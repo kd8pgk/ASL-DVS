@@ -21,37 +21,9 @@ fold into the next build of each.
    every exception and returns `""`. It does no harm. Drop the
    try/except and call `_run()` directly.
 
-## Dashboard (found in v9.3.69)
+## Dashboard (found in v9.3.69) -- done in v9.3.70
 
-1. The startup banner in `main()` is out of line. The box is 48
-   characters wide, but:
-   - The ASL node and bridge lines are 1 character short.
-   - The Local line is 1 character too long.
-   - The Network line pads by port length only, ignoring the IP's
-     length, so it is short or long depending on the IP (41 characters
-     with `192.0.2.2`).
-
-   Corrected padding, tested with 1-7 digit nodes, 2-5 digit ports and
-   7-15 character IPs:
-
-   ```python
-   pad = " " * max(0, 32 - len(_cfg.asl_node))
-   lpad = " " * max(0, 15 - len(str(_cfg.port)))
-   npad = " " * max(0, 24 - len(ip) - len(str(_cfg.port)))
-   ...
-       _bpad = " " * max(0, 32 - len(_val))
-   ...
-   ║  Network   : http://{ip}:{_cfg.port}{npad}║
-   ```
-   (Also remove the two spaces before `║` at the end of the Network line.)
-
-2. Line 1902: `f"exten => _011.,1,NoOp(international)"` has no
-   placeholders, so the `f` prefix can go (pyflakes F541).
-
-3. `_phone_call_state()` (line 2472): `chan` is unpacked from each
-   channel row but never used (pyflakes F841). Change it to `_`, or drop
-   it from the unpack.
-
-4. The page has no favicon. Every browser load asks for `/favicon.ico`,
-   gets a 404 and logs it in the browser console. Optional: add
-   `<link rel="icon" href="data:,">` to `<head>` to silence it.
+All four items are fixed in `asl_dvs_dashboard_v9.3.70_2026-10-04.py`.
+See BUILD_PLAN_dashboard_v9.3.70.md. Item 4 is fixed differently than
+first proposed: the page's Content-Security-Policy blocks `data:` images,
+so the server now answers `/favicon.ico` with 204 No Content instead.
