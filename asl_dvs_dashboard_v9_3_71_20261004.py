@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# ASL-DVS Node Control  —  asl_dvs_dashboard.py  —  v9.3.70  —  2026-10-04
+# ASL-DVS Node Control  —  asl_dvs_dashboard.py  —  v9.3.71  —  2026-10-04
 # KD8PGK / Claude AI (Anthropic)  —  CC BY-NC 4.0
 
 import argparse
@@ -42,7 +42,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.70"
+VERSION      = "9.3.71"
 BUILD_DATE   = "2026-10-04"
 
 ASL_NODE        = "652702"
@@ -762,6 +762,11 @@ def _parse_conf(path: str) -> Tuple[list, list, list, dict, list, dict, list, li
             elif len(tg_val) >= 2 and tg_val[-1].upper() != "L":
                 tg_val = tg_val + "L"
                 log.warning("DSTAR conf shim: appended L → '%s'", tg_val)
+            elif 5 <= len(tg_val) < 8:
+                # v9.3.71: a gateway callsign saved without its padding, e.g.
+                # "W1ABCBL" → "W1ABC BL" (ircDDBGateway needs 8 characters).
+                tg_val = _dstar_link_str(tg_val[:-2], tg_val[-2])
+                log.warning("DSTAR conf shim: '%s' → '%s'", name, tg_val)
             tg_val = tg_val.upper()
             tgs.append(("DSTAR", name, tg_val, row_url))
         else:
@@ -5396,6 +5401,140 @@ def action_get_dstar_hosts() -> dict:
     return _load_dstar_hosts()
 
 
+# v9.3.71: D-STAR link targets are either a reflector (REF/XRF/DCS + 3 digits,
+# routed from the host lists) or a gateway/repeater callsign (3-6 characters,
+# looked up on ircDDB and linked over DExtra).  Both use the same 8-character
+# UR link string: target padded to 6, module letter, "L".  ircDDBGateway turns
+# "W1ABC BL" into the link target "W1ABC  B" (first 6 + space + 7th char), so
+# a 5-character callsign needs its padding space kept.
+_DSTAR_CALL_RE = re.compile(r"^(?=.*\d)[A-Z0-9]{3,6}$")
+
+
+def _dstar_target_kind(base: str) -> str:
+    b = str(base or "").strip().upper()
+    m = _DSTAR_ID_RE.match(b)
+    if m and (m.group(1) in _DSTAR_TYPE_ORDER or m.group(1) == "XLX"):
+        return "reflector"
+    if _DSTAR_CALL_RE.match(b):
+        return "gateway"
+    return ""
+
+
+def _dstar_split_target(base: str, module: str) -> Tuple[str, str]:
+    # Accepts "W1ABC", "W1ABC B" or the 8-character "W1ABC  B" form; a module
+    # letter typed after the callsign wins over the separate module field.
+    b = " ".join(str(base or "").upper().split())
+    mod = str(module or "").strip().upper()[:1]
+    parts = b.rsplit(" ", 1)
+    if len(parts) == 2 and len(parts[1]) == 1 and parts[1].isalpha():
+        b, mod = parts[0].strip(), parts[1]
+    return b, mod
+
+
+def _dstar_link_str(base: str, module: str) -> str:
+    return f"{base.strip().upper().ljust(_DSTAR_BASE_LEN)}{module.upper()}L"
+
+
+def _dstar_link_target(base: str, module: str) -> str:
+    # The 8-character callsign ircDDBGateway links to, e.g. "W1ABC  B".
+    return base.strip().upper().ljust(_DSTAR_BASE_LEN + 1) + module.upper()
+
+
+# ircDDBGateway remote control (the protocol remotecontrold speaks).  Used for
+# gateway targets when /etc/ircddbgateway has remoteEnabled=1, a password and
+# a port: it hands ircDDBGateway the full 8-character target, so nothing in
+# between can drop the padding space.  Without it, gateways go through
+# dvswitch.sh tune like reflectors do.
+_IRCDDB_CONF       = "/etc/ircddbgateway"
+_IRCDDB_RC_TIMEOUT = 1.0
+_IRCDDB_RC_TRIES   = 3
+
+
+def _ircddb_conf() -> dict:
+    out: dict = {}
+    try:
+        with open(_IRCDDB_CONF, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                k, sep, v = line.partition("=")
+                if sep:
+                    out[k.strip()] = v.rstrip("\r\n")
+    except OSError:
+        pass
+    return out
+
+
+def _ircddb_rc_settings() -> Optional[dict]:
+    c = _ircddb_conf()
+    if c.get("remoteEnabled", "0").strip() != "1":
+        return None
+    pw = c.get("remotePassword", "")
+    try:
+        port = int(c.get("remotePort", "0").strip() or 0)
+    except ValueError:
+        port = 0
+    if not pw or not (0 < port < 65536):
+        return None
+    band = c.get("repeaterBand1", "").strip().upper()[:1]
+    call = (c.get("repeaterCall1", "").strip() or c.get("gatewayCallsign", "").strip()).upper()
+    if not call or not band or not band.isalpha():
+        return None
+    addr = c.get("gatewayAddress", "").strip()
+    if not addr or addr == "0.0.0.0":
+        addr = "127.0.0.1"
+    return {"addr": addr, "port": port, "password": pw,
+            "repeater": call[:7].ljust(7) + band}
+
+
+def _ircddb_rc_link(target: str) -> Tuple[bool, str]:
+    # LIN -> RND(u32) -> SHA(sha256(rnd + password)) -> ACK -> LNK -> ACK -> LOG.
+    # An empty target is an unlink.  Integers are little-endian, as on the Pi.
+    rc = _ircddb_rc_settings()
+    if rc is None:
+        return False, "ircDDBGateway remote control is not enabled"
+    dest = (rc["addr"], rc["port"])
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    sock.settimeout(_IRCDDB_RC_TIMEOUT)
+
+    def xfer(pkt: bytes, want: Tuple[bytes, ...]) -> Optional[bytes]:
+        for _ in range(_IRCDDB_RC_TRIES):
+            sock.sendto(pkt, dest)
+            try:
+                while True:
+                    data, _src = sock.recvfrom(2000)
+                    if data[:3] in want or data[:3] == b"NAK":
+                        return data
+            except _socket.timeout:
+                continue
+        return None
+
+    try:
+        r = xfer(b"LIN", (b"RND",))
+        if r is None or r[:3] != b"RND" or len(r) < 7:
+            return False, "no answer from ircDDBGateway remote control"
+        digest = hashlib.sha256(r[3:7] + rc["password"].encode("utf-8", "replace")).digest()
+        r = xfer(b"SHA" + digest, (b"ACK",))
+        if r is None or r[:3] != b"ACK":
+            return False, "ircDDBGateway remote control refused the password"
+        pkt = (b"LNK" + rc["repeater"].encode("ascii")
+               + (0).to_bytes(4, "little")                  # RECONNECT_NEVER
+               + target.ljust(8)[:8].encode("ascii"))
+        r = xfer(pkt, (b"ACK",))
+        if r is None:
+            return False, "no answer from ircDDBGateway to the link command"
+        if r[:3] != b"ACK":
+            why = r[3:].split(b"\0", 1)[0].decode("ascii", "replace").strip()
+            return False, f"ircDDBGateway rejected the link ({why or 'NAK'})"
+        return True, "ok"
+    except (OSError, UnicodeEncodeError) as e:
+        return False, f"ircDDBGateway remote control error: {e}"
+    finally:
+        try:
+            sock.sendto(b"LOG", dest)
+        except OSError:
+            pass
+        sock.close()
+
+
 _FAV_SLOTS = 10
 
 
@@ -5466,24 +5605,32 @@ def _add_favorite(field: str, entry, is_same, what: str, label: str, *,
 
 
 def action_save_dstar_favorite(base: str, module: str) -> Tuple[bool, str]:
-    base = str(base or "").strip().upper()
-    if not base or len(base) > 16 or _has_ctrl_chars(base):
-        return False, "D-STAR reflector is required (e.g. REF001)"
-    if not _DSTAR_ID_RE.match(base) or base[:3] not in _DSTAR_TYPE_ORDER:
-        return False, f"'{base}' is not a D-STAR reflector name (REF, XRF or DCS plus 3 digits)"
-    mod = str(module or "").strip().upper()
+    raw = str(base or "")
+    if not raw.strip() or len(raw) > 16 or _has_ctrl_chars(raw):
+        return False, "D-STAR reflector or gateway callsign is required (e.g. REF001 or W1ABC)"
+    base, mod = _dstar_split_target(raw, module)
     if len(mod) != 1 or not mod.isalpha():
         return False, f"Invalid module: '{module}' (must be a single letter A-Z)"
-    hosts = _load_dstar_hosts()
-    if not hosts.get("found"):
-        return False, "D-STAR reflector list not found - can't verify the reflector"
-    ref = next((r for r in hosts["reflectors"] if r["id"] == base), None)
-    if ref is None:
-        return False, f"{base} is not in the D-STAR reflector list"
-    tune  = f"{base.ljust(_DSTAR_BASE_LEN)}{mod}L"
-    label = f"{base} Mod-{mod}"
+    kind = _dstar_target_kind(base)
+    if kind == "gateway":
+        tune  = _dstar_link_str(base, mod)
+        label = f"{base} Mod-{mod} (GW)"
+        url   = ""
+    else:
+        if not _DSTAR_ID_RE.match(base) or base[:3] not in _DSTAR_TYPE_ORDER:
+            return False, (f"'{base}' is not a D-STAR reflector (REF, XRF or DCS plus 3 "
+                           f"digits) or a gateway callsign (3-6 letters/digits)")
+        hosts = _load_dstar_hosts()
+        if not hosts.get("found"):
+            return False, "D-STAR reflector list not found - can't verify the reflector"
+        ref = next((r for r in hosts["reflectors"] if r["id"] == base), None)
+        if ref is None:
+            return False, f"{base} is not in the D-STAR reflector list"
+        tune  = _dstar_link_str(base, mod)
+        label = f"{base} Mod-{mod}"
+        url   = _lh_link(ref.get("addr", ""))
     san, err = _validate_tg_entries([{"mode": "DSTAR", "name": label, "tg": tune,
-                                       "url": _lh_link(ref.get("addr", ""))}])
+                                       "url": url}])
     if err:
         return False, err
     return _add_favorite("talkgroups", san[0],
@@ -6702,19 +6849,27 @@ def action_quick_tune(mode: str, tg: str) -> Tuple[bool, str]:
 
 @_link_locked
 def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tuple[bool, str]:
-    base   = base.strip().upper()
-    module = module.strip().upper()[:1]
     is_xlx = (page == "XLX")
+    if is_xlx:
+        base   = base.strip().upper()
+        module = module.strip().upper()[:1]
+    else:
+        base, module = _dstar_split_target(base, module)
     if not base:
         return False, ("XLX reflector base must not be empty" if is_xlx
-                        else "Reflector base must not be empty")
+                        else "Reflector or gateway callsign must not be empty")
     if not module or not module.isalpha():
         return False, f"Invalid module letter: '{module}'"
 
     if len(base) > _DSTAR_BASE_LEN:
         return False, (f"'{base}' is too long for a D-Star callsign field "
                        f"(max {_DSTAR_BASE_LEN} characters before the module)")
-    tune_str = f"{base.ljust(_DSTAR_BASE_LEN)}{module}L"
+    kind = "" if is_xlx else _dstar_target_kind(base)
+    if not is_xlx and not kind:
+        return False, (f"'{base}' is not a D-STAR reflector (REF, XRF or DCS plus 3 "
+                       f"digits) or a gateway callsign (3-6 letters/digits)")
+    tune_str = _dstar_link_str(base, module)
+    use_rc   = kind == "gateway" and _ircddb_rc_settings() is not None
     _ensure_page(page)
     st = get_state()
     _clear_foreign_link()
@@ -6728,7 +6883,17 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
     remaining = _dvs_settle_until - time.monotonic()
     if remaining > 0:
         time.sleep(remaining)
-    ok, out = _dvs("tune", tune_str)
+    if use_rc:
+        # Link through ircDDBGateway's remote control, then park the UR field
+        # on CQCQCQ so later transmissions don't carry an unlink or link command.
+        ok, out = _ircddb_rc_link(_dstar_link_target(base, module))
+        if ok:
+            _dvs("tune", "CQCQCQ")
+        else:
+            log.warning("D-STAR: remote-control link to %s failed (%s) — "
+                        "falling back to dvswitch.sh tune", base, out)
+    if not use_rc or not ok:
+        ok, out = _dvs("tune", tune_str)
     if not ok:
         fail_label = "XLX" if is_xlx else "D-STAR"
         if _dvs_timed_out(out):
@@ -6741,6 +6906,10 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
     label = f"{page} | {name} | {tune_str}{bridge_lbl}"
     set_state(page=page, status=label, current_fav=tune_str, current_fav_node=None)
     conn_label = "XLX" if is_xlx else "D-STAR"
+    if kind == "gateway":
+        return True, (f"D-STAR link sent to gateway {_dstar_link_target(base, module)} "
+                      f"({tune_str}) — the gateway must be on ircDDB and have "
+                      f"module {module}")
     return True, f"{conn_label} connected: {name} ({tune_str})"
 
 def action_dstar_connect(base: str, module: str, name: str) -> Tuple[bool, str]:
@@ -6751,6 +6920,10 @@ def action_xlx_connect(name: str, base: str, module: str) -> Tuple[bool, str]:
 
 @_link_locked
 def action_dstar_disconnect() -> Tuple[bool, str]:
+    if _ircddb_rc_settings() is not None:
+        ok, why = _ircddb_rc_link("")
+        if not ok:
+            log.warning("D-STAR: remote-control unlink failed (%s)", why)
     _dvs("tune", DSTAR_UNLINK)
     _dvs("tune", TG_DISCONNECT)
     _dvs_settle()
@@ -9154,11 +9327,12 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         </div>
         <div id="pg-DSTAR" class="hidden">
           <div class="quick-bar">
-            <input id="qt-DSTAR-base" class="quick-inp" type="text" placeholder="REF001…" maxlength="12"
-              style="max-width:130px"
+            <input id="qt-DSTAR-base" class="quick-inp" type="text" placeholder="REF001 or callsign…" maxlength="12"
+              style="max-width:150px" title="Reflector (REF001, XRF012, DCS001) or gateway callsign (W1ABC)"
               onkeydown="if(event.key==='Enter')dstarQuickConnect()">
             <select id="qt-DSTAR-mod" class="ref-mod-sel" title="Module"></select>
             <button class="btn btn-conn-pink" onclick="dstarQuickConnect()">Tune</button>
+            <button class="btn btn-muted" onclick="dstarQuickSave()" title="Save to favorites">Save</button>
           </div>
           <div id="dstar-card" class="rfc-card rfc-dstar">
             <input id="dstar-filter" class="rfc-input" type="search" maxlength="40"
@@ -10186,7 +10360,9 @@ function renderDstarGrid(refs,activeTune){
   renderReflectorGrid('dstar-grid',refs,activeTune,{
     emptyMsg:'No D-STAR reflectors saved',activeClass:'active-dstar',mode:'DSTAR',
     modSel:dstarModSel,modSelName:'dstarModSel',btnConn:'btn btn-conn-pink',
-    connKind:'dstar'
+    connKind:'dstar',
+    parseRow:r=>({base:(r.tg.slice(0,-2)||r.tg).trim(),defMod:r.tg.slice(-2,-1)||'A',hostLabel:r.tg}),
+    makeTuneKey:dstarTuneKey
   });
 }
 function renderXlxGrid(refs,activeTune){
@@ -11039,13 +11215,28 @@ async function apiAction(payload,workingMsg,onOk,timeoutMs=8000){
     else errModal(d.message);
   }finally{endAction(800)}
 }
+// v9.3.71: D-STAR targets are reflectors (REF001) or gateway callsigns (W1ABC).
+// The link string pads the target to 6 before module + 'L' ("W1ABC BL"), the
+// same string the server builds and reports back as current_fav, so the grid
+// highlight compares like with like.  dstarSplit() also takes "W1ABC B" or
+// "W1ABC  B" typed into the base field, with the typed module winning.
+function dstarSplit(base,module){
+  let b=String(base||'').toUpperCase().trim().replace(/\s+/g,' ');
+  let m=String(module||'').toUpperCase().trim().slice(0,1);
+  const t=/^(.+) ([A-Z])$/.exec(b);
+  if(t){b=t[1].trim();m=t[2];}
+  return {base:b,mod:m};
+}
+function dstarTuneKey(base,mod){return String(base||'').trim().toUpperCase().padEnd(6,' ')+mod+'L';}
 async function dstarConnect(base,module,name){
   if(busy)return;
+  ({base,mod:module}=dstarSplit(base,module));
+  const tuneKey=dstarTuneKey(base,module);
   dimGrid('DSTAR');
   try{await apiAction(
     {action:'dstar-connect',base,module,name},
-    `Connecting ${base}${module}L…`,
-    d=>{curTg={mode:'DSTAR',tg:base+module+'L'};_curTgPerMode['DSTAR']=curTg;toast(d.message,'ok','dstar');renderDstarGrid(_lastDstarRefs,curTg.tg);setIndicator(curTg.tg,'DSTAR',false);},
+    `Connecting ${tuneKey}…`,
+    d=>{curTg={mode:'DSTAR',tg:tuneKey};_curTgPerMode['DSTAR']=curTg;toast(d.message,'ok','dstar');renderDstarGrid(_lastDstarRefs,curTg.tg);setIndicator(curTg.tg,'DSTAR',false);},
     DVS_MODE_TUNE_MS
   );}finally{undimGrid('DSTAR');}
 }
@@ -11169,8 +11360,20 @@ async function reflectorQuickConnect(baseId,modId,errMsg,connectFn){
 }
 async function dstarQuickConnect(){
   await reflectorQuickConnect('qt-DSTAR-base','qt-DSTAR-mod',
-    'Enter a reflector (e.g. REF001)',
-    (base,mod)=>dstarConnect(base,mod,`${base} Mod-${mod}`));
+    'Enter a reflector or gateway callsign (e.g. REF001 or W1ABC)',
+    (raw,m)=>{const {base,mod}=dstarSplit(raw,m);return dstarConnect(base,mod,`${base} Mod-${mod}`);});
+}
+async function dstarQuickSave(){
+  const el=byId('qt-DSTAR-base'),msel=byId('qt-DSTAR-mod');
+  const {base,mod}=dstarSplit(el?el.value:'',msel?msel.value:'A');
+  if(!base){toast('Enter a reflector or gateway callsign first','err');return;}
+  const d=await api({action:'save-dstar-favorite',base,module:mod},10000);
+  if(d.ok){
+    toast(d.message,/already in favorites/.test(d.message)?'info':'ok');
+    await loadTgData();
+  }else{
+    toast(d.message||'Could not save the favorite','err');
+  }
 }
 async function xlxQuickConnect(){
   await reflectorQuickConnect('qt-XLX-base','qt-XLX-mod',
