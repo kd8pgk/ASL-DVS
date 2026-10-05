@@ -30,6 +30,13 @@ in stages; everything else matches v6.13.67.
   Allow / Deny), so /api/ports no longer reads the firewall on every
   15 s refresh.  Phone's read-only "Pi firewall" checks stay; their fix
   hints now give the Cockpit / firewall-cmd / nftables / ufw step.
+  Cleanup: section labels updated for the tabs that remain, tab colour
+  map trimmed.  A saved enabled_tabs list that still names a removed tab
+  is fine -- unknown tabs are dropped when the config is read.
+  Result: 33,068 -> ~23,400 lines, page 440 -> 358 KB, 53 -> 42 GET and
+  30 -> 22 POST routes.  Checks run each stage: pyflakes (clean),
+  node --check, dead-code and reachability scans, --selftest, every GET
+  route called directly, and every tab opened in Chromium (no errors).
 
 v6.13.67 -- D-Star card: gatewayAddress row fixed.  gatewayAddress is the
 Pi's own address that ircDDBGateway binds every socket to (DExtra, D-Plus,
@@ -4811,9 +4818,8 @@ let _dpActiveView = "";
 let _dpOriginTab  = "";
 const TAB_RGB = {
   overview:"0,255,229", services:"0,255,229", ports:"34,212,255",
-  firewall:"255,170,34", journal:"212,102,255", asldvs:"255,61,90",
-  reg:"120,180,255", phone:"0,255,176",
-  tune:"255,68,204", hardware:"0,200,120", net:"64,224,208", dvsm:"255,170,34",
+  journal:"212,102,255", asldvs:"255,61,90", phone:"0,255,176",
+  tune:"255,68,204", hardware:"0,200,120", dvsm:"255,170,34",
   stfu:"0,191,255", zello:"255,140,0", sdcard:"180,140,255", edit:"255,208,64"
 };
 
@@ -10387,7 +10393,7 @@ async function openAppConfEditor(label) {
 }
 
 // ========================================================================
-// SHARED: Ports + Firewall
+// TAB: Ports -- port list and details
 // ========================================================================
 async function loadPorts() {
   const d = await api(`/api/ports?proto=${_ptProto}`);
@@ -21976,7 +21982,7 @@ def _pathfile_post(h: Handler, data: dict, fam: dict) -> None:
 
 
 # ==========================================================================
-# SHARED: Phone + Net
+# TAB: Phone -- background job runner (/api/net/job)
 # ==========================================================================
 
 _NET_JOB_LINE_CAP    = 500
@@ -22069,7 +22075,7 @@ def _net_apt_env() -> dict:
 
 
 # ==========================================================================
-# SHARED: Phone + Console
+# TAB: Phone -- helpers
 # ==========================================================================
 
 def _ph_signin_choice() -> "tuple[str, str]":
@@ -22350,7 +22356,7 @@ def _rt_history_rows() -> list:
 
 
 # ==========================================================================
-# SHARED: Net + STFU
+# TAB: STFU -- helpers
 # ==========================================================================
 
 _STFU_BINARY        = Path("/opt/STFU/STFU")
@@ -22626,7 +22632,7 @@ def get_service_detail(unit: str) -> dict:
 
 
 # ==========================================================================
-# SHARED: Phone + Tune + Console
+# SHARED: Phone + Tune
 # ==========================================================================
 
 _PH_DASH_CONF  = Path("/etc/asl_dvs/asl_dvs.conf")
@@ -22777,7 +22783,7 @@ def _ph_resolve(secs: list, name: str, _depth: int = 0) -> "tuple[dict, bool, st
 
 
 # ==========================================================================
-# SHARED: Ports + Firewall + Phone + Console
+# TAB: Phone -- firewall readers (read-only)
 # ==========================================================================
 
 def get_firewall_backend() -> str:

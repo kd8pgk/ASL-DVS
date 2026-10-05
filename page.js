@@ -622,9 +622,8 @@ let _dpActiveView = "";
 let _dpOriginTab  = "";
 const TAB_RGB = {
   overview:"0,255,229", services:"0,255,229", ports:"34,212,255",
-  firewall:"255,170,34", journal:"212,102,255", asldvs:"255,61,90",
-  reg:"120,180,255", phone:"0,255,176",
-  tune:"255,68,204", hardware:"0,200,120", net:"64,224,208", dvsm:"255,170,34",
+  journal:"212,102,255", asldvs:"255,61,90", phone:"0,255,176",
+  tune:"255,68,204", hardware:"0,200,120", dvsm:"255,170,34",
   stfu:"0,191,255", zello:"255,140,0", sdcard:"180,140,255", edit:"255,208,64"
 };
 
@@ -6198,7 +6197,7 @@ async function openAppConfEditor(label) {
 }
 
 // ========================================================================
-// SHARED: Ports + Firewall
+// TAB: Ports -- port list and details
 // ========================================================================
 async function loadPorts() {
   const d = await api(`/api/ports?proto=${_ptProto}`);
