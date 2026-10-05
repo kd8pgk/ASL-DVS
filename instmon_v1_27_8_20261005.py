@@ -1,6 +1,20 @@
 #!/usr/bin/env python3
 
-"""instmon v1.27.7 (2026-08-23) - KD8PGK Web Installer & Component Manager
+"""instmon v1.27.8 (2026-10-05) - KD8PGK Web Installer & Component Manager
+
+v1.27.8 - Watchdog (asl_dvs_watchdog.sh) retired as a component.  The
+dashboard's own systemd unit already has Restart=always + WatchdogSec=30,
+and watchdog v2.2 restarted a healthy v9.x dashboard every ~50 s (its
+/api/status check got the new login 401).  Removed the "watchdog"
+category everywhere: LIB_SUBDIRS, ALLOWED_EXT, COMPONENTS (no more
+Watchdog status card), HOME_SCAN_PATTERN_MAP, _LIBRARY_GROUPS and the
+Upload <select>.  New RETIRED_FILE_GLOBS: a file named
+asl_dvs_watchdog*.sh is now skipped by the home-dir scan and refused by
+Upload (even forced) -- without it the "scripts" row's asl_dvs*.sh
+pattern would have filed it under Scripts, where Run Script would run
+it.  An already-installed watchdog is removed by install_asl_dvs v6.4
+(Run Script), or by hand: sudo bash /usr/local/bin/asl_dvs_watchdog.sh
+--uninstall.  The old library/watchdog dir is left on disk, untracked.
 
 v1.27.7 - Added M17 Dashboard (asl_dvs_m17_dashboard.py) as its own tracked
 component, sibling to Dashboard rather than sharing its single COMPONENTS
@@ -208,7 +222,7 @@ v1.26.0 - Two changes, plus a deferred item:
     files matching the suite's known naming patterns
     (HOME_SCAN_PATTERN_MAP) and moves any that aren't already staged
     into the matching library subdir -- same category set the Upload
-    dropdown offers (dashboard/sysmon/wifimon/44helper/watchdog/instmon/
+    dropdown offers (dashboard/sysmon/wifimon/44helper/instmon/
     scripts/config). Never overwrites a same-named library file with
     different content (disambiguates with a __homescan_<epoch> suffix
     instead); identical content is left alone silently. Disable with
@@ -269,8 +283,8 @@ from datetime import datetime
 
 
 PORT =8990 
-VERSION ="1.27.7"
-DATE_STR ="2026-08-19"
+VERSION ="1.27.8"
+DATE_STR ="2026-10-05"
 
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -330,7 +344,6 @@ LIB_SUBDIRS ={
 "sysmon":os .path .join (LIBRARY_DIR ,"sysmon"),
 "wifimon":os .path .join (LIBRARY_DIR ,"wifimon"),
 "44helper":os .path .join (LIBRARY_DIR ,"44helper"),
-"watchdog":os .path .join (LIBRARY_DIR ,"watchdog"),
 "instmon":os .path .join (LIBRARY_DIR ,"instmon"),
 "svx":os .path .join (LIBRARY_DIR ,"svx"),
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
@@ -344,7 +357,6 @@ ALLOWED_EXT ={
 "sysmon":(".py",),
 "wifimon":(".py",),
 "44helper":(".py",),
-"watchdog":(".sh",),
 "instmon":(".py",),
 "svx":(".py",),
 "scripts":(".sh",),
@@ -391,23 +403,6 @@ COMPONENTS =[
 "category":"44helper",
 },
 {
-"name":"Watchdog",
-
-
-
-
-
-
-
-
-
-
-"service":"asl_dvs_watchdog.timer",
-"port":None ,
-"install_link":"/usr/local/bin/asl_dvs_watchdog.sh",
-"category":"watchdog",
-},
-{
 "name":"instmon",
 "service":"instmon",
 "port":PORT ,
@@ -437,8 +432,18 @@ INSTALLABLE_CATEGORIES ={c ["category"]for c in COMPONENTS }
 
 
 
+# v1.27.8: retired components -- skipped by the home-dir scan and refused by
+# Upload, so they can't land in another category (asl_dvs_watchdog*.sh would
+# otherwise match the "scripts" row's asl_dvs*.sh).
+RETIRED_FILE_GLOBS =("asl_dvs_watchdog*.sh",)
+
+
+def _is_retired_file (name ):
+    lname =name .lower ()
+    return any (fnmatch .fnmatch (lname ,g )for g in RETIRED_FILE_GLOBS )
+
+
 HOME_SCAN_PATTERN_MAP =[
-("watchdog",["asl_dvs_watchdog*.sh"]),
 ("dashboard",["asl_dvs_dashboard*.py"]),
 ("m17_dashboard",["asl_dvs_m17_dashboard*.py"]),
 ("sysmon",["sysmon*.py","asl_dvs_sysmon*.py","asl_dvs_m17_sysmon*.py"]),
@@ -525,6 +530,8 @@ def _file_sha256_uncached (path ):
 
 
 def _category_for_home_file (name ):
+    if _is_retired_file (name ):
+        return None 
     lname =name .lower ()
     for category ,globs in HOME_SCAN_PATTERN_MAP :
         if any (fnmatch .fnmatch (lname ,g .lower ())for g in globs ):
@@ -1185,7 +1192,6 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("wifimon","wifimon","install"),
     ("44helper","44helper","install"),
     ("SVX Dashboard","svx","install"),
-    ("Watchdog","watchdog","install"),
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
     ("Configuration","config","install_config"),
@@ -1804,7 +1810,6 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="wifimon">wifimon (.py)</option>
       <option value="44helper">44helper (.py)</option>
       <option value="svx">SVX Dashboard (.py)</option>
-      <option value="watchdog">Watchdog (.sh)</option>
       <option value="instmon">instmon (.py)</option>
       <option value="scripts">Script (.sh)</option>
       <option value="config">Config (.conf)</option>
@@ -2156,6 +2161,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (400 ,"No file provided")
             return 
         filename =os .path .basename (filename )
+        if _is_retired_file (filename ):
+            self ._error_json (400 ,f"'{filename }' is retired (asl_dvs_watchdog) -- the dashboard's own systemd watchdog covers it")
+            return 
         ext =os .path .splitext (filename )[1 ].lower ()
         if ext not in ALLOWED_EXT [category ]:
             self ._error_json (400 ,f"'{ext }' not allowed for category '{category }' (expected {ALLOWED_EXT [category ]})")
