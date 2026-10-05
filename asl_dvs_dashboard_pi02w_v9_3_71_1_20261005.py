@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 #
-# ASL-DVS Node Control  —  asl_dvs_dashboard.py  —  v9.3.71-pi02w  —  2026-10-05
+# ASL-DVS Node Control  —  asl_dvs_dashboard.py  —  v9.3.71.1-pi02w  —  2026-10-05
 # KD8PGK / Claude AI (Anthropic)  —  CC BY-NC 4.0
 # Build: Pi Zero 2 W fork of v9.3.71
 #
@@ -28,6 +28,9 @@
 #     reuses it: about 25 MB settled instead of 45 MB, twice as fast to
 #     start.  --install clears compiled copies of older versions;
 #     --uninstall removes this one and, when unused, the launcher.
+#   v9.3.71.1-pi02w: --uninstall also removes the EchoLink cache folder
+#     /run/asl_dvs_dashboard, and no longer stops part-way if a compiled
+#     copy or the launcher is already gone.
 
 import argparse
 import codecs
@@ -69,7 +72,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71-pi02w"
+VERSION      = "9.3.71.1-pi02w"
 BUILD_DATE   = "2026-10-05"
 
 ASL_NODE        = "652702"
@@ -14784,7 +14787,10 @@ def _remove_launcher_if_unused() -> None:
                 return
         except OSError:
             continue
-    os.remove(_LAUNCHER_PATH)
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 def install_service() -> None:
@@ -14848,8 +14854,16 @@ def uninstall_service() -> None:
             os.remove(target)
             print(f"  [-] Removed {target}")
         for pyc in _pyc_for(target or _INSTALL_LINK):
-            os.remove(pyc)
+            try:
+                os.remove(pyc)
+            except FileNotFoundError:
+                pass
     _remove_launcher_if_unused()
+
+    echodb_dir = os.path.dirname(_ECHODB_FILE)
+    if os.path.isdir(echodb_dir):
+        shutil.rmtree(echodb_dir, ignore_errors=True)
+        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
 

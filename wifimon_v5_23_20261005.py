@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 #"""
 #wifimon.py — WiFi & Voltage Watchdog + Dashboard for Raspberry Pi Zero 2W
-#Version: 5.22 (Starts through the shared launcher)
+#Version: 5.23 (Uninstall tolerates files already gone)
 #Build: common (all nodes, including Pi Zero 2 W)
 
 #Monitors wifi connectivity and supply voltage.
@@ -10,6 +10,8 @@
 #  1. Sustained low voltage (undervoltage protection).
 #  2. Sustained network connection loss.
 #Serves a web dashboard on port 8991 (plain HTTP by default, root-password login).
+#
+#v5.23 — --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment).
 #
 #v5.22 — Starts through the shared launcher. wifimon.service now runs
 #  /usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/wifimon.py.
@@ -679,7 +681,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.22"
+APP_VERSION = "5.23"
 
 # ── CONFIG ──────────────────────────────────────────────────────────────
 # Watchdog (unchanged from v4.8)
@@ -990,7 +992,10 @@ def _remove_launcher_if_unused() -> None:
                 return
         except OSError:
             continue
-    os.remove(_LAUNCHER_PATH)
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 def install_service() -> None:
@@ -1069,7 +1074,10 @@ def uninstall_service() -> None:
         os.remove(INSTALL_BIN_PATH)
         print(f"  [-] Removed {INSTALL_BIN_PATH}")
     for pyc in _pyc_for(INSTALL_BIN_PATH):
-        os.remove(pyc)
+        try:
+            os.remove(pyc)
+        except FileNotFoundError:
+            pass
     _remove_launcher_if_unused()
 
     if os.path.isdir(REPORT_DIR):

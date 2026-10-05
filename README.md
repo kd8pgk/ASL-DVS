@@ -40,8 +40,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_67_20261005.py` | `sysmon_pi02w_v6_13_67_1_20261005.py` | `instmon_v2_38_0_20261005.py` |
-| `VERSION` | `6.13.67` | `6.13.67.1-pi02w` | `2.38.0` |
+| File name | `sysmon_v6_13_67_20261005.py` | `sysmon_pi02w_v6_13_67_2_20261005.py` | `instmon_v2_38_1_20261005.py` |
+| `VERSION` | `6.13.67` | `6.13.67.2-pi02w` | `2.38.1` |
 | Header | | `Build: Pi Zero 2 W fork of v6.13.67` | `Build: common (all nodes, including Pi Zero 2 W)` |
 
 File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version number is never
@@ -61,7 +61,7 @@ reused: every change gets a new version.
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_38_0_20261005.py --install
+   sudo python3 instmon_v2_38_1_20261005.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -150,14 +150,14 @@ afterwards, run its own `--uninstall`.
 | File | Build |
 |---|---|
 | `asl_dvs_dashboard_v9_3_71_20261004.py` | Dashboard, full (current) |
-| `asl_dvs_dashboard_pi02w_v9_3_71_20261005.py` | Dashboard, Pi Zero 2 W (current) |
+| `asl_dvs_dashboard_pi02w_v9_3_71_1_20261005.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
 | `sysmon_v6_13_67_20261005.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_67_1_20261005.py` | SysMon, Pi Zero 2 W (current) |
+| `sysmon_pi02w_v6_13_67_2_20261005.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
-| `instmon_v2_38_0_20261005.py` | common |
-| `wifimon_v5_22_20261005.py` | common |
-| `asl_dvs_m17_44helper_v0_0_157_20261005.py` | common |
+| `instmon_v2_38_1_20261005.py` | common |
+| `wifimon_v5_23_20261005.py` | common |
+| `asl_dvs_m17_44helper_v0_0_158_20261005.py` | common |
 | `asl_dvs_watchdog_v2_3_20261005.sh` | common |
 | `install_asl_dvs_v6_5_20261005.sh` | common |
 | `uninstall_asl_dvs_all_v1_1.sh` | common |
