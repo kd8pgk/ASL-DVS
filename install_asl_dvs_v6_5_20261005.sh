@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install_asl_dvs_dashboard.sh  v6.4  (2026-10-05)
+# install_asl_dvs_dashboard.sh  v6.5  (2026-10-05)
 # Installs or updates:
 #   ASL-DVS Node Control Dashboard  (port 8989)
 #   ASL-DVS-M17 Node Control Dashboard (M17/Zello fork, port 8989)
@@ -136,6 +136,19 @@
 #   disables and deletes any installed watchdog timer/service (including
 #   instance-suffixed ones) and /usr/local/bin/asl_dvs_watchdog*.sh.
 #   Staged copies in the instmon library are left alone and ignored.
+#
+# v6.5: SysMon build choice.  SysMon now comes in two builds that both
+#   match sysmon*.py: the full one (sysmon_v*.py) and the lighter Pi Zero
+#   2 W one (sysmon_pi02w_v*.py, VERSION "x.y.z-pi02w").  Picking the
+#   newest file by date could put either on either kind of Pi, so the
+#   build is chosen first and only that build's files are offered:
+#     1. SYSMON_VARIANT=pi02w or SYSMON_VARIANT=full, if set;
+#     2. otherwise the build already installed (its VERSION line);
+#     3. otherwise pi02w on a "Raspberry Pi Zero 2 W" (device-tree
+#        model), full on anything else.
+#   No file of the chosen build found -> SysMon is not installed (with
+#   a warning saying how to override); the other build is never
+#   substituted.
 
 set -euo pipefail
 
@@ -230,6 +243,7 @@ stage_and_select() {
     local pattern="$1"
     local label="$2"
     local lib_dir="${3:-}"
+    local exclude="${4:-}"   # v6.5: optional -name pattern to leave out
 
     local SCRIPT_DIR
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -260,7 +274,11 @@ stage_and_select() {
                 _sf["${real}"]=1
                 RAW_FOUND+=("${real}")
             fi
-        done < <(find "${dir}" -maxdepth 1 -name "${pattern}" -print0 2>/dev/null)
+        done < <(if [[ -n "${exclude}" ]]; then
+                     find "${dir}" -maxdepth 1 -name "${pattern}" ! -name "${exclude}" -print0 2>/dev/null
+                 else
+                     find "${dir}" -maxdepth 1 -name "${pattern}" -print0 2>/dev/null
+                 fi)
     done
 
     if [[ "${#RAW_FOUND[@]}" -eq 0 ]]; then
@@ -660,9 +678,38 @@ if [[ -n "${M17DASH_CHOSEN}" ]]; then
 fi
 
 hdr "SysMon — file discovery"
+# v6.5: choose the build first (see the v6.5 note at the top).
+SYSMON_VARIANT="${SYSMON_VARIANT:-}"
+_sysmon_why="SYSMON_VARIANT"
+if [[ -z "${SYSMON_VARIANT}" && -f "${SYSMON_BIN}" ]]; then
+    if grep -qE '^VERSION[[:space:]]*=[[:space:]]*"[^"]*-pi02w"' "${SYSMON_BIN}" 2>/dev/null; then
+        SYSMON_VARIANT="pi02w"
+    else
+        SYSMON_VARIANT="full"
+    fi
+    _sysmon_why="the installed SysMon"
+fi
+if [[ -z "${SYSMON_VARIANT}" ]]; then
+    if tr -d '\0' < /proc/device-tree/model 2>/dev/null | grep -qi 'Zero 2'; then
+        SYSMON_VARIANT="pi02w"
+    else
+        SYSMON_VARIANT="full"
+    fi
+    _sysmon_why="this Pi's model"
+fi
+case "${SYSMON_VARIANT}" in
+    pi02w) info "SysMon build: Pi Zero 2 W (sysmon_pi02w*.py), from ${_sysmon_why}" ;;
+    full)  info "SysMon build: full (sysmon*.py without _pi02w), from ${_sysmon_why}" ;;
+    *)     die "SYSMON_VARIANT must be pi02w or full (got '${SYSMON_VARIANT}')" ;;
+esac
 CHOSEN=""
-stage_and_select "sysmon*.py" "SysMon" "${SYSMON_LIB_DIR}" || true
+if [[ "${SYSMON_VARIANT}" == "pi02w" ]]; then
+    stage_and_select "sysmon_pi02w*.py" "SysMon (Pi Zero 2 W)" "${SYSMON_LIB_DIR}" || true
+else
+    stage_and_select "sysmon*.py" "SysMon" "${SYSMON_LIB_DIR}" "sysmon_pi02w*.py" || true
+fi
 SYSMON_CHOSEN="${CHOSEN}"
+[[ -z "${SYSMON_CHOSEN}" ]] && warn "No ${SYSMON_VARIANT} SysMon build found -- set SYSMON_VARIANT=pi02w or =full to choose the other build."
 
 if [[ -n "${SYSMON_CHOSEN}" ]]; then
     info "Checking syntax…"
