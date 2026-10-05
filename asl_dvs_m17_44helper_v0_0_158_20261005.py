@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.157.py
+# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.158.py
 # Build: common (all nodes, including Pi Zero 2 W)
 # =============================================================================
 #
@@ -93,8 +93,9 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.157"
-APP_STAGE = "v0.0.157: Starts through the shared launcher. 44helper.service now runs "\
+APP_VERSION = "0.0.158"
+APP_STAGE = "v0.0.158: --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment). || "\
+    "v0.0.157: Starts through the shared launcher. 44helper.service now runs "\
     "/usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /opt/44helper/asl_dvs_m17_44helper.py. Run directly, "\
     "Python compiles this 1.1 MB file on every start and keeps that memory (about 48 MB); the launcher imports "\
     "it instead, so Python saves the compiled copy in /opt/44helper/__pycache__ and reuses it on later starts "\
@@ -1117,7 +1118,10 @@ def _remove_launcher_if_unused() -> None:
                 return
         except OSError:
             continue
-    os.remove(_LAUNCHER_PATH)
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 def install_service() -> None:
@@ -1176,7 +1180,10 @@ def uninstall_service() -> None:
         os.remove(INSTALL_BIN_PATH)
         print(f"  [-] Removed {INSTALL_BIN_PATH}")
     for pyc in _pyc_for(INSTALL_BIN_PATH):
-        os.remove(pyc)
+        try:
+            os.remove(pyc)
+        except FileNotFoundError:
+            pass
     _remove_launcher_if_unused()
 
     print(f"\nUninstallation complete. {CONFIG_FILE} was left untouched.")

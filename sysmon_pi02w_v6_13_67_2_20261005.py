@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ASL-DVS SYSMON  --  sysmon.py
-Version : 6.13.67.1-pi02w  (20261005)
+Version : 6.13.67.2-pi02w  (20261005)
 Build   : Pi Zero 2 W fork of v6.13.67
 Authors : Claude AI (Anthropic) / KD8PGK
 License : CC BY-NC 4.0
@@ -9,6 +9,8 @@ Nodes   : KD8PGK 652701 / 652702 / 652703
 
 Changelog: the last 10 versions are below.  Older entries (v6.13.55 and
 earlier) are in sysmon_changelog_v6_13_65_20261004.txt.
+
+v6.13.67.2-pi02w -- --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment).
 
 v6.13.67.1-pi02w -- Zello tab removed (Pi Zero 2 W build).  The tab
 for asl-zello-bridge (install/status/config/compatibility cards, sample
@@ -228,7 +230,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.1-pi02w"
+VERSION      = "6.13.67.2-pi02w"
 BUILD_DATE   = "20261005"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -22514,7 +22516,10 @@ def _remove_launcher_if_unused() -> None:
                 return
         except OSError:
             continue
-    os.remove(_LAUNCHER_PATH)
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 def install_service() -> None:
@@ -22579,7 +22584,10 @@ def uninstall_service() -> None:
             os.remove(target)
             print(f"  [-] Removed {target}")
         for pyc in _pyc_for(target or _INSTALL_LINK):
-            os.remove(pyc)
+            try:
+                os.remove(pyc)
+            except FileNotFoundError:
+                pass
     _remove_launcher_if_unused()
 
     print(f"\nUninstall complete. {CONFIG_FILE} was not touched.")
