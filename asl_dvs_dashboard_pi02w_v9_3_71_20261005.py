@@ -5,6 +5,18 @@
 #
 # Pi Zero 2 W build, branched from v9.3.71.  Same tabs and features (Phone
 # and every digital mode); lighter on memory and CPU for a 512 MB Pi:
+#   - ASL node search reads /var/lib/asterisk/astdb.txt from disk on each
+#     search instead of holding ~40,000 nodes in memory (was ~16 MB, 32 MB
+#     while the file was re-read).  One pass per file version records the
+#     node count, repeated nodes and lines with control characters, so a
+#     search only fully parses lines that could match (~30 ms here).
+#   - EchoLink station search: the `echolink dbdump` list is written to
+#     /run/asl_dvs_dashboard/echodb.txt (about 300 KB for 20,000 stations)
+#     and searched the same way, instead of a 2-5 MB in-memory list rebuilt
+#     every 5 minutes.  Refreshed on use when older than 5 minutes; a failed
+#     refresh keeps the last good file.
+#   Results are identical to v9.3.71 (same parsing, first line for a node
+#   wins, same order, same counts and totals).
 
 import argparse
 import codecs
@@ -14,6 +26,7 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
+import io
 import hashlib
 import hmac
 import ipaddress
@@ -5887,75 +5900,189 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
-_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-def _parse_astdb(f) -> dict:
-    rows, by_node = [], {}
-    for raw in f:
-        line = raw.strip()
-        if not line or line.startswith(("#", ";")):
-            continue
-        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
-        node = parts[0]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node in by_node:
-            continue
-        call = parts[1] if len(parts) > 1 else ""
-        desc = parts[2] if len(parts) > 2 else ""
-        loc  = parts[3] if len(parts) > 3 else ""
-        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-        rows.append(row)
-        by_node[node] = row
-    return {"rows": rows, "by_node": by_node}
 
-def _build_astdb(prev):
-    try:
-        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
-    except OSError:
-        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
-    if prev and prev.get("found") and prev["mtime"] == mtime:
-        return prev, False
-    try:
-        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
-            part = _parse_astdb(f)
-    except OSError as e:
-        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
-        part = {"rows": [], "by_node": {}}
-    return {"found": True, "mtime": mtime, **part}, False
+# A line holding a control character (other than the surrounding
+# whitespace) can't use the raw-line quick check -- _strip_ctrl() would
+# join text across it -- so such lines are always parsed in full.
+_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
-                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
-                                                 "node menu will be empty (turn on "
-                                                 "asl3-update-astdb)", _ASTDB_PATH))
 
-def _load_astdb() -> dict:
-    return _astdb_cache.get()
+class _LineDB:
+    """Pi02w: a node list searched straight from its file, one line at a
+    time, instead of being held in memory.  The AllStar list (about
+    40,000 nodes) cost about 16 MB resident that way, and 32 MB while
+    astdb.txt was being re-read.
 
-def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
+    node_of(raw) returns a line's node number, or None for a line the old
+    in-memory build skipped; parse(raw, node) returns the row (node
+    first).  The first line for a node wins, as before.
+
+    Speed: one pass per file version (cached by mtime + size) records the
+    node count, whether any node appears twice and which lines hold a
+    control character (real astdb.txt: two, a tab in a description).  A
+    search hands rows() a cheap test on the raw line (raw_ok) that never
+    rejects a line that could match; when no node repeats, lines failing
+    it are skipped without working out their node number.  path_fn returns the file's
+    path (read each time, like the old code)."""
+
+    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
+        self._path_fn     = path_fn
+        self._node_of     = node_of
+        self._parse       = parse
+        self._missing_msg = missing_msg
+        self._warned      = False
+        self._lock        = threading.Lock()
+        self._index_key   = None
+        self._index       = (0, True, frozenset())
+
+    @property
+    def path(self) -> str:
+        return self._path_fn()
+
+    def stat(self) -> "tuple[bool, int, int]":
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            if self._missing_msg and not self._warned:
+                self._warned = True
+                log.warning(self._missing_msg, self.path)
+            return False, 0, 0
+        self._warned = False
+        return True, int(st.st_mtime), st.st_size
+
+    def index(self) -> "tuple[int, bool, frozenset]":
+        """(node count, any node repeated, numbers of lines holding a
+        control character)."""
+        found, mtime, size = self.stat()
+        if not found:
+            return 0, True, frozenset()
+        key = (mtime, size)
+        with self._lock:
+            if self._index_key == key:
+                return self._index
+        seen: "set[str]" = set()
+        repeats = False
+        ctrl: "set[int]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                for i, raw in enumerate(f):
+                    if _CTRL_IN_RE.search(raw.strip()):
+                        ctrl.add(i)
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if node in seen:
+                        repeats = True
+                    else:
+                        seen.add(node)
+        except OSError:
+            return 0, True, frozenset()
+        result = (len(seen), repeats, frozenset(ctrl))
+        with self._lock:
+            self._index_key, self._index = key, result
+        return result
+
+    def total(self) -> int:
+        return self.index()[0]
+
+    def rows(self, raw_ok=None, node_ok=None):
+        """Rows in file order.  raw_ok(raw) and node_ok(node) may skip
+        lines that can't match; neither may skip one that could.  Lines
+        holding a control character never go through raw_ok."""
+        _total, repeats, ctrl = self.index()
+        seen: "set[str]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                st = os.fstat(f.fileno())
+                with self._lock:
+                    same = self._index_key == (int(st.st_mtime), st.st_size)
+                if not same:
+                    # Replaced since it was indexed: check every line in full.
+                    repeats, raw_ok, ctrl = True, None, frozenset()
+                for i, raw in enumerate(f):
+                    quick = raw_ok is not None and i not in ctrl
+                    if not repeats and quick and not raw_ok(raw):
+                        continue
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if repeats:
+                        if node in seen:
+                            continue
+                        seen.add(node)
+                        if quick and not raw_ok(raw):
+                            continue
+                    if node_ok is not None and not node_ok(node):
+                        continue
+                    yield self._parse(raw, node)
+        except OSError as e:
+            log.warning("Could not read %s: %s", self.path, e)
+
+    def find(self, node: str):
+        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
+                             node_ok=lambda n: n == node):
+            return row
+        return None
+
+
+def _astdb_node_of(raw: str):
+    line = raw.strip()
+    if not line or line.startswith(("#", ";")):
+        return None
+    node = _strip_ctrl(line.split("|", 1)[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    return str(int(node))
+
+
+def _astdb_parse(raw: str, node: str):
+    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
+    call = parts[1] if len(parts) > 1 else ""
+    desc = parts[2] if len(parts) > 2 else ""
+    loc  = parts[3] if len(parts) > 3 else ""
+    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+
+
+_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
+                 "AllStar node list not found at %s — the ASL node menu will be empty "
+                 "(turn on asl3-update-astdb)")
+
+
+def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
-           "total": len(db["rows"]), "min": min_q,
+    found, mtime, _size = db.stat()
+    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
+           "total": db.total() if found else 0, "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not db["found"] or len(q) < min_q:
+    if not found or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
+        # The normalized node number is a piece of the raw first field.
+        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
+        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
+        # Every word of a match lies inside one field, and every field is
+        # a piece of the raw line (lines with control characters, where
+        # _strip_ctrl() joins text, are never quick-checked).
+        def raw_ok(raw):
+            low = raw.lower()
+            return all(w in low for w in words)
+        node_ok = None
     count, matches = 0, []
-    for r in db["rows"]:
+    for r in db.rows(raw_ok, node_ok):
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -5978,11 +6105,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _load_astdb()["by_node"].get(node)
+    row = _astdb.find(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -6005,44 +6132,86 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-def _parse_echodb(text: str) -> dict:
-    rows, by_node = [], {}
-    for raw in text.splitlines():
-        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
-        if len(parts) < 2:
-            continue
-        node, call = parts[0], parts[1]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node == "0" or node in by_node:
-            continue
-        call = call[:24]
-        row = (node, call, f"{node} {call}".lower())
-        rows.append(row)
-        by_node[node] = row
-    rows.sort(key=lambda r: int(r[0]))
-    return {"rows": rows, "by_node": by_node}
+# Pi02w: the EchoLink station list is written to a small file in /run
+# (tmpfs) and searched from there with _LineDB, instead of being held in
+# memory as a list plus a lookup table (2-5 MB, rebuilt every 5 minutes
+# while in use).  Refreshed from Asterisk when a search or favorite needs
+# it and the file is older than _ECHODB_TTL; a failed refresh keeps the
+# last good file and is not retried until the TTL passes again.
+_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
 
-def _build_echodb(prev):
-    out, ok = ami_command(_ECHODB_CMD, timeout=8)
-    if ok and "no such command" not in out.lower():
-        part = _parse_echodb(out)
-        return {"found": True, "mtime": int(time.time()), **part}, False
-    if prev and prev.get("found"):
-        return prev, False
-    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+_echodb_refresh_lock = threading.Lock()
+_echodb_next_try     = 0.0
+_echodb_warned       = False
 
-_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
-                           lambda _r: log.warning("EchoLink station list not available "
-                                                  "(%s failed -- is chan_echolink loaded?)",
-                                                  _ECHODB_CMD))
 
-def _load_echodb() -> dict:
-    return _echodb_cache.get()
+def _echodb_node_of(raw: str):
+    parts = raw.split("|", 2)
+    if len(parts) < 2:
+        return None
+    node = _strip_ctrl(parts[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    node = str(int(node))
+    return None if node == "0" else node
+
+
+def _echodb_parse(raw: str, node: str):
+    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
+    return (node, call, f"{node} {call}".lower())
+
+
+def _echodb_write(text: str) -> None:
+    # Same rules as before: valid rows only, first line for a node wins,
+    # sorted by node number.
+    seen: "set[str]" = set()
+    rows = []
+    for raw in io.StringIO(text):
+        node = _echodb_node_of(raw)
+        if node is None or node in seen:
+            continue
+        seen.add(node)
+        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
+    rows.sort()
+    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
+    tmp = _ECHODB_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for _n, node, call in rows:
+            f.write(f"{node}|{call}\n")
+    os.replace(tmp, _ECHODB_FILE)
+
+
+def _echodb_refresh() -> None:
+    global _echodb_next_try, _echodb_warned
+    with _echodb_refresh_lock:
+        now = time.time()
+        try:
+            age = now - os.stat(_ECHODB_FILE).st_mtime
+        except OSError:
+            age = None
+        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
+            return
+        out, ok = ami_command(_ECHODB_CMD, timeout=8)
+        if ok and "no such command" not in out.lower():
+            try:
+                _echodb_write(out)
+                _echodb_warned = False
+                return
+            except OSError as e:
+                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
+        _echodb_next_try = now + _ECHODB_TTL
+        if age is None and not _echodb_warned:
+            _echodb_warned = True
+            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
+                        _ECHODB_CMD)
+
+
+_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
+
 
 def action_echo_directory(path: str) -> dict:
-    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    _echodb_refresh()
+    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -6054,7 +6223,8 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    row = _load_echodb()["by_node"].get(node)
+    _echodb_refresh()
+    row = _echodb.find(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
