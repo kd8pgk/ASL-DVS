@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install_asl_dvs_dashboard.sh  v6.3  (2026-08-21)
+# install_asl_dvs_dashboard.sh  v6.4  (2026-10-05)
 # Installs or updates:
 #   ASL-DVS Node Control Dashboard  (port 8989)
 #   ASL-DVS-M17 Node Control Dashboard (M17/Zello fork, port 8989)
@@ -8,8 +8,8 @@
 #   wifimon  — WiFi/voltage watchdog (no web UI, no port)
 #   44helper — 44Net Connect / firewall / router dashboard (port 9997)
 #   SVX Dashboard — standalone SVXLink node controller (port 8991)
-#   asl_dvs_watchdog — external liveness watchdog for the dashboard
-#                       service (no web UI, no port; timer-driven)
+#   (asl_dvs_watchdog is retired as of v6.4 -- an installed copy is
+#    removed, see the v6.4 note below)
 #
 #   Dashboard and its M17/Zello fork are two separate builds of the SAME
 #   role — pick whichever one file you actually deploy on a given node,
@@ -126,6 +126,16 @@
 #   asl_dvs.conf), so no identity seeding. Port 8991 — deliberately chosen
 #   to avoid instmon's own 8990, which svx_dashboard's PORT constant used
 #   to collide with before that was fixed upstream.
+#
+# v6.4: asl_dvs_watchdog retired.  The dashboard's own unit already has
+#   Restart=always + WatchdogSec=30 (systemd restarts it if it dies or
+#   hangs), so the external curl watchdog added little, and v2.2 of it
+#   restarted a healthy v9.x dashboard every ~50 s because /api/status
+#   now needs a login.  This installer no longer finds, stages or
+#   installs asl_dvs_watchdog*.sh; instead, on every run, it stops,
+#   disables and deletes any installed watchdog timer/service (including
+#   instance-suffixed ones) and /usr/local/bin/asl_dvs_watchdog*.sh.
+#   Staged copies in the instmon library are left alone and ignored.
 
 set -euo pipefail
 
@@ -173,7 +183,7 @@ SYSMON_PORT=9999
 SYSMON_CONF_DIR="/etc/sysmon"
 
 # asl_dvs_m17_dashboard (M17/Zello fork) also installs itself via its own
-# `--install` (same delegation pattern as wifimon/44helper/watchdog below)
+# `--install` (same delegation pattern as wifimon/44helper below)
 # — these paths are only used here for existing-install detection and
 # up-to-date comparison, never written to directly.
 M17DASH_BIN="/usr/local/bin/asl_dvs_m17_dashboard.py"
@@ -198,11 +208,6 @@ SVX_BIN="/usr/local/bin/svx_dashboard.py"
 SVX_SERVICE="svx_dashboard"
 SVX_PORT=8991
 
-# asl_dvs_watchdog also installs itself via its own `--install` (same
-# delegation pattern as wifimon/44helper above) — no port, no config file.
-WATCHDOG_BIN="/usr/local/bin/asl_dvs_watchdog.sh"
-WATCHDOG_TIMER="asl_dvs_watchdog.timer"
-
 # instmon web installer's staging library — same env-var convention
 # instmon.py itself uses (INSTMON_LIBRARY_DIR), so pointing instmon
 # at a non-default library root also repoints this script.
@@ -213,7 +218,6 @@ SYSMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/sysmon"
 WIFIMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/wifimon"
 HELPER_LIB_DIR="${INSTMON_LIBRARY_DIR}/44helper"
 SVX_LIB_DIR="${INSTMON_LIBRARY_DIR}/svx"
-WATCHDOG_LIB_DIR="${INSTMON_LIBRARY_DIR}/watchdog"
 
 LABELS=(a b c d e f g h i j)
 
@@ -540,27 +544,23 @@ _sysmon_exists=false
 _wifimon_exists=false
 _helper_exists=false
 _svx_exists=false
-_watchdog_exists=false
 systemctl is-active --quiet "${DASH_SERVICE}"    2>/dev/null && _dash_exists=true    || true
 systemctl is-active --quiet "${M17DASH_SERVICE}" 2>/dev/null && _m17dash_exists=true || true
 systemctl is-active --quiet "${SYSMON_SERVICE}"  2>/dev/null && _sysmon_exists=true  || true
 systemctl is-active --quiet "${WIFIMON_SERVICE}" 2>/dev/null && _wifimon_exists=true || true
 systemctl is-active --quiet "${HELPER_SERVICE}"  2>/dev/null && _helper_exists=true  || true
 systemctl is-active --quiet "${SVX_SERVICE}"     2>/dev/null && _svx_exists=true     || true
-systemctl is-enabled --quiet "${WATCHDOG_TIMER}" 2>/dev/null && _watchdog_exists=true || true
 [[ -f "${DASH_BIN}"     ]] && _dash_exists=true
 [[ -f "${M17DASH_BIN}"  ]] && _m17dash_exists=true
 [[ -f "${SYSMON_BIN}"   ]] && _sysmon_exists=true
 [[ -f "${WIFIMON_BIN}"  ]] && _wifimon_exists=true
 [[ -f "${HELPER_BIN}"   ]] && _helper_exists=true
 [[ -f "${SVX_BIN}"      ]] && _svx_exists=true
-[[ -f "${WATCHDOG_BIN}" ]] && _watchdog_exists=true
 
 if [[ "${_dash_exists}" == "true" || "${_m17dash_exists}" == "true" \
       || "${_sysmon_exists}" == "true" \
       || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" \
-      || "${_svx_exists}" == "true" \
-      || "${_watchdog_exists}" == "true" ]]; then
+      || "${_svx_exists}" == "true" ]]; then
     echo
     echo "  ${BLD}Existing installation detected:${RST}"
     [[ "${_dash_exists}"     == "true" ]] && echo "  ${GRN}  ✔${RST}  Dashboard      (${DASH_BIN})"
@@ -569,7 +569,6 @@ if [[ "${_dash_exists}" == "true" || "${_m17dash_exists}" == "true" \
     [[ "${_wifimon_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  wifimon        (${WIFIMON_BIN})"
     [[ "${_helper_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  44helper       (${HELPER_BIN})"
     [[ "${_svx_exists}"      == "true" ]] && echo "  ${GRN}  ✔${RST}  SVX Dashboard  (${SVX_BIN})"
-    [[ "${_watchdog_exists}" == "true" ]] && echo "  ${GRN}  ✔${RST}  watchdog       (${WATCHDOG_BIN})"
     echo
     if [[ "${NONINTERACTIVE}" == "true" ]]; then
         MODE="update"
@@ -597,6 +596,40 @@ else
 fi
 
 ok "Mode: ${MODE}"
+
+# ══════════════════════════════════════════════════════════════════════════════
+# RETIRE asl_dvs_watchdog  (v6.4)
+# ══════════════════════════════════════════════════════════════════════════════
+# Removes any installed watchdog: every asl_dvs_watchdog*.timer/.service unit
+# (instance-suffixed ones too) and /usr/local/bin/asl_dvs_watchdog*.sh.  The
+# dashboard's own systemd watchdog (Restart=always, WatchdogSec=30) covers it.
+retire_watchdog() {
+    local units=() bins=() u b
+    shopt -s nullglob
+    for u in /etc/systemd/system/asl_dvs_watchdog*.timer \
+             /etc/systemd/system/asl_dvs_watchdog*.service; do
+        units+=("$(basename "${u}")")
+    done
+    bins=(/usr/local/bin/asl_dvs_watchdog*.sh)
+    shopt -u nullglob
+    if [[ ${#units[@]} -eq 0 && ${#bins[@]} -eq 0 ]]; then
+        return 0
+    fi
+    hdr "Retiring asl_dvs_watchdog"
+    for u in "${units[@]}"; do
+        systemctl disable --now "${u}" 2>/dev/null || true
+        rm -f "/etc/systemd/system/${u}"
+        ok "Removed ${u}"
+    done
+    for b in "${bins[@]}"; do
+        rm -f "${b}"
+        ok "Removed ${b}"
+    done
+    systemctl daemon-reload
+    systemctl reset-failed 'asl_dvs_watchdog*' 2>/dev/null || true
+    info "The dashboard's own systemd watchdog (Restart=always, WatchdogSec=30) covers it."
+}
+retire_watchdog
 
 # ══════════════════════════════════════════════════════════════════════════════
 # DISCOVER + STAGE + SELECT
@@ -674,22 +707,9 @@ if [[ -n "${SVX_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
-hdr "asl_dvs_watchdog — file discovery"
-CHOSEN=""
-stage_and_select "asl_dvs_watchdog*.sh" "watchdog" "${WATCHDOG_LIB_DIR}" || true
-WATCHDOG_CHOSEN="${CHOSEN}"
-
-if [[ -n "${WATCHDOG_CHOSEN}" ]]; then
-    info "Checking syntax…"
-    bash -n "${WATCHDOG_CHOSEN}" \
-        || die "Syntax error in $(basename "${WATCHDOG_CHOSEN}") — install aborted"
-    ok "Syntax OK"
-fi
-
 if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" \
-      && -z "${WATCHDOG_CHOSEN}" ]]; then
-    die "Nothing to install — no dashboard, M17/Zello dashboard, sysmon, wifimon, 44helper, SVX dashboard, or watchdog files found."
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" ]]; then
+    die "Nothing to install — no dashboard, M17/Zello dashboard, sysmon, wifimon, 44helper, or SVX dashboard files found."
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -715,12 +735,8 @@ uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 uptodate_check "SVX Dashboard" "${SVX_CHOSEN}" "${SVX_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && SVX_CHOSEN=""
 
-uptodate_check "watchdog"  "${WATCHDOG_CHOSEN}" "${WATCHDOG_BIN}"
-[[ "${UP_TO_DATE_SKIP}" == "true" ]] && WATCHDOG_CHOSEN=""
-
 if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" \
-      && -z "${WATCHDOG_CHOSEN}" ]]; then
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" ]]; then
     ok "All selected files are already up to date — nothing to install."
     exit 0
 fi
@@ -913,26 +929,10 @@ if [[ -n "${SVX_CHOSEN}" ]]; then
 fi
 
 # ══════════════════════════════════════════════════════════════════════════════
-# INSTALL WATCHDOG
-# ══════════════════════════════════════════════════════════════════════════════
-# Same delegation pattern as wifimon/44helper — asl_dvs_watchdog.sh writes
-# and enables its own .service/.timer pair. No config to seed (no identity,
-# no port beyond the dashboard's own, which the watchdog defaults to
-# correctly on its own). Confirmed no read/input prompts anywhere in its
-# --install path, so it's safe unattended.
-if [[ -n "${WATCHDOG_CHOSEN}" ]]; then
-    hdr "Installing asl_dvs_watchdog"
-    info "Delegating to: bash $(basename "${WATCHDOG_CHOSEN}") --install"
-    bash "${WATCHDOG_CHOSEN}" --install \
-        || die "asl_dvs_watchdog --install failed — see output above"
-    ok "asl_dvs_watchdog installed, timer enabled, verification check run"
-fi
-
-# ══════════════════════════════════════════════════════════════════════════════
 # ENABLE + START
 # ══════════════════════════════════════════════════════════════════════════════
 # NOTE: this loop only covers Dashboard and SysMon. The M17/Zello dashboard,
-# wifimon, 44helper, and asl_dvs_watchdog were already enabled + started
+# wifimon and 44helper were already enabled + started
 # above by their own --install.
 hdr "Enabling and starting services"
 
@@ -1061,15 +1061,6 @@ if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     sep
 fi
 
-if [[ -n "${WATCHDOG_CHOSEN}" ]]; then
-    echo
-    echo "  ${BLD}asl_dvs_watchdog${RST}  ($(basename "${WATCHDOG_CHOSEN}"))"
-    sep
-    info "No web UI — timer-driven liveness check for ${DASH_SERVICE}."
-    info "Status: sudo bash ${WATCHDOG_BIN} --status"
-    sep
-fi
-
 echo
 echo "  ${BLD}Service commands:${RST}"
 [[ -n "${DASH_CHOSEN}"     ]] && echo "    Dashboard      :  systemctl {status|restart|stop} ${DASH_SERVICE}"
@@ -1078,6 +1069,5 @@ echo "  ${BLD}Service commands:${RST}"
 [[ -n "${WIFIMON_CHOSEN}"  ]] && echo "    wifimon        :  systemctl {status|restart|stop} ${WIFIMON_SERVICE}"
 [[ -n "${HELPER_CHOSEN}"   ]] && echo "    44helper       :  systemctl {status|restart|stop} ${HELPER_SERVICE}"
 [[ -n "${SVX_CHOSEN}"      ]] && echo "    SVX Dashboard  :  systemctl {status|restart|stop} ${SVX_SERVICE}"
-[[ -n "${WATCHDOG_CHOSEN}" ]] && echo "    watchdog       :  systemctl {status|start} ${WATCHDOG_TIMER}"
 echo "    Logs      :  journalctl -u <service> -f"
 echo
