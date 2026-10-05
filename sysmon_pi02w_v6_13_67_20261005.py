@@ -24,6 +24,12 @@ in stages; everything else matches v6.13.67.
   Reg tab removed: the HTTP and IAX2 registration check cards.  Routes
   gone: /api/reg/http, /api/reg/iax.  The shared check-list renderer
   stays (Phone uses it).
+  Firewall tab removed: ufw / nftables / firewalld rule views and
+  editing, raw ruleset, enable / disable.  Route gone: /api/firewall (GET
+  and POST).  Ports -> port details loses its Firewall zone (state and
+  Allow / Deny), so /api/ports no longer reads the firewall on every
+  15 s refresh.  Phone's read-only "Pi firewall" checks stay; their fix
+  hints now give the Cockpit / firewall-cmd / nftables / ufw step.
 
 v6.13.67 -- D-Star card: gatewayAddress row fixed.  gatewayAddress is the
 Pi's own address that ircDDBGateway binds every socket to (DExtra, D-Plus,
@@ -270,7 +276,7 @@ _DEFAULT_CONFIG = {
     },
     "ui": {
 
-        "enabled_tabs": "overview,services,ports,firewall,journal,asldvs,phone,tune,hardware,dvsm,stfu,m17,zello,sdcard,security,edit",
+        "enabled_tabs": "overview,services,ports,journal,asldvs,phone,tune,hardware,dvsm,stfu,m17,zello,sdcard,security,edit",
     },
 }
 
@@ -2029,131 +2035,6 @@ body.offline #offline-bar{display:block}
   .pt-pid,.pt-service,.pc-ok,.pc-dup{display:none}
 }
 
-.fw-backend-bar{display:flex;align-items:center;gap:.7rem;
-  padding:.38rem .9rem;background:#131c2d;
-  border-bottom:1px solid var(--border);font-family:var(--sans);font-size:var(--fs-base)}
-.fw-backend-lbl{color:#fff;font-size:var(--fs-xs);
-  letter-spacing:.2em;text-transform:uppercase}
-.fw-backend-val{color:var(--orange);font-weight:bold;
-  text-shadow:0 0 6px rgba(255,170,34,.4)}
-.fw-status-val{font-family:var(--sans);font-size:var(--fs-xs);color:#fff}
-.fw-status-val.active{color:var(--green)}
-.fw-status-val.inactive{color:var(--amber)}
-
-.fw-table-hdr,.fw-row{display:grid;
-  grid-template-columns:44px 1fr 82px 1fr 1fr 32px;
-  align-items:center;gap:.5rem;
-  padding:.38rem .9rem;border-top:1px solid var(--border)}
-.fw-table-hdr{background:#131c2d;border-top:none;
-  font-family:var(--sans);font-size:var(--fs-xs);
-  letter-spacing:.2em;text-transform:uppercase;color:#fff;cursor:default}
-.fw-row{cursor:pointer;transition:background .1s}
-.fw-row:hover{background:var(--surface2)}
-.fw-num{font-family:var(--sans);font-size:var(--fs-sm);color:#fff;text-align:right}
-.fw-to{font-family:var(--sans);font-size:var(--fs-base);color:var(--text-bright)}
-.fw-action{font-family:var(--sans);font-size:var(--fs-sm);font-weight:bold;
-  text-align:center;padding:.1rem .35rem;border-radius:3px;border:1px solid}
-.fw-action.ALLOW{color:var(--green);border-color:var(--green-dim);
-  background:rgba(0,255,176,.07)}
-.fw-action.DENY,.fw-action.REJECT{color:var(--red);border-color:var(--red-dim);
-  background:rgba(255,61,90,.07)}
-.fw-action.LIMIT{color:var(--amber);border-color:var(--amber-dim);
-  background:rgba(255,208,64,.07)}
-.fw-from{font-family:var(--sans);font-size:var(--fs-base);color:#fff}
-.fw-svc{font-family:var(--sans);font-size:var(--fs-sm);color:var(--amber);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.fw-svc.unknown{color:#fff;font-style:italic}
-.fw-del{font-family:var(--sans);font-size:var(--fs-xs);color:#fff;
-  cursor:pointer;text-align:center;padding:.1rem .3rem;
-  border:1px solid var(--border);border-radius:3px;transition:all .14s}
-.fw-del:hover{color:var(--red);border-color:var(--red-dim)}
-
-.fw-add-bar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
-  padding:.5rem .9rem;background:#131c2d;
-  border-top:2px solid var(--border2)}
-.fw-add-lbl{font-family:var(--sans);font-size:var(--fs-xs);
-  letter-spacing:.2em;text-transform:uppercase;color:#fff;white-space:nowrap}
-.fw-add-inp{font-family:var(--sans);font-size:var(--fs-base);padding:.25rem .5rem;
-  background:var(--surface2);color:var(--text-bright);
-  border:1px solid var(--border2);border-radius:3px;outline:none;
-  width:80px;transition:border-color .15s}
-.fw-add-inp:focus{border-color:var(--amber);box-shadow:0 0 6px rgba(255,208,64,.2)}
-.fw-add-inp::placeholder{color:#fff}
-.fw-add-sel{font-family:var(--sans);font-size:var(--fs-base);padding:.25rem .45rem;
-  background:var(--surface2);color:var(--text-bright);
-  border:1px solid var(--border2);border-radius:3px;
-  cursor:pointer;outline:none}
-.fw-add-sel option{background:var(--surface2)}
-
-.fw-summary-line{padding:.5rem .9rem;background:#0e1626;
-  border-bottom:1px solid var(--border);font-family:var(--sans);
-  font-size:var(--fs-sm);color:#fff;display:flex;align-items:center;gap:.45rem}
-.fw-summary-dot{font-size:.9rem;line-height:1}
-
-.fw-zone-details{padding:.5rem .9rem .6rem;background:#0e1626;
-  border-bottom:1px solid var(--border);font-family:var(--sans);
-  font-size:var(--fs-sm);color:#fff;display:flex;flex-direction:column;gap:.25rem}
-.fw-zone-row{display:flex;gap:.5rem;align-items:baseline}
-.fw-zone-lbl{color:#fff;opacity:.6;min-width:110px;
-  text-transform:uppercase;font-size:var(--fs-xs);letter-spacing:.15em}
-.fw-zone-val{color:var(--text-bright)}
-
-.fw-raw-toggle-hdr{display:flex;align-items:center;justify-content:space-between;
-  padding:.4rem .9rem;cursor:pointer;user-select:none;
-  background:#131c2d;border-top:1px solid var(--border)}
-.fw-raw-toggle-hdr:hover{background:#182030}
-.fw-raw-toggle-title{font-family:var(--sans);font-size:var(--fs-xs);
-  letter-spacing:.15em;text-transform:uppercase;color:#fff}
-.fw-raw-toggle-chevron{font-family:var(--sans);font-size:var(--fs-sm);color:#fff;
-  transition:transform .2s}
-.fw-raw-toggle-hdr.open .fw-raw-toggle-chevron{transform:rotate(90deg)}
-.fw-raw-toggle-body{display:none}
-.fw-raw-toggle-body.open{display:block}
-
-.fw-manual-hdr{display:flex;align-items:center;justify-content:space-between;
-  padding:.4rem .9rem;cursor:pointer;user-select:none;
-  background:#131c2d;border-bottom:1px solid var(--border)}
-.fw-manual-hdr:hover{background:#182030}
-.fw-manual-title{font-family:var(--sans);font-size:var(--fs-xs);
-  letter-spacing:.15em;text-transform:uppercase;color:#fff}
-.fw-manual-chevron{font-family:var(--sans);font-size:var(--fs-sm);color:#fff;
-  transition:transform .2s}
-.fw-manual-hdr.open .fw-manual-chevron{transform:rotate(90deg)}
-.fw-manual-body{display:none;background:#0e1626;border-bottom:1px solid var(--border)}
-.fw-manual-body.open{display:block}
-.fw-manual-inner{padding:.7rem .9rem .9rem;font-family:var(--sans);
-  font-size:var(--fs-sm);color:#fff;line-height:1.55;max-height:400px;
-  overflow-y:auto}
-.fw-manual-inner h4{font-family:var(--sans);font-size:var(--fs-xs);
-  letter-spacing:.12em;text-transform:uppercase;color:var(--amber);
-  margin:.9rem 0 .3rem;border-top:1px solid var(--border);padding-top:.6rem}
-.fw-manual-inner h4:first-child{margin-top:0;border-top:none;padding-top:0}
-.fw-manual-inner p{margin:.25rem 0}
-.fw-manual-inner ul{margin:.2rem 0 .4rem;padding-left:1.1rem}
-.fw-manual-inner li{margin:.15rem 0}
-.fw-manual-inner code{font-family:var(--sans);font-size:.92em;
-  background:#0a1020;border:1px solid var(--border);border-radius:3px;
-  padding:0 .3rem;color:var(--text-bright)}
-.fw-manual-inner .fw-manual-note{margin-top:.4rem;padding:.4rem .55rem;
-  background:rgba(255,208,64,.07);border:1px solid var(--amber-dim);
-  border-radius:3px;color:#fff}
-
-.fw-raw-btns{display:flex;justify-content:flex-end;
-  margin:.6rem .9rem -.2rem;gap:.4rem}
-.fw-raw-pre{margin:.6rem .9rem;background:#0a1020;
-  border:1px solid var(--border);border-radius:3px;
-  padding:.6rem .8rem;font-family:var(--sans);font-size:var(--fs-sm);
-  color:#fff;line-height:1.6;white-space:pre;overflow-x:auto;
-  max-height:420px;overflow-y:auto}
-.fw-raw-pre::-webkit-scrollbar{width:4px;height:4px}
-.fw-raw-pre::-webkit-scrollbar-thumb{background:var(--border2);border-radius:2px}
-
-@media(max-width:600px){
-  .fw-table-hdr,.fw-row{grid-template-columns:36px 1fr 64px 32px}
-  .fw-from,.fw-svc{display:none}
-  .fw-add-bar{flex-direction:column;align-items:stretch}
-}
-
 .jl-table-hdr,.jl-row{display:grid;grid-template-columns:10px 1fr 82px auto;
   align-items:center;gap:.55rem;
   padding:.42rem .9rem;border-top:1px solid var(--border)}
@@ -2897,8 +2778,6 @@ body.tab-edit #zone-content{
     onclick="switchTab('services','0,255,229')">Services</button>
   <button class="tab-btn"        id="tbtn-ports"
     onclick="switchTab('ports','34,212,255')">Ports</button>
-  <button class="tab-btn"        id="tbtn-firewall"
-    onclick="switchTab('firewall','255,170,34')">Firewall</button>
   <button class="tab-btn"        id="tbtn-journal"
     onclick="switchTab('journal','212,102,255')">Journal</button>
   <button class="tab-btn"        id="tbtn-asldvs"
@@ -3012,166 +2891,6 @@ body.tab-edit #zone-content{
       </div>
       <div id="pt-body">
         <div class="stub-panel" style="min-height:80px">Loading…</div>
-      </div>
-    </div>
-  </div>
-
-  <div id="panel-firewall" class="tab-panel">
-    <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">Firewall Rules</span>
-        <span class="s3-card-meta">click row → details &amp; actions</span>
-      </div>
-      
-      <div id="fw-backend-bar" class="fw-backend-bar">
-        <span class="fw-backend-lbl">Backend</span>
-        <span class="fw-backend-val" id="fw-backend-val">detecting…</span>
-        <span class="fw-status-val"  id="fw-status-val"></span>
-        <div style="margin-left:auto;display:flex;gap:.35rem" id="fw-ufw-btns">
-          <button class="btn btn-muted btn-sm"
-            onclick="loadFirewall()">↻ Refresh</button>
-          <button class="btn btn-green btn-sm"
-            onclick="fwUfwEnable()">✓ Enable ufw</button>
-          <button class="btn btn-red btn-sm"
-            onclick="fwUfwDisable()">✕ Disable ufw</button>
-          <button class="btn btn-muted btn-sm"
-            onclick="fwToggleManual()">📖 Guide</button>
-        </div>
-      </div>
-
-      <div id="fw-manual-hdr" class="fw-manual-hdr" onclick="fwToggleManual()">
-        <span class="fw-manual-title">Firewall Guide — ufw &amp; firewalld</span>
-        <span class="fw-manual-chevron" id="fw-manual-chevron">▶</span>
-      </div>
-      <div id="fw-manual-body" class="fw-manual-body">
-        <div class="fw-manual-inner">
-          <h4>Which backend am I running?</h4>
-          <p>sysmon auto-detects whichever firewall is installed and shows it in the
-          <b>Backend</b> field above. <code>ufw</code> is Debian/Raspberry Pi OS's
-          default frontend to <code>iptables</code>/<code>nftables</code>.
-          <code>firewalld</code> is the default on RHEL-family systems
-          (Rocky, Alma, Fedora) and is zone-based rather than rule-list-based.
-          Only one is normally active at a time — running both causes
-          conflicting rule sets.</p>
-
-          <h4>ufw basics</h4>
-          <ul>
-            <li><code>ufw</code> keeps a simple numbered rule list, evaluated
-            top to bottom. Default policy is usually
-            <code>deny incoming</code> / <code>allow outgoing</code>.</li>
-            <li>Rules added here (Add Rule bar below) call
-            <code>ufw allow/deny &lt;port&gt;/&lt;proto&gt;</code> under the hood,
-            with <code>from &lt;addr&gt;</code> if a source is given.</li>
-            <li><code>ufw status numbered</code> is what populates the rule
-            table — the row's # matches what <code>ufw delete &lt;#&gt;</code>
-            would remove.</li>
-            <li>Enabling/disabling ufw from here toggles the whole firewall,
-            not a single rule — use with care on a remote/headless Pi, since
-            a bad enable can lock out SSH if port 22 isn't allowed first.</li>
-          </ul>
-
-          <h4>firewalld basics — zones &amp; policy</h4>
-          <ul>
-            <li>firewalld groups interfaces into <b>zones</b> (e.g.
-            <code>public</code>, <code>home</code>, <code>internal</code>,
-            <code>trusted</code>), and each zone carries its own allowed
-            services/ports and a default <b>target</b> (policy) such as
-            <code>default</code> (deny unlisted), <code>ACCEPT</code>, or
-            <code>DROP</code>.</li>
-            <li>A port or service is only reachable if it's allowed in the
-            zone that's actually bound to the active interface — check the
-            <b>Zone</b> line under the backend bar (populated by
-            <code>firewall-cmd --get-active-zones</code>) to confirm which
-            zone your radio interface belongs to.</li>
-            <li>Rules added "live" (<code>--add-port</code> with no
-            <code>--permanent</code>) vanish on reload/reboot. sysmon applies
-            both the live and <code>--permanent</code> variants together so
-            changes survive a restart.</li>
-            <li>"Rich rules" (source-restricted or logged rules) don't show
-            in the simple table — see <b>Raw firewall output</b> below for
-            the full <code>firewall-cmd --zone=&lt;zone&gt; --list-all</code>
-            dump.</li>
-          </ul>
-
-          <h4>AllStarLink 3 default posture</h4>
-          <ul>
-            <li>A stock ASL3 image ships with the firewall largely open on
-            the LAN side (or firewalld absent/disabled on some images) —
-            it does <b>not</b> lock down IAX2 (<code>4569/udp</code>) or the
-            RPT/HTTP registration ports by default. Treat "detected: none"
-            or "inactive" above as the out-of-box state, not a bug.</li>
-            <li>If you enable a firewall on an ASL3 node, the ports that
-            matter most are IAX2 <code>4569/udp</code> (node-to-node/hub
-            registration), and whatever the local dashboard/API is bound to
-            (this tool, DVSwitch web UIs, etc). USRP audio bridging between
-            Asterisk and Analog_Bridge is typically loopback-only and
-            doesn't need to cross the firewall.</li>
-            <li>On a home/NAT install, most nodes rely on router port
-            forwarding rather than a host firewall — enabling ufw/firewalld
-            here adds a second layer, so double-check the port list below
-            matches what's forwarded upstream or registration/keying will
-            silently fail.</li>
-          </ul>
-
-          <div class="fw-manual-note">This panel is informational only —
-          it doesn't call any API and reflects general ufw/firewalld/ASL3
-          behavior, not this node's live config. Always confirm against the
-          Backend / Zone details above and the raw output panel.</div>
-        </div>
-      </div>
-
-      <div id="fw-summary-line" class="fw-summary-line hidden"></div>
-
-      <div id="fw-zone-details" class="fw-zone-details hidden"></div>
-
-      <div id="fw-ufw-section">
-        <div class="fw-table-hdr">
-          <span>#</span><span>To / Port</span><span>Action</span>
-          <span>From</span><span>Known Service</span><span></span>
-        </div>
-        <div id="fw-rule-body">
-          <div class="stub-panel" style="min-height:60px">Loading…</div>
-        </div>
-        
-        <div class="fw-add-bar">
-          <span class="fw-add-lbl">Add Rule</span>
-          <input  class="fw-add-inp" id="fw-add-port"
-            type="text" placeholder="Port…" maxlength="6">
-          <select class="fw-add-sel" id="fw-add-proto">
-            <option value="tcp">tcp</option>
-            <option value="udp">udp</option>
-            <option value="any">any</option>
-          </select>
-          <select class="fw-add-sel" id="fw-add-action">
-            <option value="allow">ALLOW</option>
-            <option value="deny">DENY</option>
-            <option value="limit">LIMIT</option>
-          </select>
-          <input  class="fw-add-inp" id="fw-add-from"
-            type="text" placeholder="From (Anywhere)"
-            style="width:130px">
-          <button class="btn btn-green btn-sm"
-            onclick="fwAddRule()">+ Add</button>
-        </div>
-      </div>
-      
-      <div id="fw-raw-section" class="hidden">
-        <div class="fw-raw-toggle-hdr" id="fw-raw-toggle-hdr" onclick="fwToggleRaw()">
-          <span class="fw-raw-toggle-title">Raw firewall output</span>
-          <span class="fw-raw-toggle-chevron" id="fw-raw-toggle-chevron">▶</span>
-        </div>
-        <div class="fw-raw-toggle-body" id="fw-raw-toggle-body">
-          <div class="fw-raw-btns">
-            <button class="btn btn-muted btn-sm" onclick="fwRawCopy()">⎘ Copy</button>
-          </div>
-          <pre id="fw-raw-pre" class="fw-raw-pre">Loading…</pre>
-        </div>
-      </div>
-      
-      <div id="fw-none-section" class="hidden">
-        <div class="stub-panel" style="min-height:80px">
-          No supported firewall detected (ufw / nft / iptables)
-        </div>
       </div>
     </div>
   </div>
@@ -4082,8 +3801,6 @@ body.tab-edit #zone-content{
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-ports" value="ports" onchange="edTabVisChanged()">Ports</label>
         <label class="tab-vis-lbl">
-          <input type="checkbox" id="tabchk-firewall" value="firewall" onchange="edTabVisChanged()">Firewall</label>
-        <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-journal" value="journal" onchange="edTabVisChanged()">Journal</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-asldvs" value="asldvs" onchange="edTabVisChanged()">ASL-DVS</label>
@@ -4554,7 +4271,7 @@ function doLogout() {
 }
 
 
-const TABS = ["overview","services","ports","firewall","journal","asldvs","phone","tune","hardware","dvsm","stfu","m17","zello","sdcard","security","edit"];
+const TABS = ["overview","services","ports","journal","asldvs","phone","tune","hardware","dvsm","stfu","m17","zello","sdcard","security","edit"];
 
 let _enabledTabSet = new Set(TABS);
 
@@ -5410,16 +5127,6 @@ window.loadTab_ports = function() {
   loadPorts();
   _ptRefreshTimer = setInterval(loadPorts, 15_000);
 };
-
-let _fwBackend = "none";
-let _fwCockpitInstalled = false;
-let _fwRawOpen = false;
-let _fwManualOpen = false;
-
-window.loadTab_firewall = function() { loadFirewall(); };
-
-let _fwRules = [];
-
 
 let _jpUnit  = "";
 let _jpLines = 200;
@@ -7561,286 +7268,6 @@ function ptSetProto(proto) {
     if (btn) btn.classList.toggle("on", p === proto);
   });
   loadPorts();
-}
-
-// ========================================================================
-// TAB: Firewall
-// ========================================================================
-// ---- general ----
-function renderFwSummary(el, d, rules) {
-  if (!el) return;
-  if (_fwBackend === "none") { el.classList.add("hidden"); el.innerHTML = ""; return; }
-  el.classList.remove("hidden");
-
-  const dot = d.status === "active" ? "🟢"
-            : d.status === "inactive" ? "⚪" : "🟡";
-
-  let where = "";
-  if (_fwBackend === "firewalld" && d.zone_info) {
-    const ifaces = (d.zone_info.interfaces || []).join(", ") || "no interface bound";
-    where = ` — zone "${esc(d.zone_info.zone)}" on ${esc(ifaces)}` +
-      ((d.zone_info.other_zones || []).length
-        ? ` (+ zone${d.zone_info.other_zones.length > 1 ? "s" : ""} ${esc(d.zone_info.other_zones.join(", "))})` : "");
-  } else if (_fwBackend === "nft" && d.chain_info) {
-    where = ` — ${esc(d.chain_info.family)} ${esc(d.chain_info.table)} ${esc(d.chain_info.chain)}`;
-  }
-
-  const total   = new Set(rules.filter(r => r.action === "ALLOW").map(r => r.to)).size;
-  const labeled = rules.filter(r => r.service).length;
-  const countTxt = total
-    ? `${total} port${total === 1 ? "" : "s"} allowed` +
-      (labeled ? ` (${labeled} tied to known services)` : "")
-    : "no ports currently allowed through this tool";
-
-  el.innerHTML =
-    `<span class="fw-summary-dot">${dot}</span>` +
-    `<span>${esc(_fwBackend)}${where} — ${countTxt}</span>`;
-}
-
-function renderFwZoneDetails(el, d) {
-  if (!el) return;
-  if (_fwBackend !== "firewalld" || !d.zone_info) {
-    el.classList.add("hidden");
-    el.innerHTML = "";
-    return;
-  }
-  el.classList.remove("hidden");
-  const zi = d.zone_info;
-  const rows = [["Zone", zi.zone]];
-  if ((zi.interfaces || []).length) rows.push(["Interface", zi.interfaces.join(", ")]);
-  rows.push(["Policy", zi.target_desc || zi.target || "unknown"]);
-  if (zi.rich_rule_count) {
-    rows.push(["Rich rules", `${zi.rich_rule_count} (see raw output below)`]);
-  }
-  el.innerHTML = rows.map(([lbl, val]) =>
-    `<div class="fw-zone-row"><span class="fw-zone-lbl">${esc(lbl)}</span>` +
-    `<span class="fw-zone-val">${esc(String(val))}</span></div>`
-  ).join("");
-}
-
-function openFwPanel(rule) {
-  document.getElementById("dpanel").style.setProperty(
-    "--panel-accent", "var(--orange)");
-
-  document.getElementById("dpanel-unit").textContent =
-    `Rule #${rule.display_num ?? rule.num} — ${rule.to}`;
-  document.getElementById("dpanel-desc").textContent =
-    `${rule.action}  ${rule.from}${rule.service ? "  →  " + rule.service : ""}`;
-  document.getElementById("dpanel-badges").innerHTML = "";
-  document.getElementById("dpanel-output").innerHTML =
-    '<span class="dp-out-dim">Select an action below</span>';
-
-  const body = document.getElementById("dpanel-body");
-  _dpRestoreBody();
-  body.dataset.custom = "1";
-  const svcHtml = rule.service ? `
-    <div class="dpzone-lbl">Service Actions</div>
-    <div class="dpbtn-row">
-      <button class="btn btn-blue  btn-sm"
-        onclick="ptSvcAction('restart','${esc(rule.service)}.service')">↺ Restart</button>
-      <button class="btn btn-amber btn-sm"
-        onclick="ptSvcAction('stop','${esc(rule.service)}.service')">■ Stop</button>
-      <button class="btn btn-purple btn-sm"
-        onclick="ptViewJournal('${esc(rule.service)}.service')">▤ Journal</button>
-    </div>` : "";
-
-  body.innerHTML = `
-    <div class="dpzone-lbl">Rule Details</div>
-    <div style="padding:.55rem .9rem;font-family:var(--sans);font-size:var(--fs-sm);
-      border-bottom:1px solid var(--border);line-height:1.9">
-      <div><span style="color:#fff;font-size:var(--fs-xs);letter-spacing:.12em;
-        text-transform:uppercase">Rule #&nbsp;</span>
-        <span style="color:var(--orange)">${esc(String(rule.display_num ?? rule.num))}</span></div>
-      <div><span style="color:#fff;font-size:var(--fs-xs);letter-spacing:.12em;
-        text-transform:uppercase">Port&nbsp;&nbsp;&nbsp;</span>
-        <span style="color:var(--text-bright)">${esc(rule.to)}</span></div>
-      <div><span style="color:#fff;font-size:var(--fs-xs);letter-spacing:.12em;
-        text-transform:uppercase">Action&nbsp;</span>
-        <span class="fw-action ${esc(rule.action)}" style="display:inline">
-        ${esc(rule.action)}</span></div>
-      <div><span style="color:#fff;font-size:var(--fs-xs);letter-spacing:.12em;
-        text-transform:uppercase">From&nbsp;&nbsp;&nbsp;</span>
-        <span>${esc(rule.from)}</span></div>
-      ${rule.service ? `<div><span style="color:#fff;font-size:var(--fs-xs);
-        letter-spacing:.12em;text-transform:uppercase">Service</span>
-        <span style="color:var(--amber)">${esc(rule.service)}.service</span></div>` : ""}
-    </div>
-    <div class="dpzone-lbl">Rule Actions</div>
-    <div class="dpbtn-row">
-      ${rule.deletable === false
-        ? `<span style="font-size:var(--fs-xs);color:var(--text-dim)">Rich rule — read-only here</span>`
-        : `<button class="btn btn-red btn-sm"
-        onclick="fwDeleteRule('${esc(String(rule.num))}',this);closePanel()">✕ ${rule.via === "service" ? "Remove Service " + esc(rule.fw_service) : "Delete Rule"}</button>`}
-    </div>
-    <div style="margin:.3rem .9rem .55rem;font-size:var(--fs-xs);color:var(--text-dim);
-      line-height:1.5">
-      ${_fwCockpitInstalled
-        ? `To change this rule's action, use Cockpit's firewall panel
-           (<span style="color:var(--blue)">https://&lt;host&gt;:9090</span> →
-           Networking → Firewall) — sysmon only deletes existing rules.`
-        : `To change this rule's action, delete it and re-add it with the
-           desired action, or use the ufw CLI directly — sysmon only
-           deletes existing rules.`}
-    </div>
-    ${svcHtml}
-    <div id="dpanel-output" style="margin:.55rem .9rem;background:#0a1020;
-      border:1px solid var(--border);border-radius:3px;min-height:50px;
-      max-height:160px;overflow-y:auto;padding:.5rem .7rem;
-      font-family:var(--sans);font-size:var(--fs-sm);color:#fff;line-height:1.65">
-      <span class="dp-out-dim">Action results appear here</span>
-    </div>`;
-
-  document.getElementById("dpanel-overlay").classList.add("open");
-  document.getElementById("dpanel").classList.add("open");
-}
-
-async function fwDeleteRule(num, btn) {
-  let q = `Delete firewall rule ${num}?`;
-  if (String(num).startsWith("svc:")) {
-    const [svc, zone] = String(num).slice(4).split("@");
-    const ports = [...new Set((_fwRules || []).filter(r => r.num === num).map(r => r.to))];
-    q = `Remove firewalld service "${svc}" from zone ${zone}?\n\n` +
-        `This closes: ${ports.join(", ") || "(no ports)"}` +
-        (svc === "cockpit" ? "\n\nWarning: this closes Cockpit itself." : "") +
-        (svc === "ssh" ? "\n\nWarning: this closes SSH access." : "");
-  }
-  if (!await confirm(q)) return;
-  if (btn) btn.disabled = true;
-  const d = await api("/api/firewall", "POST", {action: "delete", rule_num: num});
-  if (btn) btn.disabled = false;
-  if (!d) { toast("Server unreachable", "err"); return; }
-  toast(d.message || (d.ok ? "Rule deleted" : "Failed"), d.ok ? "ok" : "err");
-  if (d.ok) setTimeout(loadFirewall, 600);
-}
-
-async function fwUfwEnable() {
-  const d = await api("/api/firewall", "POST", {action: "enable"});
-  if (!d) { toast("Server unreachable", "err"); return; }
-  toast(d.message || (d.ok ? "ufw enabled" : "Failed"), d.ok ? "ok" : "err");
-  if (d.ok) setTimeout(loadFirewall, 800);
-}
-
-async function fwUfwDisable() {
-  if (!await confirm("Disable ufw? All firewall rules will be inactive.")) return;
-  const d = await api("/api/firewall", "POST", {action: "disable"});
-  if (!d) { toast("Server unreachable", "err"); return; }
-  toast(d.message || (d.ok ? "ufw disabled" : "Failed"), d.ok ? "ok" : "err");
-  if (d.ok) setTimeout(loadFirewall, 800);
-}
-
-// ---- card: Firewall Rules ----
-async function loadFirewall() {
-  const d = await api("/api/firewall");
-  if (!d) return;
-  _fwBackend = d.backend || "none";
-  _fwCockpitInstalled = !!d.cockpit_installed;
-
-  const bv = document.getElementById("fw-backend-val");
-  const sv = document.getElementById("fw-status-val");
-  if (bv) bv.textContent = _fwBackend;
-  if (sv) {
-    sv.textContent = d.status || "";
-    sv.className   = "fw-status-val " + (d.status || "");
-  }
-
-  const ufwSec   = document.getElementById("fw-ufw-section");
-  const rawSec   = document.getElementById("fw-raw-section");
-  const noneSec  = document.getElementById("fw-none-section");
-  const ufwBtns  = document.getElementById("fw-ufw-btns");
-  const sumLine  = document.getElementById("fw-summary-line");
-  const zoneCard = document.getElementById("fw-zone-details");
-
-  ufwSec .classList.toggle("hidden", !["ufw","nft","firewalld"].includes(_fwBackend));
-  rawSec .classList.toggle("hidden", !["nft","iptables","firewalld"].includes(_fwBackend));
-  noneSec.classList.toggle("hidden", _fwBackend !== "none");
-  if (ufwBtns) ufwBtns.style.display = _fwBackend === "ufw" ? "flex" : "none";
-
-  const rules = d.rules || [];
-  _fwRules = rules;
-  if (["ufw","nft","firewalld"].includes(_fwBackend)) {
-    renderFwRules(rules);
-  }
-
-  renderFwSummary(sumLine, d, rules);
-  renderFwZoneDetails(zoneCard, d);
-
-  if (rawSec && !rawSec.classList.contains("hidden")) {
-    const pre = document.getElementById("fw-raw-pre");
-    if (pre) pre.textContent = d.raw || "(empty ruleset)";
-  }
-}
-
-function fwToggleRaw() {
-  _fwRawOpen = !_fwRawOpen;
-  document.getElementById("fw-raw-toggle-hdr") ?.classList.toggle("open", _fwRawOpen);
-  document.getElementById("fw-raw-toggle-body")?.classList.toggle("open", _fwRawOpen);
-}
-
-function fwToggleManual() {
-  _fwManualOpen = !_fwManualOpen;
-  document.getElementById("fw-manual-hdr") ?.classList.toggle("open", _fwManualOpen);
-  document.getElementById("fw-manual-body")?.classList.toggle("open", _fwManualOpen);
-  const chev = document.getElementById("fw-manual-chevron");
-  if (chev) chev.textContent = _fwManualOpen ? "▼" : "▶";
-}
-
-async function fwRawCopy() {
-  const pre = document.getElementById("fw-raw-pre");
-  if (!pre || !pre.textContent) { toast("Nothing to copy", "err"); return; }
-  await _copyWithVerify(pre.textContent);
-}
-
-function renderFwRules(rules) {
-  const body = document.getElementById("fw-rule-body");
-  if (!body) return;
-  body.innerHTML = "";
-
-  if (!rules.length) {
-    body.innerHTML =
-      '<div class="stub-panel" style="min-height:50px">No rules configured.</div>';
-    return;
-  }
-
-  rules.forEach(r => {
-    const row = document.createElement("div");
-    row.className = "fw-row";
-    row.onclick   = e => {
-      if (e.target.classList.contains("fw-del")) return;
-      openFwPanel(r);
-    };
-
-    const svcTxt = r.service || "—";
-    const svcCls = r.service ? "fw-svc" : "fw-svc unknown";
-
-    const canDel = r.deletable !== false;
-    row.innerHTML =
-      `<span class="fw-num">${esc(String(r.display_num ?? r.num))}</span>` +
-      `<span class="fw-to">${esc(r.to)}</span>` +
-      `<span class="fw-action ${esc(r.action)}">${esc(r.action)}</span>` +
-      `<span class="fw-from">${esc(r.from)}</span>` +
-      `<span class="${svcCls}">${esc(svcTxt)}</span>` +
-      (canDel
-        ? `<span class="fw-del" onclick="fwDeleteRule('${esc(String(r.num))}',this)">✕</span>`
-        : `<span class="fw-del" style="visibility:hidden">✕</span>`);
-    body.appendChild(row);
-  });
-}
-
-async function fwAddRule() {
-  const port   = document.getElementById("fw-add-port").value.trim();
-  const proto  = document.getElementById("fw-add-proto").value;
-  const action = document.getElementById("fw-add-action").value;
-  const from_  = document.getElementById("fw-add-from").value.trim() || "Anywhere";
-  if (!port) { toast("Enter a port number", "err"); return; }
-  const d = await api("/api/firewall", "POST",
-    {action: action, port: port, proto: proto, src: from_});
-  if (!d) { toast("Server unreachable", "err"); return; }
-  toast(d.message || (d.ok ? "Rule added" : "Failed"), d.ok ? "ok" : "err");
-  if (d.ok) {
-    document.getElementById("fw-add-port").value = "";
-    document.getElementById("fw-add-from").value = "";
-    setTimeout(loadFirewall, 600);
-  }
 }
 
 // ========================================================================
@@ -11064,17 +10491,6 @@ function openPortPanel(p) {
       <button class="btn btn-purple btn-sm"
         onclick="ptViewJournal('${esc(p.service)}.service')">▤ Journal</button>
     </div>` : ""}
-    <div class="dpzone-lbl">Firewall</div>
-    <div id="pt-fw-state" style="padding:.25rem .9rem .35rem;font-family:var(--sans);
-      font-size:var(--fs-xs);${p.fw_state ? "" : "display:none"}">${p.fw_state ? `<span style="color:#fff">Currently</span>&nbsp;
-      <span style="color:${p.fw_state==="allow"?"var(--green)":"var(--red)"}">
-      ${p.fw_state==="allow"?"ALLOWED":"DENIED"}</span>` : ""}</div>
-    <div class="dpbtn-row">
-      <button class="btn btn-green btn-sm"
-        onclick="ptFwAllow('${p.port}','${p.proto}')">+ Allow ${p.port}/${p.proto}</button>
-      <button class="btn btn-red btn-sm"
-        onclick="ptFwDeny('${p.port}','${p.proto}')">✕ Deny ${p.port}/${p.proto}</button>
-    </div>
     <div id="dpanel-output" style="margin:.55rem .9rem;background:#0a1020;
       border:1px solid var(--border);border-radius:3px;min-height:60px;
       max-height:180px;overflow-y:auto;padding:.5rem .7rem;
@@ -11118,30 +10534,6 @@ function ptViewJournal(unit) {
   closePanel();
   openJournalPopup(unit);
 }
-
-async function _ptFw(action, port, proto) {
-  _ptOut(`<span class="dp-out-dim">${action === "allow" ? "Allowing" : "Denying"} ${esc(port)}/${esc(proto)}…</span>`);
-  const d = await api("/api/firewall", "POST",
-    {action, port, proto, src: "Anywhere"});
-  if (!d) { toast("Server unreachable", "err"); _ptOut('<span class="dp-out-fail">Server unreachable</span>'); return; }
-  const msg = d.message || (d.ok ? "Rule added" : "Failed");
-  toast(msg, d.ok ? "ok" : "err");
-  _ptOut(`<span class="${d.ok ? "dp-out-ok" : "dp-out-fail"}">${esc(msg)}</span>`);
-  if (d.ok) {
-    const st = document.getElementById("pt-fw-state");
-    if (st) {
-      st.innerHTML = `<span style="color:#fff">Currently</span>&nbsp;` +
-        `<span style="color:${action === "allow" ? "var(--green)" : "var(--red)"}">` +
-        `${action === "allow" ? "ALLOWED" : "DENIED"}</span>`;
-      st.style.display = "";
-    }
-    if (typeof loadPorts === "function") loadPorts();
-  }
-}
-
-function ptFwAllow(port, proto) { return _ptFw("allow", port, proto); }
-
-function ptFwDeny(port, proto) { return _ptFw("deny", port, proto); }
 
 // ========================================================================
 // SHARED: DVSM + Zello
@@ -14642,57 +14034,6 @@ def label_ports(ports: list, pinned: list) -> list:
 
     return ports
 
-def _firewalld_all_rules() -> list:
-    rules = []
-    for zone in _firewalld_active_zones():
-        rules.extend(_firewalld_zone_rules(zone))
-    return rules
-
-def _fw_state_map() -> "dict[str, str]":
-    backend = get_firewall_backend()
-    m: "dict[str, str]" = {}
-
-    if backend == "ufw":
-        for r in get_ufw_rules():
-            to = r.get("to", "")
-            if "/" not in to:
-                continue
-            port, proto = to.split("/", 1)
-            if not port.isdigit():
-                continue
-            action = r.get("action", "")
-            if action == "ALLOW":
-                m[f"{port}/{proto}"] = "allow"
-            elif action in ("DENY", "REJECT"):
-                m[f"{port}/{proto}"] = "deny"
-
-    elif backend == "nft":
-        chain_ref = _nft_find_input_chain()
-        if chain_ref:
-            for r in _nft_list_tagged_rules(*chain_ref):
-                to = r.get("to", "")
-                if "/" not in to:
-                    continue
-                m[to] = "allow" if r.get("action") == "ALLOW" else "deny"
-
-    elif backend == "firewalld":
-        for r in _firewalld_all_rules():
-            to = r.get("to", "")
-            if "/" not in to:
-                continue
-            state = "allow" if r.get("action") == "ALLOW" else "deny"
-            p, _, proto = to.partition("/")
-            lo, _, hi = p.partition("-")
-            if not (lo.isdigit() and (not hi or hi.isdigit())):
-                continue
-            if hi and int(hi) - int(lo) > 2048:
-                continue
-            for n in range(int(lo), int(hi or lo) + 1):
-                if state == "allow" or f"{n}/{proto}" not in m:
-                    m[f"{n}/{proto}"] = state
-
-    return m
-
 def _route_ports(h: Handler) -> None:
     qs    = parse_qs(urlparse(h.path).query)
     proto = qs.get("proto", ["both"])[0].strip().lower()
@@ -14701,9 +14042,6 @@ def _route_ports(h: Handler) -> None:
 
     ports = get_open_ports(proto)
     label_ports(ports, _pinned)
-    fw_map = _fw_state_map()
-    for p in ports:
-        p["fw_state"] = fw_map.get(f"{p.get('port')}/{p.get('proto')}", "")
     h.send_json({"ok": True, "ports": ports})
 
 def _probe_targets(port: str, proto: str) -> "list[tuple[int, str]]":
@@ -14819,449 +14157,6 @@ def _route_ports_probe(h: Handler) -> None:
         return
 
     h.send_json({"ok": False, "message": f"Unknown probe type: {kind!r}"}, 400)
-
-
-# ==========================================================================
-# TAB: Firewall
-# ==========================================================================
-
-def get_raw_ruleset(backend: str) -> str:
-    if backend == "nft":
-        return _run(["nft", "list", "ruleset"], timeout=6)
-    if backend == "iptables":
-        return _run(["iptables", "-L", "-n", "-v", "--line-numbers"], timeout=6)
-    return ""
-
-def _label_fw_rule(rule: dict, pinned: list) -> str:
-    to = rule.get("to", "")
-    port_part = to.split("/")[0] if "/" in to else to
-
-    if "-" in port_part:
-        
-        try:
-            lo_s, hi_s = port_part.split("-", 1)
-            lo, hi = int(lo_s), int(hi_s)
-        except ValueError:
-            return _WELL_KNOWN_PORTS.get(port_part, "")
-        for entry in pinned:
-            if "group" in entry:
-                continue
-            try:
-                ep = int(entry.get("port", -1))
-            except (TypeError, ValueError):
-                continue
-            if lo <= ep <= hi:
-                return entry.get("unit", "").replace(".service", "")
-        return _WELL_KNOWN_PORTS.get(port_part, "")
-
-    if not port_part.isdigit():
-        return ""
-    for entry in pinned:
-        if "group" in entry:
-            continue
-        ep = entry.get("port", "-")
-        if str(ep) == port_part:
-            return entry.get("unit", "").replace(".service", "")
-    return _WELL_KNOWN_PORTS.get(port_part, "")
-
-_WELL_KNOWN_PORTS = {
-    "22":   "SSH",
-    "53":   "DNS",
-    "80":   "Web (HTTP)",
-    "443":  "Web (HTTPS)",
-    "9090": "Cockpit",
-    "5353": "mDNS",
-    "123":  "NTP",
-    "67":   "DHCP",
-    "68":   "DHCP",
-}
-
-def _nft_rule_comment(port: str, proto: str) -> str:
-    return f"{_NFT_COMMENT_PREFIX}-{port}-{proto}"
-
-def _nft_ensure_input_chain() -> "tuple[tuple | None, str]":
-    ref = _nft_find_input_chain()
-    if ref:
-        return ref, ""
-    raw = _run(["nft", "list", "ruleset"], timeout=6)
-    if re.search(r'^\s*type\s+\S+\s+hook\s+input\b', raw, re.M):
-        real_hooks = 0
-        table = None
-        for line in raw.splitlines():
-            mt = re.match(r'^\s*table\s+\w+\s+(\S+)\s*\{', line)
-            if mt:
-                table = mt.group(1)
-            elif re.match(r'^\s*type\s+\S+\s+hook\s+input\b', line) and table \
-                    and not table.lower().startswith(_NFT_BAN_TABLE_PREFIXES) \
-                    and table != _NFT_SELF_CHAIN[1]:
-                real_hooks += 1
-        if real_hooks > 1:
-            return None, ("Found more than one input chain in the live nft "
-                          "ruleset — refusing to guess which one to change. "
-                          "Add/remove the rule manually with nft.")
-    fam, table, chain = _NFT_SELF_CHAIN
-    r1 = subprocess.run(["nft", "add", "table", fam, table],
-                        capture_output=True, text=True, timeout=10)
-    r2 = subprocess.run(["nft", "add", "chain", fam, table, chain,
-                         "{", "type", "filter", "hook", "input", "priority", "0", ";",
-                         "policy", "accept", ";", "}"],
-                        capture_output=True, text=True, timeout=10)
-    if r1.returncode != 0 or r2.returncode != 0:
-        return None, ("Could not create sysmon's nft input chain: "
-                      + (r1.stderr.strip() or r2.stderr.strip() or "failed"))
-    _log("nft: created table inet sysmon (chain input, policy accept)")
-    return _NFT_SELF_CHAIN, ""
-
-def _nft_add_rule(family: str, table: str, chain: str,
-                   port: str, proto: str, verdict: str) -> "tuple[bool, str]":
-    comment = _nft_rule_comment(port, proto)
-    for old in _nft_list_tagged_rules(family, table, chain):
-        if old["to"] == f"{port}/{proto}":
-            _nft_delete_rule(family, table, chain, old["num"])
-    cmd = ["nft", "insert", "rule", family, table, chain,
-           proto, "dport", port, verdict, "comment", f'"{comment}"']
-    r  = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
-    ok = r.returncode == 0
-    msg = (f"nft {verdict} {port}/{proto} ({family} {table} {chain}): "
-           f"{'OK' if ok else r.stderr.strip() or 'failed'}")
-    return ok, msg
-
-def _nft_delete_rule(family: str, table: str, chain: str, handle: int) -> "tuple[bool, str]":
-    r = subprocess.run(
-        ["nft", "delete", "rule", family, table, chain, "handle", str(handle)],
-        capture_output=True, text=True, timeout=10,
-    )
-    ok  = r.returncode == 0
-    msg = f"nft delete handle {handle}: {'OK' if ok else r.stderr.strip() or 'failed'}"
-    return ok, msg
-
-def _firewalld_zone() -> "str | None":
-    zones = _firewalld_active_zones()
-    if len(zones) == 1:
-        return zones[0]
-    if len(zones) > 1:
-        dz = _run(["firewall-cmd", "--get-default-zone"], timeout=5).strip()
-        if dz in zones:
-            return dz
-    return None
-
-def _firewalld_port_open_via(port: str, proto: str, zone: str) -> list:
-    via = []
-    for r in _firewalld_zone_rules(zone):
-        if r.get("via") != "service":
-            continue
-        for sp in r.get("service_ports", []):
-            p, _, pr = sp.partition("/")
-            if pr != proto:
-                continue
-            lo, _, hi = p.partition("-")
-            try:
-                if int(lo) <= int(port) <= int(hi or lo):
-                    via.append(r["fw_service"])
-            except ValueError:
-                continue
-    return sorted(set(via))
-
-def _firewalld_port(zone: str, port: str, proto: str,
-                    verb: str, label: str) -> "tuple[bool, str]":
-    spec = f"{port}/{proto}"
-    r1 = subprocess.run(
-        ["firewall-cmd", f"--zone={zone}", f"--{verb}-port={spec}"],
-        capture_output=True, text=True, timeout=10,
-    )
-    r2 = subprocess.run(
-        ["firewall-cmd", f"--zone={zone}", f"--{verb}-port={spec}", "--permanent"],
-        capture_output=True, text=True, timeout=10,
-    )
-    ok  = r1.returncode == 0 and r2.returncode == 0
-    detail = (r1.stderr.strip() or r2.stderr.strip()) if not ok else "OK (runtime + permanent)"
-    return ok, f"firewalld {label} {spec} (zone={zone}): {detail}"
-
-def _firewalld_add_port(zone: str, port: str, proto: str) -> "tuple[bool, str]":
-    return _firewalld_port(zone, port, proto, "add", "allow")
-
-def _firewalld_remove_port(zone: str, port: str, proto: str) -> "tuple[bool, str]":
-    return _firewalld_port(zone, port, proto, "remove", "deny (remove-port)")
-
-def _firewalld_remove_service(zone: str, svc: str) -> "tuple[bool, str]":
-    r1 = subprocess.run(["firewall-cmd", f"--zone={zone}", f"--remove-service={svc}"],
-                        capture_output=True, text=True, timeout=10)
-    r2 = subprocess.run(["firewall-cmd", f"--zone={zone}", f"--remove-service={svc}",
-                         "--permanent"], capture_output=True, text=True, timeout=10)
-    ok = r1.returncode == 0 and r2.returncode == 0
-    detail = (r1.stderr.strip() or r2.stderr.strip()) if not ok else "OK (runtime + permanent)"
-    return ok, f"firewalld remove service {svc} (zone={zone}): {detail}"
-
-_FW_TARGET_DESC = {
-    "default":     "blocks anything not explicitly allowed",
-    "ACCEPT":      "allows everything by default (rules here only add extra blocks)",
-    "DROP":        "silently drops anything not explicitly allowed",
-    "REJECT":      "rejects (with an error) anything not explicitly allowed",
-    "%%REJECT%%":  "rejects (with an error) anything not explicitly allowed",
-}
-
-def _fw_target_desc(target: str) -> str:
-    return _FW_TARGET_DESC.get(target, target or "unknown")
-
-def _route_firewall_get(h: Handler) -> None:
-    backend    = get_firewall_backend()
-    status     = ""
-    rules      = []
-    raw        = ""
-    chain_info = None
-    zone_info  = None
-
-    if backend == "ufw":
-        status = get_ufw_status()
-        raw_rules = get_ufw_rules()
-
-        for r in raw_rules:
-            r["service"] = _label_fw_rule(r, _pinned)
-        rules = raw_rules
-    elif backend == "nft":
-        raw = get_raw_ruleset(backend)
-        chain_ref = _nft_find_input_chain()
-        if chain_ref:
-            status = "active"
-            tagged = _nft_list_tagged_rules(*chain_ref)
-            for r in tagged:
-                r["service"] = _label_fw_rule(r, _pinned)
-            rules = tagged
-            chain_info = {
-                "family": chain_ref[0], "table": chain_ref[1], "chain": chain_ref[2],
-            }
-        else:
-            status = "unknown"
-    elif backend == "firewalld":
-        zones = _firewalld_active_zones()
-        if zones:
-            status = "active"
-            main = _firewalld_zone() or zones[0]
-            raws = []
-            for z in zones:
-                zraw = _run(["firewall-cmd", f"--zone={z}", "--list-all"], timeout=6)
-                raws.append(zraw)
-                for r in _firewalld_zone_rules(z, zraw):
-                    r["service"] = _label_fw_rule(r, _pinned)
-                    rules.append(r)
-                if z == main:
-                    zd = _firewalld_parse_list_all(zraw)
-                    zone_info = {
-                        "zone":            z,
-                        "interfaces":      zd["interfaces"],
-                        "target":          zd["target"],
-                        "target_desc":     _fw_target_desc(zd["target"]),
-                        "rich_rule_count": len(zd["rich_rules"]),
-                        "other_zones":     [x for x in zones if x != z],
-                    }
-            raw = "\n".join(raws)
-            for i, r in enumerate(rules, 1):
-                r["display_num"] = i
-        else:
-            status = "unknown"
-    elif backend == "iptables":
-        raw = get_raw_ruleset(backend)
-
-    h.send_json({
-        "ok":               True,
-        "backend":          backend,
-        "status":           status,
-        "rules":            rules,
-        "raw":              raw,
-        "chain_info":       chain_info,
-        "zone_info":        zone_info,
-        "cockpit_installed": get_service_installed("cockpit.service"),
-    })
-
-def _fw_reply(h: Handler, ok: bool, msg: str) -> None:
-    _log(msg, stderr=not ok)
-    h.send_json({"ok": ok, "message": msg})
-
-def _fw_port_fields(h: Handler, data: dict, protos: tuple,
-                    anywhere_only: str = ""):
-    port  = str(data.get("port",  "")).strip()
-    proto = str(data.get("proto", "tcp")).strip().lower()
-    src   = str(data.get("src",   "Anywhere")).strip()
-    if not port.isdigit():
-        h.send_json({"ok": False, "message": f"Invalid port: {port!r}"}, 400)
-        return None
-    if proto not in protos:
-        proto = "tcp"
-    if anywhere_only and src and src != "Anywhere":
-        h.send_json({"ok": False, "message": anywhere_only})
-        return None
-    return port, proto, src
-
-def _fw_rule_num(h: Handler, data: dict):
-    try:
-        return int(data.get("rule_num"))
-    except (TypeError, ValueError):
-        h.send_json({"ok": False, "message": "rule_num must be an integer"}, 400)
-        return None
-
-def _fw_unsupported(h: Handler, action: str, backend: str) -> None:
-    h.send_json({
-        "ok": False,
-        "message": f"'{action}' is not supported for the {backend} backend in this tool.",
-    })
-
-def _fw_unknown(h: Handler, action: str) -> None:
-    h.send_json({"ok": False, "message": f"Unknown firewall action: {action!r}"}, 400)
-
-def _route_firewall_post_nft(h: Handler, data: dict, action: str) -> None:
-    if action in ("allow", "deny"):
-        chain_ref, why = _nft_ensure_input_chain()
-    else:
-        chain_ref = _nft_find_input_chain()
-        why = ("No sysmon-managed nft input chain found — nothing to "
-               "remove. Add/remove the rule manually with nft.")
-    if not chain_ref:
-        h.send_json({"ok": False, "message": why})
-        return
-    family, table, chain = chain_ref
-
-    if action in ("allow", "deny"):
-        f = _fw_port_fields(h, data, ("tcp", "udp"),
-                            "nft rules added through this tool only support "
-                            "source \"Anywhere\" — use the nft CLI directly "
-                            "for source-restricted rules.")
-        if f is None:
-            return
-        port, proto, _src = f
-        verdict = "accept" if action == "allow" else "drop"
-        _fw_reply(h, *_nft_add_rule(family, table, chain, port, proto, verdict))
-        return
-
-    if action == "delete":
-        num = _fw_rule_num(h, data)
-        if num is not None:
-            _fw_reply(h, *_nft_delete_rule(family, table, chain, num))
-        return
-
-    if action in ("enable", "disable", "limit"):
-        _fw_unsupported(h, action, "nft")
-        return
-
-    _fw_unknown(h, action)
-
-def _route_firewall_post_firewalld(h: Handler, data: dict, action: str) -> None:
-    zone = _firewalld_zone()
-    if not zone:
-        h.send_json({
-            "ok": False,
-            "message": ("Could not determine which firewalld zone to change "
-                        "(several are active and none is the default zone) — "
-                        "refusing to guess. Use Cockpit or firewall-cmd "
-                        "--zone=<name>."),
-        })
-        return
-
-    if action in ("allow", "deny"):
-        f = _fw_port_fields(h, data, ("tcp", "udp"),
-                            "firewalld rules added through this tool only "
-                            "support source \"Anywhere\" — use firewall-cmd "
-                            "rich rules directly for source-restricted rules.")
-        if f is None:
-            return
-        port, proto, _src = f
-        if action == "allow":
-            _fw_reply(h, *_firewalld_add_port(zone, port, proto))
-            return
-        ok, msg = _firewalld_remove_port(zone, port, proto)
-        via = _firewalld_port_open_via(port, proto, zone)
-        if via:
-            ok = False
-            msg = (f"{port}/{proto} is still open in zone {zone} through firewalld "
-                   f"service(s) {', '.join(via)} — delete that service row in the "
-                   f"Firewall tab (or in Cockpit) to close it")
-        _fw_reply(h, ok, msg)
-        return
-
-    if action == "delete":
-        spec = str(data.get("rule_num", "")).strip()
-        spec, _, rzone = spec.partition("@")
-        if rzone:
-            if rzone not in _firewalld_active_zones():
-                h.send_json({"ok": False, "message": f"Zone {rzone!r} is not active"}, 400)
-                return
-            zone = rzone
-        if spec.startswith("svc:"):
-            svc = spec[4:]
-            if not _FWD_SERVICE_RE.match(svc):
-                h.send_json({"ok": False, "message": f"Invalid service: {svc!r}"}, 400)
-                return
-            _fw_reply(h, *_firewalld_remove_service(zone, svc))
-            return
-        if spec.startswith("rich:"):
-            h.send_json({"ok": False, "message": "Rich rules are read-only here — "
-                         "change them in Cockpit or with firewall-cmd"}, 400)
-            return
-        port, sep, proto = spec.partition("/")
-        if not sep or not re.match(r"^\d+(-\d+)?$", port) or proto not in ("tcp", "udp", "sctp", "dccp"):
-            h.send_json({"ok": False, "message": f"Invalid rule spec: {spec!r}"}, 400)
-            return
-        _fw_reply(h, *_firewalld_remove_port(zone, port, proto))
-        return
-
-    if action in ("enable", "disable", "limit"):
-        _fw_unsupported(h, action, "firewalld")
-        return
-
-    _fw_unknown(h, action)
-
-def _ufw_cmd(h: Handler, cmd: list, label: str, stdin: "str | None" = None) -> None:
-    r = subprocess.run(cmd, input=stdin, capture_output=True, text=True, timeout=10)
-    ok = r.returncode == 0
-    _fw_reply(h, ok, f"{label}: {'OK' if ok else r.stderr.strip() or 'failed'}")
-
-def _route_firewall_post(h: Handler, data: dict) -> None:
-    if os.geteuid() != 0:
-        h.send_json({"ok": False, "message": "root required"}); return
-
-    backend = get_firewall_backend()
-    action  = str(data.get("action", "")).strip().lower()
-
-    if backend == "nft":
-        _route_firewall_post_nft(h, data, action)
-        return
-
-    if backend == "firewalld":
-        _route_firewall_post_firewalld(h, data, action)
-        return
-
-    if backend != "ufw":
-        h.send_json({
-            "ok":      False,
-            "message": f"Firewall mutations require ufw, nft, or firewalld (detected: {backend})",
-        }); return
-
-    if action in ("allow", "deny", "limit"):
-        f = _fw_port_fields(h, data, ("tcp", "udp", "any"))
-        if f is None:
-            return
-        port, proto, src = f
-        rule_spec = f"{port}/{proto}" if proto != "any" else port
-        cmd = ["ufw", action, "from", src, "to", "any", "port", port,
-               "proto", proto] if src != "Anywhere" \
-              else ["ufw", action, rule_spec]
-        _ufw_cmd(h, cmd, f"ufw {action} {rule_spec}")
-        return
-
-    if action == "delete":
-        num = _fw_rule_num(h, data)
-        if num is not None:
-            _ufw_cmd(h, ["ufw", "delete", str(num)], f"ufw delete {num}", stdin="y\n")
-        return
-
-    if action == "enable":
-        _ufw_cmd(h, ["ufw", "--force", "enable"], "ufw enable")
-        return
-
-    if action == "disable":
-        _ufw_cmd(h, ["ufw", "disable"], "ufw disable")
-        return
-
-    _fw_unknown(h, action)
 
 
 # ==========================================================================
@@ -17252,16 +16147,19 @@ def _ph_fw_ctx(ctx: dict) -> dict:
     return ctx["_fw_udp"]
 
 def _ph_fw_fix(ctx: dict, what: str) -> str:
-    """Where to open a port, for the firewall this Pi runs (v6.11.8)."""
+    """How to open a port, for the firewall this Pi runs (v6.11.8; Pi02w: no Firewall tab)."""
     if "_fw_backend" not in ctx:
         ctx["_fw_backend"] = get_firewall_backend()
     be = ctx["_fw_backend"]
+    ports = what.split()[-1]
     if be == "firewalld":
-        return f"Open {what} on the Ports/Firewall tab or in Cockpit → Networking → Firewall"
+        return (f"Open {what} in Cockpit → Networking → Firewall, or: "
+                f"sudo firewall-cmd --permanent --add-port={ports}/udp && sudo firewall-cmd --reload")
     if be == "nft":
-        return (f"Open {what} on the Ports/Firewall tab. nft rules made there close again at "
-                f"reboot -- add them to /etc/nftables.conf to keep them")
-    return f"Open {what} on the Ports/Firewall tab"
+        return f"Open {what} in /etc/nftables.conf, then: sudo systemctl reload nftables"
+    if be == "ufw":
+        return f"Open {what}: sudo ufw allow {ports.replace('-', ':')}/udp"
+    return f"Open {what} in the Pi's firewall"
 
 def _ph_fw_check(cid: str, title: str, cov: dict, what: str, fix: str) -> dict:
     st = cov["state"]
@@ -22758,7 +21656,7 @@ def unpin_service(unit: str) -> bool:
         reload_config()
     return ok
 
-_ALL_TABS = ("overview", "services", "ports", "firewall", "journal",
+_ALL_TABS = ("overview", "services", "ports", "journal",
              "asldvs", "phone", "tune", "hardware", "dvsm", "stfu", "m17", "zello", "sdcard",
              "security", "edit")
 
@@ -22927,95 +21825,6 @@ def _route_appconf_get(h: Handler) -> None:
 
 def _route_appconf_post(h: Handler, data: dict) -> None:
     _pathfile_post(h, data, _PATHFILE_APPCONF)
-
-
-# ==========================================================================
-# SHARED: Ports + Firewall
-# ==========================================================================
-
-_NFT_COMMENT_PREFIX = "sysmon"
-
-def _nft_find_input_chain() -> "tuple[str, str, str] | None":
-    raw = _run(["nft", "list", "ruleset"], timeout=6)
-    if not raw:
-        return None
-
-    candidates: "list[tuple[str, str, str]]" = []
-    depth = 0
-    cur_family = cur_table = cur_chain = None
-    table_depth = chain_depth = None
-
-    for raw_line in raw.splitlines():
-        line = raw_line.strip()
-
-        m_table = re.match(r'^table\s+(\w+)\s+(\S+)\s*\{', line)
-        if m_table and table_depth is None:
-            cur_family, cur_table = m_table.group(1), m_table.group(2)
-            table_depth = depth
-            depth += 1
-            continue
-
-        m_chain = re.match(r'^chain\s+(\S+)\s*\{', line)
-        if m_chain and cur_table is not None and chain_depth is None:
-            cur_chain = m_chain.group(1)
-            chain_depth = depth
-            depth += 1
-            continue
-
-        if cur_chain is not None and re.match(r'^type\s+\S+\s+hook\s+input\b', line):
-            candidates.append((cur_family, cur_table, cur_chain))
-
-        opens  = line.count("{")
-        closes = line.count("}")
-        depth += opens - closes
-
-        if chain_depth is not None and depth <= chain_depth:
-            cur_chain   = None
-            chain_depth = None
-        if table_depth is not None and depth <= table_depth:
-            cur_table   = None
-            cur_family  = None
-            table_depth = None
-
-    return _nft_pick_chain(list(dict.fromkeys(candidates)))[0]
-
-_NFT_SELF_CHAIN = ("inet", "sysmon", "input")
-
-_NFT_BAN_TABLE_PREFIXES = ("f2b", "sshguard", "crowdsec")
-
-def _nft_pick_chain(candidates: list) -> "tuple[tuple | None, int]":
-    real = [c for c in candidates
-            if not c[1].lower().startswith(_NFT_BAN_TABLE_PREFIXES)]
-    others = [c for c in real if c != _NFT_SELF_CHAIN]
-    if len(others) == 1:
-        return others[0], 1
-    if not others and _NFT_SELF_CHAIN in real:
-        return _NFT_SELF_CHAIN, 1
-    return None, len(others)
-
-def _nft_list_tagged_rules(family: str, table: str, chain: str) -> list:
-    raw = _run(["nft", "-a", "list", "chain", family, table, chain], timeout=6)
-    if not raw:
-        return []
-
-    rules = []
-    pattern = re.compile(
-        r'(tcp|udp)\s+dport\s+(\d+)\s+(accept|drop)\s+'
-        r'comment\s+"' + re.escape(_NFT_COMMENT_PREFIX) + r'-\d+-(?:tcp|udp)"'
-        r'.*?\bhandle\s+(\d+)'
-    )
-    for line in raw.splitlines():
-        m = pattern.search(line.strip())
-        if not m:
-            continue
-        proto, port, verdict, handle = m.groups()
-        rules.append({
-            "num":    int(handle),
-            "to":     f"{port}/{proto}",
-            "action": "ALLOW" if verdict == "accept" else "DENY",
-            "from":   "Anywhere",
-        })
-    return rules
 
 
 # ==========================================================================
@@ -24370,7 +23179,6 @@ _GET_ROUTES = {
     "/api/services/detail":    _route_service_detail,
     "/api/ports":              _route_ports,
     "/api/ports/probe":        _route_ports_probe,
-    "/api/firewall":           _route_firewall_get,
     "/api/journal/list":       _route_journal_list,
     "/api/journal/fetch":      _route_journal_fetch,
     "/api/unit_file":          _route_unit_file_get,
@@ -24408,7 +23216,6 @@ _POST_ROUTES = {
     "/api/reboot":          _route_reboot,
     "/api/shutdown":        _route_shutdown,
     "/api/config":          _route_config_post,
-    "/api/firewall":        _route_firewall_post,
     "/api/unit_file":       _route_unit_file_post,
     "/api/asterisk/file":   _route_asterisk_post,
     "/api/allmon3/file":    _route_allmon3_post,
