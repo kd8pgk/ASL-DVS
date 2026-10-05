@@ -16,6 +16,14 @@ POST, the "zello_installed" check in /api/status and the tab's entries in
 the tab lists are gone.  A saved enabled_tabs list that still names zello
 is fine -- unknown tabs are dropped when the config is read.  The bridge
 service itself is untouched; Services and Journal still show it.
+  Launcher: the service now starts through /usr/local/bin/asl_dvs_launch.py
+(written by --install, shared with the Pi02w dashboard), which imports
+this file instead of running it, so Python keeps its compiled copy in
+__pycache__ and reuses it: about 26 MB settled instead of 54 MB, and twice
+as fast to start.  --install also clears compiled copies of older
+versions; --uninstall removes this version's and, when no other unit uses
+it, the launcher.  The Security check "dashboard requires login" now takes
+the last .py in the dashboard's ExecStart (the program, not the launcher).
 
 v6.13.67-pi02w -- Pi Zero 2 W build, branched from v6.13.67.  A lighter
 sysmon for the Pi Zero 2 W (512 MB RAM, 4 slow cores): tabs are removed
@@ -11914,9 +11922,11 @@ def _check_dashboard_web_auth() -> dict:
     exec_start, ran = _sec_run(
         ["systemctl", "show", "-p", "ExecStart", "--value", _SEC_DASH_UNIT])
     if ran and exec_start:
-        m = re.search(r"(/\S+\.py)", exec_start)
-        if m and Path(m.group(1)).exists():
-            src_path = m.group(1)
+        # The last .py is the program: a Pi02w unit starts it through
+        # /usr/local/bin/asl_dvs_launch.py, which comes first.
+        paths = re.findall(r"(/\S+\.py)", exec_start)
+        if paths and Path(paths[-1]).exists():
+            src_path = paths[-1]
     if not src_path:
         for cand in _SEC_DASH_CANDIDATES:
             if cand.exists():
@@ -22410,6 +22420,39 @@ def startup() -> None:
 _INSTALL_DIR   = "/usr/local/lib/asl_dvs_sysmon"
 _INSTALL_LINK  = "/usr/local/bin/sysmon.py"
 _SERVICE_PATH  = "/etc/systemd/system/sysmon.service"
+# Pi02w launcher.  A program started as `python3 file.py` is compiled from
+# source on every start, and Python keeps the memory the compile took: the
+# Pi02w sysmon settles near 54 MB that way and the Pi02w dashboard near
+# 45 MB.  Python only saves and reuses a compiled copy (__pycache__/*.pyc)
+# for code it *imports*, so the service runs this small launcher instead,
+# which imports the real file as the main program.  The first start writes
+# the compiled copy next to the file; every later start loads it (sysmon
+# ~26 MB, dashboard ~25 MB, and about twice as fast to start).  Python
+# checks the file's date and size on every start and recompiles by itself
+# after an update.  Shared by the Pi02w sysmon and dashboard; the
+# installer writes the same file.
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
+# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
+# named on the command line through Python's import system, so its compiled
+# copy is kept in __pycache__ and reused on later starts instead of the whole
+# file being compiled again -- about half the memory and twice as fast to
+# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
+import os
+import runpy
+import sys
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+if name.isidentifier():
+    sys.path.insert(0, os.path.dirname(target))
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    runpy.run_path(target, run_name="__main__")
+'''
 _SERVICE_CONTENT = f"""[Unit]
 Description=ASL-DVS SYSMON
 After=network.target
@@ -22417,7 +22460,7 @@ After=network.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -22427,6 +22470,51 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 """
+
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _pyc_for(src: str) -> list:
+    name = os.path.splitext(os.path.basename(src))[0]
+    return _glob_pyc(os.path.dirname(src), name)
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    """Drop compiled copies whose source file is gone (older versions)."""
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    """Remove the shared launcher once no installed unit runs it."""
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    os.remove(_LAUNCHER_PATH)
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 def install_service() -> None:
     if os.geteuid() != 0:
@@ -22447,6 +22535,8 @@ def install_service() -> None:
         os.remove(_INSTALL_LINK)
     os.symlink(dest, _INSTALL_LINK)
     print(f"  [+] Symlinked {_INSTALL_LINK} -> {dest}")
+    _write_launcher()
+    _prune_pyc(_INSTALL_DIR)
 
     with open(_SERVICE_PATH, "w") as f:
         f.write(_SERVICE_CONTENT)
@@ -22487,6 +22577,9 @@ def uninstall_service() -> None:
         if target and os.path.basename(target).startswith("sysmon_") and os.path.isfile(target):
             os.remove(target)
             print(f"  [-] Removed {target}")
+        for pyc in _pyc_for(target or _INSTALL_LINK):
+            os.remove(pyc)
+    _remove_launcher_if_unused()
 
     print(f"\nUninstall complete. {CONFIG_FILE} was not touched.")
 

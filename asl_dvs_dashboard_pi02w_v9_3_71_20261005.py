@@ -21,6 +21,12 @@
 #     1 s; bridge up/down now after 2 polls, ~4 s, was 3 polls, ~3 s); the
 #     page refreshes every 5 s when idle (was 3 s; 1 s while busy is
 #     unchanged) and checks the TX/RX light every 1 s (was 0.5 s).
+#   - Launcher: the service starts through /usr/local/bin/asl_dvs_launch.py
+#     (shared with the Pi02w sysmon), which imports this file instead of
+#     running it, so Python keeps the compiled copy in __pycache__ and
+#     reuses it: about 25 MB settled instead of 45 MB, twice as fast to
+#     start.  --install clears compiled copies of older versions;
+#     --uninstall removes this one and, when unused, the launcher.
 
 import argparse
 import codecs
@@ -125,13 +131,46 @@ _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
 _INSTALL_DIR      = "/usr/local/lib/asl_dvs"
 _INSTALL_LINK     = "/usr/local/bin/asl_dvs_dashboard.py"
 _SERVICE_PATH     = "/etc/systemd/system/asl_dvs_dashboard.service"
+# Pi02w launcher.  A program started as `python3 file.py` is compiled from
+# source on every start, and Python keeps the memory the compile took: the
+# Pi02w sysmon settles near 54 MB that way and the Pi02w dashboard near
+# 45 MB.  Python only saves and reuses a compiled copy (__pycache__/*.pyc)
+# for code it *imports*, so the service runs this small launcher instead,
+# which imports the real file as the main program.  The first start writes
+# the compiled copy next to the file; every later start loads it (sysmon
+# ~26 MB, dashboard ~25 MB, and about twice as fast to start).  Python
+# checks the file's date and size on every start and recompiles by itself
+# after an update.  Shared by the Pi02w sysmon and dashboard; the
+# installer writes the same file.
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
+# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
+# named on the command line through Python's import system, so its compiled
+# copy is kept in __pycache__ and reused on later starts instead of the whole
+# file being compiled again -- about half the memory and twice as fast to
+# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
+import os
+import runpy
+import sys
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+if name.isidentifier():
+    sys.path.insert(0, os.path.dirname(target))
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    runpy.run_path(target, run_name="__main__")
+'''
 _SERVICE_CONTENT  = f"""[Unit]
 Description=ASL-DVS Node Control Dashboard
 After=network.target
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/python3 {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -14702,6 +14741,51 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _pyc_for(src: str) -> list:
+    name = os.path.splitext(os.path.basename(src))[0]
+    return _glob_pyc(os.path.dirname(src), name)
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    """Drop compiled copies whose source file is gone (older versions)."""
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    """Remove the shared launcher once no installed unit runs it."""
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    os.remove(_LAUNCHER_PATH)
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
+
 def install_service() -> None:
     if os.geteuid() != 0:
         print("ERROR: install requires root  →  sudo python3 asl_dvs_dashboard.py --install",
@@ -14721,6 +14805,8 @@ def install_service() -> None:
         os.remove(_INSTALL_LINK)
     os.symlink(dest, _INSTALL_LINK)
     print(f"  [+] Symlinked {_INSTALL_LINK} -> {dest}")
+    _write_launcher()
+    _prune_pyc(_INSTALL_DIR)
 
     with open(_SERVICE_PATH, "w") as f:
         f.write(_SERVICE_CONTENT)
@@ -14760,6 +14846,9 @@ def uninstall_service() -> None:
         if target and os.path.basename(target).startswith("asl_dvs_dashboard_") and os.path.isfile(target):
             os.remove(target)
             print(f"  [-] Removed {target}")
+        for pyc in _pyc_for(target or _INSTALL_LINK):
+            os.remove(pyc)
+    _remove_launcher_if_unused()
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
 
