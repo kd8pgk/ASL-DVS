@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.154.py
+# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.155.py
 # =============================================================================
 #
 # STAGE:      Response to an external audit (not one of the original 8
@@ -92,8 +92,15 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.154"
-APP_STAGE = "v0.0.154: Package installs no longer cut off by time limits. Pi Install's firewalld and "\
+APP_VERSION = "0.0.155"
+APP_STAGE = "v0.0.155: SVXLink USRP fork audit. USRP fork is now the default Script option on the "\
+    "SVXLink tab. Fixed: every USRP step was refused as 'Unknown distro: usrp'; the build put the config in "\
+    "/usr/local/etc/svxlink/svxlink (SYSCONF_INSTALL_DIR is now /usr/local/etc -- the build adds /svxlink); "\
+    "new manual card switches UsrpLogic on (LOGICS + [LinkToUsrp]) and points DV_USER_INFOFILE at the "\
+    "/usr/local copy; make -j limited by free memory (Pi Zero 2W); clone --depth 1; preflight reports a "\
+    "missing package correctly; svxlink user gets /var/lib/svxlink; optional purge removes everything in the "\
+    "build's install_manifest.txt. Multi-line manual cards on this tab are now editable text boxes. || "\
+    "v0.0.154: Package installs no longer cut off by time limits. Pi Install's firewalld and "\
     "WireGuard/systemd-resolved prerequisites (was a 300 s cap) and System Optimization's dphys-swapfile / "\
     "man-db remove + reinstall (was 120 s, inside the web request) now run apt as their own systemd unit with "\
     "no time limit, noninteractive with confold, behind the package-health gate; the System Optimization ones "\
@@ -2679,11 +2686,32 @@ _SVX_USRP_PREFIX = "/usr/local"
 _SVX_USRP_ETC = "/usr/local/etc/svxlink"
 _SVX_USRP_SRC_DIR = "~/svxlink-usrp-src"
 
+_SVX_USRP_LOGIC_SNIPPET = f"""# 1) {_SVX_USRP_ETC}/svxlink.conf -- in the [GLOBAL] section, change
+#    LOGICS=SimplexLogic   to:
+LOGICS=SimplexLogic,UsrpLogic
+
+# 2) Same file -- add this section at the end, so the radio side and
+#    the USRP side hear each other:
+[LinkToUsrp]
+CONNECT_LOGICS=SimplexLogic:9:USRP,UsrpLogic
+DEFAULT_ACTIVE=1
+TIMEOUT=0
+
+# 3) {_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf -- change these lines:
+DV_USER_INFOFILE={_SVX_USRP_ETC}/dv_users.json
+CALL=YOURCALL
+USRP_HOST=127.0.0.1
+#    USRP_TX_PORT = the port Analog_Bridge LISTENS on (fork default 41234)
+#    USRP_RX_PORT = the port Analog_Bridge SENDS to  (fork default 41233)
+#    Match them to Analog_Bridge.ini -- the two ends are mirror images.
+#    Keep everything on 127.0.0.1; never open these ports in a firewall."""
+
 
 def _svxlink_install_steps_usrp() -> list[dict]:
     return [
         {"id": "usrp_preflight", "num": 1, "title": "Check for conflicts (read-only)",
-         "cmd": "echo '--- apt package:'; dpkg -l svxlink-server 2>/dev/null | tail -n1 || echo '(not installed)'; "
+         "cmd": "echo '--- apt package:'; st=$(dpkg-query -W -f='${Status}' svxlink-server 2>/dev/null); "
+                "case \"$st\" in *not-installed*|'') echo '(not installed)';; *) echo \"$st\";; esac; "
                 "echo '--- svxlink.service state:'; systemctl is-active svxlink 2>/dev/null; "
                 "systemctl is-enabled svxlink 2>/dev/null; true",
          "note": "Read-only — changes nothing. This build installs under /usr/local (binaries in "
@@ -2706,10 +2734,10 @@ def _svxlink_install_steps_usrp() -> list[dict]:
              {"id": "branch", "label": "Branch", "type": "text", "default": "svxlink-usrp"},
          ],
          "cmd_template": f"rm -rf {_SVX_USRP_SRC_DIR} && "
-                         "git clone -b {{branch}} https://github.com/dl1hrc/svxlink.git "
+                         "git clone --depth 1 -b {{branch}} https://github.com/dl1hrc/svxlink.git "
                          f"{_SVX_USRP_SRC_DIR}",
          "cmd": f"rm -rf {_SVX_USRP_SRC_DIR} && "
-                f"git clone -b svxlink-usrp https://github.com/dl1hrc/svxlink.git {_SVX_USRP_SRC_DIR}",
+                f"git clone --depth 1 -b svxlink-usrp https://github.com/dl1hrc/svxlink.git {_SVX_USRP_SRC_DIR}",
          "note": "UNOFFICIAL, THIRD-PARTY fork (Adi Bier / DL1HRC) — not published or endorsed by the "
                  "SvxLink project. Adds a UsrpLogic module implementing the USRP protocol so SvxLink can "
                  "talk to the same DVSwitch Analog_Bridge/MMDVM_Bridge components this fleet's DVSwitch tab "
@@ -2722,7 +2750,9 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "fork, but it is documented for Bookworm only, asks for your callsign part-way through, and installs "
                  "into /usr and /etc — run it by hand in a terminal if you prefer it; it cannot run from this helper."},
         {"id": "usrp_build", "num": 4, "title": "Configure & build (compiles from source)",
-         "cmd": f"cd {_SVX_USRP_SRC_DIR}/src && "
+         "cmd": "j=$(awk '/^MemAvailable:/ {print int($2/716800)}' /proc/meminfo); n=$(nproc); "
+                "[ \"${j:-0}\" -lt 1 ] && j=1; [ \"$j\" -gt \"$n\" ] && j=$n; "
+                f"cd {_SVX_USRP_SRC_DIR}/src && "
                 "if ! grep -rqs --include=CMakeLists.txt --include='*.cmake' WITH_CONTRIB_USRP_LOGIC . ; then "
                 "echo 'STOP: this copy of the fork has no WITH_CONTRIB_USRP_LOGIC build switch -- the USRP part "
                 "would not be built. Check the branch name in step 3.'; exit 1; fi && "
@@ -2730,14 +2760,19 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                 "mkdir -p build && cd build && "
                 "cmake -DUSE_QT=OFF -DCMAKE_BUILD_TYPE=Release -DWITH_CONTRIB_USRP_LOGIC=ON "
                 f"-DCMAKE_INSTALL_PREFIX={_SVX_USRP_PREFIX} "
-                f"-DSYSCONF_INSTALL_DIR={_SVX_USRP_ETC} -DLOCAL_STATE_DIR=/var .. && "
-                "make -j$(nproc) && sudo make install && sudo ldconfig",
+                f"-DSYSCONF_INSTALL_DIR={_SVX_USRP_PREFIX}/etc -DLOCAL_STATE_DIR=/var .. && "
+                "echo \"Building with $j parallel job(s) (free memory / 700 MB, max $n)\" && "
+                "make -j$j && sudo make install && sudo ldconfig",
          "timeout": None,
          "note": "Compiles the full SvxLink suite (svxlink, remotetrx, and the rest) plus UsrpLogic from "
                  "source. v0.0.139: runs from the fork's src/ folder (where SvxLink keeps its build file) with "
                  "-DWITH_CONTRIB_USRP_LOGIC=ON — the switch that turns on the USRP part — and first checks the "
                  "fork really has that switch, stopping if not (cmake alone would only warn and quietly build "
-                 "without USRP). This runs with no timeout since a full SvxLink build reliably takes well over the "
+                 "without USRP). v0.0.155: -DSYSCONF_INSTALL_DIR is /usr/local/etc -- the build adds "
+                 "'/svxlink' itself (src/CMakeLists.txt), so the config lands in /usr/local/etc/svxlink "
+                 "(before, it went to /usr/local/etc/svxlink/svxlink and the later steps missed it). Parallel "
+                 "jobs are limited by free memory (one per 700 MB) so the 512 MB Pi Zero 2W builds with one "
+                 "job instead of running out of memory. This runs with no timeout since a full SvxLink build reliably takes well over the "
                  "5-10 minutes a small single-program build takes, and can run "
                  "far longer than that on the Pi Zero 2W travel node (652702). SECURITY: a PR reviewer "
                  "(MarkRose) found UsrpLogic's UDP message unpacker throws on a crafted datagram under 32 "
@@ -2772,21 +2807,32 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                 "else sudo useradd -r -U -d /var/lib/svxlink -s /usr/sbin/nologin svxlink && "
                 "echo 'svxlink user created'; fi && "
                 "sudo usermod -a -G dialout,audio,plugdev svxlink && "
-                "sudo mkdir -p /var/spool/svxlink && sudo chown -R svxlink:svxlink /var/spool/svxlink && "
+                "sudo mkdir -p /var/spool/svxlink /var/lib/svxlink && "
+                "sudo chown -R svxlink:svxlink /var/spool/svxlink /var/lib/svxlink && "
                 "sudo touch /var/log/svxlink && sudo chown svxlink:svxlink /var/log/svxlink && "
                 "id svxlink",
          "timeout": 60,
          "note": "Safe to run more than once. A source build doesn't create the 'svxlink' user the way the apt "
-                 "package does, and the service in step 8 runs as that user. Also adds it to the sound-card and "
-                 "USB-serial groups, and makes its log file and spool folder writable by it — without that, the "
+                 "package does, and the service in step 9 runs as that user. Also adds it to the sound-card and "
+                 "USB-serial groups, and makes its log file, spool and state folders writable by it — without that, the "
                  "service would fail to start as svxlink."},
         {"id": "usrp_locate", "num": 7, "title": "Locate installed files (read-only)",
          "cmd": f"which svxlink; ls -la {_SVX_USRP_ETC} 2>/dev/null; "
                 f"find {_SVX_USRP_PREFIX} -iname 'svxlink*.service' 2>/dev/null; true",
          "note": "Read-only. A third-party fork's CMakeLists can differ from upstream's — this lists what "
-                 "the build step actually installed and where, since step 8 (manual) needs the real "
+                 "the build step actually installed and where, since step 9 (manual) needs the real "
                  "binary path to write a correct systemd unit."},
-        {"id": "usrp_service_unit", "num": 8, "title": "Systemd unit (author by hand)", "manual": True,
+        {"id": "usrp_logic_conf", "num": 8, "title": "svxlink.conf + UsrpLogic.conf — switch UsrpLogic on",
+         "manual": True, "manual_block": True,
+         "cmd": _SVX_USRP_LOGIC_SNIPPET,
+         "note": "Edit by hand (nano or the Cockpit file editor) — v0.0.155. The build installs UsrpLogic but "
+                 "does not switch it on: svxlink.conf ships with LOGICS=SimplexLogic and no link to it, so "
+                 "without these edits the service starts but no audio reaches the USRP side. Change "
+                 "SimplexLogic to RepeaterLogic below if that is the logic your node uses. The "
+                 "DV_USER_INFOFILE fix is needed because the fork's template points at /etc/svxlink, but "
+                 "this build installs that file under /usr/local/etc/svxlink."},
+        {"id": "usrp_service_unit", "num": 9, "title": "Systemd unit (author by hand)", "manual": True,
+         "manual_block": True,
          "cmd": "[Unit]\nDescription=SvxLink (USRP fork)\nAfter=network.target sound.target\n\n[Service]\n"
                 f"ExecStart={_SVX_USRP_PREFIX}/bin/svxlink --logfile=/var/log/svxlink --config={_SVX_USRP_ETC}/svxlink.conf\n"
                 "User=svxlink\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target",
@@ -2794,11 +2840,11 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "uses for its rpt.conf/modules.conf edits). Adjust the ExecStart path above using step 5's "
                  "output if it differs, save this as /etc/systemd/system/svxlink-usrp.service, then run "
                  "`sudo systemctl daemon-reload && sudo systemctl enable --now svxlink-usrp` yourself. The "
-                 "'svxlink' user it runs as comes from step 6 — run that first. Set up UsrpLogic.conf (see "
-                 "step 5) before starting it."},
-        _svx_config_field_step(9, conf_path=f"{_SVX_USRP_ETC}/svxlink.conf", svc="svxlink-usrp"),
-        _cockpit_install_step(10),
-        _cockpit_enable_step(11),
+                 "'svxlink' user it runs as comes from step 6 — run that first. Do step 8 (UsrpLogic on, "
+                 "ports) before starting it."},
+        _svx_config_field_step(10, conf_path=f"{_SVX_USRP_ETC}/svxlink.conf", svc="svxlink-usrp"),
+        _cockpit_install_step(11),
+        _cockpit_enable_step(12),
     ]
 
 
@@ -2808,14 +2854,20 @@ def _svxlink_purge_steps_usrp() -> list[dict]:
          "cmd": "sudo systemctl disable --now svxlink-usrp 2>&1; true",
          "note": "Trailing `; true` so this doesn't report failure if the unit was never installed."},
         {"id": "usrp_purge_binaries", "num": 2, "title": "(Optional) Remove compiled binaries and config",
-         "cmd": f"sudo rm -f {_SVX_USRP_PREFIX}/bin/svxlink {_SVX_USRP_PREFIX}/bin/remotetrx "
-                f"{_SVX_USRP_PREFIX}/bin/siglevdetcal {_SVX_USRP_PREFIX}/bin/devcal && "
-                f"sudo rm -rf {_SVX_USRP_PREFIX}/lib/svxlink {_SVX_USRP_ETC} "
+         "cmd": f"m={_SVX_USRP_SRC_DIR}/src/build/install_manifest.txt; "
+                "if [ -f \"$m\" ]; then echo \"Removing the $(wc -l < \"$m\") files the build installed "
+                "(from $m)\"; tr '\\n' '\\0' < \"$m\" | sudo xargs -0 rm -f --; "
+                "else echo 'No install list from the build -- removing the known paths instead'; "
+                f"sudo rm -f {_SVX_USRP_PREFIX}/bin/svxlink {_SVX_USRP_PREFIX}/bin/remotetrx "
+                f"{_SVX_USRP_PREFIX}/bin/svxreflector {_SVX_USRP_PREFIX}/bin/siglevdetcal "
+                f"{_SVX_USRP_PREFIX}/bin/devcal; fi; "
+                f"sudo rm -rf {_SVX_USRP_PREFIX}/lib/svxlink {_SVX_USRP_PREFIX}/lib/*/svxlink {_SVX_USRP_ETC} "
                 f"{_SVX_USRP_PREFIX}/share/svxlink && sudo ldconfig",
          "auto": False,
-         "note": "NOT run automatically — there's no apt package to purge for a source build, so this "
-                 "directly removes the well-known install paths under /usr/local rather than an apt "
-                 "database, and deletes the callsign/config along with it. Only run this for a completely "
+         "note": "NOT run automatically — there's no apt package to purge for a source build. v0.0.155: "
+                 "removes every file the build installed (its own install list, build/install_manifest.txt, "
+                 "so svxreflector, the shared libraries and man pages go too), falling back to the "
+                 "well-known paths if the source folder is gone, and deletes the callsign/config along with it. Only run this for a completely "
                  "clean slate; double-check nothing else under /usr/local depends on these paths first."},
         {"id": "usrp_purge_unit", "num": 3, "title": "(Optional) Remove the hand-authored systemd unit",
          "cmd": "sudo rm -f /etc/systemd/system/svxlink-usrp.service && sudo systemctl daemon-reload",
@@ -3328,7 +3380,8 @@ def _dispatch_dvswitch_action(payload: dict) -> dict:
 
 
 def _dispatch_svxlink_action(payload: dict) -> dict:
-    return _dispatch_tab_action(payload, _svx_lookup_step, "svx")
+    # v0.0.155: "usrp" added -- every USRP-fork step was refused as "Unknown distro".
+    return _dispatch_tab_action(payload, _svx_lookup_step, "svx", valid_distros=("bookworm", "trixie", "usrp"))
 
 
 def _dispatch_m17_action(payload: dict) -> dict:
@@ -13395,7 +13448,7 @@ _JS_SVXLINK = """
 // state (window._svxState) — nothing persisted, resets on reload.
 function svxCurrentDistro() {
   var el = document.getElementById('svx-distro');
-  return el ? el.value : 'trixie';
+  return el ? el.value : 'usrp';
 }
 
 function svxEscapeAttr(s) {
@@ -13413,7 +13466,13 @@ function svxRenderStepList(mode, distro) {
     if (step.manual) {
       html += '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
-      html += '<input type="text" class="asl3-cmd-input" readonly value="' + svxEscapeAttr(step.cmd) + '">';
+      if (step.manual_block) {
+        html += '<textarea class="cmd-preview" id="svx-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
+          'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+          'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + svxEscapeAttr(step.cmd) + '</textarea>';
+      } else {
+        html += '<input type="text" class="asl3-cmd-input" readonly value="' + svxEscapeAttr(step.cmd) + '">';
+      }
       html += '<div class="step-actions"><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
       html += '</div>';
       return;
@@ -13618,7 +13677,10 @@ function svxCopyStep(btn, mode, distro, stepId) {
   var step = svxFindStep(mode, distro, stepId);
   var label = 'Step ' + (step ? step.num : '?') + '. ' + (step ? step.title : stepId);
   var text;
-  if (step && step.manual) {
+  if (step && step.manual_block) {
+    var blockEl = document.getElementById('svx-block-' + stateKey);
+    text = label + '\\n' + (blockEl ? blockEl.value : step.cmd);
+  } else if (step && step.manual) {
     text = label + '\\n$ ' + step.cmd + '\\n\\n--- output ---\\n(manual step \u2014 not run through this engine)';
   } else {
     var resolved = svxResolveCommand(mode, distro, stepId);
@@ -16151,7 +16213,8 @@ _DVSWITCH_WARNING = """Stage 1: Bookworm uses the official dvswitch.org apt repo
   could have put on the node. The node-identity config step (Callsign/DMR ID/BrandMeister password) uses best-effort
   in-place edits of the installed .ini files — verify the result if you run more than one network profile. Check firewall posture on the Ports tab after install."""
 
-_SVXLINK_WARNING = """Stage 1: svxlink-server is natively packaged for both Bookworm and Trixie in
+_SVXLINK_WARNING = """DEFAULT (v0.0.155): the USRP fork source build is selected first -- pick Bookworm/Trixie in the
+  Script list for the plain Debian package instead. Stage 1: svxlink-server is natively packaged for both Bookworm and Trixie in
   Debian's hamradio section, so both distros use the same install/purge steps (no third-party repo or
   source build needed, unlike DVSwitch, which needs dvswitch.org's repo). Purge runs automatically (non-manual steps) after
   its double-confirm, stopping on first failure. The Callsign config step is a best-effort in-place edit —
@@ -16168,7 +16231,8 @@ _SVXLINK_WARNING = """Stage 1: svxlink-server is natively packaged for both Book
   (652702/652703) before relying on it."""
 
 
-def _render_install_panel(panel_id: str, prefix: str, warning_html: str, extra_options: str = "") -> str:
+def _render_install_panel(panel_id: str, prefix: str, warning_html: str, extra_options: str = "",
+                          default_distro: str = "trixie") -> str:
     """Shared renderer for the ASL3/DVSwitch/SVXLink 'guided install' tabs.
 
     These three tabs share one engine (distro dropdown, purge button,
@@ -16182,8 +16246,8 @@ def _render_install_panel(panel_id: str, prefix: str, warning_html: str, extra_o
   <div class="asl3-topbar">
     <label style="font-family:var(--mono);font-size:.8rem;color:var(--muted)">Script:
       <select id="{prefix}-distro" onchange="{prefix}OnDistroChange()">
-        <option value="bookworm">Bookworm (Debian 12)</option>
-        <option value="trixie" selected>Trixie (Debian 13)</option>
+        <option value="bookworm"{" selected" if default_distro == "bookworm" else ""}>Bookworm (Debian 12)</option>
+        <option value="trixie"{" selected" if default_distro == "trixie" else ""}>Trixie (Debian 13)</option>
         {extra_options}
         <option value="custom">Custom</option>
       </select>
@@ -16720,7 +16784,8 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "dvswitch": lambda: _render_install_panel("dvswitch", "dv", _DVSWITCH_WARNING),
     "svxlink": lambda: _render_install_panel(
         "svxlink", "svx", _SVXLINK_WARNING,
-        extra_options='<option value="usrp">USRP fork (source build, DL1HRC)</option>'),
+        extra_options='<option value="usrp" selected>USRP fork (source build, DL1HRC) — default</option>',
+        default_distro="usrp"),
     "m17": _render_m17_panel,
     "amp": _render_amp_panel,
     "cloudflare": _render_cf_panel,
