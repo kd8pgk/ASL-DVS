@@ -1,6 +1,53 @@
 #!/usr/bin/env python3
 
-"""instmon v1.27.8 (2026-10-05) - KD8PGK Web Installer & Component Manager
+"""instmon v1.27.9 (2026-10-05) - KD8PGK Web Installer & Component Manager
+
+v1.27.9 - Quiet System, Check for updates and Full Update.
+  Quiet System / Restore (Upload card): stops whichever of the watchdog
+timer, SysMon, Dashboard, M17 Dashboard, SVX Dashboard and 44helper are
+running, so a small Pi (Zero 2 W) has memory for uploads and installs.
+The list is fixed in QUIET_SERVICES -- radio, Asterisk, Allmon3, SSH,
+wifimon, Cockpit and instmon are never touched.  Restore starts only what
+Quiet stopped, in reverse order (watchdog timer last); a component that a
+later Install/Uninstall already restarted or removed is dropped from the
+list.  State is kept in /var/lib/instmon/quiet.json, so it survives an
+instmon restart; auto-restore after 30 min (INSTMON_QUIET_AUTO_RESTORE_SEC),
+also applied at startup if the saved quiet is older than that.  A banner
+shows while quiet; quieted component cards read QUIET.
+  Check for updates / Full Update (new Updates card): reads the public
+repo kd8pgk/ASL-DVS (branch main) through the GitHub API -- source fixed
+in code, HTTPS only, redirects only to the same GitHub hosts, 8 MB cap per
+file, and each download must match GitHub's blob hash.  For each
+installed component the newest repo build of the same variant is picked
+by the version and date in its file name (a Pi02w sysmon stays on Pi02w
+builds; plain and M17 dashboards are separate).  Installed versions come
+from the VERSION line, or for files without one (wifimon, 44helper) from
+a library or repo file with identical content; unknown versions are
+listed, never auto-updated.  Not-installed components are left alone,
+config files are never downloaded, the retired watchdog never offered.
+  Full Update runs in the background: check, download and verify
+everything (syntax check, --install/--uninstall present) before changing
+anything, Quiet, then one component at a time in the order 44helper,
+wifimon, SVX, Dashboard, M17 Dashboard, SysMon: save a library copy of
+the installed file, run its --uninstall, run the new file's --install,
+wait for the service (and its port) to come up.  A failure reinstalls
+the saved copy and the component is skipped; if that fails too it is
+listed as NEEDS ATTENTION.  The run carries on either way and ends with
+Restore and a summary (log, toast, banner until dismissed).  New install
+scripts go into the library's Scripts section and are never run.
+instmon goes last, after Restore: replaced in place by its own --install
+(an --uninstall would stop this process first), with a transient
+instmon-update-guard timer that reinstalls the saved copy if port 8990
+doesn't answer 90 s later.  Results are saved to
+/var/lib/instmon/update.json first and the restarted instmon reports
+them.  While Full Update runs, every action except Journal, plus Upload
+and the editor's Save, answers 409.
+  Checks run: pyflakes, node --check on the page script, 44 simulated
+cases (fake GitHub serving this repo's files, stubbed systemd: normal
+run, order, rollback, rollback failure, bad hash, syntax error, offline,
+nothing to do, Pi02w variant, instmon restart hand-off, Quiet
+persistence and auto-restore), a read-only check against the live repo,
+and the page driven in Chromium.
 
 v1.27.8 - Watchdog (asl_dvs_watchdog.sh) retired as a component.  The
 dashboard's own systemd unit already has Restart=always + WatchdogSec=30,
@@ -281,6 +328,9 @@ import sys
 import threading 
 import time 
 import urllib .parse 
+import urllib .request 
+import urllib .error 
+import shlex 
 import tempfile 
 import zipfile 
 from collections import deque 
@@ -288,7 +338,7 @@ from datetime import datetime
 
 
 PORT =8990 
-VERSION ="1.27.8"
+VERSION ="1.27.9"
 DATE_STR ="2026-10-05"
 
 
@@ -328,6 +378,8 @@ WantedBy=multi-user.target
 LIBRARY_DIR =os .environ .get ("INSTMON_LIBRARY_DIR","/etc/asl_dvs/instmon_library")
 CONFIG_DIR =os .environ .get ("INSTMON_CONFIG_DIR","/etc/asl_dvs")
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
+# v1.27.9: Quiet System and Full Update state (survives an instmon restart).
+STATE_DIR =os .environ .get ("INSTMON_STATE_DIR","/var/lib/instmon")
 
 
 
@@ -916,6 +968,7 @@ def scan_library ():
 
 def build_status ():
     components =[]
+    quiet =quiet_snapshot ()
     for comp in COMPONENTS :
         state =systemctl_is_active (comp ["service"])
         listening =port_open (comp ["port"])
@@ -931,8 +984,11 @@ def build_status ():
 
 
         "installed":os .path .isfile (installed_target ),
+        "quiet":comp ["service"]in quiet ["stopped"],
         })
     return {
+    "quiet":quiet ,
+    "update":update_snapshot (),
     "components":components ,
     "library":scan_library (),
     "config":{
@@ -999,6 +1055,7 @@ def run_self_install_bg (script_path ,script_name ,comp ):
         proc .wait (timeout =SCRIPT_TIMEOUT_SEC )
         if proc .returncode ==0 :
             log_event (f"Install finished OK: {script_name } ({comp ['name']})","ok")
+            quiet_forget (comp ["service"])
         else :
             log_event (f"Install exited {proc .returncode }: {script_name } ({comp ['name']})","err")
     except subprocess .TimeoutExpired :
@@ -1062,6 +1119,7 @@ def run_self_uninstall_bg (comp ):
         proc .wait (timeout =SCRIPT_TIMEOUT_SEC )
         if proc .returncode ==0 :
             log_event (f"Uninstall finished OK: {comp ['name']}","ok")
+            quiet_forget (comp ["service"])
         else :
             log_event (f"Uninstall exited {proc .returncode }: {comp ['name']}","err")
     except subprocess .TimeoutExpired :
@@ -1072,6 +1130,738 @@ def run_self_uninstall_bg (comp ):
     finally :
         with _running_installs_lock :
             _running_installs .discard (comp ["service"])
+
+
+# v1.27.9: Quiet System -- stop the node's optional web UIs and helpers so a
+# small Pi (Zero 2 W) has memory and CPU for uploads, installs and Full
+# Update.  The list is fixed here; the browser never names a unit.  Radio,
+# Asterisk, Allmon3, SSH, wifimon (Wi-Fi fallback), Cockpit and instmon
+# itself are never touched.  The watchdog timer goes first -- it would
+# otherwise restart the dashboard it watches.
+QUIET_SERVICES =[
+("Watchdog timer","asl_dvs_watchdog.timer"),
+("SysMon","sysmon"),
+("Dashboard","asl_dvs_dashboard"),
+("M17 Dashboard","asl_dvs_m17_dashboard"),
+("SVX Dashboard","svx_dashboard"),
+("44helper","44helper"),
+]
+
+QUIET_AUTO_RESTORE_SEC =int (os .environ .get ("INSTMON_QUIET_AUTO_RESTORE_SEC","1800"))
+
+QUIET_STATE_PATH =os .path .join (STATE_DIR ,"quiet.json")
+
+_quiet_lock =threading .Lock ()
+_quiet ={"on":False ,"since":0.0 ,"reason":"","stopped":[]}
+_quiet_timer =None 
+
+
+def _write_json_atomic (path ,payload ):
+    os .makedirs (os .path .dirname (path ),exist_ok =True )
+    tmp_path =path +".tmp"
+    with open (tmp_path ,"w")as f :
+        json .dump (payload ,f )
+    os .replace (tmp_path ,path )
+
+
+def _read_json (path ):
+    try :
+        with open (path )as f :
+            return json .load (f )
+    except (OSError ,ValueError ):
+        return None 
+
+
+def _systemctl (verb ,unit ,timeout =15 ):
+    try :
+        r =subprocess .run (["systemctl",verb ,unit ],capture_output =True ,text =True ,timeout =timeout )
+    except (FileNotFoundError ,subprocess .TimeoutExpired )as exc :
+        return False ,str (exc )
+    return r .returncode ==0 ,(r .stderr or r .stdout or "").strip ()[:200 ]
+
+
+def _quiet_save ():
+    try :
+        _write_json_atomic (QUIET_STATE_PATH ,_quiet )
+    except OSError as exc :
+        log_event (f"Quiet: could not save state to {QUIET_STATE_PATH}: {exc}","warn")
+
+
+def _quiet_arm_timer (delay ):
+    global _quiet_timer 
+    if _quiet_timer :
+        _quiet_timer .cancel ()
+    _quiet_timer =None 
+    if QUIET_AUTO_RESTORE_SEC >0 :
+        _quiet_timer =threading .Timer (max (delay ,1 ),_quiet_auto_restore )
+        _quiet_timer .daemon =True 
+        _quiet_timer .start ()
+
+
+def _quiet_auto_restore ():
+    if update_running ():
+        # Full Update restores at its own end; check again later.
+        _quiet_arm_timer (60 )
+        return 
+    log_event (f"Quiet: auto-restore after {QUIET_AUTO_RESTORE_SEC // 60} min","warn")
+    quiet_restore ("auto-restore")
+
+
+def quiet_snapshot ():
+    with _quiet_lock :
+        return {
+        "on":_quiet ["on"],
+        "since":_quiet ["since"],
+        "since_text":datetime .fromtimestamp (_quiet ["since"]).strftime ("%H:%M")if _quiet ["on"]else "",
+        "reason":_quiet ["reason"],
+        "stopped":list (_quiet ["stopped"]),
+        "auto_restore_min":QUIET_AUTO_RESTORE_SEC //60 ,
+        }
+
+
+def quiet_on (reason ):
+    with _quiet_lock :
+        if _quiet ["on"]:
+            return {"already":True ,"stopped":list (_quiet ["stopped"]),"failed":[]}
+        stopped ,failed =[],[]
+        for label ,unit in QUIET_SERVICES :
+            if systemctl_is_active (unit )!="active":
+                continue 
+            ok ,err =_systemctl ("stop",unit )
+            state =systemctl_is_active (unit )
+            if ok and state !="active":
+                stopped .append (unit )
+                log_event (f"Quiet: stopped {label} ({unit})","info")
+            else :
+                failed .append (label )
+                log_event (f"Quiet: {label} ({unit}) did not stop (now {state}) {err}","err")
+        _quiet .update (on =True ,since =time .time (),reason =reason ,stopped =stopped )
+        _quiet_save ()
+    _quiet_arm_timer (QUIET_AUTO_RESTORE_SEC )
+    return {"already":False ,"stopped":stopped ,"failed":failed }
+
+
+def quiet_restore (reason ):
+    global _quiet_timer 
+    with _quiet_lock :
+        if not _quiet ["on"]:
+            return {"already":True ,"started":[],"failed":[]}
+        started ,failed =[],[]
+        labels =dict ((unit ,label )for label ,unit in QUIET_SERVICES )
+        # Reverse order: the watchdog timer comes back last, after what it watches.
+        for unit in reversed (_quiet ["stopped"]):
+            label =labels .get (unit ,unit )
+            ok ,err =_systemctl ("start",unit )
+            state =systemctl_is_active (unit )
+            if ok and state =="active":
+                started .append (unit )
+                log_event (f"Restore: started {label} ({unit})","ok")
+            else :
+                failed .append (label )
+                log_event (f"Restore: {label} ({unit}) did not start (now {state}) {err}","err")
+        _quiet .update (on =False ,since =0.0 ,reason ="",stopped =[])
+        _quiet_save ()
+        if _quiet_timer :
+            _quiet_timer .cancel ()
+            _quiet_timer =None 
+    log_event (f"Quiet: system restored ({reason})","ok"if not failed else "err")
+    return {"already":False ,"started":started ,"failed":failed }
+
+
+def quiet_forget (service ):
+    # An install/uninstall already started (or removed) this service, so
+    # Restore must not touch it again.
+    with _quiet_lock :
+        if service in _quiet ["stopped"]:
+            _quiet ["stopped"].remove (service )
+            _quiet_save ()
+
+
+def quiet_resume_at_startup ():
+    saved =_read_json (QUIET_STATE_PATH )
+    if not saved or not saved .get ("on"):
+        return 
+    with _quiet_lock :
+        _quiet .update (on =True ,since =float (saved .get ("since")or time .time ()),
+        reason =str (saved .get ("reason")or ""),
+        stopped =[u for u in saved .get ("stopped",[])if u in dict ((s ,l )for l ,s in QUIET_SERVICES )])
+    age =time .time ()-_quiet ["since"]
+    if QUIET_AUTO_RESTORE_SEC >0 and age >=QUIET_AUTO_RESTORE_SEC :
+        log_event ("Quiet: was still on from before instmon restarted and is past its auto-restore time -- restoring now","warn")
+        quiet_restore ("startup")
+    else :
+        log_event (f"Quiet: still on from before instmon restarted ({len(_quiet['stopped'])} service(s) stopped)","warn")
+        _quiet_arm_timer (QUIET_AUTO_RESTORE_SEC -age )
+
+
+# v1.27.9: Check for updates / Full Update from GitHub.  Source is fixed
+# here (public repo, read-only, HTTPS); the browser can't point it anywhere
+# else.  Every download is checked against GitHub's own blob hash.
+UPDATE_REPO ="kd8pgk/ASL-DVS"
+UPDATE_BRANCH ="main"
+UPDATE_API_BASE ="https://api.github.com"
+UPDATE_RAW_HOST ="raw.githubusercontent.com"
+UPDATE_HTTP_TIMEOUT =30 
+UPDATE_MAX_FILE_BYTES =8 *1024 *1024 
+UPDATE_START_TIMEOUT_SEC =int (os .environ .get ("INSTMON_UPDATE_START_TIMEOUT_SEC","60"))
+UPDATE_SELF_GUARD_SEC =90 
+
+# One component at a time, in this order; instmon last because installing
+# it restarts this process.
+UPDATE_ORDER =["44helper","wifimon","svx","dashboard","m17_dashboard","sysmon","instmon"]
+
+# Name stem of a plain (non-variant) build, used when the installed file's
+# own name doesn't carry one (e.g. /usr/local/bin/wifimon.py).
+UPDATE_DEFAULT_STEM ={
+"dashboard":"asl_dvs_dashboard",
+"m17_dashboard":"asl_dvs_m17_dashboard",
+"sysmon":"sysmon",
+"wifimon":"wifimon",
+"44helper":"asl_dvs_m17_44helper",
+"instmon":"instmon",
+"svx":"svx_dashboard",
+}
+
+UPDATE_STATE_PATH =os .path .join (STATE_DIR ,"update.json")
+UPDATE_STAGING_DIR =os .path .join (STATE_DIR ,"staging")
+
+_REPO_NAME_RE =re .compile (r"^(?P<stem>.+?)_v(?P<ver>\d+(?:_\d+)*?)(?:_(?P<date>\d{8}))?\.(?:py|sh)$",re .IGNORECASE )
+
+_update_lock =threading .Lock ()
+_update ={
+"running":False ,"phase":"","current":"","started":0.0 ,"finished":0.0 ,
+"error":"","updated":[],"skipped":[],"attention":[],"scripts":[],
+"unchanged":[],"banner":False ,"instmon_pending":None ,
+}
+_update_check ={"at":0.0 ,"result":None }
+
+
+def update_running ():
+    with _update_lock :
+        return _update ["running"]
+
+
+def _update_set (**kw ):
+    with _update_lock :
+        _update .update (kw )
+
+
+def _update_save ():
+    with _update_lock :
+        payload =dict (_update )
+    try :
+        _write_json_atomic (UPDATE_STATE_PATH ,payload )
+    except OSError as exc :
+        log_event (f"Full Update: could not save state: {exc}","warn")
+
+
+def update_snapshot ():
+    with _update_lock :
+        snap =json .loads (json .dumps (_update ))
+    snap ["check"]=_update_check ["result"]
+    snap ["check_at"]=(datetime .fromtimestamp (_update_check ["at"]).strftime ("%H:%M")
+    if _update_check ["at"]else "")
+    return snap 
+
+
+def _version_tuple (text ):
+    if not text :
+        return None 
+    m =re .match (r"^\s*v?(\d+(?:[._]\d+)*)",str (text ))
+    if not m :
+        return None 
+    return tuple (int (p )for p in re .split (r"[._]",m .group (1 )))
+
+
+def _parse_repo_name (name ):
+    m =_REPO_NAME_RE .match (name )
+    if not m :
+        return os .path .splitext (name )[0 ].lower (),None ,""
+    return m .group ("stem").lower (),_version_tuple (m .group ("ver")),m .group ("date")or ""
+
+
+def _git_blob_sha (data ):
+    return hashlib .sha1 (b"blob %d\0"%len (data )+data ).hexdigest ()
+
+
+def _file_git_blob_sha (path ):
+    try :
+        with open (path ,"rb")as f :
+            return _git_blob_sha (f .read ())
+    except OSError :
+        return None 
+
+
+class _SameHostRedirect (urllib .request .HTTPRedirectHandler ):
+    def redirect_request (self ,req ,fp ,code ,msg ,headers ,newurl ):
+        host =urllib .parse .urlparse (newurl ).hostname or ""
+        if urllib .parse .urlparse (newurl ).scheme !="https"or host not in _update_allowed_hosts ():
+            raise urllib .error .HTTPError (newurl ,code ,f"redirect to {host} refused",headers ,fp )
+        return super ().redirect_request (req ,fp ,code ,msg ,headers ,newurl )
+
+
+def _update_allowed_hosts ():
+    return {urllib .parse .urlparse (UPDATE_API_BASE ).hostname ,UPDATE_RAW_HOST }
+
+
+def _http_get (url ,max_bytes ):
+    parsed =urllib .parse .urlparse (url )
+    if parsed .scheme !="https"or parsed .hostname not in _update_allowed_hosts ():
+        raise ValueError (f"refusing to fetch {url} (only {', '.join(sorted(_update_allowed_hosts()))})")
+    req =urllib .request .Request (url ,headers ={
+    "User-Agent":f"instmon/{VERSION}",
+    "Accept":"application/vnd.github+json"if parsed .hostname !=UPDATE_RAW_HOST else "*/*",
+    })
+    opener =urllib .request .build_opener (_SameHostRedirect )
+    with opener .open (req ,timeout =UPDATE_HTTP_TIMEOUT )as resp :
+        data =resp .read (max_bytes +1 )
+    if len (data )>max_bytes :
+        raise ValueError (f"{url} is larger than {max_bytes // (1024 * 1024)} MB")
+    return data 
+
+
+def _fetch_repo_listing ():
+    url =(f"{UPDATE_API_BASE}/repos/{UPDATE_REPO}/contents"
+    f"?ref={urllib.parse.quote(UPDATE_BRANCH)}")
+    items =json .loads (_http_get (url ,4 *1024 *1024 ).decode ("utf-8"))
+    if not isinstance (items ,list ):
+        raise ValueError ("unexpected reply from GitHub")
+    return [i for i in items if isinstance (i ,dict )and i .get ("type")=="file"
+    and isinstance (i .get ("name"),str )and isinstance (i .get ("sha"),str )]
+
+
+def _repo_candidates (listing ):
+    # category -> list of repo entries, each with its parsed name.  Config
+    # files are never offered (they would overwrite this node's settings),
+    # nor retired ones.
+    out ={}
+    for item in listing :
+        name =item ["name"]
+        if "/"in name or name .startswith ("."):
+            continue 
+        cat =_category_for_home_file (name )
+        if cat is None or cat =="config":
+            continue 
+        if os .path .splitext (name )[1 ].lower ()not in ALLOWED_EXT .get (cat ,()):
+            continue 
+        stem ,ver ,date =_parse_repo_name (name )
+        out .setdefault (cat ,[]).append ({
+        "name":name ,"sha":item ["sha"],"size":int (item .get ("size")or 0 ),
+        "download_url":item .get ("download_url")or "",
+        "stem":stem ,"ver":ver ,"date":date ,
+        })
+    return out 
+
+
+def _newest (entries ):
+    return max (entries ,key =lambda e :(e ["ver"]or (),e ["date"],e ["name"]))
+
+
+def _ver_text (t ):
+    return ".".join (str (n )for n in t )if t else "?"
+
+
+def _installed_identity (comp ,by_blob ):
+    # (stem, version tuple, how) for the installed file.  Version comes from
+    # its VERSION line, else from a library or repo file with identical
+    # content (wifimon and 44helper have no VERSION line).
+    target =resolve_installed_target (comp )
+    base =os .path .basename (target )
+    stem ,name_ver ,_date =_parse_repo_name (base )
+    ver_str =read_installed_version (target )or ""
+    ver =_version_tuple (ver_str )or name_ver 
+    if not _REPO_NAME_RE .match (base ):
+        stem =UPDATE_DEFAULT_STEM [comp ["category"]]
+        suffix =re .search (r"-([a-z0-9]+)\s*$",ver_str ,re .IGNORECASE )
+        if suffix :
+            stem =f"{stem}_{suffix.group(1).lower()}"
+    if ver is None :
+        blob =_file_git_blob_sha (target )
+        sha =file_sha256 (target )
+        lib_dir =LIB_SUBDIRS [comp ["category"]]
+        try :
+            lib_names =os .listdir (lib_dir )
+        except OSError :
+            lib_names =[]
+        for name in lib_names :
+            if _REPO_NAME_RE .match (name )and file_sha256 (os .path .join (lib_dir ,name ))==sha :
+                stem ,ver ,_date =_parse_repo_name (name )
+                break 
+        if ver is None and blob in by_blob :
+            stem ,ver ,_date =_parse_repo_name (by_blob [blob ])
+    return stem ,ver 
+
+
+def update_check ():
+    listing =_fetch_repo_listing ()
+    by_blob ={i ["sha"]:i ["name"]for i in listing }
+    cands =_repo_candidates (listing )
+    components =[]
+    for cat in UPDATE_ORDER :
+        comp =next (c for c in COMPONENTS if c ["category"]==cat )
+        row ={"category":cat ,"name":comp ["name"],"status":"","note":"",
+        "installed_version":"","repo_file":"","repo_version":""}
+        components .append (row )
+        target =resolve_installed_target (comp )
+        if not os .path .isfile (target ):
+            row .update (status ="not_installed",note ="not installed -- left alone")
+            continue 
+        stem ,inst_ver =_installed_identity (comp ,by_blob )
+        row ["installed_version"]=_ver_text (inst_ver )if inst_ver else (read_installed_version (target )or "?")
+        same_variant =[e for e in cands .get (cat ,[])if e ["stem"]==stem ]
+        if not same_variant :
+            row .update (status ="not_in_repo",note =f"no {stem} build in the repo")
+            continue 
+        best =_newest (same_variant )
+        row .update (repo_file =best ["name"],repo_version =_ver_text (best ["ver"]),sha =best ["sha"],
+        size =best ["size"],download_url =best ["download_url"])
+        if _file_git_blob_sha (target )==best ["sha"]:
+            row .update (status ="current",note ="same file as the repo")
+        elif inst_ver is None :
+            row .update (status ="unknown",note ="can't tell the installed version -- update it by hand from the library")
+        elif best ["ver"]and best ["ver"]>inst_ver :
+            row .update (status ="update",note =f"{_ver_text(inst_ver)} -> {_ver_text(best['ver'])}")
+        elif best ["ver"]==inst_ver :
+            row .update (status ="current",note ="same version (file differs locally)")
+        else :
+            row .update (status ="newer_installed",note ="installed build is newer than the repo")
+    scripts =[]
+    lib_blobs =set ()
+    try :
+        for name in os .listdir (LIB_SUBDIRS ["scripts"]):
+            b =_file_git_blob_sha (os .path .join (LIB_SUBDIRS ["scripts"],name ))
+            if b :
+                lib_blobs .add (b )
+    except OSError :
+        pass 
+    by_stem ={}
+    for e in cands .get ("scripts",[]):
+        by_stem .setdefault (e ["stem"],[]).append (e )
+    for stem in sorted (by_stem ):
+        best =_newest (by_stem [stem ])
+        scripts .append ({"name":best ["name"],"sha":best ["sha"],"size":best ["size"],
+        "download_url":best ["download_url"],
+        "status":"in_library"if best ["sha"]in lib_blobs else "new"})
+    result ={"components":components ,"scripts":scripts ,
+    "updates":sum (1 for c in components if c ["status"]=="update"),
+    "new_scripts":sum (1 for s in scripts if s ["status"]=="new")}
+    _update_check .update (at =time .time (),result =result )
+    return result 
+
+
+def _download_verified (entry ,dest_path ):
+    url =entry .get ("download_url")or ""
+    if not url :
+        raise ValueError ("no download address from GitHub")
+    data =_http_get (url ,UPDATE_MAX_FILE_BYTES )
+    if _git_blob_sha (data )!=entry ["sha"]:
+        raise ValueError ("download doesn't match GitHub's hash for the file")
+    os .makedirs (os .path .dirname (dest_path ),exist_ok =True )
+    with open (dest_path ,"wb")as f :
+        f .write (data )
+    return data 
+
+
+def _stage_to_library (category ,name ,data ):
+    # Same name already in the library with different content (edited
+    # locally) is kept; the download gets a suffixed name instead.
+    lib_dir =LIB_SUBDIRS [category ]
+    os .makedirs (lib_dir ,exist_ok =True )
+    dest =safe_join (lib_dir ,name )
+    if dest is None :
+        raise ValueError (f"bad file name {name}")
+    if os .path .isfile (dest ):
+        with open (dest ,"rb")as f :
+            if f .read ()==data :
+                return dest 
+        stem ,ext =os .path .splitext (name )
+        dest =os .path .join (lib_dir ,f"{stem}__github_{int(time.time())}{ext}")
+    compare_before_write (dest ,data )
+    with _file_meta_cache_lock :
+        _file_meta_cache .clear ()
+    return dest 
+
+
+def _run_cli (script_path ,flag ):
+    # Runs a component file's own --install / --uninstall and waits; output
+    # goes to the log.  Returns the exit code (None if it never ran).
+    try :
+        proc =subprocess .Popen (
+        [_interp_for (script_path ),script_path ,flag ],
+        stdout =subprocess .PIPE ,stderr =subprocess .STDOUT ,text =True ,bufsize =1 ,
+        )
+    except OSError as exc :
+        log_event (f"Could not run {os.path.basename(script_path)} {flag}: {exc}","err")
+        return None 
+    try :
+        for line in proc .stdout :
+            log_event (line .rstrip ("\n"),"info")
+        proc .wait (timeout =SCRIPT_TIMEOUT_SEC )
+    except subprocess .TimeoutExpired :
+        proc .kill ()
+        log_event (f"{os.path.basename(script_path)} {flag} timed out ({SCRIPT_TIMEOUT_SEC}s), killed","err")
+        return None 
+    return proc .returncode 
+
+
+def _wait_healthy (comp ):
+    deadline =time .time ()+UPDATE_START_TIMEOUT_SEC 
+    state ="unknown"
+    while time .time ()<deadline :
+        state =systemctl_is_active (comp ["service"])
+        if state =="active"and (comp ["port"]is None or port_open (comp ["port"])):
+            return True ,state 
+        time .sleep (2 )
+    if state =="active":
+        return False ,f"running but not answering on port {comp['port']}"
+    return False ,state 
+
+
+def _update_one (comp ,row ,new_path ):
+    name =comp ["name"]
+    target =resolve_installed_target (comp )
+    if not script_has_self_uninstall (target ):
+        return "skipped","installed file has no --uninstall, left alone"
+    staged ,old_name ,_note ,stage_err =stage_installed_copy_if_missing (comp )
+    if stage_err :
+        return "skipped",f"couldn't save a copy of the installed version ({stage_err}), left alone"
+    old_path =os .path .join (LIB_SUBDIRS [comp ["category"]],old_name )
+    old_ver =row ["installed_version"]
+
+    _update_set (current =f"{name}: uninstalling v{old_ver}")
+    log_event (f"Full Update: {name}: uninstalling v{old_ver}","info")
+    rc =_run_cli (comp ["install_link"],"--uninstall")
+    if rc !=0 :
+        log_event (f"Full Update: {name}: --uninstall exited {rc}; installing the new file anyway","warn")
+    quiet_forget (comp ["service"])
+
+    _update_set (current =f"{name}: installing v{row['repo_version']}")
+    log_event (f"Full Update: {name}: installing {os.path.basename(new_path)}","info")
+    rc =_run_cli (new_path ,"--install")
+    ok ,state =_wait_healthy (comp )if rc ==0 else (False ,f"--install exited {rc}")
+    if ok :
+        log_event (f"Full Update: {name} updated v{old_ver} -> v{row['repo_version']}","ok")
+        return "updated",f"v{old_ver} -> v{row['repo_version']}"
+
+    reason =f"new version failed ({state})"
+    log_event (f"Full Update: {name}: {reason} -- reinstalling v{old_ver}","err")
+    _update_set (current =f"{name}: rolling back to v{old_ver}")
+    rc =_run_cli (old_path ,"--install")
+    ok ,state =_wait_healthy (comp )if rc ==0 else (False ,f"--install exited {rc}")
+    if ok :
+        log_event (f"Full Update: {name} rolled back to v{old_ver}","warn")
+        return "skipped",f"{reason}; rolled back to v{old_ver}"
+    log_event (f"Full Update: {name} NEEDS ATTENTION -- the old version didn't come back either ({state})","err")
+    return "attention",f"{reason}; rollback to v{old_ver} also failed ({state}) -- not running"
+
+
+def _arm_instmon_guard (old_path ):
+    # After instmon restarts into the new version, a transient systemd timer
+    # checks the port; if the new instmon never answers, it reinstalls the
+    # saved old copy.  Runs outside this process, which is about to exit.
+    check =(f"timeout 5 bash -c '</dev/tcp/127.0.0.1/{PORT}' || "
+    f"{_interp_for(old_path)} {shlex.quote(old_path)} --install")
+    subprocess .run (["systemctl","stop","instmon-update-guard.timer","instmon-update-guard.service"],
+    capture_output =True ,text =True ,timeout =10 )
+    subprocess .run (["systemctl","reset-failed","instmon-update-guard.service"],
+    capture_output =True ,text =True ,timeout =10 )
+    r =subprocess .run ([
+    "systemd-run","--quiet","--collect",f"--on-active={UPDATE_SELF_GUARD_SEC}",
+    "--unit=instmon-update-guard","bash","-c",check ,
+    ],capture_output =True ,text =True ,timeout =15 )
+    return r .returncode ==0 ,(r .stderr or "").strip ()[:200 ]
+
+
+def _update_finish (error =""):
+    _update_set (running =False ,phase ="done",current ="",finished =time .time (),error =error ,banner =True )
+    _update_save ()
+    snap =update_snapshot ()
+    parts =[]
+    if error :
+        parts .append (f"stopped: {error}")
+    parts .append (f"{len(snap['updated'])} updated")
+    if snap ["skipped"]:
+        parts .append (f"{len(snap['skipped'])} skipped")
+    if snap ["attention"]:
+        parts .append (f"{len(snap['attention'])} NEED ATTENTION")
+    if snap ["scripts"]:
+        parts .append (f"{len(snap['scripts'])} script(s) added to the library")
+    level ="err"if (snap ["attention"]or error )else ("warn"if snap ["skipped"]else "ok")
+    log_event ("Full Update finished: "+", ".join (parts ),level )
+    for r in snap ["skipped"]:
+        log_event (f"  skipped {r['name']}: {r['note']}","warn")
+    for r in snap ["attention"]:
+        log_event (f"  NEEDS ATTENTION {r['name']}: {r['note']}","err")
+
+
+def run_full_update_bg ():
+    try :
+        _run_full_update ()
+    except Exception as exc :
+        log_event (f"Full Update: unexpected error: {exc}","err")
+        if update_snapshot ()["phase"]not in ("done","instmon"):
+            if quiet_snapshot ()["on"]:
+                quiet_restore ("Full Update error")
+            _update_finish (f"unexpected error: {exc}")
+
+
+def _run_full_update ():
+    log_event ("Full Update: checking GitHub for new files...","info")
+    _update_set (phase ="checking",current ="checking GitHub")
+    try :
+        check =update_check ()
+    except Exception as exc :
+        _update_finish (f"couldn't read GitHub ({exc}) -- nothing was changed")
+        return 
+    plan =[c for c in check ["components"]if c ["status"]=="update"]
+    new_scripts =[s for s in check ["scripts"]if s ["status"]=="new"]
+    _update_set (unchanged =[{"name":c ["name"],"note":c ["note"]}for c in check ["components"]
+    if c ["status"]!="update"])
+    if not plan and not new_scripts :
+        log_event ("Full Update: everything is already current -- nothing to do","ok")
+        _update_finish ()
+        return 
+
+    shutil .rmtree (UPDATE_STAGING_DIR ,ignore_errors =True )
+    os .makedirs (UPDATE_STAGING_DIR ,exist_ok =True )
+    skipped ,scripts_done =[],[]
+
+    _update_set (phase ="downloading",current ="downloading")
+    staged =[]
+    for row in plan :
+        name =row ["repo_file"]
+        _update_set (current =f"downloading {name}")
+        try :
+            data =_download_verified (row ,os .path .join (UPDATE_STAGING_DIR ,name ))
+            tmp =os .path .join (UPDATE_STAGING_DIR ,name )
+            err =check_script_syntax (tmp )
+            if err :
+                raise ValueError (f"syntax error in download: {err[:120]}")
+            _sha ,_ver ,can_install ,can_uninstall =_file_meta (tmp )
+            if not (can_install and can_uninstall ):
+                raise ValueError ("download has no --install/--uninstall")
+            lib_path =_stage_to_library (row ["category"],name ,data )
+        except Exception as exc :
+            log_event (f"Full Update: {row['name']}: {name} skipped -- {exc}","err")
+            skipped .append ({"name":row ["name"],"note":f"{name}: {exc}"})
+            continue 
+        log_event (f"Full Update: downloaded and checked {name}","ok")
+        staged .append ((row ,lib_path ))
+    for s in new_scripts :
+        _update_set (current =f"downloading {s['name']}")
+        try :
+            data =_download_verified (s ,os .path .join (UPDATE_STAGING_DIR ,s ["name"]))
+            err =check_bash_syntax (os .path .join (UPDATE_STAGING_DIR ,s ["name"]))
+            if err :
+                raise ValueError (f"syntax error in download: {err[:120]}")
+            _stage_to_library ("scripts",s ["name"],data )
+        except Exception as exc :
+            log_event (f"Full Update: script {s['name']} skipped -- {exc}","err")
+            skipped .append ({"name":s ["name"],"note":str (exc )})
+            continue 
+        log_event (f"Full Update: added script {s['name']} to the library (not run)","ok")
+        scripts_done .append ({"name":s ["name"],"note":"added to the library Scripts (not run)"})
+    shutil .rmtree (UPDATE_STAGING_DIR ,ignore_errors =True )
+    _update_set (skipped =list (skipped ),scripts =scripts_done )
+
+    if not staged :
+        _update_finish ()
+        return 
+
+    _update_set (phase ="quieting",current ="quieting the system")
+    quiet_on ("Full Update")
+
+    updated ,attention =[],[]
+    instmon_job =None 
+    for row ,lib_path in staged :
+        comp =next (c for c in COMPONENTS if c ["category"]==row ["category"])
+        if comp ["category"]=="instmon":
+            instmon_job =(comp ,row ,lib_path )
+            continue 
+        _update_set (phase ="updating")
+        with _running_installs_lock :
+            _running_installs .add (comp ["service"])
+        try :
+            outcome ,note =_update_one (comp ,row ,lib_path )
+        finally :
+            with _running_installs_lock :
+                _running_installs .discard (comp ["service"])
+        entry ={"name":comp ["name"],"note":note }
+        {"updated":updated ,"skipped":skipped ,"attention":attention }[outcome ].append (entry )
+        _update_set (updated =list (updated ),skipped =list (skipped ),attention =list (attention ))
+
+    _update_set (phase ="restoring",current ="restoring the system")
+    quiet_restore ("Full Update")
+
+    if instmon_job is None :
+        _update_finish ()
+        return 
+
+    comp ,row ,lib_path =instmon_job 
+    _staged_new ,old_name ,_note ,stage_err =stage_installed_copy_if_missing (comp )
+    if stage_err :
+        skipped .append ({"name":"instmon","note":f"couldn't save a copy of the installed version ({stage_err}), left alone"})
+        _update_set (skipped =list (skipped ))
+        _update_finish ()
+        return 
+    old_path =os .path .join (LIB_SUBDIRS ["instmon"],old_name )
+    guard_ok ,guard_err =_arm_instmon_guard (old_path )
+    if not guard_ok :
+        skipped .append ({"name":"instmon","note":f"couldn't arm the rollback guard ({guard_err}), left alone"})
+        _update_set (skipped =list (skipped ))
+        _update_finish ()
+        return 
+    # instmon is replaced in place by its own --install (an --uninstall
+    # would stop this process before the new one went in).  Results are
+    # saved first: the restart ends this process, and the new instmon reads
+    # them back at startup.
+    _update_set (phase ="instmon",current =f"instmon: installing v{row['repo_version']}",
+    instmon_pending ={"from":row ["installed_version"],"to":row ["repo_version"]})
+    _update_save ()
+    log_event (f"Full Update: instmon: installing v{row['repo_version']} -- this page reconnects when it restarts","info")
+    rc =_run_cli (lib_path ,"--install")
+    if rc !=0 :
+        subprocess .run (["systemctl","stop","instmon-update-guard.timer"],capture_output =True ,text =True ,timeout =10 )
+        skipped .append ({"name":"instmon","note":f"--install exited {rc}; still on v{row['installed_version']}"})
+        _update_set (skipped =list (skipped ),instmon_pending =None )
+        _update_finish ()
+        return 
+    # Its --install schedules the restart ~2 s out; still here a while later
+    # means it didn't happen.
+    time .sleep (45 )
+    log_event ("Full Update: instmon was installed but hasn't restarted yet","warn")
+    skipped .append ({"name":"instmon","note":f"v{row['repo_version']} installed; takes effect when instmon restarts"})
+    _update_set (skipped =list (skipped ),instmon_pending =None )
+    _update_finish ()
+
+
+def update_resume_at_startup ():
+    saved =_read_json (UPDATE_STATE_PATH )
+    if not saved :
+        return 
+    with _update_lock :
+        for key in _update :
+            if key in saved :
+                _update [key ]=saved [key ]
+        _update ["running"]=False 
+    pending =_update .get ("instmon_pending")
+    if pending :
+        mine =_version_tuple (VERSION )
+        if mine and mine ==_version_tuple (pending .get ("to")):
+            _update ["updated"].append ({"name":"instmon","note":f"v{pending.get('from')} -> v{VERSION}"})
+        else :
+            _update ["skipped"].append ({"name":"instmon","note":f"new version didn't take; running v{VERSION}"})
+        _update ["instmon_pending"]=None 
+        _update_finish ()
+    elif saved .get ("phase")not in ("done",""):
+        _update_finish ("instmon restarted in the middle of the update")
+        if quiet_snapshot ()["on"]:
+            quiet_restore ("Full Update interrupted")
+
+
+def update_dismiss ():
+    _update_set (banner =False )
+    _update_save ()
 
 
 BADGE_BY_STATE ={
@@ -1091,6 +1881,8 @@ def render_components_html (components ):
     cards =[]
     for c in components :
         label ,cls =BADGE_BY_STATE .get (c ["state"],("UNKNOWN","b-src"))
+        if c .get ("quiet")and c ["state"]!="active":
+            label ,cls ="QUIET","b-quiet"
         if c ["port"]is None :
             port_note ="no web UI"
         else :
@@ -1281,6 +2073,19 @@ button.b-danger{color:var(--red);border-color:var(--red2);background:rgba(255,61
 button.b-comms{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,208,64,.08);
   text-shadow:0 0 8px rgba(255,208,64,.4)}
 .danger-card{border-color:var(--red-dim)}
+.b-quiet{color:var(--yel);border-color:var(--amber-dim);background:rgba(255,208,64,.08)}
+/* v1.27.9: Quiet System + Full Update */
+.banner{border:1px solid var(--amber-dim);background:rgba(255,208,64,.08);color:var(--yel);
+  border-radius:6px;padding:.55rem .8rem;margin-bottom:.6rem;display:flex;flex-wrap:wrap;
+  gap:.4rem .9rem;align-items:center;font-family:var(--mono);font-size:.8rem}
+.banner.ok{border-color:var(--green-dim);background:rgba(0,255,176,.06);color:var(--grn)}
+.banner.err{border-color:var(--red-dim);background:rgba(255,61,90,.08);color:var(--red)}
+.banner ul{margin:.2rem 0 0 1.1rem;color:var(--fg)}
+.upd-table{width:100%;border-collapse:collapse;margin-top:.5rem;font-size:.78rem}
+.upd-table td{padding:.25rem .4rem;border-top:1px solid var(--border)}
+.upd-table td.st{font-family:var(--mono);font-weight:700;white-space:nowrap}
+.st-update{color:var(--yel)}.st-current{color:var(--grn)}.st-other{color:var(--muted)}
+#upd-progress{font-family:var(--mono);font-size:.8rem;color:var(--cyn);margin-top:.4rem}
 .muted{color:var(--muted)}
 .small{font-size:.74rem}
 """
@@ -1446,8 +2251,92 @@ _JS_STATUS_TOAST = """async function refreshStatus() {
     const data = await r.json();
     document.getElementById('components').innerHTML = data.components_html;
     document.getElementById('library').innerHTML = data.library_html;
+    renderQuietUpdate(data.quiet, data.update);
     wireButtons();
   } catch (e) { /* ignore this tick */ }
+}
+
+// v1.27.9: Quiet System + Full Update
+let _quietState = null;
+let _updateState = null;
+let _updateWasRunning = null;
+
+function _esc(t) {
+  return String(t == null ? '' : t).replace(/[&<>"']/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'}[c]));
+}
+
+const _UPD_STATUS = {
+  update: ['UPDATE', 'st-update'], current: ['CURRENT', 'st-current'], not_installed: ['NOT INSTALLED', 'st-other'],
+  not_in_repo: ['NOT ON GITHUB', 'st-other'], newer_installed: ['NEWER HERE', 'st-other'], unknown: ['UNKNOWN', 'st-other'],
+  new: ['NEW', 'st-update'], in_library: ['IN LIBRARY', 'st-current'],
+};
+
+function renderCheck(check) {
+  const box = document.getElementById('upd-results');
+  if (!box) return;
+  if (!check) { box.innerHTML = ''; return; }
+  const rows = check.components.map(c => {
+    const [lbl, cls] = _UPD_STATUS[c.status] || [c.status, 'st-other'];
+    return `<tr><td>${_esc(c.name)}</td><td class="st ${cls}">${lbl}</td><td>${_esc(c.note)}</td><td class="muted">${_esc(c.repo_file)}</td></tr>`;
+  }).concat(check.scripts.map(sc => {
+    const [lbl, cls] = _UPD_STATUS[sc.status] || [sc.status, 'st-other'];
+    return `<tr><td>Script</td><td class="st ${cls}">${lbl}</td><td>${sc.status === 'new' ? 'goes to the library (not run)' : ''}</td><td class="muted">${_esc(sc.name)}</td></tr>`;
+  }));
+  box.innerHTML = `<table class="upd-table">${rows.join('')}</table>`;
+}
+
+function _resultList(title, items) {
+  if (!items || !items.length) return '';
+  return `<div><b>${title}</b><ul>${items.map(r => `<li>${_esc(r.name)}: ${_esc(r.note)}</li>`).join('')}</ul></div>`;
+}
+
+function renderQuietUpdate(quiet, upd) {
+  _quietState = quiet; _updateState = upd;
+  const running = !!(upd && upd.running);
+  const banners = [];
+  if (quiet && quiet.on) {
+    banners.push(`<div class="banner"><span>System quiet since ${_esc(quiet.since_text)} (${_esc(quiet.reason)}):
+      ${quiet.stopped.length ? _esc(quiet.stopped.join(', ')) + ' stopped' : 'nothing was running'}.
+      Auto-restore after ${quiet.auto_restore_min} min.</span>
+      ${running ? '' : '<button data-action="restore">Restore</button>'}</div>`);
+  }
+  if (upd && upd.banner && !running) {
+    const bad = (upd.attention || []).length || upd.error;
+    const cls = bad ? 'err' : ((upd.skipped || []).length ? '' : 'ok');
+    banners.push(`<div class="banner ${cls}"><div style="flex:1">
+      <b>Full Update finished${upd.error ? ' -- ' + _esc(upd.error) : ''}</b>
+      ${_resultList('Updated', upd.updated)}${_resultList('Skipped', upd.skipped)}
+      ${_resultList('NEEDS ATTENTION', upd.attention)}${_resultList('Scripts', upd.scripts)}
+      ${(upd.updated || []).length + (upd.skipped || []).length + (upd.attention || []).length + (upd.scripts || []).length ? '' : '<div>Nothing needed updating.</div>'}
+      </div><button data-action="update_dismiss">Dismiss</button></div>`);
+  }
+  const bEl = document.getElementById('banners');
+  if (bEl) bEl.innerHTML = banners.join('');
+
+  const prog = document.getElementById('upd-progress');
+  if (prog) prog.textContent = running ? `Full Update running: ${upd.phase}${upd.current ? ' -- ' + upd.current : ''}` : '';
+  const meta = document.getElementById('upd-meta');
+  if (meta && upd && upd.check_at) {
+    const c = upd.check;
+    meta.textContent = `Checked ${upd.check_at}: ${c.updates} component update(s), ${c.new_scripts} new script(s).`;
+  }
+  renderCheck(upd && upd.check);
+
+  const fu = document.getElementById('full-update-btn');
+  if (fu) fu.disabled = running || !(upd && upd.check && (upd.check.updates || upd.check.new_scripts));
+  const qb = document.getElementById('quiet-btn');
+  if (qb) qb.disabled = running || !!(quiet && quiet.on);
+  const rb = document.getElementById('restore-btn');
+  if (rb) rb.disabled = running || !(quiet && quiet.on);
+  document.querySelectorAll('#components button, #library button, #upbtn').forEach(b => {
+    if (b.dataset.action !== 'journal') b.disabled = running;
+  });
+
+  if (_updateWasRunning === true && !running && upd && upd.phase === 'done') {
+    const n = (upd.updated || []).length, sk = (upd.skipped || []).length, at = (upd.attention || []).length;
+    showToast(`Full Update finished: ${n} updated, ${sk} skipped${at ? ', ' + at + ' NEED ATTENTION' : ''}.`, at ? 'err' : (sk ? 'warn' : 'ok'));
+  }
+  _updateWasRunning = running;
 }
 
 function showToast(message, level) {
@@ -1660,6 +2549,24 @@ _JS_ACTIONS = """function wireButtons() {
         } else if (action === 'comms_restart') {
           if (!confirm('Stop Asterisk, Analog_Bridge, MMDVM_Bridge, STFU, and Allmon3, pause 3s, then start them back up? All active calls/links on this node will drop for the duration.')) { btn.disabled = false; return; }
           await postAction({action: 'comms_restart'});
+        } else if (action === 'quiet') {
+          if (!confirm('Quiet the system? Stops SysMon, Dashboard, M17 Dashboard, SVX Dashboard, 44helper and the watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, Allmon3, SSH and Wi-Fi stay up.')) { btn.disabled = false; return; }
+          await postAction({action: 'quiet'});
+        } else if (action === 'restore') {
+          await postAction({action: 'restore'});
+        } else if (action === 'check_updates') {
+          showToast('Checking GitHub...', 'info');
+          await postAction({action: 'check_updates'});
+        } else if (action === 'update_dismiss') {
+          await postAction({action: 'update_dismiss'});
+        } else if (action === 'full_update') {
+          const c = _updateState && _updateState.check;
+          const list = c ? c.components.filter(x => x.status === 'update').map(x => `  ${x.name}: ${x.note}`) : [];
+          const sc = c ? c.scripts.filter(x => x.status === 'new').map(x => `  ${x.name} (library only, not run)`) : [];
+          if (!confirm('Full Update from GitHub?\\n\\n' + (list.length ? 'Components, one at a time:\\n' + list.join('\\n') + '\\n\\n' : '') +
+                       (sc.length ? 'New scripts:\\n' + sc.join('\\n') + '\\n\\n' : '') +
+                       'The system is quieted first and restored at the end. Each component is uninstalled, then the new version installed; one that fails is rolled back and skipped. instmon goes last and this page reconnects after it restarts.')) { btn.disabled = false; return; }
+          await postAction({action: 'full_update'});
         } else if (action === 'reboot') {
           if (!confirm('Reboot this Pi? Every service on it -- including this instmon page -- goes unreachable until it finishes booting back up.')) { btn.disabled = false; return; }
           if (!confirm('Really sure? This is a full node reboot, not just instmon.')) { btn.disabled = false; return; }
@@ -1745,6 +2652,7 @@ document.addEventListener('visibilitychange', () => {
   if (!document.hidden) { pollLog(); refreshStatus(); }
 });
 pollLog();
+refreshStatus();
 """
 
 _JS = (
@@ -1795,8 +2703,25 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 </header>
 <div class="wrap">
 
+<div id="banners"></div>
+
 <div class="hdr">Components</div>
 <div id="components">{components_html}
+</div>
+
+<div class="hdr">Updates</div>
+<div class="card">
+  <div class="row">
+    <button data-action="check_updates">Check for updates</button>
+    <button class="b-comms" id="full-update-btn" data-action="full_update" disabled>Full Update</button>
+    <span class="small muted" id="upd-meta">Compares installed components with github.com/kd8pgk/ASL-DVS.</span>
+  </div>
+  <div class="small muted" style="margin-top:.35rem">
+    Full Update: quiets the system, downloads and checks every newer file, then uninstalls the old and installs the new
+    one component at a time (instmon last). A component that fails is rolled back, skipped and listed at the end.
+    New install scripts go to the library's Scripts section -- they are never run for you.</div>
+  <div id="upd-progress"></div>
+  <div id="upd-results"></div>
 </div>
 
 <div class="hdr">Version Library &amp; Scripts Hub</div>
@@ -1825,6 +2750,12 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div class="small muted" style="margin-top:.35rem">
     Accepts a component .py, an install/utility .sh script, or a .conf file matching the category selected above.</div>
   <div id="upmsg" class="small" style="margin-top:.35rem"></div>
+  <div class="row" style="margin-top:.6rem">
+    <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
+    <button id="restore-btn" data-action="restore" disabled>Restore</button>
+    <span class="small muted">Before a big upload or install on a small Pi: stops SysMon, the dashboards, 44helper and the
+    watchdog timer. Radio, Asterisk, Allmon3, SSH and Wi-Fi stay up.</span>
+  </div>
 </div>
 
 <div class="hdr">Backup &amp; Export</div>  <!-- [PHASE 3] -->
@@ -1896,7 +2827,15 @@ _ACTION_HANDLERS ={
 "comms_restart":lambda self ,body :self ._action_comms_restart (body ),
 "reboot":lambda self ,body :self ._action_reboot (body ),
 "shutdown":lambda self ,body :self ._action_shutdown (body ),
+"quiet":lambda self ,body :self ._action_quiet (body ),
+"restore":lambda self ,body :self ._action_restore (body ),
+"check_updates":lambda self ,body :self ._action_check_updates (body ),
+"full_update":lambda self ,body :self ._action_full_update (body ),
+"update_dismiss":lambda self ,body :self ._action_update_dismiss (body ),
 }
+
+# Read-only actions still allowed while Full Update runs.
+_ACTIONS_DURING_UPDATE ={"journal","update_dismiss"}
 
 
 _GET_ROUTES ={
@@ -1964,6 +2903,17 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self .wfile .write (body )
 
 
+    def _update_busy (self ):
+        if not update_running ():
+            return False 
+        self ._send_json (409 ,{
+        "error":"Full Update is running",
+        "message":"Full Update is running -- wait for it to finish.",
+        "level":"warn",
+        })
+        return True 
+
+
     def _find_library_file (self ,filename ,category =None ):
         if category and category in LIB_SUBDIRS :
             candidate =safe_join (LIB_SUBDIRS [category ],filename )
@@ -1983,6 +2933,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self ._send_json (200 ,{
         "components_html":render_components_html (status ["components"]),
         "library_html":render_library_html (status ["library"]),
+        "quiet":status ["quiet"],
+        "update":status ["update"],
         })
 
     def _route_log (self ):
@@ -2105,6 +3057,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
 
     def handle_file_write (self ):
+        if self ._update_busy ():
+            return 
         length =int (self .headers .get ("Content-Length",0 ))
         try :
             body =json .loads (self .rfile .read (length )or b"{}")
@@ -2143,6 +3097,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
 
     def handle_upload (self ):
+        if self ._update_busy ():
+            return 
         content_type =self .headers .get ("Content-Type","")
         m =re .search (r'boundary=([^;]+)',content_type )
         if not m or "multipart/form-data"not in content_type :
@@ -2215,6 +3171,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             return 
 
         action =body .get ("action")
+        if action not in _ACTIONS_DURING_UPDATE and self ._update_busy ():
+            return 
         handler_fn =_ACTION_HANDLERS .get (action )
         if handler_fn is None :
             self ._error_json (400 ,f"Unknown action '{action }'")
@@ -2557,6 +3515,68 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         })
 
 
+    def _action_quiet (self ,body ):
+        res =quiet_on ("Quiet button")
+        if res ["already"]:
+            self ._send_json (200 ,{"message":"The system is already quiet.","level":"info"})
+            return 
+        names =", ".join (res ["stopped"])or "nothing was running"
+        if res ["failed"]:
+            self ._send_json (207 ,{"message":f"Quiet: stopped {names}; did not stop {', '.join(res['failed'])}.","level":"err"})
+            return 
+        self ._send_json (200 ,{"message":f"System quiet: stopped {names}. Press Restore when you're done "
+        f"(auto-restore in {QUIET_AUTO_RESTORE_SEC // 60} min).","level":"ok"})
+
+    def _action_restore (self ,body ):
+        res =quiet_restore ("Restore button")
+        if res ["already"]:
+            self ._send_json (200 ,{"message":"The system isn't quiet -- nothing to restore.","level":"info"})
+            return 
+        if res ["failed"]:
+            self ._send_json (207 ,{"message":f"Restore: {', '.join(res['failed'])} did not start -- see the log.","level":"err"})
+            return 
+        self ._send_json (200 ,{"message":f"Restored: {', '.join(res['started']) or 'nothing was stopped'}.","level":"ok"})
+
+    def _action_check_updates (self ,body ):
+        try :
+            res =update_check ()
+        except Exception as exc :
+            log_event (f"Check for updates failed: {exc}","err")
+            self ._send_json (502 ,{"error":str (exc ),"message":f"Couldn't read GitHub: {exc}","level":"err"})
+            return 
+        n ,ns =res ["updates"],res ["new_scripts"]
+        if n or ns :
+            msg =f"{n} component update(s), {ns} new script(s) on GitHub."
+        else :
+            msg ="Everything is current with GitHub."
+        log_event (f"Check for updates: {msg}","ok"if not (n or ns )else "info")
+        self ._send_json (200 ,{"result":res ,"message":msg ,"level":"info"if (n or ns )else "ok"})
+
+    def _action_full_update (self ,body ):
+        with _update_lock :
+            if _update ["running"]:
+                self ._send_json (409 ,{"error":"Full Update is already running","message":"Full Update is already running.","level":"warn"})
+                return 
+            _update .update (running =True ,phase ="starting",current ="",started =time .time (),finished =0.0 ,
+            error ="",updated =[],skipped =[],attention =[],scripts =[],unchanged =[],
+            banner =False ,instmon_pending =None )
+        with _running_installs_lock :
+            busy =sorted (_running_installs )
+        with _running_scripts_lock :
+            busy +=sorted (_running_scripts )
+        if busy :
+            _update_set (running =False ,phase ="")
+            self ._send_json (409 ,{"error":"busy","message":f"Wait for {', '.join(busy)} to finish first.","level":"warn"})
+            return 
+        log_event ("Full Update started","info")
+        threading .Thread (target =run_full_update_bg ,daemon =True ).start ()
+        self ._send_json (200 ,{"message":"Full Update started -- progress shows on the Updates card and in the log.","level":"info"})
+
+    def _action_update_dismiss (self ,body ):
+        update_dismiss ()
+        self ._send_json (200 ,{"message":"","level":"info"})
+
+
     def _action_reboot (self ,body ):
         log_event ("System reboot requested from instmon UI","warn")
         try :
@@ -2717,6 +3737,8 @@ class InstmonServer (http .server .ThreadingHTTPServer ):
 def run ():
     ensure_dirs ()
     log_event (f"instmon v{VERSION } starting on port {PORT }","info")
+    quiet_resume_at_startup ()
+    update_resume_at_startup ()
 
     if HOME_SCAN_ENABLED :
         moved =scan_home_for_new_code ()
