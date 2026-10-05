@@ -21,6 +21,9 @@ in stages; everything else matches v6.13.67.
   to Google, allstarlink.org, DV hosts and reflectors.  Routes gone:
   /api/net, /api/net/run, /api/net/cancel.  The background job runner
   and /api/net/job stay -- Phone -> Modules "Reinstall" uses them.
+  Reg tab removed: the HTTP and IAX2 registration check cards.  Routes
+  gone: /api/reg/http, /api/reg/iax.  The shared check-list renderer
+  stays (Phone uses it).
 
 v6.13.67 -- D-Star card: gatewayAddress row fixed.  gatewayAddress is the
 Pi's own address that ircDDBGateway binds every socket to (DExtra, D-Plus,
@@ -267,7 +270,7 @@ _DEFAULT_CONFIG = {
     },
     "ui": {
 
-        "enabled_tabs": "overview,services,ports,firewall,journal,asldvs,reg,phone,tune,hardware,dvsm,stfu,m17,zello,sdcard,security,edit",
+        "enabled_tabs": "overview,services,ports,firewall,journal,asldvs,phone,tune,hardware,dvsm,stfu,m17,zello,sdcard,security,edit",
     },
 }
 
@@ -2900,8 +2903,6 @@ body.tab-edit #zone-content{
     onclick="switchTab('journal','212,102,255')">Journal</button>
   <button class="tab-btn"        id="tbtn-asldvs"
     onclick="switchTab('asldvs','255,61,90')">ASL-DVS</button>
-  <button class="tab-btn"        id="tbtn-reg"
-    onclick="switchTab('reg','120,180,255')">Reg</button>
   <button class="tab-btn"        id="tbtn-phone"
     onclick="switchTab('phone','0,255,176')">Phone</button>
   <button class="tab-btn"        id="tbtn-tune"
@@ -3243,40 +3244,6 @@ body.tab-edit #zone-content{
           onclick="dstarGwRestart()">↺ Restart ircddbgatewayd</button>
         <button class="btn btn-blue btn-sm" onclick="loadDstarGw()">↻ Refresh</button>
         <button class="btn btn-muted btn-sm" onclick="dstarGwCopy(this)" title="Copy this card as text">⎘ Copy</button>
-      </div>
-    </div>
-
-  </div>
-
-  <div id="panel-reg" class="tab-panel">
-
-    <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">HTTP Registration</span>
-        <span class="reg-card-status" id="reg-http-status">—</span>
-        <span class="s3-card-meta" id="reg-http-meta">—</span>
-        <div style="display:flex;gap:.3rem;margin-left:auto">
-          <button class="btn btn-muted btn-sm" id="reg-http-refresh"
-                  onclick="loadTab_reg()">↻ Re-check</button>
-        </div>
-      </div>
-      <div id="reg-http-body">
-        <div class="stub-panel" style="min-height:60px">Loading…</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">IAX Registration</span>
-        <span class="reg-card-status" id="reg-iax-status">—</span>
-        <span class="s3-card-meta" id="reg-iax-meta">—</span>
-        <div style="display:flex;gap:.3rem;margin-left:auto">
-          <button class="btn btn-muted btn-sm" id="reg-iax-refresh"
-                  onclick="loadTab_reg()">↻ Re-check</button>
-        </div>
-      </div>
-      <div id="reg-iax-body">
-        <div class="stub-panel" style="min-height:60px">Loading…</div>
       </div>
     </div>
 
@@ -4121,8 +4088,6 @@ body.tab-edit #zone-content{
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-asldvs" value="asldvs" onchange="edTabVisChanged()">ASL-DVS</label>
         <label class="tab-vis-lbl">
-          <input type="checkbox" id="tabchk-reg" value="reg" onchange="edTabVisChanged()">Reg</label>
-        <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-phone" value="phone" onchange="edTabVisChanged()">Phone</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-tune" value="tune" onchange="edTabVisChanged()">Tune</label>
@@ -4589,7 +4554,7 @@ function doLogout() {
 }
 
 
-const TABS = ["overview","services","ports","firewall","journal","asldvs","reg","phone","tune","hardware","dvsm","stfu","m17","zello","sdcard","security","edit"];
+const TABS = ["overview","services","ports","firewall","journal","asldvs","phone","tune","hardware","dvsm","stfu","m17","zello","sdcard","security","edit"];
 
 let _enabledTabSet = new Set(TABS);
 
@@ -5972,19 +5937,6 @@ function dstarGwCopy(btn) {
   dvsmCopy(btn, lines.join("\n"));
 }
 
-const _REG_HTTP_IDS = {body: "reg-http-body", meta: "reg-http-meta", status: "reg-http-status"};
-const _REG_IAX_IDS  = {body: "reg-iax-body",  meta: "reg-iax-meta",  status: "reg-iax-status"};
-
-window.loadTab_reg = async function() {
-  if (!_enabledTabSet.has("reg")) return;
-  const [dHttp, dIax] = await Promise.all([api("/api/reg/http"), api("/api/reg/iax")]);
-
-  if (!dHttp || !dHttp.ok) { _regShowUnreachable(_REG_HTTP_IDS); }
-  else                     { renderRegChecks(dHttp.checks, dHttp.status, _REG_HTTP_IDS); }
-
-  if (!dIax || !dIax.ok) { _regShowUnreachable(_REG_IAX_IDS); }
-  else                   { renderRegChecks(dIax.checks, dIax.status, _REG_IAX_IDS); }
-};
 let _phData = {};
 
 window.phCopyCard = async function(pfx) {
@@ -7889,17 +7841,6 @@ async function fwAddRule() {
     document.getElementById("fw-add-from").value = "";
     setTimeout(loadFirewall, 600);
   }
-}
-
-// ========================================================================
-// TAB: Reg
-// ========================================================================
-// ---- general ----
-function _regShowUnreachable(ids) {
-  const body = document.getElementById(ids.body);
-  if (body) body.innerHTML = '<div class="stub-panel" style="min-height:60px">Server unreachable</div>';
-  const status = document.getElementById(ids.status);
-  if (status) { status.className = "reg-card-status"; status.textContent = "—"; }
 }
 
 // ========================================================================
@@ -16361,519 +16302,6 @@ def _route_allmon3_post(h: Handler, data: dict) -> None:
 
 
 # ==========================================================================
-# TAB: Reg
-# ==========================================================================
-
-_REGISTER_LOOSE_RE = re.compile(r'^\s*register\s*[=:]', re.IGNORECASE)
-
-_PLACEHOLDER_NODES = frozenset({"1999", "1998"})
-
-_PRIVATE_NODE_MAX  = 2000
-
-_STATPOST_URL_RE   = re.compile(
-    r'^https?://stats\.allstarlink\.org/uhandler\b', re.IGNORECASE
-)
-
-_NODE_LOOKUP_VALUES = frozenset({"dns", "file", "both"})
-
-_DEFAULT_DNS_DOMAIN = "nodes.allstarlink.org"
-
-def _scan_register_lines(content: str) -> dict:
-
-    entries:   list = []
-    malformed: list = []
-    passwords: dict = {}
-    for line in content.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith(";") or stripped.startswith("#"):
-            continue
-        m = _REGISTER_RE.match(line)
-        if m:
-            node, pwd = m.group(1).strip(), m.group(2).strip()
-            entries.append((node, bool(pwd)))
-            if pwd:
-                passwords[node] = pwd
-            continue
-        if _REGISTER_LOOSE_RE.match(line):
-            malformed.append(stripped)
-    return {"entries": entries, "malformed": malformed, "passwords": passwords}
-
-def _reg_scan_allmon3(content: str) -> "dict[str, dict]":
-
-    nodes: "dict[str, dict]" = {}
-    section = ""
-    kv: "dict[str, str]" = {}
-
-    def _flush(sec: str, kv: dict) -> None:
-        if sec and sec.isdigit():
-            nodes[sec] = dict(kv)
-
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith(("#", ";")):
-            continue
-        sm = _DVS_SECTION_RE.match(raw_line)
-        if sm:
-            _flush(section, kv)
-            section, kv = sm.group(1).strip(), {}
-            continue
-        m = _DVS_KV_RE.match(raw_line)
-        if m:
-            kv[m.group(1)] = m.group(2).strip()
-    _flush(section, kv)
-    return nodes
-
-def _reg_scan_rpt_conf(content: str) -> "tuple[dict, dict]":
-
-    sections, node_sects = _rpt_scan(content)
-    general_kv = next((kv for s, kv in sections.items()
-                        if s.strip().lower() == "general"), {})
-    return node_sects, general_kv
-
-_REG_STATUS_RANK = {"fail": 3, "warn": 2, "info": 1, "none": 1, "pass": 0}
-
-def _reg_overall_status(checks: list) -> str:
-    if not checks:
-        return "info"
-    worst = max(checks, key=lambda c: _REG_STATUS_RANK.get(c.get("status"), 1))
-    return worst.get("status") or "info"
-
-def _reg_load_context() -> dict:
-    http_content, http_err = read_asterisk_file("rpt_http_registrations.conf")
-    iax_content,  iax_err  = read_asterisk_file("iax.conf")
-    rpt_content,  rpt_err  = read_asterisk_file("rpt.conf")
-
-    empty_scan = {"entries": [], "malformed": [], "passwords": {}}
-    http_scan = _scan_register_lines(http_content) if not http_err else dict(empty_scan)
-    iax_scan  = _scan_register_lines(iax_content)  if not iax_err  else dict(empty_scan)
-
-    return {
-        "http_content": http_content, "http_err": http_err, "http_scan": http_scan,
-        "iax_content":  iax_content,  "iax_err":  iax_err,  "iax_scan":  iax_scan,
-        "rpt_content":  rpt_content,  "rpt_err":  rpt_err,
-    }
-
-def _reg_node_password_checks(entries: list, label: str) -> list:
-    checks = []
-    for node, has_pwd in entries:
-        node_ok = node.isdigit() and len(node) >= 4
-        checks.append({
-            "title":  f"{label} Node {node}",
-            "value":  node if node_ok else "invalid",
-            "status": "pass" if node_ok else "fail",
-            "note":   None, "url": None,
-        })
-        checks.append({
-            "title":  "Password", "value": None,
-            "status": "pass" if has_pwd else "fail",
-            "note":   _ASL_NOTE, "url": _ASL_URL,
-        })
-    return checks
-
-def _reg_dual_check(http_active: bool, iax_active: bool) -> list:
-    if http_active and iax_active:
-        return [{
-            "title":  "Dual registration",
-            "value":  "HTTP and IAX both active",
-            "status": "warn",
-            "note":   ("Don't register with both — wastes server load for "
-                       "no gain. Pick one, comment out the other."),
-            "url":    "https://allstarlink.github.io/adv-topics/httpreg/",
-        }]
-    return [{
-        "title":  "Dual registration",
-        "value":  "single protocol only",
-        "status": "pass",
-        "note":   None, "url": None,
-    }]
-
-def _reg_syntax_checks(scan: dict, label: str) -> list:
-    malformed = scan["malformed"]
-    if malformed:
-        return [{
-            "title":  f"{label} register line syntax",
-            "value":  malformed[0][:60],
-            "status": "fail",
-            "note":   ("Looks like a register line but doesn't match the "
-                       "required register=> node:password@host syntax "
-                       "(missing arrow is a common copy/paste mistake)."),
-            "url":    None,
-        }]
-    return [{
-        "title":  f"{label} register line syntax",
-        "value":  "no malformed lines",
-        "status": "pass",
-        "note":   None, "url": None,
-    }]
-
-def _reg_placeholder_check(entries: list, label: str) -> list:
-    if not entries:
-        return []
-    hits = [n for n, _ in entries if n in _PLACEHOLDER_NODES]
-    if hits:
-        return [{
-            "title":  f"{label} placeholder node number",
-            "value":  hits[0],
-            "status": "fail",
-            "note":   "Template default left unchanged — set your real assigned node number.",
-            "url":    None,
-        }]
-    return [{
-        "title":  f"{label} placeholder node number",
-        "value":  "none found",
-        "status": "pass",
-        "note":   None, "url": None,
-    }]
-
-def _reg_module_checks(http_active: bool, iax_active: bool) -> list:
-    if not http_active and not iax_active:
-        return []
-    http_mod = module_state("res_rpt_http_registrations.so")
-    if http_active and http_mod == "noload":
-        return [{
-            "title":  "res_rpt_http_registrations.so",
-            "value":  "noload",
-            "status": "fail",
-            "note":   "HTTP registration is configured but the module is set to noload in modules.conf.",
-            "url":    None,
-        }]
-    if http_active:
-        return [{
-            "title":  "res_rpt_http_registrations.so",
-            "value":  http_mod,
-            "status": "pass" if http_mod in ("load", "require", "blank") else "warn",
-            "note":   None, "url": None,
-        }]
-    if iax_active and http_mod in ("load", "require"):
-        return [{
-            "title":  "res_rpt_http_registrations.so",
-            "value":  http_mod,
-            "status": "warn",
-            "note":   "Only IAX registration is configured, but the HTTP registration module is still loaded.",
-            "url":    None,
-        }]
-    return [{
-        "title":  "res_rpt_http_registrations.so",
-        "value":  http_mod,
-        "status": "pass",
-        "note":   None, "url": None,
-    }]
-
-def _reg_node_coverage_checks(node_sects: dict, registered_nodes: set) -> list:
-    checks = []
-    for nid in sorted(node_sects.keys(), key=int):
-        is_private = nid.isdigit() and int(nid) < _PRIVATE_NODE_MAX
-        if is_private:
-            checks.append({
-                "title":  f"rpt.conf node {nid}",
-                "value":  "private node — registration not required",
-                "status": "pass",
-                "note":   None, "url": None,
-            })
-        elif registered_nodes and nid not in registered_nodes:
-            checks.append({
-                "title":  f"rpt.conf node {nid}",
-                "value":  "no matching registration entry",
-                "status": "warn",
-                "note":   ("Node exists in rpt.conf but isn't in either registration "
-                           "file — check for a typo'd node number."),
-                "url":    None,
-            })
-        else:
-            checks.append({
-                "title":  f"rpt.conf node {nid}",
-                "value":  "has matching registration entry",
-                "status": "pass",
-                "note":   None, "url": None,
-            })
-    return checks
-
-def _reg_lookup_settings_checks(general_kv: dict) -> list:
-    checks = []
-    method = general_kv.get("node_lookup_method", "").strip().lower()
-    if method:
-        checks.append({
-            "title":  "node_lookup_method",
-            "value":  method,
-            "status": "pass" if method in _NODE_LOOKUP_VALUES else "warn",
-            "note":   (None if method in _NODE_LOOKUP_VALUES
-                       else f"Expected one of {', '.join(sorted(_NODE_LOOKUP_VALUES))}."),
-            "url":    None,
-        })
-    domain = general_kv.get("dns_node_domain", "").strip()
-    if domain and domain != _DEFAULT_DNS_DOMAIN:
-        checks.append({
-            "title":  "dns_node_domain",
-            "value":  domain,
-            "status": "info",
-            "note":   f"Overridden from the default ({_DEFAULT_DNS_DOMAIN}) — confirm this is intentional.",
-            "url":    None,
-        })
-    return checks
-
-def _reg_statpost_checks(node_sects: dict, http_entries: list) -> list:
-    checks = []
-    for nid in sorted(node_sects.keys(), key=int):
-        kv = node_sects[nid]
-        statpost = kv.get("statpost_url", "").strip()
-        if not statpost:
-            continue
-        url_ok = bool(_STATPOST_URL_RE.match(statpost))
-        checks.append({
-            "title":  f"statpost {nid}",
-            "value":  statpost if url_ok else "unexpected URL",
-            "status": "pass" if url_ok else "warn",
-            "note":   None, "url": None,
-        })
-        has_reg_entry = any(n == nid and pwd for n, pwd in http_entries)
-        checks.append({
-            "title":  f"statpost {nid} credential",
-            "value":  ("matches HTTP registration password" if has_reg_entry
-                       else "no matching HTTP registration password"),
-            "status": "pass" if has_reg_entry else "warn",
-            "note":   (None if has_reg_entry else
-                       ("statpost can 401 even on an otherwise healthy node if this "
-                        "node/password pair drifts from rpt_http_registrations.conf — "
-                        "this doesn't block registration itself.")),
-            "url":    None,
-        })
-    return checks
-
-def _reg_ami_checks(http_passwords: dict) -> list:
-    checks = []
-
-    allmon3_path = _ALLMON3_DIR / "allmon3.ini"
-    allmon3_content, allmon3_err = read_path_file(allmon3_path) if allmon3_path.is_file() \
-        else ("", f"File not found: {allmon3_path}")
-    manager_content, manager_err = read_asterisk_file("manager.conf")
-
-    if allmon3_err or manager_err:
-        return checks
-
-    allmon3_nodes = _reg_scan_allmon3(allmon3_content)
-    manager_users = {s: kv for s, kv in _parse_sections(manager_content).items()
-                      if s.strip().lower() != "general"}
-
-    for nid in sorted(allmon3_nodes.keys(), key=lambda n: (not n.isdigit(), n)):
-        am_user = allmon3_nodes[nid].get("user", "").strip()
-        am_pass = allmon3_nodes[nid].get("pass", "").strip()
-        if not am_user:
-            continue
-
-        mgr_kv = next((kv for s, kv in manager_users.items() if s.strip() == am_user), None)
-        if mgr_kv is None:
-            checks.append({
-                "title":  f"AMI user [{nid}]",
-                "value":  f"'{am_user}' not found in manager.conf",
-                "status": "warn",
-                "note":   "Allmon3 will fail to connect locally even though AllStarLink registration can still succeed.",
-                "url":    None,
-            })
-        else:
-            checks.append({
-                "title":  f"AMI user [{nid}]",
-                "value":  f"'{am_user}' found in manager.conf",
-                "status": "pass",
-                "note":   None, "url": None,
-            })
-            mgr_secret = mgr_kv.get("secret", "").strip()
-            if am_pass and mgr_secret:
-                if am_pass != mgr_secret:
-                    checks.append({
-                        "title":  f"AMI credential [{nid}]",
-                        "value":  "allmon3.ini password != manager.conf secret",
-                        "status": "warn",
-                        "note":   f"[{am_user}] secret in manager.conf has drifted from the password in allmon3.ini's [{nid}] stanza.",
-                        "url":    None,
-                    })
-                else:
-                    checks.append({
-                        "title":  f"AMI credential [{nid}]",
-                        "value":  "allmon3.ini password matches manager.conf secret",
-                        "status": "pass",
-                        "note":   None, "url": None,
-                    })
-
-        reg_pwd = http_passwords.get(nid)
-        if reg_pwd and am_pass:
-            checks.append({
-                "title":  f"Registration vs AMI password [{nid}]",
-                "value":  "match" if reg_pwd == am_pass else "differ",
-                "status": "pass" if reg_pwd == am_pass else "info",
-                "note":   (None if reg_pwd == am_pass else
-                           "AllStarLink registration and local AMI access are separate credentials — this is only worth a look if you intended them to match."),
-                "url":    None,
-            })
-    return checks
-
-_REG_LIVE_UNREG_NOTE = {
-    "HTTP": ("Config says this node should be registered but the live "
-             "state disagrees — check for a NAT/carrier issue (e.g. a "
-             "hotspot connection that intercepts and redirects HTTP "
-             "traffic) or a blocked outbound HTTPS path."),
-    "IAX": ("Config says this node should be registered but the live "
-            "state disagrees — check for a NAT/carrier issue or a "
-            "blocked outbound UDP/4569 path (IAX2)."),
-}
-
-def _reg_live_checks(entries: list, label: str) -> list:
-    checks = []
-    reg_live = get_state_snapshot().get("reg_live")
-    if reg_live is None:
-        checks.append({
-            "title":  "Live registration state",
-            "value":  "not yet polled",
-            "status": "info",
-            "note":   "First background poll hasn't run yet — refresh in a moment.",
-            "url":    None,
-        })
-        return checks
-    if not reg_live.get("ok"):
-        checks.append({
-            "title":  "Live registration state",
-            "value":  reg_live.get("error") or "unavailable",
-            "status": "warn",
-            "note":   "Couldn't reach the Asterisk CLI — the checks above are config-only until this clears.",
-            "url":    None,
-        })
-        return checks
-
-    live_nodes = reg_live.get("nodes", {})
-    configured_nodes = {n for n, _ in entries}
-    for nid in sorted(configured_nodes, key=str):
-        live_state = live_nodes.get(nid, "not shown")
-        if live_state == "registered":
-            checks.append({
-                "title":  f"Live registration [{nid}]",
-                "value":  "registered", "status": "pass",
-                "note":   None, "url": None,
-            })
-        elif live_state == "unregistered":
-            checks.append({
-                "title":  f"Live registration [{nid}]",
-                "value":  "not registered",
-                "status": "fail",
-                "note":   _REG_LIVE_UNREG_NOTE.get(label, _REG_LIVE_UNREG_NOTE["HTTP"]),
-                "url":    None,
-            })
-        else:
-            checks.append({
-                "title":  f"Live registration [{nid}]",
-                "value":  live_state,
-                "status": "warn",
-                "note":   ("Node is configured but didn't show up clearly in "
-                           "`rpt show registrations` output — worth a manual look."),
-                "url":    None,
-            })
-    return checks
-
-def get_http_reg_status(ctx: dict = None) -> dict:
-    ctx = ctx or _reg_load_context()
-    checks: list = []
-
-    http_scan, iax_scan = ctx["http_scan"], ctx["iax_scan"]
-    http_entries, iax_entries = http_scan["entries"], iax_scan["entries"]
-    http_active, iax_active = bool(http_entries), bool(iax_entries)
-
-    if ctx["http_err"]:
-        checks.append({
-            "title": "rpt_http_registrations.conf", "value": ctx["http_err"],
-            "status": "fail", "note": None, "url": None,
-        })
-    elif not http_active:
-        checks.append({
-            "title": "HTTP registration", "value": "not configured",
-            "status": "fail", "note": None, "url": None,
-        })
-    else:
-        checks.extend(_reg_node_password_checks(http_entries, "HTTP"))
-
-    if http_active or iax_active:
-        checks.extend(_reg_dual_check(http_active, iax_active))
-
-    checks.extend(_reg_syntax_checks(http_scan, "HTTP"))
-    checks.extend(_reg_placeholder_check(http_entries, "HTTP"))
-    checks.extend(_reg_module_checks(http_active, iax_active))
-
-    if ctx["rpt_err"]:
-        checks.append({
-            "title": "rpt.conf", "value": ctx["rpt_err"],
-            "status": "fail", "note": None, "url": None,
-        })
-    else:
-        node_sects, general_kv = _reg_scan_rpt_conf(ctx["rpt_content"])
-        registered_nodes = {n for n, _ in (http_entries + iax_entries)}
-        checks.extend(_reg_node_coverage_checks(node_sects, registered_nodes))
-        checks.extend(_reg_lookup_settings_checks(general_kv))
-        checks.extend(_reg_statpost_checks(node_sects, http_entries))
-        checks.extend(_reg_ami_checks(http_scan["passwords"]))
-
-    checks.extend(_reg_live_checks(http_entries, "HTTP"))
-
-    if not checks:
-        checks.append({
-            "title": "HTTP Registration", "value": "nothing to check",
-            "status": "info", "note": None, "url": None,
-        })
-
-    return {"ok": True, "checks": checks, "status": _reg_overall_status(checks)}
-
-def get_iax_reg_status(ctx: dict = None) -> dict:
-    ctx = ctx or _reg_load_context()
-    checks: list = []
-
-    http_scan, iax_scan = ctx["http_scan"], ctx["iax_scan"]
-    http_entries, iax_entries = http_scan["entries"], iax_scan["entries"]
-    http_active, iax_active = bool(http_entries), bool(iax_entries)
-
-    if ctx["iax_err"]:
-        checks.append({
-            "title": "iax.conf", "value": ctx["iax_err"],
-            "status": "fail", "note": None, "url": None,
-        })
-    elif not iax_active:
-        checks.append({
-            "title": "IAX registration", "value": "not configured",
-            "status": "fail", "note": None, "url": None,
-        })
-    else:
-        checks.extend(_reg_node_password_checks(iax_entries, "IAX"))
-
-    if http_active or iax_active:
-        checks.extend(_reg_dual_check(http_active, iax_active))
-
-    checks.extend(_reg_syntax_checks(iax_scan, "IAX"))
-    checks.extend(_reg_placeholder_check(iax_entries, "IAX"))
-
-    if ctx["rpt_err"]:
-        checks.append({
-            "title": "rpt.conf", "value": ctx["rpt_err"],
-            "status": "fail", "note": None, "url": None,
-        })
-    else:
-        node_sects, general_kv = _reg_scan_rpt_conf(ctx["rpt_content"])
-        registered_nodes = {n for n, _ in (http_entries + iax_entries)}
-        checks.extend(_reg_node_coverage_checks(node_sects, registered_nodes))
-        checks.extend(_reg_lookup_settings_checks(general_kv))
-
-    checks.extend(_reg_live_checks(iax_entries, "IAX"))
-
-    if not checks:
-        checks.append({
-            "title": "IAX Registration", "value": "nothing to check",
-            "status": "info", "note": None, "url": None,
-        })
-
-    return {"ok": True, "checks": checks, "status": _reg_overall_status(checks)}
-
-def _route_reg_http_get(h: Handler) -> None:
-    h.send_json(get_http_reg_status())
-
-def _route_reg_iax_get(h: Handler) -> None:
-    h.send_json(get_iax_reg_status())
-
-
-# ==========================================================================
 # TAB: Phone
 # ==========================================================================
 
@@ -23331,7 +22759,7 @@ def unpin_service(unit: str) -> bool:
     return ok
 
 _ALL_TABS = ("overview", "services", "ports", "firewall", "journal",
-             "asldvs", "reg", "phone", "tune", "hardware", "dvsm", "stfu", "m17", "zello", "sdcard",
+             "asldvs", "phone", "tune", "hardware", "dvsm", "stfu", "m17", "zello", "sdcard",
              "security", "edit")
 
 _LOCKED_TABS = ("overview", "edit")
@@ -24963,8 +24391,6 @@ _GET_ROUTES = {
     "/api/abinfo":             _route_abinfo,
     "/api/hardware":           _route_hardware_get,
     "/api/hardware/diag":      _route_hardware_diag,
-    "/api/reg/http":           _route_reg_http_get,
-    "/api/reg/iax":            _route_reg_iax_get,
     "/api/phone":              _route_phone_get,
     "/api/dvsm":               _route_dvsm,
     "/api/stfu":               _route_stfu_get,

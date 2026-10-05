@@ -82,7 +82,7 @@ function doLogout() {
 }
 
 
-const TABS = ["overview","services","ports","firewall","journal","asldvs","reg","phone","tune","hardware","dvsm","stfu","m17","zello","sdcard","security","edit"];
+const TABS = ["overview","services","ports","firewall","journal","asldvs","phone","tune","hardware","dvsm","stfu","m17","zello","sdcard","security","edit"];
 
 let _enabledTabSet = new Set(TABS);
 
@@ -1465,19 +1465,6 @@ function dstarGwCopy(btn) {
   dvsmCopy(btn, lines.join("\n"));
 }
 
-const _REG_HTTP_IDS = {body: "reg-http-body", meta: "reg-http-meta", status: "reg-http-status"};
-const _REG_IAX_IDS  = {body: "reg-iax-body",  meta: "reg-iax-meta",  status: "reg-iax-status"};
-
-window.loadTab_reg = async function() {
-  if (!_enabledTabSet.has("reg")) return;
-  const [dHttp, dIax] = await Promise.all([api("/api/reg/http"), api("/api/reg/iax")]);
-
-  if (!dHttp || !dHttp.ok) { _regShowUnreachable(_REG_HTTP_IDS); }
-  else                     { renderRegChecks(dHttp.checks, dHttp.status, _REG_HTTP_IDS); }
-
-  if (!dIax || !dIax.ok) { _regShowUnreachable(_REG_IAX_IDS); }
-  else                   { renderRegChecks(dIax.checks, dIax.status, _REG_IAX_IDS); }
-};
 let _phData = {};
 
 window.phCopyCard = async function(pfx) {
@@ -3382,17 +3369,6 @@ async function fwAddRule() {
     document.getElementById("fw-add-from").value = "";
     setTimeout(loadFirewall, 600);
   }
-}
-
-// ========================================================================
-// TAB: Reg
-// ========================================================================
-// ---- general ----
-function _regShowUnreachable(ids) {
-  const body = document.getElementById(ids.body);
-  if (body) body.innerHTML = '<div class="stub-panel" style="min-height:60px">Server unreachable</div>';
-  const status = document.getElementById(ids.status);
-  if (status) { status.className = "reg-card-status"; status.textContent = "—"; }
 }
 
 // ========================================================================
