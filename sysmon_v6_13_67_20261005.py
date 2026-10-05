@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 """
 ASL-DVS SYSMON  --  sysmon.py
-Version : 6.13.66  (20261005)
+Version : 6.13.67  (20261005)
 Authors : Claude AI (Anthropic) / KD8PGK
 License : CC BY-NC 4.0
 Nodes   : KD8PGK 652701 / 652702 / 652703
 
 Changelog: the last 10 versions are below.  Older entries (v6.13.55 and
 earlier) are in sysmon_changelog_v6_13_65_20261004.txt.
+
+v6.13.67 -- D-Star card: gatewayAddress row fixed.  gatewayAddress is the
+Pi's own address that ircDDBGateway binds every socket to (DExtra, D-Plus,
+DCS, G2 and remote control), not the router's.  Blank (or 0.0.0.0) now
+passes -- it is the normal setting -- with a "don't forward the port" note
+when remote control is on.  127.0.0.1 fails (blocks reflector and gateway
+links) and an address this Pi doesn't have (e.g. the router's) fails
+(ircDDBGateway can't bind it).  The row shows whatever the remote-control
+setting, since the address covers every link.  v6.13.66 passed 127.0.0.1
+and warned on blank.
 
 v6.13.66 -- D-Star -- ircDDBGateway card (ASL-DVS tab).
 For dashboard v9.3.71, whose D-STAR tab links to gateway callsigns as well
@@ -178,7 +188,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.66"
+VERSION      = "6.13.67"
 BUILD_DATE   = "20261005"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -23645,6 +23655,11 @@ def _ircddb_read_conf() -> "tuple[dict, str]":
     return kv, ""
 
 
+def _pi_ipv4s() -> "set[str]":
+    out = _run(["ip", "-o", "-4", "addr", "show"], timeout=4)
+    return set(re.findall(r"\binet (\d+\.\d+\.\d+\.\d+)/", out))
+
+
 def _dstar_gw_checks() -> dict:
     kv, prob = _ircddb_read_conf()
     path = str(_IRCDDB_CONF_PATH)
@@ -23713,14 +23728,29 @@ def _dstar_gw_checks() -> dict:
                 row(f"UDP {port}: " + ("listening" if up else "not listening"), "Remote control listening",
                     "pass" if up else "warn",
                     None if up else "Restart ircddbgatewayd to apply the remote-control settings")
-        addr = kv.get("gatewayAddress", "")
-        if addr and addr != "0.0.0.0":
-            row(f"gatewayAddress = {addr}", "Remote control listen address", "pass")
-        else:
-            row("gatewayAddress = " + (addr or "(blank)"), "Remote control listen address", "warn",
-                "Listens on every interface -- don't forward the remote port on your router")
     else:
         row("remotePassword / remotePort", "Only needed with remote control on", "info")
+
+    # v6.13.67: gatewayAddress is the Pi's own address ircDDBGateway binds ALL
+    # its sockets to (DExtra, D-Plus, DCS, G2 and remote control) -- not the
+    # router's.  Blank is normal.  127.0.0.1 cuts off internet linking, and an
+    # address this Pi doesn't have (e.g. the router's) stops it binding at all.
+    addr = kv.get("gatewayAddress", "")
+    if not addr or addr == "0.0.0.0":
+        row("gatewayAddress = " + (addr or "(blank)"), "Listen address (this Pi's, not the router's)", "pass",
+            "Normal: all of this Pi's addresses." + (f" Don't forward UDP {port} on your router."
+                                                     if rc_on and port_ok else ""))
+    elif addr.startswith("127."):
+        row(f"gatewayAddress = {addr}", "Listen address (this Pi's, not the router's)", "fail",
+            "Loopback blocks reflector and gateway links -- leave gatewayAddress blank")
+    else:
+        mine = _pi_ipv4s()
+        if mine and addr not in mine:
+            row(f"gatewayAddress = {addr}", "Listen address (this Pi's, not the router's)", "fail",
+                f"Not an address of this Pi ({', '.join(sorted(mine))}) -- leave it blank, "
+                f"don't use the router's address")
+        else:
+            row(f"gatewayAddress = {addr}", "Listen address (this Pi's, not the router's)", "pass")
 
     statuses = [r["status"] for r in rows]
     status = "fail" if "fail" in statuses else "warn" if "warn" in statuses else "pass"
