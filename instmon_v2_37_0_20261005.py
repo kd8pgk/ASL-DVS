@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""instmon v2.36.1 (2026-09-28) - KD8PGK Web Installer & Component Manager
+"""instmon v2.37.0 (2026-10-05) - KD8PGK Web Installer & Component Manager
 
 Full version history: see CHANGELOG.md. This docstring intentionally
 stays short now -- it used to carry the entire changelog inline (see
@@ -43,8 +43,8 @@ from datetime import datetime
 
 
 PORT =8990 
-VERSION ="2.36.1"
-DATE_STR ="2026-09-28"  # v2.36.1 Login refresh: when a session expires or instmon is reinstalled/restarted, the page now reloads itself instead of popping the login box over the stale page (which mangled the text and, after login, restarted every poll timer a second time); the "Session expired" message is carried across the reload via sessionStorage and shown on the fresh login box; a once-only guard means a burst of 401s reloads once, and the boot-time login (fresh page, not logged in) never reloads, so no loop. Previous: v2.36.0 GitHub updates: Check GitHub reads the file list of kd8pgk/ASL-DVS (main) straight from GitHub -- no manifest or checksums to maintain -- shows the newest GitHub copy of each tool in its library group, Update downloads, checks (same file GitHub listed, version, shebang, syntax, --install support) and stages it in its own library folder; uninstall_asl_dvs*.sh added to Scripts with a double confirm. Previous: wifimon card now points at the wifimon v5 web dashboard (port 8991, plain HTTP, Go button); M17 Dashboard and SVX Dashboard cards removed (component, library group + upload box, library folder, home-folder sweep pattern, and the M17 branch of config install). Previous: v2.30.2 Progress audit: reader uses read1() (was a blocking read(256) => 4 s+ batches, nothing for short jobs), throttled copies report via the read-side dd (pv prints nothing when stderr is a pipe), ddrescue status is captured (it writes to stdout, which was /dev/null) and its kB unit parsed, one-decimal %, bytes done/total, elapsed, windowed time-left, stall warning
+VERSION ="2.37.0"
+DATE_STR ="2026-10-05"  # v2.37.0 Quiet System + Full Update: Quiet System / Restore (GitHub Updates card) pause SysMon, the Dashboard, 44helper and the watchdog timer(s) through the quiesce core with a new "quiet" scope -- never Asterisk, the bridges, Allmon3, wifimon or instmon -- share its state file (so a restart of instmon restores them, and a disk-image job and Quiet System can never overlap), auto-restore after 30 min (INSTMON_QUIET_AUTO_RESTORE_SEC), and drop a component that a later Install/Uninstall already restarted; Full Update (next to Check GitHub) reads the same GitHub listing, picks for every installed component the newest GitHub build of the same variant (file-name stem, or the VERSION suffix such as -pi02w), downloads and checks every file first with the GitHub Update checks, then pauses the web tools and, one component at a time (44helper, wifimon, Dashboard, SysMon, Watchdog), saves a library copy of the installed file, runs its --uninstall, runs the new file's --install and waits for the service and port; a failure puts the saved copy back and the component is skipped (or listed NEEDS ATTENTION if that fails too) and the run carries on; newer install scripts go to the Scripts library only, never run; Restore, then instmon last -- replaced in place by its own --install, with a transient instmon-update-guard timer that reinstalls the old copy if port 8990 is silent 90 s later; results are saved to instmon_full_update.json and the restarted instmon reports them; summary as a popup, in the log and as a banner until dismissed; while it runs every other action, upload, editor save and disk-image job answers 409. Check GitHub now also works out the Full Update list from the same listing (no extra GitHub request). Previous: v2.36.1 Login refresh: when a session expires or instmon is reinstalled/restarted, the page now reloads itself instead of popping the login box over the stale page (which mangled the text and, after login, restarted every poll timer a second time); the "Session expired" message is carried across the reload via sessionStorage and shown on the fresh login box; a once-only guard means a burst of 401s reloads once, and the boot-time login (fresh page, not logged in) never reloads, so no loop. Previous: v2.36.0 GitHub updates: Check GitHub reads the file list of kd8pgk/ASL-DVS (main) straight from GitHub -- no manifest or checksums to maintain -- shows the newest GitHub copy of each tool in its library group, Update downloads, checks (same file GitHub listed, version, shebang, syntax, --install support) and stages it in its own library folder; uninstall_asl_dvs*.sh added to Scripts with a double confirm. Previous: wifimon card now points at the wifimon v5 web dashboard (port 8991, plain HTTP, Go button); M17 Dashboard and SVX Dashboard cards removed (component, library group + upload box, library folder, home-folder sweep pattern, and the M17 branch of config install). Previous: v2.30.2 Progress audit: reader uses read1() (was a blocking read(256) => 4 s+ batches, nothing for short jobs), throttled copies report via the read-side dd (pv prints nothing when stderr is a pipe), ddrescue status is captured (it writes to stdout, which was /dev/null) and its kB unit parsed, one-decimal %, bytes done/total, elapsed, windowed time-left, stall warning
 
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -2786,6 +2786,14 @@ _QUIESCE_UU_PIDFILE = "/run/unattended-upgrades.pid"
 
 _quiesce_lock = threading.Lock()
 
+# v2.37.0 Quiet System: the same quiesce machinery with a narrower set --
+# the watchdog timer(s) plus the suite's web tools, never Asterisk or the
+# bridges (tier 2), never instmon, and never wifimon (it runs the Wi-Fi
+# fallback; stopping it could cut a headless Pi off). Unlike a disk image,
+# sysmon IS stopped -- freeing its memory is the point on a Pi Zero 2 W.
+QUIET_JOB_ID = "quiet-system"
+_QUIET_KEEP_CATEGORIES = ("instmon", "watchdog", "wifimon")
+
 
 def _quiesce_list_timer_units(glob_pattern=_QUIESCE_TIER0_GLOB):
     """Every currently-active timer unit whose NAME matches the glob.
@@ -2816,7 +2824,7 @@ def _quiesce_list_timer_units(glob_pattern=_QUIESCE_TIER0_GLOB):
     return sorted(set(names))
 
 
-def _quiesce_resolve_units():
+def _quiesce_resolve_units(scope="diskimg"):
     """The full quiesce set as [(tier, label, unit)], in STOP order
     (tier 0 first). Only units systemctl reports as active are
     included, so _unquiesce_services() can never start something that
@@ -2828,14 +2836,18 @@ def _quiesce_resolve_units():
     for unit in _quiesce_list_timer_units():
         resolved.append((0, unit.rsplit(".", 1)[0], unit))
 
+    keep = _QUIET_KEEP_CATEGORIES if scope == "quiet" else _QUIESCE_NEVER_STOP_CATEGORIES
     for comp in COMPONENTS:
-        if comp["category"] in _QUIESCE_NEVER_STOP_CATEGORIES:
+        if comp["category"] in keep:
             continue
         unit = comp["service"]
         if not unit.endswith(".service") and not unit.endswith(".timer"):
             unit = unit + ".service"
         if systemctl_is_active(unit) == "active":
             resolved.append((1, comp["name"], unit))
+
+    if scope == "quiet":
+        return resolved
 
     for label, unit in list(COMMS_RESTART_SERVICES) + _QUIESCE_TIER2_EXTRA:
         if systemctl_is_active(unit) == "active":
@@ -2933,7 +2945,7 @@ def _quiesce_active_connections():
     return lines
 
 
-def _quiesce_state_write(job_id, stopped):
+def _quiesce_state_write(job_id, stopped, started_at=None):
     """Persist what we have stopped so far. Written after EVERY
     individual stop, not once at the end, so a hard kill between two
     stops still leaves an accurate record for the startup sweep to
@@ -2941,7 +2953,7 @@ def _quiesce_state_write(job_id, stopped):
     choke point the v1.28.11 audit hardened for temp-file modes."""
     payload = json.dumps({
         "job_id": job_id,
-        "started_at": time.time(),
+        "started_at": started_at or time.time(),
         "stopped": [[tier, label, unit] for tier, label, unit in stopped],
     }, indent=2).encode("utf-8")
     try:
@@ -3015,7 +3027,7 @@ def _quiesce_stop_one(unit):
     return True, "stopped"
 
 
-def _quiesce_services(job_id, console_job_id=None):
+def _quiesce_services(job_id, console_job_id=None, scope="diskimg"):
     """Stop the quiesce set in tier order. Returns (ok, stopped,
     message).
 
@@ -3030,7 +3042,14 @@ def _quiesce_services(job_id, console_job_id=None):
             _diskimg_console_append(console_job_id, text)
 
     with _quiesce_lock:
-        units = _quiesce_resolve_units()
+        # v2.37.0: one quiesce at a time. Quiet System and a disk-image
+        # job share the state file; a second one would overwrite the
+        # first one's record of what to restart.
+        held = _quiesce_state_read()
+        if held is not None and held.get("job_id") != job_id:
+            who = "Quiet System" if held.get("job_id") == QUIET_JOB_ID else "a disk-image job"
+            return False, [], f"Services are already paused by {who} -- restore them first."
+        units = _quiesce_resolve_units(scope)
         if not units:
             _console("Quiesce: nothing to stop (no suite services are running).")
             log_event("Quiesce: nothing to stop -- no suite services active", "info")
@@ -3043,7 +3062,7 @@ def _quiesce_services(job_id, console_job_id=None):
         # v2.23.0: record what is about to be dropped, before dropping
         # it. Informational only -- see _quiesce_active_connections().
         try:
-            for line in _quiesce_active_connections():
+            for line in (_quiesce_active_connections() if scope != "quiet" else []):
                 _console(f"  dropping: {line}")
                 log_event(f"Quiesce dropping: {line}", "warn")
         except Exception:
@@ -3064,7 +3083,7 @@ def _quiesce_services(job_id, console_job_id=None):
             log_event(f"Quiesce: {label} ({unit}) failed to stop: {detail} -- aborting and restoring", "err")
             _console("Quiesce aborted -- restarting whatever was already stopped.")
             restore_ok, _results = _unquiesce_services(console_job_id=console_job_id, _already_locked=True)
-            msg = f"Could not stop {label} ({unit}): {detail}. Nothing was imaged."
+            msg = f"Could not stop {label} ({unit}): {detail}." + (" Nothing was imaged." if scope != "quiet" else "")
             if not restore_ok:
                 msg += " WARNING: not every service came back -- check the log; a reboot is recommended."
             return False, [], msg
@@ -3342,17 +3361,22 @@ def _quiesce_startup_sweep():
             age = f" (quiesced {int(time.time() - started)}s ago)"
     except (TypeError, ValueError):
         pass
-    log_event(
-        f"STARTUP RECOVERY: a previous instmon process left {len(stopped)} service(s) "
-        f"stopped for disk-image job {state.get('job_id')}{age} -- restarting them now.",
-        "err",
-    )
+    if state.get("job_id") == QUIET_JOB_ID:
+        # v2.37.0: Quiet System never outlives the instmon that set it.
+        log_event(f"Quiet System was on when instmon restarted{age} -- restoring "
+                  f"{len(stopped)} service(s) now.", "warn")
+    else:
+        log_event(
+            f"STARTUP RECOVERY: a previous instmon process left {len(stopped)} service(s) "
+            f"stopped for disk-image job {state.get('job_id')}{age} -- restarting them now.",
+            "err",
+        )
 
     # Order matters: kill the orphaned copy FIRST. Restoring services
     # while a ghost dd is still reading the boot disk would put the
     # writes back exactly where they were being avoided, and the image
     # is unusable regardless since nothing will finalize it.
-    if state.get("job_id"):
+    if state.get("job_id") and state.get("job_id") != QUIET_JOB_ID:
         try:
             _quiesce_stop_orphaned_job(state["job_id"])
         except Exception as exc:
@@ -3828,6 +3852,7 @@ _gh_state ={
 # its version. Bounded; cleared if it ever grows past the cap.
 _gh_version_cache ={}
 _GH_VERSION_CACHE_MAX =200 
+_gh_last_cands = []  # v2.37.0: last parsed GitHub listing (Full Update)
 
 
 def _gh_event (message ,level ):
@@ -4063,13 +4088,15 @@ def _gh_collect ():
     """(entries, skipped): the newest GitHub file of each kind, compared."""
     raw =_gh_fetch_impl (GITHUB_API_LIST_URL ,GITHUB_LIST_MAX_BYTES )
     cands ,skipped =_gh_parse_listing (raw )
+    # v2.37.0: Full Update plans from this same listing.
+    _gh_last_cands[:] = [dict(c) for c in cands]
     newest ={}
     for cand in cands :
         local =_gh_local_files (cand ["category"],cand ["glob"])
         try :
             ver =_gh_version_of (cand ,local )
         except GhRejected as exc :
-            if "reach GitHub"in str (exc )or "hourly limit"in str (exc )or "did not answer"in str (exc ):
+            if _gh_is_network_error (exc ):
                 raise 
             skipped +=1 
             log_event (f"GitHub: skipped {cand ['name']}: {exc }","warn")
@@ -4080,6 +4107,11 @@ def _gh_collect ():
             newest [kind ]=cand 
     entries =[_gh_compare (e )for e in sorted (newest .values (),key =lambda e :(e ["category"],e ["name"]))]
     return entries ,skipped 
+
+
+def _gh_is_network_error(exc):
+    text = str(exc)
+    return "reach GitHub" in text or "hourly limit" in text or "did not answer" in text
 
 
 def _gh_check_bg ():
@@ -4115,6 +4147,7 @@ def _gh_check_bg ():
         parts .append (f"{skipped } file(s) skipped (see log)")
         level ="warn"
     _gh_event ("GitHub check: "+", ".join (parts )+".",level )
+    full_update_preview()
 
 
 def gh_start_check ():
@@ -4310,6 +4343,588 @@ def _gh_status_payload ():
     }
 
 
+# =====================================================================
+# Quiet System + Full Update (v2.37.0)
+#
+# Quiet System pauses the suite's web tools and the watchdog timer(s)
+# (see QUIET_JOB_ID above) through the quiesce core, so a small Pi has
+# memory and CPU for uploads and installs. It shares the quiesce state
+# file, so the startup sweep restores it if instmon restarts, and it
+# auto-restores after QUIET_AUTO_RESTORE_SEC.
+#
+# Full Update: read GitHub's file list, pick for every INSTALLED
+# component the newest GitHub build of the same variant (a Pi02w sysmon
+# stays on Pi02w builds) and every newer install script, download and
+# check them all (the same checks as the GitHub Update button) before
+# anything changes, then Quiet System and, one component at a time,
+# save a library copy of the installed file, run its --uninstall, run
+# the new file's --install and wait for the service. A failure puts the
+# saved copy back and the component is skipped; the run carries on and
+# ends with Restore and a summary. instmon goes last, after Restore.
+# =====================================================================
+
+QUIET_AUTO_RESTORE_SEC = int(os.environ.get("INSTMON_QUIET_AUTO_RESTORE_SEC", "1800"))
+
+_quiet_timer = None
+_quiet_timer_lock = threading.Lock()
+
+
+def quiet_status():
+    state = None
+    if _quiesce_is_active():
+        state = _quiesce_state_read()
+    if not state:
+        return {"on": False, "other": False, "since": "", "stopped": [],
+                "auto_restore_min": QUIET_AUTO_RESTORE_SEC // 60}
+    mine = state.get("job_id") == QUIET_JOB_ID
+    since = ""
+    try:
+        since = datetime.fromtimestamp(float(state.get("started_at") or 0)).strftime("%H:%M")
+    except (TypeError, ValueError, OSError):
+        pass
+    return {"on": mine, "other": not mine, "since": since,
+            "stopped": [label for _t, label, _u in state.get("stopped") or []],
+            "auto_restore_min": QUIET_AUTO_RESTORE_SEC // 60}
+
+
+def _quiet_arm_timer(delay):
+    global _quiet_timer
+    with _quiet_timer_lock:
+        if _quiet_timer:
+            _quiet_timer.cancel()
+        _quiet_timer = None
+        if QUIET_AUTO_RESTORE_SEC > 0:
+            _quiet_timer = threading.Timer(max(delay, 1), _quiet_auto_restore)
+            _quiet_timer.daemon = True
+            _quiet_timer.start()
+
+
+def _quiet_auto_restore():
+    if full_update_running():
+        _quiet_arm_timer(60)  # Full Update restores at its own end
+        return
+    log_event(f"Quiet System: auto-restore after {QUIET_AUTO_RESTORE_SEC // 60} min", "warn")
+    quiet_restore()
+
+
+def quiet_start():
+    """(ok, message, level)."""
+    job = _diskimg_job_snapshot()
+    if job and job.get("state") == "running":
+        return False, "A disk-image job is running -- Quiet System is not needed (or wait for it).", "warn"
+    if _quiesce_is_active():
+        st = quiet_status()
+        if st["on"]:
+            return False, "The system is already quiet.", "info"
+        return False, "Services are already paused by a disk-image job.", "warn"
+    ok, stopped, message = _quiesce_services(QUIET_JOB_ID, scope="quiet")
+    if not ok:
+        return False, f"Quiet System failed: {message}", "err"
+    _quiet_arm_timer(QUIET_AUTO_RESTORE_SEC)
+    names = ", ".join(label for _t, label, _u in stopped) or "nothing was running"
+    log_event(f"Quiet System on: {names}", "warn")
+    return True, (f"System quiet: {names}. Press Restore when you're done "
+                  f"(auto-restore in {QUIET_AUTO_RESTORE_SEC // 60} min)."), "ok"
+
+
+def quiet_restore():
+    """(ok, message, level)."""
+    global _quiet_timer
+    st = quiet_status()
+    if not st["on"]:
+        return False, "The system isn't quiet -- nothing to restore.", "info"
+    with _quiet_timer_lock:
+        if _quiet_timer:
+            _quiet_timer.cancel()
+        _quiet_timer = None
+    ok, results = _unquiesce_services()
+    summary = _quiesce_format_results(results) or "Nothing needed restarting."
+    log_event(f"Quiet System restored: {summary}", "ok" if ok else "err")
+    return ok, f"Restored. {summary}", "ok" if ok else "err"
+
+
+def quiet_forget(service):
+    """An Install/Uninstall already restarted (or removed) this service,
+    so Restore must not touch it again."""
+    with _quiesce_lock:
+        state = _quiesce_state_read()
+        if not state or state.get("job_id") != QUIET_JOB_ID:
+            return
+        names = {service, service + ".service"}
+        kept = [e for e in state.get("stopped") or [] if e[2] not in names]
+        if len(kept) != len(state.get("stopped") or []):
+            _quiesce_state_write(QUIET_JOB_ID, kept, started_at=state.get("started_at"))
+
+
+# --- Full Update -----------------------------------------------------
+
+# One component at a time, in this order; instmon last because its own
+# --install restarts this process.
+FU_ORDER = ("44helper", "wifimon", "dashboard", "sysmon", "watchdog", "instmon")
+FU_START_TIMEOUT_SEC = int(os.environ.get("INSTMON_FU_START_TIMEOUT_SEC", "60"))
+FU_SELF_GUARD_SEC = 90
+_FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
+
+# Name stem of a plain build, for an installed file whose own name
+# carries none (e.g. /usr/local/bin/wifimon.py). A VERSION suffix such as
+# "6.13.67-pi02w" adds "_pi02w".
+_FU_DEFAULT_STEM = {
+    "dashboard": "asl_dvs_dashboard",
+    "sysmon": "sysmon",
+    "wifimon": "wifimon",
+    "44helper": "asl_dvs_m17_44helper",
+    "watchdog": "asl_dvs_watchdog",
+    "instmon": "instmon",
+}
+_FU_STEM_RE = re.compile(r"^(?P<stem>.+?)_v\d+(?:[._]\d+)*(?:_\d{8})?(?:[._-].*)?\.(?:py|sh)$", re.IGNORECASE)
+
+_fu_lock = threading.Lock()
+_fu_state = {
+    "running": False, "phase": "", "current": "", "error": "", "banner": False,
+    "updated": [], "skipped": [], "attention": [], "scripts": [], "instmon_pending": None,
+    "plan": None, "plan_at": "",
+}
+
+
+def full_update_running():
+    with _fu_lock:
+        return _fu_state["running"]
+
+
+def _fu_set(**kw):
+    with _fu_lock:
+        _fu_state.update(kw)
+
+
+def _fu_save():
+    with _fu_lock:
+        payload = {k: v for k, v in _fu_state.items() if k not in ("plan", "plan_at")}
+    try:
+        ensure_dirs()
+        compare_before_write(_FU_STATE_PATH, json.dumps(payload, indent=2).encode("utf-8"))
+    except Exception as exc:
+        log_event(f"Full Update: could not save state: {exc}", "warn")
+
+
+def full_update_snapshot():
+    with _fu_lock:
+        return json.loads(json.dumps(_fu_state))
+
+
+def _fu_stem_of_name(name):
+    m = _FU_STEM_RE.match(name)
+    return (m.group("stem") if m else os.path.splitext(name)[0]).lower()
+
+
+def _fu_installed_stem(comp, target, version):
+    base = os.path.basename(target)
+    if _FU_STEM_RE.match(base):
+        return _fu_stem_of_name(base)
+    stem = _FU_DEFAULT_STEM[comp["category"]]
+    m = re.search(r"-([A-Za-z0-9]+)\s*$", version or "")
+    return f"{stem}_{m.group(1).lower()}" if m else stem
+
+
+def _fu_plan(cands):
+    """For every COMPONENTS entry in FU_ORDER: what Full Update would do.
+    cands come from _gh_parse_listing(). Versions are read the same way
+    the GitHub check reads them (library copy, cache, or a download)."""
+    rows = []
+    for cat in FU_ORDER:
+        comp = next((c for c in COMPONENTS if c["category"] == cat), None)
+        if comp is None:
+            continue
+        row = {"category": cat, "name": comp["name"], "status": "", "note": "",
+               "installed_version": "", "file": "", "version": ""}
+        rows.append(row)
+        target = resolve_installed_target(comp)
+        if not os.path.isfile(target):
+            row.update(status="not_installed", note="not installed -- left alone")
+            continue
+        inst_ver = read_installed_version(target)
+        row["installed_version"] = inst_ver or "?"
+        if not inst_ver:
+            row.update(status="unknown", note="installed file has no version line -- update it by hand")
+            continue
+        stem = _fu_installed_stem(comp, target, inst_ver)
+        best = None
+        problems = []
+        for cand in cands:
+            if cand["category"] != cat or _fu_stem_of_name(cand["name"]) != stem:
+                continue
+            try:
+                ver = _gh_version_of(cand, _gh_local_files(cand["category"], cand["glob"]))
+            except GhRejected as exc:
+                if _gh_is_network_error(exc):
+                    raise
+                log_event(f"Full Update: skipped {cand['name']}: {exc}", "warn")
+                problems.append(f"{cand['name']}: {exc}")
+                continue
+            if best is None or _version_sort_key(ver) > _version_sort_key(best["version"]):
+                best = dict(cand, version=ver)
+        if best is None:
+            if problems:
+                row.update(status="error", note=f"couldn't read {problems[0]}")
+            else:
+                row.update(status="not_on_github", note=f"no {stem} build on GitHub")
+            continue
+        row.update(file=best["name"], version=best["version"], entry=best)
+        if _gh_local_blob_id(target) == best["blob"]:
+            row.update(status="current", note="same file as GitHub")
+        elif _version_sort_key(best["version"]) > _version_sort_key(inst_ver):
+            row.update(status="update", note=f"v{inst_ver} -> v{best['version']}")
+        elif _version_sort_key(best["version"]) == _version_sort_key(inst_ver):
+            row.update(status="current", note=f"same version (v{inst_ver})")
+        else:
+            row.update(status="newer_installed", note=f"installed v{inst_ver} is newer than GitHub")
+        if problems and row["status"] != "update":
+            # A GitHub file of this kind couldn't be read -- it may be the
+            # newer one, so don't call this component current.
+            row.update(status="error", note=f"couldn't read {problems[0]}")
+    return rows
+
+
+def _fu_publish_plan(rows, scripts):
+    public = [{k: v for k, v in r.items() if k != "entry"} for r in rows]
+    _fu_set(plan={"components": public, "scripts": [e["name"] for e in scripts],
+                  "updates": sum(1 for r in rows if r["status"] == "update")},
+            plan_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+
+
+def _fu_stage(entry):
+    """Download, check (same checks as the GitHub Update button) and
+    write one component file into its library folder. Returns the path."""
+    data = _gh_fetch_impl(_gh_file_url(entry["name"]), GITHUB_FILE_MAX_BYTES)
+    _gh_verify_content(entry, data)
+    ensure_dirs()
+    dest = safe_join(LIB_SUBDIRS[entry["category"]], entry["name"])
+    if dest is None:
+        raise GhRejected("invalid file name")
+    if os.path.isfile(dest) and _gh_local_blob_id(dest) != entry["blob"]:
+        raise GhRejected(f"the library already has a different {entry['name']} -- left alone")
+    compare_before_write(dest, data)
+    with _file_meta_cache_lock:
+        _file_meta_cache.clear()
+    return dest
+
+
+def _fu_run_cli(script_path, flag):
+    """Run a component file's own --install / --uninstall and wait.
+    Output goes to the log. Returns the exit code, None if it never ran."""
+    try:
+        proc = subprocess.Popen([_interp_for(script_path), script_path, flag],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+    except OSError as exc:
+        log_event(f"Could not run {os.path.basename(script_path)} {flag}: {exc}", "err")
+        return None
+    try:
+        for line in proc.stdout:
+            log_event(line.rstrip("\n"), "info")
+        proc.wait(timeout=SCRIPT_TIMEOUT_SEC)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        log_event(f"{os.path.basename(script_path)} {flag} timed out ({SCRIPT_TIMEOUT_SEC}s), killed", "err")
+        return None
+    return proc.returncode
+
+
+def _fu_wait_healthy(comp):
+    deadline = time.time() + FU_START_TIMEOUT_SEC
+    state = "unknown"
+    while time.time() < deadline:
+        state = systemctl_is_active(comp["service"])
+        if state == "active" and (comp["port"] is None or port_open(comp["port"])):
+            return True, state
+        time.sleep(2)
+    if state == "active":
+        return False, f"running but not answering on port {comp['port']}"
+    return False, state
+
+
+def _fu_update_one(comp, row, new_path):
+    """('updated' | 'skipped' | 'attention', note)."""
+    name = comp["name"]
+    target = resolve_installed_target(comp)
+    if not script_has_self_uninstall(target):
+        return "skipped", "installed file has no --uninstall -- left alone"
+    _staged, old_name, _note, stage_err = stage_installed_copy_if_missing(comp)
+    if stage_err:
+        return "skipped", f"couldn't save a copy of the installed version ({stage_err}) -- left alone"
+    old_path = os.path.join(LIB_SUBDIRS[comp["category"]], old_name)
+    old_ver, new_ver = row["installed_version"], row["version"]
+
+    _fu_set(current=f"{name}: uninstalling v{old_ver}")
+    log_event(f"Full Update: {name}: uninstalling v{old_ver}", "info")
+    rc = _fu_run_cli(comp["install_link"], "--uninstall")
+    if rc != 0:
+        log_event(f"Full Update: {name}: --uninstall exited {rc}; installing the new file anyway", "warn")
+    quiet_forget(comp["service"])
+
+    _fu_set(current=f"{name}: installing v{new_ver}")
+    log_event(f"Full Update: {name}: installing {os.path.basename(new_path)}", "info")
+    rc = _fu_run_cli(new_path, "--install")
+    ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
+    if ok:
+        log_event(f"Full Update: {name} updated v{old_ver} -> v{new_ver}", "ok")
+        return "updated", f"v{old_ver} -> v{new_ver}"
+
+    reason = f"v{new_ver} failed ({state})"
+    log_event(f"Full Update: {name}: {reason} -- putting v{old_ver} back", "err")
+    _fu_set(current=f"{name}: rolling back to v{old_ver}")
+    rc = _fu_run_cli(old_path, "--install")
+    ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
+    if ok:
+        log_event(f"Full Update: {name} rolled back to v{old_ver}", "warn")
+        return "skipped", f"{reason}; rolled back to v{old_ver}"
+    log_event(f"Full Update: {name} NEEDS ATTENTION -- v{old_ver} didn't come back either ({state})", "err")
+    return "attention", f"{reason}; putting v{old_ver} back also failed ({state}) -- not running"
+
+
+def _fu_arm_instmon_guard(old_path):
+    """A transient systemd timer, outside this process (which is about to
+    restart): if the new instmon isn't answering on its port after
+    FU_SELF_GUARD_SEC, reinstall the saved old copy."""
+    check = (f"timeout 5 bash -c '</dev/tcp/127.0.0.1/{PORT}' || "
+             f"{_interp_for(old_path)} {shlex.quote(old_path)} --install")
+    for args in (["systemctl", "stop", "instmon-update-guard.timer", "instmon-update-guard.service"],
+                 ["systemctl", "reset-failed", "instmon-update-guard.service"]):
+        try:
+            subprocess.run(args, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    try:
+        r = subprocess.run(["systemd-run", "--quiet", "--collect", f"--on-active={FU_SELF_GUARD_SEC}",
+                            "--unit=instmon-update-guard", "bash", "-c", check],
+                           capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+    return r.returncode == 0, (r.stderr or "").strip()[:200]
+
+
+def _fu_finish(error=""):
+    _fu_set(running=False, phase="done", current="", error=error, banner=True)
+    _fu_save()
+    snap = full_update_snapshot()
+    parts = [f"{len(snap['updated'])} updated"]
+    if snap["skipped"]:
+        parts.append(f"{len(snap['skipped'])} skipped")
+    if snap["attention"]:
+        parts.append(f"{len(snap['attention'])} NEED ATTENTION")
+    if snap["scripts"]:
+        parts.append(f"{len(snap['scripts'])} script(s) added to the library")
+    level = "err" if (snap["attention"] or error) else ("warn" if snap["skipped"] else "ok")
+    for r in snap["skipped"]:
+        log_event(f"  skipped {r['name']}: {r['note']}", "warn")
+    for r in snap["attention"]:
+        log_event(f"  NEEDS ATTENTION {r['name']}: {r['note']}", "err")
+    _gh_event("Full Update finished" + (f" ({error})" if error else "") + ": " + ", ".join(parts) + ".", level)
+
+
+def _fu_run():
+    _fu_set(phase="checking", current="reading GitHub's file list")
+    log_event(f"Full Update started ({_gh_source_label()})", "info")
+    try:
+        entries, _sk = _gh_collect()
+        rows = _fu_plan(list(_gh_last_cands))
+    except GhRejected as exc:
+        _fu_finish(f"couldn't read GitHub: {exc} -- nothing was changed")
+        return
+    with _gh_lock:
+        _gh_state.update(phase="done", error=None, entries=entries,
+                         checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    scripts = [e for e in entries if e["category"] == "scripts" and e.get("status") in _GH_UPDATABLE]
+    _fu_publish_plan(rows, scripts)
+    plan = [r for r in rows if r["status"] == "update"]
+    skipped = [{"name": r["name"], "note": r["note"]} for r in rows if r["status"] == "error"]
+    _fu_set(skipped=list(skipped))
+    if not plan and not scripts:
+        log_event("Full Update: everything is already current -- nothing to do", "ok")
+        _fu_finish()
+        return
+
+    done_scripts, staged = [], []
+    _fu_set(phase="downloading")
+    for row in plan:
+        _fu_set(current=f"downloading {row['file']}")
+        try:
+            path = _fu_stage(row["entry"])
+        except GhRejected as exc:
+            log_event(f"Full Update: {row['name']}: {row['file']} skipped -- {exc}", "err")
+            skipped.append({"name": row["name"], "note": f"{row['file']}: {exc}"})
+            continue
+        log_event(f"Full Update: downloaded and checked {row['file']}", "ok")
+        staged.append((row, path))
+    for entry in scripts:
+        _fu_set(current=f"downloading {entry['name']}")
+        try:
+            msg, _lvl = _gh_apply(entry)
+        except GhRejected as exc:
+            log_event(f"Full Update: script {entry['name']} skipped -- {exc}", "err")
+            skipped.append({"name": entry["name"], "note": str(exc)})
+            continue
+        log_event(f"Full Update: {msg}", "ok")
+        done_scripts.append({"name": entry["name"], "note": "added to the Scripts library (not run)"})
+    with _gh_lock:
+        _gh_state["entries"] = [_gh_compare(dict(e)) for e in _gh_state["entries"]]
+    _fu_set(skipped=list(skipped), scripts=done_scripts)
+    if not staged:
+        _fu_finish()
+        return
+
+    already_quiet = quiet_status()["on"]
+    if not already_quiet:
+        _fu_set(phase="quieting", current="pausing the web tools and watchdog")
+        ok, msg, _lvl = quiet_start()
+        if not ok:
+            log_event(f"Full Update: {msg} -- updating without Quiet System", "warn")
+
+    updated, attention = [], []
+    instmon_job = None
+    for row, path in staged:
+        comp = next(c for c in COMPONENTS if c["category"] == row["category"])
+        if comp["category"] == "instmon":
+            instmon_job = (comp, row, path)
+            continue
+        _fu_set(phase="updating")
+        with _running_installs_lock:
+            _running_installs.add(comp["service"])
+        try:
+            outcome, note = _fu_update_one(comp, row, path)
+        finally:
+            with _running_installs_lock:
+                _running_installs.discard(comp["service"])
+        {"updated": updated, "skipped": skipped, "attention": attention}[outcome].append(
+            {"name": comp["name"], "note": note})
+        _fu_set(updated=list(updated), skipped=list(skipped), attention=list(attention))
+
+    if quiet_status()["on"]:
+        _fu_set(phase="restoring", current="restarting what was paused")
+        quiet_restore()
+
+    if instmon_job is None:
+        _fu_finish()
+        return
+
+    comp, row, path = instmon_job
+    _staged, old_name, _note, stage_err = stage_installed_copy_if_missing(comp)
+    guard_ok, guard_err = (False, stage_err) if stage_err else \
+        _fu_arm_instmon_guard(os.path.join(LIB_SUBDIRS["instmon"], old_name))
+    if not guard_ok:
+        skipped.append({"name": "instmon", "note": f"couldn't set up its rollback ({guard_err}) -- left alone"})
+        _fu_set(skipped=list(skipped))
+        _fu_finish()
+        return
+    # instmon is replaced in place by its own --install (an --uninstall
+    # would stop this process before the new one went in). Results are
+    # saved first: the restart ends this process and the new instmon
+    # reads them back (full_update_resume_at_startup).
+    _fu_set(phase="instmon", current=f"instmon: installing v{row['version']}",
+            instmon_pending={"from": row["installed_version"], "to": row["version"]})
+    _fu_save()
+    log_event(f"Full Update: instmon: installing v{row['version']} -- this page reconnects when it restarts", "info")
+    rc = _fu_run_cli(path, "--install")
+    if rc != 0:
+        try:
+            subprocess.run(["systemctl", "stop", "instmon-update-guard.timer"],
+                           capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        skipped.append({"name": "instmon", "note": f"--install exited {rc}; still on v{row['installed_version']}"})
+        _fu_set(skipped=list(skipped), instmon_pending=None)
+        _fu_finish()
+        return
+    # Its --install schedules the restart a couple of seconds out; still
+    # here well after that means it didn't happen.
+    time.sleep(45)
+    skipped.append({"name": "instmon", "note": f"v{row['version']} installed; takes effect when instmon restarts"})
+    _fu_set(skipped=list(skipped), instmon_pending=None)
+    _fu_finish()
+
+
+def _fu_run_bg():
+    try:
+        _fu_run()
+    except Exception as exc:
+        log_event(f"Full Update: unexpected error: {exc}", "err")
+        if quiet_status()["on"]:
+            quiet_restore()
+        _fu_finish(f"unexpected error: {exc}")
+
+
+def full_update_start():
+    """(http_code, message, level)."""
+    job = _diskimg_job_snapshot()
+    if job and job.get("state") == "running":
+        return 409, "A disk-image job is running -- wait for it to finish.", "warn"
+    if quiet_status()["other"]:
+        return 409, "Services are paused by a disk-image job -- wait for it to finish.", "warn"
+    with _gh_lock:
+        if _gh_state["phase"] == "checking" or _gh_state["busy"]:
+            return 409, "A GitHub check or download is running -- wait for it to finish.", "warn"
+    with _running_installs_lock:
+        busy = sorted(_running_installs)
+    with _running_scripts_lock:
+        busy += sorted(_running_scripts)
+    if busy:
+        return 409, f"Wait for {', '.join(busy)} to finish first.", "warn"
+    with _fu_lock:
+        if _fu_state["running"]:
+            return 409, "Full Update is already running.", "warn"
+        _fu_state.update(running=True, phase="starting", current="", error="", banner=False,
+                         updated=[], skipped=[], attention=[], scripts=[], instmon_pending=None)
+    threading.Thread(target=_fu_run_bg, daemon=True).start()
+    return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
+
+
+def full_update_preview():
+    """After a GitHub check: work out what Full Update would do, so its
+    button and list are ready. Same listing, versions already cached."""
+    try:
+        rows = _fu_plan(list(_gh_last_cands))
+    except Exception as exc:
+        log_event(f"Full Update preview failed: {exc}", "warn")
+        return
+    with _gh_lock:
+        scripts = [e for e in _gh_state["entries"] if e["category"] == "scripts" and e.get("status") in _GH_UPDATABLE]
+    _fu_publish_plan(rows, scripts)
+
+
+def full_update_resume_at_startup():
+    try:
+        with open(_FU_STATE_PATH) as fh:
+            saved = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if not isinstance(saved, dict):
+        return
+    with _fu_lock:
+        for key in ("phase", "error", "banner", "updated", "skipped", "attention", "scripts", "instmon_pending"):
+            if key in saved:
+                _fu_state[key] = saved[key]
+        _fu_state["running"] = False
+    pending = saved.get("instmon_pending")
+    if pending:
+        with _fu_lock:
+            if _version_sort_key(VERSION) == _version_sort_key(str(pending.get("to"))):
+                _fu_state["updated"].append({"name": "instmon", "note": f"v{pending.get('from')} -> v{VERSION}"})
+            else:
+                _fu_state["skipped"].append({"name": "instmon", "note": f"the new version didn't take; running v{VERSION}"})
+            _fu_state["instmon_pending"] = None
+        _fu_finish()
+    elif saved.get("phase") not in ("done", ""):
+        _fu_finish("instmon restarted in the middle of the update")
+
+
+def full_update_dismiss():
+    _fu_set(banner=False)
+    _fu_save()
+
+
+def _fu_status_payload():
+    snap = full_update_snapshot()
+    return {"quiet": quiet_status(), "full_update": snap}
+
+
 def run_script_bg (script_path ,script_name ,env_overrides =None ):
 
     if env_overrides :
@@ -4357,6 +4972,7 @@ def run_self_install_bg (script_path ,script_name ,comp ):
         proc .wait (timeout =SCRIPT_TIMEOUT_SEC )
         if proc .returncode ==0 :
             log_event (f"Install finished OK: {script_name } ({comp ['name']})","ok")
+            quiet_forget (comp ["service"])
         else :
             log_event (f"Install exited {proc .returncode }: {script_name } ({comp ['name']})","err")
     except subprocess .TimeoutExpired :
@@ -4420,6 +5036,7 @@ def run_self_uninstall_bg (comp ):
         proc .wait (timeout =SCRIPT_TIMEOUT_SEC )
         if proc .returncode ==0 :
             log_event (f"Uninstall finished OK: {comp ['name']}","ok")
+            quiet_forget (comp ["service"])
         else :
             log_event (f"Uninstall exited {proc .returncode }: {comp ['name']}","err")
     except subprocess .TimeoutExpired :
@@ -4958,6 +5575,16 @@ input[type=file]{color:var(--muted);font-size:.78rem;max-width:100%}
 .gh-tag.gh-warn{color:var(--yel);border-color:var(--yel)}
 .gh-tag.gh-err{color:var(--red);border-color:var(--red-dim)}
 .gh-row button{font-size:.75rem;padding:.2rem .6rem}
+/* v2.37.0 Quiet System + Full Update */
+.fu-banner{border:1px solid var(--amber-dim);background:rgba(255,208,64,.08);color:var(--yel);
+  border-radius:6px;padding:.55rem .8rem;margin-bottom:.6rem;display:flex;flex-wrap:wrap;
+  gap:.4rem .9rem;align-items:center;font-family:var(--mono);font-size:.8rem}
+.fu-banner.ok{border-color:var(--green-dim);background:rgba(0,255,176,.06);color:var(--grn)}
+.fu-banner.err{border-color:var(--red-dim);background:rgba(255,61,90,.08);color:var(--red)}
+.fu-banner ul{margin:.2rem 0 0 1.1rem;color:var(--fg)}
+.fu-table{width:100%;border-collapse:collapse;margin-top:.45rem;font-size:.78rem}
+.fu-table td{padding:.22rem .4rem;border-top:1px solid var(--border)}
+#fu-progress{font-family:var(--mono);font-size:.8rem;color:var(--cyn);margin-top:.35rem}
 """
 
 _CSS_LOG = """#log{background:#070b10;border:1px solid var(--border2);border-radius:0 6px 6px 6px;
@@ -5249,6 +5876,69 @@ function applyLibraryCollapseState() {
 // first poll so a result from before this page load is not re-shown.
 let _ghSeenSeq = null;
 
+// v2.37.0 Quiet System + Full Update
+let _fuState = null;
+const _FU_STATUS = {
+  update: 'UPDATE', current: 'CURRENT', not_installed: 'NOT INSTALLED', not_on_github: 'NOT ON GITHUB',
+  newer_installed: 'NEWER HERE', unknown: 'UNKNOWN', error: 'ERROR',
+};
+
+function _fuList(title, items) {
+  if (!items || !items.length) return '';
+  return `<div><b>${title}</b><ul>${items.map(r => `<li>${escHtml(r.name)}: ${escHtml(r.note)}</li>`).join('')}</ul></div>`;
+}
+
+function renderQuietFullUpdate(quiet, fu) {
+  _fuState = fu;
+  const running = !!(fu && fu.running);
+  const banners = [];
+  if (quiet && quiet.on) {
+    banners.push(`<div class="fu-banner"><span>System quiet since ${escHtml(quiet.since)}:
+      ${quiet.stopped.length ? escHtml(quiet.stopped.join(', ')) + ' paused' : 'nothing was running'}.
+      Auto-restore after ${quiet.auto_restore_min} min.</span>
+      ${running ? '' : '<button data-action="restore">Restore</button>'}</div>`);
+  }
+  if (fu && fu.banner && !running) {
+    const bad = (fu.attention || []).length || fu.error;
+    const cls = bad ? 'err' : ((fu.skipped || []).length ? '' : 'ok');
+    const any = (fu.updated || []).length + (fu.skipped || []).length + (fu.attention || []).length + (fu.scripts || []).length;
+    banners.push(`<div class="fu-banner ${cls}"><div style="flex:1">
+      <b>Full Update finished${fu.error ? ' -- ' + escHtml(fu.error) : ''}</b>
+      ${_fuList('Updated', fu.updated)}${_fuList('Skipped', fu.skipped)}
+      ${_fuList('NEEDS ATTENTION', fu.attention)}${_fuList('Scripts', fu.scripts)}
+      ${any ? '' : '<div>Nothing needed updating.</div>'}
+      </div><button data-action="fu_dismiss">Dismiss</button></div>`);
+  }
+  const bEl = document.getElementById('fu-banners');
+  if (bEl) bEl.innerHTML = banners.join('');
+
+  const prog = document.getElementById('fu-progress');
+  if (prog) prog.textContent = running ? `Full Update running: ${fu.phase}${fu.current ? ' -- ' + fu.current : ''}` : '';
+  const planEl = document.getElementById('fu-plan');
+  const plan = fu && fu.plan;
+  if (planEl) {
+    planEl.innerHTML = !plan ? '' : '<table class="fu-table">' + plan.components.map(c =>
+      `<tr><td>${escHtml(c.name)}</td><td><span class="gh-tag ${c.status === 'update' ? 'gh-upd' : ''}">${_FU_STATUS[c.status] || escHtml(c.status)}</span></td>` +
+      `<td>${escHtml(c.note)}</td><td class="muted">${escHtml(c.file)}</td></tr>`).join('') +
+      plan.scripts.map(n => `<tr><td>Script</td><td><span class="gh-tag gh-upd">NEW</span></td><td>goes to the Scripts library (not run)</td><td class="muted">${escHtml(n)}</td></tr>`).join('') +
+      '</table>';
+  }
+  const fuBtn = document.getElementById('fu-btn');
+  if (fuBtn) fuBtn.disabled = running || !(plan && (plan.updates || plan.scripts.length));
+  const qb = document.getElementById('quiet-btn');
+  if (qb) qb.disabled = running || !!(quiet && (quiet.on || quiet.other));
+  const rb = document.getElementById('restore-btn');
+  if (rb) rb.disabled = running || !(quiet && quiet.on);
+  // While Full Update runs every other button waits (the server refuses
+  // them anyway); only buttons disabled here are re-enabled afterwards.
+  document.querySelectorAll('button[data-action], #diskimg-refresh-btn, #backup-btn').forEach(b => {
+    if (['fu_dismiss', 'full_update', 'quiet', 'restore', 'toggle_lib', 'toggle_diskimg_card', 'go', 'router',
+         'download', 'diskimg_backup_download'].includes(b.dataset.action)) return;
+    if (running && !b.disabled) { b.disabled = true; b.dataset.fuDisabled = '1'; }
+    else if (!running && b.dataset.fuDisabled) { b.disabled = false; delete b.dataset.fuDisabled; }
+  });
+}
+
 async function refreshStatus() {
   try {
     const r = await fetch('/api/status');
@@ -5263,6 +5953,7 @@ async function refreshStatus() {
       }
       _ghSeenSeq = data.gh_event_seq;
     }
+    renderQuietFullUpdate(data.quiet, data.full_update);
     applyLibraryCollapseState();
     wireButtons();
   } catch (e) { /* ignore this tick */ }
@@ -6478,6 +7169,21 @@ _JS_ACTIONS = """function wireButtons() {
           await postAction({action: 'install_config', name: btn.dataset.name});
         } else if (action === 'gh_check') {
           await postAction({action: 'gh_check'});
+        } else if (action === 'quiet') {
+          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper and the watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
+          await postAction({action: 'quiet'});
+        } else if (action === 'restore') {
+          await postAction({action: 'restore'});
+        } else if (action === 'fu_dismiss') {
+          await postAction({action: 'fu_dismiss'});
+        } else if (action === 'full_update') {
+          const p = _fuState && _fuState.plan;
+          const comps = p ? p.components.filter(c => c.status === 'update').map(c => `  ${c.name}: ${c.note}`) : [];
+          const scr = p ? p.scripts.map(n => `  ${n} (Scripts library only, not run)`) : [];
+          if (!confirm('Full Update from GitHub?\\n\\n' + (comps.length ? 'One at a time:\\n' + comps.join('\\n') + '\\n\\n' : '') +
+                       (scr.length ? 'New scripts:\\n' + scr.join('\\n') + '\\n\\n' : '') +
+                       'GitHub is checked again first. The web tools are paused, each component is uninstalled and the new version installed; one that fails is put back and skipped. instmon goes last -- this page reconnects after it restarts.')) { btn.disabled = false; return; }
+          await postAction({action: 'full_update', confirm: true});
         } else if (action === 'gh_update') {
           if (!confirm(`Download ${btn.dataset.name} from GitHub into the ${btn.dataset.category} library? It is checked before it is saved, and nothing runs or installs until you press its button.`)) { btn.disabled = false; return; }
           await postAction({action: 'gh_update', name: btn.dataset.name, confirm: true});
@@ -7005,6 +7711,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 </div>
 <div class="wrap">
 
+<div id="fu-banners"></div>
+
 <div class="hdr">Quick Links</div>
 <div class="card">
   <div class="row">{quicklinks_html}
@@ -7015,7 +7723,20 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="card">
   <div class="row">
     <button data-action="gh_check">Check GitHub</button>
+    <button class="b-comms" id="fu-btn" data-action="full_update" disabled>Full Update</button>
     <span id="gh-summary" class="small">{github_html}</span>
+  </div>
+  <div class="small muted" style="margin-top:.35rem">
+    Full Update: pauses the web tools, downloads and checks every newer file first, then uninstalls the old and
+    installs the new one component at a time (instmon last). A component that fails is put back, skipped and
+    listed at the end. New install scripts only go to the Scripts library -- they are never run for you.</div>
+  <div id="fu-progress"></div>
+  <div id="fu-plan"></div>
+  <div class="row" style="margin-top:.6rem">
+    <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
+    <button id="restore-btn" data-action="restore" disabled>Restore</button>
+    <span class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper
+    and the watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
   </div>
 </div>
 
@@ -7289,7 +8010,14 @@ _ACTION_HANDLERS ={
 "shutdown":lambda self ,body :self ._action_shutdown (body ),
 "gh_check":lambda self ,body :self ._action_gh_check (body ),
 "gh_update":lambda self ,body :self ._action_gh_update (body ),
+"quiet":lambda self ,body :self ._action_quiet (body ),
+"restore":lambda self ,body :self ._action_restore (body ),
+"full_update":lambda self ,body :self ._action_full_update (body ),
+"fu_dismiss":lambda self ,body :self ._action_fu_dismiss (body ),
 }
+
+# v2.37.0: the only actions accepted while Full Update runs.
+_ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss",)
 
 
 _GET_ROUTES ={
@@ -7408,6 +8136,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "components_html":render_components_html (status ["components"],status ["library"]),
         "library_html":render_library_html (status ["library"]),
         **_gh_status_payload (),
+        **_fu_status_payload (),
         })
 
     def _route_gateway(self):
@@ -8177,6 +8906,12 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not self ._check_csrf ():
             self ._error_json (403 ,"Missing or invalid X-Requested-With header")
             return
+        # v2.37.0: uploads, the editor and disk-image jobs wait for Full
+        # Update; /api/action applies its own narrower rule.
+        if full_update_running() and self.path != "/api/action":
+            self._send_json(409, {"error": "Full Update is running",
+                                  "message": "Full Update is running -- wait for it to finish.", "level": "warn"})
+            return
         handler_fn =_POST_ROUTES .get (self .path )
         if handler_fn is None :
             self ._error_json (404 ,"Not found")
@@ -8380,6 +9115,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             return 
 
         action =body .get ("action")
+        if full_update_running() and action not in _ACTIONS_DURING_FULL_UPDATE:
+            self._send_json(409, {"error": "Full Update is running",
+                                  "message": "Full Update is running -- wait for it to finish.", "level": "warn"})
+            return
         handler_fn =_ACTION_HANDLERS .get (action )
         if handler_fn is None :
             self ._error_json (400 ,f"Unknown action '{action }'")
@@ -8681,6 +9420,26 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self ._send_json (code ,{"message":msg ,"level":level })
 
 
+    def _action_quiet(self, body):
+        ok, msg, level = quiet_start()
+        self._send_json(200 if ok else 409, {"message": msg, "level": level})
+
+    def _action_restore(self, body):
+        ok, msg, level = quiet_restore()
+        self._send_json(200 if ok else 409, {"message": msg, "level": level})
+
+    def _action_full_update(self, body):
+        if not body.get("confirm"):
+            self._error_json(400, "Full Update requires confirm:true in the request body")
+            return
+        code, msg, level = full_update_start()
+        self._send_json(code, {"message": msg, "level": level})
+
+    def _action_fu_dismiss(self, body):
+        full_update_dismiss()
+        self._send_json(200, {"message": "", "level": "info"})
+
+
     def _action_save_alternate (self ):
         live_cfg =os .path .join (CONFIG_DIR ,CONFIG_NAME )
         if not os .path .isfile (live_cfg ):
@@ -8923,6 +9682,7 @@ def run ():
         )
 
     _quiesce_startup_sweep ()
+    full_update_resume_at_startup ()
 
     if HOME_SCAN_ENABLED :
         moved =scan_home_for_new_code ()
