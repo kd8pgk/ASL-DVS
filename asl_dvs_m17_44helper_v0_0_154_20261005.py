@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.10.py
+# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.154.py
 # =============================================================================
 #
 # STAGE:      Response to an external audit (not one of the original 8
@@ -92,8 +92,16 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.153"
-APP_STAGE = "v0.0.153: Terminal on/off from the page, Stage 3 of 3 -- verification + changelog for "\
+APP_VERSION = "0.0.154"
+APP_STAGE = "v0.0.154: Package installs no longer cut off by time limits. Pi Install's firewalld and "\
+    "WireGuard/systemd-resolved prerequisites (was a 300 s cap) and System Optimization's dphys-swapfile / "\
+    "man-db remove + reinstall (was 120 s, inside the web request) now run apt as their own systemd unit with "\
+    "no time limit, noninteractive with confold, behind the package-health gate; the System Optimization ones "\
+    "are background jobs the page polls. Update tab package changes without Quiet mode now also run as their "\
+    "own unit, so a 44helper restart no longer stops them. Install scripts (`| bash`, install*.sh, "\
+    "`bash ./script`) are never cut off, since they can run apt inside. Router LuCI install: 15 min instead of "\
+    "90 s, SSH keepalives, and opkg ignores a dropped session. || "\
+    "v0.0.153: Terminal on/off from the page, Stage 3 of 3 -- verification + changelog for "\
     "v0.0.151-152, no code changes. py_compile; node --check on the ASSEMBLED _JS global. Live server: Enable "\
     "refused without login (401), without the CSRF header (403), through Cloudflare (403) and with a wrong "\
     "password; 5 wrong passwords lock it (429); a good one writes the file owned by root at 0644 with who/"\
@@ -878,7 +886,6 @@ def _sessions_load() -> None:
             data = json.load(f)
     except (FileNotFoundError, ValueError, OSError):
         return
-    now = time.time()
     with _auth_lock:
         for k, exp in (data.items() if isinstance(data, dict) else []):
             if isinstance(k, str) and isinstance(exp, (int, float)):
@@ -1706,9 +1713,23 @@ def _is_apt_mutating(cmd: str) -> bool:
     return bool(_APT_MUTATING_RE.search(cmd or ""))
 
 
+# v0.0.154: an install script can run apt inside itself, where _APT_MUTATING_RE can't
+# see it (Ajenti's `curl ... | sudo bash`, amp-hub's install.sh, DVSwitch's
+# `sudo bash ./bookworm`), so those are never cut off either.
+_SCRIPT_INSTALL_RE = re.compile(
+    r"\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba)?sh\b"
+    r"|(?:\./|\b(?:ba)?sh\s+)[\w./-]*install[\w.-]*\.sh\b"
+    r"|\b(?:ba)?sh\s+\.?/\S+")
+
+
+def _is_script_install(cmd: str) -> bool:
+    return bool(_SCRIPT_INSTALL_RE.search(cmd or ""))
+
+
 def _effective_timeout(cmd: str, timeout):
-    """None (never kill) for package-manager changes; the step's own limit otherwise."""
-    return None if (_is_apt_mutating(cmd) or _is_build_cmd(cmd)) else timeout
+    """None (never kill) for package-manager changes, builds and install scripts;
+    the step's own limit otherwise."""
+    return None if (_is_apt_mutating(cmd) or _is_build_cmd(cmd) or _is_script_install(cmd)) else timeout
 
 
 def _strip_progress_noise(text: str) -> str:
@@ -4601,9 +4622,11 @@ def _unit_jobs_present() -> set:
     return units
 
 
-def _follow_unit_to_end(job_key: str, unit: str, replay: bool = False) -> dict:
+def _follow_unit_to_end(job_key: str, unit: str, replay: bool = False,
+                        sink: Callable[[str], None] | None = None) -> dict:
     """Stream a unit's journal into the job's output until the unit's command ends.
-    replay=True shows everything it has logged so far (re-adoption after a restart)."""
+    replay=True shows everything it has logged so far (re-adoption after a restart).
+    v0.0.154: sink, when given, also receives every line (for _run_pkg_unit)."""
     argv = ["journalctl", "-f", "-o", "cat", "--no-pager", "-u", unit]
     if replay:
         argv[1:1] = ["-n", "all"]
@@ -4623,6 +4646,8 @@ def _follow_unit_to_end(job_key: str, unit: str, replay: bool = False) -> dict:
         for ln in lines:
             if not _DPKG_PROGRESS_RE.match(ln.rstrip("\r")):
                 _job_append_output(job_key, ln + "\n")
+                if sink is not None:
+                    sink(ln + "\n")
         return True
 
     started, last_check, props = time.time(), 0.0, {}
@@ -4641,6 +4666,8 @@ def _follow_unit_to_end(job_key: str, unit: str, replay: bool = False) -> dict:
             _pump(0.3)
         if pending[0] and not _DPKG_PROGRESS_RE.match(pending[0]):
             _job_append_output(job_key, pending[0] + "\n")
+            if sink is not None:
+                sink(pending[0] + "\n")
     finally:
         follower.terminate()
         try:
@@ -4658,6 +4685,41 @@ def _finish_unit(unit: str, props: dict) -> tuple[bool, int | None]:
     subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
     _UNIT_LIST_CACHE["at"] = 0.0
     return ok, rc
+
+
+_APT_NI_OPTS = "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
+
+
+def _run_pkg_unit(job_key: str, cmd: str) -> dict:
+    """v0.0.154: run one package-changing command as its own systemd unit, with NO
+    time limit, and wait for it. For the typed actions (Pi Install prerequisites,
+    System Optimization remove/reinstall) that used to call apt-get directly with a
+    120-300 s cap -- which killed apt part-way on a slow SD card. Same unit naming as
+    _start_unit_job, so after a 44helper restart _job_status() re-adopts it.
+    Returns {success, returncode, output}; output also streams into job_key's job."""
+    gate = _pkg_health_gate(cmd)
+    if gate:
+        return {"success": False, "returncode": None, "output": gate.get("output", "")}
+    unit = _job_unit_name(job_key)
+    lines: list[str] = []
+    try:
+        adopting = unit in _unit_jobs_present() and _qm_unit_props(unit).get("SubState") == "running"
+        if not adopting:
+            subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
+            subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
+            start = _run_argv(["systemd-run", f"--unit={unit}", "-p", "RemainAfterExit=yes",
+                               "-p", "LogRateLimitIntervalSec=0",
+                               "--setenv=DEBIAN_FRONTEND=noninteractive", "/bin/sh", "-c", cmd], timeout=30)
+            if not start["success"]:
+                return {"success": False, "returncode": None,
+                        "output": "Could not start the package job: " + start["output"]}
+            _UNIT_LIST_CACHE["at"] = 0.0
+        props = _follow_unit_to_end(job_key, unit, replay=adopting, sink=lines.append)
+        ok, rc = _finish_unit(unit, props)
+    except Exception as exc:
+        return {"success": False, "returncode": None, "output": "".join(lines) + f"Package job error: {exc}"}
+    log(f"{'OK' if ok else 'FAIL'} (system-job, exit {rc}): {cmd}")
+    return {"success": ok, "returncode": rc, "output": "".join(lines).strip()}
 
 
 def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) -> None:
@@ -4743,7 +4805,6 @@ def _adopt_unit_job(job_key: str, unit: str) -> None:
     with _JOBS_LOCK:
         if job_key in _JOBS and _JOBS[job_key]["status"] == "running":
             return
-        props = _qm_unit_props(unit)
         started = time.time()
         _JOBS[job_key] = {"status": "running", "success": None, "returncode": None, "started_at": started,
                           "cmd": "(re-attached)", "output": f"=== Re-attached to {unit} after a helper "
@@ -5145,6 +5206,8 @@ def _dispatch_update_action(payload: dict) -> dict:
             return gate
     if payload.get("quiet") is True and step.get("quiet_eligible") and _is_apt_mutating(command_text):
         return _start_quiet_apt_job(f"update_{step_id}", command_text)
+    if _is_apt_mutating(command_text):  # v0.0.154: own unit, survives a 44helper restart
+        return _start_unit_job(f"update_{step_id}", command_text)
     return _start_shell_job(f"update_{step_id}", command_text, timeout=step.get("timeout", 900))
 
 
@@ -5961,6 +6024,17 @@ def action_sysopt_swap_revert(payload: dict) -> dict:
             "output": "reverted (swap restored)" if outcome["success"] else "one or more steps failed"}
 
 
+def _run_pkg_unit_cp(verb: str, pkg: str) -> subprocess.CompletedProcess:
+    """v0.0.154: apt-get <verb> -y <pkg> via _run_pkg_unit (no time limit, own unit),
+    shaped like subprocess.run's result so the callers below stay unchanged."""
+    action = {("purge", "dphys-swapfile"): "dphys_swap_uninstall", ("install", "dphys-swapfile"): "dphys_swap_reinstall",
+              ("purge", "man-db"): "mandb_remove", ("install", "man-db"): "mandb_reinstall"}[(verb, pkg)]
+    # Same key as the page's job (see _dispatch_system_opt_action) so output streams live.
+    res = _run_pkg_unit(f"sysopt_{action}", f"apt-get {verb} -y {_APT_NI_OPTS} {pkg}")
+    rc = res["returncode"] if res["returncode"] is not None else (0 if res["success"] else 1)
+    return subprocess.CompletedProcess([verb, pkg], rc, res["output"], "")
+
+
 def action_sysopt_swap_uninstall(payload: dict) -> dict:
     """Package removal -- Revert (action_sysopt_swap_reinstall) needs apt/
     network access, unlike Disable's fully-offline revert. Disables the
@@ -5976,8 +6050,7 @@ def action_sysopt_swap_uninstall(payload: dict) -> dict:
     _set_unit_state("dphys-swapfile.service", want_enabled=False, want_active=False)
     dry_run = _apt_dry_run_remove("dphys-swapfile")
     try:
-        r = subprocess.run(["apt-get", "purge", "-y", "dphys-swapfile"],
-                            capture_output=True, text=True, timeout=120)
+        r = _run_pkg_unit_cp("purge", "dphys-swapfile")
         purge_ok = r.returncode == 0
         purge_output = ((r.stdout or "") + (r.stderr or "")).strip()
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -6002,8 +6075,7 @@ def action_sysopt_swap_reinstall(payload: dict) -> dict:
     if entry is None:
         return {"success": False, "output": "nothing to reinstall -- dphys-swapfile was not removed via this tab"}
     try:
-        r = subprocess.run(["apt-get", "install", "-y", "dphys-swapfile"],
-                            capture_output=True, text=True, timeout=120)
+        r = _run_pkg_unit_cp("install", "dphys-swapfile")
         ok = r.returncode == 0
         output = ((r.stdout or "") + (r.stderr or "")).strip()
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -6056,8 +6128,7 @@ def action_sysopt_mandb_remove(payload: dict) -> dict:
         return {"success": False, "output": "man-db is not installed on this node"}
     dry_run = _apt_dry_run_remove("man-db")
     try:
-        r = subprocess.run(["apt-get", "purge", "-y", "man-db"],
-                            capture_output=True, text=True, timeout=120)
+        r = _run_pkg_unit_cp("purge", "man-db")
         purge_ok = r.returncode == 0
         purge_output = ((r.stdout or "") + (r.stderr or "")).strip()
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -6080,8 +6151,7 @@ def action_sysopt_mandb_reinstall(payload: dict) -> dict:
     if entry is None:
         return {"success": False, "output": "nothing to reinstall -- man-db was not removed via this tab"}
     try:
-        r = subprocess.run(["apt-get", "install", "-y", "man-db"],
-                            capture_output=True, text=True, timeout=120)
+        r = _run_pkg_unit_cp("install", "man-db")
         ok = r.returncode == 0
         output = ((r.stdout or "") + (r.stderr or "")).strip()
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
@@ -6110,11 +6180,31 @@ _SYSTEM_OPT_ACTIONS: dict[str, Callable[[dict], dict]] = {
 }
 
 
+# v0.0.154: the four package actions run as background jobs (page polls
+# /api/action_status) instead of holding the web request open while apt works.
+_SYSTEM_OPT_JOB_ACTIONS = {"dphys_swap_uninstall", "dphys_swap_reinstall", "mandb_remove", "mandb_reinstall"}
+
+
+def _sysopt_job_text(result: dict) -> dict:
+    lines = []
+    if result.get("commands"):
+        lines += ["$ " + c for c in result["commands"]] + ["", "--- output ---"]
+    lines.append(str(result.get("output") or "(no output)"))
+    if result.get("would_remove"):
+        lines.append("Also removed: " + ", ".join(result["would_remove"]))
+    return {**result, "output": "\n".join(lines)}
+
+
 def _dispatch_system_opt_action(payload: dict) -> dict:
     action = payload.get("action", "")
     handler_fn = _SYSTEM_OPT_ACTIONS.get(action)
     if handler_fn is None:
         return {"success": False, "output": f"Unknown action: {action}"}
+    if action in _SYSTEM_OPT_JOB_ACTIONS:
+        err = _require_root()
+        if err:
+            return err
+        return _start_python_job(f"sysopt_{action}", lambda: _sysopt_job_text(handler_fn(payload)))
     return handler_fn(payload)
 
 
@@ -6140,7 +6230,9 @@ def action_install_firewalld() -> dict:
     err = _require_root()
     if err:
         return err
-    results = [_run_argv(a, timeout=300 if a[0] == "apt-get" else 20) for a in _argv_install_firewalld()]
+    # v0.0.154: apt runs as its own systemd unit with no time limit (was a 300 s cap).
+    results = [_run_pkg_unit("pi_firewalld_prereq", f"apt-get install -y {_APT_NI_OPTS} firewalld")
+               if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_firewalld()]
     ok = all(r["success"] for r in results)
     status = status_firewalld_prereq()
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results)}
@@ -6165,7 +6257,9 @@ def action_install_resolved() -> dict:
     err = _require_root()
     if err:
         return err
-    results = [_run_argv(a, timeout=300 if a[0] == "apt-get" else 20) for a in _argv_install_resolved()]
+    # v0.0.154: apt runs as its own systemd unit with no time limit (was a 300 s cap).
+    results = [_run_pkg_unit("pi_resolved_prereq", f"apt-get install -y {_APT_NI_OPTS} wireguard systemd-resolved")
+               if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_resolved()]
     ok = all(r["success"] for r in results)
     status = status_resolved_prereq()
     note = ("A reboot is recommended before bringing the tunnel up "
@@ -7892,10 +7986,18 @@ def action_install_luci(cfg: configparser.ConfigParser) -> dict:
     base = _ssh_base_argv(cfg)
     if base is None:
         return {"success": False, "verified": False, "output": "Router access not configured/reachable."}
-    remote_cmd = "opkg update >/dev/null 2>&1; opkg install luci"
+    # v0.0.154: was a 90 s cap that could drop the SSH session mid-install. opkg now
+    # ignores the hang-up if the session drops, keepalives detect a dead link, and
+    # the wait is 15 minutes.
+    remote_cmd = "trap '' HUP; opkg update >/dev/null 2>&1; opkg install luci"
+    argv = base[:1] + ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"] + base[1:]
     try:
-        r = subprocess.run(base + [remote_cmd], capture_output=True, text=True, timeout=90)
-    except (FileNotFoundError, subprocess.TimeoutExpired) as e:
+        r = subprocess.run(argv + [remote_cmd], capture_output=True, text=True, timeout=900)
+    except subprocess.TimeoutExpired:
+        return {"success": False, "verified": False,
+                "output": "ssh stopped waiting after 15 minutes -- opkg may still be finishing on the "
+                          "router. Wait a few minutes, then re-check this step before running it again."}
+    except FileNotFoundError as e:
         return {"success": False, "verified": False, "output": f"ssh failed: {e}"}
     log(f"Router LuCI install attempt: exit {r.returncode}")
     luci = _ssh_run(cfg, "luci_present")
@@ -14963,6 +15065,7 @@ function sysoptRunAction(action, btn) {
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
     body: JSON.stringify({action: action})
   }).then(function(r) { return r.json(); }).then(function(result) {
+    if (result.job_key && result.status === 'running') { sysoptPollJob(result.job_key, out, btn); return; }
     if (out) {
       out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
       var lines = [];
@@ -14977,6 +15080,23 @@ function sysoptRunAction(action, btn) {
       }
       out.textContent = lines.join('\\n');
     }
+    if (btn) btn.disabled = false;
+    refreshSystemOpt();
+  }).catch(function(e) {
+    if (out) { out.className = 'asl3-console shown fail'; out.textContent = 'Request failed: ' + e; }
+    if (btn) btn.disabled = false;
+  });
+}
+
+// v0.0.154: package remove/reinstall runs as a background job -- poll it.
+function sysoptPollJob(jobKey, out, btn) {
+  fetch('/api/action_status?job_key=' + encodeURIComponent(jobKey)).then(function(r) { return r.json(); }).then(function(st) {
+    if (st.status === 'running') {
+      if (out) { out.className = 'asl3-console shown placeholder'; out.textContent = (st.output || 'Running\u2026') + '\\n(still running, ' + (st.elapsed_sec || 0) + 's)'; }
+      setTimeout(function() { sysoptPollJob(jobKey, out, btn); }, jobPollMs(1000));
+      return;
+    }
+    if (out) { out.className = 'asl3-console shown' + (st.success ? '' : ' fail'); out.textContent = st.output || '(no output)'; }
     if (btn) btn.disabled = false;
     refreshSystemOpt();
   }).catch(function(e) {
