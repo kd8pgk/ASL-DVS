@@ -15,6 +15,11 @@ pattern would have filed it under Scripts, where Run Script would run
 it.  An already-installed watchdog is removed by install_asl_dvs v6.4
 (Run Script), or by hand: sudo bash /usr/local/bin/asl_dvs_watchdog.sh
 --uninstall.  The old library/watchdog dir is left on disk, untracked.
+  Upload fix: parse_multipart() stripped every trailing CR/LF off each
+part, so an uploaded file lost its own final newline(s) and the staged
+copy no longer matched the original byte-for-byte (different sha256, so
+"installed" / up-to-date checks could disagree with the file you sent).
+It now removes only the multipart framing.
 
 v1.27.7 - Added M17 Dashboard (asl_dvs_m17_dashboard.py) as its own tracked
 component, sibling to Dashboard rather than sharing its single COMPONENTS
@@ -2602,14 +2607,20 @@ def parse_multipart (raw ,boundary ):
     boundary_bytes =("--"+boundary ).encode ()
     parts =raw .split (boundary_bytes )
     result ={}
-    for part in parts :
-        part =part .strip (b"\r\n")
-        if not part or part ==b"--":
-            continue 
+    # v1.27.8: strip exactly the multipart framing -- the CRLF after the
+    # boundary line and the CRLF before the next one.  The old
+    # part.strip(b"\r\n") also ate the file's own trailing newline(s), so a
+    # staged copy differed from the uploaded file.
+    for part in parts [1 :]:
+        if part .startswith (b"--"):
+            break 
+        if part .startswith (b"\r\n"):
+            part =part [2 :]
+        if part .endswith (b"\r\n"):
+            part =part [:-2 ]
         if b"\r\n\r\n"not in part :
             continue 
         header_blob ,value =part .split (b"\r\n\r\n",1 )
-        value =value [:-2 ]if value .endswith (b"\r\n")else value 
         headers =header_blob .decode (errors ="replace")
         name_match =re .search (r'name="([^"]+)"',headers )
         if not name_match :
