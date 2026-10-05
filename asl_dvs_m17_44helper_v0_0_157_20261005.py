@@ -99,7 +99,9 @@ APP_STAGE = "v0.0.157: Starts through the shared launcher. 44helper.service now 
     "it instead, so Python saves the compiled copy in /opt/44helper/__pycache__ and reuses it on later starts "\
     "(about 26 MB, twice as fast to start) and recompiles by itself after an update. --install writes the "\
     "launcher (same file the Pi Zero 2 W sysmon/dashboard, instmon, wifimon and install_asl_dvs v6.5 write); "\
-    "--uninstall removes 44helper's compiled copy and the launcher once no unit uses it. || "\
+    "--uninstall removes 44helper's compiled copy and the launcher once no unit uses it. --install now "\
+    "restarts 44helper.service instead of 'enable --now', which did nothing to an already-running 44helper, "\
+    "so a re-install over a running copy kept the old version going until the next restart. || "\
     "v0.0.156: Quiet mode also pauses the post-boot service check from asl_dvs_watchdog "\
     "v2.7+ (asl_dvs_bootcheck.timer while it is waiting, asl_dvs_bootcheck.service while it runs), so a "\
     "package job started in the first minutes after boot can't have Asterisk or the bridges restarted "\
@@ -1143,8 +1145,12 @@ def install_service() -> None:
     print(f"  [+] Created service file at {SYSTEMD_SERVICE_PATH}")
 
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "--now", "44helper.service"], check=True)
-    print("  [+] Enabled and started 44helper.service")
+    subprocess.run(["systemctl", "enable", "44helper.service"], check=True)
+    # restart, not enable --now: --now is a no-op on a 44helper that is
+    # already running, which would keep the old version (and old unit)
+    # going after a re-install.
+    subprocess.run(["systemctl", "restart", "44helper.service"], check=True)
+    print("  [+] Enabled and restarted 44helper.service")
     print("\nInstallation complete! View logs anytime using:")
     print("  journalctl -u 44helper -f")
 
