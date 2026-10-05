@@ -17,6 +17,10 @@
 #     refresh keeps the last good file.
 #   Results are identical to v9.3.71 (same parsing, first line for a node
 #   wins, same order, same counts and totals).
+#   - Slower polling: the link/keyed poll of Asterisk runs every 2 s (was
+#     1 s; bridge up/down now after 2 polls, ~4 s, was 3 polls, ~3 s); the
+#     page refreshes every 5 s when idle (was 3 s; 1 s while busy is
+#     unchanged) and checks the TX/RX light every 1 s (was 0.5 s).
 
 import argparse
 import codecs
@@ -6598,11 +6602,13 @@ def _dvs_settle() -> None:
 _bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
 _bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 3
+# Pi02w: the link poll runs every 2 s (was 1 s), so 2 polls (~4 s) stand
+# in for the old 3 (~3 s) before a bridge is called down or up.
+_BRIDGE_DOWN_THRESHOLD     = 2
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 3
+_BRIDGE_UP_THRESHOLD    = 2
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6698,7 +6704,7 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
         _link_exit()
 
 def _link_poll_loop() -> None:
-    INTERVAL     = 1.0
+    INTERVAL     = 2.0  # Pi02w: was 1.0
     fails        = 0
     last_detect  = time.monotonic()
     while True:
@@ -13552,7 +13558,7 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:5000);  // Pi02w: idle was 3000
 }
 let _keyedTimer=null;
 async function pollKeyed(){
@@ -13623,7 +13629,7 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedTimer=setTimeout(pollKeyed,500);
+  _keyedTimer=setTimeout(pollKeyed,1000);  // Pi02w: was 500 (the server updates every 2 s)
 }
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 async function pollAbInfo(){
