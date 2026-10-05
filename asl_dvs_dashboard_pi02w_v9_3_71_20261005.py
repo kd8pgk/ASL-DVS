@@ -2,8 +2,9 @@
 #
 # ASL-DVS Node Control  —  asl_dvs_dashboard.py  —  v9.3.71-pi02w  —  2026-10-05
 # KD8PGK / Claude AI (Anthropic)  —  CC BY-NC 4.0
+# Build: Pi Zero 2 W fork of v9.3.71
 #
-# Pi Zero 2 W build, branched from v9.3.71.  Same tabs and features (Phone
+# Same tabs and features as v9.3.71 (Phone
 # and every digital mode); lighter on memory and CPU for a 512 MB Pi:
 #   - ASL node search reads /var/lib/asterisk/astdb.txt from disk on each
 #     search instead of holding ~40,000 nodes in memory (was ~16 MB, 32 MB

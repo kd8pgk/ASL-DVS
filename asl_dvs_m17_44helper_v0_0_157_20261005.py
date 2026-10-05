@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # =============================================================================
 # ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.157.py
+# Build: common (all nodes, including Pi Zero 2 W)
 # =============================================================================
 #
 # STAGE:      Response to an external audit (not one of the original 8

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
 # install_asl_dvs_dashboard.sh  v6.5  (2026-10-05)
+# Build: common (all nodes, including Pi Zero 2 W)
 # Installs or updates:
 #   ASL-DVS Node Control Dashboard  (port 8989)
 #   ASL-DVS-M17 Node Control Dashboard (M17/Zello fork, port 8989)
@@ -148,6 +149,10 @@
 #     2. otherwise the build already installed (its VERSION line);
 #     3. otherwise pi02w on a "Raspberry Pi Zero 2 W" (device-tree
 #        model), full on anything else.
+#   Every ASL-DVS file names its build in a header line: "Build: Pi Zero
+#   2 W fork of vX.Y.Z" for a fork (also _pi02w_ in the file name and
+#   -pi02w on its VERSION) or "Build: common (all nodes, including Pi Zero
+#   2 W)" for a tool every node runs.
 #   No file of the chosen build found -> that component is not installed
 #   (with a warning saying how to override); the other build is never
 #   substituted.

@@ -3,6 +3,7 @@
 #"""
 #wifimon.py — WiFi & Voltage Watchdog + Dashboard for Raspberry Pi Zero 2W
 #Version: 5.22 (Starts through the shared launcher)
+#Build: common (all nodes, including Pi Zero 2 W)
 
 #Monitors wifi connectivity and supply voltage.
 #Triggers a clean system shutdown on:

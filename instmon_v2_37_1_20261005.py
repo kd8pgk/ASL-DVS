@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 """instmon v2.37.1 (2026-10-05) - KD8PGK Web Installer & Component Manager
+Build: common (all nodes, including Pi Zero 2 W)
 
 Full version history: see CHANGELOG.md. This docstring intentionally
 stays short now -- it used to carry the entire changelog inline (see

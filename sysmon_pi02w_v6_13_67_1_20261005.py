@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-ASL-DVS SYSMON  --  sysmon.py   (Pi Zero 2 W build)
+ASL-DVS SYSMON  --  sysmon.py
 Version : 6.13.67.1-pi02w  (20261005)
+Build   : Pi Zero 2 W fork of v6.13.67
 Authors : Claude AI (Anthropic) / KD8PGK
 License : CC BY-NC 4.0
 Nodes   : KD8PGK 652701 / 652702 / 652703
