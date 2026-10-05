@@ -137,17 +137,19 @@
 #   instance-suffixed ones) and /usr/local/bin/asl_dvs_watchdog*.sh.
 #   Staged copies in the instmon library are left alone and ignored.
 #
-# v6.5: SysMon build choice.  SysMon now comes in two builds that both
-#   match sysmon*.py: the full one (sysmon_v*.py) and the lighter Pi Zero
-#   2 W one (sysmon_pi02w_v*.py, VERSION "x.y.z-pi02w").  Picking the
-#   newest file by date could put either on either kind of Pi, so the
-#   build is chosen first and only that build's files are offered:
-#     1. SYSMON_VARIANT=pi02w or SYSMON_VARIANT=full, if set;
+# v6.5: SysMon and Dashboard build choice.  Each now comes in two builds
+#   that match the same file pattern: the full one (sysmon_v*.py,
+#   asl_dvs_dashboard_v*.py) and the lighter Pi Zero 2 W one
+#   (sysmon_pi02w_v*.py, asl_dvs_dashboard_pi02w_v*.py, VERSION
+#   "x.y.z-pi02w").  Picking the newest file by date could put either on
+#   either kind of Pi, so the build is chosen first, per component, and
+#   only that build's files are offered:
+#     1. SYSMON_VARIANT / DASH_VARIANT = pi02w or full, if set;
 #     2. otherwise the build already installed (its VERSION line);
 #     3. otherwise pi02w on a "Raspberry Pi Zero 2 W" (device-tree
 #        model), full on anything else.
-#   No file of the chosen build found -> SysMon is not installed (with
-#   a warning saying how to override); the other build is never
+#   No file of the chosen build found -> that component is not installed
+#   (with a warning saying how to override); the other build is never
 #   substituted.
 
 set -euo pipefail
@@ -365,6 +367,34 @@ stage_and_select() {
     else
         info "Skipping: ${label}"
     fi
+}
+
+# v6.5: which build of a component to install (see the v6.5 note above).
+# $1 = override (SYSMON_VARIANT / DASH_VARIANT), $2 = installed file,
+# $3 = override's name for messages.  Sets PICKED_BUILD and PICKED_WHY.
+pick_build() {
+    PICKED_BUILD="$1"
+    PICKED_WHY="$3"
+    if [[ -z "${PICKED_BUILD}" && -f "$2" ]]; then
+        if grep -qE '^VERSION[[:space:]]*=[[:space:]]*"[^"]*-pi02w"' "$2" 2>/dev/null; then
+            PICKED_BUILD="pi02w"
+        else
+            PICKED_BUILD="full"
+        fi
+        PICKED_WHY="the installed copy"
+    fi
+    if [[ -z "${PICKED_BUILD}" ]]; then
+        if tr -d '\0' < /proc/device-tree/model 2>/dev/null | grep -qi 'Zero 2'; then
+            PICKED_BUILD="pi02w"
+        else
+            PICKED_BUILD="full"
+        fi
+        PICKED_WHY="this Pi's model"
+    fi
+    case "${PICKED_BUILD}" in
+        pi02w|full) ;;
+        *) die "$3 must be pi02w or full (got '${PICKED_BUILD}')" ;;
+    esac
 }
 
 check_port() {
@@ -655,8 +685,18 @@ retire_watchdog
 
 hdr "Dashboard — file discovery"
 CHOSEN=""
-stage_and_select "asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" || true
+# v6.5: choose the build first (see the v6.5 note at the top).
+pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
+DASH_VARIANT="${PICKED_BUILD}"
+if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
+    info "Dashboard build: Pi Zero 2 W (asl_dvs_dashboard_pi02w*.py), from ${PICKED_WHY}"
+    stage_and_select "asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
+else
+    info "Dashboard build: full (asl_dvs_dashboard*.py without _pi02w), from ${PICKED_WHY}"
+    stage_and_select "asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "asl_dvs_dashboard_pi02w*.py" || true
+fi
 DASH_CHOSEN="${CHOSEN}"
+[[ -z "${DASH_CHOSEN}" ]] && warn "No ${DASH_VARIANT} Dashboard build found -- set DASH_VARIANT=pi02w or =full to choose the other build."
 
 if [[ -n "${DASH_CHOSEN}" ]]; then
     info "Checking syntax…"
@@ -679,28 +719,11 @@ fi
 
 hdr "SysMon — file discovery"
 # v6.5: choose the build first (see the v6.5 note at the top).
-SYSMON_VARIANT="${SYSMON_VARIANT:-}"
-_sysmon_why="SYSMON_VARIANT"
-if [[ -z "${SYSMON_VARIANT}" && -f "${SYSMON_BIN}" ]]; then
-    if grep -qE '^VERSION[[:space:]]*=[[:space:]]*"[^"]*-pi02w"' "${SYSMON_BIN}" 2>/dev/null; then
-        SYSMON_VARIANT="pi02w"
-    else
-        SYSMON_VARIANT="full"
-    fi
-    _sysmon_why="the installed SysMon"
-fi
-if [[ -z "${SYSMON_VARIANT}" ]]; then
-    if tr -d '\0' < /proc/device-tree/model 2>/dev/null | grep -qi 'Zero 2'; then
-        SYSMON_VARIANT="pi02w"
-    else
-        SYSMON_VARIANT="full"
-    fi
-    _sysmon_why="this Pi's model"
-fi
+pick_build "${SYSMON_VARIANT:-}" "${SYSMON_BIN}" "SYSMON_VARIANT"
+SYSMON_VARIANT="${PICKED_BUILD}"
 case "${SYSMON_VARIANT}" in
-    pi02w) info "SysMon build: Pi Zero 2 W (sysmon_pi02w*.py), from ${_sysmon_why}" ;;
-    full)  info "SysMon build: full (sysmon*.py without _pi02w), from ${_sysmon_why}" ;;
-    *)     die "SYSMON_VARIANT must be pi02w or full (got '${SYSMON_VARIANT}')" ;;
+    pi02w) info "SysMon build: Pi Zero 2 W (sysmon_pi02w*.py), from ${PICKED_WHY}" ;;
+    full)  info "SysMon build: full (sysmon*.py without _pi02w), from ${PICKED_WHY}" ;;
 esac
 CHOSEN=""
 if [[ "${SYSMON_VARIANT}" == "pi02w" ]]; then
