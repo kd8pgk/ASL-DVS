@@ -1,13 +1,30 @@
 #!/usr/bin/env python3
 """
 ASL-DVS SYSMON  --  sysmon.py
-Version : 6.13.65  (20261004)
+Version : 6.13.66  (20261005)
 Authors : Claude AI (Anthropic) / KD8PGK
 License : CC BY-NC 4.0
 Nodes   : KD8PGK 652701 / 652702 / 652703
 
 Changelog: the last 10 versions are below.  Older entries (v6.13.55 and
 earlier) are in sysmon_changelog_v6_13_65_20261004.txt.
+
+v6.13.66 -- D-Star -- ircDDBGateway card (ASL-DVS tab).
+For dashboard v9.3.71, whose D-STAR tab links to gateway callsigns as well
+as reflectors.  A new card under "DVSwitch -- Config Files" reads
+/etc/ircddbgateway and checks: ircddbgatewayd running, gatewayCallsign,
+repeaterBand1 (shown as the 8-character callsign the dashboard uses),
+ircddbEnabled (gateway lookup), dextraEnabled (gateway links), and remote
+control -- remoteEnabled (WARN when off: the dashboard falls back to
+dvswitch.sh tune), remotePassword set (never shown), remotePort valid and
+listening (catches settings not yet applied by a restart), gatewayAddress
+(WARN when blank: listens on every interface).  Buttons: Edit (the file
+is now in the DVSwitch config-file list), Restart ircddbgatewayd (root),
+Refresh, Copy.  Read-only -- nothing changes the file but the editor.
+New route /api/dstar-gw (GET checks, POST restart), added to the Page
+self-check.  Console -> Saved favorites now passes D-STAR gateway rows
+("W1ABC BL") and treats the unpadded "W1ABCBL" as old form (the dashboard
+fixes it on load).
 
 v6.13.65 -- Console Dashboard checks, stage 4 of 4 (release).
 Summary of v6.13.62-v6.13.64: a new "Dashboard" group in Console ->
@@ -161,8 +178,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.65"
-BUILD_DATE   = "20261004"
+VERSION      = "6.13.66"
+BUILD_DATE   = "20261005"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -3247,6 +3264,30 @@ body.tab-edit #zone-content{
       </div>
     </div>
 
+    <div class="s3-card" id="dstargw-card">
+      <div class="s3-card-hdr" style="padding-left:.6rem">
+        <div style="display:flex;align-items:center;gap:.55rem">
+          <div class="dvsm-accent" style="background:var(--blue)"></div>
+          <div>
+            <div class="dvsm-card-title" style="color:var(--blue)">D-Star — ircDDBGateway</div>
+            <div class="dvsm-card-sub">/etc/ircddbgateway · gateway linking · remote control</div>
+          </div>
+        </div>
+        <span class="dpbadge" id="dstargw-badge">—</span>
+      </div>
+      <div id="dstargw-body">
+        <div class="stub-panel" style="min-height:80px">Loading…</div>
+      </div>
+      <div style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:.4rem;flex-wrap:wrap">
+        <button class="btn btn-sm" style="color:var(--blue);border-color:var(--blue-dim)"
+          onclick="dstarGwEdit()">✎ Edit /etc/ircddbgateway</button>
+        <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
+          onclick="dstarGwRestart()">↺ Restart ircddbgatewayd</button>
+        <button class="btn btn-blue btn-sm" onclick="loadDstarGw()">↻ Refresh</button>
+        <button class="btn btn-muted btn-sm" onclick="dstarGwCopy(this)" title="Copy this card as text">⎘ Copy</button>
+      </div>
+    </div>
+
   </div>
 
   <div id="panel-reg" class="tab-panel">
@@ -6275,7 +6316,38 @@ async function ufReloadDaemon() {
   ufSetStatus(d.message || (d.ok ? "Daemon reloaded" : "Failed"), d.ok);
 }
 
-window.loadTab_asldvs = function() { loadAstFiles(); loadAllmon3Files(); loadDvsFiles(); };
+window.loadTab_asldvs = function() { loadAstFiles(); loadAllmon3Files(); loadDvsFiles(); loadDstarGw(); };
+
+// v6.13.66: D-Star -- ircDDBGateway card (read-only checks on /etc/ircddbgateway
+// for the dashboard's gateway linking).  Edit opens the DVSwitch file editor.
+let _dstarGw = null;
+async function loadDstarGw() {
+  const d = await api("/api/dstar-gw");
+  if (!d) return;
+  _dstarGw = d;
+  _dvsmSetBadge("dstargw-badge", d.status, d.badge);
+  _renderCompatTable("dstargw-body", d.checks || []);
+}
+async function dstarGwRestart() {
+  if (!await confirm("Restart ircddbgatewayd? Any D-Star link drops.")) return;
+  const d = await api("/api/dstar-gw", "POST", {action: "restart"});
+  if (!d || !d.ok) { toast(d?.message || "Restart failed", "err"); return; }
+  toast("ircddbgatewayd restarted", "ok");
+  setTimeout(loadDstarGw, 1500);
+}
+function dstarGwEdit() {
+  if (_dstarGw && _dstarGw.present === false) { toast("/etc/ircddbgateway not found", "warn"); return; }
+  openDvsEditor("ircddbgateway");
+}
+function dstarGwCopy(btn) {
+  if (!_dstarGw) return;
+  const lines = [`D-Star — ircDDBGateway (${_dstarGw.path}): ${_dstarGw.badge}`];
+  (_dstarGw.checks || []).forEach(c => {
+    lines.push(`[${String(c.status || "").toUpperCase()}] ${c.enables}: ${c.key}`);
+    if (c.fix) lines.push(`    -> ${c.fix}`);
+  });
+  dvsmCopy(btn, lines.join("\n"));
+}
 
 const _REG_HTTP_IDS = {body: "reg-http-body", meta: "reg-http-meta", status: "reg-http-status"};
 const _REG_IAX_IDS  = {body: "reg-iax-body",  meta: "reg-iax-meta",  status: "reg-iax-status"};
@@ -16822,6 +16894,8 @@ _DVSWITCH_FILES: "list[Path]" = [
     Path("/etc/dvswitch/MMDVM_Bridge.ini"),
 
     Path("/var/lib/dvswitch/dvs/var.txt"),
+
+    Path("/etc/ircddbgateway"),
 ]
 
 _ALLMON3_DIR   = Path("/etc/allmon3")
@@ -23538,6 +23612,141 @@ def _route_m17_post(h: Handler, data: dict) -> None:
         h.send_json({"ok": True, "message": msg, **r})
         return
 
+    h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
+
+
+# ==========================================================================
+# CARD: D-Star -- ircDDBGateway (ASL-DVS tab)
+# ==========================================================================
+# v6.13.66: read-only checks on /etc/ircddbgateway for the dashboard's
+# D-STAR tab (v9.3.71+), which links to gateway callsigns as well as
+# reflectors.  Gateway links need ircDDB (callsign lookup) and DExtra; the
+# dashboard sends them through ircDDBGateway's remote control when it is
+# enabled, and falls back to dvswitch.sh tune when it isn't.  Nothing here
+# writes the file -- Edit opens it in the DVSwitch config-file editor.
+
+_IRCDDB_CONF_PATH = Path("/etc/ircddbgateway")
+_IRCDDB_SERVICE   = "ircddbgatewayd.service"
+
+
+def _ircddb_read_conf() -> "tuple[dict, str]":
+    """(key -> value, problem).  problem is '' when the file was read."""
+    try:
+        text = _IRCDDB_CONF_PATH.read_text(errors="replace")
+    except FileNotFoundError:
+        return {}, "missing"
+    except OSError as exc:
+        return {}, f"can't read it: {exc}"
+    kv: dict = {}
+    for ln in text.splitlines():
+        k, sep, v = ln.partition("=")
+        if sep and k.strip() and not k.lstrip().startswith(("#", ";")):
+            kv[k.strip()] = v.strip()
+    return kv, ""
+
+
+def _dstar_gw_checks() -> dict:
+    kv, prob = _ircddb_read_conf()
+    path = str(_IRCDDB_CONF_PATH)
+    svc = get_service_state(_IRCDDB_SERVICE)
+    rows: list = []
+
+    def row(key, enables, status, fix=None):
+        rows.append({"key": key, "enables": enables, "status": status, "fix": fix})
+
+    row(f"{_IRCDDB_SERVICE}: {svc}", "D-Star gateway service running",
+        "pass" if svc == "active" else "fail",
+        None if svc == "active" else "Start it: sudo systemctl start ircddbgatewayd")
+
+    if prob:
+        missing = prob == "missing"
+        row(path, "ircDDBGateway config file", "fail",
+            "Not found -- is ircDDBGateway installed?" if missing else f"{path}: {prob}")
+        return {"ok": True, "path": path, "present": not missing, "status": "fail",
+                "badge": "MISSING" if missing else "FAIL", "service": svc, "checks": rows}
+
+    gw = kv.get("gatewayCallsign", "").upper()
+    row(f"gatewayCallsign = {gw or '(blank)'}", "Gateway callsign",
+        "pass" if gw else "fail", None if gw else "Set gatewayCallsign to your callsign")
+
+    band = kv.get("repeaterBand1", "").upper()
+    rcall = (kv.get("repeaterCall1", "") or gw).upper()
+    band_ok = len(band) == 1 and band.isalpha()
+    ident = (rcall[:7].ljust(7) + band) if (rcall and band_ok) else ""
+    row(f"repeaterBand1 = {band or '(blank)'}" + (f"  ->  {ident}" if ident else ""),
+        "Repeater 1 module (how the dashboard names this node)",
+        "pass" if ident else "fail",
+        None if ident else "Set repeaterBand1 to a module letter, e.g. B")
+
+    irc = kv.get("ircddbEnabled", "0") == "1"
+    row(f"ircddbEnabled = {kv.get('ircddbEnabled', '(not set)')}", "ircDDB (gateway callsign lookup)",
+        "pass" if irc else "fail",
+        None if irc else "Set ircddbEnabled=1 -- gateway callsigns can't be found without it")
+
+    dx = kv.get("dextraEnabled", "0") == "1"
+    row(f"dextraEnabled = {kv.get('dextraEnabled', '(not set)')}", "DExtra (gateway links use it)",
+        "pass" if dx else "warn", None if dx else "Set dextraEnabled=1 to link to gateways")
+
+    rc_on = kv.get("remoteEnabled", "0") == "1"
+    row(f"remoteEnabled = {kv.get('remoteEnabled', '(not set)')}", "Remote control (dashboard gateway links)",
+        "pass" if rc_on else "warn",
+        None if rc_on else "Optional: set remoteEnabled=1 so gateway links keep their module "
+                           "(without it the dashboard uses dvswitch.sh tune)")
+
+    pw = kv.get("remotePassword", "")
+    try:
+        port = int(kv.get("remotePort", "0") or 0)
+    except ValueError:
+        port = 0
+    port_ok = 0 < port < 65536
+    if rc_on:
+        row("remotePassword = " + ("(set)" if pw else "(blank)"), "Remote control password",
+            "pass" if pw else "fail", None if pw else "Set remotePassword -- remote control stays off without one")
+        row(f"remotePort = {kv.get('remotePort', '(not set)')}", "Remote control UDP port",
+            "pass" if port_ok else "fail", None if port_ok else "Set remotePort to a free UDP port, e.g. 10022")
+        if port_ok:
+            lis, lprob = _ts_udp_listeners()
+            if lprob:
+                row(f"UDP {port}", "Remote control listening", "info", f"Can't check: {lprob}")
+            else:
+                up = str(port) in lis
+                row(f"UDP {port}: " + ("listening" if up else "not listening"), "Remote control listening",
+                    "pass" if up else "warn",
+                    None if up else "Restart ircddbgatewayd to apply the remote-control settings")
+        addr = kv.get("gatewayAddress", "")
+        if addr and addr != "0.0.0.0":
+            row(f"gatewayAddress = {addr}", "Remote control listen address", "pass")
+        else:
+            row("gatewayAddress = " + (addr or "(blank)"), "Remote control listen address", "warn",
+                "Listens on every interface -- don't forward the remote port on your router")
+    else:
+        row("remotePassword / remotePort", "Only needed with remote control on", "info")
+
+    statuses = [r["status"] for r in rows]
+    status = "fail" if "fail" in statuses else "warn" if "warn" in statuses else "pass"
+    return {"ok": True, "path": path, "present": True, "status": status,
+            "badge": {"pass": "OK", "warn": "WARN", "fail": "FAIL"}[status],
+            "service": svc, "checks": rows}
+
+
+def _route_dstar_gw_get(h: Handler) -> None:
+    h.send_json(_dstar_gw_checks())
+
+
+def _route_dstar_gw_post(h: Handler, data: dict) -> None:
+    if os.geteuid() != 0:
+        h.send_json({"ok": False, "message": "root required"}); return
+    action = str(data.get("action", "")).strip().lower()
+    if action == "restart":
+        try:
+            r = subprocess.run(["systemctl", "restart", _IRCDDB_SERVICE],
+                               capture_output=True, text=True, timeout=20)
+        except Exception as exc:
+            h.send_json({"ok": False, "message": str(exc)}); return
+        if r.returncode != 0:
+            h.send_json({"ok": False, "message": (r.stderr or r.stdout or "restart failed").strip()}); return
+        h.send_json({"ok": True, "message": "ircddbgatewayd restarted"})
+        return
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
 
@@ -30684,6 +30893,7 @@ _TS_FAV_SECS = ("ASL", "ECHO", "DSTAR", "XLX")
 _TS_FAV_SLOTS = 10
 _TS_DSTAR_RE = re.compile(r"^([A-Z0-9 ]{6})([A-Z])L$")
 _TS_DSTAR_BASE_RE = re.compile(r"^(REF|XRF|DCS)\d{3}$")
+_TS_DSTAR_GW_RE = re.compile(r"^(?=[A-Z0-9]*\d)[A-Z0-9]{3,6}$")   # gateway callsign (dashboard v9.3.71+)
 _TS_XLX_RE = re.compile(r"^XLX[A-Z0-9]{3}[A-Z]L$")
 
 def _ts_fav_rows(text: str) -> "dict[str, list]":
@@ -30736,11 +30946,17 @@ def _ts_fav_ref(sec: str, val: str, nfields: int, seen: set) -> "tuple[str, str]
             return "info", "unlink row -- left out when the dashboard loads"
         m = _TS_DSTAR_RE.match(tg)
         if not m:
-            if re.match(r"^[A-Z0-9]{3,6} [A-Z]$", tg) or re.match(r"^[A-Z0-9 ]{6}[A-Z]$", tg):
+            if (re.match(r"^[A-Z0-9]{3,6} [A-Z]$", tg) or re.match(r"^[A-Z0-9 ]{6}[A-Z]$", tg)
+                    or re.match(r"^[A-Z0-9]{3,5}[A-Z]L$", tg)):
                 return "info", "old form -- the dashboard fixes it when it loads; Save in Edit to rewrite it"
             return "fail", "not a 6-character base + module + L -- won't tune"
-        st, note = (("pass", "ok") if _TS_DSTAR_BASE_RE.match(m.group(1).strip()) else
-                    ("info", "not a REF/XRF/DCS name -- tunes only if DVSwitch knows it"))
+        base = m.group(1)
+        if _TS_DSTAR_BASE_RE.match(base.strip()):
+            st, note = "pass", "ok"
+        elif base == base.strip().ljust(6) and _TS_DSTAR_GW_RE.match(base.strip()):
+            st, note = "pass", "gateway callsign -- linked through ircDDB (see the ASL-DVS tab's D-Star card)"
+        else:
+            st, note = "info", "not a REF/XRF/DCS name or gateway callsign -- tunes only if DVSwitch knows it"
     if tg in seen:
         return "warn", "saved twice"
     seen.add(tg)
@@ -30792,6 +31008,7 @@ _SELFCHECK_ROUTES = (
     ("Reg", "/api/reg/iax"), ("Phone", "/api/phone"), ("Tune", "/api/simpleusb/tune"),
     ("Tune", "/api/rpt/nodesettings"), ("Hardware", "/api/hardware"), ("Net", "/api/net"),
     ("DVSM", "/api/dvsm"), ("STFU", "/api/stfu"), ("M17", "/api/m17"), ("Zello", "/api/zello"),
+    ("ASL-DVS", "/api/dstar-gw"),
     ("SD Card", "/api/sdcard"), ("Security", "/api/security/checks"), ("Console", "/api/console/tcatalog"),
     ("Edit", "/api/asterisk/files"),
 )
@@ -32572,6 +32789,7 @@ _GET_ROUTES = {
     "/api/dvsm":               _route_dvsm,
     "/api/stfu":               _route_stfu_get,
     "/api/m17":                _route_m17_get,
+    "/api/dstar-gw":           _route_dstar_gw_get,
     "/api/zello":              _route_zello_get,
     "/api/sdcard":             _route_sdcard_get,
     "/api/sdcard/test":        _route_sdcard_test_get,
@@ -32599,6 +32817,7 @@ _POST_ROUTES = {
     "/api/hardware":        _route_hardware_post,
     "/api/stfu":            _route_stfu_post,
     "/api/m17":             _route_m17_post,
+    "/api/dstar-gw":        _route_dstar_gw_post,
     "/api/zello":           _route_zello_post,
     "/api/sdcard/test":     _route_sdcard_test_post,
     "/api/net/run":         _route_net_run_post,
