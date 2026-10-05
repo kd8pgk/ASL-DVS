@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # =============================================================================
-# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.155.py
+# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.156.py
 # =============================================================================
 #
 # STAGE:      Response to an external audit (not one of the original 8
@@ -92,8 +92,12 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.155"
-APP_STAGE = "v0.0.155: SVXLink USRP fork audit. USRP fork is now the default Script option on the "\
+APP_VERSION = "0.0.156"
+APP_STAGE = "v0.0.156: Quiet mode also pauses the post-boot service check from asl_dvs_watchdog "\
+    "v2.7+ (asl_dvs_bootcheck.timer while it is waiting, asl_dvs_bootcheck.service while it runs), so a "\
+    "package job started in the first minutes after boot can't have Asterisk or the bridges restarted "\
+    "under it. The check is restarted afterwards without waiting for it to finish. || "\
+    "v0.0.155: SVXLink USRP fork audit. USRP fork is now the default Script option on the "\
     "SVXLink tab. Fixed: every USRP step was refused as 'Unknown distro: usrp'; the build put the config in "\
     "/usr/local/etc/svxlink/svxlink (SYSCONF_INSTALL_DIR is now /usr/local/etc -- the build adds /svxlink); "\
     "new manual card switches UsrpLogic on (LOGICS + [LinkToUsrp]) and points DV_USER_INFOFILE at the "\
@@ -4359,11 +4363,40 @@ def _qm_active_units() -> list[str]:
     return units
 
 
-def _qm_resolve_plan(active: list[str] | None = None) -> list[dict]:
-    """Ordered stop list: [{unit, tier}], tier order then pattern order."""
+# v0.0.156: asl_dvs_watchdog.sh v2.7+ installs a once-per-boot check
+# (asl_dvs_bootcheck.timer -> .service) that restarts any enabled radio service
+# it finds stopped -- it would undo quiet mode if a package job starts in the
+# first minutes after boot. Paused with the watchdogs, but only while it still
+# has work to do: the timer while WAITING (an elapsed one-shot timer would just
+# fire again when restarted) and the service while the check is running.
+_QM_BOOTCHECK_TIMER = "asl_dvs_bootcheck.timer"
+_QM_BOOTCHECK_SERVICE = "asl_dvs_bootcheck.service"
+
+
+def _qm_bootcheck_units() -> list[str]:
+    out = []
+    try:
+        r = subprocess.run(["systemctl", "show", "-p", "SubState", "--value", _QM_BOOTCHECK_TIMER],
+                           capture_output=True, text=True, timeout=10)
+        if r.stdout.strip() == "waiting":
+            out.append(_QM_BOOTCHECK_TIMER)
+        r = subprocess.run(["systemctl", "is-active", _QM_BOOTCHECK_SERVICE],
+                           capture_output=True, text=True, timeout=10)
+        if r.stdout.strip() in ("active", "activating"):
+            out.append(_QM_BOOTCHECK_SERVICE)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    return out
+
+
+def _qm_resolve_plan(active: list[str] | None = None, bootcheck: list[str] | None = None) -> list[dict]:
+    """Ordered stop list: [{unit, tier}], tier order then pattern order.
+    bootcheck: boot-check units to pause (default: probed live, see above)."""
     import fnmatch
     if active is None:
         active = _qm_active_units()
+    if bootcheck is None:
+        bootcheck = _qm_bootcheck_units()
     plan, seen = [], set()
     # v0.0.109: case-insensitive -- DVSwitch units have shipped as both
     # analog_bridge.service and Analog_Bridge.service; fnmatch on POSIX is
@@ -4377,6 +4410,11 @@ def _qm_resolve_plan(active: list[str] | None = None) -> list[dict]:
                     continue
                 seen.add(unit)
                 plan.append({"unit": unit, "tier": tier})
+        if tier == _QM_TIERS[0][0]:
+            for unit in bootcheck:
+                if unit not in seen:
+                    seen.add(unit)
+                    plan.append({"unit": unit, "tier": tier})
     return plan
 
 
@@ -4426,8 +4464,11 @@ def _qm_preview(plan: list[dict]) -> dict:
 
 
 def _qm_systemctl(verb: str, unit: str) -> tuple[bool, str]:
+    argv = ["systemctl", verb, unit]
+    if verb == "start" and unit == _QM_BOOTCHECK_SERVICE:
+        argv = ["systemctl", "start", "--no-block", unit]  # v0.0.156: oneshot, runs for minutes
     try:
-        r = subprocess.run(["systemctl", verb, unit], capture_output=True, text=True, timeout=_QM_STOP_TIMEOUT)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=_QM_STOP_TIMEOUT)
         return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()
     except subprocess.TimeoutExpired:
         return False, f"timed out after {_QM_STOP_TIMEOUT}s"
