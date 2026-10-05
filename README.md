@@ -168,4 +168,6 @@ always pick the newest.
 
 ## License
 
-See [LICENSE](LICENSE). Each file also states a license in its header.
+Licensed under [Creative Commons Attribution-NonCommercial 4.0 International (CC BY-NC 4.0)](https://creativecommons.org/licenses/by-nc/4.0/). See [LICENSE](LICENSE).
+
+You may share and adapt these files if you credit KD8PGK and don't use them for commercial purposes.
