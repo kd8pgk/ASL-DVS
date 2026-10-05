@@ -2,13 +2,24 @@
 # -*- coding: utf-8 -*-
 #"""
 #wifimon.py — WiFi & Voltage Watchdog + Dashboard for Raspberry Pi Zero 2W
-#Version: 5.21 (Adapter switches: Auto / Keep on / Keep off)
+#Version: 5.22 (Starts through the shared launcher)
 
 #Monitors wifi connectivity and supply voltage.
 #Triggers a clean system shutdown on:
 #  1. Sustained low voltage (undervoltage protection).
 #  2. Sustained network connection loss.
 #Serves a web dashboard on port 8991 (plain HTTP by default, root-password login).
+#
+#v5.22 — Starts through the shared launcher. wifimon.service now runs
+#  /usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/wifimon.py.
+#  Run directly, Python compiles the whole 363 KB file on every start and
+#  keeps that memory (about 36 MB); the launcher imports wifimon instead, so
+#  Python saves the compiled copy in /usr/local/bin/__pycache__ and reuses
+#  it on later starts (about 22 MB, twice as fast to start). Python checks
+#  the file's date and size each start and recompiles by itself after an
+#  update. --install writes the launcher (same file the Pi Zero 2 W sysmon /
+#  dashboard, instmon and install_asl_dvs v6.5 write); --uninstall removes
+#  wifimon's compiled copy and the launcher once no unit uses it.
 #
 #v5.21 — Adapter switches. Each WiFi adapter on the Radio & device card
 #  gets a 3-way switch: Auto (NetworkManager decides, same as before),
@@ -667,7 +678,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.21"
+APP_VERSION = "5.22"
 
 # ── CONFIG ──────────────────────────────────────────────────────────────
 # Watchdog (unchanged from v4.8)
@@ -832,13 +843,37 @@ def save_wifi_networks(networks: List[Dict[str, object]], quiet: bool = False) -
 INSTALL_BIN_PATH = "/usr/local/bin/wifimon.py"
 SYSTEMD_SERVICE_PATH = "/etc/systemd/system/wifimon.service"
 
+# Shared launcher -- see the v5.22 note at the top.
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
+# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
+# named on the command line through Python's import system, so its compiled
+# copy is kept in __pycache__ and reused on later starts instead of the whole
+# file being compiled again -- about half the memory and twice as fast to
+# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
+import os
+import runpy
+import sys
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+if name.isidentifier():
+    sys.path.insert(0, os.path.dirname(target))
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    runpy.run_path(target, run_name="__main__")
+'''
+
 SYSTEMD_SERVICE_CONTENT = f"""[Unit]
 Description=WiFi and Voltage Watchdog + Dashboard (port {HTTP_PORT})
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /usr/local/bin/wifimon.py
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH}
 Restart=always
 RestartSec=3s
 StandardOutput=journal
@@ -912,6 +947,51 @@ def _handle_sigterm(signum: int, frame: object) -> None:
 signal.signal(signal.SIGTERM, _handle_sigterm)
 signal.signal(signal.SIGINT,  _handle_sigterm)
 
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _pyc_for(src: str) -> list:
+    name = os.path.splitext(os.path.basename(src))[0]
+    return _glob_pyc(os.path.dirname(src), name)
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    """Drop compiled copies whose source file is gone (older versions)."""
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    """Remove the shared launcher once no installed unit runs it."""
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    os.remove(_LAUNCHER_PATH)
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
+
 def install_service() -> None:
     if os.geteuid() != 0:
         print("Error: Installation requires root privileges. Run with 'sudo'.")
@@ -925,6 +1005,7 @@ def install_service() -> None:
         shutil.copy2(current_script, INSTALL_BIN_PATH)
         print(f"  [+] Copied script to {INSTALL_BIN_PATH}")
     os.chmod(INSTALL_BIN_PATH, 0o755)
+    _write_launcher()
 
     if USE_TLS:
         if _ensure_tls_cert():
@@ -986,6 +1067,9 @@ def uninstall_service() -> None:
     if os.path.exists(INSTALL_BIN_PATH):
         os.remove(INSTALL_BIN_PATH)
         print(f"  [-] Removed {INSTALL_BIN_PATH}")
+    for pyc in _pyc_for(INSTALL_BIN_PATH):
+        os.remove(pyc)
+    _remove_launcher_if_unused()
 
     if os.path.isdir(REPORT_DIR):
         print(f"  [i] Shutdown reports kept in {REPORT_DIR} (delete it by hand if unwanted)")
