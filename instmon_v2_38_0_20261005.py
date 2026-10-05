@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""instmon v2.37.1 (2026-10-05) - KD8PGK Web Installer & Component Manager
+"""instmon v2.38.0 (2026-10-05) - KD8PGK Web Installer & Component Manager
 Build: common (all nodes, including Pi Zero 2 W)
 
 Full version history: see CHANGELOG.md. This docstring intentionally
@@ -44,8 +44,8 @@ from datetime import datetime
 
 
 PORT =8990 
-VERSION ="2.37.1"
-DATE_STR ="2026-10-05"  # v2.37.1 Launcher: instmon.service now starts /usr/local/bin/asl_dvs_launch.py /usr/local/bin/instmon.py -- the launcher imports instmon instead of running it, so Python keeps the compiled copy in /usr/local/bin/__pycache__ and reuses it on every later start (about 21 MB instead of 34 MB, twice as fast to start; recompiled by itself after an update); --install writes the launcher (same file the Pi02w sysmon/dashboard and installer v6.5 write), --uninstall removes instmon's compiled copy and the launcher once no unit uses it. Pi Zero 2 W sysmon build: Check GitHub keeps the full and the Pi02w sysmon builds apart -- both match sysmon*.py, so they were one kind and only one of them showed (or a false "same version, different file" conflict); the kind now also carries the VERSION suffix ("6.13.67-pi02w" -> pi02w), so each build gets its own row and is compared only with library copies of the same build. Previous: v2.37.0 Quiet System + Full Update: Quiet System / Restore (GitHub Updates card) pause SysMon, the Dashboard, 44helper and the watchdog timer(s) through the quiesce core with a new "quiet" scope -- never Asterisk, the bridges, Allmon3, wifimon or instmon -- share its state file (so a restart of instmon restores them, and a disk-image job and Quiet System can never overlap), auto-restore after 30 min (INSTMON_QUIET_AUTO_RESTORE_SEC), and drop a component that a later Install/Uninstall already restarted; Full Update (next to Check GitHub) reads the same GitHub listing, picks for every installed component the newest GitHub build of the same variant (file-name stem, or the VERSION suffix such as -pi02w), downloads and checks every file first with the GitHub Update checks, then pauses the web tools and, one component at a time (44helper, wifimon, Dashboard, SysMon, Watchdog), saves a library copy of the installed file, runs its --uninstall, runs the new file's --install and waits for the service and port; a failure puts the saved copy back and the component is skipped (or listed NEEDS ATTENTION if that fails too) and the run carries on; newer install scripts go to the Scripts library only, never run; Restore, then instmon last -- replaced in place by its own --install, with a transient instmon-update-guard timer that reinstalls the old copy if port 8990 is silent 90 s later; results are saved to instmon_full_update.json and the restarted instmon reports them; summary as a popup, in the log and as a banner until dismissed; while it runs every other action, upload, editor save and disk-image job answers 409. Check GitHub now also works out the Full Update list from the same listing (no extra GitHub request). Previous: v2.36.1 Login refresh: when a session expires or instmon is reinstalled/restarted, the page now reloads itself instead of popping the login box over the stale page (which mangled the text and, after login, restarted every poll timer a second time); the "Session expired" message is carried across the reload via sessionStorage and shown on the fresh login box; a once-only guard means a burst of 401s reloads once, and the boot-time login (fresh page, not logged in) never reloads, so no loop. Previous: v2.36.0 GitHub updates: Check GitHub reads the file list of kd8pgk/ASL-DVS (main) straight from GitHub -- no manifest or checksums to maintain -- shows the newest GitHub copy of each tool in its library group, Update downloads, checks (same file GitHub listed, version, shebang, syntax, --install support) and stages it in its own library folder; uninstall_asl_dvs*.sh added to Scripts with a double confirm. Previous: wifimon card now points at the wifimon v5 web dashboard (port 8991, plain HTTP, Go button); M17 Dashboard and SVX Dashboard cards removed (component, library group + upload box, library folder, home-folder sweep pattern, and the M17 branch of config install). Previous: v2.30.2 Progress audit: reader uses read1() (was a blocking read(256) => 4 s+ batches, nothing for short jobs), throttled copies report via the read-side dd (pv prints nothing when stderr is a pipe), ddrescue status is captured (it writes to stdout, which was /dev/null) and its kB unit parsed, one-decimal %, bytes done/total, elapsed, windowed time-left, stall warning
+VERSION ="2.38.0"
+DATE_STR ="2026-10-05"  # v2.38.0 Pi Zero 2 W build choice: on a Pi Zero 2 W (device-tree model "Zero 2") the GitHub Updates card shows a "Pi Zero 2 W build" choice -- Pi02w fork (default) or Full build (override), saved in /etc/asl_dvs/instmon_build.json; Full Update now installs the chosen build of SysMon and the Dashboard, and switches an installed build that does not match (full -> fork or fork -> full, shown as SWITCH) the same way it updates -- library copy, --uninstall, the other build's --install, rollback on failure; tools with one common build are not affected; on other Pis nothing changes (each component keeps the build it has). Check GitHub marks the rows of the build this node does not use as "other build". Previous: v2.37.1 Launcher: instmon.service now starts /usr/local/bin/asl_dvs_launch.py /usr/local/bin/instmon.py -- the launcher imports instmon instead of running it, so Python keeps the compiled copy in /usr/local/bin/__pycache__ and reuses it on every later start (about 21 MB instead of 34 MB, twice as fast to start; recompiled by itself after an update); --install writes the launcher (same file the Pi02w sysmon/dashboard and installer v6.5 write), --uninstall removes instmon's compiled copy and the launcher once no unit uses it. Pi Zero 2 W sysmon build: Check GitHub keeps the full and the Pi02w sysmon builds apart -- both match sysmon*.py, so they were one kind and only one of them showed (or a false "same version, different file" conflict); the kind now also carries the VERSION suffix ("6.13.67-pi02w" -> pi02w), so each build gets its own row and is compared only with library copies of the same build. Previous: v2.37.0 Quiet System + Full Update: Quiet System / Restore (GitHub Updates card) pause SysMon, the Dashboard, 44helper and the watchdog timer(s) through the quiesce core with a new "quiet" scope -- never Asterisk, the bridges, Allmon3, wifimon or instmon -- share its state file (so a restart of instmon restores them, and a disk-image job and Quiet System can never overlap), auto-restore after 30 min (INSTMON_QUIET_AUTO_RESTORE_SEC), and drop a component that a later Install/Uninstall already restarted; Full Update (next to Check GitHub) reads the same GitHub listing, picks for every installed component the newest GitHub build of the same variant (file-name stem, or the VERSION suffix such as -pi02w), downloads and checks every file first with the GitHub Update checks, then pauses the web tools and, one component at a time (44helper, wifimon, Dashboard, SysMon, Watchdog), saves a library copy of the installed file, runs its --uninstall, runs the new file's --install and waits for the service and port; a failure puts the saved copy back and the component is skipped (or listed NEEDS ATTENTION if that fails too) and the run carries on; newer install scripts go to the Scripts library only, never run; Restore, then instmon last -- replaced in place by its own --install, with a transient instmon-update-guard timer that reinstalls the old copy if port 8990 is silent 90 s later; results are saved to instmon_full_update.json and the restarted instmon reports them; summary as a popup, in the log and as a banner until dismissed; while it runs every other action, upload, editor save and disk-image job answers 409. Check GitHub now also works out the Full Update list from the same listing (no extra GitHub request). Previous: v2.36.1 Login refresh: when a session expires or instmon is reinstalled/restarted, the page now reloads itself instead of popping the login box over the stale page (which mangled the text and, after login, restarted every poll timer a second time); the "Session expired" message is carried across the reload via sessionStorage and shown on the fresh login box; a once-only guard means a burst of 401s reloads once, and the boot-time login (fresh page, not logged in) never reloads, so no loop. Previous: v2.36.0 GitHub updates: Check GitHub reads the file list of kd8pgk/ASL-DVS (main) straight from GitHub -- no manifest or checksums to maintain -- shows the newest GitHub copy of each tool in its library group, Update downloads, checks (same file GitHub listed, version, shebang, syntax, --install support) and stages it in its own library folder; uninstall_asl_dvs*.sh added to Scripts with a double confirm. Previous: wifimon card now points at the wifimon v5 web dashboard (port 8991, plain HTTP, Go button); M17 Dashboard and SVX Dashboard cards removed (component, library group + upload box, library folder, home-folder sweep pattern, and the M17 branch of config install). Previous: v2.30.2 Progress audit: reader uses read1() (was a blocking read(256) => 4 s+ batches, nothing for short jobs), throttled copies report via the read-side dd (pv prints nothing when stderr is a pipe), ddrescue status is captured (it writes to stdout, which was /dev/null) and its kB unit parsed, one-decimal %, bytes done/total, elapsed, windowed time-left, stall warning
 
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -4095,6 +4095,15 @@ def _gh_version_of (cand ,local ):
     return ver 
 
 
+def _gh_other_build (entry ):
+    """v2.38.0: True when this GitHub file is a build this Pi Zero 2 W
+    does not use (the build choice), so its row says so."""
+    wanted =_build_wanted_variant ()
+    if wanted is None or entry .get ("category")not in ("sysmon","dashboard"):
+        return False
+    return _gh_variant (entry .get ("version"))!=wanted
+
+
 def _gh_compare (entry ):
     """Fill in status / local_name / local_version / message for one
     GitHub file against the library as it is right now."""
@@ -4350,6 +4359,8 @@ def _gh_group_html (category ):
         f'<span class="gh-tag {cls }">{esc (label )}</span>'
         f'<span>GitHub v{esc (e ["version"])}</span>'
         f'<span class="small muted">{name }</span>'
+        +('<span class="gh-tag" title="Not the build this Pi Zero 2 W is set to use">other build</span>'
+        if _gh_other_build (e )else "")+
         f'{action }</div>')
     return '<div class="gh-rows">'+"".join (rows )+"</div>"
 
@@ -4502,6 +4513,63 @@ def quiet_forget(service):
             _quiesce_state_write(QUIET_JOB_ID, kept, started_at=state.get("started_at"))
 
 
+# --- Pi Zero 2 W build choice (v2.38.0) -----------------------------
+# The Pi02w fork is the default on a Pi Zero 2 W; the owner can override
+# it to the full build. Other Pis are not affected. Same detection as
+# installer v6.5's pick_build(): the device-tree model names "Zero 2".
+
+_DT_MODEL_PATH = os.environ.get("INSTMON_DT_MODEL_PATH", "/proc/device-tree/model")
+_BUILD_PREF_PATH = os.path.join(CONFIG_DIR, "instmon_build.json")
+BUILD_PI02W_SUFFIX = "pi02w"
+_BUILD_CHOICES = ("fork", "full")
+
+
+def is_pi02w():
+    try:
+        with open(_DT_MODEL_PATH, "rb") as fh:
+            model = fh.read(256).decode("utf-8", "replace")
+    except OSError:
+        return False
+    return "Zero 2" in model
+
+
+def build_pref_get():
+    """"fork" (default) or "full"."""
+    try:
+        with open(_BUILD_PREF_PATH) as fh:
+            val = json.load(fh).get("pi02w_build")
+    except (OSError, ValueError, AttributeError):
+        return "fork"
+    return val if val in _BUILD_CHOICES else "fork"
+
+
+def build_pref_set(choice):
+    """(ok, message, level)."""
+    if choice not in _BUILD_CHOICES:
+        return False, f"Unknown build choice: {choice!r}", "err"
+    if not is_pi02w():
+        return False, "This isn't a Pi Zero 2 W -- the build choice only applies there.", "warn"
+    ensure_dirs()
+    compare_before_write(_BUILD_PREF_PATH, json.dumps({"pi02w_build": choice}, indent=2).encode("utf-8"))
+    label = "Pi02w fork (default)" if choice == "fork" else "Full build (override)"
+    log_event(f"Pi Zero 2 W build set to: {label}", "ok" if choice == "fork" else "warn")
+    full_update_preview()
+    return True, f"Pi Zero 2 W build: {label}. Full Update installs this build of SysMon and the Dashboard.", "ok"
+
+
+def build_choice_status():
+    pi02w = is_pi02w()
+    return {"pi02w": pi02w, "choice": build_pref_get() if pi02w else "full"}
+
+
+def _build_wanted_variant():
+    """The VERSION suffix this node should run, or None = keep whatever
+    each component has (not a Pi Zero 2 W)."""
+    if not is_pi02w():
+        return None
+    return BUILD_PI02W_SUFFIX if build_pref_get() == "fork" else ""
+
+
 # --- Full Update -----------------------------------------------------
 
 # One component at a time, in this order; instmon last because its own
@@ -4523,6 +4591,9 @@ _FU_DEFAULT_STEM = {
     "instmon": "instmon",
 }
 _FU_STEM_RE = re.compile(r"^(?P<stem>.+?)_v\d+(?:[._]\d+)*(?:_\d{8})?(?:[._-].*)?\.(?:py|sh)$", re.IGNORECASE)
+
+# Plan rows Full Update acts on ("switch": v2.38.0 Pi Zero 2 W build change).
+_FU_ACTIONABLE = ("update", "switch")
 
 _fu_lock = threading.Lock()
 _fu_state = {
@@ -4571,6 +4642,26 @@ def _fu_installed_stem(comp, target, version):
     return f"{stem}_{m.group(1).lower()}" if m else stem
 
 
+def _fu_wanted_stem(inst_stem, cat, cands):
+    """v2.38.0: the file stem Full Update installs. Not a Pi Zero 2 W:
+    the installed one. On a Pi Zero 2 W: the chosen build -- the Pi02w
+    fork where GitHub has one for this tool, else the plain stem."""
+    wanted = _build_wanted_variant()
+    if wanted is None:
+        return inst_stem
+    suffix = "_" + BUILD_PI02W_SUFFIX
+    base = inst_stem[:-len(suffix)] if inst_stem.endswith(suffix) else inst_stem
+    if wanted:
+        fork = base + suffix
+        if any(c["category"] == cat and _fu_stem_of_name(c["name"]) == fork for c in cands):
+            return fork
+    return base
+
+
+def _fu_build_label(stem):
+    return "Pi02w fork" if stem.endswith("_" + BUILD_PI02W_SUFFIX) else "full"
+
+
 def _fu_plan(cands):
     """For every COMPONENTS entry in FU_ORDER: what Full Update would do.
     cands come from _gh_parse_listing(). Versions are read the same way
@@ -4592,7 +4683,8 @@ def _fu_plan(cands):
         if not inst_ver:
             row.update(status="unknown", note="installed file has no version line -- update it by hand")
             continue
-        stem = _fu_installed_stem(comp, target, inst_ver)
+        inst_stem = _fu_installed_stem(comp, target, inst_ver)
+        stem = _fu_wanted_stem(inst_stem, cat, cands)
         best = None
         problems = []
         for cand in cands:
@@ -4615,6 +4707,14 @@ def _fu_plan(cands):
                 row.update(status="not_on_github", note=f"no {stem} build on GitHub")
             continue
         row.update(file=best["name"], version=best["version"], entry=best)
+        if stem != inst_stem:
+            # v2.38.0: the Pi Zero 2 W build choice and the installed build
+            # differ -- switch, whatever the version numbers say.
+            row.update(status="switch", note=f"{_fu_build_label(inst_stem)} v{inst_ver} -> "
+                                             f"{_fu_build_label(stem)} v{best['version']}")
+            if problems:
+                row.update(status="error", note=f"couldn't read {problems[0]}")
+            continue
         if _gh_local_blob_id(target) == best["blob"]:
             row.update(status="current", note="same file as GitHub")
         elif _version_sort_key(best["version"]) > _version_sort_key(inst_ver):
@@ -4633,7 +4733,7 @@ def _fu_plan(cands):
 def _fu_publish_plan(rows, scripts):
     public = [{k: v for k, v in r.items() if k != "entry"} for r in rows]
     _fu_set(plan={"components": public, "scripts": [e["name"] for e in scripts],
-                  "updates": sum(1 for r in rows if r["status"] == "update")},
+                  "updates": sum(1 for r in rows if r["status"] in _FU_ACTIONABLE)},
             plan_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 
@@ -4711,6 +4811,9 @@ def _fu_update_one(comp, row, new_path):
     rc = _fu_run_cli(new_path, "--install")
     ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
     if ok:
+        if row.get("status") == "switch":
+            log_event(f"Full Update: {name} switched: {row['note']}", "ok")
+            return "updated", row["note"]
         log_event(f"Full Update: {name} updated v{old_ver} -> v{new_ver}", "ok")
         return "updated", f"v{old_ver} -> v{new_ver}"
 
@@ -4780,7 +4883,7 @@ def _fu_run():
                          checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
     scripts = [e for e in entries if e["category"] == "scripts" and e.get("status") in _GH_UPDATABLE]
     _fu_publish_plan(rows, scripts)
-    plan = [r for r in rows if r["status"] == "update"]
+    plan = [r for r in rows if r["status"] in _FU_ACTIONABLE]
     skipped = [{"name": r["name"], "note": r["note"]} for r in rows if r["status"] == "error"]
     _fu_set(skipped=list(skipped))
     if not plan and not scripts:
@@ -4968,7 +5071,7 @@ def full_update_dismiss():
 
 def _fu_status_payload():
     snap = full_update_snapshot()
-    return {"quiet": quiet_status(), "full_update": snap}
+    return {"quiet": quiet_status(), "full_update": snap, "build": build_choice_status()}
 
 
 def run_script_bg (script_path ,script_name ,env_overrides =None ):
@@ -5926,8 +6029,32 @@ let _ghSeenSeq = null;
 let _fuState = null;
 const _FU_STATUS = {
   update: 'UPDATE', current: 'CURRENT', not_installed: 'NOT INSTALLED', not_on_github: 'NOT ON GITHUB',
-  newer_installed: 'NEWER HERE', unknown: 'UNKNOWN', error: 'ERROR',
+  newer_installed: 'NEWER HERE', unknown: 'UNKNOWN', error: 'ERROR', switch: 'SWITCH',
 };
+
+// v2.38.0 Pi Zero 2 W build choice (shown only on a Pi Zero 2 W).
+function renderBuildChoice(build) {
+  const el = document.getElementById('build-choice');
+  if (!el) return;
+  if (!build || !build.pi02w) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = '';
+  const sel = build.choice === 'full' ? 'full' : 'fork';
+  if (el.dataset.choice === sel) return;
+  el.dataset.choice = sel;
+  el.innerHTML = `<b>Pi Zero 2 W build:</b>
+    <label><input type="radio" name="build-choice" value="fork" ${sel === 'fork' ? 'checked' : ''}> Pi02w fork (default)</label>
+    <label><input type="radio" name="build-choice" value="full" ${sel === 'full' ? 'checked' : ''}> Full build (override)</label>
+    <span class="small muted">Full Update installs this build of SysMon and the Dashboard, and switches them if the other one is installed.</span>`;
+  el.querySelectorAll('input[name="build-choice"]').forEach(r => r.addEventListener('change', async () => {
+    const choice = r.value;
+    const msg = choice === 'full'
+      ? 'Use the FULL build of SysMon and the Dashboard on this Pi Zero 2 W? It uses more memory. Nothing changes until you run Full Update.'
+      : 'Go back to the Pi02w fork (default) of SysMon and the Dashboard? Nothing changes until you run Full Update.';
+    if (!confirm(msg)) { delete el.dataset.choice; renderBuildChoice(build); return; }
+    delete el.dataset.choice;
+    await postAction({action: 'build_pref', choice: choice});
+  }));
+}
 
 function _fuList(title, items) {
   if (!items || !items.length) return '';
@@ -5964,7 +6091,7 @@ function renderQuietFullUpdate(quiet, fu) {
   const plan = fu && fu.plan;
   if (planEl) {
     planEl.innerHTML = !plan ? '' : '<table class="fu-table">' + plan.components.map(c =>
-      `<tr><td>${escHtml(c.name)}</td><td><span class="gh-tag ${c.status === 'update' ? 'gh-upd' : ''}">${_FU_STATUS[c.status] || escHtml(c.status)}</span></td>` +
+      `<tr><td>${escHtml(c.name)}</td><td><span class="gh-tag ${c.status === 'update' || c.status === 'switch' ? 'gh-upd' : ''}">${_FU_STATUS[c.status] || escHtml(c.status)}</span></td>` +
       `<td>${escHtml(c.note)}</td><td class="muted">${escHtml(c.file)}</td></tr>`).join('') +
       plan.scripts.map(n => `<tr><td>Script</td><td><span class="gh-tag gh-upd">NEW</span></td><td>goes to the Scripts library (not run)</td><td class="muted">${escHtml(n)}</td></tr>`).join('') +
       '</table>';
@@ -6000,6 +6127,7 @@ async function refreshStatus() {
       _ghSeenSeq = data.gh_event_seq;
     }
     renderQuietFullUpdate(data.quiet, data.full_update);
+    renderBuildChoice(data.build);
     applyLibraryCollapseState();
     wireButtons();
   } catch (e) { /* ignore this tick */ }
@@ -7224,7 +7352,7 @@ _JS_ACTIONS = """function wireButtons() {
           await postAction({action: 'fu_dismiss'});
         } else if (action === 'full_update') {
           const p = _fuState && _fuState.plan;
-          const comps = p ? p.components.filter(c => c.status === 'update').map(c => `  ${c.name}: ${c.note}`) : [];
+          const comps = p ? p.components.filter(c => c.status === 'update' || c.status === 'switch').map(c => `  ${c.name}: ${c.note}`) : [];
           const scr = p ? p.scripts.map(n => `  ${n} (Scripts library only, not run)`) : [];
           if (!confirm('Full Update from GitHub?\\n\\n' + (comps.length ? 'One at a time:\\n' + comps.join('\\n') + '\\n\\n' : '') +
                        (scr.length ? 'New scripts:\\n' + scr.join('\\n') + '\\n\\n' : '') +
@@ -7776,6 +7904,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     Full Update: pauses the web tools, downloads and checks every newer file first, then uninstalls the old and
     installs the new one component at a time (instmon last). A component that fails is put back, skipped and
     listed at the end. New install scripts only go to the Scripts library -- they are never run for you.</div>
+  <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
   <div id="fu-progress"></div>
   <div id="fu-plan"></div>
   <div class="row" style="margin-top:.6rem">
@@ -8060,6 +8189,7 @@ _ACTION_HANDLERS ={
 "restore":lambda self ,body :self ._action_restore (body ),
 "full_update":lambda self ,body :self ._action_full_update (body ),
 "fu_dismiss":lambda self ,body :self ._action_fu_dismiss (body ),
+"build_pref":lambda self ,body :self ._action_build_pref (body ),
 }
 
 # v2.37.0: the only actions accepted while Full Update runs.
@@ -9484,6 +9614,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     def _action_fu_dismiss(self, body):
         full_update_dismiss()
         self._send_json(200, {"message": "", "level": "info"})
+
+    def _action_build_pref(self, body):
+        ok, msg, level = build_pref_set(body.get("choice"))
+        self._send_json(200 if ok else 409, {"message": msg, "level": level})
 
 
     def _action_save_alternate (self ):
