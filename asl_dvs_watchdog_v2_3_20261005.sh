@@ -1,10 +1,19 @@
 #!/bin/bash
 #
-# asl_dvs_watchdog.sh  v2.2  (2026-08-20)
+# asl_dvs_watchdog.sh  v2.3  (2026-10-05)
 # External liveness watchdog for asl_dvs_dashboard.service (and, as of
-# v2.2, any other Library-Card dashboard instance running the same
-# /api/status contract)
+# v2.2, any other Library-Card dashboard instance)
 # KD8PGK / Claude AI (Anthropic)  —  CC BY-NC 4.0
+#
+# v2.3: the check now asks /api/ping and counts any HTTP answer below 500
+# as alive.  Dashboard v9.x requires a login for /api/status, so v2.2's
+# unauthenticated `curl -f .../api/status` got 401 on every run, failed
+# twice and restarted the dashboard every ~50 s -- the dashboard kept
+# dropping out, sysmon's quick link went grey, and the restarts loaded the
+# Pi enough to upset sysmon and instmon as well.  /api/ping is public and
+# cheap.  A dashboard that answers at all (even 401 or 404, e.g. an older
+# build without /api/ping) is up; only no answer, a timeout or a 5xx is a
+# failure, as before retried once before the restart.
 #
 # v2.2: asl_dvs_dashboard v8.0 merged the M17 tab (USRP2M17 bridge) from
 # the asl_dvs_m17_dashboard feature branch into the mainline dashboard —
@@ -111,7 +120,7 @@
 # Env overrides (apply to BOTH the check path and unit generation in --install,
 # so they stay in sync automatically -- no more hand-editing the .service file
 # separately from the script like the old three-file layout required):
-#   ASL_DVS_WATCHDOG_PORT      dashboard /api/status port  (default 8989)
+#   ASL_DVS_WATCHDOG_PORT      dashboard /api/ping port  (default 8989)
 #   ASL_DVS_WATCHDOG_TARGET    systemd unit to restart on failure (default
 #                               asl_dvs_dashboard.service)
 #   ASL_DVS_WATCHDOG_INSTANCE  suffixes the installed filenames/units so
@@ -134,11 +143,11 @@ die()  { echo "${RED}  ✘ ${RST}$*" >&2; exit 1; }
 hdr()  { echo; echo "${BLD}${CYN}== $* ==${RST}"; }
 
 # ── Config info header (kept verbatim in the stripped delivery copy) ──────────
-SCRIPT_VERSION="2.2"
-BUILD_DATE="20260820"
+SCRIPT_VERSION="2.3"
+BUILD_DATE="20261005"
 
 PORT="${ASL_DVS_WATCHDOG_PORT:-8989}"
-URL="http://localhost:${PORT}/api/status"
+URL="http://localhost:${PORT}/api/ping"
 TARGET_SERVICE="${ASL_DVS_WATCHDOG_TARGET:-asl_dvs_dashboard.service}"
 CURL_TIMEOUT=5
 RETRY_DELAY=5
@@ -173,9 +182,11 @@ TIMER_FILE="/etc/systemd/system/${TIMER_NAME}"
 # ══════════════════════════════════════════════════════════════════════════════
 
 check() {
-    # -fsS: fail silently on HTTP error, suppress progress, keep real errors.
-    # We only care about exit status here, hence -o /dev/null.
-    curl -fsS --max-time "${CURL_TIMEOUT}" -o /dev/null "${URL}"
+    # v2.3: alive = any HTTP status 1xx-4xx.  000 (no connection / timeout)
+    # and 5xx are failures.  Not `curl -f`: a 401 means the server is up.
+    local code
+    code="$(curl -sS --max-time "${CURL_TIMEOUT}" -o /dev/null -w '%{http_code}' "${URL}" 2>/dev/null)"
+    [[ "${code}" =~ ^[1-4][0-9][0-9]$ ]]
 }
 
 run_check() {
@@ -837,7 +848,7 @@ asl_dvs_watchdog.sh v${SCRIPT_VERSION}
   (no args)     run ONE check — this is what the installed unit executes
 
 Env vars (see v2.2 header note for the multi-instance rationale):
-  ASL_DVS_WATCHDOG_PORT       /api/status port to check      (default 8989)
+  ASL_DVS_WATCHDOG_PORT       /api/ping port to check        (default 8989)
   ASL_DVS_WATCHDOG_TARGET     unit to restart on failure      (default asl_dvs_dashboard.service)
   ASL_DVS_WATCHDOG_INSTANCE   suffixes installed filenames/units so a second
                                dashboard instance (e.g. the M17/Zello branch)
