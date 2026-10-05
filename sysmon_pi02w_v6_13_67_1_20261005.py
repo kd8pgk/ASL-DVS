@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
 ASL-DVS SYSMON  --  sysmon.py   (Pi Zero 2 W build)
-Version : 6.13.67-pi02w  (20261005)
+Version : 6.13.67.1-pi02w  (20261005)
 Authors : Claude AI (Anthropic) / KD8PGK
 License : CC BY-NC 4.0
 Nodes   : KD8PGK 652701 / 652702 / 652703
 
 Changelog: the last 10 versions are below.  Older entries (v6.13.55 and
 earlier) are in sysmon_changelog_v6_13_65_20261004.txt.
+
+v6.13.67.1-pi02w -- Zello tab removed (Pi Zero 2 W build).  The tab
+for asl-zello-bridge (install/status/config/compatibility cards, sample
+and override editor, start/stop/restart), its routes /api/zello GET and
+POST, the "zello_installed" check in /api/status and the tab's entries in
+the tab lists are gone.  A saved enabled_tabs list that still names zello
+is fine -- unknown tabs are dropped when the config is read.  The bridge
+service itself is untouched; Services and Journal still show it.
 
 v6.13.67-pi02w -- Pi Zero 2 W build, branched from v6.13.67.  A lighter
 sysmon for the Pi Zero 2 W (512 MB RAM, 4 slow cores): tabs are removed
@@ -211,7 +219,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67-pi02w"
+VERSION      = "6.13.67.1-pi02w"
 BUILD_DATE   = "20261005"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -283,7 +291,7 @@ _DEFAULT_CONFIG = {
     },
     "ui": {
 
-        "enabled_tabs": "overview,services,ports,journal,asldvs,phone,tune,hardware,dvsm,stfu,m17,zello,sdcard,security,edit",
+        "enabled_tabs": "overview,services,ports,journal,asldvs,phone,tune,hardware,dvsm,stfu,m17,sdcard,security,edit",
     },
 }
 
@@ -1309,11 +1317,6 @@ def _m17hosts_fetch() -> dict:
 
     return {"ok": False, "changed": False, "source": "",
             "count": 0, "generated": "", "error": last_error}
-_ZELLO_SERVICE_PATHS = [
-    Path("/etc/systemd/system/asl-zello-bridge.service"),
-    Path("/lib/systemd/system/asl-zello-bridge.service"),
-]
-_ZELLO_VENV_BIN      = Path("/opt/asl-zello-bridge/venv/bin/asl-zello-bridge")
 
 def _probe_socket(port: str, proto: str) -> bool:
     try:
@@ -2801,8 +2804,6 @@ body.tab-edit #zone-content{
     onclick="switchTab('stfu','0,191,255')">STFU</button>
   <button class="tab-btn"        id="tbtn-m17"
     onclick="switchTab('m17','124,255,60')">M17</button>
-  <button class="tab-btn"        id="tbtn-zello"
-    onclick="switchTab('zello','255,140,0')">Zello</button>
   <button class="tab-btn"        id="tbtn-sdcard"
     onclick="switchTab('sdcard','180,140,255')">SD Card</button>
   <button class="tab-btn"        id="tbtn-security"
@@ -3552,139 +3553,6 @@ body.tab-edit #zone-content{
 
   </div>
 
-  <div id="panel-zello" class="tab-panel">
-
-    <div class="stfu-tab-hdr">
-      <span class="stfu-tab-title">Zello — asl-zello-bridge</span>
-      <button class="btn btn-blue btn-sm" onclick="loadZello()">↻ Refresh</button>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr" style="padding-left:.6rem">
-        <div style="display:flex;align-items:center;gap:.55rem">
-          <div class="dvsm-accent" style="background:var(--green)"></div>
-          <div>
-            <div class="dvsm-card-title" style="color:var(--green)">Installation</div>
-            <div class="dvsm-card-sub">Binary · Service · Status</div>
-          </div>
-        </div>
-        <span class="dpbadge" id="zello-badge-install">—</span>
-      </div>
-      <div id="zello-body-install">
-        <div class="stub-panel" style="min-height:80px">Loading…</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr" style="padding-left:.6rem">
-        <div style="display:flex;align-items:center;gap:.55rem">
-          <div class="dvsm-accent" style="background:var(--teal)"></div>
-          <div>
-            <div class="dvsm-card-title" style="color:var(--teal)">Live Status</div>
-            <div class="dvsm-card-sub">From journal — not just process state</div>
-          </div>
-        </div>
-        <button class="btn btn-muted btn-sm" onclick="openServicePanel('asl-zello-bridge','Zello Bridge')">
-          Full Journal ↗</button>
-      </div>
-      <div id="zello-body-status">
-        <div class="stub-panel" style="min-height:60px">Loading…</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr" style="padding-left:.6rem">
-        <div style="display:flex;align-items:center;gap:.55rem">
-          <div class="dvsm-accent" style="background:var(--blue)"></div>
-          <div>
-            <div class="dvsm-card-title" style="color:var(--blue)">Configuration</div>
-            <div class="dvsm-card-sub" id="zello-config-path">systemd override — Free mode</div>
-          </div>
-        </div>
-        <span class="dpbadge" id="zello-badge-config">—</span>
-      </div>
-      <div id="zello-body-config">
-        <div class="stub-panel" style="min-height:140px">Loading…</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr" style="padding-left:.6rem">
-        <div style="display:flex;align-items:center;gap:.55rem">
-          <div class="dvsm-accent" style="background:var(--red)"></div>
-          <div>
-            <div class="dvsm-card-title" style="color:var(--red)">Compatibility Checks</div>
-            <div class="dvsm-card-sub">USRP ports · rpt.conf [1918] · credentials</div>
-          </div>
-        </div>
-      </div>
-      <div id="zello-body-compat">
-        <div class="stub-panel" style="min-height:80px">Loading…</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="stfu-sample-hdr">
-        <span class="stfu-sample-title">Sample Override</span>
-        <div class="stfu-sample-btns">
-          <button class="btn btn-muted btn-sm"
-            onclick="zelloCopySample(this)">⎘ Copy Sample</button>
-          <button class="btn btn-blue btn-sm"
-            onclick="zelloOpenEditor()">✎ Edit Override</button>
-        </div>
-      </div>
-      <div class="dvsm-card-sub" style="padding:.3rem .6rem 0">
-        Reference only — shows every known key with placeholders for anything unset.
-        Use Edit Override to change the real, currently-active values.
-      </div>
-      <div id="zello-body-sample">
-        <div class="stub-panel" style="min-height:80px">Loading…</div>
-      </div>
-    </div>
-
-    <div class="s3-card" style="margin-bottom:1rem">
-      <div class="s3-card-hdr" style="padding-left:.6rem">
-        <div style="display:flex;align-items:center;gap:.55rem">
-          <div class="dvsm-accent" style="background:var(--amber)"></div>
-          <div>
-            <div class="dvsm-card-title" style="color:var(--amber)">Edit Override</div>
-            <div class="dvsm-card-sub" id="zello-editor-path">—</div>
-          </div>
-        </div>
-        <button class="btn btn-muted btn-sm" id="zello-editor-toggle"
-          onclick="zelloToggleEditor()">▼ Expand</button>
-      </div>
-      <div class="stfu-editor-wrap" id="zello-editor-wrap">
-        <div style="padding:.5rem .6rem;font-family:var(--sans);font-size:var(--fs-xs);
-          color:var(--amber);border-bottom:1px solid rgba(255,255,255,.06)">
-          ⚠ This is the real, active systemd override — including the plaintext
-          password. Save writes it to disk immediately; changes don't take effect
-          until you Restart below.
-        </div>
-        <textarea id="zello-textarea" spellcheck="false"></textarea>
-        <div class="stfu-editor-bar">
-          <button class="btn btn-sm" style="color:var(--blue);border-color:var(--blue-dim)"
-            onclick="zelloAction('start')">▶ Start</button>
-          <button class="btn btn-sm" style="color:var(--red);border-color:var(--red-dim,var(--red))"
-            onclick="zelloAction('stop')">⏹ Stop</button>
-          <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
-            onclick="zelloAction('restart')">↺ Restart</button>
-          <button class="btn btn-blue btn-sm"
-            onclick="zelloSave()">💾 Save</button>
-          <button class="btn btn-muted btn-sm"
-            onclick="zelloCopy()">⎘ Copy</button>
-          <button class="btn btn-muted btn-sm"
-            onclick="zelloDiscardEdit()">✕ Close</button>
-          <span style="font-family:var(--sans);font-size:var(--fs-xs);
-            color:#fff;margin-left:auto">
-            Save then Restart to apply changes
-          </span>
-        </div>
-      </div>
-    </div>
-
-  </div>
-
   <div id="panel-sdcard" class="tab-panel">
 
     <div class="s3-card">
@@ -3823,8 +3691,6 @@ body.tab-edit #zone-content{
           <input type="checkbox" id="tabchk-stfu" value="stfu" onchange="edTabVisChanged()">STFU</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-m17" value="m17" onchange="edTabVisChanged()">M17</label>
-        <label class="tab-vis-lbl" title="Only shown while asl-zello-bridge is actually installed, regardless of this checkbox">
-          <input type="checkbox" id="tabchk-zello" value="zello" onchange="edTabVisChanged()">Zello</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-sdcard" value="sdcard" onchange="edTabVisChanged()">SD Card</label>
         <label class="tab-vis-lbl">
@@ -4278,12 +4144,11 @@ function doLogout() {
 }
 
 
-const TABS = ["overview","services","ports","journal","asldvs","phone","tune","hardware","dvsm","stfu","m17","zello","sdcard","security","edit"];
+const TABS = ["overview","services","ports","journal","asldvs","phone","tune","hardware","dvsm","stfu","m17","sdcard","security","edit"];
 
 let _enabledTabSet = new Set(TABS);
 
 let _savedEnabledTabs = TABS.slice();
-let _zelloInstalled   = false;
 
 let _ptRefreshTimer  = null;
 let _phRefreshTimer  = null;
@@ -4292,8 +4157,7 @@ let _sdTestTimer = null;
 let _statusPollTimer = null;
 
 function _applyTabVisibilityGated() {
-  const list = _savedEnabledTabs.filter(t => t !== "zello" || _zelloInstalled);
-  applyTabVisibility(list);
+  applyTabVisibility(_savedEnabledTabs.slice());
 }
 
 
@@ -4411,11 +4275,6 @@ async function pollStatus() {
   if (!d) return;
 
   if (d.wifimon_shutdown && d.wifimon_shutdown.active) showWfmShutdown(d.wifimon_shutdown);
-
-  if (typeof d.zello_installed === "boolean" && d.zello_installed !== _zelloInstalled) {
-    _zelloInstalled = d.zello_installed;
-    _applyTabVisibilityGated();
-  }
 
   window._portConflicts = d.port_conflicts || {};
 
@@ -4820,7 +4679,7 @@ const TAB_RGB = {
   overview:"0,255,229", services:"0,255,229", ports:"34,212,255",
   journal:"212,102,255", asldvs:"255,61,90", phone:"0,255,176",
   tune:"255,68,204", hardware:"0,200,120", dvsm:"255,170,34",
-  stfu:"0,191,255", zello:"255,140,0", sdcard:"180,140,255", edit:"255,208,64"
+  stfu:"0,191,255", sdcard:"180,140,255", edit:"255,208,64"
 };
 
 function dpUnit() { return _dpUnit; }
@@ -7079,13 +6938,6 @@ let _stfuLoadedContent = null;
 let _m17SampleText = "";
 let _m17IniPath = "";
 let _m17LoadedContent = null;
-
-
-let _zelloSampleText    = "";
-let _zelloOverridePath  = "";
-let _zelloLoadedContent = null;
-
-window.loadTab_zello = function() { loadZello(); };
 
 
 function _startApp() {
@@ -9482,175 +9334,6 @@ async function m17Copy() {
 }
 
 // ========================================================================
-// TAB: Zello
-// ========================================================================
-// ---- general ----
-function _zelloRenderInstall(bodyId, badgeId, inst) {
-  _renderInstallTable(bodyId, badgeId, inst, {
-    binDefault: "/opt/asl-zello-bridge/venv/bin/asl-zello-bridge",
-    binLabel:   "Bridge installed (pip+venv or setup.py)",
-    binFix:     "See README — pip+venv install (recommended) or deprecated setup.py",
-    unit:       "asl-zello-bridge",
-    unitFix:    "Copy asl-zello-bridge.service to /etc/systemd/system/ → systemctl daemon-reload",
-  });
-}
-
-function _zelloRenderStatus(bodyId, status, inst) {
-  const body = document.getElementById(bodyId);
-  if (!body) return;
-
-  const chip = (label, ok, warnOnly) => {
-    const cls = ok ? "pass" : (warnOnly ? "warn" : "fail");
-    const bc  = _dvsmBadgeClass(cls);
-    return `<span class="dpbadge ${bc}" style="margin-right:.4rem">${_esc(label)}</span>`;
-  };
-
-  let html = `<div style="padding:.5rem .6rem">`;
-  html += chip("Service: " + (inst.service_active ? "active" : "inactive"), inst.service_active);
-  html += chip("Auth: " + (status.authenticated ? "logged in" : "not authenticated"), status.authenticated);
-  html += chip("Channel: " + (status.channel_ready ? "ready" : "not ready"), status.channel_ready);
-  if (status.currently_keyed) {
-    html += chip("On air: " + (status.keyed_by || "unknown"), true);
-  }
-  html += `</div>`;
-
-  const notes = [];
-  if (status.last_activity) {
-    const rel = status.last_activity_at ? ` (${_esc(status.last_activity_at)})` : "";
-    notes.push(`<div class="dvsm-note src">Last activity: ${_esc(status.last_activity)}${rel}</div>`);
-  }
-  if (status.last_warn) {
-    notes.push(`<div class="dvsm-note warn">&#x26A0; ${_esc(status.last_warn)}</div>`);
-  }
-  if (status.last_error) {
-    notes.push(`<div class="dvsm-note err">&#x2717; ${_esc(status.last_error)}</div>`);
-  }
-  if (!status.journal_ok) {
-    notes.push(`<div class="dvsm-note src">No journal history yet — status will populate once the service has logged something</div>`);
-  }
-
-  body.innerHTML = html + notes.join("");
-}
-
-function _zelloRenderSample(bodyId, rawText) {
-  _zelloSampleText = rawText;
-  _renderSampleCode(bodyId, rawText, /^\s*#/, /^(Environment=[^=]+)(=)(.*)/);
-}
-
-function zelloCopySample(btn) {
-  dvsmCopy(btn, _zelloSampleText);
-  const orig = btn.textContent;
-  btn.textContent = "✓ Copied";
-  setTimeout(() => { btn.textContent = orig; }, 1400);
-}
-
-async function loadZello() {
-  ["install", "config"].forEach(k =>
-    _dvsmSetBadge("zello-badge-" + k, "info", "...")
-  );
-
-  const d = await api("/api/zello");
-  if (!d || !d.ok) {
-    ["install", "config"].forEach(k =>
-      _dvsmSetBadge("zello-badge-" + k, "fail", "ERR")
-    );
-    toast("Zello: failed to load config", "warn");
-    return;
-  }
-
-  _zelloOverridePath = d.override_path || "";
-
-  _zelloRenderInstall("zello-body-install", "zello-badge-install", d.install || {});
-  _zelloRenderStatus("zello-body-status", d.status || {}, d.install || {});
-  _dvsmRenderAccount("zello-body-config", "zello-badge-config", d.config || {}, "zello");
-  _dvsmRenderCompat("zello-body-compat", d.compat || []);
-  _zelloRenderSample("zello-body-sample", d.sample_override || "");
-
-  const pathEl = document.getElementById("zello-config-path");
-  if (pathEl) {
-    pathEl.textContent = `${d.config?.mode === "work" ? "Work" : "Free"} mode — ${_zelloOverridePath}`;
-  }
-
-  window._zelloEditableCache = d.editable_content || "";
-}
-
-async function zelloOpenEditor() {
-  const taExisting = document.getElementById("zello-textarea");
-  if (taExisting && _zelloLoadedContent !== null && taExisting.value !== _zelloLoadedContent) {
-    if (!await confirm("Discard unsaved changes to the Zello override?")) return;
-  }
-
-  const d = await api("/api/zello");
-  if (!d || !d.ok) { toast(d?.message || "Could not load Zello config", "err"); return; }
-
-  const ta = document.getElementById("zello-textarea");
-  if (ta) ta.value = d.editable_content || "";
-  _zelloLoadedContent = d.editable_content || "";
-  _zelloOverridePath  = d.override_path || _zelloOverridePath;
-
-  const pathEl = document.getElementById("zello-editor-path");
-  if (pathEl) pathEl.textContent = _zelloOverridePath;
-
-  const wrap   = document.getElementById("zello-editor-wrap");
-  const togBtn = document.getElementById("zello-editor-toggle");
-  if (wrap)   wrap.classList.add("open");
-  if (togBtn) togBtn.textContent = "▲ Collapse";
-
-  if (wrap) wrap.closest(".s3-card").scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-function zelloToggleEditor() {
-  const wrap   = document.getElementById("zello-editor-wrap");
-  const togBtn = document.getElementById("zello-editor-toggle");
-  if (!wrap) return;
-  const opening = !wrap.classList.contains("open");
-  wrap.classList.toggle("open", opening);
-  if (togBtn) togBtn.textContent = opening ? "▲ Collapse" : "▼ Expand";
-  if (opening) zelloOpenEditor();
-}
-
-async function zelloAction(action) {
-  const verbs = {start: "Start", stop: "Stop", restart: "Restart"};
-  const verb  = verbs[action] || action;
-  if (!await confirm(`${verb} asl-zello-bridge?`)) return;
-  const d = await api("/api/zello", "POST", {action});
-  if (!d || !d.ok) { toast(d?.message || `${verb} failed`, "err"); return; }
-  toast(`asl-zello-bridge: ${verb.toLowerCase()}ed`, "ok");
-  setTimeout(loadZello, 1200);
-}
-
-function zelloDiscardEdit() {
-  const wrap   = document.getElementById("zello-editor-wrap");
-  const togBtn = document.getElementById("zello-editor-toggle");
-  if (wrap)   wrap.classList.remove("open");
-  if (togBtn) togBtn.textContent = "▼ Expand";
-  _zelloLoadedContent = null;
-}
-
-// ---- card: Edit Override ----
-async function zelloSave() {
-  const ta = document.getElementById("zello-textarea");
-  if (!ta) return;
-  const content = ta.value;
-  if (!await confirm(
-    "Save changes to the Zello systemd override?\n\n" +
-    "This overwrites override.conf on disk, including the plaintext password. " +
-    "Won't take effect until you Restart.")) return;
-
-  const d = await api("/api/zello", "POST", {action: "save_override_raw", content});
-  if (!d || !d.ok) { toast(d?.message || "Save failed", "err"); return; }
-  _zelloLoadedContent = content;
-  toast("Saved — restart to apply", "ok");
-  loadZello();
-}
-
-async function zelloCopy() {
-  const ta = document.getElementById("zello-textarea");
-  if (!ta || !ta.value) { toast("Nothing to copy", "err"); return; }
-  await _copyWithVerify(ta.value);
-}
-
-// ========================================================================
 // TAB: SD Card
 // ========================================================================
 // ---- general ----
@@ -10542,7 +10225,7 @@ function ptViewJournal(unit) {
 }
 
 // ========================================================================
-// SHARED: DVSM + Zello
+// TAB: DVSM -- shared card helpers
 // ========================================================================
 function dvsmCopySecret(btn, fid) { dvsmCopy(btn, _dvsmSecrets.get(fid) || ""); }
 
@@ -10643,7 +10326,7 @@ function _dvsmRenderCompat(bodyId, compat) {
 }
 
 // ========================================================================
-// SHARED: DVSM + STFU + M17 + Zello
+// SHARED: DVSM + STFU + M17
 // ========================================================================
 function _dvsmBadgeClass(status) {
   return {pass: "dpbadge-state-active",
@@ -11343,11 +11026,6 @@ def _route_net_job_get(h: "Handler") -> None:
 def _route_html(h: Handler) -> None:
     h.send_html()
 
-def _zello_quick_installed() -> bool:
-    if _ZELLO_VENV_BIN.exists() and os.access(str(_ZELLO_VENV_BIN), os.X_OK):
-        return True
-    return any(p.exists() for p in _ZELLO_SERVICE_PATHS)
-
 def _route_status(h: Handler) -> None:
     snap   = get_state_snapshot()
     mem    = snap.get("memory") or {}
@@ -11377,7 +11055,6 @@ def _route_status(h: Handler) -> None:
         "quick_tests":    snap.get("quick_tests", {}),
         "port_conflicts": snap.get("port_conflicts", {}),
         "needs_restart":  snap.get("needs_restart", False),
-        "zello_installed": _zello_quick_installed(),
         "wifimon_shutdown": snap.get("wifimon_shutdown") or {"active": False},
     })
 
@@ -20521,546 +20198,6 @@ def _route_dstar_gw_post(h: Handler, data: dict) -> None:
 
 
 # ==========================================================================
-# TAB: Zello
-# ==========================================================================
-
-_ZELLO_SERVICE_NAME  = "asl-zello-bridge"
-
-_ZELLO_OVERRIDE_DIR  = Path("/etc/systemd/system/asl-zello-bridge.service.d")
-
-_ZELLO_OVERRIDE_PATH = _ZELLO_OVERRIDE_DIR / "override.conf"
-
-_ZELLO_EXPECT_USRP_RXPORT = "34012"
-
-_ZELLO_EXPECT_USRP_TXPORT = "32012"
-
-_ZELLO_NODE_ID            = "1918"
-
-_ZELLO_ENV_KEYS = (
-    "USRP_BIND", "USRP_HOST", "USRP_RXPORT", "USRP_TXPORT",
-    "USRP_GAIN_RX_DB", "USRP_GAIN_TX_DB",
-    "ZELLO_USERNAME", "ZELLO_PASSWORD", "ZELLO_CHANNEL",
-    "ZELLO_PRIVATE_KEY", "ZELLO_ISSUER", "ZELLO_WS_ENDPOINT",
-    "ZELLO_API_ENDPOINT",
-    "LOG_LEVEL", "LOG_FORMAT",
-)
-
-def _zello_install_check() -> dict:
-
-    venv_ok   = (
-        _ZELLO_VENV_BIN.exists()
-        and os.access(str(_ZELLO_VENV_BIN), os.X_OK)
-    )
-    path_bin  = "" if venv_ok else _run(["which", "asl_zello_bridge"]).strip()
-    binary_ok = venv_ok or bool(path_bin)
-    binary_path = str(_ZELLO_VENV_BIN) if venv_ok else path_bin
-
-    svc_path, svc_installed, svc_active, svc_enabled = _svc_install_state(
-        _ZELLO_SERVICE_NAME, _ZELLO_SERVICE_PATHS)
-
-    return {
-        "binary_ok":         binary_ok,
-        "binary_path":       binary_path,
-        "service_installed": svc_installed,
-        "service_path":      svc_path,
-        "service_active":    svc_active,
-        "service_enabled":   svc_enabled,
-        "installed":         binary_ok or svc_installed,
-    }
-
-def _zello_parse_env_lines(content: str) -> dict:
-    env: dict = {}
-    for raw_line in content.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith(";"):
-            continue
-        if not line.lower().startswith("environment="):
-            continue
-        rest = line.split("=", 1)[1].strip()
-        if not rest or "=" not in rest:
-            continue
-        key, val = rest.split("=", 1)
-        key = key.strip()
-        val = val.strip()
-        if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-            val = val[1:-1]
-        if key:
-            env[key] = val
-    return env
-
-def _zello_read_env_override() -> dict:
-    env: dict = {}
-    source     = ""
-    override_ok = _ZELLO_OVERRIDE_PATH.exists()
-
-    if override_ok:
-        content, err = read_path_file(_ZELLO_OVERRIDE_PATH)
-        if not err:
-            env    = _zello_parse_env_lines(content)
-            source = "override.conf"
-
-    if not env:
-        raw = _run(
-            ["systemctl", "show", _ZELLO_SERVICE_NAME, "--property=Environment"],
-            timeout=4,
-        )
-        if raw.startswith("Environment="):
-            rest = raw[len("Environment="):]
-            for tok in rest.split():
-                if "=" in tok:
-                    k, v = tok.split("=", 1)
-                    env[k] = v
-            if env:
-                source = "systemctl show (no override.conf yet)"
-
-    return {
-        "env":              {k: env.get(k, "") for k in _ZELLO_ENV_KEYS},
-        "raw_ok":           bool(env),
-        "override_present": override_ok,
-        "override_path":    str(_ZELLO_OVERRIDE_PATH),
-        "source":           source,
-        "mode":             "work" if env.get("ZELLO_API_ENDPOINT") else "free",
-    }
-
-def _zello_libopus_present() -> bool:
-    try:
-        raw = _run(["ldconfig", "-p"], timeout=4)
-        return "libopus.so" in raw
-    except Exception as e:
-        log.debug("_zello_libopus_present: %s", e)
-        return False
-
-def _zello_build_fields(cfg: dict) -> list:
-    env = cfg["env"]
-
-    return [
-
-        {"group": "Zello Account"},
-        {"label": "Username", "value": env["ZELLO_USERNAME"] or None,
-         "masked": False, "secret": None,
-         "note": None if env["ZELLO_USERNAME"] else "Dedicated bridge account — not your personal login"},
-        {"label": "Password", "value": None,
-         "masked": True, "secret": env["ZELLO_PASSWORD"],
-         "note": None if env["ZELLO_PASSWORD"] else "Not set"},
-        {"label": "Channel", "value": env["ZELLO_CHANNEL"] or None,
-         "masked": False, "secret": None,
-         "note": "Case-sensitive, must match exactly" if env["ZELLO_CHANNEL"] else "Not set"},
-
-        {"group": "Free Auth"},
-        {"label": "Private Key Path", "value": env["ZELLO_PRIVATE_KEY"] or None,
-         "masked": False, "secret": None,
-         "note": ("Issuer/Key from developers.zello.com" if env["ZELLO_PRIVATE_KEY"]
-                   else "Not set — required for Zello Free")},
-        {"label": "Issuer", "value": env["ZELLO_ISSUER"] or None,
-         "masked": False, "secret": None,
-         "note": None if env["ZELLO_ISSUER"] else "Not set"},
-        {"label": "WS Endpoint", "value": env["ZELLO_WS_ENDPOINT"] or "wss://zello.io/ws",
-         "masked": False, "secret": None, "note": None},
-
-        {"group": "USRP Bridge Ports"},
-        {"label": "Bind", "value": env["USRP_BIND"] or "127.0.0.1",
-         "masked": False, "secret": None, "note": "Where this bridge listens for ASL"},
-        {"label": "Host", "value": env["USRP_HOST"] or "127.0.0.1",
-         "masked": False, "secret": None, "note": "Where this bridge sends audio back to ASL"},
-        {"label": "RX Port", "value": env["USRP_RXPORT"] or None,
-         "masked": False, "secret": None,
-         "note": f"ASL sends here — expected {_ZELLO_EXPECT_USRP_RXPORT}"},
-        {"label": "TX Port", "value": env["USRP_TXPORT"] or None,
-         "masked": False, "secret": None,
-         "note": f"ASL listens here — expected {_ZELLO_EXPECT_USRP_TXPORT}"},
-        {"label": "RX Gain (dB)", "value": env["USRP_GAIN_RX_DB"] or "0",
-         "masked": False, "secret": None, "note": None},
-        {"label": "TX Gain (dB)", "value": env["USRP_GAIN_TX_DB"] or "0",
-         "masked": False, "secret": None, "note": None},
-
-        {"group": "Logging"},
-        {"label": "Log Level", "value": env["LOG_LEVEL"] or "INFO",
-         "masked": False, "secret": None, "note": None},
-    ]
-
-def _zello_build_compat(cfg: dict, inst: dict) -> list:
-    env = cfg["env"]
-
-    creds_ok  = bool(env["ZELLO_USERNAME"]) and bool(env["ZELLO_PASSWORD"])
-    chan_ok   = bool(env["ZELLO_CHANNEL"])
-
-    key_path  = env["ZELLO_PRIVATE_KEY"]
-    key_ok    = False
-    key_val   = "not set"
-    if key_path:
-        try:
-            p = Path(key_path)
-            key_ok  = p.exists() and os.access(str(p), os.R_OK)
-            key_val = key_path if key_ok else f"{key_path} (unreadable)"
-        except Exception as e:
-            log.debug("_zello_build_compat key check: %s", e)
-            key_val = f"{key_path} (error checking)"
-    issuer_ok = bool(env["ZELLO_ISSUER"])
-
-    ports_ok  = (env["USRP_RXPORT"] == _ZELLO_EXPECT_USRP_RXPORT and
-                 env["USRP_TXPORT"] == _ZELLO_EXPECT_USRP_TXPORT)
-
-    opus_ok   = _zello_libopus_present()
-
-    compat = [
-        {"key": "Zello credentials set",
-         "enables": "Username + password present",
-         "status": "pass" if creds_ok else "fail",
-         "value":  "set" if creds_ok else "not set",
-         "fix":    "Set ZELLO_USERNAME and ZELLO_PASSWORD in the systemd override" if not creds_ok else None},
-        {"key": "Channel configured",
-         "enables": "ZELLO_CHANNEL present",
-         "status": "pass" if chan_ok else "fail",
-         "value":  env["ZELLO_CHANNEL"] or "not set",
-         "fix":    "Set ZELLO_CHANNEL (must match the Zello channel name exactly)" if not chan_ok else None},
-        {"key": "Private key readable",
-         "enables": "Zello Free token signing",
-         "status": "pass" if key_ok else "fail",
-         "value":  key_val,
-         "fix":    ("Point ZELLO_PRIVATE_KEY at the .key file saved from developers.zello.com"
-                    if not key_ok else None)},
-        {"key": "Issuer set",
-         "enables": "Zello Free token signing",
-         "status": "pass" if issuer_ok else "fail",
-         "value":  env["ZELLO_ISSUER"] or "not set",
-         "fix":    "Set ZELLO_ISSUER from developers.zello.com → Keys" if not issuer_ok else None},
-        {"key": "USRP ports match scheme",
-         "enables": f"RXPORT={_ZELLO_EXPECT_USRP_RXPORT} / TXPORT={_ZELLO_EXPECT_USRP_TXPORT}",
-         "status": "pass" if ports_ok else "fail",
-         "value":  f"RX={env['USRP_RXPORT'] or '—'} TX={env['USRP_TXPORT'] or '—'}",
-         "fix":    (f"Set USRP_RXPORT={_ZELLO_EXPECT_USRP_RXPORT} and "
-                    f"USRP_TXPORT={_ZELLO_EXPECT_USRP_TXPORT} — must match rpt.conf "
-                    f"[{_ZELLO_NODE_ID}]'s rxchannel") if not ports_ok else None},
-        {"key": "libopus present",
-         "enables": "Opus encode/decode for Zello audio",
-         "status": "pass" if opus_ok else "fail",
-         "value":  "found" if opus_ok else "not found",
-         "fix":    "apt-get install libopus0 libopus-dev" if not opus_ok else None},
-        {"key": "Service running",
-         "enables": "asl-zello-bridge active",
-         "status": ("pass" if inst["service_active"] else
-                    "warn" if inst["service_installed"] else "fail"),
-         "value":  ("active"    if inst["service_active"]    else
-                    "installed" if inst["service_installed"] else "not installed"),
-         "fix":    ("systemctl start asl-zello-bridge" if inst["service_installed"] and not inst["service_active"]
-                    else "Install asl-zello-bridge.service — see README" if not inst["service_installed"]
-                    else None)},
-    ]
-
-    rpt  = _dvsm_read_rpt_conf()
-    node = _m17_find_rpt_node(rpt, _ZELLO_NODE_ID) if rpt.get("raw_ok") else None
-    if not rpt.get("raw_ok"):
-        compat.append({
-            "key": f"rpt.conf [{_ZELLO_NODE_ID}] node stanza",
-            "enables": "ASL <-> Zello USRP channel wiring",
-            "status": "warn",
-            "value":  "rpt.conf unreadable",
-            "fix":    rpt.get("error") or "Check /etc/asterisk/rpt.conf permissions",
-        })
-    elif node is None:
-        compat.append({
-            "key": f"rpt.conf [{_ZELLO_NODE_ID}] node stanza",
-            "enables": "ASL <-> Zello USRP channel wiring",
-            "status": "warn",
-            "value":  "not found",
-            "fix":    (f"Add a [{_ZELLO_NODE_ID}] node stanza with "
-                       f"rxchannel = USRP/127.0.0.1:{_ZELLO_EXPECT_USRP_RXPORT}:{_ZELLO_EXPECT_USRP_TXPORT}"),
-        })
-    else:
-        rxch = node.get("rxchannel") or ""
-        node_ports_match = (
-            f":{_ZELLO_EXPECT_USRP_RXPORT}:{_ZELLO_EXPECT_USRP_TXPORT}" in rxch
-        )
-        compat.append({
-            "key": f"rpt.conf [{_ZELLO_NODE_ID}] node stanza",
-            "enables": "ASL <-> Zello USRP channel wiring",
-            "status": "pass" if node_ports_match else "fail",
-            "value":  rxch or "present, rxchannel unparsed",
-            "fix":    (None if node_ports_match else
-                       f"rxchannel ports don't match — expect "
-                       f"USRP/127.0.0.1:{_ZELLO_EXPECT_USRP_RXPORT}:{_ZELLO_EXPECT_USRP_TXPORT}"),
-        })
-
-    return compat
-
-def _zello_sample_override(cfg: dict) -> str:
-
-    env = cfg["env"]
-    lines = [
-        "[Service]",
-        f"Environment=USRP_BIND={env['USRP_BIND'] or '127.0.0.1'}",
-        f"Environment=USRP_HOST={env['USRP_HOST'] or '127.0.0.1'}",
-        f"Environment=USRP_RXPORT={env['USRP_RXPORT'] or _ZELLO_EXPECT_USRP_RXPORT}",
-        f"Environment=USRP_TXPORT={env['USRP_TXPORT'] or _ZELLO_EXPECT_USRP_TXPORT}",
-        "",
-        f"Environment=ZELLO_USERNAME={_placeholder(env['ZELLO_USERNAME'], 'bridge account username')}",
-        f"Environment=ZELLO_PASSWORD={_placeholder(env['ZELLO_PASSWORD'], 'bridge account password')}",
-        f'Environment=ZELLO_CHANNEL="{env["ZELLO_CHANNEL"] or "<channel name>"}"',
-        "",
-        f"Environment=ZELLO_PRIVATE_KEY={_placeholder(env['ZELLO_PRIVATE_KEY'], '/opt/asl-zello-bridge/zello.key')}",
-        f"Environment=ZELLO_ISSUER={_placeholder(env['ZELLO_ISSUER'], 'issuer-id from developers.zello.com')}",
-        f"Environment=ZELLO_WS_ENDPOINT={env['ZELLO_WS_ENDPOINT'] or 'wss://zello.io/ws'}",
-        "",
-        f"Environment=USRP_GAIN_RX_DB={env['USRP_GAIN_RX_DB'] or '0'}",
-        f"Environment=USRP_GAIN_TX_DB={env['USRP_GAIN_TX_DB'] or '0'}",
-        f"Environment=LOG_LEVEL={env['LOG_LEVEL'] or 'INFO'}",
-    ]
-    return "\n".join(lines)
-
-_ZELLO_RE_UNKEYED = re.compile(r"UnKeyed:(\S+?)(?:\s*\(([\d.]+)s\))?\s*$")
-
-_ZELLO_RE_KEYED    = re.compile(r"(?<!Un)Keyed:(\S+)\s*$")
-
-_ZELLO_JOURNAL_TS  = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})")
-
-def _zello_relative_time(iso_ts: str) -> str:
-    try:
-        dt   = datetime.strptime(iso_ts, "%Y-%m-%dT%H:%M:%S")
-        secs = (datetime.now() - dt).total_seconds()
-    except Exception as e:
-        log.debug("_zello_relative_time: %s", e)
-        return ""
-    if secs < 0:
-        return "just now"
-    if secs < 60:
-        return "just now"
-    if secs < 3600:
-        return f"{int(secs // 60)}m ago"
-    if secs < 86400:
-        return f"{int(secs // 3600)}h ago"
-    return f"{int(secs // 86400)}d ago"
-
-def _zello_status_from_journal(lines_n: int = 200) -> dict:
-    raw = _run(
-        ["journalctl", "-u", _ZELLO_SERVICE_NAME, f"-n{lines_n}",
-         "--no-pager", "-o", "short-iso"],
-        timeout=8,
-    )
-
-    state = {
-        "authenticated":   False,
-        "channel_ready":   False,
-        "currently_keyed": False,
-        "keyed_by":        None,
-        "last_activity":   None,
-        "last_activity_at": "",
-        "last_warn":       None,
-        "last_error":      None,
-        "journal_ok":      bool(raw),
-    }
-
-    if not raw:
-        return state
-
-    for line in raw.splitlines():
-        m_ts = _ZELLO_JOURNAL_TS.match(line)
-        ts   = m_ts.group(1) if m_ts else ""
-
-        if "Logged in!" in line:
-            state["authenticated"] = True
-            state["last_error"] = None
-        elif "Channel is ready" in line:
-            state["channel_ready"] = True
-        elif "Websocket closed" in line:
-            state["authenticated"] = False
-            state["channel_ready"] = False
-            state["currently_keyed"] = False
-            state["last_warn"] = "Websocket closed"
-        elif "Kicked from channel" in line:
-            state["authenticated"] = False
-            state["channel_ready"] = False
-            state["currently_keyed"] = False
-            state["last_error"] = "Kicked from channel"
-        elif "Woodpecker protection triggered" in line:
-            state["last_warn"] = "Woodpecker protection (rate-limited by Zello)"
-        elif "Channel not ready" in line:
-            state["channel_ready"] = False
-            state["last_warn"] = "Channel not ready"
-            continue
-
-        m_unkeyed = _ZELLO_RE_UNKEYED.search(line)
-        m_keyed   = _ZELLO_RE_KEYED.search(line)
-        if m_unkeyed:
-            user = m_unkeyed.group(1)
-            dur  = m_unkeyed.group(2)
-            state["currently_keyed"] = False
-            state["keyed_by"] = None
-            state["last_activity"] = (
-                f"UnKeyed: {user} ({dur}s)" if dur else f"UnKeyed: {user}"
-            )
-            state["last_activity_at"] = _zello_relative_time(ts) if ts else ""
-        elif m_keyed:
-            user = m_keyed.group(1)
-            state["currently_keyed"] = True
-            state["keyed_by"] = user
-            state["last_activity"] = f"Keyed: {user}"
-            state["last_activity_at"] = _zello_relative_time(ts) if ts else ""
-
-    return state
-
-def _zello_serialize_env(env: dict) -> str:
-
-    def _fmt(key: str, val: str) -> str:
-        if any(c in val for c in (" ", "\t")):
-            escaped = val.replace('"', '\\"')
-            return f'Environment={key}="{escaped}"'
-        return f"Environment={key}={val}"
-
-    groups = [
-        ("USRP", ("USRP_BIND", "USRP_HOST", "USRP_RXPORT", "USRP_TXPORT",
-                  "USRP_GAIN_RX_DB", "USRP_GAIN_TX_DB")),
-        ("Zello", ("ZELLO_USERNAME", "ZELLO_PASSWORD", "ZELLO_CHANNEL")),
-        ("Zello Free auth", ("ZELLO_PRIVATE_KEY", "ZELLO_ISSUER", "ZELLO_WS_ENDPOINT")),
-        ("Zello Work (unused in Free mode)", ("ZELLO_API_ENDPOINT",)),
-        ("Logging", ("LOG_LEVEL", "LOG_FORMAT")),
-    ]
-
-    lines = ["[Service]", ""]
-    for label, keys in groups:
-        block = [_fmt(k, env[k]) for k in keys if env.get(k)]
-        if not block:
-            continue
-        lines.append(f"# {label}")
-        lines.extend(block)
-        lines.append("")
-
-    while lines and lines[-1] == "":
-        lines.pop()
-
-    return "\n".join(lines) + "\n"
-
-def _zello_validate_env_payload(payload: dict) -> "tuple[dict, str]":
-    clean: dict = {}
-    for key, val in (payload or {}).items():
-        if key not in _ZELLO_ENV_KEYS:
-            return {}, f"Unknown config key: {key!r}"
-        if not isinstance(val, str):
-            return {}, f"Value for {key} must be a string"
-        if "\n" in val or "\r" in val:
-            return {}, f"Value for {key} cannot contain newlines"
-        clean[key] = val.strip()
-    return clean, ""
-
-def _build_zello_payload() -> dict:
-    inst = _zello_install_check()
-    cfg  = _zello_read_env_override()
-    env  = cfg["env"]
-
-    fields = _zello_build_fields(cfg)
-    compat = _zello_build_compat(cfg, inst)
-    status = _zello_status_from_journal() if inst["service_installed"] else {
-        "authenticated": False, "channel_ready": False, "currently_keyed": False,
-        "keyed_by": None, "last_activity": None, "last_activity_at": "",
-        "last_warn": None, "last_error": None, "journal_ok": False,
-    }
-
-    creds_ok = bool(env["ZELLO_USERNAME"]) and bool(env["ZELLO_PASSWORD"])
-    chan_ok  = bool(env["ZELLO_CHANNEL"])
-    key_ok   = bool(env["ZELLO_PRIVATE_KEY"]) and bool(env["ZELLO_ISSUER"])
-    config_status = ("pass" if (creds_ok and chan_ok and key_ok) else
-                      "warn" if (creds_ok or chan_ok or key_ok) else "fail")
-
-    if cfg["override_present"]:
-        raw_content, raw_err = read_path_file(_ZELLO_OVERRIDE_PATH)
-        editable_content = raw_content if not raw_err else _zello_serialize_env(env)
-    else:
-        editable_content = _zello_serialize_env(env)
-
-    return {
-        "ok":            True,
-        "install":       inst,
-        "config":        {
-            "raw_ok":           cfg["raw_ok"],
-            "override_present": cfg["override_present"],
-            "override_path":    cfg["override_path"],
-            "mode":             cfg["mode"],
-            "status":           config_status,
-            "fields":           fields,
-        },
-        "compat":            compat,
-        "status":            status,
-        "sample_override":   _zello_sample_override(cfg),
-        "editable_content":  editable_content,
-        "override_path":     cfg["override_path"],
-        "node_id":           _ZELLO_NODE_ID,
-    }
-
-def _route_zello_get(h: Handler) -> None:
-    h.send_json(_build_zello_payload())
-
-def _route_zello_post(h: Handler, data: dict) -> None:
-    if os.geteuid() != 0:
-        h.send_json({"ok": False, "message": "root required"}); return
-
-    action = str(data.get("action", "")).strip().lower()
-
-    if action in ("restart", "start", "stop"):
-        try:
-            _run(["systemctl", action, _ZELLO_SERVICE_NAME], timeout=10)
-            h.send_json({"ok": True, "message": f"{_ZELLO_SERVICE_NAME} {action}ed"})
-        except Exception as exc:
-            h.send_json({"ok": False, "message": str(exc)})
-        return
-
-    if action == "save_override_raw":
-        content = data.get("content", "")
-        if not isinstance(content, str) or not content.strip():
-            h.send_json({"ok": False, "message": "Content must not be empty"}, 400)
-            return
-
-        parsed = _zello_parse_env_lines(content)
-        clean, err = _zello_validate_env_payload(parsed)
-        if err:
-            h.send_json({"ok": False, "message": err}, 400)
-            return
-
-        out_content = _zello_serialize_env(clean)
-        ok, msg = write_path_file(_ZELLO_OVERRIDE_PATH, out_content)
-        if not ok:
-            h.send_json({"ok": False, "message": msg})
-            return
-
-        try:
-            _run(["systemctl", "daemon-reload"], timeout=8)
-        except Exception as e:
-            log.debug("_route_zello_post daemon-reload: %s", e)
-
-        h.send_json({
-            "ok":      True,
-            "message": "Saved — restart asl-zello-bridge to apply",
-        })
-        return
-
-    if action == "save_override":
-        submitted, err = _zello_validate_env_payload(data.get("env", {}))
-        if err:
-            h.send_json({"ok": False, "message": err}, 400)
-            return
-
-        current = _zello_read_env_override()["env"]
-        merged  = {**current, **submitted}
-
-        content = _zello_serialize_env(merged)
-        ok, msg = write_path_file(_ZELLO_OVERRIDE_PATH, content)
-        if not ok:
-            h.send_json({"ok": False, "message": msg})
-            return
-
-        try:
-            _run(["systemctl", "daemon-reload"], timeout=8)
-        except Exception as e:
-            log.debug("_route_zello_post daemon-reload: %s", e)
-
-        h.send_json({
-            "ok":      True,
-            "message": "Saved — restart asl-zello-bridge to apply",
-        })
-        return
-
-    h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
-
-
-# ==========================================================================
 # TAB: SD Card
 # ==========================================================================
 
@@ -21663,7 +20800,7 @@ def unpin_service(unit: str) -> bool:
     return ok
 
 _ALL_TABS = ("overview", "services", "ports", "journal",
-             "asldvs", "phone", "tune", "hardware", "dvsm", "stfu", "m17", "zello", "sdcard",
+             "asldvs", "phone", "tune", "hardware", "dvsm", "stfu", "m17", "sdcard",
              "security", "edit")
 
 _LOCKED_TABS = ("overview", "edit")
@@ -23210,7 +22347,6 @@ _GET_ROUTES = {
     "/api/stfu":               _route_stfu_get,
     "/api/m17":                _route_m17_get,
     "/api/dstar-gw":           _route_dstar_gw_get,
-    "/api/zello":              _route_zello_get,
     "/api/sdcard":             _route_sdcard_get,
     "/api/sdcard/test":        _route_sdcard_test_get,
     "/api/security/checks":    _route_security_checks,
@@ -23236,7 +22372,6 @@ _POST_ROUTES = {
     "/api/stfu":            _route_stfu_post,
     "/api/m17":             _route_m17_post,
     "/api/dstar-gw":        _route_dstar_gw_post,
-    "/api/zello":           _route_zello_post,
     "/api/sdcard/test":     _route_sdcard_test_post,
     "/api/phone/modules":   _route_phone_modules_post,
     "/api/phone/routertest": _route_phone_routertest_post,
