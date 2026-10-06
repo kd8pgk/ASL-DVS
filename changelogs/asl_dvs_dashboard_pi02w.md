@@ -1,6 +1,19 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_9_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_10_20261006.py`. Newest entries first.
+
+## 9.3.71.10-pi02w (2026-10-06)
+
+- Phone: `*65` from the radio hangs up again. Since 9.3.71.8/9.3.71.9 no call uses
+  autopatch, so `65 = autopatchdn` did nothing. `*65` now runs the same hang-up
+  script as `*62` (`65 = cmd,/var/lib/asterisk/dvs_phone_hangup`), and both end any
+  call. This corrects the 9.3.71.8 note that `*65` hangs up radio-dialed calls.
+- Phone: the dashboard's Hang up now also cancels a radio dial that is still
+  collecting digits (`rpt cmd <node> autopatchdn`), instead of keying `*65`.
+- Edit page, Phone section: new "How calls from the radio work (show/hide)" note
+  explaining `*61` dialing through the dashboard, why it avoids the dead key, and
+  hanging up with `*62`/`*65`.
+- The start-up refresh rewrites the phone nodes in `rpt.conf` on the first start.
 
 ## 9.3.71.9-pi02w (2026-10-06)
 
