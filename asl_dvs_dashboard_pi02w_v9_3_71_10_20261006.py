@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.9-pi02w"
+VERSION      = "9.3.71.10-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -2040,7 +2040,7 @@ def _phone_render_rpt(targets: List[Tuple[str, str]], existing: str) -> Tuple[st
             + _PHONE_SIMPLEX_LINES + ["",
             f"[functions{node}]",
             f"61 = autopatchup,noct=1,farenddisconnect=1,dialtime={dt},context={_phone_radio_ctx(ctx)},quiet=1",
-            f"62 = cmd,{HANGUP_SCRIPT}", "63 = cop,9", "64 = cop,10", "65 = autopatchdn",
+            f"62 = cmd,{HANGUP_SCRIPT}", "63 = cop,9", "64 = cop,10", f"65 = cmd,{HANGUP_SCRIPT}",
             "99 = cop,6"]
             + [f"{_TONE_CODE_PFX}{i} = cmd,{TONECODE_SCRIPT} {i}" for i in range(len(_TONE_CODE_FIXED))]))
     return nodes_body, "\n\n".join(stanzas), None
@@ -2534,7 +2534,7 @@ def _phone_hangup_all() -> int:
         ami_command(f"channel request hangup {row[0]}", timeout=4)
         n += 1
     for nd in _phone_all_nodes():
-        ami_command(f"rpt fun {nd} *65", timeout=4)
+        ami_command(f"rpt cmd {nd} autopatchdn", timeout=4)
     _phone_state_cache[0] = 0.0
     return n
 
@@ -8493,6 +8493,8 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ph-fav-clr { padding: .2rem .4rem; }
 @media (max-width: 560px) { .ph-fav-row { grid-template-columns: 1fr 1fr 2.2rem; } .ph-fav-row [data-fk="name"] { grid-column: 1 / -1; } }
 .ph-hint { font-family: var(--mono); font-size: .68rem; color: #6f8aa8; margin: .25rem 0 0; }
+.ph-howto summary { cursor: pointer; color: var(--teal); }
+.ph-howto p { margin: .35rem 0 0; }
 .ph-hint.ph-warn { color: var(--amber); }
 .ph-lines { font-family: var(--mono); font-size: .72rem; color: var(--text-bright); background: rgba(0,0,0,.3); border: 1px solid var(--border); border-radius: 4px; padding: .4rem .6rem; margin: .3rem 0 0; overflow-x: auto; user-select: all; white-space: pre; }
 .ph-msg { font-family: var(--mono); font-size: .75rem; color: var(--muted); margin-top: .35rem; min-height: 1em; }
@@ -9391,6 +9393,11 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
                   <select id="ph-tonepath" class="cfg-inp" onchange="ptTonePathSet(this.value)"></select></div>
               </div>
               <div class="ph-hint">Send keypad tones is saved as soon as you pick it. From the radio during a call: *980 sends *, *981 sends # and *982 sends *99.</div>
+              <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
+                <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
+                <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
+              </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
               <div class="ed-toolbar" style="justify-content:flex-start">

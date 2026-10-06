@@ -1,6 +1,18 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_3_20261006.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_4_20261006.py`. Newest entries first.
+
+## 6.13.67.4-pi02w (2026-10-06)
+
+- Phone tab, Dialing rules card: it now starts from each phone node's own
+  `context =` as well as the `*61` autopatch context. Since Dashboard Pi02w 9.3.71.9,
+  `*61` lands in a short `dvs-radio-<network>` context that hands the number to the
+  dashboard, so the card stopped there and didn't show the dialing rules. The HOIP
+  voicemail check that reads the same list works again.
+- The card has a "Why there's a short dvs-radio context (show/hide)" note when that
+  context is present.
+- Autopatch modules card: lists `app_system.so` (hands numbers dialed from the radio
+  to the dashboard) when the dialplan uses `System()`.
 
 ## 6.13.67.3-pi02w (2026-10-06)
 
@@ -18,7 +30,7 @@ Current file: `sysmon_pi02w_v6_13_67_3_20261006.py`. Newest entries first.
 
 Carried over unchanged from the comments of the files below.
 
-### sysmon_pi02w_v6_13_67_3_20261006.py (module docstring)
+### sysmon_pi02w_v6_13_67_4_20261006.py (module docstring)
 
 ```text
 ASL-DVS SYSMON  --  sysmon.py
