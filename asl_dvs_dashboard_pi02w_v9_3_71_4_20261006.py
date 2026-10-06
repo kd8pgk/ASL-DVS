@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.3-pi02w"
+VERSION      = "9.3.71.4-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -951,6 +951,8 @@ PHONE_INCOMING   = ("pin", "open", "off")
 _PHONE_TYPE_LBL  = {"sip": "SIP with login", "sip_ip": "SIP by IP address",
                     "hoip": "Hams Over IP", "awire": "AmateurWire", "iax2": "IAX2"}
 _PHONE_DIALTIME_MIN, _PHONE_DIALTIME_MAX, _PHONE_DIALTIME_DEF = 5000, 90000, 20000
+_PHONE_SIMPLEX_LINES = ["duplex = 1", "voxtimeout = 10000", "voxrecover = 2000",
+                        "simplexpatchdelay = 25", "simplexphonedelay = 25"]
 _phone_lock      = threading.RLock()
 _phone_doc_cache: list = [0.0, None]
 _HOST_RE         = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.\-]{0,120}[A-Za-z0-9])?$")
@@ -2132,8 +2134,8 @@ def _phone_render_rpt(targets: List[Tuple[str, str]], existing: str) -> Tuple[st
         stanzas.append("\n".join([
             f"[{node}](node-main)", "rxchannel = Local/pseudo", f"context = {ctx}",
             'callerid = "Phone" <0000000000>', f"functions = functions{node}",
-            f"phone_functions = functions{node}", f"link_functions = functions{node}",
-            "",
+            f"phone_functions = functions{node}", f"link_functions = functions{node}"]
+            + _PHONE_SIMPLEX_LINES + ["",
             f"[functions{node}]",
             f"61 = autopatchup,noct=1,farenddisconnect=1,dialtime={dt},context={ctx},quiet=1",
             f"62 = cmd,{HANGUP_SCRIPT}", "63 = cop,9", "64 = cop,10", "65 = autopatchdn",

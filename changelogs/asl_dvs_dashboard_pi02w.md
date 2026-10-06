@@ -1,6 +1,17 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_3_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_4_20261006.py`. Newest entries first.
+
+## 9.3.71.4-pi02w (2026-10-06)
+
+- Phone: fixes choppy receive audio on calls since 9.3.71.3. Removing the Simplex
+  setting also removed `duplex = 1` and the VOX lines from the phone nodes, so they
+  took `duplex` from `[node-main]` (2, full duplex, on an ASL3 install). The phone
+  nodes in `rpt.conf` now always get simplex mode with the default VOX values:
+  `duplex = 1`, `voxtimeout = 10000`, `voxrecover = 2000`, `simplexpatchdelay = 25`,
+  `simplexphonedelay = 25`. This is what 9.3.71.2 wrote with Simplex on. There is
+  still no setting for it on the Edit page. The start-up refresh rewrites the phone
+  nodes on the first start of this build. Hang time still comes from `[node-main]`.
 
 ## 9.3.71.3-pi02w (2026-10-06)
 
