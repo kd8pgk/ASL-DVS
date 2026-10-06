@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.5-pi02w"
+VERSION      = "9.3.71.6-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -964,6 +964,7 @@ def _phone_default() -> dict:
         "signin_mode":   "picked",
         "tot_phone_off": True,
         "tot_cap_min":   15,
+        "listen_only":   False,
         "activated":     False,
     }
 
@@ -980,7 +981,7 @@ def _phone_load() -> dict:
         return _phone_default()
     doc = _phone_default()
     for k in ("networks", "active", "patch_enabled", "dialtime", "signin_mode",
-              "tot_phone_off", "tot_cap_min"):
+              "tot_phone_off", "tot_cap_min", "listen_only"):
         if k in raw:
             doc[k] = raw[k]
     if "activated" in raw:
@@ -1156,6 +1157,7 @@ def _phone_public(doc: dict) -> dict:
         "dialtime":      doc.get("dialtime", _PHONE_DIALTIME_DEF),
         "tot_phone_off": doc.get("tot_phone_off", True) is not False,
         "tot_cap_min":   doc.get("tot_cap_min", 15),
+        "listen_only":   doc.get("listen_only") is True,
         "tone_path":     doc.get("tone_path", _PHONE_TONE_PATH_DEF),
         "node":          _cfg.bridge_nodes[BRIDGE_SLOT_PHONE],
         "live_node":     _phone_live_node(doc),
@@ -1448,6 +1450,7 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
         "signin_mode":   "picked",
         "tot_phone_off": tot_off,
         "tot_cap_min":   tot_cap,
+        "listen_only":   bool(raw.get("listen_only", cur.get("listen_only") is True)),
         "activated":     bool(cur.get("activated")),
     }
     if legacy:
@@ -2398,6 +2401,7 @@ def _phone_status() -> dict:
             "reg":  _phone_reg_states(doc) if on_tab else {},
             "signin": _phone_signin_status(doc) if on_tab else {},
             "tot": _tot_status() if on_tab else {},
+            "listen_only": doc.get("listen_only") is True,
             "tone_path": doc.get("tone_path", _PHONE_TONE_PATH_DEF),
             "notice": _phone_notice[0] if time.monotonic() < _phone_notice[1] else ""}
 
@@ -4052,8 +4056,22 @@ def _dvs(subcmd: str, arg=None):
 def _echolink_to_asl(node: str) -> str:
     return "3" + str(node).strip().zfill(6)
 
+def _phone_listen_only() -> bool:
+    try:
+        return _phone_doc().get("listen_only") is True
+    except Exception:
+        return False
+
+def _link_mode_for(node: str) -> str:
+    try:
+        if _phone_listen_only() and node in _phone_all_nodes():
+            return "R"
+    except Exception as e:
+        log.warning("link mode: phone nodes unreadable: %s", e)
+    return "T"
+
 def _connect(node: str) -> None:
-    _asterisk(f"rpt cmd {_cfg.asl_node} ilink 3 {node}")
+    _asterisk(f"rpt cmd {_cfg.asl_node} ilink {2 if _link_mode_for(node) == 'R' else 3} {node}")
 
 def _disconnect(node: str) -> None:
     _asterisk(f"rpt cmd {_cfg.asl_node} ilink 1 {node}")
@@ -5991,7 +6009,9 @@ def _parse_rpt_links_full(out: str) -> List[str]:
             nodes.append(tok)
     return nodes
 
-def _parse_rpt_links(out: str) -> List[str]:
+_link_modes: Dict[str, str] = {}
+
+def _parse_rpt_links(out: str, modes: Optional[Dict[str, str]] = None) -> List[str]:
     m = _ALINKS_RE.search(out)
     if m is None:
         return _parse_rpt_links_full(out)
@@ -6006,6 +6026,8 @@ def _parse_rpt_links(out: str) -> List[str]:
             continue
         if nd not in nodes:
             nodes.append(nd)
+            if modes is not None:
+                modes[nd] = mt.group(2).upper()
     return nodes
 
 def _query_linked_nodes(timeout: int = 3) -> Optional[List[str]]:
@@ -6153,7 +6175,10 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
 
     bridge_set = _bridge_set()
     bridge_linked_nodes: Set[str] = set()
-    adjacent = _parse_rpt_links(out)
+    modes: Dict[str, str] = {}
+    adjacent = _parse_rpt_links(out, modes)
+    _link_modes.clear()
+    _link_modes.update(modes)
     for tok in adjacent:
         if tok in bridge_set:
             bridge_linked_nodes.add(tok)
@@ -6275,6 +6300,8 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
 
     if node in bridge_linked_nodes:
         _bridge_slot_down_polls[active_slot] = 0
+        if active_slot == BRIDGE_SLOT_PHONE:
+            _phone_link_mode_fix(node, page)
         return
 
     _bridge_slot_down_polls[active_slot] += 1
@@ -6291,6 +6318,26 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
         _bridge_slot_last_reconnect[active_slot] = time.monotonic()
         log.warning("watchdog: %s (slot %d, node %s) not linked on %s tab — reconnecting",
                     BRIDGE_SLOT_LABELS[active_slot], active_slot, node, page)
+        _connect(node)
+    finally:
+        _link_exit()
+
+def _phone_link_mode_fix(node: str, page: str) -> None:
+    have, want = _link_modes.get(node, ""), _link_mode_for(node)
+    if have not in ("T", "R") or have == want:
+        return
+    if (time.monotonic() - _bridge_slot_last_reconnect[BRIDGE_SLOT_PHONE]) < _BRIDGE_RECONNECT_COOLDOWN:
+        return
+    if not _link_try_enter():
+        return
+    try:
+        if get_state_fields("page")["page"] != page:
+            return
+        _bridge_slot_last_reconnect[BRIDGE_SLOT_PHONE] = time.monotonic()
+        log.info("phone: node %s is linked %s -- relinking %s", node,
+                 "two-way" if have == "T" else "listen only", "listen only" if want == "R" else "two-way")
+        _drop_one_link(node)
+        time.sleep(0.3)
         _connect(node)
     finally:
         _link_exit()
@@ -9183,6 +9230,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             <div id="pt-reg-dot" class="dot dot-off pt-hide" title=""></div>
             <span id="pt-signin" class="pt-signin pt-hide"></span>
             <span id="pt-tot" class="pt-signin pt-hide"></span>
+            <span id="pt-listen" class="pt-signin pt-hide" title="Nothing from the radio goes into calls (Edit page, Phone)">Listen only</span>
             <input id="pt-dial" class="quick-inp" type="tel" inputmode="tel" placeholder="Number to dial…" maxlength="24"
               autocomplete="off" oninput="ptDialSync()" onkeydown="if(event.key==='Enter')ptDial()">
             <button id="pt-dial-btn" class="btn btn-green" onclick="ptDial()">Dial</button>
@@ -9282,7 +9330,9 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
                 <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-totoff">Transmitter time-out off while the Phone tab is open</label></div>
                 <div class="cfg-field"><label class="cfg-lbl" for="ph-totcap">Safety cap (minutes keyed)</label>
                   <input id="ph-totcap" class="cfg-inp" type="text" inputmode="numeric" maxlength="2" placeholder="15"></div>
+                <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-listen">Listen only (the radio never transmits into calls)</label></div>
               </div>
+              <div class="ph-hint">Listen only: you hear calls on the radio, but nothing from the radio goes into the call. Dial, hang up and send tones from this dashboard; codes keyed on the radio (*61, *65, *980-*982) don't reach the phone. Takes effect a few seconds after Save Phone.</div>
               <div class="ph-hint">Sign in: just the network picked on the Phone tab signs in, so two accounts for the same number never compete. Picking another network moves the sign-in (not during a call).</div>
               <div class="cfg-grid">
                 <div class="cfg-field"><label class="cfg-lbl" for="ph-tonepath">Send keypad tones</label>
@@ -11941,6 +11991,7 @@ function ptRenderStatus(){
     if(si.state==='signing')dot.title='Signing in…';
   }
   // v9.3.28: transmitter time-out state while on the Phone tab
+  const lo=byId('pt-listen');if(lo)lo.classList.toggle('pt-hide',st.listen_only!==true);
   const tt=st.tot||{},tl=byId('pt-tot');
   if(tl){
     const show=!!(tt.off||tt.error||tt.capped);
@@ -12488,6 +12539,7 @@ async function phLoad(){
     ptTonePathRender(d.tone_path||'provider');
     byId('ph-totoff').checked=d.tot_phone_off!==false;
     byId('ph-totcap').value=d.tot_cap_min||15;
+    byId('ph-listen').checked=d.listen_only===true;
     _ph.dirty=false;
     phRender();_ph.loaded=true;_ph.dirty=false;byId('ph-msg').textContent='';
   }catch(e){console.error('phLoad() error:',e);byId('ph-msg').textContent='Could not load phone settings'}
@@ -12498,6 +12550,7 @@ async function phSave(quiet){
     dialtime:byId('ph-dialtime').value.trim(),
     tot_phone_off:byId('ph-totoff').checked,
     tot_cap_min:byId('ph-totcap').value.trim(),
+    listen_only:byId('ph-listen').checked,
     networks:_ph.nets.map(n=>{const o=Object.assign({},n,{trusted:String(n.trusted||''),favorites:phFavsOut(n.favs)});
       delete o.favs;delete o._favOpen;delete o._auto;delete o.tone_mode;delete o.register;return o})};
   const d=await api({action:'save-phone',phone});
