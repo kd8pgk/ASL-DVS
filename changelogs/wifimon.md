@@ -1,6 +1,26 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_24_20261006.py`. Newest entries first.
+Current file: `wifimon_v5_25_20261006.py`. Newest entries first.
+
+## 5.25 (2026-10-06)
+
+- Watchdogs off on a first install. A fresh `--install` (no
+  `/etc/wifimon/wifimon.conf` and no `state.json` yet) starts wifimon with both
+  watchdogs off: it runs, shows status and voltage, but doesn't reconnect the WiFi
+  or shut the node down. A reinstall, an update or instmon's Full Update keeps
+  the watchdogs as they were (`--uninstall` keeps `/etc/wifimon`), and a node
+  that has no saved choice keeps both on, as before.
+- Popup to turn them on. After login, while a watchdog is off, the page asks
+  "Turn the watchdogs on?" with a tick box for each one that is off, and says
+  so when no WiFi networks are saved yet. "Not now" closes it until the next
+  browser session.
+- On/off switches in the Watchdog card: **WiFi watchdog** (reconnects and the
+  no-connection shutdown) and **Voltage watchdog** (the low-voltage shutdown),
+  each with a confirm. The timers read "Watchdog off" and the rules line says
+  what is off. Saved in `/etc/wifimon/state.json` (`watchdogs`); new API
+  `POST /api/watchdogs` (login and same-page check as the other changes);
+  each change is logged. "Reset to defaults" in Watchdog settings doesn't
+  touch these switches.
 
 ## 5.24 (2026-10-06)
 

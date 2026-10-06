@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.24"
+APP_VERSION = "5.25"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -70,6 +70,9 @@ REPORT_KEEP              = 10
 REPORT_MAX_BYTES         = 256 * 1024
 
 DETECT_LOGIN_PAGES    = False
+
+WIFI_WATCHDOG_ON      = True
+VOLTAGE_WATCHDOG_ON   = True
 
 KEEP_POWERSAVE_OFF    = False
 
@@ -363,8 +366,12 @@ def install_service() -> None:
         sys.exit(1)
 
     current_script = os.path.abspath(__file__)
+    fresh = not os.path.exists(CONFIG_FILE) and not os.path.exists(STATE_FILE)
 
     print("Installing wifimon...")
+    if fresh:
+        _save_state({"watchdogs": {"wifi": False, "voltage": False}})
+        print("  [+] First install: the WiFi and voltage watchdogs start OFF")
 
     if current_script != INSTALL_BIN_PATH:
         shutil.copy2(current_script, INSTALL_BIN_PATH)
@@ -403,6 +410,9 @@ def install_service() -> None:
     print(f"\nDashboard: {scheme}://{socket.gethostname()}.local:{HTTP_PORT}"
           f"  (or the node's IP address)")
     print("  Log in with the root password.")
+    if fresh:
+        print("  The watchdogs are off: wifimon only watches until you turn them on")
+        print("  on its page (it asks when you log in).")
     if _root_password_status() != "set":
         print("  [!] root has no usable password, so dashboard login will fail.")
         print("      Set one with:  sudo passwd root")
@@ -1309,7 +1319,12 @@ def _watchdog_loop() -> None:
                 log.info("Watchdog settings changed — running countdowns restarted")
 
             low_v = _check_voltage()
-            if low_v is not None:
+            if low_v is not None and not VOLTAGE_WATCHDOG_ON:
+                if low_voltage_since is not None:
+                    log.info("Voltage watchdog is off — low-voltage timer stopped")
+                    low_voltage_since = None
+                _wd_update(lowv_since_mono=None, low_v=low_v)
+            elif low_v is not None:
                 if low_voltage_since is None:
                     low_voltage_since = loop_start
                     log.warning("Low voltage: %.4fV — starting timer", low_v)
@@ -1351,6 +1366,14 @@ def _watchdog_loop() -> None:
                 if _ps_check.is_set():
                     _ps_check.clear()
                     _keep_powersave_check()
+            elif not WIFI_WATCHDOG_ON:
+                misses, first_miss_at = 0, None
+                head_start_noted, nm_busy_since, nm_step_in_noted = False, None, False
+                if down_since is not None:
+                    log.info("WiFi watchdog is off — shutdown timer stopped, no reconnects")
+                    down_since = None
+                    last_reconnect_attempt = None
+                    _wd_update(down_since_mono=None)
             elif _grace_remaining() > 0 or _hotspot_active():
                 misses, first_miss_at = 0, None
                 head_start_noted, nm_busy_since, nm_step_in_noted = False, None, False
@@ -1903,6 +1926,8 @@ def _build_status() -> Dict[str, object]:
         "networks_configured": wd["networks_configured"],
         "check_interval": CHECK_INTERVAL,
         "settings": _settings_public(),
+        "wifi_on": bool(WIFI_WATCHDOG_ON),
+        "voltage_on": bool(VOLTAGE_WATCHDOG_ON),
         "reconnect_interval": RECONNECT_INTERVAL_SECS,
         "loop_errors": wd["loop_errors"],
         "interface": INTERFACE,
@@ -2885,6 +2910,34 @@ def _apply_settings(values: Dict[str, object], persist: bool = True) -> Optional
     if persist:
         _save_state({"settings": _settings_current()})
     return " ".join(n for n in notes if n) or None
+
+def _watchdogs_public() -> Dict[str, bool]:
+    return {"wifi": bool(WIFI_WATCHDOG_ON), "voltage": bool(VOLTAGE_WATCHDOG_ON)}
+
+def _set_watchdogs(wifi: Optional[bool] = None, voltage: Optional[bool] = None,
+                   persist: bool = True) -> None:
+    global WIFI_WATCHDOG_ON, VOLTAGE_WATCHDOG_ON
+    if wifi is not None:
+        WIFI_WATCHDOG_ON = bool(wifi)
+    if voltage is not None:
+        VOLTAGE_WATCHDOG_ON = bool(voltage)
+    if persist:
+        _save_state({"watchdogs": _watchdogs_public()})
+
+def _load_watchdogs() -> None:
+    try:
+        data = json.loads(_read_text(STATE_FILE) or "{}")
+    except ValueError:
+        return
+    saved = data.get("watchdogs") if isinstance(data, dict) else None
+    if not isinstance(saved, dict):
+        return
+    _set_watchdogs(wifi=saved.get("wifi") if isinstance(saved.get("wifi"), bool) else None,
+                   voltage=saved.get("voltage") if isinstance(saved.get("voltage"), bool) else None,
+                   persist=False)
+    if not (WIFI_WATCHDOG_ON and VOLTAGE_WATCHDOG_ON):
+        log.info("Watchdogs: WiFi %s, voltage %s", "on" if WIFI_WATCHDOG_ON else "OFF",
+                 "on" if VOLTAGE_WATCHDOG_ON else "OFF")
 
 def _load_saved_settings() -> None:
     try:
@@ -4463,6 +4516,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_settings(body)
         elif path == "/api/settings/reset":
             self._handle_settings_reset(body)
+        elif path == "/api/watchdogs":
+            self._handle_watchdogs(body)
         else:
             self._json(404, {"error": "Not found."})
 
@@ -5372,6 +5427,23 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "message": "Watchdog settings saved." + (f" {note}" if note else ""),
                          "settings": _settings_public()})
 
+    def _handle_watchdogs(self, body: Dict[str, object]) -> None:
+        if body.get("confirm") is not True:
+            self._json(400, {"error": "This change needs confirmation."})
+            return
+        wifi, voltage = body.get("wifi"), body.get("voltage")
+        if (wifi is None and voltage is None) or any(
+                v is not None and not isinstance(v, bool) for v in (wifi, voltage)):
+            self._json(400, {"error": "Say which watchdog to turn on or off."})
+            return
+        _set_watchdogs(wifi=wifi, voltage=voltage)
+        now = _watchdogs_public()
+        log.info("Dashboard: watchdogs set by %s: WiFi %s, voltage %s", self.client_address[0],
+                 "on" if now["wifi"] else "off", "on" if now["voltage"] else "off")
+        msg = "WiFi watchdog {}, voltage watchdog {}.".format(
+            "on" if now["wifi"] else "off", "on" if now["voltage"] else "off")
+        self._json(200, {"ok": True, "message": msg, "watchdogs": now})
+
     def _handle_settings_reset(self, body: Dict[str, object]) -> None:
         if body.get("confirm") is not True:
             self._json(400, {"error": "This change needs confirmation."})
@@ -5631,6 +5703,18 @@ a.btnlink:hover{border-color:var(--cyan)}
   background:var(--panel);border:1px solid var(--cyan);border-radius:10px;padding:16px 22px;
   max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.55)}
 .popup.err{border-color:var(--bad)}
+.wd-sw{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:8px 0;border-bottom:1px solid var(--line)}
+.wd-sw .st{font-weight:600;margin-left:6px}
+.modal-back{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.62);
+  display:flex;align-items:center;justify-content:center;padding:16px}
+.modal{width:100%;max-width:460px;background:var(--panel);border:1px solid var(--line);
+  border-top:3px solid var(--amber);border-radius:10px;padding:20px;display:grid;gap:10px;
+  box-shadow:0 12px 40px rgba(0,0,0,.55)}
+.modal h2{margin:0;font-size:18px}
+.modal p{margin:0}
+.modal .check{align-items:flex-start}
+.modal .check input{margin-top:4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
@@ -5815,6 +5899,10 @@ a.btnlink:hover{border-color:var(--cyan)}
 
     <section class="card" id="card-watchdog" aria-labelledby="wd-h">
       <h2 id="wd-h">Watchdog</h2>
+      <div class="wd-sw"><span>WiFi watchdog<span class="st" id="wd-wifi-st"></span></span>
+        <button type="button" id="wd-wifi-btn">…</button></div>
+      <div class="wd-sw" style="margin-bottom:10px"><span>Voltage watchdog<span class="st" id="wd-voltage-st"></span></span>
+        <button type="button" id="wd-voltage-btn">…</button></div>
       <div class="timer idle" id="t-conn">
         <div class="t-head"><span>No connection</span><span class="t-val" id="t-conn-val">Checking…</span></div>
         <div class="t-bar"><div id="t-conn-fill"></div></div>
@@ -5890,6 +5978,26 @@ a.btnlink:hover{border-color:var(--cyan)}
 </div>
 
 <div id="popup" class="popup" role="status" hidden></div>
+<div id="wd-ask" class="modal-back" role="dialog" aria-modal="true" aria-labelledby="wd-ask-h" hidden>
+  <div class="modal">
+    <h2 id="wd-ask-h">Turn the watchdogs on?</h2>
+    <p>wifimon is running, but only watching. Until a watchdog is on, it won't reconnect the
+      WiFi or shut the node down.</p>
+    <label class="check" id="wd-ask-wifi-row"><input type="checkbox" id="wd-ask-wifi" checked>
+      <span><b>WiFi watchdog:</b> reconnects to your saved networks, and shuts the node down after
+      <span id="wd-ask-noconn"></span> with no connection.</span></label>
+    <label class="check" id="wd-ask-voltage-row"><input type="checkbox" id="wd-ask-voltage" checked>
+      <span><b>Voltage watchdog:</b> shuts the node down after <span id="wd-ask-lowv"></span> of
+      low voltage.</span></label>
+    <p class="hint" id="wd-ask-nonet" hidden>No WiFi networks are saved yet. Add them first, or the
+      WiFi watchdog has nothing to reconnect to.</p>
+    <p class="hint">You can turn each one on or off any time in the Watchdog card.</p>
+    <div class="actions">
+      <button type="button" id="wd-ask-on">Turn on</button>
+      <button type="button" id="wd-ask-later">Not now</button>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -6313,16 +6421,23 @@ a.btnlink:hover{border-color:var(--cyan)}
     timers = {
       at: performance.now(),
       conn: wd.no_conn_remaining, connTotal: wd.no_conn_total,
-      connIdle: wd.connected === true ? "Connected" : "Checking…",
-      connIdleCls: wd.connected === true ? "" : "idle",
+      connIdle: wd.wifi_on === false ? "Watchdog off" : wd.connected === true ? "Connected" : "Checking…",
+      connIdleCls: wd.wifi_on !== false && wd.connected === true ? "" : "idle",
       lowv: wd.lowv_remaining, lowvTotal: wd.lowv_total,
-      lowvIdle: "Normal", lowvIdleCls: "",
+      lowvIdle: wd.voltage_on === false ? "Watchdog off" : "Normal",
+      lowvIdleCls: wd.voltage_on === false ? "idle" : "",
       grace: (d.control || {}).grace_remaining, connected: wd.connected,
     };
     drawTimers();
-    $("w-rules").textContent = "Shuts the node down after " + dur(wd.no_conn_total)
-      + " with no connection, or " + dur(wd.lowv_total) + " of low voltage (below "
-      + wd.low_v_threshold + " V core).";
+    const rules = [];
+    if (wd.wifi_on !== false) rules.push(dur(wd.no_conn_total) + " with no connection");
+    if (wd.voltage_on !== false) rules.push(dur(wd.lowv_total) + " of low voltage (below "
+      + wd.low_v_threshold + " V core)");
+    $("w-rules").textContent = rules.length
+      ? "Shuts the node down after " + rules.join(", or ") + "."
+        + (wd.wifi_on === false ? " The WiFi watchdog is off: no reconnects, no shutdown on a lost connection." : "")
+        + (wd.voltage_on === false ? " The voltage watchdog is off: no shutdown on low voltage." : "")
+      : "Both watchdogs are off: wifimon only watches. It won't reconnect the WiFi or shut the node down.";
     fillKv($("w-kv"), [
       ["Core voltage", val(p.volts, " V")],
       ["Under-voltage now", yesno(p.undervoltage_now)],
@@ -7229,9 +7344,68 @@ a.btnlink:hover{border-color:var(--cyan)}
     renderRadio(d);
     renderHotspot(d);
     renderWatchdog(d);
+    renderWatchdogSwitches(d);
     renderService(d);
     handleControl(d);
   }
+
+  // ── Watchdog on/off (v5.25) ─────────────────────────────────────────
+  let wdAsked = false;
+  try { wdAsked = sessionStorage.getItem("wifimon-wd-asked") === "1"; } catch (e) {}
+  function renderWatchdogSwitches(d) {
+    const wd = d.watchdog || {};
+    [["wifi", wd.wifi_on], ["voltage", wd.voltage_on]].forEach(([k, on]) => {
+      const st = $("wd-" + k + "-st"), b = $("wd-" + k + "-btn");
+      st.textContent = on === false ? "Off" : "On";
+      st.className = "st " + (on === false ? "warn" : "good");
+      b.textContent = on === false ? "Turn on" : "Turn off";
+      b.disabled = busy;
+    });
+    if (!wdAsked && (wd.wifi_on === false || wd.voltage_on === false)) {
+      wdAsked = true;
+      showWdAsk(wd);
+    }
+  }
+  function showWdAsk(wd) {
+    $("wd-ask-wifi-row").hidden = wd.wifi_on !== false;
+    $("wd-ask-voltage-row").hidden = wd.voltage_on !== false;
+    $("wd-ask-wifi").checked = true;
+    $("wd-ask-voltage").checked = true;
+    $("wd-ask-noconn").textContent = dur(wd.no_conn_total);
+    $("wd-ask-lowv").textContent = dur(wd.lowv_total);
+    $("wd-ask-nonet").hidden = !(wd.wifi_on === false && !wd.networks_configured);
+    $("wd-ask").hidden = false;
+    $("wd-ask-on").focus();
+  }
+  function closeWdAsk() {
+    $("wd-ask").hidden = true;
+    try { sessionStorage.setItem("wifimon-wd-asked", "1"); } catch (e) {}
+  }
+  $("wd-ask-later").addEventListener("click", closeWdAsk);
+  $("wd-ask").addEventListener("keydown", (ev) => { if (ev.key === "Escape") closeWdAsk(); });
+  $("wd-ask-on").addEventListener("click", async () => {
+    const wd = (lastData && lastData.watchdog) || {};
+    const body = { confirm: true };
+    if (wd.wifi_on === false && $("wd-ask-wifi").checked) body.wifi = true;
+    if (wd.voltage_on === false && $("wd-ask-voltage").checked) body.voltage = true;
+    closeWdAsk();
+    if (body.wifi === undefined && body.voltage === undefined) return;
+    await post("/api/watchdogs", body);
+  });
+  ["wifi", "voltage"].forEach((k) => {
+    $("wd-" + k + "-btn").addEventListener("click", async () => {
+      const wd = (lastData && lastData.watchdog) || {};
+      const on = (k === "wifi" ? wd.wifi_on : wd.voltage_on) !== false;
+      const msg = k === "wifi"
+        ? (on ? "Turn the WiFi watchdog off?\n\nwifimon will stop reconnecting the WiFi and won't shut the node down when the connection is lost."
+              : "Turn the WiFi watchdog on?\n\nwifimon will reconnect to your saved networks, and shut the node down after "
+                + dur(wd.no_conn_total) + " with no connection.")
+        : (on ? "Turn the voltage watchdog off?\n\nwifimon will keep showing the voltage but won't shut the node down on low voltage."
+              : "Turn the voltage watchdog on?\n\nwifimon will shut the node down after " + dur(wd.lowv_total) + " of low voltage.");
+      if (!confirm(msg)) return;
+      await post("/api/watchdogs", { confirm: true, [k]: !on });
+    });
+  });
 
   // ── Actions ─────────────────────────────────────────────────────────
   $("btn-restart").addEventListener("click", async () => {
@@ -7296,6 +7470,7 @@ def run() -> None:
     _load_saved_interface()
     _load_dev_modes()
     _load_saved_settings()
+    _load_watchdogs()
     _apply_login_page_detection(DETECT_LOGIN_PAGES)
     _apply_keep_powersave_off(KEEP_POWERSAVE_OFF)
     _health_load()

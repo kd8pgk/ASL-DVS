@@ -185,7 +185,7 @@ afterwards, run its own `--uninstall`.
 | `sysmon_pi02w_v6_13_67_3_20261006.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
 | `instmon_v2_38_2_20261006.py` | common |
-| `wifimon_v5_24_20261006.py` | common |
+| `wifimon_v5_25_20261006.py` | common |
 | `asl_dvs_m17_44helper_v0_0_159_20261006.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_asl_dvs_v6_6_20261006.sh` | common |
