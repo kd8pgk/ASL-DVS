@@ -1,6 +1,25 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_2_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_3_20261006.py`. Newest entries first.
+
+## 9.3.71.3-pi02w (2026-10-06)
+
+- Phone: simplex and hang time always use the defaults. The Edit page's
+  "Simplex radio (use VOX for calls)" box, VOX timeout, VOX recovery, Radio delay,
+  Phone delay and Hang time fields are gone, and saved `simplex` / `hangtime`
+  values in `/etc/asl_dvs/phone.json` are ignored and dropped on the next save. The
+  phone nodes in `rpt.conf` no longer get `duplex = 1`, the VOX lines or
+  `hangtime =`; the start-up refresh rewrites them on the first start of this build.
+- Phone: the five programmable tone buttons are gone: the Edit page fields, the
+  buttons beside the call status on the Phone tab, the saved `buttons` per network,
+  and the radio codes *983 to *987. *980 (*), *981 (#) and *982 (*99) stay, and the
+  Phone tab keeps its *99 and # buttons.
+- Phone: the keypad pop-up is now the keys, the tones sent and the call check.
+  "Send keypad tones" (the tone route) moved to the Edit page's Phone section, with
+  the radio codes as a hint below it. The per-call tone mode picker and "Keep this"
+  are gone (each SIP network's Tone mode on the Edit page is the setting), and with
+  them the `phone-tone-mode` and `phone-tone-keep` actions and the tone-mode lookup
+  the Phone tab status did on every poll during a call.
 
 ## 9.3.71.2-pi02w (2026-10-06)
 
