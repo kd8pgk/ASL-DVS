@@ -1,6 +1,24 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_8_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_9_20261006.py`. Newest entries first.
+
+## 9.3.71.9-pi02w (2026-10-06)
+
+- Phone: calls dialed from the radio (`*61<number>`) now place the call the same way
+  as the dashboard's Dial button (9.3.71.8), so they don't dead-key the radio either.
+  - `*61` stays an autopatch code, but it now points at a new context,
+    `dvs-radio-<network>` (`dvs-radio-out` for the Phone Bridge node). That context
+    runs `/var/lib/asterisk/dvs_phone_dialreq <number> <network>` and hangs up, which
+    ends the autopatch at once.
+  - The script only accepts digits (up to 20) and a network id. It leaves a request
+    file in `/run/asl_dvs_tones/req`, like the `*980`-`*982` tone codes.
+  - The dashboard picks it up within about 2 seconds and dials it as if Dial were
+    pressed: AMI `Originate` into `rpt(<node>,Pv)`, with the same checks (phone tab
+    open, patch on, number rules, E911). The result shows as a notice on the Phone
+    tab. A request from a network that isn't the picked one is ignored.
+- `app_system.so` joins the phone modules, for the dialplan's `System()`.
+- The start-up refresh rewrites `rpt.conf`, the dialplan and the new script on the
+  first start of this build. Revert removes the script with the others.
 
 ## 9.3.71.8-pi02w (2026-10-06)
 

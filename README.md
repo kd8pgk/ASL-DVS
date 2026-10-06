@@ -179,7 +179,7 @@ afterwards, run its own `--uninstall`.
 | File | Build |
 |---|---|
 | `asl_dvs_dashboard_v9_3_72_20261006.py` | Dashboard, full (current) |
-| `asl_dvs_dashboard_pi02w_v9_3_71_8_20261006.py` | Dashboard, Pi Zero 2 W (current) |
+| `asl_dvs_dashboard_pi02w_v9_3_71_9_20261006.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
 | `sysmon_v6_13_68_20261006.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_3_20261006.py` | SysMon, Pi Zero 2 W (current) |
