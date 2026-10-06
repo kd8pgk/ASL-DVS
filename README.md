@@ -58,8 +58,10 @@ number is never reused: every change gets a new version.
 
 ## Installing
 
-For a Pi Zero 2 W, the step-by-step manual is
-[`docs/ASL-DVS_Pi02w_Install_Manual.pdf`](docs/ASL-DVS_Pi02w_Install_Manual.pdf).
+Step-by-step manuals (PDF):
+
+- Pi Zero 2 W build: [`docs/ASL-DVS_Pi02w_Install_Manual.pdf`](docs/ASL-DVS_Pi02w_Install_Manual.pdf)
+- Full build (Pi 3, 4 or 5): [`docs/ASL-DVS_Full_Build_Install_Manual.pdf`](docs/ASL-DVS_Full_Build_Install_Manual.pdf)
 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
