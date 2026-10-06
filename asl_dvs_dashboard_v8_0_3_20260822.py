@@ -1,126 +1,4 @@
 #!/usr/bin/env python3
-#
-# ASL-DVS Node Control  —  asl_dvs_dashboard.py  —  v8.0.3  —  2026-08-22
-# KD8PGK / Claude AI (Anthropic)  —  CC BY-NC 4.0
-#
-# v8.0.3: startup() no longer forces an ASL disconnect-all or an idle-mode
-# DVS retune on every dashboard process restart -- only on a genuine fresh
-# system boot (detected via /proc/sys/kernel/random/boot_id + a /run
-# marker, see _is_fresh_boot()). This was previously running unconditionally
-# on EVERY restart of asl_dvs_dashboard.service: the external watchdog's
-# restart, systemd's own Restart=always/WatchdogSec=30, and manual
-# `systemctl restart` all funneled through the same code path and would
-# hard-drop live ASL links (and blip-retune live DVS links) even though
-# Asterisk/Analog_Bridge themselves never went down -- only this process did.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 import argparse
 import gzip
@@ -171,29 +49,9 @@ _DVS_SEARCH_PATHS = [
 ]
 PORT            = 8989
 
-
-
-
-
-
-
-
 M17_NODE      = "1917"
 M17_INI_PATH  = "/opt/USRP2M17/USRP2M17.ini"
 M17_SERVICE   = "usrp2m17"
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 BRIDGE_SLOT_DIGITAL    = 0
 BRIDGE_SLOT_M17        = 1
@@ -202,8 +60,6 @@ BRIDGE_SLOT_RESERVED_3 = 3
 BRIDGE_SLOT_COUNT      = 4
 BRIDGE_SLOT_LABELS     = ("Digital Voice Bridge", "M17 Bridge", "Reserved", "Reserved")
 DEFAULT_BRIDGE_NODES   = [ASL_BRIDGE_NODE, M17_NODE, "", ""]
-
-
 
 _M17_USRP_DST_PORT   = 32008
 _M17_USRP_LOCAL_PORT = 34008
@@ -224,11 +80,6 @@ DSTAR_UNLINK   = "       U"
 
 ASL_DVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
 
-# /run is tmpfs and is guaranteed clean on every boot but survives any
-# number of process restarts within a boot (systemd Restart=always, the
-# external asl_dvs_watchdog.sh, a manual `systemctl restart`, a redeploy).
-# Used by _is_fresh_boot() so startup() only does its hard ASL disconnect
-# and idle DVS retune on an actual system boot, not on every restart.
 _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
 
 _INSTALL_DIR      = "/usr/local/lib/asl_dvs"
@@ -272,14 +123,6 @@ ALL_PAGES        = ("ASL", "ECHO") + DIGITAL_MODES + ("FCS", "XLX", "M17")
 VALID_CONF_MODES = {"DMR", "STFU", "YSF", "FCS", "P25", "NXDN", "DSTAR"}
 TUNE_MODES       = set(DIGITAL_MODES) | {"FCS"}
 
-
-
-
-
-
-
-
-
 BRIDGE_SLOT_PAGES = {
     BRIDGE_SLOT_DIGITAL: TUNE_MODES | {"XLX"},
     BRIDGE_SLOT_M17:     {"M17"},
@@ -307,10 +150,6 @@ def _apply_config(cfg: dict) -> None:
                 _cfg.asl_node = v
         if "bridge_nodes" in cfg:
 
-
-
-
-
             items = cfg["bridge_nodes"]
             items = list(items) if isinstance(items, (list, tuple)) else str(items).split(",")
             items = [str(x).strip() for x in items][:BRIDGE_SLOT_COUNT]
@@ -319,9 +158,6 @@ def _apply_config(cfg: dict) -> None:
             items = [v if v.isdigit() else "" for v in items]
             _cfg.bridge_nodes = items
         elif "bridge_node" in cfg:
-
-
-
 
             v = str(cfg["bridge_node"]).strip()
             if v.isdigit():
@@ -722,12 +558,6 @@ def _parse_conf(path: str) -> Tuple[list, list, list, dict, list, dict, list, li
                 if xlx_name and xlx_tg and xlx_tg != TG_BLANK_ADDR:
                     xlx_reflectors.append((xlx_name, xlx_tg, xlx_url))
         elif section == "M17":
-
-
-
-
-
-
 
             raw_parts = line.split("|")
             if len(raw_parts) >= 4:
@@ -1535,9 +1365,6 @@ def _detect_sysmon() -> bool:
 
 def _detect_m17() -> bool:
 
-
-
-
     def _probe_m17() -> bool:
         if shutil.which("systemctl") and                run(["systemctl", "status", M17_SERVICE], timeout=3)[1] in (0, 3):
             return True
@@ -1731,12 +1558,6 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
     keyed = bool(_KEYED_RE.search(out))
     linked_node: Optional[str] = None
 
-
-
-
-
-
-
     bridge_set = set(filter(None, _cfg.bridge_nodes))
     bridge_linked_nodes: Set[str] = set()
     m = _LINKS_RE.search(out)
@@ -1819,9 +1640,6 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
             active_slot = slot
             break
 
-
-
-
     for slot in _bridge_slot_down_polls:
         if slot != active_slot:
             _bridge_slot_down_polls[slot] = 0
@@ -1833,8 +1651,6 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
 
     node = _cfg.bridge_nodes[active_slot] if active_slot < len(_cfg.bridge_nodes) else ""
     if not node:
-
-
 
         _bridge_slot_down_polls[active_slot] = 0
         return
@@ -1913,8 +1729,6 @@ def _enter_digital(page: str, dvs_mode: str = None) -> None:
         if st.echo_fav and st.echo_fav.strip() and st.echo_fav != TG_BLANK_ADDR:
             _disconnect(_echolink_to_asl(st.echo_fav))
 
-
-
         prev_bridge = _active_bridge_node(prev_page)
         if prev_bridge and prev_bridge != new_bridge:
             _disconnect(prev_bridge)
@@ -1960,16 +1774,11 @@ def _enter_m17() -> None:
     new_bridge = _cfg.bridge_nodes[BRIDGE_SLOT_M17] or None
     if st.has_asl:
 
-
-
-
         bridge_set = set(filter(None, _cfg.bridge_nodes))
         if st.page in ("ASL", "ECHO") and st.current_fav and st.current_fav not in bridge_set:
             _disconnect(st.current_fav)
         if st.echo_fav and st.echo_fav.strip() and st.echo_fav != TG_BLANK_ADDR:
             _disconnect(_echolink_to_asl(st.echo_fav))
-
-
 
         prev_bridge = _active_bridge_node(prev_page)
         if prev_bridge and prev_bridge != new_bridge:
@@ -1989,15 +1798,6 @@ def _clear_links(
     target_is_echo: bool = False,
     skip_bridge: bool = False,
 ) -> None:
-
-
-
-
-
-
-
-
-
 
     st = get_state()
     paced = target_node is not None
@@ -2048,11 +1848,6 @@ def _clear_foreign_link() -> Optional[str]:
     node = st.linked_node
     if not node or node == "0":
         return None
-
-
-
-
-
 
     _dash = st.current_fav_node or (
         _echolink_to_asl(st.echo_fav)
@@ -2170,9 +1965,6 @@ def action_retune_tab(page: str, server_name: str = "") -> Tuple[bool, str]:
         return True, "Echo re-tuned"
 
     if page == "M17":
-
-
-
 
         _enter_m17()
         return True, "M17 re-tuned"
@@ -2309,21 +2101,6 @@ def action_xlx_disconnect() -> Tuple[bool, str]:
     set_state(current_fav=None, current_fav_node=None, status="XLX | Ready")
     return True, "XLX disconnected"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _m17_ini_content(callsign: str, refl_name: str, ip: str, module: str) -> str:
     
     return (
@@ -2352,8 +2129,6 @@ def _m17_ini_content(callsign: str, refl_name: str, ip: str, module: str) -> str
     )
 
 def _m17_ini_placeholder(callsign: str) -> str:
-
-
 
     return _m17_ini_content(callsign, "DISCONNECTED", "0.0.0.0", "A")
 
@@ -2391,15 +2166,9 @@ def action_m17_connect(name: str, base: str, ip: str, module: str) -> Tuple[bool
     if not st.has_m17:
         return False, "USRP2M17 bridge not detected on this host"
 
-
-
     _clear_foreign_link()
 
-
-
     _dvs("tune", TG_DISCONNECT)
-
-
 
     callsign = _effective_callsign(st)
     ok, err = _write_m17_ini(_m17_ini_content(callsign, base, ip, module))
@@ -6130,7 +5899,6 @@ class Handler(BaseHTTPRequestHandler):
                 cfg_data["mode_net_urls"] = data["mode_net_urls"]
             if "bridge_nodes" in data and isinstance(data["bridge_nodes"], (list, tuple)):
 
-
                 cfg_data["bridge_nodes"] = list(data["bridge_nodes"])
             return action_save_config(cfg_data)
 
@@ -6229,12 +5997,6 @@ def _dvs_startup_init() -> None:
         set_state(current_dvs_mode="DMR")
 
 def _is_fresh_boot() -> bool:
-    """True if this is the dashboard's first start since the system
-    booted; False if this is a process restart (systemd Restart=always,
-    the external watchdog, a manual `systemctl restart`, a redeploy, etc.)
-    within the same boot. On any error this returns True, which reproduces
-    the original always-reset behavior — the conservative fallback.
-    """
     try:
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except Exception:
@@ -6424,7 +6186,6 @@ def install_service() -> None:
     print(f"\nInstall complete. {ASL_DVS_CONF} was not touched.")
     print("View logs anytime using:  journalctl -u asl_dvs_dashboard -f")
 
-
 def uninstall_service() -> None:
     if os.geteuid() != 0:
         print("ERROR: uninstall requires root  →  sudo python3 asl_dvs_dashboard.py --uninstall",
@@ -6453,7 +6214,6 @@ def uninstall_service() -> None:
             print(f"  [-] Removed {target}")
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
-
 
 def main() -> None:
     if os.geteuid() != 0:

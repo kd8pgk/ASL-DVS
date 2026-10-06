@@ -1,7 +1,4 @@
 #!/usr/bin/env python3
-#
-# ASL-DVS Node Control  —  asl_dvs_dashboard.py  —  v9.3.71  —  2026-10-04
-# KD8PGK / Claude AI (Anthropic)  —  CC BY-NC 4.0
 
 import argparse
 import codecs
@@ -42,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71"
-BUILD_DATE   = "2026-10-04"
+VERSION      = "9.3.72"
+BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -61,14 +58,11 @@ _DVS_SEARCH_PATHS = [
 ]
 PORT            = 8989
 
-
 WIFIMON_SHUTDOWN_STATE_FILE = "/run/wifimon/shutdown_state.json"
-
 
 M17_NODE      = "1917"
 M17_INI_PATH  = "/opt/USRP2M17/USRP2M17.ini"
 M17_SERVICE   = "usrp2m17"
-
 
 BRIDGE_SLOT_DIGITAL    = 0
 BRIDGE_SLOT_M17        = 1
@@ -77,7 +71,6 @@ BRIDGE_SLOT_COUNT      = 4
 BRIDGE_SLOT_LABELS     = ("Digital Voice Bridge", "M17 Bridge", "Phone Bridge", "Reserved")
 PHONE_NODE             = "1001"
 DEFAULT_BRIDGE_NODES   = [ASL_BRIDGE_NODE, M17_NODE, PHONE_NODE, ""]
-
 
 _M17_USRP_DST_PORT   = 32008
 _M17_USRP_LOCAL_PORT = 34008
@@ -98,7 +91,6 @@ DSTAR_UNLINK   = "       U"
 _DSTAR_BASE_LEN = 6
 
 ASL_DVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
-
 
 _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
 
@@ -143,7 +135,6 @@ ALL_PAGES        = ("ASL", "ECHO") + DIGITAL_MODES + ("FCS", "XLX", "M17", "PHON
 VALID_CONF_MODES = {"DMR", "STFU", "YSF", "FCS", "P25", "NXDN", "DSTAR"}
 TUNE_MODES       = set(DIGITAL_MODES) | {"FCS"}
 
-
 BRIDGE_SLOT_PAGES = {
     BRIDGE_SLOT_DIGITAL: TUNE_MODES | {"XLX"},
     BRIDGE_SLOT_M17:     {"M17"},
@@ -173,7 +164,6 @@ def _apply_config(cfg: dict) -> None:
                 _cfg.asl_node = v
         if "bridge_nodes" in cfg:
 
-
             items = cfg["bridge_nodes"]
             items = list(items) if isinstance(items, (list, tuple)) else str(items).split(",")
             items = [str(x).strip() for x in items][:BRIDGE_SLOT_COUNT]
@@ -184,7 +174,6 @@ def _apply_config(cfg: dict) -> None:
                 items[BRIDGE_SLOT_PHONE] = PHONE_NODE
             _cfg.bridge_nodes = items
         elif "bridge_node" in cfg:
-
 
             v = str(cfg["bridge_node"]).strip()
             if v.isdigit():
@@ -728,7 +717,6 @@ def _parse_conf(path: str) -> Tuple[list, list, list, dict, list, dict, list, li
                     xlx_reflectors.append((xlx_name, xlx_tg, xlx_url))
         elif section == "M17":
 
-
             raw_parts = line.split("|")
             if len(raw_parts) >= 4:
                 m17_name   = raw_parts[0].strip()
@@ -763,8 +751,6 @@ def _parse_conf(path: str) -> Tuple[list, list, list, dict, list, dict, list, li
                 tg_val = tg_val + "L"
                 log.warning("DSTAR conf shim: appended L → '%s'", tg_val)
             elif 5 <= len(tg_val) < 8:
-                # v9.3.71: a gateway callsign saved without its padding, e.g.
-                # "W1ABCBL" → "W1ABC BL" (ircDDBGateway needs 8 characters).
                 tg_val = _dstar_link_str(tg_val[:-2], tg_val[-2])
                 log.warning("DSTAR conf shim: '%s' → '%s'", name, tg_val)
             tg_val = tg_val.upper()
@@ -1719,7 +1705,6 @@ def action_save_phone_favorite(number: str, name: str = "") -> Tuple[bool, str]:
                 return True, f"Saved {label} to {net['name']} favorite slot {i+1}"
     return False, f"All 10 favorite slots on {net['name']} are in use — free one on the Edit page"
 
-
 AST_DIR       = "/etc/asterisk"
 HANGUP_SCRIPT = "/var/lib/asterisk/dvs_phone_hangup"
 TONECODE_SCRIPT = "/var/lib/asterisk/dvs_phone_tonecode"
@@ -2336,7 +2321,6 @@ def _ph_place_second(text: str, body: str) -> str:
     if not body:
         return text
     return text.rstrip("\n") + "\n\n" + _PH_BEGIN + "\n" + body + "\n" + _PH_END + "\n"
-
 
 _PH_CH_RE   = re.compile(r"^(IAX2|PJSIP)/dvs")
 _PH_PATTERNS = {"N": "[2-9]", "X": "[0-9]"}
@@ -3576,7 +3560,6 @@ def _phone_sync_open(page: str) -> None:
     if okk:
         _phone_open_state = want
 
-
 _tot: dict = {"want_off": None, "ena": None, "error": "", "last_check": 0.0,
               "keyed_since": 0.0, "capped": False, "last_poll": 0.0}
 _TOT_ENA_RE = re.compile(r"\btot_ena\s*=\s*(\d)")
@@ -3896,7 +3879,6 @@ def _validate_tg_entries(entries: list) -> Tuple[Optional[list], Optional[str]]:
     out = []
     for i, e in enumerate(entries):
         mode = str(e.get("mode", "")).strip().upper()
-
 
         name = _strip_ctrl(str(e.get("name", "")).strip())
         tg   = _strip_ctrl(str(e.get("tg",   "")).strip())
@@ -4507,7 +4489,6 @@ _YSF_CC_CODES     = frozenset((
     "TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI "
     "VN VU WF WS YE YT ZA ZM ZW UK EU").split())
 
-
 _FCS_HOSTS_PATH  = "/var/lib/mmdvm/FCSRooms.txt"
 _FCS_HOSTS_TTL   = 300.0
 _FCS_ID_RE       = re.compile(r"FCS(\d{3})(\d{2})")
@@ -4580,7 +4561,6 @@ def _detect_sysmon() -> bool:
     return _cached_detect("sysmon", _SYSMON_CACHE_TTL, _probe)
 
 def _detect_m17() -> bool:
-
 
     def _probe_m17() -> bool:
         if shutil.which("systemctl") and                run(["systemctl", "status", M17_SERVICE], timeout=3)[1] in (0, 3):
@@ -5192,7 +5172,6 @@ def _load_m17_hosts() -> dict:
 def action_get_m17_hosts() -> dict:
     return _load_m17_hosts()
 
-
 _XLX_HOSTS_PATH   = "/var/lib/mmdvm/XLXHosts.txt"
 _XLX_HOSTS_TTL    = 300.0
 _XLX_ID_MAX       = 16
@@ -5200,20 +5179,17 @@ _XLX_ADDR_MAX     = 128
 _XLX_CODE_LEN     = 3
 _XLX_DMR_TG_BASE  = 4001
 
-
 def _xlx_empty(found: bool = False) -> dict:
     return {"ok": True, "found": found, "reflectors": [], "updated": "",
             "mtime": 0,
             "stats": {"reflectors": 0, "malformed": 0, "duplicates": 0,
                       "bad_addr": 0}}
 
-
 def _xlx_text(val, limit: int) -> str:
     if not isinstance(val, str):
         return ""
     out = _strip_ctrl(val).strip()
     return out[:limit] if out else ""
-
 
 def _xlx_id(code: str) -> str:
     if not isinstance(code, str):
@@ -5223,7 +5199,6 @@ def _xlx_id(code: str) -> str:
         return ""
     return "XLX" + code
 
-
 def _xlx_dmr_module(val) -> str:
     try:
         n = int(str(val).strip())
@@ -5231,7 +5206,6 @@ def _xlx_dmr_module(val) -> str:
         return ""
     off = n - _XLX_DMR_TG_BASE
     return chr(65 + off) if 0 <= off <= 25 else ""
-
 
 def _parse_xlx_hosts(text: str) -> dict:
     if not isinstance(text, str) or not text.strip():
@@ -5281,7 +5255,6 @@ def _parse_xlx_hosts(text: str) -> dict:
     return {"ok": True, "found": True, "reflectors": out,
             "updated": "", "mtime": 0, "stats": stats}
 
-
 def _build_xlx_hosts(_prev):
     try:
         with open(_XLX_HOSTS_PATH, "r", encoding="utf-8", errors="replace") as f:
@@ -5299,10 +5272,8 @@ _xlx_cache = _ListCache(_XLX_HOSTS_TTL, _build_xlx_hosts,
 def _load_xlx_hosts() -> dict:
     return _xlx_cache.get()
 
-
 def action_get_xlx_hosts() -> dict:
     return _load_xlx_hosts()
-
 
 _DSTAR_HOSTS_DIR   = "/var/lib/mmdvm"
 _DSTAR_HOSTS_FILES = (("REF", "DPlus_Hosts.txt"),
@@ -5313,7 +5284,6 @@ _DSTAR_HOSTS_TTL   = 300.0
 _DSTAR_ADDR_MAX    = 128
 _DSTAR_ID_RE       = re.compile(r"^([A-Z]{3})(\d{3})$")
 _DSTAR_DATE_RE     = re.compile(r"#.*?File updated on\s+(.+?)\s*$", re.I)
-
 
 def _parse_dstar_hosts(lines, kind: str) -> dict:
     rows: "list[dict]" = []
@@ -5350,7 +5320,6 @@ def _parse_dstar_hosts(lines, kind: str) -> dict:
         rows.append({"id": name, "addr": addr})
     stats["reflectors"] = len(rows)
     return {"rows": rows, "updated": updated, "stats": stats}
-
 
 def _build_dstar_hosts(_prev):
     rows: "list[dict]" = []
@@ -5396,19 +5365,10 @@ _dstar_cache = _ListCache(_DSTAR_HOSTS_TTL, _build_dstar_hosts,
 def _load_dstar_hosts() -> dict:
     return _dstar_cache.get()
 
-
 def action_get_dstar_hosts() -> dict:
     return _load_dstar_hosts()
 
-
-# v9.3.71: D-STAR link targets are either a reflector (REF/XRF/DCS + 3 digits,
-# routed from the host lists) or a gateway/repeater callsign (3-6 characters,
-# looked up on ircDDB and linked over DExtra).  Both use the same 8-character
-# UR link string: target padded to 6, module letter, "L".  ircDDBGateway turns
-# "W1ABC BL" into the link target "W1ABC  B" (first 6 + space + 7th char), so
-# a 5-character callsign needs its padding space kept.
 _DSTAR_CALL_RE = re.compile(r"^(?=.*\d)[A-Z0-9]{3,6}$")
-
 
 def _dstar_target_kind(base: str) -> str:
     b = str(base or "").strip().upper()
@@ -5419,10 +5379,7 @@ def _dstar_target_kind(base: str) -> str:
         return "gateway"
     return ""
 
-
 def _dstar_split_target(base: str, module: str) -> Tuple[str, str]:
-    # Accepts "W1ABC", "W1ABC B" or the 8-character "W1ABC  B" form; a module
-    # letter typed after the callsign wins over the separate module field.
     b = " ".join(str(base or "").upper().split())
     mod = str(module or "").strip().upper()[:1]
     parts = b.rsplit(" ", 1)
@@ -5430,25 +5387,15 @@ def _dstar_split_target(base: str, module: str) -> Tuple[str, str]:
         b, mod = parts[0].strip(), parts[1]
     return b, mod
 
-
 def _dstar_link_str(base: str, module: str) -> str:
     return f"{base.strip().upper().ljust(_DSTAR_BASE_LEN)}{module.upper()}L"
 
-
 def _dstar_link_target(base: str, module: str) -> str:
-    # The 8-character callsign ircDDBGateway links to, e.g. "W1ABC  B".
     return base.strip().upper().ljust(_DSTAR_BASE_LEN + 1) + module.upper()
 
-
-# ircDDBGateway remote control (the protocol remotecontrold speaks).  Used for
-# gateway targets when /etc/ircddbgateway has remoteEnabled=1, a password and
-# a port: it hands ircDDBGateway the full 8-character target, so nothing in
-# between can drop the padding space.  Without it, gateways go through
-# dvswitch.sh tune like reflectors do.
 _IRCDDB_CONF       = "/etc/ircddbgateway"
 _IRCDDB_RC_TIMEOUT = 1.0
 _IRCDDB_RC_TRIES   = 3
-
 
 def _ircddb_conf() -> dict:
     out: dict = {}
@@ -5461,7 +5408,6 @@ def _ircddb_conf() -> dict:
     except OSError:
         pass
     return out
-
 
 def _ircddb_rc_settings() -> Optional[dict]:
     c = _ircddb_conf()
@@ -5484,10 +5430,7 @@ def _ircddb_rc_settings() -> Optional[dict]:
     return {"addr": addr, "port": port, "password": pw,
             "repeater": call[:7].ljust(7) + band}
 
-
 def _ircddb_rc_link(target: str) -> Tuple[bool, str]:
-    # LIN -> RND(u32) -> SHA(sha256(rnd + password)) -> ACK -> LNK -> ACK -> LOG.
-    # An empty target is an unlink.  Integers are little-endian, as on the Pi.
     rc = _ircddb_rc_settings()
     if rc is None:
         return False, "ircDDBGateway remote control is not enabled"
@@ -5516,7 +5459,7 @@ def _ircddb_rc_link(target: str) -> Tuple[bool, str]:
         if r is None or r[:3] != b"ACK":
             return False, "ircDDBGateway remote control refused the password"
         pkt = (b"LNK" + rc["repeater"].encode("ascii")
-               + (0).to_bytes(4, "little")                  # RECONNECT_NEVER
+               + (0).to_bytes(4, "little")
                + target.ljust(8)[:8].encode("ascii"))
         r = xfer(pkt, (b"ACK",))
         if r is None:
@@ -5534,23 +5477,18 @@ def _ircddb_rc_link(target: str) -> Tuple[bool, str]:
             pass
         sock.close()
 
-
 _FAV_SLOTS = 10
-
 
 def _tg_blank_row(r) -> bool:
     return _tg_row_is_blank(r[1], r[2])
-
 
 def _same_tg_number(t, tg: str) -> bool:
     t = str(t).strip()
     return t.isdigit() and str(int(t)) == tg
 
-
 def _fav_full_msg(what: str) -> str:
     return (f"All {_FAV_SLOTS} {what} favorite slots are in use. "
             "Free one in the Edit tab first.")
-
 
 def _fav_place(rows, entry, is_blank, is_same):
     for slot, r in enumerate(rows, 1):
@@ -5566,7 +5504,6 @@ def _fav_place(rows, entry, is_blank, is_same):
     new_rows.append(entry)
     return "new", len(new_rows), new_rows
 
-
 def _commit_conf(**changes) -> Tuple[bool, str]:
     st   = get_state()
     prev = {k: getattr(st, k) for k in changes}
@@ -5576,7 +5513,6 @@ def _commit_conf(**changes) -> Tuple[bool, str]:
     if not ok:
         set_state(**prev)
     return ok, msg
-
 
 def _add_favorite(field: str, entry, is_same, what: str, label: str, *,
                   mode: Optional[str] = None, is_blank=None, saved: str = "",
@@ -5602,7 +5538,6 @@ def _add_favorite(field: str, entry, is_same, what: str, label: str, *,
         if after:
             after()
     return True, f"Saved {saved or label} to favorite slot {slot}"
-
 
 def action_save_dstar_favorite(base: str, module: str) -> Tuple[bool, str]:
     raw = str(base or "")
@@ -5637,7 +5572,6 @@ def action_save_dstar_favorite(base: str, module: str) -> Tuple[bool, str]:
                          lambda r: r[2].strip().upper() == tune,
                          "D-STAR", label, mode="DSTAR")
 
-
 def _lh_link(addr: str) -> str:
     a = _strip_ctrl(str(addr or "")).strip()
     if not a or "|" in a or " " in a or "/" in a:
@@ -5646,10 +5580,8 @@ def _lh_link(addr: str) -> str:
         a = f"[{a}]"
     return f"http://{a}"
 
-
 def _xlx_row_is_blank(name: str, tg: str) -> bool:
     return str(name).strip().lower() == TG_BLANK_NAME or str(tg).strip() == TG_BLANK_ADDR
-
 
 def action_save_xlx_favorite(base: str, module: str) -> Tuple[bool, str]:
     base = str(base or "").strip().upper()
@@ -5688,7 +5620,6 @@ def action_save_xlx_favorite(base: str, module: str) -> Tuple[bool, str]:
                          lambda r: str(r[1]).strip().upper() == tune,
                          "XLX", f"{rid} Mod-{mod}",
                          is_blank=lambda r: _xlx_row_is_blank(r[0], r[1]))
-
 
 def _m17_row_is_blank(name: str, ip: str) -> bool:
     return str(name).strip().lower() == TG_BLANK_NAME or str(ip).strip() == TG_BLANK_ADDR
@@ -5731,7 +5662,6 @@ def action_save_m17_favorite(base: str, module: str) -> Tuple[bool, str]:
                          "M17", f"{ref['id']} Mod-{module}",
                          is_blank=lambda r: _m17_row_is_blank(r[0], r[3]))
 
-
 def _tg_row_is_blank(name: str, tg: str) -> bool:
     return name.strip().lower() == TG_BLANK_NAME or tg.strip() == TG_BLANK_ADDR
 
@@ -5763,7 +5693,6 @@ def action_save_fcs_favorite(room: str) -> Tuple[bool, str]:
             return False
     return _add_favorite("talkgroups", san[0], same, "FCS", label, mode="FCS")
 
-
 def action_save_ysf_favorite(ref: str) -> Tuple[bool, str]:
     ref = str(ref or "").strip()
     if not ref or len(ref) > 64 or _has_ctrl_chars(ref) or ":" not in ref:
@@ -5791,7 +5720,6 @@ def action_save_ysf_favorite(ref: str) -> Tuple[bool, str]:
                                     and t.zfill(5) == rid.zfill(5))
     return _add_favorite("talkgroups", san[0], same, "YSF", label, mode="YSF")
 
-
 def action_save_stfu_favorite(tg: str) -> Tuple[bool, str]:
     tg = str(tg or "").strip()
     if not tg.isdigit() or len(tg) > 8:
@@ -5809,7 +5737,6 @@ def action_save_stfu_favorite(tg: str) -> Tuple[bool, str]:
         return False, err
     return _add_favorite("talkgroups", san[0], lambda r: _same_tg_number(r[2], tg),
                          "STFU", label, mode="STFU", saved=f"STFU {label}")
-
 
 def action_save_tg_favorite(mode: str, tg: str) -> Tuple[bool, str]:
     mode = str(mode or "").strip().upper()
@@ -5836,7 +5763,6 @@ def action_save_tg_favorite(mode: str, tg: str) -> Tuple[bool, str]:
         return False, err
     return _add_favorite("talkgroups", san[0], lambda r: _same_tg_number(r[2], tg),
                          mode, label, mode=mode, saved=f"{mode} {label}")
-
 
 def _dmr_is_brandmeister(srv: dict) -> bool:
     name = str(srv.get("name", "")).lower()
@@ -6377,7 +6303,6 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
     keyed = bool(_KEYED_RE.search(out))
     linked_node: Optional[str] = None
 
-
     bridge_set = _bridge_set()
     bridge_linked_nodes: Set[str] = set()
     adjacent = _parse_rpt_links(out)
@@ -6483,7 +6408,6 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
             active_slot = slot
             break
 
-
     for slot in _bridge_slot_down_polls:
         if slot != active_slot:
             _bridge_slot_down_polls[slot] = 0
@@ -6497,7 +6421,6 @@ def _bridge_watchdog(bridge_linked_nodes: "FrozenSet[str]") -> None:
 
     node = _slot_node(active_slot)
     if not node:
-
 
         _bridge_slot_down_polls[active_slot] = 0
         return
@@ -6884,8 +6807,6 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
     if remaining > 0:
         time.sleep(remaining)
     if use_rc:
-        # Link through ircDDBGateway's remote control, then park the UR field
-        # on CQCQCQ so later transmissions don't carry an unlink or link command.
         ok, out = _ircddb_rc_link(_dstar_link_target(base, module))
         if ok:
             _dvs("tune", "CQCQCQ")
@@ -6938,7 +6859,6 @@ def action_xlx_disconnect() -> Tuple[bool, str]:
     set_state(current_fav=None, current_fav_node=None, status="XLX | Ready")
     return True, "XLX disconnected"
 
-
 def _m17_ini_content(callsign: str, refl_name: str, ip: str, module: str) -> str:
     
     return (
@@ -6967,7 +6887,6 @@ def _m17_ini_content(callsign: str, refl_name: str, ip: str, module: str) -> str
     )
 
 def _m17_ini_placeholder(callsign: str) -> str:
-
 
     return _m17_ini_content(callsign, "DISCONNECTED", "0.0.0.0", "A")
 
@@ -7008,12 +6927,9 @@ def action_m17_connect(name: str, base: str, ip: str, module: str) -> Tuple[bool
     _ensure_page("M17")
     st = get_state()
 
-
     _clear_foreign_link()
 
-
     _dvs("tune", TG_DISCONNECT)
-
 
     callsign = _effective_callsign(st)
     ok, err = _write_m17_ini(_m17_ini_content(callsign, base, ip, module))
@@ -7037,7 +6953,6 @@ def action_m17_disconnect() -> Tuple[bool, str]:
     try:
         st = get_state()
         callsign = _effective_callsign(st)
-
 
         m17_node = _cfg.bridge_nodes[BRIDGE_SLOT_M17]
         if st.has_asl and m17_node:
@@ -13645,7 +13560,6 @@ _HTML_BYTES = (HTML
                .encode())
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
 
-
 _AUTH_ACCOUNT        = "root"
 _SESSION_TTL_SEC     = 12 * 3600
 _LOGIN_MAX_ATTEMPTS  = 5
@@ -13712,7 +13626,6 @@ def _verify_root_password(password: str) -> bool:
         stored = _read_shadow_hash(_AUTH_ACCOUNT)
         if not stored or stored[0] in ("!", "*"):
 
-
             return False
         return _crypt_verify(password, stored)
     except Exception as exc:
@@ -13723,7 +13636,6 @@ _SESSION_COOKIE_NAME = "asl_dvs_session"
 _SHARED_AUTH_DIR      = Path("/run/asl_dvs")
 _SHARED_AUTH_FILE     = _SHARED_AUTH_DIR / "auth_session.json"
 _shared_auth_proc_lock = threading.Lock()
-
 
 def _shared_auth_mutate(mutator) -> dict:
     try:
@@ -13776,7 +13688,6 @@ def _shared_auth_mutate(mutator) -> dict:
 def _issue_session() -> str:
     token = secrets.token_hex(32)
     now   = time.time()
-
 
     def _mut(d):
         d["sessions"] = {t: exp for t, exp in d["sessions"].items() if exp > now}
@@ -13839,12 +13750,10 @@ def _login_record_success(ip: str) -> None:
 
 def _session_cookie_header(token: str, max_age: int) -> str:
 
-
     return f"{_SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}"
 
 def _clear_session_cookie_header() -> str:
     return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
-
 
 _PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping"}
 
@@ -14554,7 +14463,6 @@ def install_service() -> None:
     print(f"\nInstall complete. {ASL_DVS_CONF} was not touched.")
     print("View logs anytime using:  journalctl -u asl_dvs_dashboard -f")
 
-
 def uninstall_service() -> None:
     if os.geteuid() != 0:
         print("ERROR: uninstall requires root  →  sudo python3 asl_dvs_dashboard.py --uninstall",
@@ -14583,7 +14491,6 @@ def uninstall_service() -> None:
             print(f"  [-] Removed {target}")
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
-
 
 def main() -> None:
     if os.geteuid() != 0:

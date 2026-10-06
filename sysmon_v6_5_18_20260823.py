@@ -1,11 +1,4 @@
 #!/usr/bin/env python3
-"""
-ASL-DVS SYSMON  --  sysmon.py
-Version : 6.5.18  (20260823)
-Authors : Claude AI (Anthropic) / KD8PGK
-License : CC BY-NC 4.0
-Nodes   : KD8PGK 652701 / 652702 / 652703
-"""
 
 import argparse
 import configparser
@@ -915,14 +908,12 @@ def _audio_dvswitch_compat(card_index: int) -> "tuple[bool, str | None]":
         if not rates_m:
             return (False, "cannot parse sample rates")
         
-        
         rates_list = [r.strip(",") for r in rates_m.group(1).split()]
         if "8000" not in rates_list:
             first_rate = rates_list[0] if rates_list else "unknown"
             return (False, f"8kHz not supported — min rate {first_rate}Hz")
         return (True, "")
 
-    
     cap_ok, cap_msg = _rates_ok(capture_block)
     if not cap_ok:
         return (False, f"capture: {cap_msg}")
@@ -1300,7 +1291,6 @@ def _parse_dvsi_response(data: bytes) -> "str | None":
     pkt_len = (data[1] << 8) | data[2]
     if pkt_len < 1:
         return None
-    
     
     payload = data[_DVSI_HEADER_LEN + 1 : _DVSI_HEADER_LEN + pkt_len]
     if not payload:
@@ -2625,7 +2615,6 @@ def parse_rpt_http_registrations(content: str) -> list:
         })
     return checks
 
-
 _REGISTER_LOOSE_RE = re.compile(r'^\s*register\s*[=:]', re.IGNORECASE)
 _PLACEHOLDER_NODES = frozenset({"1999", "1998"})
 _STATPOST_URL_RE   = re.compile(
@@ -2757,7 +2746,6 @@ def get_reg_status() -> dict:
     http_active  = bool(http_entries)
     iax_active   = bool(iax_entries)
 
-
     if not http_active and not iax_active:
         checks.append({
             "title": "Registration", "value": "not configured",
@@ -2791,7 +2779,6 @@ def get_reg_status() -> dict:
                 "note": _ASL_NOTE, "url": _ASL_URL,
             })
 
-
     if http_active and iax_active:
         checks.append({
             "title": "Dual registration",
@@ -2801,7 +2788,6 @@ def get_reg_status() -> dict:
                      "no gain. Pick one, comment out the other."),
             "url": "https://allstarlink.github.io/adv-topics/httpreg/",
         })
-
 
     all_malformed = http_scan["malformed"] + iax_scan["malformed"]
     if all_malformed:
@@ -2815,7 +2801,6 @@ def get_reg_status() -> dict:
             "url": None,
         })
 
-
     placeholder_hits = [n for n, _ in (http_entries + iax_entries)
                          if n in _PLACEHOLDER_NODES]
     if placeholder_hits:
@@ -2826,7 +2811,6 @@ def get_reg_status() -> dict:
             "note": "Template default left unchanged — set your real assigned node number.",
             "url": None,
         })
-
 
     http_mod = module_state("res_rpt_http_registrations.so")
     if http_active and http_mod == "noload":
@@ -2853,7 +2837,6 @@ def get_reg_status() -> dict:
             "url": None,
         })
 
-
     if rpt_err:
         checks.append({
             "title": "rpt.conf", "value": rpt_err,
@@ -2862,7 +2845,6 @@ def get_reg_status() -> dict:
     else:
         node_sects, general_kv = _reg_scan_rpt_conf(rpt_content)
         registered_nodes = {n for n, _ in (http_entries + iax_entries)}
-
 
         for nid in sorted(node_sects.keys(), key=int):
             if registered_nodes and nid not in registered_nodes:
@@ -2873,7 +2855,6 @@ def get_reg_status() -> dict:
                     "note": "Node exists in rpt.conf but isn't in the registration file — check for a typo'd node number.",
                     "url": None,
                 })
-
 
         for nid in sorted(node_sects.keys(), key=int):
             kv = node_sects[nid]
@@ -2899,7 +2880,6 @@ def get_reg_status() -> dict:
                     "url": None,
                 })
 
-
         method = general_kv.get("node_lookup_method", "").strip().lower()
         if method and method not in _NODE_LOOKUP_VALUES:
             checks.append({
@@ -2918,7 +2898,6 @@ def get_reg_status() -> dict:
                 "note": f"Overridden from the default ({_DEFAULT_DNS_DOMAIN}) — confirm this is intentional.",
                 "url": None,
             })
-
 
     allmon3_path = _ALLMON3_DIR / "allmon3.ini"
     allmon3_content, allmon3_err = read_path_file(allmon3_path) if allmon3_path.is_file() \
@@ -2957,7 +2936,6 @@ def get_reg_status() -> dict:
                         "url": None,
                     })
 
-
             reg_pwd = http_passwords.get(nid)
             if reg_pwd and am_pass and reg_pwd != am_pass:
                 checks.append({
@@ -2967,7 +2945,6 @@ def get_reg_status() -> dict:
                     "note": "AllStarLink registration and local AMI access are separate credentials — this is only worth a look if you intended them to match.",
                     "url": None,
                 })
-
 
     reg_live = get_state_snapshot().get("reg_live")
     if reg_live is None:
@@ -3281,7 +3258,6 @@ _DVSWITCH_FILES: "list[Path]" = [
 
 _SIMPLEUSB_FILE = Path("/etc/asterisk/simpleusb.conf")
 
-
 _SIMPLEUSB_FIELD_SPECS = {
     "rxmixerset":  {"type": "int",  "min": 0, "max": 1000},
     "txmixaset":   {"type": "int",  "min": 0, "max": 1000},
@@ -3289,7 +3265,6 @@ _SIMPLEUSB_FIELD_SPECS = {
     "rxboost":     {"type": "bool"},
     "deemphasis":  {"type": "bool"},
     "preemphasis": {"type": "bool"},
-
 
     "rxondelay":   {"type": "int",  "min": 0, "max": 100},
     "txoffdelay":  {"type": "int",  "min": 0, "max": 100},
@@ -3410,7 +3385,6 @@ def _tune_apply_updates(lines: list, formatted: dict) -> tuple:
 
 def parse_simpleusb_tune_settings(path: Path = _SIMPLEUSB_FILE) -> dict:
 
-
     result = {key: None for key in _SIMPLEUSB_FIELD_SPECS}
     result["devstr"] = None
     result["path"]   = str(path)
@@ -3499,7 +3473,6 @@ def parse_usbradio_settings(path: Path = _USBRADIO_FILE) -> dict:
 
 def save_simpleusb_tune_settings(updates: dict, path: Path = _SIMPLEUSB_FILE) -> tuple[bool, str]:
 
-
     if not path.exists():
         msg = f"File not found: {path}"
         _log(f"WARN — simpleusb save: {msg}")
@@ -3566,7 +3539,6 @@ def save_simpleusb_tune_settings(updates: dict, path: Path = _SIMPLEUSB_FILE) ->
             old_val = old_values.get(key)
             new_val = formatted[key]
 
-
             audit_log.append(f"{key} {old_val}→{new_val}")
 
         _log(f"simpleusb tune saved: {msg} ({'; '.join(audit_log)})")
@@ -3622,7 +3594,6 @@ def save_usbradio_settings(updates: dict, path: Path = _USBRADIO_FILE) -> tuple[
         _log(f"WARN — usbradio save: {msg}")
         return False, msg
     
-
     validation_rules = {
         "rxmixerset":  ("int", 0, 1000),
         "txmixaset":   ("int", 0, 1000),
@@ -5618,7 +5589,6 @@ def _build_m17_payload() -> dict:
         "ini_path":      cfg["ini_path"],
     }
 
-
 _ZELLO_SERVICE_NAME  = "asl-zello-bridge"
 _ZELLO_SERVICE_PATHS = [
     Path("/etc/systemd/system/asl-zello-bridge.service"),
@@ -5735,7 +5705,6 @@ def _zello_read_env_override() -> dict:
         "source":           source,
         "mode":             "work" if env.get("ZELLO_API_ENDPOINT") else "free",
     }
-
 
 def _zello_libopus_present() -> bool:
     try:
@@ -6085,7 +6054,6 @@ def label_ports(ports: list, pinned: list) -> list:
 
 def get_firewall_backend() -> str:
     
-    
     if shutil.which("ufw"):
         return "ufw"
     if shutil.which("firewall-cmd"):
@@ -6145,7 +6113,6 @@ def _label_fw_rule(rule: dict, pinned: list) -> str:
     port_part = to.split("/")[0] if "/" in to else to
 
     if "-" in port_part:
-        
         
         try:
             lo_s, hi_s = port_part.split("-", 1)
@@ -6316,7 +6283,6 @@ def _firewalld_remove_port(zone: str, port: str, proto: str) -> "tuple[bool, str
     ok  = r1.returncode == 0 and r2.returncode == 0
     detail = (r1.stderr.strip() or r2.stderr.strip()) if not ok else "OK (runtime + permanent)"
     
-    
     return ok, f"firewalld deny (remove-port) {spec} (zone={zone}): {detail}"
 
 def _firewalld_list_ports(zone: str) -> list:
@@ -6395,7 +6361,6 @@ def _fw_state_map() -> "dict[str, str]":
     elif backend == "firewalld":
         zone = _firewalld_zone()
         if zone:
-            
             
             for r in _firewalld_list_ports(zone):
                 to = r.get("to", "")
@@ -6496,7 +6461,6 @@ def _update_state(**kwargs) -> None:
 def _bg_poll_loop() -> None:
     _log("bg_poll: started")
     
-    
     _sd_notify("READY=1")
     poll_count = 0
     while True:
@@ -6535,7 +6499,6 @@ def _bg_poll_loop() -> None:
                     _log(f"bg_poll: reg_live error — {exc}", stderr=True)
         except Exception as exc:
             _log(f"bg_poll: error — {exc}", stderr=True)
-        
         
         _sd_notify("WATCHDOG=1")
         time.sleep(10)
@@ -15751,7 +15714,6 @@ _conn_sem = threading.Semaphore(_MAX_CONCURRENT_CONNS)
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
     
-    
     def handle_error(self, request, client_address) -> None:
         exc = sys.exc_info()[1]
         if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
@@ -15760,7 +15722,6 @@ class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
 
 class Handler(BaseHTTPRequestHandler):
 
-    
     timeout = 20
 
     def log_message(self, fmt, *args):
@@ -15771,7 +15732,6 @@ class Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(self.timeout)
 
     def handle(self) -> None:
-        
         
         with _conn_sem:
             super().handle()
@@ -15833,7 +15793,6 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         
-        
         try:
             handler(self)
         except (BrokenPipeError, ConnectionResetError):
@@ -15860,7 +15819,6 @@ class Handler(BaseHTTPRequestHandler):
         except (json.JSONDecodeError, ValueError) as exc:
             self.send_json({"ok": False, "message": f"Bad JSON: {exc}"}, 400)
             return
-        
         
         try:
             handler(self, data)
@@ -16952,7 +16910,6 @@ def _route_usbradio_get(h: Handler) -> None:
 
 def _route_simpleusb_tune_get(h: Handler) -> None:
 
-
     settings = parse_simpleusb_tune_settings()
     h.send_json({
         "ok":       settings.get("exists", False),
@@ -16969,7 +16926,6 @@ def _route_simpleusb_tune_post(h: Handler, data: dict) -> None:
     if os.geteuid() != 0:
         h.send_json({"ok": False, "message": "This operation requires root privileges (try: sudo)"}, 403)
         return
-
 
     updates = {}
     for key, spec in _SIMPLEUSB_FIELD_SPECS.items():
@@ -17186,7 +17142,6 @@ def _route_usbradio_post(h: Handler, data: dict) -> None:
         }, 403)
         return
     
-
     allowed_fields = {
         "rxmixerset", "txmixaset", "txmixbset", "rxvoiceadj", "rxctcssadj",
         "txctcssadj", "rxsquelchadj", "fever", "txslimsp"
@@ -17200,7 +17155,6 @@ def _route_usbradio_post(h: Handler, data: dict) -> None:
         }, 400)
         return
     
-
     ok, msg = save_usbradio_settings(updates)
     if not ok:
         h.send_json({
@@ -17251,7 +17205,6 @@ def _route_usbradio_post(h: Handler, data: dict) -> None:
     })
 
 _RADIO_TUNE_DRIVER_FIELDS = {
-
 
     "simpleusb": tuple(_SIMPLEUSB_FIELD_SPECS.keys()),
     "usbradio":  ("rxmixerset", "txmixaset", "txmixbset", "rxvoiceadj", "rxctcssadj",
@@ -17629,7 +17582,6 @@ def _route_m17_post(h: Handler, data: dict) -> None:
         return
 
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
-
 
 _ZELLO_RE_UNKEYED = re.compile(r"UnKeyed:(\S+?)(?:\s*\(([\d.]+)s\))?\s*$")
 _ZELLO_RE_KEYED    = re.compile(r"(?<!Un)Keyed:(\S+)\s*$")
@@ -18190,7 +18142,6 @@ StandardError=journal
 WantedBy=multi-user.target
 """
 
-
 def install_service() -> None:
     if os.geteuid() != 0:
         print("ERROR: install requires root  →  sudo python3 sysmon.py --install",
@@ -18218,12 +18169,10 @@ def install_service() -> None:
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "sysmon.service"], check=True)
     
-    
     subprocess.run(["systemctl", "restart", "sysmon.service"], check=True)
     print("  [+] Enabled and started sysmon.service")
     print(f"\nInstall complete. {CONFIG_FILE} was not touched.")
     print("View logs anytime using:  journalctl -u sysmon -f")
-
 
 def uninstall_service() -> None:
     if os.geteuid() != 0:
@@ -18254,7 +18203,6 @@ def uninstall_service() -> None:
             print(f"  [-] Removed {target}")
 
     print(f"\nUninstall complete. {CONFIG_FILE} was not touched.")
-
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="ASL-DVS SYSMON")

@@ -40,12 +40,12 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_67_20261005.py` | `sysmon_pi02w_v6_13_67_2_20261005.py` | `instmon_v2_38_1_20261005.py` |
-| `VERSION` | `6.13.67` | `6.13.67.2-pi02w` | `2.38.1` |
-| Header | | `Build: Pi Zero 2 W fork of v6.13.67` | `Build: common (all nodes, including Pi Zero 2 W)` |
+| File name | `sysmon_v6_13_68_20261006.py` | `sysmon_pi02w_v6_13_67_3_20261006.py` | `instmon_v2_38_2_20261006.py` |
+| `VERSION` | `6.13.68` | `6.13.67.3-pi02w` | `2.38.2` |
 
-File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version number is never
-reused: every change gets a new version.
+The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
+read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
+number is never reused: every change gets a new version.
 
 ### Which build a node gets
 
@@ -61,12 +61,12 @@ reused: every change gets a new version.
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_38_1_20261005.py --install
+   sudo python3 instmon_v2_38_2_20261006.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_asl_dvs_v6_5_20261005.sh
+   sudo bash install_asl_dvs_v6_6_20261006.sh
    ```
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -135,10 +135,34 @@ The result is about half the memory and a faster start:
 Each tool writes the launcher when it installs. It removes the launcher on
 uninstall once no service uses it any more.
 
+### Memory savers
+
+Launcher version 2 (written by SysMon Pi02w 6.13.67.3, Dashboard Pi02w
+9.3.71.2, instmon 2.38.2, wifimon 5.24, 44helper 0.0.159 and installer v6.6)
+adds three more savers. The service files do not change: the launcher starts
+Python once more with the first two, in the same process.
+
+| Saver | What it does | Off switch |
+|---|---|---|
+| `python3 -OO` | Drops the built-in help text (docstrings) from the loaded code. | `/etc/asl_dvs/launch_no_optimize` |
+| `MALLOC_ARENA_MAX=2` | At most 2 memory pools instead of up to 8 per CPU core. Each pool keeps the memory its threads freed. | `/etc/asl_dvs/launch_no_arena_cap` |
+| `malloc_trim` | 1 minute after start, then every 5 minutes, hands freed memory back to Linux. | `/etc/asl_dvs/launch_no_trim` |
+
+To turn a saver off for every tool, create its file and restart the services:
+
+```
+sudo touch /etc/asl_dvs/launch_no_arena_cap
+sudo systemctl restart sysmon asl_dvs_dashboard instmon wifimon 44helper
+```
+
+Delete the file and restart to turn it back on. With `-OO`, the first start
+after an update compiles the tool (and the parts of Python it uses) once more;
+memory settles from the next restart on.
+
 ## Removing everything
 
 ```
-sudo bash uninstall_asl_dvs_all_v1_1.sh
+sudo bash uninstall_asl_dvs_all_v1_2.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
@@ -149,22 +173,55 @@ afterwards, run its own `--uninstall`.
 
 | File | Build |
 |---|---|
-| `asl_dvs_dashboard_v9_3_71_20261004.py` | Dashboard, full (current) |
-| `asl_dvs_dashboard_pi02w_v9_3_71_1_20261005.py` | Dashboard, Pi Zero 2 W (current) |
+| `asl_dvs_dashboard_v9_3_72_20261006.py` | Dashboard, full (current) |
+| `asl_dvs_dashboard_pi02w_v9_3_71_2_20261006.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
-| `sysmon_v6_13_67_20261005.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_67_2_20261005.py` | SysMon, Pi Zero 2 W (current) |
+| `sysmon_v6_13_68_20261006.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_67_3_20261006.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
-| `instmon_v2_38_1_20261005.py` | common |
-| `wifimon_v5_23_20261005.py` | common |
-| `asl_dvs_m17_44helper_v0_0_158_20261005.py` | common |
-| `asl_dvs_watchdog_v2_3_20261005.sh` | common |
-| `install_asl_dvs_v6_5_20261005.sh` | common |
-| `uninstall_asl_dvs_all_v1_1.sh` | common |
+| `instmon_v2_38_2_20261006.py` | common |
+| `wifimon_v5_24_20261006.py` | common |
+| `asl_dvs_m17_44helper_v0_0_159_20261006.py` | common |
+| `asl_dvs_watchdog_v2_4_20261006.sh` | common |
+| `install_asl_dvs_v6_6_20261006.sh` | common |
+| `uninstall_asl_dvs_all_v1_2.sh` | common |
 | `wifi_menu.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
 always pick the newest.
+
+## Comment-stripped copies and changelogs
+
+The scripts in this repo are comment-stripped copies: comments and docstrings
+are removed, and the code is otherwise unchanged. A few comment lines stay
+because something reads them:
+
+- the first line (`#!...`) and a Python `coding` line;
+- the title line of each `.sh` script (for example
+  `# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)`): instmon reads a
+  shell script's version from it.
+
+Text inside strings is left alone, including files the tools write onto the
+Pi, like service units and the launcher.
+
+The change history of each script is in [`changelogs/`](changelogs), one file
+per tool and build:
+
+| Changelog | Scripts |
+|---|---|
+| [`sysmon.md`](changelogs/sysmon.md) | `sysmon_v*.py` (full) |
+| [`sysmon_pi02w.md`](changelogs/sysmon_pi02w.md) | `sysmon_pi02w_v*.py` |
+| [`asl_dvs_dashboard.md`](changelogs/asl_dvs_dashboard.md) | `asl_dvs_dashboard_v*.py` (full) |
+| [`asl_dvs_dashboard_pi02w.md`](changelogs/asl_dvs_dashboard_pi02w.md) | `asl_dvs_dashboard_pi02w_v*.py` |
+| [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
+| [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
+| [`asl_dvs_m17_44helper.md`](changelogs/asl_dvs_m17_44helper.md) | `asl_dvs_m17_44helper_v*.py` |
+| [`asl_dvs_watchdog.md`](changelogs/asl_dvs_watchdog.md) | `asl_dvs_watchdog_v*.sh` |
+| [`install_asl_dvs.md`](changelogs/install_asl_dvs.md) | `install_asl_dvs_v*.sh` |
+| [`uninstall_asl_dvs_all.md`](changelogs/uninstall_asl_dvs_all.md) | `uninstall_asl_dvs_all_v*.sh` |
+| [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu.sh` |
+
+Every new version adds an entry at the top of its changelog.
 
 ## License
 

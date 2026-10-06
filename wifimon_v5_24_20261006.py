@@ -1,655 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-#"""
-#wifimon.py — WiFi & Voltage Watchdog + Dashboard for Raspberry Pi Zero 2W
-#Version: 5.23 (Uninstall tolerates files already gone)
-#Build: common (all nodes, including Pi Zero 2 W)
-
-#Monitors wifi connectivity and supply voltage.
-#Triggers a clean system shutdown on:
-#  1. Sustained low voltage (undervoltage protection).
-#  2. Sustained network connection loss.
-#Serves a web dashboard on port 8991 (plain HTTP by default, root-password login).
-#
-#v5.23 — --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment).
-#
-#v5.22 — Starts through the shared launcher. wifimon.service now runs
-#  /usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/wifimon.py.
-#  Run directly, Python compiles the whole 363 KB file on every start and
-#  keeps that memory (about 36 MB); the launcher imports wifimon instead, so
-#  Python saves the compiled copy in /usr/local/bin/__pycache__ and reuses
-#  it on later starts (about 22 MB, twice as fast to start). Python checks
-#  the file's date and size each start and recompiles by itself after an
-#  update. --install writes the launcher (same file the Pi Zero 2 W sysmon /
-#  dashboard, instmon and install_asl_dvs v6.5 write); --uninstall removes
-#  wifimon's compiled copy and the launcher once no unit uses it.
-#
-#v5.21 — Adapter switches. Each WiFi adapter on the Radio & device card
-#  gets a 3-way switch: Auto (NetworkManager decides, same as before),
-#  Keep on, Keep off. Field log showed wlan0 rejoining SpectrumSetup-DD by
-#  itself after a restart although it had been disconnected earlier
-#  (`nmcli device disconnect` only lasts until the next reboot/NM restart).
-#  Keep off: `nmcli device set <dev> autoconnect no`, and disconnect it
-#  whenever it starts connecting. Keep on: autoconnect yes, and if it sits
-#  "disconnected" wifimon joins it (at most every RECONNECT_INTERVAL_SECS)
-#  to the highest-priority saved network that is in range and not already
-#  active on another adapter (up to 3 tried). For the adapter the watchdog
-#  uses, Keep on only sets autoconnect -- the watchdog's own reconnect
-#  logic (v5.16/v5.17) stays in charge. A "dev-mode" thread checks every
-#  DEVMODE_CHECK_SECS (10) and on every NetworkManager wl* event; it does
-#  nothing while the hotspot is on, a dashboard change is pending, or
-#  another change holds the action lock, and Keep on waits while a connect
-#  job runs or the adapter is unavailable (radio off).
-#  Settings are keyed by the adapter's factory hardware address
-#  (ETHTOOL_GPERMADDR; fallback /sys address if not randomized; last resort
-#  the name), so they follow the adapter if USB adapters swap wlan names.
-#  Stored in /etc/wifimon/state.json as "device_modes" (compare-before-
-#  write). Unplugged adapters with a setting are listed as "Not plugged
-#  in" with a Forget button (POST /api/device/forget {key}).
-#  Safety: Keep off is refused on the adapter the watchdog is using, and
-#  "Use this device" is refused on a Keep off adapter. If a reboot renames
-#  adapters so the watched one is now a Keep off adapter, the watchdog is
-#  moved to another adapter (Keep on first, then a connected one) with a
-#  warning, and the shutdown timer paused. Disconnect is refused on a Keep
-#  on adapter (it would just rejoin). POST /api/device/mode {device, mode,
-#  confirm} goes through the usual 60 s auto-undo, which restores the old
-#  setting (and reconnects if Keep off cut it).
-#  Also: HTTP_PORT back to 8991 (the attached copy had 8992).
-#
-#v5.20 — Reconnect fixes, stage 5 of 5 (plan complete): WiFi chips on
-#  both sides. New "WiFi chips" group under More details.
-#  This Pi: chip model from the kernel's boot lines ("... for chip
-#  BCM43430/2", "Firmware: BCM43430/2 ...") -- caught by the v5.19 kernel
-#  log reader, or read once from `journalctl -k -b` if the kernel buffer
-#  has rolled over; else the SDIO chip ID (0xa9a6 = BCM43430/43436,
-#  0x4345 = BCM43455) or a USB adapter's own maker/product strings. Driver,
-#  firmware version and bus from the driver's own report (the ethtool
-#  "driver info" request, made directly -- ethtool itself isn't needed).
-#  Router: read from `iw dev <if> scan dump`, which lists what's already
-#  cached -- it never starts a scan. For the joined access point: maker,
-#  model, model number and device name if it announces them (its WPS
-#  info); the chip maker as a best guess from the vendor tags it
-#  broadcasts (Broadcom, Qualcomm/Atheros, MediaTek/Ralink, Realtek,
-#  Marvell, Quantenna); and the maker registered for its hardware address,
-#  if an OUI list is installed (ieee-data or nmap) and the address isn't
-#  a locally-set one. Missing items show "Not announced by the router".
-#  Cached per access point (retried every 60 s until found), so the 30 s
-#  status refresh costs almost nothing.
-#
-#v5.19 — Reconnect fixes, stage 4 of 5: clearer log + WiFi health check.
-#  (1) "wlan0: connecting (need authentication)" is logged as INFO with
-#  "(password handshake)" -- it's a normal step of every join. Only if the
-#  device still isn't connected AUTH_WARN_SECS (30) later is a warning
-#  logged that the saved password may be wrong or changed.
-#  (2) Brief blips: missed checks that clear before counting as a drop
-#  (v5.16) get one INFO line ("Brief blip: N missed check(s), back without
-#  a drop") and are counted. Today's counters -- brief blips, real drops,
-#  WiFi chip stalls -- show on the Status card under the facts and in a
-#  new "WiFi health (today)" group under More details. Blip/drop counts
-#  live in /run/wifimon/health.json (tmpfs: survive a service restart, not
-#  a reboot, no SD writes) and reset at local midnight.
-#  (3) WiFi chip stalls: a reader thread follows the kernel log
-#  (/dev/kmsg, root only) for brcmf lines about timeouts (timeout / timed
-#  out / err=-110 / halted / crashed / firmware trap). Lines within 2 s are
-#  one stall. At start the kernel buffer is read back to count today's
-#  stalls since boot. Each stall is logged as a warning (at most one a
-#  minute, the rest counted). The last 20 chip messages and today's
-#  counters go into every shutdown/test report ("health" in the JSON, a
-#  "WiFi health today" line plus a "Recent WiFi chip messages" section in
-#  the text version).
-#  (4) "Stop chip roaming" (brcmfmac only), under More details after the
-#  country code: POST /api/roaming {off, confirm} writes
-#  /etc/modprobe.d/wifimon-brcmfmac.conf (options brcmfmac roamoff=1) or
-#  removes it (only if wifimon wrote it). Takes effect after a reboot; the
-#  box shows the live state and what the next boot will use. --uninstall
-#  removes the file.
-#
-#v5.18 — Reconnect fixes, stage 3 of 5: keep power save off. New watchdog
-#  setting "Keep WiFi power save off (all networks)" (KEEP_POWERSAVE_OFF,
-#  default off). On, it: (1) writes /etc/NetworkManager/conf.d/
-#  90-wifimon-powersave.conf (wifi.powersave=2 as the default for every
-#  WiFi profile, so networks added later are covered too) and runs
-#  `nmcli general reload conf` -- never a NetworkManager restart;
-#  (2) sets any saved profile that explicitly asks for power save
-#  (enable/ignore) to disable, compare-before-modify; (3) turns power save
-#  off on the live link with iw. Then it keeps it off: after every
-#  reconnect, every NetworkManager "connected" event, and whenever the 30 s
-#  status refresh sees it on, the live state is checked and turned off
-#  again with iw, logged as "Power save had come back on -- turned it off
-#  again". Not while the hotspot is on. Off removes the file (profiles
-#  already set to disable stay that way -- the v5.7 per-network control
-#  changes them back). Reconciled at every start like the login-page
-#  file; --uninstall removes it. Settings checkboxes now carry their own
-#  hint text (data-hint), and the settings-save reply joins both notes
-#  when both NetworkManager files change.
-#
-#v5.17 — Reconnect fixes, stage 2 of 5: smarter reconnect after a real
-#  drop. (1) Head start: after a real drop wifimon leaves NetworkManager
-#  (or wpa_supplicant) alone for NM_HEAD_START_SECS (30), since it rejoins
-#  by itself, and while NetworkManager reports the WiFi device as
-#  connecting/deactivating wifimon waits too -- up to NM_BUSY_MAX_SECS (45)
-#  in a row, so a join stuck forever can't block the watchdog. The same
-#  busy check runs before each network inside a retry round. (2) In range:
-#  with nmcli, each retry round scans first and skips saved networks that
-#  aren't in range (hidden networks are always tried; if the scan finds
-#  nothing, every network is tried as before). Skipped names are logged
-#  when the list changes, not every round. This stops the ~25 s stall on an absent network (seen
-#  with KD8PGK2). (3) Verify: after a join, wifimon now allows up to
-#  RECONNECT_VERIFY_SECS (15) for the connection check to pass, checking
-#  every 2 s, instead of one check after 3 s -- a slow DHCP no longer makes
-#  it move on and break a join that was working.
-#
-#v5.16 — Reconnect fixes, stage 1 of 5: stop wifimon causing drops.
-#  Field log showed a single missed ping (every ~30 s) made the watchdog
-#  run `nmcli connection up` on the network the node was ALREADY on, which
-#  made NetworkManager disconnect and rejoin (3-5 s outage each time).
-#  Now: (1) with the WiFi link still up, one missed check is not a drop --
-#  it takes MISSES_BEFORE_LOST (3) misses in a row (~15 s); the shutdown
-#  countdown is still dated from the first miss, so shutdown timing is
-#  unchanged. If the WiFi link itself goes down it counts at once, as
-#  before. (2) The reconnect never rejoins the network the node is
-#  currently joined to. (3) Joined to WiFi but no internet: wifimon waits
-#  STUCK_LINK_SECS (60) before doing anything; after that the current
-#  network may be rejoined (a genuinely stuck link). The reconnect also
-#  stops early if the node comes back on its own while it runs.
-#
-#v5.15 — WiFi country code, stage 2 of 2: the dashboard. Under the Status
-#  card's More details, right after Pi health, a "WiFi country code" block
-#  shows the code and country name with a Change button; Change opens a
-#  country picker (names with codes, sorted by name; preselects the current
-#  code, or the browser's region when none is set) and Set. The block sits
-#  outside the part that redraws every 5 s, so an open picker is never
-#  wiped. On the main Status view, when no country code is set, a one-line
-#  warning with a Fix button appears; Fix opens More details and the picker.
-#  The confirm dialog explains the brief-drop / auto-undo behaviour. The
-#  country list comes from GET /api/countries once per page load.
-#
-#v5.14 — WiFi country code, stage 1 of 2: setting it. POST /api/country
-#  {code, confirm}: the code is checked against a built-in ISO 3166 list
-#  (249 entries). With raspi-config installed it runs `raspi-config nonint
-#  do_wifi_country XX` (what the Pi OS menu does, including keeping it after
-#  a reboot). Without it: `iw reg set XX` now, plus
-#  /etc/modprobe.d/wifimon-country.conf (options cfg80211
-#  ieee80211_regdom=XX) for the next boot, compare-before-write. On
-#  wpa_supplicant setups the country= line of wpa_supplicant.conf is updated
-#  as well. The result is read back with `iw reg get`; if the node still
-#  reports another code, the reply says so (a reboot may be needed) instead
-#  of claiming success. A new country can rule out the channel in use, so
-#  this uses the v5.1 auto-undo (60 s, shutdown timer paused): with no
-#  check-in the previous code is re-applied the same way; if there was none
-#  (00), the live setting goes back to 00 and wifimon's own modprobe file is
-#  removed -- a setting raspi-config already saved stays until changed
-#  again. Refused while the hotspot is on or another change is waiting.
-#  Logged in the Activity log.
-#
-#v5.13 — nmcli additions, stage 4 of 4: emergency hotspot, started by
-#  hand only (never automatically). "Start hotspot" on the Radio & device
-#  card: network name (default <hostname>-setup), password (8-63
-#  characters, a random one offered), auto-stop after 15/30/60/120
-#  minutes. The hotspot is a NetworkManager profile written as a keyfile
-#  (0600; the password never goes on a command line): mode=ap, 2.4 GHz,
-#  WPA2 (CCMP), ipv4.method=shared (NetworkManager hands out addresses with
-#  dnsmasq -- the button is greyed out with a note when dnsmasq isn't
-#  installed), autoconnect off, bound to the WiFi device. Each start
-#  replaces the previous hotspot profile. Hotspot profiles never appear in
-#  Saved networks, the reconnect list or the join-order sync.
-#  The Pi has one radio, so the node leaves its WiFi while the hotspot is
-#  on; the confirm dialog says so and gives the address to open once your
-#  phone has joined (NetworkManager's shared address, normally
-#  http://10.42.0.1:8991). While it's on, the no-connection shutdown timer
-#  and auto-reconnect are paused (the low-voltage timer is not), other
-#  changes are refused except "Save only" in Add network -- so a hotel
-#  network can be added from the phone -- and a banner shows the time left.
-#  "Stop hotspot" (or the auto-stop) takes the hotspot down and runs the
-#  v5.2 connect job to the chosen network (default: the one the node was on
-#  before), with the usual known-good fallback. The hotspot state is kept
-#  in /run/wifimon/hotspot.json, so if wifimon restarts while it's on, the
-#  hotspot is taken down at start and normal reconnecting resumes.
-#
-#v5.12 — nmcli additions, stage 3 of 4: per-network options. Saved
-#  networks that have a NetworkManager profile get an "Options" button:
-#  IP address (Automatic / Fixed / Automatic with custom DNS -- address +
-#  prefix, gateway, 1-3 DNS servers; the gateway must be inside the
-#  address's network), "Use this Pi's real MAC address"
-#  (802-11-wireless.cloned-mac-address = permanent, for hotels and routers
-#  that register devices by MAC), and Band: Any / 2.4 GHz only / 5 GHz
-#  only (802-11-wireless.band; only offered when the WiFi device can do
-#  5 GHz, checked once with `iw phy` -- a Pi Zero 2W is 2.4 GHz only).
-#  Change from the plan: these live in their own Options form, not the
-#  Edit form, because Edit replaces the profile and so refuses the network
-#  in use, while options use `nmcli connection modify` and do work on it.
-#  Options changes on the network in use re-activate it, which briefly
-#  drops the WiFi, so they use the v5.1 auto-undo with a 2-minute window
-#  (the page may have to be reopened at a new address, and log in again
-#  there): the previous values are restored and the network re-activated
-#  if no page checks in. On other networks it just saves the options.
-#  Only values that actually change are written. Add network gains the
-#  real-MAC checkbox, and Edit now carries IP / MAC / band options over to
-#  the replacement profile (as v5.7 did for auto-join and power save).
-#
-#v5.11 — Shutdown reports, stage 4 of 4: unclean stops. At start wifimon
-#  writes a small marker (/var/lib/wifimon/running.json: start time, boot
-#  id, pid, version, fsynced) and removes it on a normal stop. If the
-#  marker is still there at the next start and no shutdown report was
-#  saved after that run began, an "unclean stop" report is saved: same
-#  boot id = wifimon itself stopped unexpectedly (crash / killed) while
-#  the node kept running; different boot id = the node lost power or
-#  restarted without a clean shutdown (e.g. a brownout faster than the
-#  low-voltage timer). It includes the end of the previous boot's journal
-#  when the journal is kept on disk (otherwise it says so). Cost: one small
-#  write per start and one delete per stop -- no periodic heartbeat.
-#
-#v5.10 — Shutdown reports, stage 3 of 4: dashboard. New "Shutdown reports"
-#  section in the Activity log card: saved reports newest first, View
-#  (the plain-text version in a scroll box), Download (.txt), Delete (with
-#  confirmation), and "Save a test report", which writes a full report --
-#  snapshot, Activity log, diagnostics -- without shutting anything down.
-#  After a restart, a banner says when and why the node last shut down
-#  (shutdown and unclean-stop reports from the last 7 days, older than the
-#  current run), with View and Dismiss (remembered in the browser, so no
-#  disk write). API, login required: GET /api/reports, GET /api/report
-#  ?name=&format=text|json[&download=1], POST /api/reports/delete,
-#  POST /api/reports/test. Report names are checked against a strict
-#  pattern, so nothing outside the report folder can be read or deleted.
-#
-#v5.9 — Shutdown reports, stage 2 of 4: save the report. do_shutdown()
-#  now writes a report to /var/log/wifimon/ (folder 0700, files 0600)
-#  BEFORE it asks systemd to power off. Correction to the plan: power-off
-#  starts at once (the 15 s in do_shutdown is only the fallback before
-#  `poweroff -f`), so the report is finished first, which delays the
-#  shutdown by at most ~10 s (5 s for low voltage). Order: (1) the reason,
-#  thresholds in force, the stage-1 snapshots (first, countdown, final) and
-#  the whole Activity log are written straight away -- temp file, fsync,
-#  rename, fsync the folder -- so a report exists even if power dies next;
-#  (2) last-moment diagnostics are gathered within the time budget (WiFi
-#  link, device list, addresses, routes, rfkill, the last NetworkManager or
-#  wpa_supplicant log lines, the last kernel messages -- each command
-#  time-limited, each output capped at 8 KB) and the report is rewritten
-#  the same safe way. Reports are capped at REPORT_MAX_BYTES (256 KB; when
-#  over, diagnostics are shortened first, then middle snapshots, then the
-#  oldest log lines, and the report says it was trimmed) and only the
-#  newest REPORT_KEEP (10) are kept. Nothing secret goes in: the Activity
-#  log never holds passwords. --uninstall leaves the reports in place.
-#
-#v5.8 — Shutdown reports, stage 1 of 4: record the lead-up (memory only;
-#  nothing is written to the SD card in this stage). As soon as either
-#  countdown starts (no connection or low voltage), the watchdog starts
-#  keeping snapshots of everything the Status card's More details shows --
-#  connection, signal, network, Pi health, watchdog counters -- plus the
-#  power readings, CPU temperature, the device in use and how old each
-#  piece of data was. One snapshot when the problem starts (always kept),
-#  then one every SNAPSHOT_EVERY_SECS (10 s; SNAPSHOT_LOWV_EVERY_SECS = 5 s
-#  while the voltage is low), keeping the newest SNAPSHOT_KEEP (20). During
-#  a no-connection countdown each snapshot also asks the status collector
-#  for an early slow refresh so IP/DNS/network details aren't 30 s old.
-#  When wifimon decides to shut down it takes one last snapshot from a
-#  fresh collection (fast values only for low voltage, where time matters),
-#  ready for stage 2 to save. If the problem clears first, or a dashboard
-#  change pauses the timer, the recording is thrown away. The Watchdog card
-#  shows while a recording is running; GET /api/snapshots (login needed)
-#  returns it in full. Snapshots are copies of data wifimon already
-#  collects, so the cost is small. (The country code / power save plan
-#  moves to after the shutdown-report stages.)
-#
-#v5.7 — nmcli additions, stage 2 of 4 (quick buttons).
-#  Reconnect now (Status card): runs the v5.2 connect job on the network
-#  in use, so a reconnect that doesn't come back falls straight through to
-#  the known-good networks, with the shutdown timer paused as usual. Same
-#  one-at-a-time rule and confirm:true as every change.
-#  Power save off: when the Status card sees power save on, it offers
-#  "Turn off for this network" and "Turn off for all saved networks". This
-#  sets 802-11-wireless.powersave = 2 (disable) on the NetworkManager
-#  profile(s) -- so it survives reboots, unlike `iw ... set power_save
-#  off` -- and, for the network in use, also runs that iw command so it
-#  takes effect now without dropping the connection. Profiles already set
-#  are not rewritten. The Edit form gains "Power save: leave as default /
-#  off".
-#  Auto-join on/off: a toggle on each saved network that has a
-#  NetworkManager profile (connection.autoconnect). Off means neither
-#  NetworkManager nor wifimon joins it by itself: the watchdog's retries
-#  and the connect job's known-good fallback both skip it. Connect still
-#  works for it, and a failed switch can still go back to it as the
-#  network it was just on (that return is part of the switch you asked
-#  for, not the node choosing a network).
-#  Edit now keeps a network's auto-join and power-save settings when it
-#  replaces the profile (v5.3-v5.6 reset them to NetworkManager's defaults).
-#
-#v5.6 — nmcli additions, stage 1 of 4 (automatic features; no new buttons).
-#  Join-order sync: whenever the reconnect list changes (arrows, Add,
-#  Add to list, Take off list, Edit, Delete, or a tag change) and once at
-#  start, each NetworkManager profile on the list gets
-#  connection.autoconnect-priority = its place counted from the bottom
-#  (top of an N-long list = N), so NetworkManager's own choice at boot
-#  matches wifimon's order. Profiles not on the list are left alone. A
-#  profile is only modified when its value differs (each modify rewrites
-#  its file -- SD wear), runs in its own thread with a 1 s pause to batch
-#  quick arrow clicks, and never touches the live connection.
-#  NetworkManager events: a background `nmcli monitor` feeds WiFi lines
-#  into the Activity log -- "wlan0: disconnected", "wlan0: using
-#  connection 'Home'", "wlan0: connecting (need authentication)" (flagged
-#  as a possible wrong password), "Connectivity is now 'portal'", primary
-#  connection changes. Other devices, p2p-dev lines, and connect sub-steps
-#  are dropped; an identical line within 10 s is skipped and at most 30
-#  lines a minute are logged. If the monitor exits it restarts itself
-#  (5 s, doubling to a 5 min ceiling). Runs with LC_ALL=C so the messages
-#  it matches aren't translated.
-#  Login-page check: new watchdog setting "Detect login pages" (off by
-#  default). On, it writes /etc/NetworkManager/conf.d/
-#  90-wifimon-connectivity.conf (NetworkManager then fetches
-#  http://nmcheck.gnome.org/check_network_status.txt about every 5 min)
-#  and runs `nmcli general reload conf` -- never a NetworkManager restart,
-#  which would drop the WiFi. Off removes the file; wifimon owns that file
-#  and reconciles it at every start, and --uninstall removes it. While on,
-#  the page shows a banner when NetworkManager reports "portal" (the
-#  network wants a login page, which a headless node can't complete), the
-#  Status card's Internet line says so, and a failed Connect names it as
-#  the reason (the job's final message and its step list now show each
-#  failed step's reason). With the setting off wifimon ignores NM's
-#  connectivity state, because NM then reports "full" regardless.
-#  Also: changing watchdog settings only restarts running countdowns when
-#  a timer-related value actually changed.
-#  Decided for stage 4: the emergency hotspot will be started by hand
-#  only (no automatic start instead of shutting down).
-#
-#v5.5 — The dashboard is served over plain HTTP by default, like the rest
-#  of the suite's web tools: USE_TLS in the CONFIG block now defaults to
-#  False (set it True to get the v5.0-v5.4 self-signed HTTPS back).
-#  With HTTPS off by choice, --install no longer makes a certificate and
-#  prints an http:// address, and the red "Not encrypted" badge and the
-#  startup warning are gone; they now appear only when HTTPS is switched
-#  on but can't start. A certificate already made in /etc/wifimon/tls is
-#  left in place and simply not used. The "come back at ..." hint shown
-#  before a network switch now uses whichever scheme the page is on.
-#  Note: with plain HTTP the root password (login, Show password) and any
-#  WiFi password shown cross the network unencrypted -- use the dashboard
-#  on a trusted network. The login cookie already drops its HTTPS-only
-#  flag when HTTPS is off.
-#
-#v5.4 — Dashboard Stage 5 of 5 (the wifimon + wifi_menu.sh dashboard
-#  conversion is complete). New "Activity log" card: the last 100 wifimon
-#  log events at INFO and above -- connection drops and restores, retries,
-#  voltage warnings, every dashboard action, password Shows, failed
-#  logins -- kept in memory only (nothing written to the SD card, gone on
-#  restart; the journal still has the full history). The page fetches only
-#  entries newer than the last one it has (/api/log?after=N), can show
-#  warnings and errors only, and has a Copy button.
-#  Security audit of the whole v5.3 file (same process as the v4.8 audit).
-#  Fixed:
-#   A1 Log line forging: text from outside -- network names, nmcli error
-#      output -- was logged as-is, so a control character or newline in it
-#      could fake extra journal lines. A filter on the wifimon logger now
-#      replaces control characters in every message, which also covers
-#      the new Activity log. (The page itself was already safe: every value
-#      is inserted as text, never as HTML.)
-#   A2 Password in exception text: when `nmcli device wifi connect ...
-#      password <psk>` or `wpa_cli set_network ... psk` timed out, the
-#      TimeoutExpired message -- which includes the whole command, password
-#      and all -- was logged (DEBUG only, so off by default). It now logs
-#      "timed out" without the command; _nmcli_ok() does the same.
-#   A3 Connection cap was global only: one client holding 16 idle
-#      keep-alive connections could lock everyone else out of the
-#      dashboard. Now also capped at MAX_CONNECTIONS_PER_IP (8) per address.
-#   A4 _IFACE_RE allowed a device name starting with '-', which a command
-#      could read as an option. Names must now start with a letter or digit
-#      (they're also still checked against the real device list).
-#  Checked and fine: every POST needs a session plus the CSRF headers;
-#  every change needs confirm:true server-side; no shell anywhere (argv
-#  lists only); config, state, pending, keyfile and TLS key files are
-#  written 0600 with atomic replace; passwords never appear in /api/status
-#  or the logs; Show password needs the root password again and shares the
-#  login lockout; the settings ranges can't produce an instant shutdown.
-#  Accepted risks, documented, not changed:
-#   R1 A network with no NetworkManager profile (wifimon.conf-only, or the
-#      wpa_cli backend) still gets its password on nmcli / wpa_cli's
-#      command line during a watchdog retry (the v4.8 accepted risk). Any
-#      network saved from the dashboard has a profile, so it never does.
-#   R2 Sessions slide with activity and have no absolute lifetime; an open
-#      dashboard tab stays logged in. They end on logout or restart.
-#   R3 No Host-header allow-list. A DNS-rebinding page can't use the
-#      session (the cookie belongs to the node's own name) and, over HTTPS,
-#      fails the certificate check; it could only try logins, which the
-#      per-IP lockout limits.
-#   R4 If openssl is missing the dashboard falls back to plain HTTP (red
-#      badge + journal warning), and Show password works there too, by
-#      the user's decision in the Stage 1 plan.
-#   R5 A slow PAM failure (pam_faildelay) holds a connection thread for a
-#      couple of seconds; the connection caps bound this, and the watchdog
-#      runs in its own thread either way.
-#  Verified off-hardware: new tests for each fix (forged-newline SSID,
-#  timed-out connect with a password, per-IP cap, dashed device name),
-#  the Activity log API and card in jsdom, and every earlier stage's
-#  suite re-run on both copies. Not verified on a real Pi.
-#
-#v5.3 — Dashboard Stage 4 of 5.
-#  Saved networks card: up/down arrows set the watchdog's reconnect order
-#  (priorities are renumbered 1..N on every move). NetworkManager-only
-#  profiles get "Add to reconnect list", and "Add all" imports every one
-#  of them at once (this replaces --setup-wifi's import for NM systems;
-#  names come from each profile's SSID, not its profile name). "Take off
-#  list" removes a network from wifimon.conf but keeps its NM profile.
-#  "Edit" changes security, password (blank = keep the current one) and
-#  hidden: a fresh keyfile profile is loaded first and the old profile(s)
-#  deleted only after that worked, so a failed edit changes nothing; the
-#  network is re-tagged Not verified. The network in use can't be edited
-#  (replacing its profile would drop the connection).
-#  Watchdog card: "Change settings" edits the shutdown / reconnect
-#  settings -- no-connection shutdown, low-voltage shutdown, low-voltage
-#  level, reconnect interval, check interval, internet-check address --
-#  within fixed safe ranges, plus "Reset to defaults" (the CONFIG block
-#  values). They apply at once and are saved in /etc/wifimon/state.json
-#  (merged with the saved device, compare-before-write). Any countdown
-#  running when settings change starts over, so shortening a limit can
-#  never trigger an instant shutdown.
-#  Watchdog reconnect: when a network has a NetworkManager profile, the
-#  watchdog now starts that profile (`nmcli connection up`) instead of
-#  `nmcli device wifi connect <ssid> password <psk>`. That keeps the
-#  password off the command line whenever a profile exists, and stops NM
-#  from growing duplicate profiles. Networks without a profile still use
-#  the v4.8 call (the documented accepted risk).
-#
-#v5.2 — Dashboard Stage 3 of 5. Two new cards.
-#  "Saved networks": ONE list merging NetworkManager's WiFi profiles with
-#  wifimon.conf's reconnect list, one row per network name. Each row
-#  shows its priority (wifimon.conf order; "not in the watchdog list" for
-#  NM-only profiles), a tag -- Known good (has connected and passed the
-#  connection check at least once), Not verified, or Failed (last attempt
-#  didn't connect) -- the password hidden behind Show, and Connect /
-#  Delete. Show asks for the root password again every time (same per-IP
-#  lockout as login), is fetched one network at a time, never included
-#  in /api/status, hides itself after 30 s, and is logged. Delete refuses
-#  the network in use. "Add network" form: name (typed or picked from the
-#  scan), Open / WPA2 / WPA3, password, hidden; "Save & connect" or "Save
-#  only". A new network is written to NetworkManager as a keyfile
-#  (/etc/NetworkManager/system-connections, 0600) and loaded with
-#  `nmcli connection load`, so its password never appears on any command
-#  line; it is also added to wifimon.conf at the bottom of the priority
-#  order, tagged Not verified.
-#  "Nearby networks": NM's scan list (strongest entry per name, hidden
-#  names left out) with a Rescan button; Connect for saved or open
-#  networks, "Add..." (opens the form pre-filled) for secured unsaved ones.
-#  Connecting runs as a background job so the page can lose contact
-#  mid-switch: pause the shutdown timer, remember the current network as
-#  the return point, give the new one NEW_NETWORK_TEST_SECS (30 s) to
-#  join and pass the watchdog's connection check. If it fails it's
-#  tagged Failed (never deleted, and nothing else is touched), then the
-#  job retries the return point, then Known good networks by priority,
-#  FALLBACK_TEST_SECS (20 s) each, skipping networks a fresh scan doesn't
-#  see (hidden ones are always tried). If all fail the pause ends at once
-#  and the normal watchdog takes over. The result shows as a popup the
-#  next time the page reaches the node. One job or pending change at a
-#  time (shares Stage 2's lock).
-#  Tags are written to wifimon.conf only when they change. The watchdog
-#  also tags a wifimon.conf network Known good when it sees the node
-#  connected on it, and reloads the list when the dashboard changes it
-#  (v4.8 only loaded it at start). Its own reconnect order is now: the
-#  network just lost, then Known good, then untagged / Not verified, then
-#  Failed -- by priority within each group.
-#  Fixes carried from v4.8: wifimon.conf is now read and written with
-#  ConfigParser(interpolation=None) -- before, a '%' in a password made
-#  load_wifi_networks() fail and save_wifi_networks() raise. And because
-#  ConfigParser trims spaces around values, a password that starts or
-#  ends with a space is now stored as psk_b64 (base64) instead of psk.
-#  Fix to v5.1: change handlers now send their reply only after releasing
-#  the action lock, so a quick follow-up click can't be refused as "busy".
-#  These cards need NetworkManager (nmcli); they say so if it's missing.
-#  Verified off-hardware with the fake-nmcli harness through the live
-#  HTTPS server; not verified against a real NetworkManager, keyfile
-#  loading on Pi OS, or a WPA3 network.
-#
-#v5.1 — Dashboard Stage 2 of 5. New "Radio & device" card: turn the
-#  WiFi radio on/off, disconnect a WiFi device, or switch which WiFi
-#  device is in use (the web version of wifi_menu.sh options 2-5; needs
-#  NetworkManager/nmcli, the card says so if it's missing).
-#  Auto-undo: turning the radio off, disconnecting, or switching devices
-#  becomes a "pending change". The page checks in automatically on its
-#  next successful poll at least 5 s after the change; if no check-in
-#  arrives within CHANGE_UNDO_SECS (60 s) -- e.g. the change cut off the
-#  browser's own WiFi path -- wifimon puts things back (radio on + the
-#  previous profile, reconnect the device, or switch back). An "Undo now"
-#  button is on the pending banner. One pending change at a time. The
-#  pending change is also written to /run/wifimon/pending_change.json
-#  (tmpfs, no SD wear) before the action runs, so if wifimon restarts
-#  mid-change it undoes it on the next start rather than leaving the
-#  node cut off.
-#  Timer pause: any change made from the card pauses the no-connection
-#  shutdown timer (and auto-reconnect, which would otherwise fight the
-#  change) for CHANGE_GRACE_SECS (180 s). While paused the timer is
-#  cleared, so if the node is still offline afterwards it starts again
-#  from the full NO_CONN_SHUTDOWN_SECS. The low-voltage timer is never
-#  paused.
-#  Switching devices moves the watchdog to the new device at run time
-#  (INTERFACE becomes a live setting) and saves the choice to
-#  /etc/wifimon/state.json (0600, compare-before-write, written only on a
-#  switch). On start, a saved device that still exists overrides INTERFACE
-#  from the CONFIG block.
-#  The page now knows which interface the browser reached it through; the
-#  confirm dialog warns when a change may cut the browser off.
-#  Also: the status collector can be asked for an early slow refresh, so
-#  the card updates right after a change instead of up to 30 s later.
-#  Verified off-hardware: a fake nmcli (state machine) driven through the
-#  live HTTPS server -- radio off/on, disconnect, switch, auto-keep,
-#  auto-undo on timeout, Undo now, one-at-a-time, restart recovery,
-#  timer pause in the watchdog loop -- plus the page in jsdom. Not
-#  verified on a real Pi with two WiFi adapters.
-#
-#v5.0 — Dashboard Stage 1 of 5 (merging wifimon + wifi_menu.sh into one
-#  dashboard service). The watchdog loop that used to be run() now runs
-#  in its own thread (_watchdog_loop); its decisions are unchanged from
-#  v4.8 -- same timers, same thresholds, same reconnect order, same
-#  shutdown path and shutdown_state.json -- it only publishes its state
-#  (_wd) for the dashboard, and each pass is wrapped so one unexpected
-#  error is logged instead of silently ending the watchdog. If the web
-#  server can't start (port taken, TLS failure), the watchdog keeps
-#  running without it.
-#  New: a second thread (_collector_loop) gathers WiFi details for the
-#  page from cheap sources -- /sys, /proc/net/wireless, iw, nmcli, ip,
-#  vcgencmd -- on two speeds (fast every 5 s: signal, counters, voltage;
-#  slow every 30 s: IP, DNS, security, country, power save). The page
-#  only ever reads that cached snapshot, so polling the page never runs
-#  nmcli. Nothing is written to the SD card.
-#  New: HTTPS on port 8991 with a per-node self-signed certificate made
-#  by openssl on first start (/etc/wifimon/tls, key 0600, EC P-256,
-#  10 years). If openssl is missing it falls back to plain HTTP and says
-#  so loudly (log + red badge on the page).
-#  New: root-password login (PAM first, /etc/shadow + libcrypt fallback,
-#  same approach as the rest of the suite), independent of the other
-#  suite tools: own cookie (wifimon_session), own in-memory session store
-#  (12 h, sliding, refreshed Set-Cookie on every authenticated response),
-#  per-IP lockout with exponential backoff after 5 failed tries, CSRF
-#  check on every POST (X-Requested-With + JSON Content-Type + Origin
-#  must match Host), security headers (CSP, X-Frame-Options, nosniff,
-#  no-referrer), 16 KB body cap, 16-connection cap.
-#  New cards: Status (network name, signal meter, IP, internet check,
-#  plus a "More details" panel: Connection, Signal, Network, Pi health,
-#  Watchdog), Watchdog (live countdowns, thresholds, voltage/throttle
-#  flags), Service (version, uptime, encryption, restart, log out).
-#  Restart runs through a detached systemd-run unit (suite standard for
-#  anything that restarts its own process) and needs confirm:true.
-#  --install now also creates the certificate and prints the dashboard
-#  address, and warns if root has no password (login would fail).
-#  Verified off-hardware only: parsers against sample iw / nmcli /
-#  /proc / vcgencmd output, a live in-process HTTPS server (login,
-#  lockout, CSRF, headers, sessions, status JSON), and the page script
-#  in jsdom. Not verified on a real Pi: real iw/nmcli output on the
-#  Zero 2W, PAM login with the real root password, the self-restart.
-#
-#v4.8 — Security audit fixes. (1) save_wifi_networks() and
-#  _ensure_config() now write wifimon.conf (plaintext WiFi PSKs) via a
-#  shared _write_config_atomic() helper: os.open(..., 0o600) + tmp-file
-#  + os.replace(), instead of plain open() followed by a separate
-#  os.chmod(). This closes two gaps: a brief window where the file
-#  existed with default-umask permissions before the chmod landed, and
-#  the lack of crash-safety (a mid-write interruption -- this daemon
-#  watchdog-reboots the node on its own -- could previously truncate
-#  the config and lose every saved network). Matches the pattern
-#  _write_shutdown_state() already used. (2) _connect_wpa_cli() now
-#  escapes embedded \" and \\ in SSID/PSK values via _wpa_cli_quote()
-#  before wrapping them in wpa_cli's quoted-string syntax -- a raw "
-#  in an SSID (broadcastable by anyone nearby) could previously break
-#  wpa_cli's own parsing of the set_network command. Still never
-#  touches a shell (subprocess is always called with an argv list), so
-#  this was never OS command injection, just unescaped input for
-#  wpa_cli's own quoting. (3) run() now logs a warning if not running
-#  as root, matching the check install_service()/uninstall_service()/
-#  run_wifi_setup() already had. Not fixed, documented as accepted
-#  risk: nmcli/wpa_cli both put the PSK on their own subprocess
-#  command line (visible via ps/proc to another *local* user for that
-#  call's duration) -- avoiding this needs NetworkManager D-Bus or the
-#  wpa_supplicant control socket instead of these CLIs, a materially
-#  bigger change than this fix warranted.
-#
-#v4.7 — Before triggering a shutdown, wifimon now writes a small JSON
-#  state file to /run/wifimon/shutdown_state.json (active/reason/trigger/
-#  since). This is written first thing inside do_shutdown(), well before
-#  the actual poweroff, so asl_dvs_dashboard and sysmon — which already
-#  poll their own /api/status every few seconds — have time to pick it
-#  up and show a persistent "wifimon is shutting this node down" popup
-#  before the node goes dark. /run is tmpfs and is wiped on every real
-#  reboot, so the flag self-clears; run() also clears it defensively on
-#  startup in case wifimon was restarted without a full reboot (e.g.
-#  after a crash) so a stale flag can't get stuck showing forever.
-#
-#v4.6 — Fixed the shebang: it was `# -*- coding: utf-8 -*-` on line 1
-#  and `#!/usr/bin/env python3` commented out on line 2, so running the
-#  file directly (./wifimon.py) couldn't find an interpreter — it only
-#  ever worked when invoked as `python3 wifimon.py`. The shebang is now
-#  the literal, uncommented first line; the coding declaration moved to
-#  line 2, which PEP 263 also allows. No other change.
-#
-#v4.5 — Line-ending normalization only. No behavior change. Lines 252-412
-#  (the WiFi-setup-wizard block: _prompt_manual_networks through
-#  run_wifi_setup) had plain LF endings while the rest of the file used
-#  CRLF — evidently pasted in from a different editor/source at some
-#  point without normalizing. Whole file is now LF throughout, matching
-#  the rest of the ASL-DVS-M17 suite (asl_dvs_m17_44helper, instmon).
-#  Verified: every line's content is byte-identical to v4.4 once both
-#  are normalized for comparison — only line-ending bytes changed.
-#
-#v4.3 — Added /etc/wifimon/wifimon.conf with a [network_N] section per
-#  known WiFi network (ssid/psk/priority). While the connection is down,
-#  wifimon now aggressively retries connecting — the network that was
-#  just lost first, then the configured networks in priority order —
-#  using nmcli if present, falling back to wpa_cli. This runs alongside
-#  the existing shutdown countdown, not instead of it: NO_CONN_SHUTDOWN_SECS
-#  still fires on schedule no matter how many reconnect attempts happened.
-#  If wifimon.conf has no networks configured, this is a no-op and
-#  behavior is unchanged from v4.2.
-#
-#v4.4 — --install now prompts for WiFi setup on an interactive terminal
-#  if no networks are configured yet: enter one manually, or import
-#  networks already saved on the system (nmcli connection profiles or
-#  wpa_supplicant.conf). Skipped automatically for non-interactive
-#  installs, and never re-prompts if wifimon.conf already has networks
-#  in it. The same menu is also available standalone via --setup-wifi.
-#
-#Usage:
-#  sudo python3 wifimon.py --install      Install as systemd service & start
-#  sudo python3 wifimon.py --uninstall    Stop & remove systemd service
-#  sudo python3 wifimon.py --setup-wifi   Add/import WiFi networks
-#  python3 wifimon.py                     Run watchdog + dashboard in foreground
-#
-#Dashboard:  http://<node>.local:8991  (log in with the root password)
-#"""
 
 import argparse
 import base64
@@ -681,10 +31,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.23"
+APP_VERSION = "5.24"
 
-# ── CONFIG ──────────────────────────────────────────────────────────────
-# Watchdog (unchanged from v4.8)
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
 CHECK_INTERVAL            = 5
@@ -693,47 +41,39 @@ NO_CONN_SHUTDOWN_SECS     = 180
 LOW_VOLTAGE_THRESHOLD     = 0.90
 LOW_VOLTAGE_SHUTDOWN_SECS = 30
 RECONNECT_INTERVAL_SECS   = 15
-MISSES_BEFORE_LOST        = 3    # failed checks in a row (WiFi link still up) before "lost" (v5.16)
-STUCK_LINK_SECS           = 60   # joined but no internet this long before any reconnect (v5.16)
-NM_HEAD_START_SECS        = 30   # after a real drop, let NetworkManager rejoin by itself first (v5.17)
-NM_BUSY_MAX_SECS          = 45   # longest wifimon waits in a row while NetworkManager is mid-join (v5.17)
-RECONNECT_VERIFY_SECS     = 15   # time a joined network gets to pass the connection check (v5.17)
-AUTH_WARN_SECS            = 30   # password handshake still not done this long -> warn (v5.19)
+MISSES_BEFORE_LOST        = 3
+STUCK_LINK_SECS           = 60
+NM_HEAD_START_SECS        = 30
+NM_BUSY_MAX_SECS          = 45
+RECONNECT_VERIFY_SECS     = 15
+AUTH_WARN_SECS            = 30
 
-# Dashboard (new in v5.0)
-HTTP_BIND        = "0.0.0.0"   # listen on every interface
+HTTP_BIND        = "0.0.0.0"
 HTTP_PORT        = 8991
-USE_TLS          = False       # True = self-signed HTTPS (needs openssl); False = plain HTTP
-SESSION_TTL_SECS = 12 * 3600   # a login lasts 12 h, extended by activity
-STATUS_FAST_SECS = 5           # signal, data counters, voltage
-STATUS_SLOW_SECS = 30          # IP, DNS, security, country, power save
-MAX_CONNECTIONS  = 16          # concurrent dashboard connections
-MAX_CONNECTIONS_PER_IP = 8     # of those, from any one address (v5.4)
+USE_TLS          = False
+SESSION_TTL_SECS = 12 * 3600
+STATUS_FAST_SECS = 5
+STATUS_SLOW_SECS = 30
+MAX_CONNECTIONS  = 16
+MAX_CONNECTIONS_PER_IP = 8
 
-# Dashboard changes (new in v5.1)
-CHANGE_UNDO_SECS  = 60         # risky change undoes itself unless the page checks in within this
-CHANGE_GRACE_SECS = 180        # shutdown timer + auto-reconnect paused this long after a change
+CHANGE_UNDO_SECS  = 60
+CHANGE_GRACE_SECS = 180
 
-# Connecting to networks (new in v5.2)
-NEW_NETWORK_TEST_SECS = 30     # time a network gets to join + pass the connection check
-FALLBACK_TEST_SECS    = 20     # time each fallback network gets
+NEW_NETWORK_TEST_SECS = 30
+FALLBACK_TEST_SECS    = 20
 
-# Shutdown reports (new in v5.8)
-SNAPSHOT_EVERY_SECS      = 10  # snapshot interval during a no-connection countdown
-SNAPSHOT_LOWV_EVERY_SECS = 5   # ... and while the voltage is low
-SNAPSHOT_KEEP            = 20  # newest snapshots kept (plus the first one)
-REPORT_KEEP              = 10  # shutdown reports kept in REPORT_DIR (v5.9)
+SNAPSHOT_EVERY_SECS      = 10
+SNAPSHOT_LOWV_EVERY_SECS = 5
+SNAPSHOT_KEEP            = 20
+REPORT_KEEP              = 10
 REPORT_MAX_BYTES         = 256 * 1024
 
-# Login-page detection (new in v5.6; also switchable on the dashboard)
-DETECT_LOGIN_PAGES    = False  # True = NetworkManager checks nmcheck.gnome.org every ~5 min
+DETECT_LOGIN_PAGES    = False
 
-# WiFi power save (new in v5.18; also switchable on the dashboard)
-KEEP_POWERSAVE_OFF    = False  # True = power save off for every network, re-checked after reconnects
+KEEP_POWERSAVE_OFF    = False
 
-# Adapter Auto / Keep on / Keep off (new in v5.21; set per adapter on the dashboard)
-DEVMODE_CHECK_SECS    = 10     # how often Keep on / Keep off adapters are checked (also on every NM event)
-# ── END CONFIG ──────────────────────────────────────────────────────────
+DEVMODE_CHECK_SECS    = 10
 
 CONFIG_DIR  = "/etc/wifimon"
 CONFIG_FILE = os.path.join(CONFIG_DIR, "wifimon.conf")
@@ -761,7 +101,6 @@ _DEFAULT_CONFIG = {
     },
 }
 
-
 def _write_config_atomic(cfg: "configparser.ConfigParser") -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
     tmp_path = CONFIG_FILE + ".tmp"
@@ -769,7 +108,6 @@ def _write_config_atomic(cfg: "configparser.ConfigParser") -> None:
     with os.fdopen(fd, "w") as f:
         cfg.write(f)
     os.replace(tmp_path, CONFIG_FILE)
-
 
 def _ensure_config() -> None:
     if os.path.exists(CONFIG_FILE):
@@ -779,7 +117,6 @@ def _ensure_config() -> None:
         cfg[section] = values
     _write_config_atomic(cfg)
     log.info("Created default config at %s", CONFIG_FILE)
-
 
 def load_wifi_networks() -> List[Dict[str, object]]:
     _ensure_config()
@@ -820,7 +157,6 @@ def load_wifi_networks() -> List[Dict[str, object]]:
     networks.sort(key=lambda n: n["priority"])
     return networks
 
-
 def save_wifi_networks(networks: List[Dict[str, object]], quiet: bool = False) -> None:
     cfg = configparser.ConfigParser(interpolation=None)
     for i, n in enumerate(networks, start=1):
@@ -846,19 +182,50 @@ def save_wifi_networks(networks: List[Dict[str, object]], quiet: bool = False) -
 INSTALL_BIN_PATH = "/usr/local/bin/wifimon.py"
 SYSTEMD_SERVICE_PATH = "/etc/systemd/system/wifimon.service"
 
-# Shared launcher -- see the v5.22 note at the top.
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
 _SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 _LAUNCHER_CODE = '''#!/usr/bin/env python3
-# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
-# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
-# named on the command line through Python's import system, so its compiled
-# copy is kept in __pycache__ and reused on later starts instead of the whole
-# file being compiled again -- about half the memory and twice as fast to
-# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
 import os
 import runpy
 import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
 
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
@@ -897,9 +264,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("wifimon")
 
-
 _LOG_CTRL_RE = re.compile(r"[\x00-\x1f\x7f]")
-
 
 class _SanitizeFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
@@ -911,12 +276,10 @@ class _SanitizeFilter(logging.Filter):
         record.msg, record.args = clean, None
         return True
 
-
 _ACTIVITY_MAX = 100
 _activity_lock = threading.Lock()
 _activity: List[Dict[str, object]] = []
 _activity_seq = 0
-
 
 class _ActivityHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
@@ -931,12 +294,10 @@ class _ActivityHandler(logging.Handler):
                               "level": record.levelname.lower(), "msg": msg})
             del _activity[:-_ACTIVITY_MAX]
 
-
 def _activity_since(after: int) -> Dict[str, object]:
     with _activity_lock:
         return {"seq": _activity_seq,
                 "entries": [dict(e) for e in _activity if int(e["seq"]) > after]}
-
 
 log.addFilter(_SanitizeFilter())
 log.addHandler(_ActivityHandler(logging.INFO))
@@ -967,7 +328,6 @@ def _glob_pyc(dir_path: str, name: str = "*") -> list:
     return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
 
 def _prune_pyc(dir_path: str) -> None:
-    """Drop compiled copies whose source file is gone (older versions)."""
     for pyc in _glob_pyc(dir_path):
         name = os.path.basename(pyc).split(".", 1)[0]
         if not os.path.exists(os.path.join(dir_path, name + ".py")):
@@ -977,7 +337,6 @@ def _prune_pyc(dir_path: str) -> None:
                 pass
 
 def _remove_launcher_if_unused() -> None:
-    """Remove the shared launcher once no installed unit runs it."""
     if not os.path.exists(_LAUNCHER_PATH):
         return
     unit_dir = _SYSTEMD_UNIT_DIR
@@ -1117,7 +476,6 @@ def _prompt_manual_networks(start_priority: int = 1) -> List[Dict[str, object]]:
             break
     return networks
 
-
 def _discover_nmcli_networks() -> List[Dict[str, object]]:
     found: List[Dict[str, object]] = []
     try:
@@ -1150,7 +508,6 @@ def _discover_nmcli_networks() -> List[Dict[str, object]]:
         found.append({"ssid": name, "psk": psk, "found_pw": bool(psk)})
     return found
 
-
 def _discover_wpa_supplicant_networks() -> List[Dict[str, object]]:
     found: List[Dict[str, object]] = []
     path = "/etc/wpa_supplicant/wpa_supplicant.conf"
@@ -1179,7 +536,6 @@ def _discover_wpa_supplicant_networks() -> List[Dict[str, object]]:
                            "hashed": hashed})
     return found
 
-
 def _discover_system_networks() -> List[Dict[str, object]]:
     backend = _wifi_backend()
     if backend == "nmcli":
@@ -1187,7 +543,6 @@ def _discover_system_networks() -> List[Dict[str, object]]:
     if backend == "wpa_cli":
         return _discover_wpa_supplicant_networks()
     return []
-
 
 def _prompt_import_networks(start_priority: int = 1) -> List[Dict[str, object]]:
     discovered = _discover_system_networks()
@@ -1221,7 +576,6 @@ def _prompt_import_networks(start_priority: int = 1) -> List[Dict[str, object]]:
             log.info("Imported %s as a pre-hashed key (wpa_cli-only)", n["ssid"])
         networks.append({"ssid": n["ssid"], "psk": n.get("psk", ""), "priority": i})
     return networks
-
 
 def run_wifi_setup() -> None:
     if os.geteuid() != 0:
@@ -1295,19 +649,15 @@ _wd: Dict[str, object] = {
     "loop_errors": 0,
 }
 
-
 def _wd_update(**changes: object) -> None:
     with _state_lock:
         _wd.update(changes)
-
 
 def _wd_incr(key: str) -> None:
     with _state_lock:
         _wd[key] = int(_wd.get(key) or 0) + 1
 
-
 _PING_TIME_RE = re.compile(r"time[=<]\s*([\d.]+)\s*ms")
-
 
 def _ping_once(host: str) -> Tuple[bool, Optional[float]]:
     try:
@@ -1322,7 +672,6 @@ def _ping_once(host: str) -> Tuple[bool, Optional[float]]:
         return False, None
     m = _PING_TIME_RE.search(res.stdout or "")
     return True, (float(m.group(1)) if m else None)
-
 
 def is_connected() -> bool:
     if not _has_carrier():
@@ -1346,8 +695,7 @@ def is_connected() -> bool:
 
 _reconnect_lock = threading.Lock()
 _reconnecting = False
-_last_absent: List[str] = []   # v5.17: log the out-of-range list only when it changes
-
+_last_absent: List[str] = []
 
 def _wifi_backend() -> Optional[str]:
     if shutil.which("nmcli"):
@@ -1355,7 +703,6 @@ def _wifi_backend() -> Optional[str]:
     if shutil.which("wpa_cli"):
         return "wpa_cli"
     return None
-
 
 def _connect_nmcli(ssid: str, psk: str) -> bool:
     try:
@@ -1386,11 +733,9 @@ def _connect_nmcli(ssid: str, psk: str) -> bool:
         log.debug("nmcli connect to %s error: %s", ssid, e)
         return False
 
-
 def _wpa_cli_quote(value: str) -> str:
     escaped = value.replace("\\", "\\\\").replace('"', '\\"')
     return f'"{escaped}"'
-
 
 def _connect_wpa_cli(ssid: str, psk: str) -> bool:
     try:
@@ -1430,7 +775,6 @@ def _connect_wpa_cli(ssid: str, psk: str) -> bool:
         log.debug("wpa_cli reconnect to %s error: %s", ssid, e)
         return False
 
-
 def _nm_device_state() -> Optional[str]:
     nm = shutil.which("nmcli")
     if not nm:
@@ -1446,11 +790,9 @@ def _nm_device_state() -> Optional[str]:
             return state.strip()
     return None
 
-
 def _nm_busy() -> bool:
     state = _nm_device_state() or ""
     return state.startswith("connecting") or state.startswith("deactivating")
-
 
 def _hidden_ssids() -> set:
     hidden: set = set()
@@ -1461,12 +803,10 @@ def _hidden_ssids() -> set:
         pass
     return hidden
 
-
 def _joined_ssid() -> Optional[str]:
     if not _has_carrier():
         return None
     return _current_ssid()
-
 
 def _attempt_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[str],
                        allow_rejoin: bool = False, interrupt_nm: bool = False) -> None:
@@ -1548,7 +888,6 @@ def _attempt_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[st
 
     _reconnecting = False
 
-
 def maybe_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[str],
                     allow_rejoin: bool = False, interrupt_nm: bool = False) -> None:
     global _reconnecting
@@ -1560,7 +899,6 @@ def maybe_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[str],
         _reconnecting = True
     threading.Thread(target=_attempt_reconnect, args=(networks, last_ssid, allow_rejoin, interrupt_nm),
                       daemon=True, name="wifi-reconnect").start()
-
 
 def _current_ssid() -> Optional[str]:
     try:
@@ -1582,7 +920,6 @@ def _current_ssid() -> Optional[str]:
         pass
 
     return None
-
 
 def _check_voltage() -> Optional[float]:
     try:
@@ -1643,17 +980,14 @@ def do_shutdown(reason: str, trigger: str) -> None:
     time.sleep(15)
     subprocess.run(["poweroff", "-f"])
 
-
 _health_lock = threading.Lock()
 _health: Dict[str, object] = {"date": None, "blips": 0, "drops": 0, "chip_stalls": None,
                               "last_stall_at": None, "last_stall_line": None}
-_chip_lines: List[Dict[str, object]] = []    # newest 20 chip messages {at, text}
+_chip_lines: List[Dict[str, object]] = []
 _STALL_RE = re.compile(r"timeout|timed out|err=-110|error -110|halted|crashed|firmware trap", re.I)
-
 
 def _today() -> str:
     return time.strftime("%Y-%m-%d")
-
 
 def _health_roll_locked() -> None:
     today = _today()
@@ -1661,7 +995,6 @@ def _health_roll_locked() -> None:
         stalls = 0 if _health["chip_stalls"] is not None else None
         _health.update(date=today, blips=0, drops=0, chip_stalls=stalls,
                        last_stall_at=None, last_stall_line=None)
-
 
 def _health_save_locked() -> None:
     try:
@@ -1675,7 +1008,6 @@ def _health_save_locked() -> None:
     except OSError as e:
         log.debug("Couldn't write %s: %s", HEALTH_FILE, e)
 
-
 def _health_load() -> None:
     try:
         data = json.loads(_read_text(HEALTH_FILE) or "null")
@@ -1688,13 +1020,11 @@ def _health_load() -> None:
                 if isinstance(data.get(key), int) and data[key] >= 0:
                     _health[key] = data[key]
 
-
 def _health_incr(key: str) -> None:
     with _health_lock:
         _health_roll_locked()
         _health[key] = int(_health.get(key) or 0) + 1
         _health_save_locked()
-
 
 def _health_public(full: bool = False) -> Dict[str, object]:
     with _health_lock:
@@ -1704,9 +1034,7 @@ def _health_public(full: bool = False) -> Dict[str, object]:
             out["chip_lines"] = [dict(x) for x in _chip_lines]
     return out
 
-
 _auth_pending_since: Optional[float] = None
-
 
 def _auth_watch_tick() -> None:
     global _auth_pending_since
@@ -1719,7 +1047,6 @@ def _auth_watch_tick() -> None:
         log.warning("WiFi still hasn't joined %ds after the password handshake started "
                     "-- the saved password may be wrong or changed", AUTH_WARN_SECS)
 
-
 def _kmsg_parse(raw: bytes) -> Optional[Tuple[float, str]]:
     try:
         head, _, msg = raw.decode("utf-8", "replace").partition(";")
@@ -1727,7 +1054,6 @@ def _kmsg_parse(raw: bytes) -> Optional[Tuple[float, str]]:
     except (ValueError, IndexError):
         return None
     return ts_us / 1e6, msg.split("\n", 1)[0].strip()
-
 
 def _kmsg_loop() -> None:
     try:
@@ -1801,7 +1127,6 @@ def _kmsg_loop() -> None:
     finally:
         os.close(fd)
 
-
 _pi_chip_boot_lines: Dict[str, str] = {}
 _pi_chip_cache: Optional[Dict[str, object]] = None
 _ap_chip_cache: Dict[str, object] = {"bssid": None, "info": None, "tried": -1e9}
@@ -1816,7 +1141,6 @@ _CHIP_OUIS = {
 _OUI_FILES = ("/usr/share/ieee-data/oui.txt", "/var/lib/ieee-data/oui.txt",
               "/usr/share/misc/oui.txt", "/usr/share/nmap/nmap-mac-prefixes")
 
-
 def _drvinfo() -> Dict[str, str]:
     buf = array.array("B", struct.pack("I", 0x00000003) + bytes(192))
     addr, _n = buf.buffer_info()
@@ -1830,11 +1154,9 @@ def _drvinfo() -> Dict[str, str]:
     field = lambda a: raw[a:a + 32].split(b"\0", 1)[0].decode("utf-8", "replace").strip()
     return {"driver": field(4), "version": field(36), "firmware": field(68), "bus": field(100)}
 
-
 def _chip_from_line(text: str) -> Optional[str]:
     m = re.search(r"for chip (\S+)", text) or re.search(r"Firmware: (\S+)", text)
     return m.group(1) if m else None
-
 
 def _pi_chip_info() -> Dict[str, object]:
     global _pi_chip_cache
@@ -1875,7 +1197,6 @@ def _pi_chip_info() -> Dict[str, object]:
     _pi_chip_cache = info
     return info
 
-
 def _oui_vendor(mac: str) -> Optional[str]:
     hexes = re.sub(r"[^0-9A-Fa-f]", "", mac or "").upper()
     if len(hexes) < 6:
@@ -1892,7 +1213,6 @@ def _oui_vendor(mac: str) -> Optional[str]:
         except OSError:
             continue
     return None
-
 
 def _parse_scan_dump(txt: str, bssid: Optional[str]) -> Optional[Dict[str, object]]:
     blocks = re.split(r"(?m)^BSS ", txt)
@@ -1922,7 +1242,6 @@ def _parse_scan_dump(txt: str, bssid: Optional[str]) -> Optional[Dict[str, objec
     return {"bssid": mac, "wps": wps, "chip_guess": chips, "local_mac": local,
             "mac_vendor": None if local else _oui_vendor(mac)}
 
-
 def _ap_chip_info(bssid: Optional[str]) -> Optional[Dict[str, object]]:
     c = _ap_chip_cache
     now = time.monotonic()
@@ -1938,7 +1257,6 @@ def _ap_chip_info(bssid: Optional[str]) -> Optional[Dict[str, object]]:
         c.update(bssid=bssid or info["bssid"], info=info)
     return info
 
-
 def _roam_state() -> Dict[str, object]:
     try:
         driver = os.path.basename(os.readlink(f"/sys/class/net/{INTERFACE}/device/driver"))
@@ -1948,7 +1266,6 @@ def _roam_state() -> Dict[str, object]:
     live = None if not live_txt else live_txt in ("1", "Y", "y")
     ours = (_read_text(ROAM_MODPROBE) or "").startswith("# Written by wifimon")
     return {"driver": driver, "roam_off_now": live, "roam_off_next_boot": ours}
-
 
 def _watchdog_loop() -> None:
     wifi_networks = load_wifi_networks()
@@ -2104,9 +1421,7 @@ def _watchdog_loop() -> None:
         if _shutdown_event.wait(timeout=max(0.1, CHECK_INTERVAL - elapsed)):
             break
 
-
 _NUM_RE = re.compile(r"-?\d+(?:\.\d+)?")
-
 
 def _read_text(path: str) -> Optional[str]:
     try:
@@ -2115,11 +1430,9 @@ def _read_text(path: str) -> Optional[str]:
     except OSError:
         return None
 
-
 def _read_sys(name: str) -> Optional[str]:
     txt = _read_text(f"/sys/class/net/{INTERFACE}/{name}")
     return txt.strip() if txt is not None else None
-
 
 def _run_text(cmd: List[str], timeout: float = 5) -> str:
     try:
@@ -2128,23 +1441,19 @@ def _run_text(cmd: List[str], timeout: float = 5) -> str:
         return ""
     return r.stdout if r.returncode == 0 else ""
 
-
 def _to_int(s: Optional[str]) -> Optional[int]:
     try:
         return int(str(s).strip())
     except (TypeError, ValueError):
         return None
 
-
 def _first_num(s: Optional[str]) -> Optional[float]:
     m = _NUM_RE.search(s or "")
     return float(m.group(0)) if m else None
 
-
 def _first_int(s: Optional[str]) -> Optional[int]:
     v = _first_num(s)
     return int(v) if v is not None else None
-
 
 def _parse_proc_wireless(text: str, iface: str) -> Dict[str, object]:
     for line in text.splitlines():
@@ -2171,7 +1480,6 @@ def _parse_proc_wireless(text: str, iface: str) -> Dict[str, object]:
         return {"link_quality": link, "proc_signal_dbm": level, "noise_dbm": noise}
     return {}
 
-
 def _parse_iw_link(text: str) -> Dict[str, object]:
     if not text.strip():
         return {}
@@ -2196,7 +1504,6 @@ def _parse_iw_link(text: str) -> Dict[str, object]:
             out["tx_bitrate"] = _first_num(line[11:])
     return out
 
-
 def _parse_station_dump(text: str) -> Dict[str, object]:
     out: Dict[str, object] = {}
     stations = 0
@@ -2220,7 +1527,6 @@ def _parse_station_dump(text: str) -> Dict[str, object]:
             out["beacon_loss"] = _first_int(value)
     return out
 
-
 def _freq_band_channel(freq: Optional[int]) -> Tuple[Optional[str], Optional[int]]:
     if not freq:
         return None, None
@@ -2231,7 +1537,6 @@ def _freq_band_channel(freq: Optional[int]) -> Tuple[Optional[str], Optional[int
     if 5925 <= freq <= 7125:
         return "6 GHz", (freq - 5950) // 5
     return None, None
-
 
 def _nmcli_split(line: str) -> List[str]:
     fields: List[str] = []
@@ -2252,13 +1557,11 @@ def _nmcli_split(line: str) -> List[str]:
     fields.append("".join(cur))
     return fields
 
-
 def _nm_scan_lines() -> List[List[str]]:
     txt = _run_text(["nmcli", "-t", "-f", "IN-USE,SSID,BSSID,CHAN,FREQ,SIGNAL,SECURITY",
                      "device", "wifi", "list", "ifname", INTERFACE, "--rescan", "no"],
                     timeout=8)
     return [f for f in (_nmcli_split(line) for line in txt.splitlines()) if len(f) >= 7]
-
 
 def _nmcli_active_ap(lines: Optional[List[List[str]]] = None) -> Dict[str, object]:
     for f in (lines if lines is not None else _nm_scan_lines()):
@@ -2274,7 +1577,6 @@ def _nmcli_active_ap(lines: Optional[List[List[str]]] = None) -> Dict[str, objec
             }
     return {}
 
-
 def _nmcli_device_info() -> Tuple[Optional[str], List[str]]:
     txt = _run_text(["nmcli", "-t", "-f", "GENERAL.CONNECTION,IP4.DNS",
                      "device", "show", INTERFACE])
@@ -2289,7 +1591,6 @@ def _nmcli_device_info() -> Tuple[Optional[str], List[str]]:
             dns.append(value)
     return profile, dns
 
-
 def _nmcli_radio() -> Optional[bool]:
     state = _run_text(["nmcli", "radio", "wifi"]).strip().lower()
     if state == "enabled":
@@ -2298,14 +1599,12 @@ def _nmcli_radio() -> Optional[bool]:
         return False
     return None
 
-
 def _ip4_address() -> Dict[str, object]:
     txt = _run_text(["ip", "-4", "-o", "addr", "show", "dev", INTERFACE])
     m = re.search(r"\binet\s+([\d.]+)/(\d+)", txt)
     if not m:
         return {"ip4": None, "ip4_prefix": None}
     return {"ip4": m.group(1), "ip4_prefix": int(m.group(2))}
-
 
 def _resolv_dns() -> List[str]:
     txt = _read_text("/etc/resolv.conf") or ""
@@ -2315,7 +1614,6 @@ def _resolv_dns() -> List[str]:
         if len(fields) >= 2 and fields[0] == "nameserver":
             out.append(fields[1])
     return out
-
 
 def _rfkill_wlan() -> Tuple[Optional[bool], Optional[bool]]:
     base = "/sys/class/rfkill"
@@ -2335,17 +1633,14 @@ def _rfkill_wlan() -> Tuple[Optional[bool], Optional[bool]]:
         hard = bool(hard) or (h is not None and h.strip() == "1")
     return soft, hard
 
-
 def _reg_country() -> Optional[str]:
     m = re.search(r"^country\s+([A-Z0-9]{2}):", _run_text(["iw", "reg", "get"]), re.M)
     return m.group(1) if m else None
-
 
 def _power_save() -> Optional[bool]:
     m = re.search(r"Power save:\s*(on|off)",
                   _run_text(["iw", "dev", INTERFACE, "get", "power_save"]), re.I)
     return (m.group(1).lower() == "on") if m else None
-
 
 def _wifi_devices() -> List[Dict[str, object]]:
     if shutil.which("nmcli"):
@@ -2371,7 +1666,6 @@ def _wifi_devices() -> List[Dict[str, object]]:
                         "hw": _adapter_key(name)})
     return out
 
-
 def _ipv4_map() -> Dict[str, str]:
     out: Dict[str, str] = {}
     for line in _run_text(["ip", "-4", "-o", "addr", "show"]).splitlines():
@@ -2379,7 +1673,6 @@ def _ipv4_map() -> Dict[str, str]:
         if m:
             out[m.group(2)] = m.group(1)
     return out
-
 
 def _read_power() -> Dict[str, object]:
     out: Dict[str, object] = {
@@ -2406,12 +1699,10 @@ def _read_power() -> Dict[str, object]:
             )
     return out
 
-
 _slow_refresh = threading.Event()
 _status_lock = threading.Lock()
 _status: Dict[str, object] = {"fast": {}, "slow": {}, "fast_at": None, "slow_at": None}
 _counters_prev: Optional[Tuple[float, int, int]] = None
-
 
 def _collect_fast() -> Dict[str, object]:
     global _counters_prev
@@ -2439,7 +1730,6 @@ def _collect_fast() -> Dict[str, object]:
 
     out["power"] = _read_power()
     return out
-
 
 def _collect_slow() -> Dict[str, object]:
     out: Dict[str, object] = {"backend": _wifi_backend()}
@@ -2480,7 +1770,6 @@ def _collect_slow() -> Dict[str, object]:
     out["ipmap"] = _ipv4_map()
     return out
 
-
 def _collector_loop() -> None:
     next_slow = 0.0
     while not _shutdown_event.is_set():
@@ -2504,7 +1793,6 @@ def _collector_loop() -> None:
             if _shutdown_event.wait(0.5):
                 return
 
-
 def _read_shutdown_state() -> Optional[Dict[str, object]]:
     txt = _read_text(SHUTDOWN_STATE_FILE)
     if not txt:
@@ -2515,11 +1803,9 @@ def _read_shutdown_state() -> Optional[Dict[str, object]]:
         return None
     return data if isinstance(data, dict) else None
 
-
 _started_wall = time.time()
 _started_mono = time.monotonic()
 _service_info: Dict[str, object] = {"tls": False, "root_pw": "unknown"}
-
 
 def _build_status() -> Dict[str, object]:
     with _status_lock:
@@ -2667,7 +1953,6 @@ def _build_status() -> Dict[str, object]:
         "last_report": _last_report_banner(),
     }
 
-
 _KEEP_MIN_SECS = 5
 _IFACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$")
 _action_lock = threading.Lock()
@@ -2675,7 +1960,6 @@ _change_lock = threading.Lock()
 _grace_until: Optional[float] = None
 _pending: Optional[Dict[str, object]] = None
 _last_result: Optional[Dict[str, object]] = None
-
 
 def _grace_start(reason: str) -> None:
     global _grace_until
@@ -2685,12 +1969,10 @@ def _grace_start(reason: str) -> None:
             _grace_until = until
     log.info("Shutdown timer paused for %d s: %s", CHANGE_GRACE_SECS, reason)
 
-
 def _grace_remaining() -> float:
     with _change_lock:
         until = _grace_until
     return 0.0 if until is None else max(0.0, until - time.monotonic())
-
 
 def _nmcli_ok(args: List[str], timeout: float = 30) -> Tuple[bool, str]:
     nm = shutil.which("nmcli")
@@ -2704,7 +1986,6 @@ def _nmcli_ok(args: List[str], timeout: float = 30) -> Tuple[bool, str]:
         return False, _log_safe(e)
     msg = (r.stderr or r.stdout or "").strip()
     return r.returncode == 0, _log_safe(msg[:300])
-
 
 def _save_state(data: Dict[str, object]) -> None:
     merged: Dict[str, object] = {}
@@ -2725,7 +2006,6 @@ def _save_state(data: Dict[str, object]) -> None:
         f.write(body)
     os.replace(tmp, STATE_FILE)
 
-
 def _set_interface(name: str, persist: bool = True) -> None:
     global INTERFACE, _counters_prev
     if name == INTERFACE:
@@ -2738,7 +2018,6 @@ def _set_interface(name: str, persist: bool = True) -> None:
             _save_state({"interface": name})
         except OSError as e:
             log.warning("Couldn't save the chosen WiFi device to %s: %s", STATE_FILE, e)
-
 
 def _load_saved_interface() -> None:
     txt = _read_text(STATE_FILE)
@@ -2753,7 +2032,6 @@ def _load_saved_interface() -> None:
         _set_interface(name, persist=False)
     elif name:
         log.warning("Saved WiFi device %r not found — using %s", name, INTERFACE)
-
 
 def _pending_persist(p: Optional[Dict[str, object]]) -> None:
     try:
@@ -2772,7 +2050,6 @@ def _pending_persist(p: Optional[Dict[str, object]]) -> None:
     except OSError as e:
         log.warning("Couldn't update %s: %s", PENDING_FILE, e)
 
-
 def _begin_change(kind: str, desc: str, undo: Dict[str, object]) -> Dict[str, object]:
     global _pending
     p: Dict[str, object] = {
@@ -2784,7 +2061,6 @@ def _begin_change(kind: str, desc: str, undo: Dict[str, object]) -> Dict[str, ob
     _pending_persist(p)
     return p
 
-
 def _arm_change(p: Dict[str, object]) -> None:
     now = time.monotonic()
     with _change_lock:
@@ -2795,14 +2071,12 @@ def _arm_change(p: Dict[str, object]) -> None:
     log.info("Pending change: %s (undoes itself in %d s unless the page checks in)",
              p["desc"], int(p.get("undo_secs") or CHANGE_UNDO_SECS))
 
-
 def _drop_change(p: Dict[str, object]) -> None:
     global _pending
     with _change_lock:
         if _pending is p:
             _pending = None
     _pending_persist(None)
-
 
 def _finish_change(p: Dict[str, object], outcome: str, ok: bool, message: str) -> None:
     global _pending, _last_result
@@ -2814,7 +2088,6 @@ def _finish_change(p: Dict[str, object], outcome: str, ok: bool, message: str) -
     _pending_persist(None)
     level = logging.INFO if ok else logging.WARNING
     log.log(level, "Change %s: %s (%s)", outcome, p.get("desc"), message)
-
 
 def _apply_undo(undo: Dict[str, object]) -> Tuple[bool, str]:
     ok_all, notes = True, []
@@ -2880,7 +2153,6 @@ def _apply_undo(undo: Dict[str, object]) -> Tuple[bool, str]:
             notes.append("reconnect: " + msg)
     return ok_all, "; ".join(notes)
 
-
 def _undo_change(change_id: str, why: str) -> bool:
     with _action_lock:
         with _change_lock:
@@ -2893,7 +2165,6 @@ def _undo_change(change_id: str, why: str) -> bool:
         _slow_refresh.set()
         return True
 
-
 def _pending_watch(change_id: str) -> None:
     while not _shutdown_event.wait(0.5):
         with _change_lock:
@@ -2905,7 +2176,6 @@ def _pending_watch(change_id: str) -> None:
             _undo_change(change_id, f"the page didn't check in within {CHANGE_UNDO_SECS} s")
             return
 
-
 def _recover_pending_change() -> None:
     global _last_result
     txt = _read_text(PENDING_FILE)
@@ -2914,8 +2184,9 @@ def _recover_pending_change() -> None:
     try:
         data = json.loads(txt)
         undo = data["undo"]
-        assert isinstance(undo, dict)
-    except (ValueError, KeyError, AssertionError, TypeError):
+        if not isinstance(undo, dict):
+            raise TypeError("undo is not a dict")
+    except (ValueError, KeyError, TypeError):
         _pending_persist(None)
         return
     log.warning("A dashboard change was still pending when wifimon stopped (%s) — undoing it",
@@ -2927,7 +2198,6 @@ def _recover_pending_change() -> None:
                         "ok": ok, "message": "wifimon restarted before the change was kept"
                         + ("" if ok else f"; undo had problems: {msg}"), "at": time.time()}
     _pending_persist(None)
-
 
 def _pending_public() -> Optional[Dict[str, object]]:
     with _change_lock:
@@ -2944,7 +2214,6 @@ def _pending_public() -> Optional[Dict[str, object]]:
         "open_url": p.get("open_url"),
     }
 
-
 def _control_public() -> Dict[str, object]:
     grace = _grace_remaining()
     with _change_lock:
@@ -2958,10 +2227,8 @@ def _control_public() -> Dict[str, object]:
         "last_result": last,
     }
 
-
 def _connected_state(state: object) -> bool:
     return isinstance(state, str) and state.startswith("connected")
-
 
 _DEV_MODES = ("auto", "on", "off")
 _DEV_MODE_WORDS = {"auto": "Auto", "on": "Keep on", "off": "Keep off"}
@@ -2973,7 +2240,6 @@ _devmode_last_try: Dict[str, float] = {}
 _devmode_notes: Dict[str, str] = {}
 _devmode_off_log: Dict[str, List[float]] = {}
 _devmode_applied: set = set()
-
 
 def _adapter_key(name: str) -> Optional[str]:
     buf = array.array("B", struct.pack("II", 0x00000020, 32) + bytes(32))
@@ -2994,14 +2260,12 @@ def _adapter_key(name: str) -> Optional[str]:
             return mac
     return f"if:{name}" if _IFACE_RE.match(name) else None
 
-
 def _dev_mode_of(key: Optional[str]) -> str:
     if not key:
         return "auto"
     with _devmode_lock:
         m = _dev_modes.get(key)
     return m["mode"] if m else "auto"
-
 
 def _save_dev_modes() -> None:
     with _devmode_lock:
@@ -3010,7 +2274,6 @@ def _save_dev_modes() -> None:
         _save_state({"device_modes": data})
     except OSError as e:
         log.warning("Couldn't save the adapter settings to %s: %s", STATE_FILE, e)
-
 
 def _set_dev_mode(key: str, name: str, mode: str, persist: bool = True) -> None:
     with _devmode_lock:
@@ -3024,7 +2287,6 @@ def _set_dev_mode(key: str, name: str, mode: str, persist: bool = True) -> None:
     if persist:
         _save_dev_modes()
     _devmode_wake.set()
-
 
 def _load_dev_modes() -> None:
     txt = _read_text(STATE_FILE)
@@ -3049,14 +2311,12 @@ def _load_dev_modes() -> None:
     for key, v in loaded.items():
         log.info("Adapter setting: %s (%s) is set to %s", v["name"], key, _DEV_MODE_WORDS[v["mode"]])
 
-
 def _devmode_note(key: str, text: Optional[str]) -> None:
     with _devmode_lock:
         if text:
             _devmode_notes[key] = text
         else:
             _devmode_notes.pop(key, None)
-
 
 def _devmode_log_off(name: str) -> None:
     now = time.monotonic()
@@ -3068,11 +2328,9 @@ def _devmode_log_off(name: str) -> None:
         log.warning("Keep off: %s keeps trying to connect (5 times in a minute)", name)
     _devmode_off_log[name] = times
 
-
 def _job_running() -> bool:
     with _change_lock:
         return bool(_job and _job.get("state") == "running")
-
 
 def _keep_on_join(name: str) -> Tuple[bool, str]:
     active = set()
@@ -3094,7 +2352,6 @@ def _keep_on_join(name: str) -> Tuple[bool, str]:
             return True, str(p["ssid"])
         last = msg
     return False, last or "couldn't join"
-
 
 def _devmode_tick() -> None:
     with _devmode_lock:
@@ -3193,7 +2450,6 @@ def _devmode_tick() -> None:
     finally:
         _action_lock.release()
 
-
 def _devmode_loop() -> None:
     while not _shutdown_event.is_set():
         try:
@@ -3202,7 +2458,6 @@ def _devmode_loop() -> None:
             log.exception("Adapter keep on/off check failed -- continuing")
         _devmode_wake.wait(DEVMODE_CHECK_SECS)
         _devmode_wake.clear()
-
 
 def _devices_public(devs: List[Dict[str, object]]) -> Tuple[List[Dict[str, object]], List[Dict[str, object]]]:
     with _devmode_lock:
@@ -3220,19 +2475,16 @@ def _devices_public(devs: List[Dict[str, object]]) -> Tuple[List[Dict[str, objec
               for k, v in sorted(modes.items()) if k not in present]
     return out, absent
 
-
 _conf_lock = threading.Lock()
 _networks_changed = threading.Event()
 _job: Optional[Dict[str, object]] = None
 _STATUS_KNOWN = ("known_good", "unverified", "failed")
 _SECURITY_KEYMGMT = {"open": None, "wpa2": "wpa-psk", "wpa3": "sae"}
 
-
 def _conf_networks() -> List[Dict[str, object]]:
     if not os.path.exists(CONFIG_FILE):
         return []
     return load_wifi_networks()
-
 
 def _set_network_status(ssid: str, status: str) -> None:
     with _conf_lock:
@@ -3247,12 +2499,10 @@ def _set_network_status(ssid: str, status: str) -> None:
             _mark_networks_changed()
             log.info("Network %s tagged %s", ssid, status)
 
-
 def _security_label(key_mgmt: Optional[str]) -> str:
     return {"": "Open", "none": "Open", "wpa-psk": "WPA2", "sae": "WPA3",
             "wpa-eap": "Enterprise", "owe": "Open (OWE)"}.get((key_mgmt or "").strip(),
                                                               key_mgmt or "Open")
-
 
 def _nm_wifi_profiles() -> List[Dict[str, object]]:
     uuids = []
@@ -3297,7 +2547,6 @@ def _nm_wifi_profiles() -> List[Dict[str, object]]:
             cur[key] = "" if value.strip() == "--" else value.strip()
     return [p for p in out if p.get("ssid") and p.get("uuid") and p.get("802-11-wireless.mode") != "ap"]
 
-
 def _scan_from_lines(lines: List[List[str]]) -> List[Dict[str, object]]:
     best: Dict[str, Dict[str, object]] = {}
     for f in lines:
@@ -3316,7 +2565,6 @@ def _scan_from_lines(lines: List[List[str]]) -> List[Dict[str, object]]:
             entry["in_use"] = entry["in_use"] or bool(old and old["in_use"])
             best[ssid] = entry
     return sorted(best.values(), key=lambda e: -int(e["signal"]))
-
 
 def _saved_public(slow: Dict[str, object], active_ssid: object) -> Dict[str, object]:
     rows: Dict[str, Dict[str, object]] = {}
@@ -3363,13 +2611,11 @@ def _saved_public(slow: Dict[str, object], active_ssid: object) -> Dict[str, obj
     return {"available": bool(shutil.which("nmcli")), "networks": result,
             "test_secs": NEW_NETWORK_TEST_SECS, "fallback_secs": FALLBACK_TEST_SECS}
 
-
 def _keyfile_escape(value: str) -> str:
     out = value.replace("\\", "\\\\").replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
     if out.startswith(" "):
         out = "\\s" + out[1:]
     return out
-
 
 def _nm_add_profile(ssid: str, security: str, password: str, hidden: bool,
                     autoconnect: bool = True, powersave: Optional[int] = None,
@@ -3417,10 +2663,8 @@ def _nm_add_profile(ssid: str, security: str, password: str, hidden: bool,
         return False, msg or "nmcli couldn't load the profile"
     return True, con_uuid
 
-
 def _profiles_for(ssid: str) -> List[Dict[str, object]]:
     return [p for p in _nm_wifi_profiles() if p["ssid"] == ssid]
-
 
 def _activate_and_check(ssid: str, secs: int) -> Tuple[bool, str]:
     deadline = time.monotonic() + secs
@@ -3443,13 +2687,11 @@ def _activate_and_check(ssid: str, secs: int) -> Tuple[bool, str]:
             return False, _no_internet_reason()
         time.sleep(2)
 
-
 def _visible_ssids() -> Optional[set]:
     _nmcli_ok(["device", "wifi", "rescan", "ifname", INTERFACE], timeout=15)
     time.sleep(3)
     names = {f[1] for f in _nm_scan_lines() if f[1]}
     return names or None
-
 
 def _job_public() -> Optional[Dict[str, object]]:
     with _change_lock:
@@ -3459,7 +2701,6 @@ def _job_public() -> Optional[Dict[str, object]]:
         job["steps"] = [dict(st) for st in _job["steps"]]
     return job
 
-
 def _job_step(job: Dict[str, object], ssid: str, role: str, result: str, note: str = "") -> Dict[str, object]:
     step = {"ssid": ssid, "role": role, "result": result, "note": note}
     with _change_lock:
@@ -3467,7 +2708,6 @@ def _job_step(job: Dict[str, object], ssid: str, role: str, result: str, note: s
         if result == "trying":
             job["phase"] = f"Trying {ssid}"
     return step
-
 
 def _job_finish(job: Dict[str, object], state: str, message: str) -> None:
     with _change_lock:
@@ -3478,7 +2718,6 @@ def _job_finish(job: Dict[str, object], state: str, message: str) -> None:
     level = logging.INFO if state in ("ok", "fallback") else logging.WARNING
     log.log(level, "Connect job: %s", message)
 
-
 def _try_network(job: Dict[str, object], ssid: str, role: str, secs: int) -> bool:
     _grace_start(f"trying {ssid} from the dashboard")
     step = _job_step(job, ssid, role, "trying")
@@ -3487,7 +2726,6 @@ def _try_network(job: Dict[str, object], ssid: str, role: str, secs: int) -> boo
         step["result"] = "ok" if ok else "failed"
         step["note"] = note
     return ok
-
 
 def _connect_job(job: Dict[str, object], previous: Optional[str]) -> None:
     target = str(job["target"])
@@ -3536,7 +2774,6 @@ def _connect_job(job: Dict[str, object], previous: Optional[str]) -> None:
         _slow_refresh.set()
         _action_lock.release()
 
-
 def _start_connect_job(target: str, kind: str = "connect") -> Dict[str, object]:
     global _job
     active = _nmcli_active_ap().get("nm_ssid") or _current_ssid()
@@ -3552,16 +2789,13 @@ def _start_connect_job(target: str, kind: str = "connect") -> Dict[str, object]:
                      daemon=True).start()
     return job
 
-
 def _grace_clear() -> None:
     global _grace_until
     with _change_lock:
         _grace_until = None
     log.info("Shutdown timer pause ended")
 
-
 _SSID_BAD_RE = re.compile(r"[\x00-\x1f\x7f]")
-
 
 def _check_new_network(body: Dict[str, object]) -> Tuple[Optional[Dict[str, object]], str]:
     ssid, security = body.get("ssid"), body.get("security")
@@ -3583,7 +2817,6 @@ def _check_new_network(body: Dict[str, object]) -> Tuple[Optional[Dict[str, obje
         return None, "WiFi passwords are 8 to 63 ordinary characters (letters, numbers, symbols)."
     return {"ssid": ssid, "security": security, "password": password, "hidden": hidden}, ""
 
-
 _SETTINGS_SPEC: Dict[str, Tuple[str, type, Optional[float], Optional[float]]] = {
     "no_conn_shutdown_secs":     ("NO_CONN_SHUTDOWN_SECS", int, 60, 86400),
     "low_voltage_shutdown_secs": ("LOW_VOLTAGE_SHUTDOWN_SECS", int, 10, 3600),
@@ -3598,16 +2831,13 @@ _SETTING_DEFAULTS: Dict[str, object] = {k: globals()[g] for k, (g, _t, _a, _b) i
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 _timers_reset = threading.Event()
 
-
 def _settings_current() -> Dict[str, object]:
     return {k: globals()[g] for k, (g, _t, _a, _b) in _SETTINGS_SPEC.items()}
-
 
 def _settings_public() -> Dict[str, object]:
     return {"values": _settings_current(), "defaults": dict(_SETTING_DEFAULTS),
             "limits": {k: [lo, hi] for k, (_g, _t, lo, hi) in _SETTINGS_SPEC.items()
                        if lo is not None}}
-
 
 def _validate_settings(raw: object) -> Tuple[Optional[Dict[str, object]], str]:
     if not isinstance(raw, dict):
@@ -3640,7 +2870,6 @@ def _validate_settings(raw: object) -> Tuple[Optional[Dict[str, object]], str]:
         out[key] = value
     return out, ""
 
-
 def _apply_settings(values: Dict[str, object], persist: bool = True) -> Optional[str]:
     before = _settings_current()
     for key, value in values.items():
@@ -3657,7 +2886,6 @@ def _apply_settings(values: Dict[str, object], persist: bool = True) -> Optional
         _save_state({"settings": _settings_current()})
     return " ".join(n for n in notes if n) or None
 
-
 def _load_saved_settings() -> None:
     try:
         data = json.loads(_read_text(STATE_FILE) or "{}")
@@ -3673,7 +2901,6 @@ def _load_saved_settings() -> None:
     _apply_settings(values, persist=False)
     log.info("Loaded watchdog settings from %s", STATE_FILE)
 
-
 def _nm_secret(ssid: str) -> str:
     for prof in _profiles_for(ssid):
         txt = _run_text(["nmcli", "-s", "--escape", "no", "-g",
@@ -3683,7 +2910,6 @@ def _nm_secret(ssid: str) -> str:
         if secret:
             return secret
     return ""
-
 
 def _move_network(ssid: str, direction: str) -> Optional[str]:
     with _conf_lock:
@@ -3700,7 +2926,6 @@ def _move_network(ssid: str, direction: str) -> Optional[str]:
         save_wifi_networks(nets, quiet=True)
     _mark_networks_changed()
     return None
-
 
 def _track_networks(ssids: List[str]) -> List[str]:
     added: List[str] = []
@@ -3724,13 +2949,10 @@ def _track_networks(ssids: List[str]) -> List[str]:
         _mark_networks_changed()
     return added
 
-
 _SECURITY_FROM_LABEL = {"Open": "open", "WPA2": "wpa2", "WPA3": "wpa3"}
-
 
 _rec_lock = threading.Lock()
 _rec: Dict[str, object] = {"active": False}
-
 
 def _cpu_temp() -> Optional[float]:
     raw = _read_text("/sys/class/thermal/thermal_zone0/temp")
@@ -3738,7 +2960,6 @@ def _cpu_temp() -> Optional[float]:
         return round(int(str(raw).strip()) / 1000.0, 1)
     except (TypeError, ValueError):
         return None
-
 
 def _snapshot(label: str) -> Dict[str, object]:
     st = _build_status()
@@ -3760,9 +2981,7 @@ def _snapshot(label: str) -> Dict[str, object]:
         },
     }
 
-
 _TRIGGER_WORDS = {"no_conn": "no connection", "low_voltage": "low voltage"}
-
 
 def _recorder_tick(down_since: Optional[float], lowv_since: Optional[float], now_mono: float) -> None:
     trigger = "low_voltage" if lowv_since is not None else ("no_conn" if down_since is not None else None)
@@ -3803,7 +3022,6 @@ def _recorder_tick(down_since: Optional[float], lowv_since: Optional[float], now
         del items[:-SNAPSHOT_KEEP]
         _rec["last_mono"] = now_mono
 
-
 def _recorder_final(trigger: str) -> None:
     try:
         fast = _collect_fast()
@@ -3826,7 +3044,6 @@ def _recorder_final(trigger: str) -> None:
         _rec["final"] = snap
     log.info("Final snapshot taken before shutdown")
 
-
 def _recording_public(full: bool = False) -> Optional[Dict[str, object]]:
     with _rec_lock:
         if not _rec.get("active"):
@@ -3843,12 +3060,10 @@ def _recording_public(full: bool = False) -> Optional[Dict[str, object]]:
                                ([_rec["final"]] if _rec.get("final") else [])
     return out
 
-
 _REPORT_NAME_RE = re.compile(r"^(shutdown|test|unclean)-\d{8}-\d{6}(-\d+)?\.json$")
 _report_lock = threading.Lock()
 _report_cache: Dict[str, Tuple[float, Dict[str, object]]] = {}
 _KIND_WORDS = {"shutdown": "Shutdown", "test": "Test report", "unclean": "Unclean stop"}
-
 
 def _durable_write(path: str, data: bytes, dir_mode: int = 0o700) -> None:
     folder = os.path.dirname(path)
@@ -3873,7 +3088,6 @@ def _durable_write(path: str, data: bytes, dir_mode: int = 0o700) -> None:
     except OSError:
         pass
 
-
 def _report_files() -> List[str]:
     try:
         names = [n for n in os.listdir(REPORT_DIR) if _REPORT_NAME_RE.match(n)]
@@ -3886,12 +3100,10 @@ def _report_files() -> List[str]:
             return 0.0
     return sorted(names, key=lambda n: (mtime(n), n))
 
-
 def _report_path(name: object) -> Optional[str]:
     if not isinstance(name, str) or not _REPORT_NAME_RE.match(name):
         return None
     return os.path.join(REPORT_DIR, name)
-
 
 def _fit_report(report: Dict[str, object]) -> bytes:
     data = json.dumps(report, indent=1).encode("utf-8")
@@ -3916,7 +3128,6 @@ def _fit_report(report: Dict[str, object]) -> bytes:
         data = json.dumps(report, indent=1).encode("utf-8")
     return data
 
-
 def _save_report(report: Dict[str, object], name: Optional[str] = None) -> str:
     with _report_lock:
         if name is None:
@@ -3931,7 +3142,6 @@ def _save_report(report: Dict[str, object], name: Optional[str] = None) -> str:
             except OSError:
                 pass
     return name
-
 
 def _build_report(kind: str, trigger: str, reason: str) -> Dict[str, object]:
     rec = _recording_public(full=True) or {}
@@ -3954,7 +3164,6 @@ def _build_report(kind: str, trigger: str, reason: str) -> Dict[str, object]:
         "health": _health_public(full=True),
         "diagnostics": {},
     }
-
 
 def _diagnostics(budget: float) -> Dict[str, str]:
     deadline = time.monotonic() + budget
@@ -3989,7 +3198,6 @@ def _diagnostics(budget: float) -> Dict[str, str]:
         out[label] = text[-8000:] if len(text) > 8000 else text
     return out
 
-
 def _shutdown_report(reason: str, trigger: str) -> None:
     try:
         report = _build_report("shutdown", trigger, reason)
@@ -4000,7 +3208,6 @@ def _shutdown_report(reason: str, trigger: str) -> None:
         _save_report(report, name)
     except Exception:
         log.exception("Couldn't save the shutdown report")
-
 
 def _report_summary(name: str) -> Optional[Dict[str, object]]:
     path = os.path.join(REPORT_DIR, name)
@@ -4024,18 +3231,15 @@ def _report_summary(name: str) -> Optional[Dict[str, object]]:
     _report_cache[name] = (mtime, summary)
     return summary
 
-
 def _reports_list() -> List[Dict[str, object]]:
     out = [s for s in (_report_summary(n) for n in reversed(_report_files())) if s]
     for stale in set(_report_cache) - {str(s["name"]) for s in out}:
         _report_cache.pop(stale, None)
     return out
 
-
 def _reports_stamp() -> str:
     files = _report_files()
     return f"{len(files)}:{files[-1] if files else ''}"
-
 
 def _last_report_banner() -> Optional[Dict[str, object]]:
     for s in _reports_list():
@@ -4046,13 +3250,11 @@ def _last_report_banner() -> Optional[Dict[str, object]]:
             return None
     return None
 
-
 def _fmt_time(t: object) -> str:
     try:
         return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(t)))
     except (TypeError, ValueError):
         return "unknown"
-
 
 def _report_text(r: Dict[str, object]) -> str:
     kind = _KIND_WORDS.get(str(r.get("kind")), str(r.get("kind")))
@@ -4101,10 +3303,8 @@ def _report_text(r: Dict[str, object]) -> str:
     lines += ["", "Full detail (every value of every snapshot) is in the JSON version of this report."]
     return "\n".join(lines) + "\n"
 
-
 def _boot_id() -> str:
     return (_read_text("/proc/sys/kernel/random/boot_id") or "").strip()
-
 
 def _marker_check_and_set() -> None:
     try:
@@ -4154,7 +3354,6 @@ def _marker_check_and_set() -> None:
     except OSError as e:
         log.warning("Couldn't write %s: %s", RUN_MARKER, e)
 
-
 def _marker_clear() -> None:
     try:
         os.remove(RUN_MARKER)
@@ -4163,14 +3362,11 @@ def _marker_clear() -> None:
     except OSError as e:
         log.warning("Couldn't remove %s: %s", RUN_MARKER, e)
 
-
 _nm_sync_wanted = threading.Event()
-
 
 def _mark_networks_changed() -> None:
     _networks_changed.set()
     _nm_sync_wanted.set()
-
 
 def _sync_nm_priorities() -> None:
     if not shutil.which("nmcli"):
@@ -4195,7 +3391,6 @@ def _sync_nm_priorities() -> None:
         log.info("NetworkManager join order updated to match the reconnect list: %s",
                  ", ".join(changed))
 
-
 def _nm_sync_loop() -> None:
     while not _shutdown_event.is_set():
         if not _nm_sync_wanted.wait(timeout=1.0):
@@ -4207,7 +3402,6 @@ def _nm_sync_loop() -> None:
             _sync_nm_priorities()
         except Exception:
             log.exception("NetworkManager join-order sync failed")
-
 
 def _nm_event(line: str) -> Optional[Tuple[int, str]]:
     line = line.strip()
@@ -4233,13 +3427,11 @@ def _nm_event(line: str) -> Optional[Tuple[int, str]]:
         return logging.WARNING, line
     return None
 
-
 _NM_EVENT_REPEAT_SECS = 10.0
 _NM_EVENT_PER_MIN = 30
 _nm_event_last: Dict[str, float] = {}
 _nm_event_times: List[float] = []
 _nm_monitor_proc: Optional[subprocess.Popen] = None
-
 
 def _nm_event_log(line: str) -> None:
     global _auth_pending_since
@@ -4273,7 +3465,6 @@ def _nm_event_log(line: str) -> None:
         return
     _nm_event_times.append(now)
     log.log(level, "NetworkManager: %s", text[:300])
-
 
 def _nm_monitor_loop() -> None:
     global _nm_monitor_proc
@@ -4315,7 +3506,6 @@ def _nm_monitor_loop() -> None:
         if _shutdown_event.wait(delay):
             return
 
-
 _NM_CONF_BODY = """# Written by wifimon ("Detect login pages" setting). wifimon owns this
 # file: turning the setting off in wifimon removes it.
 [connectivity]
@@ -4323,7 +3513,6 @@ enabled=true
 uri=http://nmcheck.gnome.org/check_network_status.txt
 interval=300
 """
-
 
 def _apply_login_page_detection(enabled: bool) -> Optional[str]:
     try:
@@ -4353,9 +3542,7 @@ def _apply_login_page_detection(enabled: bool) -> Optional[str]:
         return "NetworkManager will pick this up after its next restart."
     return None
 
-
 _POWERSAVE_WORDS = {"default": 0, "ignore": 1, "disable": 2, "enable": 3}
-
 
 def _powersave_code(value: str) -> Optional[int]:
     value = (value or "").strip().lower()
@@ -4367,7 +3554,6 @@ def _powersave_code(value: str) -> Optional[int]:
             return code
     return None
 
-
 def _autojoin_off_ssids() -> set:
     if not shutil.which("nmcli"):
         return set()
@@ -4376,7 +3562,6 @@ def _autojoin_off_ssids() -> set:
         ssid = str(p["ssid"])
         seen[ssid] = seen.get(ssid, False) or bool(p.get("autoconnect", True))
     return {ssid for ssid, any_on in seen.items() if not any_on}
-
 
 def _iw_power_save_off() -> bool:
     iw = shutil.which("iw")
@@ -4389,15 +3574,13 @@ def _iw_power_save_off() -> bool:
         return False
     return r.returncode == 0
 
-
 _NM_PS_CONF_BODY = """# Written by wifimon ("Keep WiFi power save off" setting). wifimon owns
 # this file: turning the setting off in wifimon removes it.
 [connection-wifimon-powersave]
 wifi.powersave=2
 """
-_ps_check = threading.Event()       # v5.18: "check the live power-save state soon"
+_ps_check = threading.Event()
 _ps_warned_at = -1e9
-
 
 def _apply_keep_powersave_off(enabled: bool) -> Optional[str]:
     note = None
@@ -4443,7 +3626,6 @@ def _apply_keep_powersave_off(enabled: bool) -> Optional[str]:
         _ps_check.set()
     return note
 
-
 def _keep_powersave_check() -> None:
     global _ps_warned_at
     if not KEEP_POWERSAVE_OFF or _hotspot_active():
@@ -4459,7 +3641,6 @@ def _keep_powersave_check() -> None:
         _ps_warned_at = now
         log.warning("Power save is on and couldn't be turned off (iw failed)")
 
-
 def _no_internet_reason() -> str:
     if DETECT_LOGIN_PAGES and shutil.which("nmcli"):
         state = _run_text(["nmcli", "networking", "connectivity", "check"], timeout=20).strip()
@@ -4469,14 +3650,12 @@ def _no_internet_reason() -> str:
             return f"joined, but no internet ({state})"
     return "joined, but the connection check didn't pass in time"
 
-
 _OPTION_KEYS = ("ipv4.method", "ipv4.addresses", "ipv4.gateway", "ipv4.dns",
                 "ipv4.ignore-auto-dns", "802-11-wireless.cloned-mac-address",
                 "802-11-wireless.band", "802-11-wireless.mode")
 WM_CONNECT_WAIT = 30
 _OPTIONS_UNDO_SECS = 120
 _has_5ghz_cache: Dict[str, Optional[bool]] = {}
-
 
 def _has_5ghz() -> Optional[bool]:
     if INTERFACE in _has_5ghz_cache:
@@ -4491,10 +3670,8 @@ def _has_5ghz() -> Optional[bool]:
     _has_5ghz_cache[INTERFACE] = result
     return result
 
-
 def _split_list(value: str) -> List[str]:
     return [v for v in re.split(r"[,\s]+", value or "") if v]
-
 
 def _options_public(prof: Dict[str, object]) -> Dict[str, object]:
     method = str(prof.get("ipv4.method") or "auto")
@@ -4516,7 +3693,6 @@ def _options_public(prof: Dict[str, object]) -> Dict[str, object]:
         "real_mac": str(prof.get("802-11-wireless.cloned-mac-address") or "") == "permanent",
         "band": band if band in ("a", "bg") else "any",
     }
-
 
 def _options_props(body: Dict[str, object]) -> Tuple[Optional[Dict[str, str]], str]:
     import ipaddress
@@ -4571,7 +3747,6 @@ def _options_props(body: Dict[str, object]) -> Tuple[Optional[Dict[str, str]], s
     props["802-11-wireless.band"] = "" if band == "any" else str(band)
     return props, ""
 
-
 def _norm_opt(key: str, value: object) -> str:
     v = str(value or "").strip()
     if key == "ipv4.dns":
@@ -4584,10 +3759,8 @@ def _norm_opt(key: str, value: object) -> str:
         return v or "auto"
     return "" if v == "--" else v
 
-
 def _changed_options(prof: Dict[str, object], props: Dict[str, str]) -> Dict[str, str]:
     return {k: v for k, v in props.items() if _norm_opt(k, prof.get(k)) != _norm_opt(k, v)}
-
 
 def _nm_active_uuid() -> Optional[str]:
     for line in _run_text(["nmcli", "-t", "-f", "UUID,DEVICE", "connection", "show", "--active"]).splitlines():
@@ -4595,7 +3768,6 @@ def _nm_active_uuid() -> Optional[str]:
         if len(f) >= 2 and f[1] == INTERFACE:
             return f[0]
     return None
-
 
 def _copy_nm_options(old: Dict[str, object], new_uuid: str) -> List[str]:
     props = {k: _norm_opt(k, old.get(k)) for k in _OPTION_KEYS}
@@ -4609,10 +3781,8 @@ def _copy_nm_options(old: Dict[str, object], new_uuid: str) -> List[str]:
     ok, msg = _nmcli_ok(args)
     return [] if ok else [f"couldn't carry the network options over: {msg}"]
 
-
 _COUNTRY_LIST = """AD Andorra|AE United Arab Emirates|AF Afghanistan|AG Antigua and Barbuda|AI Anguilla|AL Albania|AM Armenia|AO Angola|AQ Antarctica|AR Argentina|AS American Samoa|AT Austria|AU Australia|AW Aruba|AX Åland Islands|AZ Azerbaijan|BA Bosnia and Herzegovina|BB Barbados|BD Bangladesh|BE Belgium|BF Burkina Faso|BG Bulgaria|BH Bahrain|BI Burundi|BJ Benin|BL Saint Barthélemy|BM Bermuda|BN Brunei|BO Bolivia|BQ Caribbean Netherlands|BR Brazil|BS Bahamas|BT Bhutan|BV Bouvet Island|BW Botswana|BY Belarus|BZ Belize|CA Canada|CC Cocos (Keeling) Islands|CD Congo (DRC)|CF Central African Republic|CG Congo (Republic)|CH Switzerland|CI Côte d'Ivoire|CK Cook Islands|CL Chile|CM Cameroon|CN China|CO Colombia|CR Costa Rica|CU Cuba|CV Cabo Verde|CW Curaçao|CX Christmas Island|CY Cyprus|CZ Czechia|DE Germany|DJ Djibouti|DK Denmark|DM Dominica|DO Dominican Republic|DZ Algeria|EC Ecuador|EE Estonia|EG Egypt|EH Western Sahara|ER Eritrea|ES Spain|ET Ethiopia|FI Finland|FJ Fiji|FK Falkland Islands|FM Micronesia|FO Faroe Islands|FR France|GA Gabon|GB United Kingdom|GD Grenada|GE Georgia|GF French Guiana|GG Guernsey|GH Ghana|GI Gibraltar|GL Greenland|GM Gambia|GN Guinea|GP Guadeloupe|GQ Equatorial Guinea|GR Greece|GS South Georgia and the South Sandwich Islands|GT Guatemala|GU Guam|GW Guinea-Bissau|GY Guyana|HK Hong Kong|HM Heard Island and McDonald Islands|HN Honduras|HR Croatia|HT Haiti|HU Hungary|ID Indonesia|IE Ireland|IL Israel|IM Isle of Man|IN India|IO British Indian Ocean Territory|IQ Iraq|IR Iran|IS Iceland|IT Italy|JE Jersey|JM Jamaica|JO Jordan|JP Japan|KE Kenya|KG Kyrgyzstan|KH Cambodia|KI Kiribati|KM Comoros|KN Saint Kitts and Nevis|KP North Korea|KR South Korea|KW Kuwait|KY Cayman Islands|KZ Kazakhstan|LA Laos|LB Lebanon|LC Saint Lucia|LI Liechtenstein|LK Sri Lanka|LR Liberia|LS Lesotho|LT Lithuania|LU Luxembourg|LV Latvia|LY Libya|MA Morocco|MC Monaco|MD Moldova|ME Montenegro|MF Saint Martin|MG Madagascar|MH Marshall Islands|MK North Macedonia|ML Mali|MM Myanmar|MN Mongolia|MO Macao|MP Northern Mariana Islands|MQ Martinique|MR Mauritania|MS Montserrat|MT Malta|MU Mauritius|MV Maldives|MW Malawi|MX Mexico|MY Malaysia|MZ Mozambique|NA Namibia|NC New Caledonia|NE Niger|NF Norfolk Island|NG Nigeria|NI Nicaragua|NL Netherlands|NO Norway|NP Nepal|NR Nauru|NU Niue|NZ New Zealand|OM Oman|PA Panama|PE Peru|PF French Polynesia|PG Papua New Guinea|PH Philippines|PK Pakistan|PL Poland|PM Saint Pierre and Miquelon|PN Pitcairn Islands|PR Puerto Rico|PS Palestine|PT Portugal|PW Palau|PY Paraguay|QA Qatar|RE Réunion|RO Romania|RS Serbia|RU Russia|RW Rwanda|SA Saudi Arabia|SB Solomon Islands|SC Seychelles|SD Sudan|SE Sweden|SG Singapore|SH Saint Helena|SI Slovenia|SJ Svalbard and Jan Mayen|SK Slovakia|SL Sierra Leone|SM San Marino|SN Senegal|SO Somalia|SR Suriname|SS South Sudan|ST São Tomé and Príncipe|SV El Salvador|SX Sint Maarten|SY Syria|SZ Eswatini|TC Turks and Caicos Islands|TD Chad|TF French Southern Territories|TG Togo|TH Thailand|TJ Tajikistan|TK Tokelau|TL Timor-Leste|TM Turkmenistan|TN Tunisia|TO Tonga|TR Türkiye|TT Trinidad and Tobago|TV Tuvalu|TW Taiwan|TZ Tanzania|UA Ukraine|UG Uganda|UM U.S. Minor Outlying Islands|US United States|UY Uruguay|UZ Uzbekistan|VA Vatican City|VC Saint Vincent and the Grenadines|VE Venezuela|VG British Virgin Islands|VI U.S. Virgin Islands|VN Vietnam|VU Vanuatu|WF Wallis and Futuna|WS Samoa|YE Yemen|YT Mayotte|ZA South Africa|ZM Zambia|ZW Zimbabwe"""
 COUNTRIES: Dict[str, str] = {e[:2]: e[3:] for e in _COUNTRY_LIST.split("|")}
-
 
 def _nmcli_free_run(cmd: List[str], timeout: float = 30) -> Tuple[bool, str]:
     try:
@@ -4623,11 +3793,9 @@ def _nmcli_free_run(cmd: List[str], timeout: float = 30) -> Tuple[bool, str]:
         return False, _log_safe(e)
     return r.returncode == 0, _log_safe(((r.stderr or r.stdout) or "").strip()[:300])
 
-
 def _country_now() -> Optional[str]:
     m = re.search(r"^country\s+([A-Z0-9]{2}):", _run_text(["iw", "reg", "get"]), re.M)
     return m.group(1) if m else None
-
 
 def _write_if_changed(path: str, body: str, mode: int = 0o644) -> None:
     if _read_text(path) == body:
@@ -4638,7 +3806,6 @@ def _write_if_changed(path: str, body: str, mode: int = 0o644) -> None:
     with os.fdopen(fd, "w") as f:
         f.write(body)
     os.replace(tmp, path)
-
 
 def _country_apply(code: str) -> Tuple[bool, str, Optional[str]]:
     if shutil.which("raspi-config"):
@@ -4670,18 +3837,15 @@ def _country_apply(code: str) -> Tuple[bool, str, Optional[str]]:
     time.sleep(1)
     return True, "", _country_now()
 
-
 HOTSPOT_FILE = os.path.join(SHUTDOWN_STATE_DIR, "hotspot.json")
 COUNTRY_MODPROBE = "/etc/modprobe.d/wifimon-country.conf"
 WPA_CONFS = ("/etc/wpa_supplicant/wpa_supplicant.conf", "/etc/wpa_supplicant/wpa_supplicant-wlan0.conf")
 _hotspot: Dict[str, object] = {}
 _hotspot_lock = threading.Lock()
 
-
 def _hotspot_active() -> bool:
     with _hotspot_lock:
         return bool(_hotspot.get("active"))
-
 
 def _hotspot_ready() -> Tuple[bool, str]:
     if not shutil.which("nmcli"):
@@ -4689,7 +3853,6 @@ def _hotspot_ready() -> Tuple[bool, str]:
     if not (shutil.which("dnsmasq") or os.path.exists("/usr/sbin/dnsmasq")):
         return False, "The hotspot needs dnsmasq to hand out addresses (sudo apt install dnsmasq-base)."
     return True, ""
-
 
 def _hotspot_public() -> Dict[str, object]:
     ok, why = _hotspot_ready()
@@ -4703,7 +3866,6 @@ def _hotspot_public() -> Dict[str, object]:
                    minutes=h.get("minutes"))
     return out
 
-
 def _hotspot_profiles() -> List[str]:
     uuids = []
     for line in _run_text(["nmcli", "-t", "-f", "UUID,NAME,TYPE", "connection", "show"]).splitlines():
@@ -4711,7 +3873,6 @@ def _hotspot_profiles() -> List[str]:
         if len(f) >= 3 and f[2] == "802-11-wireless" and f[1] == "wifimon-hotspot":
             uuids.append(f[0])
     return uuids
-
 
 def _hotspot_persist() -> None:
     try:
@@ -4730,7 +3891,6 @@ def _hotspot_persist() -> None:
         pass
     except OSError as e:
         log.warning("Couldn't update %s: %s", HOTSPOT_FILE, e)
-
 
 def _hotspot_keyfile(ssid: str, password: str) -> Tuple[bool, str]:
     if not os.path.isdir(NM_CONN_DIR):
@@ -4762,7 +3922,6 @@ def _hotspot_keyfile(ssid: str, password: str) -> Tuple[bool, str]:
         return False, msg or "NetworkManager couldn't load the hotspot profile"
     return True, con_uuid
 
-
 def _hotspot_timer(token: str) -> None:
     while not _shutdown_event.wait(1.0):
         with _hotspot_lock:
@@ -4775,7 +3934,6 @@ def _hotspot_timer(token: str) -> None:
             log.info("Hotspot auto-stop time reached")
             _hotspot_stop(None, "auto-stop")
             return
-
 
 def _hotspot_stop(connect_to: Optional[str], why: str) -> str:
     with _hotspot_lock:
@@ -4793,7 +3951,6 @@ def _hotspot_stop(connect_to: Optional[str], why: str) -> str:
     _grace_clear()
     return "Hotspot stopped. The watchdog will reconnect to a known network."
 
-
 def _hotspot_recover() -> None:
     txt = _read_text(HOTSPOT_FILE)
     if not txt:
@@ -4810,12 +3967,10 @@ def _hotspot_recover() -> None:
         pass
     log.warning("A hotspot was still on when wifimon stopped -- it has been taken down")
 
-
 _PAM_SERVICE = "wifimon"
 _PAM_PROMPT_ECHO_OFF = 1
 _PAM_BUF_ERR = 5
 _crypt_lock = threading.Lock()
-
 
 def _load_lib(name: str, fallback: str) -> Optional[ctypes.CDLL]:
     path = ctypes.util.find_library(name) or fallback
@@ -4823,7 +3978,6 @@ def _load_lib(name: str, fallback: str) -> Optional[ctypes.CDLL]:
         return ctypes.CDLL(path)
     except OSError:
         return None
-
 
 def _pam_authenticate(user: str, password: str) -> Optional[bool]:
     libpam = _load_lib("pam", "libpam.so.0")
@@ -4894,7 +4048,6 @@ def _pam_authenticate(user: str, password: str) -> Optional[bool]:
         pam_end(handle, rc)
     return rc == 0
 
-
 def _shadow_authenticate(user: str, password: str) -> Optional[bool]:
     txt = _read_text("/etc/shadow")
     if txt is None:
@@ -4919,7 +4072,6 @@ def _shadow_authenticate(user: str, password: str) -> Optional[bool]:
         return False
     return hmac.compare_digest(out, stored.encode("utf-8"))
 
-
 def _verify_root_password(password: str) -> bool:
     if not password:
         return False
@@ -4927,7 +4079,6 @@ def _verify_root_password(password: str) -> bool:
     if result is None:
         result = _shadow_authenticate("root", password)
     return bool(result)
-
 
 def _root_password_status() -> str:
     txt = _read_text("/etc/shadow")
@@ -4940,12 +4091,10 @@ def _root_password_status() -> str:
             return "none" if (not stored or stored[0] in "!*") else "set"
     return "unknown"
 
-
 _COOKIE_NAME = "wifimon_session"
 _MAX_SESSIONS = 50
 _sessions_lock = threading.Lock()
 _sessions: Dict[str, float] = {}
-
 
 def _session_new() -> str:
     token = secrets.token_urlsafe(32)
@@ -4957,7 +4106,6 @@ def _session_new() -> str:
             del _sessions[min(_sessions, key=_sessions.get)]
         _sessions[token] = now + SESSION_TTL_SECS
     return token
-
 
 def _session_touch(token: str) -> bool:
     now = time.monotonic()
@@ -4971,11 +4119,9 @@ def _session_touch(token: str) -> bool:
         _sessions[token] = now + SESSION_TTL_SECS
         return True
 
-
 def _session_drop(token: str) -> None:
     with _sessions_lock:
         _sessions.pop(token, None)
-
 
 def _cookie_header(token: str, max_age: int) -> str:
     parts = [f"{_COOKIE_NAME}={token}", "Path=/", "HttpOnly", "SameSite=Strict",
@@ -4984,7 +4130,6 @@ def _cookie_header(token: str, max_age: int) -> str:
         parts.append("Secure")
     return "; ".join(parts)
 
-
 _AUTH_LOCK_AFTER = 5
 _AUTH_LOCK_BASE = 5.0
 _AUTH_LOCK_CAP = 300.0
@@ -4992,14 +4137,12 @@ _AUTH_TRACK_MAX = 1000
 _auth_lock = threading.Lock()
 _auth_failures: Dict[str, List[float]] = {}
 
-
 def _lockout_remaining(ip: str) -> float:
     with _auth_lock:
         rec = _auth_failures.get(ip)
         if not rec:
             return 0.0
         return max(0.0, rec[1] - time.monotonic())
-
 
 def _auth_record_failure(ip: str) -> None:
     now = time.monotonic()
@@ -5012,14 +4155,11 @@ def _auth_record_failure(ip: str) -> None:
             delay = min(_AUTH_LOCK_CAP, _AUTH_LOCK_BASE * (2 ** (rec[0] - _AUTH_LOCK_AFTER)))
             rec[1] = now + delay
 
-
 def _auth_record_success(ip: str) -> None:
     with _auth_lock:
         _auth_failures.pop(ip, None)
 
-
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,62}$")
-
 
 def _ensure_tls_cert() -> bool:
     if os.path.exists(TLS_CERT) and os.path.exists(TLS_KEY):
@@ -5066,13 +4206,11 @@ def _ensure_tls_cert() -> bool:
     log.info("Created self-signed HTTPS certificate for %s in %s", host, TLS_DIR)
     return True
 
-
 def _make_ssl_context() -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     ctx.load_cert_chain(TLS_CERT, TLS_KEY)
     return ctx
-
 
 _MAX_BODY = 16 * 1024
 _LOG_CONTROL_RE = re.compile(r"[\x00-\x1f\x7f]")
@@ -5087,10 +4225,8 @@ _SECURITY_HEADERS = (
      "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
 )
 
-
 def _log_safe(text: object) -> str:
     return _LOG_CONTROL_RE.sub(" ", str(text))
-
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "wifimon"
@@ -6257,7 +5393,6 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             self._json(500, {"error": f"Undo had problems: {last.get('message')}"})
 
-
 class _Server(ThreadingHTTPServer):
     daemon_threads = True
     block_on_close = False
@@ -6311,7 +5446,6 @@ class _Server(ThreadingHTTPServer):
         else:
             log.exception("Error handling request from %s", client_address[0])
 
-
 def _start_web() -> Optional[_Server]:
     try:
         httpd = _Server((HTTP_BIND, HTTP_PORT), _Handler)
@@ -6338,7 +5472,6 @@ def _start_web() -> Optional[_Server]:
         log.info("Dashboard uses plain HTTP (USE_TLS is off)")
     _service_info["tls"] = tls
     return httpd
-
 
 _PAGE_HTML = r"""<!doctype html>
 <html lang="en">
@@ -8146,13 +7279,11 @@ a.btnlink:hover{border-color:var(--cyan)}
 
 _page_cache: Optional[bytes] = None
 
-
 def _page_bytes() -> bytes:
     global _page_cache
     if _page_cache is None:
         _page_cache = _PAGE_HTML.replace("__APP_VERSION__", APP_VERSION).encode("utf-8")
     return _page_cache
-
 
 def run() -> None:
     log.info("wifimon %s starting — watchdog active on %s", APP_VERSION, INTERFACE)
@@ -8208,7 +7339,6 @@ def run() -> None:
     if proc is not None and proc.poll() is None:
         proc.terminate()
     log.info("wifimon exiting")
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="WiFi and Voltage Watchdog + Dashboard for Raspberry Pi")

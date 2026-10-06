@@ -1,171 +1,8 @@
 #!/usr/bin/env bash
-#
-# install_asl_dvs_dashboard.sh  v6.5  (2026-10-05)
-# Build: common (all nodes, including Pi Zero 2 W)
-# Installs or updates:
-#   ASL-DVS Node Control Dashboard  (port 8989)
-#   ASL-DVS-M17 Node Control Dashboard (M17/Zello fork, port 8989)
-#   ASL-DVS SysMon                  (port 9999)
-#   wifimon  — WiFi/voltage watchdog (no web UI, no port)
-#   44helper — 44Net Connect / firewall / router dashboard (port 9997)
-#   SVX Dashboard — standalone SVXLink node controller (port 8991)
-#   (asl_dvs_watchdog is retired as of v6.4 -- an installed copy is
-#    removed, see the v6.4 note below)
-#
-#   Dashboard and its M17/Zello fork are two separate builds of the SAME
-#   role — pick whichever one file you actually deploy on a given node,
-#   not both. They share port 8989 and (not by accident) the exact same
-#   config file, /etc/asl_dvs/asl_dvs.conf; running both at once on one
-#   node will fight over the port. This installer will happily stage and
-#   install both if both are found, but it does not stop you from doing
-#   that, so don't unless you've moved one to a different port yourself.
-#
-# Usage:
-#   sudo bash install_asl_dvs_dashboard.sh
-#   sudo bash install_asl_dvs_dashboard.sh --non-interactive   (or --auto, -y)
-#
-# Searches the current directory, common locations, AND the instmon
-# web installer's staging library for:
-#   asl_dvs_dashboard*.py
-#   sysmon*.py
-#   wifimon*.py
-#   asl_dvs_m17_44helper*.py
-# Each component is optional — any subset may be installed.
-#
-# v5.3: Added the instmon library subfolders to the discovery search
-# path (${INSTMON_LIBRARY_DIR:-/etc/asl_dvs/instmon_library}/dashboard
-# and .../sysmon), so files staged via instmon's "Upload & stage"
-# button show up here too, without needing to be copied to /tmp or
-# /root by hand first. Override the library root with the
-# INSTMON_LIBRARY_DIR env var if instmon is configured with a
-# non-default path on this node.
-#
-# v5.4: Added a non-interactive mode. Previously every `read -r -p
-# ... </dev/tty` prompt would just hang forever when this script was
-# run from a backgrounded subprocess with no attached terminal --
-# exactly what instmon's "Run Script" button does (Python's
-# subprocess.Popen gives it no tty). Non-interactive mode is
-# auto-detected whenever stdin isn't a terminal (covers the instmon
-# case with zero cooperation needed from the caller), and can also be
-# forced manually with --non-interactive / --auto / -y for testing.
-# In this mode:
-#   - version selection always takes the newest staged file
-#   - "reinstall anyway?" on an up-to-date file defaults to skip (n)
-#   - operation mode defaults to "update" if an existing install is
-#     found, "install" otherwise (never prompts, never quits)
-#   - first-run callsign/node/label prompts are replaced by the
-#     AUTO_CALLSIGN / AUTO_NODE / AUTO_LABEL environment variables.
-#     If a first-run config is needed and AUTO_CALLSIGN or AUTO_NODE
-#     is missing, the script dies with a clear message instead of
-#     hanging -- there's no safe default identity to invent.
-#
-# v6.0: Added wifimon and 44helper as installable components, so this
-# is now the single entry point for the whole fleet instead of just
-# dashboard+sysmon.
-#
-#   DESIGN NOTE — dashboard/sysmon vs. wifimon/44helper install path:
-#   Dashboard and sysmon are installed the original way: this script
-#   copies the binary and writes the systemd unit itself (write_service()
-#   below). wifimon and 44helper are NOT installed that way — instead
-#   this script shells out to each script's own embedded
-#   `python3 <file> --install`. Reason: those two already ship a correct,
-#   self-contained installer (own bin path — /usr/local/bin for wifimon,
-#   /opt/44helper for 44helper — own service unit content, e.g. wifimon's
-#   Nice/OOMScoreAdjust priorities), and reimplementing that in bash would
-#   mean maintaining two copies of each unit file that could drift apart.
-#   Both self-installers were audited safe for unattended use: 44helper's
-#   --install has no interactive input() calls anywhere in its path;
-#   wifimon's install_service() only reaches an interactive prompt when
-#   stdin is a tty (guarded internally), so it never hangs when this
-#   script runs non-interactively. Both self-installers' `enable --now`
-#   bug (the same STFU-visibility-class bug found in the dashboard —
-#   re-running --install was a no-op on an already-active service,
-#   leaving the old process in memory) is fixed as of wifimon v4.4,
-#   asl_dvs_dashboard v7.777, sysmon v6.5.4, and 44helper v0.0.11 — this
-#   installer's own "install all, including silent auto-install" promise
-#   depends on that fix, so treat any of the four falling below those
-#   versions as a blocker, not a cosmetic issue.
-#
-#   wifimon has no web UI/port; its config (WiFi networks/PSKs) is
-#   intentionally NOT seeded by this installer — that stays wifimon's
-#   own job via --setup-wifi, run manually after install. 44helper's
-#   config also self-initializes with defaults on first run; no identity
-#   seeding needed for either (AUTO_CALLSIGN/AUTO_NODE only apply to
-#   dashboard/sysmon, unchanged from v5.4).
-#
-# v6.1: Added asl_dvs_watchdog as a fifth delegated self-installer,
-#   same pattern as wifimon/44helper — this script never writes its
-#   unit files directly, it shells out to the watchdog's own
-#   `bash <file> --install`. Unlike wifimon/44helper the watchdog has
-#   no persistent daemon of its own (it's a oneshot + timer pair), so
-#   there's no equivalent of the "enable --now is a no-op on an
-#   already-active unit" bug class to worry about here — every timer
-#   firing re-execs whatever binary currently sits at
-#   /usr/local/bin/asl_dvs_watchdog.sh, so a fresh --install always
-#   takes effect on the very next check regardless of what was running
-#   before. No identity seeding needed (no config file at all).
-#
-# v6.2: Added the M17/Zello dashboard fork (asl_dvs_m17_dashboard.py) as
-#   a sixth delegated self-installer, now that it ships its own
-#   --install/--uninstall (as of its own v7.753-zello) instead of the
-#   old manual-cp-only deploy path. It follows the exact same delegation
-#   pattern as wifimon/44helper/watchdog above: this script only
-#   discovers, stages, and syntax-checks the file, then shells out to
-#   `python3 <file> --install`, which does its own copy + symlink +
-#   service unit (Type=notify, WatchdogSec=30) + enable + restart. No
-#   identity seeding here either — it shares asl_dvs.conf with the
-#   regular dashboard and reads/writes it the same way that dashboard
-#   does, so if a seed config was already written for one fork the other
-#   picks it straight up with no separate prompt.
-#
-# v6.3: Added SVX Dashboard (svx_dashboard.py) as a seventh delegated
-#   self-installer, same pattern as wifimon/44helper/M17-dash above: this
-#   script only discovers, stages, and syntax-checks the file, then shells
-#   out to `python3 <file> --install`, which does its own copy + symlink +
-#   service unit + enable + restart (see svx_dashboard's own
-#   install_service()). Own, separate config file (not the shared
-#   asl_dvs.conf), so no identity seeding. Port 8991 — deliberately chosen
-#   to avoid instmon's own 8990, which svx_dashboard's PORT constant used
-#   to collide with before that was fixed upstream.
-#
-# v6.4: asl_dvs_watchdog retired.  The dashboard's own unit already has
-#   Restart=always + WatchdogSec=30 (systemd restarts it if it dies or
-#   hangs), so the external curl watchdog added little, and v2.2 of it
-#   restarted a healthy v9.x dashboard every ~50 s because /api/status
-#   now needs a login.  This installer no longer finds, stages or
-#   installs asl_dvs_watchdog*.sh; instead, on every run, it stops,
-#   disables and deletes any installed watchdog timer/service (including
-#   instance-suffixed ones) and /usr/local/bin/asl_dvs_watchdog*.sh.
-#   Staged copies in the instmon library are left alone and ignored.
-#
-# v6.5: SysMon and Dashboard build choice.  Each now comes in two builds
-#   that match the same file pattern: the full one (sysmon_v*.py,
-#   asl_dvs_dashboard_v*.py) and the lighter Pi Zero 2 W one
-#   (sysmon_pi02w_v*.py, asl_dvs_dashboard_pi02w_v*.py, VERSION
-#   "x.y.z-pi02w").  Picking the newest file by date could put either on
-#   either kind of Pi, so the build is chosen first, per component, and
-#   only that build's files are offered:
-#     1. SYSMON_VARIANT / DASH_VARIANT = pi02w or full, if set;
-#     2. otherwise the build already installed (its VERSION line);
-#     3. otherwise pi02w on a "Raspberry Pi Zero 2 W" (device-tree
-#        model), full on anything else.
-#   Every ASL-DVS file names its build in a header line: "Build: Pi Zero
-#   2 W fork of vX.Y.Z" for a fork (also _pi02w_ in the file name and
-#   -pi02w on its VERSION) or "Build: common (all nodes, including Pi Zero
-#   2 W)" for a tool every node runs.
-#   No file of the chosen build found -> that component is not installed
-#   (with a warning saying how to override); the other build is never
-#   substituted.
-#   A Pi02w build is started through /usr/local/bin/asl_dvs_launch.py
-#   (written here, same file the Pi02w builds' own --install writes):
-#   run directly, Python compiles the whole file on every start and keeps
-#   that memory (sysmon ~54 MB, dashboard ~45 MB); started through the
-#   launcher it is imported, so Python saves the compiled copy in
-#   __pycache__ and reuses it (~26 MB and ~25 MB, twice as fast to start).
+# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)
 
 set -euo pipefail
 
-# ── Colour helpers ────────────────────────────────────────────────────────────
 RED=$'\033[0;31m'
 GRN=$'\033[0;32m'
 YEL=$'\033[0;33m'
@@ -180,9 +17,6 @@ die()  { echo "${RED}  ✘ ${RST}$*" >&2; exit 1; }
 hdr()  { echo; echo "${BLD}${CYN}══ $* ${RST}"; }
 sep()  { echo "  ${CYN}──────────────────────────────────────────${RST}"; }
 
-# ── Non-interactive mode ──────────────────────────────────────────────────────
-# Auto-detected from stdin not being a tty (the instmon "Run Script"
-# case), or forced explicitly for manual testing.
 NONINTERACTIVE=false
 for _arg in "$@"; do
     case "${_arg}" in
@@ -193,7 +27,6 @@ if [[ ! -t 0 ]]; then
     NONINTERACTIVE=true
 fi
 
-# ── Constants ─────────────────────────────────────────────────────────────────
 DASH_BIN="/usr/local/bin/asl_dvs_dashboard.py"
 DASH_SERVICE="asl_dvs_dashboard"
 DASH_SERVICE_FILE="/etc/systemd/system/${DASH_SERVICE}.service"
@@ -208,17 +41,10 @@ SYSMON_SERVICE_FILE="/etc/systemd/system/${SYSMON_SERVICE}.service"
 SYSMON_PORT=9999
 SYSMON_CONF_DIR="/etc/sysmon"
 
-# asl_dvs_m17_dashboard (M17/Zello fork) also installs itself via its own
-# `--install` (same delegation pattern as wifimon/44helper below)
-# — these paths are only used here for existing-install detection and
-# up-to-date comparison, never written to directly.
 M17DASH_BIN="/usr/local/bin/asl_dvs_m17_dashboard.py"
 M17DASH_SERVICE="asl_dvs_m17_dashboard"
 M17DASH_PORT=8989
 
-# wifimon and 44helper install themselves via their own `--install` (see
-# design note above) — these paths are only used here for existing-install
-# detection and up-to-date comparison, never written to directly.
 WIFIMON_BIN="/usr/local/bin/wifimon.py"
 WIFIMON_SERVICE="wifimon"
 
@@ -226,17 +52,10 @@ HELPER_BIN="/opt/44helper/asl_dvs_m17_44helper.py"
 HELPER_SERVICE="44helper"
 HELPER_PORT=9997
 
-# svx_dashboard installs itself via its own `--install` (same delegation
-# pattern as wifimon/44helper above) — these paths are only used here for
-# existing-install detection and up-to-date comparison, never written to
-# directly.
 SVX_BIN="/usr/local/bin/svx_dashboard.py"
 SVX_SERVICE="svx_dashboard"
 SVX_PORT=8991
 
-# instmon web installer's staging library — same env-var convention
-# instmon.py itself uses (INSTMON_LIBRARY_DIR), so pointing instmon
-# at a non-default library root also repoints this script.
 INSTMON_LIBRARY_DIR="${INSTMON_LIBRARY_DIR:-/etc/asl_dvs/instmon_library}"
 DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/dashboard"
 M17DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/m17_dashboard"
@@ -247,16 +66,12 @@ SVX_LIB_DIR="${INSTMON_LIBRARY_DIR}/svx"
 
 LABELS=(a b c d e f g h i j)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ══════════════════════════════════════════════════════════════════════════════
 
-# stage_and_select PATTERN LABEL [LIB_DIR]
 stage_and_select() {
     local pattern="$1"
     local label="$2"
     local lib_dir="${3:-}"
-    local exclude="${4:-}"   # v6.5: optional -name pattern to leave out
+    local exclude="${4:-}"
 
     local SCRIPT_DIR
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -380,9 +195,6 @@ stage_and_select() {
     fi
 }
 
-# v6.5: which build of a component to install (see the v6.5 note above).
-# $1 = override (SYSMON_VARIANT / DASH_VARIANT), $2 = installed file,
-# $3 = override's name for messages.  Sets PICKED_BUILD and PICKED_WHY.
 pick_build() {
     PICKED_BUILD="$1"
     PICKED_WHY="$3"
@@ -428,20 +240,51 @@ check_port() {
     fi
 }
 
-# v6.5: the shared Pi02w launcher -- see the v6.5 note at the top.
 LAUNCHER_PATH="/usr/local/bin/asl_dvs_launch.py"
 write_launcher() {
     cat > "${LAUNCHER_PATH}.tmp" <<'LAUNCHER_EOF'
 #!/usr/bin/env python3
-# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
-# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
-# named on the command line through Python's import system, so its compiled
-# copy is kept in __pycache__ and reused on later starts instead of the whole
-# file being compiled again -- about half the memory and twice as fast to
-# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
 import os
 import runpy
 import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
 
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
@@ -505,7 +348,6 @@ uptodate_check() {
     fi
 }
 
-# ── Config-prompt helpers ─────────────────────────────────────────────────────
 
 CONF_CALLSIGN=""
 CONF_NODE=""
@@ -549,12 +391,6 @@ prompt_label() {
     ok "Label: ${CONF_LABEL}"
 }
 
-# resolve_identity NEED_LABEL
-# Sets CONF_CALLSIGN / CONF_NODE / CONF_LABEL. In non-interactive mode
-# this reads AUTO_CALLSIGN / AUTO_NODE / AUTO_LABEL instead of
-# prompting -- dies with a clear message if a first-run config is
-# needed and AUTO_CALLSIGN or AUTO_NODE isn't set, since there's no
-# safe default identity to invent for a live node.
 resolve_identity() {
     local need_label="${1:-false}"
     if [[ "${NONINTERACTIVE}" == "true" ]]; then
@@ -601,9 +437,6 @@ write_sysmon_seed() {
     ok "Seed config written: ${_smc}"
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PREFLIGHT
-# ══════════════════════════════════════════════════════════════════════════════
 hdr "Preflight"
 
 if [[ "${EUID}" -ne 0 ]]; then
@@ -621,9 +454,6 @@ if ! command -v systemctl &>/dev/null; then
 fi
 ok "systemd available"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INSTALL vs UPDATE
-# ══════════════════════════════════════════════════════════════════════════════
 hdr "Operation"
 
 _dash_exists=false
@@ -685,12 +515,6 @@ fi
 
 ok "Mode: ${MODE}"
 
-# ══════════════════════════════════════════════════════════════════════════════
-# RETIRE asl_dvs_watchdog  (v6.4)
-# ══════════════════════════════════════════════════════════════════════════════
-# Removes any installed watchdog: every asl_dvs_watchdog*.timer/.service unit
-# (instance-suffixed ones too) and /usr/local/bin/asl_dvs_watchdog*.sh.  The
-# dashboard's own systemd watchdog (Restart=always, WatchdogSec=30) covers it.
 retire_watchdog() {
     local units=() bins=() u b
     shopt -s nullglob
@@ -719,13 +543,9 @@ retire_watchdog() {
 }
 retire_watchdog
 
-# ══════════════════════════════════════════════════════════════════════════════
-# DISCOVER + STAGE + SELECT
-# ══════════════════════════════════════════════════════════════════════════════
 
 hdr "Dashboard — file discovery"
 CHOSEN=""
-# v6.5: choose the build first (see the v6.5 note at the top).
 pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
 DASH_VARIANT="${PICKED_BUILD}"
 if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
@@ -758,7 +578,6 @@ if [[ -n "${M17DASH_CHOSEN}" ]]; then
 fi
 
 hdr "SysMon — file discovery"
-# v6.5: choose the build first (see the v6.5 note at the top).
 pick_build "${SYSMON_VARIANT:-}" "${SYSMON_BIN}" "SYSMON_VARIANT"
 SYSMON_VARIANT="${PICKED_BUILD}"
 case "${SYSMON_VARIANT}" in
@@ -822,9 +641,6 @@ if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
     die "Nothing to install — no dashboard, M17/Zello dashboard, sysmon, wifimon, 44helper, or SVX dashboard files found."
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# UP-TO-DATE CHECK
-# ══════════════════════════════════════════════════════════════════════════════
 hdr "Up-to-date check"
 
 uptodate_check "Dashboard" "${DASH_CHOSEN}"    "${DASH_BIN}"
@@ -851,9 +667,6 @@ if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
     exit 0
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PORT CHECKS
-# ══════════════════════════════════════════════════════════════════════════════
 hdr "Port checks"
 [[ -n "${DASH_CHOSEN}"    ]] && { info "Dashboard port ${DASH_PORT}:"; check_port "${DASH_PORT}"; }
 if [[ -n "${M17DASH_CHOSEN}" ]]; then
@@ -866,11 +679,7 @@ fi
 [[ -n "${SYSMON_CHOSEN}"  ]] && { info "SysMon port ${SYSMON_PORT}:";  check_port "${SYSMON_PORT}"; }
 [[ -n "${HELPER_CHOSEN}"  ]] && { info "44helper port ${HELPER_PORT}:"; check_port "${HELPER_PORT}"; }
 [[ -n "${SVX_CHOSEN}"     ]] && { info "SVX Dashboard port ${SVX_PORT}:"; check_port "${SVX_PORT}"; }
-# wifimon has no web UI/port — nothing to check.
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STOP RUNNING SERVICES
-# ══════════════════════════════════════════════════════════════════════════════
 hdr "Stopping existing services"
 
 stop_if_installing() {
@@ -890,13 +699,7 @@ stop_if_installing() {
 
 stop_if_installing "${DASH_SERVICE}"    "${DASH_CHOSEN}"
 stop_if_installing "${SYSMON_SERVICE}"  "${SYSMON_CHOSEN}"
-# M17/Zello dashboard, wifimon, and 44helper are NOT pre-stopped here —
-# their own --install (invoked below) does enable + restart itself, which
-# reloads the running code without a separate stop step.
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INSTALL DASHBOARD
-# ══════════════════════════════════════════════════════════════════════════════
 if [[ -n "${DASH_CHOSEN}" ]]; then
     hdr "Installing Dashboard"
 
@@ -948,15 +751,6 @@ if [[ -n "${DASH_CHOSEN}" ]]; then
     ok "Service unit: ${DASH_SERVICE_FILE}"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INSTALL M17/ZELLO DASHBOARD
-# ══════════════════════════════════════════════════════════════════════════════
-# Delegated to the fork's own --install (same pattern as wifimon/44helper/
-# watchdog — see design note at top of file). It copies itself to
-# /usr/local/lib/asl_dvs/, symlinks /usr/local/bin/asl_dvs_m17_dashboard.py,
-# writes its own service unit (Type=notify, WatchdogSec=30), then does
-# enable + restart. It shares asl_dvs.conf with the regular dashboard and
-# reads it the same way, so no separate identity seeding is needed here.
 if [[ -n "${M17DASH_CHOSEN}" ]]; then
     hdr "Installing M17/Zello dashboard"
     info "Delegating to: python3 $(basename "${M17DASH_CHOSEN}") --install"
@@ -965,9 +759,6 @@ if [[ -n "${M17DASH_CHOSEN}" ]]; then
     ok "M17/Zello dashboard installed, enabled, and restarted"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INSTALL SYSMON
-# ══════════════════════════════════════════════════════════════════════════════
 if [[ -n "${SYSMON_CHOSEN}" ]]; then
     hdr "Installing SysMon"
 
@@ -1002,15 +793,6 @@ if [[ -n "${SYSMON_CHOSEN}" ]]; then
     ok "Service unit: ${SYSMON_SERVICE_FILE}"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INSTALL WIFIMON
-# ══════════════════════════════════════════════════════════════════════════════
-# Delegated to wifimon's own --install (see design note at top of file) —
-# it copies itself to /usr/local/bin, writes its own service unit
-# (including the Nice/OOMScoreAdjust priorities this script doesn't know
-# about), then does enable + restart. Safe unattended: the only
-# interactive prompts in wifimon.py are gated on sys.stdin.isatty()
-# internally and never reached from install_service().
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     hdr "Installing wifimon"
     info "Delegating to: python3 $(basename "${WIFIMON_CHOSEN}") --install"
@@ -1019,13 +801,6 @@ if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     ok "wifimon installed, enabled, and restarted"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INSTALL 44HELPER
-# ══════════════════════════════════════════════════════════════════════════════
-# Same delegation pattern as wifimon — 44helper installs to /opt/44helper
-# (not /usr/local/bin), which is another reason to let its own installer
-# own that path rather than duplicating it here. Confirmed no input()
-# calls anywhere in its --install path, so it's safe unattended.
 if [[ -n "${HELPER_CHOSEN}" ]]; then
     hdr "Installing 44helper"
     info "Delegating to: python3 $(basename "${HELPER_CHOSEN}") --install"
@@ -1034,14 +809,6 @@ if [[ -n "${HELPER_CHOSEN}" ]]; then
     ok "44helper installed, enabled, and restarted"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# INSTALL SVX DASHBOARD
-# ══════════════════════════════════════════════════════════════════════════════
-# Same delegation pattern as wifimon/44helper — svx_dashboard writes its own
-# versioned lib dir + symlink + .service (see its install_service()). Own,
-# separate config file (not the shared asl_dvs.conf), so no identity to
-# seed here. Confirmed no input() calls anywhere in its --install path, so
-# it's safe unattended.
 if [[ -n "${SVX_CHOSEN}" ]]; then
     hdr "Installing SVX Dashboard"
     info "Delegating to: python3 $(basename "${SVX_CHOSEN}") --install"
@@ -1050,12 +817,6 @@ if [[ -n "${SVX_CHOSEN}" ]]; then
     ok "SVX Dashboard installed, enabled, and restarted"
 fi
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ENABLE + START
-# ══════════════════════════════════════════════════════════════════════════════
-# NOTE: this loop only covers Dashboard and SysMon. The M17/Zello dashboard,
-# wifimon and 44helper were already enabled + started
-# above by their own --install.
 hdr "Enabling and starting services"
 
 systemctl daemon-reload
@@ -1073,14 +834,10 @@ for svc_entry in \
     info "${svc} restarted"
 done
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STARTUP VERIFICATION
-# ══════════════════════════════════════════════════════════════════════════════
 hdr "Startup verification"
 info "Waiting for services to stabilise…"
 sleep 3
 
-# Dashboard + SysMon — check port as well
 for svc_entry in \
     "${DASH_SERVICE}:${DASH_CHOSEN}:${DASH_PORT}" \
     "${SYSMON_SERVICE}:${SYSMON_CHOSEN}:${SYSMON_PORT}"; do
@@ -1105,7 +862,6 @@ for svc_entry in \
     fi
 done
 
-# M17/Zello dashboard (port ${M17DASH_PORT}) + wifimon (no port) + 44helper (port ${HELPER_PORT}) + SVX Dashboard (port ${SVX_PORT})
 for svc_entry in \
     "${M17DASH_SERVICE}:${M17DASH_CHOSEN}:${M17DASH_PORT}" \
     "${WIFIMON_SERVICE}:${WIFIMON_CHOSEN}:" \
@@ -1133,9 +889,6 @@ for svc_entry in \
     fi
 done
 
-# ══════════════════════════════════════════════════════════════════════════════
-# SUMMARY
-# ══════════════════════════════════════════════════════════════════════════════
 hdr "Access URLs"
 
 HOSTNAME_SHORT="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo raspberrypi)"
@@ -1172,7 +925,6 @@ print_urls "ASL-DVS-M17 Node Control Dashboard"  "${M17DASH_PORT}" "${M17DASH_CH
 print_urls "ASL-DVS System Monitor"              "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
 print_urls "44Net Helper"                        "${HELPER_PORT}"  "${HELPER_CHOSEN}"
 print_urls "SVX Dashboard"                        "${SVX_PORT}"     "${SVX_CHOSEN}"
-# wifimon has no web UI — nothing to print here.
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     echo

@@ -1,198 +1,4 @@
 #!/usr/bin/env python3
-"""
-ASL-DVS SYSMON  --  sysmon.py
-Version : 6.13.67.2-pi02w  (20261005)
-Build   : Pi Zero 2 W fork of v6.13.67
-Authors : Claude AI (Anthropic) / KD8PGK
-License : CC BY-NC 4.0
-Nodes   : KD8PGK 652701 / 652702 / 652703
-
-Changelog: the last 10 versions are below.  Older entries (v6.13.55 and
-earlier) are in sysmon_changelog_v6_13_65_20261004.txt.
-
-v6.13.67.2-pi02w -- --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment).
-
-v6.13.67.1-pi02w -- Zello tab removed (Pi Zero 2 W build).  The tab
-for asl-zello-bridge (install/status/config/compatibility cards, sample
-and override editor, start/stop/restart), its routes /api/zello GET and
-POST, the "zello_installed" check in /api/status and the tab's entries in
-the tab lists are gone.  A saved enabled_tabs list that still names zello
-is fine -- unknown tabs are dropped when the config is read.  The bridge
-service itself is untouched; Services and Journal still show it.
-  Launcher: the service now starts through /usr/local/bin/asl_dvs_launch.py
-(written by --install, shared with the Pi02w dashboard), which imports
-this file instead of running it, so Python keeps its compiled copy in
-__pycache__ and reuses it: about 26 MB settled instead of 54 MB, and twice
-as fast to start.  --install also clears compiled copies of older
-versions; --uninstall removes this version's and, when no other unit uses
-it, the launcher.  The Security check "dashboard requires login" now takes
-the last .py in the dashboard's ExecStart (the program, not the launcher).
-
-v6.13.67-pi02w -- Pi Zero 2 W build, branched from v6.13.67.  A lighter
-sysmon for the Pi Zero 2 W (512 MB RAM, 4 slow cores): tabs are removed
-in stages; everything else matches v6.13.67.
-  Console tab removed: the in-browser Asterisk console (websocket,
-  asterisk -rvvv, embedded xterm.js), every Troubleshooting check and the
-  Page self-check.  Routes gone: /api/console/*, /static/xterm.js,
-  /static/xterm.css, /static/addon-fit.js.  The D-Star card keeps its
-  "Remote control listening" row (helpers moved into the card).
-  Net tab removed: hostname / .local tools, mtr install, ping and trace
-  to Google, allstarlink.org, DV hosts and reflectors.  Routes gone:
-  /api/net, /api/net/run, /api/net/cancel.  The background job runner
-  and /api/net/job stay -- Phone -> Modules "Reinstall" uses them.
-  Reg tab removed: the HTTP and IAX2 registration check cards.  Routes
-  gone: /api/reg/http, /api/reg/iax.  The shared check-list renderer
-  stays (Phone uses it).
-  Firewall tab removed: ufw / nftables / firewalld rule views and
-  editing, raw ruleset, enable / disable.  Route gone: /api/firewall (GET
-  and POST).  Ports -> port details loses its Firewall zone (state and
-  Allow / Deny), so /api/ports no longer reads the firewall on every
-  15 s refresh.  Phone's read-only "Pi firewall" checks stay; their fix
-  hints now give the Cockpit / firewall-cmd / nftables / ufw step.
-  Cleanup: section labels updated for the tabs that remain, tab colour
-  map trimmed.  A saved enabled_tabs list that still names a removed tab
-  is fine -- unknown tabs are dropped when the config is read.
-  Result: 33,068 -> ~23,400 lines, page 440 -> 358 KB, 53 -> 42 GET and
-  30 -> 22 POST routes.  Checks run each stage: pyflakes (clean),
-  node --check, dead-code and reachability scans, --selftest, every GET
-  route called directly, and every tab opened in Chromium (no errors).
-
-v6.13.67 -- D-Star card: gatewayAddress row fixed.  gatewayAddress is the
-Pi's own address that ircDDBGateway binds every socket to (DExtra, D-Plus,
-DCS, G2 and remote control), not the router's.  Blank (or 0.0.0.0) now
-passes -- it is the normal setting -- with a "don't forward the port" note
-when remote control is on.  127.0.0.1 fails (blocks reflector and gateway
-links) and an address this Pi doesn't have (e.g. the router's) fails
-(ircDDBGateway can't bind it).  The row shows whatever the remote-control
-setting, since the address covers every link.  v6.13.66 passed 127.0.0.1
-and warned on blank.
-
-v6.13.66 -- D-Star -- ircDDBGateway card (ASL-DVS tab).
-For dashboard v9.3.71, whose D-STAR tab links to gateway callsigns as well
-as reflectors.  A new card under "DVSwitch -- Config Files" reads
-/etc/ircddbgateway and checks: ircddbgatewayd running, gatewayCallsign,
-repeaterBand1 (shown as the 8-character callsign the dashboard uses),
-ircddbEnabled (gateway lookup), dextraEnabled (gateway links), and remote
-control -- remoteEnabled (WARN when off: the dashboard falls back to
-dvswitch.sh tune), remotePassword set (never shown), remotePort valid and
-listening (catches settings not yet applied by a restart), gatewayAddress
-(WARN when blank: listens on every interface).  Buttons: Edit (the file
-is now in the DVSwitch config-file list), Restart ircddbgatewayd (root),
-Refresh, Copy.  Read-only -- nothing changes the file but the editor.
-New route /api/dstar-gw (GET checks, POST restart), added to the Page
-self-check.  Console -> Saved favorites now passes D-STAR gateway rows
-("W1ABC BL") and treats the unpadded "W1ABCBL" as old form (the dashboard
-fixes it on load).
-
-v6.13.65 -- Console Dashboard checks, stage 4 of 4 (release).
-Summary of v6.13.62-v6.13.64: a new "Dashboard" group in Console ->
-Troubleshooting (before Sysmon) with three read-only checks for the
-dashboard's v9.3.61-v9.3.69 refactor -- "Dashboard file check" (version,
-compiles, functions defined twice, every page button's function present),
-"Node search lists" (the astdb.txt and EchoLink lists the ASL and Echo
-search cards use) and "Saved favorites" (each saved ASL, Echo, D-STAR and
-XLX row in asl_dvs.conf).  None connects to port 8989.  Run all goes from
-33 to 36 checks (the Console keeps 40 results).  The Page self-check is
-unchanged: it reads tab data routes, and these checks already run through
-/api/console/tcatalog, which it covers.  Changelog entries v6.13.52-
-v6.13.55 moved to sysmon_changelog_v6_13_65_20261004.txt.  Checks run:
-py_compile, pyflakes (no new warnings), duplicate-function scan, node
---check, --selftest, and tests of each new check against dashboard
-v9.3.60 and v9.3.69, broken copies (a missing page function, a file that
-won't compile), sample astdb.txt / echolink dbdump output, and a sample
-asl_dvs.conf with good, old-form, duplicate, bridge and bad rows.
-
-v6.13.64 -- Console Dashboard checks, stage 3 of 4: Saved favorites.
-"Saved favorites" reads asl_dvs.conf and checks every saved ASL, Echo,
-D-STAR and XLX row: node numbers are 1-7 digits, no bridge or phone node
-is saved as a favorite, nothing is saved twice, ASL/Echo rows past slot 10
-(not loaded) are flagged, D-STAR rows are the 6-character base + module +
-L (REF/XRF/DCS + 3 digits), XLX rows are XLX + 3 + module + L, and old
-4-field XLX rows (skipped when the dashboard loads) are flagged.  Run it
-after tapping Save on the dashboard to see the row landed right.
-
-v6.13.63 -- Console Dashboard checks, stage 2 of 4: Node search lists.
-"Node search lists" shows what the dashboard's ASL and Echo search cards
-(dashboard v9.3.61/62) have to search: astdb.txt found, its date and how
-many nodes it holds (read the way the dashboard reads it), the EchoLink
-stations logged in now (asterisk -rx "echolink dbdump"), and the bridge
-and phone nodes the dashboard leaves out of both searches.
-
-v6.13.62 -- Console Dashboard checks, stage 1 of 4: Dashboard file check.
-New "Dashboard" group in Troubleshooting (before Sysmon).  "Dashboard
-file check" reads the installed asl_dvs_dashboard.py (never connects to
-port 8989): shows its version (WARN if older than 9.3.69), compiles it in
-memory (nothing written to the SD card), flags a function defined twice,
-and checks that every on...= handler on the dashboard page names a
-function the page script defines -- a renamed or removed function there
-breaks a button.  _ts_dash_version() now finds the file through the new
-shared _ts_dash_paths().  BUILD_DATE was a release behind; now 20261004.
-
-v6.13.61 -- rpt.conf templates, stage 3 of 3: Console reader.
-_ts_rpt_sections() (used by the Console's Bridge port check, Bridge
-traffic and Stuck autopatch) now keeps the last value when a setting appears twice
-in one section, as Asterisk does -- it used to keep the first.  It also
-skips ;-- ... --; block comments instead of reading the lines inside.
-
-v6.13.60 -- rpt.conf templates, stage 2 of 3: Console check.  New
-"Template values" button in Troubleshooting -> Links: for each node it
-lists the settings that come only from a template such as [node-main],
-marks the ones the sysmon tabs read (callsign, idrecording, idtalkover,
-rxchannel, statpost_url and the four DTMF settings) and fails any node
-whose template isn't defined above it in rpt.conf.
-
-v6.13.59 -- rpt.conf templates, stage 1 of 3: shared scanner.
-_rpt_scan() now reads rpt.conf the way Asterisk does (checked against
-Asterisk's main/config.c): a node's template values go in first, then
-its own lines, and the last value wins -- so the node's own line beats
-the template, and with two templates the second beats the first.
-Templates of templates work, as does [name](!,base); a template must be
-defined above the node that uses it.  ;-- ... --; block comments are now
-skipped (a line inside one used to be read as a setting).  This changes
-what the ASL-DVS rpt.conf card, the Reg tab, the DVSM tab, the M17 and
-Zello rpt.conf checks, the header callsign and the Security identity
-show when a value is set only in the template.  Checked: output
-identical to v6.13.58 on sample files with no templates or block
-comments; new cases (value only in template, node overrides, two
-templates, template of template, missing template, block comments)
-give Asterisk's answer.  #include lines are still not followed by this
-scanner (the Phone tab and Node Settings reader does follow them).
-
-v6.13.58 -- Refactor by tab and card, stage 6 of 6 (release).
-Summary of v6.13.51-v6.13.57: a dead-code scan found nothing unused that
-is safe to delete (the 58 decorator-registered Phone/Console checks and
-the two web-server overrides only look unused; /api/dashboard-status,
-/api/appconf/files and /api/abinfo are kept on purpose).  The code is now
-grouped by tab, then by card, with no change to what any tab shows or
-does.  Changelog entries before v6.13.49 moved to the separate file
-sysmon_changelog_v6_13_58_20261004.txt (shipped with this file); the last
-10 versions stay here.  _RADIO_TUNE_DRIVERS was checked and kept as is --
-it is the allowlist the Tune save checks, and one item is correct today.
-Checks run on every stage: py_compile, pyflakes (no new warnings), a
-before/after comparison of every top-level statement and every module
-value (route tables, Phone sections, Console checks, security checks),
-the page outside the script byte-identical, every script statement
-present once with non-function statements in the same order, node
---check, and --selftest.
-
-v6.13.57 -- Refactor stage 5 of 6: Console.  The Troubleshooting checks
-are grouped by their button group (Links, Bridges, Phone, Asterisk, Pi
-health, Network, Sysmon), each helper beside the group that uses it;
-helpers used by several groups come first.  Buttons, their order in
-each group, and Run all are unchanged (checked against the old
-catalog).  The unused "order" list in /api/console/tcatalog now follows
-group order -- the page doesn't read it.  _ts_netcheck split into
-_ts_nc_state, _ts_nc_network and _ts_nc_bridges.
-
-v6.13.56 -- Refactor stage 4 of 6: Phone.  _phone_sec_health split into
-_phone_health_nodes, _phone_health_files, _phone_health_live and
-_phone_health_routes; _ph_hoip_checks split into _ph_hoip_server_ports,
-_ph_hoip_transport_auth, _ph_hoip_signin and _ph_hoip_network_vm.  The
-splits are mechanical (same statements, values passed in and out).
-Health, HOIP and Netcheck output compared old vs new over 80 mocked
-system states each (sample rpt/extensions/pjsip/iax files, canned
-command output): identical.
-"""
 
 import argparse
 import codecs
@@ -230,8 +36,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.2-pi02w"
-BUILD_DATE   = "20261005"
+VERSION      = "6.13.67.3-pi02w"
+BUILD_DATE   = "20261006"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -11925,8 +11731,6 @@ def _check_dashboard_web_auth() -> dict:
     exec_start, ran = _sec_run(
         ["systemctl", "show", "-p", "ExecStart", "--value", _SEC_DASH_UNIT])
     if ran and exec_start:
-        # The last .py is the program: a Pi02w unit starts it through
-        # /usr/local/bin/asl_dvs_launch.py, which comes first.
         paths = re.findall(r"(/\S+\.py)", exec_start)
         if paths and Path(paths[-1]).exists():
             src_path = paths[-1]
@@ -13214,11 +13018,6 @@ def _validate_security_registry(checks: "list[dict]") -> None:
 
 _validate_security_registry(SECURITY_CHECKS)
 
-
-# ==========================================================================
-# TAB: Overview
-# ==========================================================================
-
 def _route_overview(h: Handler) -> None:
     qt_results  = get_state_snapshot().get("quick_tests", {})
     batch_units = [e["unit"] for e in _pinned if "unit" in e]
@@ -13285,11 +13084,6 @@ def _route_overview(h: Handler) -> None:
         })
 
     h.send_json({"ok": True, "groups": groups})
-
-
-# ==========================================================================
-# TAB: Services
-# ==========================================================================
 
 def get_service_pid(unit: str) -> int:
     if not _validate_unit(unit):
@@ -13667,11 +13461,6 @@ def _route_svc(h: Handler, data: dict) -> None:
             "message": f"Action '{action}' not yet implemented",
         }, 501)
 
-
-# ==========================================================================
-# TAB: Ports
-# ==========================================================================
-
 def get_open_ports(proto_filter: str = "both") -> list:
     raw = _ss_tlnpu_fetch()
     if not raw:
@@ -13854,11 +13643,6 @@ def _route_ports_probe(h: Handler) -> None:
 
     h.send_json({"ok": False, "message": f"Unknown probe type: {kind!r}"}, 400)
 
-
-# ==========================================================================
-# TAB: Journal
-# ==========================================================================
-
 def get_journal_service_list(pinned: list) -> list:
     pinned_units = []
     seen         = set()
@@ -13937,11 +13721,6 @@ def _route_journal_fetch(h: Handler) -> None:
         h.send_json({"ok": False, "message": f"Journal fetch failed: {error}"})
         return
     h.send_json({"ok": True, "unit": unit, "lines": n, "output": output})
-
-
-# ==========================================================================
-# TAB: ASL-DVS
-# ==========================================================================
 
 def parse_rpt_conf(content: str) -> list:
 
@@ -14891,11 +14670,6 @@ def _route_allmon3_get(h: Handler) -> None:
 def _route_allmon3_post(h: Handler, data: dict) -> None:
     _pathfile_post(h, data, _PATHFILE_ALLMON3)
 
-
-# ==========================================================================
-# TAB: Phone
-# ==========================================================================
-
 _PHONE_SECTIONS: list = []
 
 def _phone_section(sid: str, title: str):
@@ -15399,7 +15173,6 @@ def _phone_health_nodes(C, ctx, dash_node, nodes, pnodes):
             C.append(_ph_check("dupnode", f"Node {n['node']}", "fail", "defined twice in rpt.conf",
                                "One copy was written by hand and one by the dashboard; remove the hand-made one"))
 
-
 def _phone_health_files(C, ctx, dial_sec):
     for c in dial_sec.get("missing_contexts", []):
         C.append(_ph_check("ctx", f"Dialing context {c}", "fail", "not in extensions.conf",
@@ -15439,7 +15212,6 @@ def _phone_health_files(C, ctx, dial_sec):
     elif any(g["managed"] for t in ctx["conf"].values() for g in t):
         C.append(_ph_check("markers", "Dashboard marker blocks", "ok", "balanced"))
     return plan
-
 
 def _phone_health_live(C, ctx, dial_sec, nets, nodes, running):
     if running:
@@ -15517,7 +15289,6 @@ def _phone_health_live(C, ctx, dial_sec, nets, nodes, running):
                                "" if up else "rpt.conf has it but app_rpt hasn't loaded it: run 'module reload app_rpt' "
                                              "in the Asterisk console, or restart Asterisk"))
 
-
 def _phone_health_routes(C, ctx, dial_sec, nets, nodes, plan, running):
     check = _ph_modules_conf_check(ctx, nets)
     if check:
@@ -15580,7 +15351,6 @@ def _phone_health_routes(C, ctx, dial_sec, nets, nodes, plan, running):
                 flags[m.group(1)] = m.group(2).strip()
         if flags.get("patch") == "0":
             C.append(_ph_check("patch", "Phone patch", "warn", "off", "Dialing is blocked until the dashboard turns it on"))
-
 
 @_phone_section("health", "Health checks")
 def _phone_sec_health(ctx: dict) -> dict:
@@ -15843,7 +15613,6 @@ def _ph_fw_ctx(ctx: dict) -> dict:
     return ctx["_fw_udp"]
 
 def _ph_fw_fix(ctx: dict, what: str) -> str:
-    """How to open a port, for the firewall this Pi runs (v6.11.8; Pi02w: no Firewall tab)."""
     if "_fw_backend" not in ctx:
         ctx["_fw_backend"] = get_firewall_backend()
     be = ctx["_fw_backend"]
@@ -15971,7 +15740,6 @@ def _ph_hoip_server_ports(C, dash, hosts, main):
                            ", ".join(used), "" if len(used) == 1 else "The account's lines don't agree on the port"))
     return ports, want
 
-
 def _ph_hoip_transport_auth(C, a, dash, ips, kv, main, ports, typed, want):
     tname = kv.get("transport", "") or next((_ph_last([r]).get("transport", "") for r in a["regs"]
                                              if _ph_last([r]).get("transport", "")), "")
@@ -16013,7 +15781,6 @@ def _ph_hoip_transport_auth(C, a, dash, ips, kv, main, ports, typed, want):
                                f"no reply on UDP {ping_port}" + (f" ({pr['error']})" if pr["error"] else ""),
                                "Some servers ignore this test. If 'Signed in' is OK, you can ignore this"))
     return tr, user
-
 
 def _ph_hoip_signin(C, a, ips, kv, main, name, running, user):
     reg = a["regs"][0] if a["regs"] else None
@@ -16064,7 +15831,6 @@ def _ph_hoip_signin(C, a, ips, kv, main, name, running, user):
     C.append(_ph_check("nat", "Behind-router settings", "ok" if not missing else "warn",
                        f"all {len(_PH_NAT_OPTS)} set" if not missing else f"{len(_PH_NAT_OPTS) - len(missing)} of {len(_PH_NAT_OPTS)} set",
                        "" if not missing else "Set on the account: " + ", ".join(missing)))
-
 
 def _ph_hoip_network_vm(C, ctx, dash, name, running, tr):
     if tr is not None:
@@ -16134,7 +15900,6 @@ def _ph_hoip_network_vm(C, ctx, dash, name, running, tr):
                        "Checks the dialing rules only; no call is placed"))
     return hi, lo, sip_port, vm, vm_dial
 
-
 def _ph_hoip_checks(ctx: dict, a: dict, running: bool) -> dict:
     name, kv, typed = a["endpoint"]["name"], a["kv"], a["typed"]
     dash = _ph_hoip_dash(name)
@@ -16191,7 +15956,6 @@ _PM_MODDIRS = ("/usr/lib/asterisk/modules", "/usr/lib/aarch64-linux-gnu/asterisk
                "/usr/lib64/asterisk/modules")
 
 def _pm_conf_parse(text: str) -> dict:
-    """modules.conf, line by line: every load/noload line with where it sits."""
     res = {"entries": [], "autoload": False, "modules_sec": False, "block": None}
     section, zone = "", ""
     for i, raw in enumerate(text.splitlines()):
@@ -16239,7 +16003,6 @@ def _pm_conf_state(parsed: dict, mod: str) -> dict:
     return {"conf": "load (autoload)" if parsed["autoload"] else "not listed", "where": []}
 
 def _pm_running_map() -> "dict | None":
-    """{module: True/False} from 'module show'; None when Asterisk isn't up."""
     if not _ph_ast_running():
         return None
     out = _ph_cli("module show", 8)
@@ -16262,8 +16025,6 @@ def _pm_moddir() -> str:
     return next((d for d in _PM_MODDIRS if os.path.isdir(d)), "")
 
 def _pm_owner(path: str) -> str:
-    """The package that owns a file (or should: dpkg keeps the list even when
-    the file itself was deleted)."""
     out = _run(["dpkg", "-S", path], timeout=8)
     m = re.match(r"^([a-z0-9][a-z0-9+.\-]*)(?::[a-z0-9]+)?(?:,\s*\S+)*:\s+(?=/)", out or "")
     return m.group(1) if m else ""
@@ -16411,7 +16172,6 @@ def _pm_backup(path: Path) -> str:
     return str(dst)
 
 def _pm_edit_text(text: str, changes: dict) -> "tuple[str | None, str, list]":
-    """(new text or None on refusal, message, warnings)."""
     parsed = _pm_conf_parse(text)
     if not parsed["modules_sec"]:
         return None, "modules.conf has no [modules] section -- fix it by hand first", []
@@ -16507,7 +16267,6 @@ _RT_STATE = {"watch_until": 0.0, "timer": None}
 _RT_LOCK = threading.Lock()
 
 def _rt_stun(local_port: int) -> "tuple[str, int] | None":
-    """One STUN Binding request from local_port.  Returns the public (ip, port)."""
     for host, port in _RT_STUN_SERVERS:
         try:
             addr = _socket.getaddrinfo(host, port, _socket.AF_INET, _socket.SOCK_DGRAM)[0][4]
@@ -16847,11 +16606,6 @@ def _route_phone_get(h: Handler) -> None:
         h.send_json({"ok": False, "message": f"Unknown section: {section!r}"}, 400)
         return
     h.send_json(action_phone_parse(section))
-
-
-# ==========================================================================
-# TAB: Tune
-# ==========================================================================
 
 _RADIO_PRESET_FIELDS = {
     "rxmixerset":   (int,   0,    1000),
@@ -17958,11 +17712,6 @@ def _route_radio_tune_save_post(h: Handler, data: dict) -> None:
         "restart":      restart_state,
         "restart_msg":  restart_msg or None,
     })
-
-
-# ==========================================================================
-# TAB: Hardware
-# ==========================================================================
 
 AMBE_DEVICES: "dict[tuple, str]" = {
     ("0403", "6015"): "ThumbDV",
@@ -19231,11 +18980,6 @@ def _route_hardware_post(h: Handler, data: dict) -> None:
         return
     fn(h, data)
 
-
-# ==========================================================================
-# TAB: DVSM
-# ==========================================================================
-
 def _dvsm_node_ip() -> str:
     try:
         s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
@@ -19582,11 +19326,6 @@ def _route_dvsm(h: Handler) -> None:
     payload["ok"] = True
     h.send_json(payload)
 
-
-# ==========================================================================
-# TAB: STFU
-# ==========================================================================
-
 _STFU_SERVICE_NAME  = "stfu"
 
 _STFU_SERVICE_PATHS = [
@@ -19771,11 +19510,6 @@ def _route_stfu_post(h: Handler, data: dict) -> None:
         return
 
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
-
-
-# ==========================================================================
-# TAB: M17
-# ==========================================================================
 
 _M17_BINARY        = Path("/opt/USRP2M17/USRP2M17")
 
@@ -20032,23 +19766,10 @@ def _route_m17_post(h: Handler, data: dict) -> None:
 
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
-
-# ==========================================================================
-# CARD: D-Star -- ircDDBGateway (ASL-DVS tab)
-# ==========================================================================
-# v6.13.66: read-only checks on /etc/ircddbgateway for the dashboard's
-# D-STAR tab (v9.3.71+), which links to gateway callsigns as well as
-# reflectors.  Gateway links need ircDDB (callsign lookup) and DExtra; the
-# dashboard sends them through ircDDBGateway's remote control when it is
-# enabled, and falls back to dvswitch.sh tune when it isn't.  Nothing here
-# writes the file -- Edit opens it in the DVSwitch config-file editor.
-
 _IRCDDB_CONF_PATH = Path("/etc/ircddbgateway")
 _IRCDDB_SERVICE   = "ircddbgatewayd.service"
 
-
 def _cmd_or_problem(argv: list, timeout: int = 8) -> "tuple[str, str]":
-    """(output, problem).  problem is '' when the command ran."""
     if not shutil.which(argv[0]):
         return "", f"{argv[0]} is not installed on this Pi"
     try:
@@ -20068,9 +19789,7 @@ def _udp_listeners() -> "tuple[dict, str]":
             res.setdefault(m.group(2), set()).add(m.group(3) or "?")
     return res, prob
 
-
 def _ircddb_read_conf() -> "tuple[dict, str]":
-    """(key -> value, problem).  problem is '' when the file was read."""
     try:
         text = _IRCDDB_CONF_PATH.read_text(errors="replace")
     except FileNotFoundError:
@@ -20084,11 +19803,9 @@ def _ircddb_read_conf() -> "tuple[dict, str]":
             kv[k.strip()] = v.strip()
     return kv, ""
 
-
 def _pi_ipv4s() -> "set[str]":
     out = _run(["ip", "-o", "-4", "addr", "show"], timeout=4)
     return set(re.findall(r"\binet (\d+\.\d+\.\d+\.\d+)/", out))
-
 
 def _dstar_gw_checks() -> dict:
     kv, prob = _ircddb_read_conf()
@@ -20161,10 +19878,6 @@ def _dstar_gw_checks() -> dict:
     else:
         row("remotePassword / remotePort", "Only needed with remote control on", "info")
 
-    # v6.13.67: gatewayAddress is the Pi's own address ircDDBGateway binds ALL
-    # its sockets to (DExtra, D-Plus, DCS, G2 and remote control) -- not the
-    # router's.  Blank is normal.  127.0.0.1 cuts off internet linking, and an
-    # address this Pi doesn't have (e.g. the router's) stops it binding at all.
     addr = kv.get("gatewayAddress", "")
     if not addr or addr == "0.0.0.0":
         row("gatewayAddress = " + (addr or "(blank)"), "Listen address (this Pi's, not the router's)", "pass",
@@ -20188,10 +19901,8 @@ def _dstar_gw_checks() -> dict:
             "badge": {"pass": "OK", "warn": "WARN", "fail": "FAIL"}[status],
             "service": svc, "checks": rows}
 
-
 def _route_dstar_gw_get(h: Handler) -> None:
     h.send_json(_dstar_gw_checks())
-
 
 def _route_dstar_gw_post(h: Handler, data: dict) -> None:
     if os.geteuid() != 0:
@@ -20208,11 +19919,6 @@ def _route_dstar_gw_post(h: Handler, data: dict) -> None:
         h.send_json({"ok": True, "message": "ircddbgatewayd restarted"})
         return
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
-
-
-# ==========================================================================
-# TAB: SD Card
-# ==========================================================================
 
 _SD_MANFID = {
     0x01: "Panasonic", 0x02: "Toshiba", 0x03: "SanDisk", 0x08: "Silicon Power",
@@ -20609,11 +20315,6 @@ def _route_sdcard_test_post(h: Handler, data: dict) -> None:
     else:
         h.send_json({"ok": False, "message": f"Unknown action: {action!r}"}, 400)
 
-
-# ==========================================================================
-# TAB: Security
-# ==========================================================================
-
 _SECURITY_LAYER_ORDER  = ["dvswitch", "asl", "usrp2m17", "cross-cutting"]
 
 _SECURITY_LAYER_LABELS = {
@@ -20734,11 +20435,6 @@ def _route_security_checks(h: Handler) -> None:
     out = dict(payload)
     out["cache_age_sec"] = 0
     h.send_json(out)
-
-
-# ==========================================================================
-# TAB: Edit
-# ==========================================================================
 
 def serialize_pinned_services(pinned: list) -> str:
     lines = []
@@ -20982,11 +20678,6 @@ def _route_appconf_get(h: Handler) -> None:
 def _route_appconf_post(h: Handler, data: dict) -> None:
     _pathfile_post(h, data, _PATHFILE_APPCONF)
 
-
-# ==========================================================================
-# SHARED: ASL-DVS + Edit
-# ==========================================================================
-
 def _get_hidden_files() -> set:
     raw = _cfg.get("asldvs", "hidden_files", fallback="")
     return {f.strip() for f in raw.split(",") if f.strip()}
@@ -21130,11 +20821,6 @@ def _pathfile_post(h: Handler, data: dict, fam: dict) -> None:
     h.send_json({"ok": ok, "message": msg, "path": str(p)},
                 200 if ok else 500)
 
-
-# ==========================================================================
-# TAB: Phone -- background job runner (/api/net/job)
-# ==========================================================================
-
 _NET_JOB_LINE_CAP    = 500
 
 _NET_INSTALL_TIMEOUT = 900
@@ -21222,11 +20908,6 @@ def _net_apt_env() -> dict:
     env = dict(os.environ)
     env["DEBIAN_FRONTEND"] = "noninteractive"
     return env
-
-
-# ==========================================================================
-# TAB: Phone -- helpers
-# ==========================================================================
 
 def _ph_signin_choice() -> "tuple[str, str]":
     try:
@@ -21504,11 +21185,6 @@ def _rt_history_rows() -> list:
                          "addr": m.group(4), "msg": m.group(5).strip()})
     return rows
 
-
-# ==========================================================================
-# TAB: STFU -- helpers
-# ==========================================================================
-
 _STFU_BINARY        = Path("/opt/STFU/STFU")
 
 _STFU_DVS_CANDIDATES = [
@@ -21606,11 +21282,6 @@ def _stfu_read_config() -> dict:
         "talker_alias":    talker_alias,
         "log_level":       log_level,
     }
-
-
-# ==========================================================================
-# SHARED: Overview + Services + Journal
-# ==========================================================================
 
 _DETAIL_PROPS = [
     "Description", "ActiveState", "UnitFileState",
@@ -21780,11 +21451,6 @@ def get_services_details(units: "list[str]") -> "dict[str, dict]":
 def get_service_detail(unit: str) -> dict:
     return get_services_details([unit]).get(unit) or _invalid_unit_detail(unit)
 
-
-# ==========================================================================
-# SHARED: Phone + Tune
-# ==========================================================================
-
 _PH_DASH_CONF  = Path("/etc/asl_dvs/asl_dvs.conf")
 
 _PH_PHONE_JSON = Path("/etc/asl_dvs/phone.json")
@@ -21931,11 +21597,6 @@ def _ph_resolve(secs: list, name: str, _depth: int = 0) -> "tuple[dict, bool, st
         fname = fname or s["file"]
     return out, managed, fname
 
-
-# ==========================================================================
-# TAB: Phone -- firewall readers (read-only)
-# ==========================================================================
-
 def get_firewall_backend() -> str:
     
     if shutil.which("firewall-cmd"):
@@ -22065,11 +21726,6 @@ def _firewalld_zone_rules(zone: str, raw: "str | None" = None) -> list:
                       "from": f"zone={zone} · {src.group(1) if src else 'rich rule'}",
                       "via": "rich", "deletable": False})
     return rules
-
-
-# ==========================================================================
-# SHARED: small helpers used by two or more tabs
-# ==========================================================================
 
 def save_config(updates: dict, path: Path = CONFIG_FILE) -> bool:
     try:
@@ -22316,12 +21972,6 @@ def _firewalld_parse_list_all(raw: str) -> dict:
             info["rich_rules"].append(line)
     return info
 
-
-# ==========================================================================
-# Routes and server start
-# ==========================================================================
-
-
 _GET_ROUTES = {
     "/":                       _route_html,
     "/api/ping":               lambda h: h.send_ping(),
@@ -22423,29 +22073,50 @@ def startup() -> None:
 _INSTALL_DIR   = "/usr/local/lib/asl_dvs_sysmon"
 _INSTALL_LINK  = "/usr/local/bin/sysmon.py"
 _SERVICE_PATH  = "/etc/systemd/system/sysmon.service"
-# Pi02w launcher.  A program started as `python3 file.py` is compiled from
-# source on every start, and Python keeps the memory the compile took: the
-# Pi02w sysmon settles near 54 MB that way and the Pi02w dashboard near
-# 45 MB.  Python only saves and reuses a compiled copy (__pycache__/*.pyc)
-# for code it *imports*, so the service runs this small launcher instead,
-# which imports the real file as the main program.  The first start writes
-# the compiled copy next to the file; every later start loads it (sysmon
-# ~26 MB, dashboard ~25 MB, and about twice as fast to start).  Python
-# checks the file's date and size on every start and recompiles by itself
-# after an update.  Shared by the Pi02w sysmon and dashboard; the
-# installer writes the same file.
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
 _SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 _LAUNCHER_CODE = '''#!/usr/bin/env python3
-# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
-# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
-# named on the command line through Python's import system, so its compiled
-# copy is kept in __pycache__ and reused on later starts instead of the whole
-# file being compiled again -- about half the memory and twice as fast to
-# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
 import os
 import runpy
 import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
 
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
@@ -22491,7 +22162,6 @@ def _glob_pyc(dir_path: str, name: str = "*") -> list:
     return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
 
 def _prune_pyc(dir_path: str) -> None:
-    """Drop compiled copies whose source file is gone (older versions)."""
     for pyc in _glob_pyc(dir_path):
         name = os.path.basename(pyc).split(".", 1)[0]
         if not os.path.exists(os.path.join(dir_path, name + ".py")):
@@ -22501,7 +22171,6 @@ def _prune_pyc(dir_path: str) -> None:
                 pass
 
 def _remove_launcher_if_unused() -> None:
-    """Remove the shared launcher once no installed unit runs it."""
     if not os.path.exists(_LAUNCHER_PATH):
         return
     unit_dir = _SYSTEMD_UNIT_DIR

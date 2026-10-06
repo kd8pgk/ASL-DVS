@@ -1,57 +1,21 @@
 #!/usr/bin/env bash
-# wifi-menu.sh - Simple WiFi status & switch menu using nmcli
-# Run with: bash wifi-menu.sh   (or make executable: chmod +x wifi-menu.sh)
-#
-# v2 - Audit fixes:
-#   - select_interface() no longer leaks its menu text into the returned
-#     interface name (was corrupting every downstream nmcli call whenever
-#     more than one WiFi device was present)
-#   - connect_target() no longer deletes existing saved profiles before
-#     confirming the new connection succeeds
-#   - password read uses -r (no backslash mangling)
-#   - confirmation prompts added before disconnect / delete actions
-#   - network list is sorted by signal BEFORE de-duplicating by SSID
-#   - fixed 2s post-rescan sleep replaced with a short poll
-#   - single-choice-from-list logic consolidated into one helper with
-#     consistent (non-silent-fallback) invalid-input handling
-#   - hidden network connect now asks open vs. secured instead of assuming WPA2
-#
-# v3 - External review follow-ups:
-#   - connect_target() profile cleanup uses exact-string SSID matching
-#     (awk) instead of treating the SSID as a grep -E regex, so SSIDs with
-#     characters like . * [ ] ? can no longer match/delete the wrong profile
-#   - active WiFi connection detection no longer assumes interface names
-#     contain "wl" - now derived from device TYPE=wifi/STATE=connected
-#   - saved connection names containing a literal colon are no longer
-#     truncated when listed/selected in list_saved_connections()
-#   - SIGNAL field is validated as numeric before -gt/-le comparisons,
-#     preventing a set -e crash on an empty/non-numeric scan result
 
 set -euo pipefail
 
-# Colors for nicer output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 BOLD='\033[1m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-# Restore terminal echo if a `read -s` is interrupted with Ctrl+C
 trap 'stty echo 2>/dev/null || true' EXIT
 
-# Function to detect WiFi devices
 get_wifi_devices() {
     nmcli device 2>/dev/null | awk '$2 == "wifi" {print $1}' | sort || true
 }
 
-# Generic "pick one item from a numbered list" helper.
-# Prints ONLY the chosen item to stdout; everything else (prompts, menu,
-# errors) goes to stderr so callers can safely use $(choose_from_list ...).
-# Returns 1 (nothing printed) on cancel or invalid input - callers must check.
-#
-# Usage: choose_from_list "Prompt text" "${array[@]}"
 choose_from_list() {
     local prompt="$1"; shift
     local -a items=("$@")
@@ -89,7 +53,6 @@ choose_from_list() {
     return 0
 }
 
-# Ask a yes/no question. Returns 0 for yes, 1 for no/anything else.
 confirm() {
     local prompt="$1"
     local ans
@@ -97,7 +60,6 @@ confirm() {
     [[ "$ans" =~ ^[yY]$ ]]
 }
 
-# Function to show current status
 show_status() {
     clear
     echo -e "${BOLD}${BLUE}+--------------------------------------------+${NC}"
@@ -126,9 +88,6 @@ show_status() {
     echo ""
 
     echo -e "${CYAN}Active WiFi connection:${NC}"
-    # Identify the active WiFi connection by device TYPE and STATE rather
-    # than assuming the interface name contains "wl" - not all systems
-    # follow that naming convention (predictable names, USB adapters, etc).
     local active_con
     active_con=$(nmcli -t -f DEVICE,STATE,TYPE,CONNECTION device 2>/dev/null \
         | awk -F: '$2 == "connected" && $3 == "wifi" {print $4 ":" $1}')
@@ -148,7 +107,6 @@ show_status() {
     echo ""
 }
 
-# Function to switch active WiFi device
 switch_device() {
     local devices
     readarray -t devices < <(get_wifi_devices)
@@ -179,7 +137,6 @@ switch_device() {
     read -p "Press Enter to continue..." -r
 }
 
-# Function to disconnect active WiFi
 disconnect_wifi() {
     local devices
     readarray -t devices < <(get_wifi_devices)
@@ -216,8 +173,6 @@ disconnect_wifi() {
     read -p "Press Enter to continue..." -r
 }
 
-# Helper function to prompt for interface if multiple exist.
-# Prints ONLY the chosen interface name to stdout.
 select_interface() {
     local devices
     readarray -t devices < <(get_wifi_devices)
@@ -229,10 +184,6 @@ select_interface() {
     choose_from_list "Select WiFi interface to use:" "${devices[@]}"
 }
 
-# Robust connection handler supporting open and secured connections safely.
-# Does NOT touch existing saved profiles unless the new connection succeeds,
-# so a failed attempt (bad password, busy radio) never leaves you with
-# nothing usable.
 connect_target() {
     local ssid="$1"
     local iface="$2"
@@ -269,17 +220,10 @@ connect_target() {
     if [[ "$connect_ok" == true ]]; then
         echo -e "${GREEN}✓ Connected and saved successfully!${NC}"
 
-        # Now that we KNOW the new connection works, clean up any older
-        # duplicate/stale profiles for the same SSID (nmcli sometimes
-        # creates "ssid-1", "ssid-2" style profiles on repeat connects).
-        # The just-created active profile for this device is left alone.
         local active_con
         active_con=$(nmcli -t -f NAME,DEVICE connection show --active 2>/dev/null \
             | awk -F: -v dev="$iface" '$2 == dev {print $1}')
 
-        # Exact-string match on the NAME field via awk - the SSID is NOT
-        # treated as a regex here, so SSIDs containing characters like
-        # . * [ ] ? + ( ) can't cause unintended profile matches/deletes.
         while IFS= read -r con_id; do
             [[ -z "$con_id" ]] && continue
             [[ "$con_id" == "$active_con" ]] && continue
@@ -293,7 +237,6 @@ connect_target() {
     fi
 }
 
-# Function to connect to a network (saved or new scans)
 connect_menu() {
     local iface
     if ! iface=$(select_interface); then
@@ -305,8 +248,6 @@ connect_menu() {
     echo -e "\n${BLUE}Scanning networks on ${BOLD}${iface}${NC}${BLUE}...${NC}"
     nmcli device wifi rescan ifname "$iface" 2>/dev/null || true
 
-    # Poll briefly instead of a blind fixed sleep - bail out early once
-    # results show up, cap wait time for slow hardware (e.g. Pi Zero 2W).
     local waited=0
     while (( waited < 5 )); do
         if [[ -n "$(nmcli -t -f SSID device wifi list ifname "$iface" 2>/dev/null)" ]]; then
@@ -317,9 +258,6 @@ connect_menu() {
     done
 
     local networks
-    # Sort by signal strength FIRST, then de-duplicate by SSID, so that
-    # when multiple APs share an SSID we keep the strongest one instead
-    # of whichever happened to be listed first.
     mapfile -t networks < <(nmcli -t -f SSID,SIGNAL,SECURITY device wifi list ifname "$iface" 2>/dev/null \
         | sed 's/\\:/\x00/g' \
         | sort -t: -k2 -nr \
@@ -347,9 +285,6 @@ connect_menu() {
             [[ "$signal" -gt 70 ]] && sig_color="$GREEN"
             [[ "$signal" -gt 40 && "$signal" -le 70 ]] && sig_color="$YELLOW"
         else
-            # nmcli returned something non-numeric (empty, mid-scan glitch,
-            # etc). Under set -e, feeding that straight into -gt/-le would
-            # throw an integer-expression error and kill the script.
             sig_display="?"
         fi
 
@@ -402,7 +337,6 @@ connect_menu() {
     read -p "Press Enter to continue..." -r
 }
 
-# Function to list and manage saved connections
 list_saved_connections() {
     while true; do
         clear
@@ -410,12 +344,6 @@ list_saved_connections() {
         echo -e "${BOLD}${BLUE}|         Saved WiFi Connections             |${NC}"
         echo -e "${BOLD}${BLUE}+--------------------------------------------+${NC}\n"
 
-        # nmcli -t escapes literal colons in field values as "\:" - swap
-        # them out for a NUL placeholder before splitting on ":", then
-        # restore them via bash parameter expansion (not a second sed
-        # pass, since NUL bytes are unreliable to stream through sed
-        # again), so a connection NAME containing a colon isn't
-        # truncated at the wrong point.
         local saved_lines_raw saved_lines=()
         mapfile -t saved_lines_raw < <(nmcli -t -f NAME,TYPE connection show 2>/dev/null \
             | grep -E '(802-11-wireless|wifi)' \
@@ -479,7 +407,6 @@ list_saved_connections() {
     done
 }
 
-# Main menu loop
 main_menu() {
     while true; do
         show_status
@@ -547,11 +474,9 @@ main_menu() {
     done
 }
 
-# Check for dependencies
 if ! command -v nmcli >/dev/null 2>&1; then
     echo -e "${RED}✗ Error: nmcli not found. Is NetworkManager installed?${NC}"
     exit 1
 fi
 
-# Start the menu
 main_menu
