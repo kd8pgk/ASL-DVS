@@ -42,7 +42,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.68"
+VERSION      = "6.13.69"
 BUILD_DATE   = "20261006"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2262,6 +2262,9 @@ body.tab-edit #zone-content{
 .pm-btns{display:flex;flex-wrap:wrap;gap:.25rem}
 .pm-btns .btn:disabled{opacity:.35;cursor:default}
 .ph-sub{padding:.5rem .9rem .1rem;font-family:var(--sans);font-size:var(--fs-xs);letter-spacing:.2em;text-transform:uppercase;color:#9fb4cc}
+.ph-howto{margin:.5rem .9rem;font-family:var(--mono);font-size:var(--fs-xs);color:#9fb4cc}
+.ph-howto summary{cursor:pointer;color:var(--teal)}
+.ph-howto p{margin:.35rem 0 0}
 .ast-toggle{font-family:var(--sans);font-size:var(--fs-xs);
   background:none;border:1px solid var(--border2);border-radius:3px;
   color:#fff;padding:.1rem .35rem;cursor:pointer;
@@ -8352,6 +8355,19 @@ function phRenderDialing(s, nets) {
     }
     body.appendChild(blk);
   });
+  if (s.outgoing.some(o => /^dvs-radio-/.test(o.context))) {
+    const det = document.createElement("details");
+    det.className = "ph-howto";
+    const sm = document.createElement("summary");
+    sm.textContent = "Why there's a short dvs-radio context (show/hide)";
+    det.appendChild(sm);
+    [
+      "*61 from the radio lands in the dvs-radio context. It doesn't dial: it hands the number to the dashboard and hangs up, which ends the autopatch straight away.",
+      "The dashboard then places the call through the network's dialing rules (the dvs-node and dvs-net contexts shown here), the same way as its own Dial button. The call joins the node like an incoming call, so the radio only transmits while the far end talks.",
+      "This card starts from each phone node's own context as well as the *61 context, so the dialing rules still show past the dvs-radio step.",
+    ].forEach(t => det.appendChild(phEl("p", "", t)));
+    body.appendChild(det);
+  }
   if ((s.incoming || []).length) {
     body.appendChild(phEl("div", "ph-sub", "Incoming"));
     s.incoming.forEach(i => {
@@ -18144,7 +18160,7 @@ def _phone_sec_dialing(ctx: dict) -> dict:
     for nd in _phone_sec_node(ctx)["nodes"]:
         if nd["autopatch"] and nd["autopatch"]["options"].get("context"):
             start.add(nd["autopatch"]["options"]["context"])
-        elif nd["context"]:
+        if nd["context"]:
             start.add(nd["context"])
     seen, queue, order = set(), sorted(start), []
     while queue and len(order) < 60:
@@ -19236,6 +19252,7 @@ def _pm_needs(ctx: dict) -> dict:
         "db": bool(re.search(r"\bDB(?:_EXISTS|_DELETE)?\(", raw)) or bool(ctx["dash"]["phone_node"]),
         "playback": bool(apps & {"playback", "background"}),
         "tones_sound": "dvs-tones" in ctx["dialplan"],
+        "system": "system" in apps,
     }
 
 def _pm_rows(need: dict) -> list:
@@ -19273,6 +19290,8 @@ def _pm_rows(need: dict) -> list:
         rows.append(("app_read.so", ["reverse"], False, "asks incoming callers for the PIN"))
     if need["playback"]:
         rows.append(("app_playback.so", B, False, "plays greetings and prompts"))
+    if need.get("system"):
+        rows.append(("app_system.so", ["autopatch"], False, "hands numbers dialed from the radio (*61) to the dashboard"))
     if need.get("tones_sound"):
         rows.append(("app_chanspy.so", ["autopatch"], False, "the dashboard's 'as sound' tones"))
         rows.append(("format_pcm.so", ["autopatch"], False, "reads the tone recordings"))

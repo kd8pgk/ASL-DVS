@@ -1,6 +1,17 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_68_20261006.py`. Newest entries first.
+Current file: `sysmon_v6_13_69_20261006.py`. Newest entries first.
+
+## 6.13.69 (2026-10-06)
+
+Phone tab brought level with SysMon Pi02w 6.13.67.4, for Dashboard 9.3.73.
+
+- Dialing rules card: starts from each phone node's own `context =` as well as the
+  `*61` autopatch context, so it shows the dialing rules past the new short
+  `dvs-radio-<network>` step. The HOIP voicemail check reading the same list keeps
+  working.
+- "Why there's a short dvs-radio context (show/hide)" note on the card.
+- Autopatch modules card lists `app_system.so` when the dialplan uses `System()`.
 
 ## 6.13.68 (2026-10-06)
 
@@ -11,7 +22,7 @@ Current file: `sysmon_v6_13_68_20261006.py`. Newest entries first.
 
 Carried over unchanged from the comments of the files below.
 
-### sysmon_v6_13_68_20261006.py (module docstring, as of 6.13.67)
+### sysmon_v6_13_69_20261006.py (module docstring, as of 6.13.67)
 
 ```text
 ASL-DVS SYSMON  --  sysmon.py

@@ -40,8 +40,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_68_20261006.py` | `sysmon_pi02w_v6_13_67_4_20261006.py` | `instmon_v2_38_2_20261006.py` |
-| `VERSION` | `6.13.68` | `6.13.67.4-pi02w` | `2.38.2` |
+| File name | `sysmon_v6_13_69_20261006.py` | `sysmon_pi02w_v6_13_67_4_20261006.py` | `instmon_v2_38_2_20261006.py` |
+| `VERSION` | `6.13.69` | `6.13.67.4-pi02w` | `2.38.2` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -63,7 +63,7 @@ Step-by-step manuals (PDF):
 - Pi Zero 2 W build: [`docs/ASL-DVS_Pi02w_Install_Manual.pdf`](docs/ASL-DVS_Pi02w_Install_Manual.pdf)
 - Full build (Pi 3, 4 or 5): [`docs/ASL-DVS_Full_Build_Install_Manual.pdf`](docs/ASL-DVS_Full_Build_Install_Manual.pdf)
 
-Phone dialplan guide (PDF), stock ASL3 next to the Pi02w Phone tab's dialplan:
+Phone dialplan guide (PDF), stock ASL3 next to the Phone tab's dialplan (Pi02w 9.3.71.10 and full 9.3.73 on):
 [`docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf`](docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf)
 
 1. Copy the files you want onto the Pi, all in one folder.
@@ -181,10 +181,10 @@ afterwards, run its own `--uninstall`.
 
 | File | Build |
 |---|---|
-| `asl_dvs_dashboard_v9_3_72_20261006.py` | Dashboard, full (current) |
+| `asl_dvs_dashboard_v9_3_73_20261006.py` | Dashboard, full (current) |
 | `asl_dvs_dashboard_pi02w_v9_3_71_10_20261006.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
-| `sysmon_v6_13_68_20261006.py` | SysMon, full (current) |
+| `sysmon_v6_13_69_20261006.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_4_20261006.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
 | `instmon_v2_38_2_20261006.py` | common |
