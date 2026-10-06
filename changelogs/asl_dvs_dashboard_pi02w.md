@@ -1,6 +1,30 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_4_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_5_20261006.py`. Newest entries first.
+
+## 9.3.71.5-pi02w (2026-10-06)
+
+- Phone: keypad tones on every SIP network (SIP with login, SIP by IP, Hams Over IP,
+  AmateurWire) always go as tone packets (RFC 2833): `dtmf_mode=rfc4733` in
+  `dvs_phone_pjsip.conf`. The Tone mode picker, its hints and the Hams Over IP
+  tone-mode warning are gone from the Edit page. Saved `tone_mode` values in
+  `/etc/asl_dvs/phone.json` are ignored and dropped on the next save. The phone
+  report still compares what Asterisk has loaded against RFC 2833.
+- Phone: the Hams Over IP AllStar Link card and everything behind it are removed:
+  the Edit page card (Turn on, username, password, internet name, port, landing
+  node, dial string), the HOIP AllStar caller row on the Phone tab, the incoming
+  IAX2 account in `dvs_phone_iax.conf`, the `[dvs-hoiplink]` dialplan, the
+  `phone-hl-dialstring` action, the port notes on save and the report section. The
+  Phone tab status no longer looks up HOIP AllStar callers on each poll. The saved
+  `hoip_link` block is dropped on the next save. With no IAX2 phone networks, the
+  IAX2 include lines come out of `iax.conf` too.
+- Phone: sign-in is always "Picked network only". The Sign in picker and each
+  network's "Sign in (register) with this network" box are gone. Every network with
+  a login (SIP with login, Hams Over IP, AmateurWire, IAX2) signs in while it is
+  the picked network. `phone.json` keeps `signin_mode: "picked"` and `register: true`
+  on those networks, which sysmon's Phone checks read.
+- The start-up refresh rewrites the SIP, IAX2 and dialplan files on the first
+  start of this build and reloads them.
 
 ## 9.3.71.4-pi02w (2026-10-06)
 

@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.4-pi02w"
+VERSION      = "9.3.71.5-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -937,15 +937,11 @@ _HOIP_VMACCESS_RE  = re.compile(r"^[0-9*#]{1,8}$")
 _PHONE_TEST_ALIAS  = "0098"
 _PHONE_TEST_RE     = re.compile(r"^[0-9*#]{1,20}$")
 PHONE_TONE_MODES     = ("auto", "rfc4733", "inband", "info", "auto_info")
-_PHONE_TONE_MODE_DEF = "auto"
-_HOIP_TONE_MODE    = "rfc4733"
+_PHONE_TONE_MODE_DEF = "rfc4733"
 PHONE_TONE_PATHS     = ("provider", "node", "sound")
 _PHONE_TONE_PATH_DEF = "provider"
 _PHONE_TONE_PATH_LBL = {"provider": "Straight to the provider (v9.3.13 way)", "node": "Through the call (test)",
                         "sound": "As sound (tone recordings)"}
-_HL_USER_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{2,31}$")
-_HL_PASS_RE = re.compile(r"^[A-Za-z0-9._\-+=!%^*~]{8,64}$")
-_HL_DEFAULT = {"enabled": False, "username": "", "password": "", "fqdn": "", "port": "", "node": ""}
 PHONE_DIALING    = ("phone", "ext")
 PHONE_INCOMING   = ("pin", "open", "off")
 _PHONE_TYPE_LBL  = {"sip": "SIP with login", "sip_ip": "SIP by IP address",
@@ -965,7 +961,6 @@ def _phone_default() -> dict:
         "patch_enabled": True,
         "dialtime":      _PHONE_DIALTIME_DEF,
         "tone_path":     _PHONE_TONE_PATH_DEF,
-        "hoip_link":     dict(_HL_DEFAULT),
         "signin_mode":   "picked",
         "tot_phone_off": True,
         "tot_cap_min":   15,
@@ -994,16 +989,14 @@ def _phone_load() -> dict:
         doc["activated"] = os.path.isfile(_ph_path(_PH_OWNED["ext"]))
     if raw.get("tone_path_user") and raw.get("tone_path") in PHONE_TONE_PATHS:
         doc["tone_path"], doc["tone_path_user"] = raw["tone_path"], True
-    hl = dict(_HL_DEFAULT)
-    if isinstance(raw.get("hoip_link"), dict):
-        for k in hl:
-            if k in raw["hoip_link"]:
-                hl[k] = raw["hoip_link"][k]
-    doc["hoip_link"] = hl
+    doc["signin_mode"] = "picked"
     nets = [n for n in doc["networks"] if isinstance(n, dict)][:PHONE_MAX_NETS] \
         if isinstance(doc["networks"], list) else []
     for n in nets:
         n.pop("buttons", None)
+        n.pop("tone_mode", None)
+        if "register" in n:
+            n["register"] = n.get("type") in _PHONE_LOGIN_SIP or n.get("type") == "iax2"
         n["favorites"] = _phone_norm_favs(n.get("favorites"))
     doc["networks"] = nets
     if _phone_assign_nodes(nets):
@@ -1067,8 +1060,7 @@ def _phone_fav_public(favs: List[dict]) -> List[dict]:
              "has_tones": bool(f.get("tones"))} for f in favs]
 
 def _phone_tone_mode(n: dict) -> str:
-    m = str((n or {}).get("tone_mode", "") or "").strip()
-    return m if m in PHONE_TONE_MODES else _PHONE_TONE_MODE_DEF
+    return _PHONE_TONE_MODE_DEF
 
 def _phone_slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]", "", str(name).lower())[:12] or "net"
@@ -1155,8 +1147,6 @@ def _phone_public(doc: dict) -> dict:
         pub["has_pin"]      = bool(n.get("pin"))
         pub["has_voicemail_pin"] = bool(n.get("voicemail_pin"))
         pub["type_label"]   = _PHONE_TYPE_LBL.get(n.get("type", ""), "")
-        if n.get("type") in _PHONE_SIP_TYPES:
-            pub["tone_mode"] = _phone_tone_mode(n)
         pub["favorites"]    = _phone_fav_public(n.get("favorites", []))
         nets.append(pub)
     return {
@@ -1164,11 +1154,9 @@ def _phone_public(doc: dict) -> dict:
         "active":        doc.get("active", ""),
         "patch_enabled": bool(doc.get("patch_enabled", True)),
         "dialtime":      doc.get("dialtime", _PHONE_DIALTIME_DEF),
-        "signin_mode":   _phone_signin_mode(doc),
         "tot_phone_off": doc.get("tot_phone_off", True) is not False,
         "tot_cap_min":   doc.get("tot_cap_min", 15),
         "tone_path":     doc.get("tone_path", _PHONE_TONE_PATH_DEF),
-        "hoip_link":     _hl_public(doc),
         "node":          _cfg.bridge_nodes[BRIDGE_SLOT_PHONE],
         "live_node":     _phone_live_node(doc),
         "activated":     bool(doc.get("activated")),
@@ -1270,7 +1258,7 @@ def _phone_validate_net(raw: dict, old: Optional[dict]) -> Tuple[Optional[dict],
             pw = old.get("password", "")
         if not pw:
             return None, f"{name}: password is required"
-        out.update(username=user, password=pw, register=bool(raw.get("register", True)))
+        out.update(username=user, password=pw, register=True)
         if hoip:
             hx["auth_id"] = aid or user
     else:
@@ -1334,34 +1322,8 @@ def _phone_validate_net(raw: dict, old: Optional[dict]) -> Tuple[Optional[dict],
     if tnum and not _PHONE_TEST_RE.match(tnum):
         return None, f"{name}: test number can only use digits, * and # (up to 20)"
     out["test_number"] = tnum
-    if ntype in _PHONE_SIP_TYPES:
-        tm = str(raw.get("tone_mode", (old or {}).get("tone_mode", ""))).strip() or \
-            (_HOIP_TONE_MODE if ntype == "hoip" else _PHONE_TONE_MODE_DEF)
-        if tm not in PHONE_TONE_MODES:
-            return None, f"{name}: pick a tone mode from the list"
-        out["tone_mode"] = tm
     out.update(hx)
     return out, None
-
-def _hl_default_node() -> str:
-    return _phone_node()
-
-def _hl_node_choices() -> List[List[str]]:
-    ph, radio = _phone_node(), str(_cfg.asl_node or "")
-    owner = next((n for n in _phone_doc().get("networks", []) if n.get("node") == ph), None)
-    when = f"the Phone tab is open with {owner['name']} picked" if owner else "the Phone tab is open"
-    out = [[ph, f"Phone Bridge {ph} (default; reaches the radio only while {when})"]]
-    if radio and radio not in ("0", ph):
-        out.append([radio, f"Radio node {radio} (see warning)"])
-    return out
-
-def _hl_node(hl: dict) -> str:
-    n = str((hl or {}).get("node", "") or "")
-    return n if n in {c[0] for c in _hl_node_choices()} else _hl_default_node()
-
-def _hl_ready(doc: dict) -> bool:
-    hl = doc.get("hoip_link") or {}
-    return bool(hl.get("enabled") and hl.get("username") and hl.get("password"))
 
 _iax_port_cache: list = [0.0, "4569"]
 
@@ -1400,58 +1362,6 @@ def _iax_bindport() -> str:
         port = p
     _iax_port_cache[0], _iax_port_cache[1] = now, port
     return port
-
-def _hl_public(doc: dict) -> dict:
-    hl = dict(doc.get("hoip_link") or _HL_DEFAULT)
-    node = _hl_node(hl)
-    return {"enabled": bool(hl.get("enabled")), "username": hl.get("username", ""),
-            "fqdn": hl.get("fqdn", ""), "port": hl.get("port") or _iax_bindport(), "node": node,
-            "has_password": bool(hl.get("password")), "choices": _hl_node_choices(),
-            "dial_hint": (f"IAX2/{hl.get('username')}:********@{hl.get('fqdn')}:{hl.get('port') or _iax_bindport()}/{node}"
-                          if hl.get("username") and hl.get("fqdn") else "")}
-
-def _iax_foreign_sections() -> Set[str]:
-    txt = _ph_strip(_ph_read(_ph_path("iax.conf")) or "")
-    return {m.strip().lower() for m in re.findall(r"^\s*\[([^\]]+)\]", txt, re.M)}
-
-def _hl_validate(raw, cur: dict, net_ids: Set[str]) -> Tuple[Optional[dict], Optional[str]]:
-    old = dict(cur.get("hoip_link") or _HL_DEFAULT)
-    if raw is None:
-        return old, None
-    if not isinstance(raw, dict):
-        return None, "HOIP AllStar Link settings must be an object"
-    out = {"enabled": bool(raw.get("enabled", False))}
-    user = _strip_ctrl(str(raw.get("username", "")).strip())
-    if user and not _HL_USER_RE.match(user):
-        return None, "HOIP AllStar Link: username is 3-32 letters, numbers, - or _ (starting with a letter or number)"
-    if user and (user.lower() in _iax_foreign_sections() or user.lower() in {i.lower() for i in net_ids}):
-        return None, f"HOIP AllStar Link: '{user}' is already used in iax.conf — pick another username"
-    pw = str(raw.get("password", ""))
-    if pw:
-        if not _HL_PASS_RE.match(pw):
-            return None, ("HOIP AllStar Link: password is 8-64 characters — letters, numbers and . _ - + = ! % ^ * ~ "
-                          "(no : @ / or ;)")
-    else:
-        pw = old.get("password", "") if user and user == old.get("username") else ""
-    fqdn = _strip_ctrl(str(raw.get("fqdn", "")).strip().rstrip(".")).lower()
-    if fqdn:
-        try:
-            ipaddress.ip_address(fqdn)
-            return None, "HOIP AllStar Link: HOIP needs an internet name (like kd8pgk.ddns.net), not an IP address"
-        except ValueError:
-            pass
-        if not _HOST_RE.match(fqdn) or "." not in fqdn:
-            return None, "HOIP AllStar Link: the internet name doesn't look right (like kd8pgk.ddns.net)"
-    port = str(raw.get("port", "") or _iax_bindport()).strip()
-    if not port.isdigit() or not (1 <= int(port) <= 65535):
-        return None, f"HOIP AllStar Link: port must be a number (normally {_iax_bindport()})"
-    node = str(raw.get("node", "") or "").strip()
-    if node and node not in {c[0] for c in _hl_node_choices()}:
-        return None, "HOIP AllStar Link: pick the node from the list"
-    if out["enabled"] and not (user and pw and fqdn):
-        return None, "HOIP AllStar Link: fill in username, password and internet name, or untick 'Turn on'"
-    out.update(username=user, password=pw, fqdn=fqdn, port=port, node=node or _hl_default_node())
-    return out, None
 
 def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
     if not isinstance(raw, dict):
@@ -1521,12 +1431,6 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
         home = next((n for n in nets if n["id"] == active), None) or nets[0]
         home["favorites"] = _phone_merge_favs(home["favorites"], legacy)
         legacy = []
-    hl, err = _hl_validate(raw.get("hoip_link"), cur, {n["id"] for n in nets})
-    if err:
-        return None, err
-    smode = str(raw.get("signin_mode", cur.get("signin_mode", "picked"))).strip()
-    if smode not in ("picked", "all"):
-        return None, "Sign-in must be 'picked' or 'all'"
     tot_off = raw.get("tot_phone_off", cur.get("tot_phone_off", True)) is not False
     try:
         tot_cap = int(str(raw.get("tot_cap_min", cur.get("tot_cap_min", 15))).strip() or 15)
@@ -1541,8 +1445,7 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
         "dialtime":      dialtime,
         "tone_path":     cur.get("tone_path", _PHONE_TONE_PATH_DEF),
         "tone_path_user": bool(cur.get("tone_path_user")),
-        "hoip_link":     hl,
-        "signin_mode":   smode,
+        "signin_mode":   "picked",
         "tot_phone_off": tot_off,
         "tot_cap_min":   tot_cap,
         "activated":     bool(cur.get("activated")),
@@ -1668,7 +1571,7 @@ def action_phone_select(net_id: str) -> Tuple[bool, str]:
         old_node, new_node = _phone_live_node(doc), _phone_net_node(net)
         if old_node != new_node and _phone_call_state(0.0).get("state") != "idle":
             return False, "Hang up first — each network has its own node, and the call is on this one"
-        moving = (doc.get("activated") and _phone_signin_mode(doc) == "picked" and doc["active"] != net_id
+        moving = (doc.get("activated") and doc["active"] != net_id
                   and _phone_signin_id(doc) != (net_id if net.get("register") else ""))
         if moving and _phone_call_state().get("state") != "idle":
             return False, "Hang up first — the sign-in can't move during a call"
@@ -1685,7 +1588,7 @@ def action_phone_select(net_id: str) -> Tuple[bool, str]:
         threading.Thread(target=_phone_switch_signin, args=(old_doc, net_id), daemon=True).start()
         if net.get("register"):
             return True, f"Phone network: {net['name']} — signing in…"
-        return True, f"Phone network: {net['name']} (its Sign in box is off, so nothing signs in)"
+        return True, f"Phone network: {net['name']}"
     return True, f"Phone network: {net['name']}"
 
 def action_save_phone_favorite(number: str, name: str = "") -> Tuple[bool, str]:
@@ -1941,15 +1844,6 @@ def _phone_render_dialplan(doc: dict) -> str:
         else:
             L += ["exten => _[+0-9].,1,Hangup()", "exten => s,1,Hangup()"]
         L.append("")
-    if _hl_ready(doc):
-        hn = _hl_node(doc["hoip_link"])
-        say = "&".join(["rpt/node"] + [f"digits/{c}" for c in hn] + ["rpt/connected"])
-        L += ["; Hams Over IP AllStar Link (incoming only, IAX2)", "[dvs-hoiplink]",
-              f"exten => {hn},1,NoOp(HOIP AllStar Link from ${{CALLERID(name)}})",
-              " same => n,Answer()", " same => n,Wait(1)", f" same => n,Playback({say})",
-              " same => n,Set(CALLERID(name)=HOIP-${CALLERID(name)})",
-              f" same => n,rpt({hn},P)", " same => n,Hangup()",
-              "exten => i,1,Hangup()", ""]
     return "\n".join(L) + "\n"
 
 def _pjsip_has_transport() -> bool:
@@ -2026,9 +1920,6 @@ def _phone_router_advice(doc: dict) -> dict:
                 "lines": []}
     return {}
 
-def _phone_signin_mode(doc: dict) -> str:
-    return "all" if doc.get("signin_mode") == "all" else "picked"
-
 def _phone_signin_id(doc: dict) -> str:
     nets = doc.get("networks") or []
     act = next((n for n in nets if n.get("id") == doc.get("active")), None)
@@ -2040,7 +1931,7 @@ def _phone_signin_id(doc: dict) -> str:
 def _phone_signs_in(doc: dict, n: dict) -> bool:
     if not n.get("register"):
         return False
-    return _phone_signin_mode(doc) == "all" or n.get("id") == _phone_signin_id(doc)
+    return n.get("id") == _phone_signin_id(doc)
 
 def _phone_render_pjsip(doc: dict) -> str:
     sip = [n for n in doc["networks"] if n["type"] in _PHONE_SIP_TYPES]
@@ -2096,13 +1987,6 @@ def _phone_render_iax(doc: dict) -> Tuple[str, str]:
         peers += [f"context=dvs-in-{n['id']}", "disallow=all", "allow=ulaw", "allow=g726aal2",
                   "allow=gsm", "codecpriority=host", "insecure=port,invite",
                   "requirecalltoken=yes", "qualify=yes"]
-    if _hl_ready(doc):
-        hl = doc["hoip_link"]
-        peers += ["", "; ---- Hams Over IP AllStar Link (incoming) ----", f"[{hl['username']}]",
-                  f"username={hl['username']}", "type=friend", "context=dvs-hoiplink",
-                  "host=dynamic", "auth=md5", f"secret={hl['password']}", "disallow=all",
-                  "allow=ulaw", "allow=g726aal2", "allow=gsm", "codecpriority=host",
-                  "transfer=no", "requirecalltoken=no"]
     return "\n".join(reg) + "\n", "\n".join(peers) + "\n"
 
 def _phone_rpt_targets(doc: dict) -> List[Tuple[str, str]]:
@@ -2179,10 +2063,7 @@ def action_phone_apply(restart: bool = False) -> Tuple[bool, str]:
             return True, "settings saved; the phone is off, so Asterisk was not changed (Activate to set it up)"
         targets = _phone_rpt_targets(doc)
         sip  = any(n["type"] in _PHONE_SIP_TYPES for n in doc["networks"])
-        iax  = any(n["type"] == "iax2" for n in doc["networks"]) or _hl_ready(doc)
-        if _hl_ready(doc) and doc["hoip_link"]["username"].lower() in _iax_foreign_sections():
-            return False, (f"iax.conf already has a [{doc['hoip_link']['username']}] section the dashboard "
-                           f"didn't write — pick another HOIP AllStar Link username")
+        iax  = any(n["type"] == "iax2" for n in doc["networks"])
         rpt_path = _ph_path("rpt.conf")
         rpt_old  = _ph_read(rpt_path)
         if rpt_old is None:
@@ -2256,15 +2137,6 @@ def action_phone_apply(restart: bool = False) -> Tuple[bool, str]:
     if sip:
         notes.append("SIP needs UDP 5060 and the audio ports open: use the sysmon Ports/Firewall tab "
                      "for the Pi, and forward them on your router")
-    if _hl_ready(doc) and _hl_node(doc["hoip_link"]) != str(_cfg.asl_node):
-        hn = _hl_node(doc["hoip_link"])
-        owner = next((n for n in doc["networks"] if n.get("node") == hn), None)
-        if owner is None or owner["id"] != doc.get("active"):
-            notes.append(f"HOIP AllStar Link callers land on node {hn}, which reaches your radio only while "
-                         + (f"{owner['name']} is the picked network" if owner else "no network is picked"))
-    if _hl_ready(doc):
-        notes.append(f"HOIP AllStar Link needs UDP {doc['hoip_link'].get('port') or _iax_bindport()} forwarded "
-                     f"on your router to this Pi")
     if running:
         if "modules.conf" in changed:
             for mod in _PH_MODULES:
@@ -2496,44 +2368,7 @@ def _phone_reg_states(doc: dict) -> dict:
     _phone_reg_cache[0], _phone_reg_cache[1] = now, res
     return dict(res)
 
-_hl_state_cache: list = [0.0, {}]
-
-def _hl_state(doc: dict) -> dict:
-    if not _hl_ready(doc):
-        return {}
-    now = time.monotonic()
-    if now - _hl_state_cache[0] < 2.0:
-        return dict(_hl_state_cache[1])
-    user = doc["hoip_link"]["username"]
-    rows = [r for r in _phone_all_channels() if r[0].startswith(f"IAX2/{user}-")]
-    up = [r for r in rows if r[4] == "Up"]
-    who = ""
-    if up:
-        try:
-            det = ami_command(f"core show channel {up[0][0]}", timeout=5)[0] or ""
-        except Exception:
-            det = ""
-        m = re.search(r"Caller ID Name:\s*(.+)", det)
-        name = m.group(1).strip() if m else ""
-        num = up[0][7] if len(up[0]) > 7 else ""
-        if name and name not in ("(N/A)", "<unknown>"):
-            who = _strip_ctrl(name)[:32] + (f" ({_strip_ctrl(num)[:20]})" if num and num not in ("", "<unknown>") else "")
-        elif num not in ("", "<unknown>"):
-            who = _strip_ctrl(num)[:32]
-    res = {"on": True, "node": _hl_node(doc["hoip_link"]), "callers": len(up), "who": who}
-    _hl_state_cache[0], _hl_state_cache[1] = now, res
-    return dict(res)
-
-def action_hl_dialstring() -> Tuple[bool, str]:
-    doc = _phone_load()
-    hl = doc.get("hoip_link") or {}
-    if not (hl.get("username") and hl.get("password") and hl.get("fqdn")):
-        return False, "Fill in the HOIP AllStar Link username, password and internet name, then Save Phone"
-    return True, f"IAX2/{hl['username']}:{hl['password']}@{hl['fqdn']}:{hl.get('port') or _iax_bindport()}/{_hl_node(hl)}"
-
 def _phone_signin_status(doc: dict) -> dict:
-    if _phone_signin_mode(doc) == "all":
-        return {"state": "all"}
     sid = _phone_signin_id(doc)
     if not sid:
         return {"state": "off"}
@@ -2564,7 +2399,6 @@ def _phone_status() -> dict:
             "signin": _phone_signin_status(doc) if on_tab else {},
             "tot": _tot_status() if on_tab else {},
             "tone_path": doc.get("tone_path", _PHONE_TONE_PATH_DEF),
-            "hoip_link": _hl_state(doc) if on_tab else {},
             "notice": _phone_notice[0] if time.monotonic() < _phone_notice[1] else ""}
 
 def _phone_check_number(net: dict, num: str) -> Tuple[Optional[str], Optional[str]]:
@@ -3287,17 +3121,6 @@ def _phone_report_health() -> List[str]:
 
 _REP_SECRET_RE = re.compile(r"(?im)(\b(?:password|secret|md5_cred|pin)\s*[:=]\s*)\S+")
 
-def _phone_report_hl() -> List[str]:
-    doc = _phone_load()
-    if not _hl_ready(doc):
-        return ["  HOIP AllStar Link: off"]
-    s = _hl_state(doc)
-    peer, _ = ami_command(f"iax2 show peer {doc['hoip_link']['username']}", timeout=4)
-    loaded = "Name" in (peer or "") and "not found" not in (peer or "").lower()
-    return [f"  HOIP AllStar Link: on, callers land on node {s.get('node')}",
-            f"  Asterisk has the IAX2 account: {'yes' if loaded else 'no - Save Phone again'}",
-            f"  HOIP callers on now: {s.get('callers', 0)}"]
-
 def _phone_report() -> str:
     doc = _phone_load()
     st = get_state_fields("page")
@@ -3333,7 +3156,6 @@ def _phone_report() -> str:
     L += ["", "Call now: " + json.dumps(call)]
     L += ["", "Call check (the same numbers the keypad shows):"]
     L += _phone_report_callcheck(call, chk)
-    L += ["", "HOIP AllStar Link:"] + _phone_report_hl()
     L += _phone_report_sides()
     L += _phone_report_nodes()
     if sip:
@@ -9372,7 +9194,6 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               aria-label="Send pound (unkey)" title="Send # — unkey">#</button>
           </div>
           <div class="pt-callrow"><div id="pt-call" class="pt-call" role="status"></div></div>
-          <div class="pt-callrow pt-hide" id="pt-hl"><div id="pt-hl-txt" class="pt-call pt-live" role="status"></div></div>
           <div id="pt-grid"></div>
           <div class="act-bar">
             <button class="btn btn-red" onclick="ptHangup()">Hang Up</button>
@@ -9461,10 +9282,8 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
                 <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-totoff">Transmitter time-out off while the Phone tab is open</label></div>
                 <div class="cfg-field"><label class="cfg-lbl" for="ph-totcap">Safety cap (minutes keyed)</label>
                   <input id="ph-totcap" class="cfg-inp" type="text" inputmode="numeric" maxlength="2" placeholder="15"></div>
-                <div class="cfg-field"><label class="cfg-lbl" for="ph-signin">Sign in</label>
-                  <select id="ph-signin" class="cfg-inp"><option value="picked">Picked network only</option><option value="all">All networks</option></select></div>
               </div>
-              <div class="ph-hint">Sign in: with "Picked network only", just the network picked on the Phone tab signs in, so two accounts for the same number never compete. Picking another network moves the sign-in (not during a call). A network whose own "Sign in" box is off never signs in.</div>
+              <div class="ph-hint">Sign in: just the network picked on the Phone tab signs in, so two accounts for the same number never compete. Picking another network moves the sign-in (not during a call).</div>
               <div class="cfg-grid">
                 <div class="cfg-field"><label class="cfg-lbl" for="ph-tonepath">Send keypad tones</label>
                   <select id="ph-tonepath" class="cfg-inp" onchange="ptTonePathSet(this.value)"></select></div>
@@ -9475,29 +9294,6 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <div class="ed-toolbar" style="justify-content:flex-start">
                 <button class="btn btn-muted" id="ph-add-btn" onclick="phAddNet()">Add network</button>
               </div>
-              <div class="ed-sec-hdr" style="padding-left:0"><span>Hams Over IP AllStar Link</span></div>
-              <div class="ph-hint">HOIP calls in to your node over IAX2, and callers use *99 to talk and # to stop.
-                You need an internet name that points at your home (not an IP address) and <span id="ph-hl-porthint">UDP port 4569 forwarded to this Pi</span>.
-                Save Phone, copy the dial string, and put it in your "Request a Line" ticket on the HOIP helpdesk.</div>
-              <div class="cfg-grid">
-                <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-hl-on">Turn on</label></div>
-                <div class="cfg-field"><label class="cfg-lbl" for="ph-hl-user">Username</label>
-                  <input id="ph-hl-user" class="cfg-inp" type="text" maxlength="32" autocomplete="off" placeholder="kd8pgk-hoip"></div>
-                <div class="cfg-field"><label class="cfg-lbl" for="ph-hl-pass">Password</label>
-                  <input id="ph-hl-pass" class="cfg-inp" type="password" maxlength="64" autocomplete="new-password" placeholder="8+ characters"></div>
-                <div class="cfg-field"><label class="cfg-lbl" for="ph-hl-fqdn">Internet name</label>
-                  <input id="ph-hl-fqdn" class="cfg-inp" type="text" maxlength="120" autocomplete="off" placeholder="kd8pgk.ddns.net"></div>
-                <div class="cfg-field"><label class="cfg-lbl" for="ph-hl-port">Port</label>
-                  <input id="ph-hl-port" class="cfg-inp" type="text" inputmode="numeric" maxlength="5" placeholder="4569" oninput="phHlHints()"></div>
-                <div class="cfg-field"><label class="cfg-lbl" for="ph-hl-node">Callers land on</label>
-                  <select id="ph-hl-node" class="cfg-inp" onchange="phHlHints()"></select></div>
-                <div class="ph-hint" id="ph-hl-warn" style="display:none;color:var(--warn,#ffb020)">Warning: on the radio node, HOIP callers can use every command it knows (linking and unlinking nodes too), and they are heard on whatever it is linked to, including the DMR and M17 bridges. The Phone Bridge is the safe choice.</div>
-              </div>
-              <div class="ph-hint" id="ph-hl-note"></div>
-              <div class="ed-toolbar" style="justify-content:flex-start">
-                <button class="btn btn-muted" onclick="phHlCopy()">Copy dial string</button>
-              </div>
-              <input id="ph-hl-str" class="cfg-inp" type="text" readonly style="display:none" aria-label="HOIP dial string">
               <div class="ed-toolbar" style="justify-content:flex-start;margin-top:.4rem">
                 <button class="btn btn-teal" onclick="phSave()">Save Phone</button>
                 <button class="btn btn-muted" onclick="phLoad()">Reload</button>
@@ -12128,13 +11924,6 @@ function ptRender(){
 }
 function ptRenderStatus(){
   const st=_pt.status||{},d=_pt.data,net=ptActiveNet();
-  // v9.3.21: HOIP AllStar Link callers (incoming over IAX2)
-  const hl=st.hoip_link||{},hlr=byId('pt-hl');
-  if(hlr){
-    const on=!!(hl.on&&hl.callers>0);
-    hlr.classList.toggle('pt-hide',!on);
-    if(on)byId('pt-hl-txt').textContent='HOIP AllStar caller on node '+hl.node+(hl.who?' — '+hl.who:'')+(hl.callers>1?' (+'+(hl.callers-1)+' more)':'')+' · *99 talk, # stop';
-  }
   const dot=byId('pt-reg-dot'),call=byId('pt-call'),pb=byId('pt-patch-btn');
   if(!dot||!call||!pb)return;
   const reg=(st.reg&&net)?st.reg[net.id]:undefined;
@@ -12386,15 +12175,14 @@ const PH_EXT_TYPES=['hoip','awire'];
 const PH_EXT_DEF={hoip:{name:'Hams Over IP',host:'premium.hamsoverip.com',port:'5160'},
                   awire:{name:'AmateurWire',host:'pbx1-wv.amateurwire.org',port:'5060'}};
 // v9.3.54: HOIP wants RFC 2833 tone packets with ulaw; 3191 reads your tones back
-const PH_HOIP_TONE='rfc4733',PH_HOIP_TONE_TEST='3191';
+const PH_HOIP_TONE_TEST='3191';
 // v9.3.2: how keypad tones travel on a SIP network (IAX2 has no setting).
 const PH_TONE_PATHS=[['provider','Straight to the provider (v9.3.13 way)'],['node','Through the call (test)'],['sound','As sound (tone recordings)']];
-const PH_TONE_MODES=[['auto','Automatic (recommended)'],['rfc4733','Tone packets only (RFC 2833)'],['inband','Real tones in the audio'],['info','SIP messages'],['auto_info','Packets, then SIP messages']];
 const PH_BLANK_NET={id:'',name:'',type:'iax2',host:'',port:'',username:'',password:'',caller_id:'',
   dialing:'phone',dial_format:'10',e911:false,allow_intl:false,register:true,incoming:'off',pin:'',
   trusted:'',did:'',lan_net:'',wan_ip:'',has_password:false,has_pin:false,
   callsign:'',email:'',extension:'',transport:'udp',auth_id:'',voicemail:'',voicemail_pin:'',display_name:'',dmr_id:'',
-  voicemail_access:'',login_url:'',has_voicemail_pin:false,tone_mode:'auto',test_number:'',node:''};
+  voicemail_access:'',login_url:'',has_voicemail_pin:false,test_number:'',node:''};
 function phOpts(list,cur){return list.map(([v,l])=>`<option value="${esc(v)}"${v===cur?' selected':''}>${esc(l)}</option>`).join('')}
 function phField(i,k,label,val,extra){
   extra=extra||{};
@@ -12453,7 +12241,6 @@ function phRenderNet(n,i){
     h+=phField(i,'username','SIP Username',n.username,{max:64,ph:'blank = the extension',auto:au('username')});
     h+=phField(i,'auth_id','Authentication ID',n.auth_id,{max:64,ph:'blank = the SIP username',auto:au('auth_id')});
     h+=phField(i,'password','SIP Password',n.password,{type:'password',max:128,ph:n.has_password?'unchanged':'required'});
-    h+=phChk('register','Sign in (register) with this network',n.register);
     h+=`<div class="ph-sub">Voicemail</div>`;
     if(!aw)h+=phField(i,'voicemail','Voicemail',n.voicemail,{max:64,ph:'e.g. 400353@default',auto:au('voicemail')});
     h+=phField(i,'voicemail_pin','Voicemail PIN',n.voicemail_pin,{type:'password',max:10,num:true,ph:n.has_voicemail_pin?'unchanged':'optional'});
@@ -12465,7 +12252,6 @@ function phRenderNet(n,i){
   if(login){
     h+=phField(i,'username','Username',n.username,{max:64});
     h+=phField(i,'password','Password',n.password,{type:'password',max:128,ph:n.has_password?'unchanged':'required'});
-    h+=phChk('register','Sign in (register) with this network',n.register);
   }
   }
   h+=`<div class="cfg-field"><label class="cfg-lbl">Dialing</label><select class="cfg-inp" data-k="dialing" onchange="phRerender()">${phOpts([['phone','Phone numbers'],['ext','Extensions']],n.dialing)}</select></div>`;
@@ -12485,8 +12271,6 @@ function phRenderNet(n,i){
   h+=phField(i,'did','Your phone number (DID)',n.did,{max:15,num:true});
   h+=phField(i,'test_number','Test number',n.test_number,{max:20,ph:'e.g. an echo test'});
   if(sip){
-    h+=`<div class="ph-sub">Keypad tones (SIP)</div>`;
-    h+=`<div class="cfg-field"><label class="cfg-lbl">Tone mode</label><select class="cfg-inp" data-k="tone_mode"${n.type==='hoip'?' onchange="phRerender()"':''}>${phOpts(PH_TONE_MODES,n.tone_mode||'auto')}</select></div>`;
     h+=`<div class="ph-sub">Behind a router (SIP)</div>`;
     h+=phField(i,'lan_net','Home network',n.lan_net,{max:43,ph:'192.168.1.0/24'});
     h+=phField(i,'wan_ip','Public IP address',n.wan_ip,{max:45,ph:'e.g. 203.0.113.5'});
@@ -12496,11 +12280,10 @@ function phRenderNet(n,i){
   if(opn)h+=`<div class="ph-hint">Callers go straight on the air with no PIN. If trusted numbers are listed, only those numbers get through and everyone else hears busy. Calls are answered only while the Phone tab is open; otherwise the caller gets a busy signal.</div>`;
   h+=`<div class="ph-hint">Node number: this network's own private node (1000-1999). Leave it blank and Save Phone gives it the next free number counting up from the Phone Bridge. Only the picked network's node is linked to your radio, and only while the Phone tab is open.</div>`;
   h+=`<div class="ph-hint">Test number adds a Test call row to the Phone tab. An echo test (it plays your voice back) is the quickest way to check the far end can hear you. Ask your network for its number.</div>`;
-  if(sip)h+=`<div class="ph-hint">Tone mode is how keypad tones reach this network. Automatic works for most. If the far end doesn't react to tones, try Real tones in the audio, then SIP messages. Takes effect after Save Phone.</div>`;
+  if(sip)h+=`<div class="ph-hint">Keypad tones go to this network as tone packets (RFC 2833).</div>`;
   if(n.type==='iax2')h+=`<div class="ph-hint">IAX2 uses port ${esc(_ph.iaxPort||'4569')}, the same one AllStarLink already uses on this Pi.</div>`;
   else if(hoip)h+=`<div class="ph-hint">Hams Over IP: SIP on UDP 5160, audio (RTP) on UDP 10000-15000. Voicemail Access adds a Voicemail row to the Phone tab.</div>`;
-  if(n.type==='hoip'){   // v9.3.54; v9.3.55: the tone warning updates when Tone mode is changed
-    if((n.tone_mode||'auto')!==PH_HOIP_TONE)h+=`<div class="ph-hint" style="color:var(--warn,#ffb020)">Hams Over IP asks for Tone mode: Tone packets only (RFC 2833). Pick it above and Save Phone, or *99 may not reach the far end.</div>`;
+  if(n.type==='hoip'){
     h+=`<div class="ph-hint">To test keypad tones on Hams Over IP, call ${PH_HOIP_TONE_TEST}: wait for the beep, key some digits then #, and they are read back to you.${n.test_number===PH_HOIP_TONE_TEST?' The Test call row on the Phone tab dials it.':''}</div>`;
   }
   else h+=`<div class="ph-hint">SIP needs UDP 5060 and UDP 10000-20000 forwarded on your router.</div>`;
@@ -12599,9 +12382,7 @@ function phRerender(){
     if(!n.port)n.port=PH_EXT_DEF[n.type].port;
     n.transport='udp';
     if(!PH_EXT_TYPES.includes(prev[i]))n.dialing='ext';
-    if(n.type==='hoip'&&prev[i]!=='hoip'){   // v9.3.54: HOIP's tone setting and tone test
-      if(!n.tone_mode||n.tone_mode==='auto')n.tone_mode='';
-      phAutoSet(n,'tone_mode',PH_HOIP_TONE);
+    if(n.type==='hoip'&&prev[i]!=='hoip'){
       phAutoSet(n,'test_number',PH_HOIP_TONE_TEST);
     }
   });
@@ -12642,7 +12423,7 @@ function phActClick(e){
   e.preventDefault();
   if(_ph.active_on){phRevertOpen();return false}
   if(_ph.dirty){toast('Save Phone first, then Activate','err');return false}
-  const sip=_ph.nets.some(n=>n.type!=='iax2'),iax=_ph.nets.some(n=>n.type==='iax2')||byId('ph-hl-on').checked;
+  const sip=_ph.nets.some(n=>n.type!=='iax2'),iax=_ph.nets.some(n=>n.type==='iax2');
   const html='<p>Turning the phone on changes Asterisk on this Pi:</p><ul>'+
     `<li><b>rpt.conf</b>: adds private node${_ph.nets.length>1?'s':''} ${esc(phNodesFor())}, one per phone network, each with its own code list (*61 dial, *65 hang up).</li>`+
     '<li><b>extensions.conf</b>: one line that includes the dashboard\'s dialing file.</li>'+
@@ -12705,59 +12486,20 @@ async function phLoad(){
     byId('ph-patch').checked=d.patch_enabled!==false;
     byId('ph-dialtime').value=d.dialtime||20000;
     ptTonePathRender(d.tone_path||'provider');
-    byId('ph-signin').value=d.signin_mode==='all'?'all':'picked';
     byId('ph-totoff').checked=d.tot_phone_off!==false;
     byId('ph-totcap').value=d.tot_cap_min||15;
     _ph.dirty=false;
-    phHlLoad(d.hoip_link||{});
     phRender();_ph.loaded=true;_ph.dirty=false;byId('ph-msg').textContent='';
   }catch(e){console.error('phLoad() error:',e);byId('ph-msg').textContent='Could not load phone settings'}
-}
-// v9.3.19: Hams Over IP AllStar Link fields (the password never comes back).
-function phHlLoad(h){
-  byId('ph-hl-on').checked=!!h.enabled;
-  byId('ph-hl-user').value=h.username||'';
-  byId('ph-hl-pass').value='';
-  byId('ph-hl-pass').placeholder=h.has_password?'saved — leave blank to keep':'8+ characters';
-  byId('ph-hl-fqdn').value=h.fqdn||'';
-  byId('ph-hl-port').value=h.port||_ph.iaxPort||'4569';
-  byId('ph-hl-node').innerHTML=phOpts(h.choices||[],h.node||'');
-  phHlHints();
-  byId('ph-hl-note').textContent=h.dial_hint?('Dial string: '+h.dial_hint):'';
-  const hs=byId('ph-hl-str');if(hs){hs.value='';hs.style.display='none'}
-}
-// v9.3.21: copy the full dial string (with the password) for the HOIP ticket.
-async function phHlCopy(){
-  if(_ph.dirty){toast('Save Phone first, then copy','err');return}
-  const d=await api({action:'phone-hl-dialstring'},10000);
-  if(!d.ok){toast(d.message,'err');return}
-  const t=byId('ph-hl-str');t.value=d.message;t.style.display='';
-  try{if(navigator.clipboard&&window.isSecureContext){await navigator.clipboard.writeText(d.message);toast('Dial string copied','ok');return}}catch(_){}
-  t.focus();t.select();
-  let ok=false;try{ok=document.execCommand('copy')}catch(_){}
-  toast(ok?'Dial string copied':'Text is selected — press Ctrl+C (or long-press → Copy)',ok?'ok':'err');
-}
-function phHlHints(){
-  const ip=_ph.iaxPort||'4569';
-  const p=(byId('ph-hl-port').value||'').trim()||ip;
-  const ph=byId('ph-hl-porthint');
-  if(ph)ph.textContent=p===ip?'UDP port '+ip+' forwarded to this Pi':
-    'UDP port '+p+' forwarded on your router to port '+ip+' on this Pi (Asterisk only listens on '+ip+')';
-  const sel=byId('ph-hl-node'),w=byId('ph-hl-warn');
-  if(sel&&w){const radio=sel.selectedIndex>0;w.style.display=radio?'':'none';}
 }
 async function phSave(quiet){
   phSyncFromDOM();
   const phone={active:_ph.active,patch_enabled:byId('ph-patch').checked,
     dialtime:byId('ph-dialtime').value.trim(),
-    signin_mode:byId('ph-signin').value,
     tot_phone_off:byId('ph-totoff').checked,
     tot_cap_min:byId('ph-totcap').value.trim(),
     networks:_ph.nets.map(n=>{const o=Object.assign({},n,{trusted:String(n.trusted||''),favorites:phFavsOut(n.favs)});
-      delete o.favs;delete o._favOpen;delete o._auto;return o}),
-    hoip_link:{enabled:byId('ph-hl-on').checked,username:byId('ph-hl-user').value.trim(),
-      password:byId('ph-hl-pass').value,fqdn:byId('ph-hl-fqdn').value.trim(),
-      port:byId('ph-hl-port').value.trim(),node:byId('ph-hl-node').value}};
+      delete o.favs;delete o._favOpen;delete o._auto;delete o.tone_mode;delete o.register;return o})};
   const d=await api({action:'save-phone',phone});
   if(!d.ok){toast('Phone: '+d.message,'err');byId('ph-msg').textContent=d.message;return false}
   const a=await api({action:'phone-apply',restart:byId('ph-restart').checked},60000);
@@ -14050,7 +13792,6 @@ _POST_ACTIONS: dict = {
     "phone-hangup":      lambda h, d: action_phone_hangup(),
     "phone-tones":       lambda h, d: action_phone_send_tones(_arg(d, "tones")),
     "phone-tone-path":   lambda h, d: action_phone_tone_path(_arg_s(d, "path")),
-    "phone-hl-dialstring": lambda h, d: action_hl_dialstring(),
     "phone-patch":       lambda h, d: action_phone_patch(bool(d.get("on", False))),
     "save-phone-favorite": lambda h, d: action_save_phone_favorite(_arg(d, "number"), _arg(d, "name")),
     "reboot":            _act_background("Rebooting…",
