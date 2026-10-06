@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.6-pi02w"
+VERSION      = "9.3.71.7-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -11971,8 +11971,24 @@ function ptRender(){
   }).join('');
   const empty=an?`No favorites on ${esc(an.name)} yet — dial a number and press Save`:'Pick a network first';
   grid.innerHTML=(rows||vm||tc)?('<div class="net-sel-hdr">Favorites'+(an?' · '+esc(an.name):'')+'</div>'+tc+vm+rows):'<div style="padding:1rem;color:var(--muted);font-family:var(--mono);font-size:.858rem">'+empty+'</div>';
+  ptMarkActive();
+}
+function ptNumKey(v){const s=String(v||'').replace(/\D/g,'');return s.length===11&&s[0]==='1'?s.slice(1):s}
+function ptMarkActive(){
+  const grid=byId('pt-grid');if(!grid)return;
+  const c=(_pt.status&&_pt.status.call)||{},on=!!c.state&&c.state!=='idle',up=c.state==='in_call';
+  const num=String(c.number||'');
+  const role=!on?'':num==='TEST'?'pt-test-row':num.startsWith('VM ')?'pt-vm-row':'pt-fav-row';
+  const key=role==='pt-fav-row'?ptNumKey(num||c.who):'';
+  grid.querySelectorAll('[data-role="pt-fav-row"],[data-role="pt-test-row"],[data-role="pt-vm-row"]').forEach(r=>{
+    const act=!!role&&r.dataset.role===role&&(role!=='pt-fav-row'||(!!key&&ptNumKey(r.dataset.num)===key));
+    r.classList.toggle('active-phone',act);
+    const dt=r.querySelector('.dot');
+    if(dt){dt.classList.toggle('dot-on',act&&up);dt.classList.toggle('dot-off',!(act&&up))}
+  });
 }
 function ptRenderStatus(){
+  ptMarkActive();
   const st=_pt.status||{},d=_pt.data,net=ptActiveNet();
   const dot=byId('pt-reg-dot'),call=byId('pt-call'),pb=byId('pt-patch-btn');
   if(!dot||!call||!pb)return;

@@ -1,6 +1,20 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_6_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_7_20261006.py`. Newest entries first.
+
+## 9.3.71.7-pi02w (2026-10-06)
+
+- Phone tab: the favorite in use lights up like the active row on the ASL, Echo
+  and digital tabs (green bar and tint). It lights while dialing and while ringing
+  in, and its dot turns on once the call is connected. It clears when the call ends.
+  - Calls you dial light the favorite with the dialed number. A leading 1 on an
+    11-digit number is ignored, so 5551234567 and 15551234567 match.
+  - Incoming calls light the favorite whose number matches the caller ID.
+  - The Test call and Voicemail rows light up for those calls.
+  - The name turns gold while the radio is keyed, as on the other tabs.
+- Page-only change: the Phone status already carries the call state and number.
+  The highlight is switched on the rows already shown on each status refresh, so
+  the list isn't redrawn.
 
 ## 9.3.71.6-pi02w (2026-10-06)
 
