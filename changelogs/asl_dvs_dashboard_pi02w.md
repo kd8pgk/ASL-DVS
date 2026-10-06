@@ -1,6 +1,22 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_5_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_6_20261006.py`. Newest entries first.
+
+## 9.3.71.6-pi02w (2026-10-06)
+
+- Phone: new "Listen only (the radio never transmits into calls)" box in the Edit
+  page's Phone section, off by default, one setting for all phone networks. Saved as
+  `listen_only` in `/etc/asl_dvs/phone.json`.
+- When it is on, the phone nodes are linked to the radio node as monitor links
+  (`rpt cmd <radio node> ilink 2 <phone node>`) instead of two-way (`ilink 3`). You
+  hear calls on the radio, and nothing from the radio (audio, keying or DTMF) goes
+  into the call. Dialing, hang-up and keypad tones from the dashboard still work.
+  Codes keyed on the radio (*61, *65, *980-*982) don't reach the phone node.
+- The link watchdog reads each link's mode from `RPT_ALINKS` and relinks the phone
+  node in the right mode when it is linked the other way, so the change takes effect
+  a few seconds after Save Phone, after a network switch and after a restart. Other
+  bridges are unchanged.
+- The Phone tab shows "Listen only" next to the call status while it is on.
 
 ## 9.3.71.5-pi02w (2026-10-06)
 
