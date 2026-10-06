@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-"""instmon v2.38.1 (2026-10-05) - KD8PGK Web Installer & Component Manager
+"""instmon v2.38.2 (2026-10-06) - KD8PGK Web Installer & Component Manager
 Build: common (all nodes, including Pi Zero 2 W)
 
 Full version history: see CHANGELOG.md. This docstring intentionally
@@ -44,8 +44,8 @@ from datetime import datetime
 
 
 PORT =8990 
-VERSION ="2.38.1"
-DATE_STR ="2026-10-05"  # v2.38.1 --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment). Previous: v2.38.0 Pi Zero 2 W build choice: on a Pi Zero 2 W (device-tree model "Zero 2") the GitHub Updates card shows a "Pi Zero 2 W build" choice -- Pi02w fork (default) or Full build (override), saved in /etc/asl_dvs/instmon_build.json; Full Update now installs the chosen build of SysMon and the Dashboard, and switches an installed build that does not match (full -> fork or fork -> full, shown as SWITCH) the same way it updates -- library copy, --uninstall, the other build's --install, rollback on failure; tools with one common build are not affected; on other Pis nothing changes (each component keeps the build it has). Check GitHub marks the rows of the build this node does not use as "other build". Previous: v2.37.1 Launcher: instmon.service now starts /usr/local/bin/asl_dvs_launch.py /usr/local/bin/instmon.py -- the launcher imports instmon instead of running it, so Python keeps the compiled copy in /usr/local/bin/__pycache__ and reuses it on every later start (about 21 MB instead of 34 MB, twice as fast to start; recompiled by itself after an update); --install writes the launcher (same file the Pi02w sysmon/dashboard and installer v6.5 write), --uninstall removes instmon's compiled copy and the launcher once no unit uses it. Pi Zero 2 W sysmon build: Check GitHub keeps the full and the Pi02w sysmon builds apart -- both match sysmon*.py, so they were one kind and only one of them showed (or a false "same version, different file" conflict); the kind now also carries the VERSION suffix ("6.13.67-pi02w" -> pi02w), so each build gets its own row and is compared only with library copies of the same build. Previous: v2.37.0 Quiet System + Full Update: Quiet System / Restore (GitHub Updates card) pause SysMon, the Dashboard, 44helper and the watchdog timer(s) through the quiesce core with a new "quiet" scope -- never Asterisk, the bridges, Allmon3, wifimon or instmon -- share its state file (so a restart of instmon restores them, and a disk-image job and Quiet System can never overlap), auto-restore after 30 min (INSTMON_QUIET_AUTO_RESTORE_SEC), and drop a component that a later Install/Uninstall already restarted; Full Update (next to Check GitHub) reads the same GitHub listing, picks for every installed component the newest GitHub build of the same variant (file-name stem, or the VERSION suffix such as -pi02w), downloads and checks every file first with the GitHub Update checks, then pauses the web tools and, one component at a time (44helper, wifimon, Dashboard, SysMon, Watchdog), saves a library copy of the installed file, runs its --uninstall, runs the new file's --install and waits for the service and port; a failure puts the saved copy back and the component is skipped (or listed NEEDS ATTENTION if that fails too) and the run carries on; newer install scripts go to the Scripts library only, never run; Restore, then instmon last -- replaced in place by its own --install, with a transient instmon-update-guard timer that reinstalls the old copy if port 8990 is silent 90 s later; results are saved to instmon_full_update.json and the restarted instmon reports them; summary as a popup, in the log and as a banner until dismissed; while it runs every other action, upload, editor save and disk-image job answers 409. Check GitHub now also works out the Full Update list from the same listing (no extra GitHub request). Previous: v2.36.1 Login refresh: when a session expires or instmon is reinstalled/restarted, the page now reloads itself instead of popping the login box over the stale page (which mangled the text and, after login, restarted every poll timer a second time); the "Session expired" message is carried across the reload via sessionStorage and shown on the fresh login box; a once-only guard means a burst of 401s reloads once, and the boot-time login (fresh page, not logged in) never reloads, so no loop. Previous: v2.36.0 GitHub updates: Check GitHub reads the file list of kd8pgk/ASL-DVS (main) straight from GitHub -- no manifest or checksums to maintain -- shows the newest GitHub copy of each tool in its library group, Update downloads, checks (same file GitHub listed, version, shebang, syntax, --install support) and stages it in its own library folder; uninstall_asl_dvs*.sh added to Scripts with a double confirm. Previous: wifimon card now points at the wifimon v5 web dashboard (port 8991, plain HTTP, Go button); M17 Dashboard and SVX Dashboard cards removed (component, library group + upload box, library folder, home-folder sweep pattern, and the M17 branch of config install). Previous: v2.30.2 Progress audit: reader uses read1() (was a blocking read(256) => 4 s+ batches, nothing for short jobs), throttled copies report via the read-side dd (pv prints nothing when stderr is a pipe), ddrescue status is captured (it writes to stdout, which was /dev/null) and its kB unit parsed, one-decimal %, bytes done/total, elapsed, windowed time-left, stall warning
+VERSION ="2.38.2"
+DATE_STR ="2026-10-06"  # v2.38.2 Launcher version 2 (the same file every ASL-DVS --install writes): three memory savers, each with an off switch -- python3 -OO (drops docstrings from the loaded code; off: /etc/asl_dvs/launch_no_optimize), MALLOC_ARENA_MAX=2 (at most 2 malloc pools instead of up to 8 per CPU core; off: /etc/asl_dvs/launch_no_arena_cap) and malloc_trim every 5 minutes (freed memory handed back to Linux; off: /etc/asl_dvs/launch_no_trim).  Create the file and restart the service to turn one off.  The service files are unchanged; the launcher starts Python once more with -OO and MALLOC_ARENA_MAX (same PID). Previous: v2.38.1 --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment). Previous: v2.38.0 Pi Zero 2 W build choice: on a Pi Zero 2 W (device-tree model "Zero 2") the GitHub Updates card shows a "Pi Zero 2 W build" choice -- Pi02w fork (default) or Full build (override), saved in /etc/asl_dvs/instmon_build.json; Full Update now installs the chosen build of SysMon and the Dashboard, and switches an installed build that does not match (full -> fork or fork -> full, shown as SWITCH) the same way it updates -- library copy, --uninstall, the other build's --install, rollback on failure; tools with one common build are not affected; on other Pis nothing changes (each component keeps the build it has). Check GitHub marks the rows of the build this node does not use as "other build". Previous: v2.37.1 Launcher: instmon.service now starts /usr/local/bin/asl_dvs_launch.py /usr/local/bin/instmon.py -- the launcher imports instmon instead of running it, so Python keeps the compiled copy in /usr/local/bin/__pycache__ and reuses it on every later start (about 21 MB instead of 34 MB, twice as fast to start; recompiled by itself after an update); --install writes the launcher (same file the Pi02w sysmon/dashboard and installer v6.5 write), --uninstall removes instmon's compiled copy and the launcher once no unit uses it. Pi Zero 2 W sysmon build: Check GitHub keeps the full and the Pi02w sysmon builds apart -- both match sysmon*.py, so they were one kind and only one of them showed (or a false "same version, different file" conflict); the kind now also carries the VERSION suffix ("6.13.67-pi02w" -> pi02w), so each build gets its own row and is compared only with library copies of the same build. Previous: v2.37.0 Quiet System + Full Update: Quiet System / Restore (GitHub Updates card) pause SysMon, the Dashboard, 44helper and the watchdog timer(s) through the quiesce core with a new "quiet" scope -- never Asterisk, the bridges, Allmon3, wifimon or instmon -- share its state file (so a restart of instmon restores them, and a disk-image job and Quiet System can never overlap), auto-restore after 30 min (INSTMON_QUIET_AUTO_RESTORE_SEC), and drop a component that a later Install/Uninstall already restarted; Full Update (next to Check GitHub) reads the same GitHub listing, picks for every installed component the newest GitHub build of the same variant (file-name stem, or the VERSION suffix such as -pi02w), downloads and checks every file first with the GitHub Update checks, then pauses the web tools and, one component at a time (44helper, wifimon, Dashboard, SysMon, Watchdog), saves a library copy of the installed file, runs its --uninstall, runs the new file's --install and waits for the service and port; a failure puts the saved copy back and the component is skipped (or listed NEEDS ATTENTION if that fails too) and the run carries on; newer install scripts go to the Scripts library only, never run; Restore, then instmon last -- replaced in place by its own --install, with a transient instmon-update-guard timer that reinstalls the old copy if port 8990 is silent 90 s later; results are saved to instmon_full_update.json and the restarted instmon reports them; summary as a popup, in the log and as a banner until dismissed; while it runs every other action, upload, editor save and disk-image job answers 409. Check GitHub now also works out the Full Update list from the same listing (no extra GitHub request). Previous: v2.36.1 Login refresh: when a session expires or instmon is reinstalled/restarted, the page now reloads itself instead of popping the login box over the stale page (which mangled the text and, after login, restarted every poll timer a second time); the "Session expired" message is carried across the reload via sessionStorage and shown on the fresh login box; a once-only guard means a burst of 401s reloads once, and the boot-time login (fresh page, not logged in) never reloads, so no loop. Previous: v2.36.0 GitHub updates: Check GitHub reads the file list of kd8pgk/ASL-DVS (main) straight from GitHub -- no manifest or checksums to maintain -- shows the newest GitHub copy of each tool in its library group, Update downloads, checks (same file GitHub listed, version, shebang, syntax, --install support) and stages it in its own library folder; uninstall_asl_dvs*.sh added to Scripts with a double confirm. Previous: wifimon card now points at the wifimon v5 web dashboard (port 8991, plain HTTP, Go button); M17 Dashboard and SVX Dashboard cards removed (component, library group + upload box, library folder, home-folder sweep pattern, and the M17 branch of config install). Previous: v2.30.2 Progress audit: reader uses read1() (was a blocking read(256) => 4 s+ batches, nothing for short jobs), throttled copies report via the read-side dd (pv prints nothing when stderr is a pipe), ddrescue status is captured (it writes to stdout, which was /dev/null) and its kB unit parsed, one-decimal %, bytes done/total, elapsed, windowed time-left, stall warning
 
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -82,15 +82,72 @@ SYSTEMD_SERVICE_PATH ="/etc/systemd/system/instmon.service"
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
 _SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 _LAUNCHER_CODE = '''#!/usr/bin/env python3
-# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
-# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
-# named on the command line through Python's import system, so its compiled
-# copy is kept in __pycache__ and reused on later starts instead of the whole
-# file being compiled again -- about half the memory and twice as fast to
-# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
+# asl_dvs_launch.py -- ASL-DVS launcher (version 2), written by the --install
+# of the Pi02w sysmon and dashboard, instmon, wifimon and 44helper (and by
+# install_asl_dvs v6.6).  Runs the program named on the command line through
+# Python's import system, so its compiled copy is kept in __pycache__ and
+# reused on later starts instead of the whole file being compiled again --
+# about half the memory and twice as fast to start.
+# Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
+#
+# Version 2 adds three memory savers.  Each has an off switch: create the
+# file named below (sudo touch ...) and restart the service; delete the file
+# and restart to turn the saver back on.
+#   -OO               Python drops the built-in help text (docstrings) from
+#                     the loaded code.  Off: /etc/asl_dvs/launch_no_optimize
+#   MALLOC_ARENA_MAX=2  at most 2 memory pools instead of up to 8 per CPU
+#                     core; each pool keeps memory its threads freed.
+#                     Off: /etc/asl_dvs/launch_no_arena_cap
+#   malloc_trim       1 minute after start, then every 5 minutes, freed
+#                     memory is handed back to Linux.
+#                     Off: /etc/asl_dvs/launch_no_trim
+# -OO and MALLOC_ARENA_MAX only work from the moment Python starts, so the
+# launcher starts Python once more with them (same process and PID, so the
+# systemd notify and watchdog settings are not affected).
 import os
 import runpy
 import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    # Second start: keep MALLOC_ARENA_MAX out of the programs this one runs.
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
 
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]

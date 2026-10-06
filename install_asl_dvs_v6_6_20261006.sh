@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# install_asl_dvs_dashboard.sh  v6.5  (2026-10-05)
+# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)
 # Build: common (all nodes, including Pi Zero 2 W)
 # Installs or updates:
 #   ASL-DVS Node Control Dashboard  (port 8989)
@@ -162,6 +162,16 @@
 #   that memory (sysmon ~54 MB, dashboard ~45 MB); started through the
 #   launcher it is imported, so Python saves the compiled copy in
 #   __pycache__ and reuses it (~26 MB and ~25 MB, twice as fast to start).
+#
+# v6.6: Launcher version 2 (the same file every ASL-DVS --install writes):
+#   three memory savers, each with an off switch -- python3 -OO (drops
+#   docstrings from the loaded code; off: /etc/asl_dvs/launch_no_optimize),
+#   MALLOC_ARENA_MAX=2 (at most 2 malloc pools instead of up to 8 per CPU
+#   core; off: /etc/asl_dvs/launch_no_arena_cap) and malloc_trim every 5
+#   minutes (freed memory handed back to Linux; off:
+#   /etc/asl_dvs/launch_no_trim).  Create the file and restart the service
+#   to turn one off.  The service files are unchanged; the launcher starts
+#   Python once more with -OO and MALLOC_ARENA_MAX (same PID).
 
 set -euo pipefail
 
@@ -433,15 +443,72 @@ LAUNCHER_PATH="/usr/local/bin/asl_dvs_launch.py"
 write_launcher() {
     cat > "${LAUNCHER_PATH}.tmp" <<'LAUNCHER_EOF'
 #!/usr/bin/env python3
-# asl_dvs_launch.py -- ASL-DVS Pi Zero 2 W launcher, written by the Pi02w
-# sysmon and dashboard installs (and install_asl_dvs v6.5).  Runs the program
-# named on the command line through Python's import system, so its compiled
-# copy is kept in __pycache__ and reused on later starts instead of the whole
-# file being compiled again -- about half the memory and twice as fast to
-# start.  Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
+# asl_dvs_launch.py -- ASL-DVS launcher (version 2), written by the --install
+# of the Pi02w sysmon and dashboard, instmon, wifimon and 44helper (and by
+# install_asl_dvs v6.6).  Runs the program named on the command line through
+# Python's import system, so its compiled copy is kept in __pycache__ and
+# reused on later starts instead of the whole file being compiled again --
+# about half the memory and twice as fast to start.
+# Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
+#
+# Version 2 adds three memory savers.  Each has an off switch: create the
+# file named below (sudo touch ...) and restart the service; delete the file
+# and restart to turn the saver back on.
+#   -OO               Python drops the built-in help text (docstrings) from
+#                     the loaded code.  Off: /etc/asl_dvs/launch_no_optimize
+#   MALLOC_ARENA_MAX=2  at most 2 memory pools instead of up to 8 per CPU
+#                     core; each pool keeps memory its threads freed.
+#                     Off: /etc/asl_dvs/launch_no_arena_cap
+#   malloc_trim       1 minute after start, then every 5 minutes, freed
+#                     memory is handed back to Linux.
+#                     Off: /etc/asl_dvs/launch_no_trim
+# -OO and MALLOC_ARENA_MAX only work from the moment Python starts, so the
+# launcher starts Python once more with them (same process and PID, so the
+# systemd notify and watchdog settings are not affected).
 import os
 import runpy
 import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    # Second start: keep MALLOC_ARENA_MAX out of the programs this one runs.
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
 
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
