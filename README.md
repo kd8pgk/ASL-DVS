@@ -63,7 +63,7 @@ Step-by-step manuals (PDF):
 - Pi Zero 2 W build: [`docs/ASL-DVS_Pi02w_Install_Manual.pdf`](docs/ASL-DVS_Pi02w_Install_Manual.pdf)
 - Full build (Pi 3, 4 or 5): [`docs/ASL-DVS_Full_Build_Install_Manual.pdf`](docs/ASL-DVS_Full_Build_Install_Manual.pdf)
 
-Phone dialplan guide (PDF), stock ASL3 next to the Phone tab's dialplan (Pi02w 9.3.71.10 and full 9.3.73 on):
+Phone dialplan guide (PDF, 24 pages): dialplan nuts and bolts, stock ASL3 next to the Phone tab's dialplan (Pi02w 9.3.71.10 and full 9.3.73 on):
 [`docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf`](docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf)
 
 1. Copy the files you want onto the Pi, all in one folder.
