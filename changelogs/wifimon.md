@@ -1,6 +1,18 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_25_20261006.py`. Newest entries first.
+Current file: `wifimon_v5_26_20261006.py`. Newest entries first.
+
+## 5.26 (2026-10-06)
+
+- The WiFi watchdog only runs while at least one network is saved in its
+  reconnect list (`/etc/wifimon/wifimon.conf`). With none, it is on hold even when
+  switched on: no shutdown timer, no reconnects. Removing the last network stops a
+  timer that is already running (on the next check); adding one starts the watchdog.
+  The voltage watchdog is not affected.
+- Page: the card reads "On, waiting for a saved network", the No connection timer
+  reads "No saved networks", and the rules line says why. The popup and the
+  turn-on confirm say the WiFi watchdog waits until a network is added. The status
+  API has a new `wifi_active` field (switch on and networks saved).
 
 ## 5.25 (2026-10-06)
 

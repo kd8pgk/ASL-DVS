@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.25"
+APP_VERSION = "5.26"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -1366,11 +1366,12 @@ def _watchdog_loop() -> None:
                 if _ps_check.is_set():
                     _ps_check.clear()
                     _keep_powersave_check()
-            elif not WIFI_WATCHDOG_ON:
+            elif not WIFI_WATCHDOG_ON or not wifi_networks:
                 misses, first_miss_at = 0, None
                 head_start_noted, nm_busy_since, nm_step_in_noted = False, None, False
                 if down_since is not None:
-                    log.info("WiFi watchdog is off — shutdown timer stopped, no reconnects")
+                    log.info("WiFi watchdog %s — shutdown timer stopped, no reconnects",
+                             "is off" if not WIFI_WATCHDOG_ON else "has no saved networks")
                     down_since = None
                     last_reconnect_attempt = None
                     _wd_update(down_since_mono=None)
@@ -1927,6 +1928,7 @@ def _build_status() -> Dict[str, object]:
         "check_interval": CHECK_INTERVAL,
         "settings": _settings_public(),
         "wifi_on": bool(WIFI_WATCHDOG_ON),
+        "wifi_active": bool(WIFI_WATCHDOG_ON and wd["networks_configured"]),
         "voltage_on": bool(VOLTAGE_WATCHDOG_ON),
         "reconnect_interval": RECONNECT_INTERVAL_SECS,
         "loop_errors": wd["loop_errors"],
@@ -5989,8 +5991,8 @@ a.btnlink:hover{border-color:var(--cyan)}
     <label class="check" id="wd-ask-voltage-row"><input type="checkbox" id="wd-ask-voltage" checked>
       <span><b>Voltage watchdog:</b> shuts the node down after <span id="wd-ask-lowv"></span> of
       low voltage.</span></label>
-    <p class="hint" id="wd-ask-nonet" hidden>No WiFi networks are saved yet. Add them first, or the
-      WiFi watchdog has nothing to reconnect to.</p>
+    <p class="hint" id="wd-ask-nonet" hidden>No WiFi networks are saved yet. The WiFi watchdog waits,
+      with no timer, until one is added.</p>
     <p class="hint">You can turn each one on or off any time in the Watchdog card.</p>
     <div class="actions">
       <button type="button" id="wd-ask-on">Turn on</button>
@@ -6421,8 +6423,10 @@ a.btnlink:hover{border-color:var(--cyan)}
     timers = {
       at: performance.now(),
       conn: wd.no_conn_remaining, connTotal: wd.no_conn_total,
-      connIdle: wd.wifi_on === false ? "Watchdog off" : wd.connected === true ? "Connected" : "Checking…",
-      connIdleCls: wd.wifi_on !== false && wd.connected === true ? "" : "idle",
+      connIdle: wd.wifi_on === false ? "Watchdog off"
+        : !wd.networks_configured ? "No saved networks"
+        : wd.connected === true ? "Connected" : "Checking…",
+      connIdleCls: wd.wifi_active && wd.connected === true ? "" : "idle",
       lowv: wd.lowv_remaining, lowvTotal: wd.lowv_total,
       lowvIdle: wd.voltage_on === false ? "Watchdog off" : "Normal",
       lowvIdleCls: wd.voltage_on === false ? "idle" : "",
@@ -6430,14 +6434,17 @@ a.btnlink:hover{border-color:var(--cyan)}
     };
     drawTimers();
     const rules = [];
-    if (wd.wifi_on !== false) rules.push(dur(wd.no_conn_total) + " with no connection");
+    if (wd.wifi_active) rules.push(dur(wd.no_conn_total) + " with no connection");
     if (wd.voltage_on !== false) rules.push(dur(wd.lowv_total) + " of low voltage (below "
       + wd.low_v_threshold + " V core)");
     $("w-rules").textContent = rules.length
       ? "Shuts the node down after " + rules.join(", or ") + "."
-        + (wd.wifi_on === false ? " The WiFi watchdog is off: no reconnects, no shutdown on a lost connection." : "")
+        + (wd.wifi_on === false ? " The WiFi watchdog is off: no reconnects, no shutdown on a lost connection."
+          : !wd.wifi_active ? " The WiFi watchdog is waiting for a saved network: no reconnects, no shutdown on a lost connection until one is added." : "")
         + (wd.voltage_on === false ? " The voltage watchdog is off: no shutdown on low voltage." : "")
-      : "Both watchdogs are off: wifimon only watches. It won't reconnect the WiFi or shut the node down.";
+      : wd.wifi_on !== false && !wd.wifi_active
+        ? "The WiFi watchdog is waiting for a saved network, and the voltage watchdog is off: wifimon only watches until a network is added."
+        : "Both watchdogs are off: wifimon only watches. It won't reconnect the WiFi or shut the node down.";
     fillKv($("w-kv"), [
       ["Core voltage", val(p.volts, " V")],
       ["Under-voltage now", yesno(p.undervoltage_now)],
@@ -7356,8 +7363,9 @@ a.btnlink:hover{border-color:var(--cyan)}
     const wd = d.watchdog || {};
     [["wifi", wd.wifi_on], ["voltage", wd.voltage_on]].forEach(([k, on]) => {
       const st = $("wd-" + k + "-st"), b = $("wd-" + k + "-btn");
-      st.textContent = on === false ? "Off" : "On";
-      st.className = "st " + (on === false ? "warn" : "good");
+      const waiting = k === "wifi" && on !== false && !wd.wifi_active;
+      st.textContent = on === false ? "Off" : waiting ? "On, waiting for a saved network" : "On";
+      st.className = "st " + (on === false || waiting ? "warn" : "good");
       b.textContent = on === false ? "Turn on" : "Turn off";
       b.disabled = busy;
     });
@@ -7399,7 +7407,8 @@ a.btnlink:hover{border-color:var(--cyan)}
       const msg = k === "wifi"
         ? (on ? "Turn the WiFi watchdog off?\n\nwifimon will stop reconnecting the WiFi and won't shut the node down when the connection is lost."
               : "Turn the WiFi watchdog on?\n\nwifimon will reconnect to your saved networks, and shut the node down after "
-                + dur(wd.no_conn_total) + " with no connection.")
+                + dur(wd.no_conn_total) + " with no connection."
+                + (wd.networks_configured ? "" : "\n\nNo WiFi networks are saved yet: it starts once one is added."))
         : (on ? "Turn the voltage watchdog off?\n\nwifimon will keep showing the voltage but won't shut the node down on low voltage."
               : "Turn the voltage watchdog on?\n\nwifimon will shut the node down after " + dur(wd.lowv_total) + " of low voltage.");
       if (!confirm(msg)) return;
