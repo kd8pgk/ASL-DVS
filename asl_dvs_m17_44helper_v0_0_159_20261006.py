@@ -1,57 +1,4 @@
 #!/usr/bin/env python3
-# =============================================================================
-# ASL-DVS-M17 44 Helper  —  asl_dvs_m17_44helper_v0.0.159.py
-# Build: common (all nodes, including Pi Zero 2 W)
-# =============================================================================
-#
-# STAGE:      Response to an external audit (not one of the original 8
-#             stages, and not a self-initiated fact-check pass like the
-#             v0.0.9 one — this is a response to a third-party review
-#             of the tunnel-setup logic).
-# STATUS:     Clean delivery copy — comments stripped (see the reference
-#             copy for full annotations and the changelog). Still
-#             pre-release.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 from __future__ import annotations
 
@@ -94,637 +41,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_VERSION = "0.0.159"
-APP_STAGE = "v0.0.159: Launcher version 2 (the same file every ASL-DVS --install writes): three memory savers, each with an off switch -- python3 -OO (drops docstrings from the loaded code; off: /etc/asl_dvs/launch_no_optimize), MALLOC_ARENA_MAX=2 (at most 2 malloc pools instead of up to 8 per CPU core; off: /etc/asl_dvs/launch_no_arena_cap) and malloc_trim every 5 minutes (freed memory handed back to Linux; off: /etc/asl_dvs/launch_no_trim).  Create the file and restart the service to turn one off.  The service files are unchanged; the launcher starts Python once more with -OO and MALLOC_ARENA_MAX (same PID). || "\
-    "v0.0.158: --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment). || "\
-    "v0.0.157: Starts through the shared launcher. 44helper.service now runs "\
-    "/usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /opt/44helper/asl_dvs_m17_44helper.py. Run directly, "\
-    "Python compiles this 1.1 MB file on every start and keeps that memory (about 48 MB); the launcher imports "\
-    "it instead, so Python saves the compiled copy in /opt/44helper/__pycache__ and reuses it on later starts "\
-    "(about 26 MB, twice as fast to start) and recompiles by itself after an update. --install writes the "\
-    "launcher (same file the Pi Zero 2 W sysmon/dashboard, instmon, wifimon and install_asl_dvs v6.5 write); "\
-    "--uninstall removes 44helper's compiled copy and the launcher once no unit uses it. --install now "\
-    "restarts 44helper.service instead of 'enable --now', which did nothing to an already-running 44helper, "\
-    "so a re-install over a running copy kept the old version going until the next restart. || "\
-    "v0.0.156: Quiet mode also pauses the post-boot service check from asl_dvs_watchdog "\
-    "v2.7+ (asl_dvs_bootcheck.timer while it is waiting, asl_dvs_bootcheck.service while it runs), so a "\
-    "package job started in the first minutes after boot can't have Asterisk or the bridges restarted "\
-    "under it. The check is restarted afterwards without waiting for it to finish. || "\
-    "v0.0.155: SVXLink USRP fork audit. USRP fork is now the default Script option on the "\
-    "SVXLink tab. Fixed: every USRP step was refused as 'Unknown distro: usrp'; the build put the config in "\
-    "/usr/local/etc/svxlink/svxlink (SYSCONF_INSTALL_DIR is now /usr/local/etc -- the build adds /svxlink); "\
-    "new manual card switches UsrpLogic on (LOGICS + [LinkToUsrp]) and points DV_USER_INFOFILE at the "\
-    "/usr/local copy; make -j limited by free memory (Pi Zero 2W); clone --depth 1; preflight reports a "\
-    "missing package correctly; svxlink user gets /var/lib/svxlink; optional purge removes everything in the "\
-    "build's install_manifest.txt. Multi-line manual cards on this tab are now editable text boxes. || "\
-    "v0.0.154: Package installs no longer cut off by time limits. Pi Install's firewalld and "\
-    "WireGuard/systemd-resolved prerequisites (was a 300 s cap) and System Optimization's dphys-swapfile / "\
-    "man-db remove + reinstall (was 120 s, inside the web request) now run apt as their own systemd unit with "\
-    "no time limit, noninteractive with confold, behind the package-health gate; the System Optimization ones "\
-    "are background jobs the page polls. Update tab package changes without Quiet mode now also run as their "\
-    "own unit, so a 44helper restart no longer stops them. Install scripts (`| bash`, install*.sh, "\
-    "`bash ./script`) are never cut off, since they can run apt inside. Router LuCI install: 15 min instead of "\
-    "90 s, SSH keepalives, and opkg ignores a dropped session. || "\
-    "v0.0.153: Terminal on/off from the page, Stage 3 of 3 -- verification + changelog for "\
-    "v0.0.151-152, no code changes. py_compile; node --check on the ASSEMBLED _JS global. Live server: Enable "\
-    "refused without login (401), without the CSRF header (403), through Cloudflare (403) and with a wrong "\
-    "password; 5 wrong passwords lock it (429); a good one writes the file owned by root at 0644 with who/"\
-    "where/when; 44helper not running as root -> plain refusal. Disable works with no password and even "\
-    "through a tunnel, is harmless when already off, and an open terminal gets 'switched_off' and leaves no "\
-    "process behind. jsdom page + strict `ws` client against the live server: off -> Enable on all three "\
-    "terminal cards and nothing on other cards; wrong password shown; after Enable all three flip to Open + "\
-    "Disable at once; a terminal opened and then Disable pressed -> the confirm mentions the open terminal, "\
-    "the window says 'closed because the terminal was switched off', all cards flip back to Enable. "\
-    "Earlier terminal and WebSocket checks (v0.0.150) re-run clean. || "\
-    "v0.0.152: Terminal on/off from the page, Stage 2 of 3 -- the buttons, on every terminal "\
-    "card (asl-menu, M17 installer, amp-server first run). Off: 'Terminal: off' plus an Enable terminal "\
-    "button, which opens the same root-password box the terminal uses; on success every terminal card "\
-    "updates at once. On: Open in terminal plus Disable terminal side by side; Disable asks 'Are you sure?' "\
-    "(and says an open terminal will be stopped) but no password. Not on the LAN, or 44helper not running as "\
-    "root: the grey line with the reason only, no Enable button. An open terminal that gets switched off "\
-    "shows 'closed because the terminal was switched off'. || "\
-    "v0.0.151: Terminal on/off from the page, Stage 1 of 3 -- node side. Replaces v0.0.147's "\
-    "'switched on only from a shell on the node' rule (decided with the user: opening a terminal already asks "\
-    "for the root password every time, and anyone on the LAN with that password could SSH in anyway); the "\
-    "shell method (sudo touch / sudo rm /etc/44helper/terminal.enable) still works. New POST /api/term/enable: "\
-    "login + CSRF header like every POST, LAN only (same refusal of Cloudflare/proxy headers and non-local "\
-    "addresses as the terminal itself), root password with the shared 5-try lockout; writes the enable file "\
-    "atomically, owned by root, mode 0644, containing who switched it on, from where and when. Refused with "\
-    "a plain message if 44helper is not running as root. New POST /api/term/disable: login + CSRF, no "\
-    "password, works from any address (it only removes access); deletes the file. An open terminal now "\
-    "checks the switch every second and ends at once (command stopped, 'switched off' shown) when it goes "\
-    "off. Both actions go to the Actions Log with the address. /api/term/status adds can_enable. || "\
-    "v0.0.150: In-browser terminal (Part 2), Stage 4 of 4 -- verification + changelog for "\
-    "v0.0.147-149, no code changes. py_compile; node --check on the ASSEMBLED _JS global. WebSocket: RFC 6455 "\
-    "example accept key; reader tested fed 7 bytes at a time (text, 25 KB binary, ping, fragmented message) "\
-    "and refusing unmasked (1002), stray continuation (1002), over 64 KB (1009) and oversized ping (1002). "\
-    "Gate: off by default with the switch-on hint; world-writable enable file refused; Cloudflare header, "\
-    "44Net and public addresses refused, LAN / loopback / IPv4-mapped LAN allowed; tickets single-use, "\
-    "login-bound and expiring; /api/term/open refuses no-CSRF, off-list ids, wrong password, tunnel "\
-    "traffic, and locks out after 5 bad passwords. Live server, raw socket: wrong Origin 403; real upgrade "\
-    "'HTTP/1.1 101' with the correct accept key; an interactive prompt answered through a real pty, resize "\
-    "seen by `stty size`, `tty` = /dev/pts, exit code returned; reused ticket 403; a second terminal 409; "\
-    "closing from the page, 10-idle-minutes (shortened for the test) and logout each end the session AND "\
-    "leave no process behind; Actions Log shows opened/closed with reason and never keystrokes. jsdom page "\
-    "+ the strict `ws` client library against the live server: the button appears only on the allow-listed "\
-    "card, once; wrong password message; typed input reaches the command and output comes back; resize "\
-    "applied; 'finished (exit code 7)' shown; switched off -> grey hint instead of a button. /static assets: "\
-    "401 without login, 200 with the checksum matching, unknown names 404. CSP carries connect-src for this "\
-    "host and drops it for a malformed Host. BENCH-ONLY: real xterm.js drawing in a phone/desktop browser "\
-    "(jsdom has no canvas), asl-menu / the M17 installer / amp-server in the terminal on 652702/652703, and "\
-    "that Cloudflare really adds Cf-Connecting-IP on this node's tunnel. Switch on with: sudo touch "\
-    "/etc/44helper/terminal.enable (switch off: sudo rm it). || "\
-    "v0.0.149: In-browser terminal (Part 2), Stage 3 of 4 -- the page. Each allow-listed by-hand "\
-    "step card (ASL3 asl-menu, M17 installer, Ampersand amp-server first run) gets an OPTIONAL 'Open in "\
-    "terminal' button next to its Copy button; the card and its copy/SSH instructions are unchanged, so the "\
-    "step still works by hand. When the terminal is switched off or the page is not on the LAN, the card "\
-    "shows one small grey line saying why (and the command to switch it on) instead of a button. Buttons are "\
-    "added by one shared watcher on the page (no changes to the six tabs' cloned card renderers). Clicking "\
-    "asks for the root password, then opens a full-screen terminal window (xterm.js 6.0.0 + addon-fit 0.11.0, "\
-    "MIT licence, embedded gzip+base64 -- about 165 KB of this file -- and served only after login from "\
-    "/static/*, loaded the first time a terminal opens, so normal page loads are not slowed). The window "\
-    "shows the command, fits itself to the screen (and tells the node the new size), and says why it ended "\
-    "(finished + exit code, 10 idle minutes, logged out, closed). Close button ends the command on the node. "\
-    "|| "\
-    "v0.0.148: In-browser terminal (Part 2), Stage 2 of 4 -- the terminal session on the node. New "\
-    "WebSocket route /api/term/ws?ticket=... (session cookie required like every GET; the gate from v0.0.147 "\
-    "is checked AGAIN here, plus the page's Origin must match its Host -- the WebSocket stand-in for the CSRF "\
-    "header a browser cannot send). The single-use ticket picks the allow-listed command; the command runs in "\
-    "a real terminal (os.openpty + setsid -c, so full-screen menus like asl-menu work and Ctrl-C reaches "\
-    "them) via bash -c with the card's exact text. One session at a time (claimed atomically; a second gets "\
-    "'already open'). Closes and kills the whole process group (SIGHUP, then SIGKILL after 3 s) on: the "\
-    "command ending (exit code shown), 10 idle minutes with no keystrokes, the login ending (Logout / Log out "\
-    "all devices), the page closing it, or the connection dropping. Window-size messages resize the "\
-    "terminal. Actions Log gets 'terminal opened' / 'terminal closed' with command, address, duration and "\
-    "reason -- never what was typed. CSP now names this page's own ws:// and wss:// address in connect-src "\
-    "(older Safari does not count WebSocket as 'self'). || "\
-    "v0.0.147: In-browser terminal (Part 2), Stage 1 of 4 -- WebSocket basics and the safety "\
-    "gate, no terminal yet. Stdlib-only WebSocket (RFC 6455) pieces: handshake accept-key, frame builder, and "\
-    "an incremental reader that insists on masked client frames, handles fragmented messages and "\
-    "ping/pong/close, and refuses anything over 64 KB (close 1009) or malformed (close 1002). Safety gate, "\
-    "all server-side: (1) OFF unless the file /etc/44helper/terminal.enable exists, owned by root and not "\
-    "writable by others -- created with a shell command on the node; nothing on the web page can create it; "\
-    "(2) LAN only -- refused for any request carrying proxy/tunnel headers (Cloudflare's Cf-Connecting-IP / "\
-    "Cf-Ray, X-Forwarded-For, Forwarded, X-Real-IP, Via; tunnel traffic otherwise looks like it comes from the "\
-    "Pi itself) and for any address that is not loopback, private or link-local (44Net is public, so a "\
-    "tunnel peer is refused); (3) allow-list only -- three commands, each taken from its own step card so "\
-    "the button runs exactly what the card shows: asl-menu (ASL3), the USRP2M17 installer (M17), amp-server "\
-    "first run (Ampersand); (4) root password re-entered to open, using the login lockout counter; success "\
-    "gives a single-use ticket valid 60 s and tied to this login. New routes: GET /api/term/status, POST "\
-    "/api/term/open (session + CSRF gated like every POST). || "\
-    "v0.0.146: Live updates (SSE), Stage 4 of 4 -- verification + changelog for v0.0.143-145, no "\
-    "code changes. py_compile; node --check on the ASSEMBLED _JS global. Against a REAL in-process server: "\
-    "no login -> 401; with login -> 200 text/event-stream carrying the usual security headers; a real shell "\
-    "job's output arrives line by line (~0.15 s after each echo), the finished job is resent in full, and the "\
-    "output rebuilt from the events matches the server byte for byte; 4 streams accepted, the 5th gets 503; "\
-    "revoking the login sends 'bye' and closes it; Overview/quiet pushed once on connect, NOT re-sent while "\
-    "unchanged, pushed again after a change, and the watcher stops when the last stream closes. Output past "\
-    "the 64 KB cap (300 random-length appends) rebuilds identically on the page side. Node run of the page "\
-    "code against the live server (real stream, no mocks on the server): pollers served from the copy with "\
-    "zero requests, a finished job read from the node after a POST, unknown jobs read from the node, logout "\
-    "-> stream closed and polling back at 500 ms. jsdom: the real Repair-then-purge poller shows the running "\
-    "badge (elapsed from the server clock) and resolves on the pushed result with no network calls; pushed "\
-    "Overview renders at once; after a POST the node is asked and its answer kept. BENCH-ONLY: the stream "\
-    "through the Cloudflare tunnel (proxies can hold streamed data back), and several browsers on a Pi Zero "\
-    "2W. || "\
-    "v0.0.145: Live updates (SSE), Stage 3 of 4 -- Overview and quiet mode. A watcher thread runs "\
-    "ONLY while at least one live stream is open: it re-checks Overview every 5 s and quiet mode every 10 s "\
-    "(the same rates the page used to ask at) and pushes 'overview' / 'quiet' events only when something "\
-    "actually changed (Overview's checked_at time is left out of the comparison). The page renders a push "\
-    "straight away and answers its own 5 s / 10 s timers from the last push with no request; the Re-check "\
-    "button (?force=1) and anything right after one of the page's own POSTs still go to the node (that answer then "\
-    "becomes the page's new copy). Watcher "\
-    "stops itself when the last stream closes (start/stop decided under one lock, so a stream opening as the "\
-    "last one closes can't be left without it). The still-running badge already ticks from stream data since "\
-    "v0.0.144 (pollers read elapsed time from the live copy every 200 ms). Deliberately NOT moved to the stream: "\
-    "the masked-service check -- it is a POST that clears masks (an action), so it stays tied to an open tab "\
-    "on its 60 s timer rather than running in the background. || "\
-    "v0.0.144: Live updates (SSE), Stage 2 of 4 -- step output uses the stream. New _JS_EVENTS "\
-    "(loaded right after _JS_AUTH): one EventSource per page on /api/events, started from _startApp; keeps a "\
-    "per-job copy (reset / append, trimmed with the same 64 KB rule and marker as the server) plus the "\
-    "server-clock offset for elapsed time. Routed, not rewritten: the 11 existing step pollers (Full/Split "\
-    "Tunnel, Router Install, ASL3, DVSwitch, SVXLink, M17, Ampersand, Cloudflare, Update, Repair-then-purge) "\
-    "keep their code; a fetch layer answers GET /api/action_status from the live copy with no network "\
-    "request, and jobPollMs() makes them tick every 200 ms while the stream is live (500/1000 ms as before "\
-    "when it is not) -- same result, lower risk than replacing 11 cloned loops. Safety rules: a job the "\
-    "stream hasn't sent, or a FINISHED job whose last update arrived before the page's most recent POST "\
-    "(so a re-run can never be read as the previous run's result), goes to the network exactly as before. "\
-    "Fallback: 401/503/'bye' close the stream and the page polls; it re-tries every 15 s and restarts on "\
-    "login. Nothing on screen changes except speed. || "\
-    "v0.0.143: Live updates (SSE), Stage 1 of 4 -- server side only, nothing in the page uses it "\
-    "yet. New GET /api/events keeps one connection open per page and pushes step-job changes: on connect a full "\
-    "snapshot of every tracked job, then only what changed -- new output as an append (tracked by a new per-job "\
-    "out_seq character counter bumped in _job_append_output, so the 64 KB output cap's head-trimming can't "\
-    "desync it), a full resend when a job starts over or finishes (its final output is authoritative), status/"\
-    "result changes, and 'gone' for pruned jobs. Wake-up: _job_append_output and job finish notify a shared "\
-    "condition so output goes out within ~0.15s (bursts coalesced), with a 1s tick as a safety net for any "\
-    "other state change. Keep-alive comment every 15s; retry hint 5s. Login re-checked every loop -- Logout / "\
-    "Log out all devices sends a 'bye' event and closes the stream. At most 4 streams at once; a 5th gets "\
-    "503 and the page keeps polling. Same session-cookie auth as every GET (behind _require_auth); no CSRF "\
-    "header needed because it only reads. Existing polling is unchanged. || "\
-    "v0.0.142: SVXLink USRP audit fixes, Stage 4 of 4 -- verification + changelog for v0.0.139-141, "\
-    "no code changes. py_compile; node --check on the ASSEMBLED _JS global; every new/changed shell command "\
-    "checked with dash -n (the job engine runs shell=True, i.e. /bin/sh); the build step's switch check run "\
-    "against a scratch tree both ways (switch present -> continues, absent -> stops with exit 1); the "\
-    "'USRP part built' check run both ways (no files -> NOT FOUND exit 1, file present -> FOUND + settings "\
-    "path); the purge's package step run both ways (unknown package -> skipped, installed package -> purge); "\
-    "install list numbered 1-11 with unique ids; purge list identical under all three options with every "\
-    "automatic step before every optional one; every step id resolves via _svx_lookup_step. BENCH-ONLY on "\
-    "652702/652703: an actual fork build (that the fork's switch builds UsrpLogic, where its files land, and "\
-    "whether the fork installs its own svxlink.service copy), the svxlink user starting the hand-made unit. || "\
-    "v0.0.141: SVXLink USRP audit fixes, Stage 3 of 4 -- one purge for the SVXLink tab (standing "\
-    "rule, applied now that this tab is being worked on). New _svxlink_purge_steps_all() replaces the separate "\
-    "package and USRP-build purge lists; all three dropdown options (Bookworm, Trixie, USRP fork) show the "\
-    "same list: stop & disable both svxlink and svxlink-usrp, purge svxlink-server only if dpkg knows it "\
-    "(installed or settings-left -- skipped cleanly otherwise, so a USRP-only node no longer needs the apt "\
-    "path), autoremove, then the v0.0.122 clean-up steps, then optional steps not run automatically: apt config "\
-    "(/etc/svxlink, /var/spool/svxlink), USRP build files under /usr/local, the hand-made svxlink-usrp unit, "\
-    "the source folder, and Cockpit. Tab warning updated. || "\
-    "v0.0.140: SVXLink USRP audit fixes, Stage 2 of 4 -- after-build steps. New step 5 'Check the "\
-    "USRP part was built' (read-only; fails loudly if no USRP files landed under /usr/local, shows where "\
-    "UsrpLogic.conf is -- /usr/local/etc/svxlink/svxlink.d/UsrpLogic.conf for this build, not the /etc path the "\
-    "audits quote -- and explains that SvxLink's send port must be Analog_Bridge's listen port and the "\
-    "reverse, all on 127.0.0.1). New step 6 'Create the svxlink user' as a Run button (idempotent; also "\
-    "pre-creates /var/log/svxlink and /var/spool/svxlink owned by that user, since the service runs as svxlink "\
-    "and could not write them otherwise) -- replaces the old type-it-yourself useradd note on the unit card. "\
-    "Clone step note now names f5vmr/svxlink_usrp as an alternative to run by hand (Bookworm-only, asks "\
-    "questions, so not runnable from here). Audit 3's sample UsrpLogic.conf values not copied (unverified). "\
-    "Install list is now 11 steps. || "\
-    "v0.0.139: SVXLink USRP audit fixes, Stage 1 of 4 -- build step. (1) The build now runs from the "\
-    "fork's src/ folder (SvxLink's CMakeLists.txt lives there, not at the top of the download -- the old step "\
-    "would have failed at cmake). (2) Adds -DWITH_CONTRIB_USRP_LOGIC=ON, the switch that actually builds the "\
-    "USRP part (without it you get plain SvxLink). (3) Before cmake, the step checks the fork's own CMake files "\
-    "for that switch name and stops with a clear message if it is missing -- cmake would otherwise just warn "\
-    "and build without USRP. (4) -DCMAKE_BUILD_TYPE=Release. (5) libssl-dev added to build dependencies. Kept "\
-    "on purpose: /usr/local install prefix (audits used /usr and /etc, which would overwrite the apt "\
-    "package's files). || "\
-    "v0.0.138: Overview tab now shows what is installed -- ASL3, DVSwitch, USRP2M17, SVXLink and "\
-    "Ampersand. New read-only _detect_installed_products() (one dpkg-query for all packages, one systemctl show "\
-    "for all units, plus key-file checks; cached 20s so the 5s Overview poll stays light) reports each one as "\
-    "Installed / Needs repair (half-installed package, or DVSwitch bundle with empty working parts) / Leftovers "\
-    "(removed but config, unit files or folders left) / Not installed, with version, running services and masked "\
-    "units. Shown in a new full-width 'Installed software' card with an Open-tab button per row. No mutations. || "\
-    "v0.0.137: Audit fixes, Stage 5 of 5 -- verification + changelog for v0.0.133-136, no code "\
-    "changes. py_compile; node --check on the ASSEMBLED _JS global; recovery 2 run against a REAL dpkg "\
-    "(scratch --root/--admindir with dependency pairs split the way the old batches split them): the "\
-    "v0.0.132 command fails with 'dependency problems', the v0.0.133 command finishes and the audit is "\
-    "clean; keep-masked (re-mask, recorded 0600, never auto-unmasked, never blocks, allowlist + confirm, "\
-    "unkeep hands back to the automatic clear) plus a jsdom pass on its buttons; port move refuses 0, "\
-    "70000, 8989, 9997, a listening port and non-digits without touching lighttpd.conf, accepts 8081; "\
-    "system jobs carry LogRateLimitIntervalSec=0; Custom package commands hit the masked gate, other "\
-    "Custom commands do not; step 1 plain states for unpacked / not-installed / config-files; login "\
-    "wording; plus every earlier suite re-run (the old 5-at-a-time batch and 'Session expired' assertions "\
-    "retired by design). Separate follow-up, not in this file: instmon's quiesce lock probe uses flock and "\
-    "cannot see apt's POSIX locks (audit item 2) -- needs its own instmon version. || "\
-    "v0.0.136: Audit fixes, Stage 4 of 5 -- wording and tidy-up. (item 6) DVSwitch step 1 shows "\
-    "plain states: 'HALF-INSTALLED -- run Package recovery 2' for unpacked/half-configured/half-installed/"\
-    "trigger states, 'NOT installed' for not-installed, 'removed, settings left behind' for config-files. "\
-    "(item 7) Login screen says 'Logged out' with the real causes instead of 'Session expired' (sessions "\
-    "have not expired since v0.0.129); _helper_busy() (dead since v0.0.129) removed and _check_session's "\
-    "docstring corrected. Changelog corrections, history left as written: (item 8) v0.0.108's '/tmp is "\
-    "mounted noexec' describes that node's image, not a Debian 13 default (systemd's tmp.mount uses "\
-    "nosuid,nodev); (item 9) 'packages mask their units on remove, unmask on purge' holds for packages "\
-    "using the standard Debian systemd helper -- DVSwitch's own scripts may differ, and where "\
-    "analog-reflector's mask on 652700 came from is unconfirmed. || "\
-    "v0.0.135: Audit fixes, Stage 3 of 5 -- (item 4) the 'move the DVSwitch dashboard' step now "\
-    "refuses before editing anything unless the port is 1-65535, not one of the node's own tool ports "\
-    "(_DV_RESERVED_PORTS: 22, 80, 443, 2222, 8080, 8989, 8990, 8991, 9090, 9997, 9999) and not already "\
-    "listening (ss -ltnH); (item 5) system jobs get -p LogRateLimitIntervalSec=0 so journald never drops "\
-    "a long job's output lines; (item 10) Custom-mode package commands on the install tabs now go through "\
-    "the masked-service gate too. || "\
-    "v0.0.134: Audit fixes, Stage 2 of 5 -- keep a mask on purpose (audit item 3). Automatic "\
-    "clearing would undo a deliberate mask on a listed service (apache2, lighttpd, mosquitto, monit, "\
-    "netcheck...) every time a tab opened. Each auto-cleared row on the guard card now also has 'Put the mask "\
-    "back (on purpose)': guard action keep_masked (confirm + root + tab allowlist) runs systemctl mask --now "\
-    "and records the unit in CONFIG_DIR/44helper_guard_keep.json (0600). Kept units are never auto-unmasked "\
-    "and never block a step; the card lists them under 'Left masked on purpose' with a warning that installs "\
-    "needing them will fail, and a 'Stop keeping it masked' button (action unkeep) that hands the unit back "\
-    "to the automatic clear. || "\
-    "v0.0.133: Audit fixes, Stage 1 of 5 -- package recovery 2 dependency order (audit item 1, "\
-    "HIGH). dpkg only resolves dependency order inside ONE --configure call; a package whose dependency is "\
-    "left for a later call fails (verified with a real dpkg run in a scratch admindir). The old 5-at-a-time "\
-    "alphabetical batches and one-at-a-time kernel pass split real pairs (libpython3.13 vs -stdlib, "\
-    "linux-headers-* vs linux-kbuild-*). Now: all ordinary half-installed packages in one low-priority call, "\
-    "then all kernel/firmware/initramfs ones in a second call, then --configure --pending and the audit. "\
-    "'Repair, then purge' uses the same command, so it gets the fix too. || "\
-    "v0.0.132: Stage 4 of 4 -- verification + changelog for v0.0.129-131, no code changes. "\
-    "py_compile; node --check on the ASSEMBLED _JS global; live ThreadingHTTPServer session tests (1-year "\
-    "cookie at login and on refresh, a session idle 10 days with nothing running still valid, "\
-    "/api/logout_all needs a session, ends every session, clears the store and sends exactly one clearing "\
-    "cookie, a helper restart keeps logins, a reboot (store gone) ends them, Logout unchanged); system-job "\
-    "engine against fake systemd-run/systemctl/journalctl (install-tab package step runs as "\
-    "44helper-job-<key> at normal priority with no quiet mode, a second Run attaches instead of "\
-    "duplicating, non-package steps keep the in-process runner, a unit started before a simulated restart "\
-    "is re-adopted with its earlier output replayed and its real result recorded, unknown keys stay "\
-    "unknown, Update quiet jobs still pause/restore at low priority); jsdom for the help box (pkg_health -> "\
-    "recovery 2/3/1, generic failure -> apt-running check, masked -> guard card, a single box per step, "\
-    "removed on success, buttons switch to the Update tab and highlight the card, 'Back to DVSwitch step 6' "\
-    "returns and highlights the step); plus the v0.0.101-128 suites re-run (the v0.0.112 idle-expiry "\
-    "assertion retired by design). BENCH-ONLY: re-adoption across a real systemctl restart of 44helper "\
-    "mid-install, and the year-long cookie in a real browser. || "\
-    "v0.0.131: Stage 3 of 4 -- 'What to do next' after a failed install step. New _JS_JOBHELP; "\
-    "the six install tabs' FinishStep functions open a help box under a failed INSTALL step's output (and "\
-    "remove it on success). The steps match the failure: refused for broken packages (gate pkg_health, or "\
-    "dpkg 'interrupted'/'unpacked'/'in a mess' text) -> recovery 2, 3, 1, then re-run; masked -> jump to "\
-    "the tab's red guard card; install failed -> is apt still running?, recovery 2, recovery 1, re-run; "\
-    "helper lost track (logout/restart, no result) -> same plus 'run step 1 to see how far it got'; "\
-    "DVSwitch web-server clash text -> pointer to the clash steps. Each repair line has a button that "\
-    "switches to the Update tab, loads it if needed, scrolls to the matching card and highlights it; a "\
-    "'Back to <tab> step N (title)' button (dismissable) then sits at the top of the Update tab and returns "\
-    "to the failed step, highlighted. Nothing runs from these buttons -- the cards' own Run + confirm do. || "\
-    "v0.0.130: Stage 2 of 4 -- package steps can no longer be cut off. The v0.0.106 quiet "\
-    "package-job runner is generalised into _unit_job_worker(quiet, low_priority): every package-changing "\
-    "step on the six install tabs (install, purge and Custom) now runs as its own transient systemd unit "\
-    "via _start_unit_job, not as a child of 44helper; Update-tab quiet jobs use the same engine. Unit "\
-    "names are derived from the job key (44helper-job-<key>): a second Run while it runs attaches instead "\
-    "of duplicating; after a 44helper restart _job_status() finds the unit (one cached systemctl "\
-    "list-units call) and _adopt_unit_job() re-attaches, replaying its journal output, following it to "\
-    "the end and recording the real result -- so the page reconnects instead of showing 'unknown' or a "\
-    "stuck 'Running...'. A leftover finished unit with the same name is stopped/reset before a new start. "\
-    "Quiet mode + low priority stay opt-in (Update tick box); install-tab jobs run at normal priority. "\
-    "Non-package steps keep the old in-process runner. || "\
-    "v0.0.129: Stage 1 of 4 -- 44helper logins never time out (44helper only). _check_session "\
-    "accepts any known session with no expiry check (the stored time is last-use bookkeeping); _issue_session "\
-    "no longer prunes; _sessions_load restores every saved session. The cookie is now Max-Age 365 days "\
-    "(_SESSION_COOKIE_MAX_AGE) at login and on every refresh, so closing the browser doesn't log out. A "\
-    "session ends on Log out, the new 'Log out all devices' header link (POST /api/logout_all -- session + "\
-    "CSRF required, confirm in the UI, clears every session and the store, clears this browser's cookie), or "\
-    "a reboot (the store stays in /run -- logins deliberately do NOT survive a reboot). Password, lockout and "\
-    "CSRF unchanged. || "\
-    "v0.0.128: Stage 5 of 5 -- verification + changelog for v0.0.124-127, no code changes. "\
-    "py_compile; node --check on the ASSEMBLED _JS global; Fix-broken command order checked (configure -a "\
-    "first, ';' join, still package-changing and exempt from the health gate); recovery 11 run under /bin/sh "\
-    "against fakes -- audit-listed missing list/md5sums packages picked up (header continuation lines "\
-    "ignored -- a real bug caught by the test), cached copy used when present, apt-get download when not, "\
-    "a failed download reported with exit 1, reinstreq packages still handled; quiet restore failure shows "\
-    "status + last journal lines + the port-in-use hint while other services still restart; the combined "\
-    "repair command healthy -> exit 0, still broken -> exit 1 with 'purge will NOT be started'; repair "\
-    "dispatch needs confirm and stops on uncleared masks; jsdom through the real Purge toggle: a pkg_health "\
-    "refusal shows 'Repair, then purge', a clean repair re-runs the full purge (all 8 automatic steps "\
-    "incl. cleanup) to 'complete', a failed repair stops with nothing purged; plus the v0.0.101-123 suites "\
-    "re-run. BENCH-ONLY: the combined repair and apt-get download against a genuinely damaged package on a "\
-    "real node. || "\
-    "v0.0.127: Stage 4 of 5 -- 'Repair, then purge'. _pkg_health_gate refusals now carry "\
-    "gate:'pkg_health' (the masked gate carries gate:'masked'). When a tab's purge-all sequence stops on a "\
-    "pkg_health refusal, all six install tabs' purge summaries show a 'Repair, then purge' button "\
-    "(repairThenPurgeOffer). After a confirm it POSTs /api/repair/action {start, confirm:true} (session auth "\
-    "+ CSRF, root-gated): the masked autofix for the Update list runs first, then _repair_cmd() as a quiet-mode "\
-    "package job (own systemd unit, low priority, services restored after) -- dpkg --configure -a, recovery "\
-    "10's batched configure, recovery 11's reinstall-with-download, a second configure pass, and a final "\
-    "dpkg --audit that decides success, each part in its own subshell. The button's console shows the "\
-    "still-running badge + live output; on success the purge sequence is re-run automatically (decided with "\
-    "the user); if anything is still broken it stops and nothing is purged. || "\
-    "v0.0.126: Stage 3 of 5 -- quiet mode explains a service that will not come back. When "\
-    "a restore start fails, _qm_failure_details() adds the service's status lines (systemctl status -n 0, "\
-    "first 6) and its last 15 journal lines, indented under the FAILED line, plus one plain-language hint "\
-    "when the cause is obvious (address/port already in use -> probably a second copy of the same tool; "\
-    "missing file; permission denied). The lines flow into the Quiet mode card output and the package "\
-    "job output, which both already print _qm_off's text. (asl_dvs_dashboard on 652700 was the trigger.) || "\
-    "v0.0.125: Stage 2 of 5 -- recovery step 11 fetches missing files itself. It now also "\
-    "picks up packages dpkg --audit lists as missing their list/md5sums control file (qemu-user on "\
-    "652700), not only reinstreq ones; when apt's cache has no .deb it runs apt-get download into "\
-    "/tmp/44helper-debs (download-only, so it works while dpkg is broken) and re-installs from that; "\
-    "a failed download is reported plainly and the step fails. || "\
-    "v0.0.124: Stage 1 of 5 -- Update step 2 'Fix missing/broken packages' now runs "\
-    "dpkg --configure -a before apt install -f. On 652700 the step failed at once with 'dpkg was "\
-    "interrupted, you must manually run sudo dpkg --configure -a' -- apt refuses everything until an "\
-    "interrupted install is finished. Joined with ';' so apt -f still runs if one package will not "\
-    "configure; harmless when nothing is pending. The step gains a warning note explaining the order. || "\
-    "v0.0.123: Masked-service guard rail, Stage 6 of 6 -- verification + changelog for v0.0.118-122, "\
-    "no code changes. py_compile; node --check on the ASSEMBLED _JS global; engine tests against a fake "\
-    "systemctl (tab-only detection, Debian's intentional masks never listed or touched, automatic unmask + "\
-    "disable, --runtime masks, non-root refusal, install refused while a mask cannot be cleared, purge never "\
-    "blocked, Update gate only on package-changing steps, autofix-then-run); live ThreadingHTTPServer "\
-    "(401/403, check, turn_on confirm + tab allowlist + cross-tab refusal, removal from the cleared list); "\
-    "recovery hint under /bin/sh; purge-cleanup placement on all 12 purge lists (after the automatic steps, "\
-    "before optional ones, renumbered, ids unique) and its four commands executed against fakes (rc purge "\
-    "by tab pattern only, unmask tab services only incl. runtime, broken-link removal by tab name only + "\
-    "daemon-reload, read-only report); jsdom: guard card blocked/cleared/all-clear states, install buttons "\
-    "locked and kept locked across re-renders, unlocked after clearing, Turn on posts with confirm, Update "\
-    "tab locks only package-changing steps, Services MASKED tag, DVSwitch purge auto-run including the "\
-    "cleanup steps; plus the v0.0.101-117 suites re-run. BENCH-ONLY: the automatic clear and the "\
-    "remove-masks-then-purge-unmasks behaviour against real Debian packages on 652700/652702/652703. || "\
-    "v0.0.122: Masked-service guard rail, Stage 5 of 6 -- purge cleanup. _add_purge_cleanup() "\
-    "adds four steps to every purge list on the ASL3, DVSwitch, SVXLink (all 3 options), M17, Ampersand "\
-    "and Cloudflare tabs, after the tab's own automatic steps and before its optional ones (renumbered): "\
-    "purge this tab's removed-but-not-purged (rc) packages by name pattern; unmask this tab's own "\
-    "services only (_GUARD_TAB_UNITS -- never Debian's intentional masks); remove broken links in "\
-    "/etc/systemd/system named after this tab's services (+ daemon-reload when any went); and a "\
-    "read-only 'still left behind' report (packages in any state, masks, service files, known folders). "\
-    "DVSwitch purge list now also names analog-reflector and ircddbgateway; mosquitto left to autoremove "\
-    "so it only goes when nothing else needs it. || "\
-    "v0.0.121: Masked-service guard rail, Stage 4 of 6 -- Update tab + recovery messages. The "\
-    "Update tab's check already covers the union of every install tab's services and runs automatically "\
-    "before every package-changing Update step, recovery steps 10/11 included (Stages 1 + 3), so a mask "\
-    "like analog_reflector's is cleared before dpkg --configure ever reaches it. Recovery step 10 now "\
-    "prints a plain hint whenever a batch or a kernel/firmware package fails -- what 'is masked' means, "\
-    "the exact unmask command, and that masks on the helper's own tab services are cleared automatically "\
-    "-- and the package health gate's refusal says the same. || "\
-    "v0.0.120: Masked-service guard rail, Stage 3 of 6 -- the card. New _JS_GUARD: a guard card "\
-    "is inserted at the top of the ASL3, DVSwitch, SVXLink, M17, Ampersand, Cloudflare and Update tabs; "\
-    "clickTab() triggers an automatic check (POST /api/guard/action check) and a 60s timer re-checks "\
-    "whichever of those tabs is showing. States: all clear (muted one-liner with the time); cleared "\
-    "automatically (amber, lists each unmasked-and-left-off service with a confirm-gated 'Turn on' "\
-    "button); blocked (red, the services that could not be cleared, the unmask command, 'Check again'). "\
-    "While blocked, guardApply() disables that tab's install Run buttons (id prefix <tab>-btn-install_; "\
-    "on Update only the steps _mark_pkg_change() flags as package-changing) and a MutationObserver "\
-    "re-applies it whenever the step list re-renders; purge buttons are never touched. Services tab: "\
-    "build_services_status adds a masked flag from the same single systemctl call and the row shows a "\
-    "red MASKED tag. || "\
-    "v0.0.119: Masked-service guard rail, Stage 2 of 6 -- routes. POST /api/guard/action behind "\
-    "the existing session auth + X-Requested-With CSRF check: {tab, action:'check'} runs the automatic "\
-    "clear and returns still_masked / fixed / blocked / lines for the tab card; {tab, action:'turn_on', "\
-    "unit, confirm:true} enables --now a previously-cleared service -- root-gated, confirm-gated, only "\
-    "units on that tab's own list, refused while the unit is still masked, and it drops the unit from the "\
-    "card's 'cleared, left off' list once on. Unknown tab/action refused. || "\
-    "v0.0.118: Masked-service guard rail, Stage 1 of 6 -- check, automatic clear, and the block "\
-    "on the node. _GUARD_TAB_UNITS lists each install tab's OWN services (ASL3, DVSwitch incl. "\
-    "analog_reflector/ircddbgateway(d)/mosquitto/monit/lighttpd/netcheck, SVXLink, M17, Ampersand, "\
-    "Cloudflare) plus 'update' = their union; Debian's intentional masks (sudo, hwclock, cryptdisks, "\
-    "x11-common, alsa-utils) are never on any list. _guard_masked_all() is one systemctl list-unit-files "\
-    "--state=masked,masked-runtime call. _guard_autofix(tab), as decided with the user, clears masks "\
-    "AUTOMATICALLY as 'unmask & keep off' (unmask [--runtime for runtime masks], then disable, "\
-    "daemon-reload), logs each one, re-checks, and records the result in _GUARD_LAST for the tab card. "\
-    "_masked_gate() runs it before every install-mode step on the six install tabs and before every "\
-    "package-changing Update step; if anything on the list is still masked the step is refused (gated) "\
-    "with the unmask command. Purge steps are never blocked. Why masks survive purges (found on 652700): "\
-    "Debian packages mask their own units on remove and unmask only on purge. || "\
-    "v0.0.117: Stage 7 of 7 -- verification + changelog for v0.0.111-116, no code changes. "\
-    "py_compile; node --check on the ASSEMBLED _JS global; Python: build-command detection and elapsed_sec; "\
-    "live ThreadingHTTPServer session tests (cookie Max-Age refreshed on authenticated responses, not on "\
-    "public or logout responses; expired session kept alive by a running job and by quiet mode, expires "\
-    "when idle; hashed 0600 store in a 0700 dir; restore after a simulated restart; logout clears it); "\
-    "DVSwitch commands and the new web-clash / recovery commands executed under /bin/sh (dash, as the job "\
-    "engine runs them) against fakes -- CLASH detection, no-op without a clash, lighttpd disable, port move "\
-    "with backup + validation + digits-only port, batch order light -> kernel/firmware one at a time -> "\
-    "pending, stop on failure, reinstall from cache or name the apt command; health gate refusing on "\
-    "dpkg --audit output on both the Update tab and an install tab, exempting recovery/fix steps and "\
-    "read-only apt; jsdom: badge format, 6 simulated minutes offline never failing with back-off, OK once "\
-    "the node reports done, login-screen wording while a job runs, Cockpit popup cancel/confirm on ASL3/"\
-    "DVSwitch/SVXLink/M17, DVSwitch tab card counts and the identical purge for both options, quiet "\
-    "checkboxes now on 6 Update steps; plus the v0.0.101-110 suites re-run. BENCH-ONLY on a real node: "\
-    "the session file surviving an actual systemd restart of 44helper, lighttpd moving ports on a real "\
-    "ASL3+DVSwitch node, and the recovery steps against a genuinely interrupted upgrade. || "\
-    "v0.0.116: Stage 6 of 7 -- package safety net. Health gate: _pkg_health_gate() runs a "\
-    "read-only dpkg --audit (60s cap) before any package-changing command on every install tab "\
-    "(_dispatch_tab_action) and on the Update tab; if dpkg lists unfinished/broken packages the step is "\
-    "NOT run and the reply says not to reboot and to use Package recovery 9-11 first. Exempt: Update's "\
-    "fix-broken, reconfigure, apt-running check and the recovery steps; if the audit itself cannot "\
-    "answer, the step is allowed. Recovery steps appended to the Update tab: 9 check (running package "\
-    "jobs + dpkg --audit, read-only, do-not-reboot warning), 10 finish half-installed packages (status "\
-    "U/F/W/t from dpkg-query) 5 at a time at nice 19 / ionice best-effort 7, kernel/firmware/initramfs "\
-    "last one at a time, then --configure --pending, stop on first failure, re-audit), 11 re-install "\
-    "packages flagged reinstreq from the .deb already in /var/cache/apt/archives (names the apt command "\
-    "when no copy exists). 10 and 11 are quiet-mode eligible, ticked by default. || "\
-    "v0.0.115: Stage 5 of 7 -- DVSwitch + ASL3 web-server clash. ASL3's Allmon3 runs on apache2 "\
-    "and the DVSwitch dashboard on lighttpd; both default to port 80, so the second to start fails and "\
-    "restart-loops (seen on 652700). Trixie step 1 now also reports who holds port 80 (ss -ltnpH), "\
-    "lighttpd's state and NRestarts count, and prints CLASH when apache2 is active and lighttpd is "\
-    "installed. Two optional steps appended to BOTH install options (Bookworm 9-10, Trixie 11-12), each with "\
-    "its own confirm_text popup and a guard that exits 0 doing nothing when there is no clash: turn "\
-    "lighttpd off (DVSwitch keeps working, only its web page goes), or move lighttpd to a chosen port "\
-    "(default 8081, digits only) -- backs up lighttpd.conf once to .44helper-bak, rewrites or appends "\
-    "server.port, validates with lighttpd -tt before restarting. || "\
-    "v0.0.114: Stage 4 of 7 -- DVSwitch tab: one purge for both install options. New "\
-    "_dvswitch_purge_steps_all() replaces the separate Bookworm/Trixie purge lists; both dropdown keys "\
-    "now return the same 7 steps (ids dv_purge_* + purge_cockpit): stop & disable whichever DVSwitch services exist, purge "\
-    "all DVSwitch packages (bundle, dvswitch, -base, -dashboard, -menu, -monit, analog-bridge, "\
-    "mmdvm-bridge, md380-emu), autoremove, remove the dvswitch.org source, then three optional steps not "\
-    "run automatically -- /opt config + logs, old third-party script leftovers (now also /tmp/bookworm), "\
-    "and Cockpit (with its v0.0.113 popup). The first step's note and _DVSWITCH_WARNING say the purge "\
-    "covers both options. Other tabs unchanged (same rule applied to each when it is next worked on). || "\
-    "v0.0.113: Stage 3 of 7 -- confirmation popup on every '(Optional) Stop & purge Cockpit'. "\
-    "_cockpit_purge_step() (the one shared builder behind the ASL3, DVSwitch, SVXLink and M17 purge "\
-    "lists) now carries confirm_text: remove Cockpit for the WHOLE node?, anything else using it loses it, "\
-    "a Cockpit web-terminal session in use right now will cut off partway. The six install-tab run "\
-    "functions (asl3/dv/svx/m17/amp/cfRunStep) show a step's confirm_text as its own popup before the usual "\
-    "'Run this on the node?' confirm; Cancel on either stops it. Generic, so any future step can opt in "\
-    "with the same field. || "\
-    "v0.0.112: Stage 2 of 7 -- login does not expire while something is running. Causes "\
-    "found: (a) the session cookie was set once at login with Max-Age=2h and never refreshed, so the "\
-    "browser dropped it 2h after login even though the server slid the expiry on every request; (b) "\
-    "sessions lived only in memory, so any 44helper restart logged everyone out. Fixes: _require_auth "\
-    "marks the request and _send re-sends Set-Cookie with a fresh Max-Age on every authenticated <400 "\
-    "response (not when a Set-Cookie is already being sent, e.g. logout); _check_session honours a session "\
-    "past its expiry while _helper_busy() (any job running, or quiet mode on -- which covers a quiet "\
-    "package job in its own unit), after which the normal 2h sliding timer applies; sessions are keyed by "\
-    "SHA-256 of the token and mirrored to /run/44helper/sessions.json (dir 0700, file 0600, tmpfs so gone "\
-    "at reboot, 44helper's own file -- still no SSO with dashboard/sysmon), written on login/logout/expiry "\
-    "and at most once a minute for slides, reloaded in main() before the socket binds. UI: poll loops "\
-    "never give up (v0.0.111), so after a re-login they reconnect by themselves; the login screen says a "\
-    "job is still running when a poll was active in the last 15s. || "\
-    "v0.0.111: Stage 1 of 7 -- 'still running' badge, no browser give-up, builds unbounded. New "\
-    "_JS_JOBUI helpers used by all 10 poll loops (Full/Split tunnel steps, tunnel convert preview, Router "\
-    "Install, ASL3, DVSwitch, SVXLink, M17, Ampersand, Cloudflare, Update): the badge/console now reads "\
-    "'Still running . 12m 34s' (elapsed, counting up, h/m/s, with a dot that alternates each second) and "\
-    "the time comes from _job_status's new elapsed_sec (node-side started_at), so reloads and reconnects "\
-    "show the true running time. The 30s POLL_FAIL_GIVEUP_MS is now Infinity in all 9 loops that had it: a "\
-    "lost connection shows 'Still running on the node . reconnecting...' and retries with jobPollDue() "\
-    "backing off from every 0.5s to every 10s; a step only ends when the node reports done/unknown. "\
-    "Backend: _effective_timeout() also returns None for build commands (_is_build_cmd: make/cmake/ninja/"\
-    "meson/./configure); the 15-minute limit stays for other non-package commands, as decided. || "\
-    "v0.0.110: Stage 3 of 3 -- verification + changelog for v0.0.108-109, no code changes. "\
-    "Regression: py_compile; node --check on the ASSEMBLED _JS global; bash -n on every DVSwitch step "\
-    "command; the new DVSwitch commands executed against fake sudo/apt/dpkg-query/systemctl reproducing "\
-    "652700's state (bundle installed, parts missing, empty /opt, only analog_bridge unit): step 1 reports "\
-    "each part correctly, install names the parts and re-installs exactly the empty ones with "\
-    "--force-confmiss (none when files are present; stops on an apt failure), enable enables what exists "\
-    "and fails naming the rest, purge disables per unit; quiet-mode plan with mixed-case unit names, "\
-    "monit/lighttpd/stfu tiering and the never-list; netcheck scan picking the loaded spelling; quiet "\
-    "package job carrying best-effort/7; plus the v0.0.101-107 Python and jsdom suites re-run (DVSwitch "\
-    "test-install assertion updated for the new component list). BENCH-ONLY on a real node: the "\
-    "--force-confmiss re-install actually restoring Analog_Bridge.ini from the package, and md380-emu "\
-    "running on arm64. || "\
-    "v0.0.109: Stage 2 of 3 -- service-name and priority fixes. Quiet mode: unit matching is "\
-    "now case-insensitive (fnmatchcase on lowercased names), so both analog_bridge.service and "\
-    "Analog_Bridge.service are paused; monit.service joins the watchdog tier (dvswitch-monit auto-restarts "\
-    "DVSwitch services, which would undo a pause), lighttpd.service joins the web-tools tier (the DVSwitch "\
-    "dashboard runs on it; 652700 showed it restart-looping) and stfu.service the radio tier. Quiet package "\
-    "jobs now use IOSchedulingClass=best-effort + IOSchedulingPriority=7 instead of idle: on 652700 an "\
-    "idle-class install was starved of disk time by still-running services until the node locked up. "\
-    "Netcheck card: _NETCHECK_BRIDGE_UNITS was capitalised only (Analog_Bridge/MMDVM_Bridge/STFU) but the "\
-    "dvswitch.org packages ship lowercase names, so the scan looked at units that do not exist; it now "\
-    "accepts both spellings and _netcheck_bridge_units_present() reports whichever is loaded. The Services "\
-    "tab rows were already lowercase and are unchanged. || "\
-    "v0.0.108: DVSwitch tab fixes from the 652700 bench session, Stage 1 of 3. Findings: the "\
-    "dvswitch-server bundle was installed (Bookworm repo on Trixie arm64 -- confirmed working) but "\
-    "mmdvm-bridge and md380-emu were never installed and analog-bridge's /opt folder was empty; `systemctl "\
-    "enable a b c` aborted on the first missing unit; the repo script failed with 'Permission denied' "\
-    "because /tmp is mounted noexec. Changes (Bookworm + Trixie): step 1 (Trixie) now reports per part -- "\
-    "package installed?, /opt files present?, service found? -- and no longer calls apt-cache (it could hang "\
-    "while apt rebuilt its cache); repo download/run steps skip themselves when the dvswitch.org source is "\
-    "present and run the script via `sudo bash`; the test install and install steps name the parts "\
-    "(dvswitch-server analog-bridge mmdvm-bridge md380-emu), and install re-installs any part whose /opt "\
-    "folder is empty with --force-confmiss so deleted files and .ini config return; enable acts on the "\
-    "services that exist and fails naming the missing ones; purge disables per-unit and now also purges "\
-    "dvswitch, dvswitch-dashboard, dvswitch-menu and dvswitch-monit. || "\
-    "v0.0.107: Quiet mode, Stage 4 of 4 -- verification + changelog, no code changes. "\
-    "Regression on this file: py_compile; node --check on the ASSEMBLED _JS global; engine tests against "\
-    "fake systemctl/pkill (tier order, never-list, mandb placement, 0600 state written per stop, already-on, "\
-    "reverse restore, abort-and-restore on a stop failure, restore-failure reporting, crash-recovery sweep, "\
-    "deferred sweep while a package unit runs, real fcntl lockf held by a child detected and refusing, "\
-    "concurrency guard); live ThreadingHTTPServer (401 unauthenticated, 403 without X-Requested-With, "\
-    "on/off/status round trip, reboot needs confirm, banner + card in the rendered page); package-job tests "\
-    "against fake systemd-run/journalctl (Nice/idle/RemainAfterExit/noninteractive on the unit, stop -> "\
-    "run -> restore order, progress lines filtered, exit status read, unit reset-failed, restore after a "\
-    "failed job, job refused when quiet cannot start, manual quiet left on, unticked and non-eligible steps "\
-    "take the old path); jsdom for the card, banner, reboot button and the per-step checkbox; plus the "\
-    "v0.0.101-103 suites re-run. One bug found and fixed during Stage 3: select() on a buffered text pipe "\
-    "misses lines already pulled into Python's buffer, so the journal follower now reads the raw fd. The "\
-    "older _job_worker uses the same select+readline pattern -- lines there are only delayed, not lost "\
-    "(EOF drains them), left as-is. BENCH-ONLY on 652700/652702/652703: the real unit names matched by the "\
-    "tier patterns (sysmon/dashboard/instmon/svx_dashboard/ircddbgateway), Asterisk and the bridges coming "\
-    "back after a long pause, journald actually streaming a transient unit's apt output live, and the "\
-    "startup sweep waiting correctly when 44helper is restarted mid-upgrade. || "\
-    "v0.0.106: Quiet mode, Stage 3 of 4 -- package steps run in quiet mode. Update tab steps "\
-    "fix_missing, dpkg_configure, upgrade and full_upgrade carry quiet_eligible and render a 'Run in quiet "\
-    "mode' checkbox, ticked by default; the Run POST sends quiet:true/false. With quiet on (and the command "\
-    "a mutating apt/dpkg one), _start_quiet_apt_job/_quiet_apt_worker: turns quiet mode on (refusing to run "\
-    "the package job if that fails), records the job unit in the quiet state file, runs the command via "\
-    "systemd-run as its own transient unit 44helper-apt-<ts> with Nice=19, IOSchedulingClass=idle, "\
-    "DEBIAN_FRONTEND=noninteractive and RemainAfterExit=yes, streams output by following the unit's journal "\
-    "(never a pipe -- a pipe would SIGPIPE the upgrade if 44helper died), reads ExecMainStatus, stops + "\
-    "reset-fails the unit, then restores node services in a finally block. If quiet mode was already on by "\
-    "hand it is left on. The v0.0.104 startup sweep's wait-for-job_unit path covers a 44helper restart "\
-    "mid-job. Unticked, the step runs exactly as before. Low priority applies only in quiet mode, as "\
-    "decided. || "\
-    "v0.0.105: Quiet mode, Stage 2 of 4 -- Update tab card + banner. GET /api/quiet/status "\
-    "(active/since/paused list, or the would-pause plan when off, plus a stop/restore command preview) and "\
-    "POST /api/quiet/action {on|off|reboot}, both behind the existing session auth + X-Requested-With CSRF "\
-    "check with no new auth code. reboot requires confirm:true + root and is scheduled via systemd-run "\
-    "--on-active=3 so the reply gets out first. Update tab: a 'Quiet mode' card at the top (state pill, "\
-    "command preview that switches between what On will stop and what Off will restore, Turn on / Turn off "\
-    "buttons that disable during the request, a Reboot node button shown only after a restore failure, with "\
-    "a double confirm). A red sticky 'NODE SERVICES PAUSED' banner under the header on every tab, polled "\
-    "every 10s from _startApp (so never before login) and refreshed with the Update tab. JS written with "\
-    "no backslash escapes (String.fromCharCode(10) for newlines) to stay clear of this file's triple-quoted-"\
-    "JS escaping trap. || "\
-    "v0.0.104: Quiet mode, Stage 1 of 4 -- engine only, nothing visible in the page yet. "\
-    "Modelled on instmon's quiesce. _qm_resolve_plan() orders ACTIVE units into 4 tiers -- watchdogs & "\
-    "timers (asl_dvs_watchdog*, asl3-update-nodelist/astdb, man-db timers), background disk users (PCP "\
-    "pmie/pmlogger/pmproxy/pmcd, packagekit, man-db.service, plus pkill mandb), suite web tools (sysmon, "\
-    "dashboard, instmon, svx/m17 dashboards), radio services (asterisk, bridges, md380-emu, svxlink[-usrp], "\
-    "ircddbgateway) -- never 44helper, wifimon, ssh, cockpit, networking, firewalld or systemd core. "\
-    "_qm_on() refuses while apt/dpkg hold their locks (fcntl.lockf probe -- apt uses POSIX record locks, "\
-    "which flock cannot see), stops in tier order writing the state file (CONFIG_DIR/44helper_quiet_state."\
-    "json, 0600) after every stop, and on any stop failure aborts and restores what it had paused. "\
-    "_qm_off() starts exactly the recorded list in reverse and clears the state; failures are reported "\
-    "with a reboot suggestion, no retry loop. _qm_startup_sweep() runs in main() before the socket binds: "\
-    "restores a left-on quiet mode, or waits for a still-running package unit first. Decisions: sysmon "\
-    "stopped, wifimon kept. || "\
-    "v0.0.103: package commands are never killed partway through. Trigger: a live Update-tab "\
-    "'apt upgrade' (121 packages, 223 MB) hit the 900s cap and the engine killed it mid-unpack of libc6/"\
-    "python3.13/a new kernel, leaving dpkg half-configured -- while the timeout text claimed it was 'not "\
-    "stuck'. (1) _is_apt_mutating()/_effective_timeout(): any mutating apt/apt-get/aptitude verb or dpkg "\
-    "action runs with NO timeout on every tab and in Custom mode, applied centrally in _start_shell_job and "\
-    "_run_shell_line, so per-step 'timeout' values no longer matter for these (read-only apt update/"\
-    "apt-cache/apt list keep theirs). (2) Timed-out non-apt jobs now stop the whole command: jobs run in "\
-    "their own session and _stop_process_tree() sends SIGTERM to the group (sudo relays it even under "\
-    "use_pty), then SIGKILL after 10s -- previously only the shell was killed, which could orphan children. "\
-    "(3) _timeout_message rewritten: no more 'not stuck' after a kill; a (now-unreachable) apt-change case "\
-    "gives do-not-reboot recovery steps; read-only apt and other commands say plainly they were stopped. "\
-    "(4) dpkg '(Reading database ... N%' progress lines are filtered from job output (they flooded the 64 KB "\
-    "buffer); the final files-installed line is kept. (5) Update tab step 2 gains a read-only 'Is apt still "\
-    "running?' option (pgrep), listed first, above the existing dpkg --configure -a recovery. || "\
-    "v0.0.102: verification + changelog for v0.0.100-101, no code changes. Lean regression: "\
-    "py_compile; node --check on the ASSEMBLED _JS global; module import with step-catalog checks (DVSwitch "\
-    "install/purge x bookworm/trixie: unique ids, contiguous nums, _dv_lookup_step resolves the new tx_ "\
-    "steps, optional steps auto:False; SVXLink USRP purge auto flags; branch default svxlink-usrp); and a "\
-    "9-assertion jsdom pass (Trixie shows 10 cards with the simulated-install gate and no old-script "\
-    "command, Bookworm unchanged at 8, SVXLink dropdown bookworm/trixie/usrp/custom, USRP branch field "\
-    "defaults to svxlink-usrp, Trixie Run posts {mode,distro,step_id} with the X-Requested-With header). "\
-    "All green. Still BENCH-ONLY: Bookworm DVSwitch packages on Trixie, and the USRP fork build, on "\
-    "652702/652703. || "\
-    "v0.0.101: DVSwitch Trixie path rebuilt. The third-party yo8aiv/install-dvswitch-trixie "\
-    "script failed at 'cd MMDVM_Bridge/src' and could never succeed: DVSwitch's MMDVM_Bridge/Analog_Bridge "\
-    "GitHub repos are filesystem mirrors of prebuilt per-arch binaries (no source, no Makefile) and "\
-    "DVSwitch/md380-emu does not exist. Its two steps (and the v0.0.98-era unbounded build timeout they "\
-    "needed) are removed. New Trixie install (10 steps): read-only pre-flight (arch + whether the "\
-    "dvswitch.org source is already present + apt-cache policy), fetch/run the official dvswitch.org "\
-    "Bookworm repo script (skip if present), apt update, a SIMULATED install (apt-get install -s, exits "\
-    "non-zero on unmet deps) as a safety gate, the real dvswitch-server install, enable services, then the "\
-    "existing Cockpit/config steps. Trixie purge now reuses the Bookworm apt-based purge (ids re-prefixed "\
-    "tx_) plus one optional non-auto step removing leftovers of the old script. _DVSWITCH_WARNING and two "\
-    "SVXLink notes that referenced the old Trixie build reworded. BENCH-ONLY: whether the Bookworm "\
-    "packages resolve on Trixie -- confirm on 652702/652703. || "\
-    "v0.0.100: tidy-up pass, no new features. (1) Version lineage recorded: an intermediate copy "\
-    "labelled 0.0.98 (the 'notimeout' file) carried one unversioned change -- the DVSwitch Trixie build "\
-    "step's timeout set to None (unbounded) -- which v0.0.99 already contains; that copy is retired and "\
-    "this file continues from the v0.0.99 svx_usrp lineage. (2) SVXLink USRP fork: branch default "\
-    "corrected 'usrp' -> 'svxlink-usrp' (the 'usrp' branch does not exist on github.com/dl1hrc/svxlink; "\
-    "'svxlink-usrp' confirmed present via git ls-remote 2026-09-27; 'tetra-usrp' is a different project). "\
-    "(3) Travel node corrected 652703 -> 652702 in four notes (652702 is the Pi Zero 2W travel node, 652703 "\
-    "is the Pi 4 radio node). (4) usrp_purge_source now auto:False, matching the v0.0.99 changelog's stated "\
-    "rule that the USRP purge only auto-runs the service stop. || "\
-    "v0.0.99: SVXLink tab gains a third 'USRP fork' script option alongside Bookworm/Trixie, "\
-    "reusing the distro-dropdown-repurposing trick (bookworm/trixie/usrp are now flat sibling keys in "\
-    "_SVXLINK_SCRIPTS rather than nested under a distro), rendered via a new extra_options param on the "\
-    "shared _render_install_panel (ASL3/DVSwitch keep only their original two dropdown options; the extra "\
-    "slot is empty string for those two call sites). Builds Adi Bier/DL1HRC's UNOFFICIAL fork "\
-    "(github.com/dl1hrc/svxlink, editable branch field defaulting to 'usrp') from source, which adds a "\
-    "UsrpLogic module so SvxLink can speak the USRP protocol to this fleet's existing DVSwitch "\
-    "Analog_Bridge/MMDVM_Bridge — not merged upstream (sm0svx/svxlink PR #547). 9-step install: read-only "\
-    "conflict pre-flight (apt package + svxlink.service state), build deps (same list as sm0svx's own "\
-    "InstallSrcHwRpi wiki), clone (editable branch field), configure+build+install in one step "\
-    "(CMAKE_INSTALL_PREFIX=/usr/local, SYSCONF_INSTALL_DIR=/usr/local/etc — deliberately NOT /usr and /etc, "\
-    "so it can't file-collide with an apt-installed svxlink-server even though the two still can't run "\
-    "simultaneously), a read-only locate-installed-files step, a manual (not auto-run) systemd-unit card "\
-    "since a third-party fork's CMake install layout can't be trusted blindly, then the existing callsign-"\
-    "config/Cockpit steps reused with a new conf_path/svc parameterization on _svx_config_field_step "\
-    "(previously hardcoded to /etc/svxlink/svxlink.conf + svxlink). 4-step purge, NOT auto-run beyond "\
-    "stopping the unit (no apt package backs this, so blind rm of /usr/local paths needs a human's OK). "\
-    "Build step timeout is None (unbounded, same fix just applied to DVSwitch's Trixie build card) since a "\
-    "full SvxLink source build reliably exceeds DVSwitch's much smaller UsrpLogic-only build's already-long "\
-    "estimate. SECURITY flag carried into the build step's note: a PR #547 reviewer found UsrpLogic's UDP "\
-    "unpacker throws uncaught on a sub-32-byte crafted datagram (process crash), unpatched as of last "\
-    "review — note recommends loopback-only binding, never added to a firewalld zone or routed over the "\
-    "tunnel, echoing the existing loopback-only port-role convention. BENCH-ONLY (flagged in _SVXLINK_WARNING "\
-    "+ the clone/build step notes, not exercisable from the build sandbox): the exact branch name on the "\
-    "fork, the build actually completing on real hardware, and the installed-unit layout the locate step is "\
-    "meant to surface — confirm on 652702/652703. Verified: py_compile, AST duplicate-function scan (none), "\
-    "module import + _svx_lookup_step exercised for both new install/purge keys, extra_options wiring "\
-    "confirmed present only on the svxlink panel call site. || v0.0.95-98: new Cloudflare tab (install helper for a Cloudflare Tunnel / cloudflared as a persistent, OUTBOUND-ONLY connector) built in four staged versions. A local web service (asl_dvs_dashboard 8989, sysmon 9999, instmon 8990, or this 44helper) becomes reachable over the internet with NO inbound port-forward and no public IP. Rides the shared async-job engine (_dispatch_tab_action, tab_prefix='cf'); the 'distro' slot is repurposed as the METHOD ('token' = persistent dashboard-managed cloudflared.service from a Zero Trust tunnel token [default]; 'quick' = throwaway TryCloudflare foreground test tunnel), the same trick M17 used for 'standard' and Ampersand for 'server'/'hub'. The local config.yml ingress method is out of scope; no Custom mode. v0.0.95 backend: _CF_PREFLIGHT_CMD (read-only pre-flight + WireGuard-coexistence guardrail), _CF_INSTALL_APT_CMD (shared apt install, with key-rotation + Signed-By-conflict notes), _CF_TOKEN_INSTALL_BLOCK (the token paste-by-hand manual_block), the step builders, _CF_SCRIPTS (install/purge x token/quick), _cf_lookup_step, _dispatch_cf_action, _route_cf_script, and /api/cf/script (GET) + /api/cf/action (POST) behind the same session-cookie auth + X-Requested-With CSRF gating with no new auth code. token install = 5 steps (pre-flight, install cloudflared, service-install manual_block, verify, dashboard-hostname note [manual]); token purge = 3 (uninstall service, remove package, optional /etc/cloudflared creds removal carrying auto:False so the sequencer skips it). quick install = 3 (pre-flight, install, foreground quick-run [manual]); quick purge = 1 (remove package). v0.0.96 UI+JS: _CF_WARNING, _render_cf_panel (method dropdown), _JS_CF (cloned from the proven _JS_AMP source text -- manual_block/manual render kinds and all escaping verbatim -- renamed amp->cf with the fetch URLs [/api/cf/*], job-key prefix ['cf_'] and default method ['token'] retargeted; zero residual amp tokens, the &amp; entity preserved), the TABS/_PANEL_RENDERERS entries, the .tab.t-cloudflare colour rule (a new Cloudflare-orange accent distinct from amp's orange), and refreshCF() in init. v0.0.97 reference tables + security: cloudflared.service added to _SERVICE_UNIT_DEFS (group 'Cloudflare Tunnel'); 7844/udp documented in _PORTS_REFERENCE (reference-only) and _PORT_ROLES ('outbound-only', which is in _PORT_ROLES_NEVER_EXPOSED). Deliberately NOT added to _SERVICE_PORT_DEFS -- cloudflared has no inbound listener, so a _local_port_listening() row would read 'inactive' forever and mislead. Two design tensions drive the tab (both in _CF_WARNING + the backend header): (A) it BYPASSES the firewall -- nothing opens inbound, so firewalld/the Ports tab cannot see or flag the exposure, and for the token method the ingress mapping lives server-side in Cloudflare, so this tool CANNOT enumerate what a running connector exposes (only 'connector active -> check the dashboard'); hence a prominent auth-or-Access warning. (B) WireGuard coexistence -- cloudflared (outbound daemon, edge 7844/udp, no inbound listener) and wg0 never conflict; the only interaction is egress routing (clean under no/split tunnel; under a full tunnel the edge connection rides wg0 through the 44Net gateway, working only if it NATs outbound + passes 7844). The guardrail is DETECT + WARN, never block, inside the read-only pre-flight (classify wg0 from `wg show`/wg0.conf, confirm with `ip route get 1.1.1.1`, emit a verdict), keeping 'works in any combination' true. SECRET HANDLING: the token install is a manual_block (not engine-run) so the token never reaches the Actions Log (cloudflared still stores it at rest in the unit / /etc/cloudflared by design -- dashboard-regenerable, so acceptable); deliberately NOT backed up to the instmon library (regenerable, unlike the wg0 key). BENCH-ONLY (flagged in the tab warning + backend comment, not exercisable from the build sandbox): the apt repo line / signing-key URL / package version (Cloudflare rotated keys, old key removed 30 Apr 2026 -- the fresh cloudflare-main.gpg fetched here is the current one, required on Debian Trixie/RPM), the full-tunnel egress path (that the 44Net gateway NATs/passes 7844), the wg-classify verdict against a real full-tunnel node, and the quick tunnel printing a reachable *.trycloudflare.com URL -- confirm on real hardware (652702/652703). Verified each stage: py_compile; node --check on the ASSEMBLED _JS global; a backend exercise (catalog shape, step kinds, lookup, dispatch guards -- unknown-distro/empty-command/unknown-step rejected, 30s/900s timeouts), with the pre-flight + apt commands checked by `bash -n` and the pre-flight run read-only in the sandbox (none/split/full/other wg-classify branches); and a 20-assertion jsdom UI pass (token 5 cards / quick 3 cards, manual_block textarea + manual/run-button presence, method-dropdown switch, run POST body {mode,distro,step_id} + CSRF header, pill->OK on completion, purge double-confirm auto-running exactly the 2 non-optional steps with a 2/2 summary, clipboard copy of the token block). || v0.0.94: hotfix -- the v0.0.93 netcheck fix buttons posted {action: ...} to /api/pi_install/action, but _dispatch_pi_install_action keys the simple-action lookup on 'step' (as every sibling card -- DNS/AllowedIPs/reflector -- already does), so every netcheck fix returned 'Unknown step/action: /netcheck_fix_unit'. _pnPost now posts {step: action, ...extra}. Root cause the tests missed: the v0.0.93 auth/CSRF probe hand-wrote a body carrying BOTH step and action so it passed, and the jsdom assertions checked body.action; both now assert on step, and the auth probe sends the JS-shaped step-only body. No behavior change beyond routing the six netcheck actions (fix_unit/fix_bridge/fix_target/enable_waitonline/revert/restart) to their handlers. Re-verified: py_compile, node --check on the assembled _JS, jsdom (fix buttons post step=<action>), and in-process auth/CSRF with the real step-only body reaching the handler. || v0.0.93: netcheck drop-in fixes (Stage 2 of the netcheck troubleshooting card; mutating). Builds on the v0.0.92 read-only scan: each fix the scan says applies now has a confirmed button, and scan_netcheck reports our_dropin markers + a fixes summary so the UI only offers what's applicable. Mechanism is systemd drop-ins at /etc/systemd/system/<unit>.d/44helper-netcheck.conf (world-readable 0644, atomic write) so a package update can't clobber them and Revert is a file delete. Actions (root-gated, idempotent, daemon-reload + re-scan to verify, synchronous via /api/pi_install/action under the existing auth+CSRF gating): action_netcheck_fix_unit writes a netcheck drop-in (Type=oneshot, RemainAfterExit=yes, After=/Wants=network-online.target) for the Type=notify-without-sd_notify + missing-ordering case; action_netcheck_fix_bridge (per bridge) resets Requires= and re-adds every entry EXCEPT netcheck then adds Wants=netcheck + After=netcheck network-online.target, so the bridge starts even if netcheck fails while unrelated Requires are preserved (systemd can't drop a single list entry otherwise); action_netcheck_fix_target auto-edits the probe target the user chose (default 1.1.1.1) -- backs the script up to the instmon library via _compare_before_write first, then swaps ONLY the identified target token (byte-for-byte elsewhere, preserving mode), validating the new target as IP/hostname; action_netcheck_enable_waitonline enables the backend-correct wait unit only (re-derives the backend server-side, never trusts a client-named unit, refuses on unknown backend); action_netcheck_revert deletes all our drop-ins + restores the script from the library backup + daemon-reload; action_netcheck_restart restarts netcheck + the loaded bridges (warned: can drop an active bridge with the tunnel up). Confirmed decisions applied: full-tunnel intended permanent; drop-ins under /etc; auto-edit the probe target. UI: fix buttons render inside the existing troubleshooting card from data.fixes (only applicable ones shown; bridge buttons wired via data-nc-bridge to avoid onclick string args; a target input defaulting to 1.1.1.1; Revert shown once anything is applied; Restart always, warned) with an action-output console. BENCH-ONLY (not exercisable from the build sandbox, flagged in-card + backend comments): the drop-ins' actual effect on boot ordering, the script auto-edit against the real netcheck script, and the restart behavior must be confirmed on real hardware (652702/652703) -- especially that the loosened bridges now come up when netcheck fails, and that repointing the probe to a through-tunnel target actually clears the boot failure. Verified: py_compile, node --check on the assembled _JS, backend exercise with mocked systemctl/filesystem (drop-in content + path for unit and per-bridge Requires-reset-preserving-others, script backup + single-token repoint with mode preserved + invalid-target refusal + unidentified-target refusal, backend-correct wait-online enable + unknown-backend refusal, revert removes drop-ins + restores script, restart argv, fixes-summary applicability, idempotent re-apply), in-process auth/CSRF gating on the new actions, and a jsdom pass (only-applicable fix buttons render from data.fixes, bridge buttons post the right unit, target input feeds the post, confirms fire, revert appears only when applied). || v0.0.92: netcheck bridge-startup diagnostic (Pi Install tabs, read-only; Stage 1 of the netcheck troubleshooting card). From the netcheck handoff: with a full tunnel up, netcheck.service can fail/time out at boot and drag down the DVSwitch bridges (Analog_Bridge/MMDVM_Bridge/STFU) gated on it. A collapsed 'Troubleshooting: bridge startup (netcheck)' card is rendered after the Enable-tunnel step on BOTH tabs, with kind-appropriate framing (Full: this is the likely fix; Split: production split-tunnel usually does not trigger this since DVSwitch stays off the tunnel -- only needed if bridges have actually failed). This stage is READ-ONLY: scan_netcheck() inspects the units and script via lightweight unlogged subprocess.run (systemctl show of netcheck + the three bridges for Type/Result/After/Requires/Wants/FragmentPath/DropInPaths, ExecStart -> script path -> heuristic probe target/timeout and whether it signals readiness, network backend + matching wait-online unit, wg-quick@wg0 presence, /lib-vs-/etc) and returns a verdict list that NAMES each problem and why it matters: Type=notify with no sd_notify (systemd marks it failed on clean exit), missing After=network-online.target, bridges hard-gated by Requires= AND After= vs Requires-only, backend/wait-unit, /lib package-managed units (fixes will land as /etc drop-ins). Exposed read-only, session-gated: GET /api/pi_install/netcheck_scan and /api/pi_install/netcheck_journal (last-N boot log, on demand). No mutations, nothing root-gated -- the drop-in fixes (netcheck Type/ordering, Requires->Wants on the bridges, auto-repointing the probe target, backend-correct wait-online) come in Stage 2. Decisions locked for Stage 2: full-tunnel is intended permanent if it works; fixes via systemd drop-ins under /etc; auto-edit the netcheck probe target. Verified: py_compile, node --check on the assembled _JS, backend exercise with mocked systemctl/journalctl (unit-fact parsing, notify-without-ready + missing-ordering + hard-gated verdicts, script target/timeout heuristics, backend detection, absent-netcheck path), in-process auth/CSRF/session gating on the new GET routes, and a jsdom render of the card on both tabs (kind framing, scan populates verdict + unit table, journal on demand). || v0.0.91: Firewall-tab quick port-control set. A new zone-parameterised 'Quick port control' card on the Firewall tab, alongside the existing 44NetConnect/router-forward cards. build_firewall_status now also reports zones (--get-zones), default_zone, active_zones (--get-active-zones parsed to zone->interfaces), wg0_zone (--get-zone-of-interface=wg0) and panic (--query-panic); all read-only introspection uses lightweight unlogged subprocess.run per the cross-cutting convention. New actions on _dispatch_firewall_action (/api/firewall/action, behind _check_auth+_check_csrf): fw_inspect_zone (read-only --list-all, no root), and root-gated fw_add_port_runtime (--zone=<z> --add-port, NO --permanent so it self-reverts on reload -- the safe no-confirm test path), fw_promote_port (targeted --permanent --add-port + --reload for ONE port), fw_remove_port (runtime + permanent + reload), fw_commit_all_runtime (blanket --runtime-to-permanent, a separate explicit button), fw_reload, fw_add_service_zone/fw_remove_service_zone (validated against --get-services), fw_change_interface/fw_remove_interface (--change-interface, safer than --add-interface), and fw_panic_off (--panic-off recovery; --panic-on is intentionally never exposed). Zone dropdown from --get-zones with the 44NetConnect zone pinned top and active-zone/interface + default-zone shown; preset fill-buttons for IAX2 4569/udp, EchoLink/SvxLink 5198-5199/udp, VOTER/RTCM 1667/udp and the configured DVSwitch Mobile port. Guardrails reuse the v0.0.89 role catalog: a loopback-only port is blocked outright in any zone (backend-enforced, not just UI), and a mgmt-LAN risky-if-public port (AMI/dashboards/Cockpit) is allowed but red-flagged. Every posted zone is validated against the live --get-zones set; ports via _valid_port_proto; interface/service names by regex. Verified: py_compile, node --check on the assembled _JS global, backend exercise with mocked subprocess (zone-parameterised add/remove, runtime-vs-permanent argv shapes, targeted promote vs blanket runtime-to-permanent, guardrail block/warn, zone/port validation refusals, panic-off, inspect), in-process ThreadingHTTPServer auth/CSRF gating on the new routes, and a jsdom pass (zone select + pin, presets, runtime->permanent, panic query/off, guardrail block). || v0.0.90: Full-tunnel-only outbound reflector ports (Full Tunnel tab). New step-4b card, rendered ONLY on the Full tab (right after the 4a DNS/MTU card; omitted entirely under split tunnel), for the digital-voice reflector destinations the node dials OUT to. Under a full tunnel (AllowedIPs 0.0.0.0/0) that egress rides wg0, so each 'rule' is a firewalld *direct* rule on the OUTPUT chain scoped to -o wg0 -- an egress ALLOW, never an inbound zone opening. _REFLECTOR_EGRESS_CATALOG (grouped, single canonical _reflector_egress_rule_args builder): M17 17000, YSF 42000, P25 41000, NXDN 41400, D-STAR DPlus 20001/DExtra 30001/DCS 30051, MMDVM/XLX 62030 (all confirmed) plus opt-in, UNVERIFIED-against-live-reflector entries BrandMeister DMR 62031, DMR+/HBlink 55555 (collision note), and XLX/URF interlink 10002/10017. Loopback-only ports are deliberately excluded (outbound destinations only). status_wg_reflector_egress reads one --get-all-rules (lightweight subprocess.run, not _run_argv) and marks each catalog port applied/not; action_wg_add_reflector_egress is root-gated, idempotent (queries each rule before adding, reloads once, re-reads to verify), rejects any selection naming a port outside the catalog, and defaults an empty selection to the confirmed set; action_wg_remove_reflector_egress reverses it (empty selection = full cleanup). Both run synchronously via /api/pi_install/action under the same auth+CSRF gating as set_dns/repair_allowed_ips; not job-routed. BENCH-ONLY (flagged in-card + backend comment, not exercisable from the build sandbox): the 62031 and 10002/10017 entries must be confirmed against a live reflector on real hardware (652702/652703). Verified: py_compile, node --check on the assembled _JS global, backend exercise of the egress-rule build sequence with mocked subprocess (add builds the exact --add-rule argv per selected port, idempotent skip on --query-rule hit, single reload, catalog-guard rejection, remove/cleanup path), and a jsdom render of the 4b card on the Full tab (grouped catalog, confirmed vs opt-in markers, apply/remove wiring) plus confirmed absence on the Split tab. || v0.0.89: Per-system firewall ports check (Ports tab) + per-tab notes. The Ports tab now attaches a structural role to every reference port -- the fact the raw exposed/listening bits can't express: peer-inbound (must be reachable in the 44Net tunnel zone), mgmt-LAN (management UI/API, LAN-only, never in the tunnel zone), loopback-only (inter-process on 127.0.0.1, never needs any zone opening), or outbound-only (egress to a reflector/master, never an inbound opening). Roles live in a static _PORT_ROLES side-table keyed by port/proto; no new probing -- build_ports_status still reuses _pi_exposed_port_set/_firewalld_zone_info/_local_port_listening. _port_verdict(role, exposed, running) classifies each row OK / needed-but-not-open (a running peer-inbound port not open in the current exposure mechanism) / over-exposed (a mgmt/loopback/outbound port that IS exposed -- the security finding, generalising the old public-only 'mismatch') / not-listening (service down). refreshPorts() now groups rows by system with Role and Verdict columns; over-exposed rows keep the red highlight. Per-tab note 'Check firewall posture on the Ports tab after install' added to the ASL3/DVSwitch/SVXLink/M17/Ampersand tab warnings. Verified: py_compile, node --check on the assembled _JS global, role-classification + verdict unit tests, over-exposed detection against a seeded firewalld zone, and a jsdom grouping/verdict render. || v0.0.88: Split-tunnel AllowedIPs repair (Split Tunnel tab). New step-4b card (rendered only on the Split tab, right after the 4a DNS/MTU card) that detects a wg0.conf still carrying the portal default AllowedIPs = 0.0.0.0/0 and, on one click, rewrites ONLY the [Peer] AllowedIPs line to the 44Net split set 44.0.0.0/9, 44.128.0.0/10. Whitespace/byte-preserving: _wg_repair_allowed_ips_text edits the matched line's value in place via splitlines(keepends=True) + a whitespace-capturing regex, never a full rebuild, so the private key, endpoint, DNS/MTU managed blocks, comments, indentation and exact line endings are untouched. Idempotent (no-op once narrowed; refuses any non-full shape). status_wg_allowed_ips classifies shape no-conf/none/full/split/narrowed-other and feeds build_pi_install_status; action_wg_repair_allowed_ips is root-gated, backs up to the instmon library via _wg_write_conf, and re-parses to verify shape==split. Runs synchronously via /api/pi_install/action (file write only, no exec), inheriting the same auth+CSRF gating as paste_config/set_dns; not job-routed. Confirm dialog before writing. Verified: py_compile, node --check on the assembled _JS global, backend exercise (full-to-split rewrite with byte-for-byte preservation of all other lines incl. CRLF, idempotent re-run, already-split no-op, narrowed-other/none refusals, multi-value 0.0.0.0/0+::/0 case), in-process ThreadingHTTPServer auth/CSRF gating on the new step, and a jsdom render of the 4b card on the Split tab across all shapes plus confirmed absence on the Full tab. || v0.0.87: WireGuard DNS/MTU control on the Full & Split tunnel tabs. New step-4a card (rendered right after Paste config on both tabs) with three DNS mechanisms, sequenced by robustness on systemd-resolved: resolvectl-in-PostUp full (resolvectl domain %i ~. \u2014 all DNS via the tunnel resolver) and split (~ampr.org ~44.in-addr.arpa \u2014 only 44Net names), plus a bare DNS = line fallback for classic resolvconf/openresolv systems. Fixes the classic full-tunnel DNS breakage (AllowedIPs=0.0.0.0/0 routes DNS into wg0 where the old resolver is unreachable). Managed lines live in a marked block inside [Interface] (# 44helper-dns-begin/end, # 44helper-mtu-begin/end) so they are unambiguously reversible without touching user lines; resolvectl and DNS= are mutually exclusive (setting a mode removes the old block first). DNS servers are strictly IP-validated (ipaddress.ip_address) before being interpolated into the root-run PostUp shell command \u2014 no hostnames, no shell metacharacters. The DNS = line mode preflights for the resolvconf command and refuses if absent (wg-quick up would otherwise fail and tear the interface down); resolvectl modes need no resolvconf. Optional MTU field (1280-1500, blank/off removes). Backend action_wg_set_dns/action_wg_set_mtu run synchronously via /api/pi_install/action (file write only, no exec), inheriting the same auth+CSRF gating as paste_config; status_wg_dns feeds build_pi_install_status. Verified: py_compile, module import, node --check on the assembled _JS global, backend exercise of all four DNS modes + MTU (set/verify/revert/idempotent, IP validation, resolvconf/resolvectl preflight refusals), and a jsdom render of the 4a card on both tabs. || v0.0.83-86: new Ampersand tab (install helper for the Ampersand-ASL project, github.com/Ampersand-ASL) built in four staged versions. v0.0.83 backend — _AMP_SCRIPTS catalog (install/purge x server/hub), _amp_lookup_step, _dispatch_amp_action on the shared async-job engine (tab_prefix='amp', 'distro' slot repurposed as the product 'server'/'hub' like M17 did with 'standard'), plus /api/amp/script (GET) and /api/amp/action (POST) behind the same auth+CSRF gating. v0.0.84 UI — _AMP_WARNING, _render_amp_panel (product dropdown), _JS_AMP (cloned from the proven _JS_M17, custom mode removed), TABS/_PANEL_RENDERERS entries, .tab.t-amp (orange), refreshAmp() in init. amp-server = 6 install steps (conflict pre-flight, deps, udev manual_block, S3 download, foreground first-run, systemd manual_block) + 5 purge; amp-hub = 5 install (conflict pre-flight, wget, opaque install.sh, env manual_block, enable) + 5 purge. v0.0.85 conflict avoidance + reference tables — each card leads with a read-only 'Check for conflicts' step (Ampersand REPLACES Asterisk; contends for IAX 4569/udp + node number + web UI 8080); added Ampersand rows to _SERVICE_UNIT_DEFS, _SERVICE_PORT_DEFS, and _PORTS_REFERENCE. v0.0.86 changelog/docs/regression. Release dates pinned in editable fields (amp-server 20260610, amp-hub 20260225) with CHANGELOG links. BENCH-ONLY (not exercisable from the build sandbox, flagged in the tab warning + backend comment): the S3 tarball fetch/extract, amp-hub's bundled install.sh behavior, and the authored systemd unit + udev rule -- verify on real hardware (652702/652703). Verified per stage: py_compile, node --check on the assembled _JS global, in-process ThreadingHTTPServer auth/CSRF gating on both routes, and an 18-assertion jsdom UI pass (card counts/order, manual_block textareas, purge double-confirm, run POST payload+CSRF header, clipboard copy)."
-
-
+APP_STAGE = "v0.0.159: Launcher version 2 (memory savers); comment-stripped copy, history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -761,14 +78,8 @@ _DEFAULT_CONFIG: dict[str, dict[str, str]] = {
     },
 }
 
-
 _AUTH_ACCOUNT        = "root"
-_SESSION_TTL_SEC      = 2 * 3600   # v0.0.129: bookkeeping only -- sessions no longer expire
-# v0.0.129: decided with the user -- 44helper logins never time out. A session ends
-# only on Logout, "Log out all devices", or a reboot (the store is in /run). The
-# browser cookie lasts a year and is refreshed on every authenticated response,
-# so closing the browser doesn't log out either. 44helper only; dashboard/sysmon/
-# instmon keep their own rules.
+_SESSION_TTL_SEC      = 2 * 3600
 _SESSION_COOKIE_MAX_AGE = 365 * 24 * 3600
 _LOGIN_MAX_ATTEMPTS   = 5
 _LOGIN_WINDOW_SEC     = 5 * 60
@@ -780,14 +91,7 @@ _auth_sessions: dict[str, float] = {}
 _auth_failures: dict[str, list[float]] = {}
 _auth_locked: dict[str, float] = {}
 
-
 def _read_shadow_hash(account: str):
-    """Read the encrypted-password field for `account` straight out of
-    /etc/shadow with plain file I/O -- no `spwd` involved, since that
-    module is gone on Python 3.13+ (PEP 594). Requires root, which this
-    process already needs for its install/firewall/router actions.
-    Returns None on any failure to read/parse. Ported verbatim from
-    sysmon v6.6.0's own _read_shadow_hash()."""
     try:
         with open("/etc/shadow", "r") as fh:
             for line in fh:
@@ -798,17 +102,9 @@ def _read_shadow_hash(account: str):
         log(f"WARNING: _read_shadow_hash: {exc}")
     return None
 
-
 _libcrypt_handle = None
 
-
 def _crypt_verify(password: str, stored_hash: str) -> bool:
-    """crypt(3)-based hash verification via ctypes against the system's
-    real libcrypt -- used instead of the stdlib `crypt` module, which is
-    also gone on Python 3.13+ (PEP 594). Calls the exact same libxcrypt
-    implementation the OS itself uses for login, so yescrypt, sha512crypt,
-    etc. all keep working; only Python's own wrapper module was removed,
-    not the underlying library. Ported verbatim from sysmon v6.6.0."""
     global _libcrypt_handle
     if _libcrypt_handle is None:
         import ctypes
@@ -841,15 +137,7 @@ def _crypt_verify(password: str, stored_hash: str) -> bool:
         return False
     return hmac.compare_digest(result.decode("utf-8", "surrogateescape"), stored_hash)
 
-
 def _verify_root_password(password: str) -> bool:
-    """True iff `password` is the box's current root password. Tries PAM
-    first (when the optional `pam` package is installed), falls back to
-    a direct /etc/shadow + ctypes-libcrypt comparison that needs no
-    optional packages and no stdlib modules removed in Python 3.13+.
-    Never raises -- any failure to check is treated as a failed login,
-    not an error, and fails closed. Ported verbatim from sysmon v6.6.0's
-    own _verify_root_password()."""
     if not password:
         return False
     try:
@@ -868,26 +156,16 @@ def _verify_root_password(password: str) -> bool:
         log(f"WARNING: _verify_root_password: shadow fallback failed: {exc}")
         return False
 
-
-# v0.0.112: sessions are keyed by a SHA-256 of the cookie token (never the token
-# itself) and mirrored to a root-only file under /run, so a 44helper restart --
-# e.g. an upgrade replacing python3 mid-job -- does not log the user out. /run is
-# tmpfs, so the file is gone after a reboot. This stays 44helper's own file: no
-# relation to the dashboard/sysmon /run/asl_dvs SSO file.
 _SESSION_STORE_DIR = "/run/44helper"
 _SESSION_STORE_FILE = _SESSION_STORE_DIR + "/sessions.json"
 _SESSION_SAVE_MIN_GAP = 60.0
 _session_last_save = [0.0]
 
-
 def _session_key(token: str) -> str:
     import hashlib
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
-
 def _sessions_persist(force: bool = False) -> None:
-    """Called with _auth_lock held. Throttled: sliding-expiry bumps happen on
-    every poll, so the file is rewritten at most once a minute unless forced."""
     now = time.time()
     if not force and now - _session_last_save[0] < _SESSION_SAVE_MIN_GAP:
         return
@@ -902,7 +180,6 @@ def _sessions_persist(force: bool = False) -> None:
     except OSError as exc:
         log(f"WARNING: could not save sessions to {_SESSION_STORE_FILE}: {exc}")
 
-
 def _sessions_load() -> None:
     try:
         with open(_SESSION_STORE_FILE, "r", encoding="utf-8") as f:
@@ -916,7 +193,6 @@ def _sessions_load() -> None:
     if _auth_sessions:
         log(f"Restored {len(_auth_sessions)} login session(s) after restart")
 
-
 def _issue_session() -> str:
     token = secrets.token_hex(32)
     now = time.time()
@@ -925,25 +201,17 @@ def _issue_session() -> str:
         _sessions_persist(force=True)
     return token
 
-
 def _check_session(token: str) -> bool:
-    """True iff `token` is a live session; slides its expiry forward
-    (sliding TTL) on every successful check. Since v0.0.129 sessions never
-    expire: a known session is valid until logout, "log out all devices" or a
-    reboot; the stored time is last-use bookkeeping only."""
     if not token:
         return False
     now = time.time()
     key = _session_key(token)
     with _auth_lock:
-        # v0.0.129: no expiry check -- a known session is valid until logout,
-        # "log out all devices" or a reboot. The stored time is last-use only.
         if key not in _auth_sessions:
             return False
         _auth_sessions[key] = now + _SESSION_TTL_SEC
         _sessions_persist()
         return True
-
 
 def _revoke_all_sessions() -> int:
     with _auth_lock:
@@ -953,16 +221,12 @@ def _revoke_all_sessions() -> int:
     log(f"AUTH: logged out all devices ({n} session(s) ended)")
     return n
 
-
 def _revoke_session(token: str) -> None:
     with _auth_lock:
         _auth_sessions.pop(_session_key(token), None)
         _sessions_persist(force=True)
 
-
 def _login_is_locked(client_ip: str):
-    """Returns the unlock time (time.time()-based) if `client_ip` is
-    currently locked out, else None."""
     now = time.time()
     with _auth_lock:
         until = _auth_locked.get(client_ip)
@@ -973,7 +237,6 @@ def _login_is_locked(client_ip: str):
             _auth_failures.pop(client_ip, None)
             return None
         return until
-
 
 def _login_record_failure(client_ip: str) -> None:
     now = time.time()
@@ -986,20 +249,16 @@ def _login_record_failure(client_ip: str) -> None:
             log(f"Auth: {client_ip} locked out for {_LOGIN_LOCKOUT_SEC}s after "
                 f"{len(hits)} failed root-password attempts")
 
-
 def _login_record_success(client_ip: str) -> None:
     with _auth_lock:
         _auth_failures.pop(client_ip, None)
         _auth_locked.pop(client_ip, None)
 
-
 def _session_cookie_header(token: str, max_age: int) -> str:
     return f"{_SESSION_COOKIE_NAME}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={max_age}"
 
-
 def _clear_session_cookie_header() -> str:
     return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
-
 
 def load_config() -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
@@ -1019,7 +278,6 @@ def load_config() -> configparser.ConfigParser:
 
     return cfg
 
-
 def save_config(cfg: configparser.ConfigParser) -> None:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1029,37 +287,12 @@ def save_config(cfg: configparser.ConfigParser) -> None:
     except OSError as e:
         log(f"WARNING: could not save {CONFIG_FILE}: {e}")
 
-
-
 INSTALL_BIN_PATH = "/opt/44helper/asl_dvs_m17_44helper.py"
 SYSTEMD_SERVICE_PATH = "/etc/systemd/system/44helper.service"
 
-# Shared launcher -- see the v0.0.157 note in APP_STAGE.
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
 _SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 _LAUNCHER_CODE = '''#!/usr/bin/env python3
-# asl_dvs_launch.py -- ASL-DVS launcher (version 2), written by the --install
-# of the Pi02w sysmon and dashboard, instmon, wifimon and 44helper (and by
-# install_asl_dvs v6.6).  Runs the program named on the command line through
-# Python's import system, so its compiled copy is kept in __pycache__ and
-# reused on later starts instead of the whole file being compiled again --
-# about half the memory and twice as fast to start.
-# Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
-#
-# Version 2 adds three memory savers.  Each has an off switch: create the
-# file named below (sudo touch ...) and restart the service; delete the file
-# and restart to turn the saver back on.
-#   -OO               Python drops the built-in help text (docstrings) from
-#                     the loaded code.  Off: /etc/asl_dvs/launch_no_optimize
-#   MALLOC_ARENA_MAX=2  at most 2 memory pools instead of up to 8 per CPU
-#                     core; each pool keeps memory its threads freed.
-#                     Off: /etc/asl_dvs/launch_no_arena_cap
-#   malloc_trim       1 minute after start, then every 5 minutes, freed
-#                     memory is handed back to Linux.
-#                     Off: /etc/asl_dvs/launch_no_trim
-# -OO and MALLOC_ARENA_MAX only work from the moment Python starts, so the
-# launcher starts Python once more with them (same process and PID, so the
-# systemd notify and watchdog settings are not affected).
 import os
 import runpy
 import sys
@@ -1068,7 +301,6 @@ _OFF = "/etc/asl_dvs/launch_no_"
 _AGAIN = "ASL_DVS_LAUNCH"
 
 if _AGAIN in os.environ:
-    # Second start: keep MALLOC_ARENA_MAX out of the programs this one runs.
     if os.environ.pop(_AGAIN) == "arena":
         os.environ.pop("MALLOC_ARENA_MAX", None)
 else:
@@ -1086,7 +318,6 @@ else:
         except OSError:
             pass
 
-
 def _trim_loop():
     import time
     time.sleep(60)
@@ -1099,7 +330,6 @@ def _trim_loop():
     while True:
         trim(0)
         time.sleep(300)
-
 
 if not os.path.exists(_OFF + "trim"):
     import threading
@@ -1133,7 +363,6 @@ StandardError=journal
 WantedBy=multi-user.target
 """
 
-
 def _write_launcher() -> None:
     tmp = _LAUNCHER_PATH + ".tmp"
     with open(tmp, "w") as f:
@@ -1151,7 +380,6 @@ def _glob_pyc(dir_path: str, name: str = "*") -> list:
     return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
 
 def _prune_pyc(dir_path: str) -> None:
-    """Drop compiled copies whose source file is gone (older versions)."""
     for pyc in _glob_pyc(dir_path):
         name = os.path.basename(pyc).split(".", 1)[0]
         if not os.path.exists(os.path.join(dir_path, name + ".py")):
@@ -1161,7 +389,6 @@ def _prune_pyc(dir_path: str) -> None:
                 pass
 
 def _remove_launcher_if_unused() -> None:
-    """Remove the shared launcher once no installed unit runs it."""
     if not os.path.exists(_LAUNCHER_PATH):
         return
     unit_dir = _SYSTEMD_UNIT_DIR
@@ -1209,14 +436,10 @@ def install_service() -> None:
 
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "44helper.service"], check=True)
-    # restart, not enable --now: --now is a no-op on a 44helper that is
-    # already running, which would keep the old version (and old unit)
-    # going after a re-install.
     subprocess.run(["systemctl", "restart", "44helper.service"], check=True)
     print("  [+] Enabled and restarted 44helper.service")
     print("\nInstallation complete! View logs anytime using:")
     print("  journalctl -u 44helper -f")
-
 
 def uninstall_service() -> None:
     if os.geteuid() != 0:
@@ -1246,12 +469,9 @@ def uninstall_service() -> None:
 
     print(f"\nUninstallation complete. {CONFIG_FILE} was left untouched.")
 
-
-
 _LOG_MAXLEN = 500
 _log_buf: deque[str] = deque(maxlen=_LOG_MAXLEN)
 _log_lock = threading.Lock()
-
 
 def log(msg: str) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1260,19 +480,15 @@ def log(msg: str) -> None:
         _log_buf.append(line)
     print(line, flush=True)
 
-
 def get_log_lines() -> list[str]:
     with _log_lock:
         return list(_log_buf)
-
-
 
 WG0_CONF_PATH = "/etc/wireguard/wg0.conf"
 
 def _wg_library_path() -> str:
     library_dir = os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")
     return os.path.join(library_dir, "config", "wg0.conf")
-
 
 def _compare_before_write(dest_path: str, data_bytes: bytes) -> tuple[bool, str]:
     dest_dir = os.path.dirname(dest_path)
@@ -1295,24 +511,14 @@ FIREWALLD_ZONE = "44NetConnect"
 FIREWALLD_ZONES_DIR = "/etc/firewalld/zones"
 _ZONE_XML_MODE = 0o644
 
-
 def _polkit_signature_crash(output: str) -> bool:
-    """True if `output` (from _run_argv) is firewalld's own
-    CheckAuthorization/empty-dict D-Bus crash described above, rather
-    than some other firewall-cmd failure (e.g. 'already exists', a real
-    permission error, invalid zone, etc.) that should be left alone."""
     low = output.lower()
     return "checkauthorization" in low and "unable to guess signature from an empty dict" in low
-
 
 def _zone_xml_path(zone: str) -> str:
     return os.path.join(FIREWALLD_ZONES_DIR, f"{zone}.xml")
 
-
 def _zone_xml_read(zone: str) -> ET.Element:
-    """Returns the zone's permanent XML root, parsed from disk if the
-    file exists, or a fresh minimal <zone> element (matching what
-    `--new-zone` itself would produce) if it doesn't yet."""
     path = _zone_xml_path(zone)
     if os.path.isfile(path):
         return ET.parse(path).getroot()
@@ -1321,10 +527,7 @@ def _zone_xml_read(zone: str) -> ET.Element:
     ET.SubElement(root, "description").text = f"Firewall zone for {zone}"
     return root
 
-
 def _zone_xml_write(zone: str, root: ET.Element) -> None:
-    """Atomic write, same tmp-file-then-os.replace pattern used
-    elsewhere in this file (see _save_wg_key_backup-style writes above)."""
     path = _zone_xml_path(zone)
     tree = ET.ElementTree(root)
     ET.indent(tree, space="  ")
@@ -1333,18 +536,11 @@ def _zone_xml_write(zone: str, root: ET.Element) -> None:
     os.chmod(tmp_path, _ZONE_XML_MODE)
     os.replace(tmp_path, path)
 
-
 def _zone_xml_ensure_zone(zone: str) -> None:
-    """Fallback for action_create_zone(): write the zone file directly
-    only if it isn't already there (idempotent, matches the 'already
-    exists' tolerance already used on the normal D-Bus path)."""
     if not os.path.isfile(_zone_xml_path(zone)):
         _zone_xml_write(zone, _zone_xml_read(zone))
 
-
 def _zone_xml_add_child(zone: str, tag: str, attrib: dict[str, str]) -> None:
-    """Fallback for the add-service/add-port/attach-interface actions:
-    idempotent add of a single <tag attrib.../> element."""
     root = _zone_xml_read(zone)
     for child in root.findall(tag):
         if child.attrib == attrib:
@@ -1352,12 +548,7 @@ def _zone_xml_add_child(zone: str, tag: str, attrib: dict[str, str]) -> None:
     ET.SubElement(root, tag, attrib)
     _zone_xml_write(zone, root)
 
-
 def _zone_xml_remove_child(zone: str, tag: str, attrib: dict[str, str]) -> None:
-    """Fallback for the remove-service/remove-port/delete-zone actions:
-    idempotent removal of any matching <tag attrib.../> element. A
-    missing file is treated as already-removed, same spirit as
-    _pi_purge_tolerant_ok()'s tolerance for a purge step's undo actions."""
     path = _zone_xml_path(zone)
     if not os.path.isfile(path):
         return
@@ -1367,21 +558,7 @@ def _zone_xml_remove_child(zone: str, tag: str, attrib: dict[str, str]) -> None:
             root.remove(child)
     _zone_xml_write(zone, root)
 
-
 def _reload_firewalld() -> dict:
-    """Wraps `firewall-cmd --reload`. CONFIRMED (not assumed) via a real
-    capture on this fleet's hardware that --reload hits the *same*
-    CheckAuthorization crash as the mutating calls above -- an earlier
-    version of this comment/changelog claimed --reload was unaffected,
-    based only on the pasted workaround text rather than a real test;
-    that was wrong and is corrected here.
-    Debian's firewalld.service sets `ExecReload=/usr/bin/firewall-cmd
-    --reload`, so `systemctl reload firewalld` is NOT a safe fallback --
-    it just re-runs the identical broken D-Bus call. Instead, on the same
-    crash signature, send SIGHUP directly to the daemon: firewalld's own
-    docs (firewalld.org/documentation/the-daemon-firewalld) document
-    `killall -HUP firewalld` as --reload's equivalent, and a signal never
-    touches D-Bus/polkit at all."""
     r = _run_argv(["firewall-cmd", "--reload"])
     if not r["success"] and _polkit_signature_crash(r["output"]):
         r2 = _run_argv(["systemctl", "kill", "-s", "HUP", "firewalld"])
@@ -1392,7 +569,6 @@ def _reload_firewalld() -> dict:
             r["output"] += "\n[44helper] --reload SIGHUP fallback also failed: " + r2["output"]
     return r
 
-
 _WATCHED_DASHBOARD_PORTS: dict[int, str] = {
     9999: "sysmon dashboard",
     8989: "asl_dvs_dashboard",
@@ -1400,10 +576,8 @@ _WATCHED_DASHBOARD_PORTS: dict[int, str] = {
 }
 _WATCHED_AMI_PORT = 5038
 
-
 def _wg0_interface_present() -> bool:
     return os.path.exists("/sys/class/net/wg0")
-
 
 def _parse_wg_conf_text(text: str, mask_private_key: bool = True) -> dict:
     result: dict = {"interface": {}, "peers": []}
@@ -1432,7 +606,6 @@ def _parse_wg_conf_text(text: str, mask_private_key: bool = True) -> dict:
                 result["peers"][-1][key] = val
     return result
 
-
 def _parse_wg0_conf(path: str = WG0_CONF_PATH) -> dict | None:
     if not os.path.exists(path):
         return None
@@ -1445,14 +618,12 @@ def _parse_wg0_conf(path: str = WG0_CONF_PATH) -> dict | None:
 
     return _parse_wg_conf_text(text)
 
-
 def _wg0_conf_perms_ok(path: str = WG0_CONF_PATH) -> bool | None:
     try:
         mode = os.stat(path).st_mode & 0o777
     except OSError:
         return None
     return mode == 0o600
-
 
 def _wg_show_wg0() -> dict | None:
     try:
@@ -1476,7 +647,6 @@ def _wg_show_wg0() -> dict | None:
             info["endpoint"] = line.split(":", 1)[1].strip()
     return info or None
 
-
 def _firewalld_zone_info(zone: str = FIREWALLD_ZONE) -> dict | None:
     try:
         r = subprocess.run(
@@ -1499,7 +669,6 @@ def _firewalld_zone_info(zone: str = FIREWALLD_ZONE) -> dict | None:
             info["interfaces"] = line.split(":", 1)[1].split()
     return info
 
-
 def _configured_tunnel_names(cfg: configparser.ConfigParser) -> list[str]:
     if "tunnels" not in cfg:
         return []
@@ -1510,17 +679,6 @@ def _configured_tunnel_names(cfg: configparser.ConfigParser) -> list[str]:
             names.add(parts[1])
     return sorted(names)
 
-
-# =============================================================================
-# v0.0.138: Overview "Installed software" card. Read-only detection of the five
-# stacks this helper installs. Three cheap probes, shared by all five:
-#   - one `dpkg-query -W` listing every package's status + version,
-#   - one `systemctl show` for every unit on the list,
-#   - plain os.path checks for key files (for the non-apt installs).
-# Result is cached for _INSTALLED_CACHE_TTL seconds so the 5s Overview poll
-# doesn't run dpkg-query every time on a Pi Zero.
-# States: installed / broken (needs repair) / leftovers / absent.
-# =============================================================================
 _INSTALLED_PRODUCTS: list[dict] = [
     {"key": "asl3", "name": "AllStarLink 3 (ASL3)", "tab": "asl3",
      "pkgs": ["asl3", "asl3-asterisk", "allmon3"], "core_pkgs": ["asl3", "asl3-asterisk"],
@@ -1534,7 +692,6 @@ _INSTALLED_PRODUCTS: list[dict] = [
      "core_files": ["/opt/MMDVM_Bridge/MMDVM_Bridge", "/opt/Analog_Bridge/Analog_Bridge"], "core_units": [],
      "units": ["analog_bridge.service", "mmdvm_bridge.service", "md380-emu.service"],
      "leftover_paths": ["/opt/MMDVM_Bridge", "/opt/Analog_Bridge", "/var/lib/dvswitch"],
-     # dvswitch-server can be "installed" while its working parts are empty (v0.0.108)
      "expect_files": ["/opt/MMDVM_Bridge/MMDVM_Bridge", "/opt/Analog_Bridge/Analog_Bridge"]},
     {"key": "usrp2m17", "name": "USRP2M17 (M17)", "tab": "m17",
      "pkgs": [], "core_pkgs": [], "pkg_regex": r"^(usrp2m17|m17)",
@@ -1557,11 +714,7 @@ _INSTALLED_CACHE_TTL = 20.0
 _INSTALLED_CACHE: dict = {"at": 0.0, "data": None}
 _INSTALLED_LOCK = threading.Lock()
 
-
 def _installed_dpkg_all() -> dict[str, tuple[str, str]] | None:
-    """{package: (status_abbrev, version)} for every package dpkg knows, or
-    None if dpkg-query isn't available. Status abbrev is 2 chars, e.g. 'ii'
-    installed, 'rc' removed with config left, 'iU'/'iF'/'iH' half-done."""
     try:
         r = subprocess.run(
             ["dpkg-query", "-W", "-f=${Package}\t${db:Status-Abbrev}\t${Version}\n"],
@@ -1576,9 +729,7 @@ def _installed_dpkg_all() -> dict[str, tuple[str, str]] | None:
             out[parts[0].split(":")[0]] = (parts[1].strip()[:2], parts[2].strip())
     return out
 
-
 def _installed_units_show(units: list[str]) -> dict[str, dict]:
-    """One `systemctl show` for all units -> {unit: {load, active, file}}."""
     res: dict[str, dict] = {}
     if not units:
         return res
@@ -1601,7 +752,6 @@ def _installed_units_show(units: list[str]) -> dict[str, dict]:
                      "active": kv.get("ActiveState", "unknown"),
                      "file": kv.get("UnitFileState", "")}
     return res
-
 
 def _detect_installed_products(force: bool = False) -> list[dict]:
     now = time.monotonic()
@@ -1695,7 +845,6 @@ def _detect_installed_products(force: bool = False) -> list[dict]:
         _INSTALLED_CACHE["data"] = results
     return results
 
-
 def build_overview_data(cfg: configparser.ConfigParser) -> dict:
     my_port = cfg.getint("server", "port", fallback=9997)
 
@@ -1720,7 +869,6 @@ def build_overview_data(cfg: configparser.ConfigParser) -> dict:
         "self_check": self_check,
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
-
 
 def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | None) -> list[dict]:
     findings: list[dict] = []
@@ -1782,14 +930,11 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
 
     return findings
 
-
 def _self_check_worst_level(findings: list[dict]) -> str:
     order = {"danger": 3, "warn": 2, "info": 1, "ok": 0}
     if not findings:
         return "ok"
     return max(findings, key=lambda f: order.get(f["level"], 0))["level"]
-
-
 
 PI_INSTALL_STEPS = [
     "firewalld_prereq",
@@ -1821,7 +966,6 @@ PI_INSTALL_PORTS = {
                                    "specifically want remote dashboard access over the tunnel."},
 }
 
-
 def _run_argv(argv: list[str], timeout: int = 20) -> dict:
     log(f"RUN: {' '.join(argv)}")
     try:
@@ -1837,75 +981,42 @@ def _run_argv(argv: list[str], timeout: int = 20) -> dict:
         log(f"FAIL (timeout): {' '.join(argv)}")
         return {"success": False, "returncode": None, "output": "command timed out"}
 
-
 def _require_root() -> dict | None:
     if os.geteuid() != 0:
         return {"success": False, "returncode": None,
                 "output": "This action requires root. Run 44helper via its systemd service (installed with --install)."}
     return None
 
-
-# v0.0.103: package-manager commands must never be killed partway through. A live
-# node (2026-09-27) had `apt upgrade` killed at the 900s cap mid-unpack of libc6 /
-# python3.13 / a new kernel, leaving dpkg half-configured. Any command that runs a
-# mutating apt/apt-get/aptitude verb or a mutating dpkg action now runs with NO
-# timeout, on every tab and in Custom mode, regardless of the step's own "timeout"
-# value. Read-only apt calls (apt update, apt-cache, apt list) keep their limits.
 _APT_MUTATING_RE = re.compile(
     r"\b(?:apt|apt-get|aptitude)\b(?!-cache)[^;&|\n]*?\b(?:install|reinstall|upgrade|full-upgrade|"
     r"dist-upgrade|remove|purge|autoremove|autopurge)\b(?!-)"
     r"|\bdpkg\b[^;&|\n]*?(?:--configure|--install|--remove|--purge|--unpack|\s-[iPr]\b)")
-# dpkg's database-reading progress ticker ("(Reading database ... 45%") -- dozens of
-# near-identical lines per package that flooded the 64 KB job buffer and could push
-# real errors out of view. The final "... N files and directories currently
-# installed.)" line does not match and is kept.
 _DPKG_PROGRESS_RE = re.compile(r"^\(Reading database \.\.\.\s*(?:\d+%)?\s*$")
 
-
-# v0.0.111: compiling software can legitimately take an hour on a Pi, so a
-# command that runs a build tool is never cut off either (decided with the user:
-# the 15-minute limit stays for everything else, e.g. downloads and git).
 _BUILD_CMD_RE = re.compile(r"(?:^|[\s;&|(])(?:make|cmake|ninja|meson)(?:\s|$)|\./configure(?:\s|$)")
-
 
 def _is_build_cmd(cmd: str) -> bool:
     return bool(_BUILD_CMD_RE.search(cmd or ""))
 
-
 def _is_apt_mutating(cmd: str) -> bool:
     return bool(_APT_MUTATING_RE.search(cmd or ""))
 
-
-# v0.0.154: an install script can run apt inside itself, where _APT_MUTATING_RE can't
-# see it (Ajenti's `curl ... | sudo bash`, amp-hub's install.sh, DVSwitch's
-# `sudo bash ./bookworm`), so those are never cut off either.
 _SCRIPT_INSTALL_RE = re.compile(
     r"\|\s*(?:sudo\s+(?:-\S+\s+)*)?(?:ba)?sh\b"
     r"|(?:\./|\b(?:ba)?sh\s+)[\w./-]*install[\w.-]*\.sh\b"
     r"|\b(?:ba)?sh\s+\.?/\S+")
 
-
 def _is_script_install(cmd: str) -> bool:
     return bool(_SCRIPT_INSTALL_RE.search(cmd or ""))
 
-
 def _effective_timeout(cmd: str, timeout):
-    """None (never kill) for package-manager changes, builds and install scripts;
-    the step's own limit otherwise."""
     return None if (_is_apt_mutating(cmd) or _is_build_cmd(cmd) or _is_script_install(cmd)) else timeout
-
 
 def _strip_progress_noise(text: str) -> str:
     return "".join(l for l in (text or "").splitlines(keepends=True)
                    if not _DPKG_PROGRESS_RE.match(l.rstrip("\r\n")))
 
-
 def _stop_process_tree(proc: "subprocess.Popen", grace: float = 10.0) -> None:
-    """Stops the whole command, not just its shell. The job runs in its own session
-    (start_new_session=True), so its process group holds the shell and everything it
-    started. SIGTERM first -- sudo relays SIGTERM to its child even when sudoers
-    use_pty puts that child in a separate session, which SIGKILL cannot do -- then
-    SIGKILL whatever is left after the grace period."""
     for sig, wait in ((signal.SIGTERM, grace), (signal.SIGKILL, 5.0)):
         try:
             os.killpg(proc.pid, sig)
@@ -1917,13 +1028,7 @@ def _stop_process_tree(proc: "subprocess.Popen", grace: float = 10.0) -> None:
         except subprocess.TimeoutExpired:
             continue
 
-
 def _run_shell_line(cmd: str, timeout: int = 900) -> dict:
-    """Sibling to _run_argv(), for the ASL3/DVswitch/SVXlink install-script
-    tabs. Uses subprocess.run(shell=True) rather than an argv list, since
-    real install lines routinely chain with && (apt update && apt install
-    ...) which an argv list can't express. Same log()/timeout/not-found
-    shape as _run_argv() so Actions Log entries look consistent."""
     log(f"RUN(shell): {cmd}")
     timeout = _effective_timeout(cmd, timeout)
     try:
@@ -1947,13 +1052,10 @@ def _run_shell_line(cmd: str, timeout: int = 900) -> dict:
         log(f"FAIL (exception): {cmd} :: {exc}")
         return {"success": False, "returncode": None, "output": f"error running command: {exc}"}
 
-
-
 _JOBS: dict[str, dict] = {}
 _JOBS_LOCK = threading.Lock()
 _JOB_OUTPUT_CAP = 64 * 1024
 _JOB_IDLE_TTL = 600
-
 
 def _job_append_output(job_key: str, text: str) -> None:
     if not text:
@@ -1963,12 +1065,11 @@ def _job_append_output(job_key: str, text: str) -> None:
         if job is None:
             return
         job["output"] += text
-        job["out_seq"] = job.get("out_seq", 0) + len(text)  # v0.0.143: live-stream append counter
+        job["out_seq"] = job.get("out_seq", 0) + len(text)
         if len(job["output"]) > _JOB_OUTPUT_CAP:
             overflow = len(job["output"]) - _JOB_OUTPUT_CAP
             job["output"] = "(...output truncated...)\n" + job["output"][overflow:]
     _ev_notify()
-
 
 def _prune_stale_jobs() -> None:
     cutoff = time.time() - _JOB_IDLE_TTL
@@ -1978,25 +1079,8 @@ def _prune_stale_jobs() -> None:
         for k in stale:
             del _JOBS[k]
 
-
 def _timeout_message(cmd: str, timeout: int) -> str:
-    """v0.0.43: the timeout message used to unconditionally blame
-    interactive prompts, which was actively misleading for the far more
-    common real cause here — a slow apt operation (mirror latency, a
-    large dependency set, a from-source build) legitimately taking
-    longer than the timeout allowed, not a command sitting stuck waiting
-    on input. Every apt-touching command in this codebase already runs
-    DEBIAN_FRONTEND=noninteractive, so branch on "apt" appearing in the
-    command at all (broader than matching the noninteractive marker
-    literally — also correctly catches bare `apt update`/`apt-cache
-    policy` calls that never carry that marker since they don't need
-    it, but are just as likely to be slow-mirror victims). The
-    interactive-prompt possibility is downgraded to a caveat rather than
-    an assertion, since it can't be ruled out for Custom mode's
-    free-text box, the one place an actually-interactive command could
-    still land."""
     if _is_apt_mutating(cmd):
-        # Should be unreachable since v0.0.103 (these run with no timeout); kept as a safe fallback.
         return (f"\ncommand was STOPPED after {timeout}s while changing packages. The system may be "
                 f"half-updated. Do NOT reboot yet. On the Update tab: 1) run 'Is apt still running?' and "
                 f"wait until it reports nothing running, 2) run step 2's 'Reconfigure half-installed "
@@ -2009,7 +1093,6 @@ def _timeout_message(cmd: str, timeout: int) -> str:
     return (f"\ncommand timed out after {timeout}s and was stopped, including anything it started. "
             f"If this command normally expects interactive input, note this engine has no stdin "
             f"channel to supply it.")
-
 
 def _job_worker(job_key: str, cmd: str, timeout: int) -> None:
     log(f"RUN(shell,async): {cmd}")
@@ -2066,10 +1149,7 @@ def _job_worker(job_key: str, cmd: str, timeout: int) -> None:
     _ev_notify()
     log(f"{'OK' if (not timed_out and rc == 0) else 'FAIL'} (exit {rc}): {cmd}")
 
-
 def _start_shell_job(job_key: str, cmd: str, timeout: int = 900) -> dict:
-    """Starts (or re-attaches to an already-running) background job for
-    cmd, returning immediately. Does not itself run the command."""
     with _JOBS_LOCK:
         existing = _JOBS.get(job_key)
         if existing is not None and existing["status"] == "running":
@@ -2080,17 +1160,7 @@ def _start_shell_job(job_key: str, cmd: str, timeout: int = 900) -> dict:
     threading.Thread(target=_job_worker, args=(job_key, cmd, timeout), daemon=True).start()
     return {"job_key": job_key, "status": "running"}
 
-
 def _job_python_worker(job_key: str, fn: Callable[[], dict]) -> None:
-    """Sibling to _job_worker(), for Pi Install / Router Install's typed
-    action functions (v0.0.42) rather than a shell command line. These
-    each do their own single blocking subprocess/SSH call internally
-    (not a chain this engine can tap for line-by-line progress the way
-    _job_worker streams shell stdout), so the job buffer here is just
-    the action's final {success, verified, output} dict — the visible
-    win is the browser no longer blocking the whole request for up to
-    90s (install_luci) and getting a live elapsed-time indicator, not
-    interim progress lines."""
     log(f"RUN(python-job): {job_key}")
     try:
         result = fn()
@@ -2110,11 +1180,7 @@ def _job_python_worker(job_key: str, fn: Callable[[], dict]) -> None:
                        output=str(result.get("output", "")), finished_at=time.time())
     log(f"{'OK' if result.get('success') else 'FAIL'} (python-job): {job_key}")
 
-
 def _start_python_job(job_key: str, fn: Callable[[], dict]) -> dict:
-    """Same dedupe/re-attach contract as _start_shell_job, but runs an
-    arbitrary zero-arg callable (one of the existing action_*() functions,
-    via a closure) in the background instead of a shell line."""
     with _JOBS_LOCK:
         existing = _JOBS.get(job_key)
         if existing is not None and existing["status"] == "running":
@@ -2124,14 +1190,11 @@ def _start_python_job(job_key: str, fn: Callable[[], dict]) -> dict:
     threading.Thread(target=_job_python_worker, args=(job_key, fn), daemon=True).start()
     return {"job_key": job_key, "status": "running"}
 
-
 def _job_status(job_key: str) -> dict:
     _prune_stale_jobs()
     with _JOBS_LOCK:
         job = _JOBS.get(job_key)
     if job is None:
-        # v0.0.130: not tracked in this process -- maybe a system job started before a
-        # 44helper restart. If its unit still exists, re-adopt it (replays its output).
         unit = _job_unit_name(job_key)
         if unit in _unit_jobs_present():
             _adopt_unit_job(job_key, unit)
@@ -2146,14 +1209,6 @@ def _job_status(job_key: str) -> dict:
                 "verified": job.get("verified"),
                 "elapsed_sec": int(max(0, end - job.get("started_at", end)))}
 
-
-
-# =============================================================================
-# v0.0.143: live updates over Server-Sent Events (SSE). ONE stream per page
-# (/api/events) carries everything, because browsers allow only ~6 open
-# connections per site over plain HTTP -- one stream per card would freeze the
-# page. Stdlib only: SSE is plain text over a normal HTTP response.
-# =============================================================================
 _EV_COND = threading.Condition()
 _EV_STREAMS = 0
 _EV_MAX_STREAMS = 4
@@ -2161,23 +1216,16 @@ _EV_KEEPALIVE = 15.0
 _EV_TICK = 1.0
 _EV_COALESCE = 0.15
 
-
 def _ev_notify() -> None:
     with _EV_COND:
         _EV_COND.notify_all()
-
 
 def _ev_write(wfile, event: str, data) -> None:
     payload = json.dumps(data, separators=(",", ":"))
     wfile.write(f"event: {event}\ndata: {payload}\n\n".encode("utf-8"))
     wfile.flush()
 
-
 def _ev_job_diffs(sent: dict) -> list[dict]:
-    """What changed in _JOBS since this stream last sent. `sent` is per-stream
-    state: key -> (started_at, out_seq, meta). Output goes as an append where
-    possible, a full resend when the job restarted, finished, or the append is
-    bigger than what is still held."""
     with _JOBS_LOCK:
         snap = {k: (v.get("started_at"), v.get("out_seq", 0), v.get("output", ""), v.get("status"),
                     v.get("success"), v.get("returncode"), v.get("verified"), v.get("finished_at"))
@@ -2209,15 +1257,11 @@ def _ev_job_diffs(sent: dict) -> list[dict]:
             del sent[k]
     return out
 
-
-# v0.0.145: Overview + quiet-mode watcher. Runs only while a stream is open;
-# streams send its results when the fingerprint changes.
 _EV_WATCH: dict = {"overview": None, "ov_fp": None, "ov_rev": 0, "ov_at": 0.0,
                    "quiet": None, "qm_fp": None, "qm_rev": 0, "qm_at": 0.0, "running": False}
 _EV_WATCH_LOCK = threading.Lock()
 _EV_OV_EVERY = 5.0
 _EV_QM_EVERY = 10.0
-
 
 def _ev_watcher_ensure() -> None:
     with _EV_WATCH_LOCK:
@@ -2226,9 +1270,7 @@ def _ev_watcher_ensure() -> None:
         _EV_WATCH["running"] = True
     threading.Thread(target=_ev_watcher_loop, daemon=True).start()
 
-
 def _ev_watch_step(now: float) -> bool:
-    """One watcher pass. True if anything was published."""
     changed = False
     if now - _EV_WATCH["ov_at"] >= _EV_OV_EVERY:
         _EV_WATCH["ov_at"] = now
@@ -2254,7 +1296,6 @@ def _ev_watch_step(now: float) -> bool:
             log(f"live-update watcher: quiet-mode check failed: {exc}")
     return changed
 
-
 def _ev_watcher_loop() -> None:
     while True:
         with _EV_WATCH_LOCK:
@@ -2262,12 +1303,11 @@ def _ev_watcher_loop() -> None:
                 n = _EV_STREAMS
             if n <= 0:
                 _EV_WATCH["running"] = False
-                _EV_WATCH["ov_at"] = _EV_WATCH["qm_at"] = 0.0  # next start re-checks at once
+                _EV_WATCH["ov_at"] = _EV_WATCH["qm_at"] = 0.0
                 return
         if _ev_watch_step(time.monotonic()):
             _ev_notify()
         time.sleep(1.0)
-
 
 def _ev_watch_diffs(seen: dict) -> list[tuple[str, dict]]:
     out = []
@@ -2278,10 +1318,7 @@ def _ev_watch_diffs(seen: dict) -> list[tuple[str, dict]]:
                 out.append((name, _EV_WATCH[name]))
     return out
 
-
 def _ev_serve(wfile, alive: Callable[[], bool], max_seconds: float | None = None) -> None:
-    """The stream loop. Returns when the login is gone, the client hangs up
-    (write raises), or max_seconds passes (tests only)."""
     sent: dict = {}
     seen: dict = {}
     t0 = last_write = time.monotonic()
@@ -2311,7 +1348,6 @@ def _ev_serve(wfile, alive: Callable[[], bool], max_seconds: float | None = None
             _EV_COND.wait(timeout=_EV_TICK)
         time.sleep(_EV_COALESCE)
 
-
 def _cockpit_install_step(num: int) -> dict:
     return {
         "id": "install_cockpit", "num": num, "title": "Install Cockpit (web admin UI)",
@@ -2325,7 +1361,6 @@ def _cockpit_install_step(num: int) -> dict:
                 "once from whichever tab you set up first, skip it on the others.",
     }
 
-
 def _cockpit_enable_step(num: int) -> dict:
     return {
         "id": "enable_cockpit", "num": num, "title": "Enable Cockpit socket",
@@ -2333,7 +1368,6 @@ def _cockpit_enable_step(num: int) -> dict:
         "note": "Idempotent — safe to run again from another tab if Cockpit was already installed/enabled "
                 "from there.",
     }
-
 
 def _cockpit_purge_step(num: int) -> dict:
     return {
@@ -2352,7 +1386,6 @@ def _cockpit_purge_step(num: int) -> dict:
                 "from whichever other tab's stack is relying on it. Only run this if you're sure nothing "
                 "else on this node still wants Cockpit.",
     }
-
 
 def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
     return [
@@ -2430,7 +1463,6 @@ def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
                  "`sudo asl-menu` there to complete Node Settings / radio interface configuration."},
     ]
 
-
 _ASL3_INSTALL_BOOKWORM: list[dict] = _asl3_install_steps("deb12")
 _ASL3_INSTALL_TRIXIE: list[dict] = _asl3_install_steps("deb13")
 
@@ -2469,7 +1501,6 @@ def _asl3_purge_steps() -> list[dict]:
         _cockpit_purge_step(7),
     ]
 
-
 _ASL3_PURGE_BOOKWORM: list[dict] = _asl3_purge_steps()
 _ASL3_PURGE_TRIXIE: list[dict] = _asl3_purge_steps()
 
@@ -2477,7 +1508,6 @@ _ASL3_SCRIPTS: dict[str, dict[str, list[dict]]] = {
     "install": {"bookworm": _ASL3_INSTALL_BOOKWORM, "trixie": _ASL3_INSTALL_TRIXIE},
     "purge": {"bookworm": _ASL3_PURGE_BOOKWORM, "trixie": _ASL3_PURGE_TRIXIE},
 }
-
 
 def _dv_config_field_step(num: int) -> dict:
     return {
@@ -2504,28 +1534,11 @@ def _dv_config_field_step(num: int) -> dict:
                 "USRP ports or AMBE settings.",
     }
 
-
-# v0.0.108: DVSwitch step commands rebuilt from what 652700 actually showed.
-# (1) The dvswitch-server meta-package can be installed while its working parts
-#     are not: on 652700 mmdvm-bridge and md380-emu were never installed and
-#     analog-bridge was "installed" with an EMPTY /opt/Analog_Bridge (files
-#     removed by an earlier purge). So the components are named explicitly, and
-#     an empty /opt dir triggers a --reinstall with --force-confmiss (without it
-#     dpkg treats a deleted conffile such as Analog_Bridge.ini as the admin's
-#     choice and does NOT put it back).
-# (2) `systemctl enable a b c` aborts entirely on the first missing unit, so the
-#     enable/disable steps now act on the units that exist and name the rest.
-# (3) Trixie mounts /tmp noexec on some images ("sudo: unable to execute
-#     ./bookworm: Permission denied"), so the repo script runs via `sudo bash`.
-# (4) The repo steps skip themselves when the dvswitch.org source is present.
 _DV_COMPONENTS = "dvswitch-server analog-bridge mmdvm-bridge md380-emu"
 _DV_APT_OPTS = ("-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\"")
 _DV_SRC_TEST = "grep -rqs 'dvswitch.org' /etc/apt/sources.list /etc/apt/sources.list.d/"
 _DV_UNITS = "analog_bridge mmdvm_bridge md380-emu"
 
-# v0.0.115: ASL3's Allmon3 runs on apache2 and the DVSwitch dashboard on lighttpd; both
-# default to port 80, so whichever starts second fails and systemd keeps restarting it
-# (what 652700 showed). Read-only check, shared by step 1 and the two fix steps.
 _DV_WEB_CHECK = (
     "echo '--- web server on port 80:'; "
     "w=$(ss -ltnpH 'sport = :80' 2>/dev/null | grep -o 'users:((\"[^\"]*\"' | cut -d'\"' -f2 | sort -u | tr '\\n' ' '); "
@@ -2542,12 +1555,9 @@ _DV_NO_CLASH_GUARD = ("if ! systemctl is-active --quiet apache2 2>/dev/null || "
                       "echo 'No clash: apache2 is not running or lighttpd is not installed -- nothing to change.'; "
                       "exit 0; fi; ")
 
-
-# Ports the DVSwitch dashboard must never be moved onto (v0.0.135).
 _DV_RESERVED_PORTS = [("22", "SSH"), ("80", "apache2 / Allmon3"), ("443", "HTTPS"), ("2222", "Web_Proxy"),
                       ("8080", "Web_Proxy"), ("8989", "asl_dvs_dashboard"), ("8990", "instmon"),
                       ("8991", "wifimon"), ("9090", "Cockpit"), ("9997", "44helper"), ("9999", "sysmon")]
-
 
 def _dv_web_clash_steps(first_num: int) -> list[dict]:
     return [
@@ -2563,8 +1573,6 @@ def _dv_web_clash_steps(first_num: int) -> list[dict]:
          "title": "(Optional) Web-server clash: move the DVSwitch web dashboard to another port",
          "fields": [{"id": "port", "label": "New port for the DVSwitch dashboard", "type": "text",
                      "default": "8081"}],
-         # v0.0.135 (audit item 4): range, suite ports, and "already listening" checked
-         # before anything is edited -- the old version only checked it was digits.
          "cmd_template": ("case '{{port}}' in ''|*[!0-9]*) echo 'Port must be a number'; exit 1;; esac; "
                           "if [ '{{port}}' -lt 1 ] || [ '{{port}}' -gt 65535 ]; then "
                           "echo 'Port must be between 1 and 65535.'; exit 1; fi; "
@@ -2590,7 +1598,6 @@ def _dv_web_clash_steps(first_num: int) -> list[dict]:
                  "zone; check the Ports tab afterwards). Does nothing if there is no clash."},
     ]
 
-
 _DV_PREFLIGHT_CMD = (
     "echo '--- processor type:'; dpkg --print-architecture; "
     "echo '--- DVSwitch package source:'; "
@@ -2600,8 +1607,6 @@ _DV_PREFLIGHT_CMD = (
     "for pair in analog-bridge:Analog_Bridge mmdvm-bridge:MMDVM_Bridge md380-emu:md380-emu; do "
     "p=${pair%%:*}; d=${pair#*:}; "
     "s=$(dpkg-query -W -f='${Status}' $p 2>/dev/null); "
-    # v0.0.136 (audit item 6): plain words instead of raw dpkg states like
-    # "install ok unpacked" / "unknown ok not-installed" (both seen on 652700).
     "case \"$s\" in *' installed') ps='installed';; ''|*not-installed) ps='NOT installed';; "
     "*unpacked|*half-configured|*half-installed|*triggers-awaited|*triggers-pending) "
     "ps='HALF-INSTALLED -- run Package recovery 2 on the Update tab';; "
@@ -2639,16 +1644,13 @@ _DV_DISABLE_CMD = (
     "else echo \"$u: not installed, skipping\"; fi; done; true"
 )
 
-
 def _dv_fetch_repo_cmd(flag: str = "") -> str:
     return (f"if {_DV_SRC_TEST}; then echo 'DVSwitch source already set up -- skipping'; "
             f"else cd /tmp && sudo wget {flag}http://dvswitch.org/bookworm; fi")
 
-
 def _dv_run_repo_cmd() -> str:
     return (f"if {_DV_SRC_TEST}; then echo 'DVSwitch source already set up -- skipping'; "
             "else cd /tmp && sudo bash ./bookworm; fi")
-
 
 _DV_REPO_NOTE = ("Official dvswitch.org script, written for Debian 12 — adds the DVSwitch apt source and signing "
                  "key. Fetched over plain HTTP (no TLS); review it if you want to confirm before trusting it on a "
@@ -2662,7 +1664,6 @@ _DV_INSTALL_NOTE = ("Installs the dvswitch-server bundle AND its working parts b
 _DV_ENABLE_NOTE = ("Enables and starts whichever of analog_bridge / mmdvm_bridge / md380-emu exist, and FAILS naming "
                    "any that are missing (a plain `systemctl enable a b c` aborts on the first missing one and "
                    "enables nothing).")
-
 
 def _dvswitch_install_steps_bookworm() -> list[dict]:
     return [
@@ -2681,7 +1682,6 @@ def _dvswitch_install_steps_bookworm() -> list[dict]:
         _dv_config_field_step(8),
         *_dv_web_clash_steps(9),
     ]
-
 
 def _dvswitch_install_steps_trixie() -> list[dict]:
     return [
@@ -2717,7 +1717,6 @@ def _dvswitch_install_steps_trixie() -> list[dict]:
         *_dv_web_clash_steps(11),
     ]
 
-
 def _dvswitch_purge_steps_bookworm() -> list[dict]:
     return [
         {"id": "bw_purge_stop_services", "num": 1, "title": "Stop & disable DVSwitch services",
@@ -2751,13 +1750,7 @@ def _dvswitch_purge_steps_bookworm() -> list[dict]:
         _cockpit_purge_step(6),
     ]
 
-
 def _dvswitch_purge_steps_all() -> list[dict]:
-    """v0.0.114: ONE purge list for the DVSwitch tab, shown whichever install option
-    is selected. Both options install the same packages from the same dvswitch.org
-    source, so a single pass removes anything either could have put on the node --
-    including leftovers of the retired pre-v0.0.101 Trixie source-build script.
-    Same list under both dropdown keys, so job keys are purge_<distro>_dv_purge_*."""
     steps = [dict(s, id=s["id"].replace("bw_", "dv_", 1)) for s in _dvswitch_purge_steps_bookworm()]
     cockpit = steps.pop()
     steps[0] = dict(steps[0], note=steps[0]["note"] + " This purge covers BOTH install options (Bookworm "
@@ -2777,12 +1770,10 @@ def _dvswitch_purge_steps_all() -> list[dict]:
     steps.append(dict(cockpit, num=len(steps) + 1))
     return steps
 
-
 _DVSWITCH_SCRIPTS: dict[str, dict[str, list[dict]]] = {
     "install": {"bookworm": _dvswitch_install_steps_bookworm(), "trixie": _dvswitch_install_steps_trixie()},
     "purge": {"bookworm": _dvswitch_purge_steps_all(), "trixie": _dvswitch_purge_steps_all()},
 }
-
 
 def _svx_config_field_step(num: int, conf_path: str = "/etc/svxlink/svxlink.conf",
                             svc: str = "svxlink") -> dict:
@@ -2802,7 +1793,6 @@ def _svx_config_field_step(num: int, conf_path: str = "/etc/svxlink/svxlink.conf
                 "needs sound-card device and GPIO pin (PTT/COS) settings that are specific to your hardware — "
                 "those are left as installer defaults; edit them by hand for your actual interface.",
     }
-
 
 def _svxlink_install_steps() -> list[dict]:
     return [
@@ -2830,7 +1820,6 @@ def _svxlink_install_steps() -> list[dict]:
         _cockpit_install_step(7),
         _cockpit_enable_step(8),
     ]
-
 
 _SVX_USRP_BUILD_DEPS = (
     "g++ cmake make libsigc++-2.0-dev libgsm1-dev libpopt-dev tcl-dev libgcrypt20-dev "
@@ -2861,7 +1850,6 @@ USRP_HOST=127.0.0.1
 #    USRP_RX_PORT = the port Analog_Bridge SENDS to  (fork default 41233)
 #    Match them to Analog_Bridge.ini -- the two ends are mirror images.
 #    Keep everything on 127.0.0.1; never open these ports in a firewall."""
-
 
 def _svxlink_install_steps_usrp() -> list[dict]:
     return [
@@ -3003,7 +1991,6 @@ def _svxlink_install_steps_usrp() -> list[dict]:
         _cockpit_enable_step(12),
     ]
 
-
 def _svxlink_purge_steps_usrp() -> list[dict]:
     return [
         {"id": "usrp_purge_stop", "num": 1, "title": "Stop & disable svxlink-usrp",
@@ -3036,7 +2023,6 @@ def _svxlink_purge_steps_usrp() -> list[dict]:
                  "service stop. Keeping the source tree lets you rebuild without re-cloning."},
     ]
 
-
 def _svxlink_purge_steps() -> list[dict]:
     return [
         {"id": "svx_purge_stop", "num": 1, "title": "Stop & disable SvxLink",
@@ -3055,13 +2041,7 @@ def _svxlink_purge_steps() -> list[dict]:
         _cockpit_purge_step(5),
     ]
 
-
 def _svxlink_purge_steps_all() -> list[dict]:
-    """v0.0.141: ONE purge list for the SVXLink tab, whichever install option is
-    selected (same idea as DVSwitch's v0.0.114 _dvswitch_purge_steps_all). Removes
-    anything either the apt package or the USRP source build could have left.
-    Optional (auto False) steps are kept last so the v0.0.122 clean-up steps land
-    before them and the automatic run stops where it should."""
     usrp = {st["id"]: st for st in _svxlink_purge_steps_usrp()}
     pkg = {st["id"]: st for st in _svxlink_purge_steps()}
     steps = [
@@ -3088,15 +2068,12 @@ def _svxlink_purge_steps_all() -> list[dict]:
         st["num"] = i
     return steps
 
-
 _SVXLINK_SCRIPTS: dict[str, dict[str, list[dict]]] = {
     "install": {"bookworm": _svxlink_install_steps(), "trixie": _svxlink_install_steps(),
                 "usrp": _svxlink_install_steps_usrp()},
     "purge": {"bookworm": _svxlink_purge_steps_all(), "trixie": _svxlink_purge_steps_all(),
               "usrp": _svxlink_purge_steps_all()},
 }
-
-
 
 _M17_RPTCONF_SNIPPET = """[1917]
    rxchannel = USRP/127.0.0.1:34008:32008  ; USRP channel driver — must be enabled in modules.conf
@@ -3139,7 +2116,6 @@ stanza:
 
 NODE1 = 1917
 """
-
 
 def _m17_install_steps() -> list[dict]:
     return [
@@ -3214,7 +2190,6 @@ def _m17_install_steps() -> list[dict]:
         _cockpit_enable_step(11),
     ]
 
-
 def _m17_purge_steps() -> list[dict]:
     return [
         {"id": "m17_purge_stop", "num": 1, "title": "Stop & disable USRP2M17",
@@ -3238,12 +2213,10 @@ def _m17_purge_steps() -> list[dict]:
         _cockpit_purge_step(6),
     ]
 
-
 _M17_SCRIPTS: dict[str, dict[str, list[dict]]] = {
     "install": {"standard": _m17_install_steps()},
     "purge": {"standard": _m17_purge_steps()},
 }
-
 
 def _m17_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _M17_SCRIPTS.get(mode, {}).get(distro, []):
@@ -3251,13 +2224,11 @@ def _m17_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
             return step
     return None
 
-
 def _asl3_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _ASL3_SCRIPTS.get(mode, {}).get(distro, []):
         if step["id"] == step_id:
             return step
     return None
-
 
 def _dv_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _DVSWITCH_SCRIPTS.get(mode, {}).get(distro, []):
@@ -3265,24 +2236,14 @@ def _dv_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
             return step
     return None
 
-
 def _svx_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _SVXLINK_SCRIPTS.get(mode, {}).get(distro, []):
         if step["id"] == step_id:
             return step
     return None
 
-
-# v0.0.116: package health gate. Before any command that changes packages, a
-# read-only `dpkg --audit`; if dpkg reports half-installed or broken packages the
-# step is refused and the user is pointed at the Update tab's recovery steps --
-# building on top of a half-finished upgrade is how 652700 got into trouble.
-# The recovery steps themselves (and Update's fix-broken / reconfigure / apt-check
-# steps) are exempt. If the audit itself can't answer (overloaded node), the step
-# is allowed rather than blocking the user out of their own tools.
 _PKG_GATE_EXEMPT_UPDATE_IDS = {"fix_missing", "dpkg_configure", "apt_running_check",
                                "recover_check", "recover_configure", "recover_reinstall"}
-
 
 def _pkg_health_gate(command_text: str) -> dict | None:
     if not _is_apt_mutating(command_text):
@@ -3303,20 +2264,6 @@ def _pkg_health_gate(command_text: str) -> dict | None:
                       "(9, 10, 11), then run this step again. Masked services on this helper's own tabs are "
                       "cleared automatically before those steps run.\n\n--- dpkg --audit ---\n" + problems}
 
-
-# =============================================================================
-# v0.0.118: masked-service guard rail. A masked unit (a link to /dev/null in
-# /etc/systemd/system) survives apt purge -- Debian packages MASK their own
-# units on `remove` and only unmask on `purge`, so a remove-without-purge leaves
-# the mask behind, and a later install then fails in its postinst ("Failed to
-# enable unit ... is masked") -- exactly what broke analog-reflector on 652700.
-# Each tab only ever looks at ITS OWN services: Debian ships intentional masks
-# (sudo, hwclock, cryptdisks, cryptdisks-early, x11-common, alsa-utils) that must
-# never be touched. Decided with the user: masks on a tab's own services are
-# cleared AUTOMATICALLY, as "unmask & keep off" (unmask, then disable -- the
-# service still does not run, but package scripts work again); the install
-# steps are refused on the node until nothing on the tab's list is masked.
-# =============================================================================
 _GUARD_TAB_UNITS: dict[str, list[str]] = {
     "asl3": ["asterisk.service", "allmon3.service", "apache2.service",
              "asl3-update-astdb.timer", "asl3-update-nodelist.timer"],
@@ -3330,12 +2277,7 @@ _GUARD_TAB_UNITS: dict[str, list[str]] = {
 }
 _GUARD_TAB_UNITS["update"] = sorted({u for units in _GUARD_TAB_UNITS.values() for u in units})
 _GUARD_LAST: dict[str, dict] = {}
-# v0.0.134 (audit item 3): masks the user wants to KEEP. Automatic clearing would
-# otherwise undo a deliberate mask on a listed service (e.g. apache2 masked to give
-# port 80 to lighttpd) every time the tab opened. A kept unit is never auto-unmasked
-# and never blocks a step -- the card lists it with a warning instead.
 _GUARD_KEEP_FILE = str(CONFIG_DIR / "44helper_guard_keep.json")
-
 
 def _guard_keep_list() -> list[str]:
     try:
@@ -3345,14 +2287,11 @@ def _guard_keep_list() -> list[str]:
     except (FileNotFoundError, ValueError, OSError):
         return []
 
-
 def _guard_keep_set(units: list[str]) -> None:
     _compare_before_write(_GUARD_KEEP_FILE, json.dumps(sorted(set(units))).encode("utf-8"))
 _GUARD_LOCK = threading.Lock()
 
-
 def _guard_masked_all() -> dict[str, str]:
-    """{unit_lower: state} for every masked / masked-runtime unit file. One call."""
     try:
         r = subprocess.run(["systemctl", "list-unit-files", "--no-legend", "--no-pager", "--plain",
                             "--state=masked,masked-runtime"], capture_output=True, text=True, timeout=20)
@@ -3365,15 +2304,11 @@ def _guard_masked_all() -> dict[str, str]:
             out[parts[0].lower()] = parts[1]
     return out
 
-
 def _guard_masked_for(tab: str, masked: dict[str, str] | None = None) -> list[tuple[str, str]]:
     masked = _guard_masked_all() if masked is None else masked
     return [(u, masked[u.lower()]) for u in _GUARD_TAB_UNITS.get(tab, []) if u.lower() in masked]
 
-
 def _guard_autofix(tab: str) -> dict:
-    """Clear masks on this tab's own services ("unmask & keep off"), then re-check.
-    Result is also kept in _GUARD_LAST[tab] for the tab's card."""
     with _GUARD_LOCK:
         keep = set(_guard_keep_list())
         found_all = _guard_masked_for(tab)
@@ -3397,14 +2332,11 @@ def _guard_autofix(tab: str) -> dict:
             subprocess.run(["systemctl", "daemon-reload"], capture_output=True, text=True, timeout=60)
         still = [u for u, _ in _guard_masked_for(tab) if u not in keep]
         prev = _GUARD_LAST.get(tab, {})
-        # "fixed" accumulates everything auto-cleared on this tab since 44helper started,
-        # so the card can keep offering "Turn on" for it (Stage 2 removes a unit once turned on).
         result = {"tab": tab, "checked_at": time.time(), "still_masked": still,
                   "fixed": sorted(set(prev.get("fixed", [])) | set(fixed)),
                   "lines": lines or prev.get("lines", []), "blocked": bool(still), "kept": kept}
         _GUARD_LAST[tab] = result
         return result
-
 
 def _masked_gate(tab: str) -> dict | None:
     res = _guard_autofix(tab)
@@ -3416,11 +2348,7 @@ def _masked_gate(tab: str) -> dict | None:
                       "fail on them. Clear them from the red card at the top of this tab, or in SSH with: "
                       "sudo systemctl unmask " + " ".join(res["still_masked"]) + "\n\n" + "\n".join(res["lines"])}
 
-
 def _guard_turn_on(tab: str, unit: str) -> dict:
-    """v0.0.119: the one manual fix left once masks are cleared automatically --
-    turn a previously-masked service ON (enable --now). Only units on that tab's
-    own list are accepted, so this can never be used to start anything else."""
     if tab not in _GUARD_TAB_UNITS:
         return {"success": False, "output": f"Unknown tab: {tab}"}
     if unit not in _GUARD_TAB_UNITS[tab]:
@@ -3437,7 +2365,6 @@ def _guard_turn_on(tab: str, unit: str) -> dict:
             if last and unit in last.get("fixed", []):
                 last["fixed"] = [u for u in last["fixed"] if u != unit]
     return r
-
 
 def _dispatch_guard_action(payload: dict) -> dict:
     tab = str(payload.get("tab", ""))
@@ -3477,19 +2404,8 @@ def _dispatch_guard_action(payload: dict) -> dict:
         return _guard_turn_on(tab, str(payload.get("unit", "")))
     return {"success": False, "output": f"Unknown guard action: {action}"}
 
-
 def _dispatch_tab_action(payload: dict, lookup_fn: Callable[[str, str, str], dict | None],
                           tab_prefix: str, valid_distros: tuple[str, ...] = ("bookworm", "trixie")) -> dict:
-    """Shared dispatcher for the ASL3/DVswitch/SVXlink/M17 tabs (v0.0.40:
-    now starts an async job and returns immediately — see _start_shell_job
-    — instead of blocking until the command finishes). job_key is built
-    from tab_prefix + mode + distro + step_id for install/purge steps (a
-    stable, repeatable key so a page reload or a double-clicked Run can
-    re-attach to / dedupe against an already-running job), or a random
-    tab_prefix + "_custom_" + uuid for Custom-mode's free-text box.
-    v0.0.43: reads an optional "timeout" key off the looked-up step
-    (falling back to _start_shell_job's own 900s default when absent) —
-    see _ASL3_SCRIPTS et al for which steps override it and why."""
     mode = payload.get("mode", "")
     command_text = str(payload.get("command_text", "")).strip()
     if not command_text:
@@ -3515,7 +2431,7 @@ def _dispatch_tab_action(payload: dict, lookup_fn: Callable[[str, str, str], dic
     if err:
         err["status"] = "done"
         return err
-    if mode == "install" or (mode == "custom" and _is_apt_mutating(command_text)):  # v0.0.135: + Custom
+    if mode == "install" or (mode == "custom" and _is_apt_mutating(command_text)):
         mgate = _masked_gate(tab_prefix)
         if mgate:
             return mgate
@@ -3526,23 +2442,17 @@ def _dispatch_tab_action(payload: dict, lookup_fn: Callable[[str, str, str], dic
         return _start_unit_job(job_key, command_text)
     return _start_shell_job(job_key, command_text, timeout=timeout)
 
-
 def _dispatch_asl3_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _asl3_lookup_step, "asl3")
-
 
 def _dispatch_dvswitch_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _dv_lookup_step, "dv")
 
-
 def _dispatch_svxlink_action(payload: dict) -> dict:
-    # v0.0.155: "usrp" added -- every USRP-fork step was refused as "Unknown distro".
     return _dispatch_tab_action(payload, _svx_lookup_step, "svx", valid_distros=("bookworm", "trixie", "usrp"))
-
 
 def _dispatch_m17_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _m17_lookup_step, "m17", valid_distros=("standard",))
-
 
 _AMP_SERVER_UDEV_SNIPPET = """# Create /etc/udev/rules.d/99-ampersand.rules with these two lines:
 
@@ -3613,7 +2523,6 @@ export AMP_IAX_PORT=4568
 # LD_LIBRARY_PATH are set up by install.sh — leave them as-is unless you
 # have a specific reason to change them."""
 
-
 def _amp_server_install_steps() -> list[dict]:
     return [
         {"id": "amp_srv_check_conflicts", "num": 1, "title": "Check for conflicts (read-only)",
@@ -3675,7 +2584,6 @@ def _amp_server_install_steps() -> list[dict]:
                  "password. Edit the text below before copying."},
     ]
 
-
 def _amp_server_purge_steps() -> list[dict]:
     return [
         {"id": "amp_srv_purge_stop", "num": 1, "title": "Stop & disable amp-server",
@@ -3696,7 +2604,6 @@ def _amp_server_purge_steps() -> list[dict]:
                  "amp-server.json lives in the HOME of whoever ran the server; adjust the path if it wasn't "
                  "root."},
     ]
-
 
 def _amp_hub_install_steps() -> list[dict]:
     return [
@@ -3740,7 +2647,6 @@ def _amp_hub_install_steps() -> list[dict]:
          "note": "Watch it come up with `journalctl -u amp-hub -f`. Restart it after any amp-hub.env change."},
     ]
 
-
 def _amp_hub_purge_steps() -> list[dict]:
     return [
         {"id": "amp_hub_purge_stop", "num": 1, "title": "Stop & disable amp-hub",
@@ -3763,12 +2669,10 @@ def _amp_hub_purge_steps() -> list[dict]:
                  "settings. Only run this for a completely clean slate."},
     ]
 
-
 _AMP_SCRIPTS: dict[str, dict[str, list[dict]]] = {
     "install": {"server": _amp_server_install_steps(), "hub": _amp_hub_install_steps()},
     "purge": {"server": _amp_server_purge_steps(), "hub": _amp_hub_purge_steps()},
 }
-
 
 def _amp_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _AMP_SCRIPTS.get(mode, {}).get(distro, []):
@@ -3776,11 +2680,8 @@ def _amp_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
             return step
     return None
 
-
 def _dispatch_amp_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _amp_lookup_step, "amp", valid_distros=("server", "hub"))
-
-
 
 _CF_PREFLIGHT_CMD = (
     "echo '== cloudflared present? =='; "
@@ -3848,7 +2749,6 @@ _CF_TOKEN_INSTALL_BLOCK = (
 
 _CF_DASH_NEXT_STEPS_URL = "https://one.dash.cloudflare.com/"
 
-
 def _cf_preflight_step() -> dict:
     return {
         "id": "cf_preflight", "num": 1, "title": "Pre-flight + WireGuard guardrail (read-only)",
@@ -3863,7 +2763,6 @@ def _cf_preflight_step() -> dict:
                 "(7844/udp) rides wg0 through the 44Net gateway.",
     }
 
-
 def _cf_install_apt_step() -> dict:
     return {
         "id": "cf_install", "num": 2, "title": "Install cloudflared",
@@ -3871,7 +2770,6 @@ def _cf_install_apt_step() -> dict:
         "timeout": 900,
         "note": _CF_INSTALL_APT_NOTE,
     }
-
 
 def _cf_token_install_steps() -> list[dict]:
     return [
@@ -3905,7 +2803,6 @@ def _cf_token_install_steps() -> list[dict]:
                  "instmon's auth is opt-in."},
     ]
 
-
 def _cf_token_purge_steps() -> list[dict]:
     return [
         {"id": "cf_purge_uninstall", "num": 1, "title": "Uninstall the connector service",
@@ -3923,7 +2820,6 @@ def _cf_token_purge_steps() -> list[dict]:
                  "Zero Trust dashboard, so this is safe/reversible."},
     ]
 
-
 def _cf_quick_install_steps() -> list[dict]:
     return [
         _cf_preflight_step(),
@@ -3940,7 +2836,6 @@ def _cf_quick_install_steps() -> list[dict]:
                  "only point it at a service with its own auth."},
     ]
 
-
 def _cf_quick_purge_steps() -> list[dict]:
     return [
         {"id": "cf_purge_pkg", "num": 1, "title": "Remove the cloudflared package",
@@ -3949,23 +2844,11 @@ def _cf_quick_purge_steps() -> list[dict]:
                  "and gone once you Ctrl-C it), so removing the package is the whole cleanup."},
     ]
 
-
 _CF_SCRIPTS: dict[str, dict[str, list[dict]]] = {
     "install": {"token": _cf_token_install_steps(), "quick": _cf_quick_install_steps()},
     "purge": {"token": _cf_token_purge_steps(), "quick": _cf_quick_purge_steps()},
 }
 
-
-# =============================================================================
-# v0.0.122: purge cleanup, added to every install tab's purge list. A plain
-# `apt purge` leaves behind exactly what bit 652700: packages left in
-# "removed, config kept" state (rc), masks those removals created on the
-# package's own services, dangling boot links, and folders. Each tab now adds
-# four steps after its own automatic steps (before its optional ones): purge
-# this tab's rc packages, unmask this tab's own services (never Debian's
-# intentional masks -- only _GUARD_TAB_UNITS[tab]), delete broken links named
-# after this tab's services, and a read-only "still left behind" report.
-# =============================================================================
 _PURGE_CLEANUP_SPEC: dict[str, tuple[str, list[str]]] = {
     "asl3": ("^(asl3|allmon3|asterisk)", ["/etc/asterisk", "/var/lib/asterisk", "/etc/allmon3"]),
     "dv": ("^(dvswitch|analog-bridge|analog-reflector|mmdvm-bridge|md380-emu|ircddbgateway)",
@@ -3976,7 +2859,6 @@ _PURGE_CLEANUP_SPEC: dict[str, tuple[str, list[str]]] = {
     "amp": ("^amp-", []),
     "cf": ("^cloudflared", ["/etc/cloudflared"]),
 }
-
 
 def _purge_cleanup_steps(tab: str) -> list[dict]:
     regex, dirs = _PURGE_CLEANUP_SPEC[tab]
@@ -4019,7 +2901,6 @@ def _purge_cleanup_steps(tab: str) -> list[dict]:
                  "masks, service files, folders -- so nothing is left behind silently."},
     ]
 
-
 def _add_purge_cleanup() -> None:
     seen = set()
     for tab, catalog in (("asl3", _ASL3_SCRIPTS), ("dv", _DVSWITCH_SCRIPTS), ("svx", _SVXLINK_SCRIPTS),
@@ -4033,19 +2914,9 @@ def _add_purge_cleanup() -> None:
             for i, st in enumerate(steps, 1):
                 st["num"] = i
 
-
 _add_purge_cleanup()
 
-
-# =============================================================================
-# v0.0.147: optional in-browser terminal (Part 2). Everything here is refused
-# unless the node owner switched it on from a shell (the enable file below),
-# the request comes straight from the LAN, the command is on the allow-list,
-# and the root password was just re-entered.
-# =============================================================================
 _TERM_ENABLE_FILE = CONFIG_DIR / "terminal.enable"
-# allow-list id -> (step id whose card this belongs to, label). The command
-# itself is read from that step's card so the two can never drift apart.
 _TERM_ALLOW: dict[str, tuple[str, str]] = {
     "asl_menu": ("run_asl_menu", "asl-menu (ASL3 node settings)"),
     "m17_install": ("m17_run_install", "USRP2M17 installer (asks for your callsign)"),
@@ -4057,10 +2928,7 @@ _TERM_TICKET_TTL = 60.0
 _TERM_TICKETS: dict[str, dict] = {}
 _TERM_LOCK = threading.Lock()
 
-
 def _term_allowlist() -> dict[str, dict]:
-    """id -> {id, step, title, cmd}. A step id found with two different
-    commands (or none) is left out rather than guessed."""
     out: dict[str, dict] = {}
     catalogs = (_ASL3_SCRIPTS, _DVSWITCH_SCRIPTS, _SVXLINK_SCRIPTS, _M17_SCRIPTS, _AMP_SCRIPTS, _CF_SCRIPTS)
     for tid, (step_id, title) in _TERM_ALLOW.items():
@@ -4069,7 +2937,6 @@ def _term_allowlist() -> dict[str, dict]:
         if len(cmds) == 1:
             out[tid] = {"id": tid, "step": step_id, "title": title, "cmd": cmds.pop()}
     return out
-
 
 def _term_enabled() -> tuple[bool, str]:
     try:
@@ -4084,7 +2951,6 @@ def _term_enabled() -> tuple[bool, str]:
     if st.st_uid != 0 or st.st_mode & 0o022:
         return False, f"{_TERM_ENABLE_FILE} must be owned by root and not writable by anyone else."
     return True, ""
-
 
 def _term_client_ok(ip: str, headers) -> tuple[bool, str]:
     for h in _TERM_PROXY_HEADERS:
@@ -4102,7 +2968,6 @@ def _term_client_ok(ip: str, headers) -> tuple[bool, str]:
         return True, ""
     return False, f"Refused: {addr} is not a local-network address. The terminal only works from your LAN."
 
-
 def _term_can_enable(ip: str, headers) -> tuple[bool, str]:
     ok, why = _term_client_ok(ip, headers)
     if not ok:
@@ -4112,9 +2977,7 @@ def _term_can_enable(ip: str, headers) -> tuple[bool, str]:
                        f"the node instead: sudo touch {_TERM_ENABLE_FILE}")
     return True, ""
 
-
 def _term_switch(on: bool, ip: str) -> tuple[bool, str]:
-    """v0.0.151: write or remove the enable file. Callers do the checks."""
     path = Path(_TERM_ENABLE_FILE)
     try:
         if on:
@@ -4135,7 +2998,6 @@ def _term_switch(on: bool, ip: str) -> tuple[bool, str]:
     log(f"Terminal switched {'ON' if on else 'OFF'} from the page by {ip}")
     return True, f"Terminal switched {'on' if on else 'off'}."
 
-
 def _term_issue_ticket(session_token: str, tid: str) -> str:
     now = time.time()
     t = secrets.token_urlsafe(24)
@@ -4145,9 +3007,7 @@ def _term_issue_ticket(session_token: str, tid: str) -> str:
         _TERM_TICKETS[t] = {"sess": _session_key(session_token), "id": tid, "exp": now + _TERM_TICKET_TTL}
     return t
 
-
 def _term_take_ticket(ticket: str, session_token: str) -> str | None:
-    """Single use: removed whether or not it matches."""
     with _TERM_LOCK:
         v = _TERM_TICKETS.pop(ticket, None) if ticket else None
     if v is None or v["exp"] < time.time():
@@ -4156,21 +3016,16 @@ def _term_take_ticket(ticket: str, session_token: str) -> str | None:
         return None
     return v["id"]
 
-
-# --- WebSocket (RFC 6455), stdlib only ---------------------------------------
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 _WS_MAX = 1 << 16
-
 
 class _WSProtocolError(Exception):
     def __init__(self, code: int, msg: str) -> None:
         super().__init__(msg)
         self.code = code
 
-
 def _ws_accept_key(key: str) -> str:
     return base64.b64encode(hashlib.sha1((key + _WS_GUID).encode("ascii")).digest()).decode("ascii")
-
 
 def _ws_frame(opcode: int, payload: bytes = b"") -> bytes:
     n = len(payload)
@@ -4183,13 +3038,10 @@ def _ws_frame(opcode: int, payload: bytes = b"") -> bytes:
         hdr = struct.pack("!BBQ", b0, 127, n)
     return hdr + payload
 
-
 def _ws_close_frame(code: int, reason: str = "") -> bytes:
     return _ws_frame(0x8, struct.pack("!H", code) + reason.encode("utf-8")[:120])
 
-
 class _WSReader:
-    """Feed raw bytes, get complete (opcode, payload) messages back."""
 
     def __init__(self) -> None:
         self.buf = bytearray()
@@ -4250,7 +3102,6 @@ class _WSReader:
                 raise _WSProtocolError(1002, "unknown opcode")
         return out
 
-
 def _term_status(ip: str, headers) -> dict:
     enabled, why = _term_enabled()
     client_ok, cwhy = _term_client_ok(ip, headers)
@@ -4262,11 +3113,9 @@ def _term_status(ip: str, headers) -> dict:
             "can_enable": can_enable, "enable_reason": ewhy,
             "busy": busy, "commands": cmds, "enable_file": str(_TERM_ENABLE_FILE)}
 
-
 _TERM_ACTIVE: dict = {"id": None}
 _TERM_IDLE_SEC = 600
 _TERM_KILL_GRACE = 3.0
-
 
 def _term_claim(tid: str) -> bool:
     with _TERM_LOCK:
@@ -4275,17 +3124,14 @@ def _term_claim(tid: str) -> bool:
         _TERM_ACTIVE["id"] = tid
         return True
 
-
 def _term_release() -> None:
     with _TERM_LOCK:
         _TERM_ACTIVE["id"] = None
-
 
 def _term_set_size(fd: int, cols: int, rows: int) -> None:
     cols = max(2, min(500, int(cols)))
     rows = max(1, min(300, int(rows)))
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-
 
 def _term_spawn(cmd: str) -> tuple[subprocess.Popen, int]:
     master, slave = os.openpty()
@@ -4305,7 +3151,6 @@ def _term_spawn(cmd: str) -> tuple[subprocess.Popen, int]:
         os.close(slave)
     return proc, master
 
-
 def _term_kill(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
@@ -4323,10 +3168,7 @@ def _term_kill(proc: subprocess.Popen) -> None:
         except subprocess.TimeoutExpired:
             continue
 
-
 def _term_session(sock, tid: str, alive: Callable[[], bool], ip: str) -> str:
-    """Run one allow-listed command in a terminal and bridge it to the
-    WebSocket until something ends it. Returns the reason it ended."""
     item = _term_allowlist().get(tid)
     if item is None:
         sock.sendall(_ws_close_frame(1008, "not allowed"))
@@ -4400,7 +3242,7 @@ def _term_session(sock, tid: str, alive: Callable[[], bool], ip: str) -> str:
                 reason = f"command finished (exit {rc})"
                 break
             if rc is not None and master_open and not r:
-                master_open = False  # child gone and nothing more to read
+                master_open = False
                 continue
             if time.monotonic() - last_input > _TERM_IDLE_SEC:
                 send_json({"t": "exit", "reason": "idle"})
@@ -4428,35 +3270,15 @@ def _term_session(sock, tid: str, alive: Callable[[], bool], ip: str) -> str:
         log(f"Terminal closed: {item['title']} from {ip} after {int(time.monotonic() - started)}s -- {reason}")
     return reason
 
-
-
 def _cf_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
     for step in _CF_SCRIPTS.get(mode, {}).get(distro, []):
         if step["id"] == step_id:
             return step
     return None
 
-
 def _dispatch_cf_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _cf_lookup_step, "cf", valid_distros=("token", "quick"))
 
-
-
-# =============================================================================
-# v0.0.104: Quiet mode engine (modelled on instmon's quiesce, v2.16-2.25).
-# Pauses the things that fight over the SD card during big package jobs, in a
-# fixed tier order, and restores exactly what it stopped in reverse. Trigger:
-# 652700 on 2026-09-27 -- a large apt upgrade plus the suite's own pollers, PCP,
-# packagekit, mandb and the ASL3 timers overloaded the card until simple
-# commands hung, and the asl_dvs_watchdog timer was live while Asterisk was
-# deliberately stopped. Tier order matters: watchdogs first, so nothing restarts
-# what we are about to stop; radio services last. Only units that are ACTIVE
-# at the time are stopped, so restore never starts something that was already
-# off. The state file is rewritten after EVERY individual stop, so a crash or
-# restart of 44helper mid-way leaves an exact record for the startup sweep.
-# Never touched: 44helper itself, wifimon (keeps WiFi recovery alive), ssh,
-# cockpit, networking, firewalld, systemd core units.
-# =============================================================================
 _QM_STATE_FILE = str(CONFIG_DIR / "44helper_quiet_state.json")
 _QM_LOCK = threading.Lock()
 _QM_STOP_TIMEOUT = 150
@@ -4474,11 +3296,8 @@ _QM_TIERS: list[tuple[str, list[str]]] = [
 ]
 _QM_NEVER = ["*44helper*", "*wifimon*", "ssh*", "sshd*", "cockpit*", "NetworkManager*", "firewalld*",
              "systemd-*", "dbus*", "wpa_supplicant*", "polkit*"]
-# apt/dpkg take POSIX (fcntl) record locks, not flock() locks -- on Linux the two
-# are independent, so the probe must use lockf or it would never see apt holding them.
 _QM_LOCK_PATHS = ["/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock",
                   "/var/lib/apt/lists/lock", "/var/cache/apt/archives/lock"]
-
 
 def _qm_read_state() -> dict:
     try:
@@ -4488,17 +3307,14 @@ def _qm_read_state() -> dict:
     except (FileNotFoundError, ValueError, OSError):
         return {}
 
-
 def _qm_write_state(state: dict) -> None:
     _compare_before_write(_QM_STATE_FILE, json.dumps(state, indent=1).encode("utf-8"))
-
 
 def _qm_clear_state() -> None:
     try:
         os.remove(_QM_STATE_FILE)
     except FileNotFoundError:
         pass
-
 
 def _qm_active_units() -> list[str]:
     try:
@@ -4514,16 +3330,8 @@ def _qm_active_units() -> list[str]:
             units.append(parts[0])
     return units
 
-
-# v0.0.156: asl_dvs_watchdog.sh v2.7+ installs a once-per-boot check
-# (asl_dvs_bootcheck.timer -> .service) that restarts any enabled radio service
-# it finds stopped -- it would undo quiet mode if a package job starts in the
-# first minutes after boot. Paused with the watchdogs, but only while it still
-# has work to do: the timer while WAITING (an elapsed one-shot timer would just
-# fire again when restarted) and the service while the check is running.
 _QM_BOOTCHECK_TIMER = "asl_dvs_bootcheck.timer"
 _QM_BOOTCHECK_SERVICE = "asl_dvs_bootcheck.service"
-
 
 def _qm_bootcheck_units() -> list[str]:
     out = []
@@ -4540,19 +3348,13 @@ def _qm_bootcheck_units() -> list[str]:
         pass
     return out
 
-
 def _qm_resolve_plan(active: list[str] | None = None, bootcheck: list[str] | None = None) -> list[dict]:
-    """Ordered stop list: [{unit, tier}], tier order then pattern order.
-    bootcheck: boot-check units to pause (default: probed live, see above)."""
     import fnmatch
     if active is None:
         active = _qm_active_units()
     if bootcheck is None:
         bootcheck = _qm_bootcheck_units()
     plan, seen = [], set()
-    # v0.0.109: case-insensitive -- DVSwitch units have shipped as both
-    # analog_bridge.service and Analog_Bridge.service; fnmatch on POSIX is
-    # case-sensitive, so either spelling would otherwise be silently skipped.
     for tier, patterns in _QM_TIERS:
         for pat in patterns:
             for unit in sorted(active):
@@ -4568,7 +3370,6 @@ def _qm_resolve_plan(active: list[str] | None = None, bootcheck: list[str] | Non
                     seen.add(unit)
                     plan.append({"unit": unit, "tier": tier})
     return plan
-
 
 def _qm_package_locks_busy() -> list[str]:
     import fcntl
@@ -4587,17 +3388,11 @@ def _qm_package_locks_busy() -> list[str]:
             os.close(fd)
     return busy
 
-
 _QM_TIER_NAMES = [t for t, _ in _QM_TIERS]
 _QM_MANDB_AFTER = _QM_TIER_NAMES.index("background disk users")
 
-
 def _qm_mandb_due(tier: str | None, done: bool) -> bool:
-    """mandb is not a unit (the index rebuild runs as a plain process), so it is
-    killed once, right after the background tier -- whether or not any unit in
-    that tier happened to be active."""
     return not done and (tier is None or _QM_TIER_NAMES.index(tier) > _QM_MANDB_AFTER)
-
 
 def _qm_preview(plan: list[dict]) -> dict:
     stop, tier, killed = [], None, False
@@ -4614,11 +3409,10 @@ def _qm_preview(plan: list[dict]) -> dict:
     restore = [f"sudo systemctl start {p['unit']}" for p in reversed(plan)]
     return {"stop": stop, "restore": restore}
 
-
 def _qm_systemctl(verb: str, unit: str) -> tuple[bool, str]:
     argv = ["systemctl", verb, unit]
     if verb == "start" and unit == _QM_BOOTCHECK_SERVICE:
-        argv = ["systemctl", "start", "--no-block", unit]  # v0.0.156: oneshot, runs for minutes
+        argv = ["systemctl", "start", "--no-block", unit]
     try:
         r = subprocess.run(argv, capture_output=True, text=True, timeout=_QM_STOP_TIMEOUT)
         return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()
@@ -4626,7 +3420,6 @@ def _qm_systemctl(verb: str, unit: str) -> tuple[bool, str]:
         return False, f"timed out after {_QM_STOP_TIMEOUT}s"
     except FileNotFoundError:
         return False, "systemctl not found"
-
 
 _QM_CAUSE_HINTS = [
     (re.compile(r"address already in use|errno 98|port .* (in use|busy)", re.I),
@@ -4638,11 +3431,7 @@ _QM_CAUSE_HINTS = [
      "Likely cause: a permissions problem on one of this service's files."),
 ]
 
-
 def _qm_failure_details(unit: str) -> list[str]:
-    """v0.0.126: when a paused service will not come back, show WHY right there --
-    its status line and last journal lines, plus a plain-language hint for the
-    common causes -- instead of leaving the user to dig in SSH."""
     out = []
     try:
         st = subprocess.run(["systemctl", "status", unit, "--no-pager", "-n", "0", "-l"],
@@ -4662,7 +3451,6 @@ def _qm_failure_details(unit: str) -> list[str]:
             break
     return out
 
-
 def _qm_restore_list(stopped: list[dict], lines: list[str]) -> list[str]:
     failed = []
     for item in reversed(stopped):
@@ -4672,7 +3460,6 @@ def _qm_restore_list(stopped: list[dict], lines: list[str]) -> list[str]:
             failed.append(item["unit"])
             lines.extend(_qm_failure_details(item["unit"]))
     return failed
-
 
 def _qm_on(reason: str = "manual") -> dict:
     if not _QM_LOCK.acquire(blocking=False):
@@ -4717,14 +3504,12 @@ def _qm_on(reason: str = "manual") -> dict:
     finally:
         _QM_LOCK.release()
 
-
 def _qm_kill_mandb(lines: list[str]) -> None:
     try:
         r = subprocess.run(["pkill", "-x", "mandb"], capture_output=True, text=True, timeout=10)
         lines.append("pkill mandb: " + ("stopped a running index rebuild" if r.returncode == 0 else "none running"))
     except (FileNotFoundError, subprocess.TimeoutExpired):
         lines.append("pkill mandb: skipped")
-
 
 def _qm_off(reason: str = "manual") -> dict:
     if not _QM_LOCK.acquire(blocking=False):
@@ -4747,7 +3532,6 @@ def _qm_off(reason: str = "manual") -> dict:
     finally:
         _QM_LOCK.release()
 
-
 def _qm_status() -> dict:
     state = _qm_read_state()
     if state.get("active"):
@@ -4757,7 +3541,6 @@ def _qm_status() -> dict:
     plan = _qm_resolve_plan()
     return {"active": False, "plan": plan, "preview": _qm_preview(plan)}
 
-
 def _qm_unit_running(unit: str) -> bool:
     try:
         r = subprocess.run(["systemctl", "show", unit, "-p", "SubState", "--value"],
@@ -4766,13 +3549,7 @@ def _qm_unit_running(unit: str) -> bool:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
 
-
 def _qm_startup_sweep() -> None:
-    """Called from main() before the server binds. If a previous run left quiet
-    mode on, put everything back -- but if a package job it started is still
-    running in its own systemd unit, wait for that first (restoring the radio
-    stack under a still-running upgrade would bring back the exact load quiet
-    mode exists to remove)."""
     try:
         state = _qm_read_state()
         if not state.get("active"):
@@ -4792,18 +3569,7 @@ def _qm_startup_sweep() -> None:
     except Exception as exc:
         log(f"QUIET: startup sweep error (continuing startup): {exc}")
 
-
-# v0.0.106: package steps run in quiet mode. The command runs as its OWN
-# transient systemd unit (not a child of 44helper), at Nice=19 / idle I/O
-# priority, so a 44helper restart mid-upgrade -- e.g. when the upgrade itself
-# replaces python3 -- cannot kill it. Output is followed from the journal
-# (journalctl -f -u <unit>) instead of a pipe: with a pipe, the command would
-# take SIGPIPE on its next write if 44helper died, which is the exact failure
-# being designed out. RemainAfterExit=yes keeps the unit (and its exit status)
-# around after the command ends; this worker reads the status, then stops and
-# reset-fails the unit itself. No timeout, per v0.0.103.
 _QM_JOB_POLL_SEC = 2.0
-
 
 def _qm_unit_props(unit: str) -> dict:
     try:
@@ -4819,7 +3585,6 @@ def _qm_unit_props(unit: str) -> dict:
             props[k.strip()] = v.strip()
     return props
 
-
 def _qm_job_finish(job_key: str, success: bool, returncode) -> None:
     with _JOBS_LOCK:
         job = _JOBS.get(job_key)
@@ -4827,30 +3592,13 @@ def _qm_job_finish(job_key: str, success: bool, returncode) -> None:
             job.update(status="done", success=success, returncode=returncode, finished_at=time.time())
     _ev_notify()
 
-
-# v0.0.130: every package-changing step -- on the install tabs as well as the Update
-# tab -- runs as its OWN transient systemd unit, not as a child of 44helper. A logout,
-# a browser closing, or 44helper itself restarting (e.g. when the upgrade replaces
-# python3) can no longer cut an install off half-way, which is what left analog-bridge
-# "unpacked" and mmdvm-bridge/md380-emu never installed on 652700. The unit name is
-# derived from the job key (44helper-job-<key>), so:
-#   * a second Run of the same step while it is still running attaches to it instead
-#     of starting a duplicate;
-#   * after a 44helper restart, _job_status() finds the unit still running (or just
-#     finished) and RE-ADOPTS it -- replaying its output from the journal -- so the
-#     page reconnects with the real output and result instead of "unknown".
-# Quiet mode + low priority remain opt-in (Update tab tick box), as decided earlier.
 _UNIT_JOB_PREFIX = "44helper-job-"
 _UNIT_LIST_CACHE: dict = {"at": 0.0, "units": set()}
-
 
 def _job_unit_name(job_key: str) -> str:
     return _UNIT_JOB_PREFIX + re.sub(r"[^A-Za-z0-9_.-]", "_", job_key)[:180]
 
-
 def _unit_jobs_present() -> set:
-    """Names of 44helper-job-* units systemd still knows (running or exited). Cached 5s
-    so a page reconnecting 20 steps at once costs one systemctl call, not twenty."""
     now = time.time()
     if now - _UNIT_LIST_CACHE["at"] < 5.0:
         return _UNIT_LIST_CACHE["units"]
@@ -4867,12 +3615,8 @@ def _unit_jobs_present() -> set:
     _UNIT_LIST_CACHE.update(at=now, units=units)
     return units
 
-
 def _follow_unit_to_end(job_key: str, unit: str, replay: bool = False,
                         sink: Callable[[str], None] | None = None) -> dict:
-    """Stream a unit's journal into the job's output until the unit's command ends.
-    replay=True shows everything it has logged so far (re-adoption after a restart).
-    v0.0.154: sink, when given, also receives every line (for _run_pkg_unit)."""
     argv = ["journalctl", "-f", "-o", "cat", "--no-pager", "-u", unit]
     if replay:
         argv[1:1] = ["-n", "all"]
@@ -4922,7 +3666,6 @@ def _follow_unit_to_end(job_key: str, unit: str, replay: bool = False,
             follower.kill()
     return props
 
-
 def _finish_unit(unit: str, props: dict) -> tuple[bool, int | None]:
     status = props.get("ExecMainStatus", "")
     rc = int(status) if status.lstrip("-").isdigit() else None
@@ -4932,17 +3675,9 @@ def _finish_unit(unit: str, props: dict) -> tuple[bool, int | None]:
     _UNIT_LIST_CACHE["at"] = 0.0
     return ok, rc
 
-
 _APT_NI_OPTS = "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold"
 
-
 def _run_pkg_unit(job_key: str, cmd: str) -> dict:
-    """v0.0.154: run one package-changing command as its own systemd unit, with NO
-    time limit, and wait for it. For the typed actions (Pi Install prerequisites,
-    System Optimization remove/reinstall) that used to call apt-get directly with a
-    120-300 s cap -- which killed apt part-way on a slow SD card. Same unit naming as
-    _start_unit_job, so after a 44helper restart _job_status() re-adopts it.
-    Returns {success, returncode, output}; output also streams into job_key's job."""
     gate = _pkg_health_gate(cmd)
     if gate:
         return {"success": False, "returncode": None, "output": gate.get("output", "")}
@@ -4967,7 +3702,6 @@ def _run_pkg_unit(job_key: str, cmd: str) -> dict:
     log(f"{'OK' if ok else 'FAIL'} (system-job, exit {rc}): {cmd}")
     return {"success": ok, "returncode": rc, "output": "".join(lines).strip()}
 
-
 def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) -> None:
     own_quiet = False
     job_ok, rc = False, None
@@ -4987,12 +3721,8 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
             if state.get("active"):
                 state["job_unit"] = unit
                 _qm_write_state(state)
-        # A finished-but-not-cleaned unit with this name would block systemd-run.
         subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
         subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
-        # v0.0.135 (audit item 5): no journald rate limiting for this unit -- the job's
-        # output reaches the page through the journal, and a big upgrade can exceed the
-        # default burst (lines would be dropped from the display, not from the job).
         props_argv = ["-p", "RemainAfterExit=yes", "-p", "LogRateLimitIntervalSec=0"]
         if low_priority:
             props_argv += ["-p", "Nice=19", "-p", "IOSchedulingClass=best-effort", "-p", "IOSchedulingPriority=7"]
@@ -5023,10 +3753,8 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
         _qm_job_finish(job_key, job_ok, rc)
         log(f"{'OK' if job_ok else 'FAIL'} (system-job, exit {rc}): {cmd}")
 
-
 def _quiet_apt_worker(job_key: str, cmd: str) -> None:
     _unit_job_worker(job_key, cmd, quiet=True, low_priority=True)
-
 
 def _start_unit_job(job_key: str, cmd: str, quiet: bool = False, low_priority: bool = False) -> dict:
     unit = _job_unit_name(job_key)
@@ -5035,7 +3763,7 @@ def _start_unit_job(job_key: str, cmd: str, quiet: bool = False, low_priority: b
         if existing is not None and existing["status"] == "running":
             return {"job_key": job_key, "status": "running"}
     if unit in _unit_jobs_present() and _qm_unit_props(unit).get("SubState") == "running":
-        _adopt_unit_job(job_key, unit)          # already running (e.g. from before a restart)
+        _adopt_unit_job(job_key, unit)
         return {"job_key": job_key, "status": "running", "attached": True}
     with _JOBS_LOCK:
         _JOBS[job_key] = {"status": "running", "output": "", "success": None,
@@ -5044,10 +3772,7 @@ def _start_unit_job(job_key: str, cmd: str, quiet: bool = False, low_priority: b
     threading.Thread(target=_unit_job_worker, args=(job_key, cmd, quiet, low_priority), daemon=True).start()
     return {"job_key": job_key, "status": "running"}
 
-
 def _adopt_unit_job(job_key: str, unit: str) -> None:
-    """Re-attach to a unit started before a 44helper restart: replay its journal into
-    a fresh job entry, follow it to the end, then record and clean up the result."""
     with _JOBS_LOCK:
         if job_key in _JOBS and _JOBS[job_key]["status"] == "running":
             return
@@ -5069,19 +3794,10 @@ def _adopt_unit_job(job_key: str, unit: str) -> None:
     log(f"Re-attached to running system job {unit}")
     threading.Thread(target=_run, daemon=True).start()
 
-
 def _start_quiet_apt_job(job_key: str, cmd: str) -> dict:
     return _start_unit_job(job_key, cmd, quiet=True, low_priority=True)
 
-
-# v0.0.127: one combined package repair, used by "Repair, then purge". Each part runs
-# in its own subshell so one part's `exit` doesn't end the sequence: finish anything
-# interrupted, the batched configure (recovery 10), the reinstall-with-download
-# (recovery 11), a second configure pass for anything the reinstall unblocked, then a
-# final dpkg --audit that decides success. Runs via the quiet-mode package job
-# (own systemd unit, low priority, services restored afterwards).
 def _repair_cmd() -> str:
-    # Built at call time: the recovery constants are defined further down this file.
     return (
         "echo '=== 1/4 finishing interrupted installs ==='; "
         "sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a; "
@@ -5092,7 +3808,6 @@ def _repair_cmd() -> str:
         "echo 'Still broken after the repair -- the purge will NOT be started.'; exit 1; fi; "
         "echo 'Package system is healthy.'"
     )
-
 
 def _dispatch_repair_action(payload: dict) -> dict:
     if payload.get("action") != "start":
@@ -5106,7 +3821,6 @@ def _dispatch_repair_action(payload: dict) -> dict:
     if fix["still_masked"]:
         return {"success": False, "output": "Masked services could not be cleared: " + ", ".join(fix["still_masked"])}
     return _start_quiet_apt_job("repair_packages", _repair_cmd())
-
 
 def _dispatch_quiet_action(payload: dict) -> dict:
     action = str(payload.get("action", ""))
@@ -5126,12 +3840,6 @@ def _dispatch_quiet_action(payload: dict) -> dict:
         return r
     return {"success": False, "output": f"Unknown quiet-mode action: {action}"}
 
-
-# v0.0.116: Update-tab package recovery, following the method that repaired
-# 652700 on 2026-09-27: look first, then finish half-installed packages in small
-# batches at low priority (kernel / firmware / initramfs last, one at a time, since
-# they rebuild the boot image), re-install anything dpkg marks broken from the
-# .deb already in apt's cache (no network needed), then the pending triggers.
 _RECOVER_CHECK_CMD = (
     "echo '--- package jobs running right now:'; pgrep -a 'apt|dpkg|unattended-upgr' || echo '(none)'; "
     "echo '--- dpkg --audit:'; a=$(dpkg --audit 2>&1); "
@@ -5141,11 +3849,6 @@ _RECOVER_CHECK_CMD = (
 )
 _RECOVER_NICE = "nice -n 19 ionice -c2 -n7"
 _RECOVER_HEAVY = "^(linux-(image|headers|base|kbuild)|raspi-firmware|raspberrypi-kernel|initramfs-tools)"
-# v0.0.121: a failing postinst that says "Failed to enable unit ... is masked" is
-# the analog-reflector case from 652700. Masks on the suite tabs' own services are
-# now cleared automatically before this step even starts (the Update tab's
-# masked gate), so if one still shows up here it belongs to something outside
-# those lists -- the hint says exactly what to look for and how to clear it.
 _RECOVER_MASK_HINT = ("_MASKHINT='If a line above says \"is masked\": that service is blocked from starting and its "
                       "package cannot finish. Clear it with: sudo systemctl unmask <name>.service -- then run this "
                       "step again. (Masks on this helper'\"'\"'s own install-tab services are cleared automatically.)'; ")
@@ -5155,12 +3858,6 @@ _RECOVER_CONFIGURE_CMD = (
     "awk 'substr($1,2,1) ~ /[UFWt]/ {print $2}'); "
     "if [ -z \"$pk\" ]; then echo 'No half-installed packages.'; else "
     f"light=$(echo \"$pk\" | grep -vE '{_RECOVER_HEAVY}'); heavy=$(echo \"$pk\" | grep -E '{_RECOVER_HEAVY}'); "
-    # v0.0.133 (audit fix): ONE dpkg call per group. dpkg only orders dependencies
-    # within a single call -- configuring a package whose dependency waits for a
-    # later call fails (verified with real dpkg). The old 5-at-a-time alphabetical
-    # batches split real pairs (libpython3.13 before libpython3.13-stdlib,
-    # linux-headers-* before linux-kbuild-*), so this step could fail on exactly the
-    # 652700 case it was built for. Light group first, kernel/firmware group last.
     "if [ -n \"$light\" ]; then echo '=== finishing ordinary packages (one command -- dpkg sorts the order) ==='; "
     f"sudo {_RECOVER_NICE} dpkg --configure $light || "
     "{ echo 'Finishing the ordinary packages failed -- stopping here. Copy this output.'; echo \"$_MASKHINT\"; exit 1; }; fi; "
@@ -5173,12 +3870,6 @@ _RECOVER_CONFIGURE_CMD = (
     "echo 'Still listed above -- if any say reinstall, run step 11.'; exit 1; fi; "
     "echo 'dpkg --audit is clean.'"
 )
-# v0.0.125: also picks up packages dpkg --audit reports as missing their "list" or
-# "md5sums" control file (qemu-user on 652700, damaged by an install cut off mid-unpack)
-# -- those are not always flagged reinstreq -- and when apt's cache has no copy, fetches
-# just that one .deb with `apt-get download` (works while dpkg is broken, since it only
-# downloads) before re-installing it with dpkg -i. A failed download is reported and the
-# step fails; nothing is left half-done.
 _RECOVER_REINSTALL_CMD = (
     "pk=$( { dpkg-query -W -f='${db:Status-Abbrev} ${binary:Package}\\n' 2>/dev/null | "
     "awk 'substr($1,3,1)==\"R\" {print $2}'; "
@@ -5214,15 +3905,10 @@ _RECOVERY_STEPS: list[dict] = [
                 "Run step 9 again afterwards -- it should list nothing."},
 ]
 
-
 _UPDATE_STEPS: list[dict] = [
     {"id": "apt_update", "num": 1, "title": "Refresh package index",
      "cmd": "sudo apt update"},
     {"id": "fix_missing", "quiet_eligible": True, "num": 2, "title": "Fix missing/broken packages",
-     # v0.0.124: finish any interrupted install FIRST -- apt refuses to do anything
-     # ("dpkg was interrupted, you must manually run 'sudo dpkg --configure -a'") until
-     # that is done (hit on 652700). Harmless when nothing is pending. ';' not '&&' so
-     # apt -f still gets its chance to sort out dependencies if one package won't configure.
      "cmd": "sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a; "
             "sudo DEBIAN_FRONTEND=noninteractive apt install -f -y "
             "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\"",
@@ -5396,18 +4082,13 @@ _UPDATE_STEPS: list[dict] = [
      ]},
 ] + _RECOVERY_STEPS
 
-
 def _mark_pkg_change(steps: list[dict]) -> None:
-    """v0.0.120: flag Update-tab steps (and alts) that change packages, so the
-    guard card greys out exactly those while a masked service blocks them."""
     for st in steps:
         st["pkg_change"] = _is_apt_mutating(st.get("cmd", ""))
         for alt in st.get("alts", []):
             alt["pkg_change"] = _is_apt_mutating(alt.get("cmd", ""))
 
-
 _mark_pkg_change(_UPDATE_STEPS)
-
 
 def _update_lookup_step(step_id: str) -> dict | None:
     for step in _UPDATE_STEPS:
@@ -5418,19 +4099,7 @@ def _update_lookup_step(step_id: str) -> dict | None:
                 return alt
     return None
 
-
 def _dispatch_update_action(payload: dict) -> dict:
-    """Update tab's dispatcher, ported onto the shared async job engine
-    (v0.0.40) — the original fork this was merged from predated that
-    engine and blocked on _run_shell_line(). Flat step list, no
-    mode/distro dimension, so job_key is simply f"update_{step_id}" —
-    same stability properties as the other tabs' keys (dedupes a
-    double-clicked Run, lets a reload re-attach to a still-running
-    apt upgrade). v0.0.43: reads the step's optional "timeout" the same
-    way _dispatch_tab_action does — this dispatcher is a separate
-    function (Update tab predates and isn't part of the four
-    mode/distro-based tabs _dispatch_tab_action serves), so it needed
-    its own copy of this read rather than inheriting it for free."""
     step_id = payload.get("step_id", "")
     command_text = str(payload.get("command_text", "")).strip()
     if not command_text:
@@ -5452,16 +4121,11 @@ def _dispatch_update_action(payload: dict) -> dict:
             return gate
     if payload.get("quiet") is True and step.get("quiet_eligible") and _is_apt_mutating(command_text):
         return _start_quiet_apt_job(f"update_{step_id}", command_text)
-    if _is_apt_mutating(command_text):  # v0.0.154: own unit, survives a 44helper restart
+    if _is_apt_mutating(command_text):
         return _start_unit_job(f"update_{step_id}", command_text)
     return _start_shell_job(f"update_{step_id}", command_text, timeout=step.get("timeout", 900))
 
-
 def action_update_status() -> dict:
-    """Informational strip for the Update tab: upgradable packages, held
-    packages, and whether a reboot is pending. Read-only — no root required,
-    no Actions Log entry (matches the other *_status() helpers, e.g.
-    status_firewalld_prereq(), which also just report state)."""
     upgradable = _run_argv(["apt", "list", "--upgradable"], timeout=30)
     held = _run_argv(["apt-mark", "showhold"], timeout=15)
     reboot_required = os.path.exists("/var/run/reboot-required")
@@ -5477,31 +4141,17 @@ def action_update_status() -> dict:
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-
 def action_update_lookup_installed() -> dict:
-    """apt list --installed — full installed-package listing, no filter.
-    Kept separate from the version-policy lookup below since they answer
-    different questions (everything on the box vs. installed-vs-candidate
-    version for one named package)."""
     return _run_shell_line("apt list --installed 2>/dev/null", timeout=20)
 
-
 def action_update_lookup_policy(pkg: str) -> dict:
-    """apt-cache policy <pkg> — installed vs. candidate version for one
-    named package."""
     pkg = pkg.strip()
     if not pkg:
         return {"success": False, "output": "No package name provided."}
     q = shlex.quote(pkg)
     return _run_shell_line(f"apt-cache policy {q}", timeout=20)
 
-
-
-
 def _sysopt_dpkg_installed(pkg: str) -> bool:
-    """True if `pkg` is installed (dpkg's own "ii" install-state, not just
-    "known to apt"). dpkg-query's ${Status} field is machine-parseable,
-    unlike dpkg -l's column-aligned output, and needs no header-skipping."""
     try:
         r = subprocess.run(
             ["dpkg-query", "-W", "-f=${Status}", pkg],
@@ -5511,15 +4161,7 @@ def _sysopt_dpkg_installed(pkg: str) -> bool:
         return False
     return r.returncode == 0 and r.stdout.strip().startswith("install ok installed")
 
-
 def _sysopt_unit_state(unit: str) -> dict:
-    """{"exists": bool, "enabled": str, "active": str} for one systemd unit.
-    "exists" is keyed off is-enabled's output only: a unit systemd has never
-    heard of prints the literal "not-found" there with a nonzero exit --
-    long-standing, scriptable systemd behavior. is-active does NOT give a
-    matching "not-found" signal (a nonexistent unit just reads "inactive"
-    there, same as a real, installed-but-stopped one), so it's recorded for
-    information only and never used to decide existence."""
     def _query(verb: str) -> str:
         try:
             r = subprocess.run(
@@ -5534,15 +4176,7 @@ def _sysopt_unit_state(unit: str) -> dict:
     active = _query("is-active")
     return {"exists": enabled != "not-found", "enabled": enabled, "active": active}
 
-
 def _sysopt_probe_journald() -> dict:
-    """Current Storage= value from journald.conf plus any drop-ins under
-    journald.conf.d/ -- systemd applies these in filename order with later
-    files winning key-for-key, so the last Storage= line found across all of
-    them (main file first, then drop-ins sorted) is the value actually in
-    effect. "not_set" means systemd's own built-in default applies
-    (effectively "auto": persistent if /var/log/journal already exists,
-    volatile otherwise)."""
     paths = [Path("/etc/systemd/journald.conf")]
     dropin_dir = Path("/etc/systemd/journald.conf.d")
     if dropin_dir.is_dir():
@@ -5566,13 +4200,11 @@ def _sysopt_probe_journald() -> dict:
 
     return {"storage": storage or "not_set", "checked_paths": checked}
 
-
 def _sysopt_probe_rsyslog() -> dict:
     installed = _sysopt_dpkg_installed("rsyslog")
     if not installed:
         return {"applicable": False, "installed": False}
     return {"applicable": True, "installed": True, **_sysopt_unit_state("rsyslog.service")}
-
 
 def _sysopt_probe_dphys_swapfile() -> dict:
     installed = _sysopt_dpkg_installed("dphys-swapfile")
@@ -5589,23 +4221,15 @@ def _sysopt_probe_dphys_swapfile() -> dict:
         **_sysopt_unit_state("dphys-swapfile.service"),
     }
 
-
 def _sysopt_probe_mandb() -> dict:
     installed = _sysopt_dpkg_installed("man-db")
     if not installed:
         return {"applicable": False, "installed": False}
     return {"applicable": True, "installed": True, **_sysopt_unit_state("man-db.timer")}
 
-
 _FSTAB_PATH = "/etc/fstab"
 
-
 def _parse_fstab_root_entry(fstab_text: str) -> dict | None:
-    """Locate the root ("/") entry in fstab text and return its fields plus
-    a normalized, lowercase, de-duplicated set of its mount options. Returns
-    None if no root entry is found (a malformed file, or a boot-via-cmdline
-    setup with no fstab root line) -- callers must handle that rather than
-    assume one always exists."""
     for raw_line in fstab_text.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#"):
@@ -5624,14 +4248,7 @@ def _parse_fstab_root_entry(fstab_text: str) -> dict | None:
         }
     return None
 
-
 def _live_root_mount_options() -> set[str]:
-    """Options the kernel currently has root mounted with, per
-    /proc/self/mountinfo -- distinct from what fstab says, so Stage 4's UI
-    can flag drift (e.g. someone hand-edited fstab, or remounted manually,
-    outside this tool). Format per proc(5): fields before " - " include the
-    mountpoint (index 4) and mount options (index 5); fields after include
-    filesystem type, source, and per-superblock options (index 2)."""
     try:
         text = Path("/proc/self/mountinfo").read_text(encoding="utf-8")
     except OSError:
@@ -5649,7 +4266,6 @@ def _live_root_mount_options() -> set[str]:
             opts |= set(right[2].split(","))
         return {o.strip().lower() for o in opts if o.strip()}
     return set()
-
 
 def _sysopt_probe_fstab_noatime() -> dict:
     try:
@@ -5672,16 +4288,7 @@ def _sysopt_probe_fstab_noatime() -> dict:
         "drift": fstab_has != live_has,
     }
 
-
 def build_system_opt_status() -> dict:
-    """Aggregated, read-only status for the System Optimization tab.
-    Nothing here writes anything or requires root. Each action in Stage 3
-    re-probes its own item rather than trusting a cached snapshot, same as
-    this file's other *_status() functions. "applied_items" (added in
-    Stage 4) is just the key list from the Stage-3 state file -- reading
-    it is as read-only as everything else here -- so the UI knows which
-    Revert/Reinstall buttons have something to actually restore, without
-    needing its own separate endpoint."""
     return {
         "journald": _sysopt_probe_journald(),
         "rsyslog": _sysopt_probe_rsyslog(),
@@ -5693,34 +4300,14 @@ def build_system_opt_status() -> dict:
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-
-
-
 def _fstab_library_path() -> str:
-    """Same instmon Version Library "config" category the WireGuard backup
-    (v0.0.52) already writes to -- same env var, same directory, so this
-    shows up next to it with no extra coordination."""
     library_dir = os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")
     return os.path.join(library_dir, "config", "fstab.bak")
 
-
 def _fstab_backup_before_change(current_fstab_text: str) -> tuple[bool, str]:
-    """Single canonical backup of the fstab as it stood BEFORE this change
-    -- not a rotating history (D-3). Reuses compare_before_write() as-is:
-    that helper's hardcoded 0600 is fine here, since this is a backup copy
-    in the library directory, not the live /etc/fstab. Skips the write
-    entirely (and the SD-card write it would cost) when the backup already
-    matches -- a repeat Apply of the same state doesn't churn the card."""
     return _compare_before_write(_fstab_library_path(), current_fstab_text.encode("utf-8"))
 
-
 def _fstab_options_with_flag(options_str: str, flag: str, want_present: bool) -> str:
-    """Add or remove one option from a comma-separated fstab option field,
-    comparing case-insensitively (a real fstab may read `NoAtime`) but
-    otherwise preserving the original order and casing of every option
-    this call didn't touch -- minimal diff, easy for an operator to read
-    back. Never leaves an empty options field (mount(8) requires at least
-    one; "defaults" is the standard fallback)."""
     tokens = [t for t in options_str.split(",")]
     flag_lower = flag.strip().lower()
     filtered = [t for t in tokens if t.strip().lower() != flag_lower]
@@ -5730,17 +4317,9 @@ def _fstab_options_with_flag(options_str: str, flag: str, want_present: bool) ->
         filtered = ["defaults"]
     return ",".join(filtered)
 
-
 _FSTAB_WS_RE = re.compile(r"(\s+)")
 
-
 def _rewrite_fstab_line_options(raw_line: str, flag: str, want_present: bool) -> str:
-    """Rewrite ONLY the option field (the 4th whitespace-separated field)
-    of one fstab line, preserving everything else about it byte-for-byte
-    -- including its original whitespace layout (fstab is commonly
-    hand-aligned with tabs or run-together spaces) and the case/order of
-    every option besides `flag`. Caller guarantees raw_line is the real
-    root entry; behavior on any other line is undefined."""
     ending = ""
     for eol in ("\r\n", "\n"):
         if raw_line.endswith(eol):
@@ -5755,12 +4334,7 @@ def _rewrite_fstab_line_options(raw_line: str, flag: str, want_present: bool) ->
     tokens[options_pos] = _fstab_options_with_flag(tokens[options_pos], flag, want_present)
     return "".join(tokens) + ending
 
-
 def _find_fstab_root_line_index(fstab_text: str) -> int | None:
-    """Index into fstab_text.splitlines(keepends=True) of the real root
-    ('/') entry, or None if there isn't one. Same skip rules (blank/comment
-    lines, fields < 4) as _parse_fstab_root_entry() in Stage 1, so the two
-    never disagree about which line is "the" root entry."""
     for i, raw_line in enumerate(fstab_text.splitlines(keepends=True)):
         content = raw_line.strip()
         if not content or content.startswith("#"):
@@ -5770,11 +4344,7 @@ def _find_fstab_root_line_index(fstab_text: str) -> int | None:
             return i
     return None
 
-
 def _build_candidate_fstab(fstab_text: str, flag: str, want_present: bool) -> tuple[str | None, str | None]:
-    """Returns (candidate_text, None) on success or (None, error_message).
-    Every line except the root entry is passed through completely
-    untouched."""
     idx = _find_fstab_root_line_index(fstab_text)
     if idx is None:
         return None, f"no root ('/') entry found in {_FSTAB_PATH}"
@@ -5782,18 +4352,7 @@ def _build_candidate_fstab(fstab_text: str, flag: str, want_present: bool) -> tu
     lines[idx] = _rewrite_fstab_line_options(lines[idx], flag, want_present)
     return "".join(lines), None
 
-
 def _findmnt_verify_tab_file(path: str) -> tuple[bool, str]:
-    """`findmnt --verify --tab-file <path>` against a CANDIDATE file --
-    never the live /etc/fstab. This is util-linux's purpose-built fstab
-    validator (present on both Bookworm and Bullseye, util-linux >= 2.36),
-    and it replaces `mount -a --fake` from the original plan for two
-    independently confirmed reasons (see the plan-review doc, E1): `-f`
-    causes libmount to skip mount option analysis entirely, so it wouldn't
-    reliably catch a bad option string; and `mount -a` skips any entry
-    whose mountpoint is already mounted, which root always is. findmnt
-    --verify has neither problem, and it validates the exact candidate
-    file passed in rather than needing any live-system workaround."""
     try:
         r = subprocess.run(
             ["findmnt", "--verify", "--tab-file", path],
@@ -5806,15 +4365,7 @@ def _findmnt_verify_tab_file(path: str) -> tuple[bool, str]:
     output = (r.stdout or "") + (r.stderr or "")
     return r.returncode == 0, output.strip()
 
-
 def _write_fstab_atomic(new_text: str) -> tuple[bool, str]:
-    """Atomic temp-file-then-os.replace write for /etc/fstab specifically
-    -- deliberately NOT compare_before_write(), whose hardcoded 0600 chmod
-    was written for private files (config, the WireGuard backup) and would
-    leave the live fstab silently root-only (D-6). /etc/fstab must stay
-    world-readable; this ends at the standard 0644. Still skips the write
-    entirely when the content already matches, same SD-wear reasoning as
-    the shared helper."""
     data = new_text.encode("utf-8")
     if os.path.isfile(_FSTAB_PATH):
         with open(_FSTAB_PATH, "rb") as f:
@@ -5827,17 +4378,7 @@ def _write_fstab_atomic(new_text: str) -> tuple[bool, str]:
     os.replace(tmp_path, _FSTAB_PATH)
     return True, "written"
 
-
 def _remount_root(want_noatime: bool) -> dict:
-    """`mount -o remount,noatime /` (or the `-noatime` form to drop it) --
-    applies live, immediately, no reboot needed: atime flags are among the
-    options a remount can change (confirmed against current documentation
-    -- D-7, correcting the original plan's "requires a full system reboot"
-    banner text, which isn't accurate). Reported as its own step, separate
-    from the fstab write: a failed write leaves the node exactly as it
-    was, while a successful write with a failed remount means the change
-    is only queued for next boot -- an operator watching for an immediate
-    effect needs that distinction, not a single pass/fail bit."""
     opt = "noatime" if want_noatime else "-noatime"
     cmd = f"mount -o remount,{opt} /"
     try:
@@ -5852,16 +4393,7 @@ def _remount_root(want_noatime: bool) -> dict:
     output = (r.stdout or "") + (r.stderr or "")
     return {"success": r.returncode == 0, "output": output.strip(), "cmd": cmd}
 
-
 def _apply_fstab_noatime(want_present: bool) -> dict:
-    """The full safe-write pipeline for the root fstab noatime option:
-    read -> back up (before changing, D-3) -> build a candidate touching
-    only the root line -> validate the CANDIDATE via findmnt --verify
-    (D-5) -> write atomically at 0644 (D-6) -> live remount (D-7). Any
-    failure stops the pipeline immediately -- this function never leaves
-    /etc/fstab partially changed, and never writes anything unvalidated.
-    Root-gated directly (not only by Stage 3's dispatcher), matching this
-    file's existing convention of gating inside the action itself."""
     result: dict = {
         "requested_present": want_present,
         "backup": None,
@@ -5929,14 +4461,9 @@ def _apply_fstab_noatime(want_present: bool) -> dict:
         result["output"] = "already matched the requested state; live-remounted to confirm"
     return result
 
-
-
 _SYSOPT_STATE_PATH = str(CONFIG_DIR / "44helper_sysopt_state.json")
 
-
 def _sysopt_state_read() -> dict:
-    """Never raises -- a missing or corrupt state file is just "nothing
-    has been applied yet", not a fatal error."""
     try:
         with open(_SYSOPT_STATE_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
@@ -5944,14 +4471,11 @@ def _sysopt_state_read() -> dict:
     except (OSError, ValueError):
         return {}
 
-
 def _sysopt_state_write(state: dict) -> None:
     _compare_before_write(_SYSOPT_STATE_PATH, json.dumps(state, indent=2).encode("utf-8"))
 
-
 def _sysopt_state_get_item(item_key: str) -> dict | None:
     return _sysopt_state_read().get(item_key)
-
 
 def _sysopt_state_set_item(item_key: str, prior_state: dict) -> None:
     state = _sysopt_state_read()
@@ -5961,23 +4485,13 @@ def _sysopt_state_set_item(item_key: str, prior_state: dict) -> None:
     }
     _sysopt_state_write(state)
 
-
 def _sysopt_state_clear_item(item_key: str) -> None:
     state = _sysopt_state_read()
     if item_key in state:
         del state[item_key]
         _sysopt_state_write(state)
 
-
 def _set_unit_state(unit: str, want_enabled: bool, want_active: bool) -> dict:
-    """Drive one systemd unit to an exact (enabled, active) combination via
-    the minimal necessary systemctl calls, reporting each one individually.
-    Shared by every disable/revert action below so "restore prior state"
-    (D-0) always means restoring the exact enabled/active combination
-    captured at Apply time -- not just flipping a single on/off bit.
-    "Turn off" steps run before "turn on" steps so all four combinations
-    (already correct, fully flip, enable-only, disable-only) resolve
-    correctly regardless of the unit's starting state."""
     steps: list[dict] = []
 
     def _run(verb: str) -> bool:
@@ -6004,15 +4518,7 @@ def _set_unit_state(unit: str, want_enabled: bool, want_active: bool) -> dict:
         all_ok = _run("start") and all_ok
     return {"success": all_ok, "steps": steps}
 
-
 def _describe_unit_commands(unit: str, want_enabled: bool, want_active: bool) -> list[str]:
-    """Same stop-before-disable, enable-before-start ordering _set_unit_state()
-    above uses, but only DESCRIBES the systemctl command lines that combination
-    would run -- never executes anything. Used to preview a Revert button's
-    exact command before it's clicked, once the prior state (want_enabled/
-    want_active) has actually been captured; kept as its own small function
-    rather than adding a dry-run flag to _set_unit_state() itself, so the
-    real action path can't accidentally be called in preview-only mode."""
     cmds: list[str] = []
     if not want_active:
         cmds.append(f"systemctl stop {unit}")
@@ -6024,30 +4530,11 @@ def _describe_unit_commands(unit: str, want_enabled: bool, want_active: bool) ->
         cmds.append(f"systemctl start {unit}")
     return cmds
 
-
 def _describe_fstab_remount_commands(want_present: bool, candidate_label: str = "<candidate-fstab>") -> list[str]:
-    """Describes (never executes) the two-command fstab-noatime pipeline:
-    the findmnt safety check against a candidate file, then the live
-    remount. `candidate_label` is a placeholder for the static pre-run
-    preview (the real temp path doesn't exist yet); _apply_fstab_noatime()
-    itself builds the equivalent list with the REAL temp path once one
-    actually exists, for the post-run executed-commands display."""
     opt = "noatime" if want_present else "-noatime"
     return [f"findmnt --verify --tab-file {candidate_label}", f"mount -o remount,{opt} /"]
 
-
 def _revert_command_preview() -> dict:
-    """Best-effort literal preview of what each item's Revert button would
-    run -- purely descriptive (never executes anything), same spirit as
-    the static .cmd-preview boxes Apply/Disable/Uninstall already render.
-    Only meaningful for an item that's actually been applied (Revert is
-    greyed out otherwise, per Stage 4's sysoptApplyRevertAvailability());
-    an item with no state-file entry is simply absent from the result --
-    the frontend leaves that item's Revert preview at its static
-    "nothing to revert yet" placeholder in that case. journald's Revert
-    and the two apt reinstall actions aren't included here since their
-    commands never depend on captured state -- they're static and already
-    rendered directly into the page at build time."""
     preview: dict[str, list[str]] = {}
 
     fstab_entry = _sysopt_state_get_item("fstab_noatime")
@@ -6064,14 +4551,7 @@ def _revert_command_preview() -> dict:
 
     return preview
 
-
 def _apt_dry_run_remove(pkg: str) -> dict:
-    """`apt-get remove --dry-run <pkg>` -- surfaces the real removal
-    cascade (any other installed package that would be pulled down with
-    it) before a purge action runs for real, matching this file's existing
-    habit of showing real effects before a destructive click (e.g. the Pi
-    Install purge sequence) rather than a generic "this removes a
-    package" warning."""
     try:
         r = subprocess.run(["apt-get", "remove", "--dry-run", pkg],
                             capture_output=True, text=True, timeout=30)
@@ -6084,8 +4564,6 @@ def _apt_dry_run_remove(pkg: str) -> dict:
         if line.strip().startswith("Remv ") and len(line.strip().split()) > 1
     ]
     return {"success": r.returncode == 0, "output": output.strip(), "would_remove": would_remove}
-
-
 
 def action_sysopt_fstab_noatime_apply(payload: dict) -> dict:
     err = _require_root()
@@ -6100,7 +4578,6 @@ def action_sysopt_fstab_noatime_apply(payload: dict) -> dict:
         log(f"System Optimization: fstab noatime apply -- {result['output']}")
     return result
 
-
 def action_sysopt_fstab_noatime_revert(payload: dict) -> dict:
     err = _require_root()
     if err:
@@ -6114,16 +4591,10 @@ def action_sysopt_fstab_noatime_revert(payload: dict) -> dict:
         log(f"System Optimization: fstab noatime revert -- {result['output']}")
     return result
 
-
-
 _SYSOPT_JOURNALD_DROPIN_DIR = "/etc/systemd/journald.conf.d"
 _SYSOPT_JOURNALD_DROPIN_PATH = _SYSOPT_JOURNALD_DROPIN_DIR + "/44helper-sysopt.conf"
 
-
 def _write_conf_atomic(path: str, content: str, mode: int = 0o644) -> tuple[bool, str]:
-    """Like _write_fstab_atomic() but for small standalone config files
-    (systemd drop-ins) rather than /etc/fstab specifically -- standard
-    config-file mode 0644, not compare_before_write()'s hardcoded 0600."""
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, mode=0o755, exist_ok=True)
@@ -6139,7 +4610,6 @@ def _write_conf_atomic(path: str, content: str, mode: int = 0o644) -> tuple[bool
     os.replace(tmp_path, path)
     return True, "written"
 
-
 def _restart_journald() -> dict:
     try:
         r = subprocess.run(["systemctl", "restart", "systemd-journald"],
@@ -6148,12 +4618,7 @@ def _restart_journald() -> dict:
         return {"success": False, "output": str(exc)}
     return {"success": r.returncode == 0, "output": ((r.stdout or "") + (r.stderr or "")).strip()}
 
-
 def action_sysopt_journald_volatile_apply(payload: dict) -> dict:
-    """D-4: the restart is an accepted, immediate part of Apply, not
-    deferred to a reboot -- reported as its own step so a restart failure
-    is visible distinctly from the config write, same reasoning as the
-    fstab remount step."""
     err = _require_root()
     if err:
         return err
@@ -6170,12 +4635,7 @@ def action_sysopt_journald_volatile_apply(payload: dict) -> dict:
     log(f"System Optimization: journald volatile apply -- {result['output']}")
     return result
 
-
 def action_sysopt_journald_volatile_revert(payload: dict) -> dict:
-    """Deletes the drop-in this tab added -- never touches journald.conf
-    itself or any other drop-in, so whatever was in effect before Apply
-    (main file default, or another drop-in) is exactly what applies again
-    once ours is gone."""
     err = _require_root()
     if err:
         return err
@@ -6197,8 +4657,6 @@ def action_sysopt_journald_volatile_revert(payload: dict) -> dict:
     log(f"System Optimization: journald volatile revert -- {result['output']}")
     return result
 
-
-
 def action_sysopt_rsyslog_disable(payload: dict) -> dict:
     err = _require_root()
     if err:
@@ -6213,7 +4671,6 @@ def action_sysopt_rsyslog_disable(payload: dict) -> dict:
         log("System Optimization: rsyslog disabled")
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "disabled" if outcome["success"] else "one or more steps failed"}
-
 
 def action_sysopt_rsyslog_revert(payload: dict) -> dict:
     err = _require_root()
@@ -6230,15 +4687,7 @@ def action_sysopt_rsyslog_revert(payload: dict) -> dict:
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "reverted" if outcome["success"] else "one or more steps failed"}
 
-
-
 def action_sysopt_swap_disable(payload: dict) -> dict:
-    """Stops and disables the service -- package stays installed, fully
-    offline-revertible. Relies on the package's own init-script stop/start
-    actions to actually swapoff/swapon (standard behavior for this
-    package's bundled init script) rather than calling `dphys-swapfile
-    swapoff` directly -- unverified against real hardware, flagged for
-    bench testing per the implementation plan's S-4."""
     err = _require_root()
     if err:
         return err
@@ -6252,7 +4701,6 @@ def action_sysopt_swap_disable(payload: dict) -> dict:
         log("System Optimization: dphys-swapfile disabled")
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "disabled (swap off)" if outcome["success"] else "one or more steps failed"}
-
 
 def action_sysopt_swap_revert(payload: dict) -> dict:
     err = _require_root()
@@ -6269,24 +4717,14 @@ def action_sysopt_swap_revert(payload: dict) -> dict:
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "reverted (swap restored)" if outcome["success"] else "one or more steps failed"}
 
-
 def _run_pkg_unit_cp(verb: str, pkg: str) -> subprocess.CompletedProcess:
-    """v0.0.154: apt-get <verb> -y <pkg> via _run_pkg_unit (no time limit, own unit),
-    shaped like subprocess.run's result so the callers below stay unchanged."""
     action = {("purge", "dphys-swapfile"): "dphys_swap_uninstall", ("install", "dphys-swapfile"): "dphys_swap_reinstall",
               ("purge", "man-db"): "mandb_remove", ("install", "man-db"): "mandb_reinstall"}[(verb, pkg)]
-    # Same key as the page's job (see _dispatch_system_opt_action) so output streams live.
     res = _run_pkg_unit(f"sysopt_{action}", f"apt-get {verb} -y {_APT_NI_OPTS} {pkg}")
     rc = res["returncode"] if res["returncode"] is not None else (0 if res["success"] else 1)
     return subprocess.CompletedProcess([verb, pkg], rc, res["output"], "")
 
-
 def action_sysopt_swap_uninstall(payload: dict) -> dict:
-    """Package removal -- Revert (action_sysopt_swap_reinstall) needs apt/
-    network access, unlike Disable's fully-offline revert. Disables the
-    service first (best-effort; purge's own maintainer scripts normally
-    handle this too), dry-runs the removal for the cascade list, then
-    purges for real."""
     err = _require_root()
     if err:
         return err
@@ -6308,12 +4746,7 @@ def action_sysopt_swap_uninstall(payload: dict) -> dict:
         log(f"System Optimization: dphys-swapfile purged (also removed: {dry_run['would_remove']})")
     return result
 
-
 def action_sysopt_swap_reinstall(payload: dict) -> dict:
-    """Needs network access on the node. Returns the package to its
-    fresh-install defaults, not necessarily the exact enabled/active
-    combination that existed before removal -- an inherent limit of the
-    uninstall/reinstall path, unlike Disable/Revert's exact-state restore."""
     err = _require_root()
     if err:
         return err
@@ -6331,8 +4764,6 @@ def action_sysopt_swap_reinstall(payload: dict) -> dict:
         log("System Optimization: dphys-swapfile reinstalled")
     return {"success": ok, "output": output, "commands": ["apt-get install -y dphys-swapfile"]}
 
-
-
 def action_sysopt_mandb_timer_disable(payload: dict) -> dict:
     err = _require_root()
     if err:
@@ -6348,7 +4779,6 @@ def action_sysopt_mandb_timer_disable(payload: dict) -> dict:
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "disabled" if outcome["success"] else "one or more steps failed"}
 
-
 def action_sysopt_mandb_timer_revert(payload: dict) -> dict:
     err = _require_root()
     if err:
@@ -6363,7 +4793,6 @@ def action_sysopt_mandb_timer_revert(payload: dict) -> dict:
         log("System Optimization: man-db.timer reverted")
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "reverted" if outcome["success"] else "one or more steps failed"}
-
 
 def action_sysopt_mandb_remove(payload: dict) -> dict:
     err = _require_root()
@@ -6386,10 +4815,7 @@ def action_sysopt_mandb_remove(payload: dict) -> dict:
         log(f"System Optimization: man-db purged (also removed: {dry_run['would_remove']})")
     return result
 
-
 def action_sysopt_mandb_reinstall(payload: dict) -> dict:
-    """Needs network access on the node. See the dphys-swapfile reinstall
-    docstring above for the same fresh-install-defaults caveat."""
     err = _require_root()
     if err:
         return err
@@ -6406,7 +4832,6 @@ def action_sysopt_mandb_reinstall(payload: dict) -> dict:
         _sysopt_state_clear_item("mandb_remove")
         log("System Optimization: man-db reinstalled")
     return {"success": ok, "output": output, "commands": ["apt-get install -y man-db"]}
-
 
 _SYSTEM_OPT_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "fstab_noatime_apply": action_sysopt_fstab_noatime_apply,
@@ -6425,11 +4850,7 @@ _SYSTEM_OPT_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "mandb_reinstall": action_sysopt_mandb_reinstall,
 }
 
-
-# v0.0.154: the four package actions run as background jobs (page polls
-# /api/action_status) instead of holding the web request open while apt works.
 _SYSTEM_OPT_JOB_ACTIONS = {"dphys_swap_uninstall", "dphys_swap_reinstall", "mandb_remove", "mandb_reinstall"}
-
 
 def _sysopt_job_text(result: dict) -> dict:
     lines = []
@@ -6439,7 +4860,6 @@ def _sysopt_job_text(result: dict) -> dict:
     if result.get("would_remove"):
         lines.append("Also removed: " + ", ".join(result["would_remove"]))
     return {**result, "output": "\n".join(lines)}
-
 
 def _dispatch_system_opt_action(payload: dict) -> dict:
     action = payload.get("action", "")
@@ -6453,7 +4873,6 @@ def _dispatch_system_opt_action(payload: dict) -> dict:
         return _start_python_job(f"sysopt_{action}", lambda: _sysopt_job_text(handler_fn(payload)))
     return handler_fn(payload)
 
-
 def status_firewalld_prereq() -> dict:
     installed = shutil.which("firewall-cmd") is not None
     active = False
@@ -6464,26 +4883,21 @@ def status_firewalld_prereq() -> dict:
     done = installed and active
     return {"done": done, "installed": installed, "active": active}
 
-
 def _argv_install_firewalld() -> list[list[str]]:
     return [
         ["apt-get", "install", "-y", "firewalld"],
         ["systemctl", "enable", "--now", "firewalld"],
     ]
 
-
 def action_install_firewalld() -> dict:
     err = _require_root()
     if err:
         return err
-    # v0.0.154: apt runs as its own systemd unit with no time limit (was a 300 s cap).
     results = [_run_pkg_unit("pi_firewalld_prereq", f"apt-get install -y {_APT_NI_OPTS} firewalld")
                if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_firewalld()]
     ok = all(r["success"] for r in results)
     status = status_firewalld_prereq()
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results)}
-
-
 
 def status_resolved_prereq() -> dict:
     r = subprocess.run(["systemctl", "is-active", "systemd-resolved"],
@@ -6491,19 +4905,16 @@ def status_resolved_prereq() -> dict:
     active = r.stdout.strip() == "active"
     return {"done": active, "active": active}
 
-
 def _argv_install_resolved() -> list[list[str]]:
     return [
         ["apt-get", "install", "-y", "wireguard", "systemd-resolved"],
         ["systemctl", "enable", "--now", "systemd-resolved"],
     ]
 
-
 def action_install_resolved() -> dict:
     err = _require_root()
     if err:
         return err
-    # v0.0.154: apt runs as its own systemd unit with no time limit (was a 300 s cap).
     results = [_run_pkg_unit("pi_resolved_prereq", f"apt-get install -y {_APT_NI_OPTS} wireguard systemd-resolved")
                if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_resolved()]
     ok = all(r["success"] for r in results)
@@ -6513,8 +4924,6 @@ def action_install_resolved() -> dict:
             "timeout on `wg-quick up` even with the service active.")
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results) + "\n" + note}
 
-
-
 def status_create_zone() -> dict:
     try:
         r = subprocess.run(["firewall-cmd", "--get-zones"], capture_output=True, text=True, timeout=5)
@@ -6522,7 +4931,6 @@ def status_create_zone() -> dict:
         return {"done": False, "zones": []}
     zones = r.stdout.split() if r.returncode == 0 else []
     return {"done": FIREWALLD_ZONE in zones, "zones": zones}
-
 
 def action_create_zone() -> dict:
     err = _require_root()
@@ -6540,14 +4948,11 @@ def action_create_zone() -> dict:
     status = status_create_zone()
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results)}
 
-
-
 def status_service_ports() -> dict:
     zone = _firewalld_zone_info()
     if zone is None:
         return {"done": False, "zone_exists": False, "services": [], "ports": []}
     return {"done": True, "zone_exists": True, "services": zone["services"], "ports": zone["ports"]}
-
 
 def _valid_port_proto(s: str) -> bool:
     parts = s.split("/")
@@ -6560,7 +4965,6 @@ def _valid_port_proto(s: str) -> bool:
         return False
     port = int(port_s)
     return 1 <= port <= 65535
-
 
 def action_add_service(service: str) -> dict:
     err = _require_root()
@@ -6578,7 +4982,6 @@ def action_add_service(service: str) -> dict:
     status = status_service_ports()
     verified = service in status.get("services", [])
     return {"success": ok, "verified": verified, "output": "\n".join(r["output"] for r in results)}
-
 
 def action_add_port(port_proto: str, dvswitch_mobile: bool = False) -> dict:
     err = _require_root()
@@ -6603,8 +5006,6 @@ def action_add_port(port_proto: str, dvswitch_mobile: bool = False) -> dict:
         save_config(_cfg)
     return {"success": ok, "verified": verified, "output": "\n".join(r["output"] for r in results)}
 
-
-
 def status_paste_config() -> dict:
     exists = os.path.exists(WG0_CONF_PATH)
     perms_ok = _wg0_conf_perms_ok()
@@ -6612,19 +5013,13 @@ def status_paste_config() -> dict:
     return {"done": exists and perms_ok is True, "exists": exists, "perms_ok": perms_ok,
             "library_backup_exists": library_backup_exists}
 
-
 _WG_KEY_RE = re.compile(r"^[A-Za-z0-9+/]{43}=$")
 
-
 def _wg_conf_field(parsed_section: dict, field: str) -> str:
-    """Case-insensitive lookup into a _parse_wg_conf_text() section dict —
-    WireGuard config keys are conventionally 'PrivateKey' etc. but the
-    parser preserves whatever case the pasted text used."""
     for key, val in parsed_section.items():
         if key.lower() == field.lower():
             return val.strip()
     return ""
-
 
 def _validate_wg_config_text(text: str) -> tuple[bool, str]:
     if not text or not text.strip():
@@ -6652,16 +5047,10 @@ def _validate_wg_config_text(text: str) -> tuple[bool, str]:
         )
     return True, "OK"
 
-
 _PI_SPLIT_ALLOWED_IPS = {"44.0.0.0/9", "44.128.0.0/10"}
 _PI_FULL_ALLOWED_IPS = {"0.0.0.0/0"}
 
-
 def _pi_allowed_ips_mismatch_note(config_text: str, kind: str) -> str:
-    """Non-blocking note if a pasted config's AllowedIPs shape doesn't match
-    the Pi Install tab it was pasted into ('full' or 'split'). Symmetric
-    version of the one-directional (split-only) check already used by
-    Router Install's action_capture_router_config for Model C."""
     if kind not in ("full", "split"):
         return ""
     parsed = _parse_wg_conf_text(config_text, mask_private_key=False)
@@ -6678,7 +5067,6 @@ def _pi_allowed_ips_mismatch_note(config_text: str, kind: str) -> str:
                 "not the 0.0.0.0/0 full-tunnel shape expected on the Full Tunnel tab — "
                 "double check this is really a full-tunnel config.")
     return ""
-
 
 def action_paste_config(config_text: str, backup_to_library: bool = True, kind: str = "") -> dict:
     err = _require_root()
@@ -6723,7 +5111,6 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
         save_config(_cfg)
     return {"success": True, "verified": status["done"], "output": "\n".join(output_lines)}
 
-
 def action_load_wg_from_library() -> dict:
     err = _require_root()
     if err:
@@ -6743,7 +5130,6 @@ def action_load_wg_from_library() -> dict:
     log(f"Read wg0.conf back from library at {path} for a restore (private key never logged)")
     return {"success": True, "verified": True, "output": content}
 
-
 _WG_DNS_BEGIN = "# 44helper-dns-begin"
 _WG_DNS_END = "# 44helper-dns-end"
 _WG_MTU_BEGIN = "# 44helper-mtu-begin"
@@ -6755,12 +5141,7 @@ _WG_DNS_DEFAULTS = {
     "dns_line": ["1.1.1.1", "9.9.9.9", "44.0.0.1"],
 }
 
-
 def _valid_dns_servers(raw: str):
-    """Split a comma/space list of DNS servers and require each to be a bare IP.
-    Strict on purpose: these values are interpolated into a PostUp shell command
-    wg-quick runs as root, so anything that is not an IP is rejected outright
-    (no hostnames, no shell metacharacters). Returns a list or None."""
     tokens = [t for t in re.split(r"[,\s]+", raw.strip()) if t]
     if not tokens:
         return None
@@ -6771,9 +5152,7 @@ def _valid_dns_servers(raw: str):
             return None
     return tokens
 
-
 def _wg_extract_block(text: str, begin: str, end: str):
-    """Lines strictly between a begin/end marker pair (exclusive), or []."""
     out = []
     inside = False
     for ln in text.splitlines():
@@ -6787,9 +5166,7 @@ def _wg_extract_block(text: str, begin: str, end: str):
             out.append(ln)
     return out
 
-
 def _wg_block_remove(text: str, begin: str, end: str) -> str:
-    """Drop a marked block (markers included). No-op if absent."""
     out = []
     inside = False
     for ln in text.splitlines():
@@ -6804,10 +5181,7 @@ def _wg_block_remove(text: str, begin: str, end: str) -> str:
             out.append(ln)
     return "\n".join(out) + "\n"
 
-
 def _wg_insert_in_interface(text: str, block_lines):
-    """Insert block_lines immediately after the [Interface] header line.
-    Returns None if there is no [Interface] section."""
     out = []
     inserted = False
     for ln in text.splitlines():
@@ -6818,7 +5192,6 @@ def _wg_insert_in_interface(text: str, block_lines):
     if not inserted:
         return None
     return "\n".join(out) + "\n"
-
 
 def _wg_dns_preflight() -> dict:
     resolvectl = shutil.which("resolvectl") is not None
@@ -6845,7 +5218,6 @@ def _wg_dns_preflight() -> dict:
     return {"resolvectl": resolvectl, "resolvconf": bool(resolvconf_path),
             "resolvconf_impl": impl, "resolved_active": resolved_active}
 
-
 def _wg_dns_mode_of(dns_block) -> str:
     for ln in dns_block:
         low = ln.strip().lower()
@@ -6854,7 +5226,6 @@ def _wg_dns_mode_of(dns_block) -> str:
         if low.startswith("dns"):
             return "dns_line"
     return "off"
-
 
 def _wg_dns_servers_of(dns_block) -> str:
     for ln in dns_block:
@@ -6870,7 +5241,6 @@ def _wg_dns_servers_of(dns_block) -> str:
                 parts = parts[1:]
             return ", ".join(parts)
     return ""
-
 
 def status_wg_dns() -> dict:
     pf = _wg_dns_preflight()
@@ -6894,7 +5264,6 @@ def status_wg_dns() -> dict:
     return {"conf_exists": exists, "mode": mode, "servers": servers,
             "mtu": mtu, "preflight": pf}
 
-
 def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     out = []
     with open(WG0_CONF_PATH, "w") as f:
@@ -6909,7 +5278,6 @@ def _wg_write_conf(new_text: str, backup_to_library: bool = True):
         except OSError as e:
             out.append(f"Library backup failed (live wg0.conf still written OK): {e}")
     return out
-
 
 def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
     err = _require_root()
@@ -6972,7 +5340,6 @@ def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
     out.append("Restart the tunnel for this to take effect:  systemctl restart wg-quick@wg0")
     return {"success": True, "verified": verified, "output": "\n".join(out)}
 
-
 def action_wg_set_mtu(mtu: str = "") -> dict:
     err = _require_root()
     if err:
@@ -7014,18 +5381,10 @@ def action_wg_set_mtu(mtu: str = "") -> dict:
     out.append("Restart the tunnel for this to take effect:  systemctl restart wg-quick@wg0")
     return {"success": True, "verified": verified, "output": "\n".join(out)}
 
-
-
-
 _PI_SPLIT_ALLOWED_IPS_STR = "44.0.0.0/9, 44.128.0.0/10"
 _AIP_LINE_RE = re.compile(r"^(\s*AllowedIPs\s*=\s*)(.*?)(\s*)$", re.IGNORECASE)
 
-
 def _wg_repair_allowed_ips_text(text: str) -> tuple[str, int]:
-    """Rewrite full-tunnel (0.0.0.0/0) AllowedIPs on [Peer] lines to the
-    split-tunnel 44Net set. Preserves every other byte of the file
-    (including exact line endings) by editing only the matched line's value
-    in place -- never a full rebuild. Returns (new_text, lines_changed)."""
     lines = text.splitlines(keepends=True)
     section: str | None = None
     changed = 0
@@ -7048,13 +5407,7 @@ def _wg_repair_allowed_ips_text(text: str) -> tuple[str, int]:
                     changed += 1
     return "".join(lines), changed
 
-
 def status_wg_allowed_ips() -> dict:
-    """Read-only shape of the first [Peer]'s AllowedIPs. shape is one of
-    'no-conf', 'unreadable', 'none', 'full' (contains 0.0.0.0/0), 'split'
-    (exactly the 44Net set), or 'narrowed-other'. repairable is True only
-    for 'full'. Direct read (not _run_argv) to keep the Actions Log clean,
-    same convention as status_wg_dns."""
     if not os.path.exists(WG0_CONF_PATH):
         return {"conf_exists": False, "allowed_ips": "", "shape": "no-conf", "repairable": False}
     try:
@@ -7076,12 +5429,7 @@ def status_wg_allowed_ips() -> dict:
     return {"conf_exists": True, "allowed_ips": allowed_ips, "shape": shape,
             "repairable": shape == "full"}
 
-
 def action_wg_repair_allowed_ips() -> dict:
-    """Narrow a full-tunnel AllowedIPs=0.0.0.0/0 on the [Peer] line to the
-    44Net split set. Rewrites only the peer line (byte-for-byte elsewhere),
-    refreshes the library backup via _wg_write_conf, then re-parses to
-    verify. No-op if already narrowed; refuses any non-full shape."""
     err = _require_root()
     if err:
         return err
@@ -7119,7 +5467,6 @@ def action_wg_repair_allowed_ips() -> dict:
                "systemctl restart wg-quick@wg0")
     return {"success": True, "verified": verified, "output": "\n".join(out)}
 
-
 _WG_EGRESS_IFACE = "wg0"
 _REFLECTOR_EGRESS_CATALOG: list[tuple[str, str, str, bool, str]] = [
     ("M17",                    "17000", "udp", True,  ""),
@@ -7139,21 +5486,12 @@ _REFLECTOR_EGRESS_BY_KEY: dict[str, tuple[str, str, bool, str]] = {
     f"{p}/{pr}": (net, pr, conf, note) for (net, p, pr, conf, note) in _REFLECTOR_EGRESS_CATALOG
 }
 
-
 def _reflector_egress_rule_args(port: str, proto: str, verb: str) -> list[str]:
-    """The single canonical firewalld direct-rule argv for one reflector port.
-    verb is one of --add-rule / --remove-rule / --query-rule. OUTPUT chain,
-    priority 0, scoped to the wg0 egress interface -- outbound only."""
     return ["firewall-cmd", "--permanent", "--direct", verb,
             "ipv4", "filter", "OUTPUT", "0",
             "-o", _WG_EGRESS_IFACE, "-p", proto, "--dport", port, "-j", "ACCEPT"]
 
-
 def _reflector_rule_present(all_rules_text: str, port: str, proto: str) -> bool:
-    """True if `firewall-cmd --direct --get-all-rules` output already lists our
-    OUTPUT/-o wg0/--dport <port> ACCEPT rule. Matched structurally (all tokens
-    present on one line) rather than by exact string, since firewalld may
-    normalise spacing/quoting."""
     needles = ["OUTPUT", "-o", _WG_EGRESS_IFACE, "-p", proto, "--dport", port, "ACCEPT"]
     for line in all_rules_text.splitlines():
         toks = line.split()
@@ -7161,11 +5499,7 @@ def _reflector_rule_present(all_rules_text: str, port: str, proto: str) -> bool:
             return True
     return False
 
-
 def status_wg_reflector_egress() -> dict:
-    """Read-only view of which catalog egress rules are present. One direct
-    subprocess.run of --get-all-rules (not _run_argv) to keep the Actions Log
-    clean, same convention as status_wg_dns/status_wg_allowed_ips."""
     try:
         r = subprocess.run(
             ["firewall-cmd", "--permanent", "--direct", "--get-all-rules"],
@@ -7191,10 +5525,7 @@ def status_wg_reflector_egress() -> dict:
             "applied_count": applied, "confirmed_total": confirmed_total,
             "unconfirmed_total": unconfirmed_total}
 
-
 def _reflector_selection(payload_ports) -> list[str] | None:
-    """Resolve the posted selection to a list of catalog keys. None/empty ->
-    the confirmed set. Any key outside the catalog -> None (reject)."""
     if not payload_ports:
         return [f"{p}/{pr}" for (net, p, pr, conf, note) in _REFLECTOR_EGRESS_CATALOG if conf]
     keys = []
@@ -7204,11 +5535,7 @@ def _reflector_selection(payload_ports) -> list[str] | None:
         keys.append(k)
     return keys
 
-
 def action_wg_add_reflector_egress(payload_ports=None) -> dict:
-    """Add firewalld OUTPUT/-o wg0 ACCEPT direct rules for the selected reflector
-    ports. Idempotent (queries each rule first, skips those present); reloads
-    once if anything was added; re-reads status to verify. Root-gated."""
     err = _require_root()
     if err:
         return err
@@ -7243,10 +5570,7 @@ def action_wg_add_reflector_egress(payload_ports=None) -> dict:
     return {"success": all("add failed" not in line for line in out), "verified": verified,
             "output": "\n".join(out)}
 
-
 def action_wg_remove_reflector_egress(payload_ports=None) -> dict:
-    """Remove the catalog egress rules (reverses add). None/empty selection ->
-    remove every catalog rule (full cleanup). Root-gated, idempotent."""
     err = _require_root()
     if err:
         return err
@@ -7282,13 +5606,11 @@ def action_wg_remove_reflector_egress(payload_ports=None) -> dict:
     return {"success": all("remove failed" not in line for line in out), "verified": verified,
             "output": "\n".join(out)}
 
-
 def status_attach_interface() -> dict:
     zone = _firewalld_zone_info()
     if zone is None:
         return {"done": False, "zone_exists": False}
     return {"done": "wg0" in zone["interfaces"], "zone_exists": True, "interfaces": zone["interfaces"]}
-
 
 def action_attach_interface() -> dict:
     err = _require_root()
@@ -7303,8 +5625,6 @@ def action_attach_interface() -> dict:
     ok = all(r["success"] for r in results)
     status = status_attach_interface()
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results)}
-
-
 
 def _wg_quick_template_available() -> bool:
     try:
@@ -7329,12 +5649,10 @@ ExecStop=wg-quick down /etc/wireguard/wg0.conf
 WantedBy=multi-user.target
 """
 
-
 def status_enable_tunnel() -> dict:
     wg_status = _wg_show_wg0()
     up = wg_status is not None and bool(wg_status.get("latest_handshake"))
     return {"done": up, "wg_status": wg_status, "wg0_present": _wg0_interface_present()}
-
 
 def action_enable_tunnel() -> dict:
     err = _require_root()
@@ -7365,21 +5683,11 @@ def action_enable_tunnel() -> dict:
     note = " (used ARDC fallback unit, §1a.3 — standard wg-quick@.service template not found)" if used_fallback else ""
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results) + note}
 
-
-
 def _pi_purge_tolerant_ok(result: dict) -> bool:
-    """Best-effort: a systemctl/firewall-cmd call against something that
-    was never enabled/present in the first place commonly returns a
-    non-zero exit with wording like 'not loaded' or 'not found' or
-    'does not exist' depending on the systemd/firewalld version — that's
-    not a real failure for an undo step whose whole point is idempotency,
-    so treat it the same way action_create_zone() already treats
-    firewall-cmd's 'already exists' on the forward path."""
     if result["success"]:
         return True
     low = result["output"].lower()
     return any(phrase in low for phrase in ("not loaded", "not found", "not exist", "no such", "invalid zone"))
-
 
 def action_purge_disable_tunnel() -> dict:
     err = _require_root()
@@ -7406,7 +5714,6 @@ def action_purge_disable_tunnel() -> dict:
     lines.append("Result: tunnel confirmed down." if verified else
                   "Result: tunnel still shows a handshake \u2014 check manually (wg show wg0).")
     return {"success": all_ok, "verified": verified, "output": "\n".join(lines)}
-
 
 def action_purge_remove_wg0_conf() -> dict:
     err = _require_root()
@@ -7438,7 +5745,6 @@ def action_purge_remove_wg0_conf() -> dict:
     status = status_paste_config()
     return {"success": True, "verified": not status["done"], "output": "\n".join(output_lines)}
 
-
 def action_purge_delete_zone() -> dict:
     err = _require_root()
     if err:
@@ -7455,7 +5761,6 @@ def action_purge_delete_zone() -> dict:
     status = status_create_zone()
     return {"success": ok, "verified": not status["done"], "output": "\n".join(r["output"] for r in results)}
 
-
 def check_myip() -> dict:
     try:
         req = urllib.request.Request("https://connect.44net.cloud/myip", headers={"User-Agent": "44helper"})
@@ -7466,7 +5771,6 @@ def check_myip() -> dict:
     is_44 = ip.startswith("44.")
     return {"success": is_44, "ip": ip, "output": f"connect.44net.cloud/myip reports: {ip}"}
 
-
 def check_rpt_registrations() -> dict:
     try:
         r = subprocess.run(["asterisk", "-rx", "rpt show registrations"],
@@ -7474,7 +5778,6 @@ def check_rpt_registrations() -> dict:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {"success": False, "output": "asterisk not available on this system"}
     return {"success": r.returncode == 0, "output": r.stdout.strip() or r.stderr.strip()}
-
 
 def build_pi_convert_preview(cfg: configparser.ConfigParser, target_kind: str) -> dict:
     current_kind = cfg.get("tunnels", "tunnel.pi.kind", fallback="")
@@ -7496,7 +5799,6 @@ def build_pi_convert_preview(cfg: configparser.ConfigParser, target_kind: str) -
                             "label": f"DVSwitch Mobile port ({dvswitch_mobile_port})"})
 
     return {"current_kind": current_kind, "target_kind": target_kind, "prune_candidates": candidates}
-
 
 def action_pi_convert_prune(cfg: configparser.ConfigParser, target_kind: str, confirmed_ids: list[str]) -> dict:
     err = _require_root()
@@ -7523,18 +5825,11 @@ def action_pi_convert_prune(cfg: configparser.ConfigParser, target_kind: str, co
         lines.append(f"[{item_id}] {'ok' if result.get('success') else 'FAILED'}: {result.get('output', '')}")
     return {"success": all_ok, "verified": all_ok, "output": "\n".join(lines) or "Nothing selected to remove."}
 
-
-
 _NETCHECK_UNIT = "netcheck.service"
-# v0.0.109: the real dvswitch.org packages ship lowercase unit names
-# (analog_bridge.service, confirmed on 652700); older/other builds used the
-# capitalised forms. Both spellings are accepted; the scan reports whichever
-# is actually loaded (lowercase when neither is).
 _NETCHECK_BRIDGE_PAIRS = [("analog_bridge.service", "Analog_Bridge.service"),
                           ("mmdvm_bridge.service", "MMDVM_Bridge.service"),
                           ("stfu.service", "STFU.service")]
 _NETCHECK_BRIDGE_UNITS = [u for pair in _NETCHECK_BRIDGE_PAIRS for u in pair]
-
 
 def _netcheck_bridge_units_present() -> list[str]:
     picked = []
@@ -7549,10 +5844,7 @@ def _netcheck_bridge_units_present() -> list[str]:
 _NETCHECK_WG_UNIT = "wg-quick@wg0.service"
 _NETCHECK_NET_ONLINE = "network-online.target"
 
-
 def _systemctl_show(unit: str, props: list[str]) -> dict:
-    """`systemctl show <unit> -p a,b,c` parsed to a dict. Empty on error; a
-    missing unit still returns LoadState=not-found."""
     try:
         r = subprocess.run(["systemctl", "show", unit, "--property=" + ",".join(props)],
                            capture_output=True, text=True, timeout=6)
@@ -7565,7 +5857,6 @@ def _systemctl_show(unit: str, props: list[str]) -> dict:
             out[k] = v
     return out
 
-
 def _sc_is_active(unit: str) -> bool:
     try:
         r = subprocess.run(["systemctl", "is-active", unit],
@@ -7573,7 +5864,6 @@ def _sc_is_active(unit: str) -> bool:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
     return r.stdout.strip() == "active"
-
 
 def _sc_is_enabled(unit: str) -> str:
     try:
@@ -7583,11 +5873,7 @@ def _sc_is_enabled(unit: str) -> str:
         return "unknown"
     return (r.stdout.strip() or r.stderr.strip() or "unknown")
 
-
 def _netcheck_script_info(exec_start: str) -> dict:
-    """From an ExecStart value, pull the script path (path=... token), read it
-    if we can, and heuristically surface its ping/curl target, timeout, and
-    whether it ever signals readiness (sd_notify / systemd-notify)."""
     info = {"script_path": "", "readable": False, "target": "", "timeout": "",
             "notify_ready": None}
     mp = re.search(r"path=([^\s;]+)", exec_start or "")
@@ -7615,7 +5901,6 @@ def _netcheck_script_info(exec_start: str) -> dict:
         info["timeout"] = mto.group(1)
     return info
 
-
 def _network_backend() -> dict:
     if _sc_is_active("NetworkManager.service"):
         unit = "NetworkManager-wait-online.service"
@@ -7625,15 +5910,10 @@ def _network_backend() -> dict:
         return {"manager": "systemd-networkd", "wait_unit": unit, "wait_enabled": _sc_is_enabled(unit)}
     return {"manager": "unknown", "wait_unit": "", "wait_enabled": "unknown"}
 
-
 def _unit_in_etc(fragment_path: str) -> bool:
     return fragment_path.startswith("/etc/systemd/")
 
-
 def scan_netcheck() -> dict:
-    """Read-only diagnostic of the netcheck.service -> DVSwitch-bridge chain.
-    Returns the parsed unit facts plus a verdict list (level/message) naming
-    each problem found and why it matters. No mutations."""
     if shutil.which("systemctl") is None:
         return {"available": False, "verdict": [
             {"level": "info", "message": "systemctl not found -- not a systemd host, nothing to scan."}]}
@@ -7763,9 +6043,7 @@ def scan_netcheck() -> dict:
             "fixes": _netcheck_fixes_summary(netcheck, bridges, backend),
             "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-
 def netcheck_journal(lines: int = 40) -> dict:
-    """Read-only: last N lines of netcheck's current-boot journal, on demand."""
     n = 40
     try:
         n = max(1, min(200, int(lines)))
@@ -7780,31 +6058,22 @@ def netcheck_journal(lines: int = 40) -> dict:
         return {"available": False, "output": "journalctl timed out."}
     return {"available": True, "output": (r.stdout or r.stderr or "(no journal output)").strip()}
 
-
-
 _NETCHECK_DROPIN_NAME = "44helper-netcheck.conf"
-
 
 def _netcheck_dropin_dir(unit: str) -> str:
     return f"/etc/systemd/system/{unit}.d"
 
-
 def _netcheck_dropin_path(unit: str) -> str:
     return os.path.join(_netcheck_dropin_dir(unit), _NETCHECK_DROPIN_NAME)
 
-
 def _netcheck_our_dropin_exists(unit: str) -> bool:
     return os.path.isfile(_netcheck_dropin_path(unit))
-
 
 def _netcheck_script_library_path() -> str:
     library_dir = os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")
     return os.path.join(library_dir, "config", "netcheck.script")
 
-
 def _write_netcheck_dropin(unit: str, content: str) -> str:
-    """Atomically write a 0644 drop-in (system unit override must be world-
-    readable, unlike the 0600 config backups)."""
     d = _netcheck_dropin_dir(unit)
     os.makedirs(d, mode=0o755, exist_ok=True)
     path = _netcheck_dropin_path(unit)
@@ -7815,10 +6084,8 @@ def _write_netcheck_dropin(unit: str, content: str) -> str:
     os.replace(tmp, path)
     return path
 
-
 def _daemon_reload() -> dict:
     return _run_argv(["systemctl", "daemon-reload"])
-
 
 def _valid_probe_target(t: str) -> bool:
     try:
@@ -7828,7 +6095,6 @@ def _valid_probe_target(t: str) -> bool:
         pass
     return bool(re.match(
         r"^(?=.{1,253}$)([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,}$", t or ""))
-
 
 def _netcheck_fixes_summary(netcheck: dict, bridges: list, backend: dict) -> dict:
     nc_applicable = netcheck["exists"] and (
@@ -7856,7 +6122,6 @@ def _netcheck_fixes_summary(netcheck: dict, bridges: list, backend: dict) -> dic
         "any_applied": any_applied,
     }
 
-
 def action_netcheck_fix_unit() -> dict:
     err = _require_root()
     if err:
@@ -7883,7 +6148,6 @@ def action_netcheck_fix_unit() -> dict:
             "output": f"Wrote {path}\n{rl['output']}\n"
                       f"netcheck now Type={after['type']}, ordered after network-online.target="
                       f"{after['ordered_after_network_online']}."}
-
 
 def action_netcheck_fix_bridge(unit: str) -> dict:
     err = _require_root()
@@ -7918,7 +6182,6 @@ def action_netcheck_fix_bridge(unit: str) -> dict:
             "output": f"Wrote {path}\n{rl['output']}\n"
                       f"{unit}: Requires now '{after.get('Requires', '')}', Wants '{after.get('Wants', '')}'.\n"
                       "This bridge will now start even if netcheck fails."}
-
 
 def action_netcheck_fix_target(target: str = "", timeout: str = "") -> dict:
     err = _require_root()
@@ -7967,7 +6230,6 @@ def action_netcheck_fix_target(target: str = "", timeout: str = "") -> dict:
                       f"Repointed probe target {old_target} -> {t} in {path}.\n"
                       "Restart netcheck (and the bridges) to pick this up."}
 
-
 def action_netcheck_enable_waitonline() -> dict:
     err = _require_root()
     if err:
@@ -7981,7 +6243,6 @@ def action_netcheck_enable_waitonline() -> dict:
     after = _sc_is_enabled(unit)
     return {"success": r["success"], "verified": after in ("enabled", "enabled-runtime", "static"),
             "output": f"{r['output']}\n{unit} is now {after}."}
-
 
 def action_netcheck_revert() -> dict:
     err = _require_root()
@@ -8023,7 +6284,6 @@ def action_netcheck_revert() -> dict:
     return {"success": rl["success"], "verified": True,
             "output": "Removed:\n" + ("\n".join(removed) or "(no drop-ins)") + f"\n{restored}\n{rl['output']}"}
 
-
 def action_netcheck_restart() -> dict:
     err = _require_root()
     if err:
@@ -8032,8 +6292,6 @@ def action_netcheck_restart() -> dict:
     r = _run_argv(["systemctl", "restart"] + units)
     return {"success": r["success"], "verified": r["success"],
             "output": f"Restarted: {' '.join(units)}\n{r['output']}"}
-
-
 
 def build_pi_install_status(cfg: configparser.ConfigParser) -> dict:
     steps = {
@@ -8053,8 +6311,6 @@ def build_pi_install_status(cfg: configparser.ConfigParser) -> dict:
             "dvswitch_mobile_port": cfg.get("tunnels", "tunnel.pi.dvswitch_mobile_port", fallback=""),
             "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-
-
 _SSH_CONNECT_TIMEOUT = 6
 _SSH_CMD_TIMEOUT = 10
 
@@ -8069,7 +6325,6 @@ _ROUTER_PROBES = {
 _KNOWN_GLINET_MODELS = [
     "GL-MT300N", "GL-AR300M", "GL-MT3000", "GL-XE300", "GL-MT2500A", "GL-MT2500",
 ]
-
 
 def _ssh_base_argv(cfg: configparser.ConfigParser) -> list[str] | None:
     if shutil.which("ssh") is None:
@@ -8090,7 +6345,6 @@ def _ssh_base_argv(cfg: configparser.ConfigParser) -> list[str] | None:
         f"{user}@{host}",
     ]
 
-
 def _ssh_run(cfg: configparser.ConfigParser, probe_key: str) -> dict:
     if probe_key not in _ROUTER_PROBES:
         return {"ok": False, "output": f"internal error: unknown probe '{probe_key}'"}
@@ -8109,13 +6363,11 @@ def _ssh_run(cfg: configparser.ConfigParser, probe_key: str) -> dict:
         return {"ok": False, "output": (r.stderr or r.stdout or f"ssh exited {r.returncode}").strip()}
     return {"ok": True, "output": r.stdout.strip()}
 
-
 def _match_known_glinet_model(version_text: str) -> str | None:
     for model in _KNOWN_GLINET_MODELS:
         if model.lower() in version_text.lower():
             return model
     return None
-
 
 def probe_router(cfg: configparser.ConfigParser) -> dict:
     result: dict = {
@@ -8160,10 +6412,8 @@ def probe_router(cfg: configparser.ConfigParser) -> dict:
 
     return result
 
-
 _router_cache: dict = {"data": None, "ts": 0.0}
 _router_cache_lock = threading.Lock()
-
 
 def get_router_status(cfg: configparser.ConfigParser, force: bool = False) -> dict:
     poll_interval = cfg.getint("router", "poll_interval_sec", fallback=60)
@@ -8182,7 +6432,6 @@ def get_router_status(cfg: configparser.ConfigParser, force: bool = False) -> di
         _router_cache["data"] = result
         _router_cache["ts"] = now
     return result
-
 
 def save_router_config(cfg: configparser.ConfigParser, access_method: str, host: str,
                         user: str, key_path: str, poll_interval_sec: str) -> dict:
@@ -8216,8 +6465,6 @@ def save_router_config(cfg: configparser.ConfigParser, access_method: str, host:
     log(f"Router config saved: access_method={access_method}, host={host}, user={user}")
     return {"success": True, "output": "Router config saved."}
 
-
-
 ROUTER_INSTALL_STEPS = [
     "allocation_type", "capture_config", "apply_wg_config", "set_lan_ip",
     "bring_up_tunnel", "pi_address", "firewall_zone", "verify",
@@ -8226,15 +6473,10 @@ ROUTER_INSTALL_STEPS = [
 _pending_router_wg: dict | None = None
 _pending_router_wg_lock = threading.Lock()
 
-
-
 def action_install_luci(cfg: configparser.ConfigParser) -> dict:
     base = _ssh_base_argv(cfg)
     if base is None:
         return {"success": False, "verified": False, "output": "Router access not configured/reachable."}
-    # v0.0.154: was a 90 s cap that could drop the SSH session mid-install. opkg now
-    # ignores the hang-up if the session drops, keepalives detect a dead link, and
-    # the wait is 15 minutes.
     remote_cmd = "trap '' HUP; opkg update >/dev/null 2>&1; opkg install luci"
     argv = base[:1] + ["-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4"] + base[1:]
     try:
@@ -8250,12 +6492,9 @@ def action_install_luci(cfg: configparser.ConfigParser) -> dict:
     verified = luci["ok"] and luci["output"].strip() == "yes"
     return {"success": r.returncode == 0, "verified": verified, "output": (r.stdout + r.stderr).strip()}
 
-
-
 def status_allocation_type(cfg: configparser.ConfigParser) -> dict:
     mode = cfg.get("tunnels", "tunnel.router.mode", fallback="")
     return {"done": mode in ("router_single", "router_subnet"), "mode": mode or None}
-
 
 def action_set_allocation_type(cfg: configparser.ConfigParser, mode: str) -> dict:
     if mode not in ("router_single", "router_subnet"):
@@ -8266,8 +6505,6 @@ def action_set_allocation_type(cfg: configparser.ConfigParser, mode: str) -> dic
     save_config(cfg)
     return {"success": True, "verified": True, "output": f"Allocation type set to {mode}."}
 
-
-
 def _cidr_valid(cidr: str) -> tuple[bool, str]:
     try:
         iface = ipaddress.ip_interface(cidr)
@@ -8276,7 +6513,6 @@ def _cidr_valid(cidr: str) -> tuple[bool, str]:
     if iface.version != 4:
         return False, "Only IPv4 CIDR is supported here."
     return True, ""
-
 
 def status_capture_config(cfg: configparser.ConfigParser) -> dict:
     with _pending_router_wg_lock:
@@ -8291,7 +6527,6 @@ def status_capture_config(cfg: configparser.ConfigParser) -> dict:
         done = bool(address)
     return {"done": done, "pending_apply": pending,
             "applied": applied, "wg_address": address, "lan_subnet": lan_subnet, "mode": mode}
-
 
 def action_capture_router_config(cfg: configparser.ConfigParser, config_text: str, lan_subnet_cidr: str = "") -> dict:
     mode = cfg.get("tunnels", "tunnel.router.mode", fallback="")
@@ -8339,8 +6574,6 @@ def action_capture_router_config(cfg: configparser.ConfigParser, config_text: st
     subnet_note = f"; LAN subnet: {lan_subnet_cidr}" if lan_subnet_cidr else " (Model B — no LAN subnet needed)"
     return {"success": True, "verified": True,
             "output": f"Captured. Interface address: {address or '(none parsed)'}{subnet_note}.{note}"}
-
-
 
 def _build_uci_wg_apply_cmd(iface_name: str, wg: dict) -> str | None:
     iface = wg["interface"]
@@ -8395,11 +6628,9 @@ def _build_uci_wg_apply_cmd(iface_name: str, wg: dict) -> str | None:
 
     return " && ".join(cmds)
 
-
 def status_apply_wg_config(cfg: configparser.ConfigParser) -> dict:
     applied = cfg.get("tunnels", "tunnel.router.wg_applied", fallback="") == "true"
     return {"done": applied}
-
 
 def action_apply_router_wg_config(cfg: configparser.ConfigParser) -> dict:
     global _pending_router_wg
@@ -8433,12 +6664,9 @@ def action_apply_router_wg_config(cfg: configparser.ConfigParser) -> dict:
 
     return {"success": ok, "verified": ok, "output": (r.stdout + r.stderr).strip() or ("OK" if ok else "uci command failed")}
 
-
-
 def status_set_lan_ip(cfg: configparser.ConfigParser) -> dict:
     done = cfg.get("tunnels", "tunnel.router.lan_ip_applied", fallback="") == "true"
     return {"done": done}
-
 
 def action_set_router_lan_ip(cfg: configparser.ConfigParser) -> dict:
     lan_subnet = cfg.get("tunnels", "tunnel.router.lan_subnet", fallback="")
@@ -8485,12 +6713,9 @@ def action_set_router_lan_ip(cfg: configparser.ConfigParser) -> dict:
         ),
     }
 
-
-
 def status_bring_up_tunnel(cfg: configparser.ConfigParser) -> dict:
     done = cfg.get("tunnels", "tunnel.router.tunnel_up", fallback="") == "true"
     return {"done": done}
-
 
 def action_bring_up_router_tunnel(cfg: configparser.ConfigParser) -> dict:
     base = _ssh_base_argv(cfg)
@@ -8509,8 +6734,6 @@ def action_bring_up_router_tunnel(cfg: configparser.ConfigParser) -> dict:
         save_config(cfg)
     return {"success": ok, "verified": verified, "output": out}
 
-
-
 def _pi_primary_mac() -> str | None:
     for iface in ("eth0", "wlan0"):
         path = f"/sys/class/net/{iface}/address"
@@ -8522,11 +6745,9 @@ def _pi_primary_mac() -> str | None:
                 continue
     return None
 
-
 def status_pi_address(cfg: configparser.ConfigParser) -> dict:
     mac = _pi_primary_mac()
     return {"done": False, "pi_mac": mac}
-
 
 def action_lookup_pi_address(cfg: configparser.ConfigParser) -> dict:
     mac = _pi_primary_mac()
@@ -8556,7 +6777,6 @@ def action_lookup_pi_address(cfg: configparser.ConfigParser) -> dict:
         save_config(cfg)
     return {"success": True, "verified": bool(pi_ip), "output": f"Pi's current 44Net address: {pi_ip or '(unparsed)'}"}
 
-
 def action_add_static_binding(cfg: configparser.ConfigParser) -> dict:
     mac = cfg.get("tunnels", "tunnel.router.pi_mac", fallback="") or _pi_primary_mac()
     pi_ip = cfg.get("tunnels", "tunnel.router.pi_44_address", fallback="")
@@ -8583,12 +6803,9 @@ def action_add_static_binding(cfg: configparser.ConfigParser) -> dict:
     ok = r.returncode == 0
     return {"success": ok, "verified": ok, "output": (r.stdout + r.stderr).strip() or ("OK" if ok else "uci command failed")}
 
-
-
 def status_firewall_zone(cfg: configparser.ConfigParser) -> dict:
     done = cfg.get("tunnels", "tunnel.router.zone_fixed", fallback="") == "true"
     return {"done": done}
-
 
 def action_fix_wireguard_zone(cfg: configparser.ConfigParser) -> dict:
     base = _ssh_base_argv(cfg)
@@ -8610,8 +6827,6 @@ def action_fix_wireguard_zone(cfg: configparser.ConfigParser) -> dict:
         cfg["tunnels"]["tunnel.router.zone_fixed"] = "true"
         save_config(cfg)
     return {"success": ok, "verified": ok, "output": (r2.stdout + r2.stderr).strip() or ("OK" if ok else "uci command failed — is firewall.wgzone present? (requires step 5 applied first)")}
-
-
 
 def check_ping_traceroute_44() -> dict:
     target = "44.1.1.17"
@@ -8644,9 +6859,7 @@ def check_ping_traceroute_44() -> dict:
                   ("\n" + trace_out if trace_out else ""),
     }
 
-
 KNOWN_GOOD_ROUTER_DIR = "/etc/44helper/known_good_routers"
-
 
 def save_known_good_router_note(cfg: configparser.ConfigParser, probe: dict) -> dict:
     try:
@@ -8713,9 +6926,7 @@ https://wiki.ampr.org/wiki/44Net_Connect/Supported_Platforms
     log(f"Saved known-good router note: {path}")
     return {"success": True, "output": f"Saved to {path}", "filename": fname}
 
-
 _NOTE_FILENAME_RE = re.compile(r"^[A-Za-z0-9_.\-]+\.md$")
-
 
 def list_known_good_router_notes() -> list[str]:
     try:
@@ -8724,7 +6935,6 @@ def list_known_good_router_notes() -> list[str]:
         return sorted(f for f in os.listdir(KNOWN_GOOD_ROUTER_DIR) if _NOTE_FILENAME_RE.match(f))
     except OSError:
         return []
-
 
 def read_known_good_router_note(filename: str) -> str | None:
     if not _NOTE_FILENAME_RE.match(filename):
@@ -8740,22 +6950,17 @@ def read_known_good_router_note(filename: str) -> str | None:
     except OSError:
         return None
 
-
-
 MODEL_B_FORWARD_SERVICES = {
     "iax2": {"label": "AllStarLink IAX2", "port": "4569", "proto": "udp", "default_on": True},
 }
-
 
 def status_port_forwards(cfg: configparser.ConfigParser) -> dict:
     raw = cfg.get("tunnels", "tunnel.router.forwards", fallback="")
     forwards = [f for f in raw.split(",") if f]
     return {"done": bool(forwards), "forwards": forwards}
 
-
 def _valid_port(port: str) -> bool:
     return port.isdigit() and 1 <= int(port) <= 65535
-
 
 def action_add_port_forward(cfg: configparser.ConfigParser, name: str, port: str, proto: str) -> dict:
     if proto not in ("udp", "tcp"):
@@ -8812,7 +7017,6 @@ def action_add_port_forward(cfg: configparser.ConfigParser, name: str, port: str
     return {"success": ok, "verified": ok,
             "output": (r_set.stdout + r_set.stderr).strip() or ("OK" if ok else "uci command failed")}
 
-
 def check_model_b_verify(cfg: configparser.ConfigParser) -> dict:
     myip = check_myip()
     forwards = status_port_forwards(cfg)
@@ -8826,11 +7030,9 @@ def check_model_b_verify(cfg: configparser.ConfigParser) -> dict:
         "forwards": forwards["forwards"],
     }
 
-
 def status_verify(cfg: configparser.ConfigParser) -> dict:
     done = cfg.get("tunnels", "tunnel.router.verified", fallback="") == "true"
     return {"done": done}
-
 
 def build_router_install_status(cfg: configparser.ConfigParser) -> dict:
     steps = {
@@ -8845,8 +7047,6 @@ def build_router_install_status(cfg: configparser.ConfigParser) -> dict:
         "verify": status_verify(cfg),
     }
     return {"steps": steps, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
-
 
 def _local_port_listening(port: int, proto: str = "tcp") -> bool:
     path = f"/proc/net/{proto}"
@@ -8868,14 +7068,12 @@ def _local_port_listening(port: int, proto: str = "tcp") -> bool:
         return False
     return False
 
-
 def _systemctl_is_active(unit: str) -> bool:
     try:
         r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
     return r.stdout.strip() == "active"
-
 
 _SERVICE_UNIT_DEFS: list[tuple[str, str, str, bool]] = [
     ("firewalld", "firewalld.service", "System", False),
@@ -8907,10 +7105,9 @@ _SERVICE_PORT_DEFS: list[tuple[str, int, str, str, bool]] = [
     ("Ampersand IAX (amp-hub default)", 4568, "udp", "Ampersand", False),
 ]
 
-
 def build_services_status(cfg: configparser.ConfigParser) -> dict:
     groups: dict[str, list[dict]] = {}
-    masked = _guard_masked_all()  # v0.0.120: one call, shown as MASKED on the row
+    masked = _guard_masked_all()
     for label, unit, group, flag in _SERVICE_UNIT_DEFS:
         active = _systemctl_is_active(unit)
         u = unit if "." in unit else unit + ".service"
@@ -8928,7 +7125,6 @@ def build_services_status(cfg: configparser.ConfigParser) -> dict:
         "label": "44helper (this dashboard)", "source": f"port {my_port}/tcp", "active": True, "flag_public": True,
     })
     return {"groups": groups, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-
 
 _PORTS_REFERENCE: list[tuple[str, str, str, str, bool]] = [
     ("IAX2", "4569", "udp", "AllStarLink IAX2 — primary 44Net Connect use case", False),
@@ -8948,7 +7144,6 @@ _PORTS_REFERENCE: list[tuple[str, str, str, str, bool]] = [
     ("Ampersand IAX (hub)", "4568", "udp", "amp-hub default IAX port — use a distinct port from Asterisk's 4569 if both run on one box", False),
     ("Cloudflare Tunnel (edge)", "7844", "udp", "cloudflared outbound edge connection (QUIC, with TCP fallback) — OUTBOUND-ONLY, never an inbound opening or a forward. A Cloudflare Tunnel bypasses the firewall entirely: nothing opens inbound, so no port here maps to what the tunnel exposes — that is managed in the Zero Trust dashboard and cannot be enumerated locally", False),
 ]
-
 
 _PORT_ROLE_OTHER = "other"
 _PORT_ROLES: dict[str, tuple[str, str]] = {
@@ -8972,14 +7167,10 @@ _PORT_ROLES: dict[str, tuple[str, str]] = {
 
 _PORT_ROLES_NEVER_EXPOSED = {"mgmt-LAN", "loopback-only", "outbound-only"}
 
-
 def _port_role(port: str, proto: str) -> tuple[str, str]:
     return _PORT_ROLES.get(f"{port}/{proto}", (_PORT_ROLE_OTHER, _PORT_ROLE_OTHER))
 
-
 def _port_verdict(role: str, exposed: bool, running: bool) -> str:
-    """Structural verdict for one port row. over-exposed wins because it is a
-    firewall-rule fact independent of whether the service happens to be up."""
     if exposed and role in _PORT_ROLES_NEVER_EXPOSED:
         return "over-exposed"
     if role == "peer-inbound" and running and not exposed:
@@ -8988,12 +7179,10 @@ def _port_verdict(role: str, exposed: bool, running: bool) -> str:
         return "not-listening"
     return "OK"
 
-
 def _pi_exposed_port_set(zone: dict | None) -> set[str]:
     if zone is None:
         return set()
     return set(zone.get("ports", [])) | set(zone.get("services", []))
-
 
 def build_ports_status(cfg: configparser.ConfigParser) -> dict:
     pi_mode = cfg.get("tunnels", "tunnel.pi.mode", fallback="")
@@ -9037,7 +7226,6 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
 
     return {"rows": rows, "exposure_source": exposure_source, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-
 def _ports_row(label, port, proto, purpose, flag_public, exposed, running, system=None, role=None) -> dict:
     if system is None or role is None:
         system, role = _port_role(port, proto)
@@ -9049,8 +7237,6 @@ def _ports_row(label, port, proto, purpose, flag_public, exposed, running, syste
         "mismatch": verdict == "over-exposed",
     }
 
-
-
 def check_allstarlink_zone_guardrail() -> dict:
     try:
         r = subprocess.run(["firewall-cmd", "--zone=allstarlink", "--list-interfaces"],
@@ -9061,7 +7247,6 @@ def check_allstarlink_zone_guardrail() -> dict:
         return {"applicable": False, "wg0_attached": False}
     interfaces = r.stdout.split()
     return {"applicable": True, "wg0_attached": "wg0" in interfaces}
-
 
 def action_remove_zone_service(cfg: configparser.ConfigParser, service: str) -> dict:
     err = _require_root()
@@ -9077,7 +7262,6 @@ def action_remove_zone_service(cfg: configparser.ConfigParser, service: str) -> 
     zone = _firewalld_zone_info()
     verified = zone is not None and service not in zone.get("services", [])
     return {"success": ok, "verified": verified, "output": "\n".join(r["output"] for r in results)}
-
 
 def action_remove_zone_port(cfg: configparser.ConfigParser, port_proto: str) -> dict:
     err = _require_root()
@@ -9099,8 +7283,6 @@ def action_remove_zone_port(cfg: configparser.ConfigParser, port_proto: str) -> 
         cfg["tunnels"]["tunnel.pi.dvswitch_mobile_port"] = ""
         save_config(cfg)
     return {"success": ok, "verified": verified, "output": "\n".join(r["output"] for r in results)}
-
-
 
 def list_router_port_forwards(cfg: configparser.ConfigParser) -> list[dict] | None:
     base = _ssh_base_argv(cfg)
@@ -9124,9 +7306,7 @@ def list_router_port_forwards(cfg: configparser.ConfigParser) -> list[dict] | No
             out.append({"id": parts[0], "name": parts[1], "port": parts[2], "proto": parts[3], "dest_ip": parts[4]})
     return out
 
-
 _UCI_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
-
 
 def action_remove_port_forward(cfg: configparser.ConfigParser, redirect_id: str) -> dict:
     if not _UCI_ID_RE.match(redirect_id):
@@ -9141,7 +7321,6 @@ def action_remove_port_forward(cfg: configparser.ConfigParser, redirect_id: str)
         return {"success": False, "verified": False, "output": f"ssh failed: {e}"}
     ok = r.returncode == 0
     return {"success": ok, "verified": ok, "output": (r.stdout + r.stderr).strip() or ("OK" if ok else "uci command failed")}
-
 
 def build_firewall_status(cfg: configparser.ConfigParser) -> dict:
     pi_zone = _firewalld_zone_info()
@@ -9161,22 +7340,16 @@ def build_firewall_status(cfg: configparser.ConfigParser) -> dict:
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
-
-
-
 _FW_IFACE_RE = re.compile(r"^[A-Za-z0-9._-]{1,15}$")
 _FW_SVC_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
-
 def _fw_get_zones() -> list[str]:
-    """firewalld's configured zones. Lightweight/unlogged (read-only)."""
     try:
         r = subprocess.run(["firewall-cmd", "--get-zones"],
                            capture_output=True, text=True, timeout=5)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     return r.stdout.split() if r.returncode == 0 else []
-
 
 def _fw_get_services() -> list[str]:
     try:
@@ -9186,7 +7359,6 @@ def _fw_get_services() -> list[str]:
         return []
     return r.stdout.split() if r.returncode == 0 else []
 
-
 def _fw_default_zone() -> str:
     try:
         r = subprocess.run(["firewall-cmd", "--get-default-zone"],
@@ -9195,9 +7367,7 @@ def _fw_default_zone() -> str:
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
 
-
 def _fw_active_zones() -> dict:
-    """{zone: [interfaces]} parsed from --get-active-zones. Read-only."""
     try:
         r = subprocess.run(["firewall-cmd", "--get-active-zones"],
                            capture_output=True, text=True, timeout=5)
@@ -9215,7 +7385,6 @@ def _fw_active_zones() -> dict:
             out[cur] = line.split("interfaces:", 1)[1].split()
     return out
 
-
 def _fw_zone_of_iface(iface: str = "wg0") -> str:
     try:
         r = subprocess.run(["firewall-cmd", f"--get-zone-of-interface={iface}"],
@@ -9223,7 +7392,6 @@ def _fw_zone_of_iface(iface: str = "wg0") -> str:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
-
 
 def _fw_panic_on() -> bool:
     try:
@@ -9233,11 +7401,7 @@ def _fw_panic_on() -> bool:
         return False
     return r.stdout.strip() == "on"
 
-
 def _firewall_port_guardrail(port_proto: str) -> dict:
-    """Role-based guardrail for adding a port to a zone (reuses the v0.0.89
-    role catalog). loopback-only -> block; mgmt-LAN (risky-if-public) -> warn;
-    anything else -> ok."""
     parts = port_proto.split("/")
     if len(parts) != 2:
         return {"level": "ok", "role": "other", "message": ""}
@@ -9254,18 +7418,13 @@ def _firewall_port_guardrail(port_proto: str) -> dict:
                             "Only sensible on a LAN-facing zone, never on the 44Net tunnel zone.")}
     return {"level": "ok", "role": role, "message": ""}
 
-
 def _fw_zone_guard(zone: str) -> dict | None:
     if not zone or zone not in _fw_get_zones():
         return {"success": False, "verified": False,
                 "output": f"Refused: '{zone}' is not one of firewalld's configured zones."}
     return None
 
-
 def action_fw_add_port_runtime(zone: str, port_proto: str) -> dict:
-    """Runtime-only add (no --permanent) -- self-reverts on reload/reboot, so
-    it is a safe test with no confirm. Root-gated. Loopback-only ports are
-    blocked; mgmt-LAN ports are allowed with a red-flag in the output."""
     err = _require_root()
     if err:
         return err
@@ -9288,10 +7447,7 @@ def action_fw_add_port_runtime(zone: str, port_proto: str) -> dict:
                "Use 'Make permanent' to keep it.")
     return {"success": r["success"], "verified": verified, "output": "\n".join(out)}
 
-
 def action_fw_promote_port(zone: str, port_proto: str) -> dict:
-    """Targeted permanent add of ONE port (not a blanket runtime->permanent):
-    --permanent --add-port then --reload. Root-gated; confirmed in the UI."""
     err = _require_root()
     if err:
         return err
@@ -9319,9 +7475,7 @@ def action_fw_promote_port(zone: str, port_proto: str) -> dict:
         out.append("[red-flag] " + guard["message"])
     return {"success": ok, "verified": verified, "output": "\n".join(out)}
 
-
 def action_fw_remove_port(zone: str, port_proto: str) -> dict:
-    """Remove a port from BOTH runtime and permanent, then reload. Confirmed in UI."""
     err = _require_root()
     if err:
         return err
@@ -9344,16 +7498,12 @@ def action_fw_remove_port(zone: str, port_proto: str) -> dict:
     ok = r_perm["success"] and rl["success"]
     return {"success": ok, "verified": verified, "output": "\n".join([r_rt["output"], r_perm["output"], rl["output"]])}
 
-
 def action_fw_commit_all_runtime() -> dict:
-    """Blanket firewall-cmd --runtime-to-permanent. Sweeps ALL current runtime
-    state into permanent -- explicit and separate from per-port promote. Confirm."""
     err = _require_root()
     if err:
         return err
     r = _run_argv(["firewall-cmd", "--runtime-to-permanent"])
     return {"success": r["success"], "verified": r["success"], "output": r["output"]}
-
 
 def action_fw_reload() -> dict:
     err = _require_root()
@@ -9361,7 +7511,6 @@ def action_fw_reload() -> dict:
         return err
     r = _reload_firewalld()
     return {"success": r["success"], "verified": r["success"], "output": r["output"]}
-
 
 def action_fw_add_service_zone(zone: str, service: str) -> dict:
     err = _require_root()
@@ -9384,7 +7533,6 @@ def action_fw_add_service_zone(zone: str, service: str) -> dict:
     verified = verify.returncode == 0 and verify.stdout.strip() == "yes"
     return {"success": ok, "verified": verified, "output": "\n".join(x["output"] for x in results)}
 
-
 def action_fw_remove_service_zone(zone: str, service: str) -> dict:
     err = _require_root()
     if err:
@@ -9406,11 +7554,7 @@ def action_fw_remove_service_zone(zone: str, service: str) -> dict:
     verified = verify.returncode == 0 and verify.stdout.strip() == "no"
     return {"success": ok, "verified": verified, "output": "\n".join(x["output"] for x in results)}
 
-
 def action_fw_change_interface(zone: str, iface: str) -> dict:
-    """Move iface into zone with --change-interface (safer than --add-interface:
-    it reassigns instead of erroring on ZONE_CONFLICT). Permanent + reload.
-    Strong confirm in UI -- can change this Pi's return network path."""
     err = _require_root()
     if err:
         return err
@@ -9424,7 +7568,6 @@ def action_fw_change_interface(zone: str, iface: str) -> dict:
     ok = all(x["success"] for x in results)
     verified = _fw_zone_of_iface(iface) == zone
     return {"success": ok, "verified": verified, "output": "\n".join(x["output"] for x in results)}
-
 
 def action_fw_remove_interface(zone: str, iface: str) -> dict:
     err = _require_root()
@@ -9441,19 +7584,14 @@ def action_fw_remove_interface(zone: str, iface: str) -> dict:
     verified = _fw_zone_of_iface(iface) != zone
     return {"success": ok, "verified": verified, "output": "\n".join(x["output"] for x in results)}
 
-
 def action_fw_panic_off() -> dict:
-    """firewall-cmd --panic-off (recovery). --panic-on is intentionally NOT
-    exposed anywhere -- it drops all traffic and could lock out this dashboard."""
     err = _require_root()
     if err:
         return err
     r = _run_argv(["firewall-cmd", "--panic-off"])
     return {"success": r["success"], "verified": r["success"] and not _fw_panic_on(), "output": r["output"]}
 
-
 def action_fw_inspect_zone(zone: str) -> dict:
-    """Read-only --list-all for one zone (subprocess.run, unlogged, no root)."""
     if not zone or zone not in _fw_get_zones():
         return {"success": False, "output": f"'{zone}' is not a configured zone."}
     try:
@@ -9462,8 +7600,6 @@ def action_fw_inspect_zone(zone: str) -> dict:
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         return {"success": False, "output": f"list-all failed: {e}"}
     return {"success": r.returncode == 0, "output": (r.stdout or "") + (r.stderr or "")}
-
-
 
 _CSS_BASE = """
 /* ── :root variables — copied verbatim from asl_dvs_dashboard, design plan §10 ── */
@@ -10064,7 +8200,6 @@ RPT_CONF_RESERVED_STANZAS: frozenset[str] = frozenset({
     "assignidx",
 })
 
-
 def _parse_asterisk_conf_stanzas(text: str) -> dict:
     stanzas: dict = {}
     current = ""
@@ -10091,7 +8226,6 @@ def _parse_asterisk_conf_stanzas(text: str) -> dict:
 
     return stanzas
 
-
 def _read_conf_stanzas(path: str) -> dict | None:
     if not os.path.exists(path):
         return None
@@ -10101,7 +8235,6 @@ def _read_conf_stanzas(path: str) -> dict | None:
     except OSError:
         return {"_unreadable": True}
     return _parse_asterisk_conf_stanzas(text)
-
 
 def parse_iax_conf(cfg: configparser.ConfigParser) -> dict:
     path = cfg.get("nodes", "iax_conf_path", fallback="/etc/asterisk/iax.conf")
@@ -10129,7 +8262,6 @@ def parse_iax_conf(cfg: configparser.ConfigParser) -> dict:
 
     return result
 
-
 def parse_rpt_conf(cfg: configparser.ConfigParser) -> dict:
     path = cfg.get("nodes", "rpt_conf_path", fallback="/etc/asterisk/rpt.conf")
     stanzas = _read_conf_stanzas(path)
@@ -10155,7 +8287,6 @@ def parse_rpt_conf(cfg: configparser.ConfigParser) -> dict:
         }
 
     return result
-
 
 def parse_extensions_conf(cfg: configparser.ConfigParser) -> dict:
     path = cfg.get("nodes", "extensions_conf_path", fallback="/etc/asterisk/extensions.conf")
@@ -10192,7 +8323,6 @@ def parse_extensions_conf(cfg: configparser.ConfigParser) -> dict:
 
     return result
 
-
 def parse_allmon3_ini(cfg: configparser.ConfigParser) -> dict:
     path = cfg.get("nodes", "allmon3_ini_path", fallback="/etc/allmon3/allmon3.ini")
 
@@ -10222,7 +8352,6 @@ def parse_allmon3_ini(cfg: configparser.ConfigParser) -> dict:
 
     return result
 
-
 def build_nodes_parse_snapshot(cfg: configparser.ConfigParser) -> dict:
     return {
         "iax_conf": parse_iax_conf(cfg),
@@ -10231,12 +8360,9 @@ def build_nodes_parse_snapshot(cfg: configparser.ConfigParser) -> dict:
         "allmon3_ini": parse_allmon3_ini(cfg),
     }
 
-
-
 _RPT_NODE_TARGET_RE = re.compile(
     r"^radio@(?P<host>[^:/]+)(?::(?P<port>\d+))?/(?P<node>\d+)\s*,?\s*(?P<flags>.*)$"
 )
-
 
 def _parse_rpt_node_target(target: str) -> dict:
     m = _RPT_NODE_TARGET_RE.match(target.strip())
@@ -10247,7 +8373,6 @@ def _parse_rpt_node_target(target: str) -> dict:
         "port": m.group("port"),
         "flags": m.group("flags").strip(),
     }
-
 
 def parse_stored_peers(cfg: configparser.ConfigParser) -> dict:
     raw = cfg.get("nodes", "peers", fallback="")
@@ -10267,7 +8392,6 @@ def parse_stored_peers(cfg: configparser.ConfigParser) -> dict:
         }
     return out
 
-
 def parse_peer_links(cfg: configparser.ConfigParser) -> dict:
     raw = cfg.get("nodes", "peer_links", fallback="")
     out: dict = {}
@@ -10281,14 +8405,12 @@ def parse_peer_links(cfg: configparser.ConfigParser) -> dict:
         out[parts[0]] = parts[1]
     return out
 
-
 def _local_node_numbers(rpt_conf: dict) -> list[str]:
     names = rpt_conf.get("stanzas", {}).keys()
     return sorted(
         (n for n in names if n.isdigit() and n not in RPT_CONF_RESERVED_STANZAS),
         key=int,
     )
-
 
 def build_local_node_cards(snapshot: dict) -> list[dict]:
     rpt_conf = snapshot["rpt_conf"]
@@ -10317,7 +8439,6 @@ def build_local_node_cards(snapshot: dict) -> list[dict]:
             "extensions_match": (ext_conf.get("node") == node) if ext_conf.get("node") else None,
         })
     return cards
-
 
 def build_peer_node_cards(cfg: configparser.ConfigParser, snapshot: dict) -> list[dict]:
     rpt_conf = snapshot["rpt_conf"]
@@ -10355,8 +8476,6 @@ def build_peer_node_cards(cfg: configparser.ConfigParser, snapshot: dict) -> lis
         })
     return cards
 
-
-
 def probe_peer_helper(url: str, timeout: float = 1.5) -> dict:
     probe_url = url.strip().rstrip("/") + "/api/version"
     if not (probe_url.startswith("http://") or probe_url.startswith("https://")):
@@ -10370,7 +8489,6 @@ def probe_peer_helper(url: str, timeout: float = 1.5) -> dict:
     except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError, ValueError) as e:
         return {"reachable": False, "error": str(e)[:120], "remote_version": None}
 
-
 def fetch_peer_node_status(url: str, timeout: float = 2.5) -> dict | None:
     status_url = url.strip().rstrip("/") + "/api/nodes/status"
     if not (status_url.startswith("http://") or status_url.startswith("https://")):
@@ -10382,7 +8500,6 @@ def fetch_peer_node_status(url: str, timeout: float = 2.5) -> dict | None:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except (urllib.error.URLError, OSError, TimeoutError, json.JSONDecodeError, ValueError):
         return None
-
 
 def probe_all_peer_helpers(peer_cards: list[dict], timeout: float = 1.5, fetch_remote_status: bool = True) -> None:
     for card in peer_cards:
@@ -10396,7 +8513,6 @@ def probe_all_peer_helpers(peer_cards: list[dict], timeout: float = 1.5, fetch_r
             card["helper_remote_status"] = fetch_peer_node_status(card["helper_url"])
         else:
             card["helper_remote_status"] = None
-
 
 def build_nodes_guardrails(box: dict, local_cards: list[dict], peer_cards: list[dict]) -> list[dict]:
     findings: list[dict] = []
@@ -10667,7 +8783,6 @@ def build_nodes_guardrails(box: dict, local_cards: list[dict], peer_cards: list[
 
     return findings
 
-
 def build_nodes_tab_data(cfg: configparser.ConfigParser, probe_peers: bool = False) -> dict:
     snapshot = build_nodes_parse_snapshot(cfg)
     iax_conf = snapshot["iax_conf"]
@@ -10697,8 +8812,6 @@ def build_nodes_tab_data(cfg: configparser.ConfigParser, probe_peers: bool = Fal
         "snapshot": snapshot,
     }
 
-
-
 def _serialize_stored_peers(peers: dict) -> str:
     lines = []
     for node in sorted(peers, key=int):
@@ -10706,10 +8819,8 @@ def _serialize_stored_peers(peers: dict) -> str:
         lines.append(f"{node}|{p.get('ip', '')}|{p.get('port') or ''}|{p.get('label', '')}")
     return "\n".join(lines)
 
-
 def _serialize_peer_links(links: dict) -> str:
     return "\n".join(f"{node}|{url}" for node, url in sorted(links.items(), key=lambda kv: int(kv[0])))
-
 
 def action_upsert_peer(cfg: configparser.ConfigParser, node: str, ip: str, port: str, label: str, helper_url: str = "") -> dict:
     if not node.isdigit():
@@ -10740,7 +8851,6 @@ def action_upsert_peer(cfg: configparser.ConfigParser, node: str, ip: str, port:
     log(f"Nodes tab: peer {node} ({ip}{':' + port if port else ''}) saved")
     return {"success": True, "output": f"Peer {node} saved."}
 
-
 def action_remove_peer(cfg: configparser.ConfigParser, node: str) -> dict:
     peers = parse_stored_peers(cfg)
     if node not in peers:
@@ -10758,7 +8868,6 @@ def action_remove_peer(cfg: configparser.ConfigParser, node: str) -> dict:
     save_config(cfg)
     log(f"Nodes tab: peer {node} removed")
     return {"success": True, "output": f"Peer {node} removed."}
-
 
 def build_node_snippet(cfg: configparser.ConfigParser, scope: str) -> dict:
     data = build_nodes_tab_data(cfg)
@@ -10799,7 +8908,6 @@ def build_node_snippet(cfg: configparser.ConfigParser, scope: str) -> dict:
                  "text": f"{node} = radio@{ip}{port_part}/{node},NONE"}
 
     return {"error": f"Unknown scope '{scope}'."}
-
 
 def _apply_targeted_conf_edit(path: str, line_no: int | None, new_text: str, stanza_name: str) -> dict:
     if not os.path.exists(path):
@@ -10857,7 +8965,6 @@ def _apply_targeted_conf_edit(path: str, line_no: int | None, new_text: str, sta
         "diff": diff,
     }
 
-
 def action_save_node_snippet(cfg: configparser.ConfigParser, scope: str, text: str) -> dict:
     text = text.strip()
     if not text:
@@ -10887,9 +8994,6 @@ def action_save_node_snippet(cfg: configparser.ConfigParser, scope: str, text: s
     if result["success"]:
         log(f"Nodes tab: wrote {scope} -> {path} (backup: {result.get('backup_path')})")
     return {**result, "scope": scope}
-
-
-
 
 _JS_TABS = """
 function clickTab(id) {
@@ -14911,7 +13015,6 @@ function cfTogglePurge() {
 
 """
 
-
 _JS_UPDATE = """
 // ── Update tab — flat step list (no distro), each step optionally
 // carrying nested "alt" cards (more aggressive variant + warning banner).
@@ -15384,7 +13487,6 @@ function sysoptCopyStep(btn, label, cmdId, outId) {
   copyTextToClipboard(text, btn);
 }
 """
-
 
 _JS_AUTH = """
 // ============================================================
@@ -16282,7 +14384,6 @@ _JS = (
     + _JS_TERM
 )
 
-
 def _render_tab_bar() -> str:
     buttons = []
     for tab_id, label, css_class, _stage in TABS:
@@ -16294,7 +14395,6 @@ def _render_tab_bar() -> str:
             buttons.append('<div class="tab-break"></div>')
     return '<div class="tabs">' + "".join(buttons) + "</div>"
 
-
 def _render_services_panel() -> str:
     return """
 <div class="tab-panel hidden" id="panel-services">
@@ -16303,7 +14403,6 @@ def _render_services_panel() -> str:
   <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:.6rem" id="svc-checked-at"></span>
 </div>
 """
-
 
 def _render_ports_panel() -> str:
     return """
@@ -16314,7 +14413,6 @@ def _render_ports_panel() -> str:
   <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:.6rem" id="ports-checked-at"></span>
 </div>
 """
-
 
 def _render_firewall_panel() -> str:
     return """
@@ -16376,7 +14474,6 @@ def _render_firewall_panel() -> str:
 </div>
 """
 
-
 def _render_actions_log_panel() -> str:
     return """
 <div class="tab-panel hidden" id="panel-actions_log">
@@ -16390,7 +14487,6 @@ def _render_actions_log_panel() -> str:
   </div>
 </div>
 """
-
 
 _ASL3_WARNING = """Stage 1: engine + real Bookworm/Trixie install AND purge steps. Purge now runs
   automatically (steps 1-5) after its double-confirm, stopping on first failure; step 6
@@ -16423,16 +14519,8 @@ _SVXLINK_WARNING = """DEFAULT (v0.0.155): the USRP fork source build is selected
   present, and offers the USRP build's files as optional steps. BENCH-ONLY: confirm the actual build/branch on real hardware
   (652702/652703) before relying on it."""
 
-
 def _render_install_panel(panel_id: str, prefix: str, warning_html: str, extra_options: str = "",
                           default_distro: str = "trixie") -> str:
-    """Shared renderer for the ASL3/DVSwitch/SVXLink 'guided install' tabs.
-
-    These three tabs share one engine (distro dropdown, purge button,
-    purge-steps/steps containers, custom-command card) and differ only in
-    the panel id, the element/JS-function id prefix, the warning copy, and
-    (SVXLink only) an extra dropdown option for the USRP-fork source build.
-    """
     return f"""
 <div class="tab-panel hidden" id="panel-{panel_id}">
   <div class="step-warn-box"><button type="button" class="step-warn-toggle" onclick="toggleStepWarn(this)" aria-expanded="false" title="Show note">&#9660;</button><div class="step-warn sw-hidden">{warning_html}</div></div>
@@ -16460,7 +14548,6 @@ def _render_install_panel(panel_id: str, prefix: str, warning_html: str, extra_o
 </div>
 """
 
-
 _M17_WARNING = """Stage 1: installs mjwgeek/USRP2M17-Selector (GitHub) — a web UI + systemd
   service for picking M17 reflectors/modules and restarting the bridge. That repo is No-Modification/
   No-Redistribution licensed, personal/non-commercial use only; this tab only clones and runs its own
@@ -16469,7 +14556,6 @@ _M17_WARNING = """Stage 1: installs mjwgeek/USRP2M17-Selector (GitHub) — a web
   live Asterisk config unattended, so apply those by hand. install.sh itself (step 3) is also manual since it
   interactively prompts for your callsign. Purge runs automatically (non-manual, non-optional steps) after
   its double-confirm but never touches the three conf-file edits — revert those by hand. Check firewall posture on the Ports tab after install."""
-
 
 def _render_m17_panel() -> str:
     return """
@@ -16497,7 +14583,6 @@ def _render_m17_panel() -> str:
 </div>
 """.format(warning=_M17_WARNING)
 
-
 _AMP_WARNING = """Install helper for the Ampersand-ASL project (github.com/Ampersand-ASL) &mdash; a
   from-scratch, <b>Asterisk-free</b> ASL/IAX node. Choose a product from the dropdown:
   <b>Radio node (amp-server)</b> for a station with attached radio/hotspot hardware, or
@@ -16519,7 +14604,6 @@ _AMP_WARNING = """Install helper for the Ampersand-ASL project (github.com/Amper
   install.sh, and the authored systemd unit / udev rule are not exercisable from the build
   sandbox &mdash; verify on real hardware. Check firewall posture on the Ports tab after install."""
 
-
 def _render_amp_panel() -> str:
     return """
 <div class="tab-panel hidden" id="panel-amp">
@@ -16537,7 +14621,6 @@ def _render_amp_panel() -> str:
   <div id="amp-steps"></div>
 </div>
 """.format(warning=_AMP_WARNING)
-
 
 _CF_WARNING = """Installs and manages a <b>Cloudflare Tunnel (cloudflared)</b> as a persistent,
   <b>outbound-only</b> connector, so a local service (asl_dvs_dashboard 8989, sysmon 9999,
@@ -16573,7 +14656,6 @@ _CF_WARNING = """Installs and manages a <b>Cloudflare Tunnel (cloudflared)</b> a
   exercisable from the build sandbox &mdash; verify on real hardware. Check firewall posture on the
   Ports tab after install (noting the enumeration limitation above)."""
 
-
 def _render_cf_panel() -> str:
     return """
 <div class="tab-panel hidden" id="panel-cloudflare">
@@ -16591,7 +14673,6 @@ def _render_cf_panel() -> str:
   <div id="cf-steps"></div>
 </div>
 """.format(warning=_CF_WARNING)
-
 
 def _render_update_panel() -> str:
     return """
@@ -16646,17 +14727,7 @@ def _render_update_panel() -> str:
 </div>
 """
 
-
 def _render_system_opt_panel() -> str:
-    """Stage 4 -- the entire wiring surface is this function, the TABS
-    tuple, the _PANEL_RENDERERS entry, and the one .tab.t-system-opt CSS
-    rule (see the plan-review doc, S1.1). Server renders the static shell
-    once; refreshSystemOpt() fills in live pill/detail text from
-    /api/system_opt/status, same pattern as the Update tab. dphys-swapfile
-    and mandb each get two separate cards (Disable vs. Uninstall/Remove,
-    D-1/D-2) rather than one card with a dropdown, so the
-    offline-revertible-vs-needs-network distinction is visible without a
-    click."""
     return """
 <div class="tab-panel hidden" id="panel-system_opt">
   <div class="ov-banner lvl-info">
@@ -16812,7 +14883,6 @@ $ apt-get install -y man-db</div>
 </div>
 """
 
-
 def _render_panel(tab_id: str, label: str, stage: str) -> str:
     return f"""
 <div class="tab-panel hidden" id="panel-{tab_id}">
@@ -16824,7 +14894,6 @@ def _render_panel(tab_id: str, label: str, stage: str) -> str:
   </div>
 </div>
 """
-
 
 def _render_router_install_panel() -> str:
     return """
@@ -16840,7 +14909,6 @@ def _render_router_install_panel() -> str:
   <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted)" id="router-checked-at"></span>
 </div>
 """
-
 
 def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str:
     other_kind = "split" if kind == "full" else "full"
@@ -16879,7 +14947,6 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
 </div>
 """
 
-
 def _render_full_tunnel_panel() -> str:
     return _render_pi_tunnel_panel(
         "full", "Full Tunnel",
@@ -16888,7 +14955,6 @@ def _render_full_tunnel_panel() -> str:
         "the 44Net Connect tunnel."
     )
 
-
 def _render_split_tunnel_panel() -> str:
     return _render_pi_tunnel_panel(
         "split", "Split Tunnel",
@@ -16896,8 +14962,6 @@ def _render_split_tunnel_panel() -> str:
         "should read 44.0.0.0/9, 44.128.0.0/10 (44-net ranges only), leaving this "
         "Pi's other traffic on its normal route."
     )
-
-
 
 def _render_overview_panel() -> str:
     return """
@@ -16932,7 +14996,6 @@ def _render_overview_panel() -> str:
 </div>
 """
 
-
 def _render_nodes_panel() -> str:
     return """
 <div class="tab-panel hidden" id="panel-nodes">
@@ -16966,7 +15029,6 @@ def _render_nodes_panel() -> str:
 </div>
 """
 
-
 _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "overview": _render_overview_panel,
     "full_tunnel": _render_full_tunnel_panel,
@@ -16989,7 +15051,6 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "firewall": _render_firewall_panel,
     "actions_log": _render_actions_log_panel,
 }
-
 
 def render_page(cfg: configparser.ConfigParser) -> str:
     callsign = cfg.get("identity", "callsign", fallback="").strip()
@@ -17051,41 +15112,29 @@ def render_page(cfg: configparser.ConfigParser) -> str:
 </html>
 """
 
-
-
-
-
-
 def _route_index(query: dict) -> tuple[int, str, bytes]:
     return 200, "text/html; charset=utf-8", render_page(_cfg).encode("utf-8")
-
 
 def _route_version(query: dict) -> tuple[int, str, bytes]:
     payload = {"app": APP_TITLE, "version": APP_VERSION, "stage": APP_STAGE}
     return 200, "application/json", json.dumps(payload).encode("utf-8")
 
-
 def _route_ping(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", b'{"ok":true}'
-
 
 def _route_whoami(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", b'{"ok":true}'
 
-
 def _route_log(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(get_log_lines()).encode("utf-8")
-
 
 def _route_overview(query: dict) -> tuple[int, str, bytes]:
     if (query.get("force") or [""])[0] == "1":
         _detect_installed_products(force=True)
     return 200, "application/json", json.dumps(build_overview_data(_cfg)).encode("utf-8")
 
-
 def _route_pi_install_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_pi_install_status(_cfg)).encode("utf-8")
-
 
 def _route_pi_install_convert_preview(query: dict) -> tuple[int, str, bytes]:
     target_kind = query.get("target_kind", [""])[0]
@@ -17094,21 +15143,17 @@ def _route_pi_install_convert_preview(query: dict) -> tuple[int, str, bytes]:
             {"error": "target_kind must be 'full' or 'split'"}).encode("utf-8")
     return 200, "application/json", json.dumps(build_pi_convert_preview(_cfg, target_kind)).encode("utf-8")
 
-
 def _route_nodes_status(query: dict) -> tuple[int, str, bytes]:
     body = json.dumps(build_nodes_tab_data(_cfg, probe_peers=True)).encode("utf-8")
     return 200, "application/json", body
-
 
 def _route_nodes_edit_snippet(query: dict) -> tuple[int, str, bytes]:
     scope = query.get("scope", [""])[0]
     return 200, "application/json", json.dumps(build_node_snippet(_cfg, scope)).encode("utf-8")
 
-
 def _route_pi_install_verify(query: dict) -> tuple[int, str, bytes]:
     result = {"myip": check_myip(), "rpt": check_rpt_registrations()}
     return 200, "application/json", json.dumps(result).encode("utf-8")
-
 
 def _route_router_status(query: dict) -> tuple[int, str, bytes]:
     force = query.get("force", ["0"])[0] == "1"
@@ -17127,83 +15172,64 @@ def _route_router_status(query: dict) -> tuple[int, str, bytes]:
     }).encode("utf-8")
     return 200, "application/json", body
 
-
 def _route_router_install_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_router_install_status(_cfg)).encode("utf-8")
-
 
 def _route_services_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_services_status(_cfg)).encode("utf-8")
 
-
 def _route_ports_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_ports_status(_cfg)).encode("utf-8")
-
 
 def _route_firewall_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_firewall_status(_cfg)).encode("utf-8")
 
-
 def _route_pi_install_netcheck_scan(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(scan_netcheck()).encode("utf-8")
-
 
 def _route_pi_install_netcheck_journal(query: dict) -> tuple[int, str, bytes]:
     lines = query.get("lines", ["40"])[0]
     return 200, "application/json", json.dumps(netcheck_journal(lines)).encode("utf-8")
 
-
 def _route_actions_log_notes(query: dict) -> tuple[int, str, bytes]:
     body = json.dumps(list_known_good_router_notes()).encode("utf-8")
     return 200, "application/json", body
 
-
 def _route_asl3_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_ASL3_SCRIPTS).encode("utf-8")
-
 
 def _route_dvswitch_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_DVSWITCH_SCRIPTS).encode("utf-8")
 
-
 def _route_svxlink_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_SVXLINK_SCRIPTS).encode("utf-8")
-
 
 def _route_m17_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_M17_SCRIPTS).encode("utf-8")
 
-
 def _route_amp_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_AMP_SCRIPTS).encode("utf-8")
-
 
 def _route_cf_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_CF_SCRIPTS).encode("utf-8")
 
-
 def _route_update_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_UPDATE_STEPS).encode("utf-8")
-
 
 def _route_update_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(action_update_status()).encode("utf-8")
 
-
 def _route_system_opt_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(build_system_opt_status()).encode("utf-8")
 
-
 def _route_quiet_status(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_qm_status()).encode("utf-8")
-
 
 def _route_action_status(query: dict) -> tuple[int, str, bytes]:
     job_key = query.get("job_key", [""])[0]
     if not job_key:
         return 400, "application/json", json.dumps({"error": "job_key required"}).encode("utf-8")
     return 200, "application/json", json.dumps(_job_status(job_key)).encode("utf-8")
-
 
 _PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping"}
 
@@ -17241,8 +15267,6 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/action_status": _route_action_status,
 }
 
-
-
 _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "firewalld_prereq": lambda p: action_install_firewalld(),
     "resolved_prereq": lambda p: action_install_resolved(),
@@ -17274,7 +15298,6 @@ _PI_INSTALL_SERVICE_PORTS_ACTIONS: dict[str, Callable[[dict], dict]] = {
 _PI_INSTALL_JOB_STEPS = {"firewalld_prereq", "resolved_prereq", "create_zone", "attach_interface", "enable_tunnel",
                          "purge_disable_tunnel", "purge_remove_wg0_conf", "purge_delete_zone", "convert_prune"}
 
-
 def _dispatch_pi_install_action(payload: dict) -> dict:
     step = payload.get("step", "")
     action = payload.get("action", step)
@@ -17286,7 +15309,6 @@ def _dispatch_pi_install_action(payload: dict) -> dict:
     if step == "service_ports" and action in _PI_INSTALL_SERVICE_PORTS_ACTIONS:
         return _PI_INSTALL_SERVICE_PORTS_ACTIONS[action](payload)
     return {"success": False, "verified": False, "output": f"Unknown step/action: {step}/{action}"}
-
 
 def _router_action_verify(payload: dict) -> dict:
     mode = _cfg.get("tunnels", "tunnel.router.mode", fallback="")
@@ -17300,7 +15322,6 @@ def _router_action_verify(payload: dict) -> dict:
         _cfg["tunnels"]["tunnel.router.verified"] = "true"
         save_config(_cfg)
     return result
-
 
 _ROUTER_INSTALL_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "install_luci": lambda p: action_install_luci(_cfg),
@@ -17325,7 +15346,6 @@ _ROUTER_INSTALL_JOB_STEPS = {
     "pi_address_lookup", "pi_address_bind", "firewall_zone", "add_port_forward", "verify",
 }
 
-
 def _dispatch_router_install_action(payload: dict) -> dict:
     step = payload.get("step", "")
     handler_fn = _ROUTER_INSTALL_ACTIONS.get(step)
@@ -17334,7 +15354,6 @@ def _dispatch_router_install_action(payload: dict) -> dict:
     if step in _ROUTER_INSTALL_JOB_STEPS:
         return _start_python_job(f"router_{step}", lambda: handler_fn(payload))
     return handler_fn(payload)
-
 
 _FIREWALL_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "add_service": lambda p: action_add_service(p.get("service", "")),
@@ -17355,14 +15374,12 @@ _FIREWALL_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "fw_panic_off": lambda p: action_fw_panic_off(),
 }
 
-
 def _dispatch_firewall_action(payload: dict) -> dict:
     action = payload.get("action", "")
     handler_fn = _FIREWALL_ACTIONS.get(action)
     if handler_fn is not None:
         return handler_fn(payload)
     return {"success": False, "verified": False, "output": f"Unknown action: {action}"}
-
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args) -> None:
@@ -17375,7 +15392,7 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host", "") if getattr(self, "headers", None) else ""
         connect = ""
         if host and re.fullmatch(r"[A-Za-z0-9.\-]+(:\d{1,5})?|\[[0-9A-Fa-f:.]+\](:\d{1,5})?", host):
-            connect = f"connect-src 'self' ws://{host} wss://{host}; "  # v0.0.148: terminal WebSocket
+            connect = f"connect-src 'self' ws://{host} wss://{host}; "
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; " + connect + "frame-ancestors 'none'; "
@@ -17398,12 +15415,8 @@ class Handler(BaseHTTPRequestHandler):
         return ""
 
     def _require_auth(self) -> bool:
-        """True iff this request carries a live session cookie. Otherwise
-        sends a 401 JSON response and returns False -- callers must stop."""
         token = self._session_token()
         if _check_session(token):
-            # v0.0.112: re-send the cookie with a fresh Max-Age on this response;
-            # before, the browser dropped it 2h after LOGIN however active the user was.
             self._refresh_cookie_token = token
             return True
         try:
@@ -17442,7 +15455,6 @@ class Handler(BaseHTTPRequestHandler):
                    extra_headers={"Set-Cookie": _clear_session_cookie_header()})
 
     def _term_ws(self, query: dict) -> None:
-        """v0.0.148: WebSocket upgrade for one terminal session."""
         def refuse(code: int, msg: str) -> None:
             self._send(code, "application/json", json.dumps({"success": False, "output": msg}).encode("utf-8"))
         ip = self._client_ip()
@@ -17478,7 +15490,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             self.__dict__.pop("_refresh_cookie_token", None)
             self.close_connection = True
-            self.protocol_version = "HTTP/1.1"  # browsers require "HTTP/1.1 101" for a WebSocket upgrade
+            self.protocol_version = "HTTP/1.1"
             self.send_response(101, "Switching Protocols")
             self.send_header("Upgrade", "websocket")
             self.send_header("Connection", "Upgrade")
@@ -17492,7 +15504,6 @@ class Handler(BaseHTTPRequestHandler):
             _term_release()
 
     def _term_enable(self) -> None:
-        """v0.0.151: switch the terminal on -- LAN only, root password."""
         def reply(code: int, ok: bool, msg: str) -> None:
             self._send(code, "application/json", json.dumps({"success": ok, "output": msg}).encode("utf-8"))
         ip = self._client_ip()
@@ -17518,8 +15529,6 @@ class Handler(BaseHTTPRequestHandler):
         reply(200 if ok else 500, ok, msg)
 
     def _term_open(self) -> None:
-        """v0.0.147: re-check the root password and hand out a single-use
-        ticket for one allow-listed command."""
         def reply(code: int, ok: bool, msg: str, **extra) -> None:
             self._send(code, "application/json",
                        json.dumps({"success": ok, "output": msg, **extra}).encode("utf-8"))
@@ -17558,8 +15567,6 @@ class Handler(BaseHTTPRequestHandler):
         reply(200, True, "ok", ticket=_term_issue_ticket(self._session_token(), tid))
 
     def _stream_events(self) -> None:
-        """v0.0.143: the live-update stream (see _ev_serve). Auth already
-        passed in do_GET; the login is re-checked on every loop."""
         global _EV_STREAMS
         with _EV_COND:
             busy = _EV_STREAMS >= _EV_MAX_STREAMS
@@ -17897,41 +15904,10 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, "text/plain; charset=utf-8", b"not found")
 
-
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-
-
-# =============================================================================
-# v0.0.149: embedded xterm.js for the optional terminal. Served (after login)
-# from /static/<name>; decoded once on first request. Versions: @xterm/xterm
-# 6.0.0, @xterm/addon-fit 0.11.0 (from the npm registry); the sha256 next to
-# each is of the original file (source-map comment line removed), so a copy can
-# be checked against upstream. Licence (MIT) for xterm.js and its addon:
-# Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
-# Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
-# Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy
-# of this software and associated documentation files (the "Software"), to deal
-# in the Software without restriction, including without limitation the rights
-# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-# copies of the Software, and to permit persons to whom the Software is
-# furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in
-# all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
-# THE SOFTWARE.
-# =============================================================================
 _TERM_ASSETS_B64: dict[str, tuple[str, str, str]] = {
     "xterm.js": ("application/javascript", "98d0973151aff2991d335b1adbbdac2e14da26341abe329d677d4c0034402bdf", """
 H4sIAAAAAAACA+y963rbOLIo+iDnj6yd8Ue2KUXyJbYl0zqOk3R7JpdetnsyvTz+HFqCLU5kUkNSsT0y97PsZ9lPdqpwIwCClOR0
@@ -19591,7 +17567,6 @@ BnGldPriL8GyXenMBQAA
 }
 _TERM_ASSETS: dict[str, tuple[str, bytes]] = {}
 
-
 def _term_asset(name: str) -> tuple[str, bytes] | None:
     if name not in _TERM_ASSETS_B64:
         return None
@@ -19604,9 +17579,7 @@ def _term_asset(name: str) -> tuple[str, bytes] | None:
         _TERM_ASSETS[name] = (ctype + "; charset=utf-8", raw)
     return _TERM_ASSETS[name]
 
-
 _cfg: configparser.ConfigParser
-
 
 def main() -> None:
     global _cfg
@@ -19640,7 +17613,6 @@ def main() -> None:
     except KeyboardInterrupt:
         log("KeyboardInterrupt, shutting down")
         server.shutdown()
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

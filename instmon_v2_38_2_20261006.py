@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
 
-"""instmon v2.38.2 (2026-10-06) - KD8PGK Web Installer & Component Manager
-Build: common (all nodes, including Pi Zero 2 W)
-
-Full version history: see CHANGELOG.md. This docstring intentionally
-stays short now -- it used to carry the entire changelog inline (see
-CHANGELOG.md's own note, and its v1.26.0 entry, for why that moved).
-"""
-
 import argparse
 import base64
 import collections
@@ -42,68 +34,25 @@ import zipfile
 from collections import deque 
 from datetime import datetime 
 
-
 PORT =8990 
 VERSION ="2.38.2"
-DATE_STR ="2026-10-06"  # v2.38.2 Launcher version 2 (the same file every ASL-DVS --install writes): three memory savers, each with an off switch -- python3 -OO (drops docstrings from the loaded code; off: /etc/asl_dvs/launch_no_optimize), MALLOC_ARENA_MAX=2 (at most 2 malloc pools instead of up to 8 per CPU core; off: /etc/asl_dvs/launch_no_arena_cap) and malloc_trim every 5 minutes (freed memory handed back to Linux; off: /etc/asl_dvs/launch_no_trim).  Create the file and restart the service to turn one off.  The service files are unchanged; the launcher starts Python once more with -OO and MALLOC_ARENA_MAX (same PID). Previous: v2.38.1 --uninstall no longer stops part-way if a compiled copy or the launcher is already gone (removed by another uninstall at the same moment). Previous: v2.38.0 Pi Zero 2 W build choice: on a Pi Zero 2 W (device-tree model "Zero 2") the GitHub Updates card shows a "Pi Zero 2 W build" choice -- Pi02w fork (default) or Full build (override), saved in /etc/asl_dvs/instmon_build.json; Full Update now installs the chosen build of SysMon and the Dashboard, and switches an installed build that does not match (full -> fork or fork -> full, shown as SWITCH) the same way it updates -- library copy, --uninstall, the other build's --install, rollback on failure; tools with one common build are not affected; on other Pis nothing changes (each component keeps the build it has). Check GitHub marks the rows of the build this node does not use as "other build". Previous: v2.37.1 Launcher: instmon.service now starts /usr/local/bin/asl_dvs_launch.py /usr/local/bin/instmon.py -- the launcher imports instmon instead of running it, so Python keeps the compiled copy in /usr/local/bin/__pycache__ and reuses it on every later start (about 21 MB instead of 34 MB, twice as fast to start; recompiled by itself after an update); --install writes the launcher (same file the Pi02w sysmon/dashboard and installer v6.5 write), --uninstall removes instmon's compiled copy and the launcher once no unit uses it. Pi Zero 2 W sysmon build: Check GitHub keeps the full and the Pi02w sysmon builds apart -- both match sysmon*.py, so they were one kind and only one of them showed (or a false "same version, different file" conflict); the kind now also carries the VERSION suffix ("6.13.67-pi02w" -> pi02w), so each build gets its own row and is compared only with library copies of the same build. Previous: v2.37.0 Quiet System + Full Update: Quiet System / Restore (GitHub Updates card) pause SysMon, the Dashboard, 44helper and the watchdog timer(s) through the quiesce core with a new "quiet" scope -- never Asterisk, the bridges, Allmon3, wifimon or instmon -- share its state file (so a restart of instmon restores them, and a disk-image job and Quiet System can never overlap), auto-restore after 30 min (INSTMON_QUIET_AUTO_RESTORE_SEC), and drop a component that a later Install/Uninstall already restarted; Full Update (next to Check GitHub) reads the same GitHub listing, picks for every installed component the newest GitHub build of the same variant (file-name stem, or the VERSION suffix such as -pi02w), downloads and checks every file first with the GitHub Update checks, then pauses the web tools and, one component at a time (44helper, wifimon, Dashboard, SysMon, Watchdog), saves a library copy of the installed file, runs its --uninstall, runs the new file's --install and waits for the service and port; a failure puts the saved copy back and the component is skipped (or listed NEEDS ATTENTION if that fails too) and the run carries on; newer install scripts go to the Scripts library only, never run; Restore, then instmon last -- replaced in place by its own --install, with a transient instmon-update-guard timer that reinstalls the old copy if port 8990 is silent 90 s later; results are saved to instmon_full_update.json and the restarted instmon reports them; summary as a popup, in the log and as a banner until dismissed; while it runs every other action, upload, editor save and disk-image job answers 409. Check GitHub now also works out the Full Update list from the same listing (no extra GitHub request). Previous: v2.36.1 Login refresh: when a session expires or instmon is reinstalled/restarted, the page now reloads itself instead of popping the login box over the stale page (which mangled the text and, after login, restarted every poll timer a second time); the "Session expired" message is carried across the reload via sessionStorage and shown on the fresh login box; a once-only guard means a burst of 401s reloads once, and the boot-time login (fresh page, not logged in) never reloads, so no loop. Previous: v2.36.0 GitHub updates: Check GitHub reads the file list of kd8pgk/ASL-DVS (main) straight from GitHub -- no manifest or checksums to maintain -- shows the newest GitHub copy of each tool in its library group, Update downloads, checks (same file GitHub listed, version, shebang, syntax, --install support) and stages it in its own library folder; uninstall_asl_dvs*.sh added to Scripts with a double confirm. Previous: wifimon card now points at the wifimon v5 web dashboard (port 8991, plain HTTP, Go button); M17 Dashboard and SVX Dashboard cards removed (component, library group + upload box, library folder, home-folder sweep pattern, and the M17 branch of config install). Previous: v2.30.2 Progress audit: reader uses read1() (was a blocking read(256) => 4 s+ batches, nothing for short jobs), throttled copies report via the read-side dd (pv prints nothing when stderr is a pipe), ddrescue status is captured (it writes to stdout, which was /dev/null) and its kB unit parsed, one-decimal %, bytes done/total, elapsed, windowed time-left, stall warning
-
+DATE_STR ="2026-10-06"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
 UNINSTALLER_SCRIPT_GLOB ="uninstall_asl_dvs*.sh"
 
-
-
-
-
-
 INTERACTIVE_ONLY_SCRIPT_GLOBS =("wifi_menu*.sh","wifi-menu*.sh")
-
 
 SCRIPT_TIMEOUT_SEC =int (os .environ .get ("INSTMON_SCRIPT_TIMEOUT_SEC","600"))
 MAX_UPLOAD_BYTES =int (os .environ .get ("INSTMON_MAX_UPLOAD_MB","50"))*1024 *1024 
 REBOOT_SHUTDOWN_DELAY_SEC =int (os .environ .get ("INSTMON_REBOOT_SHUTDOWN_DELAY_SEC","2"))
 
-
 INSTALL_BIN_PATH ="/usr/local/bin/instmon.py"
 SYSTEMD_SERVICE_PATH ="/etc/systemd/system/instmon.service"
 
-# Launcher (v2.37.1, same file the Pi Zero 2 W sysmon/dashboard builds
-# write).  A program started as `python3 file.py` is compiled from
-# source on every start, and Python keeps the memory the compile took: the
-# Pi02w sysmon settles near 54 MB that way and the Pi02w dashboard near
-# 45 MB.  Python only saves and reuses a compiled copy (__pycache__/*.pyc)
-# for code it *imports*, so the service runs this small launcher instead,
-# which imports the real file as the main program.  The first start writes
-# the compiled copy next to the file; every later start loads it (sysmon
-# ~26 MB, dashboard ~25 MB, and about twice as fast to start).  Python
-# checks the file's date and size on every start and recompiles by itself
-# after an update.  Shared by the Pi02w sysmon and dashboard; the
-# installer writes the same file.
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
 _SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 _LAUNCHER_CODE = '''#!/usr/bin/env python3
-# asl_dvs_launch.py -- ASL-DVS launcher (version 2), written by the --install
-# of the Pi02w sysmon and dashboard, instmon, wifimon and 44helper (and by
-# install_asl_dvs v6.6).  Runs the program named on the command line through
-# Python's import system, so its compiled copy is kept in __pycache__ and
-# reused on later starts instead of the whole file being compiled again --
-# about half the memory and twice as fast to start.
-# Usage: python3 asl_dvs_launch.py /usr/local/bin/sysmon.py [args]
-#
-# Version 2 adds three memory savers.  Each has an off switch: create the
-# file named below (sudo touch ...) and restart the service; delete the file
-# and restart to turn the saver back on.
-#   -OO               Python drops the built-in help text (docstrings) from
-#                     the loaded code.  Off: /etc/asl_dvs/launch_no_optimize
-#   MALLOC_ARENA_MAX=2  at most 2 memory pools instead of up to 8 per CPU
-#                     core; each pool keeps memory its threads freed.
-#                     Off: /etc/asl_dvs/launch_no_arena_cap
-#   malloc_trim       1 minute after start, then every 5 minutes, freed
-#                     memory is handed back to Linux.
-#                     Off: /etc/asl_dvs/launch_no_trim
-# -OO and MALLOC_ARENA_MAX only work from the moment Python starts, so the
-# launcher starts Python once more with them (same process and PID, so the
-# systemd notify and watchdog settings are not affected).
 import os
 import runpy
 import sys
@@ -112,7 +61,6 @@ _OFF = "/etc/asl_dvs/launch_no_"
 _AGAIN = "ASL_DVS_LAUNCH"
 
 if _AGAIN in os.environ:
-    # Second start: keep MALLOC_ARENA_MAX out of the programs this one runs.
     if os.environ.pop(_AGAIN) == "arena":
         os.environ.pop("MALLOC_ARENA_MAX", None)
 else:
@@ -130,7 +78,6 @@ else:
         except OSError:
             pass
 
-
 def _trim_loop():
     import time
     time.sleep(60)
@@ -143,7 +90,6 @@ def _trim_loop():
     while True:
         trim(0)
         time.sleep(300)
-
 
 if not os.path.exists(_OFF + "trim"):
     import threading
@@ -158,7 +104,6 @@ if name.isidentifier():
 else:
     runpy.run_path(target, run_name="__main__")
 '''
-# instmon itself (451 KB): about 34 MB started directly, 21 MB through it.
 
 SYSTEMD_SERVICE_CONTENT ="""[Unit]
 Description=instmon Web Installer & Component Manager
@@ -177,34 +122,16 @@ StandardError=journal
 WantedBy=multi-user.target
 """
 
-
 LIBRARY_DIR =os .environ .get ("INSTMON_LIBRARY_DIR","/etc/asl_dvs/instmon_library")
 CONFIG_DIR =os .environ .get ("INSTMON_CONFIG_DIR","/etc/asl_dvs")
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
 
-
-
-
-
-
 HOME_SCAN_DIR =os .environ .get ("INSTMON_HOME_SCAN_DIR",os .path .expanduser ("~"))
 HOME_SCAN_ENABLED =os .environ .get ("INSTMON_HOME_SCAN_ENABLED","1")!="0"
-
-
-# ---------------------------------------------------------------------
-# Root-password authentication core (replaces the old generated/env
-# Basic-Auth credential pair entirely -- see v1.29.0 changelog above).
-# New code below uses normal Python spacing, not this file's
-# space-before-paren house style.
-# ---------------------------------------------------------------------
 
 _AUTH_ACCOUNT = "root"
 
 def _read_shadow_hash(account):
-    """Read the encrypted-password field for `account` straight out of
-    /etc/shadow with plain file I/O -- no `spwd` involved, since that
-    module is gone on Python 3.13+ (PEP 594). Requires root to read.
-    Returns None on any failure to read/parse."""
     try:
         with open("/etc/shadow", "r") as fh:
             for line in fh:
@@ -215,12 +142,9 @@ def _read_shadow_hash(account):
         log_event(f"_read_shadow_hash: {exc}", "warn")
     return None
 
-_libcrypt_handle = None  # cached ctypes.CDLL, or False if none could be loaded
+_libcrypt_handle = None
 
 def _crypt_verify(password, stored_hash):
-    """crypt(3)-based hash verification via ctypes against the system's
-    real libcrypt -- used instead of the stdlib `crypt` module, which is
-    also gone on Python 3.13+ (PEP 594)."""
     global _libcrypt_handle
     if _libcrypt_handle is None:
         import ctypes
@@ -254,9 +178,6 @@ def _crypt_verify(password, stored_hash):
     return hmac.compare_digest(result.decode("utf-8", "surrogateescape"), stored_hash)
 
 def _verify_root_password(password):
-    """True iff `password` is the box's current root password. Tries PAM
-    first, falls back to /etc/shadow + ctypes-libcrypt. Never raises --
-    any failure to check is a failed login, fails closed."""
     if not password:
         return False
     try:
@@ -275,17 +196,10 @@ def _verify_root_password(password):
         log_event(f"_verify_root_password: shadow fallback failed: {exc}", "warn")
         return False
 
-# ---------------------------------------------------------------------
-# Independent in-memory session store. Deliberately NOT the shared
-# /run/asl_dvs SSO file the dashboard/sysmon pair use -- this app's
-# session is its own, with its own cookie name, and never touches
-# /run/asl_dvs in any way.
-# ---------------------------------------------------------------------
-
 _SESSION_COOKIE_NAME = "instmon_session"
-_SESSION_TTL_SEC = 12 * 3600  # sliding, refreshed on every authed request
+_SESSION_TTL_SEC = 12 * 3600
 
-_sessions = {}   # token -> expiry (float, time.time())
+_sessions = {}
 _sessions_lock = threading.Lock()
 
 def _issue_session():
@@ -318,28 +232,6 @@ def _session_cookie_header(token, max_age):
 def _clear_session_cookie_header():
     return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
 
-
-# ---------------------------------------------------------------------
-# Disk Image & Clone (Stage 1: drive discovery only -- no write paths
-# exist yet). Boot-disk resolution and attached-USB-drive listing for
-# the dashboard's "Disk Image & Clone" card: backing up the Pi's own
-# boot disk to a USB drive, cloning it directly onto a spare drive, and
-# restoring a saved image onto a spare drive -- never onto the disk the
-# Pi is currently running from. New code below uses normal Python
-# spacing, not this file's space-before-paren house style -- same
-# convention as the root-password auth block above.
-# ---------------------------------------------------------------------
-
-# Every external binary the Disk Image & Clone feature can shell out
-# to. "required" tools are needed for Backup/Clone/Restore themselves
-# (dd does the imaging, lsblk/findmnt resolve the boot disk and list
-# drives, mount is used to reach a Backup destination's filesystem,
-# partprobe re-reads a partition table after a Clone/Restore write and
-# after losetup below). "optional" tools each gate exactly one
-# checkbox and are looked up by the feature name they belong to --
-# missing one of these disables that checkbox's feature, not the whole
-# card. Checked with shutil.which() so a red pass/fail line can flag a
-# missing tool up front in the UI, instead of only failing mid-job.
 _DISKIMG_REQUIRED_TOOLS = ("dd", "lsblk", "findmnt", "mount", "umount", "partprobe")
 _DISKIMG_OPTIONAL_TOOLS = {
     "losetup": "Shrink to fit",
@@ -352,18 +244,12 @@ _DISKIMG_OPTIONAL_TOOLS = {
     "mkfs.ext4": "Full Format (ext4)",
     "mkfs.vfat": "Full Format (FAT32)",
     "mkfs.exfat": "Full Format (exFAT)",
-    # v2.26.0 Stages 1/5/6: each of these gates exactly one Backup/Clone
-    # checkbox, same as every entry above -- missing the binary disables
-    # that one option, not the feature it lives on.
     "fsfreeze": "Freeze filesystem during copy",
     "pv": "Throttle speed",
     "ddrescue": "Resilient clone (ddrescue)",
 }
 
-
 def _diskimg_check_dependencies():
-    """Pass/fail dependency check for every binary the Disk Image &
-    Clone feature can shell out to. Never raises."""
     missing_required = [t for t in _DISKIMG_REQUIRED_TOOLS if not shutil.which(t)]
     missing_optional = {t: feat for t, feat in _DISKIMG_OPTIONAL_TOOLS.items() if not shutil.which(t)}
     return {
@@ -372,13 +258,7 @@ def _diskimg_check_dependencies():
         "missing_optional": missing_optional,
     }
 
-
 def _get_boot_disk():
-    """Return the whole-disk device name (e.g. 'mmcblk0', 'sda') backing
-    the root filesystem, or None if it can't be determined. Every
-    destructive disk-image action (clone/restore) must fail closed --
-    refuse to run at all -- when this returns None, since without it
-    there is no way to tell the boot disk from a spare. Never raises."""
     try:
         result = subprocess.run(
             ["findmnt", "-no", "SOURCE", "/"],
@@ -397,10 +277,7 @@ def _get_boot_disk():
         log_event(f"_get_boot_disk: could not resolve boot disk: {exc}", "warn")
         return None
 
-
 def _lsblk_json():
-    """Whole `lsblk -J` tree (disks with nested partition children), or
-    None on any failure to run/parse it. Never raises."""
     try:
         result = subprocess.run(
             ["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,MODEL,TRAN,TYPE,RM,MOUNTPOINT,FSTYPE"],
@@ -413,11 +290,7 @@ def _lsblk_json():
         log_event(f"_lsblk_json: lsblk query failed: {exc}", "warn")
         return None
 
-
 def _disk_mountpoints(node):
-    """Every mountpoint of `node` and its partition children, recursively
-    -- a whole disk is only safe to treat as unmounted if nothing under
-    it is mounted anywhere, not just the disk node itself."""
     points = []
     mp = node.get("mountpoint")
     if mp:
@@ -426,27 +299,14 @@ def _disk_mountpoints(node):
         points.extend(_disk_mountpoints(child))
     return points
 
-
 def _disk_read_only(name):
-    """True if the kernel currently reports this whole-disk device as
-    read-only -- covers a physically write-protect-locked SD card in a
-    reader that honors the lock tab. False (not "unknown") on any read
-    failure, since the write attempt itself is still the authoritative
-    check; this is a pre-flight UI hint, not the enforcement point."""
     try:
         with open(f"/sys/block/{name}/ro", "r") as f:
             return f.read().strip() == "1"
     except OSError:
         return False
 
-
 def _list_usb_drives():
-    """Attached USB-transport whole disks (SD-card-via-USB-adapter
-    readers included -- they enumerate identically to a flash drive),
-    each annotated with size/model/mount state/read-only state/whether
-    it's the Pi's own boot disk. Empty multi-slot-reader entries
-    (SIZE=0, no card inserted) are omitted. Never raises -- any failure
-    to query drives returns an empty list rather than propagating."""
     data = _lsblk_json()
     if data is None:
         return []
@@ -479,10 +339,7 @@ def _list_usb_drives():
         })
     return drives
 
-
 def fmt_bytes(n):
-    """Human-readable byte size for log/error messages (server-side
-    counterpart to the frontend's fmtBytes())."""
     try:
         n = float(n)
     except (TypeError, ValueError):
@@ -493,12 +350,7 @@ def fmt_bytes(n):
         n /= 1024
     return f"{n:.1f} TB"
 
-
 def _disk_size_bytes(name):
-    """Whole-disk capacity in bytes for a device by lsblk NAME (a block
-    device's own stat() st_size is unreliable for this -- lsblk is the
-    same source of truth _list_usb_drives() already uses). None if the
-    device can't be found or lsblk can't be queried."""
     data = _lsblk_json()
     if data is None:
         return None
@@ -510,15 +362,7 @@ def _disk_size_bytes(name):
     except (TypeError, ValueError):
         return None
 
-
 def _find_mount_or_mountable_partition(disk_node):
-    """For a whole disk being used as a Backup destination (needs a
-    mounted filesystem to receive a file -- unlike Clone/Restore, which
-    write the raw block device directly): pick its data partition,
-    preferring one that's already mounted. Returns (device_path,
-    existing_mountpoint_or_None, fstype) or None if nothing on this disk
-    has a recognized filesystem at all (e.g. a blank/unpartitioned
-    drive)."""
     children = disk_node.get("children") or []
     candidates = children if children else [disk_node]
     best = None
@@ -534,16 +378,9 @@ def _find_mount_or_mountable_partition(disk_node):
             best = cand
     return best
 
-
 _DISKIMG_MOUNT_ROOT = "/mnt/instmon-diskimg"
 
-
 def _diskimg_ensure_mounted(disk_name):
-    """Ensure `disk_name` (an lsblk NAME) has a mounted, writable data
-    partition available for Backup to write a file onto, mounting it
-    ourselves under _DISKIMG_MOUNT_ROOT if nothing is mounted yet.
-    Returns (mountpoint, we_mounted_it) or (None, False) if no usable
-    filesystem could be found or mounted. Never raises."""
     data = _lsblk_json()
     if data is None:
         return None, False
@@ -565,19 +402,9 @@ def _diskimg_ensure_mounted(disk_name):
         return None, False
     return mountpoint, True
 
-
-# --- dd job engine (Stage 2). Backup/Clone/Restore all share this --
-# one disk-image job at a time, system-wide, same one-job discipline as
-# _running_installs. -----------------------------------------------
-
 _DISKIMG_BACKUP_DIRNAME = "instmon-backups"
 _DD_PROGRESS_RE = re.compile(rb"(\d+)\s+bytes")
 
-# v2.26.0 Stages 5/6: the throttled-pipeline (pv) and resilient
-# (ddrescue) backends each write a completely different progress format
-# to stderr than plain dd's "N bytes ..." line above -- one regex per
-# backend, picked by job["progress_format"] in
-# _diskimg_reader_thread_body, never assumed to match dd's.
 _PV_PROGRESS_RE = re.compile(rb"([\d.]+)\s*([KMGT]?i?B)\b")
 _PV_UNIT_MULTIPLIERS = {
     "B": 1,
@@ -585,29 +412,13 @@ _PV_UNIT_MULTIPLIERS = {
     "kiB": 1024,
     "KB": 1000, "kB": 1000, "MB": 1000 ** 2, "GB": 1000 ** 3, "TB": 1000 ** 4,
 }
-# ddrescue's status block includes a "rescued: <amount> <unit>B" field --
-# the actual bytes recovered so far, which is what a progress bar wants
-# (as opposed to "ipos", the current read position, which can be ahead
-# of what's actually been successfully copied when sectors are being
-# retried).
 _DDRESCUE_PROGRESS_RE = re.compile(rb"rescued:\s*([\d.]+)\s*([kKMGT]?i?B)")
-# v2.30.2: ddrescue writes its whole multi-line status block (with ANSI
-# cursor-up escapes) to STDOUT once a second, and prints kilobytes with a
-# lowercase k ("41943 kB"). Neither was handled: stdout went to /dev/null
-# and the unit regex only knew an uppercase K. The block's lines are noise
-# to the job console; only real error text ("ddrescue: ...") is kept.
 _ANSI_ESCAPE_RE = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]")
 _DDRESCUE_STATUS_LINE_RE = re.compile(
     rb"(ipos:|opos:|non-tried:|non-trimmed:|non-scraped:|bad-sector:|rescued:|"
     rb"time since last successful read|^\s*(Copying|Trimming|Scraping|Retrying|Finished|Press Ctrl-C|GNU ddrescue))")
 
-
 def _diskimg_parse_meter_bytes(amount_bytes, unit_bytes):
-    """Shared byte-amount parser for the pv and ddrescue progress
-    regexes above -- both report a human "<number> <unit>" pair, not a
-    raw byte count the way dd's status=progress line does. Never
-    raises: an amount that doesn't parse as a float is treated as no
-    progress update rather than crashing the reader thread."""
     try:
         amount = float(amount_bytes)
     except ValueError:
@@ -615,27 +426,12 @@ def _diskimg_parse_meter_bytes(amount_bytes, unit_bytes):
     unit = unit_bytes.decode("ascii", "replace")
     return int(amount * _PV_UNIT_MULTIPLIERS.get(unit, 1))
 
-
 _diskimg_job = None
 _diskimg_job_lock = threading.Lock()
 
-# Terminal-style feedback for the Disk Image & Clone card (v2.9.0),
-# same idea as 44helper's per-step .asl3-console: a small rolling log
-# of meaningful lines (command launched, real dd/openssl error text,
-# phase changes, final result) -- NOT a mirror of dd's own
-# once-a-second progress output, which stays in the compact
-# percent/rate/ETA line the job panel already had. Capped so a very
-# long-running job's console can't grow without bound.
 _DISKIMG_CONSOLE_MAX_LINES = 300
 
-
 def _diskimg_console_append(job_id, text):
-    """Append one line to the current job's console, tagged with a
-    wall-clock timestamp like the main execution log. No-op if the job
-    has since ended/been replaced (job_id no longer matches) so a
-    slow-to-arrive line from a superseded job never lands on the wrong
-    console. Must be called with _diskimg_job_lock NOT already held by
-    the caller -- it takes the lock itself."""
     ts = datetime.now().strftime("%H:%M:%S")
     with _diskimg_job_lock:
         if _diskimg_job is None or _diskimg_job["id"] != job_id:
@@ -644,57 +440,21 @@ def _diskimg_console_append(job_id, text):
         console.append(f"[{ts}] {text}")
         del console[:-_DISKIMG_CONSOLE_MAX_LINES]
 
-
 def _diskimg_command_display(cmd):
-    """Human-readable, copy-pasteable rendering of an argv list for the
-    command-preview field -- shlex-quoted so it's accurate shell
-    syntax, not just str(list). The bash -c pipeline case (see
-    _diskimg_pipeline_command()) already carries its own fully-quoted
-    script as argv[2]; showing that script directly reads far better
-    than re-quoting 'bash -c <whole script as one quoted blob>'."""
     if len(cmd) == 3 and cmd[0] == "bash" and cmd[1] == "-c":
         return cmd[2]
     return " ".join(shlex.quote(a) for a in cmd)
 
+_WIPE_BLOCK_SIZE = 4 * 1024 * 1024
 
-_WIPE_BLOCK_SIZE = 4 * 1024 * 1024  # 4 MiB, matches the dd bs= used everywhere else in this feature
-
-# v2.30.0 Quick format: how much of the start of the drive the wipe phase
-# zeroes instead of the whole thing. 16 MiB covers the MBR/primary GPT,
-# the usual 1 MiB partition-start gap, and any old filesystem's
-# superblock/journal header sitting at the start of the old first
-# partition. The tail (old backup GPT) is cleared by wipefs in
-# _diskimg_partition_and_format().
 _QUICK_WIPE_BYTES = 16 * 1024 * 1024
 
-
 def _diskimg_format_wipe_bytes(size_bytes, quick=False):
-    """Bytes the wipe phase of a Format job will zero -- the job's
-    bytes_total, so the progress bar's percentage means something for a
-    Quick format too. Full format: the whole drive."""
     if quick:
         return max(_WIPE_BLOCK_SIZE, min(size_bytes, _QUICK_WIPE_BYTES))
     return size_bytes
 
-
 def _diskimg_wipe_command(dst, size_bytes, unit_name, quick=False):
-    """argv for a whole-disk zero-wipe of `dst` (Full Format's first
-    phase, v2.10.0 Stage 2) -- same systemd-run --pipe --collect
-    detaching pattern as _diskimg_dd_command() below. Bounded with an
-    explicit count= (rather than letting dd run from /dev/zero until
-    it hits ENOSPC at the physical end of the device) so a full,
-    successful wipe exits 0 like every other job phase instead of
-    looking like a failure; this leaves under one block (4MiB) at the
-    very tail not explicitly zeroed, which is harmless here since the
-    very next phase writes a fresh GPT partition table -- including
-    its backup header, which lives in that same tail region -- over
-    whatever was there. Returns (argv, detached: bool).
-
-    quick (v2.30.0): zero only the first _QUICK_WIPE_BYTES of the drive
-    (old MBR/GPT and any filesystem header at the start) instead of the
-    whole thing -- seconds rather than the drive's full write time. The
-    rest of the old data stays on the drive, so this is NOT a secure
-    erase. size_bytes is capped, so it need not be the drive's size."""
     if quick:
         count = max(1, min(size_bytes, _QUICK_WIPE_BYTES) // _WIPE_BLOCK_SIZE)
     else:
@@ -709,33 +469,7 @@ def _diskimg_wipe_command(dst, size_bytes, unit_name, quick=False):
               "and will NOT survive an instmon restart", "warn")
     return dd_cmd, False
 
-
 def _diskimg_dd_command(src, dst, unit_name, best_effort=False, direct_io=False):
-    """argv for the copy, wrapped in a detached `systemd-run --pipe
-    --collect` transient unit when systemd-run is available, so the
-    copy survives an instmon.service restart the same way
-    install_service()'s self-restart fix does -- the dd process runs as
-    its own unit, not a child of instmon's cgroup, while --pipe still
-    forwards its stderr (status=progress output) back to this process
-    for the reader thread below. Falls back to a plain, non-detached
-    subprocess when systemd-run isn't on PATH (e.g. a non-systemd
-    dev/test environment) -- logged, since that job would NOT survive
-    an instmon restart. Returns (argv, detached: bool).
-
-    best_effort (v2.26.0 Stage 2): adds conv=sync,noerror so a read
-    error on the source is padded with nulls and skipped rather than
-    aborting the whole copy -- sync is required alongside noerror, not
-    optional, or a skipped block shifts every later block out of
-    alignment. Only ever offered for Backup/Clone, where the source is
-    this Pi's own live boot disk.
-
-    direct_io (v2.26.0 Stage 3): adds oflag=direct so writes bypass the
-    page cache instead of buffering in RAM before hitting the
-    destination -- steadier write behavior on a small/shared-bus board
-    like a Pi Zero 2W. Only offered for Clone for now: Clone's
-    destination is always a raw block device, while Backup/Restore's
-    file-based endpoint (a file on a mounted vfat/exfat/ext4 drive) has
-    not been confirmed to tolerate O_DIRECT alignment."""
     conv = "fsync,sync,noerror" if best_effort else "fsync"
     dd_cmd = ["dd", f"if={src}", f"of={dst}", "bs=4M", "status=progress", f"conv={conv}"]
     if direct_io:
@@ -749,48 +483,11 @@ def _diskimg_dd_command(src, dst, unit_name, best_effort=False, direct_io=False)
               "and will NOT survive an instmon restart", "warn")
     return dd_cmd, False
 
-
-# --- optional encryption (v2.4). Backup can encrypt its output;
-# Restore can decrypt an encrypted backup on the way back out. Both are
-# a dd<->openssl pipeline instead of plain dd -- see
-# _diskimg_pipeline_command() below for why that pipeline never runs
-# through the systemd-run --pipe --collect wrapping the plain dd path
-# uses. ------------------------------------------------------------
-
 _DISKIMG_PASS_ENV_VAR = "INSTMON_DISKIMG_PASS"
 _DISKIMG_ENCRYPTED_SUFFIX = ".img.enc"
 _OPENSSL_ENC_ARGS = ["-aes-256-cbc", "-pbkdf2", "-salt"]
 
-
 def _diskimg_pipeline_command(mode, src, dst, best_effort=False):
-    """argv for an encrypt (mode="encrypt", used by Backup) or decrypt
-    (mode="decrypt", used by Restore of a .img.enc backup) pipeline:
-    dd piped through, or from, `openssl enc`, with the passphrase read
-    by openssl from the INSTMON_DISKIMG_PASS environment variable
-    (-pass env:...) -- never appearing on openssl's own argv, this
-    process's argv, or any log line. `set -o pipefail` makes a dd
-    failure (e.g. a source read error) fail the whole pipeline's exit
-    code too, not get silently masked by openssl succeeding on
-    truncated input.
-
-    best_effort (v2.26.0 Stage 2) only ever applies to mode="encrypt"
-    (Backup is the only kind that ever combines encrypt with a live
-    source disk read) -- adds conv=sync,noerror to the read-side dd so
-    a source error is padded and skipped rather than aborting the
-    whole pipeline, same rationale as _diskimg_dd_command()'s
-    best_effort. Not offered for mode="decrypt": Restore always reads
-    a backup file already on disk, not the live boot disk, so there is
-    nothing to be resilient against here.
-
-    Always returns a plain argv, never wrapped in the systemd-run
-    --pipe --collect transient-unit detaching _diskimg_dd_command()
-    uses for a plain copy: getting the passphrase into that unit's own
-    environment would mean either putting it on systemd-run's own argv
-    (--setenv=...) or relying on environment inheritance systemd-run
-    does not do by default for a transient unit -- both worse than the
-    job simply not surviving an instmon restart, which is the same
-    tradeoff already accepted whenever systemd-run isn't available at
-    all (see _diskimg_dd_command() above)."""
     openssl_common = ["openssl", "enc"] + _OPENSSL_ENC_ARGS + ["-pass", f"env:{_DISKIMG_PASS_ENV_VAR}"]
     if mode == "encrypt":
         conv = " conv=sync,noerror" if best_effort else ""
@@ -806,39 +503,7 @@ def _diskimg_pipeline_command(mode, src, dst, best_effort=False):
         )
     return ["bash", "-c", script]
 
-
-# --- alternate copy backends (v2.26.0 Stages 5/6). Both are opt-in
-# checkboxes on Backup/Clone/Restore alongside the plain dd path above,
-# not a replacement for it -- see _diskimg_start_job for the precedence
-# between encrypt/decrypt, ddrescue, throttle, and plain dd. --------
-
 def _diskimg_throttled_dd_command(src, dst, rate_mb, unit_name, best_effort=False, direct_io=False):
-    """argv for a bandwidth-limited copy: dd | pv -L <rate> | dd
-    (v2.26.0 Stage 5) -- the same bash -c pipeline shape as
-    _diskimg_pipeline_command()'s openssl path, for the same reason: a
-    shell pipeline can't be expressed as a single argv. `set -o
-    pipefail` so a read-side dd failure fails the whole pipeline's exit
-    code, not just the write side.
-
-    Progress (v2.30.2): the READ-side dd runs status=progress and pv runs
-    -q. Before this, pv's own meter was the progress source, but pv only
-    draws it when stderr is a terminal (it is a pipe here), so a
-    throttled job reported nothing until it finished. The read-side dd
-    counts bytes as the pipe accepts them, which pv's rate limit paces,
-    so it runs at most one 4 MiB block ahead of what is written --
-    the same dd format the plain copy path already parses.
-
-    Always returns detached=False: unlike _diskimg_dd_command(), this
-    is NOT wrapped in systemd-run --pipe --collect. Whether a bash -c
-    pipeline can be wrapped the same way a plain dd argv is has not
-    been tested here -- the encrypt/decrypt pipeline above avoids that
-    wrapping for a specific, different reason (the passphrase's own
-    environment), not because pipes as a category can't be wrapped, so
-    this is left unwrapped as the conservative default pending that
-    test, not a confirmed limitation. Logged by the caller, same as
-    the systemd-run-not-found case elsewhere in this feature, since a
-    throttled job will NOT survive an instmon restart either way right
-    now."""
     in_conv = " conv=sync,noerror" if best_effort else ""
     out_flags = "status=none conv=fsync" + (" oflag=direct" if direct_io else "")
     script = (
@@ -848,36 +513,12 @@ def _diskimg_throttled_dd_command(src, dst, rate_mb, unit_name, best_effort=Fals
     )
     return ["bash", "-c", script], False
 
-
 _DISKIMG_MAPFILE_SUFFIX = ".ddrescue.map"
 
-
 def _diskimg_ddrescue_mapfile_path(job_id):
-    """Per-job ddrescue mapfile path, alongside this feature's other
-    per-job state (CONFIG_DIR) -- ddrescue requires a mapfile argument
-    to run at all; instmon doesn't use it to resume an interrupted
-    rescue today, it exists purely because the tool needs one, and is
-    removed with the job's other cleanup once the job reaches a
-    terminal state (see _diskimg_reader_thread_body)."""
     return os.path.join(CONFIG_DIR, f"instmon_diskimg_{job_id}{_DISKIMG_MAPFILE_SUFFIX}")
 
-
 def _diskimg_ddrescue_command(src, dst, mapfile_path, unit_name):
-    """argv for a resilient copy via GNU ddrescue instead of dd
-    (v2.26.0 Stage 6) -- retries bad sectors non-destructively instead
-    of dd's abort-on-error (or, with best_effort, skip-and-pad)
-    behavior. -d bypasses the page cache, same rationale as
-    _diskimg_dd_command()'s direct_io; -b matches the 4 MiB block size
-    used everywhere else in this feature. Only ever offered for
-    Backup/Clone (D-4, same restriction as best_effort/freeze): the
-    source being resilient against is this Pi's own live boot disk.
-    Never combined with encrypt -- ddrescue writes to its destination
-    with retries and seeks, which a downstream openssl pipe consumer
-    couldn't follow the way it follows dd's strictly sequential
-    output; see the encrypt/ddrescue mutual-exclusion check in the
-    Backup handler. Same systemd-run --pipe --collect detaching
-    pattern as _diskimg_dd_command() -- see that function's docstring
-    for the rationale. Returns (argv, detached: bool)."""
     ddrescue_cmd = ["ddrescue", "-d", "-b", "4MiB", src, dst, mapfile_path]
     if shutil.which("systemd-run"):
         return (
@@ -888,24 +529,7 @@ def _diskimg_ddrescue_command(src, dst, mapfile_path, unit_name):
               "and will NOT survive an instmon restart", "warn")
     return ddrescue_cmd, False
 
-
 def _diskimg_freeze(action):
-    """(ok, message) for `fsfreeze -f /` (action="freeze") or
-    `fsfreeze -u /` (action="unfreeze") (v2.26.0 Stage 1). Only ever
-    called around the copy phase of an already-quiesced Backup/Clone --
-    freeze right after _quiesce_services succeeds and before the copy
-    starts, unfreeze before _unquiesce_services runs (see
-    _diskimg_start_job and _diskimg_finish_quiesce). Freezing pauses
-    new writes to the root filesystem so the raw block-level image dd
-    or ddrescue takes of the boot disk is crash-consistent, without
-    needing the filesystem unmounted -- it can't be, this Pi is running
-    from it. Reads are not blocked by a freeze, only writes are, so
-    instmon's own operation during the copy phase (console/progress
-    updates are in-memory only by this point -- _quiesce_state_write
-    already finished during the earlier stop phase) is unaffected.
-    subprocess.run() directly, no systemd-run wrapping: this needs to
-    complete synchronously before/after the copy phase, not run as its
-    own detached unit. Never raises."""
     flag = "f" if action == "freeze" else "u"
     try:
         result = subprocess.run(
@@ -919,19 +543,7 @@ def _diskimg_freeze(action):
         return False, f"fsfreeze -{flag} / returned {result.returncode}" + (f": {detail}" if detail else "")
     return True, "Root filesystem frozen for the copy." if action == "freeze" else "Root filesystem thawed."
 
-
 def _quiesce_command_preview():
-    """The quiesce step as it would appear in a command preview
-    (v2.19.0). Built from _quiesce_resolve_units(), the same function
-    the real quiesce walks, so the preview cannot drift from what
-    actually gets stopped -- the v2.9.0 rule for the dd preview,
-    applied to this step too.
-
-    Returns (display_text, unit_count). Renders as one `systemctl stop`
-    line per tier rather than one big line, because the tier split IS
-    the design (the watchdog has to go first or it undoes the quiesce)
-    and flattening it would hide that from anyone reading the preview
-    to check what the button will do."""
     units = _quiesce_resolve_units()
     if not units:
         return "# (no suite services are currently running -- nothing to stop)", 0
@@ -946,13 +558,7 @@ def _quiesce_command_preview():
     lines.append("sync")
     return "\n".join(lines), len(units)
 
-
 def _diskimg_build_command_preview(kind, params):
-    """Wrapper (v2.19.0) that prepends the quiesce step to the base
-    preview when the Backup/Clone card has the quiesce box ticked. The
-    restart half is deliberately not shown: it is the same list in
-    reverse and printing it twice makes the preview harder to scan,
-    not clearer."""
     command, note_or_error = _diskimg_build_command_preview_base(kind, params)
     if command is None or not params.get("quiesce") or kind not in ("backup", "clone"):
         return command, note_or_error
@@ -966,21 +572,7 @@ def _diskimg_build_command_preview(kind, params):
     note = (note_or_error + " " + extra).strip() if note_or_error else extra
     return combined, (note or None)
 
-
 def _diskimg_build_command_preview_base(kind, params):
-    """Best-effort, side-effect-free preview of the exact dd/openssl
-    command a Backup/Clone/Restore action would launch for the
-    options currently selected in the UI (v2.9.0) -- built from the
-    very same _diskimg_dd_command()/_diskimg_pipeline_command()
-    functions the real job uses, so the preview can never drift out of
-    sync with what actually runs. Never mounts a drive, writes a file,
-    or starts a subprocess -- only resolves things already knowable
-    without side effects (attached drive list, boot disk, existing
-    backup files). Returns (command_display_or_None, note_or_error);
-    the note is shown as a small caveat alongside a successful
-    preview, the error is shown in place of the command when one
-    can't be built yet. Never raises -- always safe to call on every
-    keystroke."""
     try:
         if kind == "backup":
             boot_disk = _get_boot_disk()
@@ -1006,9 +598,6 @@ def _diskimg_build_command_preview_base(kind, params):
             ext = _DISKIMG_ENCRYPTED_SUFFIX if encrypt else ".img"
             fname = f"{hostname}_{stamp}" + (f"_{label}" if label else "") + ext
             dest_display = os.path.join(f"<mount of {match['path']}>", _DISKIMG_BACKUP_DIRNAME, fname)
-            # Same precedence as _diskimg_start_job: encrypt beats
-            # backend/throttle (this preview never claims to combine
-            # them, since the real job doesn't either).
             if encrypt:
                 cmd = _diskimg_pipeline_command("encrypt", src_path, dest_display, best_effort=best_effort)
             elif backend == "ddrescue":
@@ -1119,10 +708,7 @@ def _diskimg_build_command_preview_base(kind, params):
         log_event(f"_diskimg_build_command_preview({kind}): {exc}", "warn")
         return None, "Could not build a preview right now."
 
-
 def _diskimg_job_snapshot():
-    """A JSON-safe copy of the current job (drops the live Popen handle),
-    or None if no job has ever run this process lifetime."""
     with _diskimg_job_lock:
         if _diskimg_job is None:
             return None
@@ -1130,24 +716,7 @@ def _diskimg_job_snapshot():
         job.pop("proc", None)
         return job
 
-
 def _diskimg_reader_thread(job_id):
-    """Thin outermost wrapper around the real reader body (v2.18.0).
-
-    The ONLY reason this wrapper exists is the quiesce finally block.
-    _diskimg_reader_thread_body() has half a dozen `return` statements
-    scattered through it -- four of them inside `with
-    _diskimg_job_lock:` blocks that fire when the job id no longer
-    matches -- and every one of them must still restore the node's
-    services. Wrapping the body in a separate function instead of
-    threading a try/finally through its existing nesting makes that
-    structurally impossible to get wrong: there is exactly one way out
-    of the body, and it passes through this finally.
-
-    Note this covers the ordinary ends only -- success, dd failure,
-    cancel, verify mismatch, an unexpected exception. A SIGKILL, an OOM
-    kill or a power cut runs no finally at all; those are the startup
-    sweep's job (_quiesce_startup_sweep, v2.17.0)."""
     quiesced = False
     frozen = False
     with _diskimg_job_lock:
@@ -1160,29 +729,14 @@ def _diskimg_reader_thread(job_id):
         if quiesced:
             try:
                 _diskimg_finish_quiesce(job_id, frozen)
-            except Exception as exc:  # never let this thread die silently quiesced
+            except Exception as exc:
                 try:
                     log_event(f"Unquiesce after job {job_id} errored: {exc} -- "
                               "services may still be stopped; a reboot is recommended.", "err")
                 except Exception:
                     pass
 
-
 def _diskimg_finish_quiesce(job_id, frozen=False):
-    """Restore services at the end of a quiesced job and fold the
-    outcome into the job's own message. The job's terminal state has
-    already been decided by the body and is never overwritten here: a
-    backup that copied and verified cleanly is still a successful
-    backup even if a service failed to come back. That failure becomes
-    a warning appended to the message (D-6), not a failed job.
-
-    frozen (v2.26.0 Stage 1): thaw the root filesystem BEFORE
-    restarting services below, not after -- a frozen fs blocks writes,
-    and several of the services being restarted here will want to
-    write (logs, state files, sockets) as soon as they come up. A thaw
-    failure is folded into the message the same D-6 way an unquiesce
-    failure is (a warning on an otherwise-successful job), since the
-    copy itself is already safely on disk either way."""
     if frozen:
         with _diskimg_job_lock:
             if _diskimg_job is not None and _diskimg_job["id"] == job_id:
@@ -1218,24 +772,15 @@ def _diskimg_finish_quiesce(job_id, frozen=False):
             _diskimg_job["message"] += ("  " if _diskimg_job["message"] else "") + summary
     log_event(f"Disk-image job {job_id}: {summary}", "ok" if ok else "err")
 
-
 def _diskimg_reader_thread_body(job_id):
     with _diskimg_job_lock:
         job = _diskimg_job
         if job is None or job["id"] != job_id:
             return
         proc = job["proc"]
-        # v2.26.0 Stages 5/6: which regex/parser this job's backend
-        # writes to stderr -- picked once here rather than re-read from
-        # the job dict on every chunk, since it never changes mid-job.
         progress_format = job.get("progress_format", "dd")
     buf = b""
     last_nonprogress_line = ""
-    # v2.30.2: read1() returns as soon as ANY bytes are available. The old
-    # proc.stderr.read(256) on Popen's default BufferedReader blocks until
-    # a full 256 bytes have piled up -- about four dd progress lines, so
-    # the bar moved in 4 s+ steps at best, and a job that finished inside
-    # that window (a Quick format) never reported anything at all.
     stream = proc.stdout
     read_some = getattr(stream, "read1", None) or (lambda n: stream.read(n))
     try:
@@ -1244,10 +789,6 @@ def _diskimg_reader_thread_body(job_id):
             if not chunk:
                 break
             buf += chunk
-            # dd's status=progress (and pv's meter, and ddrescue's
-            # status block) all write \r-terminated updates, not \n --
-            # split on either so a plain readline() (which only breaks
-            # on \n) never sits on data that already arrived.
             parts = re.split(rb"[\r\n]", buf)
             buf = parts[-1]
             for piece in parts[:-1]:
@@ -1269,18 +810,8 @@ def _diskimg_reader_thread_body(job_id):
                         if _diskimg_job is not None and _diskimg_job["id"] == job_id:
                             _diskimg_job["bytes_done"] = parsed
                 elif progress_format == "ddrescue" and _DDRESCUE_STATUS_LINE_RE.search(piece):
-                    continue  # part of the status block, not an error
+                    continue
                 else:
-                    # Not a progress line -- most likely dd's own error
-                    # text ("No space left on device", a permission
-                    # error, a bad destination, ...) or systemd-run's own
-                    # complaint if the unit itself couldn't start. Kept
-                    # so a failure message says WHY, not just an exit
-                    # code -- an "audit the error messages" hardening
-                    # pass item. Also echoed to the console (v2.9.0) --
-                    # unlike the once-a-second progress line, real error
-                    # text like this is rare enough that showing every
-                    # line doesn't flood the box.
                     try:
                         last_nonprogress_line = piece.decode("utf-8", "replace").strip()
                         if last_nonprogress_line:
@@ -1320,10 +851,6 @@ def _diskimg_reader_thread_body(job_id):
         quick = bool(job.get("quick"))
         mapfile_path = job.get("mapfile_path")
 
-    # v2.26.0 Stage 6: clean up the ddrescue mapfile (if this job used
-    # one) now that the copy has reached a terminal outcome one way or
-    # another -- best-effort, same FileNotFoundError-tolerant shape as
-    # _quiesce_state_clear().
     if mapfile_path:
         try:
             os.remove(mapfile_path)
@@ -1334,9 +861,6 @@ def _diskimg_reader_thread_body(job_id):
 
     if not copy_ok:
         if kind == "backup":
-            # v2.30.0: a Backup whose copy was cancelled or failed leaves a
-            # truncated .img (or .img.enc) in instmon-backups/, which
-            # _diskimg_list_backups() would then offer to Restore. Remove it.
             outcome = _diskimg_remove_partial_backup(dest)
             if outcome == "deleted":
                 if state == "cancelled":
@@ -1354,11 +878,6 @@ def _diskimg_reader_thread_body(job_id):
         _diskimg_console_append(job_id, f"{state}: {message}")
         return
 
-    # Copy succeeded. Run any requested post-copy steps -- verify, then
-    # (backup only) shrink -- before finalizing to a terminal state.
-    # Each step keeps the job "running" with "phase" set accordingly so
-    # the UI's job panel stays live throughout, potentially long as
-    # both steps can be.
     final_state, final_message = "done", "Completed successfully."
 
     if verify_requested:
@@ -1396,9 +915,6 @@ def _diskimg_reader_thread_body(job_id):
                     _diskimg_job["bytes_done"] = new_size
 
     if final_state == "done" and kind == "format":
-        # v2.30.0: a cancel that lands in the gap between the wipe exiting
-        # and this point must still be honoured. Once the phase flips to
-        # "formatting" below, _diskimg_cancel_job() refuses instead.
         cancelled_before_format = False
         with _diskimg_job_lock:
             if _diskimg_job is None or _diskimg_job["id"] != job_id:
@@ -1435,16 +951,10 @@ def _diskimg_reader_thread_body(job_id):
     log_event(f"Disk-image {kind} {state}: {message}", level)
     _diskimg_console_append(job_id, f"{state}: {message}")
     if state == "done" and kind in ("clone", "restore", "format"):
-        # A raw disk-to-disk write leaves the kernel's view of the
-        # destination's partition table stale (it read the old one, if
-        # any, at attach time) -- reread it so the new partitions show
-        # up without needing to unplug/replug the drive. Best-effort: a
-        # failure here doesn't change the copy's own success.
         try:
             subprocess.run(["partprobe", dest], capture_output=True, timeout=15)
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
             log_event(f"partprobe {dest} failed (copy itself still succeeded): {exc}", "warn")
-
 
 def _diskimg_start_job(
     kind, source_desc, dest_desc, src_path, dst_path, bytes_total,
@@ -1455,59 +965,8 @@ def _diskimg_start_job(
     verify_algo="sha256", backend="dd", throttle_rate_mb=None,
     freeze_requested=False, quick_requested=False,
 ):
-    """Launch a dd-based (or, with a passphrase, dd<->openssl pipeline)
-    disk-image job. Refuses to start a second job while one is already
-    running -- there is still only ever one disk-image job
-    system-wide, across all four cards (Format/Backup/Clone/Restore).
-    shrink_requested only ever applies to kind="backup"; verify_requested
-    applies to backup/clone/restore, but is mutually exclusive with
-    either passphrase argument (checked by callers, not here -- see
-    handle_diskimg_backup_start()/handle_diskimg_restore_start() for
-    why) and is never set for kind="format" (there's nothing
-    meaningful to verify a zero-wipe against). encrypt_passphrase only
-    ever applies to kind="backup", decrypt_passphrase only to
-    kind="restore"; at most one of the two is ever set. fs_type only
-    applies to kind="format" (v2.10.0 Stage 2) -- consumed by the
-    post-copy partition+mkfs step in _diskimg_reader_thread, not by
-    the dd command itself. The passphrase itself is used only to build
-    this one subprocess's environment below and is never written into
-    the job dict, a log line, or any argv -- its only representation
-    on disk or in a process listing is inside that one subprocess's
-    own environment (visible only to root, same as this whole app
-    already requires to touch disk devices at all).
-
-    v2.26.0 additions, all normalized (not trusted from the caller) the
-    same way quiesce_requested already is just below -- each is a
-    no-op outside the kind/combination it's meaningful for, rather
-    than an error, since the UI is expected to just not offer them
-    outside that context:
-    best_effort_requested/freeze_requested -- backup/clone only (D-4:
-        same "source is the live boot disk" restriction as quiesce).
-        freeze_requested additionally requires quiesce_requested --
-        it's offered in the UI as a sub-option of Pause node services.
-    direct_io_requested -- clone only (Backup/Restore's file-based
-        endpoint hasn't been confirmed to tolerate O_DIRECT).
-    backend="ddrescue" -- backup/clone only, and mutually exclusive
-        with best_effort/direct_io (ddrescue is its own resilience
-        strategy) and with encrypt (checked by the caller, same as
-        the existing encrypt-vs-shrink/verify checks).
-    throttle_rate_mb -- backup/clone/restore, but never combined with
-        encrypt/decrypt (a 3-stage pipe) or backend="ddrescue"
-        (ddrescue doesn't stream sequentially the way a pipe needs).
-    verify_algo -- "sha256" (default) or "blake2b"; irrelevant unless
-        verify_requested is also set.
-    quick_requested (v2.30.0) -- format only: the wipe phase zeroes just
-        the start of the drive (bytes_total should then be
-        _diskimg_format_wipe_bytes(size, True)), and the partition+mkfs
-        step also runs wipefs. Not a secure erase.
-
-    Returns (ok, job_id_or_error_message)."""
     global _diskimg_job
 
-    # quiesce (v2.18.0) only ever applies where the SOURCE is the live
-    # boot disk, i.e. backup and clone (D-4). Restore reads a file and
-    # writes a spare drive; format touches a spare drive only -- taking
-    # the node off the air for either would buy nothing.
     quiesce_requested = bool(quiesce_requested) and kind in ("backup", "clone")
     quiesce_stopped_public = []
     quiesce_console = []
@@ -1523,18 +982,12 @@ def _diskimg_start_job(
         bool(throttle_rate_mb) and kind in ("backup", "clone", "restore")
         and backend != "ddrescue" and not (encrypt_passphrase or decrypt_passphrase)
     )
-    # v2.30.2: throttled copies now report through the read-side dd, so
-    # only ddrescue needs its own parser.
     progress_format = "ddrescue" if backend == "ddrescue" else "dd"
 
     job_id = secrets.token_hex(8)
     unit_name = f"instmon-diskimg-{job_id}"
 
     if quiesce_requested:
-        # Publish a placeholder job FIRST, so the UI's 5s poll can see
-        # the quiescing phase while it happens -- stopping Asterisk and
-        # the bridges is not instant, and a job that appears only once
-        # dd starts would leave the panel blank for that whole window.
         with _diskimg_job_lock:
             if _diskimg_job is not None and _diskimg_job.get("state") == "running":
                 return False, "A disk-image job is already running -- wait for it to finish or cancel it first."
@@ -1559,11 +1012,6 @@ def _diskimg_start_job(
                 ],
             }
 
-        # NOTE: the job lock is deliberately NOT held across the two
-        # calls below. Stopping services can take tens of seconds, and
-        # _diskimg_job_snapshot() (the UI's 5s poll) needs that lock --
-        # holding it here would freeze the job panel during exactly the
-        # phase the user most wants to watch.
         ok, reason = _quiesce_check_package_locks()
         if not ok:
             _diskimg_console_append(job_id, f"Pre-flight failed: {reason}")
@@ -1575,8 +1023,6 @@ def _diskimg_start_job(
 
         ok, stopped, message = _quiesce_services(job_id, console_job_id=job_id)
         if not ok:
-            # _quiesce_services has already restored anything it
-            # stopped before failing (D-5) -- nothing is left down.
             with _diskimg_job_lock:
                 if _diskimg_job is not None and _diskimg_job["id"] == job_id:
                     _diskimg_job = None
@@ -1588,19 +1034,8 @@ def _diskimg_start_job(
             if _diskimg_job is not None and _diskimg_job["id"] == job_id:
                 _diskimg_job["quiesced"] = True
                 _diskimg_job["quiesce_stopped"] = quiesce_stopped_public
-                # Keep the quiescing transcript -- the dict built below
-                # replaces this one entirely, and losing the record of
-                # what was stopped would gut the console exactly when a
-                # node fails to come back.
                 quiesce_console = list(_diskimg_job.get("console") or [])
 
-        # v2.26.0 Stage 1: freeze AFTER services are stopped (so nothing
-        # still-running has a write in flight when the freeze lands)
-        # and BEFORE the copy starts. A freeze failure does NOT abort
-        # the job -- the image stays crash-consistent without it, same
-        # as before this feature existed, so this fails open with a
-        # console warning rather than throwing away a job that already
-        # paid the cost of quiescing.
         if freeze_requested:
             freeze_ok, freeze_message = _diskimg_freeze("freeze")
             _diskimg_console_append(job_id, freeze_message)
@@ -1608,10 +1043,6 @@ def _diskimg_start_job(
                 frozen_ok = True
             else:
                 log_event(f"Disk-image {kind}: fsfreeze -f / failed, continuing without it: {freeze_message}", "warn")
-            # Re-capture the transcript now that the freeze line landed
-            # on it -- same reason quiesce_stopped_public was captured
-            # above: the dict built below replaces this placeholder
-            # wholesale, so anything not carried forward here is lost.
             with _diskimg_job_lock:
                 if _diskimg_job is not None and _diskimg_job["id"] == job_id:
                     quiesce_console = list(_diskimg_job.get("console") or [])
@@ -1650,33 +1081,12 @@ def _diskimg_start_job(
         popen_error = None
         proc = None
         try:
-            # start_new_session=True (v2.26.0 Stage 5): puts the child
-            # in its own process group regardless of backend. Matters
-            # for the two bash -c pipeline forms (encrypt/decrypt above,
-            # throttled-pv below) -- a pipeline's stages are separate
-            # processes under the same shell, and terminate()-ing just
-            # the shell's own PID would leave them running orphaned. No
-            # effect on a detached systemd-run job (that unit already
-            # manages its own process group) or on a plain single dd.
-            # v2.30.2: stdout is merged into the same pipe the reader
-            # already parses (stderr=STDOUT, reader reads proc.stdout).
-            # It used to be /dev/null, which silently discarded ddrescue's
-            # whole progress display -- ddrescue writes it to stdout. dd,
-            # pv and openssl write nothing to stdout in these commands.
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
         except OSError as exc:
-            # Do NOT return from inside the lock here: if we quiesced,
-            # the services still have to come back, and
-            # _unquiesce_services -> _diskimg_console_append takes this
-            # same non-reentrant lock. Record it and handle it below.
             popen_error = f"Could not start {cmd[0]}: {exc}"
             if quiesce_requested and _diskimg_job is not None and _diskimg_job["id"] == job_id:
                 _diskimg_job = None
         finally:
-            # Drop this function's own reference to the passphrase (and
-            # the env dict holding it) as soon as it's no longer
-            # needed -- Popen() has already either read it into the
-            # child's environment or failed to start.
             passphrase = None
             env = None
         if popen_error is None:
@@ -1702,14 +1112,10 @@ def _diskimg_start_job(
                 "fs_type": fs_type if kind == "format" else None,
                 "quick": quick_requested,
                 "command_display": command_display,
-                # Carried forward from the quiescing placeholder above,
-                # since this dict replaces it wholesale.
                 "quiesced": bool(quiesce_requested),
                 "quiesce_stopped": quiesce_stopped_public,
                 "quiesce_results": None,
                 "quiesce_restore_ok": None,
-                # v2.26.0 additions -- see _diskimg_start_job's docstring
-                # for what each is restricted to.
                 "frozen": frozen_ok,
                 "backend": backend,
                 "best_effort_requested": best_effort_requested,
@@ -1725,7 +1131,6 @@ def _diskimg_start_job(
             }
 
     if popen_error is not None:
-        # Outside the job lock, so the unquiesce path may safely take it.
         if quiesce_requested:
             log_event(f"Disk-image {kind} failed to start after quiescing -- restoring services", "err")
             restore_ok, results = _unquiesce_services()
@@ -1740,72 +1145,32 @@ def _diskimg_start_job(
     log_event(f"Disk-image {kind} started: {source_desc} -> {dest_desc}", "info")
     return True, job_id
 
-
 def _diskimg_cancel_job():
-    """Cancel whichever disk-image job is currently running, however it
-    was launched -- stop the transient systemd unit if it was detached,
-    else terminate() the direct child. Returns (ok, message)."""
     with _diskimg_job_lock:
         job = _diskimg_job
         if job is None or job.get("state") != "running":
             return False, "No disk-image job is currently running."
         if job.get("cancelled"):
-            # v2.30.1: a stop is already in flight (the job is winding down
-            # -- deleting a partial backup, or waiting on verify to notice
-            # the flag). A second click, or a second browser tab, must not
-            # re-send SIGTERM / systemctl stop.
             return True, "Stop already requested -- waiting for the job to wind down."
         if job.get("phase") == "quiescing":
-            # Services are being stopped right now. There is no dd to
-            # terminate yet, and interrupting mid-sequence would leave
-            # the node half down with nothing tracking it. The sequence
-            # is short and self-limiting (each stop is bounded by
-            # QUIESCE_STOP_TIMEOUT_SEC), and if it fails it restores
-            # itself -- so wait it out and cancel the copy instead.
             return False, "Node services are still being stopped -- this finishes shortly. Cancel once the copy has started."
         if job.get("phase") == "unquiescing":
             return False, "The job has finished and services are being restarted -- this finishes on its own shortly."
         if job.get("phase") == "thawing":
-            # v2.26.0 Stage 1: same situation as "unquiescing" below --
-            # the copy has already finished, thaw is a single quick
-            # syscall with nothing to terminate(), and unquiescing
-            # follows it automatically either way.
             return False, "The job has finished and the filesystem is being thawed -- this finishes on its own shortly."
         if job.get("phase") == "shrinking":
-            # The copy is already done and on disk -- shrinking runs a
-            # short, synchronous sequence of tool calls (e2fsck,
-            # resize2fs, parted) with nothing to terminate() and no
-            # transient unit of its own, so there's no way to interrupt
-            # it safely mid-step without risking the partition table.
-            # It finishes on its own shortly either way.
             return False, "The backup copy is already complete and is now being shrunk -- this finishes on its own shortly and can't be cancelled mid-step."
         if job.get("phase") == "formatting":
-            # v2.30.0: partition + mkfs run synchronously inside the reader
-            # thread with no process handle and nothing that polls the
-            # cancel flag. Setting the flag here used to be silently
-            # ignored (the job still ended "done"), so refuse honestly,
-            # same as shrinking.
             return False, "The drive has been wiped and is now being partitioned and formatted -- this finishes on its own shortly and cannot be stopped mid-step."
         job["cancelled"] = True
         proc, unit_name, phase = job["proc"], job["unit_name"], job.get("phase")
         cancel_kind = job.get("kind")
     if phase == "verifying":
-        # _diskimg_verify_copy() itself polls the "cancelled" flag just
-        # set above between chunks and will stop on its own within one
-        # chunk -- there's no subprocess to terminate() for this phase,
-        # and the copy already on disk is unaffected either way.
         return True, "Cancel requested -- verification will stop shortly. The copy on disk is unaffected."
     try:
         if unit_name:
             subprocess.run(["systemctl", "stop", f"{unit_name}.service"], capture_output=True, timeout=10)
         elif proc is not None:
-            # v2.26.0 Stage 5: kill the whole process group, not just
-            # proc's own PID -- a bash -c pipeline (encrypt/decrypt
-            # above, throttled-pv) forks additional processes that
-            # start_new_session=True (see the Popen call above) put in
-            # this same group. Falls back to plain terminate() if the
-            # group kill can't be sent (process already gone, no
-            # permission, etc.) rather than raising.
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
             except (ProcessLookupError, PermissionError, OSError):
@@ -1816,14 +1181,7 @@ def _diskimg_cancel_job():
         return True, "Cancel requested -- the partial backup file will be deleted."
     return True, "Cancel requested -- the destination will be left partial."
 
-
 def _diskimg_remove_partial_backup(path):
-    """v2.30.0: delete the truncated output file of a Backup whose copy
-    was cancelled or failed, so it cannot show up in Restore's list.
-    Deliberately narrow: only a regular (non-symlink) *.img / *.img.enc
-    file sitting directly inside an instmon-backups/ directory -- never
-    an arbitrary path. Returns "deleted", "" (nothing there / refused),
-    or a short error string for an OSError."""
     try:
         if os.path.basename(os.path.dirname(path)) != _DISKIMG_BACKUP_DIRNAME:
             return ""
@@ -1838,15 +1196,7 @@ def _diskimg_remove_partial_backup(path):
     except OSError as exc:
         return str(exc)
 
-
 def _diskimg_reset_job(kind):
-    """v2.30.0: the Reset button's server half. Marks the finished job
-    dismissed (rather than clearing _diskimg_job) so GET /api/diskimg/job
-    stops returning it -- the panel stays empty across page reloads and
-    other browsers -- while everything that reads the raw job, notably
-    _diskimg_schedule_watch_job(), is untouched. Only dismisses a job of
-    the card's own kind; anything else is a no-op success so the card's
-    form can still reset. Returns (ok, message)."""
     with _diskimg_job_lock:
         job = _diskimg_job
         if job is None or job.get("dismissed") or job.get("kind") != kind:
@@ -1858,14 +1208,7 @@ def _diskimg_reset_job(kind):
         job["dismissed"] = True
     return True, "Card reset."
 
-
 def _diskimg_list_backups():
-    """Every *.img or *.img.enc (v2.4: an openssl-encrypted backup --
-    see _diskimg_pipeline_command()) under instmon-backups/ on every
-    currently attached and mounted USB drive, newest first -- not just
-    the drive Backup last wrote to, since Restore (Stage 4) needs to
-    see images that might live on a different drive than whichever is
-    plugged in now."""
     results = []
     for d in _list_usb_drives():
         mountpoints = d.get("mounted_at") or []
@@ -1894,40 +1237,10 @@ def _diskimg_list_backups():
     results.sort(key=lambda e: e["mtime"], reverse=True)
     return results
 
-
-# --- integrity verification (v2.2). Optional post-copy step, available
-# on Backup, Clone, and Restore alike: stream both sides of a completed
-# copy and confirm they're byte-for-byte identical via sha256 (or,
-# v2.26.0 Stage 4, blake2b) rather than trusting dd's exit code alone --
-# dd returning 0 says the write syscalls succeeded, not that a flaky
-# USB reader/cable or a failing destination drive didn't silently
-# corrupt something along the way. --
-
 _VERIFY_CHUNK_SIZE = 4 * 1024 * 1024
 _VERIFY_HASHERS = {"sha256": hashlib.sha256, "blake2b": hashlib.blake2b}
 
-
 def _diskimg_verify_copy(job_id, src_path, dst_path, expected_bytes, algo="sha256"):
-    """Stream exactly expected_bytes from src_path and dst_path in
-    lockstep (bounding the read is what makes this safe to use for
-    Clone/Restore too, where the destination's own true device size can
-    be larger than what was actually written), hashing each side and
-    comparing at the end. Checks for a cancel request on the job
-    between chunks so a slow verify on a large image can still be
-    interrupted -- unlike dd, there's no subprocess to terminate() here,
-    so this loop is the only thing that can act on a cancel during this
-    phase. Returns (result, message) where result is one of "ok",
-    "mismatch" (confirmed data difference -- treated as a real failure
-    by the caller), "cancelled", or "error" (verification itself could
-    not complete, e.g. a read error -- distinct from a confirmed
-    mismatch, and not itself treated as the job having failed).
-
-    algo (v2.26.0 Stage 4): "sha256" (default) or "blake2b" -- both
-    stdlib hashlib, both C-backed, so this is not a stdlib-only
-    exception; blake2b is offered as a faster option since verify's
-    real cost at this feature's 4 MiB chunk size is the double
-    sequential disk read, not hash CPU, so the win is real but modest.
-    An unrecognized algo falls back to sha256 rather than raising."""
     hasher_factory = _VERIFY_HASHERS.get(algo, hashlib.sha256)
     try:
         src_hash = hasher_factory()
@@ -1943,11 +1256,6 @@ def _diskimg_verify_copy(job_id, src_path, dst_path, expected_bytes, algo="sha25
                 chunk_size = min(_VERIFY_CHUNK_SIZE, remaining)
                 s_chunk = sf.read(chunk_size)
                 d_chunk = df.read(chunk_size)
-                # A short read (fewer bytes than asked for, on either
-                # side) this far from expected_bytes means that side's
-                # actual content is shorter than the copy was supposed
-                # to be -- a real problem, but a different one than a
-                # confirmed byte mismatch, so it's kept distinct.
                 if len(s_chunk) < chunk_size or len(d_chunk) < chunk_size:
                     return "error", "Source or destination ended earlier than expected during verification."
                 src_hash.update(s_chunk)
@@ -1965,29 +1273,9 @@ def _diskimg_verify_copy(job_id, src_path, dst_path, expected_bytes, algo="sha25
         )
     return "ok", f"Verified -- {algo} matches ({src_hash.hexdigest()[:12]}...)."
 
-
-# --- shrink-to-fit (v2.1). Optional post-Backup step: shrink the last
-# partition's filesystem to its minimum size and truncate the .img file
-# to match, PiShrink-style. Only ever runs after a Backup has already
-# completed successfully -- never touches Clone or Restore. ------------
-
 _SHRINK_REQUIRED_TOOLS = ("losetup", "partprobe", "blkid", "e2fsck", "resize2fs", "dumpe2fs", "parted")
 
-
 def _diskimg_shrink_image(image_path):
-    """Best-effort shrink of a just-completed backup .img: resize2fs -M
-    the last partition's filesystem down to its minimum, shrink that
-    partition's table entry to match with parted, then truncate the
-    file to the new end of the partition table. Refuses cleanly --
-    leaving the original file completely untouched -- for any layout
-    other than "last partition is ext2/3/4", or if a required tool is
-    missing, or if any step fails; this is meant for the plain
-    boot(FAT)+root(ext4) layout instmon's own Backup produces, not
-    arbitrary images. The file is truncated only as the very last step,
-    after every earlier step has already succeeded and the loop device
-    has been detached, so a failure partway through can never leave a
-    still-good backup corrupted or truncated. Returns (ok, message,
-    new_size_or_None)."""
     for tool in _SHRINK_REQUIRED_TOOLS:
         if not shutil.which(tool):
             return False, f"'{tool}' is not installed", None
@@ -2005,11 +1293,6 @@ def _diskimg_shrink_image(image_path):
         if not loop_dev:
             return False, "losetup returned no loop device", None
 
-        # losetup -fP alone does not reliably create partition device
-        # nodes for the newly-attached loop device -- partprobe is
-        # required. Its stderr can carry a harmless "udevadm: not
-        # found" warning where no udev is running; that is not itself
-        # a failure, so it is discarded rather than checked.
         subprocess.run(["partprobe", loop_dev], capture_output=True, timeout=20)
         time.sleep(0.2)
 
@@ -2031,10 +1314,6 @@ def _diskimg_shrink_image(image_path):
             return False, "could not read the last partition's start sector", None
         part_number = len(parts)
 
-        # lsblk's own FSTYPE column depends on udev database population
-        # and comes back null in a plain-kernel/no-udev environment --
-        # blkid reads the filesystem superblock directly instead, and
-        # is reliable regardless.
         fstype = subprocess.run(
             ["blkid", "-o", "value", "-s", "TYPE", part_path],
             capture_output=True, text=True, timeout=10,
@@ -2042,11 +1321,6 @@ def _diskimg_shrink_image(image_path):
         if fstype not in ("ext2", "ext3", "ext4"):
             return False, f"last partition is '{fstype or 'unknown'}', not ext2/3/4 (only that family is resizable here)", None
 
-        # e2fsck -f -y is required before resize2fs will touch the
-        # filesystem, and also catches a corrupt filesystem before it's
-        # shrunk further. Exit code 1 ("errors corrected, filesystem
-        # now clean") is e2fsck's own documented non-fatal outcome, not
-        # a reason to refuse.
         fsck = subprocess.run(["e2fsck", "-f", "-y", part_path], capture_output=True, text=True, timeout=300)
         if fsck.returncode not in (0, 1):
             return False, f"e2fsck -f -y exited {fsck.returncode} -- refusing to shrink a filesystem that may still be inconsistent", None
@@ -2067,15 +1341,10 @@ def _diskimg_shrink_image(image_path):
 
         sector_size = 512
         new_fs_bytes = block_count * block_size
-        new_fs_bytes -= new_fs_bytes % sector_size  # never round up past what resize2fs actually produced
+        new_fs_bytes -= new_fs_bytes % sector_size
         size_sectors = new_fs_bytes // sector_size
         end_sector = start_sector + size_sectors - 1
 
-        # `parted -s`/`--script` alone prints an unanswered "Shrinking a
-        # partition can cause data loss, are you sure?" prompt and does
-        # NOT apply the resize (confirmed by direct testing) --
-        # --pretend-input-tty plus a piped "Yes\n" is the only technique
-        # found that actually applies it non-interactively.
         parted_proc = subprocess.run(
             ["parted", "---pretend-input-tty", loop_dev, "unit", "s", "resizepart", str(part_number), f"{end_sector}s"],
             input="Yes\n", capture_output=True, text=True, timeout=30,
@@ -2088,9 +1357,6 @@ def _diskimg_shrink_image(image_path):
         if loop_dev:
             subprocess.run(["losetup", "-d", loop_dev], capture_output=True, timeout=15)
 
-    # Truncate only now -- every earlier step already succeeded and the
-    # loop device is detached, so shrinking the file can't confuse a
-    # still-attached loop device's view of it.
     try:
         with open(image_path, "r+b") as f:
             f.truncate(new_image_size)
@@ -2099,35 +1365,13 @@ def _diskimg_shrink_image(image_path):
 
     return True, f"Shrunk to {fmt_bytes(new_image_size)}.", new_image_size
 
-
-# --- Full Format (v2.10.0 Stage 2): wipe (dd, handled by the same job
-# engine as Backup/Clone/Restore) then partition+mkfs -- the latter is
-# a short synchronous post-copy step, same shape as Backup's existing
-# shrink phase above. -------------------------------------------------
-
 _DISKIMG_FORMAT_FS_TOOLS = {
     "ext4": "mkfs.ext4",
     "fat32": "mkfs.vfat",
     "exfat": "mkfs.exfat",
 }
 
-
 def _diskimg_partition_and_format(dest, fs_type, quick=False):
-    """Wipe-then-format's post-copy step: write a fresh GPT label with
-    a single whole-disk partition onto `dest` (already zero-wiped by
-    the job's dd phase), then mkfs it as fs_type
-    ("ext4"/"fat32"/"exfat"). Mirrors _diskimg_shrink_image()'s own
-    pattern of partprobe + lsblk -J to find the resulting partition's
-    real device path, rather than guessing a naming convention (sdX1
-    vs mmcblkXp1 vs nvmeXnYp1) by string concatenation. Returns (ok,
-    message). Never raises.
-
-    quick (v2.30.0): the job's dd phase only zeroed the start of the
-    drive, so also run wipefs -a on the whole drive (clears a stale
-    backup GPT at the tail) and on the new partition (clears signatures
-    a previous filesystem left in the same spot) before mkfs. Best
-    effort: the head zero and mkfs -F already cover the common case, so
-    a missing or failing wipefs is logged, not fatal."""
     def _wipefs(target):
         if not quick or not shutil.which("wipefs"):
             return
@@ -2197,14 +1441,6 @@ def _diskimg_partition_and_format(dest, fs_type, quick=False):
         return False, f"{mkfs_tool} failed: {(mkfs_proc.stderr or mkfs_proc.stdout).strip()}"
     return True, f"Partitioned (GPT) and formatted {part_path} as {fs_type}." + (" (Quick format.)" if quick else "")
 
-
-# --- scheduled/automatic backups (v2.3). A background thread (started
-# from run(), so it only runs when instmon is actually serving -- never
-# during unit/smoke tests, which call these functions directly instead)
-# wakes once a minute and, if enabled and due, starts a Backup job the
-# same way handle_diskimg_backup_start() does, then prunes older
-# backups on that drive down to a configured retention count. -------
-
 _DISKIMG_SCHEDULE_PATH = os.path.join(CONFIG_DIR, "instmon_diskimg_schedule.json")
 _diskimg_schedule_lock = threading.Lock()
 
@@ -2215,11 +1451,6 @@ _DISKIMG_SCHEDULE_DEFAULTS = {
     "retention": 5,
     "shrink": False,
     "verify": False,
-    # v2.25.0 (quiesce Stage 6). Default OFF, and stays off unless
-    # someone deliberately ticks it: an unattended quiesce takes the
-    # node off the air at 03:00 with nobody watching, which is a
-    # materially bigger commitment than ticking the same box on a
-    # manual backup you are sitting in front of.
     "quiesce": False,
     "label": "auto",
     "last_run_at": None,
@@ -2230,12 +1461,7 @@ _DISKIMG_SCHEDULE_DEFAULTS = {
     "last_quiesce_restore_ok": None,
 }
 
-
 def _diskimg_schedule_load():
-    """Current schedule config, merged over the defaults above so an
-    older config file (or a hand-edited/partial one) never crashes this
-    -- any key it doesn't recognize is dropped, any key it's missing
-    keeps its default. Never raises."""
     cfg = dict(_DISKIMG_SCHEDULE_DEFAULTS)
     with _diskimg_schedule_lock:
         try:
@@ -2249,7 +1475,6 @@ def _diskimg_schedule_load():
             log_event(f"Could not read disk-image schedule config, using defaults: {exc}", "warn")
     return cfg
 
-
 def _diskimg_schedule_save(cfg):
     with _diskimg_schedule_lock:
         try:
@@ -2257,14 +1482,7 @@ def _diskimg_schedule_save(cfg):
         except OSError as exc:
             log_event(f"Could not save disk-image schedule config: {exc}", "err")
 
-
 def _diskimg_schedule_prune(dest_drive_path, retention):
-    """Keep only the newest `retention` backups on dest_drive_path,
-    deleting older ones -- prunes every backup on that drive, not just
-    ones this schedule itself created, since retention is a per-drive
-    setting the user configures ("keep the newest N backups on this
-    drive"). Best-effort: a delete failure is logged, not raised, since
-    the backup that was just made succeeding is what matters most."""
     try:
         retention = max(1, int(retention))
     except (TypeError, ValueError):
@@ -2280,30 +1498,16 @@ def _diskimg_schedule_prune(dest_drive_path, retention):
         except OSError as exc:
             log_event(f"Scheduled backup retention: could not delete {stale['name']}: {exc}", "warn")
 
-
 def _diskimg_schedule_watch_job(job_id, dest_drive_path):
-    """Runs in its own thread for the lifetime of one scheduled Backup
-    job: waits for it to leave "running", records the result into the
-    schedule config (so the UI has something to show and so
-    last_run_at anchors the next interval), and prunes old backups on
-    success. Deliberately reloads the config fresh rather than reusing
-    whatever was passed to _diskimg_schedule_tick() -- the user may have
-    changed settings (e.g. retention) while this job was still running."""
     restore_ok = None
     while True:
         with _diskimg_job_lock:
             job = _diskimg_job
             if job is None or job["id"] != job_id:
-                return  # job slot reused/cleared -- nothing left to record
+                return
             state, message = job["state"], job["message"]
             phase, quiesced = job.get("phase"), job.get("quiesced")
             restore_ok = job.get("quiesce_restore_ok")
-        # v2.25.0: a quiesced job reaches its terminal STATE before the
-        # finally block has finished restarting services -- the restart
-        # outcome is appended to the message afterwards. Waiting for the
-        # phase to settle too is what keeps "Allmon3 never came back"
-        # out of the gap between those two moments and in the schedule
-        # card, which is the only place anyone will see it at 03:00.
         if state != "running" and not (quiesced and phase != "done"):
             break
         time.sleep(2)
@@ -2324,20 +1528,7 @@ def _diskimg_schedule_watch_job(job_id, dest_drive_path):
     if state == "done":
         _diskimg_schedule_prune(dest_drive_path, cfg.get("retention"))
 
-
 def _diskimg_schedule_tick():
-    """Called once a minute by _diskimg_scheduler_loop(). If enabled and
-    due, starts a Backup job identical in shape to what
-    handle_diskimg_backup_start() would start for a manual click, with
-    the same validation -- any check that would reject a manual Backup
-    (boot disk unresolved, destination absent/unusable/undersized, no
-    free space) instead skips this tick and records why, so the UI can
-    explain a schedule that hasn't been running rather than looking
-    like it's silently doing nothing. A skip does NOT count as a run --
-    it doesn't touch last_run_at, so the next tick tries again (with
-    logging throttled to once per distinct reason, not once a minute)
-    rather than waiting out a full interval for a merely-unplugged
-    drive."""
     cfg = _diskimg_schedule_load()
     if not cfg.get("enabled"):
         return
@@ -2347,7 +1538,7 @@ def _diskimg_schedule_tick():
         interval_sec = 24 * 3600
     last_run_at = cfg.get("last_run_at")
     if last_run_at is not None and (time.time() - last_run_at) < interval_sec:
-        return  # not due yet
+        return
 
     def skip(reason):
         if cfg.get("last_skip_message") != reason:
@@ -2422,10 +1613,6 @@ def _diskimg_schedule_tick():
 
     quiesce = bool(cfg.get("quiesce"))
     if quiesce:
-        # Checked here as well as inside _diskimg_start_job so an
-        # apt/dpkg run becomes a throttled SKIP -- the tick retries in a
-        # minute rather than burning the whole interval. A manual click
-        # gets an error instead, because a person is there to read it.
         locks_ok, lock_reason = _quiesce_check_package_locks()
         if not locks_ok:
             skip(lock_reason)
@@ -2447,7 +1634,6 @@ def _diskimg_schedule_tick():
     log_event(f"Scheduled backup started: {src_path} -> {dest_path}", "info")
     threading.Thread(target=_diskimg_schedule_watch_job, args=(result, match["path"]), daemon=True).start()
 
-
 def _diskimg_scheduler_loop():
     while True:
         try:
@@ -2455,7 +1641,6 @@ def _diskimg_scheduler_loop():
         except Exception as exc:
             log_event(f"Disk-image scheduler tick error: {exc}", "err")
         time.sleep(60)
-
 
 LIB_SUBDIRS ={
 "dashboard":os .path .join (LIBRARY_DIR ,"dashboard"),
@@ -2468,7 +1653,6 @@ LIB_SUBDIRS ={
 "config":os .path .join (LIBRARY_DIR ,"config"),
 }
 
-
 ALLOWED_EXT ={
 "dashboard":(".py",),
 "sysmon":(".py",),
@@ -2480,13 +1664,11 @@ ALLOWED_EXT ={
 "config":(".conf",),
 }
 
-
 COMPONENTS =[
 {
 "name":"Dashboard",
 "service":"asl_dvs_dashboard",
 "port":8989 ,
-
 
 "install_link":"/usr/local/bin/asl_dvs_dashboard.py",
 "category":"dashboard",
@@ -2515,15 +1697,6 @@ COMPONENTS =[
 {
 "name":"Watchdog",
 
-
-
-
-
-
-
-
-
-
 "service":"asl_dvs_watchdog.timer",
 "port":None ,
 "install_link":"/usr/local/bin/asl_dvs_watchdog.sh",
@@ -2538,19 +1711,7 @@ COMPONENTS =[
 },
 ]
 
-
-
-
 INSTALLABLE_CATEGORIES ={c ["category"]for c in COMPONENTS }
-
-
-
-
-
-
-
-
-
 
 HOME_SCAN_PATTERN_MAP =[
 ("watchdog",["asl_dvs_watchdog*.sh"]),
@@ -2563,15 +1724,6 @@ HOME_SCAN_PATTERN_MAP =[
 ("scripts",["install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
 ]
 
-
-
-
-
-
-
-
-
-
 COMMS_RESTART_SERVICES =[
 ("Asterisk","asterisk.service"),
 ("Analog_Bridge","analog_bridge.service"),
@@ -2580,23 +1732,15 @@ COMMS_RESTART_SERVICES =[
 ("Allmon3","allmon3.service"),
 ]
 
-
-
-
-
-
 COMMS_RESTART_PAUSE_SEC =3 
-
 
 LOG_MAX_LINES =500 
 _log =deque (maxlen =LOG_MAX_LINES )
 _log_lock =threading .Lock ()
 _log_seq =0 
 
-
 _running_scripts =set ()
 _running_scripts_lock =threading .Lock ()
-
 
 _running_installs =set ()
 _running_installs_lock =threading .Lock ()
@@ -2609,14 +1753,12 @@ AUTH_MAX_FAILURES =5
 AUTH_LOCKOUT_BASE_SEC =5 
 AUTH_LOCKOUT_MAX_SEC =300 
 
-
 def _auth_lockout_remaining (client_ip ):
     with _auth_failures_lock :
         rec =_auth_failures .get (client_ip )
         if not rec :
             return 0 
         return max (0 ,rec ["locked_until"]-time .time ())
-
 
 def _record_auth_failure (client_ip ):
     with _auth_failures_lock :
@@ -2633,11 +1775,9 @@ def _record_auth_failure (client_ip ):
             "warn",
             )
 
-
 def _record_auth_success (client_ip ):
     with _auth_failures_lock :
         _auth_failures .pop (client_ip ,None )
-
 
 def log_event (message ,level ="info"):
     global _log_seq 
@@ -2651,11 +1791,9 @@ def log_event (message ,level ="info"):
         "msg":message ,
         })
 
-
 def ensure_dirs ():
     for path in LIB_SUBDIRS .values ():
         os .makedirs (path ,exist_ok =True )
-
 
 def safe_join (base_dir ,filename ):
     base_real =os .path .realpath (base_dir )
@@ -2663,7 +1801,6 @@ def safe_join (base_dir ,filename ):
     if candidate ==base_real or not candidate .startswith (base_real +os .sep ):
         return None 
     return candidate 
-
 
 def _file_sha256_uncached (path ):
     if not os .path .isfile (path ):
@@ -2674,14 +1811,12 @@ def _file_sha256_uncached (path ):
             h .update (chunk )
     return h .hexdigest ()
 
-
 def _category_for_home_file (name ):
     lname =name .lower ()
     for category ,globs in HOME_SCAN_PATTERN_MAP :
         if any (fnmatch .fnmatch (lname ,g .lower ())for g in globs ):
             return category 
     return None 
-
 
 def scan_home_for_new_code ():
     moved =[]
@@ -2734,7 +1869,6 @@ def scan_home_for_new_code ():
 
     return moved 
 
-
 def compare_before_write (dest_path ,data_bytes ):
     dest_dir =os .path .dirname (dest_path )
     if dest_dir :
@@ -2744,14 +1878,6 @@ def compare_before_write (dest_path ,data_bytes ):
             existing =f .read ()
         if existing ==data_bytes :
             return False ,"unchanged (skipped write)"
-    # A fixed dest_path + ".tmp" name is shared by every concurrent
-    # writer targeting the same dest_path -- two uploads/edits racing
-    # on the same filename can interleave writes into that one tmp
-    # file before either os.replace() runs. tempfile.mkstemp() gives
-    # each call its own uniquely-named tmp file in the same directory
-    # (so os.replace() stays an atomic same-filesystem rename), created
-    # with the 0600 mode already applied at open time -- no separate
-    # os.chmod() needed.
     base =os .path .basename (dest_path )
     fd ,tmp_path =tempfile .mkstemp (prefix =base +".",suffix =".tmp",dir =dest_dir or ".")
     try :
@@ -2767,7 +1893,6 @@ def compare_before_write (dest_path ,data_bytes ):
         raise 
     return True ,"written"
 
-
 def systemctl_is_active (service ):
     try :
         result =subprocess .run (
@@ -2778,93 +1903,18 @@ def systemctl_is_active (service ):
     except (FileNotFoundError ,subprocess .TimeoutExpired ):
         return "unknown"
 
-
-# =====================================================================
-# Quiesce for Backup/Clone (v2.16.0, Stage 1 of the quiesce plan)
-#
-# Optionally stop the node's own services for the duration of a disk
-# image Backup or Clone, so far fewer writes are in flight while dd
-# reads the live boot disk. This is NOT a filesystem snapshot: the
-# image stays crash-consistent (ext4 replays its journal on first boot
-# of a restored card). It reduces in-flight writes; it does not
-# eliminate them.
-#
-# Deliberately an ALLOW-LIST, never "list every running unit and exempt
-# a few". A running Pi has dbus, systemd-logind, systemd-udevd, polkit,
-# user@0 and friends in that list, and stopping systemd-udevd would
-# break the very partprobe/lsblk calls this feature depends on. The
-# allow-list is built from the two curated lists this file already
-# maintains for other purposes (COMPONENTS, COMMS_RESTART_SERVICES),
-# so it can never drift away from what the suite actually installs.
-#
-# THREE TIERS, stopped 0 -> 1 -> 2 and restarted 2 -> 1 -> 0:
-#
-#   Tier 0  asl_dvs_watchdog*.timer  -- FIRST, because the watchdog
-#           fires every 45s and issues `systemctl restart` on a target
-#           it finds down; leave it running and it simply undoes the
-#           quiesce mid-copy. Globbed, not hardcoded:
-#           ASL_DVS_WATCHDOG_INSTANCE means a node can have several
-#           (e.g. the M17/Zello branch's own). Restarted LAST, so its
-#           first tick lands well after the dashboard is up rather
-#           than during the dashboard's own startup window -- exactly
-#           the false-alarm case asl_dvs_watchdog.sh v2.4 fixed.
-#
-#   Tier 1  the suite's web tools. They are Asterisk *clients*, so
-#           they go down before Asterisk does; dropping Asterisk first
-#           would just spray connection errors into the journal for
-#           the few seconds before these stop anyway -- noise in
-#           exactly the log you would be reading if the backup went
-#           wrong. instmon itself is NEVER in any tier.
-#
-#   Tier 2  comms: Asterisk, the bridges, Allmon3, SVXLink. Restarted
-#           first on the way back up, so the web tools find a live
-#           Asterisk on their first poll instead of failing once and
-#           waiting out a retry interval.
-#
-# Every tier is filtered to units that are actually active at quiesce
-# time, so only what was really running is ever restarted.
-# =====================================================================
-
 _QUIESCE_TIER0_GLOB = "asl_dvs_watchdog*.timer"
 
-# COMPONENTS categories that are never stopped by a quiesce (v2.21.0):
-#
-#   instmon   -- stopping the process running this code would end the
-#                job it is trying to protect.
-#   watchdog  -- already covered by the tier-0 glob above, which also
-#                catches instance-suffixed copies (see
-#                ASL_DVS_WATCHDOG_INSTANCE) that this single COMPONENTS
-#                entry does not know about.
-#   sysmon    -- deliberate carve-out. A disk image is the longest,
-#                highest-risk operation instmon performs, and sysmon is
-#                the only live view of temperature, voltage and disk
-#                during it. It is a read-mostly monitor: its write
-#                volume is irrelevant next to Asterisk and the bridges,
-#                so stopping it costs visibility and buys essentially
-#                nothing.
 _QUIESCE_NEVER_STOP_CATEGORIES = ("instmon", "watchdog", "sysmon")
 
-# Tier 2 is COMMS_RESTART_SERVICES plus SVXLink. SVXLink is not in that
-# list because the Comms SERV Restart button predates 44helper's
-# SVXLink support; it is included here only when actually active (see
-# _quiesce_resolve_units), so a node without it is unaffected.
 _QUIESCE_TIER2_EXTRA = [("SVXLink", "svxlink.service")]
 
 _QUIESCE_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_quiesce_state.json")
 QUIESCE_STOP_TIMEOUT_SEC = int(os.environ.get("INSTMON_QUIESCE_STOP_TIMEOUT_SEC", "15"))
 
-# After `systemctl stop` hits our client-side timeout, poll this many
-# times at this interval before calling it a failure. The timeout kills
-# the systemctl *client*, not the systemd *job* -- a slow-but-working
-# stop and a wedged unit look identical at the moment the client dies,
-# and only re-checking is-active tells them apart.
 _QUIESCE_STOP_RECHECK_TRIES = 3
 _QUIESCE_STOP_RECHECK_DELAY = 2.0
 
-# apt/dpkg lock files. These are PERMANENT files -- they exist on every
-# Debian system whether or not apt is running, so os.path.exists() is
-# meaningless here. apt holds an flock() on them; the only correct test
-# is to try to take that lock ourselves, non-blocking.
 _QUIESCE_APT_LOCKS = (
     "/var/lib/dpkg/lock-frontend",
     "/var/lib/dpkg/lock",
@@ -2880,22 +1930,10 @@ _QUIESCE_UU_PIDFILE = "/run/unattended-upgrades.pid"
 
 _quiesce_lock = threading.Lock()
 
-# v2.37.0 Quiet System: the same quiesce machinery with a narrower set --
-# the watchdog timer(s) plus the suite's web tools, never Asterisk or the
-# bridges (tier 2), never instmon, and never wifimon (it runs the Wi-Fi
-# fallback; stopping it could cut a headless Pi off). Unlike a disk image,
-# sysmon IS stopped -- freeing its memory is the point on a Pi Zero 2 W.
 QUIET_JOB_ID = "quiet-system"
 _QUIET_KEEP_CATEGORIES = ("instmon", "watchdog", "wifimon")
 
-
 def _quiesce_list_timer_units(glob_pattern=_QUIESCE_TIER0_GLOB):
-    """Every currently-active timer unit whose NAME matches the glob.
-    This is a unit-name match via systemd, not a shell glob over a
-    directory -- a node may have several watchdog timers installed
-    under different ASL_DVS_WATCHDOG_INSTANCE suffixes and we need all
-    of them. Returns a list of unit names, sorted for stable ordering
-    (so the stop order and the command preview always agree)."""
     try:
         result = subprocess.run(
             ["systemctl", "list-units", "--type=timer", "--state=active",
@@ -2917,14 +1955,7 @@ def _quiesce_list_timer_units(glob_pattern=_QUIESCE_TIER0_GLOB):
             names.append(unit)
     return sorted(set(names))
 
-
 def _quiesce_resolve_units(scope="diskimg"):
-    """The full quiesce set as [(tier, label, unit)], in STOP order
-    (tier 0 first). Only units systemctl reports as active are
-    included, so _unquiesce_services() can never start something that
-    was already down before the job began. instmon is excluded
-    unconditionally -- stopping the process running this code would
-    end the job it is trying to protect."""
     resolved = []
 
     for unit in _quiesce_list_timer_units():
@@ -2949,12 +1980,7 @@ def _quiesce_resolve_units(scope="diskimg"):
 
     return resolved
 
-
 def _quiesce_check_package_locks():
-    """(ok, reason). Refuse to quiesce while apt/dpkg is mid-run --
-    stopping services underneath a package upgrade is how you get a
-    half-configured dpkg database, and the resulting image would carry
-    that damage forward into every restore."""
     for path in _QUIESCE_APT_LOCKS:
         if not os.path.exists(path):
             continue
@@ -2967,9 +1993,6 @@ def _quiesce_check_package_locks():
                 return False, f"A package manager is running (lock held on {path}). Try again once apt/dpkg finishes."
             fcntl.flock(fd, fcntl.LOCK_UN)
         except OSError:
-            # Cannot open it at all -- do not invent a blocker out of a
-            # permissions or filesystem quirk; the unit checks below
-            # still cover the common unattended-upgrades case.
             pass
         finally:
             if fd is not None:
@@ -2981,9 +2004,6 @@ def _quiesce_check_package_locks():
     try:
         with open(_QUIESCE_UU_PIDFILE, "r") as fh:
             pid = fh.read().strip()
-        # A stale pidfile left behind by a crashed run is a known
-        # unattended-upgrades failure mode, so the file existing is not
-        # itself proof anything is running -- check the process.
         if pid.isdigit() and os.path.isdir(f"/proc/{pid}"):
             return False, "unattended-upgrades is currently running. Try again once it finishes."
     except (OSError, ValueError):
@@ -2995,20 +2015,7 @@ def _quiesce_check_package_locks():
 
     return True, ""
 
-
 def _quiesce_active_connections():
-    """Best-effort description of what this quiesce is about to drop
-    (v2.23.0). Purely informational -- it never blocks or fails a
-    quiesce, it just turns "why did 652701 drop at 14:20?" into a line
-    in the console instead of an afternoon in the journal.
-
-    Deliberately not a pre-flight gate: the operator has already been
-    told the node goes off the air and has confirmed it twice. Turning
-    an active QSO into a hard refusal would mean a backup that can
-    never run on a busy node.
-
-    Returns a list of human-readable lines, empty if Asterisk isn't
-    there, isn't an app_rpt build, or anything at all goes wrong."""
     if not shutil.which("asterisk"):
         return []
     def _rx(cmd):
@@ -3025,8 +2032,6 @@ def _quiesce_active_connections():
         nodes = re.findall(r"^\s*(\d{3,7})\s*$", local, re.MULTILINE)
         for node in nodes[:8]:
             out = _rx(f"rpt nodes {node}")
-            # app_rpt prints a table of connected node numbers; pull the
-            # numeric ones and drop the node's own entry.
             conns = [n for n in re.findall(r"\b(\d{4,7})\b", out) if n != node]
             conns = sorted(set(conns))
             if conns:
@@ -3038,13 +2043,7 @@ def _quiesce_active_connections():
         return []
     return lines
 
-
 def _quiesce_state_write(job_id, stopped, started_at=None):
-    """Persist what we have stopped so far. Written after EVERY
-    individual stop, not once at the end, so a hard kill between two
-    stops still leaves an accurate record for the startup sweep to
-    recover from. 0600 via compare_before_write(), which is the single
-    choke point the v1.28.11 audit hardened for temp-file modes."""
     payload = json.dumps({
         "job_id": job_id,
         "started_at": started_at or time.time(),
@@ -3056,11 +2055,7 @@ def _quiesce_state_write(job_id, stopped, started_at=None):
     except Exception as exc:
         log_event(f"Quiesce: could not write state file: {exc}", "err")
 
-
 def _quiesce_state_read():
-    """The persisted quiesce state, or None. A malformed file is
-    treated as absent AND deleted -- this is read on the startup path
-    (Stage 2) and must never be able to block instmon from booting."""
     try:
         with open(_QUIESCE_STATE_PATH, "r") as fh:
             data = json.load(fh)
@@ -3081,7 +2076,6 @@ def _quiesce_state_read():
     data["stopped"] = stopped
     return data
 
-
 def _quiesce_state_clear():
     try:
         os.remove(_QUIESCE_STATE_PATH)
@@ -3090,16 +2084,10 @@ def _quiesce_state_clear():
     except OSError as exc:
         log_event(f"Quiesce: could not remove state file: {exc}", "warn")
 
-
 def _quiesce_is_active():
-    """True if a quiesce is currently recorded as in effect."""
     return os.path.exists(_QUIESCE_STATE_PATH)
 
-
 def _quiesce_stop_one(unit):
-    """(ok, detail) for one unit. Distinguishes 'the systemctl client
-    timed out but the unit did stop' from 'the unit is wedged' -- see
-    _QUIESCE_STOP_RECHECK_TRIES."""
     try:
         result = subprocess.run(
             ["systemctl", "stop", unit],
@@ -3120,25 +2108,12 @@ def _quiesce_stop_one(unit):
         return False, "systemctl stop succeeded but the unit is still active"
     return True, "stopped"
 
-
 def _quiesce_services(job_id, console_job_id=None, scope="diskimg"):
-    """Stop the quiesce set in tier order. Returns (ok, stopped,
-    message).
-
-    ANY failure aborts: whatever has already been stopped is restarted
-    immediately and ok=False is returned, so a caller never proceeds
-    into dd with the node half-quiesced. On success, ends with a sync()
-    -- the point of stopping the services was to stop them dirtying the
-    page cache, so the flush belongs AFTER they are down, not before.
-    """
     def _console(text):
         if console_job_id:
             _diskimg_console_append(console_job_id, text)
 
     with _quiesce_lock:
-        # v2.37.0: one quiesce at a time. Quiet System and a disk-image
-        # job share the state file; a second one would overwrite the
-        # first one's record of what to restart.
         held = _quiesce_state_read()
         if held is not None and held.get("job_id") != job_id:
             who = "Quiet System" if held.get("job_id") == QUIET_JOB_ID else "a disk-image job"
@@ -3153,8 +2128,6 @@ def _quiesce_services(job_id, console_job_id=None, scope="diskimg"):
         _console(f"Quiesce: stopping {len(units)} unit(s) -- the node will be off the air until this job finishes.")
         log_event(f"Quiesce: stopping {len(units)} unit(s) for job {job_id}", "warn")
 
-        # v2.23.0: record what is about to be dropped, before dropping
-        # it. Informational only -- see _quiesce_active_connections().
         try:
             for line in (_quiesce_active_connections() if scope != "quiet" else []):
                 _console(f"  dropping: {line}")
@@ -3171,8 +2144,6 @@ def _quiesce_services(job_id, console_job_id=None, scope="diskimg"):
                 _console(f"  [tier {tier}] {label} ({unit}): {detail}")
                 log_event(f"Quiesce: stopped {label} ({unit})", "info")
                 continue
-            # Abort. Roll back everything already stopped, in the
-            # normal reverse-tier restart order.
             _console(f"  [tier {tier}] {label} ({unit}): FAILED -- {detail}")
             log_event(f"Quiesce: {label} ({unit}) failed to stop: {detail} -- aborting and restoring", "err")
             _console("Quiesce aborted -- restarting whatever was already stopped.")
@@ -3189,22 +2160,7 @@ def _quiesce_services(job_id, console_job_id=None, scope="diskimg"):
         _console(f"Quiesce complete -- {len(stopped)} unit(s) stopped, buffers flushed.")
         return True, stopped, f"{len(stopped)} service(s) stopped."
 
-
 def _unquiesce_services(console_job_id=None, _already_locked=False):
-    """Restart everything the persisted state says we stopped, in
-    reverse tier order (2 -> 1 -> 0). Returns (ok, results) where
-    results is [(label, unit, ok, state)].
-
-    Contract, because this is the recovery path and everything else
-    depends on it holding:
-      * IDEMPOTENT -- safe to call any number of times; a no-op when no
-        state file exists.
-      * NEVER RAISES -- catches everything, logs, and returns.
-      * Safe from any thread.
-      * Clears the state file only when every unit actually came back,
-        so a partial recovery is retried by the next startup sweep
-        instead of being silently forgotten.
-    """
     def _console(text):
         if console_job_id:
             try:
@@ -3229,11 +2185,6 @@ def _unquiesce_services(console_job_id=None, _already_locked=False):
         log_event(f"Unquiesce: restarting {len(stopped)} unit(s)", "info")
 
         results = []
-        # Simply walk the recorded stop order backwards. That is the
-        # exact mirror -- tier 2 first, tier 0 last, and reversed
-        # within each tier too -- without needing to re-derive the
-        # tiers from a state file that may have been written by an
-        # older version.
         for tier, label, unit in list(reversed(stopped)):
             try:
                 r = subprocess.run(["systemctl", "start", unit],
@@ -3268,17 +2219,14 @@ def _unquiesce_services(console_job_id=None, _already_locked=False):
             return _run()
         with _quiesce_lock:
             return _run()
-    except Exception as exc:  # last-ditch: this function must never raise
+    except Exception as exc:
         try:
             log_event(f"Unquiesce: unexpected error: {exc}", "err")
         except Exception:
             pass
         return False, []
 
-
 def _quiesce_format_results(results):
-    """One-line human summary of _unquiesce_services() results, for a
-    job message / popup."""
     if not results:
         return ""
     failed = [f"{l}" for l, _u, ok, _s in results if not ok]
@@ -3287,45 +2235,14 @@ def _quiesce_format_results(results):
     return (f"{len(results) - len(failed)} of {len(results)} service(s) restarted -- "
             f"still down: {', '.join(failed)}. Reboot recommended.")
 
-
-# ---------------------------------------------------------------------
-# systemd watchdog (v2.22.0)
-#
-# Closes the one hole the quiesce recovery story had. The reader
-# thread's finally covers every ordinary end; Restart=always plus the
-# startup sweep covers a crash, a SIGKILL, an OOM kill and a power cut,
-# because a dead instmon is back within seconds and the sweep runs.
-# What neither covered is instmon HANGING: still alive, so systemd
-# never restarts it, so the sweep never runs, so a quiesced node stays
-# off the air indefinitely. On a radio node that is the worst outcome
-# this feature can produce.
-#
-# The ping is deliberately NOT a bare "this thread still runs" tick,
-# which would keep reporting healthy through exactly the deadlock it is
-# supposed to catch. It is gated on actually acquiring
-# _diskimg_job_lock -- the lock every disk-image code path takes and
-# releases quickly, and the one a wedged job would be holding. If it
-# cannot be taken within _WATCHDOG_LOCK_TIMEOUT, this process has
-# stopped being able to do its job, the ping stops, and systemd
-# restarts it into the startup sweep.
-#
-# WatchdogSec= alone is enough for systemd to provide $NOTIFY_SOCKET;
-# Type=notify is not required.
-# ---------------------------------------------------------------------
-
 _WATCHDOG_LOCK_TIMEOUT = 15.0
 
-
 def _sd_notify(message):
-    """Send one datagram to systemd's notify socket. Best-effort and
-    silent: a missing or unusable socket just means this instance is
-    not being watchdogged (run by hand, an older unit file without
-    WatchdogSec, a non-systemd box), which is not an error."""
     addr = os.environ.get("NOTIFY_SOCKET")
     if not addr:
         return False
     if addr.startswith("@"):
-        addr = "\0" + addr[1:]  # abstract namespace
+        addr = "\0" + addr[1:]
     try:
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
             sock.settimeout(2)
@@ -3335,16 +2252,12 @@ def _sd_notify(message):
     except (OSError, ValueError):
         return False
 
-
 def _instmon_responsive():
-    """True if this process can still do disk-image work. See the note
-    above for why the job lock is the thing being tested."""
     acquired = _diskimg_job_lock.acquire(timeout=_WATCHDOG_LOCK_TIMEOUT)
     if not acquired:
         return False
     _diskimg_job_lock.release()
     return True
-
 
 def _sd_watchdog_loop():
     if not os.environ.get("NOTIFY_SOCKET"):
@@ -3353,7 +2266,6 @@ def _sd_watchdog_loop():
         interval_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
     except ValueError:
         interval_usec = 0
-    # systemd's own guidance: ping at half the configured interval.
     period = (interval_usec / 1e6 / 2.0) if interval_usec > 0 else 30.0
     period = max(5.0, min(period, 300.0))
     log_event(f"systemd watchdog active -- pinging every {period:.0f}s while responsive", "info")
@@ -3365,9 +2277,6 @@ def _sd_watchdog_loop():
                 warned = False
             elif not warned:
                 warned = True
-                # Log once, then stay quiet: if this is real, systemd
-                # kills us shortly and the message needs to be in the
-                # journal, not repeated every cycle.
                 log_event(
                     "instmon appears wedged (disk-image lock unavailable for "
                     f"{_WATCHDOG_LOCK_TIMEOUT:.0f}s) -- withholding the systemd watchdog ping so "
@@ -3378,23 +2287,7 @@ def _sd_watchdog_loop():
             pass
         time.sleep(period)
 
-
 def _quiesce_stop_orphaned_job(job_id):
-    """Stop a detached disk-image unit left running by a previous
-    instmon process (v2.22.0).
-
-    _diskimg_dd_command wraps dd in a `systemd-run --pipe --collect`
-    transient unit precisely so the copy survives an instmon restart.
-    That is right when instmon restarts mid-copy for an unrelated
-    reason -- but the reader thread does NOT survive, and it is the
-    reader thread that reads dd's progress, runs verify and shrink,
-    sets the terminal state and restores services. An orphaned copy is
-    therefore one nothing will ever finish, verify, or report: it will
-    keep writing gigabytes to a USB drive with nobody watching, and the
-    job panel will never show it ending.
-
-    So the sweep stops it and says so plainly, rather than leaving a
-    half-finished image being written by a ghost."""
     unit = f"instmon-diskimg-{job_id}.service"
     try:
         r = subprocess.run(["systemctl", "is-active", unit],
@@ -3402,10 +2295,6 @@ def _quiesce_stop_orphaned_job(job_id):
         if (r.stdout or "").strip() != "active":
             return False
     except Exception:
-        # Broad on purpose. This runs on the startup path before the
-        # socket binds, so ANYTHING raised here would stop instmon from
-        # coming up at all -- and it would do so while services are
-        # stopped, which is the exact state this code exists to escape.
         return False
     log_event(
         f"STARTUP RECOVERY: the previous process's disk-image copy ({unit}) is still running "
@@ -3419,27 +2308,7 @@ def _quiesce_stop_orphaned_job(job_id):
         log_event(f"STARTUP RECOVERY: could not stop {unit}: {exc}", "err")
     return True
 
-
 def _quiesce_startup_sweep():
-    """Called once from run(), BEFORE the socket binds.
-
-    This is the whole recovery story. There is deliberately no deadline
-    watchdog thread counting down against the job: the reader thread's
-    finally block handles every ordinary end (success, dd failure,
-    cancel, verify mismatch, an exception), and for everything it
-    cannot handle -- SIGKILL, OOM, power loss, an unhandled crash --
-    instmon is Restart=always, so the process is back within seconds
-    and lands here. v2.22.0 added the last case: a HUNG instmon, which
-    would otherwise never restart and so never reach this function, is
-    now restarted by systemd's own watchdog (see _sd_watchdog_loop). A node left off the
-    air is the worst failure this feature has, so this function is
-    loud: it logs at err level, not info, and it says what to do if a
-    service will not come back.
-
-    Anything found here means the previous process died mid-job. The dd
-    itself may well have survived (it runs in a detached systemd-run
-    transient unit), but its reader thread did not, so nothing else is
-    ever going to restore these services."""
     state = _quiesce_state_read()
     if state is None:
         return
@@ -3456,7 +2325,6 @@ def _quiesce_startup_sweep():
     except (TypeError, ValueError):
         pass
     if state.get("job_id") == QUIET_JOB_ID:
-        # v2.37.0: Quiet System never outlives the instmon that set it.
         log_event(f"Quiet System was on when instmon restarted{age} -- restoring "
                   f"{len(stopped)} service(s) now.", "warn")
     else:
@@ -3466,10 +2334,6 @@ def _quiesce_startup_sweep():
             "err",
         )
 
-    # Order matters: kill the orphaned copy FIRST. Restoring services
-    # while a ghost dd is still reading the boot disk would put the
-    # writes back exactly where they were being avoided, and the image
-    # is unusable regardless since nothing will finalize it.
     if state.get("job_id") and state.get("job_id") != QUIET_JOB_ID:
         try:
             _quiesce_stop_orphaned_job(state["job_id"])
@@ -3488,10 +2352,6 @@ def _quiesce_startup_sweep():
         "err",
     )
 
-
-# ============ end quiesce core (v2.16.0) =============================
-
-
 def port_open (port ,host ="127.0.0.1",timeout =0.5 ):
     if port is None :
         return None 
@@ -3500,7 +2360,6 @@ def port_open (port ,host ="127.0.0.1",timeout =0.5 ):
             return True 
     except OSError :
         return False 
-
 
 def attempt_rollback (dest_path ,backup_path ,comp ):
 
@@ -3517,9 +2376,7 @@ def attempt_rollback (dest_path ,backup_path ,comp ):
     log_event (f"Rolled back {comp ['name']} to previous version (now {state })","warn")
     return True ,state ,listening 
 
-
 ROLLBACK_HISTORY_DEPTH =int (os .environ .get ("INSTMON_ROLLBACK_HISTORY_DEPTH","3"))
-
 
 def _rotate_backups (dest_path ,depth =ROLLBACK_HISTORY_DEPTH ):
 
@@ -3533,7 +2390,6 @@ def _rotate_backups (dest_path ,depth =ROLLBACK_HISTORY_DEPTH ):
                 os .replace (src ,dst )
             except OSError :
                 pass 
-
 
 def install_file_with_verification (data ,dest_path ,comp ):
 
@@ -3579,7 +2435,6 @@ def install_file_with_verification (data ,dest_path ,comp ):
         result ["level"]="err"
         return result 
 
-
     time .sleep (1.5 )
     state =systemctl_is_active (comp ["service"])
     listening =port_open (comp ["port"])
@@ -3601,7 +2456,6 @@ def install_file_with_verification (data ,dest_path ,comp ):
 
     return result 
 
-
 def _scan_file_header_uncached (path ):
 
     if not os .path .isfile (path ):
@@ -3613,21 +2467,12 @@ def _scan_file_header_uncached (path ):
         return None ,False ,False 
     return _scan_header_text (content )
 
-
 def _scan_header_text (content ):
-    # Same version / self-install detection as a library file, but on
-    # text already in memory -- used for GitHub downloads before they
-    # are ever written to the library.
     m =re .search (r'^\s*VERSION\s*=\s*"([^"]+)"',content ,re .MULTILINE )
     version =m .group (1 )if m else None 
     self_install =('add_argument("--install"'in content )and ("def install_service"in content )
     self_uninstall =('add_argument("--uninstall"'in content )and ("def uninstall_service"in content )
 
-    
-    
-    
-    
-    
     if version is None :
         m =re .search (r'^\s*SCRIPT_VERSION\s*=\s*"([^"]+)"',content ,re .MULTILINE )
         version =m .group (1 )if m else None 
@@ -3638,10 +2483,6 @@ def _scan_header_text (content ):
         m =re .search (r'^\s*#\s*Version\s*:\s*([0-9]+(?:\.[0-9]+)*)',content ,re .MULTILINE |re .IGNORECASE )
         version =m .group (1 )if m else None 
     if version is None :
-        # Last resort, first 10 lines only: a title comment naming the
-        # file and its version, e.g. "# install_asl_dvs.sh  v6.3  (date)".
-        # Changelog lines ("# v5.3: ...") don't match -- a file name must
-        # come first.
         head ="\n".join (content .split ("\n",10 )[:10 ])
         m =re .search (r'^#\s*[A-Za-z0-9._-]+\.(?:sh|py)\s+v([0-9]+(?:\.[0-9]+)*)\b',head ,re .MULTILINE )
         version =m .group (1 )if m else None 
@@ -3652,23 +2493,13 @@ def _scan_header_text (content ):
 
     return version ,self_install ,self_uninstall 
 
-
 def _interp_for (path ):
-    
     
     return "bash"if path .lower ().endswith (".sh")else "python3"
 
-
-# Bounded LRU rather than a plain dict -- library entries get renamed,
-# force-uploaded past a mismatch, or replaced by newer versions over a
-# node's uptime, and every distinct path this has ever stat()'d stays
-# keyed here forever otherwise. OrderedDict gives cheap move-to-end on
-# hit and a cheap oldest-first evict on overflow without pulling in a
-# real LRU library for what's a small, single-purpose cache.
 _FILE_META_CACHE_MAX =2000 
 _file_meta_cache =collections .OrderedDict ()
 _file_meta_cache_lock =threading .Lock ()
-
 
 def _file_meta (path ):
 
@@ -3691,28 +2522,23 @@ def _file_meta (path ):
             _file_meta_cache .popitem (last =False )
     return sha ,ver ,self_install ,self_uninstall 
 
-
 def file_sha256 (path ):
     sha ,_ver ,_self_install ,_self_uninstall =_file_meta (path )
     return sha 
 
-
 def read_installed_version (path ):
     _sha ,ver ,_self_install ,_self_uninstall =_file_meta (path )
     return ver 
-
 
 def script_has_self_install (path ):
 
     _sha ,_ver ,self_install ,_self_uninstall =_file_meta (path )
     return self_install 
 
-
 def script_has_self_uninstall (path ):
 
     _sha ,_ver ,_self_install ,self_uninstall =_file_meta (path )
     return self_uninstall 
-
 
 def check_python_syntax (path ):
 
@@ -3735,7 +2561,6 @@ def check_python_syntax (path ):
             except OSError :
                 pass 
 
-
 def check_bash_syntax (path ):
     try :
         result =subprocess .run (
@@ -3747,16 +2572,11 @@ def check_bash_syntax (path ):
     except (FileNotFoundError ,subprocess .TimeoutExpired )as exc :
         return f"Could not check syntax: {exc }"
 
-
 def check_script_syntax (path ):
-    
-    
-    
     
     if path .lower ().endswith (".sh"):
         return check_bash_syntax (path )
     return check_python_syntax (path )
-
 
 def human_size (num_bytes ):
     for unit in ("B","KB","MB","GB"):
@@ -3765,21 +2585,13 @@ def human_size (num_bytes ):
         num_bytes /=1024 
     return f"{num_bytes :.1f} TB"
 
-
 def resolve_installed_target (comp ):
 
     return os .path .realpath (comp ["install_link"])
 
-
 def _version_sort_key (ver ):
     if not ver or ver =="?":
         return (-1 ,)
-    # Strip a leading v/V ("v2.0" -> "2.0") before parsing. Without this,
-    # the leading "v2" segment has no digit at position 0 so re.match
-    # fails and the whole segment parses as 0 -- "v2.0" -> (0, 0), which
-    # sorts *before* "0.9" -> (0, 9). Only the very first segment can
-    # carry the prefix, so this only needs to strip once at the start
-    # of the whole string, not per-segment.
     if ver and ver [0 ]in ("v","V"):
         ver =ver [1 :]
     parts =[]
@@ -3787,7 +2599,6 @@ def _version_sort_key (ver ):
         m =re .match (r"\d+",p )
         parts .append (int (m .group ())if m else 0 )
     return tuple (parts )
-
 
 def scan_library ():
     ensure_dirs ()
@@ -3831,7 +2642,6 @@ def scan_library ():
             out [cat ].sort (key =lambda e :e ["mtime_epoch"],reverse =True )
     return out 
 
-
 def build_status ():
     components =[]
     for comp in COMPONENTS :
@@ -3847,7 +2657,6 @@ def build_status ():
         "listening":listening ,
         "version":read_installed_version (installed_target )or "?",
 
-
         "installed":os .path .isfile (installed_target ),
         })
     return {
@@ -3859,42 +2668,17 @@ def build_status ():
     },
     }
 
-
 def is_installer_script (name ):
 
     return fnmatch .fnmatch (name .lower (),INSTALLER_SCRIPT_GLOB .lower ())
-
 
 def is_uninstaller_script (name ):
 
     return fnmatch .fnmatch (name .lower (),UNINSTALLER_SCRIPT_GLOB .lower ())
 
-
 def is_interactive_only_script (name ):
 
     return any (fnmatch .fnmatch (name .lower (),g .lower ())for g in INTERACTIVE_ONLY_SCRIPT_GLOBS )
-
-
-# =====================================================================
-# GitHub updates (v2.32.0 - v2.36.0)
-#
-# Check GitHub asks GitHub for the list of files in the suite's public
-# repo (one api.github.com request -- nothing to maintain in the repo),
-# keeps the files whose names match a library naming pattern, reads
-# each one's version from inside the file, and compares the newest
-# GitHub copy of each kind with the newest local copy in its own
-# library folder. A file already in the library (same git blob id) is
-# never downloaded again. Update downloads one file, checks it (same
-# file GitHub listed, version line, shebang, syntax, --install support)
-# and only then writes it into that library folder with
-# compare_before_write(). Nothing is ever installed from here -- the
-# library card's own Install button does that. Never downgrades, never
-# touches config.
-#
-# The file-name -> category rule is HOME_SCAN_PATTERN_MAP, first match
-# wins -- the same table the home-folder sweep and uploads use, so a
-# GitHub file can only land in the folder a manual upload would use.
-# =====================================================================
 
 GITHUB_REPO =os .environ .get ("INSTMON_GITHUB_REPO","kd8pgk/ASL-DVS").strip ("/")
 GITHUB_BRANCH =os .environ .get ("INSTMON_GITHUB_BRANCH","main")
@@ -3906,7 +2690,6 @@ GITHUB_LIST_MAX_BYTES =1024 *1024
 GITHUB_FILE_MAX_BYTES =MAX_UPLOAD_BYTES 
 GITHUB_MAX_ENTRIES =1000 
 
-# Config files are per-node and never come from GitHub.
 GH_CATEGORIES =tuple (c for c in LIB_SUBDIRS if c !="config")
 
 _GH_REPO_RE =re .compile (r'^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')
@@ -3923,44 +2706,34 @@ _GH_LABELS ={
 }
 _GH_UPDATABLE =("update","missing")
 
-
 class GhRejected (Exception ):
-    """A download or check that failed. The message is shown to the user."""
-
+    pass
 
 _gh_lock =threading .Lock ()
 _gh_state ={
-"phase":"idle",       # idle | checking | done | error
+"phase":"idle",
 "checked_at":None ,
 "error":None ,
-"entries":[],         # newest GitHub file of each kind, with its status
-"skipped":0 ,         # tool-named files that could not be used (reasons in the log)
-"busy":set (),        # file names being downloaded right now
-"event_seq":0 ,       # bumped on every finished check/update (page popup)
+"entries":[],
+"skipped":0 ,
+"busy":set (),
+"event_seq":0 ,
 "event_msg":"",
 "event_level":"info",
 }
 
-# git blob id -> version read from that file. A blob id names exact file
-# content, so a file read once is never downloaded again just to learn
-# its version. Bounded; cleared if it ever grows past the cap.
 _gh_version_cache ={}
 _GH_VERSION_CACHE_MAX =200 
-_gh_last_cands = []  # v2.37.0: last parsed GitHub listing (Full Update)
-
+_gh_last_cands = []
 
 def _gh_event (message ,level ):
-    # Caller must NOT hold _gh_lock.
     log_event (message ,level )
     with _gh_lock :
         _gh_state ["event_seq"]+=1 
         _gh_state ["event_msg"]=message 
         _gh_state ["event_level"]=level 
 
-
 def _gh_kind_for_name (name ):
-    """(category, glob) for a file name, first match in
-    HOME_SCAN_PATTERN_MAP wins. (None, None) if nothing matches."""
     lname =name .lower ()
     for category ,globs in HOME_SCAN_PATTERN_MAP :
         for g in globs :
@@ -3968,11 +2741,8 @@ def _gh_kind_for_name (name ):
                 return category ,g .lower ()
     return None ,None 
 
-
 def _git_blob_id (data ):
-    """The id GitHub shows for a file's content (git's blob sha-1)."""
     return hashlib .sha1 (b"blob %d\x00"%len (data )+data ).hexdigest ()
-
 
 def _gh_local_blob_id (path ):
     try :
@@ -3981,15 +2751,10 @@ def _gh_local_blob_id (path ):
     except OSError :
         return None 
 
-
 def _gh_source_label ():
     return f"{GITHUB_REPO } ({GITHUB_BRANCH })"
 
-
 def _gh_fetch_https (url ,max_bytes ):
-    """Download one URL. Certificate checking stays ON (unlike the LAN
-    router probe). Returns bytes; raises GhRejected with a
-    plain-language reason on any failure."""
     if not url .lower ().startswith ("https://"):
         raise GhRejected ("the GitHub address must start with https://")
     if not _GH_REPO_RE .match (GITHUB_REPO ):
@@ -4041,20 +2806,12 @@ def _gh_fetch_https (url ,max_bytes ):
     except (OSError ,http .client .HTTPException ,ValueError )as exc :
         raise GhRejected (f"download of {shown } failed: {exc }")
 
-
-# Swappable for tests (no network in the test harness).
 _gh_fetch_impl =_gh_fetch_https 
-
 
 def _gh_file_url (name ):
     return GITHUB_RAW_BASE +"/"+urllib .parse .quote (name )
 
-
 def _gh_parse_listing (raw ):
-    """Tool files from GitHub's folder listing:
-    ([{name, category, glob, blob, size}], skipped_count).
-    Files that match no library naming pattern (PDFs, LICENSE, ...) are
-    ignored silently; tool-named files that can't be used are logged."""
     try :
         data =json .loads (raw .decode ("utf-8"))
     except (UnicodeDecodeError ,json .JSONDecodeError )as exc :
@@ -4095,18 +2852,11 @@ def _gh_parse_listing (raw ):
         out .append ({"name":name ,"category":category ,"glob":glob ,"blob":blob ,"size":size })
     return out ,skipped 
 
-
 def _gh_variant(version):
-    """v2.37.1: the build a version line names -- "6.13.67-pi02w" is the
-    Pi Zero 2 W build, "6.13.67" the plain one. Two builds of one tool
-    share a file pattern, so the pattern alone can't tell them apart."""
     m = re.search(r"-([A-Za-z0-9]+)\s*$", version or "")
     return m.group(1).lower() if m else ""
 
-
 def _gh_local_files (category ,glob ):
-    """[(name, version, sort_key, path)] for library files of the same
-    kind (same category AND same first-match pattern) as a GitHub file."""
     out =[]
     d =LIB_SUBDIRS [category ]
     try :
@@ -4123,10 +2873,7 @@ def _gh_local_files (category ,glob ):
         out .append ((n ,ver ,_version_sort_key (ver ),full ))
     return out 
 
-
 def _gh_version_of (cand ,local ):
-    """Version of a GitHub file: from an identical library file, the
-    cache, or (last resort) by downloading it. Raises GhRejected."""
     for _n ,ver ,_key ,full in local :
         if ver and _gh_local_blob_id (full )==cand ["blob"]:
             return ver 
@@ -4145,25 +2892,18 @@ def _gh_version_of (cand ,local ):
     ver ,_si ,_su =_scan_header_text (text )
     if len (_gh_version_cache )>=_GH_VERSION_CACHE_MAX :
         _gh_version_cache .clear ()
-    # Remember "no version" too, so the same file is not fetched again.
     _gh_version_cache [cand ["blob"]]=ver or None 
     if not ver :
         raise GhRejected ("no version line found in the file")
     return ver 
 
-
 def _gh_other_build (entry ):
-    """v2.38.0: True when this GitHub file is a build this Pi Zero 2 W
-    does not use (the build choice), so its row says so."""
     wanted =_build_wanted_variant ()
     if wanted is None or entry .get ("category")not in ("sysmon","dashboard"):
         return False
     return _gh_variant (entry .get ("version"))!=wanted
 
-
 def _gh_compare (entry ):
-    """Fill in status / local_name / local_version / message for one
-    GitHub file against the library as it is right now."""
     variant =_gh_variant (entry .get ("version"))
     local =[l for l in _gh_local_files (entry ["category"],entry ["glob"])if _gh_variant (l [1 ])==variant ]
     entry ["local_name"]=None 
@@ -4195,12 +2935,9 @@ def _gh_compare (entry ):
         "not updated (never reuse a version number)")
     return entry 
 
-
 def _gh_collect ():
-    """(entries, skipped): the newest GitHub file of each kind, compared."""
     raw =_gh_fetch_impl (GITHUB_API_LIST_URL ,GITHUB_LIST_MAX_BYTES )
     cands ,skipped =_gh_parse_listing (raw )
-    # v2.37.0: Full Update plans from this same listing.
     _gh_last_cands[:] = [dict(c) for c in cands]
     newest ={}
     for cand in cands :
@@ -4220,11 +2957,9 @@ def _gh_collect ():
     entries =[_gh_compare (e )for e in sorted (newest .values (),key =lambda e :(e ["category"],e ["name"]))]
     return entries ,skipped 
 
-
 def _gh_is_network_error(exc):
     text = str(exc)
     return "reach GitHub" in text or "hourly limit" in text or "did not answer" in text
-
 
 def _gh_check_bg ():
     try :
@@ -4261,7 +2996,6 @@ def _gh_check_bg ():
     _gh_event ("GitHub check: "+", ".join (parts )+".",level )
     full_update_preview()
 
-
 def gh_start_check ():
     with _gh_lock :
         if _gh_state ["phase"]=="checking":
@@ -4274,10 +3008,7 @@ def gh_start_check ():
     threading .Thread (target =_gh_check_bg ,daemon =True ).start ()
     return True ,"Checking GitHub -- results appear in each library group."
 
-
 def _gh_verify_content (entry ,data ):
-    """Every check a download must pass before it is written. Raises
-    GhRejected with the reason."""
     if _git_blob_id (data )!=entry ["blob"]:
         raise GhRejected ("the download does not match the file GitHub listed -- it was damaged, "
         "or the file changed on GitHub since the check (press Check GitHub again)")
@@ -4321,12 +3052,9 @@ def _gh_verify_content (entry ,data ):
     if err :
         raise GhRejected (f"syntax check failed: {err }")
 
-
 def _gh_apply (entry ):
-    """Download, check and stage one file. Returns (message, level)."""
     name =entry ["name"]
     category =entry ["category"]
-    # Re-check the kind rule here too -- state could in theory be stale.
     if _gh_kind_for_name (name )!=(category ,entry ["glob"])or category not in GH_CATEGORIES :
         raise GhRejected (f"{name } does not belong in the {category } library")
     if not _GH_NAME_RE .match (name ):
@@ -4334,7 +3062,6 @@ def _gh_apply (entry ):
     data =_gh_fetch_impl (_gh_file_url (name ),GITHUB_FILE_MAX_BYTES )
     _gh_verify_content (entry ,data )
 
-    # The library may have changed since the check: compare again now.
     current =_gh_compare (dict (entry ))
     if current ["status"]=="up_to_date":
         return f"{name } is already in the {category } library -- nothing to do.","info"
@@ -4353,7 +3080,6 @@ def _gh_apply (entry ):
     nxt ="run it from there when you're ready"if category =="scripts"else "press Install on it to use it"
     return (f"Downloaded {name } (v{entry ['version']}) into the {category } library -- {nxt }.","ok")
 
-
 def _gh_update_bg (entry ):
     name =entry ["name"]
     try :
@@ -4368,9 +3094,7 @@ def _gh_update_bg (entry ):
         _gh_state ["entries"]=[refreshed if e ["name"]==name else e for e in _gh_state ["entries"]]
     _gh_event (msg ,level )
 
-
 def gh_start_update (name ):
-    """(http_code, message, level)."""
     if not isinstance (name ,str )or not name :
         return 400 ,"No file name given.","err"
     with _gh_lock :
@@ -4390,9 +3114,7 @@ def gh_start_update (name ):
     threading .Thread (target =_gh_update_bg ,args =(entry ,),daemon =True ).start ()
     return 200 ,f"Downloading {name } -- it is checked before it is saved.","info"
 
-
 def _gh_group_html (category ):
-    """Status rows for one library group; empty until a check has run."""
     with _gh_lock :
         if _gh_state ["phase"]!="done":
             return ""
@@ -4421,7 +3143,6 @@ def _gh_group_html (category ):
         f'{action }</div>')
     return '<div class="gh-rows">'+"".join (rows )+"</div>"
 
-
 def _gh_summary_html ():
     with _gh_lock :
         phase =_gh_state ["phase"]
@@ -4443,7 +3164,6 @@ def _gh_summary_html ():
     text +=". Update buttons are in each library group."
     return f'<span>{text }</span> <span class="muted">Source: {src }</span>'
 
-
 def _gh_status_payload ():
     with _gh_lock :
         seq =_gh_state ["event_seq"]
@@ -4456,32 +3176,10 @@ def _gh_status_payload ():
     "gh_event_level":level ,
     }
 
-
-# =====================================================================
-# Quiet System + Full Update (v2.37.0)
-#
-# Quiet System pauses the suite's web tools and the watchdog timer(s)
-# (see QUIET_JOB_ID above) through the quiesce core, so a small Pi has
-# memory and CPU for uploads and installs. It shares the quiesce state
-# file, so the startup sweep restores it if instmon restarts, and it
-# auto-restores after QUIET_AUTO_RESTORE_SEC.
-#
-# Full Update: read GitHub's file list, pick for every INSTALLED
-# component the newest GitHub build of the same variant (a Pi02w sysmon
-# stays on Pi02w builds) and every newer install script, download and
-# check them all (the same checks as the GitHub Update button) before
-# anything changes, then Quiet System and, one component at a time,
-# save a library copy of the installed file, run its --uninstall, run
-# the new file's --install and wait for the service. A failure puts the
-# saved copy back and the component is skipped; the run carries on and
-# ends with Restore and a summary. instmon goes last, after Restore.
-# =====================================================================
-
 QUIET_AUTO_RESTORE_SEC = int(os.environ.get("INSTMON_QUIET_AUTO_RESTORE_SEC", "1800"))
 
 _quiet_timer = None
 _quiet_timer_lock = threading.Lock()
-
 
 def quiet_status():
     state = None
@@ -4500,7 +3198,6 @@ def quiet_status():
             "stopped": [label for _t, label, _u in state.get("stopped") or []],
             "auto_restore_min": QUIET_AUTO_RESTORE_SEC // 60}
 
-
 def _quiet_arm_timer(delay):
     global _quiet_timer
     with _quiet_timer_lock:
@@ -4512,17 +3209,14 @@ def _quiet_arm_timer(delay):
             _quiet_timer.daemon = True
             _quiet_timer.start()
 
-
 def _quiet_auto_restore():
     if full_update_running():
-        _quiet_arm_timer(60)  # Full Update restores at its own end
+        _quiet_arm_timer(60)
         return
     log_event(f"Quiet System: auto-restore after {QUIET_AUTO_RESTORE_SEC // 60} min", "warn")
     quiet_restore()
 
-
 def quiet_start():
-    """(ok, message, level)."""
     job = _diskimg_job_snapshot()
     if job and job.get("state") == "running":
         return False, "A disk-image job is running -- Quiet System is not needed (or wait for it).", "warn"
@@ -4540,9 +3234,7 @@ def quiet_start():
     return True, (f"System quiet: {names}. Press Restore when you're done "
                   f"(auto-restore in {QUIET_AUTO_RESTORE_SEC // 60} min)."), "ok"
 
-
 def quiet_restore():
-    """(ok, message, level)."""
     global _quiet_timer
     st = quiet_status()
     if not st["on"]:
@@ -4556,10 +3248,7 @@ def quiet_restore():
     log_event(f"Quiet System restored: {summary}", "ok" if ok else "err")
     return ok, f"Restored. {summary}", "ok" if ok else "err"
 
-
 def quiet_forget(service):
-    """An Install/Uninstall already restarted (or removed) this service,
-    so Restore must not touch it again."""
     with _quiesce_lock:
         state = _quiesce_state_read()
         if not state or state.get("job_id") != QUIET_JOB_ID:
@@ -4569,17 +3258,10 @@ def quiet_forget(service):
         if len(kept) != len(state.get("stopped") or []):
             _quiesce_state_write(QUIET_JOB_ID, kept, started_at=state.get("started_at"))
 
-
-# --- Pi Zero 2 W build choice (v2.38.0) -----------------------------
-# The Pi02w fork is the default on a Pi Zero 2 W; the owner can override
-# it to the full build. Other Pis are not affected. Same detection as
-# installer v6.5's pick_build(): the device-tree model names "Zero 2".
-
 _DT_MODEL_PATH = os.environ.get("INSTMON_DT_MODEL_PATH", "/proc/device-tree/model")
 _BUILD_PREF_PATH = os.path.join(CONFIG_DIR, "instmon_build.json")
 BUILD_PI02W_SUFFIX = "pi02w"
 _BUILD_CHOICES = ("fork", "full")
-
 
 def is_pi02w():
     try:
@@ -4589,9 +3271,7 @@ def is_pi02w():
         return False
     return "Zero 2" in model
 
-
 def build_pref_get():
-    """"fork" (default) or "full"."""
     try:
         with open(_BUILD_PREF_PATH) as fh:
             val = json.load(fh).get("pi02w_build")
@@ -4599,9 +3279,7 @@ def build_pref_get():
         return "fork"
     return val if val in _BUILD_CHOICES else "fork"
 
-
 def build_pref_set(choice):
-    """(ok, message, level)."""
     if choice not in _BUILD_CHOICES:
         return False, f"Unknown build choice: {choice!r}", "err"
     if not is_pi02w():
@@ -4613,32 +3291,20 @@ def build_pref_set(choice):
     full_update_preview()
     return True, f"Pi Zero 2 W build: {label}. Full Update installs this build of SysMon and the Dashboard.", "ok"
 
-
 def build_choice_status():
     pi02w = is_pi02w()
     return {"pi02w": pi02w, "choice": build_pref_get() if pi02w else "full"}
 
-
 def _build_wanted_variant():
-    """The VERSION suffix this node should run, or None = keep whatever
-    each component has (not a Pi Zero 2 W)."""
     if not is_pi02w():
         return None
     return BUILD_PI02W_SUFFIX if build_pref_get() == "fork" else ""
 
-
-# --- Full Update -----------------------------------------------------
-
-# One component at a time, in this order; instmon last because its own
-# --install restarts this process.
 FU_ORDER = ("44helper", "wifimon", "dashboard", "sysmon", "watchdog", "instmon")
 FU_START_TIMEOUT_SEC = int(os.environ.get("INSTMON_FU_START_TIMEOUT_SEC", "60"))
 FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
 
-# Name stem of a plain build, for an installed file whose own name
-# carries none (e.g. /usr/local/bin/wifimon.py). A VERSION suffix such as
-# "6.13.67-pi02w" adds "_pi02w".
 _FU_DEFAULT_STEM = {
     "dashboard": "asl_dvs_dashboard",
     "sysmon": "sysmon",
@@ -4649,7 +3315,6 @@ _FU_DEFAULT_STEM = {
 }
 _FU_STEM_RE = re.compile(r"^(?P<stem>.+?)_v\d+(?:[._]\d+)*(?:_\d{8})?(?:[._-].*)?\.(?:py|sh)$", re.IGNORECASE)
 
-# Plan rows Full Update acts on ("switch": v2.38.0 Pi Zero 2 W build change).
 _FU_ACTIONABLE = ("update", "switch")
 
 _fu_lock = threading.Lock()
@@ -4659,16 +3324,13 @@ _fu_state = {
     "plan": None, "plan_at": "",
 }
 
-
 def full_update_running():
     with _fu_lock:
         return _fu_state["running"]
 
-
 def _fu_set(**kw):
     with _fu_lock:
         _fu_state.update(kw)
-
 
 def _fu_save():
     with _fu_lock:
@@ -4679,16 +3341,13 @@ def _fu_save():
     except Exception as exc:
         log_event(f"Full Update: could not save state: {exc}", "warn")
 
-
 def full_update_snapshot():
     with _fu_lock:
         return json.loads(json.dumps(_fu_state))
 
-
 def _fu_stem_of_name(name):
     m = _FU_STEM_RE.match(name)
     return (m.group("stem") if m else os.path.splitext(name)[0]).lower()
-
 
 def _fu_installed_stem(comp, target, version):
     base = os.path.basename(target)
@@ -4698,11 +3357,7 @@ def _fu_installed_stem(comp, target, version):
     m = re.search(r"-([A-Za-z0-9]+)\s*$", version or "")
     return f"{stem}_{m.group(1).lower()}" if m else stem
 
-
 def _fu_wanted_stem(inst_stem, cat, cands):
-    """v2.38.0: the file stem Full Update installs. Not a Pi Zero 2 W:
-    the installed one. On a Pi Zero 2 W: the chosen build -- the Pi02w
-    fork where GitHub has one for this tool, else the plain stem."""
     wanted = _build_wanted_variant()
     if wanted is None:
         return inst_stem
@@ -4714,15 +3369,10 @@ def _fu_wanted_stem(inst_stem, cat, cands):
             return fork
     return base
 
-
 def _fu_build_label(stem):
     return "Pi02w fork" if stem.endswith("_" + BUILD_PI02W_SUFFIX) else "full"
 
-
 def _fu_plan(cands):
-    """For every COMPONENTS entry in FU_ORDER: what Full Update would do.
-    cands come from _gh_parse_listing(). Versions are read the same way
-    the GitHub check reads them (library copy, cache, or a download)."""
     rows = []
     for cat in FU_ORDER:
         comp = next((c for c in COMPONENTS if c["category"] == cat), None)
@@ -4765,8 +3415,6 @@ def _fu_plan(cands):
             continue
         row.update(file=best["name"], version=best["version"], entry=best)
         if stem != inst_stem:
-            # v2.38.0: the Pi Zero 2 W build choice and the installed build
-            # differ -- switch, whatever the version numbers say.
             row.update(status="switch", note=f"{_fu_build_label(inst_stem)} v{inst_ver} -> "
                                              f"{_fu_build_label(stem)} v{best['version']}")
             if problems:
@@ -4781,11 +3429,8 @@ def _fu_plan(cands):
         else:
             row.update(status="newer_installed", note=f"installed v{inst_ver} is newer than GitHub")
         if problems and row["status"] != "update":
-            # A GitHub file of this kind couldn't be read -- it may be the
-            # newer one, so don't call this component current.
             row.update(status="error", note=f"couldn't read {problems[0]}")
     return rows
-
 
 def _fu_publish_plan(rows, scripts):
     public = [{k: v for k, v in r.items() if k != "entry"} for r in rows]
@@ -4793,10 +3438,7 @@ def _fu_publish_plan(rows, scripts):
                   "updates": sum(1 for r in rows if r["status"] in _FU_ACTIONABLE)},
             plan_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
-
 def _fu_stage(entry):
-    """Download, check (same checks as the GitHub Update button) and
-    write one component file into its library folder. Returns the path."""
     data = _gh_fetch_impl(_gh_file_url(entry["name"]), GITHUB_FILE_MAX_BYTES)
     _gh_verify_content(entry, data)
     ensure_dirs()
@@ -4810,10 +3452,7 @@ def _fu_stage(entry):
         _file_meta_cache.clear()
     return dest
 
-
 def _fu_run_cli(script_path, flag):
-    """Run a component file's own --install / --uninstall and wait.
-    Output goes to the log. Returns the exit code, None if it never ran."""
     try:
         proc = subprocess.Popen([_interp_for(script_path), script_path, flag],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
@@ -4830,7 +3469,6 @@ def _fu_run_cli(script_path, flag):
         return None
     return proc.returncode
 
-
 def _fu_wait_healthy(comp):
     deadline = time.time() + FU_START_TIMEOUT_SEC
     state = "unknown"
@@ -4843,9 +3481,7 @@ def _fu_wait_healthy(comp):
         return False, f"running but not answering on port {comp['port']}"
     return False, state
 
-
 def _fu_update_one(comp, row, new_path):
-    """('updated' | 'skipped' | 'attention', note)."""
     name = comp["name"]
     target = resolve_installed_target(comp)
     if not script_has_self_uninstall(target):
@@ -4885,11 +3521,7 @@ def _fu_update_one(comp, row, new_path):
     log_event(f"Full Update: {name} NEEDS ATTENTION -- v{old_ver} didn't come back either ({state})", "err")
     return "attention", f"{reason}; putting v{old_ver} back also failed ({state}) -- not running"
 
-
 def _fu_arm_instmon_guard(old_path):
-    """A transient systemd timer, outside this process (which is about to
-    restart): if the new instmon isn't answering on its port after
-    FU_SELF_GUARD_SEC, reinstall the saved old copy."""
     check = (f"timeout 5 bash -c '</dev/tcp/127.0.0.1/{PORT}' || "
              f"{_interp_for(old_path)} {shlex.quote(old_path)} --install")
     for args in (["systemctl", "stop", "instmon-update-guard.timer", "instmon-update-guard.service"],
@@ -4905,7 +3537,6 @@ def _fu_arm_instmon_guard(old_path):
     except (OSError, subprocess.TimeoutExpired) as exc:
         return False, str(exc)
     return r.returncode == 0, (r.stderr or "").strip()[:200]
-
 
 def _fu_finish(error=""):
     _fu_set(running=False, phase="done", current="", error=error, banner=True)
@@ -4924,7 +3555,6 @@ def _fu_finish(error=""):
     for r in snap["attention"]:
         log_event(f"  NEEDS ATTENTION {r['name']}: {r['note']}", "err")
     _gh_event("Full Update finished" + (f" ({error})" if error else "") + ": " + ", ".join(parts) + ".", level)
-
 
 def _fu_run():
     _fu_set(phase="checking", current="reading GitHub's file list")
@@ -5020,10 +3650,6 @@ def _fu_run():
         _fu_set(skipped=list(skipped))
         _fu_finish()
         return
-    # instmon is replaced in place by its own --install (an --uninstall
-    # would stop this process before the new one went in). Results are
-    # saved first: the restart ends this process and the new instmon
-    # reads them back (full_update_resume_at_startup).
     _fu_set(phase="instmon", current=f"instmon: installing v{row['version']}",
             instmon_pending={"from": row["installed_version"], "to": row["version"]})
     _fu_save()
@@ -5039,13 +3665,10 @@ def _fu_run():
         _fu_set(skipped=list(skipped), instmon_pending=None)
         _fu_finish()
         return
-    # Its --install schedules the restart a couple of seconds out; still
-    # here well after that means it didn't happen.
     time.sleep(45)
     skipped.append({"name": "instmon", "note": f"v{row['version']} installed; takes effect when instmon restarts"})
     _fu_set(skipped=list(skipped), instmon_pending=None)
     _fu_finish()
-
 
 def _fu_run_bg():
     try:
@@ -5056,9 +3679,7 @@ def _fu_run_bg():
             quiet_restore()
         _fu_finish(f"unexpected error: {exc}")
 
-
 def full_update_start():
-    """(http_code, message, level)."""
     job = _diskimg_job_snapshot()
     if job and job.get("state") == "running":
         return 409, "A disk-image job is running -- wait for it to finish.", "warn"
@@ -5081,10 +3702,7 @@ def full_update_start():
     threading.Thread(target=_fu_run_bg, daemon=True).start()
     return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
 
-
 def full_update_preview():
-    """After a GitHub check: work out what Full Update would do, so its
-    button and list are ready. Same listing, versions already cached."""
     try:
         rows = _fu_plan(list(_gh_last_cands))
     except Exception as exc:
@@ -5093,7 +3711,6 @@ def full_update_preview():
     with _gh_lock:
         scripts = [e for e in _gh_state["entries"] if e["category"] == "scripts" and e.get("status") in _GH_UPDATABLE]
     _fu_publish_plan(rows, scripts)
-
 
 def full_update_resume_at_startup():
     try:
@@ -5120,16 +3737,13 @@ def full_update_resume_at_startup():
     elif saved.get("phase") not in ("done", ""):
         _fu_finish("instmon restarted in the middle of the update")
 
-
 def full_update_dismiss():
     _fu_set(banner=False)
     _fu_save()
 
-
 def _fu_status_payload():
     snap = full_update_snapshot()
     return {"quiet": quiet_status(), "full_update": snap, "build": build_choice_status()}
-
 
 def run_script_bg (script_path ,script_name ,env_overrides =None ):
 
@@ -5163,7 +3777,6 @@ def run_script_bg (script_path ,script_name ,env_overrides =None ):
         with _running_scripts_lock :
             _running_scripts .discard (script_name )
 
-
 def run_self_install_bg (script_path ,script_name ,comp ):
 
     log_event (f"Installing {script_name } ({comp ['name']}) -- running its own --install...","info")
@@ -5189,7 +3802,6 @@ def run_self_install_bg (script_path ,script_name ,comp ):
     finally :
         with _running_installs_lock :
             _running_installs .discard (comp ["service"])
-
 
 def stage_installed_copy_if_missing (comp ):
 
@@ -5226,7 +3838,6 @@ def stage_installed_copy_if_missing (comp ):
     log_event (f"Staged installed {comp ['name']} file into the library as {candidate } before uninstall","info")
     return True ,candidate ,f"staged a library copy as {candidate }",None 
 
-
 def run_self_uninstall_bg (comp ):
 
     script_path =comp ["install_link"]
@@ -5254,7 +3865,6 @@ def run_self_uninstall_bg (comp ):
         with _running_installs_lock :
             _running_installs .discard (comp ["service"])
 
-
 BADGE_BY_STATE ={
 "active":("RUNNING","b-run"),
 "inactive":("STOPPED","b-stop"),
@@ -5262,11 +3872,9 @@ BADGE_BY_STATE ={
 "unknown":("UNKNOWN","b-src"),
 }
 
-
 def esc (s ):
 
     return html .escape (str (s ),quote =True )
-
 
 def render_components_html (components ,library =None ):
     cards =[]
@@ -5276,7 +3884,6 @@ def render_components_html (components ,library =None ):
             port_note ="no web UI"
         else :
             port_note =f'port {c ["port"]}'if c ["listening"]else f'port {c ["port"]} (not listening)'
-
 
         is_self =c ["category"]=="instmon"
 
@@ -5325,11 +3932,9 @@ def render_components_html (components ,library =None ):
   </div>""")
     return "".join (cards )
 
-
 def render_library_group_html (title ,category ,entries ,action_label ,nested =False ):
     rows =[]
     for e in entries :
-
 
         name =esc (e ["name"])
 
@@ -5339,7 +3944,6 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
             badge ,bcls ="ALT","b-src"
         else :
             badge ,bcls ="READY","b-inst"
-
 
         installer_attr =""
         interactive_only =False 
@@ -5361,7 +3965,6 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
         elif category =="config":
             run_label ,run_btn_style ="Install Config",""
         else :
-
 
             run_label ,run_btn_style ="Install",""
 
@@ -5395,12 +3998,6 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
     if not rows :
         rows .append ('<div class="small muted" style="padding:.4rem .2rem">-- empty --</div>')
     card_cls ="card libgrp libgrp-nested collapsed"if nested else "card libgrp collapsed"
-    # Per-category upload widget -- replaces the old single global "Upload"
-    # card (with its category dropdown). Each library group gets its own
-    # scoped file input + button, since the category is already fixed by
-    # which group this is; no dropdown needed. Lives inside .librows (so
-    # it collapses/expands with the rest of the group) and carries its
-    # own msg span rather than sharing one global #upmsg.
     upload_html =f"""
     <div class="librow libgrp-upload">
       <input type="file" id="file-{category}" data-category="{category}">
@@ -5419,7 +4016,6 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
     {upload_html }
     </div>
   </div>"""
-
 
 _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("Dashboard","dashboard","install"),
@@ -5444,12 +4040,6 @@ _ORPHAN_LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     if category not in INSTALLABLE_CATEGORIES 
 ]
 
-
-# ---- Router quick link: gateway detection (Stage 1 helpers) ----------------
-# Nothing here touches the network at import time. parse_default_gateway()
-# takes /proc/net/route text, probe_router_ui() takes the ip/schemes/timeout,
-# and the cache takes an injectable prober and clock, so each piece can be
-# tested without a live router.
 _RTF_UP =0x0001
 _RTF_GATEWAY =0x0002
 _RTF_REJECT =0x0200
@@ -5457,25 +4047,10 @@ ROUTER_PROBE_TIMEOUT =1.5
 ROUTER_PROBE_TTL =30.0
 _ROUTER_SCHEMES =(("http",80),("https",443))
 
-
 def _route_hex_to_ip(value):
-    # /proc/net/route prints each address as the kernel's raw u32 in host
-    # byte order; packing it back in native order restores the wire bytes
-    # on little- and big-endian machines alike.
     return socket.inet_ntoa(struct.pack("=L", int(value, 16)))
 
-
 def parse_default_gateway(route_text):
-    """Return the gateway in use from /proc/net/route text, or None.
-
-    Only up, non-reject default routes with a real gateway count, so a
-    VPN device-only default (WireGuard, gateway 0.0.0.0) is ignored. With
-    several candidates the lowest metric wins, ties going to the first
-    listed. /proc/net/route is the main table, so fwmark policy tables
-    are not involved. Result: {"ip", "iface", "lan"} where lan is the
-    interface's connected network holding the gateway as "a.b.c.d/nn",
-    or None if no such route is listed.
-    """
     defaults = []
     connected = []
     for line in (route_text or "").splitlines():
@@ -5483,7 +4058,6 @@ def parse_default_gateway(route_text):
         if len(cols) < 8:
             continue
         try:
-            # The header row fails the hex parse here and is skipped.
             iface = cols[0]
             dest = _route_hex_to_ip(cols[1])
             gw = _route_hex_to_ip(cols[2])
@@ -5515,7 +4089,6 @@ def parse_default_gateway(route_text):
             best = net
     return {"ip": gw, "iface": iface, "lan": str(best) if best else None}
 
-
 def read_default_gateway():
     try:
         with open("/proc/net/route") as fh:
@@ -5523,13 +4096,7 @@ def read_default_gateway():
     except OSError:
         return None
 
-
 def client_on_gateway_lan(client_ip, gw):
-    """True only if client_ip is inside the gateway interface's network.
-
-    Unknown network, unparseable address, or a loopback / port-forwarded /
-    remote viewer all give False, so the caller hides the button.
-    """
     if not gw or not gw.get("lan"):
         return False
     try:
@@ -5540,18 +4107,7 @@ def client_on_gateway_lan(client_ip, gw):
     except ValueError:
         return False
 
-
 def probe_router_ui(ip, timeout=ROUTER_PROBE_TIMEOUT, schemes=_ROUTER_SCHEMES):
-    """Return the router's web UI URL on ip, or None.
-
-    Tries each (scheme, port) in order with a plain GET / and never reads
-    the body. 200-399 counts as displayable, and so do 401/403 since a
-    login-protected UI still renders in the browser. A refused connection,
-    404, 5xx or non-HTTP reply moves on to the next scheme; a timeout ends
-    the probe at once (a dead or firewalled host would only time out again).
-    HTTPS skips certificate checks -- this is reachability only and sends
-    nothing but the GET.
-    """
     for scheme, port in schemes:
         conn = None
         try:
@@ -5582,19 +4138,10 @@ def probe_router_ui(ip, timeout=ROUTER_PROBE_TIMEOUT, schemes=_ROUTER_SCHEMES):
             return f"{scheme}://{ip}:{port}/"
     return None
 
-
 _router_probe_cache = {}
 _router_probe_lock = threading.Lock()
 
-
 def cached_router_probe(ip, ttl=ROUTER_PROBE_TTL, prober=probe_router_ui, clock=time.monotonic):
-    """probe_router_ui() with a per-ip cache, negative results included.
-
-    A dead gateway costs a full probe timeout, so a miss is cached for the
-    same ttl as a hit -- the browser can poll freely without hammering the
-    router. The probe runs outside the lock; two simultaneous first calls
-    may both probe, which is harmless.
-    """
     now = clock()
     with _router_probe_lock:
         hit = _router_probe_cache.get(ip)
@@ -5608,17 +4155,9 @@ def cached_router_probe(ip, ttl=ROUTER_PROBE_TTL, prober=probe_router_ui, clock=
             del _router_probe_cache[old_ip]
     return url
 
-
 ROUTER_LINK ="@router"
 
 QUICKLINKS =[
-# (label, target, enabled) -- shortcuts. target is a str path (reverse-proxy
-# shortcut on plain HTTP/port 80), an int port (opened as http://host:port,
-# same as a component's Go button), or ROUTER_LINK -- the one dynamic entry:
-# it ships hidden and pollGateway() reveals it only while the gateway in use
-# is known, on the viewer's LAN, and serving a page (see /api/gateway).
-# No service/port tracking here on purpose: these aren't COMPONENTS entries,
-# just fixed links. Display order here is the order shown in the row.
 ("Allmon3","/allmon3",True ),
 ("DVSwitch","/dvswitch",True ),
 ("Cockpit",9090 ,True ),
@@ -5626,13 +4165,10 @@ QUICKLINKS =[
 ("Router",ROUTER_LINK,True ),
 ]
 
-
 def render_quicklinks_html ():
     btns =[]
     for label ,target ,enabled in QUICKLINKS :
         if target ==ROUTER_LINK :
-            # Manages its own visibility (CSS .b-router + JS), so `enabled`
-            # doesn't apply. No href/url until pollGateway() supplies one.
             btns .append (
             f'<button id="router-link" data-action="router" class="b-go b-router">{esc (label )}</button>'
             )
@@ -5645,18 +4181,11 @@ def render_quicklinks_html ():
         )
     return "".join (btns )
 
-
 def render_library_html (library ):
-    """Render only the orphan (non-component) library groups -- scripts
-    and config -- for the standalone library section. The matched groups
-    (dashboard, sysmon, etc.) are rendered nested inside their component
-    cards by render_components_html() instead."""
     return "".join (
     render_library_group_html (title ,category ,library [category ],action_label )
     for title ,category ,action_label in _ORPHAN_LIBRARY_GROUPS 
     )
-
-
 
 _CSS_BASE = """:root{
   /* ── palette matched to asl_dvs_dashboard ── */
@@ -6010,8 +4539,6 @@ _CSS = (
     + _CSS_LOGIN
     + _CSS_DISKIMG
 )
-
-
 
 _JS_LOG_POLL = """let lastLogId = 0;
 const MAX_CLIENT_LOG_LINES = 500;
@@ -7888,7 +6415,6 @@ _JS = (
     + _JS_INIT
 )
 
-
 def render_page ():
     status =build_status ()
     quicklinks_html =render_quicklinks_html ()
@@ -7907,7 +6433,6 @@ def render_page ():
     github_html =_gh_summary_html (),
     log_html =log_html ,
     )
-
 
 HTML_TEMPLATE ="""<!DOCTYPE html>
 <html lang="en">
@@ -8227,7 +6752,6 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 </html>
 """
 
-
 _ACTION_HANDLERS ={
 "install":lambda self ,body :self ._action_install (body ),
 "uninstall":lambda self ,body :self ._action_uninstall (body ),
@@ -8249,9 +6773,7 @@ _ACTION_HANDLERS ={
 "build_pref":lambda self ,body :self ._action_build_pref (body ),
 }
 
-# v2.37.0: the only actions accepted while Full Update runs.
 _ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss",)
-
 
 _GET_ROUTES ={
 "/":lambda self :self ._route_index (),
@@ -8286,7 +6808,6 @@ _POST_ROUTES ={
 "/api/diskimg/schedule":lambda self :self .handle_diskimg_schedule_set (),
 }
 
-
 class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     server_version =f"instmon/{VERSION }"
 
@@ -8300,7 +6821,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
         )
         self .send_header ("Referrer-Policy","no-referrer")
-
 
     def _send_json (self ,status ,payload ,extra_headers=None ):
         body =json .dumps (payload ).encode ("utf-8")
@@ -8348,7 +6868,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             return
         self._error_json(401, "Authentication required")
 
-
     def _find_library_file (self ,filename ,category =None ):
         if category and category in LIB_SUBDIRS :
             candidate =safe_join (LIB_SUBDIRS [category ],filename )
@@ -8358,7 +6877,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             if candidate and os .path .isfile (candidate ):
                 return candidate 
         return None 
-
 
     def _route_index (self ):
         self ._send_html (200 ,render_page ())
@@ -8373,12 +6891,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         })
 
     def _route_gateway(self):
-        # Router quick link. {"ok": true, "url", "ip"} only when the gateway
-        # in use is known, the viewer is on its LAN, and its web UI answers
-        # a probe; anything else is {"ok": false} and the button stays
-        # hidden. The LAN check runs first and costs nothing, so viewers
-        # arriving by port-forward or VPN never trigger a probe. The
-        # answer depends on who is asking, so it must never be cached.
         gw = read_default_gateway()
         url = None
         if gw and client_on_gateway_lan(self.client_address[0], gw):
@@ -8397,11 +6909,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self ._send_json (200 ,{"entries":entries })
 
     def _route_diskimg_drives(self):
-        # Stage 1: read-only. Resolved fresh on every call (never cached)
-        # since a drive can be plugged/unplugged/swapped between polls --
-        # see _get_boot_disk()/_list_usb_drives() docstrings. Dependency
-        # check is equally cheap (shutil.which() only) so it rides along
-        # on the same 5s poll rather than needing its own endpoint.
         boot_disk = _get_boot_disk()
         self._send_json(200, {
             "drives": _list_usb_drives(),
@@ -8502,11 +7009,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
         label = re.sub(r"[^A-Za-z0-9_-]+", "_", (body.get("label") or "").strip())[:40]
 
-        # Deliberately does NOT require dest_device to be currently
-        # attached -- this is a schedule for a drive that will be
-        # plugged in later (e.g. overnight), not an immediate action.
-        # _diskimg_schedule_tick() records why a run was skipped if the
-        # drive isn't there when a run comes due.
         cfg = _diskimg_schedule_load()
         cfg["enabled"] = enabled
         cfg["interval_hours"] = interval_hours
@@ -8525,11 +7027,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self._send_json(200, {"message": "Schedule saved.", "level": "ok", "schedule": cfg})
 
     def handle_diskimg_preview(self):
-        # v2.9.0: side-effect-free "what command would this run" preview
-        # for the command-line fields on the Backup/Clone/Restore rows.
-        # Always 200 -- an unresolved preview (no drive picked yet, boot
-        # disk not detected, etc.) is a normal, frequent state while
-        # someone is mid-selection, not an error worth a 4xx/5xx status.
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -8661,9 +7158,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         dest_path = os.path.join(backup_dir, fname)
 
         quiesce = bool(body.get("quiesce"))
-        # The pre-job sync stays where it is; _quiesce_services() runs
-        # its own sync AFTER the services are down, which is the one
-        # that actually matters when quiescing.
         subprocess.run(["sync"], capture_output=True, timeout=30)
         ok, result = _diskimg_start_job(
             "backup", src_path, dest_path, src_path, dest_path, src_size,
@@ -8674,7 +7168,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             throttle_rate_mb=throttle_rate_mb, freeze_requested=freeze,
             verify_algo=verify_algo,
         )
-        passphrase = None  # done with it in this scope either way
+        passphrase = None
         if not ok:
             self._error_json(409, result)
             return
@@ -8729,7 +7223,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self._send_json(200, {"message": message, "level": "warn"})
 
     def handle_diskimg_job_reset(self):
-        # v2.30.0: Reset button. Body {"kind": "format"|"backup"|"clone"|"restore"}.
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -8747,11 +7240,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self._send_json(200, {"message": message, "level": "ok"})
 
     def handle_diskimg_unmount(self):
-        # v2.13.0 Stage 4: unmount every mountpoint currently reported
-        # for a drive -- lets someone clear the "Unmounted" prerequisite
-        # for Full Format (or Clone/Restore, which already silently
-        # require it) without leaving the browser. Never touches the
-        # boot disk under any circumstance.
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -8795,11 +7283,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self._send_json(200, {"message": f"Unmounted {match['path']}.", "level": "ok"})
 
     def handle_diskimg_format_start(self):
-        # v2.10.0 Stage 2: full wipe + fresh GPT + mkfs of the
-        # destination drive. Same attached/not-boot-disk/not-write-
-        # protected/unmounted gates as Clone -- Format is at least as
-        # destructive (Clone at least leaves a byte-for-byte copy of
-        # something; Format leaves an empty, freshly-labeled disk).
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -9020,11 +7503,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self._error_json(400, "Bandwidth throttle isn't supported when restoring an encrypted backup yet -- turn off one or the other")
             return
 
-        # Belt-and-suspenders: even though a mounted destination is
-        # already rejected below (and the drive holding this image is
-        # necessarily mounted, or _diskimg_list_backups() couldn't have
-        # found it there), never allow restoring an image onto the very
-        # disk it's currently stored on.
         boot_disk = _get_boot_disk()
         if not boot_disk:
             self._error_json(409, "Could not determine this Pi's boot disk -- refusing to start a restore until this resolves.")
@@ -9068,7 +7546,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             decrypt_passphrase=passphrase if image["encrypted"] else None,
             throttle_rate_mb=throttle_rate_mb, verify_algo=verify_algo,
         )
-        passphrase = None  # done with it in this scope either way
+        passphrase = None
         if not ok:
             self._error_json(409, result)
             return
@@ -9121,7 +7599,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             return
         handler_fn (self )
 
-
     def do_POST (self ):
         if self.path == "/api/login":
             self._handle_login()
@@ -9139,8 +7616,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not self ._check_csrf ():
             self ._error_json (403 ,"Missing or invalid X-Requested-With header")
             return
-        # v2.37.0: uploads, the editor and disk-image jobs wait for Full
-        # Update; /api/action applies its own narrower rule.
         if full_update_running() and self.path != "/api/action":
             self._send_json(409, {"error": "Full Update is running",
                                   "message": "Full Update is running -- wait for it to finish.", "level": "warn"})
@@ -9175,7 +7650,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             _record_auth_failure(client_ip)
             self._send_json(401, {"ok": False, "error": "Invalid password"})
 
-
     def handle_download (self ):
         query =urllib .parse .parse_qs (urllib .parse .urlparse (self .path ).query )
         file_names =query .get ("file",[])
@@ -9207,14 +7681,12 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         except Exception as exc :
             self ._error_json (500 ,f"Error downloading file: {exc }")
 
-
     def handle_backup (self ):
         try :
 
             tmp_file =tempfile .NamedTemporaryFile (prefix ="instmon_backup_",suffix =".zip",delete =False )
             tmp_path =tmp_file .name 
             tmp_file .close ()
-
 
             with zipfile .ZipFile (tmp_path ,'w',zipfile .ZIP_DEFLATED )as zf :
                 for root ,dirs ,files in os .walk (LIBRARY_DIR ):
@@ -9237,7 +7709,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             log_event (f"Full backup downloaded ({stamp })","ok")
         except Exception as exc :
             self ._error_json (500 ,f"Error creating backup: {exc }")
-
 
     def handle_file_write (self ):
         length =int (self .headers .get ("Content-Length",0 ))
@@ -9285,7 +7756,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._send_json (200 ,{"wrote":wrote ,"reason":reason })
         except Exception as exc :
             self ._error_json (500 ,f"Error writing file: {exc }")
-
 
     def handle_upload (self ):
         content_type =self .headers .get ("Content-Type","")
@@ -9338,7 +7808,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         message =f"Staged {filename } in the {category } library."if wrote else f"{filename } already staged (unchanged)."
         self ._send_json (200 ,{"name":filename ,"wrote":wrote ,"reason":reason ,"message":message ,"level":"ok"if wrote else "info"})
 
-
     def handle_action (self ):
         length =int (self .headers .get ("Content-Length",0 ))
         try :
@@ -9357,7 +7826,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (400 ,f"Unknown action '{action }'")
             return 
         handler_fn (self ,body )
-
 
     def _action_install (self ,body ):
 
@@ -9385,7 +7853,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 })
                 return 
             _running_installs .add (comp ["service"])
-
 
         if not script_has_self_install (src ):
             with _running_installs_lock :
@@ -9418,7 +7885,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "level":"info",
         })
 
-
     def _action_uninstall (self ,body ):
 
         category =body .get ("category")
@@ -9441,7 +7907,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._send_json (400 ,{"error":msg ,"message":msg ,"level":"err"})
             return 
 
-
         with _running_installs_lock :
             if comp ["service"]in _running_installs :
                 self ._send_json (409 ,{
@@ -9451,7 +7916,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 })
                 return 
             _running_installs .add (comp ["service"])
-
 
         staged ,staged_name ,stage_note ,stage_err =stage_installed_copy_if_missing (comp )
         if stage_err :
@@ -9474,7 +7938,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "message":f"Uninstalling {comp ['name']} ({stage_note }) -- watch the log below for output.",
         "level":"info",
         })
-
 
     def _action_start (self ,body ):
 
@@ -9501,7 +7964,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "level":"info",
         })
 
-
     def _action_stop (self ,body ):
 
         service =body .get ("service","")
@@ -9526,7 +7988,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "message":f"{comp ['name']} stopped (now {state }).",
         "level":"info",
         })
-
 
     def _action_install_config (self ,body ):
         name =body .get ("name")
@@ -9553,7 +8014,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             _running_installs .add (dest )
 
         try :
-
 
             _dash_comp =next ((c for c in COMPONENTS if c ["category"]=="dashboard"),None )
             comp =None 
@@ -9586,7 +8046,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             with _running_installs_lock :
                 _running_installs .discard (dest )
 
-
     def _action_delete (self ,body ):
         category =body .get ("category")
         name =body .get ("name")
@@ -9601,7 +8060,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         log_event (f"Deleted {name } from {category } library","warn")
         self ._send_json (200 ,{"deleted":name ,"message":f"Deleted {name } from the library.","level":"warn"})
 
-
     def _action_run_script (self ,body ):
         if not body .get ("confirm"):
             self ._error_json (400 ,"Running a script requires confirm:true in the request body")
@@ -9612,7 +8070,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (404 ,f"Script not found: {name }")
             return 
 
-
         with _running_scripts_lock :
             if name in _running_scripts :
                 self ._send_json (409 ,{
@@ -9622,7 +8079,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 })
                 return 
             _running_scripts .add (name )
-
 
         env_overrides ={}
         for field ,envvar in (
@@ -9640,7 +8096,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         thread .start ()
         self ._send_json (200 ,{"started":name ,"message":f"Running {name } -- watch the log below for output.","level":"info"})
 
-
     def _action_gh_check (self ,body ):
         ok ,msg =gh_start_check ()
         self ._send_json (200 if ok else 409 ,{"message":msg ,"level":"info"if ok else "warn"})
@@ -9651,7 +8106,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             return 
         code ,msg ,level =gh_start_update (body .get ("name"))
         self ._send_json (code ,{"message":msg ,"level":level })
-
 
     def _action_quiet(self, body):
         ok, msg, level = quiet_start()
@@ -9676,7 +8130,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         ok, msg, level = build_pref_set(body.get("choice"))
         self._send_json(200 if ok else 409, {"message": msg, "level": level})
 
-
     def _action_save_alternate (self ):
         live_cfg =os .path .join (CONFIG_DIR ,CONFIG_NAME )
         if not os .path .isfile (live_cfg ):
@@ -9691,14 +8144,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         log_event (f"Saved active config as alternate: {alt_name }","ok")
         self ._send_json (200 ,{"name":alt_name ,"message":f"Saved active config as {alt_name }.","level":"ok"})
 
-
     def _action_comms_restart (self ,body ):
-        
-        
-        
-        
-        
-        
         
         stop_results =[]
         for label ,unit in COMMS_RESTART_SERVICES :
@@ -9747,17 +8193,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "level":level ,
         })
 
-
     def _action_reboot (self ,body ):
         log_event ("System reboot requested from instmon UI","warn")
         try :
-            
-            
-            
-            
-            
-            
-            
             
             subprocess .run ([
             "systemd-run","--quiet","--collect",f"--on-active={REBOOT_SHUTDOWN_DELAY_SEC }",
@@ -9771,7 +8209,6 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "message":f"Rebooting in ~{REBOOT_SHUTDOWN_DELAY_SEC }s. This page (and everything else on the node) will be unreachable until it comes back up.",
         "level":"warn",
         })
-
 
     def _action_shutdown (self ,body ):
         log_event ("System shutdown requested from instmon UI","warn")
@@ -9789,10 +8226,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "level":"warn",
         })
 
-
     def log_message (self ,format ,*args ):
         return 
-
 
 def parse_multipart (raw ,boundary ):
     boundary_bytes =("--"+boundary ).encode ()
@@ -9816,7 +8251,6 @@ def parse_multipart (raw ,boundary ):
         result [field_name ]=(filename ,value )
     return result 
 
-
 def _write_launcher() -> None:
     tmp = _LAUNCHER_PATH + ".tmp"
     with open(tmp, "w") as f:
@@ -9834,7 +8268,6 @@ def _glob_pyc(dir_path: str, name: str = "*") -> list:
     return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
 
 def _prune_pyc(dir_path: str) -> None:
-    """Drop compiled copies whose source file is gone (older versions)."""
     for pyc in _glob_pyc(dir_path):
         name = os.path.basename(pyc).split(".", 1)[0]
         if not os.path.exists(os.path.join(dir_path, name + ".py")):
@@ -9844,7 +8277,6 @@ def _prune_pyc(dir_path: str) -> None:
                 pass
 
 def _remove_launcher_if_unused() -> None:
-    """Remove the shared launcher once no installed unit runs it."""
     if not os.path.exists(_LAUNCHER_PATH):
         return
     unit_dir = _SYSTEMD_UNIT_DIR
@@ -9887,26 +8319,6 @@ def install_service ()->None :
     subprocess .run (["systemctl","daemon-reload"],check =True )
     subprocess .run (["systemctl","enable","instmon.service"],check =True )
     
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
     subprocess .run ([
     "systemd-run","--quiet","--collect","--on-active=2",
     "--unit=instmon-selfrestart",
@@ -9919,7 +8331,6 @@ def install_service ()->None :
     print ("\nNote: instmon serves plaintext HTTP only (no built-in TLS).")
     print ("Keep it on a trusted LAN/VPN, or put a TLS-terminating reverse")
     print ("proxy in front of it if it needs to be reachable from anywhere less trusted.")
-
 
 def uninstall_service ()->None :
     if os .geteuid ()!=0 :
@@ -9951,11 +8362,9 @@ def uninstall_service ()->None :
     print ("Note: the library/config/install directories under "
     f"{LIBRARY_DIR } were left in place -- remove manually if desired.")
 
-
 class InstmonServer (http .server .ThreadingHTTPServer ):
     allow_reuse_address =True 
     daemon_threads =True 
-
 
 def run ():
     ensure_dirs ()
@@ -9997,7 +8406,6 @@ def run ():
         print ("\nShutting down instmon server.")
         httpd .server_close ()
         sys .exit (0 )
-
 
 if __name__ =="__main__":
     parser =argparse .ArgumentParser (description ="instmon - KD8PGK Web Installer & Component Manager")

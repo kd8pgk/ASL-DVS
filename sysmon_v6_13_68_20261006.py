@@ -1,150 +1,4 @@
 #!/usr/bin/env python3
-"""
-ASL-DVS SYSMON  --  sysmon.py
-Version : 6.13.67  (20261005)
-Authors : Claude AI (Anthropic) / KD8PGK
-License : CC BY-NC 4.0
-Nodes   : KD8PGK 652701 / 652702 / 652703
-
-Changelog: the last 10 versions are below.  Older entries (v6.13.55 and
-earlier) are in sysmon_changelog_v6_13_65_20261004.txt.
-
-v6.13.67 -- D-Star card: gatewayAddress row fixed.  gatewayAddress is the
-Pi's own address that ircDDBGateway binds every socket to (DExtra, D-Plus,
-DCS, G2 and remote control), not the router's.  Blank (or 0.0.0.0) now
-passes -- it is the normal setting -- with a "don't forward the port" note
-when remote control is on.  127.0.0.1 fails (blocks reflector and gateway
-links) and an address this Pi doesn't have (e.g. the router's) fails
-(ircDDBGateway can't bind it).  The row shows whatever the remote-control
-setting, since the address covers every link.  v6.13.66 passed 127.0.0.1
-and warned on blank.
-
-v6.13.66 -- D-Star -- ircDDBGateway card (ASL-DVS tab).
-For dashboard v9.3.71, whose D-STAR tab links to gateway callsigns as well
-as reflectors.  A new card under "DVSwitch -- Config Files" reads
-/etc/ircddbgateway and checks: ircddbgatewayd running, gatewayCallsign,
-repeaterBand1 (shown as the 8-character callsign the dashboard uses),
-ircddbEnabled (gateway lookup), dextraEnabled (gateway links), and remote
-control -- remoteEnabled (WARN when off: the dashboard falls back to
-dvswitch.sh tune), remotePassword set (never shown), remotePort valid and
-listening (catches settings not yet applied by a restart), gatewayAddress
-(WARN when blank: listens on every interface).  Buttons: Edit (the file
-is now in the DVSwitch config-file list), Restart ircddbgatewayd (root),
-Refresh, Copy.  Read-only -- nothing changes the file but the editor.
-New route /api/dstar-gw (GET checks, POST restart), added to the Page
-self-check.  Console -> Saved favorites now passes D-STAR gateway rows
-("W1ABC BL") and treats the unpadded "W1ABCBL" as old form (the dashboard
-fixes it on load).
-
-v6.13.65 -- Console Dashboard checks, stage 4 of 4 (release).
-Summary of v6.13.62-v6.13.64: a new "Dashboard" group in Console ->
-Troubleshooting (before Sysmon) with three read-only checks for the
-dashboard's v9.3.61-v9.3.69 refactor -- "Dashboard file check" (version,
-compiles, functions defined twice, every page button's function present),
-"Node search lists" (the astdb.txt and EchoLink lists the ASL and Echo
-search cards use) and "Saved favorites" (each saved ASL, Echo, D-STAR and
-XLX row in asl_dvs.conf).  None connects to port 8989.  Run all goes from
-33 to 36 checks (the Console keeps 40 results).  The Page self-check is
-unchanged: it reads tab data routes, and these checks already run through
-/api/console/tcatalog, which it covers.  Changelog entries v6.13.52-
-v6.13.55 moved to sysmon_changelog_v6_13_65_20261004.txt.  Checks run:
-py_compile, pyflakes (no new warnings), duplicate-function scan, node
---check, --selftest, and tests of each new check against dashboard
-v9.3.60 and v9.3.69, broken copies (a missing page function, a file that
-won't compile), sample astdb.txt / echolink dbdump output, and a sample
-asl_dvs.conf with good, old-form, duplicate, bridge and bad rows.
-
-v6.13.64 -- Console Dashboard checks, stage 3 of 4: Saved favorites.
-"Saved favorites" reads asl_dvs.conf and checks every saved ASL, Echo,
-D-STAR and XLX row: node numbers are 1-7 digits, no bridge or phone node
-is saved as a favorite, nothing is saved twice, ASL/Echo rows past slot 10
-(not loaded) are flagged, D-STAR rows are the 6-character base + module +
-L (REF/XRF/DCS + 3 digits), XLX rows are XLX + 3 + module + L, and old
-4-field XLX rows (skipped when the dashboard loads) are flagged.  Run it
-after tapping Save on the dashboard to see the row landed right.
-
-v6.13.63 -- Console Dashboard checks, stage 2 of 4: Node search lists.
-"Node search lists" shows what the dashboard's ASL and Echo search cards
-(dashboard v9.3.61/62) have to search: astdb.txt found, its date and how
-many nodes it holds (read the way the dashboard reads it), the EchoLink
-stations logged in now (asterisk -rx "echolink dbdump"), and the bridge
-and phone nodes the dashboard leaves out of both searches.
-
-v6.13.62 -- Console Dashboard checks, stage 1 of 4: Dashboard file check.
-New "Dashboard" group in Troubleshooting (before Sysmon).  "Dashboard
-file check" reads the installed asl_dvs_dashboard.py (never connects to
-port 8989): shows its version (WARN if older than 9.3.69), compiles it in
-memory (nothing written to the SD card), flags a function defined twice,
-and checks that every on...= handler on the dashboard page names a
-function the page script defines -- a renamed or removed function there
-breaks a button.  _ts_dash_version() now finds the file through the new
-shared _ts_dash_paths().  BUILD_DATE was a release behind; now 20261004.
-
-v6.13.61 -- rpt.conf templates, stage 3 of 3: Console reader.
-_ts_rpt_sections() (used by the Console's Bridge port check, Bridge
-traffic and Stuck autopatch) now keeps the last value when a setting appears twice
-in one section, as Asterisk does -- it used to keep the first.  It also
-skips ;-- ... --; block comments instead of reading the lines inside.
-
-v6.13.60 -- rpt.conf templates, stage 2 of 3: Console check.  New
-"Template values" button in Troubleshooting -> Links: for each node it
-lists the settings that come only from a template such as [node-main],
-marks the ones the sysmon tabs read (callsign, idrecording, idtalkover,
-rxchannel, statpost_url and the four DTMF settings) and fails any node
-whose template isn't defined above it in rpt.conf.
-
-v6.13.59 -- rpt.conf templates, stage 1 of 3: shared scanner.
-_rpt_scan() now reads rpt.conf the way Asterisk does (checked against
-Asterisk's main/config.c): a node's template values go in first, then
-its own lines, and the last value wins -- so the node's own line beats
-the template, and with two templates the second beats the first.
-Templates of templates work, as does [name](!,base); a template must be
-defined above the node that uses it.  ;-- ... --; block comments are now
-skipped (a line inside one used to be read as a setting).  This changes
-what the ASL-DVS rpt.conf card, the Reg tab, the DVSM tab, the M17 and
-Zello rpt.conf checks, the header callsign and the Security identity
-show when a value is set only in the template.  Checked: output
-identical to v6.13.58 on sample files with no templates or block
-comments; new cases (value only in template, node overrides, two
-templates, template of template, missing template, block comments)
-give Asterisk's answer.  #include lines are still not followed by this
-scanner (the Phone tab and Node Settings reader does follow them).
-
-v6.13.58 -- Refactor by tab and card, stage 6 of 6 (release).
-Summary of v6.13.51-v6.13.57: a dead-code scan found nothing unused that
-is safe to delete (the 58 decorator-registered Phone/Console checks and
-the two web-server overrides only look unused; /api/dashboard-status,
-/api/appconf/files and /api/abinfo are kept on purpose).  The code is now
-grouped by tab, then by card, with no change to what any tab shows or
-does.  Changelog entries before v6.13.49 moved to the separate file
-sysmon_changelog_v6_13_58_20261004.txt (shipped with this file); the last
-10 versions stay here.  _RADIO_TUNE_DRIVERS was checked and kept as is --
-it is the allowlist the Tune save checks, and one item is correct today.
-Checks run on every stage: py_compile, pyflakes (no new warnings), a
-before/after comparison of every top-level statement and every module
-value (route tables, Phone sections, Console checks, security checks),
-the page outside the script byte-identical, every script statement
-present once with non-function statements in the same order, node
---check, and --selftest.
-
-v6.13.57 -- Refactor stage 5 of 6: Console.  The Troubleshooting checks
-are grouped by their button group (Links, Bridges, Phone, Asterisk, Pi
-health, Network, Sysmon), each helper beside the group that uses it;
-helpers used by several groups come first.  Buttons, their order in
-each group, and Run all are unchanged (checked against the old
-catalog).  The unused "order" list in /api/console/tcatalog now follows
-group order -- the page doesn't read it.  _ts_netcheck split into
-_ts_nc_state, _ts_nc_network and _ts_nc_bridges.
-
-v6.13.56 -- Refactor stage 4 of 6: Phone.  _phone_sec_health split into
-_phone_health_nodes, _phone_health_files, _phone_health_live and
-_phone_health_routes; _ph_hoip_checks split into _ph_hoip_server_ports,
-_ph_hoip_transport_auth, _ph_hoip_signin and _ph_hoip_network_vm.  The
-splits are mechanical (same statements, values passed in and out).
-Health, HOIP and Netcheck output compared old vs new over 80 mocked
-system states each (sample rpt/extensions/pjsip/iax files, canned
-command output): identical.
-"""
 
 import argparse
 import ast
@@ -188,8 +42,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67"
-BUILD_DATE   = "20261005"
+VERSION      = "6.13.68"
+BUILD_DATE   = "20261006"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -15274,15 +15128,12 @@ def _validate_security_registry(checks: "list[dict]") -> None:
 _validate_security_registry(SECURITY_CHECKS)
 _WS_MAX = 1 << 16
 
-
 class _WSProtocolError(Exception):
     def __init__(self, code: int, msg: str) -> None:
         super().__init__(msg)
         self.code = code
 
-
 class _WSReader:
-    """Feed raw bytes, get complete (opcode, payload) messages back."""
 
     def __init__(self) -> None:
         self.buf = bytearray()
@@ -15343,7 +15194,6 @@ class _WSReader:
                 raise _WSProtocolError(1002, "unknown opcode")
         return out
 
-
 class _SelfCheckHandler:
     def __init__(self, path: str):
         self.path = path
@@ -15352,11 +15202,6 @@ class _SelfCheckHandler:
 
     def send_json(self, data, status: int = 200, extra_headers: dict = None) -> None:
         self.result = (status, data)
-
-
-# ==========================================================================
-# TAB: Overview
-# ==========================================================================
 
 def _route_overview(h: Handler) -> None:
     qt_results  = get_state_snapshot().get("quick_tests", {})
@@ -15424,11 +15269,6 @@ def _route_overview(h: Handler) -> None:
         })
 
     h.send_json({"ok": True, "groups": groups})
-
-
-# ==========================================================================
-# TAB: Services
-# ==========================================================================
 
 def get_service_pid(unit: str) -> int:
     if not _validate_unit(unit):
@@ -15806,11 +15646,6 @@ def _route_svc(h: Handler, data: dict) -> None:
             "message": f"Action '{action}' not yet implemented",
         }, 501)
 
-
-# ==========================================================================
-# TAB: Ports
-# ==========================================================================
-
 def get_open_ports(proto_filter: str = "both") -> list:
     raw = _ss_tlnpu_fetch()
     if not raw:
@@ -16046,11 +15881,6 @@ def _route_ports_probe(h: Handler) -> None:
         return
 
     h.send_json({"ok": False, "message": f"Unknown probe type: {kind!r}"}, 400)
-
-
-# ==========================================================================
-# TAB: Firewall
-# ==========================================================================
 
 def get_raw_ruleset(backend: str) -> str:
     if backend == "nft":
@@ -16490,11 +16320,6 @@ def _route_firewall_post(h: Handler, data: dict) -> None:
 
     _fw_unknown(h, action)
 
-
-# ==========================================================================
-# TAB: Journal
-# ==========================================================================
-
 def get_journal_service_list(pinned: list) -> list:
     pinned_units = []
     seen         = set()
@@ -16573,11 +16398,6 @@ def _route_journal_fetch(h: Handler) -> None:
         h.send_json({"ok": False, "message": f"Journal fetch failed: {error}"})
         return
     h.send_json({"ok": True, "unit": unit, "lines": n, "output": output})
-
-
-# ==========================================================================
-# TAB: ASL-DVS
-# ==========================================================================
 
 def parse_rpt_conf(content: str) -> list:
 
@@ -17527,11 +17347,6 @@ def _route_allmon3_get(h: Handler) -> None:
 def _route_allmon3_post(h: Handler, data: dict) -> None:
     _pathfile_post(h, data, _PATHFILE_ALLMON3)
 
-
-# ==========================================================================
-# TAB: Reg
-# ==========================================================================
-
 _REGISTER_LOOSE_RE = re.compile(r'^\s*register\s*[=:]', re.IGNORECASE)
 
 _PLACEHOLDER_NODES = frozenset({"1999", "1998"})
@@ -18040,11 +17855,6 @@ def _route_reg_http_get(h: Handler) -> None:
 def _route_reg_iax_get(h: Handler) -> None:
     h.send_json(get_iax_reg_status())
 
-
-# ==========================================================================
-# TAB: Phone
-# ==========================================================================
-
 _PHONE_SECTIONS: list = []
 
 def _phone_section(sid: str, title: str):
@@ -18548,7 +18358,6 @@ def _phone_health_nodes(C, ctx, dash_node, nodes, pnodes):
             C.append(_ph_check("dupnode", f"Node {n['node']}", "fail", "defined twice in rpt.conf",
                                "One copy was written by hand and one by the dashboard; remove the hand-made one"))
 
-
 def _phone_health_files(C, ctx, dial_sec):
     for c in dial_sec.get("missing_contexts", []):
         C.append(_ph_check("ctx", f"Dialing context {c}", "fail", "not in extensions.conf",
@@ -18588,7 +18397,6 @@ def _phone_health_files(C, ctx, dial_sec):
     elif any(g["managed"] for t in ctx["conf"].values() for g in t):
         C.append(_ph_check("markers", "Dashboard marker blocks", "ok", "balanced"))
     return plan
-
 
 def _phone_health_live(C, ctx, dial_sec, nets, nodes, running):
     if running:
@@ -18666,7 +18474,6 @@ def _phone_health_live(C, ctx, dial_sec, nets, nodes, running):
                                "" if up else "rpt.conf has it but app_rpt hasn't loaded it: run 'module reload app_rpt' "
                                              "in the Asterisk console, or restart Asterisk"))
 
-
 def _phone_health_routes(C, ctx, dial_sec, nets, nodes, plan, running):
     check = _ph_modules_conf_check(ctx, nets)
     if check:
@@ -18729,7 +18536,6 @@ def _phone_health_routes(C, ctx, dial_sec, nets, nodes, plan, running):
                 flags[m.group(1)] = m.group(2).strip()
         if flags.get("patch") == "0":
             C.append(_ph_check("patch", "Phone patch", "warn", "off", "Dialing is blocked until the dashboard turns it on"))
-
 
 @_phone_section("health", "Health checks")
 def _phone_sec_health(ctx: dict) -> dict:
@@ -18992,7 +18798,6 @@ def _ph_fw_ctx(ctx: dict) -> dict:
     return ctx["_fw_udp"]
 
 def _ph_fw_fix(ctx: dict, what: str) -> str:
-    """Where to open a port, for the firewall this Pi runs (v6.11.8)."""
     if "_fw_backend" not in ctx:
         ctx["_fw_backend"] = get_firewall_backend()
     be = ctx["_fw_backend"]
@@ -19117,7 +18922,6 @@ def _ph_hoip_server_ports(C, dash, hosts, main):
                            ", ".join(used), "" if len(used) == 1 else "The account's lines don't agree on the port"))
     return ports, want
 
-
 def _ph_hoip_transport_auth(C, a, dash, ips, kv, main, ports, typed, want):
     tname = kv.get("transport", "") or next((_ph_last([r]).get("transport", "") for r in a["regs"]
                                              if _ph_last([r]).get("transport", "")), "")
@@ -19159,7 +18963,6 @@ def _ph_hoip_transport_auth(C, a, dash, ips, kv, main, ports, typed, want):
                                f"no reply on UDP {ping_port}" + (f" ({pr['error']})" if pr["error"] else ""),
                                "Some servers ignore this test. If 'Signed in' is OK, you can ignore this"))
     return tr, user
-
 
 def _ph_hoip_signin(C, a, ips, kv, main, name, running, user):
     reg = a["regs"][0] if a["regs"] else None
@@ -19210,7 +19013,6 @@ def _ph_hoip_signin(C, a, ips, kv, main, name, running, user):
     C.append(_ph_check("nat", "Behind-router settings", "ok" if not missing else "warn",
                        f"all {len(_PH_NAT_OPTS)} set" if not missing else f"{len(_PH_NAT_OPTS) - len(missing)} of {len(_PH_NAT_OPTS)} set",
                        "" if not missing else "Set on the account: " + ", ".join(missing)))
-
 
 def _ph_hoip_network_vm(C, ctx, dash, name, running, tr):
     if tr is not None:
@@ -19280,7 +19082,6 @@ def _ph_hoip_network_vm(C, ctx, dash, name, running, tr):
                        "Checks the dialing rules only; no call is placed"))
     return hi, lo, sip_port, vm, vm_dial
 
-
 def _ph_hoip_checks(ctx: dict, a: dict, running: bool) -> dict:
     name, kv, typed = a["endpoint"]["name"], a["kv"], a["typed"]
     dash = _ph_hoip_dash(name)
@@ -19337,7 +19138,6 @@ _PM_MODDIRS = ("/usr/lib/asterisk/modules", "/usr/lib/aarch64-linux-gnu/asterisk
                "/usr/lib64/asterisk/modules")
 
 def _pm_conf_parse(text: str) -> dict:
-    """modules.conf, line by line: every load/noload line with where it sits."""
     res = {"entries": [], "autoload": False, "modules_sec": False, "block": None}
     section, zone = "", ""
     for i, raw in enumerate(text.splitlines()):
@@ -19385,7 +19185,6 @@ def _pm_conf_state(parsed: dict, mod: str) -> dict:
     return {"conf": "load (autoload)" if parsed["autoload"] else "not listed", "where": []}
 
 def _pm_running_map() -> "dict | None":
-    """{module: True/False} from 'module show'; None when Asterisk isn't up."""
     if not _ph_ast_running():
         return None
     out = _ph_cli("module show", 8)
@@ -19408,8 +19207,6 @@ def _pm_moddir() -> str:
     return next((d for d in _PM_MODDIRS if os.path.isdir(d)), "")
 
 def _pm_owner(path: str) -> str:
-    """The package that owns a file (or should: dpkg keeps the list even when
-    the file itself was deleted)."""
     out = _run(["dpkg", "-S", path], timeout=8)
     m = re.match(r"^([a-z0-9][a-z0-9+.\-]*)(?::[a-z0-9]+)?(?:,\s*\S+)*:\s+(?=/)", out or "")
     return m.group(1) if m else ""
@@ -19557,7 +19354,6 @@ def _pm_backup(path: Path) -> str:
     return str(dst)
 
 def _pm_edit_text(text: str, changes: dict) -> "tuple[str | None, str, list]":
-    """(new text or None on refusal, message, warnings)."""
     parsed = _pm_conf_parse(text)
     if not parsed["modules_sec"]:
         return None, "modules.conf has no [modules] section -- fix it by hand first", []
@@ -19653,7 +19449,6 @@ _RT_STATE = {"watch_until": 0.0, "timer": None}
 _RT_LOCK = threading.Lock()
 
 def _rt_stun(local_port: int) -> "tuple[str, int] | None":
-    """One STUN Binding request from local_port.  Returns the public (ip, port)."""
     for host, port in _RT_STUN_SERVERS:
         try:
             addr = _socket.getaddrinfo(host, port, _socket.AF_INET, _socket.SOCK_DGRAM)[0][4]
@@ -19993,11 +19788,6 @@ def _route_phone_get(h: Handler) -> None:
         h.send_json({"ok": False, "message": f"Unknown section: {section!r}"}, 400)
         return
     h.send_json(action_phone_parse(section))
-
-
-# ==========================================================================
-# TAB: Tune
-# ==========================================================================
 
 _RADIO_PRESET_FIELDS = {
     "rxmixerset":   (int,   0,    1000),
@@ -21104,11 +20894,6 @@ def _route_radio_tune_save_post(h: Handler, data: dict) -> None:
         "restart":      restart_state,
         "restart_msg":  restart_msg or None,
     })
-
-
-# ==========================================================================
-# TAB: Hardware
-# ==========================================================================
 
 AMBE_DEVICES: "dict[tuple, str]" = {
     ("0403", "6015"): "ThumbDV",
@@ -22377,11 +22162,6 @@ def _route_hardware_post(h: Handler, data: dict) -> None:
         return
     fn(h, data)
 
-
-# ==========================================================================
-# TAB: Net
-# ==========================================================================
-
 _NET_PING_TIMEOUT    = 30
 
 _NET_MTR_TIMEOUT     = 60
@@ -22823,11 +22603,6 @@ def _net_resolve_ref(mode: str, idx: str):
             return "", "Selection out of range"
     return "", "Mode not available"
 
-
-# ==========================================================================
-# TAB: DVSM
-# ==========================================================================
-
 def _dvsm_node_ip() -> str:
     try:
         s = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
@@ -23174,11 +22949,6 @@ def _route_dvsm(h: Handler) -> None:
     payload["ok"] = True
     h.send_json(payload)
 
-
-# ==========================================================================
-# TAB: STFU
-# ==========================================================================
-
 _STFU_SERVICE_NAME  = "stfu"
 
 _STFU_SERVICE_PATHS = [
@@ -23363,11 +23133,6 @@ def _route_stfu_post(h: Handler, data: dict) -> None:
         return
 
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
-
-
-# ==========================================================================
-# TAB: M17
-# ==========================================================================
 
 _M17_BINARY        = Path("/opt/USRP2M17/USRP2M17")
 
@@ -23624,23 +23389,10 @@ def _route_m17_post(h: Handler, data: dict) -> None:
 
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
-
-# ==========================================================================
-# CARD: D-Star -- ircDDBGateway (ASL-DVS tab)
-# ==========================================================================
-# v6.13.66: read-only checks on /etc/ircddbgateway for the dashboard's
-# D-STAR tab (v9.3.71+), which links to gateway callsigns as well as
-# reflectors.  Gateway links need ircDDB (callsign lookup) and DExtra; the
-# dashboard sends them through ircDDBGateway's remote control when it is
-# enabled, and falls back to dvswitch.sh tune when it isn't.  Nothing here
-# writes the file -- Edit opens it in the DVSwitch config-file editor.
-
 _IRCDDB_CONF_PATH = Path("/etc/ircddbgateway")
 _IRCDDB_SERVICE   = "ircddbgatewayd.service"
 
-
 def _ircddb_read_conf() -> "tuple[dict, str]":
-    """(key -> value, problem).  problem is '' when the file was read."""
     try:
         text = _IRCDDB_CONF_PATH.read_text(errors="replace")
     except FileNotFoundError:
@@ -23654,11 +23406,9 @@ def _ircddb_read_conf() -> "tuple[dict, str]":
             kv[k.strip()] = v.strip()
     return kv, ""
 
-
 def _pi_ipv4s() -> "set[str]":
     out = _run(["ip", "-o", "-4", "addr", "show"], timeout=4)
     return set(re.findall(r"\binet (\d+\.\d+\.\d+\.\d+)/", out))
-
 
 def _dstar_gw_checks() -> dict:
     kv, prob = _ircddb_read_conf()
@@ -23731,10 +23481,6 @@ def _dstar_gw_checks() -> dict:
     else:
         row("remotePassword / remotePort", "Only needed with remote control on", "info")
 
-    # v6.13.67: gatewayAddress is the Pi's own address ircDDBGateway binds ALL
-    # its sockets to (DExtra, D-Plus, DCS, G2 and remote control) -- not the
-    # router's.  Blank is normal.  127.0.0.1 cuts off internet linking, and an
-    # address this Pi doesn't have (e.g. the router's) stops it binding at all.
     addr = kv.get("gatewayAddress", "")
     if not addr or addr == "0.0.0.0":
         row("gatewayAddress = " + (addr or "(blank)"), "Listen address (this Pi's, not the router's)", "pass",
@@ -23758,10 +23504,8 @@ def _dstar_gw_checks() -> dict:
             "badge": {"pass": "OK", "warn": "WARN", "fail": "FAIL"}[status],
             "service": svc, "checks": rows}
 
-
 def _route_dstar_gw_get(h: Handler) -> None:
     h.send_json(_dstar_gw_checks())
-
 
 def _route_dstar_gw_post(h: Handler, data: dict) -> None:
     if os.geteuid() != 0:
@@ -23778,11 +23522,6 @@ def _route_dstar_gw_post(h: Handler, data: dict) -> None:
         h.send_json({"ok": True, "message": "ircddbgatewayd restarted"})
         return
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
-
-
-# ==========================================================================
-# TAB: Zello
-# ==========================================================================
 
 _ZELLO_SERVICE_NAME  = "asl-zello-bridge"
 
@@ -24319,11 +24058,6 @@ def _route_zello_post(h: Handler, data: dict) -> None:
 
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
-
-# ==========================================================================
-# TAB: SD Card
-# ==========================================================================
-
 _SD_MANFID = {
     0x01: "Panasonic", 0x02: "Toshiba", 0x03: "SanDisk", 0x08: "Silicon Power",
     0x18: "Infineon",  0x1b: "Samsung", 0x1c: "Transcend", 0x1d: "ADATA",
@@ -24719,11 +24453,6 @@ def _route_sdcard_test_post(h: Handler, data: dict) -> None:
     else:
         h.send_json({"ok": False, "message": f"Unknown action: {action!r}"}, 400)
 
-
-# ==========================================================================
-# TAB: Security
-# ==========================================================================
-
 _SECURITY_LAYER_ORDER  = ["dvswitch", "asl", "usrp2m17", "cross-cutting"]
 
 _SECURITY_LAYER_LABELS = {
@@ -24844,11 +24573,6 @@ def _route_security_checks(h: Handler) -> None:
     out = dict(payload)
     out["cache_age_sec"] = 0
     h.send_json(out)
-
-
-# ==========================================================================
-# TAB: Console
-# ==========================================================================
 
 _CON_ENABLE_FILE = Path("/etc/sysmon/console.enable")
 
@@ -24987,8 +24711,6 @@ def _con_set_size(fd: int, cols, rows) -> None:
     fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 def _con_prepare_home() -> None:
-    """Private HOME so `asterisk -r` keeps its own history; strip any '!'
-    lines from it (none can be typed here, this is belt and braces)."""
     try:
         _CON_HOME.mkdir(parents=True, exist_ok=True)
         os.chmod(_CON_HOME, 0o700)
@@ -25039,7 +24761,6 @@ def _con_kill(proc: subprocess.Popen) -> None:
             continue
 
 def _con_filter(data: bytes) -> "tuple[bytes, bool]":
-    """Drop '!' and Ctrl-Z.  Returns (bytes to send, whether anything was dropped)."""
     out = bytes(b for b in data if b not in _CON_DROP)
     return out, len(out) != len(data)
 
@@ -25296,13 +25017,10 @@ def _ph_node_ok(v: str) -> bool:
     return v.isdigit() and _PH_NODE_MIN <= int(v) <= _PH_NODE_MAX
 
 def _ph_hand_nodes(ctx: dict) -> set:
-    """Node numbers rpt.conf has as hand-made (not dashboard) sections."""
     return {s["name"] for s in ctx["conf"]["rpt.conf"]
             if s["name"].isdigit() and not s["is_template"] and not s["managed"]}
 
 def _ph_expected_nodes(dash: dict, hand: "set | None" = None) -> "tuple[list, str, set]":
-    """([{id, name, node, saved, picked}], phone bridge node, reserved numbers).
-    A new number also skips the hand-made nodes in rpt.conf (hand)."""
     base = dash.get("phone_node") or "1001"
     bn = dash.get("bridge_nodes") or []
     reserved = {x for i, x in enumerate(bn) if x and i != 2}
@@ -25334,7 +25052,6 @@ def _ph_expected_nodes(dash: dict, hand: "set | None" = None) -> "tuple[list, st
     return nets, base, reserved
 
 def _ph_main_links(main: str) -> "list | None":
-    """Nodes linked to the radio node (RPT_LINKS), or None when unreadable."""
     out = _ph_cli(f"rpt show variables {main}", 4)
     m = re.search(r"RPT_LINKS\s*=\s*(.+)", out or "", re.I)
     if not m:
@@ -25444,8 +25161,6 @@ _CON_SYS = {"@swap_now": _con_sys_swap_now, "@swap_progs": _con_sys_swap_progs,
             "@phone_nodes": _con_sys_phone_nodes, "@phone_clash": _con_sys_phone_clash}
 
 def _con_sip_host() -> str:
-    """v6.13.20: server name of the phone network in use -- the one picked on
-    the dashboard Phone tab, else the first SIP network that has a server."""
     try:
         nets = [n_ for n_ in _phone_sec_networks(_ph_load_ctx()).get("networks", [])
                 if n_.get("type", "").startswith("sip") and n_.get("host")]
@@ -25485,7 +25200,6 @@ def _con_debug_arm() -> None:
     tm.start()
 
 def _con_cleanup() -> None:
-    """Run when a console closes: switch off any debug the buttons turned on."""
     tm = _CON_DEBUG.get("timer")
     if tm:
         tm.cancel()
@@ -25502,7 +25216,6 @@ def _con_sum(*ids):
     return deco
 
 def _con_dots(raw: str) -> dict:
-    """'Label.......: value' and 'Label: value' lines -> {label: value}."""
     out = {}
     for line in raw.splitlines():
         m = re.match(r"^\s*([A-Za-z][^:.]*?)\s*\.{2,}\s*:\s*(.*)$", line) or \
@@ -25959,7 +25672,6 @@ def _ts(group: str, tid: str, label: str, kind: str = ""):
     return deco
 
 def _ts_cmd(argv: list, timeout: int = 8) -> "tuple[str, str]":
-    """(output, problem).  problem is '' when the command ran."""
     if not shutil.which(argv[0]):
         return "", f"{argv[0]} is not installed on this Pi"
     try:
@@ -25977,9 +25689,6 @@ def _ts_journal(unit: str, since: str, lines: int = 20000) -> "tuple[str, str]":
     return _ts_cmd(["journalctl", "-u", unit, "--since", since, "-n", str(lines), "--no-pager", "-o", "short-iso"], 15)
 
 def _ts_ast_log(since_min: int = 60) -> "tuple[str, str, str]":
-    """Asterisk log text for the last N minutes: (text, where, problem).
-    Prefers the journal (journalctl -u asterisk); falls back to the tail of
-    /var/log/asterisk/messages(.log) or full when the journal has nothing."""
     out, prob = _ts_journal("asterisk", f"{since_min} minutes ago")
     if not prob and out.strip() and "-- No entries --" not in out:
         return out, f"journalctl -u asterisk --since '{since_min} minutes ago'", ""
@@ -26014,7 +25723,6 @@ def _ts_time(ln: str) -> str:
     return m.group(1) if m else ""
 
 def _ts_msg(ln: str) -> str:
-    """The message part of a log line (after the last ']: ' or 'asterisk[pid]: ')."""
     i = ln.rfind("]: ")
     if i >= 0:
         return ln[i + 3:]
@@ -26029,11 +25737,7 @@ _TS_LINKEV_RE = re.compile(r"(?i)\b(connect(?:ed|ing)?|disconnect(?:ed|ing)?|est
 
 _TS_NODE_RE = re.compile(r"(?<![\d.:])(\d{4,7})(?![\d.:])")
 
-# ---- Console · Troubleshooting: helpers used by several groups ----
-
 def _ts_rpt_sections() -> "dict[str, dict]":
-    """[section] -> {key: value} from rpt.conf, comments (incl. ;-- --; blocks) stripped;
-    templates kept.  A key set twice in one section keeps the last value, as Asterisk does."""
     try:
         txt = _RPT_CONF.read_text(errors="replace")
     except OSError:
@@ -26062,8 +25766,6 @@ def _ts_rpt_sections() -> "dict[str, dict]":
     return out
 
 def _ts_dns_servers() -> "tuple[list, str]":
-    """Name servers the Pi asks: (servers, where).  Follows the
-    systemd-resolved stub (127.0.0.53) to the real list."""
     def read(f):
         try:
             return [ln.split()[1] for ln in Path(f).read_text(errors="replace").splitlines()
@@ -26088,8 +25790,6 @@ def _ts_ipv6_off() -> bool:
     return not Path("/proc/net/if_inet6").exists()
 
 def _ts_net_basics() -> dict:
-    """Internet-by-IP and DNS-server rows shared by Name lookups and
-    Netcheck startup.  Nothing is changed."""
     raw, inet = [], None
     ping_row = ["Internet by IP", "ping 8.8.8.8 / 1.1.1.1", ["ping is not installed", "info"]]
     if shutil.which("ping"):
@@ -26154,7 +25854,6 @@ def _dpx_strip(line: str) -> str:
     return "".join(out).strip()
 
 def _dpx_split(s: str, sep: str = ",") -> list:
-    """Split at top-level separators (not inside ( ) { } [ ])."""
     parts, depth, cur, i = [], 0, [], 0
     while i < len(s):
         c = s[i]
@@ -26176,8 +25875,6 @@ def _dpx_split(s: str, sep: str = ",") -> list:
     return parts
 
 def _dpx_scan(ast_dir=None) -> dict:
-    """Read extensions.conf + its #includes as Asterisk would, keeping file
-    and line for every statement."""
     base = Path(ast_dir or _AST_DIR)
     res = {"stmts": [], "files": [], "missing": [], "errors": [], "base": base}
     state = {"ctx": None, "managed": False}
@@ -26252,9 +25949,6 @@ def _dpx_scan(ast_dir=None) -> dict:
     return res
 
 def _dpx_model(scan: dict) -> dict:
-    """Contexts, extensions and steps built from the scan, priorities
-    counted the way Asterisk counts them.  Problems found on the way go
-    to model['issues'] as (stmt, message, status)."""
     ctxs: dict = {}
     issues: list = []
     glb: dict = {}
@@ -26355,7 +26049,6 @@ def _dpx_glb_expand(s: str, glb: dict) -> str:
     return re.sub(r"\$\{(\w+)\}", lambda m: glb.get(m.group(1), m.group(0)), s)
 
 def _dpx_ext_match(model: dict, ctx: str, ext: str) -> list:
-    """Extensions in ctx that would take ext (literal or pattern)."""
     out = []
     for pat in model["ctxs"].get(ctx, {}).get("exts", {}):
         p = _dpx_glb_expand(pat, model["globals"]).split("/")[0]
@@ -26364,8 +26057,6 @@ def _dpx_ext_match(model: dict, ctx: str, ext: str) -> list:
     return out
 
 def _dpx_jumps(step: dict) -> list:
-    """(context, extension, priority) targets a step jumps to; '' = same as
-    the step's own.  Only Goto, GotoIf, Gosub, GosubIf and Dial(Local/)."""
     app, args = step["app"].lower(), step["args"]
     out = []
 
@@ -26395,8 +26086,6 @@ def _dpx_jumps(step: dict) -> list:
     return out
 
 def _dpx_conf_refs(ctx: dict) -> list:
-    """(file, line, section, context, what) for every context another config
-    file sends calls to."""
     refs = []
     for top in ("echolink.conf", "sip.conf"):
         if top not in ctx["conf"]:
@@ -26441,8 +26130,6 @@ def _ts_iax_port() -> int:
         return 4569
 
 def _ts_dash_paths():
-    """v6.13.62: where the installed dashboard may be, in the order to try.
-    systemctl is asked only if none of the usual paths gave an answer."""
     yield from ("/opt/asl_dvs/asl_dvs_dashboard.py", "/usr/local/bin/asl_dvs_dashboard.py",
                 "/opt/asl_dvs_dashboard/asl_dvs_dashboard.py")
     try:
@@ -28380,8 +28067,6 @@ def _route_console_static(h: "Handler") -> None:
     h.end_headers()
     h.wfile.write(body)
 
-# ---- Console · Troubleshooting: Links ----
-
 @_ts("Links", "ts_drops", "Why did a link drop?")
 def _ts_drops():
     txt, where, prob = _ts_ast_log(60)
@@ -28508,9 +28193,6 @@ def _ts_tot():
 
 @_ts("Links", "ts_localnodes", "Local node entries")
 def _ts_localnodes():
-    """v6.13.16: [nodes] lines that point at this Pi (127.0.0.1) must use
-    Asterisk's real IAX2 port, or links between local nodes sit in
-    CONNECTING forever."""
     iaxp = _ts_iax_port()
     try:
         txt = _RPT_CONF.read_text(errors="replace")
@@ -28548,12 +28230,8 @@ def _ts_localnodes():
 _TS_TPL_READ_KEYS = ("callsign", "idrecording", "idtalkover", "rxchannel", "statpost_url",
                      "propagate_dtmf", "propagate_phonedtmf", "remote_dtmf_allowed", "phonesendlinks")
 
-
 @_ts("Links", "ts_tplvals", "Template values")
 def _ts_tplvals():
-    """v6.13.60: which node settings come only from a template like [node-main].
-    Before v6.13.59 the ASL-DVS rpt.conf card, Reg, DVSM, M17/Zello checks and
-    the header callsign missed these."""
     try:
         txt = _RPT_CONF.read_text(errors="replace")
     except OSError as exc:
@@ -28588,9 +28266,6 @@ def _ts_tplvals():
         "note": ("Since v6.13.59 the ASL-DVS rpt.conf card, Reg, DVSM, M17 and Zello checks and the header read "
                  "these the way Asterisk does: template first, the node's own line wins. Nothing to fix -- "
                  "this list shows what they now see that they didn't before.")}}
-
-
-# ---- Console · Troubleshooting: Bridges ----
 
 def _ts_ab_ports() -> "tuple[dict, str]":
     for f in _DVSWITCH_FILES:
@@ -28746,8 +28421,6 @@ def _ts_exit_words(code: str, name: str = "") -> str:
     return f"exit {n}" + (f"/{name}" if name else "") + (f" -- {w}" if w else "")
 
 def _ts_script_path(execstart: str) -> str:
-    """v6.13.40: the script ExecStart runs -- past an interpreter such as
-    /bin/bash or /usr/bin/env python3 -- or '' when it can't be told."""
     m = re.search(r"argv\[\]=([^;]*)", execstart)
     argv = m.group(1).split() if m else []
     if not argv:
@@ -28761,8 +28434,6 @@ def _ts_script_path(execstart: str) -> str:
     return ""
 
 def _ts_script_hosts(path: str) -> list:
-    """Host names written in netcheck's script, best guess.  Comment lines
-    are skipped; a compiled program (ELF) is not searched (v6.13.40)."""
     try:
         data = Path(path).read_bytes()[:400_000]
     except OSError:
@@ -29014,8 +28685,6 @@ def _ts_netcheck():
         "status": "pass" if nc_ok and not down else _ts_worst([r[2][1] for r in rows]),
         "headline": head, "table": {"head": ["Check", "Found", "Result"], "rows": rows}, "note": note}}
 
-# ---- Console · Troubleshooting: Phone ----
-
 @_ts("Phone", "ts_dupreg", "Duplicate sign-in check")
 def _ts_dupreg():
     if not _ph_ast_running():
@@ -29049,7 +28718,6 @@ def _ts_dupreg():
                 "'Sign in: picked network only' on the Edit page" if dup else ""}}
 
 def _ts_patch_nodes() -> list:
-    """[(node, code)] for nodes whose function table has an autopatchdn code."""
     secs = _ts_rpt_sections()
     res = []
     for n, kv in secs.items():
@@ -29159,8 +28827,6 @@ def _ts_dp_set(var: str, entries: list) -> str:
     return ""
 
 def _ts_expand(s: str, ext: str, entries: list, glb: dict) -> str:
-    """Fill in ${EXTEN}, ${EXTEN:n}, and ${VAR} from a Set() in the same
-    context or [globals].  Anything unknown is left as written."""
     def sub(m):
         name, off, ln = m.group(1), m.group(2), m.group(3)
         if name == "EXTEN":
@@ -29177,7 +28843,6 @@ def _ts_expand(s: str, ext: str, entries: list, glb: dict) -> str:
     return _TS_VAR_RE.sub(sub, s.strip())
 
 def _ts_pat_prefix(pat: str) -> str:
-    """The fixed first digits of a pattern: _4. -> 4, _31XXX -> 31."""
     if not pat.startswith("_"):
         return ""
     out = ""
@@ -29205,9 +28870,6 @@ _TS_QUIET_APPS = {"answer", "wait", "playback", "noop", "verbose", "set", "ringi
                   "hangup", "busy", "congestion", "read", "gotoif", "goto", "saydigits", "background"}
 
 def _ts_phone_routes(ctx: dict) -> "tuple[list, list, list]":
-    """(landings, networks with no rpt(), raw lines).  Follows each phone
-    network's incoming rules through Goto() and Dial(Local/ext@ctx), carrying
-    the extension, then adds rpt() phone-mode lines found anywhere else."""
     plan = ctx["dialplan"]
     glb = _ts_dp_globals(ctx)
     try:
@@ -29299,7 +28961,6 @@ def _ts_phone_landings(ctx: dict) -> list:
     return _ts_phone_routes(ctx)[0]
 
 def _ts_func_ptt(secs: list, stanza: str) -> "tuple[bool, list]":
-    """(stanza exists, [codes whose value is cop,6]) with templates merged."""
     exists = any(s["name"] == stanza for s in secs)
     kv, _m, _f = _ph_resolve(secs, stanza)
     codes = sorted(c for c, v in kv.items() if re.match(r"^\s*cop\s*,\s*6\s*$", v.split(";")[0], re.I))
@@ -29408,8 +29069,6 @@ def _ts_star99():
         "note": " · ".join(dict.fromkeys(notes))}}
 
 def _ts_radio_node(ctx: dict) -> str:
-    """The radio node: asl_node from the dashboard, else the one node in
-    rpt.conf whose rxchannel is a radio (not pseudo, USRP or voter-less)."""
     if ctx["dash"].get("asl_node"):
         return ctx["dash"]["asl_node"]
     secs = ctx["conf"]["rpt.conf"]
@@ -29577,7 +29236,6 @@ _TS_DTMF = {
 }
 
 def _ts_pjsip_ep_kv(ctx: dict, name: str) -> dict:
-    """An endpoint's settings with its templates merged (not its aor/auth)."""
     secs = ctx["conf"]["pjsip.conf"]
     out: dict = {}
     for s in secs:
@@ -29593,9 +29251,6 @@ def _ts_pjsip_ep_kv(ctx: dict, name: str) -> dict:
     return out
 
 def _ts_pjsip_ep_allow(ctx: dict, name: str, _depth: int = 0) -> list:
-    """v6.13.40: an endpoint's codecs in order from pjsip.conf, every allow=
-    line counted (the merged settings keep only the last one) and
-    disallow=all starting the list over; templates first."""
     secs = ctx["conf"]["pjsip.conf"]
     out: list = []
     if _depth > 5:
@@ -29777,8 +29432,6 @@ _DPX_DEAD_APPS = {"answer", "wait", "playback", "background", "noop", "verbose",
                   "congestion", "progress", "ringing", "set", "saydigits", "playtones", "stopplaytones"}
 
 def _dpx_best(model: dict, ctx: str, ext: str) -> str:
-    """The extension Asterisk would pick: an exact name first, then the
-    pattern with the fewest wildcards (longest literal part)."""
     hits = _dpx_ext_match(model, ctx, ext)
     if not hits:
         return ""
@@ -29792,7 +29445,6 @@ def _dpx_best(model: dict, ctx: str, ext: str) -> str:
     return sorted(hits, key=score)[0]
 
 def _dpx_route(model: dict, ctx: str, num: str, accounts: dict, depth: int = 0, seen=None) -> dict:
-    """Follow a number through the dialplan.  Returns {"status", "path", "end"}."""
     seen = seen or set()
     if (ctx, num) in seen or depth > 6:
         return {"status": "info", "path": [], "end": "goes round in a loop"}
@@ -29920,8 +29572,6 @@ def _ts_aproutes():
                      f"{ok} sample number{'s' if ok != 1 else ''} reach a phone network"),
         "table": {"head": ["Autopatch context", "Number tried", "Where it goes", "Result"], "rows": rows},
         "note": " · ".join(dict.fromkeys(notes))}}
-
-# ---- Console · Troubleshooting: Asterisk ----
 
 def _ts_norm(msg: str) -> str:
     s = re.sub(r"0x[0-9a-fA-F]+", "#", msg)
@@ -30209,7 +29859,6 @@ def _dpx_funcs_used(step: dict) -> set:
     return out
 
 def _dpx_loaded(text: str) -> dict:
-    """dialplan show -> {context: set(extension names)} for pbx_config contexts."""
     out, cur = {}, None
     for ln in text.splitlines():
         m = re.match(r"^\[ Context '([^']+)' created by '([^']+)' \]", ln)
@@ -30350,7 +29999,6 @@ def _ts_dploaded():
         "note": " · ".join(dict.fromkeys(notes))}}
 
 def _dpx_db_reads(args: str) -> list:
-    """Keys inside ${DB(...)} (not DB_EXISTS etc.), nested ${} kept."""
     out, i = [], 0
     while True:
         i = args.find("${DB(", i)
@@ -30431,8 +30079,6 @@ def _ts_dbvals():
                      f"All {len(rows)} saved values the dialplan reads are there"),
         "table": {"head": ["Read at", "Key", "Log warnings", "Result"], "rows": rows},
         "note": " · ".join(dict.fromkeys(notes)) or "Values aren't shown -- some hold PINs"}}
-
-# ---- Console · Troubleshooting: Pi health ----
 
 _TS_THROTTLE_BITS = ((0, "Low voltage right now", "fail"), (1, "CPU speed capped right now", "warn"),
                      (2, "Throttled right now", "warn"), (3, "Temperature limit right now", "warn"),
@@ -30560,8 +30206,6 @@ def _ts_mem():
                  ["CPU load (1 / 5 / 15 min)", f"{l1:.2f} / {l5:.2f} / {l15:.2f} on {cpus} cores"]],
         "table": {"head": ["CPU %", "Memory %", "Program"], "rows": [[a, b, c] for a, b, c in tops]} if tops else None,
         "note": "; ".join(notes)}}
-
-# ---- Console · Troubleshooting: Network ----
 
 @_ts("Network", "ts_fw", "Firewall check")
 def _ts_fw():
@@ -30739,11 +30383,6 @@ def _ts_wifi():
         "note": "" if st == "pass" else ("Weak WiFi causes link drops and choppy audio: move the Pi or access point closer, "
                                          "or use a cable" if dbm is not None and dbm < -60 else prob)}}
 
-# ---- Console · Troubleshooting: Dashboard ----
-# v6.13.62+: checks on the ASL-DVS dashboard.  Like every check on this
-# page they read files and run local commands only -- nothing connects to
-# port 8989.
-
 _TS_DASH_MIN = "9.3.69"
 _TS_JS_NOT_FUNCS = frozenset((
     "if", "for", "while", "switch", "return", "typeof", "new", "function", "void", "delete",
@@ -30758,7 +30397,6 @@ _TS_ON_ATTR_RE = re.compile(r"""\bon[a-z]+\s*=\s*(?:"([^"]*)"|'([^']*)')""")
 _TS_JS_CALL_RE = re.compile(r"(?<![\w$.])([A-Za-z_$][\w$]*)\s*\(")
 
 def _ts_dash_file() -> "tuple[str, str]":
-    """(path, text) of the installed dashboard, or ('', why)."""
     tried = []
     for f in _ts_dash_paths():
         try:
@@ -30775,8 +30413,6 @@ def _ts_vnum(v: str) -> tuple:
         return ()
 
 def _ts_dash_page_check(tree) -> "tuple[list, list, int, int]":
-    """(handler names with no function, page functions defined twice,
-    handler count, function count) for the dashboard's HTML page."""
     html = ""
     for node in tree.body:
         if (isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "HTML" for t in node.targets)
@@ -30838,13 +30474,10 @@ def _ts_dashfile():
         "note": ("Reads the file only. A missing function means that button or box does nothing -- send the raw "
                  "text. A function defined twice means only the last copy runs.")}}
 
-
 _TS_ASTDB = Path("/var/lib/asterisk/astdb.txt")
 _TS_ASTDB_OLD_DAYS = 30
 
 def _ts_dash_bridges() -> "set[str]":
-    """Nodes the dashboard keeps out of its searches and favorites: the
-    bridge slots plus every phone node (its _bridge_set)."""
     info = _ph_dash_info()
     out = {n for n in info.get("bridge_nodes") or [] if n}
     out.update(n for n in (info.get("phone_nodes") or {}) if n)
@@ -30853,7 +30486,6 @@ def _ts_dash_bridges() -> "set[str]":
     return out
 
 def _ts_node_key(v: str) -> str:
-    """'0042' -> '42'; '' when not a 1-7 digit node number."""
     v = str(v).strip()
     return str(int(v)) if v.isdigit() and len(v) <= 7 else ""
 
@@ -30918,18 +30550,14 @@ def _ts_nodelists():
         "note": ("These are what the dashboard's ASL and Echo search cards look through. Bridge and phone "
                  "nodes are left out on purpose. Reads only -- nothing is changed.")}}
 
-
 _TS_FAV_SECS = ("ASL", "ECHO", "DSTAR", "XLX")
 _TS_FAV_SLOTS = 10
 _TS_DSTAR_RE = re.compile(r"^([A-Z0-9 ]{6})([A-Z])L$")
 _TS_DSTAR_BASE_RE = re.compile(r"^(REF|XRF|DCS)\d{3}$")
-_TS_DSTAR_GW_RE = re.compile(r"^(?=[A-Z0-9]*\d)[A-Z0-9]{3,6}$")   # gateway callsign (dashboard v9.3.71+)
+_TS_DSTAR_GW_RE = re.compile(r"^(?=[A-Z0-9]*\d)[A-Z0-9]{3,6}$")
 _TS_XLX_RE = re.compile(r"^XLX[A-Z0-9]{3}[A-Z]L$")
 
 def _ts_fav_rows(text: str) -> "dict[str, list]":
-    """{section: [(slot, name, value, field_count)]} for the favorite
-    sections of asl_dvs.conf, slots counted the way the dashboard loads them
-    (blank rows take a slot too)."""
     out: dict = {k: [] for k in _TS_FAV_SECS}
     sec = None
     for ln in text.splitlines():
@@ -31029,9 +30657,6 @@ def _ts_favs():
         "note": ("Reads asl_dvs.conf only. Run it after tapping Save on the dashboard (search card, quick bar "
                  "or Edit tab) to see the row landed in the right form.")}}
 
-
-# ---- Console · Troubleshooting: Sysmon ----
-
 _SELFCHECK_ROUTES = (
     ("Overview", "/api/overview"), ("Services", "/api/services"), ("Ports", "/api/ports"),
     ("Firewall", "/api/firewall"), ("Journal", "/api/journal/list"), ("ASL-DVS", "/api/status"),
@@ -31095,11 +30720,6 @@ def _ts_selfcheck():
         "status": worst, "headline": head, "rows": rows,
         "note": ("Reads only -- nothing is changed. A warning usually means a part isn't installed "
                  "on this Pi (normal). A failure means that tab's code broke -- send the raw text.")}}
-
-
-# ==========================================================================
-# TAB: Edit
-# ==========================================================================
 
 def serialize_pinned_services(pinned: list) -> str:
     lines = []
@@ -31343,11 +30963,6 @@ def _route_appconf_get(h: Handler) -> None:
 def _route_appconf_post(h: Handler, data: dict) -> None:
     _pathfile_post(h, data, _PATHFILE_APPCONF)
 
-
-# ==========================================================================
-# SHARED: Ports + Firewall
-# ==========================================================================
-
 _NFT_COMMENT_PREFIX = "sysmon"
 
 def _nft_find_input_chain() -> "tuple[str, str, str] | None":
@@ -31431,11 +31046,6 @@ def _nft_list_tagged_rules(family: str, table: str, chain: str) -> list:
             "from":   "Anywhere",
         })
     return rules
-
-
-# ==========================================================================
-# SHARED: ASL-DVS + Edit
-# ==========================================================================
 
 def _get_hidden_files() -> set:
     raw = _cfg.get("asldvs", "hidden_files", fallback="")
@@ -31580,11 +31190,6 @@ def _pathfile_post(h: Handler, data: dict, fam: dict) -> None:
     h.send_json({"ok": ok, "message": msg, "path": str(p)},
                 200 if ok else 500)
 
-
-# ==========================================================================
-# SHARED: Phone + Net
-# ==========================================================================
-
 _NET_JOB_LINE_CAP    = 500
 
 _NET_INSTALL_TIMEOUT = 900
@@ -31672,11 +31277,6 @@ def _net_apt_env() -> dict:
     env = dict(os.environ)
     env["DEBIAN_FRONTEND"] = "noninteractive"
     return env
-
-
-# ==========================================================================
-# SHARED: Phone + Console
-# ==========================================================================
 
 def _ph_signin_choice() -> "tuple[str, str]":
     try:
@@ -31954,11 +31554,6 @@ def _rt_history_rows() -> list:
                          "addr": m.group(4), "msg": m.group(5).strip()})
     return rows
 
-
-# ==========================================================================
-# SHARED: Net + STFU
-# ==========================================================================
-
 _STFU_BINARY        = Path("/opt/STFU/STFU")
 
 _STFU_DVS_CANDIDATES = [
@@ -32056,11 +31651,6 @@ def _stfu_read_config() -> dict:
         "talker_alias":    talker_alias,
         "log_level":       log_level,
     }
-
-
-# ==========================================================================
-# SHARED: Overview + Services + Journal
-# ==========================================================================
 
 _DETAIL_PROPS = [
     "Description", "ActiveState", "UnitFileState",
@@ -32230,11 +31820,6 @@ def get_services_details(units: "list[str]") -> "dict[str, dict]":
 def get_service_detail(unit: str) -> dict:
     return get_services_details([unit]).get(unit) or _invalid_unit_detail(unit)
 
-
-# ==========================================================================
-# SHARED: Phone + Tune + Console
-# ==========================================================================
-
 _PH_DASH_CONF  = Path("/etc/asl_dvs/asl_dvs.conf")
 
 _PH_PHONE_JSON = Path("/etc/asl_dvs/phone.json")
@@ -32381,11 +31966,6 @@ def _ph_resolve(secs: list, name: str, _depth: int = 0) -> "tuple[dict, bool, st
         fname = fname or s["file"]
     return out, managed, fname
 
-
-# ==========================================================================
-# SHARED: Ports + Firewall + Phone + Console
-# ==========================================================================
-
 def get_firewall_backend() -> str:
     
     if shutil.which("firewall-cmd"):
@@ -32515,11 +32095,6 @@ def _firewalld_zone_rules(zone: str, raw: "str | None" = None) -> list:
                       "from": f"zone={zone} · {src.group(1) if src else 'rich rule'}",
                       "via": "rich", "deletable": False})
     return rules
-
-
-# ==========================================================================
-# SHARED: small helpers used by two or more tabs
-# ==========================================================================
 
 def save_config(updates: dict, path: Path = CONFIG_FILE) -> bool:
     try:
@@ -32765,12 +32340,6 @@ def _firewalld_parse_list_all(raw: str) -> dict:
         if in_rich:
             info["rich_rules"].append(line)
     return info
-
-
-# ==========================================================================
-# Routes and server start
-# ==========================================================================
-
 
 _GET_ROUTES = {
     "/":                       _route_html,
