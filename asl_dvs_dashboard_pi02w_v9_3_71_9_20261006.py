@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.8-pi02w"
+VERSION      = "9.3.71.9-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -1620,6 +1620,7 @@ def action_save_phone_favorite(number: str, name: str = "") -> Tuple[bool, str]:
 AST_DIR       = "/etc/asterisk"
 HANGUP_SCRIPT = "/var/lib/asterisk/dvs_phone_hangup"
 TONECODE_SCRIPT = "/var/lib/asterisk/dvs_phone_tonecode"
+DIALREQ_SCRIPT  = "/var/lib/asterisk/dvs_phone_dialreq"
 _TONE_REQ_DIR   = "/run/asl_dvs_tones/req"
 _TONE_CODE_PFX  = "98"
 _TONE_CODE_FIXED = {"0": ("*", "*"), "1": ("#", "#"), "2": ("*99", "*99")}
@@ -1632,7 +1633,7 @@ _PH_OWNED = {"ext": "dvs_phone_extensions.conf", "pjsip": "dvs_phone_pjsip.conf"
 _PH_MODULES = (
     "bridge_builtin_features.so", "bridge_builtin_interval_features.so", "bridge_holding.so",
     "bridge_native_rtp.so", "bridge_simple.so", "bridge_softmix.so", "chan_bridge_media.so",
-    "app_verbose.so", "app_read.so",
+    "app_verbose.so", "app_read.so", "app_system.so",
     "func_callerid.so",
     "app_senddtmf.so",
     "app_chanspy.so", "app_playback.so", "format_pcm.so")
@@ -1755,6 +1756,12 @@ def _phone_render_dialplan(doc: dict) -> str:
          " same => n,Goto(dvs-net-${DVSNET},${EXTEN},1)",
          " same => n(bad),Goto(dvs-invalid,s,1)",
          "exten => i,1,Goto(dvs-invalid,s,1)", "exten => t,1,Hangup()", "",
+         "; Dialed from the radio (*61): hand the number to the dashboard, which places the call.",
+         "[dvs-radio-out]",
+         "exten => _X.,1,NoOp(radio dial)",
+         f" same => n,System({DIALREQ_SCRIPT} \"${{EXTEN}}\" \"${{DB(dvsphone/active)}}\")",
+         " same => n,Hangup()",
+         "exten => i,1,Hangup()", "exten => t,1,Hangup()", "",
          "; Tones as sound (v9.3.16): plays touch-tone recordings, whispered into",
          "; the live call by ChanSpy.  Only the dashboard starts this.",
          "[dvs-tones]",
@@ -1775,7 +1782,12 @@ def _phone_render_dialplan(doc: dict) -> str:
               " same => n(net),GotoIf($[\"${DB(dvsphone/patch)}\" = \"0\"]?bad)",
               f" same => n,Goto(dvs-net-{nid},${{EXTEN}},1)",
               " same => n(bad),Goto(dvs-invalid,s,1)",
-              "exten => i,1,Goto(dvs-invalid,s,1)", "exten => t,1,Hangup()", ""]
+              "exten => i,1,Goto(dvs-invalid,s,1)", "exten => t,1,Hangup()", "",
+              f"[dvs-radio-{nid}]",
+              "exten => _X.,1,NoOp(radio dial)",
+              f" same => n,System({DIALREQ_SCRIPT} \"${{EXTEN}}\" {nid})",
+              " same => n,Hangup()",
+              "exten => i,1,Hangup()", "exten => t,1,Hangup()", ""]
         test = []
         if n.get("test_number"):
             test = [f"exten => {_PHONE_TEST_ALIAS},1,NoOp(test call)"] + _ph_cid(n)
@@ -1998,6 +2010,9 @@ def _phone_rpt_targets(doc: dict) -> List[Tuple[str, str]]:
         out.append((_phone_node(), "dvs-phone-out"))
     return out
 
+def _phone_radio_ctx(ctx: str) -> str:
+    return "dvs-radio-" + ctx[len("dvs-node-"):] if ctx.startswith("dvs-node-") else "dvs-radio-out"
+
 def _phone_render_rpt(targets: List[Tuple[str, str]], existing: str) -> Tuple[str, str, Optional[str]]:
     plain = _ph_strip(existing)
     live = "\n".join(l for l in plain.splitlines() if not l.lstrip().startswith(";"))
@@ -2024,7 +2039,7 @@ def _phone_render_rpt(targets: List[Tuple[str, str]], existing: str) -> Tuple[st
             f"phone_functions = functions{node}", f"link_functions = functions{node}"]
             + _PHONE_SIMPLEX_LINES + ["",
             f"[functions{node}]",
-            f"61 = autopatchup,noct=1,farenddisconnect=1,dialtime={dt},context={ctx},quiet=1",
+            f"61 = autopatchup,noct=1,farenddisconnect=1,dialtime={dt},context={_phone_radio_ctx(ctx)},quiet=1",
             f"62 = cmd,{HANGUP_SCRIPT}", "63 = cop,9", "64 = cop,10", "65 = autopatchdn",
             "99 = cop,6"]
             + [f"{_TONE_CODE_PFX}{i} = cmd,{TONECODE_SCRIPT} {i}" for i in range(len(_TONE_CODE_FIXED))]))
@@ -2037,6 +2052,18 @@ case "$1" in [0-2]) ;; *) exit 0 ;; esac
 d=/run/asl_dvs_tones/req
 [ -d "$d" ] || exit 0
 : > "$d/code$1" 2>/dev/null
+exit 0
+"""
+
+_PH_DIAL_SCRIPT = """#!/bin/bash
+# asl_dvs_dashboard - radio dial request (written by the dashboard)
+# Leaves a note for the dashboard; the dashboard places the call.
+case "$1" in ''|*[!0-9]*) exit 0 ;; esac
+[ ${#1} -le 20 ] || exit 0
+case "$2" in ''|*[!a-z0-9]*) exit 0 ;; esac
+d=/run/asl_dvs_tones/req
+[ -d "$d" ] || exit 0
+: > "$d/dial_$1_$2" 2>/dev/null
 exit 0
 """
 
@@ -2115,7 +2142,8 @@ def action_phone_apply(restart: bool = False) -> Tuple[bool, str]:
                     continue
                 if _ph_read(p) != owned[key]:
                     _ph_write(p, owned[key]); changed.append(fname)
-            for spath, sbody in ((HANGUP_SCRIPT, _PH_SCRIPT), (TONECODE_SCRIPT, _PH_CODE_SCRIPT)):
+            for spath, sbody in ((HANGUP_SCRIPT, _PH_SCRIPT), (TONECODE_SCRIPT, _PH_CODE_SCRIPT),
+                                 (DIALREQ_SCRIPT, _PH_DIAL_SCRIPT)):
                 hp = Path(spath)
                 if _ph_read(str(hp)) != sbody:
                     hp.parent.mkdir(parents=True, exist_ok=True)
@@ -2264,7 +2292,7 @@ def action_phone_revert(restart: bool = False) -> Tuple[bool, str]:
             for fname in _PH_OWNED.values():
                 if _ph_remove_owned(_ph_path(fname)):
                     removed.append(fname)
-            for sp in (HANGUP_SCRIPT, TONECODE_SCRIPT):
+            for sp in (HANGUP_SCRIPT, TONECODE_SCRIPT, DIALREQ_SCRIPT):
                 txt = _ph_read(sp)
                 if txt is not None and txt.startswith("#!/bin/bash\n# asl_dvs_dashboard"):
                     os.unlink(sp)
@@ -2848,7 +2876,8 @@ def _phone_setup_stale(doc: dict) -> bool:
             return True
     except Exception:
         pass
-    return TONECODE_SCRIPT not in rpt or _ph_read(TONECODE_SCRIPT) != _PH_CODE_SCRIPT
+    return (TONECODE_SCRIPT not in rpt or _ph_read(TONECODE_SCRIPT) != _PH_CODE_SCRIPT
+            or _ph_read(DIALREQ_SCRIPT) != _PH_DIAL_SCRIPT)
 
 def action_phone_vm_pin() -> Tuple[bool, str]:
     net = _phone_active_net(_phone_load())
@@ -3278,6 +3307,17 @@ def _phone_radio_code(code: str) -> None:
         _phone_set_notice(f"Sent {label} from the radio" if ok else msg)
     threading.Thread(target=go, name="phone-radio-code", daemon=True).start()
 
+def _phone_radio_dial(num: str, nid: str) -> None:
+    doc = _phone_doc()
+    if nid != doc.get("active"):
+        _phone_set_notice(f"Radio dial {num} ignored — it came from a network that isn't the picked one")
+        return
+
+    def go():
+        ok, msg = action_phone_dial(num)
+        _phone_set_notice(f"From the radio: {msg}" if ok else f"Radio dial {num}: {msg}")
+    threading.Thread(target=go, name="phone-radio-dial", daemon=True).start()
+
 def _phone_radio_codes_poll() -> None:
     try:
         names = os.listdir(_TONE_REQ_DIR)
@@ -3294,6 +3334,11 @@ def _phone_radio_codes_poll() -> None:
         if m:
             log.info("phone: radio tone code *%s%s", _TONE_CODE_PFX, m.group(1))
             _phone_radio_code(m.group(1))
+            continue
+        m = re.fullmatch(r"dial_([0-9]{1,20})_([a-z0-9]{1,32})", nm)
+        if m:
+            log.info("phone: radio dial %s on %s", m.group(1), m.group(2))
+            _phone_radio_dial(m.group(1), m.group(2))
 
 def _phone_sync_open(page: str) -> None:
     global _phone_open_state
