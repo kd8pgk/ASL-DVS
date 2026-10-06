@@ -63,6 +63,9 @@ Step-by-step manuals (PDF):
 - Pi Zero 2 W build: [`docs/ASL-DVS_Pi02w_Install_Manual.pdf`](docs/ASL-DVS_Pi02w_Install_Manual.pdf)
 - Full build (Pi 3, 4 or 5): [`docs/ASL-DVS_Full_Build_Install_Manual.pdf`](docs/ASL-DVS_Full_Build_Install_Manual.pdf)
 
+Phone dialplan guide (PDF), stock ASL3 next to the Pi02w Phone tab's dialplan:
+[`docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf`](docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf)
+
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
