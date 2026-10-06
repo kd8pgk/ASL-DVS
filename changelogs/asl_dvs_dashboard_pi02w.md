@@ -1,6 +1,25 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_7_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_8_20261006.py`. Newest entries first.
+
+## 9.3.71.8-pi02w (2026-10-06)
+
+- Phone: calls dialed from the dashboard (numbers, favorites, Test call, Voicemail)
+  no longer use autopatch (`rpt fun <node> *61<number>`). The dashboard has Asterisk
+  place the call (AMI `Originate`, `Local/<number>@dvs-node-<network>/n`), and when
+  it is answered the call joins the phone node with `rpt(<node>,Pv)`, the same way
+  incoming calls already do.
+- Why: during an autopatch call app_rpt keeps every linked node keyed for the whole
+  call, so a simplex hotspot transmits nonstop and can't hear your radio. Joined
+  with `Pv` (phone mode with VOX), the radio keys only while the far end is talking.
+- The dialing rules are unchanged: the same `dvs-node-<network>` context, number
+  checks, caller ID, saved tones and the phone patch on/off switch. Calls ring for up
+  to 65 seconds.
+- Differences from autopatch: the radio hears nothing until the far end answers (no
+  ringback over the air). Long nonstop far-end talk is cut for 2 s every 10 s
+  (`voxtimeout` / `voxrecover`), as on incoming calls.
+- `*61<number>` dialed from the radio still uses autopatch (rpt.conf unchanged).
+  From the radio, `*62` hangs up any call and `*65` hangs up radio-dialed calls.
 
 ## 9.3.71.7-pi02w (2026-10-06)
 

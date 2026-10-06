@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.7-pi02w"
+VERSION      = "9.3.71.8-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -2457,7 +2457,7 @@ def action_phone_dial(number: str) -> Tuple[bool, str]:
     _phone_astdb("put", "active", net["id"])
     tones = _phone_fav_tones(net, num, number)
     by_asterisk = _phone_then_prepare(tones)
-    out, ok = ami_command(f"rpt fun {node} *61{num}", timeout=6, priority=True)
+    out, ok = _phone_originate(net, node, num)
     if not ok:
         if by_asterisk:
             _phone_astdb("del", "then")
@@ -2471,6 +2471,13 @@ def action_phone_dial(number: str) -> Tuple[bool, str]:
                              name="phone-then-send", daemon=True).start()
         return True, f"Dialing {num} on {net['name']}… (saved tones go out when it answers)"
     return True, f"Dialing {num} on {net['name']}…"
+
+_PHONE_RING_MS = 65000
+
+def _phone_originate(net: dict, node: str, num: str) -> Tuple[str, bool]:
+    return ami_action([("Action", "Originate"), ("Channel", f"Local/{num}@dvs-node-{net['id']}/n"),
+                       ("Application", "Rpt"), ("Data", f"{node},Pv"),
+                       ("Timeout", str(_PHONE_RING_MS)), ("Async", "true")], timeout=6)
 
 def action_phone_voicemail() -> Tuple[bool, str]:
     doc = _phone_load()
