@@ -1,6 +1,28 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_161_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_162_20261007.py`. Newest entries first.
+
+## 0.0.162 (2026-10-07)
+
+From the audit of the presets against the real ASL3, DVSwitch and M17 configs of node 652702.
+
+- **Fixes (presets):**
+  - `#tryinclude` / `#include` lines after a private stanza were captured into the preset and deleted from the node it was applied to. Lines starting with `#` are now never captured and never removed.
+  - `.ini` ports: applying a preset rewrote each port line even when the value was right, losing spacing and the comment after it. Now only the number changes, and only when it differs.
+  - `require = chan_usrp.so` was not recognised, so a second `load`/`noload` line was added. `require` (and `preload`) now count as loaded and are never changed; when a preset wants `noload` the preview warns instead.
+- **Presets carry DVSwitch ports:** Analog_Bridge.ini `[USRP]` and `[AMBE_AUDIO]` `txPort`/`rxPort`, and DVSwitch.ini `[DMR]` `txPort`/`rxPort`. `MMDVM_Bridge.ini` stays out (its ports pair with gateway configs). More identity keys are blocked: `bmpassword`, `userid`, `talkeralias`, `fallbackid`, `nxdnfallbackid`.
+- **Allmon3 follows a preset:** sections for new private nodes are added to `allmon3.ini` with `host`/`user`/`pass` copied from the node's own public section; sections for removed private nodes are removed.
+- **Preview warnings** (shown first, and again in the confirm box):
+  - EchoLink: a preset that removes the private node in `echolink.conf` `astnode` while `chan_echolink` is loaded.
+  - AMBE pairing: Analog_Bridge `[AMBE_AUDIO]` and DVSwitch.ini `[DMR]` no longer mirrored.
+  - Port clashes the change would cause.
+- **Port check card** on the Config tab: UDP ports that more than one program listens on, across `rpt.conf` USRP channels, Analog_Bridge.ini, DVSwitch.ini, MMDVM_Bridge.ini (enabled networks), USRP2M17.ini and ircddbgateway. A sender pointing at a listener is a pair, not a clash. It finds the 32010 clash between MMDVM_Bridge `[P25 Network]` and USRP2M17 (fixed in Dashboard Pi02w 9.3.71.11). It also shows when the DMR link between Analog_Bridge and MMDVM_Bridge is not paired.
+- **Restores keep the Phone tab's blocks:** the dashboard's marked Phone-tab blocks in a restored file are replaced by the ones on the node now, so phone networks set up since are not undone. The `dvs_phone_*.conf` files and `phone.json` are never saved or restored.
+- **More files saved** (whole files, kept only on the node, never in presets; not listed as missing when absent):
+  - ASL3: `echolink.conf`, `rpt_http_registrations.conf`, `savenode.conf`, `simpleusb.conf`, `custom/extensions.conf`, `custom/echolink.conf`, `custom/iax.conf`, `custom/iax/iaxrpt-users.conf`, `custom/iax/iaxclient-users.conf`, `custom/simpleusb.conf`, `custom/simpleusb/*.conf`.
+  - DVSwitch: `/opt/Analog_Bridge/dvsm.macro`, `/var/lib/dvswitch/dvs/var.txt`, `/etc/ircddbgateway`.
+- **Restore reminders:** restart the dashboard if it shows Asterisk unreachable after `manager.conf` is restored; press Restart ASL3 after `simpleusb.conf` is restored.
+- **Install tabs:** "Save original configs as Restore point" is now also step 16 on the ASL3 tab and the last step on the DVSwitch tab (11 Bookworm, 13 Trixie).
 
 ## 0.0.161 (2026-10-07)
 

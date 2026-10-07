@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.161"
-APP_STAGE = "v0.0.161: Config tab presets keep each node's own ID and IAX port; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.162"
+APP_STAGE = "v0.0.162: Config tab: DVSwitch ports, Allmon3, port clash check, ASL3/DVSwitch save steps; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -1387,6 +1387,14 @@ def _cockpit_purge_step(num: int) -> dict:
                 "else on this node still wants Cockpit.",
     }
 
+def _config_save_step(step_id: str, num: int) -> dict:
+    return {"id": step_id, "num": num, "title": "Save original configs as Restore point",
+            "config_save": True,
+            "note": "Do not run this until ASL3, DVSwitch and USRP2M17 (whichever of them you will use) are all "
+                    "installed and set up. It saves the config files of every installed system to the library as "
+                    "the Restore point, once. Running it again only adds systems installed since; saved files are "
+                    "never overwritten. The Restore point, save points and presets are on the Config tab."}
+
 def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
     return [
         {"id": "prereqs", "num": 1, "title": "Install prerequisites",
@@ -1461,6 +1469,7 @@ def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
                  "channel to drive it, so it is not run via the Run button here. SSH into the node (or use "
                  "the Cockpit terminal at the address shown for the Cockpit-socket step above) and run "
                  "`sudo asl-menu` there to complete Node Settings / radio interface configuration."},
+        _config_save_step("asl3_save_restore", 16),
     ]
 
 _ASL3_INSTALL_BOOKWORM: list[dict] = _asl3_install_steps("deb12")
@@ -1681,6 +1690,7 @@ def _dvswitch_install_steps_bookworm() -> list[dict]:
         _cockpit_enable_step(7),
         _dv_config_field_step(8),
         *_dv_web_clash_steps(9),
+        _config_save_step("dv_save_restore", 11),
     ]
 
 def _dvswitch_install_steps_trixie() -> list[dict]:
@@ -1715,6 +1725,7 @@ def _dvswitch_install_steps_trixie() -> list[dict]:
         _cockpit_enable_step(9),
         _dv_config_field_step(10),
         *_dv_web_clash_steps(11),
+        _config_save_step("dv_save_restore", 13),
     ]
 
 def _dvswitch_purge_steps_bookworm() -> list[dict]:
@@ -2175,12 +2186,7 @@ def _m17_install_steps() -> list[dict]:
          "cmd": "sudo astres.sh",
          "note": "astres.sh is ASL3/HamVOIP's standard Asterisk-restart helper. If it's not on PATH on your "
                  "image, edit this field to `sudo systemctl restart asterisk` before running."},
-        {"id": "m17_save_restore", "num": 9, "title": "Save original configs as Restore point",
-         "config_save": True,
-         "note": "Do not run this until ASL3, DVSwitch and USRP2M17 (whichever of them you will use) are all "
-                 "installed and set up. It saves the config files of every installed system to the library as the "
-                 "Restore point, once. Running it again only adds systems installed since; saved files are never "
-                 "overwritten. The Restore point, save points and presets are on the Config tab."},
+        _config_save_step("m17_save_restore", 9),
         {"id": "m17_sudoers", "num": 10, "title": "Install sudoers rule for the web UI",
          "cmd": "printf 'www-data ALL=(ALL) NOPASSWD: /var/www/html/m17/update_usrp2m17.sh\\n"
                 "www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart usrp2m17\\n' | "
@@ -8188,31 +8194,54 @@ _CFGR_EXT = "/etc/asterisk/extensions.conf"
 _CFGR_MOD = "/etc/asterisk/modules.conf"
 _CFGR_IAX = "/etc/asterisk/iax.conf"
 _CFGR_RADIO_LOCAL_RE = re.compile(r"(radio@127\.0\.0\.1)(?::\d+)?/")
+_CFGR_ECHOLINK = "/etc/asterisk/echolink.conf"
+_CFGR_ALLMON = "/etc/allmon3/allmon3.ini"
+_CFGR_AB = "/opt/Analog_Bridge/Analog_Bridge.ini"
+_CFGR_DVSINI = "/opt/MMDVM_Bridge/DVSwitch.ini"
+_CFGR_MMDVM = "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"
+_CFGR_M17INI = "/opt/USRP2M17/USRP2M17.ini"
+_CFGR_IRCDDB = "/etc/ircddbgateway"
 
 _CFGR_GROUPS: dict[str, dict] = {
     "asl3": {"label": "ASL3", "markers": ["/etc/asterisk/rpt.conf"],
-             "files": ["/etc/asterisk/rpt.conf", "/etc/asterisk/iax.conf", "/etc/asterisk/extensions.conf",
-                       "/etc/asterisk/modules.conf", "/etc/asterisk/manager.conf", "/etc/allmon3/allmon3.ini"],
+             "core": ["/etc/asterisk/rpt.conf", "/etc/asterisk/iax.conf", "/etc/asterisk/extensions.conf",
+                      "/etc/asterisk/modules.conf", "/etc/asterisk/manager.conf", "/etc/allmon3/allmon3.ini"],
+             "optional": ["/etc/asterisk/echolink.conf", "/etc/asterisk/rpt_http_registrations.conf",
+                          "/etc/asterisk/savenode.conf", "/etc/asterisk/simpleusb.conf",
+                          "/etc/asterisk/custom/extensions.conf", "/etc/asterisk/custom/echolink.conf",
+                          "/etc/asterisk/custom/iax.conf", "/etc/asterisk/custom/iax/iaxrpt-users.conf",
+                          "/etc/asterisk/custom/iax/iaxclient-users.conf", "/etc/asterisk/custom/simpleusb.conf"],
+             "globs": [("/etc/asterisk/custom/simpleusb", ".conf")],
              "services": ["asterisk", "allmon3"]},
     "dvs": {"label": "DVSwitch", "markers": ["/opt/MMDVM_Bridge/MMDVM_Bridge", "/opt/Analog_Bridge/Analog_Bridge"],
-            "files": ["/opt/MMDVM_Bridge/MMDVM_Bridge.ini", "/opt/MMDVM_Bridge/DVSwitch.ini",
-                      "/opt/Analog_Bridge/Analog_Bridge.ini"],
+            "core": ["/opt/MMDVM_Bridge/MMDVM_Bridge.ini", "/opt/MMDVM_Bridge/DVSwitch.ini",
+                     "/opt/Analog_Bridge/Analog_Bridge.ini"],
+            "optional": ["/opt/Analog_Bridge/dvsm.macro", "/var/lib/dvswitch/dvs/var.txt", "/etc/ircddbgateway"],
+            "globs": [],
             "services": ["mmdvm_bridge", "analog_bridge", "md380-emu"]},
     "m17": {"label": "USRP2M17", "markers": ["/opt/USRP2M17"],
-            "files": ["/opt/USRP2M17/USRP2M17.ini", "/etc/sudoers.d/usrp2m17", "/etc/asterisk/rpt.conf",
-                      "/etc/asterisk/modules.conf", "/etc/asterisk/extensions.conf"],
+            "core": ["/opt/USRP2M17/USRP2M17.ini", "/etc/sudoers.d/usrp2m17", "/etc/asterisk/rpt.conf",
+                     "/etc/asterisk/modules.conf", "/etc/asterisk/extensions.conf"],
+            "optional": [],
+            "globs": [],
             "services": ["usrp2m17", "asterisk"]},
 }
+for _g in _CFGR_GROUPS.values():
+    _g["files"] = _g["core"] + _g["optional"]
 
 _CFGR_PRESETS: dict[str, str] = {"travel_node": "Travel Node"}
 _CFGR_PRIVATE_MIN, _CFGR_PRIVATE_MAX = 1000, 1999
 _CFGR_IDENTITY_KEYS = frozenset({"callsign", "id", "password", "passwd", "secret", "register", "gatewaydmrid",
-                                 "repeaterid", "name", "idrecording", "idtalkover", "callerid"})
+                                 "repeaterid", "name", "idrecording", "idtalkover", "callerid", "bmpassword",
+                                 "userid", "talkeralias", "fallbackid", "nxdnfallbackid"})
 _CFGR_COMPANION_KEYS = frozenset({"functions", "link_functions", "phone_functions", "telemetry", "morse", "macro",
                                   "wait_times", "memory", "controlstates", "scheduler"})
 _CFGR_INI_WIRING: dict[str, dict[str, tuple[str, ...]]] = {
     "/opt/USRP2M17/USRP2M17.ini": {"M17 Network": ("LocalPort", "DstPort"),
                                    "USRP Network": ("LocalPort", "DstPort")},
+    "/opt/Analog_Bridge/Analog_Bridge.ini": {"USRP": ("txPort", "rxPort"),
+                                             "AMBE_AUDIO": ("txPort", "rxPort")},
+    "/opt/MMDVM_Bridge/DVSwitch.ini": {"DMR": ("txPort", "rxPort")},
 }
 _CFGR_HDR_RE = re.compile(r"^\s*\[([^\]]+)\]")
 _CFGR_KV_RE = re.compile(r"^\s*([^;=\s][^=]*?)\s*=>?\s*(.*)$")
@@ -8220,7 +8249,8 @@ _CFGR_MANAGED_BEGIN_RE = re.compile(r"^\s*;\s*>>>.*managed by .*>>>\s*$")
 _CFGR_MANAGED_END_RE = re.compile(r"^\s*;\s*<<<.*<<<\s*$")
 _CFGR_EXTEN_RE = re.compile(r"^\s*exten\s*=>\s*(\d+)\s*,")
 _CFGR_SAME_RE = re.compile(r"^\s*same\s*=>")
-_CFGR_CHAN_USRP_RE = re.compile(r"^(\s*)(load|noload)(\s*=>?\s*chan_usrp\.so\b.*)$")
+_CFGR_INI_VAL_RE = re.compile(r"^(\s*[^=;#]+?\s*=\s*)([^\s;#]*)(.*)$")
+_CFGR_USRP_RX_RE = re.compile(r"(?i)^usrp/[^:/]+:(\d+):(\d+)")
 _CFGR_PORT_RE = re.compile(r"^\d{1,5}$")
 
 def _cfgr_now() -> str:
@@ -8229,8 +8259,68 @@ def _cfgr_now() -> str:
 def _cfgr_installed() -> dict[str, bool]:
     return {g: any(os.path.exists(m) for m in d["markers"]) for g, d in _CFGR_GROUPS.items()}
 
-def _cfgr_allowed_paths() -> set[str]:
-    return {p for d in _CFGR_GROUPS.values() for p in d["files"]}
+def _cfgr_group_paths(group: str) -> list[str]:
+    d = _CFGR_GROUPS[group]
+    out = list(d["files"])
+    for base, suffix in d["globs"]:
+        try:
+            names = sorted(os.listdir(base))
+        except OSError:
+            continue
+        for n in names:
+            p = os.path.join(base, n)
+            if n.endswith(suffix) and not n.startswith(".") and os.path.isfile(p) and p not in out:
+                out.append(p)
+    return out
+
+def _cfgr_path_allowed(group: str, path: str) -> bool:
+    d = _CFGR_GROUPS.get(group)
+    if d is None or not isinstance(path, str):
+        return False
+    if path in d["files"]:
+        return True
+    if os.path.normpath(path) != path:
+        return False
+    for base, suffix in d["globs"]:
+        n = os.path.basename(path)
+        if os.path.dirname(path) == base and n.endswith(suffix) and not n.startswith("."):
+            return True
+    return False
+
+def _cfgr_module_re(name: str) -> re.Pattern:
+    return re.compile(r"^(\s*)(load|noload|require|preload)(\s*=>?\s*" + re.escape(name) + r"(?:\.so)?(?![\w.]).*)$")
+
+def _cfgr_module_state(lines: list[str], name: str) -> str | None:
+    mask = _cfgr_managed_mask(lines)
+    rx = _cfgr_module_re(name)
+    state = None
+    for i, line in enumerate(lines):
+        m = None if mask[i] else rx.match(line)
+        if m:
+            state = m.group(2)
+    return state
+
+def _cfgr_text(path: str, override: dict[str, bytes] | None = None) -> str | None:
+    b = (override or {}).get(path)
+    if b is None:
+        b = _cfgr_read(path)
+    return None if b is None else b.decode("utf-8", "replace")
+
+def _cfgr_ini_sections(text: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {"": {}}
+    sec = ""
+    for line in text.splitlines():
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            sec = m.group(1).strip().lower()
+            out.setdefault(sec, {})
+            continue
+        if line.lstrip().startswith("#"):
+            continue
+        kv = _cfgr_kv(line)
+        if kv:
+            out[sec].setdefault(kv[0].lower(), kv[1])
+    return out
 
 def _cfgr_ensure_root_dir() -> None:
     os.makedirs(_CFGR_DIR, mode=0o700, exist_ok=True)
@@ -8263,13 +8353,14 @@ def _cfgr_store_path(snap_dir: str, group: str, path: str) -> str:
 def _cfgr_copy_group(snap_dir: str, group: str) -> dict:
     files: dict[str, dict] = {}
     missing: list[str] = []
-    for path in _CFGR_GROUPS[group]["files"]:
+    for path in _cfgr_group_paths(group):
         try:
             st = os.stat(path)
             with open(path, "rb") as f:
                 data = f.read()
         except FileNotFoundError:
-            missing.append(path)
+            if path in _CFGR_GROUPS[group]["core"]:
+                missing.append(path)
             continue
         _compare_before_write(_cfgr_store_path(snap_dir, group, path), data)
         files[path] = {"sha256": hashlib.sha256(data).hexdigest(), "uid": st.st_uid, "gid": st.st_gid,
@@ -8394,6 +8485,7 @@ def build_config_status() -> dict:
                                         "files": sorted((entry.get("files") or {}).keys()),
                                         "missing": entry.get("missing", [])}
         changed = _cfgr_changed_files(snap, m)
+    clashes, n_ports = _cfgr_port_clashes()
     presets = {}
     for pid, plabel in _CFGR_PRESETS.items():
         p = _cfgr_load_preset(pid)
@@ -8409,6 +8501,9 @@ def build_config_status() -> dict:
         "points": _cfgr_list_points(),
         "presets": presets,
         "max_points": _CFGR_MAX_POINTS,
+        "port_clashes": clashes,
+        "ports_checked": n_ports,
+        "ambe_pairing": _cfgr_ambe_pairing(),
         "checked_at": _cfgr_now(),
     }
 
@@ -8522,16 +8617,13 @@ def _cfgr_act_restore(payload: dict) -> dict:
     for g in groups:
         entry = m["groups"][g]
         for path, meta in (entry.get("files") or {}).items():
-            if path not in _CFGR_GROUPS[g]["files"]:
+            if not _cfgr_path_allowed(g, path):
                 continue
             prev = plan.get(path)
             if prev is None or str(entry.get("saved_at", "")) >= str(m["groups"][prev[0]].get("saved_at", "")):
                 plan[path] = (g, meta)
-    allowed = _cfgr_allowed_paths()
     blobs: dict[str, bytes] = {}
     for path, (g, meta) in plan.items():
-        if path not in allowed:
-            continue
         data = _cfgr_read(_cfgr_store_path(snap, g, path))
         if data is None or hashlib.sha256(data).hexdigest() != meta.get("sha256"):
             return {"success": False, "output": f"The saved copy of {path} is missing or damaged. Nothing was restored."}
@@ -8542,26 +8634,84 @@ def _cfgr_act_restore(payload: dict) -> dict:
     auto_id, removed = _cfgr_auto_point(f"restore {label}", groups)
     lines = [f"Current files saved first as automatic copy {auto_id}.", f"Restoring from '{label}':"]
     ok = True
+    kept_phone = []
+    written = set()
     for path in sorted(blobs):
         g, meta = plan[path]
         try:
             uid, gid, mode = int(meta.get("uid")), int(meta.get("gid")), int(meta.get("mode"))
         except (TypeError, ValueError):
             uid, gid, mode = _cfgr_meta_of(path)
-        res = _cfgr_write_file(path, blobs[path], uid, gid, mode)
+        data, touched = _cfgr_keep_managed(blobs[path], _cfgr_read(path))
+        if touched:
+            kept_phone.append(path)
+        res = _cfgr_write_file(path, data, uid, gid, mode)
         if res.startswith("NOT"):
             ok = False
+        if res == "written":
+            written.add(os.path.basename(path))
         lines.append(f"  {path}: {res}")
+    if kept_phone:
+        lines.append("Phone-tab blocks kept as they are now in: " + ", ".join(kept_phone))
     if removed:
         lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
+    if "manager.conf" in written:
+        lines.append("manager.conf was restored: if the dashboard then shows Asterisk as unreachable, restart the "
+                     "dashboard (sudo systemctl restart asl_dvs_dashboard).")
+    if "simpleusb.conf" in written:
+        lines.append("simpleusb.conf was restored: press Restart ASL3 so Asterisk loads it before it saves its own copy.")
     lines.append("Services were NOT restarted. Use the Restart buttons below when ready.")
     log(f"{'OK' if ok else 'FAIL'}: CONFIG restored {', '.join(groups)} from {kind}/{sid or 'restore'}")
     return {"success": ok, "output": "\n".join(lines), "restart_groups": groups}
 
+def _cfgr_managed_spans(lines: list[str]) -> list[tuple[int, int]]:
+    mask = _cfgr_managed_mask(lines)
+    spans: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lines):
+        if mask[i]:
+            j = i
+            while j < len(lines) and mask[j]:
+                j += 1
+            spans.append((i, j))
+            i = j
+        else:
+            i += 1
+    return spans
+
+def _cfgr_keep_managed(saved: bytes, current: bytes | None) -> tuple[bytes, bool]:
+    if current is None:
+        return saved, False
+    s = saved.decode("utf-8", "replace").splitlines()
+    c = current.decode("utf-8", "replace").splitlines()
+    sb = _cfgr_managed_spans(s)
+    cb = _cfgr_managed_spans(c)
+    if not sb and not cb:
+        return saved, False
+    cur_blocks = [c[a:b] for a, b in cb]
+    out: list[str] = []
+    prev = 0
+    for idx, (a, b) in enumerate(sb):
+        out += s[prev:a]
+        if idx < len(cur_blocks):
+            out += cur_blocks[idx]
+        prev = b
+    out += s[prev:]
+    for idx in range(len(sb), len(cur_blocks)):
+        a = cb[idx][0]
+        anchor = c[a - 1] if a > 0 else ""
+        at = next((j for j, line in enumerate(out) if anchor.strip() and line == anchor), None)
+        if at is None:
+            out += [""] + cur_blocks[idx]
+        else:
+            out[at + 1:at + 1] = cur_blocks[idx]
+    data = ("\n".join(out) + ("\n" if saved.endswith(b"\n") or not saved else "")).encode("utf-8")
+    return data, data != saved
+
 def _cfgr_act_diff(payload: dict) -> dict:
     g = str(payload.get("group", ""))
     path = str(payload.get("path", ""))
-    if g not in _CFGR_GROUPS or path not in _CFGR_GROUPS[g]["files"]:
+    if g not in _CFGR_GROUPS or not _cfgr_path_allowed(g, path):
         return {"success": False, "output": "Unknown file."}
     snap = _cfgr_snap_dir("restore")
     m = _cfgr_read_manifest(snap)
@@ -8723,7 +8873,7 @@ def _cfgr_capture() -> tuple[dict | None, list[str], list[str]]:
             block = [_cfgr_clean(rl[s["start"]]) or f"[{s['name']}]"]
             for i in range(s["start"] + 1, s["end"]):
                 line = None if rmask[i] else _cfgr_clean(rl[i])
-                if line is None:
+                if line is None or line.lstrip().startswith("#"):
                     continue
                 why = _cfgr_filter_line(line, public)
                 if why:
@@ -8767,12 +8917,8 @@ def _cfgr_capture() -> tuple[dict | None, list[str], list[str]]:
     if mod_b is None:
         notes.append(f"{_CFGR_MOD} not found; chan_usrp setting not in the preset.")
     else:
-        ml = _cfgr_lines(mod_b.decode("utf-8", "replace"))
-        mmask = _cfgr_managed_mask(ml)
-        for i, line in enumerate(ml):
-            mm = None if mmask[i] else _CFGR_CHAN_USRP_RE.match(line)
-            if mm:
-                chan_usrp = mm.group(2)
+        st = _cfgr_module_state(_cfgr_lines(mod_b.decode("utf-8", "replace")), "chan_usrp")
+        chan_usrp = None if st is None else ("noload" if st == "noload" else "load")
     ini_out: dict[str, dict[str, dict[str, str]]] = {}
     for path, sections in _CFGR_INI_WIRING.items():
         b = _cfgr_read(path)
@@ -8985,7 +9131,8 @@ def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list
     for members in units.values():
         for s in members:
             first_start = s["start"] if first_start is None else min(first_start, s["start"])
-            drop.update(i for i in range(s["start"], s["end"]) if not mask[i])
+            drop.update(i for i in range(s["start"], s["end"])
+                        if not mask[i] and not lines[i].lstrip().startswith("#"))
     nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
     add_before: dict[int, list[str]] = {}
     tail: list[str] = []
@@ -9066,17 +9213,24 @@ def _cfgr_apply_ext(lines: list[str], p: dict) -> list[str]:
     out.extend(add_before.get(len(lines), []))
     return out + tail
 
-def _cfgr_apply_mod(lines: list[str], p: dict) -> list[str]:
+def _cfgr_apply_mod(lines: list[str], p: dict) -> tuple[list[str], list[str]]:
     want = p["modules"].get("chan_usrp")
     if want is None:
-        return list(lines)
+        return list(lines), []
     mask = _cfgr_managed_mask(lines)
+    rx = _cfgr_module_re("chan_usrp")
     out = list(lines)
+    warn: list[str] = []
     found = False
     for i, line in enumerate(lines):
-        mm = None if mask[i] else _CFGR_CHAN_USRP_RE.match(line)
+        mm = None if mask[i] else rx.match(line)
         if mm:
             found = True
+            if mm.group(2) in ("require", "preload"):
+                if want == "noload":
+                    warn.append(f"modules.conf has '{mm.group(2)} chan_usrp' (line {i + 1}); the preset wants noload. "
+                                "Left as it is; change it by hand if you really want USRP off.")
+                continue
             out[i] = mm.group(1) + want + mm.group(3)
     if not found:
         secs = _cfgr_sections(lines, mask)
@@ -9089,7 +9243,7 @@ def _cfgr_apply_mod(lines: list[str], p: dict) -> list[str]:
                 if lines[i].strip():
                     last = i
             out.insert(last + 1, f"{want} => chan_usrp.so")
-    return out
+    return out, warn
 
 def _cfgr_apply_ini(lines: list[str], wanted: dict[str, dict[str, str]]) -> tuple[list[str], list[str]]:
     out = list(lines)
@@ -9115,8 +9269,9 @@ def _cfgr_apply_ini(lines: list[str], wanted: dict[str, dict[str, str]]) -> tupl
                     hit = i
                     break
             if hit is not None:
-                kname = _cfgr_kv(out[hit])[0]
-                out[hit] = f"{kname}={val}"
+                m = _CFGR_INI_VAL_RE.match(out[hit])
+                if m and m.group(2) != val:
+                    out[hit] = m.group(1) + val + m.group(3)
             else:
                 last = start
                 for i in range(start + 1, end):
@@ -9126,9 +9281,128 @@ def _cfgr_apply_ini(lines: list[str], wanted: dict[str, dict[str, str]]) -> tupl
                 end += 1
     return out, notes
 
-def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], str]:
+def _cfgr_allmon_sync(text: str, want: set[str], removed: list[str]) -> tuple[list[str], list[str]]:
+    lines = _cfgr_lines(text)
+    secs = _cfgr_sections(lines, [False] * len(lines))
+    names = {s["name"] for s in secs}
+    notes: list[str] = []
+    public = [s for s in secs if s["name"].isdigit() and not _cfgr_is_private(s["name"])]
+    c = globals().get("_cfg")
+    own = c.get("identity", "node", fallback="").strip() if c is not None else ""
+    public.sort(key=lambda s: s["name"] != own)
+    drop: set[int] = set()
+    for s in secs:
+        if s["name"] in removed:
+            drop.update(range(s["start"], s["end"]))
+            notes.append(f"allmon3.ini: [{s['name']}] removed")
+    out = [line for i, line in enumerate(lines) if i not in drop]
+    adds = sorted((n for n in want if n not in names), key=int)
+    if adds and not public:
+        notes.append("allmon3.ini has no public node section to copy host/user/pass from; add "
+                     + ", ".join(adds) + " to Allmon3 by hand")
+        return out, notes
+    for n in adds:
+        src = public[0]
+        body = []
+        for i in range(src["start"] + 1, src["end"]):
+            kv = _cfgr_kv(lines[i])
+            if kv and kv[0].lower() in ("host", "port", "user", "pass"):
+                body.append(lines[i].rstrip())
+        while out and not out[-1].strip():
+            out.pop()
+        out += ["", f"[{n}]"] + body
+        notes.append(f"allmon3.ini: [{n}] added (host/user/pass copied from [{src['name']}])")
+    return out, notes
+
+def _cfgr_listeners(override: dict[str, bytes] | None = None) -> list[tuple[str, str, str]]:
+    found: list[tuple[str, str, str]] = []
+    t = _cfgr_text(_CFGR_RPT, override)
+    if t is not None:
+        lines = _cfgr_lines(t)
+        mask = _cfgr_managed_mask(lines)
+        sec = ""
+        for i, line in enumerate(lines):
+            m = _CFGR_HDR_RE.match(line)
+            if m:
+                sec = m.group(1).strip()
+                continue
+            kv = _cfgr_kv(line)
+            if kv and kv[0].lower() == "rxchannel":
+                um = _CFGR_USRP_RX_RE.match(kv[1])
+                if um:
+                    found.append((um.group(2), "Asterisk", f"rpt.conf [{sec}] rxchannel"
+                                  + (" (Phone tab)" if mask[i] else "")))
+    t = _cfgr_text(_CFGR_AB, override)
+    if t is not None:
+        ini = _cfgr_ini_sections(t)
+        for sec in ("usrp", "ambe_audio"):
+            v = ini.get(sec, {}).get("rxport", "")
+            if _CFGR_PORT_RE.match(v):
+                found.append((v, "Analog_Bridge", f"Analog_Bridge.ini [{sec.upper()}] rxPort"))
+    t = _cfgr_text(_CFGR_DVSINI, override)
+    if t is not None:
+        ini = _cfgr_ini_sections(t)
+        for sec in ("dmr", "dstar", "nxdn", "p25", "ysf"):
+            v = ini.get(sec, {}).get("rxport", "")
+            if _CFGR_PORT_RE.match(v):
+                found.append((v, "MMDVM_Bridge", f"DVSwitch.ini [{sec.upper()}] rxPort"))
+    t = _cfgr_text(_CFGR_MMDVM, override)
+    if t is not None:
+        ini = _cfgr_ini_sections(t)
+        for sec, key in (("D-Star Network", "LocalPort"), ("System Fusion Network", "LocalPort"),
+                         ("P25 Network", "LocalPort"), ("NXDN Network", "LocalPort"), ("DMR Network", "Local")):
+            d = ini.get(sec.lower(), {})
+            v = d.get(key.lower(), "")
+            if d.get("enable", "1") == "1" and _CFGR_PORT_RE.match(v):
+                found.append((v, "MMDVM_Bridge", f"MMDVM_Bridge.ini [{sec}] {key}"))
+    t = _cfgr_text(_CFGR_M17INI, override)
+    if t is not None:
+        ini = _cfgr_ini_sections(t)
+        for sec in ("M17 Network", "USRP Network"):
+            v = ini.get(sec.lower(), {}).get("localport", "")
+            if _CFGR_PORT_RE.match(v):
+                found.append((v, "USRP2M17", f"USRP2M17.ini [{sec}] LocalPort"))
+    t = _cfgr_text(_CFGR_IRCDDB, override)
+    if t is not None:
+        d = _cfgr_ini_sections(t).get("", {})
+        if _CFGR_PORT_RE.match(d.get("hbport", "")):
+            found.append((d["hbport"], "ircDDBGateway", "ircddbgateway hbPort"))
+        if d.get("remoteenabled") == "1" and _CFGR_PORT_RE.match(d.get("remoteport", "")):
+            found.append((d["remoteport"], "ircDDBGateway", "ircddbgateway remotePort"))
+    return found
+
+def _cfgr_port_clashes(override: dict[str, bytes] | None = None) -> tuple[list[str], int]:
+    found = _cfgr_listeners(override)
+    by_port: dict[str, list[tuple[str, str]]] = {}
+    for port, prog, where in found:
+        by_port.setdefault(port, []).append((prog, where))
+    out = []
+    for port in sorted(by_port, key=int):
+        users = by_port[port]
+        if len({w for _, w in users}) > 1:
+            out.append(f"UDP {port} is listened on by more than one: "
+                       + "; ".join(f"{p} ({w})" for p, w in users))
+    return out, len(found)
+
+def _cfgr_ambe_pairing(override: dict[str, bytes] | None = None) -> str:
+    ab = _cfgr_text(_CFGR_AB, override)
+    mb = _cfgr_text(_CFGR_DVSINI, override)
+    if ab is None or mb is None:
+        return ""
+    a = _cfgr_ini_sections(ab).get("ambe_audio", {})
+    d = _cfgr_ini_sections(mb).get("dmr", {})
+    at, ar, dt, dr = a.get("txport", ""), a.get("rxport", ""), d.get("txport", ""), d.get("rxport", "")
+    if not all(_CFGR_PORT_RE.match(x) for x in (at, ar, dt, dr)):
+        return ""
+    if at == dr and ar == dt:
+        return ""
+    return (f"Analog_Bridge [AMBE_AUDIO] txPort/rxPort {at}/{ar} and DVSwitch.ini [DMR] txPort/rxPort {dt}/{dr} "
+            "are not mirrored, so DMR audio between them would not flow")
+
+def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], list[str], str]:
     changes: dict[str, tuple[bytes, bytes]] = {}
     notes: list[str] = []
+    warnings: list[str] = []
     removed: list[str] = []
     for path in (_CFGR_RPT, _CFGR_EXT, _CFGR_MOD):
         cur = _cfgr_read(path)
@@ -9139,7 +9413,7 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
         if path == _CFGR_RPT:
             new, removed, added, err, id_notes = _cfgr_apply_rpt(lines, p, _cfgr_bindport())
             if new is None:
-                return {}, [], [], err
+                return {}, [], [], [], err
             notes += id_notes
             mask = _cfgr_managed_mask(lines)
             managed = sorted(h for h in _cfgr_managed_headers(lines, mask) if _cfgr_is_private(h))
@@ -9148,7 +9422,8 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
         elif path == _CFGR_EXT:
             new = _cfgr_apply_ext(lines, p)
         else:
-            new = _cfgr_apply_mod(lines, p)
+            new, mod_warn = _cfgr_apply_mod(lines, p)
+            warnings += mod_warn
         data = _cfgr_join(new).encode("utf-8")
         if data != cur:
             changes[path] = (cur, data)
@@ -9162,17 +9437,40 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
         data = _cfgr_join(new).encode("utf-8")
         if data != cur:
             changes[path] = (cur, data)
-    return changes, removed, notes, ""
+    am = _cfgr_read(_CFGR_ALLMON)
+    if am is not None and _cfgr_read(_CFGR_RPT) is not None:
+        want = {n["node"] for n in p["rpt"]["nodes"]}
+        new, n3 = _cfgr_allmon_sync(am.decode("utf-8", "replace"), want, removed)
+        notes += n3
+        data = _cfgr_join(new).encode("utf-8")
+        if data != am:
+            changes[_CFGR_ALLMON] = (am, data)
+    el = _cfgr_text(_CFGR_ECHOLINK)
+    mod = _cfgr_text(_CFGR_MOD)
+    if removed and el is not None and mod is not None:
+        if _cfgr_module_state(_cfgr_lines(mod), "chan_echolink") in ("load", "require", "preload"):
+            for sec, d in _cfgr_ini_sections(el).items():
+                node = d.get("astnode", "")
+                if node in removed:
+                    warnings.append(f"EchoLink ([{sec}] astnode = {node} in echolink.conf) uses private node {node}, "
+                                    "which this preset removes. EchoLink would stop working.")
+    override = {path: new for path, (_old, new) in changes.items()}
+    pair = _cfgr_ambe_pairing(override)
+    if pair:
+        warnings.append(pair)
+    clashes, _n = _cfgr_port_clashes(override)
+    warnings += clashes
+    return changes, removed, notes, warnings, ""
 
 def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
     pid = str(payload.get("preset", ""))
     p = _cfgr_load_preset(pid)
     if p is None:
         return {"success": False, "output": f"No '{_CFGR_PRESETS.get(pid, pid)}' preset is saved on this node yet."}
-    changes, removed, notes, err = _cfgr_preset_plan(p)
+    changes, removed, notes, warnings, err = _cfgr_preset_plan(p)
     if err:
         return {"success": False, "output": "Preset not applied: " + err}
-    lines: list[str] = []
+    lines: list[str] = [f"WARNING: {w}" for w in warnings]
     if removed:
         lines.append("PRIVATE NODES THAT WILL BE REMOVED: " + ", ".join(removed))
     if not changes:
@@ -9184,7 +9482,7 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
         lines += [""] + list(d)
     if notes:
         lines += [""] + notes
-    result = {"success": True, "removed": removed, "changes": sorted(changes)}
+    result = {"success": True, "removed": removed, "changes": sorted(changes), "warnings": warnings}
     if not apply or not changes:
         result["output"] = "\n".join(lines)
         return result
@@ -9385,6 +9683,7 @@ function cfgApplyPreset(btn, pid) {
     var msg = 'Apply this preset? The preview of every change is shown below the button.\n\n' +
               'Files changed: ' + res.changes.join(', ') + '\n';
     if (res.removed && res.removed.length) msg += '\nPRIVATE NODES THAT WILL BE REMOVED: ' + res.removed.join(', ') + '\n';
+    if (res.warnings && res.warnings.length) msg += '\nWARNINGS:\n- ' + res.warnings.join('\n- ') + '\n';
     msg += '\nThe current files are saved first as an automatic copy, so this can be undone.';
     if (!confirm(msg)) return;
     cfgPost({action: 'preset_apply', preset: pid}, 'cfg-restore-out', btn);
@@ -9449,6 +9748,14 @@ function cfgRender(d) {
   });
   h += '</table>';
   document.getElementById('cfg-status').innerHTML = h;
+  var ports = document.getElementById('cfg-ports');
+  var pc = d.port_clashes || [];
+  var ph = '';
+  if (pc.length) ph += pc.map(function(x) { return '<div class="ov-banner lvl-danger">' + cfgEsc(x) + '</div>'; }).join('');
+  if (d.ambe_pairing) ph += '<div class="ov-banner lvl-warn">' + cfgEsc(d.ambe_pairing) + '</div>';
+  if (!ph) ph = '<span class="cfg-hint">No UDP port clashes (' + (d.ports_checked || 0) + ' listening ports checked)' +
+    '; DMR link between Analog_Bridge and MMDVM_Bridge is paired.</span>';
+  ports.innerHTML = ph;
   document.getElementById('cfg-retake-btn').style.display = d.restore.exists ? 'inline-block' : 'none';
   var sel = document.getElementById('cfg-point');
   var keep = sel.value;
@@ -9533,13 +9840,23 @@ def _render_config_panel() -> str:
     <div class="step-head"><div class="step-title">Travel Node preset</div>
       <span class="cfg-hint" id="cfg-preset-state"></span></div>
     <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
-      [nodes] lines, their extensions, chan_usrp in modules.conf, and the USRP2M17.ini ports. Never callsigns, IDs or
-      passwords. Run it on the travel node; apply it on any node from the Restore list above.</div>
+      [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
+      [USRP]/[AMBE_AUDIO] and DVSwitch.ini [DMR] ports. Never callsigns, IDs or passwords. Applying it also keeps
+      Allmon3 in step with the private nodes. Run it on the travel node; apply it on any node from the Restore list
+      above.</div>
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
       <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
     </div>
     <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card">
+    <div class="step-head"><div class="step-title">Port check</div></div>
+    <div class="step-body">UDP ports that more than one program listens on, across rpt.conf, Analog_Bridge.ini,
+      DVSwitch.ini, MMDVM_Bridge.ini, USRP2M17.ini and ircddbgateway. A sender pointing at a listener is a pair,
+      not a clash.</div>
+    <div id="cfg-ports"></div>
   </div>
 
   <button class="btn-recheck" onclick="refreshConfig()">Re-check</button>
@@ -12514,6 +12831,14 @@ function asl3RenderStepList(mode, distro) {
       html += '</div>';
       return;
     }
+    if (step.config_save) {
+      html += '<span class="step-pill not_started">Config</span></div>';
+      if (step.note) html += renderStepWarn(asl3EscapeAttr(step.note));
+      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'asl3-out-' + stateKey + '\\')">Save Restore point</button></div>';
+      html += '<div class="asl3-console shown placeholder" id="asl3-out-' + stateKey + '">(not saved from here yet)</div>';
+      html += '</div>';
+      return;
+    }
     var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
     var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
     html += '<span class="step-pill ' + pillClass + '" id="asl3-pill-' + stateKey + '">' + pillLabel + '</span></div>';
@@ -12650,7 +12975,7 @@ function asl3ReconnectRunningJobs(distro) {
   ['install', 'purge'].forEach(function(mode) {
     var steps = ((window._asl3Scripts || {})[mode] || {})[distro] || [];
     steps.forEach(function(step) {
-      if (step.manual) return;
+      if (step.manual || step.config_save) return;
       var stateKey = mode + '_' + distro + '_' + step.id;
       var jobKey = 'asl3_' + stateKey;
       fetch('/api/action_status?job_key=' + encodeURIComponent(jobKey)).then(function(r) { return r.json(); }).then(function(status) {
@@ -12832,6 +13157,14 @@ function dvRenderStepList(mode, distro) {
       html += '</div>';
       return;
     }
+    if (step.config_save) {
+      html += '<span class="step-pill not_started">Config</span></div>';
+      if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
+      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'dv-out-' + stateKey + '\\')">Save Restore point</button></div>';
+      html += '<div class="asl3-console shown placeholder" id="dv-out-' + stateKey + '">(not saved from here yet)</div>';
+      html += '</div>';
+      return;
+    }
     var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
     var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
     html += '<span class="step-pill ' + pillClass + '" id="dv-pill-' + stateKey + '">' + pillLabel + '</span></div>';
@@ -12968,7 +13301,7 @@ function dvReconnectRunningJobs(distro) {
   ['install', 'purge'].forEach(function(mode) {
     var steps = ((window._dvScripts || {})[mode] || {})[distro] || [];
     steps.forEach(function(step) {
-      if (step.manual) return;
+      if (step.manual || step.config_save) return;
       var stateKey = mode + '_' + distro + '_' + step.id;
       var jobKey = 'dv_' + stateKey;
       fetch('/api/action_status?job_key=' + encodeURIComponent(jobKey)).then(function(r) { return r.json(); }).then(function(status) {
