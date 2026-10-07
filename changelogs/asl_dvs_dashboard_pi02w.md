@@ -1,6 +1,15 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_12_20261007.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py`. Newest entries first.
+
+## 9.3.71.13-pi02w (2026-10-07)
+
+- M17 favorites: the module drop-down on each reflector row clipped "All Modules"
+  to "All Modu" (the box was 88 px wide, the text needs about 71 px plus padding
+  and the arrow). It is now 7.6 rem wide on the M17 grid and the M17 quick bar.
+  The rows were already identical to each other at 390, 800, 980 and 1280 px;
+  the drop-down clip was the only difference. Other pages (D-STAR, XLX) keep the
+  narrow box because their modules are one letter.
 
 ## 9.3.71.12-pi02w (2026-10-07)
 

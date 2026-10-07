@@ -1,6 +1,32 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_8_20261007.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_9_20261007.py`. Newest entries first.
+
+## 6.13.67.9-pi02w (2026-10-07)
+
+- Hardware tab video options now survive an update. SysMon's `--uninstall` puts
+  the HDMI/video driver and GPU memory options in `config.txt` back to stock, and
+  instmon's Full Update and Update uninstall before they install, so an update
+  silently undid "Disable HDMI and video driver" and "Lower GPU memory" (the
+  reboot applied it).
+  - `--uninstall` now saves which options were on, in `/etc/sysmon/boot_restore.json`
+    (mode 600, with the time), and still restores the stock `config.txt`.
+  - `--install` puts them back if that file is under 30 minutes old, then
+    deletes it. A real removal, or a fresh install much later, does not bring
+    them back by surprise.
+  - The first update from an older SysMon still runs the old uninstall, which
+    saves nothing. For that case `--install` falls back to the copy of
+    `config.txt` SysMon keeps (`config.txt.asl_dvs.bak`) when it is under 30
+    minutes old and the service file is gone (so it is an install after an
+    uninstall, never an install over a running SysMon where you may have just
+    turned an option off). The age is the file's change time, because the
+    backup keeps the old file's modified time.
+  - Covers instmon's Full Update and Update, a manual reinstall, and the
+    44helper reinstall job.
+- Tested: 17 checks of the save and put-back logic, and 6 end-to-end checks that
+  run the real `install_service` and `uninstall_service` against a sandbox
+  (config.txt comes back identical, installing over the top changes nothing, a
+  fresh install with nothing set changes nothing).
 
 ## 6.13.67.8-pi02w (2026-10-07)
 
