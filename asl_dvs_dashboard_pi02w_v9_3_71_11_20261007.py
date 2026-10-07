@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.10-pi02w"
+VERSION      = "9.3.71.11-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -75,7 +75,7 @@ DEFAULT_BRIDGE_NODES   = [ASL_BRIDGE_NODE, M17_NODE, PHONE_NODE, ""]
 
 _M17_USRP_DST_PORT   = 32008
 _M17_USRP_LOCAL_PORT = 34008
-_M17_NET_LOCAL_PORT  = 32010
+_M17_NET_LOCAL_PORT  = 17010
 _M17_NET_DST_PORT    = 17000
 _M17_GAIN_DB         = 3
 

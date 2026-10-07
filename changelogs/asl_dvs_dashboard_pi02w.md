@@ -1,6 +1,16 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_10_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_11_20261007.py`. Newest entries first.
+
+## 9.3.71.11-pi02w (2026-10-07)
+
+- M17: USRP2M17 now listens on UDP 17010 for reflector traffic (`LocalPort` in
+  `[M17 Network]` of `USRP2M17.ini`), was 32010. MMDVM_Bridge's stock
+  `[P25 Network]` also listens on 32010, and on node 652702 both programs held it
+  at once (`ss -ulpn`), so reflector packets could reach MMDVM_Bridge instead of
+  USRP2M17. The new port is written the next time the dashboard connects or
+  disconnects an M17 reflector. Reflectors answer the port USRP2M17 sends from,
+  so nothing else needs to change.
 
 ## 9.3.71.10-pi02w (2026-10-06)
 
