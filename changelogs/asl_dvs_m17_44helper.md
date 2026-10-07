@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_168_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_169_20261007.py`. Newest entries first.
+
+## 0.0.169 (2026-10-07)
+
+- Config tab, phone width: the Standard configuration and Digital-mode gateways
+  tables were wider than their cards (390 and 428 px in a 318 px card at 390 px
+  wide) and spilled out. Tables now scroll sideways inside their card. Tablet and
+  desktop widths were already fine; checked at 390, 800, 980 and 1280 px with
+  live-looking data.
 
 ## 0.0.168 (2026-10-07)
 

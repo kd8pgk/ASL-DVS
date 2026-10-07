@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.168"
-APP_STAGE = "v0.0.168: Config tab: reinstall the tools from the library and reboot after a config change (install over, no uninstall); history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.169"
+APP_STAGE = "v0.0.169: Config tab: reinstall the tools from the library and reboot after a config change; phone-width tables scroll inside their card; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -7787,7 +7787,7 @@ header {
 .tab.t-system-opt{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-actions-log{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-config{--mc:var(--green);--mc-rgb:0,255,176}
-.cfg-table{border-collapse:collapse;width:100%;margin:.5rem 0;font-family:var(--mono);font-size:.76rem}
+.cfg-table{border-collapse:collapse;width:100%;max-width:100%;display:block;overflow-x:auto;margin:.5rem 0;font-family:var(--mono);font-size:.76rem}
 .cfg-table th,.cfg-table td{border:1px solid var(--border2);padding:.3rem .45rem;text-align:left;vertical-align:top}
 .cfg-hint{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
 .cfg-chk{display:inline-block;margin-right:1rem;font-family:var(--mono);font-size:.8rem}
