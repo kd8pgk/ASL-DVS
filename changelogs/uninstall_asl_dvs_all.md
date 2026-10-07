@@ -1,6 +1,14 @@
 # Uninstaller (uninstall_asl_dvs_all) changelog
 
-Current file: `uninstall_asl_dvs_all_v1_2.sh`. Newest entries first.
+Current file: `uninstall_asl_dvs_all_v1_3.sh`. Newest entries first.
+
+## 1.3 (2026-10-07)
+
+- After the tools are removed, puts back the SysMon Pi02w Hardware-tab boot settings in
+  `/boot/firmware/config.txt`: removes the `#ASL-DVS-VIDEO-OFF# ` prefix (video driver back
+  on) and the `#ASL-DVS-GPUMEM-BEGIN` … `#ASL-DVS-GPUMEM-END` block (GPU memory back to the
+  default). Saves `config.txt.asl_dvs.bak` first and says a reboot is needed. Skipped when
+  the file has no ASL-DVS markers.
 
 ## 1.2 (2026-10-06)
 

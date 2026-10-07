@@ -4,6 +4,7 @@ import argparse
 import codecs
 import configparser
 import fcntl
+import glob
 import gzip
 import hmac
 import io
@@ -36,8 +37,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.4-pi02w"
-BUILD_DATE   = "20261006"
+VERSION      = "6.13.67.5-pi02w"
+BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -2460,6 +2461,15 @@ body.tab-edit #zone-content{
 .hw-pwr-val.warn{color:var(--amber)}
 .hw-pwr-val.hot{color:var(--red);text-shadow:0 0 6px rgba(255,61,90,.35)}
 .hw-pwr-val.dim{color:#fff;font-style:italic}
+.hw-vid-opt{display:flex;align-items:flex-start;gap:.55rem;padding:.45rem .9rem;
+  font-family:var(--sans);font-size:var(--fs-sm);color:var(--text-bright);cursor:pointer}
+.hw-vid-opt input[type=checkbox]{accent-color:var(--amber);margin-top:.2rem;cursor:pointer}
+.hw-vid-opt.disabled{opacity:.55;cursor:default}
+.hw-vid-pend{display:inline-block;margin-left:.4rem;padding:0 .4rem;border-radius:3px;
+  font-size:var(--fs-xs);color:#000;background:var(--amber);font-weight:bold}
+.hw-vid-refs{margin:.3rem .9rem .5rem;font-family:var(--mono);font-size:var(--fs-xs);
+  color:var(--amber);white-space:pre-wrap;word-break:break-all}
+.hw-vid-actions{display:flex;gap:.4rem;padding:.3rem .9rem .6rem}
 .hw-pwr-note{font-size:var(--fs-xs);color:#fff;
   display:block;margin-top:.08rem;line-height:1.4}
 
@@ -2984,6 +2994,16 @@ body.tab-edit #zone-content{
       </div>
       <div id="hw-pwr-body">
         <div class="stub-panel" style="min-height:80px">Loading…</div>
+      </div>
+    </div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">Video &amp; GPU Memory</span>
+        <span class="s3-card-meta" id="hw-vid-meta">—</span>
+      </div>
+      <div id="hw-vid-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
       </div>
     </div>
 
@@ -7904,6 +7924,7 @@ async function loadHardware() {
   renderAmbeSection(d.ambe  || []);
   renderAudioSection(d.audio || []);
   renderPowerSection(d.power || null);
+  renderVideoSection(d.video || null);
   loadHardwareDiag();
 }
 
@@ -8193,6 +8214,83 @@ function renderPowerSection(pwr) {
   }
 
   body.innerHTML = html;
+}
+
+function renderVideoSection(v) {
+  const body = document.getElementById("hw-vid-body");
+  const meta = document.getElementById("hw-vid-meta");
+  if (!body) return;
+  if (!v || !v.available) {
+    if (meta) meta.textContent = "not available";
+    body.innerHTML = `<div class="stub-panel" style="min-height:48px">${_esc((v && v.message) || "No data")}</div>`;
+    return;
+  }
+  const lv = v.live || {};
+  const pend = v.video_pending || v.gpumem_pending;
+  if (meta) meta.textContent = pend ? "reboot required" : "config.txt in effect";
+  const pb = (on) => on ? `<span class="hw-vid-pend">REBOOT REQUIRED</span>` : "";
+  const hdmi = (lv.hdmi || []).map(c => `${c.name}: ${c.status}`).join(", ");
+  const noVid = v.video_lines === 0;
+  let html = `<table class="hw-pwr-tbl">
+    <tr><td class="hw-pwr-lbl">Video driver</td>
+      <td class="hw-pwr-val ${lv.vc4_loaded ? "" : "ok"}">${lv.vc4_loaded ? "vc4 loaded" : "vc4 not loaded"}
+        <span class="hw-pwr-note">${_esc(hdmi ? "HDMI " + hdmi : "no HDMI outputs listed")}</span>${pb(v.video_pending)}</td></tr>
+    <tr><td class="hw-pwr-lbl">GPU memory</td>
+      <td class="hw-pwr-val">${lv.gpu_mb != null ? lv.gpu_mb + " MB" : "—"}
+        <span class="hw-pwr-note">vcgencmd get_mem gpu</span>${pb(v.gpumem_pending)}</td></tr>
+    <tr><td class="hw-pwr-lbl">CMA reserved</td>
+      <td class="hw-pwr-val">${lv.cma_mb != null ? lv.cma_mb + " MB" : "—"}
+        <span class="hw-pwr-note">memory kept back for the video driver (CmaTotal)</span></td></tr>
+  </table>`;
+  html += `<label class="hw-vid-opt${noVid && !v.video_off ? " disabled" : ""}">
+      <input type="checkbox" id="hw-vid-chk-video" ${v.video_off ? "checked" : ""}
+        ${noVid && !v.video_off ? "disabled" : ""} onchange="hwBootOpt('video', this)">
+      <span>Disable HDMI and video driver (headless)
+        <span class="hw-pwr-note">${noVid ? "no dtoverlay=vc4-kms-v3d line in config.txt" :
+          "comments out dtoverlay=vc4-kms-v3d; frees the driver and its memory"}</span></span></label>`;
+  html += `<label class="hw-vid-opt">
+      <input type="checkbox" id="hw-vid-chk-gpumem" ${v.gpumem_low ? "checked" : ""}
+        onchange="hwBootOpt('gpumem', this)">
+      <span>Lower GPU memory to ${v.gpumem_low_mb} MB
+        <span class="hw-pwr-note">adds gpu_mem=${v.gpumem_low_mb}; camera and video decoding stop working</span></span></label>`;
+  if ((lv.hdmi_sound || []).length) {
+    html += `<div class="hw-diag-note">HDMI sound card(s) (${_esc(lv.hdmi_sound.join(", "))}) go away with the video
+      driver, so other sound cards can get a new number.</div>`;
+  }
+  if ((v.hw_refs || []).length) {
+    html += `<div class="hw-diag-note">These settings name a sound card by number and may need changing:</div>
+      <div class="hw-vid-refs">${_esc(v.hw_refs.join("\n"))}</div>`;
+  }
+  html += `<div class="hw-diag-note">With the video driver off you cannot plug in a monitor to get back in. If the network
+    fails, edit config.txt on the SD card from another computer (remove the #ASL-DVS-VIDEO-OFF# prefix).
+    Copy from before the last change: ${_esc(v.backup)}</div>`;
+  if (pend) {
+    html += `<div class="hw-vid-actions"><button class="btn btn-sm" onclick="postAction('/api/reboot','reboot',this,'⟳ Reboot now to apply the config.txt change?')">⟳ Reboot now</button></div>`;
+  }
+  body.innerHTML = html;
+}
+
+async function hwBootOpt(opt, el) {
+  const on = el.checked;
+  let msg;
+  if (opt === "video") {
+    msg = on ? "Disable HDMI and the video driver in config.txt? Takes effect after a reboot. A monitor will no longer show anything."
+             : "Turn the HDMI video driver back on in config.txt? Takes effect after a reboot.";
+    const refs = document.querySelector(".hw-vid-refs");
+    if (on && refs) msg += " Some settings name a sound card by number (listed on the card). Check them after the reboot.";
+  } else {
+    msg = on ? "Lower GPU memory to 16 MB in config.txt? Takes effect after a reboot."
+             : "Put GPU memory back to the default in config.txt? Takes effect after a reboot.";
+  }
+  const ok = await confirm(msg);
+  if (!ok) { el.checked = !on; return; }
+  el.disabled = true;
+  const d = await api("/api/hardware", "POST", {action: "boot_opt", opt, on});
+  el.disabled = false;
+  if (!d) { el.checked = !on; toast("Server unreachable", "err"); return; }
+  toast(d.message || (d.ok ? "OK" : "Failed"), d.ok ? "ok" : "err");
+  if (d.video) renderVideoSection(d.video);
+  else if (!d.ok) el.checked = !on;
 }
 
 function renderAmbeSection(devices) {
@@ -18798,6 +18896,7 @@ def _route_hardware_get(h: Handler) -> None:
             "core_volts":  get_pi_voltage(),
             "cpu_temp":    get_cpu_temp(),
         },
+        "video": get_video_state(),
     })
 
 def _route_hardware_diag(h: Handler) -> None:
@@ -18979,7 +19078,224 @@ def _hw_reset_ambe(h: Handler, data: dict) -> None:
         "restart_results": restart_results,
     }, 200 if result["ok"] else 500)
 
+BOOT_CONFIG      = Path("/boot/firmware/config.txt")
+_BOOTCFG_BACKUP  = "config.txt.asl_dvs.bak"
+_VIDEO_OFF_TAG   = "#ASL-DVS-VIDEO-OFF# "
+_GPUMEM_BEGIN    = "#ASL-DVS-GPUMEM-BEGIN"
+_GPUMEM_END      = "#ASL-DVS-GPUMEM-END"
+_GPUMEM_LOW_MB   = 16
+_VC4_OVERLAY_RE  = re.compile(r'^\s*dtoverlay\s*=\s*vc4-f?kms-v3d\b')
+_GPUMEM_LINE_RE  = re.compile(r'^\s*gpu_mem\s*=\s*(\d+)')
+_HW_REF_RE       = re.compile(r'\b(?:plug)?hw:\s*\d+|^\s*card\s+\d+\b|\bcard\s*=\s*\d+\b', re.I)
+_HW_REF_GLOBS    = ("/etc/asterisk/*.conf", "/opt/Analog_Bridge/*.ini",
+                    "/opt/MMDVM_Bridge/*.ini", "/etc/asound.conf", "/root/.asoundrc")
+
+def _bootcfg_parse(text: str) -> dict:
+    lines = text.splitlines()
+    active = [ln for ln in lines if _VC4_OVERLAY_RE.match(ln)]
+    tagged = [ln for ln in lines if ln.startswith(_VIDEO_OFF_TAG)]
+    in_block = False
+    gpu_low = False
+    other_gpu = None
+    for ln in lines:
+        s = ln.strip()
+        if s == _GPUMEM_BEGIN:
+            in_block = gpu_low = True
+            continue
+        if s == _GPUMEM_END:
+            in_block = False
+            continue
+        if not in_block:
+            m = _GPUMEM_LINE_RE.match(ln)
+            if m:
+                other_gpu = int(m.group(1))
+    return {
+        "video_off":       bool(tagged) and not active,
+        "video_partial":   bool(tagged) and bool(active),
+        "video_lines":     len(active) + len(tagged),
+        "gpumem_low":      gpu_low,
+        "gpumem_other":    other_gpu,
+    }
+
+def _bootcfg_set_video(text: str, off: bool) -> str:
+    out = []
+    for ln in text.splitlines(keepends=True):
+        if off and _VC4_OVERLAY_RE.match(ln):
+            out.append(_VIDEO_OFF_TAG + ln)
+        elif not off and ln.startswith(_VIDEO_OFF_TAG):
+            out.append(ln[len(_VIDEO_OFF_TAG):])
+        else:
+            out.append(ln)
+    return "".join(out)
+
+def _bootcfg_set_gpumem(text: str, low: bool) -> str:
+    out = []
+    skip = False
+    for ln in text.splitlines(keepends=True):
+        s = ln.strip()
+        if s == _GPUMEM_BEGIN:
+            skip = True
+            continue
+        if skip:
+            if s == _GPUMEM_END:
+                skip = False
+            continue
+        out.append(ln)
+    res = "".join(out)
+    if low:
+        if res and not res.endswith("\n"):
+            res += "\n"
+        res += (f"{_GPUMEM_BEGIN}\n[all]\ngpu_mem={_GPUMEM_LOW_MB}\n{_GPUMEM_END}\n")
+    return res
+
+def _bootcfg_write(new_text: str) -> None:
+    d = BOOT_CONFIG.parent
+    shutil.copy2(BOOT_CONFIG, d / _BOOTCFG_BACKUP)
+    tmp = d / (BOOT_CONFIG.name + ".asl_dvs.tmp")
+    with open(tmp, "w") as fh:
+        fh.write(new_text)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, BOOT_CONFIG)
+    try:
+        fd = os.open(str(d), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
+    os.sync()
+
+def _bootcfg_restore_all() -> bool:
+    try:
+        text = BOOT_CONFIG.read_text()
+    except OSError:
+        return False
+    new = _bootcfg_set_gpumem(_bootcfg_set_video(text, False), False)
+    if new == text:
+        return False
+    _bootcfg_write(new)
+    return True
+
+def _video_live_state() -> dict:
+    try:
+        mods = Path("/proc/modules").read_text()
+    except OSError:
+        mods = ""
+    vc4 = any(ln.split(" ", 1)[0] == "vc4" for ln in mods.splitlines())
+    hdmi = []
+    for st in sorted(Path("/sys/class/drm").glob("card*-HDMI-*/status")):
+        try:
+            hdmi.append({"name": st.parent.name.split("-", 1)[1],
+                         "status": st.read_text().strip()})
+        except OSError:
+            pass
+    cma_kb = None
+    try:
+        for ln in Path("/proc/meminfo").read_text().splitlines():
+            if ln.startswith("CmaTotal:"):
+                cma_kb = int(ln.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    gpu_mb = None
+    m = re.search(r'gpu=(\d+)M', _run(["vcgencmd", "get_mem", "gpu"], timeout=3))
+    if m:
+        gpu_mb = int(m.group(1))
+    hdmi_snd = []
+    try:
+        for ln in Path("/proc/asound/cards").read_text().splitlines():
+            mm = re.match(r'\s*(\d+)\s+\[([^\]]+)\]\s*:\s*(.*)', ln)
+            if mm and ("hdmi" in mm.group(2).lower() or "hdmi" in mm.group(3).lower()):
+                hdmi_snd.append(f"card {mm.group(1)}: {mm.group(2).strip()}")
+    except OSError:
+        pass
+    return {"vc4_loaded": vc4, "hdmi": hdmi, "cma_mb": (cma_kb // 1024) if cma_kb is not None else None,
+            "gpu_mb": gpu_mb, "hdmi_sound": hdmi_snd}
+
+def _video_hw_refs(limit: int = 12) -> list:
+    refs = []
+    for pat in _HW_REF_GLOBS:
+        for fn in sorted(glob.glob(pat)):
+            try:
+                with open(fn, errors="replace") as fh:
+                    for n, ln in enumerate(fh, 1):
+                        body = ln.split(";", 1)[0] if fn.endswith(".conf") and "asterisk" in fn else ln
+                        if body.lstrip().startswith("#"):
+                            continue
+                        if _HW_REF_RE.search(body):
+                            refs.append(f"{fn}:{n}: {ln.strip()[:120]}")
+                            if len(refs) >= limit:
+                                return refs
+            except OSError:
+                continue
+    return refs
+
+def get_video_state() -> dict:
+    try:
+        text = BOOT_CONFIG.read_text()
+    except OSError:
+        return {"available": False, "config": str(BOOT_CONFIG),
+                "message": f"{BOOT_CONFIG} not found (Bookworm or Trixie only)"}
+    cfg  = _bootcfg_parse(text)
+    live = _video_live_state()
+    video_pending = cfg["video_lines"] > 0 and (cfg["video_off"] == live["vc4_loaded"])
+    gpu_pending = False
+    if live["gpu_mb"] is not None:
+        if cfg["gpumem_low"]:
+            gpu_pending = live["gpu_mb"] != _GPUMEM_LOW_MB
+        else:
+            gpu_pending = (live["gpu_mb"] == _GPUMEM_LOW_MB
+                           and cfg["gpumem_other"] != _GPUMEM_LOW_MB)
+    return {
+        "available":      True,
+        "config":         str(BOOT_CONFIG),
+        "video_off":      cfg["video_off"],
+        "video_partial":  cfg["video_partial"],
+        "video_lines":    cfg["video_lines"],
+        "gpumem_low":     cfg["gpumem_low"],
+        "gpumem_other":   cfg["gpumem_other"],
+        "gpumem_low_mb":  _GPUMEM_LOW_MB,
+        "video_pending":  video_pending,
+        "gpumem_pending": gpu_pending,
+        "backup":         str(BOOT_CONFIG.parent / _BOOTCFG_BACKUP),
+        "live":           live,
+        "hw_refs":        _video_hw_refs() if (not cfg["video_off"] and live["hdmi_sound"]) else [],
+    }
+
+def _hw_boot_opt(h: Handler, data: dict) -> None:
+    opt = str(data.get("opt", "")).strip()
+    on  = bool(data.get("on"))
+    if opt not in ("video", "gpumem"):
+        h.send_json({"ok": False, "message": f"unknown option '{opt}'"}, 400); return
+    try:
+        text = BOOT_CONFIG.read_text()
+    except OSError as e:
+        h.send_json({"ok": False, "message": f"cannot read {BOOT_CONFIG}: {e}"}); return
+    cfg = _bootcfg_parse(text)
+    if opt == "video":
+        if on and cfg["video_lines"] == 0:
+            h.send_json({"ok": False, "message":
+                         "No dtoverlay=vc4-kms-v3d line in config.txt; the video driver is not loaded from there"})
+            return
+        new = _bootcfg_set_video(text, on)
+        what = "HDMI and video driver " + ("disabled" if on else "restored")
+    else:
+        new = _bootcfg_set_gpumem(text, on)
+        what = f"GPU memory {'set to ' + str(_GPUMEM_LOW_MB) + ' MB' if on else 'restored to the default'}"
+    if new == text:
+        h.send_json({"ok": True, "message": f"No change needed ({what} already)",
+                     "video": get_video_state()}); return
+    try:
+        _bootcfg_write(new)
+    except OSError as e:
+        h.send_json({"ok": False, "message": f"write failed: {e}"}); return
+    _log(f"config.txt: {what}", stderr=True)
+    h.send_json({"ok": True, "message": f"{what} in config.txt. Reboot to apply.",
+                 "video": get_video_state()})
+
 _HARDWARE_ACTIONS = {
+    "boot_opt":   _hw_boot_opt,
     "set_udev":   _hw_set_udev,
     "del_udev":   _hw_del_udev,
     "set_tty":    _hw_set_tty,
@@ -22277,6 +22593,12 @@ def uninstall_service() -> None:
             except FileNotFoundError:
                 pass
     _remove_launcher_if_unused()
+
+    try:
+        if _bootcfg_restore_all():
+            print(f"  [-] Restored HDMI/video driver and GPU memory in {BOOT_CONFIG} (reboot to apply)")
+    except OSError as e:
+        print(f"  [!] Could not restore {BOOT_CONFIG}: {e}")
 
     print(f"\nUninstall complete. {CONFIG_FILE} was not touched.")
 

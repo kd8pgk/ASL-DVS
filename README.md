@@ -40,8 +40,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_69_20261006.py` | `sysmon_pi02w_v6_13_67_4_20261006.py` | `instmon_v2_38_2_20261006.py` |
-| `VERSION` | `6.13.69` | `6.13.67.4-pi02w` | `2.38.2` |
+| File name | `sysmon_v6_13_69_20261006.py` | `sysmon_pi02w_v6_13_67_5_20261007.py` | `instmon_v2_38_2_20261006.py` |
+| `VERSION` | `6.13.69` | `6.13.67.5-pi02w` | `2.38.2` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -170,12 +170,14 @@ memory settles from the next restart on.
 ## Removing everything
 
 ```
-sudo bash uninstall_asl_dvs_all_v1_2.sh
+sudo bash uninstall_asl_dvs_all_v1_3.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
 instmon's library and `/etc/wifimon/wifimon.conf` in place. To remove instmon
-afterwards, run its own `--uninstall`.
+afterwards, run its own `--uninstall`. If the SysMon Pi02w Hardware tab turned off
+the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
+(reboot to apply).
 
 ## Files
 
@@ -185,14 +187,14 @@ afterwards, run its own `--uninstall`.
 | `asl_dvs_dashboard_pi02w_v9_3_71_10_20261006.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
 | `sysmon_v6_13_69_20261006.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_67_4_20261006.py` | SysMon, Pi Zero 2 W (current) |
+| `sysmon_pi02w_v6_13_67_5_20261007.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
 | `instmon_v2_38_2_20261006.py` | common |
 | `wifimon_v5_26_20261006.py` | common |
 | `asl_dvs_m17_44helper_v0_0_159_20261006.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_asl_dvs_v6_6_20261006.sh` | common |
-| `uninstall_asl_dvs_all_v1_2.sh` | common |
+| `uninstall_asl_dvs_all_v1_3.sh` | common |
 | `wifi_menu.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
