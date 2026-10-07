@@ -1,6 +1,23 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_165_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_166_20261007.py`. Newest entries first.
+
+## 0.0.166 (2026-10-07)
+
+Stage 4 of the standard-configuration work: how a node differs from stock, and the standard values.
+
+- **Standard configuration card** on the Config tab. It lists only what differs from the stock ASL3 and DVSwitch files, with the stock value beside it and an **Apply** and **Undo** per setting. Nothing changes by itself.
+  - **Apply** shows the change first (a diff), saves the current files as an automatic copy, then writes only that value, keeping the line's spacing and trailing comment. Services are not restarted until you press Restart.
+  - **Undo** puts back the exact original line (or removes a line that Apply added) and gives back the identical file. A value you changed since is left alone and reported.
+  - The dashboard's Phone-tab blocks are never touched. Identity (callsigns, IDs, passwords) and the node's radio tuning are never listed.
+- **Bridge nodes.** Each private node with a USRP channel (the DVSwitch and M17 bridges) gets a "standard USRP values" setting: the upstream USRP2M17 values `duplex 0`, `hangtime 0`, `althangtime 0`, `holdofftelem 1`, `telemdefault 0`, `telemdynamic 0`, `linktolink no`, `nounkeyct 1`, `tx_timeout 170000`. A bridge node should not inherit a radio's hang time, telemetry or courtesy tones. The values go into the node's own stanza, not the template, so they work on a fresh node whose template is still stock.
+- **Presets** now give the bridge nodes they apply the same standard values (the preview says which nodes got them). Private nodes that are not USRP channels are left as they are.
+- **Template items (stock for a new build; your own value is fine):** `[node-main]` `duplex` 2, `hangtime` 2000, `althangtime` 4000, `telemdefault` 2, and the `713` / `714` status commands in `[functions-main]`.
+- **Optional efficiency:**
+  - **Debug logging off:** `Debug=0` in the five MMDVM_Bridge networks and `logLevel = 2` in Analog_Bridge. A new build keeps debug on; turn it off when the node is stable to save SD-card writes. (`[Log] DisplayLevel` is already 1 in stock, so it is not touched.)
+  - **Unload chan_usbradio:** refused when any node uses the USB Radio channel, when `chan_simpleusb` is not loaded, and left alone when it is a `require` line.
+- **Shown only, never applied:** the IAX port (`bindport`), `chan_usrp` (wiring), `savenode` `ENABLE` and the YSF inactivity timeout (your choices).
+- **Fix:** setting a key that had an empty value (`linktolink =`) no longer produces `linktolink =no`.
 
 ## 0.0.165 (2026-10-07)
 
