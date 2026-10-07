@@ -1,6 +1,20 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_163_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_164_20261007.py`. Newest entries first.
+
+## 0.0.164 (2026-10-07)
+
+Stage 2 of the standard-configuration work: the digital-mode gateways.
+
+- **Gateways at boot.** On node 652702 `p25gateway` and `nxdngateway` were installed but disabled (their unit preset says enabled), so P25 and NXDN only ran after their dashboard page had been opened. `ircddbgatewayd`, `ysfgateway` and `stfu` were already enabled.
+  - New DVSwitch tab install step "Enable the digital-mode gateways at boot" (step 6 on Bookworm, step 8 on Trixie): enables and starts `ircddbgatewayd`, `ysfgateway`, `p25gateway`, `nxdngateway` and `stfu` when it exists. It fails naming any of the four that are not installed as services. Later steps move down one (the save step is now 12 on Bookworm and 14 on Trixie).
+  - New **Digital-mode gateways** card on the Config tab for nodes that are already installed: a table of each service (installed, starts at boot, running) with "Enable and start at boot" and "Undo". Undo disables only the gateways this card enabled. No config file is changed.
+  - The dashboard still starts a gateway when its page is opened and restarts it when you leave.
+- **Gateway files in the saved set** (DVSwitch group, whole files kept only on the node, never in presets, and not reported as missing when absent): `/opt/YSFGateway/YSFGateway.ini`, `/opt/P25Gateway/P25Gateway.ini`, `/opt/NXDNGateway/NXDNGateway.ini`.
+- **Gateway pairing checks** in the Port check card (warn only; nothing is changed):
+  - Each gateway's ports must mirror MMDVM_Bridge's: System Fusion (YSFGateway), P25 (P25Gateway), NXDN (NXDNGateway) and D-Star (ircDDBGateway). A network that is disabled in `MMDVM_Bridge.ini`, or a file that is missing, is skipped.
+  - `DVSwitch.ini` `RemotePort` must match each gateway's command port (P25, NXDN, YSF when it has a `[Remote Commands]` section, and D-Star).
+  - The P25, NXDN and YSF gateways' listening ports join the port-clash check.
 
 ## 0.0.163 (2026-10-07)
 
