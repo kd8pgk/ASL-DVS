@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.12-pi02w"
+VERSION      = "9.3.71.13-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -7969,6 +7969,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
   flex-shrink: 0;
 }
 .ref-mod-sel:focus { border-color: var(--amber); }
+#m17-grid .ref-mod-sel, #qt-M17-mod { width: 7.6rem; }
 .ref-mod-sel option { background: var(--surface2); }
 .btn-conn  { color: var(--teal); border-color: var(--teal-dim); }
 .btn-conn-pink { color: var(--pink); border-color: var(--pink-dim); }
