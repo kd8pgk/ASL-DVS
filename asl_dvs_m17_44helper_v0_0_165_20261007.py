@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.164"
-APP_STAGE = "v0.0.164: Config tab and DVSwitch tab: gateways at boot, gateway files saved, gateway pairing checks; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.165"
+APP_STAGE = "v0.0.165: Config tab: what is listening now (bind address, firewall verdict), command ports on the Ports tab; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -7129,6 +7129,10 @@ _SERVICE_PORT_DEFS: list[tuple[str, int, str, str, bool]] = [
     ("Zello bridge TX leg", 32012, "udp", "AllStarLink / DVSwitch", False),
     ("DVSwitch AMBE bridge (Analog_Bridge listen)", 31100, "udp", "AllStarLink / DVSwitch", False),
     ("DVSwitch AMBE bridge (MMDVM_Bridge listen)", 31103, "udp", "AllStarLink / DVSwitch", False),
+    ("YSFGateway commands", 6073, "udp", "AllStarLink / DVSwitch", True),
+    ("P25Gateway commands", 6074, "udp", "AllStarLink / DVSwitch", True),
+    ("NXDNGateway commands", 6075, "udp", "AllStarLink / DVSwitch", True),
+    ("ircDDBGateway remote control", 54321, "udp", "AllStarLink / DVSwitch", True),
     ("USRP2M17 USRP leg (target app)", 34008, "udp", "M17", False),
     ("USRP2M17 USRP leg (Asterisk listen)", 32008, "udp", "M17", False),
     ("Ampersand web UI (amp-server/amp-hub)", 8080, "tcp", "Ampersand", True),
@@ -7167,6 +7171,10 @@ _PORTS_REFERENCE: list[tuple[str, str, str, str, bool]] = [
     ("Zello TX", "32012", "udp", "Zello bridge USRP leg — loopback-only, never needs forwarding", False),
     ("DVSwitch AB listen", "31100", "udp", "DVSwitch AMBE bridge, Analog_Bridge<->MMDVM_Bridge — loopback-only, never needs forwarding", False),
     ("DVSwitch MB listen", "31103", "udp", "DVSwitch AMBE bridge, Analog_Bridge<->MMDVM_Bridge — loopback-only, never needs forwarding", False),
+    ("YSFGateway commands", "6073", "udp", "YSF gateway remote-command port, used by the dvs tool on this node only — risky if public, never needs forwarding", True),
+    ("P25Gateway commands", "6074", "udp", "P25 gateway remote-command port, used by the dvs tool on this node only — risky if public, never needs forwarding", True),
+    ("NXDNGateway commands", "6075", "udp", "NXDN gateway remote-command port, used by the dvs tool on this node only — risky if public, never needs forwarding", True),
+    ("ircDDBGateway remote control", "54321", "udp", "D-Star gateway remote-control port (its password is the repeater ID, which is public) — risky if public, never needs forwarding", True),
     ("sysmon", "9999", "tcp", "sysmon dashboard", True),
     ("asl_dvs_dashboard", "8989", "tcp", "asl_dvs_dashboard", True),
     ("Cockpit", "9090", "tcp", "System management UI", True),
@@ -7187,6 +7195,10 @@ _PORT_ROLES: dict[str, tuple[str, str]] = {
     "32012/udp":        ("DVSwitch",              "loopback-only"),
     "31100/udp":        ("DVSwitch",              "loopback-only"),
     "31103/udp":        ("DVSwitch",              "loopback-only"),
+    "6073/udp":         ("DVSwitch",              "loopback-only"),
+    "6074/udp":         ("DVSwitch",              "loopback-only"),
+    "6075/udp":         ("DVSwitch",              "loopback-only"),
+    "54321/udp":        ("DVSwitch",              "loopback-only"),
     "9999/tcp":         ("Dashboards",            "mgmt-LAN"),
     "8989/tcp":         ("Dashboards",            "mgmt-LAN"),
     "9090/tcp":         ("System management",     "mgmt-LAN"),
@@ -9628,6 +9640,186 @@ def _cfgr_act_gateways_revert(payload: dict) -> dict:
     log(f"{'OK' if ok else 'FAIL'}: CONFIG gateways undone")
     return {"success": ok, "output": "\n".join(lines)}
 
+_CFGR_FW_SERVICE_DIRS = ("/etc/firewalld/services", "/usr/lib/firewalld/services")
+_CFGR_CMD_PORTS: dict[tuple[str, str], str] = {("6073", "udp"): "YSFGateway", ("6074", "udp"): "P25Gateway",
+                                               ("6075", "udp"): "NXDNGateway", ("54321", "udp"): "ircDDBGateway"}
+_CFGR_SS_RE = re.compile(r"^(tcp|udp)\s+(\S+)\s+\d+\s+\d+\s+(\S+)\s+(\S+)\s*(.*)$")
+_CFGR_SS_PROC_RE = re.compile(r'users:\(\("([^"]+)",pid=(\d+)')
+_CFGR_BROAD_RANGE = 100
+
+def _cfgr_split_addr(a: str) -> tuple[str, str]:
+    if a.startswith("[") and "]" in a:
+        host, port = a[1:a.index("]")], a.rsplit(":", 1)[1]
+    else:
+        host, _, port = a.rpartition(":")
+    return host.split("%")[0], port
+
+def _cfgr_bind_class(host: str) -> str:
+    if host in ("0.0.0.0", "::", "*", ""):
+        return "all"
+    if host.startswith("127.") or host == "::1":
+        return "loopback"
+    return "address"
+
+def _cfgr_ss_listeners() -> list[dict] | None:
+    try:
+        r = subprocess.run(["ss", "-H", "-tulnp"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode != 0:
+        return None
+    rank = {"loopback": 0, "address": 1, "all": 2}
+    seen: dict[tuple[str, str, str], dict] = {}
+    for line in r.stdout.splitlines():
+        m = _CFGR_SS_RE.match(line.strip())
+        if not m:
+            continue
+        proto, state, local, _peer, rest = m.groups()
+        if (proto == "udp" and state != "UNCONN") or (proto == "tcp" and state != "LISTEN"):
+            continue
+        host, port = _cfgr_split_addr(local)
+        if not port.isdigit():
+            continue
+        pm = _CFGR_SS_PROC_RE.search(rest)
+        proc = pm.group(1) if pm else ""
+        key = (proto, port, proc)
+        bind = _cfgr_bind_class(host)
+        if key not in seen or rank[bind] > rank[seen[key]["bind"]]:
+            seen[key] = {"proto": proto, "port": port, "process": proc, "pid": pm.group(2) if pm else "",
+                         "bind": bind, "address": host}
+    return sorted(seen.values(), key=lambda x: (x["proto"], int(x["port"]), x["process"]))
+
+def _cfgr_fw_ports(text: str) -> list[tuple[int, int, str]]:
+    out = []
+    for item in text.split():
+        m = re.match(r"^(\d+)(?:-(\d+))?/(tcp|udp)$", item)
+        if m:
+            out.append((int(m.group(1)), int(m.group(2) or m.group(1)), m.group(3)))
+    return out
+
+def _cfgr_fw_service_ports(name: str) -> list[tuple[int, int, str]]:
+    if not re.match(r"^[A-Za-z0-9._-]+$", name):
+        return []
+    for d in _CFGR_FW_SERVICE_DIRS:
+        try:
+            root = ET.parse(os.path.join(d, name + ".xml")).getroot()
+        except (OSError, ET.ParseError):
+            continue
+        out = []
+        for e in root.findall("port"):
+            out += _cfgr_fw_ports(f"{e.get('port', '')}/{e.get('protocol', '')}")
+        return out
+    return []
+
+def _cfgr_firewall_info() -> dict | None:
+    try:
+        az = subprocess.run(["firewall-cmd", "--get-active-zones"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if az.returncode != 0:
+        return None
+    names = [ln.strip() for ln in az.stdout.splitlines() if ln.strip() and not ln.startswith((" ", "\t"))]
+    zones = []
+    services: dict[str, list[tuple[int, int, str]]] = {}
+    for name in names:
+        name = name.split(" ")[0]
+        try:
+            r = subprocess.run(["firewall-cmd", f"--zone={name}", "--list-all"], capture_output=True, text=True, timeout=15)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode != 0:
+            continue
+        d: dict[str, str] = {}
+        for ln in r.stdout.splitlines():
+            if ln.startswith("  ") and ":" in ln:
+                k, _, v = ln.strip().partition(":")
+                d[k.strip()] = v.strip()
+        svc = d.get("services", "").split()
+        for sv in svc:
+            if sv not in services:
+                services[sv] = _cfgr_fw_service_ports(sv)
+        zones.append({"name": name, "interfaces": d.get("interfaces", "").split(), "target": d.get("target", "default"),
+                      "ports": _cfgr_fw_ports(d.get("ports", "")), "services": svc})
+    return {"zones": zones, "services": services} if zones else None
+
+def _cfgr_fw_allows(fw: dict, port: int, proto: str) -> tuple[str, str, int]:
+    for z in fw["zones"]:
+        if z["target"].upper() == "ACCEPT":
+            return "open", f"zone {z['name']} accepts everything", 65536
+        for lo, hi, pr in z["ports"]:
+            if pr == proto and lo <= port <= hi:
+                return "open", (f"{lo}-{hi}/{pr}" if lo != hi else f"{port}/{pr}"), hi - lo + 1
+        for sv in z["services"]:
+            for lo, hi, pr in fw["services"].get(sv, []):
+                if pr == proto and lo <= port <= hi:
+                    return "open", f"service {sv}", hi - lo + 1
+    return "blocked", "", 0
+
+def _cfgr_listening_report() -> dict:
+    live = _cfgr_ss_listeners()
+    fw = _cfgr_firewall_info()
+    rep: dict = {"available": live is not None, "firewall": "", "rows": [], "findings": [], "loopback_only": 0,
+                 "blocked": 0, "checked_at": _cfgr_now()}
+    if live is None:
+        rep["findings"].append({"level": "info", "text": "Could not read the listening ports (the ss command is not available)."})
+        return rep
+    if fw is None:
+        rep["firewall"] = "not available"
+        rep["findings"].append({"level": "info", "text": "No firewall data: firewalld is not running or not installed, so "
+                                "nothing here can say whether a port is reachable."})
+    else:
+        rep["firewall"] = "; ".join(f"{z['name']} ({', '.join(z['interfaces']) or 'no interfaces'}, target {z['target']})"
+                                    for z in fw["zones"])
+    for l in live:
+        if l["bind"] == "loopback":
+            rep["loopback_only"] += 1
+            continue
+        port = int(l["port"])
+        cmd = _CFGR_CMD_PORTS.get((l["port"], l["proto"]))
+        if fw is None:
+            verdict, via, width = "unknown", "", 0
+        else:
+            verdict, via, width = _cfgr_fw_allows(fw, port, l["proto"])
+        note = ""
+        if cmd:
+            if verdict == "blocked":
+                note = f"{cmd} command port, blocked by the firewall"
+            else:
+                note = f"{cmd} command port"
+                rep["findings"].append({"level": "danger", "text": (
+                    f"{l['proto'].upper()} {l['port']} ({cmd} command port) is bound to every interface and "
+                    + ("the firewall allows it" if verdict == "open" else "there is no firewall data")
+                    + ". Anyone on the network can send it link commands. It is only used from this node: close it.")})
+        elif verdict == "open" and width >= _CFGR_BROAD_RANGE and not l["process"].lower().startswith("asterisk"):
+            note = f"only open through the broad range {via}"
+            rep["findings"].append({"level": "warn", "text": (
+                f"{l['proto'].upper()} {l['port']} ({l['process'] or 'unknown'}) is reachable from the network only because "
+                f"the firewall opens the broad range {via}. Narrow that range to what is needed (for example the phone "
+                "feature's RTP ports), or move this port out of it.")})
+        if verdict == "blocked":
+            rep["blocked"] += 1
+            if not cmd:
+                continue
+        rep["rows"].append({**l, "verdict": verdict, "via": via, "note": note})
+    udp_live = {l["port"] for l in live if l["proto"] == "udp"}
+    missing: dict[str, list[str]] = {}
+    for port, prog, _where in _cfgr_listeners():
+        if port not in udp_live:
+            missing.setdefault(prog, [])
+            if port not in missing[prog]:
+                missing[prog].append(port)
+    for prog, ports in sorted(missing.items()):
+        rep["findings"].append({"level": "info", "text": (
+            f"{prog} is configured to listen on UDP {', '.join(sorted(ports, key=int))}, but nothing is listening there "
+            "(is it running?).")})
+    order = {"danger": 0, "warn": 1, "info": 2}
+    rep["findings"].sort(key=lambda f: order[f["level"]])
+    rep["rows"].sort(key=lambda r: (r["verdict"] != "open", r["proto"], int(r["port"])))
+    return rep
+
+def _route_config_listeners(query: dict) -> tuple[int, str, bytes]:
+    return 200, "application/json", json.dumps(_cfgr_listening_report()).encode("utf-8")
+
 def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], list[str], str]:
     changes: dict[str, tuple[bytes, bytes]] = {}
     notes: list[str] = []
@@ -9955,6 +10147,36 @@ function cfgDiff(btn, g, path) {
   cfgPost({action: 'diff', group: g, path: path}, 'cfg-diff-out', btn);
 }
 
+function cfgListening(btn) {
+  var box = document.getElementById('cfg-listen');
+  if (btn) btn.disabled = true;
+  box.innerHTML = '<span class="cfg-hint">Checking…</span>';
+  fetch('/api/config/listeners').then(function(r) { return r.json(); }).then(function(d) {
+    if (btn) btn.disabled = false;
+    var lvl = {danger: 'lvl-danger', warn: 'lvl-warn', info: 'lvl-info'};
+    var h = (d.findings || []).map(function(f) { return '<div class="ov-banner ' + lvl[f.level] + '">' + cfgEsc(f.text) + '</div>'; }).join('');
+    if (d.available) {
+      h += '<div class="cfg-hint">Firewall: ' + cfgEsc(d.firewall || 'not available') + ' &middot; ' + (d.loopback_only || 0) +
+           ' listen on this node only &middot; ' + (d.blocked || 0) + ' blocked by the firewall</div>';
+      var rows = d.rows || [];
+      if (rows.length) {
+        h += '<table class="cfg-table"><tr><th>Port</th><th>Process</th><th>Listens on</th><th>Firewall</th><th>Note</th></tr>';
+        rows.forEach(function(r) {
+          h += '<tr><td>' + cfgEsc(r.proto.toUpperCase() + ' ' + r.port) + '</td><td>' + cfgEsc(r.process || '?') + '</td><td>' +
+               (r.bind === 'all' ? 'every interface' : cfgEsc(r.address)) + '</td><td>' +
+               (r.verdict === 'open' ? 'open (' + cfgEsc(r.via) + ')' : (r.verdict === 'blocked' ? 'blocked' : 'unknown')) +
+               '</td><td>' + cfgEsc(r.note) + '</td></tr>';
+        });
+        h += '</table>';
+      }
+    }
+    box.innerHTML = h || '<span class="cfg-hint">Nothing to report.</span>';
+  }).catch(function(e) {
+    if (btn) btn.disabled = false;
+    box.innerHTML = '<div class="ov-banner lvl-danger">Request failed: ' + cfgEsc(e) + '</div>';
+  });
+}
+
 function cfgGateways(btn, action) {
   var msg = action === 'gateways_apply'
     ? 'Enable and start the digital-mode gateways now?\n\nThey start at every boot afterwards. This does not change any config file.'
@@ -10125,8 +10347,12 @@ def _render_config_panel() -> str:
     <div class="step-body">UDP ports that more than one program listens on, across rpt.conf, Analog_Bridge.ini,
       DVSwitch.ini, MMDVM_Bridge.ini, USRP2M17.ini, ircddbgateway and the YSF, P25 and NXDN gateways. A sender
       pointing at a listener is a pair, not a clash. It also checks that each gateway's ports mirror MMDVM_Bridge's and
-      that DVSwitch.ini's RemotePort matches the gateway's command port.</div>
+      that DVSwitch.ini's RemotePort matches the gateway's command port. "Check what is listening now" reads the live
+      listening ports and the firewall: it shows which ports are reachable from the network, flags the gateway command
+      ports and any port that is only open through a broad firewall range, and lists configured ports nothing listens on.</div>
     <div id="cfg-ports"></div>
+    <div class="step-actions"><button class="btn-copy" onclick="cfgListening(this)">Check what is listening now</button></div>
+    <div id="cfg-listen"></div>
   </div>
 
   <button class="btn-recheck" onclick="refreshConfig()">Re-check</button>
@@ -17260,6 +17486,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/quiet/status": _route_quiet_status,
     "/api/system_opt/status": _route_system_opt_status,
     "/api/config/status": _route_config_status,
+    "/api/config/listeners": _route_config_listeners,
     "/api/action_status": _route_action_status,
 }
 
