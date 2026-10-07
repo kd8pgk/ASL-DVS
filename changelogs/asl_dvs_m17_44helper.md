@@ -1,6 +1,19 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_159_20261006.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_160_20261007.py`. Newest entries first.
+
+## 0.0.160 (2026-10-07)
+
+SvxLink tab, USRP fork install (Bookworm and Trixie alike). Checked against the fork's own source (dl1hrc/svxlink, branch `svxlink-usrp`, commit 769d39b) and with a full build.
+
+- Build step no longer stops every time. Its check looked for the text `WITH_CONTRIB_USRP_LOGIC` in the build files, but the fork builds that switch name from `add_contrib(USRP_LOGIC ...)`, so the text is never there. The check now looks for the UsrpLogic folder and that line, and after cmake it requires `WITH_CONTRIB_USRP_LOGIC:BOOL=ON` in `CMakeCache.txt`.
+- "Create the svxlink user" moved ahead of the build (now step 3). `make install` hands some folders to the `svxlink` user and stops with an error if the user does not exist yet.
+- svxlink.conf snippet (step 8) adds `LINKS=LinkToUsrp` to `[GLOBAL]`. Without it SvxLink ignores the `[LinkToUsrp]` section and no audio crosses to the USRP side. The snippet also says to take `ModuleEchoLink` out of `MODULES=` (it uses UDP 5198/5199, the same as ASL3's EchoLink) and how to give a Pi Zero 2 W a sound card (USB, or `snd-dummy` for USRP-only use).
+- Step 3 adds the `svxlink` user to the `gpio` group when that group exists (Raspberry Pi OS), for GPIO PTT/COS, and writes `/etc/logrotate.d/svxlink-usrp` (weekly, 4 kept) unless the apt package's `/etc/logrotate.d/svxlink` is there. The source build installs no log rotation of its own. The package install's group step adds `gpio` the same way.
+- Preflight (step 1) also lists the sound cards, whether UDP 5198/5199 are taken, and the memory plus swap the build will have (warns under 1500 MB).
+- `doxygen` dropped from the build packages. It only builds optional API documentation and pulls in well over 100 MB on Trixie.
+- "Check the USRP part was built" looks for `UsrpLogic.so` in SvxLink's library folder only. "Locate installed files" no longer searches for a systemd unit the build never installs.
+- Purge also removes `/etc/logrotate.d/svxlink-usrp`.
 
 ## 0.0.159 (2026-10-06)
 
