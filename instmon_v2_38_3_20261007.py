@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.38.2"
-DATE_STR ="2026-10-06"
+VERSION ="2.38.3"
+DATE_STR ="2026-10-07"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
 UNINSTALLER_SCRIPT_GLOB ="uninstall_asl_dvs*.sh"
@@ -3132,14 +3132,14 @@ def _gh_group_html (category ):
             action =(f'<button data-action="gh_update" data-category="{esc (category )}" '
             f'data-name="{name }">Update</button>')
         else :
-            action =""
+            action ="<span></span>"
         rows .append (
         f'<div class="gh-row" title="{esc (e .get ("message",""))}">'
         f'<span class="gh-tag {cls }">{esc (label )}</span>'
         f'<span>GitHub v{esc (e ["version"])}</span>'
         f'<span class="small muted">{name }</span>'
         +('<span class="gh-tag" title="Not the build this Pi Zero 2 W is set to use">other build</span>'
-        if _gh_other_build (e )else "")+
+        if _gh_other_build (e )else "<span></span>")+
         f'{action }</div>')
     return '<div class="gh-rows">'+"".join (rows )+"</div>"
 
@@ -3915,7 +3915,7 @@ def render_components_html (components ,library =None ):
 
         cards .append (f"""
   <div class="card">
-    <div class="row">
+    <div class="row comp-row">
       <b>{c ['name']}</b>
       <span class="ver">v{c ['version']}</span>
       <span class="badge {cls }">{label }</span>
@@ -4310,6 +4310,21 @@ input[type=file]{color:var(--muted);font-size:.78rem;max-width:100%}
 .gh-tag.gh-warn{color:var(--yel);border-color:var(--yel)}
 .gh-tag.gh-err{color:var(--red);border-color:var(--red-dim)}
 .gh-row button{font-size:.75rem;padding:.2rem .6rem}
+.librow-top>span,.gh-row>span,.comp-row>span{min-width:0;overflow-wrap:anywhere}
+@media(min-width:561px){
+.comp-row{display:grid;grid-template-columns:7rem 9.5rem 6rem minmax(0,1fr);gap:.2rem .9rem;align-items:center}
+.comp-row .ver{min-width:0}
+.comp-row>:nth-child(5){grid-column:4;grid-row:2}
+.librow-top{display:grid;grid-template-columns:10rem minmax(0,1fr) 6rem;gap:.4rem .9rem;align-items:center}
+.librow-top .ver{min-width:0}
+.gh-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1.2fr) minmax(0,5.5rem) minmax(0,4.8rem);gap:.2rem .6rem;align-items:center}
+.gh-row>:nth-child(3){grid-column:1/-1;grid-row:2}
+.gh-row>:nth-child(4){grid-column:3;grid-row:1}
+.gh-row>:nth-child(5){grid-column:4;grid-row:1}
+.comp-row .badge,.librow-top .badge,.gh-row .gh-tag{justify-self:start}
+.gh-row>:nth-child(5){justify-self:end}
+}
+@media(max-width:560px){.gh-row>span:empty{display:none}}
 /* v2.37.0 Quiet System + Full Update */
 .fu-banner{border:1px solid var(--amber-dim);background:rgba(255,208,64,.08);color:var(--yel);
   border-radius:6px;padding:.55rem .8rem;margin-bottom:.6rem;display:flex;flex-wrap:wrap;
