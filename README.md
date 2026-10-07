@@ -66,6 +66,9 @@ Step-by-step manuals (PDF):
 Phone dialplan guide (PDF, 24 pages): dialplan nuts and bolts, stock ASL3 next to the Phone tab's dialplan (Pi02w 9.3.71.10 and full 9.3.73 on):
 [`docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf`](docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf)
 
+Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2M17 bridge-node files, port map, services and firewall for a clean build, with no identity data (placeholders only):
+[`docs/ASL-DVS_Idealized_Node_Configuration.pdf`](docs/ASL-DVS_Idealized_Node_Configuration.pdf)
+
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
