@@ -1,6 +1,30 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_27_20261007.py`. Newest entries first.
+Current file: `wifimon_v5_28_20261007.py`. Newest entries first.
+
+## 5.28 (2026-10-07)
+
+- More details: the groups (Connection, Signal, Network and so on) each sized
+  their own key column, so on a two or three column screen the values started at
+  different places (200, 193 and 182 px down one column). Every group now uses the
+  same key column, so all the values line up. Long keys wrap inside it.
+- "Stop chip roaming" survives an update. Uninstalling wifimon removes
+  `/etc/modprobe.d/wifimon-brcmfmac.conf`, and instmon's Full Update and Update
+  uninstall before they install, so an update silently undid the setting (the
+  watchdog's power-save and login-page settings were already re-applied at every
+  start from `wifimon.conf`).
+  - `--uninstall` saves the file's text in `/etc/wifimon/roam_restore.json` (mode
+    600, with the time) and still removes the file.
+  - `--install` writes it back if that copy is under 30 minutes old and no roaming
+    file exists, then deletes the copy. A real removal, or a fresh install much
+    later, does not bring it back by surprise. Only a file wifimon wrote is ever
+    saved or written.
+  - The first update from 5.27 or older still runs the old uninstall, which saves
+    nothing, so it applies from the update after this one. The 44helper reinstall
+    job never uninstalls, so it was never affected.
+- Tested: 11 checks of the save and put-back logic against the real
+  `install_service` and `uninstall_service`; the real installers of every tool
+  and the real reinstall job run end to end in a sandbox with `systemctl` stubbed.
 
 ## 5.27 (2026-10-07)
 
