@@ -1,6 +1,24 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_160_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_161_20261007.py`. Newest entries first.
+
+## 0.0.161 (2026-10-07)
+
+Quiet installs, and a config.txt memory option. Aimed at the Pi Zero 2 W; a Pi 3 or a laptop keeps working as before unless quiet installs are turned on.
+
+- **Quiet installs.** On the ASL3, DVSwitch, SvxLink, M17, Amp and Cloudflare tabs, every big step (package install or removal, build, install script, `git clone`, `pip`/`npm`/`cargo`/`go` installs) now:
+  - pauses node services first, using the existing quiet mode;
+  - runs as its own system job at the lowest CPU and disk priority (it keeps going if 44helper restarts);
+  - drops the file cache and prints free memory before and after;
+  - for a build on a node with under 1.5 GB of memory plus swap, adds a temporary 1 GB swap file (`/var/tmp/asl_dvs_build.swap`, needs 2 GB free disk), removed when services are restored.
+- Services stay paused for 5 minutes after a big step, so the next big step (for example SvxLink deps, clone, build) does not stop and start Asterisk again. They come back by themselves after that, right away when a step that may need them runs, from **Restore now** in the red banner (which counts down), or when 44helper restarts with no job running.
+- Setting on the Update tab's quiet-mode card: **Auto** (default: on for a Pi Zero 2 W or under 1 GB RAM), **On** or **Off**. Stored in `/etc/44helper/44helper_quiet_install.json`.
+- Build steps (`make`, `cmake`, `./configure`) now always run as their own system job, quiet installs or not, so a long build survives a 44helper restart. System jobs get `HOME` set, so `~` paths work.
+- Quiet mode pauses more: apt's daily timers (so an unattended upgrade cannot grab the package lock mid-install), `fstrim`, `e2scrub_all` and `logrotate` timers, and an OS extras group (Bluetooth, `hciuart`, `triggerhappy`, printing, `udisks2`). Socket and path units are included so these are not started again behind its back.
+- Never paused, added: WireGuard (`wg-quick@*`, `44net-tunnel`), `cloudflared`, `tailscaled`, Raspberry Pi Connect, ModemManager and avahi -- any of them may be how you reach the node.
+- Restore skips a service whose unit was removed, or that was disabled, while services were paused (for example by a purge) instead of starting it again or reporting a failure.
+- **System Optimization: config.txt -- Headless memory.** Raspberry Pi only. Comments out `dtoverlay=vc4-kms-v3d` (with a `#44helper-headless# ` prefix) and adds a marked `[all]` / `gpu_mem=16` block at the end of `/boot/firmware/config.txt` (or `/boot/config.txt` on older images). A copy is kept in the instmon library before the first change. Revert removes both. Takes effect after a reboot; the card shows "reboot pending" and the memory before and after.
+- SvxLink USRP preflight and build notes point at quiet installs for low-memory nodes.
 
 ## 0.0.160 (2026-10-07)
 

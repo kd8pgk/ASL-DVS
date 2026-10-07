@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.160"
-APP_STAGE = "v0.0.160: SvxLink USRP install fixed (build check, user before build, LINKS=, log rotation); comment-stripped copy, history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.161"
+APP_STAGE = "v0.0.161: Quiet installs (pause services, low priority, temp swap for builds) and config.txt headless memory; comment-stripped copy, history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -1149,7 +1149,8 @@ def _job_worker(job_key: str, cmd: str, timeout: int) -> None:
     _ev_notify()
     log(f"{'OK' if (not timed_out and rc == 0) else 'FAIL'} (exit {rc}): {cmd}")
 
-def _start_shell_job(job_key: str, cmd: str, timeout: int = 900) -> dict:
+def _start_shell_job(job_key: str, cmd: str, timeout: int = 900,
+                     pre: Callable[[str], None] | None = None) -> dict:
     with _JOBS_LOCK:
         existing = _JOBS.get(job_key)
         if existing is not None and existing["status"] == "running":
@@ -1157,7 +1158,15 @@ def _start_shell_job(job_key: str, cmd: str, timeout: int = 900) -> dict:
         _JOBS[job_key] = {"status": "running", "output": "", "success": None,
                            "returncode": None, "started_at": time.time(), "cmd": cmd}
     timeout = _effective_timeout(cmd, timeout)
-    threading.Thread(target=_job_worker, args=(job_key, cmd, timeout), daemon=True).start()
+
+    def _run() -> None:
+        if pre is not None:
+            try:
+                pre(job_key)
+            except Exception as exc:
+                _job_append_output(job_key, f"(pre-step error: {exc})\n")
+        _job_worker(job_key, cmd, timeout)
+    threading.Thread(target=_run, daemon=True).start()
     return {"job_key": job_key, "status": "running"}
 
 def _job_python_worker(job_key: str, fn: Callable[[], dict]) -> None:
@@ -1887,7 +1896,8 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                 "echo '--- memory + swap for the build:'; "
                 "awk '/^MemTotal:/ {m=$2} /^SwapTotal:/ {s=$2} END {t=int((m+s)/1024); "
                 "printf \"%d MB (RAM %d MB + swap %d MB)\\n\", t, m/1024, s/1024; "
-                "if (t < 1500) print \"LOW -- the build may run out of memory. Add swap before step 5.\"}' /proc/meminfo; true",
+                "if (t < 1500) print \"LOW -- turn quiet installs on (Update tab; it adds a temporary swap file for the build) \" "
+                "\"or add swap before step 5.\"}' /proc/meminfo; true",
          "note": "Read-only — changes nothing. This build installs under /usr/local (binaries in "
                  "/usr/local/bin, config in /usr/local/etc/svxlink) specifically so it can NOT collide with "
                  "an apt-installed svxlink-server's /usr and /etc files. It can still not RUN at the same "
@@ -1982,7 +1992,9 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "(v0.0.155) -- the build adds '/svxlink' itself, so the config lands in /usr/local/etc/svxlink. "
                  "Run step 3 first: `make install` hands some folders to the svxlink user. Parallel "
                  "jobs are limited by free memory (one per 700 MB) so the 512 MB Pi Zero 2W builds with one "
-                 "job instead of running out of memory. This runs with no timeout since a full SvxLink build reliably takes well over the "
+                 "job instead of running out of memory. With quiet installs on (v0.0.161, the default on a Pi Zero 2W), node "
+                 "services are paused first, free memory is measured after that, and a temporary 1 GB swap file is "
+                 "added when memory plus swap is under 1.5 GB. This runs with no timeout since a full SvxLink build reliably takes well over the "
                  "5-10 minutes a small single-program build takes, and can run "
                  "far longer than that on the Pi Zero 2W travel node (652702). SECURITY: a PR reviewer "
                  "(MarkRose) found UsrpLogic's UDP message unpacker throws on a crafted datagram under 32 "
@@ -2491,8 +2503,12 @@ def _dispatch_tab_action(payload: dict, lookup_fn: Callable[[str, str, str], dic
     gate = _pkg_health_gate(command_text)
     if gate:
         return gate
-    if _is_apt_mutating(command_text):
+    if _qi_is_heavy(command_text) and _qi_enabled():
+        return _start_unit_job(job_key, command_text, quiet=True, low_priority=True, session="install")
+    if _is_apt_mutating(command_text) or _is_build_cmd(command_text):
         return _start_unit_job(job_key, command_text)
+    if _qi_session_paused():
+        return _start_shell_job(job_key, command_text, timeout=timeout, pre=_qi_light_step_restore)
     return _start_shell_job(job_key, command_text, timeout=timeout)
 
 def _dispatch_asl3_action(payload: dict) -> dict:
@@ -3337,9 +3353,13 @@ _QM_LOCK = threading.Lock()
 _QM_STOP_TIMEOUT = 150
 _QM_TIERS: list[tuple[str, list[str]]] = [
     ("watchdogs & timers", ["asl_dvs_watchdog*.timer", "asl_dvs_watchdog*.service", "monit.service",
-                            "asl3-update-nodelist.timer", "asl3-update-astdb.timer", "man-db.timer"]),
+                            "asl3-update-nodelist.timer", "asl3-update-astdb.timer", "man-db.timer",
+                            "apt-daily.timer", "apt-daily-upgrade.timer", "fstrim.timer",
+                            "e2scrub_all.timer", "logrotate.timer"]),
     ("background disk users", ["pmie.service", "pmlogger.service", "pmproxy.service", "pmcd.service",
                                "packagekit.service", "man-db.service"]),
+    ("OS extras", ["triggerhappy.socket", "triggerhappy.service", "bluetooth.service", "hciuart.service",
+                   "cups.socket", "cups.path", "cups.service", "cups-browsed.service", "udisks2.service"]),
     ("suite web tools", ["*sysmon*.service", "*asl_dvs_dashboard*.service", "*asl-dvs-dashboard*.service",
                          "*instmon*.service", "*svx_dashboard*.service", "*m17*dashboard*.service",
                          "lighttpd.service"]),
@@ -3348,7 +3368,8 @@ _QM_TIERS: list[tuple[str, list[str]]] = [
                         "ircddbgateway*.service", "stfu.service"]),
 ]
 _QM_NEVER = ["*44helper*", "*wifimon*", "ssh*", "sshd*", "cockpit*", "NetworkManager*", "firewalld*",
-             "systemd-*", "dbus*", "wpa_supplicant*", "polkit*"]
+             "systemd-*", "dbus*", "wpa_supplicant*", "polkit*", "wg-quick*", "44net-tunnel*",
+             "cloudflared*", "tailscaled*", "rpi-connect*", "ModemManager*", "avahi-daemon*"]
 _QM_LOCK_PATHS = ["/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock",
                   "/var/lib/apt/lists/lock", "/var/cache/apt/archives/lock"]
 
@@ -3372,14 +3393,14 @@ def _qm_clear_state() -> None:
 def _qm_active_units() -> list[str]:
     try:
         r = subprocess.run(["systemctl", "list-units", "--all", "--plain", "--no-legend", "--no-pager",
-                            "--type=service,timer", "--state=active"],
+                            "--type=service,timer,socket,path", "--state=active"],
                            capture_output=True, text=True, timeout=20)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     units = []
     for line in (r.stdout or "").splitlines():
         parts = line.split()
-        if parts and parts[0].endswith((".service", ".timer")):
+        if parts and parts[0].endswith((".service", ".timer", ".socket", ".path")):
             units.append(parts[0])
     return units
 
@@ -3507,6 +3528,13 @@ def _qm_failure_details(unit: str) -> list[str]:
 def _qm_restore_list(stopped: list[dict], lines: list[str]) -> list[str]:
     failed = []
     for item in reversed(stopped):
+        props = _qm_unit_props(item["unit"])
+        if props.get("LoadState") == "not-found":
+            lines.append(f"start {item['unit']}: skipped -- it was removed while services were paused")
+            continue
+        if item.get("ufs") == "enabled" and props.get("UnitFileState") in ("disabled", "masked"):
+            lines.append(f"start {item['unit']}: skipped -- it was {props['UnitFileState']} while services were paused")
+            continue
         ok, out = _qm_systemctl("start", item["unit"])
         lines.append(f"start {item['unit']}: {'ok' if ok else 'FAILED ' + out}")
         if not ok:
@@ -3514,7 +3542,7 @@ def _qm_restore_list(stopped: list[dict], lines: list[str]) -> list[str]:
             lines.extend(_qm_failure_details(item["unit"]))
     return failed
 
-def _qm_on(reason: str = "manual") -> dict:
+def _qm_on(reason: str = "manual", session: str | None = None) -> dict:
     if not _QM_LOCK.acquire(blocking=False):
         return {"success": False, "output": "A quiet-mode change is already in progress."}
     try:
@@ -3528,7 +3556,8 @@ def _qm_on(reason: str = "manual") -> dict:
             return {"success": False, "output": "A package job is running (locked: " + ", ".join(busy) +
                     "). Wait for it to finish, then try again."}
         plan = _qm_resolve_plan()
-        state = {"active": True, "reason": reason, "started_at": time.time(), "stopped": [], "job_unit": None}
+        state = {"active": True, "reason": reason, "started_at": time.time(), "stopped": [], "job_unit": None,
+                 "session": session, "linger_until": None, "temp_swap": None}
         _qm_write_state(state)
         lines = [f"Quiet mode ON ({reason}) -- {len(plan)} unit(s) to pause."]
         tier, killed = None, False
@@ -3539,6 +3568,7 @@ def _qm_on(reason: str = "manual") -> dict:
                     killed = True
                 tier = item["tier"]
                 lines.append(f"# {tier}")
+            ufs = _qm_unit_props(item["unit"]).get("UnitFileState", "")
             ok, out = _qm_systemctl("stop", item["unit"])
             if not ok:
                 lines.append(f"stop {item['unit']}: FAILED {out}")
@@ -3548,7 +3578,7 @@ def _qm_on(reason: str = "manual") -> dict:
                 log(f"QUIET: on aborted at {item['unit']}; restore failures: {failed}")
                 return {"success": False, "restore_ok": not failed, "output": "\n".join(lines)}
             lines.append(f"stop {item['unit']}: ok")
-            state["stopped"].append(item)
+            state["stopped"].append(dict(item, ufs=ufs))
             _qm_write_state(state)
         if not killed:
             _qm_kill_mandb(lines)
@@ -3564,7 +3594,7 @@ def _qm_kill_mandb(lines: list[str]) -> None:
     except (FileNotFoundError, subprocess.TimeoutExpired):
         lines.append("pkill mandb: skipped")
 
-def _qm_off(reason: str = "manual") -> dict:
+def _qm_off(reason: str = "manual", expect_linger: float | None = None) -> dict:
     if not _QM_LOCK.acquire(blocking=False):
         return {"success": False, "output": "A quiet-mode change is already in progress."}
     try:
@@ -3574,7 +3604,12 @@ def _qm_off(reason: str = "manual") -> dict:
         state = _qm_read_state()
         if not state.get("active"):
             return {"success": True, "restore_ok": True, "output": "Quiet mode is not on -- nothing to restore."}
+        if expect_linger is not None and state.get("linger_until") != expect_linger:
+            return {"success": True, "restore_ok": True, "skipped": True,
+                    "output": "A newer install step took over -- services stay paused."}
         lines = [f"Quiet mode OFF ({reason}) -- restoring {len(state.get('stopped', []))} unit(s) in reverse order."]
+        if state.get("temp_swap"):
+            _qi_remove_temp_swap(state["temp_swap"], lines)
         failed = _qm_restore_list(state.get("stopped", []), lines)
         _qm_clear_state()
         if failed:
@@ -3588,11 +3623,14 @@ def _qm_off(reason: str = "manual") -> dict:
 def _qm_status() -> dict:
     state = _qm_read_state()
     if state.get("active"):
+        lu = state.get("linger_until")
         return {"active": True, "since": state.get("started_at"), "reason": state.get("reason"),
                 "stopped": [p["unit"] for p in state.get("stopped", [])], "job_unit": state.get("job_unit"),
-                "preview": _qm_preview(state.get("stopped", []))}
+                "session": state.get("session"), "temp_swap": state.get("temp_swap"),
+                "linger_left": max(0, int(lu - time.time())) if lu else None,
+                "preview": _qm_preview(state.get("stopped", [])), "qi": _qi_info()}
     plan = _qm_resolve_plan()
-    return {"active": False, "plan": plan, "preview": _qm_preview(plan)}
+    return {"active": False, "plan": plan, "preview": _qm_preview(plan), "qi": _qi_info()}
 
 def _qm_unit_running(unit: str) -> bool:
     try:
@@ -3622,12 +3660,225 @@ def _qm_startup_sweep() -> None:
     except Exception as exc:
         log(f"QUIET: startup sweep error (continuing startup): {exc}")
 
+_QI_CFG_PATH = str(CONFIG_DIR / "44helper_quiet_install.json")
+_QI_MODES = ("auto", "on", "off")
+_QI_LINGER_SEC = 300
+_QI_LOW_RAM_KB = 1024 * 1024
+_QI_SWAP_PATH = "/var/tmp/asl_dvs_build.swap"
+_QI_SWAP_MB = 1024
+_QI_SWAP_BELOW_MB = 1536
+_QI_SWAP_DISK_SPARE_MB = 1024
+_QI_HEAVY_RE = re.compile(
+    r"(?:^|[\s;&|(])(?:git\s+clone|pip3?\s+install|npm\s+(?:install|ci)|cargo\s+(?:build|install)"
+    r"|go\s+(?:build|install))\b")
+
+def _qi_meminfo() -> dict:
+    out = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                k, _, v = line.partition(":")
+                parts = v.split()
+                if parts and parts[0].isdigit():
+                    out[k.strip()] = int(parts[0])
+    except OSError:
+        pass
+    return out
+
+def _qi_model() -> str:
+    try:
+        with open("/proc/device-tree/model", "rb") as f:
+            return f.read().replace(b"\0", b"").decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
+
+def _qi_low_ram() -> bool:
+    mem = _qi_meminfo().get("MemTotal", 0)
+    return (0 < mem < _QI_LOW_RAM_KB) or "Zero 2" in _qi_model()
+
+def _qi_mode() -> str:
+    try:
+        with open(_QI_CFG_PATH, "r", encoding="utf-8") as f:
+            mode = json.load(f).get("mode", "auto")
+        return mode if mode in _QI_MODES else "auto"
+    except (OSError, ValueError, AttributeError):
+        return "auto"
+
+def _qi_set_mode(mode: str) -> dict:
+    if mode not in _QI_MODES:
+        return {"success": False, "output": f"Unknown quiet-install setting: {mode}"}
+    err = _require_root()
+    if err:
+        return err
+    _compare_before_write(_QI_CFG_PATH, json.dumps({"mode": mode}).encode("utf-8"))
+    info = _qi_info()
+    log(f"QUIET: quiet installs set to {mode} (now {'on' if info['enabled'] else 'off'} for this node)")
+    return {"success": True, "output": f"Quiet installs: {mode} -- {'on' if info['enabled'] else 'off'} for this node.",
+            "qi": info}
+
+def _qi_enabled() -> bool:
+    mode = _qi_mode()
+    return mode == "on" or (mode == "auto" and _qi_low_ram())
+
+def _qi_info() -> dict:
+    return {"mode": _qi_mode(), "enabled": _qi_enabled(), "low_ram": _qi_low_ram(), "model": _qi_model(),
+            "mem_mb": _qi_meminfo().get("MemTotal", 0) // 1024, "linger_sec": _QI_LINGER_SEC}
+
+def _qi_is_heavy(cmd: str) -> bool:
+    return (_is_apt_mutating(cmd) or _is_build_cmd(cmd) or _is_script_install(cmd)
+            or bool(_QI_HEAVY_RE.search(cmd or "")))
+
+def _qi_session_paused() -> bool:
+    state = _qm_read_state()
+    return bool(state.get("active")) and state.get("session") == "install"
+
+def _qi_run(argv: list[str], timeout: int = 60) -> tuple[bool, str]:
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+        return False, str(exc)
+
+def _qi_swap_active(path: str) -> bool:
+    try:
+        with open("/proc/swaps", "r", encoding="utf-8") as f:
+            return any(line.split()[0] == path for line in f.read().splitlines()[1:] if line.split())
+    except OSError:
+        return False
+
+def _qi_remove_temp_swap(path: str, lines: list[str]) -> bool:
+    if _qi_swap_active(path):
+        ok, out = _qi_run(["swapoff", path], timeout=900)
+        if not ok:
+            lines.append(f"Temporary swap {path}: swapoff FAILED ({out}) -- left in place; a reboot clears it.")
+            return False
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        lines.append(f"Temporary swap {path}: could not delete ({exc}).")
+        return False
+    lines.append(f"Temporary swap {path}: removed.")
+    return True
+
+def _qi_add_temp_swap(lines: list[str]) -> str | None:
+    mi = _qi_meminfo()
+    total_mb = (mi.get("MemTotal", 0) + mi.get("SwapTotal", 0)) // 1024
+    if total_mb >= _QI_SWAP_BELOW_MB:
+        lines.append(f"Swap: memory + swap is {total_mb} MB -- no temporary swap needed.")
+        return None
+    path = _QI_SWAP_PATH
+    if os.path.exists(path):
+        _qi_remove_temp_swap(path, lines)
+    try:
+        free_mb = shutil.disk_usage(os.path.dirname(path)).free // (1024 * 1024)
+    except OSError as exc:
+        lines.append(f"Swap: could not check free disk space ({exc}) -- no temporary swap added.")
+        return None
+    if free_mb < _QI_SWAP_MB + _QI_SWAP_DISK_SPARE_MB:
+        lines.append(f"Swap: only {free_mb} MB free on disk (needs {_QI_SWAP_MB + _QI_SWAP_DISK_SPARE_MB} MB) "
+                     "-- no temporary swap added.")
+        return None
+    for make in (["fallocate", "-l", f"{_QI_SWAP_MB}M", path],
+                 ["dd", "if=/dev/zero", f"of={path}", "bs=1M", f"count={_QI_SWAP_MB}", "status=none"]):
+        ok, out = _qi_run(make, timeout=900)
+        if ok:
+            try:
+                os.chmod(path, 0o600)
+            except OSError:
+                pass
+            ok, out = _qi_run(["mkswap", path], timeout=120)
+        if ok:
+            ok, out = _qi_run(["swapon", path], timeout=120)
+        if ok:
+            lines.append(f"Swap: added a temporary {_QI_SWAP_MB} MB swap file ({path}); it is removed when "
+                         "services are restored.")
+            return path
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    lines.append(f"Swap: could not add a temporary swap file ({out}).")
+    return None
+
+def _qi_prepare_memory(cmd: str, before_kb: int, lines: list[str]) -> None:
+    try:
+        os.sync()
+        with open("/proc/sys/vm/drop_caches", "w", encoding="utf-8") as f:
+            f.write("3\n")
+        lines.append("Dropped the file cache.")
+    except OSError as exc:
+        lines.append(f"Could not drop the file cache ({exc}).")
+    if _is_build_cmd(cmd) and not _is_apt_mutating(cmd) and not _qm_read_state().get("temp_swap"):
+        path = _qi_add_temp_swap(lines)
+        if path:
+            state = _qm_read_state()
+            if state.get("active"):
+                state["temp_swap"] = path
+                _qm_write_state(state)
+            else:
+                _qi_remove_temp_swap(path, lines)
+    after = _qi_meminfo()
+    lines.append(f"Free memory: {before_kb // 1024} MB before -> {after.get('MemAvailable', 0) // 1024} MB now "
+                 f"(swap {after.get('SwapTotal', 0) // 1024} MB).")
+
+def _qi_start_linger() -> None:
+    state = _qm_read_state()
+    if not state.get("active") or state.get("session") != "install":
+        return
+    until = time.time() + _QI_LINGER_SEC
+    state["linger_until"] = until
+    _qm_write_state(state)
+    threading.Thread(target=_qi_linger_wait, args=(until,), daemon=True).start()
+
+def _qi_linger_wait(until: float) -> None:
+    while True:
+        time.sleep(max(0.2, min(30.0, until - time.time())))
+        state = _qm_read_state()
+        if not state.get("active") or state.get("session") != "install" or state.get("linger_until") != until:
+            return
+        if time.time() < until:
+            continue
+        r = _qm_off(f"quiet install: no install step for {_QI_LINGER_SEC // 60} minutes", expect_linger=until)
+        log("QUIET: " + r.get("output", "").replace("\n", " | "))
+        return
+
+def _qi_adopt_session(job_key: str) -> bool:
+    if not _QM_LOCK.acquire(timeout=300):
+        return False
+    try:
+        state = _qm_read_state()
+        if not (state.get("active") and state.get("session") == "install"):
+            return False
+        state["linger_until"] = None
+        _qm_write_state(state)
+    finally:
+        _QM_LOCK.release()
+    _job_append_output(job_key, "=== Quiet install: node services are still paused from the previous step ===\n")
+    return True
+
+def _qi_light_step_restore(job_key: str) -> None:
+    state = _qm_read_state()
+    if not (state.get("active") and state.get("session") == "install"):
+        return
+    ju = state.get("job_unit")
+    if ju and _qm_unit_running(ju):
+        _job_append_output(job_key, f"=== Note: node services are paused for a running install step ({ju}); "
+                                    "this step runs with them paused ===\n")
+        return
+    _job_append_output(job_key, "=== Quiet install: restoring node services first (this step may need them) ===\n")
+    r = _qm_off("quiet install: next step needs node services")
+    _job_append_output(job_key, r.get("output", "") + "\n")
+    if not r.get("restore_ok", True):
+        _job_append_output(job_key, "WARNING: not every service came back -- a reboot is recommended.\n")
+
 _QM_JOB_POLL_SEC = 2.0
 
 def _qm_unit_props(unit: str) -> dict:
     try:
         r = subprocess.run(["systemctl", "show", unit, "-p", "ActiveState", "-p", "SubState",
-                            "-p", "ExecMainStatus", "-p", "LoadState"],
+                            "-p", "ExecMainStatus", "-p", "LoadState", "-p", "UnitFileState"],
                            capture_output=True, text=True, timeout=15)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {}
@@ -3755,28 +4006,37 @@ def _run_pkg_unit(job_key: str, cmd: str) -> dict:
     log(f"{'OK' if ok else 'FAIL'} (system-job, exit {rc}): {cmd}")
     return {"success": ok, "returncode": rc, "output": "".join(lines).strip()}
 
-def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) -> None:
+def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool,
+                     session: str | None = None) -> None:
     own_quiet = False
     job_ok, rc = False, None
     unit = _job_unit_name(job_key)
     try:
         if quiet:
-            if _qm_read_state().get("active"):
+            before_kb = _qi_meminfo().get("MemAvailable", 0)
+            if session and _qi_adopt_session(job_key):
+                own_quiet = True
+            elif _qm_read_state().get("active"):
                 _job_append_output(job_key, "=== Quiet mode is already on -- it will be left on after this job. ===\n")
             else:
-                r = _qm_on("package job")
+                r = _qm_on("install step" if session else "package job", session=session)
                 _job_append_output(job_key, "=== Quiet mode: pausing node services ===\n" + r.get("output", "") + "\n")
                 if not r.get("success"):
                     _job_append_output(job_key, "Quiet mode could not start -- the package job was NOT run.\n")
                     return
                 own_quiet = True
+            if own_quiet and session:
+                mem_lines: list[str] = []
+                _qi_prepare_memory(cmd, before_kb, mem_lines)
+                _job_append_output(job_key, "=== Quiet install: memory ===\n" + "\n".join(mem_lines) + "\n")
             state = _qm_read_state()
             if state.get("active"):
                 state["job_unit"] = unit
                 _qm_write_state(state)
         subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
         subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
-        props_argv = ["-p", "RemainAfterExit=yes", "-p", "LogRateLimitIntervalSec=0"]
+        props_argv = ["-p", "RemainAfterExit=yes", "-p", "LogRateLimitIntervalSec=0",
+                      f"--setenv=HOME={os.environ.get('HOME') or '/root'}"]
         if low_priority:
             props_argv += ["-p", "Nice=19", "-p", "IOSchedulingClass=best-effort", "-p", "IOSchedulingPriority=7"]
         start = _run_argv(["systemd-run", f"--unit={unit}"] + props_argv +
@@ -3798,7 +4058,12 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
     except Exception as exc:
         _job_append_output(job_key, f"Package job error: {exc}\n")
     finally:
-        if own_quiet:
+        if own_quiet and session:
+            _qi_start_linger()
+            _job_append_output(job_key, f"=== Quiet install: node services stay paused for {_QI_LINGER_SEC // 60} more "
+                                        "minutes in case the next step is also big. Restore them now from the red "
+                                        "banner, or run a step that needs them. ===\n")
+        elif own_quiet:
             r = _qm_off("package job finished")
             _job_append_output(job_key, "=== Quiet mode: restoring node services ===\n" + r.get("output", "") + "\n")
             if not r.get("restore_ok", True):
@@ -3809,7 +4074,8 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
 def _quiet_apt_worker(job_key: str, cmd: str) -> None:
     _unit_job_worker(job_key, cmd, quiet=True, low_priority=True)
 
-def _start_unit_job(job_key: str, cmd: str, quiet: bool = False, low_priority: bool = False) -> dict:
+def _start_unit_job(job_key: str, cmd: str, quiet: bool = False, low_priority: bool = False,
+                    session: str | None = None) -> dict:
     unit = _job_unit_name(job_key)
     with _JOBS_LOCK:
         existing = _JOBS.get(job_key)
@@ -3822,7 +4088,7 @@ def _start_unit_job(job_key: str, cmd: str, quiet: bool = False, low_priority: b
         _JOBS[job_key] = {"status": "running", "output": "", "success": None,
                           "returncode": None, "started_at": time.time(), "cmd": cmd}
     log(f"RUN(system job{', quiet' if quiet else ''}): {cmd}")
-    threading.Thread(target=_unit_job_worker, args=(job_key, cmd, quiet, low_priority), daemon=True).start()
+    threading.Thread(target=_unit_job_worker, args=(job_key, cmd, quiet, low_priority, session), daemon=True).start()
     return {"job_key": job_key, "status": "running"}
 
 def _adopt_unit_job(job_key: str, unit: str) -> None:
@@ -3881,6 +4147,8 @@ def _dispatch_quiet_action(payload: dict) -> dict:
         return _qm_on("manual")
     if action == "off":
         return _qm_off("manual")
+    if action == "install_mode":
+        return _qi_set_mode(str(payload.get("mode", "")))
     if action == "reboot":
         if payload.get("confirm") is not True:
             return {"success": False, "output": "Reboot requires confirm:true."}
@@ -4348,6 +4616,7 @@ def build_system_opt_status() -> dict:
         "dphys_swapfile": _sysopt_probe_dphys_swapfile(),
         "fstab_noatime": _sysopt_probe_fstab_noatime(),
         "mandb": _sysopt_probe_mandb(),
+        "headless_mem": _sysopt_probe_headless_mem(),
         "applied_items": sorted(_sysopt_state_read().keys()),
         "revert_preview": _revert_command_preview(),
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -4886,7 +5155,129 @@ def action_sysopt_mandb_reinstall(payload: dict) -> dict:
         log("System Optimization: man-db reinstalled")
     return {"success": ok, "output": output, "commands": ["apt-get install -y man-db"]}
 
+_HM_CONFIG_PATHS = ["/boot/firmware/config.txt", "/boot/config.txt"]
+_HM_BEGIN = "# 44helper headless-memory begin"
+_HM_END = "# 44helper headless-memory end"
+_HM_OFF_PREFIX = "#44helper-headless# "
+_HM_GPU_MEM = 16
+_HM_KMS_RE = re.compile(r"^\s*dtoverlay\s*=\s*vc4-f?kms-v3d\b")
+
+def _hm_config_path() -> str | None:
+    for p in _HM_CONFIG_PATHS:
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as f:
+                head = f.read(4096)
+        except OSError:
+            continue
+        if p == "/boot/config.txt" and "/boot/firmware/config.txt" in head and "DO NOT EDIT" in head.upper():
+            continue
+        return p
+    return None
+
+def _hm_boot_id() -> str:
+    try:
+        with open("/proc/sys/kernel/random/boot_id", "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+def _hm_transform(text: str, apply: bool) -> str:
+    lines = text.splitlines()
+    out, in_block = [], False
+    for line in lines:
+        if line.strip() == _HM_BEGIN:
+            in_block = True
+            continue
+        if in_block:
+            if line.strip() == _HM_END:
+                in_block = False
+            continue
+        if line.startswith(_HM_OFF_PREFIX):
+            line = line[len(_HM_OFF_PREFIX):]
+        if apply and _HM_KMS_RE.match(line):
+            line = _HM_OFF_PREFIX + line
+        out.append(line)
+    while out and not out[-1].strip():
+        out.pop()
+    if apply:
+        out += ["", _HM_BEGIN, "[all]", f"gpu_mem={_HM_GPU_MEM}", _HM_END]
+    return "\n".join(out) + "\n"
+
+def _sysopt_probe_headless_mem() -> dict:
+    model = _qi_model()
+    mi = _qi_meminfo()
+    base = {"model": model, "mem_total_mb": mi.get("MemTotal", 0) // 1024, "cma_mb": mi.get("CmaTotal", 0) // 1024}
+    if not model.startswith("Raspberry Pi"):
+        return {**base, "applicable": False, "reason": "not a Raspberry Pi"}
+    path = _hm_config_path()
+    if path is None:
+        return {**base, "applicable": False, "reason": "no config.txt found in /boot/firmware or /boot"}
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return {**base, "applicable": False, "reason": f"could not read {path}: {exc}"}
+    applied = _HM_BEGIN in text
+    kms_on = any(_HM_KMS_RE.match(l) for l in text.splitlines())
+    gpu = ""
+    if shutil.which("vcgencmd"):
+        ok, out = _qi_run(["vcgencmd", "get_mem", "gpu"], timeout=10)
+        gpu = out if ok else ""
+    entry = _sysopt_state_get_item("headless_mem")
+    prior = (entry or {}).get("prior_state", {})
+    pending = bool(applied and prior.get("boot_id") and prior.get("boot_id") == _hm_boot_id())
+    return {**base, "applicable": True, "path": path, "applied": applied, "kms_overlay_on": kms_on,
+            "gpu_mem_now": gpu, "reboot_pending": pending,
+            "before_mem_total_mb": prior.get("mem_total_mb"), "before_cma_mb": prior.get("cma_mb")}
+
+def _hm_write(path: str, text: str) -> None:
+    tmp = path + ".44helper.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+    os.sync()
+
+def _hm_change(apply: bool) -> dict:
+    err = _require_root()
+    if err:
+        return err
+    probe = _sysopt_probe_headless_mem()
+    if not probe.get("applicable"):
+        return {"success": False, "output": f"Not available on this node: {probe.get('reason')}"}
+    path = probe["path"]
+    if not apply and _sysopt_state_get_item("headless_mem") is None and not probe["applied"]:
+        return {"success": False, "output": "nothing to revert -- this tab never changed config.txt"}
+    current = Path(path).read_text(encoding="utf-8", errors="replace")
+    library_dir = os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")
+    if apply:
+        _compare_before_write(os.path.join(library_dir, "config", "config.txt.bak"), current.encode("utf-8"))
+    new = _hm_transform(current, apply)
+    cmds = [f"cp {path} {library_dir}/config/config.txt.bak"] if apply else []
+    if new == current:
+        msg = "config.txt already matched -- nothing written"
+    else:
+        _hm_write(path, new)
+        msg = f"{path} written"
+    diff = "".join(difflib.unified_diff(current.splitlines(True), new.splitlines(True), "before", "after", n=1))
+    if apply:
+        _sysopt_state_set_item("headless_mem", {"mem_total_mb": probe["mem_total_mb"], "cma_mb": probe["cma_mb"],
+                                                "boot_id": _hm_boot_id(), "path": path})
+    else:
+        _sysopt_state_clear_item("headless_mem")
+    log(f"System Optimization: headless memory {'apply' if apply else 'revert'} -- {msg}")
+    return {"success": True, "commands": cmds + [f"edit {path} (diff below)"],
+            "output": msg + ". Takes effect after a reboot.\n\n" + (diff or "(no change)")}
+
+def action_sysopt_headless_mem_apply(payload: dict) -> dict:
+    return _hm_change(True)
+
+def action_sysopt_headless_mem_revert(payload: dict) -> dict:
+    return _hm_change(False)
+
 _SYSTEM_OPT_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "headless_mem_apply": action_sysopt_headless_mem_apply,
+    "headless_mem_revert": action_sysopt_headless_mem_revert,
     "fstab_noatime_apply": action_sysopt_fstab_noatime_apply,
     "fstab_noatime_revert": action_sysopt_fstab_noatime_revert,
     "journald_volatile_apply": action_sysopt_journald_volatile_apply,
@@ -13407,7 +13798,8 @@ function sysoptApplyRevertAvailability(appliedItems) {
     'dphys_swap': 'sysopt-swap-revert-btn',
     'dphys_swap_uninstall': 'sysopt-swap-reinstall-btn',
     'mandb_timer': 'sysopt-mandb-timer-revert-btn',
-    'mandb_remove': 'sysopt-mandb-reinstall-btn'
+    'mandb_remove': 'sysopt-mandb-reinstall-btn',
+    'headless_mem': 'sysopt-hm-revert-btn'
   };
   Object.keys(map).forEach(function(key) {
     var btn = document.getElementById(map[key]);
@@ -13437,6 +13829,29 @@ function sysoptRenderRevertPreview(previewMap) {
   });
 }
 
+function sysoptRenderHeadless(d) {
+  var det = document.getElementById('sysopt-hm-detail');
+  if (!det) return;
+  var mem = 'Memory now: ' + d.mem_total_mb + ' MB total, ' + d.cma_mb + ' MB graphics (CMA) area' +
+    (d.gpu_mem_now ? ', firmware ' + d.gpu_mem_now : '') + '.';
+  if (!d.applicable) {
+    sysoptSetPill('sysopt-hm-pill', 'not_started', 'not available');
+    det.textContent = 'Not available: ' + (d.reason || 'unknown') + '. ' + mem;
+    return;
+  }
+  var before = (d.before_mem_total_mb !== null && d.before_mem_total_mb !== undefined)
+    ? ' Before the change: ' + d.before_mem_total_mb + ' MB total, ' + d.before_cma_mb + ' MB CMA.' : '';
+  if (d.applied && d.reboot_pending) {
+    sysoptSetPill('sysopt-hm-pill', 'attempted_unconfirmed', 'reboot pending');
+  } else if (d.applied) {
+    sysoptSetPill('sysopt-hm-pill', 'done', 'applied');
+  } else {
+    sysoptSetPill('sysopt-hm-pill', 'not_started', d.kms_overlay_on ? 'graphics driver on' : 'not applied');
+  }
+  det.textContent = d.path + ': ' + (d.applied ? 'headless block present' : 'not changed by this tab') +
+    (d.kms_overlay_on ? ', vc4-kms-v3d on' : ', vc4-kms-v3d off') + '. ' + mem + before;
+}
+
 function refreshSystemOpt() {
   fetch('/api/system_opt/status').then(function(r) { return r.json(); }).then(function(d) {
     sysoptRenderFstab(d.fstab_noatime);
@@ -13446,6 +13861,7 @@ function refreshSystemOpt() {
     sysoptRenderPackagePresenceCard(d.dphys_swapfile, 'sysopt-swap-uninstall-pill', 'not installed');
     sysoptRenderUnitCard(d.mandb, 'sysopt-mandb-timer-pill', 'sysopt-mandb-timer-detail', true);
     sysoptRenderPackagePresenceCard(d.mandb, 'sysopt-mandb-remove-pill', 'not installed');
+    sysoptRenderHeadless(d.headless_mem || {});
     sysoptApplyRevertAvailability(d.applied_items || []);
     sysoptRenderRevertPreview(d.revert_preview || {});
     document.getElementById('sysopt-checked-at').textContent = 'checked ' + d.checked_at;
@@ -13460,6 +13876,7 @@ function sysoptOutId(action) {
   if (action.indexOf('dphys_swap') === 0) return 'sysopt-swap-out';
   if (action.indexOf('mandb_timer') === 0) return 'sysopt-mandb-timer-out';
   if (action.indexOf('mandb_remove') === 0 || action === 'mandb_reinstall') return 'sysopt-mandb-remove-out';
+  if (action.indexOf('headless_mem') === 0) return 'sysopt-hm-out';
   return null;
 }
 
@@ -13970,12 +14387,23 @@ function qmRenderStatus(s) {
   var onBtn = document.getElementById('qm-on-btn');
   var offBtn = document.getElementById('qm-off-btn');
   var rb = document.getElementById('qm-reboot-btn');
+  qiRender(s.qi);
   if (s.active) {
     var since = s.since ? new Date(s.since * 1000).toLocaleTimeString() : '?';
     if (banner) {
       banner.style.display = 'block';
-      banner.textContent = 'NODE SERVICES PAUSED \u2014 quiet mode on since ' + since + ' (' + (s.stopped || []).length +
-        ' paused' + (s.job_unit ? ', package job ' + s.job_unit : '') + '). Turn it off on the Update tab when finished.';
+      if (s.session === 'install') {
+        var left = (s.linger_left === null || s.linger_left === undefined) ? null : s.linger_left;
+        banner.innerHTML = qmEsc('NODE SERVICES PAUSED FOR AN INSTALL \u2014 since ' + since + ' (' + (s.stopped || []).length +
+          ' paused' + (s.temp_swap ? ', temporary swap on' : '') + '). ' +
+          (s.job_unit ? 'Running ' + s.job_unit + '.' :
+            (left !== null ? 'Restoring in ' + Math.floor(left / 60) + ':' + ('0' + (left % 60)).slice(-2) +
+              ' unless another big step starts.' : ''))) +
+          ' <button type="button" class="btn-run" style="margin-left:.6rem;background:#fff;color:#a0001c;border-color:#fff" onclick="qmAction(' + "'off'" + ')">Restore now</button>';
+      } else {
+        banner.textContent = 'NODE SERVICES PAUSED \u2014 quiet mode on since ' + since + ' (' + (s.stopped || []).length +
+          ' paused' + (s.job_unit ? ', package job ' + s.job_unit : '') + '). Turn it off on the Update tab when finished.';
+      }
     }
     if (state) { state.className = 'step-pill danger'; state.textContent = 'ON'; }
     if (prev) prev.textContent = 'Turning off will run:' + qmNL() + (s.preview ? s.preview.restore.join(qmNL()) : '');
@@ -13992,6 +14420,26 @@ function qmRenderStatus(s) {
     if (offBtn) offBtn.disabled = true;
   }
   if (rb) rb.style.display = _qmLastRestoreFailed ? 'inline-block' : 'none';
+}
+function qiRender(qi) {
+  if (!qi) return;
+  var sel = document.getElementById('qi-mode');
+  var pill = document.getElementById('qi-state');
+  if (sel && document.activeElement !== sel) sel.value = qi.mode;
+  if (pill) {
+    pill.className = 'step-pill ' + (qi.enabled ? 'done' : 'not_started');
+    pill.textContent = (qi.enabled ? 'ON' : 'Off') + ' for this node (' + (qi.model || 'unknown model') + ', ' + qi.mem_mb + ' MB)';
+  }
+}
+function qiSetMode(mode) {
+  var out = document.getElementById('qm-out');
+  return qmPost({action: 'install_mode', mode: mode}).then(function(res) {
+    if (out) { out.className = 'asl3-console shown' + (res.success ? '' : ' fail'); out.textContent = res.output || '(no output)'; }
+    if (res.qi) qiRender(res.qi);
+    refreshQuiet();
+  }).catch(function(e) {
+    if (out) { out.className = 'asl3-console shown fail'; out.textContent = 'Request failed: ' + e; }
+  });
 }
 function refreshQuiet() {
   fetch('/api/quiet/status').then(function(r) { return r.json(); }).then(qmRenderStatus).catch(function() {});
@@ -14734,10 +15182,12 @@ def _render_update_panel() -> str:
     <div class="step-head"><div class="step-title">Quiet mode (pause node services)</div>
       <span class="step-pill not_started" id="qm-state">…</span></div>
     <div class="step-body">Before a big install or upgrade, pause everything that competes for the SD card, in
-      this order: watchdogs and update timers, background disk users (performance recorder, packagekit, manual-page
-      index), the suite web tools, then radio services. Turning it off restarts exactly what was paused, in reverse.
-      Never touched: 44helper, wifimon, SSH, Cockpit, networking, the firewall. The node is OFF THE AIR while this
-      is on.</div>
+      this order: watchdogs and update timers (including apt's daily timers), background disk users (performance
+      recorder, packagekit, manual-page index), OS extras (Bluetooth, triggerhappy, printing, udisks2), the suite web
+      tools, then radio services. Turning it off restarts exactly what was paused, in reverse -- except a service that
+      was removed or disabled in the meantime. Never touched: 44helper, wifimon, SSH, Cockpit, networking, the
+      firewall, WireGuard/44Net, Cloudflare, Tailscale, Raspberry Pi Connect, ModemManager, avahi. The node is OFF THE
+      AIR while this is on.</div>
     <div class="asl3-console shown placeholder" id="qm-preview">(loading…)</div>
     <div class="step-actions">
       <button class="btn-run" id="qm-on-btn" onclick="qmAction('on')">Turn on</button>
@@ -14745,6 +15195,22 @@ def _render_update_panel() -> str:
       <button class="btn-purge" id="qm-reboot-btn" style="display:none" onclick="qmReboot()">Reboot node</button>
     </div>
     <div class="asl3-console shown placeholder" id="qm-out">(no quiet-mode action yet)</div>
+    <div class="step-body" style="margin-top:.8rem"><b>Quiet installs</b> -- on the ASL3, DVSwitch, SvxLink, M17,
+      Amp and Cloudflare tabs, every big step (package install or removal, build, install script, git clone) pauses
+      the services above first, runs at low priority as its own system job, and drops the file cache. A build on a
+      node with under 1.5 GB of memory plus swap also gets a temporary 1 GB swap file. Services stay paused for
+      5 minutes after a big step in case the next one is big too, then come back by themselves -- or right away
+      when you run a step that needs them, or press Restore now in the red banner.</div>
+    <div class="step-actions">
+      <label style="font-family:var(--mono);font-size:.8rem;color:var(--muted)">Quiet installs:
+        <select id="qi-mode" onchange="qiSetMode(this.value)">
+          <option value="auto">Auto (on for a Pi Zero 2 W or under 1 GB RAM)</option>
+          <option value="on">On</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+      <span class="step-pill not_started" id="qi-state">…</span>
+    </div>
   </div>
 
   <div class="step-card">
@@ -14929,6 +15395,35 @@ $ apt-get purge -y man-db
 Reinstall:
 $ apt-get install -y man-db</div>
     <div class="asl3-console shown placeholder" id="sysopt-mandb-remove-out">(no action run yet)</div>
+  </div>
+
+  <div class="step-card">
+    <div class="step-head">
+      <div class="step-title">config.txt -- Headless memory (needs a reboot)</div>
+      <span class="step-pill not_started" id="sysopt-hm-pill">checking…</span>
+    </div>
+    <div class="step-body" id="sysopt-hm-detail">checking…</div>
+    <div class="step-body">For a Pi run without a screen (the Pi Zero 2 W travel node): turns off the
+      vc4-kms-v3d graphics driver and sets gpu_mem=16, so memory set aside for graphics goes back to Linux.
+      The HDMI text console still works on the basic framebuffer; there is no desktop, camera or hardware
+      video, and no HDMI audio (a USB sound card is not affected). Raspberry Pi only. A copy of config.txt is
+      kept before the first change. Revert puts the driver line back and removes the gpu_mem block. Either way,
+      <b>reboot to take effect</b> -- the card shows the memory before and after.</div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="sysoptRunSimple(this,'headless_mem_apply','Turn off the graphics driver and set gpu_mem=16 in config.txt? It takes effect after a reboot.')">Apply</button>
+      <button class="btn-run" id="sysopt-hm-revert-btn" onclick="sysoptRunSimple(this,'headless_mem_revert','Put the graphics driver back and remove gpu_mem=16 from config.txt? It takes effect after a reboot.')">Revert</button>
+      <button class="btn-copy" onclick="sysoptCopyStep(this,'config.txt -- Headless memory','sysopt-hm-cmd','sysopt-hm-out')">Copy</button>
+    </div>
+    <div class="cmd-preview" id="sysopt-hm-cmd">Apply (config.txt in /boot/firmware, or /boot on older images):
+  dtoverlay=vc4-kms-v3d   becomes   #44helper-headless# dtoverlay=vc4-kms-v3d
+  and at the end:
+  # 44helper headless-memory begin
+  [all]
+  gpu_mem=16
+  # 44helper headless-memory end
+Revert: removes the block and the #44helper-headless# prefix.
+Then: sudo reboot</div>
+    <div class="asl3-console shown placeholder" id="sysopt-hm-out">(no action run yet)</div>
   </div>
 
   <button class="btn-recheck" onclick="refreshSystemOpt()">Re-check</button>
