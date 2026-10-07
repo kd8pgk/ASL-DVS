@@ -1,6 +1,18 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_164_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_165_20261007.py`. Newest entries first.
+
+## 0.0.165 (2026-10-07)
+
+Stage 3 of the standard-configuration work: what is actually reachable.
+
+- **Config tab, Port check: "Check what is listening now".** Reads the live listening ports (`ss`) and the firewalld zones on demand, so the tab does not run them on every refresh. It shows:
+  - Which listeners are reachable from the network: the port, the process, whether it listens on every interface or one address, and whether the firewall lets it in and through which rule (an exact port, a service, or a range). Ports that listen on this node only (127.0.0.1) and ports the firewall blocks are only counted.
+  - **Command ports** (UDP 6073 YSFGateway, 6074 P25Gateway, 6075 NXDNGateway, 54321 ircDDBGateway): a red finding when one is bound to every interface and the firewall allows it, or there is no firewall data. They are only used from the node itself. A blocked one is shown with a note.
+  - **Broad firewall ranges:** an amber finding for a port that is reachable only because the firewall opens a range of 100 or more ports (for example `10000-20000/udp` reaching USRP2M17 on 17010 and MMDVM_Bridge on 14021). Asterisk's own ports in the range are expected and not flagged.
+  - **Configured but not listening:** a program whose config file names a UDP port that nothing listens on (for example P25Gateway when `p25gateway` is not running).
+  - It says so plainly when firewalld is not running (no verdicts) or `ss` is missing.
+- **Ports tab and Services tab:** the four gateway command ports are now known entries, flagged "risky if public" and "never needs forwarding", so the Ports tab can mark one over-exposed when the tunnel zone opens it. They are listed on the Services tab with the same names so the Ports tab can see they are running.
 
 ## 0.0.164 (2026-10-07)
 
