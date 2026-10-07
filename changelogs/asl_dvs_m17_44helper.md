@@ -1,6 +1,16 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_162_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_163_20261007.py`. Newest entries first.
+
+## 0.0.163 (2026-10-07)
+
+Stage 1 of the standard-configuration work: fixes a flaw in 0.0.162 found on node 652702, where Analog_Bridge was listening on the STFU ports (36100) and not the DMR ones (31100).
+
+- **The digital-mode ports are not wiring.** The dashboard switches modes with `dvswitch.sh mode <MODE>`, which rewrites `ambeMode` and the `[AMBE_AUDIO]` ports in `Analog_Bridge.ini`. In 0.0.162 a preset saved and applied those ports, so applying one forced the saved mode's ports onto a node in another mode and broke its audio path until the next mode switch.
+  - Presets now carry only the Analog_Bridge `[USRP]` ports (the link to Asterisk). `[AMBE_AUDIO]` and the `DVSwitch.ini` `[DMR]` ports (a stock value) are no longer in presets.
+  - A preset saved by 0.0.162 still loads: the mode ports and anything not on the wiring list are ignored, and the apply preview says what was left out.
+- **Pairing check is mode-aware.** It compared Analog_Bridge `[AMBE_AUDIO]` with `DVSwitch.ini` `[DMR]` only, so on a node in any other mode the Config tab showed a false "not mirrored" warning. It now passes when `[AMBE_AUDIO]` mirrors **any** mode section in `DVSwitch.ini` and shows which one ("paired on the STFU mode"). It warns only when it mirrors none.
+- **Restoring `Analog_Bridge.ini` switches the mode.** The confirm box says so when DVSwitch is ticked, and the result names the saved mode and ports and reminds you to restart DVSwitch.
 
 ## 0.0.162 (2026-10-07)
 
