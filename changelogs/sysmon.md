@@ -14,6 +14,11 @@ Hardware tab: the **Video & GPU Memory** card from SysMon Pi02w 6.13.67.5.
     (`#ASL-DVS-GPUMEM-BEGIN`, `[all]`, `gpu_mem=16`, `#ASL-DVS-GPUMEM-END`). Camera and
     video decoding stop working. Greyed out on a Raspberry Pi 5, where `gpu_mem` has no
     effect.
+- Headless-only warning on the card and in the confirm dialog: on a laptop or a computer
+  with a monitor you use, don't turn off video, since the screen goes blank after the
+  reboot. A red warning appears when a monitor is connected or the system boots to a
+  desktop (`graphical.target`). On a laptop or PC with no `config.txt`, the card says it
+  does nothing there.
 - Shows the running state (vc4 loaded, HDMI outputs, GPU memory, CMA reserved), a
   "Reboot required" badge with a Reboot now button, the HDMI sound cards that go away,
   and settings that name a sound card by number.

@@ -9453,6 +9453,16 @@ function renderVideoSection(v) {
       <td class="hw-pwr-val">${lv.cma_mb != null ? lv.cma_mb + " MB" : "—"}
         <span class="hw-pwr-note">memory kept back for the video driver (CmaTotal)</span></td></tr>
   </table>`;
+  const inUse = [];
+  if ((lv.hdmi || []).some(c => c.status === "connected")) inUse.push("a monitor is connected");
+  if (lv.desktop) inUse.push("this system boots to a desktop (graphical.target)");
+  html += `<div class="hw-diag-note" style="color:var(--amber)">⚠ Only for a headless node.
+    If this computer has a screen you use, such as a laptop or a Pi with a monitor and desktop,
+    do not turn off video: the screen goes blank after the reboot.</div>`;
+  if (inUse.length && !v.video_off) {
+    html += `<div class="hw-diag-note" style="color:var(--red)">⚠ This node does not look headless:
+      ${_esc(inUse.join("; "))}.</div>`;
+  }
   html += `<label class="hw-vid-opt${noVid && !v.video_off ? " disabled" : ""}">
       <input type="checkbox" id="hw-vid-chk-video" ${v.video_off ? "checked" : ""}
         ${noVid && !v.video_off ? "disabled" : ""} onchange="hwBootOpt('video', this)">
@@ -9487,7 +9497,7 @@ async function hwBootOpt(opt, el) {
   const on = el.checked;
   let msg;
   if (opt === "video") {
-    msg = on ? "Disable HDMI and the video driver in config.txt? Takes effect after a reboot. A monitor will no longer show anything."
+    msg = on ? "Disable HDMI and the video driver in config.txt? Takes effect after a reboot. Only do this on a headless node: on a laptop or a computer with a monitor the screen goes blank."
              : "Turn the HDMI video driver back on in config.txt? Takes effect after a reboot.";
     const refs = document.querySelector(".hw-vid-refs");
     if (on && refs) msg += " Some settings name a sound card by number (listed on the card). Check them after the reboot.";
@@ -22394,7 +22404,8 @@ def _video_live_state() -> dict:
                 hdmi_snd.append(f"card {mm.group(1)}: {mm.group(2).strip()}")
     except OSError:
         pass
-    return {"vc4_loaded": vc4, "hdmi": hdmi, "cma_mb": (cma_kb // 1024) if cma_kb is not None else None,
+    desktop = _run(["systemctl", "get-default"], timeout=3) == "graphical.target"
+    return {"vc4_loaded": vc4, "hdmi": hdmi, "desktop": desktop, "cma_mb": (cma_kb // 1024) if cma_kb is not None else None,
             "gpu_mb": gpu_mb, "hdmi_sound": hdmi_snd}
 
 def _video_hw_refs(limit: int = 12) -> list:
@@ -22427,7 +22438,8 @@ def get_video_state() -> dict:
         text = BOOT_CONFIG.read_text()
     except OSError:
         return {"available": False, "config": str(BOOT_CONFIG),
-                "message": f"{BOOT_CONFIG} not found (Bookworm or Trixie only)"}
+                "message": f"{BOOT_CONFIG} not found. This card is for a Raspberry Pi on "
+                           "Bookworm or Trixie; it does nothing on a laptop or PC."}
     cfg  = _bootcfg_parse(text)
     live = _video_live_state()
     video_pending = cfg["video_lines"] > 0 and (cfg["video_off"] == live["vc4_loaded"])
