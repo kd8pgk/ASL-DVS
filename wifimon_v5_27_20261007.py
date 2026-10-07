@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.26"
+APP_VERSION = "5.27"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -5655,6 +5655,7 @@ main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;
 .note{margin:0 0 10px;padding:8px 10px;border-radius:6px;border:1px solid var(--line);
   background:var(--panel2);color:var(--muted);font-size:14px}
 .wide{grid-column:1/-1}
+@media(min-width:964px){#card-log{grid-column:span 2}}
 .card-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
 .card-head h2{margin:0;flex:1}
 .net{padding:10px 0;border-top:1px solid var(--line)}
@@ -5944,6 +5945,15 @@ a.btnlink:hover{border-color:var(--cyan)}
       </form>
     </section>
 
+    <section class="card" id="card-service" aria-labelledby="sv-h">
+      <h2 id="sv-h">Service</h2>
+      <dl class="kv" id="v-kv"></dl>
+      <div class="actions">
+        <button type="button" class="danger" id="btn-restart">Restart service</button>
+        <button type="button" id="btn-logout">Log out</button>
+      </div>
+    </section>
+
     <section class="card wide" id="card-log" aria-labelledby="lg-h">
       <div class="card-head">
         <h2 id="lg-h">Activity log</h2>
@@ -5966,15 +5976,6 @@ a.btnlink:hover{border-color:var(--cyan)}
         <pre class="pre" id="rep-text"></pre>
       </div>
       <p class="rules">A report is saved every time wifimon shuts the node down, and after a stop that wasn't clean (power lost or a crash). The newest ones are kept.</p>
-    </section>
-
-    <section class="card" id="card-service" aria-labelledby="sv-h">
-      <h2 id="sv-h">Service</h2>
-      <dl class="kv" id="v-kv"></dl>
-      <div class="actions">
-        <button type="button" class="danger" id="btn-restart">Restart service</button>
-        <button type="button" id="btn-logout">Log out</button>
-      </div>
     </section>
   </main>
 </div>
@@ -6761,6 +6762,11 @@ a.btnlink:hover{border-color:var(--cyan)}
         up.setAttribute("aria-label", "Move " + n.ssid + " up");
         down.setAttribute("aria-label", "Move " + n.ssid + " down");
         head.append(up, down);
+      } else {
+        const gap1 = btn("▲", "arrow", () => {}, true);
+        const gap2 = btn("▼", "arrow", () => {}, true);
+        for (const g of [gap1, gap2]) { g.style.visibility = "hidden"; g.setAttribute("aria-hidden", "true"); g.tabIndex = -1; }
+        head.append(gap1, gap2);
       }
       head.appendChild(el("span", "prio", has(n.priority) ? String(n.priority) : "–"));
       head.appendChild(el("span", "net-name", n.ssid));

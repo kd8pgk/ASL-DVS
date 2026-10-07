@@ -1,6 +1,24 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_26_20261006.py`. Newest entries first.
+Current file: `wifimon_v5_27_20261007.py`. Newest entries first.
+
+## 5.27 (2026-10-07)
+
+- Page layout, found checking the grid on a Galaxy Tab S6 Lite:
+  - **Saved networks:** a network that is not in the watchdog's reconnect list has
+    no up and down arrows, so its number and name started about 80 px to the left
+    of the other rows. It now keeps the same space (hidden arrows), so the number
+    and name line up on every row.
+  - **Cards:** the full-width Activity log sat between Watchdog and Service, which
+    left each of them alone in a half-empty row on a two-column screen (about
+    600 to 960 px). The Service card now comes before the Activity log: Watchdog
+    and Service share a row at two columns, and at three columns (964 px and up)
+    the Activity log fills the row beside Service. The page reads in the same
+    order, with the Activity log last.
+- Checked in headless Chromium at 390, 600, 800, 980 and 1280 px with a full
+  status (connected, three saved networks, scan list, two adapters): the old page
+  fails both checks from 600 px up, the new page passes. No change to what the
+  page does.
 
 ## 5.26 (2026-10-06)
 
