@@ -1,6 +1,29 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_69_20261006.py`. Newest entries first.
+Current file: `sysmon_v6_13_70_20261007.py`. Newest entries first.
+
+## 6.13.70 (2026-10-07)
+
+Hardware tab: the **Video & GPU Memory** card from SysMon Pi02w 6.13.67.5.
+
+- Two checkboxes that edit `/boot/firmware/config.txt` (Bookworm and Trixie), applied
+  after a reboot. Unchecking puts the file back the way it was.
+  - **Disable HDMI and video driver (headless):** comments out `dtoverlay=vc4-kms-v3d`
+    as `#ASL-DVS-VIDEO-OFF# dtoverlay=vc4-kms-v3d`. Refused when there is no such line.
+  - **Lower GPU memory to 16 MB:** adds a marked block at the end
+    (`#ASL-DVS-GPUMEM-BEGIN`, `[all]`, `gpu_mem=16`, `#ASL-DVS-GPUMEM-END`). Camera and
+    video decoding stop working. Greyed out on a Raspberry Pi 5, where `gpu_mem` has no
+    effect.
+- Headless-only warning on the card and in the confirm dialog: on a laptop or a computer
+  with a monitor you use, don't turn off video, since the screen goes blank after the
+  reboot. A red warning appears when a monitor is connected or the system boots to a
+  desktop (`graphical.target`). On a laptop or PC with no `config.txt`, the card says it
+  does nothing there.
+- Shows the running state (vc4 loaded, HDMI outputs, GPU memory, CMA reserved), a
+  "Reboot required" badge with a Reboot now button, the HDMI sound cards that go away,
+  and settings that name a sound card by number.
+- Each change writes `config.txt.asl_dvs.bak` first and replaces config.txt in one step.
+  `--uninstall` and the uninstaller (1.3) put both settings back.
 
 ## 6.13.69 (2026-10-06)
 
