@@ -1,6 +1,36 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_166_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_167_20261007.py`. Newest entries first.
+
+## 0.0.167 (2026-10-07)
+
+- Config tab: new last card **Finish: reinstall the tools and reboot**. After any
+  Config change that worked (Restore, preset apply, Standard configuration
+  Apply or Undo, Gateways Enable or Undo) the card appears and stays, even after
+  a page reload, until the reboot or a Dismiss. One button, **Reinstall tools and
+  reboot**, first shows what it will do and asks to confirm.
+- What the button does, as one detached system job (`asl-dvs-reinstall`, run with
+  `systemd-run`, so it keeps going when 44helper itself is reinstalled):
+  1. Picks the newest copy of each installed tool already on the node: the
+     highest version among the library file and the installed file, same build
+     (Pi02w or full) as what is installed. Nothing is downloaded.
+  2. **instmon first**, then Dashboard, SysMon and wifimon, and 44helper last.
+     The Watchdog is never touched. Tools that are not installed are left alone.
+  3. Each tool: its installed file is saved first, the tool is uninstalled and the
+     new copy installed with its own `--install` (instmon is installed over itself,
+     with a 90-second rollback timer). If the new copy does not start, the saved
+     copy is put back.
+  4. Waits for the services to settle (at least 20 seconds, up to 3 minutes).
+  5. Reboots by itself only if instmon, the Dashboard and Asterisk are healthy.
+     Otherwise it does not reboot, says which one is not healthy, and keeps the
+     card so you can read the log.
+- The card shows each step's result and the log tail, and keeps polling through
+  the helper restart and the reboot. After the node is back it says Done.
+- Identity is untouched: each tool's own `--install` keeps `/etc/asl_dvs/asl_dvs.conf`
+  and nothing identity-related is passed or logged. Files in
+  `/etc/asl_dvs/instmon_library/config_restore/` stay root-only.
+- New actions `reinstall_preview`, `reinstall_start`, `reinstall_dismiss` and a
+  status route `/api/config/reinstall`.
 
 ## 0.0.166 (2026-10-07)
 
