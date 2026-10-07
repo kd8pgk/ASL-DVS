@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.160"
-APP_STAGE = "v0.0.160: Config tab (Restore point, save points, Travel Node preset, restart); history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.161"
+APP_STAGE = "v0.0.161: Config tab presets keep each node's own ID and IAX port; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -8186,6 +8186,8 @@ _CFGR_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_[A-Za-z0-9_.-]{1,48}$")
 _CFGR_RPT = "/etc/asterisk/rpt.conf"
 _CFGR_EXT = "/etc/asterisk/extensions.conf"
 _CFGR_MOD = "/etc/asterisk/modules.conf"
+_CFGR_IAX = "/etc/asterisk/iax.conf"
+_CFGR_RADIO_LOCAL_RE = re.compile(r"(radio@127\.0\.0\.1)(?::\d+)?/")
 
 _CFGR_GROUPS: dict[str, dict] = {
     "asl3": {"label": "ASL3", "markers": ["/etc/asterisk/rpt.conf"],
@@ -8924,15 +8926,60 @@ def _cfgr_act_preset_capture(payload: dict, save: bool) -> dict:
         log(f"OK: CONFIG preset saved: {pid}")
     return {"success": True, "output": "\n".join(lines)}
 
-def _cfgr_apply_rpt(lines: list[str], p: dict) -> tuple[list[str] | None, list[str], list[str], str]:
+def _cfgr_bindport() -> str:
+    b = _cfgr_read(_CFGR_IAX)
+    if b is None:
+        return "4569"
+    sec = ""
+    for line in _cfgr_lines(b.decode("utf-8", "replace")):
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            sec = m.group(1).strip().lower()
+            continue
+        kv = _cfgr_kv(line)
+        if sec == "general" and kv and kv[0].lower() == "bindport" and _CFGR_PORT_RE.match(kv[1]):
+            return kv[1]
+    return "4569"
+
+def _cfgr_local_nodes_line(line: str, port: str) -> str:
+    return _CFGR_RADIO_LOCAL_RE.sub(lambda m: m.group(1) + ("" if port == "4569" else ":" + port) + "/", line)
+
+def _cfgr_identity_lines(lines: list[str], mask: list[bool], sec: dict, only: frozenset[str]) -> list[str]:
+    out = []
+    for i in range(sec["start"] + 1, sec["end"]):
+        kv = None if mask[i] else _cfgr_kv(lines[i])
+        if kv and kv[0].lower() in only:
+            out.append(lines[i].rstrip())
+    return out
+
+def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list[str] | None, list[str], list[str], str, list[str]]:
     mask = _cfgr_managed_mask(lines)
     managed = _cfgr_managed_headers(lines, mask)
     want = {n["node"]: n for n in p["rpt"]["nodes"]}
     clash = sorted(n for n in want if n in managed)
     if clash:
         return None, [], [], ("private node " + ", ".join(clash) + " is also in the dashboard's Phone-tab block in "
-                              "rpt.conf. Change it on the Phone tab first.")
+                              "rpt.conf. Change it on the Phone tab first."), []
     units, secs = _cfgr_rpt_units(lines, mask)
+    notes: list[str] = []
+    public = [s for s in secs if s["name"].isdigit() and not _cfgr_is_private(s["name"])]
+    c = globals().get("_cfg")
+    own = c.get("identity", "node", fallback="").strip() if c is not None else ""
+    public.sort(key=lambda s: s["name"] != own)
+    public_id = _cfgr_identity_lines(lines, mask, public[0], frozenset({"idrecording"})) if public else []
+    keep_id: dict[str, list[str]] = {}
+    for node in want:
+        if node in units:
+            keep_id[node] = _cfgr_identity_lines(lines, mask, units[node][0], _CFGR_IDENTITY_KEYS)
+            if keep_id[node]:
+                notes.append(f"[{node}]: kept this node's own " + ", ".join(_cfgr_kv(x)[0] for x in keep_id[node]))
+        elif public_id:
+            keep_id[node] = public_id
+            notes.append(f"[{node}]: new here, ID copied from [{public[0]['name']}]: {public_id[0].strip()}")
+        else:
+            keep_id[node] = []
+        if not keep_id[node]:
+            notes.append(f"[{node}]: no ID line on this node; the template's ID (if any) applies")
     drop: set[int] = set()
     first_start = None
     for members in units.values():
@@ -8942,7 +8989,14 @@ def _cfgr_apply_rpt(lines: list[str], p: dict) -> tuple[list[str] | None, list[s
     nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
     add_before: dict[int, list[str]] = {}
     tail: list[str] = []
-    new_nodes_lines = [n["nodes_line"] for n in p["rpt"]["nodes"] if n["nodes_line"]]
+    new_nodes_lines = []
+    for n in p["rpt"]["nodes"]:
+        if not n["nodes_line"]:
+            continue
+        fixed = _cfgr_local_nodes_line(n["nodes_line"], port)
+        if fixed != n["nodes_line"]:
+            notes.append(f"[nodes] {n['node']}: IAX port set to this node's bindport {port}")
+        new_nodes_lines.append(fixed)
     if nodes_sec is not None:
         last = nodes_sec["start"]
         for i in range(nodes_sec["start"] + 1, nodes_sec["end"]):
@@ -8957,7 +9011,10 @@ def _cfgr_apply_rpt(lines: list[str], p: dict) -> tuple[list[str] | None, list[s
     stanza_text: list[str] = []
     for n in sorted(p["rpt"]["nodes"], key=lambda x: int(x["node"])):
         for s in n["stanzas"]:
-            stanza_text += list(s["lines"]) + [""]
+            body = list(s["lines"])
+            if s["name"] == n["node"]:
+                body = body[:1] + keep_id.get(n["node"], []) + body[1:]
+            stanza_text += body + [""]
     if stanza_text:
         if first_start is not None:
             slot = add_before.setdefault(first_start, [])
@@ -8978,7 +9035,7 @@ def _cfgr_apply_rpt(lines: list[str], p: dict) -> tuple[list[str] | None, list[s
     have = set(units)
     removed = sorted(have - set(want), key=int)
     added = sorted(set(want) - have, key=int)
-    return out, removed, added, ""
+    return out, removed, added, "", notes
 
 def _cfgr_apply_ext(lines: list[str], p: dict) -> list[str]:
     drop: set[int] = set()
@@ -9080,9 +9137,10 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
             continue
         lines = _cfgr_lines(cur.decode("utf-8", "replace"))
         if path == _CFGR_RPT:
-            new, removed, added, err = _cfgr_apply_rpt(lines, p)
+            new, removed, added, err, id_notes = _cfgr_apply_rpt(lines, p, _cfgr_bindport())
             if new is None:
                 return {}, [], [], err
+            notes += id_notes
             mask = _cfgr_managed_mask(lines)
             managed = sorted(h for h in _cfgr_managed_headers(lines, mask) if _cfgr_is_private(h))
             if managed:

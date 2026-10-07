@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_160_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_161_20261007.py`. Newest entries first.
+
+## 0.0.161 (2026-10-07)
+
+- Config tab, applying a preset: each node keeps its own ID. Before, a private node stanza from the preset replaced the node's own, so its `idrecording` was lost and the `[node-main]` template's ID (stock ASL3: someone else's callsign) went on the air.
+  - A private node that is already on the node keeps that node's own identity lines (`idrecording` and the other blocked keys).
+  - A private node that is new on the node gets the `idrecording` of the node's own public stanza.
+  - The preview and the result list which ID lines were kept or copied.
+- Config tab, applying a preset: the `[nodes]` lines now use this node's IAX port (`bindport` in `[general]` of `iax.conf`, 4569 when not set). Before, the port of the node the preset was saved on (for example `:4579`) was carried over and the private nodes could not link.
 
 ## 0.0.160 (2026-10-07)
 
@@ -14,7 +22,7 @@ Current file: `asl_dvs_m17_44helper_v0_0_160_20261007.py`. Newest entries first.
   - **Restart services:** after a restore or preset, a button per system restarts its services (asterisk, allmon3 / mmdvm_bridge, analog_bridge, md380-emu / usrp2m17, asterisk). Nothing restarts on its own.
   - **Travel Node preset:** wiring only, never callsigns, IDs or passwords. Save it on the travel node (Preview shows exactly what goes in). It holds the private nodes (1000-1999) in `rpt.conf` with their function stanzas and `[nodes]` lines, their `exten =>` lines, `chan_usrp.so` load/noload, and the `USRP2M17.ini` ports. Lines with identity keys or the public node number are left out, and so are comments.
   - **Applying a preset:** a preview of every changed line first; private nodes not in the preset are removed. The node's own public stanza and everything else in the files stay. The Phone-tab nodes the dashboard manages (its marked block in `rpt.conf`) are never captured or touched.
-- M17 tab: new step 9 "Save original configs as Restore point" (the same save as on the Config tab). Sudoers and the Cockpit steps move to 10-12. ASL3 and DVSwitch get the same step in 0.0.161.
+- M17 tab: new step 9 "Save original configs as Restore point" (the same save as on the Config tab). Sudoers and the Cockpit steps move to 10-12. ASL3 and DVSwitch get the same step in a later version.
 
 ## 0.0.159 (2026-10-06)
 
