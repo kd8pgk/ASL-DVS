@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.5-pi02w"
+VERSION      = "6.13.67.6-pi02w"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -8907,10 +8907,6 @@ function _stfuRenderCompat(bodyId, compat) {
 
 function stfuCopyStanza(btn) {
   dvsmCopy(btn, _stfuSampleText);
-  
-  const orig = btn.textContent;
-  btn.textContent = "✓ Copied";
-  setTimeout(() => { btn.textContent = orig; }, 1400);
 }
 
 async function stfuOpenEditor() {
@@ -9156,9 +9152,6 @@ async function m17UpdateHosts() {
 
 function m17CopyStanza(btn) {
   dvsmCopy(btn, _m17SampleText);
-  const orig = btn.textContent;
-  btn.textContent = "✓ Copied";
-  setTimeout(() => { btn.textContent = orig; }, 1400);
 }
 
 async function m17Restart() {
@@ -10273,12 +10266,43 @@ function _dvsmSetBadge(id, status, text) {
   el.className   = "dpbadge " + _dvsmBadgeClass(status);
 }
 
+function _copyTextSync(text) {
+  const tmp = document.createElement("textarea");
+  tmp.value = text;
+  tmp.style.position = "fixed";
+  tmp.style.top = "0";
+  tmp.style.left = "0";
+  tmp.style.opacity = "0";
+  tmp.style.fontSize = "16px";
+  document.body.appendChild(tmp);
+  tmp.focus();
+  tmp.select();
+  tmp.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+  document.body.removeChild(tmp);
+  return ok;
+}
+
 function dvsmCopy(btn, value) {
-  navigator.clipboard.writeText(String(value || "")).catch(() => {});
-  const orig = btn.textContent;
-  btn.textContent = "✓";
-  btn.classList.add("copied");
-  setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 1200);
+  const text = String(value || "");
+  const orig = btn.dataset.origLabel || btn.textContent;
+  btn.dataset.origLabel = orig;
+  const short = orig.trim().length <= 2;
+  const done = (ok) => {
+    btn.textContent = ok ? (short ? "✓" : "✓ Copied") : (short ? "✗" : "Copy failed");
+    btn.classList.toggle("copied", ok);
+    if (!ok) toast("Copy failed: select the text and copy it by hand", "err");
+    clearTimeout(btn._copyTimer);
+    btn._copyTimer = setTimeout(() => { btn.textContent = orig; btn.classList.remove("copied"); }, 1400);
+  };
+  if (!text) { done(false); return; }
+  if (_copyTextSync(text)) { done(true); return; }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
+    return;
+  }
+  done(false);
 }
 
 function dvsmCopyAttr(btn) { dvsmCopy(btn, btn.getAttribute("data-copyval") || ""); }

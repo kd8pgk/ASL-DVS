@@ -1,6 +1,18 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_5_20261007.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_6_20261007.py`. Newest entries first.
+
+## 6.13.67.6-pi02w (2026-10-07)
+
+- Copy buttons on the DVSwitch / M17 / STFU cards work again (Copy Stanza on
+  the sample USRP2M17.ini and DVSwitch.ini cards, and the copy buttons for
+  values and secrets). They used only `navigator.clipboard`, which browsers
+  provide on https or localhost but not on `http://<node-ip>`, so nothing was
+  copied. They now copy through a hidden text box first (works on plain http,
+  iOS too) and use `navigator.clipboard` only where it exists. A failed copy
+  says so ("Copy failed" and a message) instead of showing a tick.
+- Copy Stanza no longer leaves its button stuck on "✓": its own label change
+  fought the shared copy helper's.
 
 ## 6.13.67.5-pi02w (2026-10-07)
 
