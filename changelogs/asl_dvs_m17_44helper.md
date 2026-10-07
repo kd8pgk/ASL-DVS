@@ -1,6 +1,20 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_169_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_170_20261007.py`. Newest entries first.
+
+## 0.0.170 (2026-10-07)
+
+- Services tab: the rows did not line up. Each row ran the label, the "(source)"
+  text and the flags together on one line, so "(systemd)" started wherever the
+  label ended (87 to 167 px in the test data on a tablet). Each row is now four
+  columns, the dot, the label, the source and the flags (MASKED, "[should stay
+  private]"), the same on every row. On a phone the flags drop under the label.
+- Ports tab, phone width: the table was wider than its card (555 px in a 358 px
+  card) and spilled out. It now scrolls sideways inside the card, as the Config
+  tab's tables do since 0.0.169.
+- Checked in headless Chromium at 390, 800 and 1280 px with live-looking data on
+  Overview, Services and Ports. The Overview "Installed software" rows and cards
+  were already aligned.
 
 ## 0.0.169 (2026-10-07)
 
