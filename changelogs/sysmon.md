@@ -1,6 +1,21 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_71_20261007.py`. Newest entries first.
+Current file: `sysmon_v6_13_72_20261007.py`. Newest entries first.
+
+## 6.13.72 (2026-10-07)
+
+- Copy buttons that copy the full desktop layout, whatever the screen size,
+  same as SysMon Pi02w 6.13.67.7. Text is built from the page's data, not from
+  what is on screen, so a phone and a desktop copy the same text.
+- **Ports tab:** `Copy table` (current All/TCP/UDP filter), `Copy all` (every
+  open port) and `Copy port details`. Columns: port, proto, process, PID, listen
+  address, service, conflict (OK/DUP) and the full command line (new, from
+  `/proc/<pid>/cmdline`, up to 300 chars). The page reads the full port list
+  once and filters All/TCP/UDP in the page.
+- **Services, Overview, Hardware and Security tabs:** a Copy button on each.
+  Hardware copies the whole tab; Security copies every check with its result and,
+  for warnings and failures, what it means and how to fix it.
+- The Journal tab already copies from its popup; unchanged.
 
 ## 6.13.71 (2026-10-07)
 
