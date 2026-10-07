@@ -1,6 +1,27 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_11_20261007.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_12_20261007.py`. Newest entries first.
+
+## 9.3.71.12-pi02w (2026-10-07)
+
+- Edit, Phone tab: the network cards lined up wrongly on tablet-width screens
+  (about 560 to 1200 px; found on a Galaxy Tab S6 Lite in Vivaldi, where turning
+  on "Desktop site" hid it). Phones use one column and were fine.
+  - A field whose label wraps to two lines (for example "SIP server / proxy /
+    registrar") pushed its box lower than the boxes beside it. Fields in a row
+    now sit on a common bottom line, so every box lines up.
+  - The checkbox rows ("E911 is set up", "Allow international") sat at label
+    height, above the box next to them. They now have the height of a box and
+    sit level with it.
+  - The favorites rows used their own column widths and gap, so Name, Number and
+    "Then send" did not sit under the field columns above them. They now use the
+    same columns and gap as the field grid at every width. The clear (✕) button
+    sits inside the "Then send" cell. Phone layout is unchanged.
+  - Measured in headless Chromium at 390, 560, 561, 700, 800, 900, 1000 and
+    1200 px: the old build had misaligned rows at every width from 560 up, the new
+    build has none, and the favorites columns match the field columns.
+- No change to what is saved: names, numbers and tones sync as before, and the
+  clear button still works.
 
 ## 9.3.71.11-pi02w (2026-10-07)
 

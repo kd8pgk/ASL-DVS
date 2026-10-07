@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.166"
-APP_STAGE = "v0.0.166: Config tab: standard configuration (differs from stock, bridge-node profile, optional efficiency); history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.169"
+APP_STAGE = "v0.0.169: Config tab: reinstall the tools from the library and reboot after a config change; phone-width tables scroll inside their card; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -7787,7 +7787,7 @@ header {
 .tab.t-system-opt{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-actions-log{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-config{--mc:var(--green);--mc-rgb:0,255,176}
-.cfg-table{border-collapse:collapse;width:100%;margin:.5rem 0;font-family:var(--mono);font-size:.76rem}
+.cfg-table{border-collapse:collapse;width:100%;max-width:100%;display:block;overflow-x:auto;margin:.5rem 0;font-family:var(--mono);font-size:.76rem}
 .cfg-table th,.cfg-table td{border:1px solid var(--border2);padding:.3rem .45rem;text-align:left;vertical-align:top}
 .cfg-hint{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
 .cfg-chk{display:inline-block;margin-right:1rem;font-family:var(--mono);font-size:.8rem}
@@ -8558,6 +8558,7 @@ def build_config_status() -> dict:
         "gateway_warnings": gw_warn,
         "gateways": _cfgr_gateway_states(),
         "standard": _cfgr_std_status(),
+        "reinstall": _cfgr_ri_status(),
         "checked_at": _cfgr_now(),
     }
 
@@ -10317,6 +10318,455 @@ def _cfgr_std_revert(cid: str, state: dict) -> dict:
     return {"success": ok, "output": "\n".join(head + [""] + report).strip(),
             "restart_groups": [g for g in groups if installed[g]]}
 
+_CFGR_RI_UNIT = "asl-dvs-reinstall"
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "std_apply", "std_revert",
+                               "gateways_apply", "gateways_revert"})
+_CFGR_RI_JOB = r'''#!/usr/bin/env python3
+import json
+import os
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+
+LIB = "@@LIB@@"
+WORK = os.path.join(LIB, "config_restore")
+STATE = os.path.join(WORK, "reinstall_job.json")
+LOG = os.path.join(WORK, "reinstall.log")
+PENDING = os.path.join(WORK, "reinstall_pending.json")
+BACKUP = os.path.join(WORK, "reinstall_backup")
+GUARD_SEC = 90
+INSTMON_RESTART_WAIT = 6
+START_TIMEOUT = 60
+SETTLE_MIN = 20
+SETTLE_MAX = 180
+STEP_TIMEOUT = 600
+DRY = False
+
+TOOLS = [
+    ("instmon", "instmon", "instmon", 8990, "/usr/local/bin/instmon.py"),
+    ("Dashboard", "dashboard", "asl_dvs_dashboard", 8989, "/usr/local/bin/asl_dvs_dashboard.py"),
+    ("SysMon", "sysmon", "sysmon", 9999, "/usr/local/bin/sysmon.py"),
+    ("wifimon", "wifimon", "wifimon", 8991, "/usr/local/bin/wifimon.py"),
+    ("44helper", "44helper", "44helper", 9997, "/opt/44helper/asl_dvs_m17_44helper.py"),
+]
+CRITICAL = ("instmon", "asl_dvs_dashboard")
+VER_RE = re.compile(r"^\s*(?:APP_VERSION|SCRIPT_VERSION|VERSION)\s*=\s*[\"']([^\"']+)[\"']", re.M)
+STEM_RE = re.compile(r"^(.+?)_v\d")
+
+state = {"phase": "starting", "started_at": "", "finished_at": "", "steps": [], "result": "", "reboot_at": 0}
+
+
+def now():
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def save():
+    os.makedirs(WORK, mode=0o700, exist_ok=True)
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(state, fh)
+    os.replace(tmp, STATE)
+
+
+def log(msg):
+    line = "[%s] %s" % (now(), msg)
+    print(line, flush=True)
+    try:
+        with open(LOG, "a") as fh:
+            fh.write(line + "\n")
+    except OSError:
+        pass
+
+
+def step(name, status, note=""):
+    for s in state["steps"]:
+        if s["name"] == name:
+            s["status"], s["note"] = status, note
+            break
+    else:
+        state["steps"].append({"name": name, "status": status, "note": note})
+    save()
+    log("%s: %s %s" % (name, status, note))
+
+
+def read(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return ""
+
+
+def ver_of(path):
+    m = VER_RE.search(read(path))
+    return m.group(1) if m else ""
+
+
+def vkey(ver):
+    out = []
+    for part in (ver or "").lstrip("vV").split("."):
+        m = re.match(r"\d+", part)
+        out.append(int(m.group()) if m else 0)
+    return tuple(out)
+
+
+def interp(path):
+    return "bash" if path.endswith(".sh") else "python3"
+
+
+def run(argv, timeout=STEP_TIMEOUT):
+    if DRY:
+        log("DRY: " + " ".join(argv))
+        return 0
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log("could not run %s: %s" % (" ".join(argv), exc))
+        return None
+    for line in ((proc.stdout or "") + (proc.stderr or "")).splitlines():
+        log("  " + line)
+    return proc.returncode
+
+
+def sysctl(*args):
+    try:
+        r = subprocess.run(["systemctl"] + list(args), capture_output=True, text=True, timeout=15)
+        return r.stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+
+
+def port_open(port):
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def healthy(unit, port, timeout):
+    end = time.time() + timeout
+    st = ""
+    while True:
+        st = sysctl("is-active", unit)
+        if st == "active" and port_open(port):
+            return True, st
+        if time.time() >= end:
+            break
+        time.sleep(2)
+    if st == "active":
+        return False, "running but not answering on port %s" % port
+    return False, st or "unknown"
+
+
+def stem_of(path):
+    m = STEM_RE.match(os.path.basename(path))
+    return m.group(1).lower() if m else ""
+
+
+def plan():
+    rows = []
+    for label, cat, unit, port, link in TOOLS:
+        row = {"name": label, "category": cat, "unit": unit, "port": port, "link": link, "action": "skip",
+               "note": "", "installed": "", "version": "", "file": "", "source": ""}
+        rows.append(row)
+        target = os.path.realpath(link)
+        if not os.path.isfile(target):
+            row["note"] = "not installed, left alone"
+            continue
+        inst_ver = ver_of(target)
+        row["installed"] = inst_ver
+        if not inst_ver:
+            row["note"] = "installed file has no version line, left alone"
+            continue
+        if "--install" not in read(target):
+            row["note"] = "installed file has no --install, left alone"
+            continue
+        fork = "pi02w" in inst_ver.lower()
+        stem = stem_of(target)
+        best = (vkey(inst_ver), 0, target, inst_ver, "installed copy")
+        folder = os.path.join(LIB, cat)
+        try:
+            names = sorted(os.listdir(folder))
+        except OSError:
+            names = []
+        for name in names:
+            path = os.path.join(folder, name)
+            if not name.endswith(".py") or not os.path.isfile(path):
+                continue
+            v = ver_of(path)
+            if not v or ("pi02w" in v.lower()) != fork:
+                continue
+            cs = stem_of(path)
+            if stem and cs and stem != cs:
+                continue
+            cand = (vkey(v), 1, path, v, "library")
+            if cand[:2] >= best[:2]:
+                best = cand
+        row.update(action="reinstall", file=best[2], version=best[3], source=best[4])
+        row["note"] = "v%s -> v%s (%s)" % (inst_ver, best[3], best[4])
+    return rows
+
+
+def backup(cat, target):
+    folder = os.path.join(BACKUP, cat)
+    os.makedirs(folder, mode=0o700, exist_ok=True)
+    dest = os.path.join(folder, os.path.basename(target))
+    shutil.copy2(target, dest)
+    return dest
+
+
+def guard_arm(old):
+    for args in (["systemctl", "stop", "instmon-update-guard.timer", "instmon-update-guard.service"],
+                 ["systemctl", "reset-failed", "instmon-update-guard.service"]):
+        run(args, 15)
+    check = "timeout 5 bash -c '</dev/tcp/127.0.0.1/8990' || python3 %s --install" % old
+    return run(["systemd-run", "--quiet", "--collect", "--on-active=%d" % GUARD_SEC,
+                "--unit=instmon-update-guard", "bash", "-c", check], 20) == 0
+
+
+def guard_stop():
+    run(["systemctl", "stop", "instmon-update-guard.timer"], 15)
+
+
+def drop_superseded(old_target, link):
+    new_target = os.path.realpath(link)
+    if (old_target != new_target and os.path.isfile(old_target) and os.path.isfile(new_target)
+            and os.path.dirname(old_target) == os.path.dirname(new_target)):
+        try:
+            os.remove(old_target)
+            log("removed the superseded copy " + old_target)
+        except OSError as exc:
+            log("could not remove %s: %s" % (old_target, exc))
+
+
+def install_and_wait(name, unit, port, path, wait_first=0):
+    rc = run([interp(path), path, "--install"])
+    if rc == 0 and wait_first:
+        time.sleep(wait_first)
+    return healthy(unit, port, START_TIMEOUT) if rc == 0 else (False, "--install exited %s" % rc)
+
+
+def do_tool(row):
+    name, cat, unit, port, link = row["name"], row["category"], row["unit"], row["port"], row["link"]
+    target = os.path.realpath(link)
+    try:
+        old = backup(cat, target)
+    except OSError as exc:
+        step(name, "skipped", "could not save a copy of the installed file (%s), left alone" % exc)
+        return "skipped"
+    new = old if row["source"] == "installed copy" else row["file"]
+    wait = INSTMON_RESTART_WAIT if cat == "instmon" else 0
+    if cat == "instmon":
+        if not guard_arm(old):
+            step(name, "skipped", "could not set up its rollback timer, left alone")
+            return "skipped"
+    step(name, "running", "installing v%s" % row["version"])
+    ok, st = install_and_wait(name, unit, port, new, wait)
+    if ok:
+        if cat == "instmon":
+            guard_stop()
+        drop_superseded(target, link)
+        step(name, "ok", row["note"])
+        return "ok"
+    step(name, "running", "v%s failed (%s), putting v%s back" % (row["version"], st, row["installed"]))
+    ok2, st2 = install_and_wait(name, unit, port, old, wait)
+    if cat == "instmon":
+        guard_stop()
+    if ok2:
+        step(name, "rolled back", "v%s failed (%s); v%s is back" % (row["version"], st, row["installed"]))
+        return "rolled back"
+    step(name, "attention", "v%s failed (%s) and the old one did not come back (%s)" % (row["version"], st, st2))
+    return "attention"
+
+
+def settle(rows):
+    step("Settle", "running", "waiting for services")
+    time.sleep(SETTLE_MIN)
+    end = time.time() + SETTLE_MAX
+    want = [("asterisk", None)]
+    for r in rows:
+        if r["action"] == "reinstall":
+            want.append((r["unit"], r["port"]))
+    while True:
+        bad = []
+        for unit, port in want:
+            if unit == "asterisk" and sysctl("show", "-p", "LoadState", "--value", unit) != "loaded":
+                continue
+            st = sysctl("is-active", unit)
+            if st != "active" or (port and not port_open(port)):
+                bad.append("%s (%s)" % (unit, st or "unknown"))
+        if not bad or time.time() >= end:
+            return bad
+        time.sleep(3)
+
+
+def finish(phase, result):
+    state.update(phase=phase, result=result, finished_at=now())
+    save()
+    log("finished: %s - %s" % (phase, result))
+
+
+def main_run():
+    os.makedirs(WORK, mode=0o700, exist_ok=True)
+    with open(LOG, "w"):
+        pass
+    state["started_at"] = now()
+    state["phase"] = "reinstalling"
+    save()
+    rows = plan()
+    todo = [r for r in rows if r["action"] == "reinstall"]
+    for r in rows:
+        if r["action"] != "reinstall":
+            step(r["name"], "skipped", r["note"])
+    if not todo:
+        finish("done_no_reboot", "no installed tools were found, nothing reinstalled and no reboot")
+        return 0
+    outcomes = {}
+    for r in todo:
+        outcomes[r["name"]] = do_tool(r)
+    state["phase"] = "settling"
+    save()
+    bad = settle(rows)
+    step("Settle", "ok" if not bad else "warn", "all services answering" if not bad else "not answering: " + ", ".join(bad))
+    crit_bad = []
+    for r in todo:
+        if r["unit"] in CRITICAL:
+            st = sysctl("is-active", r["unit"])
+            if st != "active" or not port_open(r["port"]):
+                crit_bad.append(r["name"])
+    if sysctl("show", "-p", "LoadState", "--value", "asterisk") == "loaded" and sysctl("is-active", "asterisk") != "active":
+        crit_bad.append("Asterisk")
+    if crit_bad:
+        finish("done_no_reboot", "not rebooted: " + ", ".join(crit_bad) + " not healthy. See the log.")
+        return 1
+    state["phase"] = "rebooting"
+    state["reboot_at"] = time.time()
+    state["result"] = "tools reinstalled, rebooting"
+    save()
+    try:
+        os.remove(PENDING)
+    except OSError:
+        pass
+    run(["sync"], 30)
+    rc = run(["systemd-run", "--quiet", "--collect", "--on-active=5", "--unit=asl-dvs-reinstall-reboot",
+              "/bin/systemctl", "reboot"], 30)
+    if rc != 0:
+        state["reboot_at"] = 0
+        finish("done_no_reboot", "tools reinstalled but the reboot could not be started, reboot by hand")
+        return 1
+    log("reboot scheduled in 5 seconds")
+    return 0
+
+
+if __name__ == "__main__":
+    if "--plan" in sys.argv:
+        print(json.dumps(plan()))
+        sys.exit(0)
+    if "--run" in sys.argv:
+        sys.exit(main_run())
+    print("usage: job.py --plan | --run")
+    sys.exit(2)
+'''
+
+def _cfgr_ri_path(name: str) -> str:
+    return os.path.join(_CFGR_DIR, name)
+
+def _cfgr_ri_json(path: str):
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+def _cfgr_ri_mark(reason: str) -> None:
+    if _cfgr_ri_running():
+        return
+    _cfgr_ensure_root_dir()
+    for p in (_cfgr_ri_path("reinstall_job.json"),):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    with open(_cfgr_ri_path("reinstall_pending.json"), "w", encoding="utf-8") as fh:
+        json.dump({"since": _cfgr_now(), "reason": reason}, fh)
+    os.chmod(_cfgr_ri_path("reinstall_pending.json"), 0o600)
+
+def _cfgr_ri_running() -> bool:
+    try:
+        r = subprocess.run(["systemctl", "is-active", _CFGR_RI_UNIT], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return r.stdout.strip() in ("active", "activating")
+
+def _cfgr_ri_write_script() -> None:
+    _cfgr_ensure_root_dir()
+    text = _CFGR_RI_JOB.replace("@@LIB@@", os.path.dirname(_CFGR_DIR))
+    with open(_cfgr_ri_path("reinstall_job.py"), "w", encoding="utf-8") as fh:
+        fh.write(text)
+    os.chmod(_cfgr_ri_path("reinstall_job.py"), 0o700)
+
+def _cfgr_ri_boot_time() -> float:
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as fh:
+            return time.time() - float(fh.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+def _cfgr_ri_status() -> dict:
+    job = _cfgr_ri_json(_cfgr_ri_path("reinstall_job.json"))
+    running = _cfgr_ri_running()
+    if job and job.get("phase") == "rebooting" and job.get("reboot_at") and _cfgr_ri_boot_time() > float(job["reboot_at"]):
+        job["phase"] = "rebooted"
+        job["result"] = "tools reinstalled and the node rebooted"
+    tail: list[str] = []
+    try:
+        with open(_cfgr_ri_path("reinstall.log"), "r", encoding="utf-8", errors="replace") as fh:
+            tail = fh.read().splitlines()[-60:]
+    except OSError:
+        pass
+    return {"pending": _cfgr_ri_json(_cfgr_ri_path("reinstall_pending.json")), "job": job, "running": running, "log": tail}
+
+def _cfgr_act_reinstall_preview(payload: dict) -> dict:
+    _cfgr_ri_write_script()
+    r = _run_argv(["python3", _cfgr_ri_path("reinstall_job.py"), "--plan"], timeout=30)
+    if not r["success"]:
+        return {"success": False, "output": "Could not read the plan: " + r["output"]}
+    try:
+        plan = json.loads(r["output"])
+    except ValueError:
+        return {"success": False, "output": "Could not read the plan: " + r["output"][:200]}
+    lines = []
+    for row in plan:
+        lines.append(f"{row['name']}: {row['note']}")
+    return {"success": True, "plan": plan, "output": "\n".join(lines)}
+
+def _cfgr_act_reinstall_start(payload: dict) -> dict:
+    if _cfgr_ri_running():
+        return {"success": False, "output": "A reinstall is already running."}
+    _cfgr_ri_write_script()
+    _run_argv(["systemctl", "reset-failed", _CFGR_RI_UNIT], timeout=10)
+    r = _run_argv(["systemd-run", f"--unit={_CFGR_RI_UNIT}", "--collect", "python3", _cfgr_ri_path("reinstall_job.py"), "--run"], timeout=30)
+    if not r["success"]:
+        return {"success": False, "output": "Could not start the reinstall: " + r["output"]}
+    return {"success": True, "output": "Reinstall started. instmon goes first, then the other tools, then the node reboots."}
+
+def _cfgr_act_reinstall_dismiss(payload: dict) -> dict:
+    if _cfgr_ri_running():
+        return {"success": False, "output": "A reinstall is running."}
+    for p in (_cfgr_ri_path("reinstall_pending.json"), _cfgr_ri_path("reinstall_job.json")):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    return {"success": True, "output": "Dismissed."}
+
+def _route_config_reinstall(query: dict) -> tuple[int, str, bytes]:
+    return 200, "application/json", json.dumps(_cfgr_ri_status()).encode("utf-8")
+
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "std_preview": lambda p: _cfgr_act_std(p, "preview"),
     "std_apply": lambda p: _cfgr_act_std(p, "apply"),
@@ -10334,6 +10784,9 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "preset_apply": lambda p: _cfgr_act_preset_apply(p, True),
     "gateways_apply": _cfgr_act_gateways_apply,
     "gateways_revert": _cfgr_act_gateways_revert,
+    "reinstall_preview": _cfgr_act_reinstall_preview,
+    "reinstall_start": _cfgr_act_reinstall_start,
+    "reinstall_dismiss": _cfgr_act_reinstall_dismiss,
 }
 
 def _dispatch_config_action(payload: dict) -> dict:
@@ -10346,7 +10799,10 @@ def _dispatch_config_action(payload: dict) -> dict:
         return err
     with _CFGR_LOCK:
         try:
-            return fn(payload)
+            res = fn(payload)
+            if action in _CFGR_RI_CHANGING and res.get("success"):
+                _cfgr_ri_mark(action)
+            return res
         except OSError as exc:
             log(f"FAIL: CONFIG {action}: {exc}")
             return {"success": False, "output": f"Failed: {exc}"}
@@ -10692,10 +11148,98 @@ function cfgRender(d) {
   document.getElementById('cfg-checked-at').textContent = 'checked ' + d.checked_at;
 }
 
+
+var CFG_RI_TIMER = null;
+
+function cfgRiStop() {
+  if (CFG_RI_TIMER) { clearInterval(CFG_RI_TIMER); CFG_RI_TIMER = null; }
+}
+
+function cfgRiPoll() {
+  if (CFG_RI_TIMER) return;
+  CFG_RI_TIMER = setInterval(function() {
+    fetch('/api/config/reinstall').then(function(r) { return r.json(); }).then(function(ri) {
+      cfgRenderReinstall(ri);
+    }).catch(function() {
+      var head = document.getElementById('cfg-ri-head');
+      if (head) head.textContent = 'The helper is restarting or the node is rebooting. Reconnecting…';
+    });
+  }, 3000);
+}
+
+function cfgRenderReinstall(ri) {
+  var card = document.getElementById('cfg-reinstall');
+  if (!card) return;
+  var job = ri.job || null, pending = ri.pending || null;
+  if (!pending && !job && !ri.running) { card.style.display = 'none'; cfgRiStop(); return; }
+  card.style.display = 'block';
+  var phase = job ? job.phase : '';
+  var head = '', btns = '', busy = false;
+  if (ri.running || phase === 'reinstalling' || phase === 'settling' || phase === 'starting') {
+    head = 'Reinstalling the tools. Do not power the node off. It reboots by itself when this finishes.';
+    busy = true;
+  } else if (phase === 'rebooting') {
+    head = 'Tools reinstalled. The node is rebooting. This page reconnects when it is back.';
+    busy = true;
+  } else if (phase === 'rebooted') {
+    head = 'Done: ' + (job.result || 'tools reinstalled and the node rebooted') + (job.finished_at ? ' (' + job.finished_at + ')' : '') + '.';
+    btns = '<button class="btn-copy" onclick="cfgRiDismiss(this)">Dismiss</button>';
+  } else if (phase === 'done_no_reboot') {
+    head = (job.result || 'The node was not rebooted.');
+    btns = '<button class="btn-run" onclick="cfgReinstall(this)">Reinstall again</button> ' +
+           '<button class="btn-copy" onclick="cfgRiDismiss(this)">Dismiss</button>';
+  } else {
+    head = 'Configuration changed' + (pending && pending.since ? ' (' + pending.since + ')' : '') +
+           '. A reinstall of the tools from the library and a reboot are suggested so everything starts clean.';
+    btns = '<button class="btn-run" onclick="cfgReinstall(this)">Reinstall tools and reboot</button> ' +
+           '<button class="btn-copy" onclick="cfgRiDismiss(this)">Not now</button>';
+  }
+  document.getElementById('cfg-ri-head').textContent = head;
+  document.getElementById('cfg-ri-btns').innerHTML = btns;
+  var h = '';
+  if (job && job.steps && job.steps.length) {
+    h = '<table class="cfg-table"><tr><th>Step</th><th>Result</th><th></th></tr>';
+    job.steps.forEach(function(s) {
+      h += '<tr><td>' + cfgEsc(s.name) + '</td><td>' + cfgEsc(s.status) + '</td><td>' + cfgEsc(s.note) + '</td></tr>';
+    });
+    h += '</table>';
+  }
+  document.getElementById('cfg-ri-steps').innerHTML = h;
+  var out = document.getElementById('cfg-ri-out');
+  var tail = (ri.log || []).join('\n');
+  if (tail) {
+    out.style.display = 'block';
+    out.className = 'asl3-console shown' + (phase === 'done_no_reboot' ? ' fail' : '');
+    out.textContent = tail;
+  }
+  if (busy) cfgRiPoll(); else cfgRiStop();
+}
+
+function cfgReinstall(btn) {
+  document.getElementById('cfg-ri-out').style.display = 'block';
+  cfgPost({action: 'reinstall_preview'}, 'cfg-ri-out', btn).then(function(res) {
+    if (btn) btn.disabled = false;
+    if (!res || !res.success) return;
+    var msg = 'Reinstall the tools from the library, then reboot?\n\n' + res.output +
+              '\n\nOrder: instmon first, then the others. Each tool is saved first and put back if its new copy does not start. ' +
+              'Your callsign, node number and settings are kept. When the services have settled and instmon, the dashboard and Asterisk are healthy, the node reboots by itself.';
+    if (!confirm(msg)) return;
+    cfgPost({action: 'reinstall_start'}, 'cfg-ri-out', btn).then(function() {
+      document.getElementById('cfg-ri-out').style.display = 'block';
+      cfgRiPoll();
+    });
+  });
+}
+
+function cfgRiDismiss(btn) {
+  cfgPost({action: 'reinstall_dismiss'}, 'cfg-ri-out', btn);
+}
+
 function refreshConfig() {
   return fetch('/api/config/status').then(function(r) { return r.json(); }).then(function(d) {
     CFG_STATE = d;
     cfgRender(d);
+    cfgRenderReinstall(d.reinstall || {});
   });
 }
 """
@@ -10795,6 +11339,14 @@ def _render_config_panel() -> str:
     <div id="cfg-ports"></div>
     <div class="step-actions"><button class="btn-copy" onclick="cfgListening(this)">Check what is listening now</button></div>
     <div id="cfg-listen"></div>
+  </div>
+
+  <div class="step-card" id="cfg-reinstall" style="display:none">
+    <div class="step-head"><div class="step-title">Finish: reinstall the tools and reboot</div></div>
+    <div class="step-body" id="cfg-ri-head"></div>
+    <div class="step-actions" id="cfg-ri-btns"></div>
+    <div id="cfg-ri-steps"></div>
+    <div class="asl3-console shown placeholder" id="cfg-ri-out" style="display:none"></div>
   </div>
 
   <button class="btn-recheck" onclick="refreshConfig()">Re-check</button>
@@ -17929,6 +18481,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/system_opt/status": _route_system_opt_status,
     "/api/config/status": _route_config_status,
     "/api/config/listeners": _route_config_listeners,
+    "/api/config/reinstall": _route_config_reinstall,
     "/api/action_status": _route_action_status,
 }
 

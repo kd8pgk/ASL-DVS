@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.11-pi02w"
+VERSION      = "9.3.71.12-pi02w"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -8489,9 +8489,13 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .cfg-inp:disabled { opacity: .45; cursor: not-allowed; }
 .ph-net { border: 1px solid var(--border); border-radius: 6px; padding: .5rem .6rem; margin: .45rem 0; background: #0f1522; }
 .ph-net-hdr { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .35rem; font-family: var(--mono); font-size: .8rem; color: var(--text-bright); }
-.ph-fav-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr 2.2rem; gap: .4rem; margin: .25rem 0; }
+.ph-net .cfg-field { justify-content: flex-end; }
+.ph-net .cfg-field > .tab-chk-lbl { min-height: 2.15rem; box-sizing: border-box; }
+.ph-fav-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: .4rem .9rem; margin: .25rem 0; }
+.ph-fav-tone { display: flex; gap: .4rem; min-width: 0; }
+.ph-fav-tone .cfg-inp { flex: 1 1 0; min-width: 0; }
 .ph-fav-clr { padding: .2rem .4rem; }
-@media (max-width: 560px) { .ph-fav-row { grid-template-columns: 1fr 1fr 2.2rem; } .ph-fav-row [data-fk="name"] { grid-column: 1 / -1; } }
+@media (max-width: 560px) { .ph-fav-row { grid-template-columns: 1fr 1fr 2.2rem; gap: .4rem; } .ph-fav-tone { display: contents; } .ph-fav-row [data-fk="name"] { grid-column: 1 / -1; } }
 .ph-hint { font-family: var(--mono); font-size: .68rem; color: #6f8aa8; margin: .25rem 0 0; }
 .ph-howto summary { cursor: pointer; color: var(--teal); }
 .ph-howto p { margin: .35rem 0 0; }
@@ -12335,8 +12339,8 @@ function phFavBlock(n,i){
   h+=favs.map((f,j)=>
     `<div class="ph-fav-row" data-fi="${j}"><input class="cfg-inp" data-fk="name" type="text" maxlength="24" placeholder="${j+1}. Name" value="${esc(f.name)}">`+
     `<input class="cfg-inp" data-fk="number" type="text" inputmode="numeric" maxlength="20" placeholder="Number" value="${esc(f.number)}">`+
-    `<input class="cfg-inp" data-fk="tones" type="password" inputmode="tel" maxlength="32" autocomplete="off" placeholder="${f.has_tones?'Then send: saved':'Then send'}" value="${esc(f.tones||'')}">`+
-    (f.has_tones?`<button type="button" class="btn btn-muted ph-fav-clr" data-fclr="${j}" aria-label="Clear the saved tones for favorite ${j+1}" title="Clear the saved tones">✕</button>`:'<span></span>')+
+    `<div class="ph-fav-tone"><input class="cfg-inp" data-fk="tones" type="password" inputmode="tel" maxlength="32" autocomplete="off" placeholder="${f.has_tones?'Then send: saved':'Then send'}" value="${esc(f.tones||'')}">`+
+    (f.has_tones?`<button type="button" class="btn btn-muted ph-fav-clr" data-fclr="${j}" aria-label="Clear the saved tones for favorite ${j+1}" title="Clear the saved tones">✕</button>`:'')+`</div>`+
     `</div>`).join('');
   h+=`<div class="ph-hint">These favorites show on the Phone tab while this network is picked. Then send: tones sent 1 second after the call answers, such as a PIN like 1234#. A comma waits 1 second. Saved tones are hidden; leave the box blank to keep them, or press ✕ to clear them.</div>`;
   return h+`</div>`;

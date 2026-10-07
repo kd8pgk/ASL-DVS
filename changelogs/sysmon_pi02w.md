@@ -1,6 +1,27 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_7_20261007.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_8_20261007.py`. Newest entries first.
+
+## 6.13.67.8-pi02w (2026-10-07)
+
+- Screen-size fixes, found sweeping every tab at the Galaxy Tab S6 Lite's widths
+  (about 800 px portrait, 1280 px landscape, 980 px in Vivaldi's "Desktop site")
+  and at phone width.
+  - **Ports tab:** the column headers (PID, Known Service, Conflict) sat 28 to 56
+    px left of their values at every width from 600 px up, because the header and
+    each row sized their `auto` and `1fr` columns separately. Both now use the
+    same fixed columns, with a little less letter spacing so PROTO and PROCESS no
+    longer touch. On a phone the header now hides the same columns the rows hide
+    (it used to spill onto extra lines). The Copy buttons wrap to a second line on
+    a phone instead of running off the card.
+  - **STFU tab:** at phone width the "Hotspot Password → Self Care" pill, the
+    "✕ Close" button and the "Save then Restart to apply changes" text ran off
+    the card. The BrandMeister bar and the editor button bar now wrap. (The M17
+    editor bar uses the same class and gets the same fix.)
+  - Checked in headless Chromium at 390, 600, 800, 980 and 1280 px, with the
+    old build as a control (it fails the same checks), and with live-looking
+    data on Ports, Services, Overview, Hardware and Security: no clipped
+    content and no misaligned rows.
 
 ## 6.13.67.7-pi02w (2026-10-07)
 

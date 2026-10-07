@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.72"
+VERSION      = "6.13.73"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -1832,7 +1832,7 @@ body.offline #offline-bar{display:block}
 .dp-out-warn{color:var(--amber); text-shadow:0 0 4px rgba(255,208,64,.3)}
 .dp-out-dim {color:#fff}
 
-.pt-controls{display:flex;align-items:center;gap:.4rem;
+.pt-controls{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;
   padding:.42rem .9rem;background:#131c2d;border-bottom:1px solid var(--border)}
 .pt-proto-btn{font-family:var(--sans);font-size:var(--fs-sm);font-weight:bold;
   letter-spacing:.05em;text-transform:uppercase;padding:.22rem .65rem;
@@ -1851,12 +1851,12 @@ body.offline #offline-bar{display:block}
 .dot-legend-item{display:flex;align-items:center;gap:.32rem;white-space:nowrap}
 
 .pt-table-hdr,.pt-row{display:grid;
-  grid-template-columns:10px 70px 48px 1fr 58px 1fr auto;
+  grid-template-columns:10px 70px 52px minmax(0,1fr) 58px minmax(0,1fr) 76px;
   align-items:center;gap:.55rem;padding:.38rem .9rem;
   border-top:1px solid var(--border)}
 .pt-table-hdr{background:#131c2d;border-top:none;
   font-family:var(--sans);font-size:var(--fs-xs);
-  letter-spacing:.2em;text-transform:uppercase;color:#fff;cursor:default}
+  letter-spacing:.14em;text-transform:uppercase;color:#fff;cursor:default}
 .pt-row{cursor:pointer;transition:background .1s}
 .pt-row:hover{background:var(--surface2)}
 .pt-port{font-family:var(--sans);font-size:.902rem;
@@ -1871,6 +1871,7 @@ body.offline #offline-bar{display:block}
 
 @media(max-width:600px){
   .pt-table-hdr,.pt-row{grid-template-columns:10px 60px 40px 1fr}
+  .pt-table-hdr span:nth-child(n+5){display:none}
   .pt-pid,.pt-service,.pc-ok,.pc-dup{display:none}
 }
 
@@ -2545,11 +2546,11 @@ body.tab-edit #zone-content{
 .stfu-tab-title{font-family:var(--sans);font-size:var(--fs-sm);letter-spacing:.22em;
   text-transform:uppercase;color:#fff}
 
-.stfu-bm-bar{display:flex;align-items:center;justify-content:space-between;
+.stfu-bm-bar{display:flex;flex-wrap:wrap;gap:.35rem .6rem;align-items:center;justify-content:space-between;
   padding:.42rem .9rem;
   background:linear-gradient(90deg,rgba(0,191,255,.06),rgba(0,191,255,.03));
   border-bottom:1px solid rgba(0,191,255,.15)}
-.stfu-bm-bar-left{display:flex;align-items:center;gap:.55rem}
+.stfu-bm-bar-left{display:flex;flex-wrap:wrap;align-items:center;gap:.55rem}
 .stfu-bm-label{font-family:var(--sans);font-size:var(--fs-sm);
   color:#fff;letter-spacing:.06em}
 .stfu-bm-link{font-family:var(--sans);font-size:var(--fs-sm);color:var(--blue);
@@ -2582,7 +2583,7 @@ body.tab-edit #zone-content{
   border:none;outline:none;padding:.8rem 1rem;
   resize:none;tab-size:4;white-space:pre;overflow:auto;
   min-height:260px;display:block}
-.stfu-editor-bar{display:flex;align-items:center;gap:.4rem;
+.stfu-editor-bar{display:flex;flex-wrap:wrap;align-items:center;gap:.4rem;
   padding:.38rem .9rem;background:#131c2d;border-top:1px solid var(--border)}
 
 .hw-pwr-tbl{width:100%;border-collapse:collapse}

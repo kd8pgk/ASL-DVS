@@ -1,6 +1,66 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_166_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_169_20261007.py`. Newest entries first.
+
+## 0.0.169 (2026-10-07)
+
+- Config tab, phone width: the Standard configuration and Digital-mode gateways
+  tables were wider than their cards (390 and 428 px in a 318 px card at 390 px
+  wide) and spilled out. Tables now scroll sideways inside their card. Tablet and
+  desktop widths were already fine; checked at 390, 800, 980 and 1280 px with
+  live-looking data.
+
+## 0.0.168 (2026-10-07)
+
+- Reinstall tools and reboot: fixes found by reading every tool's own `--install`
+  and `--uninstall` and testing the job against fake tools that copy and link
+  themselves the way the real ones do.
+  - **No more `--uninstall`.** Each tool is now installed over the top. SysMon's
+    `--uninstall` puts the HDMI/video driver and GPU memory options in
+    `config.txt` back (the reboot would have applied that), and wifimon's removes
+    its WiFi power-save and roaming files. Installing over keeps all of that.
+    After a good install, the old versioned file the Dashboard and SysMon leave
+    in their install folder is removed so old versions do not pile up.
+  - **Reinstalling the installed copy** (when the installed file is the newest on
+    the node) now installs from the saved copy. The Dashboard and SysMon installs
+    copy themselves into place, so installing from the installed file itself
+    failed with a same-file error and rolled back.
+  - **instmon:** its `--install` restarts it two seconds later, so the health
+    check waits six seconds first and cannot pass against the old instmon.
+- Tested: 12 end-to-end checks with real file operations (install order, no
+  uninstall, newest versions, old versioned files removed, installed-copy
+  source, failed install rolled back with the link pointing at a working file),
+  plus the earlier suites and the browser test.
+
+## 0.0.167 (2026-10-07)
+
+- Config tab: new last card **Finish: reinstall the tools and reboot**. After any
+  Config change that worked (Restore, preset apply, Standard configuration
+  Apply or Undo, Gateways Enable or Undo) the card appears and stays, even after
+  a page reload, until the reboot or a Dismiss. One button, **Reinstall tools and
+  reboot**, first shows what it will do and asks to confirm.
+- What the button does, as one detached system job (`asl-dvs-reinstall`, run with
+  `systemd-run`, so it keeps going when 44helper itself is reinstalled):
+  1. Picks the newest copy of each installed tool already on the node: the
+     highest version among the library file and the installed file, same build
+     (Pi02w or full) as what is installed. Nothing is downloaded.
+  2. **instmon first**, then Dashboard, SysMon and wifimon, and 44helper last.
+     The Watchdog is never touched. Tools that are not installed are left alone.
+  3. Each tool: its installed file is saved first, the tool is uninstalled and the
+     new copy installed with its own `--install` (instmon is installed over itself,
+     with a 90-second rollback timer). If the new copy does not start, the saved
+     copy is put back.
+  4. Waits for the services to settle (at least 20 seconds, up to 3 minutes).
+  5. Reboots by itself only if instmon, the Dashboard and Asterisk are healthy.
+     Otherwise it does not reboot, says which one is not healthy, and keeps the
+     card so you can read the log.
+- The card shows each step's result and the log tail, and keeps polling through
+  the helper restart and the reboot. After the node is back it says Done.
+- Identity is untouched: each tool's own `--install` keeps `/etc/asl_dvs/asl_dvs.conf`
+  and nothing identity-related is passed or logged. Files in
+  `/etc/asl_dvs/instmon_library/config_restore/` stay root-only.
+- New actions `reinstall_preview`, `reinstall_start`, `reinstall_dismiss` and a
+  status route `/api/config/reinstall`.
 
 ## 0.0.166 (2026-10-07)
 
