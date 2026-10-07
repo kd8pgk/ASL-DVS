@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.71"
+VERSION      = "6.13.72"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2871,6 +2871,8 @@ body.tab-edit #zone-content{
       <div id="ov-global-bar">
         <span id="ov-global-lbl">Global Actions</span>
         <div style="flex:1"></div>
+        <button class="btn btn-muted btn-sm"
+          onclick="dtCopy(this, ovText)" title="Copy the overview as text">⎘ Copy</button>
         <button class="btn btn-red btn-sm"
           onclick="svcGlobal('stop_all',this)">■ Stop All</button>
         <button class="btn btn-blue btn-sm"
@@ -2884,6 +2886,8 @@ body.tab-edit #zone-content{
     <div class="s3-card">
       <div class="s3-card-hdr">
         <span class="s3-card-title">Services</span>
+        <button class="btn btn-muted btn-sm" style="margin-left:auto"
+          onclick="dtCopy(this, svcText)" title="Copy this list as text">⎘ Copy</button>
       </div>
       __SVC_LEGEND__
       <div class="s3-controls">
@@ -2915,6 +2919,11 @@ body.tab-edit #zone-content{
           onclick="ptSetProto('tcp')">TCP</button>
         <button class="pt-proto-btn"    id="pt-btn-udp"
           onclick="ptSetProto('udp')">UDP</button>
+        <span style="flex:1"></span>
+        <button class="btn btn-muted btn-sm" onclick="ptCopy(this,false)"
+          title="Copy the table (current filter) as text, full desktop layout">⎘ Copy table</button>
+        <button class="btn btn-muted btn-sm" onclick="ptCopy(this,true)"
+          title="Copy every open port, TCP and UDP, as text">⎘ Copy all</button>
       </div>
       <div class="dot-legend">
         <span class="dot-legend-item"><span class="dot dot-on"></span>Known Service</span>
@@ -3361,6 +3370,11 @@ body.tab-edit #zone-content{
   </div>
 
   <div id="panel-hardware" class="tab-panel">
+
+    <div class="hw-copybar" style="display:flex;justify-content:flex-end;padding:.2rem 0 .5rem">
+      <button class="btn btn-muted btn-sm" onclick="dtCopy(this, hwText)"
+        title="Copy the whole Hardware tab as text">⎘ Copy hardware report</button>
+    </div>
 
     <div class="s3-card">
       <div class="s3-card-hdr">
@@ -4192,6 +4206,9 @@ body.tab-edit #zone-content{
       <span class="sec-sum-item">Checks <span class="sec-sum-n other" id="sec-n-total">–</span></span>
       <button class="btn btn-muted btn-sm" id="sec-rerun-all"
               onclick="secRerun()">&#8635; Re-run checks</button>
+      <button class="btn btn-muted btn-sm" id="sec-copy"
+              onclick="dtCopy(this, secText)"
+              title="Copy every check result as text">&#9112; Copy</button>
       <span class="sec-sum-ts" id="sec-last-run">not run yet</span>
     </div>
 
@@ -5109,6 +5126,7 @@ async function loadOverview() {
 }
 
 function renderOverview(groups) {
+  _ovGroups = groups || [];
   const container = document.getElementById("ov-content");
   if (!container) return;
 
@@ -6363,6 +6381,10 @@ const _hwPingCache = {};
 let _hwUsbView  = "flat";
 let _hwAlsaView = "playback";
 let _hwDiagData = null;
+let _hwData = null;
+let _ptAll = [];
+let _ovGroups = [];
+let _s3Items = [];
 
 const _HW_AMBE_PAIRS  = {"0403:6015": "ThumbDV"};
 const _HW_FTDI_VIDS   = {"0403": true};
@@ -7818,6 +7840,7 @@ async function loadGeneralList() {
 
 // ---- card: Services ----
 function renderGeneralList(d) {
+  _s3Items = d.items || [];
   const body = document.getElementById("s3-gen-body");
   if (!body) return;
   body.innerHTML = "";
@@ -7885,6 +7908,7 @@ function ptSetProto(proto) {
     const btn = document.getElementById("pt-btn-" + p);
     if (btn) btn.classList.toggle("on", p === proto);
   });
+  if (_ptAll.length) renderPorts(_ptShown());
   loadPorts();
 }
 
@@ -9126,6 +9150,7 @@ function renderRptNodes() {
 // ---- general ----
 async function loadHardware() {
   const d = await api("/api/hardware");
+  if (d) _hwData = d;
   if (!d) {
     document.getElementById("hw-ambe-meta").textContent  = "error";
     document.getElementById("hw-audio-meta").textContent = "error";
@@ -12083,12 +12108,17 @@ async function openAppConfEditor(label) {
 // SHARED: Ports + Firewall
 // ========================================================================
 async function loadPorts() {
-  const d = await api(`/api/ports?proto=${_ptProto}`);
+  const d = await api("/api/ports?proto=both");
   if (!d) return;
-  renderPorts(d.ports || []);
+  _ptAll = d.ports || [];
+  renderPorts(_ptShown());
 
   const ts = document.getElementById("pt-refresh-ts");
   if (ts) ts.textContent = "↻ " + new Date().toTimeString().slice(0,8);
+}
+
+function _ptShown() {
+  return _ptProto === "both" ? _ptAll : _ptAll.filter(p => p.proto === _ptProto);
 }
 
 function renderPorts(ports) {
@@ -12163,6 +12193,10 @@ function openPortPanel(p) {
       ${p.service ? `<div><span style="color:#fff;letter-spacing:.12em;
         text-transform:uppercase;font-size:var(--fs-xs)">Service</span>
         <span style="color:var(--amber)">${esc(p.service)}.service</span></div>` : ""}
+    </div>
+    <div class="dpbtn-row">
+      <button class="btn btn-muted btn-sm"
+        onclick="dtCopy(this, () => ptOneText('${esc(p.port)}', '${esc(p.proto)}'))">⎘ Copy port details</button>
     </div>
     <div class="dpzone-lbl">Port Probes</div>
     <div class="dpbtn-row">
@@ -12421,6 +12455,162 @@ function dvsmCopy(btn, value) {
 }
 
 function dvsmCopyAttr(btn) { dvsmCopy(btn, btn.getAttribute("data-copyval") || ""); }
+
+// ---- desktop-layout text copies (v6.13.67.7) ----
+// Built from the data, never from the screen, so a phone and a desktop
+// copy exactly the same text.
+function _dtStamp(title) {
+  return [title, "sysmon v__VERSION__ · " + new Date().toLocaleString(), ""];
+}
+function _dtTable(head, rows) {
+  const all = [head].concat(rows.map(r => r.map(c => c == null || c === "" ? "-" : String(c))));
+  const w = head.map((_, i) => Math.max(...all.map(r => String(r[i]).length)));
+  return all.map(r => r.map((c, i) => i === r.length - 1 ? c : String(c).padEnd(w[i])).join("  ").trimEnd());
+}
+function dtCopy(btn, fn) {
+  let text = "";
+  try { text = fn(); } catch (e) { text = ""; }
+  if (!String(text).trim()) { toast("Nothing to copy yet", "err"); return; }
+  dvsmCopy(btn, text);
+}
+function _ptConflict(p) {
+  const c = (window._portConflicts || {})[`${p.proto}:${p.port}`];
+  return c ? "DUP " + c.map(x => `${x.process}(${x.pid})`).join(", ") : "OK";
+}
+function _ptRows(list) {
+  return list.map(p => [p.port, p.proto, p.process || "-", p.pid || "-", p.addr || "0.0.0.0",
+                        p.service ? p.service + ".service" : "-", _ptConflict(p), p.cmd || "-"]);
+}
+const _PT_HEAD = ["PORT", "PROTO", "PROCESS", "PID", "LISTEN", "SERVICE", "CONFLICT", "COMMAND"];
+function ptCopy(btn, everything) {
+  dtCopy(btn, () => {
+    const list = everything ? _ptAll : _ptShown();
+    const filt = everything ? "all" : (_ptProto === "both" ? "all" : _ptProto.toUpperCase());
+    return _dtStamp(`Open ports (${filt}) - ${list.length} listening`)
+      .concat(_dtTable(_PT_HEAD, _ptRows(list))).join("\n");
+  });
+}
+function ptOneText(port, proto) {
+  const list = _ptAll.filter(p => String(p.port) === String(port) && p.proto === proto);
+  return _dtStamp(`Port ${port}/${proto}`).concat(_dtTable(_PT_HEAD, _ptRows(list))).join("\n");
+}
+function _svcRow(svc) {
+  return [(svc.unit || "").replace(/\.service$/, ""), svc.state || "-",
+          svc.enabled === true ? "enabled" : svc.enabled === false ? "disabled" : (svc.enabled || "-"),
+          svc.owner || "-", svc.mode || "-"];
+}
+function svcText() {
+  const scope = _s3Scope + (_s3Filter ? `, filter "${_s3Filter}"` : "");
+  return _dtStamp(`Services (${scope}) - ${_s3Items.length}`)
+    .concat(_dtTable(["UNIT", "STATE", "ENABLED", "OWNER", "PERMS"], _s3Items.map(_svcRow))).join("\n");
+}
+function ovText() {
+  const out = _dtStamp("Overview");
+  _ovGroups.forEach(g => {
+    out.push("[" + g.group + "]");
+    const rows = (g.services || []).map(svc => {
+      const r = _svcRow(svc);
+      const port = svc.nr > 0 ? "NR:" + svc.nr
+                 : (svc.port && svc.port !== "-" ? `:${svc.port}/${svc.proto || ""}` : "-");
+      return [r[0], r[1], r[3], r[4], port];
+    });
+    out.push(..._dtTable(["UNIT", "STATE", "OWNER", "PERMS", "PORT"], rows), "");
+  });
+  return out.join("\n").trimEnd();
+}
+function _yn(v) { return v === true ? "yes" : v === false ? "no" : "-"; }
+function _hwHealth(label, o) {
+  const x = o || {};
+  return `  ${label}: ${x.ok === true ? "OK" : x.ok === false ? "FAIL" : "not run"}${x.detail ? " - " + x.detail : ""}`;
+}
+function hwText() {
+  if (!_hwData) return "";
+  const out = _dtStamp("Hardware");
+  const d = _hwData;
+  out.push("[AMBE device]");
+  const am = d.ambe || [];
+  if (!am.length) out.push("  none detected");
+  am.forEach(a => {
+    out.push(`  ${a.label || "-"}  ${a.vid || "?"}:${a.pid || "?"}  ${(a.dev_nodes || []).join(" ") || "no node"}` +
+             `  ${a.ambe_known ? "AMBE" : "generic serial"}${a.udev_symlink ? "  -> " + a.udev_symlink : ""}`);
+    const L = a.layers || {};
+    out.push(_hwHealth("Kernel recognized", L.l1), _hwHealth("Serial port accessible", L.l2),
+             _hwHealth("Process holding port", L.l3), _hwHealth("Chip responding", L.l4));
+  });
+  out.push("", "[Audio device]");
+  const au = (d.audio || []).filter(a => a.is_usb);
+  if (!au.length) out.push("  no USB audio devices");
+  au.forEach(a => {
+    out.push(`  ${a.card_name || "-"}  hw:${a.card_index},0  ${a.vid || "?"}:${a.pid || "?"}`);
+    const c = a.checks || {};
+    out.push(_hwHealth("Kernel recognized", c.c1), _hwHealth("Device free", c.c2),
+             `  DVSwitch compatible: ${_yn(a.dvswitch_ok)}`);
+  });
+  const p = d.power;
+  out.push("", "[Power & thermal]");
+  if (!p) out.push("  no data");
+  else {
+    const t = p.throttle || {};
+    out.push(`  Power health: ${t.available ? (t.pwr_status || "-") : "vcgencmd unavailable"}  bitmask ${t.raw || "-"}`);
+    if (p.core_volts != null) out.push(`  Core voltage: ${Number(p.core_volts).toFixed(4)}V`);
+    if (p.cpu_temp != null) out.push(`  SoC temp: ${p.cpu_temp}C`);
+    if (t.available) {
+      const f = [["UV now", t.uv_now], ["Freq cap now", t.freq_cap_now], ["Throttled now", t.throttled_now],
+                 ["Temp now", t.temp_now], ["UV since boot", t.uv_ever], ["Freq cap since boot", t.freq_cap_ever],
+                 ["Throttled since boot", t.throttled_ever], ["Temp since boot", t.temp_ever]];
+      out.push("  Flags set: " + (f.filter(x => x[1]).map(x => x[0]).join(", ") || "none"));
+    }
+  }
+  const v = d.video;
+  out.push("", "[Video & GPU memory]");
+  if (!v || !v.available) out.push("  " + ((v && v.message) || "no data"));
+  else {
+    const lv = v.live || {};
+    out.push(`  Video driver: ${lv.vc4_loaded ? "vc4 loaded" : "vc4 not loaded"}` +
+             `  HDMI: ${(lv.hdmi || []).map(c => c.name + " " + c.status).join(", ") || "none listed"}`);
+    out.push(`  GPU memory: ${lv.gpu_mb != null ? lv.gpu_mb + " MB" : "-"}  CMA reserved: ${lv.cma_mb != null ? lv.cma_mb + " MB" : "-"}`);
+    out.push(`  Headless option: ${v.video_off ? "on" : "off"}  Low GPU memory option: ${v.gpumem_low ? "on" : "off"}` +
+             `${v.video_pending || v.gpumem_pending ? "  (reboot required)" : ""}`);
+  }
+  const g = _hwDiagData || {};
+  out.push("", "[USB bus]");
+  const u = g.lsusb || {};
+  if (!u.available) out.push("  " + (u.error || "lsusb not available"));
+  else { (u.flat || []).forEach(l => out.push("  " + l)); if (u.tree) out.push("", u.tree); }
+  out.push("", "[asl-find-sound]");
+  const f = g.asl_find_sound || {};
+  out.push(f.installed ? (f.output || "(no output)") : "  " + (f.error || "not installed"));
+  out.push("", "[ALSA cards]");
+  const a = g.alsa || {};
+  if (!a.available) out.push("  " + (a.error || "aplay not available"));
+  else { out.push("Playback:", a.playback || "", "Capture:", a.capture || ""); }
+  return out.join("\n").trimEnd();
+}
+function secText() {
+  const d = _secData;
+  if (!d || !d.checks) return "";
+  const s = d.summary || {};
+  const out = _dtStamp(`Security - pass ${s.pass ?? "-"}, warn ${s.warn ?? "-"}, fail ${s.fail ?? "-"}, checks ${s.total ?? "-"}`);
+  const byLayer = {};
+  (d.layers || []).forEach(l => { byLayer[l.id] = l; });
+  _SEC_LAYER_IDS.forEach(id => {
+    const cs = d.checks.filter(c => c.layer === id);
+    if (!cs.length) return;
+    const l = byLayer[id] || {};
+    out.push(`[${id}] ${(l.status || "").toUpperCase()}`);
+    cs.forEach(c => {
+      const det = _secRowDetail(c);
+      out.push(`  ${String(c.status || "").toUpperCase().padEnd(5)} ${c.label}${det ? " - " + det : ""}`);
+      if (c.status && c.status !== "pass" && c.status !== "info") {
+        if (c.meaning) out.push("        Meaning: " + c.meaning);
+        if (c.remediation) out.push("        Fix: " + c.remediation);
+      }
+    });
+    out.push("");
+  });
+  return out.join("\n").trimEnd();
+}
+
 
 function _compatRowHtml(key, enables, status, sub) {
   const bc = _dvsmBadgeClass(status);
@@ -15796,6 +15986,16 @@ def _route_svc(h: Handler, data: dict) -> None:
             "message": f"Action '{action}' not yet implemented",
         }, 501)
 
+def _pid_cmdline(pid) -> str:
+    if not pid:
+        return ""
+    try:
+        with open(f"/proc/{int(pid)}/cmdline", "rb") as fh:
+            raw = fh.read(2048)
+    except (OSError, ValueError):
+        return ""
+    return " ".join(raw.decode("utf-8", "replace").split("\0")).strip()[:300]
+
 def get_open_ports(proto_filter: str = "both") -> list:
     raw = _ss_tlnpu_fetch()
     if not raw:
@@ -15829,6 +16029,7 @@ def get_open_ports(proto_filter: str = "both") -> list:
             "addr":    e["addr"],
             "pid":     e["pid"],
             "process": e["process"],
+            "cmd":     _pid_cmdline(e["pid"]),
             "service": "",
         })
 
