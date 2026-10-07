@@ -1,6 +1,28 @@
 # instmon changelog
 
-Current file: `instmon_v2_38_2_20261006.py`. Newest entries first.
+Current file: `instmon_v2_38_3_20261007.py`. Newest entries first.
+
+## 2.38.3 (2026-10-07)
+
+- Page layout: the columns on the instmon page did not line up. Each row sized its
+  own version, name and badge, so a long version such as `9.3.71.13-pi02w` pushed
+  its file name and badge to a different place than a short one such as `9.3.73`.
+  Seen on a Galaxy Tab S6 Lite.
+  - **Components:** name, version, state and port now sit in fixed columns, with
+    the service name on a second line, so every component card lines up.
+  - **Library lists:** version, file name and INSTALLED/ALT badge sit in fixed
+    columns in every library group.
+  - **GitHub update rows:** the status tag, the GitHub version, the other-build
+    tag and the Update button sit in fixed columns, with the file name on a
+    second line. Empty cells are now emitted so a row without a tag or button
+    keeps the others in place. Badges and tags keep their natural width.
+  - On a phone the page was 31 px wider than the screen because long file names
+    in the GitHub rows did not wrap; they now wrap, and the page fits. The phone
+    layout is otherwise unchanged (columns apply from 561 px up).
+- Measured in headless Chromium at 390, 600, 800, 980 and 1280 px with every
+  component, library group and GitHub status filled in: the old build was off by
+  up to 188 px (library) and 80 px (GitHub) from 600 px up, the new build is
+  aligned at every width with no page overflow.
 
 ## 2.38.2 (2026-10-06)
 

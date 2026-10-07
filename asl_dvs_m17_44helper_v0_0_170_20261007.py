@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.169"
-APP_STAGE = "v0.0.169: Config tab: reinstall the tools from the library and reboot after a config change; phone-width tables scroll inside their card; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.170"
+APP_STAGE = "v0.0.170: Config tab: reinstall the tools from the library and reboot after a config change; Services rows line up; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -8083,8 +8083,12 @@ _CSS_FIREWALL = """
   color: #5a7898;
   margin: .8rem 0 .3rem;
 }
-.svc-row { display: flex; align-items: center; gap: .5rem; padding: .2rem 0; font-family: var(--mono); font-size: .84rem; }
+.svc-row { display: grid; grid-template-columns: 1rem minmax(0, 2fr) minmax(0, 9rem) minmax(0, 1.4fr); align-items: center; gap: .5rem; padding: .2rem 0; font-family: var(--mono); font-size: .84rem; }
+.svc-label { overflow-wrap: anywhere; }
+.svc-src { color: var(--muted); }
+@media (max-width: 560px) { .svc-row { grid-template-columns: 1rem minmax(0, 1fr) auto; } .svc-flags { grid-column: 2 / -1; } .svc-flags:empty { display: none; } }
 .svc-row.flagged { color: var(--amber); }
+#ports-table { display: block; max-width: 100%; overflow-x: auto; }
 #ports-table th, #ports-table td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--border2); }
 #ports-table th { color: #5a7898; font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; }
 #ports-table tr.mismatch { background: rgba(255,61,90,.12); }
@@ -13976,10 +13980,13 @@ function refreshServices() {
       html += '<div class="svc-group-title">' + group + '</div>';
       data.groups[group].forEach(function(item) {
         var cls = 'svc-row' + (item.flag_public ? ' flagged' : '');
-        html += '<div class="' + cls + '">' + _ovDot(item.active ? 'ok' : (item.masked ? 'warn' : 'info')) + item.label +
-                ' <span style="color:var(--muted)">(' + item.source + ')</span>' +
-                (item.masked ? ' <span style="color:var(--red);font-weight:700">MASKED</span>' : '') +
-                (item.flag_public ? ' <span style="color:var(--amber)">[should stay private]</span>' : '') + '</div>';
+        html += '<div class="' + cls + '">' + _ovDot(item.active ? 'ok' : (item.masked ? 'warn' : 'info')) +
+                '<span class="svc-label">' + item.label + '</span>' +
+                '<span class="svc-src">(' + item.source + ')</span>' +
+                '<span class="svc-flags">' +
+                (item.masked ? '<span style="color:var(--red);font-weight:700">MASKED</span>' : '') +
+                (item.masked && item.flag_public ? ' ' : '') +
+                (item.flag_public ? '<span style="color:var(--amber)">[should stay private]</span>' : '') + '</span></div>';
       });
     });
     document.getElementById('svc-groups').innerHTML = html;
