@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.163"
-APP_STAGE = "v0.0.163: Config tab: presets leave the digital-mode ports alone, mode-aware pairing check; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.164"
+APP_STAGE = "v0.0.164: Config tab and DVSwitch tab: gateways at boot, gateway files saved, gateway pairing checks; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -1647,6 +1647,20 @@ _DV_ENABLE_CMD = (
     "if [ -n \"$missing\" ]; then echo \"NOT installed as services:$missing -- re-run the install step\"; exit 1; fi"
 )
 
+_DV_GATEWAYS_ENABLE_CMD = (
+    "found=''; missing=''; "
+    "for u in ircddbgatewayd ysfgateway p25gateway nxdngateway; do "
+    "if systemctl cat $u.service >/dev/null 2>&1; then found=\"$found $u\"; else missing=\"$missing $u\"; fi; done; "
+    "if systemctl cat stfu.service >/dev/null 2>&1; then found=\"$found stfu\"; fi; "
+    "if [ -n \"$found\" ]; then sudo systemctl enable --now $found || exit 1; echo \"enabled:$found\"; fi; "
+    "if [ -n \"$missing\" ]; then echo \"NOT installed as services:$missing -- re-run the DVSwitch install step\"; exit 1; fi"
+)
+_DV_GATEWAYS_NOTE = ("Enables and starts the digital-mode gateways: ircddbgatewayd (D-Star and XLX), ysfgateway (YSF and "
+                     "FCS), p25gateway, nxdngateway, and stfu when it exists. p25gateway and nxdngateway are installed "
+                     "but disabled, so without this step P25 and NXDN do not work until their dashboard page is "
+                     "opened. FAILS naming any of the four that are not installed as services. The dashboard still "
+                     "starts and restarts a gateway when you open and leave its page.")
+
 _DV_DISABLE_CMD = (
     f"for u in {_DV_UNITS}; do "
     "if systemctl cat $u.service >/dev/null 2>&1; then sudo systemctl disable --now $u 2>&1; "
@@ -1686,11 +1700,13 @@ def _dvswitch_install_steps_bookworm() -> list[dict]:
          "cmd": _DV_INSTALL_CMD, "timeout": 900, "note": _DV_INSTALL_NOTE},
         {"id": "bw_enable_services", "num": 5, "title": "Enable DVSwitch services at boot",
          "cmd": _DV_ENABLE_CMD, "note": _DV_ENABLE_NOTE},
-        _cockpit_install_step(6),
-        _cockpit_enable_step(7),
-        _dv_config_field_step(8),
-        *_dv_web_clash_steps(9),
-        _config_save_step("dv_save_restore", 11),
+        {"id": "bw_enable_gateways", "num": 6, "title": "Enable the digital-mode gateways at boot",
+         "cmd": _DV_GATEWAYS_ENABLE_CMD, "note": _DV_GATEWAYS_NOTE},
+        _cockpit_install_step(7),
+        _cockpit_enable_step(8),
+        _dv_config_field_step(9),
+        *_dv_web_clash_steps(10),
+        _config_save_step("dv_save_restore", 12),
     ]
 
 def _dvswitch_install_steps_trixie() -> list[dict]:
@@ -1721,11 +1737,13 @@ def _dvswitch_install_steps_trixie() -> list[dict]:
          "cmd": _DV_INSTALL_CMD, "timeout": 900, "note": "Only run after step 5 passed. " + _DV_INSTALL_NOTE},
         {"id": "tx_enable_services", "num": 7, "title": "Enable DVSwitch services at boot",
          "cmd": _DV_ENABLE_CMD, "note": _DV_ENABLE_NOTE},
-        _cockpit_install_step(8),
-        _cockpit_enable_step(9),
-        _dv_config_field_step(10),
-        *_dv_web_clash_steps(11),
-        _config_save_step("dv_save_restore", 13),
+        {"id": "tx_enable_gateways", "num": 8, "title": "Enable the digital-mode gateways at boot",
+         "cmd": _DV_GATEWAYS_ENABLE_CMD, "note": _DV_GATEWAYS_NOTE},
+        _cockpit_install_step(9),
+        _cockpit_enable_step(10),
+        _dv_config_field_step(11),
+        *_dv_web_clash_steps(12),
+        _config_save_step("dv_save_restore", 14),
     ]
 
 def _dvswitch_purge_steps_bookworm() -> list[dict]:
@@ -8201,6 +8219,16 @@ _CFGR_DVSINI = "/opt/MMDVM_Bridge/DVSwitch.ini"
 _CFGR_MMDVM = "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"
 _CFGR_M17INI = "/opt/USRP2M17/USRP2M17.ini"
 _CFGR_IRCDDB = "/etc/ircddbgateway"
+_CFGR_YSFGW = "/opt/YSFGateway/YSFGateway.ini"
+_CFGR_P25GW = "/opt/P25Gateway/P25Gateway.ini"
+_CFGR_NXDNGW = "/opt/NXDNGateway/NXDNGateway.ini"
+_CFGR_GATEWAYS: list[tuple[str, str, bool]] = [
+    ("ircddbgatewayd.service", "D-Star and XLX", True),
+    ("ysfgateway.service", "YSF and FCS", True),
+    ("p25gateway.service", "P25", True),
+    ("nxdngateway.service", "NXDN", True),
+    ("stfu.service", "STFU", False),
+]
 
 _CFGR_GROUPS: dict[str, dict] = {
     "asl3": {"label": "ASL3", "markers": ["/etc/asterisk/rpt.conf"],
@@ -8216,7 +8244,9 @@ _CFGR_GROUPS: dict[str, dict] = {
     "dvs": {"label": "DVSwitch", "markers": ["/opt/MMDVM_Bridge/MMDVM_Bridge", "/opt/Analog_Bridge/Analog_Bridge"],
             "core": ["/opt/MMDVM_Bridge/MMDVM_Bridge.ini", "/opt/MMDVM_Bridge/DVSwitch.ini",
                      "/opt/Analog_Bridge/Analog_Bridge.ini"],
-            "optional": ["/opt/Analog_Bridge/dvsm.macro", "/var/lib/dvswitch/dvs/var.txt", "/etc/ircddbgateway"],
+            "optional": ["/opt/Analog_Bridge/dvsm.macro", "/var/lib/dvswitch/dvs/var.txt", "/etc/ircddbgateway",
+                         "/opt/YSFGateway/YSFGateway.ini", "/opt/P25Gateway/P25Gateway.ini",
+                         "/opt/NXDNGateway/NXDNGateway.ini"],
             "globs": [],
             "services": ["mmdvm_bridge", "analog_bridge", "md380-emu"]},
     "m17": {"label": "USRP2M17", "markers": ["/opt/USRP2M17"],
@@ -8484,6 +8514,7 @@ def build_config_status() -> dict:
                                         "missing": entry.get("missing", [])}
         changed = _cfgr_changed_files(snap, m)
     clashes, n_ports = _cfgr_port_clashes()
+    gw_ok, gw_warn = _cfgr_gateway_pairs()
     presets = {}
     for pid, plabel in _CFGR_PRESETS.items():
         p = _cfgr_load_preset(pid)
@@ -8503,6 +8534,9 @@ def build_config_status() -> dict:
         "ports_checked": n_ports,
         "ambe_pairing": _cfgr_ambe_state()[0],
         "ambe_paired_with": _cfgr_ambe_state()[1],
+        "gateway_pairs_ok": gw_ok,
+        "gateway_warnings": gw_warn,
+        "gateways": _cfgr_gateway_states(),
         "checked_at": _cfgr_now(),
     }
 
@@ -9393,6 +9427,23 @@ def _cfgr_listeners(override: dict[str, bytes] | None = None) -> list[tuple[str,
             found.append((d["hbport"], "ircDDBGateway", "ircddbgateway hbPort"))
         if d.get("remoteenabled") == "1" and _CFGR_PORT_RE.match(d.get("remoteport", "")):
             found.append((d["remoteport"], "ircDDBGateway", "ircddbgateway remotePort"))
+    for path, prog in ((_CFGR_P25GW, "P25Gateway"), (_CFGR_NXDNGW, "NXDNGateway")):
+        t = _cfgr_text(path, override)
+        if t is None:
+            continue
+        ini = _cfgr_ini_sections(t)
+        for sec, key in (("general", "localport"), ("network", "port")):
+            v = ini.get(sec, {}).get(key, "")
+            if _CFGR_PORT_RE.match(v):
+                found.append((v, prog, f"{os.path.basename(path)} [{sec.title()}] {key}"))
+        rc = ini.get("remote commands", {})
+        if rc.get("enable") == "1" and _CFGR_PORT_RE.match(rc.get("port", "")):
+            found.append((rc["port"], prog, f"{os.path.basename(path)} [Remote Commands] Port"))
+    t = _cfgr_text(_CFGR_YSFGW, override)
+    if t is not None:
+        v = _cfgr_ini_sections(t).get("general", {}).get("localport", "")
+        if _CFGR_PORT_RE.match(v):
+            found.append((v, "YSFGateway", "YSFGateway.ini [General] LocalPort"))
     return found
 
 def _cfgr_port_clashes(override: dict[str, bytes] | None = None) -> tuple[list[str], int]:
@@ -9433,6 +9484,149 @@ def _cfgr_ambe_state(override: dict[str, bytes] | None = None) -> tuple[str, str
 
 def _cfgr_ambe_pairing(override: dict[str, bytes] | None = None) -> str:
     return _cfgr_ambe_state(override)[0]
+
+def _cfgr_gateway_pairs(override: dict[str, bytes] | None = None) -> tuple[list[str], list[str]]:
+    ok: list[str] = []
+    warn: list[str] = []
+    mm_t = _cfgr_text(_CFGR_MMDVM, override)
+    mm = _cfgr_ini_sections(mm_t) if mm_t is not None else {}
+    num = _CFGR_PORT_RE.match
+
+    def link(label: str, mm_sec: str, gw_label: str, gw: dict[str, str], keys: tuple[str, str]) -> None:
+        d = mm.get(mm_sec, {})
+        if not d or d.get("enable", "1") != "1":
+            return
+        pairs = ((d.get("localport", ""), gw.get(keys[0], ""), "MMDVM_Bridge listens on {a}, but {gw} sends to {b}"),
+                 (d.get("gatewayport", ""), gw.get(keys[1], ""), "MMDVM_Bridge sends to {a}, but {gw} listens on {b}"))
+        bad = False
+        for a, b, text in pairs:
+            if num(a) and num(b) and a != b:
+                warn.append(f"{label}: " + text.format(a=a, b=b, gw=gw_label))
+                bad = True
+        if not bad and all(num(x) for pair in pairs for x in pair[:2]):
+            ok.append(label)
+
+    def remote(label: str, dvs_sec: str, port: str) -> None:
+        dt = _cfgr_text(_CFGR_DVSINI, override)
+        if dt is None or not num(port):
+            return
+        rp = _cfgr_ini_sections(dt).get(dvs_sec, {}).get("remoteport", "")
+        if not num(rp):
+            return
+        if rp == port:
+            ok.append(label)
+        else:
+            warn.append(f"{label}: DVSwitch.ini [{dvs_sec.upper()}] RemotePort is {rp}, but the gateway takes commands on {port}")
+
+    if mm:
+        for label, mm_sec, path, gw_label in (("System Fusion link", "system fusion network", _CFGR_YSFGW, "YSFGateway"),
+                                              ("P25 link", "p25 network", _CFGR_P25GW, "P25Gateway"),
+                                              ("NXDN link", "nxdn network", _CFGR_NXDNGW, "NXDNGateway")):
+            t = _cfgr_text(path, override)
+            if t is not None:
+                link(label, mm_sec, gw_label, _cfgr_ini_sections(t).get("general", {}), ("rptport", "localport"))
+        t = _cfgr_text(_CFGR_IRCDDB, override)
+        if t is not None:
+            link("D-Star link", "d-star network", "ircDDBGateway", _cfgr_ini_sections(t).get("", {}),
+                 ("repeaterport1", "hbport"))
+    for label, dvs_sec, path in (("P25 commands", "p25", _CFGR_P25GW), ("NXDN commands", "nxdn", _CFGR_NXDNGW),
+                                 ("YSF commands", "ysf", _CFGR_YSFGW)):
+        t = _cfgr_text(path, override)
+        if t is None:
+            continue
+        rc = _cfgr_ini_sections(t).get("remote commands", {})
+        if rc.get("enable") == "1":
+            remote(label, dvs_sec, rc.get("port", ""))
+    t = _cfgr_text(_CFGR_IRCDDB, override)
+    if t is not None:
+        d = _cfgr_ini_sections(t).get("", {})
+        if d.get("remoteenabled") == "1":
+            remote("D-Star commands", "dstar", d.get("remoteport", ""))
+    return ok, warn
+
+def _cfgr_gateway_states() -> list[dict]:
+    units = [u for u, _l, _r in _CFGR_GATEWAYS]
+    try:
+        r = subprocess.run(["systemctl", "show", "--property=Id,LoadState,UnitFileState,ActiveState", *units],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    info: dict[str, dict[str, str]] = {}
+    for block in r.stdout.split("\n\n"):
+        d = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        if d.get("Id"):
+            info[d["Id"]] = d
+    out = []
+    for unit, label, required in _CFGR_GATEWAYS:
+        d = info.get(unit, {})
+        out.append({"unit": unit, "label": label, "required": required,
+                    "exists": d.get("LoadState", "not-found") not in ("not-found", "masked", "error"),
+                    "enabled": d.get("UnitFileState", "").startswith("enabled"),
+                    "active": d.get("ActiveState") == "active"})
+    return out
+
+def _cfgr_gateways_state_path() -> str:
+    return os.path.join(_CFGR_DIR, "gateways_applied.json")
+
+def _cfgr_gateways_applied() -> list[str]:
+    try:
+        with open(_cfgr_gateways_state_path(), "r") as f:
+            v = json.load(f)
+    except (OSError, ValueError):
+        return []
+    known = {u for u, _l, _r in _CFGR_GATEWAYS}
+    return [u for u in v if isinstance(u, str) and u in known] if isinstance(v, list) else []
+
+def _cfgr_act_gateways_apply(payload: dict) -> dict:
+    states = _cfgr_gateway_states()
+    if not states:
+        return {"success": False, "output": "Could not read the service list (systemctl is not available)."}
+    lines: list[str] = []
+    ok = True
+    mine = set(_cfgr_gateways_applied())
+    for st in states:
+        unit = st["unit"]
+        if not st["exists"]:
+            if st["required"]:
+                ok = False
+                lines.append(f"{unit}: NOT installed as a service. Re-run the DVSwitch install step.")
+            else:
+                lines.append(f"{unit}: not installed, skipped")
+            continue
+        if st["enabled"] and st["active"]:
+            lines.append(f"{unit}: already enabled and running")
+            continue
+        r = _run_argv(["systemctl", "enable", "--now", unit], timeout=60)
+        if r["success"]:
+            if not st["enabled"]:
+                mine.add(unit)
+            lines.append(f"{unit}: enabled and started")
+        else:
+            ok = False
+            lines.append(f"{unit}: FAILED: {r['output']}")
+    _cfgr_ensure_root_dir()
+    _compare_before_write(_cfgr_gateways_state_path(), json.dumps(sorted(mine)).encode("utf-8"))
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG gateways enabled")
+    return {"success": ok, "output": "\n".join(lines)}
+
+def _cfgr_act_gateways_revert(payload: dict) -> dict:
+    mine = _cfgr_gateways_applied()
+    if not mine:
+        return {"success": True, "output": "Nothing to undo: this tab has not enabled any gateway."}
+    lines: list[str] = []
+    ok = True
+    left: list[str] = []
+    for unit in mine:
+        r = _run_argv(["systemctl", "disable", "--now", unit], timeout=60)
+        if r["success"]:
+            lines.append(f"{unit}: disabled and stopped")
+        else:
+            ok = False
+            left.append(unit)
+            lines.append(f"{unit}: FAILED: {r['output']}")
+    _compare_before_write(_cfgr_gateways_state_path(), json.dumps(left).encode("utf-8"))
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG gateways undone")
+    return {"success": ok, "output": "\n".join(lines)}
 
 def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], list[str], str]:
     changes: dict[str, tuple[bytes, bytes]] = {}
@@ -9554,6 +9748,8 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "preset_capture": lambda p: _cfgr_act_preset_capture(p, True),
     "preset_apply_preview": lambda p: _cfgr_act_preset_apply(p, False),
     "preset_apply": lambda p: _cfgr_act_preset_apply(p, True),
+    "gateways_apply": _cfgr_act_gateways_apply,
+    "gateways_revert": _cfgr_act_gateways_revert,
 }
 
 def _dispatch_config_action(payload: dict) -> dict:
@@ -9759,6 +9955,14 @@ function cfgDiff(btn, g, path) {
   cfgPost({action: 'diff', group: g, path: path}, 'cfg-diff-out', btn);
 }
 
+function cfgGateways(btn, action) {
+  var msg = action === 'gateways_apply'
+    ? 'Enable and start the digital-mode gateways now?\n\nThey start at every boot afterwards. This does not change any config file.'
+    : 'Disable and stop the gateways this tab enabled?';
+  if (!confirm(msg)) return;
+  cfgPost({action: action}, 'cfg-gw-out', btn);
+}
+
 function cfgPresetCapture(btn, save) {
   if (save && !confirm('Save this node\'s wiring and private nodes as the Travel Node preset?\n\n' +
                        'Only wiring is saved: no callsign, IDs or passwords. An existing Travel Node preset is replaced.\n' +
@@ -9792,9 +9996,22 @@ function cfgRender(d) {
   var ph = '';
   if (pc.length) ph += pc.map(function(x) { return '<div class="ov-banner lvl-danger">' + cfgEsc(x) + '</div>'; }).join('');
   if (d.ambe_pairing) ph += '<div class="ov-banner lvl-warn">' + cfgEsc(d.ambe_pairing) + '</div>';
+  (d.gateway_warnings || []).forEach(function(x) { ph += '<div class="ov-banner lvl-warn">' + cfgEsc(x) + '</div>'; });
   if (!ph) ph = '<span class="cfg-hint">No UDP port clashes (' + (d.ports_checked || 0) + ' listening ports checked)' +
-    (d.ambe_paired_with ? '; Analog_Bridge and MMDVM_Bridge are paired on the ' + cfgEsc(d.ambe_paired_with) + ' mode.' : '.') + '</span>';
+    (d.ambe_paired_with ? '; Analog_Bridge and MMDVM_Bridge are paired on the ' + cfgEsc(d.ambe_paired_with) + ' mode' : '') +
+    ((d.gateway_pairs_ok || []).length ? '; paired: ' + d.gateway_pairs_ok.map(cfgEsc).join(', ') : '') + '.</span>';
   ports.innerHTML = ph;
+  var gwBox = document.getElementById('cfg-gw');
+  var gl = d.gateways || [];
+  if (!gl.length) gwBox.innerHTML = '<span class="cfg-hint">Could not read the services (systemctl not available).</span>';
+  else {
+    var gh = '<table class="cfg-table"><tr><th>Service</th><th>For</th><th>Installed</th><th>Starts at boot</th><th>Running</th></tr>';
+    gl.forEach(function(g) {
+      gh += '<tr><td>' + cfgEsc(g.unit) + '</td><td>' + cfgEsc(g.label) + '</td><td>' + (g.exists ? '&#10004;' : (g.required ? '&#10008;' : 'no')) +
+            '</td><td>' + (g.exists ? (g.enabled ? '&#10004;' : '&#10008;') : '') + '</td><td>' + (g.exists ? (g.active ? '&#10004;' : '&#10008;') : '') + '</td></tr>';
+    });
+    gwBox.innerHTML = gh + '</table>';
+  }
   document.getElementById('cfg-retake-btn').style.display = d.restore.exists ? 'inline-block' : 'none';
   var sel = document.getElementById('cfg-point');
   var keep = sel.value;
@@ -9891,10 +10108,24 @@ def _render_config_panel() -> str:
   </div>
 
   <div class="step-card">
+    <div class="step-head"><div class="step-title">Digital-mode gateways</div></div>
+    <div class="step-body">The services behind D-Star, XLX, YSF, FCS, P25, NXDN and STFU. P25 and NXDN are installed but
+      disabled, so they only run after their dashboard page has been opened. Enabling them makes every mode work
+      from the dvs tool right after boot.</div>
+    <div id="cfg-gw"></div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="cfgGateways(this,'gateways_apply')">Enable and start at boot</button>
+      <button class="btn-purge" onclick="cfgGateways(this,'gateways_revert')">Undo</button>
+    </div>
+    <div class="asl3-console shown placeholder" id="cfg-gw-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card">
     <div class="step-head"><div class="step-title">Port check</div></div>
     <div class="step-body">UDP ports that more than one program listens on, across rpt.conf, Analog_Bridge.ini,
-      DVSwitch.ini, MMDVM_Bridge.ini, USRP2M17.ini and ircddbgateway. A sender pointing at a listener is a pair,
-      not a clash.</div>
+      DVSwitch.ini, MMDVM_Bridge.ini, USRP2M17.ini, ircddbgateway and the YSF, P25 and NXDN gateways. A sender
+      pointing at a listener is a pair, not a clash. It also checks that each gateway's ports mirror MMDVM_Bridge's and
+      that DVSwitch.ini's RemotePort matches the gateway's command port.</div>
     <div id="cfg-ports"></div>
   </div>
 

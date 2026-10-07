@@ -191,7 +191,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
 | `instmon_v2_38_2_20261006.py` | common |
 | `wifimon_v5_26_20261006.py` | common |
-| `asl_dvs_m17_44helper_v0_0_163_20261007.py` | common |
+| `asl_dvs_m17_44helper_v0_0_164_20261007.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_asl_dvs_v6_6_20261006.sh` | common |
 | `uninstall_asl_dvs_all_v1_3.sh` | common |
