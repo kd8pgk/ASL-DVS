@@ -1,6 +1,25 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_6_20261007.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_7_20261007.py`. Newest entries first.
+
+## 6.13.67.7-pi02w (2026-10-07)
+
+- Copy buttons that copy the full desktop layout, whatever the screen size.
+  The text is built from the data the page already holds, not from what is
+  on screen, so a phone (where the table hides columns) and a desktop copy the
+  same text. Checked in headless Chromium at 390px and 1400px: identical.
+- **Ports tab:** `Copy table` (current All/TCP/UDP filter), `Copy all` (every
+  open port, TCP and UDP) and `Copy port details` in the port panel. Columns:
+  port, proto, process, PID, listen address, service, conflict (OK/DUP) and the
+  full command line (new: read from `/proc/<pid>/cmdline`, up to 300 chars).
+  The page now reads the full port list once and filters by All/TCP/UDP in the
+  page, so the filter buttons answer at once.
+- **Services, Overview, Hardware and Security tabs:** a Copy button on each.
+  Services and Overview copy unit, state, owner, perms and port. Hardware copies
+  the whole tab (AMBE, audio, power and thermal, video, USB bus, asl-find-sound,
+  ALSA playback and capture). Security copies every check with its result and,
+  for warnings and failures, what it means and how to fix it.
+- The Journal tab already copies from its popup; unchanged.
 
 ## 6.13.67.6-pi02w (2026-10-07)
 
