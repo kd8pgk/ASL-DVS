@@ -1,6 +1,28 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_4_20261006.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_5_20261007.py`. Newest entries first.
+
+## 6.13.67.5-pi02w (2026-10-07)
+
+- Hardware tab: new **Video & GPU Memory** card with two checkboxes. Each one edits
+  `/boot/firmware/config.txt` (Bookworm and Trixie) and takes effect after a reboot.
+  Unchecking puts the file back the way it was.
+  - **Disable HDMI and video driver (headless):** comments out `dtoverlay=vc4-kms-v3d`
+    as `#ASL-DVS-VIDEO-OFF# dtoverlay=vc4-kms-v3d`. The `vc4` driver no longer loads,
+    which frees its memory on the 512 MB board. Refused when config.txt has no such line.
+  - **Lower GPU memory to 16 MB:** adds a marked block at the end of config.txt
+    (`#ASL-DVS-GPUMEM-BEGIN`, `[all]`, `gpu_mem=16`, `#ASL-DVS-GPUMEM-END`). Camera and
+    video decoding stop working.
+- The card shows what is running now (vc4 loaded or not, HDMI outputs, GPU memory from
+  `vcgencmd get_mem gpu`, CMA reserved), a "Reboot required" badge when config.txt and
+  the running system differ, and a Reboot now button.
+- Before turning the video driver off, the card lists the HDMI sound card(s) that go
+  away and any setting in `/etc/asterisk`, `/opt/Analog_Bridge`, `/opt/MMDVM_Bridge`,
+  `/etc/asound.conf` or `/root/.asoundrc` that names a sound card by number, since
+  card numbers can change.
+- Every change writes `config.txt.asl_dvs.bak` (the file before the change), then
+  replaces config.txt in one step (temporary file, fsync, rename).
+- `--uninstall` puts both settings back.
 
 ## 6.13.67.4-pi02w (2026-10-06)
 

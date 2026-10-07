@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_asl_dvs_all.sh  v1.2  (2026-10-06)
+# uninstall_asl_dvs_all.sh  v1.3  (2026-10-07)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -36,6 +36,22 @@ for entry in "${COMPONENTS[@]}"; do
     fi
     echo
 done
+
+BOOT_CFG=/boot/firmware/config.txt
+echo "-- config.txt (HDMI/video driver, GPU memory) --"
+if [[ -f "$BOOT_CFG" ]] && grep -q -e '^#ASL-DVS-VIDEO-OFF# ' -e '^#ASL-DVS-GPUMEM-BEGIN' "$BOOT_CFG"; then
+    cp -p "$BOOT_CFG" "${BOOT_CFG}.asl_dvs.bak"
+    if sed -i -e 's/^#ASL-DVS-VIDEO-OFF# //' -e '/^#ASL-DVS-GPUMEM-BEGIN/,/^#ASL-DVS-GPUMEM-END/d' "$BOOT_CFG"; then
+        sync
+        ok "Restored the video driver and GPU memory in ${BOOT_CFG} (backup ${BOOT_CFG}.asl_dvs.bak)"
+        warn "Reboot to apply"
+    else
+        warn "Could not edit ${BOOT_CFG} — restore it from ${BOOT_CFG}.asl_dvs.bak"
+    fi
+else
+    info "No ASL-DVS changes in ${BOOT_CFG}, skipping"
+fi
+echo
 
 echo "== Done =="
 echo "Untouched by design: instmon, /etc/asl_dvs/ (config + instmon_library), /etc/wifimon/wifimon.conf,"
