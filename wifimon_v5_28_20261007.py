@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.27"
+APP_VERSION = "5.28"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -360,6 +360,49 @@ def _remove_launcher_if_unused() -> None:
         return
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
+ROAM_RESTORE_FILE    = os.path.join(CONFIG_DIR, "roam_restore.json")
+ROAM_RESTORE_MAX_AGE = 1800
+
+def _roam_save_for_update() -> bool:
+    text = _read_text(ROAM_MODPROBE)
+    if not text or not text.startswith("# Written by wifimon"):
+        return False
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(ROAM_RESTORE_FILE, "w") as fh:
+            json.dump({"saved_at": time.time(), "text": text}, fh)
+        os.chmod(ROAM_RESTORE_FILE, 0o600)
+    except OSError:
+        return False
+    return True
+
+def _roam_reapply_saved() -> bool:
+    try:
+        with open(ROAM_RESTORE_FILE) as fh:
+            d = json.load(fh)
+    except OSError:
+        return False
+    except ValueError:
+        d = {}
+    try:
+        os.remove(ROAM_RESTORE_FILE)
+    except OSError:
+        pass
+    try:
+        text = d.get("text")
+        fresh = time.time() - float(d.get("saved_at", 0)) <= ROAM_RESTORE_MAX_AGE
+    except (AttributeError, TypeError, ValueError):
+        return False
+    if not fresh or not isinstance(text, str) or not text.startswith("# Written by wifimon"):
+        return False
+    if _read_text(ROAM_MODPROBE) is not None:
+        return False
+    try:
+        _write_if_changed(ROAM_MODPROBE, text)
+    except OSError:
+        return False
+    return True
+
 def install_service() -> None:
     if os.geteuid() != 0:
         print("Error: Installation requires root privileges. Run with 'sudo'.")
@@ -378,6 +421,8 @@ def install_service() -> None:
         print(f"  [+] Copied script to {INSTALL_BIN_PATH}")
     os.chmod(INSTALL_BIN_PATH, 0o755)
     _write_launcher()
+    if _roam_reapply_saved():
+        print(f"  [+] Put back {ROAM_MODPROBE} (Stop chip roaming, set before this update; takes effect after a reboot)")
 
     if USE_TLS:
         if _ensure_tls_cert():
@@ -465,8 +510,11 @@ def uninstall_service() -> None:
         print(f"  [-] Removed {NM_PS_CONF_FILE}")
 
     if (_read_text(ROAM_MODPROBE) or "").startswith("# Written by wifimon"):
+        kept = _roam_save_for_update()
         os.remove(ROAM_MODPROBE)
         print(f"  [-] Removed {ROAM_MODPROBE} (takes effect after a reboot)")
+        if kept:
+            print("  [i] Your choice is kept for 30 minutes: installing wifimon again in that time puts it back")
 
     print("\nUninstallation complete.")
 
@@ -5619,6 +5667,7 @@ main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;
   margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
 .group h3{margin:0 0 8px;font-size:14px;color:var(--cyan)}
 .kv{display:grid;grid-template-columns:auto 1fr;gap:5px 14px;margin:0}
+.details .kv{grid-template-columns:minmax(11rem,44%) 1fr}
 .kv dt{color:var(--muted)}
 .kv dd{margin:0;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
 

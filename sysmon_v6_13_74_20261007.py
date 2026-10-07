@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.73"
+VERSION      = "6.13.74"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -22587,6 +22587,76 @@ def _bootcfg_write(new_text: str) -> None:
         pass
     os.sync()
 
+_BOOT_RESTORE_FILE    = CONFIG_FILE.parent / "boot_restore.json"
+_BOOT_RESTORE_MAX_AGE = 1800
+
+def _bootcfg_save_for_update() -> bool:
+    try:
+        st = _bootcfg_parse(BOOT_CONFIG.read_text())
+    except OSError:
+        return False
+    video = bool(st["video_off"] or st["video_partial"])
+    gpu = bool(st["gpumem_low"])
+    if not (video or gpu):
+        return False
+    try:
+        _BOOT_RESTORE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(_BOOT_RESTORE_FILE, "w") as fh:
+            json.dump({"saved_at": time.time(), "video_off": video, "gpumem_low": gpu}, fh)
+        os.chmod(_BOOT_RESTORE_FILE, 0o600)
+    except OSError:
+        return False
+    return True
+
+def _bootcfg_saved_state(service_present: bool):
+    now = time.time()
+    try:
+        with open(_BOOT_RESTORE_FILE) as fh:
+            d = json.load(fh)
+        if now - float(d.get("saved_at", 0)) > _BOOT_RESTORE_MAX_AGE:
+            return None
+        return bool(d.get("video_off")), bool(d.get("gpumem_low"))
+    except (OSError, ValueError, TypeError):
+        pass
+    if service_present:
+        return None
+    bak = BOOT_CONFIG.parent / _BOOTCFG_BACKUP
+    try:
+        if now - bak.stat().st_ctime > _BOOT_RESTORE_MAX_AGE:
+            return None
+        st = _bootcfg_parse(bak.read_text())
+    except OSError:
+        return None
+    return bool(st["video_off"] or st["video_partial"]), bool(st["gpumem_low"])
+
+def _bootcfg_reapply_saved(service_present: bool) -> list:
+    saved = _bootcfg_saved_state(service_present)
+    try:
+        _BOOT_RESTORE_FILE.unlink()
+    except OSError:
+        pass
+    if not saved or not (saved[0] or saved[1]):
+        return []
+    try:
+        text = BOOT_CONFIG.read_text()
+    except OSError:
+        return []
+    new = text
+    done = []
+    if saved[0]:
+        new = _bootcfg_set_video(new, True)
+        done.append("HDMI/video driver off")
+    if saved[1]:
+        new = _bootcfg_set_gpumem(new, True)
+        done.append("low GPU memory")
+    if new == text:
+        return []
+    try:
+        _bootcfg_write(new)
+    except OSError:
+        return []
+    return done
+
 def _bootcfg_restore_all() -> bool:
     try:
         text = BOOT_CONFIG.read_text()
@@ -33076,6 +33146,7 @@ def install_service() -> None:
     current_script = os.path.abspath(__file__)
     print("Installing sysmon...")
 
+    service_present = os.path.exists(_SERVICE_PATH)
     os.makedirs(_INSTALL_DIR, exist_ok=True)
     dest = os.path.join(_INSTALL_DIR, os.path.basename(current_script))
     shutil.copy2(current_script, dest)
@@ -33086,6 +33157,13 @@ def install_service() -> None:
         os.remove(_INSTALL_LINK)
     os.symlink(dest, _INSTALL_LINK)
     print(f"  [+] Symlinked {_INSTALL_LINK} -> {dest}")
+    try:
+        put_back = _bootcfg_reapply_saved(service_present)
+    except Exception as e:
+        put_back = []
+        print(f"  [!] Could not put back your HDMI/GPU memory choices: {e}")
+    if put_back:
+        print(f"  [+] Put back in {BOOT_CONFIG}: {', '.join(put_back)} (they were set before this update)")
 
     with open(_SERVICE_PATH, "w") as f:
         f.write(_SERVICE_CONTENT)
@@ -33128,8 +33206,11 @@ def uninstall_service() -> None:
             print(f"  [-] Removed {target}")
 
     try:
+        saved_for_update = _bootcfg_save_for_update()
         if _bootcfg_restore_all():
             print(f"  [-] Restored HDMI/video driver and GPU memory in {BOOT_CONFIG} (reboot to apply)")
+            if saved_for_update:
+                print("  [i] Your choices are kept for 30 minutes: installing SysMon again in that time puts them back")
     except OSError as e:
         print(f"  [!] Could not restore {BOOT_CONFIG}: {e}")
 

@@ -1,6 +1,20 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_73_20261007.py`. Newest entries first.
+Current file: `sysmon_v6_13_74_20261007.py`. Newest entries first.
+
+## 6.13.74 (2026-10-07)
+
+- Hardware tab video options now survive an update, same as SysMon Pi02w
+  6.13.67.9. `--uninstall` saves which of "Disable HDMI and video driver" and
+  "Lower GPU memory" were on, in `/etc/sysmon/boot_restore.json` (mode 600, with the
+  time), and still restores the stock `config.txt`. `--install` puts them back if
+  that file is under 30 minutes old, then deletes it. The first update from an
+  older SysMon falls back to SysMon's own `config.txt.asl_dvs.bak` when it is under
+  30 minutes old and the service file is gone (an install after an uninstall, never
+  an install over a running SysMon). Covers instmon's Full Update and Update, a
+  manual reinstall, and the 44helper reinstall job.
+- Tested: 17 checks of the save and put-back logic and 6 end-to-end checks that
+  run the real `install_service` and `uninstall_service` against a sandbox.
 
 ## 6.13.73 (2026-10-07)
 
