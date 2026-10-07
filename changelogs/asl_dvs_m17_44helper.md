@@ -1,6 +1,20 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_159_20261006.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_160_20261007.py`. Newest entries first.
+
+## 0.0.160 (2026-10-07)
+
+- New **Config** tab (after System Optimization). Everything is kept in `/etc/asl_dvs/instmon_library/config_restore/` (folders 0700, files 0600).
+  - **Restore point:** the original config files of every installed system: ASL3 (`rpt.conf`, `iax.conf`, `extensions.conf`, `modules.conf`, `manager.conf`, `allmon3.ini`), DVSwitch (`MMDVM_Bridge.ini`, `DVSwitch.ini`, `Analog_Bridge.ini`) and USRP2M17 (`USRP2M17.ini`, `/etc/sudoers.d/usrp2m17`, plus the three Asterisk files it edits). Each system is kept apart. Saving again only adds systems installed since; saved files are never overwritten. Nothing is saved automatically; a banner shows until a Restore point exists.
+  - **Before saving:** the save asks whether more of ASL3 / DVSwitch / USRP2M17 will be installed, and to wait until after the last install. Not all three are needed.
+  - **Retake Restore point:** type `RETAKE` to confirm. The old Restore point is kept as the save point `restore_replaced_<date>`.
+  - **Status:** for each system, whether it is installed, when it was saved, and which files have changed since, with a View diff for each.
+  - **Save points:** a name and a button save the current files of every installed system. At most 10; the oldest automatic copies are dropped first.
+  - **Restore:** pick Restore, a preset, a save point or an automatic copy, tick the systems, and restore. The current files are saved first as an automatic copy, so every restore can be undone. Files go back with their owner and mode; the sudoers file is checked with `visudo -c` first. Only paths on the fixed file list are ever written.
+  - **Restart services:** after a restore or preset, a button per system restarts its services (asterisk, allmon3 / mmdvm_bridge, analog_bridge, md380-emu / usrp2m17, asterisk). Nothing restarts on its own.
+  - **Travel Node preset:** wiring only, never callsigns, IDs or passwords. Save it on the travel node (Preview shows exactly what goes in). It holds the private nodes (1000-1999) in `rpt.conf` with their function stanzas and `[nodes]` lines, their `exten =>` lines, `chan_usrp.so` load/noload, and the `USRP2M17.ini` ports. Lines with identity keys or the public node number are left out, and so are comments.
+  - **Applying a preset:** a preview of every changed line first; private nodes not in the preset are removed. The node's own public stanza and everything else in the files stay. The Phone-tab nodes the dashboard manages (its marked block in `rpt.conf`) are never captured or touched.
+- M17 tab: new step 9 "Save original configs as Restore point" (the same save as on the Config tab). Sudoers and the Cockpit steps move to 10-12. ASL3 and DVSwitch get the same step in 0.0.161.
 
 ## 0.0.159 (2026-10-06)
 

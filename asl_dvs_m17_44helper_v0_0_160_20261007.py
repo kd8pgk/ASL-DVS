@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.159"
-APP_STAGE = "v0.0.159: Launcher version 2 (memory savers); comment-stripped copy, history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.160"
+APP_STAGE = "v0.0.160: Config tab (Restore point, save points, Travel Node preset, restart); history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -2175,7 +2175,13 @@ def _m17_install_steps() -> list[dict]:
          "cmd": "sudo astres.sh",
          "note": "astres.sh is ASL3/HamVOIP's standard Asterisk-restart helper. If it's not on PATH on your "
                  "image, edit this field to `sudo systemctl restart asterisk` before running."},
-        {"id": "m17_sudoers", "num": 9, "title": "Install sudoers rule for the web UI",
+        {"id": "m17_save_restore", "num": 9, "title": "Save original configs as Restore point",
+         "config_save": True,
+         "note": "Do not run this until ASL3, DVSwitch and USRP2M17 (whichever of them you will use) are all "
+                 "installed and set up. It saves the config files of every installed system to the library as the "
+                 "Restore point, once. Running it again only adds systems installed since; saved files are never "
+                 "overwritten. The Restore point, save points and presets are on the Config tab."},
+        {"id": "m17_sudoers", "num": 10, "title": "Install sudoers rule for the web UI",
          "cmd": "printf 'www-data ALL=(ALL) NOPASSWD: /var/www/html/m17/update_usrp2m17.sh\\n"
                 "www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart usrp2m17\\n' | "
                 "sudo tee /etc/sudoers.d/usrp2m17 >/dev/null && "
@@ -2186,8 +2192,8 @@ def _m17_install_steps() -> list[dict]:
                  "a drop-in is safer to install/remove unattended. Assumes ASL3-Appliance's Apache runs as "
                  "www-data; if this node is HamVOIP instead (runs its web server as `http`), edit the "
                  "installed file afterward and swap www-data for http, matching upstream's HamVOIP block."},
-        _cockpit_install_step(10),
-        _cockpit_enable_step(11),
+        _cockpit_install_step(11),
+        _cockpit_enable_step(12),
     ]
 
 def _m17_purge_steps() -> list[dict]:
@@ -7744,6 +7750,11 @@ header {
 .tab.t-firewall{--mc:var(--red);--mc-rgb:255,61,90}
 .tab.t-system-opt{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-actions-log{--mc:var(--orange);--mc-rgb:255,170,34}
+.tab.t-config{--mc:var(--green);--mc-rgb:0,255,176}
+.cfg-table{border-collapse:collapse;width:100%;margin:.5rem 0;font-family:var(--mono);font-size:.76rem}
+.cfg-table th,.cfg-table td{border:1px solid var(--border2);padding:.3rem .45rem;text-align:left;vertical-align:top}
+.cfg-hint{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
+.cfg-chk{display:inline-block;margin-right:1rem;font-family:var(--mono);font-size:.8rem}
 
 .tab-panel {
   border: 1px solid var(--border2);
@@ -8167,6 +8178,1317 @@ _CSS = (
     + _CSS_QUIET
 )
 
+_CFGR_DIR = os.path.join(os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library"), "config_restore")
+_CFGR_LOCK = threading.Lock()
+_CFGR_MAX_POINTS = 10
+_CFGR_NAME_RE = re.compile(r"^[A-Za-z0-9 _.-]{1,40}$")
+_CFGR_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}_[A-Za-z0-9_.-]{1,48}$")
+_CFGR_RPT = "/etc/asterisk/rpt.conf"
+_CFGR_EXT = "/etc/asterisk/extensions.conf"
+_CFGR_MOD = "/etc/asterisk/modules.conf"
+
+_CFGR_GROUPS: dict[str, dict] = {
+    "asl3": {"label": "ASL3", "markers": ["/etc/asterisk/rpt.conf"],
+             "files": ["/etc/asterisk/rpt.conf", "/etc/asterisk/iax.conf", "/etc/asterisk/extensions.conf",
+                       "/etc/asterisk/modules.conf", "/etc/asterisk/manager.conf", "/etc/allmon3/allmon3.ini"],
+             "services": ["asterisk", "allmon3"]},
+    "dvs": {"label": "DVSwitch", "markers": ["/opt/MMDVM_Bridge/MMDVM_Bridge", "/opt/Analog_Bridge/Analog_Bridge"],
+            "files": ["/opt/MMDVM_Bridge/MMDVM_Bridge.ini", "/opt/MMDVM_Bridge/DVSwitch.ini",
+                      "/opt/Analog_Bridge/Analog_Bridge.ini"],
+            "services": ["mmdvm_bridge", "analog_bridge", "md380-emu"]},
+    "m17": {"label": "USRP2M17", "markers": ["/opt/USRP2M17"],
+            "files": ["/opt/USRP2M17/USRP2M17.ini", "/etc/sudoers.d/usrp2m17", "/etc/asterisk/rpt.conf",
+                      "/etc/asterisk/modules.conf", "/etc/asterisk/extensions.conf"],
+            "services": ["usrp2m17", "asterisk"]},
+}
+
+_CFGR_PRESETS: dict[str, str] = {"travel_node": "Travel Node"}
+_CFGR_PRIVATE_MIN, _CFGR_PRIVATE_MAX = 1000, 1999
+_CFGR_IDENTITY_KEYS = frozenset({"callsign", "id", "password", "passwd", "secret", "register", "gatewaydmrid",
+                                 "repeaterid", "name", "idrecording", "idtalkover", "callerid"})
+_CFGR_COMPANION_KEYS = frozenset({"functions", "link_functions", "phone_functions", "telemetry", "morse", "macro",
+                                  "wait_times", "memory", "controlstates", "scheduler"})
+_CFGR_INI_WIRING: dict[str, dict[str, tuple[str, ...]]] = {
+    "/opt/USRP2M17/USRP2M17.ini": {"M17 Network": ("LocalPort", "DstPort"),
+                                   "USRP Network": ("LocalPort", "DstPort")},
+}
+_CFGR_HDR_RE = re.compile(r"^\s*\[([^\]]+)\]")
+_CFGR_KV_RE = re.compile(r"^\s*([^;=\s][^=]*?)\s*=>?\s*(.*)$")
+_CFGR_MANAGED_BEGIN_RE = re.compile(r"^\s*;\s*>>>.*managed by .*>>>\s*$")
+_CFGR_MANAGED_END_RE = re.compile(r"^\s*;\s*<<<.*<<<\s*$")
+_CFGR_EXTEN_RE = re.compile(r"^\s*exten\s*=>\s*(\d+)\s*,")
+_CFGR_SAME_RE = re.compile(r"^\s*same\s*=>")
+_CFGR_CHAN_USRP_RE = re.compile(r"^(\s*)(load|noload)(\s*=>?\s*chan_usrp\.so\b.*)$")
+_CFGR_PORT_RE = re.compile(r"^\d{1,5}$")
+
+def _cfgr_now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+def _cfgr_installed() -> dict[str, bool]:
+    return {g: any(os.path.exists(m) for m in d["markers"]) for g, d in _CFGR_GROUPS.items()}
+
+def _cfgr_allowed_paths() -> set[str]:
+    return {p for d in _CFGR_GROUPS.values() for p in d["files"]}
+
+def _cfgr_ensure_root_dir() -> None:
+    os.makedirs(_CFGR_DIR, mode=0o700, exist_ok=True)
+    os.chmod(_CFGR_DIR, 0o700)
+
+def _cfgr_snap_dir(kind: str, sid: str = "") -> str | None:
+    if kind == "restore":
+        return os.path.join(_CFGR_DIR, "restore")
+    if kind in ("user", "auto") and _CFGR_ID_RE.match(sid or ""):
+        return os.path.join(_CFGR_DIR, kind, sid)
+    return None
+
+def _cfgr_read_manifest(snap_dir: str) -> dict | None:
+    try:
+        with open(os.path.join(snap_dir, "manifest.json"), "r") as f:
+            m = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(m, dict) or not isinstance(m.get("groups"), dict):
+        return None
+    return m
+
+def _cfgr_write_manifest(snap_dir: str, m: dict) -> None:
+    _compare_before_write(os.path.join(snap_dir, "manifest.json"),
+                          json.dumps(m, indent=1, sort_keys=True).encode("utf-8"))
+
+def _cfgr_store_path(snap_dir: str, group: str, path: str) -> str:
+    return os.path.join(snap_dir, group, "files", path.lstrip("/"))
+
+def _cfgr_copy_group(snap_dir: str, group: str) -> dict:
+    files: dict[str, dict] = {}
+    missing: list[str] = []
+    for path in _CFGR_GROUPS[group]["files"]:
+        try:
+            st = os.stat(path)
+            with open(path, "rb") as f:
+                data = f.read()
+        except FileNotFoundError:
+            missing.append(path)
+            continue
+        _compare_before_write(_cfgr_store_path(snap_dir, group, path), data)
+        files[path] = {"sha256": hashlib.sha256(data).hexdigest(), "uid": st.st_uid, "gid": st.st_gid,
+                       "mode": stat.S_IMODE(st.st_mode), "size": len(data)}
+    return {"saved_at": _cfgr_now(), "files": files, "missing": missing}
+
+def _cfgr_take(snap_dir: str, groups: list[str], label: str, kind: str) -> dict:
+    _cfgr_ensure_root_dir()
+    m = _cfgr_read_manifest(snap_dir) or {"label": label, "kind": kind, "created_at": _cfgr_now(),
+                                          "app_version": APP_VERSION, "groups": {}}
+    for g in groups:
+        m["groups"][g] = _cfgr_copy_group(snap_dir, g)
+    _cfgr_write_manifest(snap_dir, m)
+    return m
+
+def _cfgr_new_id(label: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]", "_", label)[:48] or "point"
+    while True:
+        sid = f"{datetime.now().strftime('%Y-%m-%d_%H%M%S')}_{slug}"
+        if not any(os.path.exists(os.path.join(_CFGR_DIR, k, sid)) for k in ("user", "auto")):
+            return sid
+        time.sleep(1)
+
+def _cfgr_list_points() -> list[dict]:
+    out: list[dict] = []
+    for kind in ("user", "auto"):
+        base = os.path.join(_CFGR_DIR, kind)
+        try:
+            names = os.listdir(base)
+        except OSError:
+            continue
+        for n in names:
+            if not _CFGR_ID_RE.match(n):
+                continue
+            m = _cfgr_read_manifest(os.path.join(base, n))
+            if m is None:
+                continue
+            out.append({"kind": kind, "id": n, "label": str(m.get("label", n)),
+                        "created_at": str(m.get("created_at", "")),
+                        "groups": [g for g in _CFGR_GROUPS if g in m["groups"]]})
+    out.sort(key=lambda p: p["id"], reverse=True)
+    return out
+
+def _cfgr_prune(keep_id: str = "") -> list[str]:
+    points = _cfgr_list_points()
+    autos = sorted((p for p in points if p["kind"] == "auto" and p["id"] != keep_id), key=lambda p: p["id"])
+    removed: list[str] = []
+    while len(points) > _CFGR_MAX_POINTS and autos:
+        victim = autos.pop(0)
+        shutil.rmtree(os.path.join(_CFGR_DIR, "auto", victim["id"]), ignore_errors=True)
+        points = [p for p in points if not (p["kind"] == "auto" and p["id"] == victim["id"])]
+        removed.append(victim["label"])
+    return removed
+
+def _cfgr_auto_point(reason: str, groups: list[str]) -> tuple[str, list[str]]:
+    label = f"auto before {reason}"
+    sid = _cfgr_new_id(label)
+    _cfgr_take(os.path.join(_CFGR_DIR, "auto", sid), groups, label, "auto")
+    log(f"OK: CONFIG automatic save point {sid}")
+    return sid, _cfgr_prune(keep_id=sid)
+
+def _cfgr_read(path: str) -> bytes | None:
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return None
+
+def _cfgr_write_file(path: str, data: bytes, uid: int | None, gid: int | None, mode: int) -> str:
+    parent = os.path.dirname(path)
+    if not os.path.isdir(parent):
+        return f"skipped: {parent} does not exist on this node"
+    if _cfgr_read(path) == data:
+        return "unchanged"
+    tmp = path + ".44htmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.chmod(tmp, mode & 0o7777)
+    if uid is not None and gid is not None:
+        try:
+            os.chown(tmp, uid, gid)
+        except OSError:
+            pass
+    if path.startswith("/etc/sudoers.d/"):
+        chk = _run_argv(["visudo", "-c", "-f", tmp])
+        if not chk["success"]:
+            os.unlink(tmp)
+            return "NOT written: visudo check failed: " + chk["output"]
+    os.replace(tmp, path)
+    return "written"
+
+def _cfgr_meta_of(path: str) -> tuple[int | None, int | None, int]:
+    try:
+        st = os.stat(path)
+        return st.st_uid, st.st_gid, stat.S_IMODE(st.st_mode)
+    except OSError:
+        return None, None, 0o644
+
+def _cfgr_changed_files(snap_dir: str, m: dict) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for g, entry in m["groups"].items():
+        if g not in _CFGR_GROUPS:
+            continue
+        changed = []
+        for path, meta in (entry.get("files") or {}).items():
+            cur = _cfgr_read(path)
+            if cur is None or hashlib.sha256(cur).hexdigest() != meta.get("sha256"):
+                changed.append(path)
+        out[g] = changed
+    return out
+
+def build_config_status() -> dict:
+    snap = _cfgr_snap_dir("restore")
+    m = _cfgr_read_manifest(snap)
+    restore = {"exists": m is not None, "created_at": "", "groups": {}}
+    changed: dict[str, list[str]] = {}
+    if m is not None:
+        restore["created_at"] = str(m.get("created_at", ""))
+        for g, entry in m["groups"].items():
+            if g in _CFGR_GROUPS:
+                restore["groups"][g] = {"saved_at": entry.get("saved_at", ""),
+                                        "files": sorted((entry.get("files") or {}).keys()),
+                                        "missing": entry.get("missing", [])}
+        changed = _cfgr_changed_files(snap, m)
+    presets = {}
+    for pid, plabel in _CFGR_PRESETS.items():
+        p = _cfgr_load_preset(pid)
+        presets[pid] = {"label": plabel, "exists": p is not None, "saved_at": (p or {}).get("saved_at", "")}
+    return {
+        "library": _CFGR_DIR,
+        "order": list(_CFGR_GROUPS),
+        "groups_meta": {g: {"label": d["label"], "files": d["files"], "services": d["services"]}
+                        for g, d in _CFGR_GROUPS.items()},
+        "installed": _cfgr_installed(),
+        "restore": restore,
+        "changed": changed,
+        "points": _cfgr_list_points(),
+        "presets": presets,
+        "max_points": _CFGR_MAX_POINTS,
+        "checked_at": _cfgr_now(),
+    }
+
+def _cfgr_files_line(entry: dict) -> str:
+    saved = ", ".join(sorted((entry.get("files") or {}).keys())) or "(none)"
+    text = f"saved: {saved}"
+    if entry.get("missing"):
+        text += f"; not on this node: {', '.join(entry['missing'])}"
+    return text
+
+def _cfgr_act_save_restore(payload: dict) -> dict:
+    installed = _cfgr_installed()
+    if not any(installed.values()):
+        return {"success": False, "output": "None of ASL3, DVSwitch or USRP2M17 is installed on this node. Nothing to save."}
+    snap = _cfgr_snap_dir("restore")
+    m = _cfgr_read_manifest(snap)
+    have = set(m["groups"]) if m else set()
+    todo = [g for g in _CFGR_GROUPS if installed[g] and g not in have]
+    if not todo:
+        return {"success": True, "output": "The Restore point already holds every installed system "
+                                           f"(first saved {m.get('created_at', '?')}). Nothing changed. "
+                                           "To replace it, use Retake Restore point on the Config tab."}
+    m = _cfgr_take(snap, todo, "Restore", "restore")
+    lines = [f"Restore point saved to {snap}"]
+    for g in todo:
+        lines.append(f"  {_CFGR_GROUPS[g]['label']}: {_cfgr_files_line(m['groups'][g])}")
+    kept = [g for g in have if g in _CFGR_GROUPS]
+    if kept:
+        lines.append("Already in the Restore point, not changed: " + ", ".join(_CFGR_GROUPS[g]["label"] for g in kept))
+    log(f"OK: CONFIG Restore point saved ({', '.join(todo)})")
+    return {"success": True, "output": "\n".join(lines)}
+
+def _cfgr_act_retake_restore(payload: dict) -> dict:
+    if str(payload.get("confirm", "")) != "RETAKE":
+        return {"success": False, "output": "Type RETAKE to confirm."}
+    installed = _cfgr_installed()
+    groups = [g for g in _CFGR_GROUPS if installed[g]]
+    if not groups:
+        return {"success": False, "output": "None of ASL3, DVSwitch or USRP2M17 is installed on this node. Nothing to save."}
+    _cfgr_ensure_root_dir()
+    snap = _cfgr_snap_dir("restore")
+    lines = []
+    if _cfgr_read_manifest(snap) is not None:
+        label = f"restore_replaced_{datetime.now().strftime('%Y-%m-%d')}"
+        sid = _cfgr_new_id(label)
+        dest = os.path.join(_CFGR_DIR, "user", sid)
+        os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+        os.replace(snap, dest)
+        old = _cfgr_read_manifest(dest) or {"groups": {}}
+        old["label"] = label
+        old["kind"] = "user"
+        _cfgr_write_manifest(dest, old)
+        lines.append(f"Old Restore point kept as save point '{label}'.")
+    elif os.path.isdir(snap):
+        shutil.rmtree(snap, ignore_errors=True)
+    m = _cfgr_take(snap, groups, "Restore", "restore")
+    lines.append(f"New Restore point saved to {snap}")
+    for g in groups:
+        lines.append(f"  {_CFGR_GROUPS[g]['label']}: {_cfgr_files_line(m['groups'][g])}")
+    removed = _cfgr_prune()
+    if removed:
+        lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
+    log(f"OK: CONFIG Restore point retaken ({', '.join(groups)})")
+    return {"success": True, "output": "\n".join(lines)}
+
+def _cfgr_act_create_point(payload: dict) -> dict:
+    name = str(payload.get("name", "")).strip()
+    if not _CFGR_NAME_RE.match(name):
+        return {"success": False, "output": "Name: 1 to 40 letters, digits, spaces, '_', '.' or '-'."}
+    installed = _cfgr_installed()
+    groups = [g for g in _CFGR_GROUPS if installed[g]]
+    if not groups:
+        return {"success": False, "output": "None of ASL3, DVSwitch or USRP2M17 is installed on this node. Nothing to save."}
+    users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
+    if len(users) >= _CFGR_MAX_POINTS:
+        return {"success": False, "output": f"There are already {_CFGR_MAX_POINTS} save points. Delete one first."}
+    sid = _cfgr_new_id(name)
+    m = _cfgr_take(os.path.join(_CFGR_DIR, "user", sid), groups, name, "user")
+    lines = [f"Save point '{name}' created."]
+    for g in groups:
+        lines.append(f"  {_CFGR_GROUPS[g]['label']}: {_cfgr_files_line(m['groups'][g])}")
+    removed = _cfgr_prune(keep_id=sid)
+    if removed:
+        lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
+    log(f"OK: CONFIG save point created: {sid}")
+    return {"success": True, "output": "\n".join(lines)}
+
+def _cfgr_act_delete_point(payload: dict) -> dict:
+    kind = str(payload.get("kind", ""))
+    sid = str(payload.get("id", ""))
+    if kind not in ("user", "auto"):
+        return {"success": False, "output": "Only save points and automatic copies can be deleted."}
+    snap = _cfgr_snap_dir(kind, sid)
+    if snap is None or _cfgr_read_manifest(snap) is None:
+        return {"success": False, "output": "That save point was not found."}
+    shutil.rmtree(snap)
+    log(f"OK: CONFIG save point deleted: {kind}/{sid}")
+    return {"success": True, "output": f"Deleted {sid}."}
+
+def _cfgr_act_restore(payload: dict) -> dict:
+    kind = str(payload.get("kind", ""))
+    sid = str(payload.get("id", ""))
+    snap = _cfgr_snap_dir(kind, sid)
+    m = _cfgr_read_manifest(snap) if snap else None
+    if m is None:
+        return {"success": False, "output": "That restore point was not found."}
+    groups = [g for g in _CFGR_GROUPS if g in (payload.get("groups") or []) and g in m["groups"]]
+    if not groups:
+        return {"success": False, "output": "Tick at least one system that is in this restore point."}
+    plan: dict[str, tuple[str, dict]] = {}
+    for g in groups:
+        entry = m["groups"][g]
+        for path, meta in (entry.get("files") or {}).items():
+            if path not in _CFGR_GROUPS[g]["files"]:
+                continue
+            prev = plan.get(path)
+            if prev is None or str(entry.get("saved_at", "")) >= str(m["groups"][prev[0]].get("saved_at", "")):
+                plan[path] = (g, meta)
+    allowed = _cfgr_allowed_paths()
+    blobs: dict[str, bytes] = {}
+    for path, (g, meta) in plan.items():
+        if path not in allowed:
+            continue
+        data = _cfgr_read(_cfgr_store_path(snap, g, path))
+        if data is None or hashlib.sha256(data).hexdigest() != meta.get("sha256"):
+            return {"success": False, "output": f"The saved copy of {path} is missing or damaged. Nothing was restored."}
+        blobs[path] = data
+    if not blobs:
+        return {"success": False, "output": "No files to restore for those systems."}
+    label = str(m.get("label", sid or "Restore"))
+    auto_id, removed = _cfgr_auto_point(f"restore {label}", groups)
+    lines = [f"Current files saved first as automatic copy {auto_id}.", f"Restoring from '{label}':"]
+    ok = True
+    for path in sorted(blobs):
+        g, meta = plan[path]
+        try:
+            uid, gid, mode = int(meta.get("uid")), int(meta.get("gid")), int(meta.get("mode"))
+        except (TypeError, ValueError):
+            uid, gid, mode = _cfgr_meta_of(path)
+        res = _cfgr_write_file(path, blobs[path], uid, gid, mode)
+        if res.startswith("NOT"):
+            ok = False
+        lines.append(f"  {path}: {res}")
+    if removed:
+        lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
+    lines.append("Services were NOT restarted. Use the Restart buttons below when ready.")
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG restored {', '.join(groups)} from {kind}/{sid or 'restore'}")
+    return {"success": ok, "output": "\n".join(lines), "restart_groups": groups}
+
+def _cfgr_act_diff(payload: dict) -> dict:
+    g = str(payload.get("group", ""))
+    path = str(payload.get("path", ""))
+    if g not in _CFGR_GROUPS or path not in _CFGR_GROUPS[g]["files"]:
+        return {"success": False, "output": "Unknown file."}
+    snap = _cfgr_snap_dir("restore")
+    m = _cfgr_read_manifest(snap)
+    if m is None or g not in m["groups"] or path not in (m["groups"][g].get("files") or {}):
+        return {"success": False, "output": "That file is not in the Restore point."}
+    old = (_cfgr_read(_cfgr_store_path(snap, g, path)) or b"").decode("utf-8", "replace").splitlines()
+    cur_b = _cfgr_read(path)
+    if cur_b is None:
+        return {"success": True, "output": f"{path} is no longer on this node."}
+    cur = cur_b.decode("utf-8", "replace").splitlines()
+    diff = list(difflib.unified_diff(old, cur, f"Restore point: {path}", f"now: {path}", lineterm=""))
+    if len(diff) > 600:
+        diff = diff[:600] + [f"... ({len(diff) - 600} more lines)"]
+    return {"success": True, "output": "\n".join(diff) or "No differences."}
+
+def _cfgr_act_restart(payload: dict) -> dict:
+    groups = [g for g in _CFGR_GROUPS if g in (payload.get("groups") or [])]
+    if not groups:
+        return {"success": False, "output": "No system chosen."}
+    units: list[str] = []
+    for g in groups:
+        for u in _CFGR_GROUPS[g]["services"]:
+            if u not in units:
+                units.append(u)
+    lines = []
+    ok = True
+    for u in units:
+        st = _run_argv(["systemctl", "show", "-p", "LoadState", "--value", u])
+        if st["output"].strip() != "loaded":
+            lines.append(f"{u}: not on this node, skipped")
+            continue
+        r = _run_argv(["systemctl", "restart", u], timeout=120)
+        ok = ok and r["success"]
+        lines.append(f"{u}: {'restarted' if r['success'] else 'FAILED: ' + r['output']}")
+    return {"success": ok, "output": "\n".join(lines)}
+
+def _cfgr_lines(text: str) -> list[str]:
+    return text.splitlines()
+
+def _cfgr_join(lines: list[str]) -> str:
+    return "\n".join(lines) + "\n"
+
+def _cfgr_managed_mask(lines: list[str]) -> list[bool]:
+    mask: list[bool] = []
+    inside = False
+    for line in lines:
+        if not inside and _CFGR_MANAGED_BEGIN_RE.match(line):
+            inside = True
+            mask.append(True)
+            continue
+        mask.append(inside)
+        if inside and _CFGR_MANAGED_END_RE.match(line):
+            inside = False
+    return mask
+
+def _cfgr_sections(lines: list[str], mask: list[bool]) -> list[dict]:
+    secs: list[dict] = []
+    cur: dict | None = None
+    for i, line in enumerate(lines):
+        m = _CFGR_HDR_RE.match(line)
+        if mask[i]:
+            if m and cur is not None:
+                cur["end"] = i
+                cur = None
+            continue
+        if m:
+            if cur is not None:
+                cur["end"] = i
+            cur = {"name": m.group(1).strip(), "start": i, "end": len(lines)}
+            secs.append(cur)
+    return secs
+
+def _cfgr_is_private(name: str) -> bool:
+    return name.isdigit() and _CFGR_PRIVATE_MIN <= int(name) <= _CFGR_PRIVATE_MAX
+
+def _cfgr_kv(line: str) -> tuple[str, str] | None:
+    s = line.strip()
+    if not s or s.startswith(";") or s.startswith("["):
+        return None
+    m = _CFGR_KV_RE.match(line)
+    if not m:
+        return None
+    return m.group(1).strip(), m.group(2).split(";", 1)[0].strip()
+
+def _cfgr_managed_headers(lines: list[str], mask: list[bool]) -> set[str]:
+    out = set()
+    for i, line in enumerate(lines):
+        m = _CFGR_HDR_RE.match(line)
+        if mask[i] and m:
+            out.add(m.group(1).strip())
+    return out
+
+def _cfgr_rpt_units(lines: list[str], mask: list[bool]) -> tuple[dict[str, list[dict]], list[dict]]:
+    secs = _cfgr_sections(lines, mask)
+    by_name = {s["name"]: s for s in secs}
+    units: dict[str, list[dict]] = {}
+    for s in secs:
+        if not _cfgr_is_private(s["name"]):
+            continue
+        members = [s]
+        for i in range(s["start"] + 1, s["end"]):
+            if mask[i]:
+                continue
+            kv = _cfgr_kv(lines[i])
+            if kv and kv[0].lower() in _CFGR_COMPANION_KEYS:
+                ref = kv[1].strip()
+                if s["name"] in ref and ref in by_name and by_name[ref] not in members and not _cfgr_is_private(ref):
+                    members.append(by_name[ref])
+        units[s["name"]] = members
+    return units, secs
+
+def _cfgr_public_numbers(lines: list[str], mask: list[bool]) -> set[str]:
+    nums = {s["name"] for s in _cfgr_sections(lines, mask) if s["name"].isdigit() and not _cfgr_is_private(s["name"])}
+    c = globals().get("_cfg")
+    node = c.get("identity", "node", fallback="").strip() if c is not None else ""
+    if node.isdigit():
+        nums.add(node)
+    return {n for n in nums if len(n) >= 4}
+
+def _cfgr_filter_line(line: str, public: set[str]) -> str | None:
+    kv = _cfgr_kv(line)
+    if kv is None:
+        return None
+    if kv[0].lower() in _CFGR_IDENTITY_KEYS:
+        return f"identity key '{kv[0]}'"
+    for n in public:
+        if re.search(r"(?<!\d)" + re.escape(n) + r"(?!\d)", line):
+            return f"contains public node number {n}"
+    return None
+
+def _cfgr_clean(line: str) -> str | None:
+    if line.strip().startswith(";"):
+        return None
+    return re.split(r"(?<!\\);", line, 1)[0].rstrip()
+
+def _cfgr_trim(block: list[str]) -> list[str]:
+    while block and not block[-1].strip():
+        block.pop()
+    return block
+
+def _cfgr_capture() -> tuple[dict | None, list[str], list[str]]:
+    notes: list[str] = []
+    skipped: list[str] = []
+    rpt_b = _cfgr_read(_CFGR_RPT)
+    if rpt_b is None:
+        return None, [f"{_CFGR_RPT} not found. ASL3 must be installed to save a preset."], skipped
+    rl = _cfgr_lines(rpt_b.decode("utf-8", "replace"))
+    rmask = _cfgr_managed_mask(rl)
+    public = _cfgr_public_numbers(rl, rmask)
+    units, secs = _cfgr_rpt_units(rl, rmask)
+    managed = sorted(h for h in _cfgr_managed_headers(rl, rmask) if _cfgr_is_private(h))
+    if managed:
+        notes.append("Left out (managed by the dashboard's Phone tab): private node " + ", ".join(managed))
+    nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
+    nodes_out = []
+    for node in sorted(units, key=int):
+        stanzas = []
+        for s in units[node]:
+            block = [_cfgr_clean(rl[s["start"]]) or f"[{s['name']}]"]
+            for i in range(s["start"] + 1, s["end"]):
+                line = None if rmask[i] else _cfgr_clean(rl[i])
+                if line is None:
+                    continue
+                why = _cfgr_filter_line(line, public)
+                if why:
+                    skipped.append(f"rpt.conf [{s['name']}] line {i + 1} left out ({why})")
+                    continue
+                block.append(line)
+            stanzas.append({"name": s["name"], "lines": _cfgr_trim(block)})
+        nodes_line = ""
+        if nodes_sec is not None:
+            for i in range(nodes_sec["start"] + 1, nodes_sec["end"]):
+                kv = None if rmask[i] else _cfgr_kv(rl[i])
+                if kv and kv[0] == node:
+                    line = _cfgr_clean(rl[i]) or ""
+                    why = _cfgr_filter_line(line, public)
+                    if why:
+                        skipped.append(f"rpt.conf [nodes] line {i + 1} left out ({why})")
+                    else:
+                        nodes_line = line.strip()
+                    break
+        nodes_out.append({"node": node, "stanzas": stanzas, "nodes_line": nodes_line})
+    exts = []
+    ext_b = _cfgr_read(_CFGR_EXT)
+    if ext_b is None:
+        notes.append(f"{_CFGR_EXT} not found; no extensions in the preset.")
+    else:
+        for e in _cfgr_ext_entries(_cfgr_lines(ext_b.decode("utf-8", "replace"))):
+            block = []
+            for raw in e["lines"]:
+                line = _cfgr_clean(raw)
+                if not line:
+                    continue
+                why = _cfgr_filter_line(line, public)
+                if why:
+                    skipped.append(f"extensions.conf [{e['context']}] line left out ({why})")
+                else:
+                    block.append(line)
+            if block:
+                exts.append({"context": e["context"], "node": e["node"], "lines": block})
+    chan_usrp = None
+    mod_b = _cfgr_read(_CFGR_MOD)
+    if mod_b is None:
+        notes.append(f"{_CFGR_MOD} not found; chan_usrp setting not in the preset.")
+    else:
+        ml = _cfgr_lines(mod_b.decode("utf-8", "replace"))
+        mmask = _cfgr_managed_mask(ml)
+        for i, line in enumerate(ml):
+            mm = None if mmask[i] else _CFGR_CHAN_USRP_RE.match(line)
+            if mm:
+                chan_usrp = mm.group(2)
+    ini_out: dict[str, dict[str, dict[str, str]]] = {}
+    for path, sections in _CFGR_INI_WIRING.items():
+        b = _cfgr_read(path)
+        if b is None:
+            notes.append(f"{path} not found; its ports are not in the preset.")
+            continue
+        vals = _cfgr_ini_values(_cfgr_lines(b.decode("utf-8", "replace")), sections)
+        if vals:
+            ini_out[path] = vals
+    preset = {"saved_at": _cfgr_now(), "app_version": APP_VERSION,
+              "rpt": {"nodes": nodes_out}, "modules": {"chan_usrp": chan_usrp},
+              "extensions": exts, "ini": ini_out}
+    return preset, notes, skipped
+
+def _cfgr_ext_entries(lines: list[str]) -> list[dict]:
+    mask = _cfgr_managed_mask(lines)
+    out: list[dict] = []
+    ctx = ""
+    cur: dict | None = None
+    for i, line in enumerate(lines):
+        if mask[i]:
+            cur = None
+            continue
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            ctx = m.group(1).strip()
+            cur = None
+            continue
+        em = _CFGR_EXTEN_RE.match(line)
+        if em:
+            if _cfgr_is_private(em.group(1)):
+                cur = {"context": ctx, "node": em.group(1), "lines": [line], "idx": [i]}
+                out.append(cur)
+            else:
+                cur = None
+            continue
+        if cur is not None and _CFGR_SAME_RE.match(line):
+            cur["lines"].append(line)
+            cur["idx"].append(i)
+            continue
+        if line.strip() and not line.strip().startswith(";"):
+            cur = None
+    return out
+
+def _cfgr_ini_values(lines: list[str], sections: dict[str, tuple[str, ...]]) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {}
+    sec = None
+    for line in lines:
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            sec = m.group(1).strip()
+            continue
+        if sec not in sections:
+            continue
+        kv = _cfgr_kv(line)
+        if not kv:
+            continue
+        for key in sections[sec]:
+            if kv[0].lower() == key.lower() and _CFGR_PORT_RE.match(kv[1]):
+                out.setdefault(sec, {})[key] = kv[1]
+    return out
+
+def _cfgr_preset_path(pid: str) -> str:
+    return os.path.join(_CFGR_DIR, "presets", pid, "preset.json")
+
+def _cfgr_valid_line(s: object) -> bool:
+    return isinstance(s, str) and "\n" not in s and "\r" not in s and len(s) <= 1000
+
+def _cfgr_validate_preset(p: object) -> dict | None:
+    if not isinstance(p, dict):
+        return None
+    try:
+        for n in p["rpt"]["nodes"]:
+            if not _cfgr_is_private(str(n["node"])) or not _cfgr_valid_line(n.get("nodes_line", "")):
+                return None
+            for s in n["stanzas"]:
+                if not all(_cfgr_valid_line(x) for x in s["lines"]) or not s["lines"]:
+                    return None
+                hm = _CFGR_HDR_RE.match(s["lines"][0])
+                if not hm or hm.group(1).strip() != s["name"]:
+                    return None
+        for e in p["extensions"]:
+            if not _cfgr_is_private(str(e["node"])) or not all(_cfgr_valid_line(x) for x in e["lines"]):
+                return None
+            if not _cfgr_valid_line(e["context"]) or "]" in e["context"] or not e["context"]:
+                return None
+        if p["modules"].get("chan_usrp") not in (None, "load", "noload"):
+            return None
+        for path, secs in p["ini"].items():
+            if path not in _CFGR_INI_WIRING:
+                return None
+            for sec, kvs in secs.items():
+                if sec not in _CFGR_INI_WIRING[path]:
+                    return None
+                for k, v in kvs.items():
+                    if k not in _CFGR_INI_WIRING[path][sec] or not _CFGR_PORT_RE.match(str(v)):
+                        return None
+    except (KeyError, TypeError, AttributeError):
+        return None
+    return p
+
+def _cfgr_load_preset(pid: str) -> dict | None:
+    if pid not in _CFGR_PRESETS:
+        return None
+    try:
+        with open(_cfgr_preset_path(pid), "r") as f:
+            return _cfgr_validate_preset(json.load(f))
+    except (OSError, ValueError):
+        return None
+
+def _cfgr_preset_summary(p: dict) -> list[str]:
+    lines = ["Private nodes (rpt.conf):"]
+    for n in p["rpt"]["nodes"]:
+        lines.append(f"  {n['node']}: stanzas {', '.join('[' + s['name'] + ']' for s in n['stanzas'])}"
+                     + (f"; [nodes] {n['nodes_line']}" if n["nodes_line"] else "; no [nodes] line"))
+    if not p["rpt"]["nodes"]:
+        lines.append("  (none)")
+    lines.append("Extensions (extensions.conf):")
+    for e in p["extensions"]:
+        lines.append(f"  [{e['context']}] " + " | ".join(x.strip() for x in e["lines"]))
+    if not p["extensions"]:
+        lines.append("  (none)")
+    lines.append(f"chan_usrp.so (modules.conf): {p['modules'].get('chan_usrp') or 'not set, left alone'}")
+    for path, secs in p["ini"].items():
+        for sec, kvs in secs.items():
+            lines.append(f"{path} [{sec}]: " + ", ".join(f"{k}={v}" for k, v in kvs.items()))
+    return lines
+
+def _cfgr_act_preset_capture(payload: dict, save: bool) -> dict:
+    pid = str(payload.get("preset", ""))
+    if pid not in _CFGR_PRESETS:
+        return {"success": False, "output": "Unknown preset."}
+    p, notes, skipped = _cfgr_capture()
+    if p is None:
+        return {"success": False, "output": "\n".join(notes)}
+    p["preset"] = pid
+    p["label"] = _CFGR_PRESETS[pid]
+    lines = [("Saved" if save else "Would save") + f" as preset '{_CFGR_PRESETS[pid]}' (wiring only, no callsign, IDs or passwords):", ""]
+    lines += _cfgr_preset_summary(p)
+    if skipped:
+        lines += ["", "Left out on purpose:"] + [f"  {s}" for s in skipped]
+    if notes:
+        lines += [""] + notes
+    if save:
+        if _cfgr_validate_preset(p) is None:
+            return {"success": False, "output": "The captured preset did not pass its own checks. Nothing saved.\n" + "\n".join(lines)}
+        _cfgr_ensure_root_dir()
+        dest = _cfgr_preset_path(pid)
+        os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+        _compare_before_write(dest, json.dumps(p, indent=1, sort_keys=True).encode("utf-8"))
+        log(f"OK: CONFIG preset saved: {pid}")
+    return {"success": True, "output": "\n".join(lines)}
+
+def _cfgr_apply_rpt(lines: list[str], p: dict) -> tuple[list[str] | None, list[str], list[str], str]:
+    mask = _cfgr_managed_mask(lines)
+    managed = _cfgr_managed_headers(lines, mask)
+    want = {n["node"]: n for n in p["rpt"]["nodes"]}
+    clash = sorted(n for n in want if n in managed)
+    if clash:
+        return None, [], [], ("private node " + ", ".join(clash) + " is also in the dashboard's Phone-tab block in "
+                              "rpt.conf. Change it on the Phone tab first.")
+    units, secs = _cfgr_rpt_units(lines, mask)
+    drop: set[int] = set()
+    first_start = None
+    for members in units.values():
+        for s in members:
+            first_start = s["start"] if first_start is None else min(first_start, s["start"])
+            drop.update(i for i in range(s["start"], s["end"]) if not mask[i])
+    nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
+    add_before: dict[int, list[str]] = {}
+    tail: list[str] = []
+    new_nodes_lines = [n["nodes_line"] for n in p["rpt"]["nodes"] if n["nodes_line"]]
+    if nodes_sec is not None:
+        last = nodes_sec["start"]
+        for i in range(nodes_sec["start"] + 1, nodes_sec["end"]):
+            kv = None if mask[i] else _cfgr_kv(lines[i])
+            if kv and _cfgr_is_private(kv[0]):
+                drop.add(i)
+            elif lines[i].strip() and i not in drop:
+                last = i
+        add_before.setdefault(last + 1, []).extend(new_nodes_lines)
+    elif new_nodes_lines:
+        tail += ["", "[nodes]"] + new_nodes_lines
+    stanza_text: list[str] = []
+    for n in sorted(p["rpt"]["nodes"], key=lambda x: int(x["node"])):
+        for s in n["stanzas"]:
+            stanza_text += list(s["lines"]) + [""]
+    if stanza_text:
+        if first_start is not None:
+            slot = add_before.setdefault(first_start, [])
+            slot.extend(([""] if slot else []) + stanza_text)
+        else:
+            tail = ([""] + stanza_text) + tail
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        if i in add_before:
+            if add_before[i] and out and out[-1].strip() and _CFGR_HDR_RE.match(add_before[i][0]):
+                out.append("")
+            out.extend(add_before[i])
+        if i not in drop:
+            out.append(line)
+    if len(lines) in add_before:
+        out.extend(add_before[len(lines)])
+    out.extend(tail)
+    have = set(units)
+    removed = sorted(have - set(want), key=int)
+    added = sorted(set(want) - have, key=int)
+    return out, removed, added, ""
+
+def _cfgr_apply_ext(lines: list[str], p: dict) -> list[str]:
+    drop: set[int] = set()
+    for e in _cfgr_ext_entries(lines):
+        drop.update(e["idx"])
+    by_ctx: dict[str, list[str]] = {}
+    for e in p["extensions"]:
+        by_ctx.setdefault(e["context"], []).extend(e["lines"])
+    mask = _cfgr_managed_mask(lines)
+    secs = _cfgr_sections(lines, mask)
+    add_before: dict[int, list[str]] = {}
+    tail: list[str] = []
+    for ctx, new in by_ctx.items():
+        sec = next((s for s in secs if s["name"] == ctx), None)
+        if sec is None:
+            tail += ["", f"[{ctx}]"] + new
+            continue
+        last = sec["start"]
+        for i in range(sec["start"] + 1, sec["end"]):
+            if lines[i].strip() and i not in drop and not mask[i]:
+                last = i
+        add_before.setdefault(last + 1, []).extend(new)
+    out: list[str] = []
+    for i, line in enumerate(lines):
+        out.extend(add_before.get(i, []))
+        if i not in drop:
+            out.append(line)
+    out.extend(add_before.get(len(lines), []))
+    return out + tail
+
+def _cfgr_apply_mod(lines: list[str], p: dict) -> list[str]:
+    want = p["modules"].get("chan_usrp")
+    if want is None:
+        return list(lines)
+    mask = _cfgr_managed_mask(lines)
+    out = list(lines)
+    found = False
+    for i, line in enumerate(lines):
+        mm = None if mask[i] else _CFGR_CHAN_USRP_RE.match(line)
+        if mm:
+            found = True
+            out[i] = mm.group(1) + want + mm.group(3)
+    if not found:
+        secs = _cfgr_sections(lines, mask)
+        sec = next((s for s in secs if s["name"].lower() == "modules"), None)
+        if sec is None:
+            out += ["", "[modules]", f"{want} => chan_usrp.so"]
+        else:
+            last = sec["start"]
+            for i in range(sec["start"] + 1, sec["end"]):
+                if lines[i].strip():
+                    last = i
+            out.insert(last + 1, f"{want} => chan_usrp.so")
+    return out
+
+def _cfgr_apply_ini(lines: list[str], wanted: dict[str, dict[str, str]]) -> tuple[list[str], list[str]]:
+    out = list(lines)
+    notes: list[str] = []
+    for sec, kvs in wanted.items():
+        start = None
+        end = len(out)
+        for i, line in enumerate(out):
+            m = _CFGR_HDR_RE.match(line)
+            if m and start is None and m.group(1).strip() == sec:
+                start = i
+            elif m and start is not None:
+                end = i
+                break
+        if start is None:
+            notes.append(f"[{sec}] not found, its ports were left alone")
+            continue
+        for key, val in kvs.items():
+            hit = None
+            for i in range(start + 1, end):
+                kv = _cfgr_kv(out[i])
+                if kv and kv[0].lower() == key.lower():
+                    hit = i
+                    break
+            if hit is not None:
+                kname = _cfgr_kv(out[hit])[0]
+                out[hit] = f"{kname}={val}"
+            else:
+                last = start
+                for i in range(start + 1, end):
+                    if out[i].strip():
+                        last = i
+                out.insert(last + 1, f"{key}={val}")
+                end += 1
+    return out, notes
+
+def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], str]:
+    changes: dict[str, tuple[bytes, bytes]] = {}
+    notes: list[str] = []
+    removed: list[str] = []
+    for path in (_CFGR_RPT, _CFGR_EXT, _CFGR_MOD):
+        cur = _cfgr_read(path)
+        if cur is None:
+            notes.append(f"{path} not found on this node, skipped")
+            continue
+        lines = _cfgr_lines(cur.decode("utf-8", "replace"))
+        if path == _CFGR_RPT:
+            new, removed, added, err = _cfgr_apply_rpt(lines, p)
+            if new is None:
+                return {}, [], [], err
+            mask = _cfgr_managed_mask(lines)
+            managed = sorted(h for h in _cfgr_managed_headers(lines, mask) if _cfgr_is_private(h))
+            if managed:
+                notes.append("Not touched (managed by the dashboard's Phone tab): private node " + ", ".join(managed))
+        elif path == _CFGR_EXT:
+            new = _cfgr_apply_ext(lines, p)
+        else:
+            new = _cfgr_apply_mod(lines, p)
+        data = _cfgr_join(new).encode("utf-8")
+        if data != cur:
+            changes[path] = (cur, data)
+    for path, secs in p["ini"].items():
+        cur = _cfgr_read(path)
+        if cur is None:
+            notes.append(f"{path} not found on this node, skipped")
+            continue
+        new, n2 = _cfgr_apply_ini(_cfgr_lines(cur.decode("utf-8", "replace")), secs)
+        notes += [f"{path}: {x}" for x in n2]
+        data = _cfgr_join(new).encode("utf-8")
+        if data != cur:
+            changes[path] = (cur, data)
+    return changes, removed, notes, ""
+
+def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
+    pid = str(payload.get("preset", ""))
+    p = _cfgr_load_preset(pid)
+    if p is None:
+        return {"success": False, "output": f"No '{_CFGR_PRESETS.get(pid, pid)}' preset is saved on this node yet."}
+    changes, removed, notes, err = _cfgr_preset_plan(p)
+    if err:
+        return {"success": False, "output": "Preset not applied: " + err}
+    lines: list[str] = []
+    if removed:
+        lines.append("PRIVATE NODES THAT WILL BE REMOVED: " + ", ".join(removed))
+    if not changes:
+        lines.append("This node already matches the preset. Nothing to change.")
+    for path, (old, new) in changes.items():
+        d = difflib.unified_diff(old.decode("utf-8", "replace").splitlines(),
+                                 new.decode("utf-8", "replace").splitlines(),
+                                 f"now: {path}", f"after preset: {path}", lineterm="")
+        lines += [""] + list(d)
+    if notes:
+        lines += [""] + notes
+    result = {"success": True, "removed": removed, "changes": sorted(changes)}
+    if not apply or not changes:
+        result["output"] = "\n".join(lines)
+        return result
+    groups = [g for g in _CFGR_GROUPS if any(path in _CFGR_GROUPS[g]["files"] for path in changes)]
+    auto_id, dropped = _cfgr_auto_point(f"preset {_CFGR_PRESETS[pid]}", groups)
+    head = [f"Current files saved first as automatic copy {auto_id}."]
+    ok = True
+    for path, (_old, new) in changes.items():
+        uid, gid, mode = _cfgr_meta_of(path)
+        res = _cfgr_write_file(path, new, uid, gid, mode)
+        ok = ok and not res.startswith("NOT")
+        head.append(f"  {path}: {res}")
+    if dropped:
+        head.append("Oldest automatic copies dropped: " + ", ".join(dropped))
+    head.append("Services were NOT restarted. Use the Restart buttons below when ready.")
+    installed = _cfgr_installed()
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG preset {pid} applied ({', '.join(sorted(changes))})")
+    result.update({"success": ok, "output": "\n".join(head + [""] + lines),
+                   "restart_groups": [g for g in groups if installed[g]]})
+    return result
+
+_CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "save_restore": _cfgr_act_save_restore,
+    "retake_restore": _cfgr_act_retake_restore,
+    "create_point": _cfgr_act_create_point,
+    "delete_point": _cfgr_act_delete_point,
+    "restore": _cfgr_act_restore,
+    "diff": _cfgr_act_diff,
+    "restart": _cfgr_act_restart,
+    "preset_capture_preview": lambda p: _cfgr_act_preset_capture(p, False),
+    "preset_capture": lambda p: _cfgr_act_preset_capture(p, True),
+    "preset_apply_preview": lambda p: _cfgr_act_preset_apply(p, False),
+    "preset_apply": lambda p: _cfgr_act_preset_apply(p, True),
+}
+
+def _dispatch_config_action(payload: dict) -> dict:
+    action = str(payload.get("action", ""))
+    fn = _CFGR_ACTIONS.get(action)
+    if fn is None:
+        return {"success": False, "output": f"Unknown action: {action}"}
+    err = _require_root()
+    if err:
+        return err
+    with _CFGR_LOCK:
+        try:
+            return fn(payload)
+        except OSError as exc:
+            log(f"FAIL: CONFIG {action}: {exc}")
+            return {"success": False, "output": f"Failed: {exc}"}
+
+def _route_config_status(query: dict) -> tuple[int, str, bytes]:
+    with _CFGR_LOCK:
+        try:
+            body = build_config_status()
+        except OSError as exc:
+            body = {"error": str(exc)}
+    return 200, "application/json", json.dumps(body).encode("utf-8")
+
+_JS_CONFIG = r"""
+var CFG_STATE = null;
+
+function cfgEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function cfgLabel(g) {
+  var m = (CFG_STATE && CFG_STATE.groups_meta && CFG_STATE.groups_meta[g]) || {};
+  return m.label || g;
+}
+
+function cfgOut(outId, text, ok) {
+  var out = outId ? document.getElementById(outId) : null;
+  if (!out) return;
+  out.className = 'asl3-console shown' + (ok === false ? ' fail' : (ok === null ? ' placeholder' : ''));
+  out.textContent = text;
+}
+
+function cfgPost(payload, outId, btn) {
+  if (btn) btn.disabled = true;
+  cfgOut(outId, 'Working…', null);
+  return fetch('/api/config/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify(payload)
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    cfgOut(outId, res.output || '(no output)', !!res.success);
+    if (btn) btn.disabled = false;
+    if (res.restart_groups && res.restart_groups.length) cfgShowRestart(res.restart_groups);
+    refreshConfig();
+    return res;
+  }).catch(function(e) {
+    cfgOut(outId, 'Request failed: ' + e, false);
+    if (btn) btn.disabled = false;
+    return {success: false};
+  });
+}
+
+function cfgSaveRestore(btn, outId) {
+  fetch('/api/config/status').then(function(r) { return r.json(); }).then(function(d) {
+    CFG_STATE = d;
+    var have = (d.restore && d.restore.groups) || {};
+    var lines = ['Save original configs as Restore point', '', 'Installed now:'];
+    (d.order || []).forEach(function(g) {
+      lines.push('   ' + (d.installed[g] ? '[x] ' : '[ ] ') + cfgLabel(g) + (d.installed[g] ? '' : '  (not installed)') +
+                 (have[g] ? '  (already in Restore point, kept)' : ''));
+    });
+    lines.push('');
+    lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 on this node?');
+    lines.push('If yes, press Cancel and wait until after the last install.');
+    lines.push('You do not need all three: save once everything you plan to use is installed.');
+    if (!confirm(lines.join('\n'))) return;
+    cfgPost({action: 'save_restore'}, outId, btn);
+  }).catch(function(e) { cfgOut(outId, 'Request failed: ' + e, false); });
+}
+
+function cfgRetake(btn) {
+  var d = CFG_STATE || {installed: {}, order: []};
+  var lines = ['Retake Restore point', '', 'Installed now:'];
+  (d.order || []).forEach(function(g) {
+    lines.push('   ' + (d.installed[g] ? '[x] ' : '[ ] ') + cfgLabel(g) + (d.installed[g] ? '' : '  (not installed)'));
+  });
+  lines.push('');
+  lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 on this node? If yes, cancel and wait until after the last install.');
+  lines.push('The old Restore point is kept as a save point named restore_replaced_<date>.');
+  lines.push('');
+  lines.push('Type RETAKE to confirm:');
+  var typed = prompt(lines.join('\n'), '');
+  if (typed === null) return;
+  if (typed !== 'RETAKE') { alert('Not retaken: you must type RETAKE.'); return; }
+  cfgPost({action: 'retake_restore', confirm: 'RETAKE'}, 'cfg-restore-out', btn);
+}
+
+function cfgCreatePoint(btn) {
+  var el = document.getElementById('cfg-point-name');
+  var name = (el.value || '').trim();
+  if (!/^[A-Za-z0-9 _.\-]{1,40}$/.test(name)) { alert('Name: 1 to 40 letters, digits, spaces, _ . or -'); return; }
+  cfgPost({action: 'create_point', name: name}, 'cfg-create-out', btn).then(function(res) {
+    if (res && res.success) el.value = '';
+  });
+}
+
+function cfgSelected() {
+  var sel = document.getElementById('cfg-point');
+  var v = sel ? sel.value : '';
+  var i = v.indexOf(':');
+  return {kind: v.slice(0, i), id: v.slice(i + 1)};
+}
+
+function cfgFindPoint(kind, id) {
+  var pts = (CFG_STATE && CFG_STATE.points) || [];
+  for (var i = 0; i < pts.length; i++) { if (pts[i].kind === kind && pts[i].id === id) return pts[i]; }
+  return null;
+}
+
+function cfgOnPointChange() {
+  var s = cfgSelected();
+  var box = document.getElementById('cfg-groups');
+  var del = document.getElementById('cfg-delete-btn');
+  var btn = document.getElementById('cfg-restore-btn');
+  var groups = [];
+  if (s.kind === 'restore') groups = Object.keys((CFG_STATE.restore && CFG_STATE.restore.groups) || {});
+  else if (s.kind === 'user' || s.kind === 'auto') { var p = cfgFindPoint(s.kind, s.id); groups = p ? p.groups : []; }
+  if (s.kind === 'preset') {
+    box.innerHTML = '<span class="cfg-hint">A preset sets only the wiring between the systems and the private nodes. ' +
+      'Callsigns, IDs and passwords are never in it. Private nodes not in the preset are removed.</span>';
+    btn.textContent = 'Preview and apply preset';
+  } else {
+    var h = '';
+    (CFG_STATE.order || []).forEach(function(g) {
+      if (groups.indexOf(g) === -1) return;
+      h += '<label class="cfg-chk"><input type="checkbox" value="' + cfgEsc(g) + '" checked> ' + cfgEsc(cfgLabel(g)) + '</label>';
+    });
+    box.innerHTML = h || '<span class="cfg-hint">(nothing saved in this entry)</span>';
+    btn.textContent = 'Restore selected';
+  }
+  btn.disabled = !s.kind || (s.kind !== 'preset' && !groups.length);
+  del.style.display = (s.kind === 'user' || s.kind === 'auto') ? 'inline-block' : 'none';
+}
+
+function cfgRestore(btn) {
+  var s = cfgSelected();
+  if (!s.kind) return;
+  if (s.kind === 'preset') { cfgApplyPreset(btn, s.id); return; }
+  var groups = [];
+  document.querySelectorAll('#cfg-groups input[type=checkbox]').forEach(function(c) { if (c.checked) groups.push(c.value); });
+  if (!groups.length) { alert('Tick at least one system.'); return; }
+  var sel = document.getElementById('cfg-point');
+  var name = sel.options[sel.selectedIndex].text;
+  if (!confirm('Restore ' + groups.map(cfgLabel).join(', ') + ' config files from "' + name + '"?\n\n' +
+               'The current files are saved first as an automatic copy, so this can be undone.\n' +
+               'Services are not restarted until you press Restart.')) return;
+  cfgPost({action: 'restore', kind: s.kind, id: s.id, groups: groups}, 'cfg-restore-out', btn);
+}
+
+function cfgApplyPreset(btn, pid) {
+  cfgPost({action: 'preset_apply_preview', preset: pid}, 'cfg-restore-out', btn).then(function(res) {
+    if (!res || !res.success || !res.changes || !res.changes.length) return;
+    var msg = 'Apply this preset? The preview of every change is shown below the button.\n\n' +
+              'Files changed: ' + res.changes.join(', ') + '\n';
+    if (res.removed && res.removed.length) msg += '\nPRIVATE NODES THAT WILL BE REMOVED: ' + res.removed.join(', ') + '\n';
+    msg += '\nThe current files are saved first as an automatic copy, so this can be undone.';
+    if (!confirm(msg)) return;
+    cfgPost({action: 'preset_apply', preset: pid}, 'cfg-restore-out', btn);
+  });
+}
+
+function cfgDelete(btn) {
+  var s = cfgSelected();
+  if (s.kind !== 'user' && s.kind !== 'auto') return;
+  var sel = document.getElementById('cfg-point');
+  if (!confirm('Delete "' + sel.options[sel.selectedIndex].text + '"? This cannot be undone.')) return;
+  cfgPost({action: 'delete_point', kind: s.kind, id: s.id}, 'cfg-restore-out', btn);
+}
+
+function cfgShowRestart(groups) {
+  var card = document.getElementById('cfg-restart');
+  var h = '';
+  groups.forEach(function(g) {
+    var svc = ((CFG_STATE.groups_meta || {})[g] || {}).services || [];
+    h += '<button class="btn-run" onclick="cfgRestart(this,\'' + cfgEsc(g) + '\')">Restart ' + cfgEsc(cfgLabel(g)) +
+         ' services</button> <span class="cfg-hint">' + cfgEsc(svc.join(', ')) + '</span><br>';
+  });
+  document.getElementById('cfg-restart-btns').innerHTML = h;
+  cfgOut('cfg-restart-out', 'Configs restored. Services not restarted yet.', null);
+  card.style.display = 'block';
+}
+
+function cfgRestart(btn, g) {
+  if (!confirm('Restart the ' + cfgLabel(g) + ' services now? Calls and links on them drop for a moment.')) return;
+  cfgPost({action: 'restart', groups: [g]}, 'cfg-restart-out', btn);
+}
+
+function cfgDiff(btn, g, path) {
+  cfgPost({action: 'diff', group: g, path: path}, 'cfg-diff-out', btn);
+}
+
+function cfgPresetCapture(btn, save) {
+  if (save && !confirm('Save this node\'s wiring and private nodes as the Travel Node preset?\n\n' +
+                       'Only wiring is saved: no callsign, IDs or passwords. An existing Travel Node preset is replaced.\n' +
+                       'Use Preview first to see exactly what goes in.')) return;
+  cfgPost({action: save ? 'preset_capture' : 'preset_capture_preview', preset: 'travel_node'}, 'cfg-preset-out', btn);
+}
+
+function cfgRender(d) {
+  var order = d.order || [];
+  var banner = document.getElementById('cfg-banner');
+  if (d.error) { banner.className = 'ov-banner lvl-danger'; banner.textContent = 'Could not read the library: ' + d.error; banner.style.display = 'block'; return; }
+  if (!d.restore.exists) {
+    banner.className = 'ov-banner lvl-warn';
+    banner.textContent = 'No Restore point yet. Save one when your installs are finished (button below, or the save step on the install tab).';
+    banner.style.display = 'block';
+  } else banner.style.display = 'none';
+  var h = '<table class="cfg-table"><tr><th>System</th><th>Installed</th><th>In Restore point</th><th>Changed since</th></tr>';
+  order.forEach(function(g) {
+    var rg = d.restore.groups[g];
+    var ch = (d.changed || {})[g] || [];
+    var chHtml = rg ? (ch.length ? ch.map(function(p) {
+      return cfgEsc(p) + ' <button class="btn-copy" onclick="cfgDiff(this,\'' + cfgEsc(g) + '\',\'' + cfgEsc(p) + '\')">View diff</button>';
+    }).join('<br>') : 'no changes') : '';
+    h += '<tr><td>' + cfgEsc(cfgLabel(g)) + '</td><td>' + (d.installed[g] ? '&#10004;' : '&#10008;') + '</td><td>' +
+         (rg ? cfgEsc(rg.saved_at) : 'not saved') + '</td><td>' + chHtml + '</td></tr>';
+  });
+  h += '</table>';
+  document.getElementById('cfg-status').innerHTML = h;
+  document.getElementById('cfg-retake-btn').style.display = d.restore.exists ? 'inline-block' : 'none';
+  var sel = document.getElementById('cfg-point');
+  var keep = sel.value;
+  var o = '';
+  if (d.restore.exists) o += '<optgroup label="Restore point"><option value="restore:">Restore (' + cfgEsc(d.restore.created_at) + ')</option></optgroup>';
+  var pr = '';
+  Object.keys(d.presets || {}).forEach(function(pid) {
+    var p = d.presets[pid];
+    if (p.exists) pr += '<option value="preset:' + cfgEsc(pid) + '">' + cfgEsc(p.label) + ' (' + cfgEsc(p.saved_at) + ')</option>';
+  });
+  if (pr) o += '<optgroup label="Presets">' + pr + '</optgroup>';
+  var us = '', au = '';
+  (d.points || []).forEach(function(p) {
+    var opt = '<option value="' + p.kind + ':' + cfgEsc(p.id) + '">' + cfgEsc(p.label) + ' (' + cfgEsc(p.created_at) + ')</option>';
+    if (p.kind === 'user') us += opt; else au += opt;
+  });
+  if (us) o += '<optgroup label="Save points">' + us + '</optgroup>';
+  if (au) o += '<optgroup label="Automatic copies">' + au + '</optgroup>';
+  sel.innerHTML = o || '<option value="">(nothing saved yet)</option>';
+  if (keep) { for (var i = 0; i < sel.options.length; i++) { if (sel.options[i].value === keep) { sel.value = keep; break; } } }
+  cfgOnPointChange();
+  var tp = (d.presets || {}).travel_node || {};
+  document.getElementById('cfg-preset-state').textContent = tp.exists ? ('saved ' + tp.saved_at) : 'not saved on this node';
+  document.getElementById('cfg-library').textContent = d.library;
+  document.getElementById('cfg-checked-at').textContent = 'checked ' + d.checked_at;
+}
+
+function refreshConfig() {
+  return fetch('/api/config/status').then(function(r) { return r.json(); }).then(function(d) {
+    CFG_STATE = d;
+    cfgRender(d);
+  });
+}
+"""
+
+
+def _render_config_panel() -> str:
+    return r"""
+<div class="tab-panel hidden" id="panel-config">
+  <div id="cfg-banner" class="ov-banner lvl-warn" style="display:none"></div>
+
+  <div class="step-card">
+    <div class="step-head"><div class="step-title">Restore point</div></div>
+    <div class="step-body">The original config files, saved once after your installs are finished. Each system's
+      files are kept apart; saving again only adds systems that were installed later.</div>
+    <div id="cfg-status"></div>
+    <div class="step-actions">
+      <button class="btn-run" onclick="cfgSaveRestore(this,'cfg-restore-out')">Save Restore point</button>
+      <button class="btn-purge" id="cfg-retake-btn" style="display:none" onclick="cfgRetake(this)">Retake Restore point</button>
+    </div>
+    <div class="asl3-console shown placeholder" id="cfg-diff-out">(press View diff next to a changed file)</div>
+  </div>
+
+  <div class="step-card">
+    <div class="step-head"><div class="step-title">Restore</div></div>
+    <label style="font-family:var(--mono);font-size:.8rem;color:var(--muted)">From:
+      <select id="cfg-point" style="max-width:100%" onchange="cfgOnPointChange()"></select>
+    </label>
+    <div id="cfg-groups" style="margin:.5rem 0"></div>
+    <div class="step-actions">
+      <button class="btn-run" id="cfg-restore-btn" onclick="cfgRestore(this)">Restore selected</button>
+      <button class="btn-purge" id="cfg-delete-btn" style="display:none" onclick="cfgDelete(this)">Delete</button>
+    </div>
+    <div class="asl3-console shown placeholder" id="cfg-restore-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card" id="cfg-restart" style="display:none">
+    <div class="step-head"><div class="step-title">Restart services</div></div>
+    <div id="cfg-restart-btns" style="margin:.4rem 0"></div>
+    <div class="asl3-console shown placeholder" id="cfg-restart-out"></div>
+  </div>
+
+  <div class="step-card">
+    <div class="step-head"><div class="step-title">Create save point</div></div>
+    <div class="step-body">Saves the current config files of every installed system under a name of your choice.</div>
+    <input type="text" class="asl3-cmd-input" id="cfg-point-name" maxlength="40" placeholder="Name, e.g. before reflector change">
+    <div class="step-actions"><button class="btn-run" onclick="cfgCreatePoint(this)">Create save point</button></div>
+    <div class="asl3-console shown placeholder" id="cfg-create-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card">
+    <div class="step-head"><div class="step-title">Travel Node preset</div>
+      <span class="cfg-hint" id="cfg-preset-state"></span></div>
+    <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
+      [nodes] lines, their extensions, chan_usrp in modules.conf, and the USRP2M17.ini ports. Never callsigns, IDs or
+      passwords. Run it on the travel node; apply it on any node from the Restore list above.</div>
+    <div class="step-actions">
+      <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
+      <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
+    </div>
+    <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
+  </div>
+
+  <button class="btn-recheck" onclick="refreshConfig()">Re-check</button>
+  <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:.6rem">library: <span id="cfg-library"></span> &middot; <span id="cfg-checked-at"></span></span>
+</div>
+"""
+
 TABS: list[tuple[str, str, str, str]] = [
     ("overview", "Overview", "t-overview", "Stage 2"),
     ("router_install", "Router Install", "t-router-install", "Steps 1-2a: Stage 4 — Steps 3-11 (Model C): Stage 5 (done) — Model B: Stage 6"),
@@ -8181,6 +9503,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("cloudflare", "Cloudflare", "t-cloudflare", "Stages 1-4 (cloudflared connector: token dashboard-managed + quick TryCloudflare; outbound-only, bypasses the firewall, WireGuard-coexistence pre-flight)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, dphys-swapfile, fstab noatime, mandb"),
+    ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
     ("firewall", "Firewall", "t-firewall", "Stage 7 (done)"),
@@ -10449,6 +11772,7 @@ function _startApp() {
   refreshCF();
   refreshUpdate();
   refreshSystemOpt();
+  refreshConfig();
   startQuietPolling();
   _ovTimer = setInterval(refreshOverview, 5000);
 }
@@ -12111,6 +13435,14 @@ function m17RenderStepList(mode, distro) {
       html += '</div>';
       return;
     }
+    if (step.config_save) {
+      html += '<span class="step-pill not_started">Config</span></div>';
+      if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
+      html += '<div class="step-actions"><button class="btn-run" onclick="cfgSaveRestore(this,\\'m17-out-' + stateKey + '\\')">Save Restore point</button></div>';
+      html += '<div class="asl3-console shown placeholder" id="m17-out-' + stateKey + '">(not saved from here yet)</div>';
+      html += '</div>';
+      return;
+    }
     var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
     var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
     html += '<span class="step-pill ' + pillClass + '" id="m17-pill-' + stateKey + '">' + pillLabel + '</span></div>';
@@ -12247,7 +13579,7 @@ function m17ReconnectRunningJobs(distro) {
   ['install', 'purge'].forEach(function(mode) {
     var steps = ((window._m17Scripts || {})[mode] || {})[distro] || [];
     steps.forEach(function(step) {
-      if (step.manual || step.manual_block) return;
+      if (step.manual || step.manual_block || step.config_save) return;
       var stateKey = mode + '_' + distro + '_' + step.id;
       var jobKey = 'm17_' + stateKey;
       fetch('/api/action_status?job_key=' + encodeURIComponent(jobKey)).then(function(r) { return r.json(); }).then(function(status) {
@@ -14377,6 +15709,7 @@ _JS = (
     + _JS_CF
     + _JS_UPDATE
     + _JS_SYSTEM_OPT
+    + _JS_CONFIG
     + _JS_QUIET
     + _JS_GUARD
     + _JS_REPAIR
@@ -15046,6 +16379,7 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "cloudflare": _render_cf_panel,
     "update": _render_update_panel,
     "system_opt": _render_system_opt_panel,
+    "config": _render_config_panel,
     "services": _render_services_panel,
     "ports": _render_ports_panel,
     "firewall": _render_firewall_panel,
@@ -15264,6 +16598,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/update/status": _route_update_status,
     "/api/quiet/status": _route_quiet_status,
     "/api/system_opt/status": _route_system_opt_status,
+    "/api/config/status": _route_config_status,
     "/api/action_status": _route_action_status,
 }
 
@@ -15748,6 +17083,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, "application/json", err)
                 return
             result = _dispatch_firewall_action(payload)
+            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
+            return
+
+        if path == "/api/config/action":
+            payload, err = self._read_json_body()
+            if err is not None:
+                self._send(400, "application/json", err)
+                return
+            result = _dispatch_config_action(payload)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
