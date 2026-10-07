@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.162"
-APP_STAGE = "v0.0.162: Config tab: DVSwitch ports, Allmon3, port clash check, ASL3/DVSwitch save steps; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.163"
+APP_STAGE = "v0.0.163: Config tab: presets leave the digital-mode ports alone, mode-aware pairing check; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -8239,9 +8239,7 @@ _CFGR_COMPANION_KEYS = frozenset({"functions", "link_functions", "phone_function
 _CFGR_INI_WIRING: dict[str, dict[str, tuple[str, ...]]] = {
     "/opt/USRP2M17/USRP2M17.ini": {"M17 Network": ("LocalPort", "DstPort"),
                                    "USRP Network": ("LocalPort", "DstPort")},
-    "/opt/Analog_Bridge/Analog_Bridge.ini": {"USRP": ("txPort", "rxPort"),
-                                             "AMBE_AUDIO": ("txPort", "rxPort")},
-    "/opt/MMDVM_Bridge/DVSwitch.ini": {"DMR": ("txPort", "rxPort")},
+    "/opt/Analog_Bridge/Analog_Bridge.ini": {"USRP": ("txPort", "rxPort")},
 }
 _CFGR_HDR_RE = re.compile(r"^\s*\[([^\]]+)\]")
 _CFGR_KV_RE = re.compile(r"^\s*([^;=\s][^=]*?)\s*=>?\s*(.*)$")
@@ -8503,7 +8501,8 @@ def build_config_status() -> dict:
         "max_points": _CFGR_MAX_POINTS,
         "port_clashes": clashes,
         "ports_checked": n_ports,
-        "ambe_pairing": _cfgr_ambe_pairing(),
+        "ambe_pairing": _cfgr_ambe_state()[0],
+        "ambe_paired_with": _cfgr_ambe_state()[1],
         "checked_at": _cfgr_now(),
     }
 
@@ -8636,6 +8635,7 @@ def _cfgr_act_restore(payload: dict) -> dict:
     ok = True
     kept_phone = []
     written = set()
+    ab_note = ""
     for path in sorted(blobs):
         g, meta = plan[path]
         try:
@@ -8650,7 +8650,15 @@ def _cfgr_act_restore(payload: dict) -> dict:
             ok = False
         if res == "written":
             written.add(os.path.basename(path))
+            if path == _CFGR_AB:
+                am = _cfgr_ini_sections(data.decode("utf-8", "replace")).get("ambe_audio", {})
+                ab_note = (f"{os.path.basename(path)} holds the node's current digital mode, so restoring it switched "
+                           f"the mode to the saved one (ambeMode = {am.get('ambemode', '?')}, ports "
+                           f"{am.get('txport', '?')}/{am.get('rxport', '?')}). Press Restart DVSwitch services, or "
+                           "switch the mode back from the dashboard or the dvs menu.")
         lines.append(f"  {path}: {res}")
+    if ab_note:
+        lines.append(ab_note)
     if kept_phone:
         lines.append("Phone-tab blocks kept as they are now in: " + ", ".join(kept_phone))
     if removed:
@@ -9020,12 +9028,28 @@ def _cfgr_validate_preset(p: object) -> dict | None:
         return None
     return p
 
+def _cfgr_prune_legacy(p: object) -> object:
+    if not isinstance(p, dict) or not isinstance(p.get("ini"), dict):
+        return p
+    keep: dict = {}
+    pruned: list[str] = []
+    for path, secs in p["ini"].items():
+        wiring = _CFGR_INI_WIRING.get(path)
+        if not isinstance(secs, dict):
+            continue
+        for sec, kvs in secs.items():
+            if wiring is not None and sec in wiring and isinstance(kvs, dict):
+                keep.setdefault(path, {})[sec] = kvs
+            else:
+                pruned.append(f"{os.path.basename(path)} [{sec}]")
+    return {**p, "ini": keep, "_pruned": pruned}
+
 def _cfgr_load_preset(pid: str) -> dict | None:
     if pid not in _CFGR_PRESETS:
         return None
     try:
         with open(_cfgr_preset_path(pid), "r") as f:
-            return _cfgr_validate_preset(json.load(f))
+            return _cfgr_validate_preset(_cfgr_prune_legacy(json.load(f)))
     except (OSError, ValueError):
         return None
 
@@ -9384,20 +9408,31 @@ def _cfgr_port_clashes(override: dict[str, bytes] | None = None) -> tuple[list[s
                        + "; ".join(f"{p} ({w})" for p, w in users))
     return out, len(found)
 
-def _cfgr_ambe_pairing(override: dict[str, bytes] | None = None) -> str:
+def _cfgr_ambe_state(override: dict[str, bytes] | None = None) -> tuple[str, str]:
     ab = _cfgr_text(_CFGR_AB, override)
     mb = _cfgr_text(_CFGR_DVSINI, override)
     if ab is None or mb is None:
-        return ""
+        return "", ""
     a = _cfgr_ini_sections(ab).get("ambe_audio", {})
-    d = _cfgr_ini_sections(mb).get("dmr", {})
-    at, ar, dt, dr = a.get("txport", ""), a.get("rxport", ""), d.get("txport", ""), d.get("rxport", "")
-    if not all(_CFGR_PORT_RE.match(x) for x in (at, ar, dt, dr)):
-        return ""
-    if at == dr and ar == dt:
-        return ""
-    return (f"Analog_Bridge [AMBE_AUDIO] txPort/rxPort {at}/{ar} and DVSwitch.ini [DMR] txPort/rxPort {dt}/{dr} "
-            "are not mirrored, so DMR audio between them would not flow")
+    at, ar = a.get("txport", ""), a.get("rxport", "")
+    if not (_CFGR_PORT_RE.match(at) and _CFGR_PORT_RE.match(ar)):
+        return "", ""
+    paired: list[str] = []
+    seen = 0
+    for sec, d in _cfgr_ini_sections(mb).items():
+        dt, dr = d.get("txport", ""), d.get("rxport", "")
+        if not sec or not (_CFGR_PORT_RE.match(dt) and _CFGR_PORT_RE.match(dr)):
+            continue
+        seen += 1
+        if at == dr and ar == dt:
+            paired.append(sec.upper())
+    if not seen or paired:
+        return "", ", ".join(paired)
+    return (f"Analog_Bridge [AMBE_AUDIO] txPort/rxPort {at}/{ar} is not the mirror of any mode section in "
+            "DVSwitch.ini, so audio between Analog_Bridge and MMDVM_Bridge would not flow"), ""
+
+def _cfgr_ambe_pairing(override: dict[str, bytes] | None = None) -> str:
+    return _cfgr_ambe_state(override)[0]
 
 def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str], list[str], list[str], str]:
     changes: dict[str, tuple[bytes, bytes]] = {}
@@ -9471,6 +9506,9 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
     if err:
         return {"success": False, "output": "Preset not applied: " + err}
     lines: list[str] = [f"WARNING: {w}" for w in warnings]
+    if p.get("_pruned"):
+        lines.append("Left out of this older preset (digital-mode ports change with the mode, so presets no longer "
+                     "carry them): " + ", ".join(p["_pruned"]))
     if removed:
         lines.append("PRIVATE NODES THAT WILL BE REMOVED: " + ", ".join(removed))
     if not changes:
@@ -9672,6 +9710,7 @@ function cfgRestore(btn) {
   var sel = document.getElementById('cfg-point');
   var name = sel.options[sel.selectedIndex].text;
   if (!confirm('Restore ' + groups.map(cfgLabel).join(', ') + ' config files from "' + name + '"?\n\n' +
+               (groups.indexOf('dvs') !== -1 ? 'Restoring DVSwitch also restores Analog_Bridge.ini, which holds the node\'s current digital mode: the mode is switched to the one saved in this entry.\n' : '') +
                'The current files are saved first as an automatic copy, so this can be undone.\n' +
                'Services are not restarted until you press Restart.')) return;
   cfgPost({action: 'restore', kind: s.kind, id: s.id, groups: groups}, 'cfg-restore-out', btn);
@@ -9754,7 +9793,7 @@ function cfgRender(d) {
   if (pc.length) ph += pc.map(function(x) { return '<div class="ov-banner lvl-danger">' + cfgEsc(x) + '</div>'; }).join('');
   if (d.ambe_pairing) ph += '<div class="ov-banner lvl-warn">' + cfgEsc(d.ambe_pairing) + '</div>';
   if (!ph) ph = '<span class="cfg-hint">No UDP port clashes (' + (d.ports_checked || 0) + ' listening ports checked)' +
-    '; DMR link between Analog_Bridge and MMDVM_Bridge is paired.</span>';
+    (d.ambe_paired_with ? '; Analog_Bridge and MMDVM_Bridge are paired on the ' + cfgEsc(d.ambe_paired_with) + ' mode.' : '.') + '</span>';
   ports.innerHTML = ph;
   document.getElementById('cfg-retake-btn').style.display = d.restore.exists ? 'inline-block' : 'none';
   var sel = document.getElementById('cfg-point');
@@ -9841,7 +9880,7 @@ def _render_config_panel() -> str:
       <span class="cfg-hint" id="cfg-preset-state"></span></div>
     <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
       [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
-      [USRP]/[AMBE_AUDIO] and DVSwitch.ini [DMR] ports. Never callsigns, IDs or passwords. Applying it also keeps
+      [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
       Allmon3 in step with the private nodes. Run it on the travel node; apply it on any node from the Restore list
       above.</div>
     <div class="step-actions">
