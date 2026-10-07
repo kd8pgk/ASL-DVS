@@ -1,6 +1,28 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_167_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_168_20261007.py`. Newest entries first.
+
+## 0.0.168 (2026-10-07)
+
+- Reinstall tools and reboot: fixes found by reading every tool's own `--install`
+  and `--uninstall` and testing the job against fake tools that copy and link
+  themselves the way the real ones do.
+  - **No more `--uninstall`.** Each tool is now installed over the top. SysMon's
+    `--uninstall` puts the HDMI/video driver and GPU memory options in
+    `config.txt` back (the reboot would have applied that), and wifimon's removes
+    its WiFi power-save and roaming files. Installing over keeps all of that.
+    After a good install, the old versioned file the Dashboard and SysMon leave
+    in their install folder is removed so old versions do not pile up.
+  - **Reinstalling the installed copy** (when the installed file is the newest on
+    the node) now installs from the saved copy. The Dashboard and SysMon installs
+    copy themselves into place, so installing from the installed file itself
+    failed with a same-file error and rolled back.
+  - **instmon:** its `--install` restarts it two seconds later, so the health
+    check waits six seconds first and cannot pass against the old instmon.
+- Tested: 12 end-to-end checks with real file operations (install order, no
+  uninstall, newest versions, old versioned files removed, installed-copy
+  source, failed install rolled back with the link pointing at a working file),
+  plus the earlier suites and the browser test.
 
 ## 0.0.167 (2026-10-07)
 

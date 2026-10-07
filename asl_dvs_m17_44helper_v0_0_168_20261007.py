@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.167"
-APP_STAGE = "v0.0.167: Config tab: reinstall the tools from the library and reboot after a config change; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.168"
+APP_STAGE = "v0.0.168: Config tab: reinstall the tools from the library and reboot after a config change (install over, no uninstall); history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -10338,6 +10338,7 @@ LOG = os.path.join(WORK, "reinstall.log")
 PENDING = os.path.join(WORK, "reinstall_pending.json")
 BACKUP = os.path.join(WORK, "reinstall_backup")
 GUARD_SEC = 90
+INSTMON_RESTART_WAIT = 6
 START_TIMEOUT = 60
 SETTLE_MIN = 20
 SETTLE_MAX = 180
@@ -10481,8 +10482,8 @@ def plan():
         if not inst_ver:
             row["note"] = "installed file has no version line, left alone"
             continue
-        if "--uninstall" not in read(target) or "--install" not in read(target):
-            row["note"] = "installed file has no --install/--uninstall, left alone"
+        if "--install" not in read(target):
+            row["note"] = "installed file has no --install, left alone"
             continue
         fork = "pi02w" in inst_ver.lower()
         stem = stem_of(target)
@@ -10531,48 +10532,50 @@ def guard_stop():
     run(["systemctl", "stop", "instmon-update-guard.timer"], 15)
 
 
+def drop_superseded(old_target, link):
+    new_target = os.path.realpath(link)
+    if (old_target != new_target and os.path.isfile(old_target) and os.path.isfile(new_target)
+            and os.path.dirname(old_target) == os.path.dirname(new_target)):
+        try:
+            os.remove(old_target)
+            log("removed the superseded copy " + old_target)
+        except OSError as exc:
+            log("could not remove %s: %s" % (old_target, exc))
+
+
+def install_and_wait(name, unit, port, path, wait_first=0):
+    rc = run([interp(path), path, "--install"])
+    if rc == 0 and wait_first:
+        time.sleep(wait_first)
+    return healthy(unit, port, START_TIMEOUT) if rc == 0 else (False, "--install exited %s" % rc)
+
+
 def do_tool(row):
     name, cat, unit, port, link = row["name"], row["category"], row["unit"], row["port"], row["link"]
-    new = row["file"]
     target = os.path.realpath(link)
     try:
         old = backup(cat, target)
     except OSError as exc:
         step(name, "skipped", "could not save a copy of the installed file (%s), left alone" % exc)
         return "skipped"
+    new = old if row["source"] == "installed copy" else row["file"]
+    wait = INSTMON_RESTART_WAIT if cat == "instmon" else 0
     if cat == "instmon":
         if not guard_arm(old):
             step(name, "skipped", "could not set up its rollback timer, left alone")
             return "skipped"
-        step(name, "running", "installing v%s" % row["version"])
-        rc = run([interp(new), new, "--install"])
-        ok, st = healthy(unit, port, START_TIMEOUT) if rc == 0 else (False, "--install exited %s" % rc)
-        if ok:
-            guard_stop()
-            step(name, "ok", row["note"])
-            return "ok"
-        step(name, "running", "v%s failed (%s), putting v%s back" % (row["version"], st, row["installed"]))
-        rc = run([interp(old), old, "--install"])
-        ok2, st2 = healthy(unit, port, START_TIMEOUT) if rc == 0 else (False, "--install exited %s" % rc)
-        guard_stop()
-        if ok2:
-            step(name, "rolled back", "v%s failed (%s); v%s is back" % (row["version"], st, row["installed"]))
-            return "rolled back"
-        step(name, "attention", "v%s failed (%s) and the old one did not come back (%s)" % (row["version"], st, st2))
-        return "attention"
-    step(name, "running", "uninstalling v%s" % row["installed"])
-    rc = run([interp(link), link, "--uninstall"])
-    if rc != 0:
-        log("%s: --uninstall exited %s, installing the new file anyway" % (name, rc))
     step(name, "running", "installing v%s" % row["version"])
-    rc = run([interp(new), new, "--install"])
-    ok, st = healthy(unit, port, START_TIMEOUT) if rc == 0 else (False, "--install exited %s" % rc)
+    ok, st = install_and_wait(name, unit, port, new, wait)
     if ok:
+        if cat == "instmon":
+            guard_stop()
+        drop_superseded(target, link)
         step(name, "ok", row["note"])
         return "ok"
     step(name, "running", "v%s failed (%s), putting v%s back" % (row["version"], st, row["installed"]))
-    rc = run([interp(old), old, "--install"])
-    ok2, st2 = healthy(unit, port, START_TIMEOUT) if rc == 0 else (False, "--install exited %s" % rc)
+    ok2, st2 = install_and_wait(name, unit, port, old, wait)
+    if cat == "instmon":
+        guard_stop()
     if ok2:
         step(name, "rolled back", "v%s failed (%s); v%s is back" % (row["version"], st, row["installed"]))
         return "rolled back"
