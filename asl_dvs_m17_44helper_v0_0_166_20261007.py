@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.165"
-APP_STAGE = "v0.0.165: Config tab: what is listening now (bind address, firewall verdict), command ports on the Ports tab; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.166"
+APP_STAGE = "v0.0.166: Config tab: standard configuration (differs from stock, bridge-node profile, optional efficiency); history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -8232,6 +8232,14 @@ _CFGR_MMDVM = "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"
 _CFGR_M17INI = "/opt/USRP2M17/USRP2M17.ini"
 _CFGR_IRCDDB = "/etc/ircddbgateway"
 _CFGR_YSFGW = "/opt/YSFGateway/YSFGateway.ini"
+_CFGR_SAVENODE = "/etc/asterisk/savenode.conf"
+_CFGR_BRIDGE_PROFILE = (("duplex", "0"), ("hangtime", "0"), ("althangtime", "0"), ("holdofftelem", "1"),
+                        ("telemdefault", "0"), ("telemdynamic", "0"), ("linktolink", "no"), ("nounkeyct", "1"),
+                        ("tx_timeout", "170000"))
+_CFGR_USRP_CHAN_RE = re.compile(r"(?i)^\s*rxchannel\s*=\s*usrp/")
+_CFGR_USBRADIO_CHAN_RE = re.compile(r"(?i)^\s*rxchannel\s*=\s*(usbradio|radio)/")
+_CFGR_STD_GROUPS = (("bridge", "Bridge nodes"), ("template", "Template (rpt.conf)"), ("efficiency", "Optional efficiency"),
+                    ("wiring", "Wiring (shown only)"), ("choice", "Your choices (shown only)"))
 _CFGR_P25GW = "/opt/P25Gateway/P25Gateway.ini"
 _CFGR_NXDNGW = "/opt/NXDNGateway/NXDNGateway.ini"
 _CFGR_GATEWAYS: list[tuple[str, str, bool]] = [
@@ -8549,6 +8557,7 @@ def build_config_status() -> dict:
         "gateway_pairs_ok": gw_ok,
         "gateway_warnings": gw_warn,
         "gateways": _cfgr_gateway_states(),
+        "standard": _cfgr_std_status(),
         "checked_at": _cfgr_now(),
     }
 
@@ -9231,6 +9240,10 @@ def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list
             body = list(s["lines"])
             if s["name"] == n["node"]:
                 body = body[:1] + keep_id.get(n["node"], []) + body[1:]
+                if any(_CFGR_USRP_CHAN_RE.match(x) for x in body):
+                    for k, v in _CFGR_BRIDGE_PROFILE:
+                        body, _old, _found = _cfgr_set_key(body, s["name"], k, v)
+                    notes.append(f"[{n['node']}]: bridge node, standard USRP values applied")
             stanza_text += body + [""]
     if stanza_text:
         if first_start is not None:
@@ -9928,7 +9941,386 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
                    "restart_groups": [g for g in groups if installed[g]]})
     return result
 
+def _cfgr_section_span(lines: list[str], mask: list[bool], section: str) -> tuple[int, int] | None:
+    if section == "":
+        first = next((i for i, ln in enumerate(lines) if not mask[i] and _CFGR_HDR_RE.match(ln)), len(lines))
+        return -1, first
+    sec = next((x for x in _cfgr_sections(lines, mask) if x["name"] == section), None)
+    return (sec["start"], sec["end"]) if sec else None
+
+def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple[list[str], str | None, bool]:
+    mask = _cfgr_managed_mask(lines)
+    span = _cfgr_section_span(lines, mask, section)
+    if span is None:
+        return list(lines), None, False
+    start, end = span
+    for i in range(start + 1, end):
+        if mask[i]:
+            continue
+        kv = _cfgr_kv(lines[i])
+        if kv and kv[0].lower() == key.lower():
+            if kv[1].lower() == value.lower():
+                return list(lines), kv[1], True
+            new = list(lines)
+            m = _CFGR_INI_VAL_RE.match(lines[i])
+            gap = " " if m and value and re.search(r"\s=", m.group(1)) and not m.group(1).endswith((" ", "\t")) else ""
+            new[i] = (m.group(1) + gap + value + m.group(3)) if m else f"{kv[0]} = {value}"
+            return new, kv[1], True
+    last = start
+    style = None
+    for i in range(start + 1, end):
+        if mask[i]:
+            continue
+        if lines[i].strip():
+            last = i
+        if style is None and _cfgr_kv(lines[i]):
+            style = " = " if " = " in lines[i] else "="
+    new = list(lines)
+    new.insert(last + 1, f"{key}{style or ' = '}{value}")
+    return new, None, True
+
+def _cfgr_remove_key(lines: list[str], section: str, key: str) -> list[str]:
+    mask = _cfgr_managed_mask(lines)
+    span = _cfgr_section_span(lines, mask, section)
+    if span is None:
+        return list(lines)
+    for i in range(span[0] + 1, span[1]):
+        kv = None if mask[i] else _cfgr_kv(lines[i])
+        if kv and kv[0].lower() == key.lower():
+            return lines[:i] + lines[i + 1:]
+    return list(lines)
+
+def _cfgr_set_module(lines: list[str], name: str, state: str) -> tuple[list[str], str | None]:
+    mask = _cfgr_managed_mask(lines)
+    rx = _cfgr_module_re(name)
+    idx = [i for i, ln in enumerate(lines) if not mask[i] and rx.match(ln)]
+    if not idx:
+        new = list(lines)
+        sec = next((x for x in _cfgr_sections(lines, mask) if x["name"].lower() == "modules"), None)
+        if sec is None:
+            return new + ["", "[modules]", f"{state} => {name}.so"], None
+        last = sec["start"]
+        for i in range(sec["start"] + 1, sec["end"]):
+            if lines[i].strip() and not mask[i]:
+                last = i
+        new.insert(last + 1, f"{state} => {name}.so")
+        return new, None
+    old = rx.match(lines[idx[-1]]).group(2)
+    if old in ("require", "preload") or old == state:
+        return list(lines), old
+    new = list(lines)
+    for i in idx:
+        m = rx.match(lines[i])
+        new[i] = m.group(1) + state + m.group(3)
+    return new, old
+
+def _cfgr_remove_module(lines: list[str], name: str) -> list[str]:
+    mask = _cfgr_managed_mask(lines)
+    rx = _cfgr_module_re(name)
+    idx = [i for i, ln in enumerate(lines) if not mask[i] and rx.match(ln)]
+    return lines[:idx[-1]] + lines[idx[-1] + 1:] if idx else list(lines)
+
+def _cfgr_line_delta(before: list[str], new: list[str]) -> tuple[str | None, str]:
+    i = next((j for j in range(len(new)) if j >= len(before) or new[j] != before[j]), len(new) - 1)
+    if len(new) == len(before) + 1:
+        return None, new[i]
+    return before[i], new[i]
+
+def _cfgr_revert_line(lines: list[str], rec: dict) -> tuple[list[str], bool]:
+    mask = _cfgr_managed_mask(lines)
+    lo, hi = 0, len(lines)
+    if rec["kind"] == "ini":
+        span = _cfgr_section_span(lines, mask, rec["section"])
+        if span is None:
+            return list(lines), False
+        lo, hi = span[0] + 1, span[1]
+    for i in range(lo, hi):
+        if not mask[i] and lines[i] == rec["new_line"]:
+            if rec["old_line"] is None:
+                return lines[:i] + lines[i + 1:], True
+            new = list(lines)
+            new[i] = rec["old_line"]
+            return new, True
+    return list(lines), False
+
+def _cfgr_join_like(lines: list[str], orig: bytes) -> bytes:
+    eol = "\r\n" if b"\r\n" in orig else "\n"
+    text = eol.join(lines)
+    if not orig or orig.endswith(b"\n"):
+        text += eol
+    return text.encode("utf-8")
+
+def _cfgr_bridge_nodes() -> list[str]:
+    t = _cfgr_text(_CFGR_RPT)
+    if t is None:
+        return []
+    lines = _cfgr_lines(t)
+    mask = _cfgr_managed_mask(lines)
+    out = []
+    for sec in _cfgr_sections(lines, mask):
+        if not _cfgr_is_private(sec["name"]):
+            continue
+        if any(not mask[i] and _CFGR_USRP_CHAN_RE.match(lines[i]) for i in range(sec["start"] + 1, sec["end"])):
+            out.append(sec["name"])
+    return sorted(set(out), key=int)
+
+def _cfgr_std_checks() -> list[dict]:
+    checks: list[dict] = []
+    for node in _cfgr_bridge_nodes():
+        checks.append({"id": f"bridge_{node}", "group": "bridge", "label": f"Bridge node {node}: standard USRP values",
+                       "apply": True, "edits": [("ini", _CFGR_RPT, node, k, v) for k, v in _CFGR_BRIDGE_PROFILE],
+                       "note": "The upstream USRP2M17 values. A bridge node should not inherit a radio's hang time, "
+                               "telemetry or courtesy tones."})
+    for key, stock, why in (("duplex", "2", "stock is a full-duplex repeater; each node sets its own"),
+                            ("hangtime", "2000", "stock hang time"), ("althangtime", "4000", "stock alternate hang time"),
+                            ("telemdefault", "2", "stock telemetry mode")):
+        checks.append({"id": f"tpl_{key}", "group": "template", "label": f"[node-main] {key}", "apply": True,
+                       "edits": [("ini", _CFGR_RPT, "node-main", key, stock)],
+                       "note": f"Template for every node ({why}). Your own value is fine; stock is the default for a new build."})
+    checks.append({"id": "tpl_status", "group": "template", "label": "[functions-main] status commands 713 and 714",
+                   "apply": True, "edits": [("ini", _CFGR_RPT, "functions-main", "713", "status,13"),
+                                            ("ini", _CFGR_RPT, "functions-main", "714", "status,14")],
+                   "note": "Status report and full system status from the radio."})
+    checks.append({"id": "eff_debug", "group": "efficiency", "label": "Debug logging off", "apply": True,
+                   "edits": [("ini", _CFGR_MMDVM, sec, "Debug", "0") for sec in
+                             ("D-Star Network", "DMR Network", "System Fusion Network", "P25 Network", "NXDN Network")]
+                   + [("ini", _CFGR_AB, "GENERAL", "logLevel", "2")],
+                   "note": "A new build keeps debug on. Turn it off when the node is stable: it writes a lot to the SD card."})
+    checks.append({"id": "eff_usbradio", "group": "efficiency", "label": "Unload chan_usbradio", "apply": True,
+                   "guard": "usbradio", "edits": [("mod", _CFGR_MOD, "chan_usbradio", "noload")],
+                   "note": "Frees memory on a node that uses SimpleUSB. Refused when any node uses the USB Radio channel."})
+    checks.append({"id": "wiring_bindport", "group": "wiring", "label": "IAX port (iax.conf bindport)", "apply": False,
+                   "edits": [("ini", _CFGR_IAX, "general", "bindport", "4569")],
+                   "note": "Wiring: the [nodes] lines in rpt.conf must use the same port. Presets keep them in step."})
+    checks.append({"id": "wiring_usrp", "group": "wiring", "label": "chan_usrp", "apply": False,
+                   "edits": [("mod", _CFGR_MOD, "chan_usrp", "noload")],
+                   "note": "Wiring: loaded on a node with bridge nodes."})
+    checks.append({"id": "choice_savenode", "group": "choice", "label": "savenode ENABLE", "apply": False,
+                   "edits": [("ini", _CFGR_SAVENODE, "", "ENABLE", "0")], "note": "Your choice."})
+    checks.append({"id": "choice_ysf", "group": "choice", "label": "YSFGateway InactivityTimeout", "apply": False,
+                   "edits": [("ini", _CFGR_YSFGW, "Network", "InactivityTimeout", "10")],
+                   "note": "Your choice: 0 never disconnects from a reflector."})
+    return checks
+
+def _cfgr_edit_label(edit: tuple) -> str:
+    return edit[3] if edit[0] == "ini" else edit[2]
+
+def _cfgr_edit_now(edit: tuple, cache: dict[str, str | None]) -> tuple[str, str]:
+    path = edit[1]
+    if path not in cache:
+        cache[path] = _cfgr_text(path)
+    t = cache[path]
+    if t is None:
+        return "na", ""
+    if edit[0] == "mod":
+        st = _cfgr_module_state(_cfgr_lines(t), edit[2])
+        if st is None:
+            return ("ok", "not set") if edit[3] == "noload" else ("differs", "not set")
+        same = st == edit[3] or (st in ("require", "preload") and edit[3] == "load")
+        return ("ok" if same else "differs"), st
+    sec = _cfgr_ini_sections(t)
+    name = edit[2].lower()
+    if name not in sec:
+        return "na", ""
+    v = sec[name].get(edit[3].lower())
+    if v is None:
+        return "differs", "not set"
+    return ("ok" if v.lower() == edit[4].lower() else "differs"), v
+
+def _cfgr_std_state() -> dict:
+    try:
+        with open(os.path.join(_CFGR_DIR, "standard_applied.json"), "r") as f:
+            v = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return v if isinstance(v, dict) else {}
+
+def _cfgr_std_save(state: dict) -> None:
+    _cfgr_ensure_root_dir()
+    _compare_before_write(os.path.join(_CFGR_DIR, "standard_applied.json"),
+                          json.dumps(state, indent=1, sort_keys=True).encode("utf-8"))
+
+def _cfgr_std_status() -> list[dict]:
+    applied = _cfgr_std_state()
+    labels = dict(_CFGR_STD_GROUPS)
+    cache: dict[str, str | None] = {}
+    out = []
+    for c in _cfgr_std_checks():
+        diff, na = [], 0
+        for e in c["edits"]:
+            st, now = _cfgr_edit_now(e, cache)
+            if st == "na":
+                na += 1
+            elif st == "differs":
+                diff.append((e, now))
+        if na == len(c["edits"]) and c["id"] not in applied:
+            continue
+        single = len(c["edits"]) == 1
+        out.append({"id": c["id"], "group": c["group"], "group_label": labels[c["group"]], "label": c["label"],
+                    "apply": c["apply"], "note": c.get("note", ""), "state": "differs" if diff else "ok",
+                    "now": (diff[0][1] if single else ", ".join(f"{_cfgr_edit_label(e)} {n}" for e, n in diff)) if diff else "",
+                    "stock": (diff[0][0][-1] if single else ", ".join(f"{_cfgr_edit_label(e)} {e[-1]}" for e, _n in diff)) if diff else "",
+                    "applied": c["id"] in applied})
+    return out
+
+def _cfgr_std_plan(check: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[dict], list[str], str]:
+    if check.get("guard") == "usbradio":
+        rt = _cfgr_text(_CFGR_RPT)
+        if rt is not None and any(_CFGR_USBRADIO_CHAN_RE.match(x) for x in _cfgr_lines(rt)):
+            return {}, [], [], "A node in rpt.conf uses the USB Radio channel (Radio/...). chan_usbradio must stay loaded."
+        mt = _cfgr_text(_CFGR_MOD)
+        if mt is None or _cfgr_module_state(_cfgr_lines(mt), "chan_simpleusb") not in ("load", "require", "preload"):
+            return {}, [], [], ("chan_simpleusb is not loaded, so unloading chan_usbradio could leave this node "
+                                "without a radio interface.")
+    origs: dict[str, bytes] = {}
+    lines: dict[str, list[str]] = {}
+    records: list[dict] = []
+    notes: list[str] = []
+    for e in check["edits"]:
+        path = e[1]
+        if path not in lines:
+            b = _cfgr_read(path)
+            if b is None:
+                notes.append(f"{path} not found on this node, skipped")
+                lines[path] = []
+                continue
+            origs[path] = b
+            lines[path] = _cfgr_lines(b.decode("utf-8", "replace"))
+        if path not in origs:
+            continue
+        before = lines[path]
+        if e[0] == "ini":
+            new, old, found = _cfgr_set_key(before, e[2], e[3], e[4])
+            if not found:
+                notes.append(f"{os.path.basename(path)} has no [{e[2]}] section, skipped")
+                continue
+            if new != before:
+                ol, nl = _cfgr_line_delta(before, new)
+                records.append({"kind": "ini", "path": path, "section": e[2], "key": e[3], "old": old, "new": e[4],
+                                "old_line": ol, "new_line": nl})
+                lines[path] = new
+        else:
+            new, old = _cfgr_set_module(before, e[2], e[3])
+            if new != before:
+                ol, nl = _cfgr_line_delta(before, new)
+                records.append({"kind": "mod", "path": path, "name": e[2], "old": old, "new": e[3],
+                                "old_line": ol, "new_line": nl})
+                lines[path] = new
+            elif old in ("require", "preload") and e[3] == "noload":
+                notes.append(f"modules.conf has '{old} {e[2]}'; left as it is.")
+    changes = {}
+    for path, orig in origs.items():
+        data = _cfgr_join_like(lines[path], orig)
+        if data != orig:
+            changes[path] = (orig, data)
+    return changes, records, notes, ""
+
+def _cfgr_std_groups(paths) -> list[str]:
+    return [g for g in _CFGR_GROUPS if any(_cfgr_path_allowed(g, p) for p in paths)]
+
+def _cfgr_act_std(payload: dict, mode: str) -> dict:
+    cid = str(payload.get("id", ""))
+    check = next((c for c in _cfgr_std_checks() if c["id"] == cid), None)
+    state = _cfgr_std_state()
+    if mode == "revert":
+        return _cfgr_std_revert(cid, state)
+    if check is None or not check["apply"]:
+        return {"success": False, "output": "That setting cannot be applied from here."}
+    changes, records, notes, err = _cfgr_std_plan(check)
+    if err:
+        return {"success": False, "output": "Not applied: " + err}
+    lines: list[str] = []
+    if not changes:
+        lines.append("Already standard. Nothing to change.")
+    for path, (old, new) in changes.items():
+        d = difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(),
+                                 f"now: {path}", f"standard: {path}", lineterm="")
+        lines += [""] + list(d)
+    if notes:
+        lines += [""] + notes
+    result = {"success": True, "changes": sorted(changes)}
+    if mode == "preview" or not changes:
+        result["output"] = "\n".join(lines)
+        return result
+    groups = _cfgr_std_groups(changes)
+    auto_id, dropped = _cfgr_auto_point(f"standard {check['label']}", groups)
+    head = [f"Current files saved first as automatic copy {auto_id}."]
+    ok = True
+    for path, (_old, new) in changes.items():
+        uid, gid, fmode = _cfgr_meta_of(path)
+        res = _cfgr_write_file(path, new, uid, gid, fmode)
+        ok = ok and not res.startswith("NOT")
+        head.append(f"  {path}: {res}")
+    if dropped:
+        head.append("Oldest automatic copies dropped: " + ", ".join(dropped))
+    head.append("Services were NOT restarted. Use the Restart buttons below when ready.")
+    kept = {(r["kind"], r["path"], r.get("section", r.get("name")), r.get("key", "")): r
+            for r in (state.get(cid, {}).get("records") or [])}
+    for r in records:
+        kept.setdefault((r["kind"], r["path"], r.get("section", r.get("name")), r.get("key", "")), r)
+    state[cid] = {"applied_at": _cfgr_now(), "records": list(kept.values())}
+    _cfgr_std_save(state)
+    installed = _cfgr_installed()
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG standard '{check['label']}' applied")
+    result.update({"success": ok, "output": "\n".join(head + [""] + lines),
+                   "restart_groups": [g for g in groups if installed[g]]})
+    return result
+
+def _cfgr_std_revert(cid: str, state: dict) -> dict:
+    recs = (state.get(cid) or {}).get("records") or []
+    if not recs:
+        return {"success": True, "output": "Nothing to undo: this tab has not changed that setting."}
+    origs: dict[str, bytes] = {}
+    lines: dict[str, list[str]] = {}
+    report: list[str] = []
+    for r in recs:
+        path = r.get("path", "")
+        if not any(_cfgr_path_allowed(g, path) for g in _CFGR_GROUPS):
+            report.append(f"{path}: not a file this tab manages, skipped")
+            continue
+        if path not in lines:
+            b = _cfgr_read(path)
+            if b is None:
+                report.append(f"{path}: not found, skipped")
+                continue
+            origs[path] = b
+            lines[path] = _cfgr_lines(b.decode("utf-8", "replace"))
+        what = f"[{r['section']}] {r['key']}" if r["kind"] == "ini" else r["name"]
+        if "new_line" not in r:
+            report.append(f"{what}: not recorded by this version, left as it is")
+            continue
+        lines[path], done = _cfgr_revert_line(lines[path], r)
+        if not done:
+            report.append(f"{what}: changed since (or no longer there), left as it is")
+        elif r["old_line"] is None:
+            report.append(f"{what}: removed again")
+        else:
+            report.append(f"{what}: back to {r['old'] if r['old'] else '(empty)'}")
+    changes = {p: (origs[p], _cfgr_join_like(lines[p], origs[p])) for p in origs if _cfgr_join_like(lines[p], origs[p]) != origs[p]}
+    ok = True
+    head: list[str] = []
+    groups: list[str] = []
+    if changes:
+        groups = _cfgr_std_groups(changes)
+        auto_id, _dropped = _cfgr_auto_point("undo standard", groups)
+        head.append(f"Current files saved first as automatic copy {auto_id}.")
+        for path, (_o, new) in changes.items():
+            uid, gid, fmode = _cfgr_meta_of(path)
+            res = _cfgr_write_file(path, new, uid, gid, fmode)
+            ok = ok and not res.startswith("NOT")
+            head.append(f"  {path}: {res}")
+        head.append("Services were NOT restarted. Use the Restart buttons below when ready.")
+    state.pop(cid, None)
+    _cfgr_std_save(state)
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG standard '{cid}' undone")
+    installed = _cfgr_installed()
+    return {"success": ok, "output": "\n".join(head + [""] + report).strip(),
+            "restart_groups": [g for g in groups if installed[g]]}
+
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
+    "std_preview": lambda p: _cfgr_act_std(p, "preview"),
+    "std_apply": lambda p: _cfgr_act_std(p, "apply"),
+    "std_revert": lambda p: _cfgr_act_std(p, "revert"),
     "save_restore": _cfgr_act_save_restore,
     "retake_restore": _cfgr_act_retake_restore,
     "create_point": _cfgr_act_create_point,
@@ -10177,6 +10569,44 @@ function cfgListening(btn) {
   });
 }
 
+function cfgStd(btn, id, action) {
+  var c = ((CFG_STATE && CFG_STATE.standard) || []).filter(function(x) { return x.id === id; })[0] || {label: id};
+  if (action === 'std_revert') {
+    if (!confirm('Put back the values this tab replaced for "' + c.label + '"?\n\nThe current files are saved first as an automatic copy.')) return;
+    cfgPost({action: 'std_revert', id: id}, 'cfg-std-out', btn);
+    return;
+  }
+  cfgPost({action: 'std_preview', id: id}, 'cfg-std-out', btn).then(function(res) {
+    if (!res || !res.success || !res.changes || !res.changes.length) return;
+    if (!confirm('Set "' + c.label + '" to the standard value?\n\nThe change is shown below the buttons. The current files are saved first as an automatic copy, and Undo puts the old values back. Services are not restarted until you press Restart.')) return;
+    cfgPost({action: 'std_apply', id: id}, 'cfg-std-out', btn);
+  });
+}
+
+function cfgRenderStd(d) {
+  var box = document.getElementById('cfg-std');
+  var std = d.standard || [];
+  var rows = std.filter(function(c) { return c.state === 'differs' || c.applied; });
+  var same = std.filter(function(c) { return c.state === 'ok' && !c.applied; }).length;
+  var h = '';
+  if (!rows.length) h = '<span class="cfg-hint">Everything this tab knows about matches the stock values.</span>';
+  else {
+    h = '<table class="cfg-table"><tr><th>Setting</th><th>Now</th><th>Stock</th><th></th></tr>';
+    var last = '';
+    rows.forEach(function(c) {
+      if (c.group_label !== last) { h += '<tr><td colspan="4"><b>' + cfgEsc(c.group_label) + '</b></td></tr>'; last = c.group_label; }
+      var btns = '';
+      if (c.apply && c.state === 'differs') btns += '<button class="btn-run" onclick="cfgStd(this,\'' + cfgEsc(c.id) + '\',\'std_apply\')">Apply</button> ';
+      if (c.applied) btns += '<button class="btn-purge" onclick="cfgStd(this,\'' + cfgEsc(c.id) + '\',\'std_revert\')">Undo</button>';
+      if (!c.apply) btns = '<span class="cfg-hint">shown only</span>';
+      h += '<tr><td>' + cfgEsc(c.label) + '<div class="cfg-hint">' + cfgEsc(c.note) + '</div></td><td>' + cfgEsc(c.now || (c.state === 'ok' ? 'matches stock' : '')) +
+           '</td><td>' + cfgEsc(c.stock) + '</td><td>' + btns + '</td></tr>';
+    });
+    h += '</table>';
+  }
+  box.innerHTML = h + (same ? '<div class="cfg-hint">' + same + ' other settings already match stock.</div>' : '');
+}
+
 function cfgGateways(btn, action) {
   var msg = action === 'gateways_apply'
     ? 'Enable and start the digital-mode gateways now?\n\nThey start at every boot afterwards. This does not change any config file.'
@@ -10223,6 +10653,7 @@ function cfgRender(d) {
     (d.ambe_paired_with ? '; Analog_Bridge and MMDVM_Bridge are paired on the ' + cfgEsc(d.ambe_paired_with) + ' mode' : '') +
     ((d.gateway_pairs_ok || []).length ? '; paired: ' + d.gateway_pairs_ok.map(cfgEsc).join(', ') : '') + '.</span>';
   ports.innerHTML = ph;
+  cfgRenderStd(d);
   var gwBox = document.getElementById('cfg-gw');
   var gl = d.gateways || [];
   if (!gl.length) gwBox.innerHTML = '<span class="cfg-hint">Could not read the services (systemctl not available).</span>';
@@ -10320,13 +10751,24 @@ def _render_config_panel() -> str:
     <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
       [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
       [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
-      Allmon3 in step with the private nodes. Run it on the travel node; apply it on any node from the Restore list
+      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the standard USRP values. Run it on the travel node; apply it on any node from the Restore list
       above.</div>
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
       <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
     </div>
     <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card">
+    <div class="step-head"><div class="step-title">Standard configuration</div></div>
+    <div class="step-body">How this node differs from the stock ASL3 and DVSwitch files, with the standard value for each.
+      Nothing changes by itself: Apply shows the change first, saves the current files as an automatic copy, and Undo
+      puts the old value back. Bridge nodes (the private nodes that use a USRP channel) get the upstream USRP2M17 values,
+      which is also what a preset does to the bridge nodes it applies. Identity (callsigns, IDs, passwords) and this node's
+      radio tuning are never listed.</div>
+    <div id="cfg-std"></div>
+    <div class="asl3-console shown placeholder" id="cfg-std-out">(nothing run yet)</div>
   </div>
 
   <div class="step-card">
