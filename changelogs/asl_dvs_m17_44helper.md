@@ -1,6 +1,76 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_170_20261007.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_174_20261008.py`. Newest entries first.
+
+## 0.0.174 (2026-10-08)
+
+Config tab: an **Identity** card, and the Phone tab's accounts in restore points.
+
+- **Phone in restore points.** Phone is a system of its own in restore points and
+  save points: `/etc/asl_dvs/phone.json` and, when they exist,
+  `dvs_phone_extensions.conf`, `dvs_phone_pjsip.conf`, `dvs_phone_iax.conf`,
+  `dvs_phone_iax_reg.conf` and `pjsip.conf` in `/etc/asterisk`. It counts as
+  installed once `phone.json` exists, so a phone set up later is added by the
+  next Save Restore point without changing what is already saved. Restoring
+  Phone writes the accounts back; the phone nodes in `rpt.conf` and
+  `extensions.conf` stay as they are now (restores always keep the Phone tab's
+  blocks), and the output says to press Apply on the dashboard's Phone tab to
+  rebuild them. The dashboard reads `phone.json` fresh, so it needs no restart.
+- **Banner** when a system is installed but not in the Restore point, for
+  example "Phone was set up after the Restore point. Press Save Restore point to
+  add it". Covers DVSwitch and USRP2M17 added later too.
+- **Identity card**, after Travel Node preset. It lists every callsign, ID and
+  password in the config files, grouped by which copies must hold the same
+  value, masked as `••••••`:
+  - **Same everywhere:** callsign (44helper.conf, rpt.conf ID recordings,
+    MMDVM_Bridge, var.txt, ircddbgateway, YSF, P25, NXDN and M17 gateways,
+    EchoLink); ASL node number (every reference must be one of rpt.conf's public
+    nodes, else "not a public node"); DMR ID (first 7 digits).
+  - **Must match:** DMR ID + suffix (MMDVM_Bridge Id and Analog_Bridge
+    repeaterID); the AMI secret (manager.conf user and the allmon3.ini `pass`
+    that logs in as that user); the ASL node password (savenode.conf and the
+    `register =>` line for the same node); the BrandMeister password
+    (DVSwitch.ini STFU and var.txt).
+  - **Stands alone:** EchoLink password and node number, IAX client secrets
+    (`allstar-public` skipped), DMR network password, TGIF password, ircDDB and
+    remote-control passwords, APRS passwords, NXDN Id, STFU talker alias.
+  - **Phone accounts:** each phone.json account, with its copies in
+    `dvs_phone_pjsip.conf` / `dvs_phone_iax.conf` under it. A mismatch means a
+    generated file was edited by hand; the next Phone-tab Apply overwrites it.
+  Each group has one chip (matches, differs, some copies empty, not set). When a
+  group differs, letters A, B beside the values show which copies agree, so the
+  odd one out is plain without revealing anything. Phone nodes are never checked
+  for an ID; an ID recording that is a sound file is listed, not compared.
+- **Reveal** asks for the root password (same check and lockout as the terminal)
+  and then shows every value as written in its file, passwords included, until
+  Hide or a page reload. Re-check keeps them shown. Hide ends the grant on the
+  server; log out ends it too. The log records only "identity values revealed
+  to <address>" or a wrong password, never a value.
+- New `GET /api/config/identity` (always masked, public node numbers too),
+  `POST /api/config/identity_reveal` and `POST /api/config/identity_hide`.
+  Reveal replies are sent with `Cache-Control: no-store`.
+- Read only for now, built for editing later: one field table
+  (`_CFGR_ID_FIELDS`) with a row per file, section and key, so a password is
+  known by where it is, not by its key name; each field has a `parse` and a
+  `render` for how its file writes the value (`CALL D` for M17, `CALL-L` for
+  EchoLink, `|iCALL/R` for ID recordings); each card row carries `data-fid` and
+  an empty action cell for an Edit button.
+- `_CFGR_IDENTITY_KEYS` (what the Travel Node preset leaves out) is unchanged.
+- Key names come from the files SysMon and the dashboards already read. Keys
+  only some installs have (ircddbUsername, dplusLogin, ircddbPassword, APRS
+  passwords, NXDN Id, YSF Id) are listed only when present.
+- Tested in a scratch container with the config files at their real paths:
+  - Phone: save before and after setup, Phone-only restore (rpt.conf untouched),
+    ASL3 restore (live phone block kept), save points and automatic copies
+    include Phone.
+  - Scan: every form reads and writes back unchanged; a node where every group
+    matches and one where seven groups differ on purpose; nothing in the masked
+    response.
+  - Headless Chromium at 390 and 1280 px: banner, card, no page errors, no
+    sideways scroll, no test value in the masked card; Reveal with a wrong and
+    the right password, Enter, Re-check, Hide, reload.
+  - HTTP: five wrong passwords then 429; nothing revealed after log out; no
+    value in the log.
 
 ## 0.0.170 (2026-10-07)
 
