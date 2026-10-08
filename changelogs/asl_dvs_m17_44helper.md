@@ -1,6 +1,43 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_174_20261008.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_175_20261008.py`. Newest entries first.
+
+## 0.0.175 (2026-10-08)
+
+Config tab fixes from an audit of the whole tab.
+
+- **Identity card: EchoLink `astnode`** may be any node in rpt.conf, public or
+  private. A private astnode is a real setup (the preset already warns before
+  removing one), but it made the ASL node number group show "differs".
+- **Identity card: `;` in ini values.** MMDVM_Bridge, DVSwitch.ini, the gateway
+  ini files, var.txt and 44helper.conf are now read without cutting a value at
+  `;`, so a BrandMeister password like `ab;cd` reads whole and no longer shows a
+  false "differs". Asterisk files still treat `;` as a comment.
+- **Identity card: a malformed `phone.json`** (`networks` not a list) is skipped
+  instead of breaking the card; any other scan error now shows a message on the
+  card and goes to the log instead of failing the request.
+- **Identity card: masking** only covers node numbers of 4 digits or more, so a
+  short number in 44helper.conf no longer masks parts of labels such as
+  `repeaterCall1`.
+- **Identity card: Hide** could be undone by a Re-check reply that arrived after
+  it, showing the values again. A reply that arrives after Hide is now dropped.
+- **Restore writes:** the temp file is created 0600 from the start (it was briefly
+  0644, so restoring `phone.json` left a readable copy for a moment), a stale temp
+  file is replaced, and the temp file is removed if a write fails.
+- **Retake Restore point** says so when keeping the old Restore point as a save
+  point takes you over the 10 save point limit.
+- **View diff** passes the file name through data attributes, so a file name
+  with a quote no longer breaks the button.
+- Wording: the Restart card says "Config files changed" (it also follows a preset
+  or Standard configuration change, not only a restore); the "nothing installed"
+  message and the Save/Retake confirmations mention Phone.
+- Tested: a test for each fix (EchoLink on a private node and on an unknown
+  node, `;` in an ini and in an Asterisk file, bad `phone.json`, a scan error,
+  short-number masking, temp file mode, stale and failed temp files, Retake over
+  the limit). Headless Chromium: the Hide race and the quoted file name both fail
+  on 0.0.174 and pass on 0.0.175. The 0.0.174 suites pass again: restore points
+  with Phone, the identity scan, the card at 390 and 1280 px, Reveal and Hide, and
+  the lockout. No value in the log.
 
 ## 0.0.174 (2026-10-08)
 
