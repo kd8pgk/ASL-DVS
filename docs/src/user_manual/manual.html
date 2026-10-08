@@ -276,8 +276,9 @@ sudo systemctl status sysmon</pre>
     <li>When you're done, press <b>Log Out</b> in the header, especially on a shared computer.</li>
   </ol>
   <ul>
-    <li><b>Each tool has its own login.</b> Logging in to SysMon doesn't log you in to the Dashboard.</li>
-    <li><b>Wrong passwords lock you out for a while.</b> After several wrong tries in a row, that address has to wait before it can try again, and the wait grows with each failure. Wait it out; don't keep guessing.</li>
+    <li><b>The Dashboard and SysMon share one login.</b> Log in to either one and the other opens without asking, in the same browser. A shared login lasts 12 hours from the last time you used either page.</li>
+    <li><b>instmon, wifimon and 44helper each have their own login.</b></li>
+    <li><b>Wrong passwords lock you out for a while.</b> On the Dashboard and SysMon, five wrong passwords within 5 minutes lock that address out of both for 15 minutes. The other tools have similar limits. Wait it out; don't keep guessing.</li>
     <li><b>44helper stays logged in</b> until you log out, press <b>Log out all devices</b>, or the Pi reboots, because its jobs can run for a long time.</li>
   </ul>
   <div class="call care"><span class="t">CAREFUL</span>The pages use plain HTTP, so your password crosses the network
@@ -465,6 +466,280 @@ sudo bash uninstall_asl_dvs_all_v1_3.sh</pre>
     <p>Config files in <code>/etc</code> are never touched by an update. SysMon's Hardware tab options (HDMI and video
       driver off, lower GPU memory) are saved when SysMon is uninstalled during an update and put back on install, if
       the install follows within 30 minutes.</p>
+  </div>
+</section>
+
+<section class="part">
+  <div class="pn">PART II</div>
+  <h1>SysMon</h1>
+  <p>SysMon is the node's health monitor. It shows whether every service is up, checks your Asterisk, DVSwitch
+    and M17 config files against each other, reads logs, and looks after the hardware and SD card. Most of what
+    it does is read-only. Every button that changes something says so.</p>
+  <ol start="3">
+    <li>SysMon basics and live status</li>
+    <li>Node and DVSwitch health</li>
+    <li>System care</li>
+    <li>Full-build tabs</li>
+  </ol>
+</section>
+
+<section class="chapter" id="ch3">
+  <div class="kicker">Chapter 3 · SysMon</div>
+  <h1 class="ch">SysMon basics and live status</h1>
+  <p class="ch-lede">This chapter covers the parts of SysMon you see every time: the header and command bar, then
+    the four status tabs: Overview, Services, Ports and Journal. Open SysMon at
+    <code>http://&lt;pi-address&gt;:9999</code>.</p>
+
+  <h2><span class="n">3.1</span>What SysMon is for</h2>
+  <p>Open SysMon when something on the node isn't working, or when you want to be sure everything is. In one place it shows:</p>
+  <ul>
+    <li>whether Asterisk, the DVSwitch bridges, the gateways, USRP2M17 and the ASL-DVS tools are running;</li>
+    <li>the Pi's load, memory, temperature and power health, updated every 5 seconds;</li>
+    <li>which programs are listening on which network ports, and whether two of them clash;</li>
+    <li>the system log (journal) of any service, filtered and ready to copy.</li>
+  </ul>
+  <p>The status tabs can also start, stop and restart services. Everything else in SysMon is either read-only or
+    asks before it changes a file.</p>
+
+  <h2><span class="n">3.2</span>The page at a glance</h2>
+  <figure>
+    <div class="mock">
+      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.9-pi02w</span></div>
+      <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
+      <div class="cards">
+        <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
+        <div class="card"><b>Load</b><span class="v ok">0.42 / 0.51 / 0.48</span></div>
+        <div class="card"><b>Mem</b><span class="v">301 / 415 MiB</span></div>
+        <div class="card"><b>Temp · Pwr</b><span class="v ok">47.2°C · OK</span></div>
+      </div>
+      <div class="tabs" style="padding-top:0">
+        <span class="tab on" style="background:rgb(0,255,229)">Overview</span><span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Journal</span>
+        <span class="tab">ASL-DVS</span><span class="tab">Phone</span><span class="tab">Tune</span><span class="tab">Hardware</span><span class="tab">DVSM</span>
+        <span class="tab">STFU</span><span class="tab">M17</span><span class="tab">SD Card</span><span class="tab">Security</span><span class="tab">Edit</span>
+      </div>
+      <div class="row"><span class="txt" style="color:var(--bright)">Radio:</span><span class="btn">Radio 1</span><span class="btn">Radio 2</span><span class="btn">Radio 3</span><span class="btn">Radio 4</span><span class="btn">Radio 5</span>
+        <span style="flex:1"></span><span class="btn">↻ Refresh</span><span class="btn" style="color:var(--org);border-color:var(--org)">⟳ Reboot</span><span class="btn" style="color:var(--red);border-color:var(--red)">⏻ Shutdown</span><span class="btn">⎋ Logout</span></div>
+    </div>
+    <figcaption><b>Figure 3.1 · Illustration.</b> SysMon's top section. From the top: header, quick links, status strip, tabs and command bar.</figcaption>
+  </figure>
+
+  <table>
+    <tr><th>Part</th><th>What it shows or does</th></tr>
+    <tr><td>Header</td><td>Your callsign and node number, how long the Pi has been up, and SysMon's version.</td></tr>
+    <tr><td>Quick links</td><td>Open Allmon3, the DVSwitch page, Cockpit, the USRP2M17 page and wifimon in a new tab. <b>Node Control</b> goes back to the Dashboard.</td></tr>
+    <tr><td>Status strip</td><td>Host name, load, memory, CPU temperature and power health (below).</td></tr>
+    <tr><td>Tabs</td><td>One per view. You can hide the ones you don't use on the Edit tab (Chapter 5).</td></tr>
+    <tr><td>Radio 1 to 5</td><td>Saved sets of radio audio settings. Pressing one applies it (Chapter 5, Tune tab).</td></tr>
+    <tr><td>Refresh</td><td>Reads the status strip again now, instead of waiting for the next 5-second update.</td></tr>
+    <tr><td>Reboot / Shutdown</td><td>Restart or power off the whole Pi. Both ask first. After Shutdown, the Pi stays off until you remove and restore power.</td></tr>
+  </table>
+
+  <h3>Reading the status strip</h3>
+  <table>
+    <tr><th>Field</th><th class="ok">Green</th><th class="warn">Amber</th><th class="bad">Red</th></tr>
+    <tr><td>Load (1, 5, 15 min)</td><td>1-minute load up to 1.5</td><td>above 1.5</td><td>above 3</td></tr>
+    <tr><td>Temp</td><td>up to 60 °C</td><td>above 60 °C</td><td>above 75 °C</td></tr>
+    <tr><td>Pwr</td><td><code>OK</code></td><td><code>WARN</code>: a problem happened since boot but isn't happening now</td><td><code>⚡ UV</code> under-voltage now, or <code>⚡ THR</code> throttled now</td></tr>
+  </table>
+  <p>Hover over <b>Pwr</b> to see exactly what was flagged, such as "Under-voltage since boot". When under-voltage
+    starts, SysMon also shows a pop-up warning to check the power supply.</p>
+  <div class="call tip"><span class="t">TIP</span>A Pi Zero 2 W has four 1 GHz cores and 512 MB, so a load of
+    1 to 2 during a tune or an update is normal. A load that <i>stays</i> red with nothing going on usually means a
+    service is stuck restarting. Check the Overview for an <code>NR:</code> count.</div>
+
+  <h3>The status dots</h3>
+  <p>Every service list in SysMon uses the same coloured dots:</p>
+  <table>
+    <tr><th>Dot</th><th>Means</th></tr>
+    <tr><td class="ok">● Active</td><td>Running normally.</td></tr>
+    <tr><td class="warn">● Stopped</td><td>Installed but not running. That is fine for a gateway you don't use, and a problem for Asterisk.</td></tr>
+    <tr><td class="bad">● Failed / Masked</td><td>It crashed or failed to start, or it has been blocked from starting (masked).</td></tr>
+    <tr><td style="color:var(--blu)">● Unknown</td><td>SysMon couldn't read its state.</td></tr>
+    <tr><td style="color:var(--muted)">● Not installed</td><td>There is no such service on this Pi. That is normal for optional parts.</td></tr>
+  </table>
+
+  <h3>Two banners you may see</h3>
+  <ul>
+    <li><b>"Restart sysmon to apply server address changes"</b>: you changed SysMon's port or bind address on the Edit tab. It takes effect when SysMon restarts.</li>
+    <li><b>"wifimon — Node Shutting Down"</b>: wifimon has started a safe shutdown because of low voltage or lost network. The Pi needs power-cycling, or its WiFi back, before it will come up again.</li>
+  </ul>
+
+  <h2><span class="n">3.3</span>Overview tab</h2>
+  <p>The Overview is SysMon's home page. It lists your <b>pinned services</b> in groups. Out of the box the groups
+    are System, ASL-DVS, Asterisk Core and M17, which cover everything a bridge node runs.</p>
+  <figure>
+    <div class="mock">
+      <table>
+        <tr><th></th><th>Asterisk Core</th><th>Owner</th><th>Perms</th><th>Status</th><th>Port</th><th></th><th></th></tr>
+        <tr><td class="ok">●</td><td>asterisk</td><td>asterisk</td><td>644</td><td class="ok">active</td><td class="mono">:4569/udp</td><td class="ok">[OK]</td><td><span class="btn">↺ Restart</span> <span class="btn">■ Stop</span> <span class="btn">☠ Kill</span> <span class="btn">Edit</span></td></tr>
+        <tr><td class="ok">●</td><td>analog_bridge</td><td>root</td><td>644</td><td class="ok">active</td><td></td><td></td><td><span class="btn">↺ Restart</span> <span class="btn">■ Stop</span> <span class="btn">☠ Kill</span> <span class="btn">Edit</span></td></tr>
+        <tr><td class="bad">●</td><td>ysfgateway</td><td>mmdvm</td><td>644</td><td class="bad">failed</td><td class="warn">NR:5⚠</td><td></td><td><span class="btn">▶ Start</span> <span class="btn">✕ Reset</span> <span class="btn">Edit</span></td></tr>
+        <tr><td class="warn">●</td><td>p25gateway</td><td>mmdvm</td><td>644</td><td class="warn">inactive</td><td></td><td></td><td><span class="btn">▶ Start</span> <span class="btn">Edit</span></td></tr>
+        <tr><td style="color:var(--muted)">●</td><td style="color:var(--muted)">quantar_bridge</td><td>—</td><td>—</td><td style="color:var(--muted)">not-inst</td><td></td><td></td><td></td></tr>
+      </table>
+      <div class="row" style="padding-top:.5em"><span class="txt">Global Actions</span><span style="flex:1"></span><span class="btn">⎘ Copy</span><span class="btn" style="color:var(--red);border-color:var(--red)">■ Stop All</span><span class="btn">↺ Restart All</span></div>
+    </div>
+    <figcaption><b>Figure 3.2 · Illustration.</b> One Overview group. The buttons on each row depend on the service's state.</figcaption>
+  </figure>
+  <table>
+    <tr><th>Column</th><th>What it tells you</th></tr>
+    <tr><td>Name</td><td>The service. Click it to open its detail panel (3.4).</td></tr>
+    <tr><td>Owner</td><td>The Linux user it runs as. Amber means it runs as root but doesn't need to. Click the amber value for the Security tab's explanation.</td></tr>
+    <tr><td>Perms</td><td>The permissions on its service file. Amber or red means other users could change it. Click for the explanation.</td></tr>
+    <tr><td>Status</td><td><code>active</code>, <code>inactive</code>, <code>failed</code>, <code>not-inst</code> or <code>unknown</code>.</td></tr>
+    <tr><td>Port</td><td>The port it should listen on. If it has restarted on its own since it was last started, this shows <code>NR:</code> and the count instead, with ⚠ above 3.</td></tr>
+    <tr><td>[OK] / [DUP]</td><td>For a running service with a port: <code>[DUP]</code> means another program has the same port and protocol, and hovering names both. <code>[OK]</code> means no clash.</td></tr>
+  </table>
+  <h3>Row buttons</h3>
+  <table>
+    <tr><th>State</th><th>Buttons</th></tr>
+    <tr><td>active</td><td><b>Restart</b>; <b>Stop</b> (asks first); <b>Kill</b>, which ends the process at once with no clean shutdown (asks first); <b>Edit</b>, which opens the service file.</td></tr>
+    <tr><td>failed</td><td><b>Start</b>; <b>Reset</b>, which clears the failed mark and the restart counter; <b>Edit</b>.</td></tr>
+    <tr><td>inactive</td><td><b>Start</b>; <b>Edit</b>.</td></tr>
+  </table>
+  <p>Restart is done carefully: SysMon stops the service, waits for it to stop, starts it, and waits for it to come
+    up. The Overview refreshes itself a few times over the next half minute while that happens.</p>
+  <h3>Global Actions</h3>
+  <ul>
+    <li><b>Copy</b> puts the whole Overview on the clipboard as text, ready to paste into a help request.</li>
+    <li><b>Stop All</b> stops every pinned service except SysMon itself.</li>
+    <li><b>Restart All</b> restarts every pinned service, SysMon included.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span><b>Stop All</b> and <b>Restart All</b> act at once, with no
+    confirmation. Stop All takes the node off the air: it stops Asterisk, the bridges and the Dashboard. To get it
+    back, press <b>Restart All</b> or reboot. SysMon keeps running, so the page stays usable.</div>
+
+  <h2><span class="n">3.4</span>Services tab</h2>
+  <p>The Services tab lists <b>every</b> service on the Pi, not just the pinned ones.</p>
+  <ul>
+    <li><b>Active</b> shows only running services. <b>All</b> also shows stopped, failed and disabled ones.</li>
+    <li>Type in <b>filter by name</b> to narrow the list, for example <code>gateway</code>.</li>
+    <li>The list refreshes every 30 seconds while the tab is open. <b>Copy</b> puts it on the clipboard as text.</li>
+  </ul>
+  <h3>The service detail panel</h3>
+  <p>Click any service, here or on the Overview, to open its panel. The top shows badges for its state, whether it
+    starts at boot, its process number, its restart count (<code>NR:</code>), CPU and memory use, and the user it
+    runs as. Under that, <b>Ownership &amp; permissions</b> shows who owns the service file and the program.</p>
+  <table>
+    <tr><th>Section</th><th>Button</th><th>What it does, in plain words</th></tr>
+    <tr><td>Daemon Controls</td><td>Reload Daemon</td><td>Makes systemd re-read every service file. Needed after you edit one by hand.</td></tr>
+    <tr><td></td><td>Reset Failed</td><td>Clears a "failed" mark so the service can be started cleanly.</td></tr>
+    <tr><td></td><td>Mask / Unmask</td><td>Mask blocks a service from starting at all, even by hand, until you Unmask it. Asks first.</td></tr>
+    <tr><td>Runtime Controls</td><td>Start / Stop / Restart</td><td>As on the Overview. Stop asks first.</td></tr>
+    <tr><td></td><td>Reload</td><td>Asks the program to re-read its settings without restarting. Greyed out for services that don't support it.</td></tr>
+    <tr><td>Boot Persistence</td><td>Enable / Disable</td><td>Whether the service starts by itself at boot. Disable asks first. Neither one starts or stops it now.</td></tr>
+    <tr><td>Pinned Services</td><td>Pin / Unpin</td><td>Adds the service to the Overview, in a group you pick or a new one, or removes it.</td></tr>
+    <tr><td>Status</td><td>(output)</td><td>The service's current status and its last 50 log lines, with errors in red and warnings in amber.</td></tr>
+  </table>
+  <h3>Editing a service file</h3>
+  <p><b>Edit</b> opens the service's systemd file in an editor, with <b>Save</b>, <b>Restart</b>, <b>Reload
+    Daemon</b> and <b>Copy</b> buttons. After saving, press Reload Daemon and then Restart for the change to take effect.</p>
+  <div class="call note"><span class="t">NOTE</span>Service files that came with a package live in
+    <code>/lib/systemd/system</code>. SysMon never changes those. Saving one creates your own copy in
+    <code>/etc/systemd/system/</code>, which takes priority and survives package updates. A yellow bar warns
+    you when this happens.</div>
+
+  <h2><span class="n">3.5</span>Ports tab</h2>
+  <p>The Ports tab lists every network port a program on the Pi is listening on. It refreshes every 15 seconds.</p>
+  <table>
+    <tr><th>Column</th><th>Meaning</th></tr>
+    <tr><td>Dot</td><td>Green: the port belongs to a known service. Grey: a listener SysMon can't tie to a service.</td></tr>
+    <tr><td>Port / Proto</td><td>The port number, and TCP or UDP.</td></tr>
+    <tr><td>Process / PID</td><td>The program listening, and its process number.</td></tr>
+    <tr><td>Known Service</td><td>The service that program belongs to, or "— unknown —".</td></tr>
+    <tr><td>Conflict</td><td><code>[OK]</code>, or <code>[DUP]</code> if more than one program has the port.</td></tr>
+  </table>
+  <ul>
+    <li><b>All / TCP / UDP</b> filter the list. <b>Copy table</b> copies what you see; <b>Copy all</b> copies every port.</li>
+    <li>Click a row for its panel: the listen address, <b>Probe</b> buttons (HTTP and TCP for a TCP port, UDP for a UDP port) that test whether it answers, and for a known service <b>Restart Service</b>, <b>Stop Service</b> and <b>Journal</b>.</li>
+  </ul>
+  <div class="call note"><span class="t">NOTE</span><code>[OK]</code> only means nothing else is fighting for that
+    port. It doesn't mean the service is healthy. A DVSwitch port clash is a common cause of "no audio". The
+    pairing rules are in <code>docs/ASL-DVS_Idealized_Node_Configuration.pdf</code>, section 4.</div>
+
+  <h2><span class="n">3.6</span>Journal tab</h2>
+  <p>The Journal tab lists your pinned services that are installed, followed by any other running service. Click
+    one to open its log in a pop-up window.</p>
+  <table>
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td>Lines 50 / 200 / All</td><td>How far back to read. All means the last 2,000 lines.</td></tr>
+    <tr><td>grep filter</td><td>Shows only lines containing your text, for example <code>error</code> or a talkgroup number.</td></tr>
+    <tr><td>Refresh</td><td>Reads the log again.</td></tr>
+    <tr><td>Restart / Start</td><td>Restart or start the service from the log window, so you can watch what happens.</td></tr>
+    <tr><td>Copy</td><td>Copies the lines you see (after the filter).</td></tr>
+  </table>
+
+  <h2><span class="n">3.7</span>Common tasks</h2>
+  <h3>A service shows red</h3>
+  <ol class="steps">
+    <li>On the Overview, note the <code>NR:</code> count. A high count means it keeps crashing.</li>
+    <li>Open the Journal tab, click the service, choose 200 lines and filter on <code>error</code>.</li>
+    <li>Fix the cause. It is usually a config file, covered on the ASL-DVS, DVSM, STFU and M17 tabs (Chapter 4).</li>
+    <li>On the Overview, press <b>Reset</b>, then <b>Start</b>. Watch the dot turn green.</li>
+  </ol>
+  <h3>Find out what is using a port</h3>
+  <ol class="steps">
+    <li>Open the Ports tab and press UDP or TCP.</li>
+    <li>Find the port number. The Process and Known Service columns name the owner.</li>
+    <li>If it shows <code>[DUP]</code>, hover over it for both programs, then stop or reconfigure one of them.</li>
+  </ol>
+  <h3>Add a service to the Overview</h3>
+  <ol class="steps">
+    <li>Services tab, press <b>All</b>, and filter for the service.</li>
+    <li>Click it, pick a group under Pinned Services (or "New group…") and press <b>Pin</b>.</li>
+  </ol>
+  <h3>Send someone a status report</h3>
+  <p>Use <b>Copy</b> on the Overview, the Services list, a Ports table or a journal window, and paste it into your
+    message. Copies are plain text, so they paste cleanly into an email or forum post.</p>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>How SysMon gathers and acts</h2>
+    <h3>Refresh timings</h3>
+    <table>
+      <tr><th>What</th><th>How often</th><th>Notes</th></tr>
+      <tr><td>Background poll (server)</td><td>every 10 s</td><td>Host, load, memory, swap, temperature, voltage, throttle state, disk, SD health, process count, wifimon shutdown state. Also tells systemd's watchdog that SysMon is alive.</td></tr>
+      <tr><td>Quick tests, port clashes</td><td>every 30 s</td><td>Every third background poll.</td></tr>
+      <tr><td>Status strip (page)</td><td>every 5 s</td><td><code>GET /api/status</code>, read from the background poll's snapshot, so it costs almost nothing.</td></tr>
+      <tr><td>Services list</td><td>every 30 s</td><td>Only while the Services tab is open.</td></tr>
+      <tr><td>Ports list</td><td>every 15 s</td><td>Only while the Ports tab is open.</td></tr>
+      <tr><td>M17 reflector list</td><td>hourly check</td><td>Downloads <code>M17Hosts.json</code> again when it is stale (Chapter 4).</td></tr>
+    </table>
+    <p>Switching tabs stops the previous tab's timer, so only the tab you're looking at polls.</p>
+
+    <h3>Where the data comes from</h3>
+    <ul>
+      <li><b>Services:</b> <code>systemctl show</code> and <code>systemctl list-units</code>. The owner comes from the running process, or from <code>User=</code> in the unit.</li>
+      <li><b>Ports:</b> <code>ss -tlnpu</code>, with each process's command line from <code>/proc/&lt;pid&gt;/cmdline</code>.</li>
+      <li><b>Journal:</b> <code>journalctl -u &lt;unit&gt; -n &lt;lines&gt;</code>, between 10 and 2,000 lines.</li>
+      <li><b>Power:</b> <code>vcgencmd get_throttled</code>. Its bits give under-voltage, frequency cap, throttling and temperature limit, both now and since boot. Without it, SysMon shows the core voltage instead.</li>
+    </ul>
+
+    <h3>Service actions</h3>
+    <p>Every action goes to <code>POST /api/svc</code>. Unit names are checked before anything runs.</p>
+    <ul>
+      <li><b>Simple actions</b> (start, stop, reset-failed, enable, disable, reload, mask, unmask) run the matching <code>systemctl</code> command, with a 15-second limit.</li>
+      <li><b>Restart</b> runs in the background: <code>systemctl stop</code>, wait up to 15 s; if it is still running, <code>SIGKILL</code> and wait up to 5 s; then <code>systemctl start</code> and wait up to 10 s for it to become active. The result goes to SysMon's own log.</li>
+      <li><b>Kill</b> sends <code>SIGKILL</code> to the main process. systemd may then restart it, depending on the unit's <code>Restart=</code> setting.</li>
+      <li><b>Stop All</b> runs <code>systemctl stop</code> on each pinned unit except <code>sysmon.service</code>. <b>Restart All</b> runs <code>systemctl restart</code> on each pinned unit, SysMon included.</li>
+    </ul>
+
+    <h3>The pinned list</h3>
+    <p>The Overview groups come from <code>[services] pinned</code> in <code>/etc/sysmon/sysmon.conf</code>, one line per entry:</p>
+<pre>__GROUP__:Asterisk Core
+asterisk.service | ASL3 Asterisk/app_rpt | /etc/asterisk/rpt.conf | 4569 | udp
+<span class="c"># unit | description | config_path | port | proto   ( - for none )</span></pre>
+    <p>You can edit it as text on the Edit tab (Chapter 5). Pin and Unpin rewrite it for you.</p>
+
+    <h3>Login and process</h3>
+    <ul>
+      <li>SysMon runs as root, because it reads every config file and controls services. It refuses to start as any other user.</li>
+      <li>SysMon and the Dashboard keep their logins in one shared file, <code>/run/asl_dvs/auth_session.json</code> (mode 600, locked while written). Both use the cookie <code>asl_dvs_session</code>, so one login covers both pages. A session expires 12 hours after it was last used. Five failures from one address within 5 minutes lock it out of both for 15 minutes. <code>/run</code> is cleared at reboot, so a reboot logs everyone out.</li>
+      <li>The password is checked through PAM, with <code>/etc/shadow</code> as a fallback.</li>
+      <li>The page is built once at start-up and sent compressed. Everything after that is small JSON requests.</li>
+    </ul>
+<pre><span class="c"># SysMon's own checks, without the web page</span>
+sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
