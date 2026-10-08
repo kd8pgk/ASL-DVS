@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.73"
+VERSION      = "9.3.74"
 BUILD_DATE   = "2026-10-06"
 
 ASL_NODE        = "652702"
@@ -861,6 +861,15 @@ def _atomic_write(path: Path, data: str) -> None:
     except Exception as exc:
         log.warning("_atomic_write: directory fsync failed for %s: %s", path.parent, exc)
 
+_CFG_BACKUP_DIR = Path(os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")) / "config_backup"
+
+def _config_backup(path: Path, data: str) -> None:
+    try:
+        _CFG_BACKUP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        _atomic_write(_CFG_BACKUP_DIR / path.name, data)
+    except Exception as exc:
+        log.warning("config backup: could not copy %s to %s: %s", path, _CFG_BACKUP_DIR, exc)
+
 PHONE_CONF       = "/etc/asl_dvs/phone.json"
 PHONE_MAX_NETS   = 6
 PHONE_FAV_COUNT  = 10
@@ -1430,7 +1439,9 @@ def _phone_clean_favs(favs_raw, old_favs: List[dict], where: str) -> Tuple[Optio
 def _phone_write(doc: dict) -> Tuple[bool, str]:
     try:
         Path(PHONE_CONF).parent.mkdir(parents=True, exist_ok=True)
-        _atomic_write(Path(PHONE_CONF), json.dumps(doc, indent=1, sort_keys=True) + "\n")
+        _data = json.dumps(doc, indent=1, sort_keys=True) + "\n"
+        _atomic_write(Path(PHONE_CONF), _data)
+        _config_backup(Path(PHONE_CONF), _data)
         _phone_doc_cache[0] = 0.0
         return True, "Saved"
     except Exception as e:
@@ -3777,7 +3788,9 @@ def _write_conf(node_entries: list, tg_entries: list, echo_entries: list):
                         lines.append(raw)
             except Exception as exc:
                 log.warning("_write_conf: could not preserve extra sections: %s", exc)
-        _atomic_write(conf_path, "".join(lines))
+        _data = "".join(lines)
+        _atomic_write(conf_path, _data)
+        _config_backup(conf_path, _data)
         return True, (f"Saved {len(node_entries)} ASL nodes, "
                       f"{len(echo_entries)} Echo nodes and "
                       f"{len(tg_entries)} talkgroups")
@@ -3928,7 +3941,9 @@ def action_save_dmr_server_tgs(srv_tgs: dict, server_list: Optional[list] = None
             for _, name, tg, _u in rows:
                 lines_out.append(f"{name}|{tg}\n")
         _rotate_backup(conf_path)
-        _atomic_write(conf_path, "".join(lines_out))
+        _data = "".join(lines_out)
+        _atomic_write(conf_path, _data)
+        _config_backup(conf_path, _data)
         set_state(dmr_server_tgs=new_tgs, dmr_servers=new_servers)
         if new_servers:
             current = get_state().active_dmr_server

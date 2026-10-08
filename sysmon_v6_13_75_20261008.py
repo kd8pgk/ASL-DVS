@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.74"
+VERSION      = "6.13.75"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -198,6 +198,23 @@ def _atomic_write(path: Path, content: str) -> None:
         except OSError as e:
             log.debug("_atomic_write cleanup: %s", e)
         raise
+
+_CFG_BACKUP_DIR = Path(os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")) / "config_backup"
+
+def _config_backup(path: Path, content: str) -> None:
+    try:
+        _CFG_BACKUP_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        dest = _CFG_BACKUP_DIR / path.name
+        tmp = dest.with_name(dest.name + ".tmp")
+        tmp.unlink(missing_ok=True)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(content)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, dest)
+    except Exception as exc:
+        log.warning("config backup: could not copy %s to %s: %s", path, _CFG_BACKUP_DIR, exc)
 
 def parse_pinned_services(raw: str) -> list:
     result = []
@@ -31842,6 +31859,8 @@ def _pathfile_post(h: Handler, data: dict, fam: dict) -> None:
         return
 
     ok, msg = write_path_file(p, content)
+    if ok and p in _APPCONF_FILES:
+        _config_backup(p, content)
     _log(msg, stderr=not ok)
     h.send_json({"ok": ok, "message": msg, "path": str(p)},
                 200 if ok else 500)
@@ -32769,6 +32788,8 @@ def save_config(updates: dict, path: Path = CONFIG_FILE) -> bool:
         buf = io.StringIO()
         _cfg.write(buf)
         _atomic_write(path, buf.getvalue())
+        if path == CONFIG_FILE:
+            _config_backup(path, buf.getvalue())
         _log(f"Config saved to {path}")
         return True
     except Exception as exc:

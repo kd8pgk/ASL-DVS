@@ -1,6 +1,16 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_9_20261007.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_10_20261008.py`. Newest entries first.
+
+## 6.13.67.10-pi02w (2026-10-08)
+
+- Config backup for instmon. Every time SysMon saves `sysmon.conf` (settings,
+  pinned services, config file editor) or `asl_dvs.conf` (config file editor), it
+  also writes a copy to `/etc/asl_dvs/instmon_library/config_backup/<same name>`,
+  mode 0600 in a 0700 folder. One copy per file: each save replaces it. If the
+  copy fails, the save still succeeds and a warning is logged. instmon 2.38.5
+  shows these copies on its Configuration card, with Reinstall, Download and
+  Upload.
 
 ## 6.13.67.9-pi02w (2026-10-07)
 

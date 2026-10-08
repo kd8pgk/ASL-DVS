@@ -15,7 +15,6 @@ By KD8PGK, written with Claude (Anthropic).
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
 | 44helper | `asl_dvs_m17_44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
-| Watchdog | `asl_dvs_watchdog_v*.sh` | none | Restarts the Dashboard if it stops answering. See the note under [Installing](#installing). |
 
 Scripts:
 
@@ -40,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_74_20261007.py` | `sysmon_pi02w_v6_13_67_9_20261007.py` | `instmon_v2_38_3_20261007.py` |
-| `VERSION` | `6.13.74` | `6.13.67.9-pi02w` | `2.38.3` |
+| File name | `sysmon_v6_13_75_20261008.py` | `sysmon_pi02w_v6_13_67_10_20261008.py` | `instmon_v2_38_5_20261008.py` |
+| `VERSION` | `6.13.75` | `6.13.67.10-pi02w` | `2.38.5` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -72,12 +71,12 @@ Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_38_3_20261007.py --install
+   sudo python3 instmon_v2_38_5_20261008.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_asl_dvs_v6_6_20261006.sh
+   sudo bash install_asl_dvs_v6_7_20261008.sh
    ```
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -92,10 +91,10 @@ sudo python3 <file>.py --install
 sudo python3 <file>.py --uninstall
 ```
 
-**Watchdog note:** the installer (v6.4 and later) no longer installs the
-Watchdog, and it removes an installed copy. The Dashboard's own service
-already restarts it with `Restart=always` and `WatchdogSec=30`. The Watchdog
-script stays in the repo, and instmon can still install it.
+**Watchdog note:** the old Watchdog script (`asl_dvs_watchdog`) is retired.
+The Dashboard's own service already restarts it with `Restart=always` and
+`WatchdogSec=30`. The installer (v6.7 and later) no longer looks for an old
+copy; the uninstaller still removes one.
 
 ## Updating from GitHub (instmon)
 
@@ -186,17 +185,16 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `asl_dvs_dashboard_v9_3_73_20261006.py` | Dashboard, full (current) |
-| `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py` | Dashboard, Pi Zero 2 W (current) |
+| `asl_dvs_dashboard_v9_3_74_20261008.py` | Dashboard, full (current) |
+| `asl_dvs_dashboard_pi02w_v9_3_71_14_20261008.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
-| `sysmon_v6_13_74_20261007.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_67_9_20261007.py` | SysMon, Pi Zero 2 W (current) |
+| `sysmon_v6_13_75_20261008.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_67_10_20261008.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
-| `instmon_v2_38_3_20261007.py` | common |
+| `instmon_v2_38_5_20261008.py` | common |
 | `wifimon_v5_28_20261007.py` | common |
 | `asl_dvs_m17_44helper_v0_0_175_20261008.py` | common |
-| `asl_dvs_watchdog_v2_4_20261006.sh` | common |
-| `install_asl_dvs_v6_6_20261006.sh` | common |
+| `install_asl_dvs_v6_7_20261008.sh` | common |
 | `uninstall_asl_dvs_all_v1_3.sh` | common |
 | `wifi_menu.sh` | common |
 
@@ -211,7 +209,7 @@ because something reads them:
 
 - the first line (`#!...`) and a Python `coding` line;
 - the title line of each `.sh` script (for example
-  `# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)`): instmon reads a
+  `# install_asl_dvs_dashboard.sh  v6.7  (2026-10-08)`): instmon reads a
   shell script's version from it.
 
 Text inside strings is left alone, including files the tools write onto the
