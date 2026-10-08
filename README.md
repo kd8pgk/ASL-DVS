@@ -15,7 +15,6 @@ By KD8PGK, written with Claude (Anthropic).
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
 | 44helper | `asl_dvs_m17_44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
-| Watchdog | `asl_dvs_watchdog_v*.sh` | none | Restarts the Dashboard if it stops answering. See the note under [Installing](#installing). |
 
 Scripts:
 
@@ -77,7 +76,7 @@ Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_asl_dvs_v6_6_20261006.sh
+   sudo bash install_asl_dvs_v6_7_20261008.sh
    ```
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -92,10 +91,10 @@ sudo python3 <file>.py --install
 sudo python3 <file>.py --uninstall
 ```
 
-**Watchdog note:** the installer (v6.4 and later) no longer installs the
-Watchdog, and it removes an installed copy. The Dashboard's own service
-already restarts it with `Restart=always` and `WatchdogSec=30`. instmon
-(v2.38.4 and later) no longer shows a Watchdog card.
+**Watchdog note:** the old Watchdog script (`asl_dvs_watchdog`) is retired.
+The Dashboard's own service already restarts it with `Restart=always` and
+`WatchdogSec=30`. The installer (v6.7 and later) no longer looks for an old
+copy; the uninstaller still removes one.
 
 ## Updating from GitHub (instmon)
 
@@ -195,8 +194,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_38_4_20261008.py` | common |
 | `wifimon_v5_28_20261007.py` | common |
 | `asl_dvs_m17_44helper_v0_0_175_20261008.py` | common |
-| `asl_dvs_watchdog_v2_4_20261006.sh` | common |
-| `install_asl_dvs_v6_6_20261006.sh` | common |
+| `install_asl_dvs_v6_7_20261008.sh` | common |
 | `uninstall_asl_dvs_all_v1_3.sh` | common |
 | `wifi_menu.sh` | common |
 
@@ -211,7 +209,7 @@ because something reads them:
 
 - the first line (`#!...`) and a Python `coding` line;
 - the title line of each `.sh` script (for example
-  `# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)`): instmon reads a
+  `# install_asl_dvs_dashboard.sh  v6.7  (2026-10-08)`): instmon reads a
   shell script's version from it.
 
 Text inside strings is left alone, including files the tools write onto the

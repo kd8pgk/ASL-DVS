@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)
+# install_asl_dvs_dashboard.sh  v6.7  (2026-10-08)
 
 set -euo pipefail
 
@@ -514,34 +514,6 @@ else
 fi
 
 ok "Mode: ${MODE}"
-
-retire_watchdog() {
-    local units=() bins=() u b
-    shopt -s nullglob
-    for u in /etc/systemd/system/asl_dvs_watchdog*.timer \
-             /etc/systemd/system/asl_dvs_watchdog*.service; do
-        units+=("$(basename "${u}")")
-    done
-    bins=(/usr/local/bin/asl_dvs_watchdog*.sh)
-    shopt -u nullglob
-    if [[ ${#units[@]} -eq 0 && ${#bins[@]} -eq 0 ]]; then
-        return 0
-    fi
-    hdr "Retiring asl_dvs_watchdog"
-    for u in "${units[@]}"; do
-        systemctl disable --now "${u}" 2>/dev/null || true
-        rm -f "/etc/systemd/system/${u}"
-        ok "Removed ${u}"
-    done
-    for b in "${bins[@]}"; do
-        rm -f "${b}"
-        ok "Removed ${b}"
-    done
-    systemctl daemon-reload
-    systemctl reset-failed 'asl_dvs_watchdog*' 2>/dev/null || true
-    info "The dashboard's own systemd watchdog (Restart=always, WatchdogSec=30) covers it."
-}
-retire_watchdog
 
 
 hdr "Dashboard — file discovery"

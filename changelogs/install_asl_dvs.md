@@ -1,6 +1,13 @@
 # Installer (install_asl_dvs) changelog
 
-Current file: `install_asl_dvs_v6_6_20261006.sh`. Newest entries first.
+Current file: `install_asl_dvs_v6_7_20261008.sh`. Newest entries first.
+
+## 6.7 (2026-10-08)
+
+- Removed the Watchdog retire step. Since v6.4 the installer stopped and deleted
+  any `asl_dvs_watchdog` timer, service and script it found. The Watchdog is
+  long retired, so the installer no longer looks for it. To remove an old copy,
+  run the uninstaller (`uninstall_asl_dvs_all_v*.sh`), which still handles it.
 
 ## 6.6 (2026-10-06)
 
