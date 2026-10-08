@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.174"
-APP_STAGE = "v0.0.174: Config tab: Identity card of callsigns, IDs and passwords (masked, Reveal after the root password); Phone accounts in restore points; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.175"
+APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -8502,20 +8502,32 @@ def _cfgr_write_file(path: str, data: bytes, uid: int | None, gid: int | None, m
     if _cfgr_read(path) == data:
         return "unchanged"
     tmp = path + ".44htmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.chmod(tmp, mode & 0o7777)
-    if uid is not None and gid is not None:
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        if uid is not None and gid is not None:
+            try:
+                os.chown(tmp, uid, gid)
+            except OSError:
+                pass
+        os.chmod(tmp, mode & 0o7777)
+        if path.startswith("/etc/sudoers.d/"):
+            chk = _run_argv(["visudo", "-c", "-f", tmp])
+            if not chk["success"]:
+                os.unlink(tmp)
+                return "NOT written: visudo check failed: " + chk["output"]
+        os.replace(tmp, path)
+    except OSError:
         try:
-            os.chown(tmp, uid, gid)
+            os.unlink(tmp)
         except OSError:
             pass
-    if path.startswith("/etc/sudoers.d/"):
-        chk = _run_argv(["visudo", "-c", "-f", tmp])
-        if not chk["success"]:
-            os.unlink(tmp)
-            return "NOT written: visudo check failed: " + chk["output"]
-    os.replace(tmp, path)
+        raise
     return "written"
 
 def _cfgr_meta_of(path: str) -> tuple[int | None, int | None, int]:
@@ -8590,7 +8602,7 @@ _CFGR_ID_FIELDS: list[dict] = [
     {"fid": "el_call", "label": "EchoLink callsign", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "call",
      "groups": ("callsign",), "form": "echolink", "kind": "value"},
     {"fid": "el_astnode", "label": "EchoLink astnode", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "astnode",
-     "groups": ("node",), "form": "plain", "kind": "value"},
+     "groups": ("node",), "form": "plain", "kind": "value", "any_node": True},
     {"fid": "el_node", "label": "EchoLink node number", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "node",
      "groups": ("alone",), "form": "plain", "kind": "value"},
     {"fid": "el_pwd", "label": "EchoLink password", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "pwd",
@@ -8703,6 +8715,22 @@ def _cfgr_id_norm(norm: str, value: str) -> str:
         return v[:7] if v.isdigit() and len(v) >= 7 else v
     return v
 
+def _cfgr_id_ini(text: str) -> dict[str, dict[str, str]]:
+    out: dict[str, dict[str, str]] = {"": {}}
+    sec = ""
+    for line in text.splitlines():
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            sec = m.group(1).strip().lower()
+            out.setdefault(sec, {})
+            continue
+        s = line.strip()
+        if not s or s[0] in "#;" or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        out[sec].setdefault(k.strip().lower(), v.strip())
+    return out
+
 def _cfgr_flat(text: str) -> dict[str, str]:
     out: dict[str, str] = {}
     for line in text.splitlines():
@@ -8751,7 +8779,8 @@ def _cfgr_id_instances(fd: dict, cache: dict) -> list[dict]:
             val = kv.get(fd["key"])
             where = fd["key"]
         else:
-            sec = _cfgr_ini_sections(t).get(fd["section"], None)
+            parse = _cfgr_ini_sections if fd["file"].startswith("/etc/asterisk/") else _cfgr_id_ini
+            sec = parse(t).get(fd["section"], None)
             val = None if sec is None else sec.get(fd["key"].lower())
             where = f"[{fd['section']}] {fd['key']}"
         scope = ""
@@ -8834,7 +8863,8 @@ def _cfgr_id_instances(fd: dict, cache: dict) -> list[dict]:
             doc = None
         if not isinstance(doc, dict):
             return out
-        for n in doc.get("networks") or []:
+        nets = doc.get("networks")
+        for n in nets if isinstance(nets, list) else []:
             if not isinstance(n, dict) or not n.get("id"):
                 continue
             nid = str(n["id"])
@@ -8873,9 +8903,12 @@ def _cfgr_identity_scan() -> dict:
                          "file": inst["file"], "where": inst["where"], "form": fd["form"],
                          "kind": inst.get("kind", fd["kind"]), "groups": list(fd["groups"]),
                          "scope": inst["scope"], "found": inst["found"], "account": inst.get("account", ""),
-                         "anchor": bool(fd.get("anchor")), "raw": inst["raw"], "value": value,
+                         "anchor": bool(fd.get("anchor")), "any_node": bool(fd.get("any_node")),
+                         "raw": inst["raw"], "value": value,
                          "set": bool(inst["raw"].strip()), "tags": {}, "states": {},
                          "note": "" if value or not inst["raw"].strip() else "not a callsign (a sound file)"})
+    rpt = _cfgr_ast_sections(_CFGR_RPT)
+    rpt_nodes = {n for n, _kv in rpt[0] if n.isdigit()} if rpt else set()
     accounts = {r["scope"].split(":")[0]: r["account"] for r in rows if r["fid"] == "ph_json" and r["account"]}
     for r in rows:
         if r["fid"] in ("ph_pjsip", "ph_iax"):
@@ -8894,6 +8927,7 @@ def _cfgr_identity_scan() -> dict:
             rs = [r for r in rs if r["value"].strip() or not r["set"]] or rs
             vals = [(r, _cfgr_id_norm(g["norm"], r["value"])) for r in rs if r["value"].strip()]
             tags: dict[str, str] = {}
+            bad: list[str] = []
             state = "none"
             if g["mode"] == "equal":
                 for _, v in vals:
@@ -8902,12 +8936,14 @@ def _cfgr_identity_scan() -> dict:
                          else "incomplete" if len(vals) < len(rs) else "one copy" if len(rs) == 1 else "match")
             elif g["mode"] == "member":
                 anchor = {v for r, v in vals if r["anchor"]}
-                bad = [v for r, v in vals if not r["anchor"] and anchor and v not in anchor]
+                bad = [r["rid"] for r, v in vals if not r["anchor"] and anchor
+                       and v not in (anchor | rpt_nodes if r["any_node"] else anchor)]
                 state = "not set" if not vals else "no public node" if not anchor else "differs" if bad else "match"
-                for r, v in vals:
-                    tags[v] = "" if v in anchor else "?"
             for r, v in vals:
-                r["tags"][gid] = tags.get(v, "") if state in ("differs", "no public node") else ""
+                if g["mode"] == "member":
+                    r["tags"][gid] = "?" if (r["rid"] in bad or (state == "no public node" and not r["anchor"])) else ""
+                else:
+                    r["tags"][gid] = tags.get(v, "") if state == "differs" else ""
             for r in rs:
                 r["states"][gid] = state if r["value"].strip() else "not set"
             for r in scopes[scope]:
@@ -8922,7 +8958,7 @@ def _cfgr_identity_scan() -> dict:
 def _cfgr_identity_public(reveal: bool = False) -> dict:
     d = _cfgr_identity_scan()
     public = sorted({r["value"] for r in d["rows"] if "node" in r["groups"] and r["value"].isdigit()
-                     and not _cfgr_is_private(r["value"])}, key=len, reverse=True)
+                     and len(r["value"]) >= 4 and not _cfgr_is_private(r["value"])}, key=len, reverse=True)
     for r in d["rows"]:
         if not reveal:
             r["raw"] = _CFGR_ID_MASK if r["set"] else ""
@@ -8990,7 +9026,7 @@ def _cfgr_files_line(entry: dict) -> str:
 def _cfgr_act_save_restore(payload: dict) -> dict:
     installed = _cfgr_installed()
     if not any(installed.values()):
-        return {"success": False, "output": "None of ASL3, DVSwitch or USRP2M17 is installed on this node. Nothing to save."}
+        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17 or Phone) is installed on this node."}
     snap = _cfgr_snap_dir("restore")
     m = _cfgr_read_manifest(snap)
     have = set(m["groups"]) if m else set()
@@ -9015,7 +9051,7 @@ def _cfgr_act_retake_restore(payload: dict) -> dict:
     installed = _cfgr_installed()
     groups = [g for g in _CFGR_GROUPS if installed[g]]
     if not groups:
-        return {"success": False, "output": "None of ASL3, DVSwitch or USRP2M17 is installed on this node. Nothing to save."}
+        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17 or Phone) is installed on this node."}
     _cfgr_ensure_root_dir()
     snap = _cfgr_snap_dir("restore")
     lines = []
@@ -9030,6 +9066,10 @@ def _cfgr_act_retake_restore(payload: dict) -> dict:
         old["kind"] = "user"
         _cfgr_write_manifest(dest, old)
         lines.append(f"Old Restore point kept as save point '{label}'.")
+        users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
+        if len(users) > _CFGR_MAX_POINTS:
+            lines.append(f"There are now {len(users)} save points, more than the {_CFGR_MAX_POINTS} allowed: delete one "
+                         "before creating a new save point.")
     elif os.path.isdir(snap):
         shutil.rmtree(snap, ignore_errors=True)
     m = _cfgr_take(snap, groups, "Restore", "restore")
@@ -9049,7 +9089,7 @@ def _cfgr_act_create_point(payload: dict) -> dict:
     installed = _cfgr_installed()
     groups = [g for g in _CFGR_GROUPS if installed[g]]
     if not groups:
-        return {"success": False, "output": "None of ASL3, DVSwitch or USRP2M17 is installed on this node. Nothing to save."}
+        return {"success": False, "output": "Nothing this tab saves (ASL3, DVSwitch, USRP2M17 or Phone) is installed on this node."}
     users = [p for p in _cfgr_list_points() if p["kind"] == "user"]
     if len(users) >= _CFGR_MAX_POINTS:
         return {"success": False, "output": f"There are already {_CFGR_MAX_POINTS} save points. Delete one first."}
@@ -11235,8 +11275,9 @@ def _route_config_identity(query: dict) -> tuple[int, str, bytes]:
     with _CFGR_LOCK:
         try:
             body = _cfgr_identity_public(False)
-        except OSError as exc:
-            body = {"error": str(exc)}
+        except Exception as exc:
+            log(f"FAIL: CONFIG identity scan: {type(exc).__name__}: {exc}")
+            body = {"error": "Could not read the config files: " + type(exc).__name__}
     return 200, "application/json", json.dumps(body).encode("utf-8")
 
 def _route_config_status(query: dict) -> tuple[int, str, bytes]:
@@ -11299,6 +11340,7 @@ function cfgSaveRestore(btn, outId) {
     lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 on this node?');
     lines.push('If yes, press Cancel and wait until after the last install.');
     lines.push('You do not need all three: save once everything you plan to use is installed.');
+    lines.push('A phone set up later is added by pressing this button again.');
     if (!confirm(lines.join('\n'))) return;
     cfgPost({action: 'save_restore'}, outId, btn);
   }).catch(function(e) { cfgOut(outId, 'Request failed: ' + e, false); });
@@ -11311,7 +11353,7 @@ function cfgRetake(btn) {
     lines.push('   ' + (d.installed[g] ? '[x] ' : '[ ] ') + cfgLabel(g) + (d.installed[g] ? '' : '  (not installed)'));
   });
   lines.push('');
-  lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 on this node? If yes, cancel and wait until after the last install.');
+  lines.push('Will you install more of ASL3 / DVSwitch / USRP2M17 on this node? If yes, cancel and wait until after the last install. A phone set up later is added with Save Restore point.');
   lines.push('The old Restore point is kept as a save point named restore_replaced_<date>.');
   lines.push('');
   lines.push('Type RETAKE to confirm:');
@@ -11414,7 +11456,7 @@ function cfgShowRestart(groups) {
          ' services</button> <span class="cfg-hint">' + cfgEsc(svc.join(', ')) + '</span><br>';
   });
   document.getElementById('cfg-restart-btns').innerHTML = h;
-  cfgOut('cfg-restart-out', 'Configs restored. Services not restarted yet.', null);
+  cfgOut('cfg-restart-out', 'Config files changed. Services not restarted yet.', null);
   card.style.display = 'block';
 }
 
@@ -11533,7 +11575,8 @@ function cfgRender(d) {
     var rg = d.restore.groups[g];
     var ch = (d.changed || {})[g] || [];
     var chHtml = rg ? (ch.length ? ch.map(function(p) {
-      return cfgEsc(p) + ' <button class="btn-copy" onclick="cfgDiff(this,\'' + cfgEsc(g) + '\',\'' + cfgEsc(p) + '\')">View diff</button>';
+      return cfgEsc(p) + ' <button class="btn-copy" data-g="' + cfgEsc(g) + '" data-p="' + cfgEsc(p) +
+        '" onclick="cfgDiff(this,this.dataset.g,this.dataset.p)">View diff</button>';
     }).join('<br>') : 'no changes') : '';
     h += '<tr><td>' + cfgEsc(cfgLabel(g)) + '</td><td>' + (d.installed[g] ? '&#10004;' : '&#10008;') + '</td><td>' +
          (rg ? cfgEsc(rg.saved_at) : 'not saved') + '</td><td>' + chHtml + '</td></tr>';
@@ -11764,6 +11807,7 @@ function cfgIdPostReveal(pw) {
 function cfgIdLoad() {
   if (CFG_ID_REVEALED) {
     return cfgIdPostReveal('').then(function(d) {
+      if (!CFG_ID_REVEALED) return;
       if (!d.success) { CFG_ID_REVEALED = false; cfgIdButtons(); return cfgIdLoad(); }
       CFG_ID = d; cfgIdRender(d);
     }).catch(function(e) { cfgIdRender({error: 'Could not read identity: ' + e}); });
@@ -19387,8 +19431,9 @@ class Handler(BaseHTTPRequestHandler):
         with _CFGR_LOCK:
             try:
                 body = _cfgr_identity_public(True)
-            except OSError as exc:
-                body = {"error": str(exc)}
+            except Exception as exc:
+                log(f"FAIL: CONFIG identity scan: {type(exc).__name__}: {exc}")
+                body = {"error": "Could not read the config files: " + type(exc).__name__}
         body["success"] = "error" not in body
         reply(200, body)
 
