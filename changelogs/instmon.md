@@ -1,6 +1,15 @@
 # instmon changelog
 
-Current file: `instmon_v2_38_3_20261007.py`. Newest entries first.
+Current file: `instmon_v2_38_4_20261008.py`. Newest entries first.
+
+## 2.38.4 (2026-10-08)
+
+- The Watchdog card is gone from the Components list. The installer (v6.4 and
+  later) no longer installs the Watchdog and removes an installed copy, so the
+  card had nothing left to manage. Its library list, which sat inside the card,
+  goes with it.
+- Nothing else changes. On a node that still has an old Watchdog installed,
+  Quiet System and the disk-image pause still stop and restart its timer.
 
 ## 2.38.3 (2026-10-07)
 

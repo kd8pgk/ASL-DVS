@@ -40,8 +40,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_74_20261007.py` | `sysmon_pi02w_v6_13_67_9_20261007.py` | `instmon_v2_38_3_20261007.py` |
-| `VERSION` | `6.13.74` | `6.13.67.9-pi02w` | `2.38.3` |
+| File name | `sysmon_v6_13_74_20261007.py` | `sysmon_pi02w_v6_13_67_9_20261007.py` | `instmon_v2_38_4_20261008.py` |
+| `VERSION` | `6.13.74` | `6.13.67.9-pi02w` | `2.38.4` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -72,7 +72,7 @@ Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_38_3_20261007.py --install
+   sudo python3 instmon_v2_38_4_20261008.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -94,8 +94,8 @@ sudo python3 <file>.py --uninstall
 
 **Watchdog note:** the installer (v6.4 and later) no longer installs the
 Watchdog, and it removes an installed copy. The Dashboard's own service
-already restarts it with `Restart=always` and `WatchdogSec=30`. The Watchdog
-script stays in the repo, and instmon can still install it.
+already restarts it with `Restart=always` and `WatchdogSec=30`. instmon
+(v2.38.4 and later) no longer shows a Watchdog card.
 
 ## Updating from GitHub (instmon)
 
@@ -192,7 +192,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_v6_13_74_20261007.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_9_20261007.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
-| `instmon_v2_38_3_20261007.py` | common |
+| `instmon_v2_38_4_20261008.py` | common |
 | `wifimon_v5_28_20261007.py` | common |
 | `asl_dvs_m17_44helper_v0_0_175_20261008.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |

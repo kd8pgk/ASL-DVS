@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.38.3"
-DATE_STR ="2026-10-07"
+VERSION ="2.38.4"
+DATE_STR ="2026-10-08"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
 UNINSTALLER_SCRIPT_GLOB ="uninstall_asl_dvs*.sh"
@@ -3879,6 +3879,8 @@ def esc (s ):
 def render_components_html (components ,library =None ):
     cards =[]
     for c in components :
+        if c ["category"]=="watchdog":
+            continue 
         label ,cls =BADGE_BY_STATE .get (c ["state"],("UNKNOWN","b-src"))
         if c ["port"]is None :
             port_note ="no web UI"
