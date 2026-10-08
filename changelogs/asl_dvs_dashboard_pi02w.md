@@ -1,6 +1,17 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_pi02w_v9_3_71_14_20261008.py`. Newest entries first.
+
+## 9.3.71.14-pi02w (2026-10-08)
+
+- Config backup for instmon. Every time the Dashboard saves `asl_dvs.conf`
+  (node, talkgroup, echo, XLX, M17 and DMR network saves) or `phone.json` (Phone
+  tab), it also writes a copy to
+  `/etc/asl_dvs/instmon_library/config_backup/<same name>`, mode 0600 in a
+  0700 folder. One copy per file: each save replaces it. If the copy fails, the
+  save still succeeds and a warning is logged. The default `asl_dvs.conf` made on
+  first start is not copied. instmon 2.38.5 shows these copies on its
+  Configuration card, with Reinstall, Download and Upload.
 
 ## 9.3.71.13-pi02w (2026-10-07)
 

@@ -1,6 +1,28 @@
 # instmon changelog
 
-Current file: `instmon_v2_38_4_20261008.py`. Newest entries first.
+Current file: `instmon_v2_38_5_20261008.py`. Newest entries first.
+
+## 2.38.5 (2026-10-08)
+
+- Configuration card: new **Backups** rows for `asl_dvs.conf`, `sysmon.conf` and
+  `phone.json`. The Dashboard (9.3.74 / 9.3.71.14-pi02w) and SysMon
+  (6.13.75 / 6.13.67.10-pi02w) copy each file to
+  `instmon_library/config_backup/` every time they save it. One backup per file.
+  - Each row shows the backup's date and size, and whether it matches the live
+    file (MATCHES LIVE, DIFFERS, NO LIVE FILE, or NO BACKUP).
+  - **Reinstall** checks the backup (UTF-8 text, at most 256 KB; `sysmon.conf`
+    must parse as an INI file, `phone.json` as a JSON object), keeps the old live
+    file as `.prev`, writes the backup live (mode 0600) and restarts its tool:
+    `asl_dvs.conf` the Dashboard, `sysmon.conf` SysMon, with the usual rollback if
+    the tool doesn't come back. `phone.json` restarts nothing: press Apply on the
+    Dashboard's Phone tab.
+  - **Download** saves the backup.
+  - **Upload backup** takes only those three exact names, runs the same checks,
+    and replaces that backup. It doesn't install anything until you press
+    Reinstall.
+  - The existing Install Config list stays below as "Other config files".
+- The backups hold passwords. "Download Full Backup (ZIP)" covers the whole
+  library, so it now includes them.
 
 ## 2.38.4 (2026-10-08)
 

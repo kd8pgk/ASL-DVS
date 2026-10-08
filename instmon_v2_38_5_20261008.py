@@ -3,6 +3,7 @@
 import argparse
 import base64
 import collections
+import configparser
 import fcntl
 import fnmatch
 import hashlib
@@ -35,7 +36,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.38.4"
+VERSION ="2.38.5"
 DATE_STR ="2026-10-08"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -3934,6 +3935,158 @@ def render_components_html (components ,library =None ):
   </div>""")
     return "".join (cards )
 
+CFG_BACKUP_DIR = os.path.join(LIBRARY_DIR, "config_backup")
+CFG_BACKUP_MAX_BYTES = 256 * 1024
+CFG_BACKUPS = [
+    {"name": "asl_dvs.conf", "live": os.path.join(CONFIG_DIR, CONFIG_NAME), "category": "dashboard",
+     "saved_by": "Dashboard or SysMon", "kind": "text"},
+    {"name": "sysmon.conf", "live": "/etc/sysmon/sysmon.conf", "category": "sysmon",
+     "saved_by": "SysMon", "kind": "ini"},
+    {"name": "phone.json", "live": "/etc/asl_dvs/phone.json", "category": None,
+     "saved_by": "Dashboard Phone tab", "kind": "json"},
+]
+CFG_BACKUPS_BY_NAME = {b["name"]: b for b in CFG_BACKUPS}
+
+def cfgbak_path(name):
+    if name not in CFG_BACKUPS_BY_NAME:
+        return None
+    return os.path.join(CFG_BACKUP_DIR, name)
+
+def cfgbak_check(name, data):
+    spec = CFG_BACKUPS_BY_NAME.get(name)
+    if spec is None:
+        return f"'{name}' is not one of {', '.join(CFG_BACKUPS_BY_NAME)}."
+    if not data:
+        return f"{name} is empty."
+    if len(data) > CFG_BACKUP_MAX_BYTES:
+        return f"{name} is larger than {CFG_BACKUP_MAX_BYTES // 1024} KB."
+    if b"\x00" in data:
+        return f"{name} is not a text file."
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return f"{name} is not UTF-8 text."
+    if spec["kind"] == "json":
+        try:
+            doc = json.loads(text)
+        except ValueError as exc:
+            return f"{name} is not valid JSON: {exc}"
+        if not isinstance(doc, dict):
+            return f"{name} must hold a JSON object."
+    elif spec["kind"] == "ini":
+        try:
+            configparser.ConfigParser(interpolation=None, strict=False).read_string(text)
+        except configparser.Error as exc:
+            return f"{name} is not a valid config file: {str(exc).splitlines()[0]}"
+    elif not text.strip():
+        return f"{name} is empty."
+    return None
+
+def cfgbak_write(name, data):
+    os.makedirs(CFG_BACKUP_DIR, mode=0o700, exist_ok=True)
+    return compare_before_write(cfgbak_path(name), data)
+
+def cfgbak_reinstall(name):
+    spec = CFG_BACKUPS_BY_NAME.get(name)
+    src = cfgbak_path(name)
+    if spec is None:
+        return 400, {"error": "Unknown config backup.", "level": "err"}
+    if not os.path.isfile(src):
+        return 404, {"error": f"No backup of {name} in the library.", "level": "err"}
+    try:
+        with open(src, "rb") as f:
+            data = f.read(CFG_BACKUP_MAX_BYTES + 1)
+    except OSError as exc:
+        return 500, {"error": f"Could not read the {name} backup: {exc}", "level": "err"}
+    problem = cfgbak_check(name, data)
+    if problem:
+        return 400, {"error": f"Backup not reinstalled: {problem}", "level": "err"}
+    dest = spec["live"]
+    with _running_installs_lock:
+        if dest in _running_installs:
+            return 409, {"error": f"An install to {dest} is already in progress",
+                         "message": "Another install of this file is already in progress -- wait for it to finish.",
+                         "level": "warn"}
+        _running_installs.add(dest)
+    try:
+        comp = next((c for c in COMPONENTS if c["category"] == spec["category"]), None)
+        if comp is not None and not os.path.isfile(resolve_installed_target(comp)):
+            comp = None
+        if comp is None:
+            try:
+                if os.path.isfile(dest) and file_sha256(dest) != hashlib.sha256(data).hexdigest():
+                    _rotate_backups(dest)
+                    shutil.copy2(dest, dest + ".prev")
+                wrote, reason = compare_before_write(dest, data)
+            except OSError as exc:
+                return 500, {"error": f"Reinstall failed writing {dest}: {exc}", "level": "err"}
+            log_event(f"Reinstall {name} backup -> {dest} ({reason})", "ok" if wrote else "info")
+            if not wrote:
+                message = f"{name} already matches the backup (unchanged)."
+            elif name == "phone.json":
+                message = "phone.json reinstalled. Open the Dashboard's Phone tab and press Apply to rebuild the phone files."
+            else:
+                message = f"{name} reinstalled to {dest}. Its tool is not installed, so nothing was restarted."
+            return 200, {"wrote": wrote, "reason": reason, "message": message, "level": "ok" if wrote else "info"}
+        result = install_file_with_verification(data, dest, comp)
+        if result["reason"] == "error":
+            return 500, {"error": result["message"], "level": "err"}
+        log_event(f"Reinstall {name} backup -> {dest} ({result['reason']})", "ok" if result["wrote"] else "info")
+        if result["wrote"]:
+            result["message"] = f"{name} reinstalled from the backup. {result['message']}"
+        else:
+            result["message"] = f"{name} already matches the backup (unchanged) -- no restart needed."
+        return 200, result
+    finally:
+        with _running_installs_lock:
+            _running_installs.discard(dest)
+
+def render_cfgbak_html():
+    rows = []
+    for spec in CFG_BACKUPS:
+        name = esc(spec["name"])
+        path = cfgbak_path(spec["name"])
+        have = os.path.isfile(path)
+        if not have:
+            badge, bcls = "NO BACKUP", "b-src"
+            bot = f"<span>Saved by: {esc(spec['saved_by'])}</span><span>&middot;</span><span>no backup yet -- one is made on the next save</span>"
+        else:
+            st = os.stat(path)
+            live_sum = file_sha256(spec["live"])
+            if live_sum is None:
+                badge, bcls = "NO LIVE FILE", "b-src"
+            elif live_sum == file_sha256(path):
+                badge, bcls = "MATCHES LIVE", "b-inst"
+            else:
+                badge, bcls = "DIFFERS", "b-src"
+            bot = (f"<span>Saved by: {esc(spec['saved_by'])}</span><span>&middot;</span>"
+                   f"<span>{esc(datetime.fromtimestamp(st.st_mtime).strftime('%Y-%m-%d %H:%M'))}</span>"
+                   f"<span>&middot;</span><span>{esc(human_size(st.st_size))}</span>")
+        dis = "" if have else " disabled"
+        rows.append(f"""
+    <div class="librow cfgbak-row">
+      <div class="librow-top">
+        <span class="ver">backup</span>
+        <span>{name} <span class="small muted">&rarr; {esc(spec['live'])}</span></span>
+        <span class="badge {bcls}">{badge}</span>
+      </div>
+      <div class="librow-actions">
+        <button data-action="cfgbak_reinstall" data-name="{name}"{dis}>Reinstall</button>
+        <button data-action="download" data-category="config_backup" data-name="{name}"{dis}>Download</button>
+      </div>
+      <div class="librow-bot small muted">{bot}</div>
+    </div>""")
+    return f"""
+    <div class="small muted cfgbak-note" style="padding:.2rem .2rem .3rem">Backups: the Dashboard and SysMon copy each of these
+    files here every time they save it. One backup per file -- each save or upload replaces it.</div>
+    {''.join(rows)}
+    <div class="librow libgrp-upload">
+      <input type="file" id="file-config_backup" data-category="config_backup" accept=".conf,.json">
+      <button data-action="upload" data-category="config_backup">Upload backup</button>
+      <span id="upmsg-config_backup" class="small muted">asl_dvs.conf, sysmon.conf or phone.json -- replaces that backup, installs nothing</span>
+    </div>
+    <div class="small muted" style="padding:.5rem .2rem .2rem">Other config files:</div>"""
+
 def render_library_group_html (title ,category ,entries ,action_label ,nested =False ):
     rows =[]
     for e in entries :
@@ -4014,6 +4167,7 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
     </div>
     {_gh_group_html (category )}
     <div class="librows">
+    {render_cfgbak_html ()if category =="config"else ""}
     {''.join (rows )}
     {upload_html }
     </div>
@@ -5939,6 +6093,9 @@ _JS_ACTIONS = """function wireButtons() {
             window.open(`http://${location.hostname}:${btn.dataset.port}`, '_blank');
           }
           btn.disabled = false;
+        } else if (action === 'cfgbak_reinstall') {
+          if (!confirm(`Reinstall the ${btn.dataset.name} backup over the live file? The old live file is kept as .prev, and the Dashboard or SysMon restarts if the file is theirs.`)) { btn.disabled = false; return; }
+          await postAction({action: 'cfgbak_reinstall', name: btn.dataset.name});
         } else if (action === 'install_config') {
           if (!confirm(`Install ${btn.dataset.name} as the active config? This will restart the Dashboard if it's installed.`)) { btn.disabled = false; return; }
           await postAction({action: 'install_config', name: btn.dataset.name});
@@ -6775,6 +6932,7 @@ _ACTION_HANDLERS ={
 "start":lambda self ,body :self ._action_start (body ),
 "stop":lambda self ,body :self ._action_stop (body ),
 "install_config":lambda self ,body :self ._action_install_config (body ),
+"cfgbak_reinstall":lambda self ,body :self ._send_json (*cfgbak_reinstall (str (body .get ("name")or ""))),
 "delete":lambda self ,body :self ._action_delete (body ),
 "run_script":lambda self ,body :self ._action_run_script (body ),
 "save_alternate":lambda self ,body :self ._action_save_alternate (),
@@ -6886,6 +7044,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self._error_json(401, "Authentication required")
 
     def _find_library_file (self ,filename ,category =None ):
+        if category =="config_backup":
+            candidate =cfgbak_path (os .path .basename (filename or ""))
+            return candidate if candidate and os .path .isfile (candidate )else None 
         if category and category in LIB_SUBDIRS :
             candidate =safe_join (LIB_SUBDIRS [category ],filename )
             return candidate if candidate and os .path .isfile (candidate )else None 
@@ -7791,6 +7952,25 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         category =fields .get ("category",(None ,b""))[1 ].decode (errors ="replace")
         filename ,filedata =fields .get ("file",(None ,None ))
         force =fields .get ("force",(None ,b""))[1 ].decode (errors ="replace")=="1"
+        if category =="config_backup":
+            if not filename or filedata is None :
+                self ._error_json (400 ,"No file provided")
+                return 
+            filename =os .path .basename (filename )
+            problem =cfgbak_check (filename ,filedata )
+            if problem :
+                self ._error_json (400 ,problem )
+                return 
+            try :
+                wrote ,reason =cfgbak_write (filename ,filedata )
+            except OSError as exc :
+                self ._error_json (500 ,f"Could not save the {filename } backup: {exc }")
+                return 
+            log_event (f"Uploaded {filename } as the config backup ({reason })","ok")
+            message =(f"{filename } saved as the backup. Press Reinstall to make it live."
+            if wrote else f"{filename } already matches the backup (unchanged).")
+            self ._send_json (200 ,{"name":filename ,"wrote":wrote ,"reason":reason ,"message":message ,"level":"ok"if wrote else "info"})
+            return 
         if category not in LIB_SUBDIRS :
             self ._error_json (400 ,f"Unknown category '{category }'")
             return 
