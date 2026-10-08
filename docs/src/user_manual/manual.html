@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>ASL-DVS User Manual</title>
+<link rel="stylesheet" href="manual.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">ASL-DVS NODE CONTROL</div>
+      <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
+    </div>
+    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-08</div>
+  </div>
+  <div class="body">
+    <h1>User Manual<br><span>The ASL-DVS Suite</span></h1>
+    <p class="lede">How to use the ASL-DVS web tools day to day: what every page, tab and button does, with a
+      technical close to each chapter for when you want to know how it works. Written for the Pi Zero 2 W build;
+      full-build differences are marked where they matter.</p>
+    <div class="chips">
+      <span class="chip c1">DASHBOARD</span><span class="chip c2">SYSMON</span><span class="chip c3">INSTMON</span>
+      <span class="chip c4">WIFIMON</span><span class="chip c5">44HELPER</span>
+    </div>
+    <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
+    <table>
+      <tr><th>Tool</th><th>File</th><th>Version</th></tr>
+      <tr><td>Dashboard</td><td class="mono">asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py</td><td>9.3.71.13-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_9_20261007.py</td><td>6.13.67.9-pi02w</td></tr>
+      <tr><td>44helper</td><td class="mono">asl_dvs_m17_44helper_v0_0_175_20261008.py</td><td>0.0.175</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_38_3_20261007.py</td><td>2.38.3</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_28_20261007.py</td><td>5.28</td></tr>
+      <tr><td>Installer</td><td class="mono">install_asl_dvs_v6_6_20261006.sh</td><td>6.6</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_74_20261007.py</td><td>6.13.74</td></tr>
+      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_73_20261006.py</td><td>9.3.73</td></tr>
+    </table>
+    <span class="draft">DRAFT · PART I OF V</span>
+  </div>
+  <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Contents</div>
+  <h1 class="ch">In this manual</h1>
+  <ul class="toc">
+    <li class="pt">Part I · Getting started</li>
+    <li><span class="no">1</span>The suite at a glance<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">2</span>Installing and updating, in brief<span class="st done">THIS DRAFT</span></li>
+    <li class="pt">Part II · SysMon</li>
+    <li class="later"><span class="no">3</span>SysMon basics and live status: Overview, Services, Ports, Journal<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">4</span>Node and DVSwitch health: ASL-DVS, DVSM, STFU, M17, Phone<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console<span class="st">LATER STAGE</span></li>
+    <li class="pt">Part III · 44helper</li>
+    <li class="later"><span class="no">7</span>44helper basics: Overview, Services, Ports, Firewall, Actions Log<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">8</span>44Net and remote access: Router Install, Tunnels, Nodes, Cloudflare<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">9</span>Software installers: ASL3, DVSwitch, SVXLink, M17, Ampersand<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">10</span>Keeping the system healthy: Update, System Optimization<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">11</span>The Config tab: restore points, save points, presets, identity<span class="st">LATER STAGE</span></li>
+    <li class="pt">Part IV · The other tools</li>
+    <li class="later"><span class="no">12</span>The Dashboard<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">13</span>instmon<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">14</span>wifimon and wifi_menu.sh<span class="st">LATER STAGE</span></li>
+    <li class="pt">Part V · Reference</li>
+    <li class="later"><span class="no">15</span>Troubleshooting and recovery<span class="st">LATER STAGE</span></li>
+    <li class="later"><span class="no">A</span>Appendices: ports, files, services, launcher, glossary<span class="st">LATER STAGE</span></li>
+  </ul>
+
+  <h2>How to use this manual</h2>
+  <p>If you are new to the suite, read Part I first, then turn to the chapter for the tool in front of you.
+    Every chapter after Chapter 2 follows the same order, so you always know where to look:</p>
+  <ol class="steps">
+    <li><b>What it's for</b>: what the tool or tab does, and when you would open it.</li>
+    <li><b>Before you start</b>: what has to be installed, and anything that can go wrong.</li>
+    <li><b>Tab by tab</b>: each card and button, and what good and bad readings look like.</li>
+    <li><b>Common tasks</b>: short recipes, step by step.</li>
+    <li><b>Under the hood</b>: the technical close, in a purple-labelled panel. It covers the files, services,
+      ports and timers involved. You can skip it on a first read.</li>
+  </ol>
+
+  <h3>Markers used in the text</h3>
+  <div class="call note"><span class="t">NOTE</span>Background, or something worth knowing.</div>
+  <div class="call tip"><span class="t">TIP</span>A quicker or safer way to do something.</div>
+  <div class="call care"><span class="t">CAREFUL</span>This changes your node, restarts something or needs a reboot.</div>
+  <div class="call full"><span class="t">FULL BUILD</span>Applies to the full build (Pi 3, 4 or 5) only. Also shown as the badge <span class="badge full">FULL</span>.</div>
+
+  <h3>Commands and pictures</h3>
+  <p>Commands are typed on the Pi, in an SSH session or at a keyboard and screen. Lines starting with <code>#</code>
+    are notes. Replace <code>&lt;pi-address&gt;</code> with your Pi's IP address or host name.</p>
+<pre><span class="c"># a note about the next line</span>
+sudo systemctl status sysmon</pre>
+  <p>Pictures marked <b>Illustration</b> are drawn to show a page's layout. They use the same tab names and order
+    as the real page, but the values in them are made up. Example identities use the placeholders
+    <code>N0CALL</code> and <code>&lt;NODE&gt;</code>.</p>
+</section>
+
+<section class="part">
+  <div class="pn">PART I</div>
+  <h1>Getting started</h1>
+  <p>What the suite is, what each tool is for, how to log in, and the short version of installing and
+    updating it. The full install steps are in the install manuals in the <code>docs/</code> folder.</p>
+  <ol>
+    <li>The suite at a glance</li>
+    <li>Installing and updating, in brief</li>
+  </ol>
+</section>
+
+<section class="chapter" id="ch1">
+  <div class="kicker">Chapter 1 · Overview</div>
+  <h1 class="ch">The suite at a glance</h1>
+  <p class="ch-lede">ASL-DVS is a set of five small web tools that run on the same Raspberry Pi as your AllStarLink
+    node. Each tool has its own page in the browser. Together they let you run, check, repair and update the node
+    without typing commands.</p>
+
+  <h2><span class="n">1.1</span>What is on the node</h2>
+  <p>The tools sit on top of a working AllStarLink 3 (ASL3) node with DVSwitch. It helps to know the main parts,
+    because the tools check and talk to all of them:</p>
+  <table>
+    <tr><th>Part</th><th>What it does</th></tr>
+    <tr><td>Asterisk + app_rpt</td><td>The ASL3 engine. It runs your node, links to other AllStarLink nodes over IAX2 and handles EchoLink.</td></tr>
+    <tr><td>Analog_Bridge</td><td>Turns the node's audio into digital voice and back again. It talks to Asterisk on a private node (1999 by convention).</td></tr>
+    <tr><td>MMDVM_Bridge</td><td>Connects Analog_Bridge to the digital networks: DMR directly, and System Fusion, P25, NXDN and D-STAR through their gateways.</td></tr>
+    <tr><td>Gateways</td><td>YSFGateway, P25Gateway, NXDNGateway and ircDDBGateway. Each one connects to that mode's reflectors or talkgroups.</td></tr>
+    <tr><td>USRP2M17</td><td>Bridges a second private node (1917 by convention) to an M17 reflector.</td></tr>
+  </table>
+
+  <figure>
+<pre>AllStarLink network
+      |  IAX2  (UDP 4569)
+ [ ASL3 / Asterisk ]------ your node &lt;NODE&gt;      (radio, optional)
+      |  USRP (UDP, this Pi only)
+      +-- private node 1999 -- Analog_Bridge -- MMDVM_Bridge -- DMR network
+      |                                              |
+      |                     YSFGateway / P25Gateway / NXDNGateway / ircDDBGateway
+      |
+      +-- private node 1917 -- USRP2M17 --------------------- M17 reflector</pre>
+    <figcaption><b>Figure 1.1</b> The audio path through a bridge node. Node numbers 1000 to 1999 are private: they
+      never leave the Pi. The full layout is in <code>docs/ASL-DVS_Idealized_Node_Configuration.pdf</code>.</figcaption>
+  </figure>
+
+  <h2><span class="n">1.2</span>The five tools</h2>
+  <p>Each tool is one file, runs as its own service, and serves its own page on its own port.</p>
+  <table>
+    <tr><th>Tool</th><th>Port</th><th>What it's for</th><th>Open it when you want to...</th></tr>
+    <tr><td>Dashboard</td><td class="port">8989</td><td>Node control.</td><td>Connect to AllStar or EchoLink nodes, change DMR talkgroup or YSF, P25, NXDN, D-STAR, XLX or M17 reflector, use favorites, make a phone call.</td></tr>
+    <tr><td>SysMon</td><td class="port">9999</td><td>System monitor and health checks.</td><td>See whether the Pi and node are healthy, find a stopped service or a bad config file, read logs, look after the SD card.</td></tr>
+    <tr><td>44helper</td><td class="port">9997</td><td>Setup, repair and configuration helper.</td><td>Set up 44Net or Cloudflare remote access, install ASL3, DVSwitch, SVXLink, M17 or Ampersand, run updates, save and restore your config.</td></tr>
+    <tr><td>instmon</td><td class="port">8990</td><td>Installer and manager for the suite.</td><td>Update the tools from GitHub, start or stop them, pause the suite for a big job, back up or image the SD card.</td></tr>
+    <tr><td>wifimon</td><td class="port">8991</td><td>WiFi and power watchdog.</td><td>Change WiFi networks, check signal and supply voltage, set up the automatic safe shutdown.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>44helper is optional. The other four make up the core suite.
+    A sixth item, the Watchdog script, is no longer needed: the Dashboard's own service restarts it if it stops.</div>
+
+  <h3>Which tool for which job</h3>
+  <table>
+    <tr><th>I want to...</th><th>Go to</th></tr>
+    <tr><td>Talk on a DMR talkgroup or a reflector</td><td>Dashboard, the mode's tab</td></tr>
+    <tr><td>Link to another AllStar node</td><td>Dashboard, ASL tab</td></tr>
+    <tr><td>Find out why something stopped working</td><td>SysMon, Overview and Services, then the matching check tab</td></tr>
+    <tr><td>Check that my config files agree with each other</td><td>SysMon, ASL-DVS and DVSM tabs; 44helper, Config tab</td></tr>
+    <tr><td>Save my config before I change it</td><td>44helper, Config tab (restore point)</td></tr>
+    <tr><td>Reach my node from outside my home network</td><td>44helper, Router Install / Tunnel tabs or Cloudflare</td></tr>
+    <tr><td>Update the suite</td><td>instmon, GitHub Updates</td></tr>
+    <tr><td>Update Linux and ASL packages</td><td>44helper, Update tab</td></tr>
+    <tr><td>Make the SD card last longer</td><td>SysMon, SD Card tab; 44helper, System Optimization</td></tr>
+    <tr><td>Change WiFi network</td><td>wifimon</td></tr>
+  </table>
+
+  <h2><span class="n">1.3</span>A first look at each page</h2>
+  <p>Every page has a header with the tool's name and version and a Log Out button. Most pages have a row of
+    tabs under the header; click a tab to switch view. The pictures below show each tool's tabs in order.</p>
+
+  <figure>
+    <div class="mock">
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.13-pi02w</span></div>
+      <div class="tabs">
+        <span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span>
+        <span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span>
+        <span class="tab">XLX</span><span class="tab">M17</span><span class="tab">Phone</span><span class="tab">EDIT</span>
+      </div>
+    </div>
+    <figcaption><b>Figure 1.2 · Illustration.</b> The Dashboard (port 8989). One tab per mode, plus Phone and EDIT.
+      EDIT holds your favorites and settings. The Pi Zero 2 W build keeps every tab of the full build.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="mock">
+      <div class="bar"><span class="ttl" style="color:var(--yel)">ASL-DVS SYSMON</span><span class="meta">v6.13.67.9-pi02w</span></div>
+      <div class="tabs">
+        <span class="tab on" style="background:rgb(0,255,229)">Overview</span>
+        <span class="tab" style="border-color:rgb(0,255,229)">Services</span>
+        <span class="tab" style="border-color:rgb(34,212,255)">Ports</span>
+        <span class="tab off">Firewall</span>
+        <span class="tab" style="border-color:rgb(212,102,255)">Journal</span>
+        <span class="tab" style="border-color:rgb(255,61,90)">ASL-DVS</span>
+        <span class="tab off">Reg</span>
+        <span class="tab" style="border-color:rgb(0,255,176)">Phone</span>
+        <span class="tab" style="border-color:rgb(255,68,204)">Tune</span>
+        <span class="tab" style="border-color:rgb(0,200,120)">Hardware</span>
+        <span class="tab off">Net</span>
+        <span class="tab" style="border-color:rgb(255,170,34)">DVSM</span>
+        <span class="tab" style="border-color:rgb(0,191,255)">STFU</span>
+        <span class="tab" style="border-color:rgb(124,255,60)">M17</span>
+        <span class="tab off">Zello</span>
+        <span class="tab" style="border-color:rgb(180,140,255)">SD Card</span>
+        <span class="tab" style="border-color:rgb(255,90,120)">Security</span>
+        <span class="tab off">Console</span>
+        <span class="tab" style="border-color:rgb(255,208,64)">Edit</span>
+      </div>
+    </div>
+    <figcaption><b>Figure 1.3 · Illustration.</b> SysMon (port 9999). The 14 solid tabs are in the Pi Zero 2 W build.
+      The 5 faded tabs (Firewall, Reg, Net, Zello, Console) are <span class="badge full">FULL</span> build only.</figcaption>
+  </figure>
+
+  <figure>
+    <div class="mock">
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44HELPER</span><span class="meta">v0.0.175</span></div>
+      <div class="tabs">
+        <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
+        <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
+        <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
+        <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
+        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Firewall</span><span class="tab">Actions Log</span>
+      </div>
+    </div>
+    <figcaption><b>Figure 1.4 · Illustration.</b> 44helper (port 9997). The first row is 44Net remote access. The
+      second row has the installers, maintenance, Config and the status tabs. 44helper is the same on every Pi.</figcaption>
+  </figure>
+
+  <div class="grid2">
+    <figure style="margin:0">
+      <div class="mock">
+        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.38.3</span></div>
+        <div class="sect">Quick Links</div><div class="sect">GitHub Updates</div>
+        <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="btn c">Quiet System</span></div>
+        <div class="sect">Components</div><div class="sect">Scripts &amp; Configuration Library</div>
+        <div class="sect">Backup &amp; Export</div><div class="sect" style="padding-bottom:.6em">Disk Image &amp; Clone</div>
+      </div>
+      <figcaption><b>Figure 1.5 · Illustration.</b> instmon (port 8990) is one long page of sections, not tabs.</figcaption>
+    </figure>
+    <figure style="margin:0">
+      <div class="mock">
+        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.28</span></div>
+        <div class="sect">Status</div><div class="sect">Saved networks</div><div class="sect">Nearby networks</div>
+        <div class="sect">Radio &amp; device</div><div class="sect">Watchdog</div><div class="sect">Service</div>
+        <div class="sect" style="padding-bottom:.6em">Activity log</div>
+      </div>
+      <figcaption><b>Figure 1.6 · Illustration.</b> wifimon (port 8991) is also one page of cards.</figcaption>
+    </figure>
+  </div>
+
+  <h2><span class="n">1.4</span>Two builds: Pi Zero 2 W and full</h2>
+  <p>The Dashboard and SysMon come in two builds. The other tools have a single build that runs on every Pi.</p>
+  <div class="grid2">
+    <div class="box"><h4 style="color:var(--cyan)">Pi Zero 2 W build <span class="badge pi">PI02W</span></h4>
+      <p>For the 512 MB Pi Zero 2 W. This manual is written for it.</p>
+      <ul><li>Dashboard: every tab is kept. It searches the AllStar and EchoLink lists from disk instead of memory, and refreshes less often.</li>
+        <li>SysMon: drops the Firewall, Reg, Net, Zello and Console tabs to save memory.</li></ul></div>
+    <div class="box"><h4 style="color:var(--org)">Full build <span class="badge full">FULL</span></h4>
+      <p>For a Pi 3, 4 or 5.</p>
+      <ul><li>Dashboard: the same tabs, and it keeps the lists in memory.</li>
+        <li>SysMon: all 19 tabs. Chapter 6 covers the five extra ones.</li></ul></div>
+  </div>
+  <p><b>Which build am I running?</b> Look at the version in the page header. A Pi Zero 2 W build version ends
+    in <code>-pi02w</code>, for example <code>6.13.67.9-pi02w</code>. A full build version doesn't, for example
+    <code>6.13.74</code>.</p>
+  <div class="call note"><span class="t">NOTE</span>Apart from SysMon, the builds look and work the same, so this
+    manual points out the full build only where it differs.</div>
+
+  <h2><span class="n">1.5</span>Logging in</h2>
+  <ol class="steps">
+    <li>Open the page in a browser: <code>http://&lt;pi-address&gt;:&lt;port&gt;</code>, for example <code>http://192.168.1.50:9999</code> for SysMon.</li>
+    <li>Type the Pi's <b>root password</b> and press Log In. There is no user name.</li>
+    <li>When you're done, press <b>Log Out</b> in the header, especially on a shared computer.</li>
+  </ol>
+  <ul>
+    <li><b>Each tool has its own login.</b> Logging in to SysMon doesn't log you in to the Dashboard.</li>
+    <li><b>Wrong passwords lock you out for a while.</b> After several wrong tries in a row, that address has to wait before it can try again, and the wait grows with each failure. Wait it out; don't keep guessing.</li>
+    <li><b>44helper stays logged in</b> until you log out, press <b>Log out all devices</b>, or the Pi reboots, because its jobs can run for a long time.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>The pages use plain HTTP, so your password crosses the network
+    unencrypted. Only open them on your own network or over a VPN or tunnel, never straight from the internet.
+    Chapters 7 and 8 cover safe remote access with 44helper.</div>
+  <div class="call tip"><span class="t">TIP</span>If the login is always refused, set the root password again on the
+    Pi with <code>sudo passwd root</code>. Raspberry Pi OS ships with root locked, so a new Pi needs this once.</div>
+
+  <h2><span class="n">1.6</span>Phones and tablets</h2>
+  <p>The pages are laid out for phone, tablet and desktop widths. On a phone, wide tables hide their less
+    important columns, and the tab row wraps onto more lines. Turning a tablet to landscape shows everything.</p>
+  <p>Leave a page open only while you're using it. Each open page polls its tool for fresh data, and on a
+    Pi Zero 2 W that costs CPU and memory.</p>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>Services, files and ports</h2>
+    <table>
+      <tr><th>Tool</th><th>systemd service</th><th>Program</th><th>Config</th></tr>
+      <tr><td>Dashboard</td><td class="mono">asl_dvs_dashboard</td><td class="mono">/usr/local/bin/asl_dvs_dashboard.py</td><td class="mono">/etc/asl_dvs/asl_dvs.conf</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon</td><td class="mono">/usr/local/bin/sysmon.py</td><td class="mono">/etc/sysmon/sysmon.conf</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper</td><td class="mono">/opt/44helper/asl_dvs_m17_44helper.py</td><td class="mono">/etc/44helper/44helper.conf</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon</td><td class="mono">/usr/local/bin/instmon.py</td><td class="mono">/etc/asl_dvs/instmon_library/</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon</td><td class="mono">/usr/local/bin/wifimon.py</td><td class="mono">/etc/wifimon/wifimon.conf</td></tr>
+    </table>
+    <p>The Dashboard and SysMon program paths are links into <code>/usr/local/lib/asl_dvs/</code> and
+      <code>/usr/local/lib/asl_dvs_sysmon/</code>. The installed file keeps its own name, so the version is always
+      visible on disk.</p>
+
+    <h3>One process each, started through the launcher</h3>
+    <p>Every service starts its tool through the shared launcher <code>/usr/local/bin/asl_dvs_launch.py</code>:</p>
+<pre>ExecStart=/usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/sysmon.py</pre>
+    <p>The launcher loads the tool as a module so that Python keeps its compiled copy in <code>__pycache__</code>.
+      That roughly halves each tool's memory (SysMon on a Pi Zero 2 W: 54 MB started directly, 26 MB through the
+      launcher). The launcher also turns on three memory savers: <code>python3 -OO</code>,
+      <code>MALLOC_ARENA_MAX=2</code> and a periodic <code>malloc_trim</code>. Each has an off-switch file in
+      <code>/etc/asl_dvs/</code> named <code>launch_no_optimize</code>, <code>launch_no_arena_cap</code> or
+      <code>launch_no_trim</code>.</p>
+
+    <h3>How a page works</h3>
+    <ul>
+      <li>Each tool is a small Python HTTP server. The page's HTML, CSS and JavaScript are built into the tool's file, so
+        there is nothing else to install and no web server to configure.</li>
+      <li>The page fetches live data from the tool's own <code>/api/...</code> addresses as JSON and redraws its cards.</li>
+      <li>The login checks the password against the root entry in <code>/etc/shadow</code>, and sets a session cookie.
+        Requests that change anything also need a matching CSRF header, so another web page can't act for you.</li>
+      <li>Version numbers come from the <code>VERSION</code> line in each file. The <code>-pi02w</code> suffix is how the
+        installer and instmon recognise the Pi Zero 2 W build.</li>
+    </ul>
+
+    <h3>Checking on a tool from the shell</h3>
+<pre><span class="c"># is it running, and its last 30 log lines</span>
+systemctl status sysmon --no-pager
+journalctl -u sysmon -n 30 --no-pager
+<span class="c"># is anything listening on its port?</span>
+ss -tlnp | grep 9999
+<span class="c"># restart all the web tools</span>
+sudo systemctl restart sysmon asl_dvs_dashboard instmon wifimon 44helper</pre>
+  </div>
+</section>
+
+<section class="chapter" id="ch2">
+  <div class="kicker">Chapter 2 · Setup</div>
+  <h1 class="ch">Installing and updating, in brief</h1>
+  <p class="ch-lede">This chapter covers just enough to get the suite onto a node and keep it current. For every
+    step and option, use the install manual for your build.</p>
+  <table>
+    <tr><th>Manual</th><th>File in docs/</th></tr>
+    <tr><td>Pi Zero 2 W install</td><td class="mono">ASL-DVS_Pi02w_Install_Manual.pdf</td></tr>
+    <tr><td>Full build install <span class="badge full">FULL</span></td><td class="mono">ASL-DVS_Full_Build_Install_Manual.pdf</td></tr>
+  </table>
+
+  <h2><span class="n">2.1</span>Before you start</h2>
+  <ul>
+    <li>A Raspberry Pi already running AllStarLink 3 with DVSwitch set up.</li>
+    <li>SSH access with <code>sudo</code>, and a root password (<code>sudo passwd root</code>).</li>
+    <li>On a Pi Zero 2 W, some free memory. Check with <code>free -m</code>. The install manual lists services you can turn off if you don't use them.</li>
+  </ul>
+
+  <h2><span class="n">2.2</span>Install in three steps</h2>
+  <ol class="steps">
+    <li><b>Get the files.</b> Download the current files from github.com/kd8pgk/ASL-DVS into one folder on the Pi.</li>
+    <li><b>Install instmon first.</b> It can then install and update everything else from the browser.
+<pre>sudo python3 instmon_v2_38_3_20261007.py --install</pre></li>
+    <li><b>Install the rest</b> with the installer. On a new node it asks for your callsign, node number and a label.
+<pre>sudo bash install_asl_dvs_v6_6_20261006.sh</pre></li>
+  </ol>
+  <p>The installer picks the build for you: the Pi Zero 2 W build on a Pi Zero 2 W, the full build on anything else.
+    If one build is already installed, it keeps that build. When it finishes, it checks that each tool is running
+    and listening on its port.</p>
+  <div class="call tip"><span class="t">TIP</span>44helper is optional. Install it the same way, or from
+    instmon's page, when you want its remote-access, installer or Config tools.</div>
+
+  <h2><span class="n">2.3</span>First visit to each page</h2>
+  <table>
+    <tr><th>Page</th><th>Address</th><th>Check first</th></tr>
+    <tr><td>Dashboard</td><td class="mono">http://&lt;pi-address&gt;:8989</td><td>Your callsign and node number are right in the header.</td></tr>
+    <tr><td>SysMon</td><td class="mono">http://&lt;pi-address&gt;:9999</td><td>The Overview shows no red items (Chapter 3).</td></tr>
+    <tr><td>instmon</td><td class="mono">http://&lt;pi-address&gt;:8990</td><td>Every tool shows as installed and running.</td></tr>
+    <tr><td>wifimon</td><td class="mono">http://&lt;pi-address&gt;:8991</td><td>Answer "Turn the watchdogs on?" (below).</td></tr>
+    <tr><td>44helper</td><td class="mono">http://&lt;pi-address&gt;:9997</td><td>Take a restore point on the Config tab (Chapter 11).</td></tr>
+  </table>
+  <h3>wifimon's watchdogs</h3>
+  <p>A new wifimon starts with both watchdogs off: it shows WiFi and voltage, but won't act on them. On your first
+    login it asks whether to turn them on. <b>Add your WiFi networks first.</b></p>
+  <ul>
+    <li><b>WiFi watchdog:</b> reconnects to your saved networks, and shuts the Pi down after 3 minutes with no connection.</li>
+    <li><b>Voltage watchdog:</b> shuts the Pi down after 30 seconds of low supply voltage.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>Both watchdogs can shut the node down. A Pi Zero 2 W is
+    sensitive to voltage drop, so use a good power supply and a short cable before turning the voltage watchdog on.</div>
+
+  <h2><span class="n">2.4</span>Keeping the suite up to date</h2>
+  <p>Updates come from GitHub through instmon's <b>GitHub Updates</b> section.</p>
+  <figure>
+    <div class="mock">
+      <div class="sect">GitHub Updates</div>
+      <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="txt">3 newer on GitHub · checked 14:02</span></div>
+      <div class="row"><span class="txt">Pi Zero 2 W build:</span><span class="btn c">Pi02w fork (default)</span><span class="btn">Full build (override)</span></div>
+      <table>
+        <tr><th>Tool</th><th>Installed</th><th>GitHub</th><th></th></tr>
+        <tr><td>SysMon</td><td class="mono">6.13.67.8-pi02w</td><td class="mono">6.13.67.9-pi02w</td><td class="warn">NEWER</td></tr>
+        <tr><td>44helper</td><td class="mono">0.0.174</td><td class="mono">0.0.175</td><td class="warn">NEWER</td></tr>
+        <tr><td>SysMon</td><td class="mono">—</td><td class="mono">6.13.74</td><td style="color:var(--muted)">other build</td></tr>
+      </table>
+      <div class="row" style="padding-top:.5em"><span class="btn c">Quiet System</span><span class="btn">Restore</span></div>
+    </div>
+    <figcaption><b>Figure 2.1 · Illustration.</b> instmon's GitHub Updates section on a Pi Zero 2 W. The build
+      choice appears only on a Pi Zero 2 W.</figcaption>
+  </figure>
+  <table>
+    <tr><th>Button</th><th>What it does</th></tr>
+    <tr><td>Check GitHub</td><td>Lists the newest copy of each tool on GitHub, and marks the ones newer than yours.</td></tr>
+    <tr><td>Update</td><td>Downloads and checks one file into instmon's library. Nothing is installed until you press Install on it.</td></tr>
+    <tr><td>Full Update</td><td>Updates every installed tool in one go, one tool at a time, with automatic roll-back if a new version fails.</td></tr>
+    <tr><td>Quiet System</td><td>Pauses SysMon, the Dashboard and 44helper during a big upload or install. The radio side keeps running, and everything comes back by itself after 30 minutes. <b>Restore</b> brings it back sooner.</td></tr>
+  </table>
+  <div class="call tip"><span class="t">TIP</span>Before a Full Update, take a restore point in 44helper's Config
+    tab. Full Update only replaces the tools, but a restore point means you can roll back any config change you
+    make while trying out the new versions.</div>
+  <p>Updating Linux, ASL3 and DVSwitch packages is a separate job. 44helper's Update tab handles it (Chapter 10).</p>
+
+  <h2><span class="n">2.5</span>Removing the suite</h2>
+<pre><span class="c"># remove one tool</span>
+sudo python3 /usr/local/bin/sysmon.py --uninstall
+<span class="c"># remove every tool except instmon</span>
+sudo bash uninstall_asl_dvs_all_v1_3.sh</pre>
+  <p>Your settings in <code>/etc/asl_dvs/</code>, instmon's library and wifimon's config stay in place. Remove
+    instmon last, with its own <code>--uninstall</code>.</p>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>What install and update actually do</h2>
+    <h3>--install, per tool</h3>
+    <ul>
+      <li>Copies the file into place, writes its <code>.service</code> unit, and writes the shared launcher if it is missing.</li>
+      <li>Enables the service so it starts at boot, and starts it.</li>
+      <li><code>--uninstall</code> stops and removes the service and the program. It removes the launcher only once no other service uses it.</li>
+    </ul>
+    <h3>How the installer picks a build</h3>
+    <ol>
+      <li><code>SYSMON_VARIANT</code> / <code>DASH_VARIANT</code> set to <code>pi02w</code> or <code>full</code>, if you set them;</li>
+      <li>otherwise, the build already installed;</li>
+      <li>otherwise, <code>pi02w</code> on a Pi Zero 2 W and <code>full</code> on any other Pi.</li>
+    </ol>
+    <p>If no file of the chosen build is found, that tool is skipped with a warning; the other build is never used
+      in its place. The installer looks in its own folder, the current folder, <code>/root</code>, <code>/home/pi</code>,
+      your home folder, <code>/tmp</code> and instmon's library. <code>--non-interactive</code> (or <code>-y</code>)
+      skips every question and takes the identity from <code>AUTO_CALLSIGN</code>, <code>AUTO_NODE</code> and
+      <code>AUTO_LABEL</code>.</p>
+    <h3>The checks on every download</h3>
+    <p>Before instmon saves a file from GitHub, the file must match GitHub's file list. It must also have a version
+      line and the right first line, pass a syntax check, and support <code>--install</code>.</p>
+    <h3>Full Update, step by step</h3>
+    <ol>
+      <li>Downloads and checks every new file before anything changes.</li>
+      <li>Pauses the web tools.</li>
+      <li>For each tool in turn, saves a copy of the installed file in the library, runs the old <code>--uninstall</code>, and runs the new <code>--install</code>. If the new one fails, it puts the old one back and moves on.</li>
+      <li>Updates instmon last. A timer reinstalls the old instmon if the new one isn't answering after 90 seconds.</li>
+      <li>Ends with a summary. New install scripts go only to the Scripts library and are never run for you.</li>
+    </ol>
+    <p>On a Pi Zero 2 W, the build choice decides which build Full Update installs. A tool installed in the other
+      build is listed as <b>SWITCH</b> and replaced. On other Pis the choice is hidden and each tool keeps its build.</p>
+    <h3>Settings that survive an update</h3>
+    <p>Config files in <code>/etc</code> are never touched by an update. SysMon's Hardware tab options (HDMI and video
+      driver off, lower GPU memory) are saved when SysMon is uninstalled during an update and put back on install, if
+      the install follows within 30 minutes.</p>
+  </div>
+</section>
+
+</body>
+</html>
