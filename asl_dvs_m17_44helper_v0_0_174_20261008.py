@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.170"
-APP_STAGE = "v0.0.170: Config tab: reinstall the tools from the library and reboot after a config change; Services rows line up; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.174"
+APP_STAGE = "v0.0.174: Config tab: Identity card of callsigns, IDs and passwords (masked, Reveal after the root password); Phone accounts in restore points; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -7791,6 +7791,13 @@ header {
 .cfg-table th,.cfg-table td{border:1px solid var(--border2);padding:.3rem .45rem;text-align:left;vertical-align:top}
 .cfg-hint{font-family:var(--mono);font-size:.72rem;color:var(--muted)}
 .cfg-chk{display:inline-block;margin-right:1rem;font-family:var(--mono);font-size:.8rem}
+.cfg-id-chip{display:inline-block;padding:0 .35rem;border:1px solid var(--border2);border-radius:3px;font-size:.7rem;white-space:nowrap;color:var(--muted)}
+.cfg-id-chip.ok{color:var(--green);border-color:var(--green)}
+.cfg-id-chip.bad{color:var(--red);border-color:var(--red)}
+.cfg-id-chip.warn{color:var(--amber);border-color:var(--amber)}
+.cfg-id-band{font-family:var(--mono);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:.8rem 0 .2rem}
+.cfg-id-tag{font-weight:bold;color:var(--amber);margin-left:.3rem}
+.cfg-id-val{min-width:10ch;overflow-wrap:anywhere}
 
 .tab-panel {
   border: 1px solid var(--border2);
@@ -8279,6 +8286,13 @@ _CFGR_GROUPS: dict[str, dict] = {
             "optional": [],
             "globs": [],
             "services": ["usrp2m17", "asterisk"]},
+    "phone": {"label": "Phone", "markers": ["/etc/asl_dvs/phone.json"],
+              "core": ["/etc/asl_dvs/phone.json"],
+              "optional": ["/etc/asterisk/dvs_phone_extensions.conf", "/etc/asterisk/dvs_phone_pjsip.conf",
+                           "/etc/asterisk/dvs_phone_iax.conf", "/etc/asterisk/dvs_phone_iax_reg.conf",
+                           "/etc/asterisk/pjsip.conf"],
+              "globs": [],
+              "services": ["asterisk"]},
 }
 for _g in _CFGR_GROUPS.values():
     _g["files"] = _g["core"] + _g["optional"]
@@ -8524,6 +8538,406 @@ def _cfgr_changed_files(snap_dir: str, m: dict) -> dict[str, list[str]]:
         out[g] = changed
     return out
 
+_CFGR_ID_MASK = "•" * 6
+_CFGR_ID_BANDS: list[tuple[str, str]] = [
+    ("same", "Same everywhere"), ("match", "Must match"), ("alone", "Stands alone"), ("phone", "Phone accounts")]
+_CFGR_ID_GROUPS: dict[str, dict] = {
+    "callsign": {"label": "Callsign", "band": "same", "mode": "equal", "norm": "call"},
+    "node": {"label": "ASL node number", "band": "same", "mode": "member", "norm": "plain"},
+    "dmr": {"label": "DMR ID (7 digits)", "band": "same", "mode": "equal", "norm": "dmr7"},
+    "dmr_full": {"label": "DMR ID + suffix", "band": "match", "mode": "equal", "norm": "plain"},
+    "ami": {"label": "AMI secret", "band": "match", "mode": "equal", "norm": "plain"},
+    "node_pw": {"label": "ASL node password", "band": "match", "mode": "equal", "norm": "plain"},
+    "bm_pw": {"label": "BrandMeister password", "band": "match", "mode": "equal", "norm": "plain"},
+    "alone": {"label": "Stands alone", "band": "alone", "mode": "none", "norm": "plain"},
+    "phone": {"label": "Phone account", "band": "phone", "mode": "equal", "norm": "plain"},
+}
+_CFGR_HELPER_CONF = "/etc/44helper/44helper.conf"
+_CFGR_PHONE_JSON = "/etc/asl_dvs/phone.json"
+_CFGR_VARTXT = "/var/lib/dvswitch/dvs/var.txt"
+_CFGR_RPT_HTTP = "/etc/asterisk/rpt_http_registrations.conf"
+_CFGR_MANAGER = "/etc/asterisk/manager.conf"
+_CFGR_PH_PJSIP = "/etc/asterisk/dvs_phone_pjsip.conf"
+_CFGR_PH_IAX = "/etc/asterisk/dvs_phone_iax.conf"
+_CFGR_ID_FIELDS: list[dict] = [
+    {"fid": "helper_call", "label": "44helper callsign", "src": "ini", "file": _CFGR_HELPER_CONF,
+     "section": "identity", "key": "callsign", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "helper_node", "label": "44helper node", "src": "ini", "file": _CFGR_HELPER_CONF,
+     "section": "identity", "key": "node", "groups": ("node",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "rpt_node", "label": "Public node", "src": "rpt_public", "file": _CFGR_RPT,
+     "groups": ("node",), "form": "section_name", "kind": "value", "anchor": True},
+    {"fid": "rpt_idrec", "label": "ID recording", "src": "rpt_key", "file": _CFGR_RPT, "key": "idrecording",
+     "groups": ("callsign",), "form": "idrec", "kind": "value"},
+    {"fid": "rpt_idtalk", "label": "ID talkover", "src": "rpt_key", "file": _CFGR_RPT, "key": "idtalkover",
+     "groups": ("callsign",), "form": "idrec", "kind": "value"},
+    {"fid": "ext_node", "label": "extensions.conf NODE", "src": "ini", "file": _CFGR_EXT,
+     "section": "globals", "key": "NODE", "groups": ("node",), "form": "plain", "kind": "value"},
+    {"fid": "savenode_node", "label": "savenode NODE", "src": "flat", "file": _CFGR_SAVENODE,
+     "key": "NODE", "groups": ("node",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "savenode_pw", "label": "savenode PASSWORD", "src": "flat", "file": _CFGR_SAVENODE,
+     "key": "PASSWORD", "groups": ("node_pw",), "form": "plain", "kind": "secret", "expect": True,
+     "scope_from": ("flat", "NODE")},
+    {"fid": "reg_node", "label": "Registration node", "src": "register", "file": _CFGR_RPT_HTTP,
+     "part": "node", "groups": ("node",), "form": "reg_node", "kind": "value"},
+    {"fid": "reg_pw", "label": "Registration password", "src": "register", "file": _CFGR_RPT_HTTP,
+     "part": "pw", "groups": ("node_pw",), "form": "reg_pw", "kind": "secret"},
+    {"fid": "allmon_node", "label": "Allmon3 node", "src": "allmon_node", "file": _CFGR_ALLMON,
+     "groups": ("node",), "form": "section_name", "kind": "value"},
+    {"fid": "allmon_pass", "label": "Allmon3 pass", "src": "allmon_pass", "file": _CFGR_ALLMON,
+     "groups": ("ami",), "form": "plain", "kind": "secret"},
+    {"fid": "manager_secret", "label": "AMI user secret", "src": "manager", "file": _CFGR_MANAGER,
+     "groups": ("ami",), "form": "plain", "kind": "secret"},
+    {"fid": "el_call", "label": "EchoLink callsign", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "call",
+     "groups": ("callsign",), "form": "echolink", "kind": "value"},
+    {"fid": "el_astnode", "label": "EchoLink astnode", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "astnode",
+     "groups": ("node",), "form": "plain", "kind": "value"},
+    {"fid": "el_node", "label": "EchoLink node number", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "node",
+     "groups": ("alone",), "form": "plain", "kind": "value"},
+    {"fid": "el_pwd", "label": "EchoLink password", "src": "echolink", "file": _CFGR_ECHOLINK, "key": "pwd",
+     "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "iax_secret", "label": "IAX client secret", "src": "iax_secret",
+     "files": [_CFGR_IAX, "/etc/asterisk/custom/iax.conf", "/etc/asterisk/custom/iax/iaxrpt-users.conf",
+               "/etc/asterisk/custom/iax/iaxclient-users.conf"],
+     "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "mb_call", "label": "MMDVM_Bridge callsign", "src": "ini", "file": _CFGR_MMDVM,
+     "section": "general", "key": "Callsign", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "mb_id", "label": "MMDVM_Bridge Id", "src": "ini", "file": _CFGR_MMDVM,
+     "section": "general", "key": "Id", "groups": ("dmr", "dmr_full"), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "mb_dmr_pw", "label": "DMR network password", "src": "ini", "file": _CFGR_MMDVM,
+     "section": "dmr network", "key": "Password", "groups": ("alone",), "form": "plain", "kind": "secret", "expect": True},
+    {"fid": "mb_nxdn_id", "label": "NXDN Id", "src": "ini", "file": _CFGR_MMDVM,
+     "section": "nxdn", "key": "Id", "groups": ("alone",), "form": "plain", "kind": "value"},
+    {"fid": "ab_gw_id", "label": "Analog_Bridge gatewayDmrId", "src": "ini", "file": _CFGR_AB,
+     "section": "ambe_audio", "key": "gatewayDmrId", "groups": ("dmr",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "ab_rpt_id", "label": "Analog_Bridge repeaterID", "src": "ini", "file": _CFGR_AB,
+     "section": "ambe_audio", "key": "repeaterID", "groups": ("dmr", "dmr_full"), "form": "plain", "kind": "value",
+     "expect": True},
+    {"fid": "stfu_id", "label": "STFU UserID", "src": "ini", "file": _CFGR_DVSINI,
+     "section": "stfu", "key": "UserID", "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "stfu_pw", "label": "STFU BMPassword", "src": "ini", "file": _CFGR_DVSINI,
+     "section": "stfu", "key": "BMPassword", "groups": ("bm_pw",), "form": "plain", "kind": "secret"},
+    {"fid": "stfu_ta", "label": "STFU TalkerAlias", "src": "ini", "file": _CFGR_DVSINI,
+     "section": "stfu", "key": "TalkerAlias", "groups": ("alone",), "form": "plain", "kind": "value"},
+    {"fid": "var_call", "label": "dvs call_sign", "src": "flat", "file": _CFGR_VARTXT, "key": "call_sign",
+     "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "var_dmr", "label": "dvs dmr_id", "src": "flat", "file": _CFGR_VARTXT, "key": "dmr_id",
+     "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "var_bm_pw", "label": "dvs bm_password", "src": "flat", "file": _CFGR_VARTXT, "key": "bm_password",
+     "groups": ("bm_pw",), "form": "plain", "kind": "secret"},
+    {"fid": "var_tgif_pw", "label": "dvs tgif_password", "src": "flat", "file": _CFGR_VARTXT, "key": "tgif_password",
+     "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "ircddb_gw", "label": "gatewayCallsign", "src": "flat", "file": _CFGR_IRCDDB, "key": "gatewayCallsign",
+     "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "ircddb_rpt", "label": "repeaterCall1", "src": "flat", "file": _CFGR_IRCDDB, "key": "repeaterCall1",
+     "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "ircddb_user", "label": "ircddbUsername", "src": "flat", "file": _CFGR_IRCDDB, "key": "ircddbUsername",
+     "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "ircddb_dplus", "label": "dplusLogin", "src": "flat", "file": _CFGR_IRCDDB, "key": "dplusLogin",
+     "groups": ("callsign",), "form": "plain", "kind": "value"},
+    {"fid": "ircddb_pw", "label": "ircddbPassword", "src": "flat", "file": _CFGR_IRCDDB, "key": "ircddbPassword",
+     "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "ircddb_remote_pw", "label": "remotePassword", "src": "flat", "file": _CFGR_IRCDDB,
+     "key": "remotePassword", "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "ysf_call", "label": "YSFGateway callsign", "src": "ini", "file": _CFGR_YSFGW,
+     "section": "general", "key": "Callsign", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "ysf_id", "label": "YSFGateway Id", "src": "ini", "file": _CFGR_YSFGW,
+     "section": "general", "key": "Id", "groups": ("dmr",), "form": "plain", "kind": "value"},
+    {"fid": "ysf_aprs", "label": "YSFGateway APRS password", "src": "ini", "file": _CFGR_YSFGW,
+     "section": "aprs", "key": "Password", "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "p25_call", "label": "P25Gateway callsign", "src": "ini", "file": _CFGR_P25GW,
+     "section": "general", "key": "Callsign", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "nxdn_call", "label": "NXDNGateway callsign", "src": "ini", "file": _CFGR_NXDNGW,
+     "section": "general", "key": "Callsign", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
+    {"fid": "nxdn_aprs", "label": "NXDNGateway APRS password", "src": "ini", "file": _CFGR_NXDNGW,
+     "section": "aprs", "key": "Password", "groups": ("alone",), "form": "plain", "kind": "secret"},
+    {"fid": "m17_call", "label": "USRP2M17 callsign", "src": "ini", "file": _CFGR_M17INI,
+     "section": "m17 network", "key": "Callsign", "groups": ("callsign",), "form": "first", "kind": "value", "expect": True},
+    {"fid": "ph_json", "label": "phone.json", "src": "phone_json", "file": _CFGR_PHONE_JSON,
+     "groups": ("phone",), "form": "plain", "kind": "value"},
+    {"fid": "ph_pjsip", "label": "dvs_phone_pjsip.conf", "src": "phone_pjsip", "file": _CFGR_PH_PJSIP,
+     "groups": ("phone",), "form": "plain", "kind": "secret"},
+    {"fid": "ph_iax", "label": "dvs_phone_iax.conf", "src": "phone_iax", "file": _CFGR_PH_IAX,
+     "groups": ("phone",), "form": "plain", "kind": "secret"},
+]
+_CFGR_PHONE_KEYS: list[tuple[str, str, str]] = [
+    ("username", "Username", "value"), ("password", "Password", "secret"), ("auth_id", "Authentication ID", "value"),
+    ("caller_id", "Caller ID", "value"), ("display_name", "Display name", "value"), ("callsign", "Callsign", "value"),
+    ("dmr_id", "DMR ID", "value"), ("extension", "Extension", "value"), ("email", "Email", "value"),
+    ("pin", "Incoming-call PIN", "secret"), ("voicemail_pin", "Voicemail PIN", "secret")]
+_CFGR_CALL_SUFFIX_RE = re.compile(r"(?:[-/][LR])$")
+_CFGR_REG_RE = re.compile(r"^(\s*register\s*=>\s*)(\d+)(:)([^@\s;]*)(@.*)$", re.I)
+
+def _cfgr_id_parse(form: str, raw: str) -> str:
+    v = raw.strip()
+    if form == "first":
+        return v.split()[0] if v else ""
+    if form == "idrec":
+        if not v.lower().startswith("|i"):
+            return ""
+        rest = v[2:].strip()
+        return rest.split()[0] if rest else ""
+    if form == "echolink":
+        return re.sub(r"-[LRlr]$", "", v)
+    return v
+
+def _cfgr_id_render(form: str, value: str, old: str) -> str:
+    if form == "first":
+        parts = old.strip().split(None, 1)
+        return value + (" " + parts[1] if len(parts) > 1 else "")
+    if form == "idrec":
+        lead = old[:len(old) - len(old.lstrip())]
+        rest = old.strip()[2:].strip()
+        parts = rest.split(None, 1)
+        return lead + old.strip()[:2] + value + (" " + parts[1] if len(parts) > 1 else "")
+    if form == "echolink":
+        m = re.search(r"-[LRlr]$", old.strip())
+        return value + (m.group(0) if m else "")
+    return value
+
+def _cfgr_id_norm(norm: str, value: str) -> str:
+    v = value.strip()
+    if norm == "call":
+        v = v.upper().split()[0] if v else ""
+        return _CFGR_CALL_SUFFIX_RE.sub("", v)
+    if norm == "dmr7":
+        return v[:7] if v.isdigit() and len(v) >= 7 else v
+    return v
+
+def _cfgr_flat(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s[0] in "#;[" or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        v = v.strip()
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+            v = v[1:-1]
+        out.setdefault(k.strip(), v)
+    return out
+
+def _cfgr_ast_sections(path: str) -> tuple[list[tuple[str, dict[str, str]]], set[str]] | None:
+    text = _cfgr_text(path)
+    if text is None:
+        return None
+    lines = _cfgr_lines(text)
+    mask = _cfgr_managed_mask(lines)
+    out = []
+    managed = _cfgr_managed_headers(lines, mask)
+    for s in _cfgr_sections(lines, mask):
+        kv: dict[str, str] = {}
+        for i in range(s["start"] + 1, s["end"]):
+            p = None if mask[i] else _cfgr_kv(lines[i])
+            if p and p[0].lower() not in kv:
+                kv[p[0].lower()] = p[1]
+        out.append((s["name"], kv))
+    return out, managed
+
+def _cfgr_id_instances(fd: dict, cache: dict) -> list[dict]:
+    def text(path):
+        if path not in cache:
+            cache[path] = _cfgr_text(path)
+        return cache[path]
+    src = fd["src"]
+    out: list[dict] = []
+    def add(file, where, raw, scope="", found=True, sub=""):
+        out.append({"file": file, "where": where, "raw": raw, "scope": scope, "found": found, "sub": sub})
+    if src in ("ini", "flat"):
+        t = text(fd["file"])
+        if t is None:
+            return out
+        if src == "flat":
+            kv = _cfgr_flat(t)
+            val = kv.get(fd["key"])
+            where = fd["key"]
+        else:
+            sec = _cfgr_ini_sections(t).get(fd["section"], None)
+            val = None if sec is None else sec.get(fd["key"].lower())
+            where = f"[{fd['section']}] {fd['key']}"
+        scope = ""
+        if fd.get("scope_from") and val is not None:
+            scope = _cfgr_flat(t).get(fd["scope_from"][1], "")
+        if val is not None or fd.get("expect"):
+            add(fd["file"], where, val or "", scope, val is not None)
+        return out
+    if src in ("rpt_public", "rpt_key"):
+        r = _cfgr_ast_sections(fd["file"])
+        if r is None:
+            return out
+        secs, managed = r
+        for name, kv in secs:
+            if not name.isdigit() or name in managed:
+                continue
+            if src == "rpt_public":
+                if not _cfgr_is_private(name):
+                    add(fd["file"], f"[{name}]", name, name)
+            elif fd["key"] in kv:
+                add(fd["file"], f"[{name}] {fd['key']}", kv[fd["key"]], "", True,
+                    "private node" if _cfgr_is_private(name) else "")
+        return out
+    if src == "register":
+        t = text(fd["file"])
+        if t is None:
+            return out
+        for line in t.splitlines():
+            m = _CFGR_REG_RE.match(line)
+            if m and not line.lstrip().startswith(";"):
+                node = m.group(2)
+                add(fd["file"], f"register => {node}", node if fd["part"] == "node" else m.group(4), node)
+        return out
+    if src in ("allmon_node", "allmon_pass"):
+        r = _cfgr_ast_sections(fd["file"])
+        if r is None:
+            return out
+        for name, kv in r[0]:
+            if not name.isdigit():
+                continue
+            if src == "allmon_node":
+                if not _cfgr_is_private(name):
+                    add(fd["file"], f"[{name}]", name, name)
+            elif "pass" in kv:
+                add(fd["file"], f"[{name}] pass (user {kv.get('user', '?')})", kv["pass"], kv.get("user", ""))
+        return out
+    if src == "manager":
+        r = _cfgr_ast_sections(fd["file"])
+        a = _cfgr_ast_sections(_CFGR_ALLMON)
+        if r is None:
+            return out
+        users = {kv.get("user", "") for name, kv in (a[0] if a else []) if name.isdigit()}
+        for name, kv in r[0]:
+            if name.lower() != "general" and "secret" in kv and (not users or name in users):
+                add(fd["file"], f"[{name}] secret", kv["secret"], name)
+        return out
+    if src == "echolink":
+        for path in (fd["file"], "/etc/asterisk/custom/echolink.conf"):
+            r = _cfgr_ast_sections(path)
+            if r is None:
+                continue
+            for name, kv in r[0]:
+                if ("call" in kv or "node" in kv) and fd["key"] in kv:
+                    add(path, f"[{name}] {fd['key']}", kv[fd["key"]])
+        return out
+    if src == "iax_secret":
+        for path in fd["files"]:
+            r = _cfgr_ast_sections(path)
+            if r is None:
+                continue
+            for name, kv in r[0]:
+                if "secret" in kv and name.lower() not in ("general", "allstar-public"):
+                    add(path, f"[{name}] secret", kv["secret"])
+        return out
+    if src == "phone_json":
+        t = text(fd["file"])
+        try:
+            doc = json.loads(t) if t is not None else None
+        except ValueError:
+            doc = None
+        if not isinstance(doc, dict):
+            return out
+        for n in doc.get("networks") or []:
+            if not isinstance(n, dict) or not n.get("id"):
+                continue
+            nid = str(n["id"])
+            for key, label, kind in _CFGR_PHONE_KEYS:
+                if str(n.get(key, "") or ""):
+                    add(fd["file"], f"{n.get('name') or nid}: {key}", str(n[key]), nid + ":" + key, True, label)
+                    out[-1]["kind"] = kind
+                    out[-1]["account"] = str(n.get("name") or nid)
+        return out
+    if src in ("phone_pjsip", "phone_iax"):
+        r = _cfgr_ast_sections(fd["file"])
+        if r is None:
+            return out
+        for name, kv in r[0]:
+            if src == "phone_pjsip" and name.endswith("-auth") and "password" in kv:
+                nid = name[:-5]
+                add(fd["file"], f"[{name}] password", kv["password"], nid + ":password", True, "Password")
+            elif src == "phone_iax" and "secret" in kv:
+                add(fd["file"], f"[{name}] secret", kv["secret"], name + ":password", True, "Password")
+                if "username" in kv:
+                    add(fd["file"], f"[{name}] username", kv["username"], name + ":username", True, "Username")
+                    out[-1]["kind"] = "value"
+        return out
+    return out
+
+def _cfgr_identity_scan() -> dict:
+    cache: dict[str, str | None] = {}
+    rows: list[dict] = []
+    for fd in _CFGR_ID_FIELDS:
+        for n, inst in enumerate(_cfgr_id_instances(fd, cache)):
+            value = _cfgr_id_parse(fd["form"], inst["raw"])
+            label = fd["label"] + (" (private node)" if inst.get("sub") == "private node" else "")
+            if fd["src"].startswith("phone_"):
+                label = inst.get("sub") or fd["label"]
+            rows.append({"rid": f"{fd['fid']}#{n}", "fid": fd["fid"], "label": label,
+                         "file": inst["file"], "where": inst["where"], "form": fd["form"],
+                         "kind": inst.get("kind", fd["kind"]), "groups": list(fd["groups"]),
+                         "scope": inst["scope"], "found": inst["found"], "account": inst.get("account", ""),
+                         "anchor": bool(fd.get("anchor")), "raw": inst["raw"], "value": value,
+                         "set": bool(inst["raw"].strip()), "tags": {}, "states": {},
+                         "note": "" if value or not inst["raw"].strip() else "not a callsign (a sound file)"})
+    accounts = {r["scope"].split(":")[0]: r["account"] for r in rows if r["fid"] == "ph_json" and r["account"]}
+    for r in rows:
+        if r["fid"] in ("ph_pjsip", "ph_iax"):
+            r["account"] = accounts.get(r["scope"].split(":")[0], "")
+    groups: dict[str, dict] = {}
+    for gid, g in _CFGR_ID_GROUPS.items():
+        members = [r for r in rows if gid in r["groups"]]
+        if not members:
+            continue
+        scopes: dict[str, list[dict]] = {}
+        for r in members:
+            key = r["scope"] if gid in ("ami", "node_pw", "phone") else ""
+            scopes.setdefault(key, []).append(r)
+        results = []
+        for scope, rs in scopes.items():
+            rs = [r for r in rs if r["value"].strip() or not r["set"]] or rs
+            vals = [(r, _cfgr_id_norm(g["norm"], r["value"])) for r in rs if r["value"].strip()]
+            tags: dict[str, str] = {}
+            state = "none"
+            if g["mode"] == "equal":
+                for _, v in vals:
+                    tags.setdefault(v, chr(ord("A") + len(tags)))
+                state = ("not set" if not vals else "differs" if len(tags) > 1
+                         else "incomplete" if len(vals) < len(rs) else "one copy" if len(rs) == 1 else "match")
+            elif g["mode"] == "member":
+                anchor = {v for r, v in vals if r["anchor"]}
+                bad = [v for r, v in vals if not r["anchor"] and anchor and v not in anchor]
+                state = "not set" if not vals else "no public node" if not anchor else "differs" if bad else "match"
+                for r, v in vals:
+                    tags[v] = "" if v in anchor else "?"
+            for r, v in vals:
+                r["tags"][gid] = tags.get(v, "") if state in ("differs", "no public node") else ""
+            for r in rs:
+                r["states"][gid] = state if r["value"].strip() else "not set"
+            for r in scopes[scope]:
+                r["states"].setdefault(gid, "not compared")
+            results.append({"scope": scope, "state": state, "rows": [r["rid"] for r in rs]})
+        worst = next((s for s in ("differs", "no public node", "incomplete", "not set", "match", "one copy", "none")
+                      if any(x["state"] == s for x in results)), "none")
+        groups[gid] = {"label": g["label"], "band": g["band"], "mode": g["mode"], "state": worst, "scopes": results}
+    files = sorted({r["file"] for r in rows})
+    return {"bands": _CFGR_ID_BANDS, "groups": groups, "rows": rows, "files": files}
+
+def _cfgr_identity_public(reveal: bool = False) -> dict:
+    d = _cfgr_identity_scan()
+    public = sorted({r["value"] for r in d["rows"] if "node" in r["groups"] and r["value"].isdigit()
+                     and not _cfgr_is_private(r["value"])}, key=len, reverse=True)
+    for r in d["rows"]:
+        if not reveal:
+            r["raw"] = _CFGR_ID_MASK if r["set"] else ""
+            r["value"] = _CFGR_ID_MASK if r["value"] else ""
+            for n in public:
+                r["where"] = re.sub(r"(?<!\d)" + re.escape(n) + r"(?!\d)", _CFGR_ID_MASK, r["where"])
+            r["scope"] = ""
+        r.pop("form", None)
+    for g in d["groups"].values():
+        for s in g["scopes"]:
+            s["scope"] = "" if not reveal else s["scope"]
+    d["revealed"] = reveal
+    d["checked_at"] = _cfgr_now()
+    return d
+
 def build_config_status() -> dict:
     snap = _cfgr_snap_dir("restore")
     m = _cfgr_read_manifest(snap)
@@ -8728,6 +9142,9 @@ def _cfgr_act_restore(payload: dict) -> dict:
                      "dashboard (sudo systemctl restart asl_dvs_dashboard).")
     if "simpleusb.conf" in written:
         lines.append("simpleusb.conf was restored: press Restart ASL3 so Asterisk loads it before it saves its own copy.")
+    if "phone.json" in written:
+        lines.append("phone.json was restored: open the dashboard's Phone tab and press Apply to rebuild the phone "
+                     "nodes from the restored accounts.")
     lines.append("Services were NOT restarted. Use the Restart buttons below when ready.")
     log(f"{'OK' if ok else 'FAIL'}: CONFIG restored {', '.join(groups)} from {kind}/{sid or 'restore'}")
     return {"success": ok, "output": "\n".join(lines), "restart_groups": groups}
@@ -10811,6 +11228,17 @@ def _dispatch_config_action(payload: dict) -> dict:
             log(f"FAIL: CONFIG {action}: {exc}")
             return {"success": False, "output": f"Failed: {exc}"}
 
+_CFGR_REVEALED: set[str] = set()
+_CFGR_REVEAL_LOCK = threading.Lock()
+
+def _route_config_identity(query: dict) -> tuple[int, str, bytes]:
+    with _CFGR_LOCK:
+        try:
+            body = _cfgr_identity_public(False)
+        except OSError as exc:
+            body = {"error": str(exc)}
+    return 200, "application/json", json.dumps(body).encode("utf-8")
+
 def _route_config_status(query: dict) -> tuple[int, str, bytes]:
     with _CFGR_LOCK:
         try:
@@ -11090,7 +11518,16 @@ function cfgRender(d) {
     banner.className = 'ov-banner lvl-warn';
     banner.textContent = 'No Restore point yet. Save one when your installs are finished (button below, or the save step on the install tab).';
     banner.style.display = 'block';
-  } else banner.style.display = 'none';
+  } else {
+    var late = order.filter(function(g) { return d.installed[g] && !d.restore.groups[g]; });
+    if (late.length) {
+      banner.className = 'ov-banner lvl-warn';
+      banner.textContent = late.map(cfgLabel).join(', ') + (late.length > 1 ? ' were' : ' was') +
+        ' set up after the Restore point. Press Save Restore point to add ' + (late.length > 1 ? 'them' : 'it') +
+        '; what is already saved is not changed.';
+      banner.style.display = 'block';
+    } else banner.style.display = 'none';
+  }
   var h = '<table class="cfg-table"><tr><th>System</th><th>Installed</th><th>In Restore point</th><th>Changed since</th></tr>';
   order.forEach(function(g) {
     var rg = d.restore.groups[g];
@@ -11239,7 +11676,143 @@ function cfgRiDismiss(btn) {
   cfgPost({action: 'reinstall_dismiss'}, 'cfg-ri-out', btn);
 }
 
+var CFG_ID = null;
+
+function cfgIdChip(state) {
+  var cls = {'match': 'ok', 'differs': 'bad', 'incomplete': 'warn', 'no public node': 'warn', 'not set': 'warn'}[state] || '';
+  var text = {'match': 'matches', 'differs': 'differs', 'incomplete': 'some copies empty', 'no public node': 'no public node',
+              'not set': 'not set', 'one copy': 'one copy', 'not compared': 'not compared', 'none': ''}[state];
+  if (text === undefined) text = state;
+  return text ? '<span class="cfg-id-chip ' + cls + '">' + cfgEsc(text) + '</span>' : '';
+}
+
+function cfgIdRow(r, gid) {
+  var val = r.set ? r.raw : '<span class="cfg-hint">(empty)</span>';
+  if (r.set) val = cfgEsc(val);
+  var tag = (r.tags || {})[gid];
+  var st = (r.states || {})[gid] || '';
+  var check = '';
+  if (r.note) check = '<span class="cfg-hint">' + cfgEsc(r.note) + '</span>';
+  else if (!r.set) check = cfgIdChip('not set');
+  else if (tag === '?') check = '<span class="cfg-id-chip bad">not a public node</span>';
+  if (tag === '?') tag = '';
+  var file = r.file.split('/').pop();
+  return '<tr data-fid="' + cfgEsc(r.fid) + '" data-rid="' + cfgEsc(r.rid) + '"><td>' + cfgEsc(r.label) +
+    (r.kind === 'secret' ? ' <span class="cfg-hint">(secret)</span>' : '') + '</td><td class="cfg-id-val">' + val +
+    (tag ? '<span class="cfg-id-tag">' + cfgEsc(tag) + '</span>' : '') + '</td><td>' + check + '</td><td><span title="' +
+    cfgEsc(r.file) + '">' + cfgEsc(file) + '</span><div class="cfg-hint">' + cfgEsc(r.where) + '</div></td><td class="cfg-id-act"></td></tr>';
+}
+
+function cfgIdRender(d) {
+  var box = document.getElementById('cfg-id');
+  var head = document.getElementById('cfg-id-state');
+  if (!box) return;
+  if (d.error) { box.innerHTML = '<div class="ov-banner lvl-danger">' + cfgEsc(d.error) + '</div>'; return; }
+  var rows = d.rows || [];
+  if (!rows.length) { box.innerHTML = '<span class="cfg-hint">None of the config files this card reads are on this node yet.</span>'; head.textContent = ''; return; }
+  var groups = d.groups || {};
+  var bad = Object.keys(groups).filter(function(g) { return groups[g].state === 'differs'; }).length;
+  head.textContent = bad ? bad + ' group' + (bad > 1 ? 's differ' : ' differs') : 'no differences';
+  var h = '';
+  (d.bands || []).forEach(function(b) {
+    var gids = Object.keys(groups).filter(function(g) { return groups[g].band === b[0]; });
+    if (!gids.length) return;
+    h += '<div class="cfg-id-band">' + cfgEsc(b[1]) + '</div><table class="cfg-table"><tr><th>Field</th><th>Value</th><th>Check</th><th>File</th><th></th></tr>';
+    gids.forEach(function(gid) {
+      var g = groups[gid];
+      var mine = rows.filter(function(r) { return r.groups.indexOf(gid) >= 0; });
+      if (b[0] === 'phone') {
+        var accts = [];
+        mine.forEach(function(r) { if (r.account && accts.indexOf(r.account) < 0) accts.push(r.account); });
+        accts.forEach(function(a) {
+          h += '<tr><td colspan="5"><b>' + cfgEsc(a) + '</b></td></tr>';
+          var bad = mine.some(function(r) { return r.account === a && (r.states || {})[gid] === 'differs'; });
+          if (bad) h = h.replace(/<b>([^<]*)<\/b><\/td><\/tr>$/, '<b>$1</b> ' + cfgIdChip('differs') + '</td></tr>');
+          mine.forEach(function(r) { if (r.account === a) h += cfgIdRow(r, gid); });
+        });
+        var gen = mine.filter(function(r) { return !r.account; });
+        if (gen.length) {
+          h += '<tr><td colspan="5"><b>Not in phone.json</b></td></tr>';
+          gen.forEach(function(r) { h += cfgIdRow(r, gid); });
+        }
+      } else {
+        if (gid !== 'alone') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) + '</td></tr>';
+        mine.forEach(function(r) { h += cfgIdRow(r, gid); });
+      }
+    });
+    h += '</table>';
+  });
+  box.innerHTML = h + '<div class="cfg-hint">When a group differs, the letters A, B show which copies hold the same value. ' +
+    'Phone accounts: the dashboard rewrites the dvs_phone files from phone.json on every Phone-tab Apply. Checked ' + cfgEsc(d.checked_at || '') + '.</div>';
+}
+
+var CFG_ID_REVEALED = false;
+
+function cfgIdButtons() {
+  document.getElementById('cfg-id-reveal-btn').style.display = CFG_ID_REVEALED ? 'none' : '';
+  document.getElementById('cfg-id-hide-btn').style.display = CFG_ID_REVEALED ? '' : 'none';
+}
+
+function cfgIdPostReveal(pw) {
+  return fetch('/api/config/identity_reveal', {
+    method: 'POST', cache: 'no-store',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify(pw ? {password: pw} : {})
+  }).then(function(r) { return r.json(); });
+}
+
+function cfgIdLoad() {
+  if (CFG_ID_REVEALED) {
+    return cfgIdPostReveal('').then(function(d) {
+      if (!d.success) { CFG_ID_REVEALED = false; cfgIdButtons(); return cfgIdLoad(); }
+      CFG_ID = d; cfgIdRender(d);
+    }).catch(function(e) { cfgIdRender({error: 'Could not read identity: ' + e}); });
+  }
+  return fetch('/api/config/identity').then(function(r) { return r.json(); }).then(function(d) {
+    if (CFG_ID_REVEALED) return;
+    CFG_ID = d;
+    cfgIdRender(d);
+  }).catch(function(e) { cfgIdRender({error: 'Could not read identity: ' + e}); });
+}
+
+function cfgIdAskReveal() {
+  document.getElementById('cfg-id-auth').style.display = '';
+  document.getElementById('cfg-id-err').textContent = '';
+  var pw = document.getElementById('cfg-id-pw');
+  pw.value = '';
+  pw.focus();
+}
+
+function cfgIdCancel() {
+  document.getElementById('cfg-id-pw').value = '';
+  document.getElementById('cfg-id-auth').style.display = 'none';
+}
+
+function cfgIdReveal() {
+  var pwEl = document.getElementById('cfg-id-pw');
+  var err = document.getElementById('cfg-id-err');
+  if (!pwEl.value) { err.textContent = 'Enter the root password.'; return; }
+  var btn = document.getElementById('cfg-id-go');
+  btn.disabled = true;
+  cfgIdPostReveal(pwEl.value).then(function(d) {
+    btn.disabled = false;
+    if (!d.success) { err.textContent = d.output || d.error || 'Not revealed.'; return; }
+    pwEl.value = '';
+    document.getElementById('cfg-id-auth').style.display = 'none';
+    CFG_ID_REVEALED = true; cfgIdButtons();
+    CFG_ID = d; cfgIdRender(d);
+  }).catch(function(e) { btn.disabled = false; err.textContent = 'Request failed: ' + e; });
+}
+
+function cfgIdHide() {
+  CFG_ID_REVEALED = false; cfgIdButtons();
+  fetch('/api/config/identity_hide', {method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}, body: '{}'})
+    .finally(function() { cfgIdLoad(); });
+}
+
 function refreshConfig() {
+  cfgIdLoad();
   return fetch('/api/config/status').then(function(r) { return r.json(); }).then(function(d) {
     CFG_STATE = d;
     cfgRender(d);
@@ -11306,6 +11879,28 @@ def _render_config_panel() -> str:
       <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
     </div>
     <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card" id="cfg-id-card">
+    <div class="step-head"><div class="step-title">Identity</div>
+      <span class="cfg-hint" id="cfg-id-state"></span></div>
+    <div class="step-body">Callsigns, IDs and passwords in this node's config files, grouped by which copies must hold the
+      same value. Values are masked; Reveal shows them all, passwords included, after the root password, until you press
+      Hide or reload the page. Read only: change a value in its file, or for phone accounts on the dashboard's Phone tab.
+      The Travel Node preset never carries any of these.</div>
+    <div class="step-actions">
+      <button class="btn-copy" id="cfg-id-reveal-btn" onclick="cfgIdAskReveal()">Reveal</button>
+      <button class="btn-copy" id="cfg-id-hide-btn" style="display:none" onclick="cfgIdHide()">Hide</button>
+    </div>
+    <div class="term-auth" id="cfg-id-auth" style="display:none">
+      <div>Enter the root password to show the values.</div>
+      <input type="password" id="cfg-id-pw" autocomplete="current-password" placeholder="root password"
+             onkeydown="if(event.key==='Enter')cfgIdReveal();if(event.key==='Escape')cfgIdCancel();">
+      <button class="btn-run" id="cfg-id-go" onclick="cfgIdReveal()">Reveal</button>
+      <button class="btn-copy" onclick="cfgIdCancel()">Cancel</button>
+      <span id="cfg-id-err" style="color:var(--red)"></span>
+    </div>
+    <div id="cfg-id"></div>
   </div>
 
   <div class="step-card">
@@ -18487,6 +19082,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/quiet/status": _route_quiet_status,
     "/api/system_opt/status": _route_system_opt_status,
     "/api/config/status": _route_config_status,
+    "/api/config/identity": _route_config_identity,
     "/api/config/listeners": _route_config_listeners,
     "/api/config/reinstall": _route_config_reinstall,
     "/api/action_status": _route_action_status,
@@ -18753,6 +19349,49 @@ class Handler(BaseHTTPRequestHandler):
         ok, msg = _term_switch(True, ip)
         reply(200 if ok else 500, ok, msg)
 
+    def _identity_reveal(self) -> None:
+        def reply(code: int, body: dict) -> None:
+            self._send(code, "application/json", json.dumps(body).encode("utf-8"),
+                       extra_headers={"Cache-Control": "no-store"})
+        ip = self._client_ip()
+        payload, err = self._read_json_body()
+        if err is not None:
+            self._send(400, "application/json", err)
+            return
+        key = _session_key(self._session_token())
+        pw = str(payload.get("password", ""))
+        if not pw:
+            with _CFGR_REVEAL_LOCK:
+                granted = key in _CFGR_REVEALED
+            if not granted:
+                reply(403, {"success": False, "output": "Enter the root password."})
+                return
+        else:
+            locked_until = _login_is_locked(ip)
+            if locked_until is not None:
+                reply(429, {"success": False,
+                            "output": f"Too many failed attempts -- try again in {max(0, int(locked_until - time.time()))}s"})
+                return
+            if not _verify_root_password(pw):
+                _login_record_failure(ip)
+                log(f"Config: wrong root password from {ip} for identity reveal")
+                reply(403, {"success": False, "output": "Wrong root password."})
+                return
+            _login_record_success(ip)
+            with _auth_lock:
+                live = set(_auth_sessions)
+            with _CFGR_REVEAL_LOCK:
+                _CFGR_REVEALED.intersection_update(live)
+                _CFGR_REVEALED.add(key)
+            log(f"Config: identity values revealed to {ip}")
+        with _CFGR_LOCK:
+            try:
+                body = _cfgr_identity_public(True)
+            except OSError as exc:
+                body = {"error": str(exc)}
+        body["success"] = "error" not in body
+        reply(200, body)
+
     def _term_open(self) -> None:
         def reply(code: int, ok: bool, msg: str, **extra) -> None:
             self._send(code, "application/json",
@@ -18921,6 +19560,16 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/term/open":
             self._term_open()
+            return
+
+        if path == "/api/config/identity_reveal":
+            self._identity_reveal()
+            return
+
+        if path == "/api/config/identity_hide":
+            with _CFGR_REVEAL_LOCK:
+                _CFGR_REVEALED.discard(_session_key(self._session_token()))
+            self._send(200, "application/json", b'{"success": true}')
             return
 
         if path == "/api/term/enable":
