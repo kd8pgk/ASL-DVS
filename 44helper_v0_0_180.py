@@ -40,8 +40,9 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.179"
-APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.180"
+BUILD_DATE = "2026-10-11"
+APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -18987,7 +18988,7 @@ def render_page(cfg: configparser.ConfigParser) -> str:
 <div class="wrap">
   {_render_tab_bar()}
   {panels}
-  <div class="ver-tag">asl_dvs_m17_44helper_v{APP_VERSION}.py — stage {APP_STAGE.split(' ')[0]} of 8 — reference copy, not release-stripped</div>
+  <div class="ver-tag">44helper_v{APP_VERSION.replace('.', '_')}.py — stage {APP_STAGE.split(' ')[0]} of 8 — reference copy, not release-stripped</div>
 </div>
 <script>{_JS}</script>
 </body>

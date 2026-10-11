@@ -1,6 +1,22 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_179_20261011.py`. Newest entries first.
+Current file: `44helper_v0_0_180.py`. Newest entries first. Before 0.0.180 the
+file was `asl_dvs_m17_44helper_v*_<date>.py` and this changelog was
+`asl_dvs_m17_44helper.md`.
+
+## 0.0.180 (2026-10-11)
+
+- New name: `44helper_v0_0_180.py` (was
+  `asl_dvs_m17_44helper_v0_0_179_20261011.py`). No `asl_dvs_m17_` prefix and no
+  date in the name; the date is in a new `BUILD_DATE` line. Needs instmon
+  2.40.0 or installer 6.7.0 to be seen as the same tool as the old name.
+- The file name at the foot of the page reads `44helper_v0_0_180.py`, and
+  `APP_STAGE` points at `changelogs/44helper.md`.
+- Unchanged: the installed program stays `/opt/44helper/asl_dvs_m17_44helper.py`,
+  the service stays `44helper`, the config stays `/etc/44helper/44helper.conf`.
+- Tested: page rendered with the default config, footer shows the new name,
+  page JavaScript passes `node --check`.
+
 
 ## 0.0.179 (2026-10-11)
 

@@ -14,7 +14,7 @@ By KD8PGK, written with Claude (Anthropic).
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
-| 44helper | `asl_dvs_m17_44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
+| 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
 | Watchdog | `asl_dvs_watchdog_v*.sh` | none | Restarts the Dashboard if it stops answering. See the note under [Installing](#installing). |
 
 Scripts:
@@ -202,7 +202,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
 | `instmon_v2_40_0.py` | common |
 | `wifimon_v5_28_20261007.py` | common |
-| `asl_dvs_m17_44helper_v0_0_179_20261011.py` | common |
+| `44helper_v0_0_180.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_v6_7_0.sh` | common |
 | `uninstall_all_v1_4_0.sh` | common |
@@ -236,7 +236,7 @@ per tool and build:
 | [`dashboard_pi02w.md`](changelogs/dashboard_pi02w.md) | `dashboard_pi02w_v*.py` (older: `asl_dvs_dashboard_pi02w_v*.py`) |
 | [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
-| [`asl_dvs_m17_44helper.md`](changelogs/asl_dvs_m17_44helper.md) | `asl_dvs_m17_44helper_v*.py` |
+| [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` (older: `asl_dvs_m17_44helper_v*.py`) |
 | [`asl_dvs_watchdog.md`](changelogs/asl_dvs_watchdog.md) | `asl_dvs_watchdog_v*.sh` |
 | [`install.md`](changelogs/install.md) | `install_v*.sh` (older: `install_asl_dvs_v*.sh`) |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` (older: `uninstall_asl_dvs_all_v*.sh`) |
