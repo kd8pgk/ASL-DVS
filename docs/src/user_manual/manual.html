@@ -36,7 +36,7 @@
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_74_20261007.py</td><td>6.13.74</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_73_20261006.py</td><td>9.3.73</td></tr>
     </table>
-    <span class="draft">DRAFT · PARTS I–III OF V</span>
+    <span class="draft">DRAFT · PARTS I–IV OF V</span>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
 </section>
@@ -60,9 +60,9 @@
     <li><span class="no">10</span>Keeping the system healthy: Update, System Optimization<span class="st done">THIS DRAFT</span></li>
     <li><span class="no">11</span>The Config tab: restore points, save points, presets, identity<span class="st done">THIS DRAFT</span></li>
     <li class="pt">Part IV · The other tools</li>
-    <li class="later"><span class="no">12</span>The Dashboard<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">13</span>instmon<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">14</span>wifimon and wifi_menu.sh<span class="st">LATER STAGE</span></li>
+    <li><span class="no">12</span>The Dashboard<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">13</span>instmon<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">14</span>wifimon and wifi_menu.sh<span class="st done">THIS DRAFT</span></li>
     <li class="pt">Part V · Reference</li>
     <li class="later"><span class="no">15</span>Troubleshooting and recovery<span class="st">LATER STAGE</span></li>
     <li class="later"><span class="no">A</span>Appendices: ports, files, services, launcher, glossary<span class="st">LATER STAGE</span></li>
@@ -2303,6 +2303,120 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li><b>Version</b> comes from the file's <code>VERSION</code>, <code>APP_VERSION</code> or <code>SCRIPT_VERSION</code> line, or, for <code>.sh</code> scripts, the title line <code># name.sh  vX.Y (date)</code>.</li>
       <li><b>Router link:</b> reads the default route from <code>/proc/net/route</code>, and probes the gateway on http:80, then https:443, with a 1.5-second limit, cached for 30 seconds. It is only offered when your browser is on that same network.</li>
       <li><b>Disk jobs:</b> <code>dd</code> or <code>ddrescue</code>, <code>openssl enc</code> with PBKDF2 for encryption, <code>resize2fs</code> and <code>parted</code> for Shrink to fit, and <code>fsfreeze</code> for Freeze. Throttled copies run as a shell pipeline that won't survive an instmon restart.</li>
+    </ul>
+  </div>
+</section>
+
+<section class="chapter" id="ch14">
+  <div class="kicker">Chapter 14 · wifimon</div>
+  <h1 class="ch">wifimon and wifi_menu.sh</h1>
+  <p class="ch-lede">wifimon keeps a WiFi node connected, and shuts it down cleanly before low voltage or a lost
+    network can corrupt the SD card. Its page manages your WiFi networks, a travel hotspot and its own watchdogs.
+    Open it at <code>http://&lt;pi-address&gt;:8991</code>. <code>wifi_menu.sh</code> is a text menu for the same
+    WiFi jobs over SSH.</p>
+
+  <h2><span class="n">14.1</span>Status</h2>
+  <ul>
+    <li>The network you are on, a signal meter from −90 to −30 dBm, the IP address, and whether the internet answers.</li>
+    <li>Warnings with one-click fixes: <b>Power save is on</b> (it can cause dropouts; turn it off for this network or all of them) and <b>No WiFi country code</b> (it can keep a Pi's WiFi off or limited).</li>
+    <li><b>More details</b>, <b>Reconnect now</b>, the <b>WiFi country code</b>, and <b>WiFi chip roaming</b>. Stopping roaming helps with a single router, and takes effect after a reboot.</li>
+  </ul>
+
+  <h2><span class="n">14.2</span>Saved networks</h2>
+  <p>Every saved WiFi network, in the order the node tries them. <b>Add network</b> takes a name, security (WPA2, WPA3
+    or open), password, a hidden-network box, <b>Use this Pi's real MAC address</b> (for hotels and routers that
+    register devices) and power save. Then <b>Save &amp; connect</b> or <b>Save only</b>.</p>
+  <ul>
+    <li>Each network has <b>Options</b>: automatic or fixed IP address, your own DNS servers, real MAC, and band (any, 2.4 GHz only, 5 GHz only).</li>
+    <li>The <b>reconnect list</b> is the set of networks the WiFi watchdog will go back to. A network saved some other way shows "not in the watchdog's reconnect list" with an <b>Add</b> button. <b>Add all to reconnect list</b> does them all at once.</li>
+  </ul>
+  <div class="call note"><span class="t">NOTE</span><b>Changes that could cut you off undo themselves.</b> When you
+    connect to a different network or change options, a banner counts down. If your browser can't reach the page
+    on the new connection within 60 seconds (120 for options), wifimon puts the old settings back. Press <b>Undo
+    now</b> to go back straight away.</div>
+
+  <h2><span class="n">14.3</span>Nearby networks</h2>
+  <p>What the Pi can hear, with signal strength. <b>Rescan</b> looks again. Use Add network to save one.</p>
+
+  <h2><span class="n">14.4</span>Radio &amp; device</h2>
+  <ul>
+    <li><b>WiFi radio</b> on or off, and the list of WiFi devices, for example a USB WiFi adapter beside the built-in one.</li>
+    <li><b>Emergency hotspot</b>: the node makes its own WiFi, so a phone can reach this page and add a hotel network. Set a name and password (<b>New</b> makes one), and when it turns off by itself (15, 30, 60 or 120 minutes). While it is on, choose which network to join afterwards, or press <b>Stop hotspot</b>. The node leaves its current WiFi while the hotspot runs.</li>
+  </ul>
+
+  <h2><span class="n">14.5</span>Watchdog</h2>
+  <table>
+    <tr><th>Watchdog</th><th>Does</th><th>Default</th></tr>
+    <tr><td>WiFi watchdog</td><td>Reconnects to the reconnect list. If there is no connection for the set time, it shuts the node down cleanly. It waits, with no timer, while no networks are saved.</td><td>shut down after 180 s offline; retry every 15 s</td></tr>
+    <tr><td>Voltage watchdog</td><td>Shuts the node down cleanly after a sustained low-voltage spell.</td><td>below 0.90 V core for 30 s</td></tr>
+  </table>
+  <p>Two bars count up while a problem lasts: <b>No connection</b> and <b>Low voltage</b>. After you change networks,
+    a grace period keeps the WiFi watchdog from acting while the new connection settles. <b>Change settings</b>
+    opens:</p>
+  <table>
+    <tr><th>Setting</th><th>Range</th></tr>
+    <tr><td>Shut down after no connection for</td><td>60 to 86,400 s</td></tr>
+    <tr><td>Shut down after low voltage for</td><td>10 to 3,600 s</td></tr>
+    <tr><td>Low voltage means core below</td><td>0.70 to 1.00 V</td></tr>
+    <tr><td>Retry WiFi every … while offline</td><td>5 to 600 s</td></tr>
+    <tr><td>Check the connection every</td><td>2 to 60 s</td></tr>
+    <tr><td>Internet check pings</td><td>address to ping</td></tr>
+    <tr><td>Detect login pages</td><td>off by default; checks for hotel sign-in pages (fetches a test page about every 5 minutes)</td></tr>
+    <tr><td>Keep WiFi power save off</td><td>off by default; when on, keeps it off on every network</td></tr>
+  </table>
+  <p><b>Reset to defaults</b> puts every setting back.</p>
+  <div class="call care"><span class="t">CAREFUL</span>On a new install both watchdogs start <b>off</b>, and the page
+    asks "Turn the watchdogs on?" at your first login (Chapter 2). Add your networks first. When a watchdog shuts the
+    node down, SysMon and the Dashboard show a "wifimon — Node Shutting Down" notice. Afterwards the Pi needs power
+    cycling, or its WiFi back.</div>
+
+  <h2><span class="n">14.6</span>Service and Activity log</h2>
+  <ul>
+    <li><b>Service</b>: wifimon's version and state, <b>Restart service</b>, <b>Log out</b>.</li>
+    <li><b>Activity log</b>: the last 100 events, newest first, with a "warnings and errors only" filter and Copy. The full history is in <code>journalctl -u wifimon</code>.</li>
+    <li><b>Shutdown reports</b>: one is saved every time wifimon shuts the node down, and after any stop that wasn't clean (power lost or a crash). View or Download them; <b>Save a test report</b> makes one now. They are the first place to look after an unexpected power-off.</li>
+  </ul>
+
+  <h2><span class="n">14.7</span>wifi_menu.sh</h2>
+  <p>A text menu for when the web page isn't reachable but SSH or a keyboard is:</p>
+<pre>sudo bash wifi_menu.sh</pre>
+  <table>
+    <tr><th>Key</th><th>Does</th></tr>
+    <tr><td>1</td><td>Refresh status</td></tr>
+    <tr><td>2 / 3</td><td>Turn the WiFi radio on / off</td></tr>
+    <tr><td>4</td><td>Switch the active WiFi device</td></tr>
+    <tr><td>5</td><td>Disconnect the active WiFi</td></tr>
+    <tr><td>6</td><td>Connect to a network on the default device, from a scan list; <code>h</code> for a hidden network</td></tr>
+    <tr><td>7</td><td>List saved connections; <code>f &lt;#&gt;</code> forgets one (asks first)</td></tr>
+    <tr><td>q</td><td>Quit</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>Turning the radio off or disconnecting over a WiFi SSH session
+    cuts that session. Use a keyboard and screen, or a wired link, for those.</div>
+
+  <h2><span class="n">14.8</span>Common tasks</h2>
+  <h3>Set up at a hotel</h3>
+  <ol class="steps">
+    <li>Reach wifimon once, for example through your phone's hotspot saved as a network at home, and press <b>Start hotspot</b> under Radio &amp; device.</li>
+    <li>Join the hotspot from your phone and open <code>http://&lt;node&gt;:8991</code>.</li>
+    <li>Add the hotel network, with <b>Use this Pi's real MAC address</b> if the hotel registers devices, and turn on Detect login pages if it has a sign-in page.</li>
+    <li>Choose it under "Afterwards connect to", then Stop hotspot.</li>
+  </ol>
+  <h3>Find out why the node switched itself off</h3>
+  <ol class="steps">
+    <li>Activity log, Shutdown reports: open the newest one. It says which watchdog fired, with the voltage and connection history before it.</li>
+    <li>For low voltage: use a better power supply and a shorter, thicker cable. SysMon's Pwr field (Chapter 3) shows under-voltage since boot.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>How wifimon works</h2>
+    <ul>
+      <li><b>Files:</b> program <code>/usr/local/bin/wifimon.py</code>, service <code>wifimon</code>, port 8991. Settings and the reconnect list are in <code>/etc/wifimon/wifimon.conf</code>. NetworkManager's own profiles are in <code>/etc/NetworkManager/system-connections</code>. Shutdown state, which SysMon and the Dashboard read, is in <code>/run/wifimon/shutdown_state.json</code>. Reports are in <code>/var/log/wifimon</code>; the newest 10 are kept, each up to 256 KB.</li>
+      <li><b>WiFi:</b> everything goes through NetworkManager (<code>nmcli</code>). wifimon gives NetworkManager a 30-second head start to reconnect by itself, counts 3 failed checks as "lost", and treats a link with no traffic for 60 s as stuck. It reorders NetworkManager's join order to match the reconnect list.</li>
+      <li><b>Undo:</b> a risky change is recorded as pending, with a 60-second deadline (120 for options). The page checks in from the new connection to keep it; otherwise the change is undone. A 180-second grace period follows each change.</li>
+      <li><b>Voltage:</b> sampled through the Pi firmware. Snapshots are taken every 10 s, or every 5 s while voltage is low; the last 20 go into a shutdown report.</li>
+      <li><b>Login:</b> its own, with the root password, checked through PAM. Sessions last 12 hours. The page polls status every 5 seconds.</li>
+      <li><b>Setup from the shell:</b> <code>sudo python3 /usr/local/bin/wifimon.py --setup-wifi</code> adds or imports networks. <code>wifi_menu.sh</code> uses <code>nmcli</code> only and doesn't touch wifimon's reconnect list.</li>
     </ul>
   </div>
 </section>

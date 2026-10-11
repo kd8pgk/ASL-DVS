@@ -118,3 +118,4 @@ figcaption b{color:var(--text)}
 .toc .st{margin-left:auto;font-size:7pt;letter-spacing:.1em;color:var(--muted)}
 .toc .st.done{color:var(--grn)}
 .keep{break-inside:avoid}
+table tr:first-child{break-after:avoid-page}
