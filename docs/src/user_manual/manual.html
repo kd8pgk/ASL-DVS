@@ -29,12 +29,12 @@
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py</td><td>9.3.71.13-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_11_20261011.py</td><td>6.13.67.11-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">asl_dvs_m17_44helper_v0_0_178_20261011.py</td><td>0.0.178</td></tr>
+      <tr><td>44helper</td><td class="mono">asl_dvs_m17_44helper_v0_0_179_20261011.py</td><td>0.0.179</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_39_0_20261011.py</td><td>2.39.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_28_20261007.py</td><td>5.28</td></tr>
       <tr><td>Installer</td><td class="mono">install_asl_dvs_v6_6_20261006.sh</td><td>6.6</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_76_20261011.py</td><td>6.13.76</td></tr>
-      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_73_20261006.py</td><td>9.3.73</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_77_20261011.py</td><td>6.13.77</td></tr>
+      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_74_20261011.py</td><td>9.3.74</td></tr>
     </table>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
@@ -215,7 +215,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44HELPER</span><span class="meta">v0.0.178</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44HELPER</span><span class="meta">v0.0.179</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -264,7 +264,7 @@ sudo systemctl status sysmon</pre>
   </div>
   <p><b>Which build am I running?</b> Look at the version in the page header. A Pi Zero 2 W build version ends
     in <code>-pi02w</code>, for example <code>6.13.67.11-pi02w</code>. A full build version doesn't, for example
-    <code>6.13.76</code>.</p>
+    <code>6.13.77</code>.</p>
   <div class="call note"><span class="t">NOTE</span>Apart from SysMon, the builds look and work the same, so this
     manual points out the full build only where it differs.</div>
 
@@ -400,8 +400,8 @@ sudo systemctl restart sysmon asl_dvs_dashboard instmon wifimon 44helper</pre>
       <table>
         <tr><th>Tool</th><th>Installed</th><th>GitHub</th><th></th></tr>
         <tr><td>SysMon</td><td class="mono">6.13.67.10-pi02w</td><td class="mono">6.13.67.11-pi02w</td><td class="warn">NEWER</td></tr>
-        <tr><td>44helper</td><td class="mono">0.0.177</td><td class="mono">0.0.178</td><td class="warn">NEWER</td></tr>
-        <tr><td>SysMon</td><td class="mono">—</td><td class="mono">6.13.76</td><td style="color:var(--muted)">other build</td></tr>
+        <tr><td>44helper</td><td class="mono">0.0.178</td><td class="mono">0.0.179</td><td class="warn">NEWER</td></tr>
+        <tr><td>SysMon</td><td class="mono">—</td><td class="mono">6.13.77</td><td style="color:var(--muted)">other build</td></tr>
       </table>
       <div class="row" style="padding-top:.5em"><span class="btn c">Quiet System</span><span class="btn">Restore</span></div>
     </div>
@@ -858,10 +858,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     connect or disconnect on the Dashboard, which rewrites the whole file. Make lasting M17 changes on the
     Dashboard instead.</div>
   <div class="call note"><span class="t">NOTE</span>If <code>LocalPort</code> under <code>[M17 Network]</code> is
-    missing, the sample fills in <code>17010</code>, the port the Dashboard writes from 9.3.71.11 (see the node
-    configuration guide, section 4). SysMon before 6.13.67.10 filled in <code>32010</code>, which is the port
-    MMDVM_Bridge uses for P25. <span class="badge full">FULL</span> The full build's sample still fills in
-    <code>32010</code>, because the full Dashboard (9.3.73) still writes it.</div>
+    missing, the sample fills in <code>17010</code>, the port the Dashboard writes (Pi02w from 9.3.71.11, full
+    build from 9.3.74; see the node configuration guide, section 4). SysMon before 6.13.67.10 (Pi02w) and 6.13.77
+    (full) filled in <code>32010</code>, which is the port MMDVM_Bridge uses for P25.</div>
 
   <h2><span class="n">4.6</span>Phone tab</h2>
   <p>The Phone tab shows what Asterisk is set up to do for <b>autopatch</b> (radio dials out) and <b>reverse
@@ -1150,8 +1149,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds five tabs the Pi Zero 2 W build leaves out to
     save memory: Firewall, Reg, Net, Zello and Console. Everything in Chapters 3 to 5 also applies to the full
     build, which has the same tabs.</p>
-  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_76_20261011.py</code>
-    (version <code>6.13.76</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
+  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_77_20261011.py</code>
+    (version <code>6.13.77</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
     (override)</b> choice, but it uses about twice the memory.</div>
 
   <figure>
@@ -1311,7 +1310,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">ASL-DVS-M17 44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.178 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">ASL-DVS-M17 44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.179 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1411,12 +1410,14 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.5</span>Ports tab</h2>
   <p>A reference table of every port the node's software uses, checked against what is actually reachable through
     your remote-access setup. The line above the table says where it looked: the Pi's 44NetConnect zone, the
-    router's forward table, or "none (no tunnel configured yet)".</p>
+    router's forward table, or "none (no tunnel configured yet)". <b>Running</b> means the port is listening on the
+    Pi (or, for the outbound-only Cloudflare row, that <code>cloudflared</code> is up). From 44helper 0.0.179; before,
+    most rows always read not running.</p>
   <table>
     <tr><th>Verdict</th><th>Means</th></tr>
     <tr><td class="ok">OK</td><td>As it should be.</td></tr>
     <tr><td class="bad">over-exposed</td><td>A port that must never be public is open: a dashboard, Cockpit, AMI, a loopback-only bridge port, or a gateway command port.</td></tr>
-    <tr><td class="warn">needed-but-not-open</td><td>A port other nodes must reach (IAX2 4569, EchoLink 5198-5199, VOTER 1667, Ampersand hub 4568) is running but not open, so inbound links will fail.</td></tr>
+    <tr><td class="warn">needed-but-not-open</td><td>A port other nodes must reach (IAX2 4569, EchoLink 5198-5199, VOTER 1667, Ampersand hub 4568) is running but not open, so inbound links will fail. Not shown until a tunnel is set up.</td></tr>
     <tr><td style="color:var(--muted)">not-listening</td><td>Nothing is running on it, which is normal for software you don't use.</td></tr>
   </table>
 
@@ -2194,7 +2195,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li><b>Polling:</b> <code>/api/status</code> every 5 s when idle and every 1 s while a tune is in progress, with an ETag, so unchanged state costs almost nothing. On the Pi Zero 2 W build the AllStar and EchoLink lists are searched on disk rather than held in memory.</li>
       <li><b>Tuning:</b> through DVSwitch's <code>dvswitch.sh</code> (mode and tune commands) and Asterisk's AMI on 127.0.0.1:5038 (link and unlink). A tune counts as done when Analog_Bridge's <code>/tmp/ABInfo_*.json</code> confirms it.</li>
       <li><b>Changing tab:</b> drops the links except the needed bridge node, sends a talkgroup disconnect, switches the DVSwitch mode, starts or stops the mode's gateway service (YSF, P25, NXDN, ircDDBGateway), and links the bridge node (1999, or 1917 for M17).</li>
-      <li><b>M17:</b> writes <code>/opt/USRP2M17/USRP2M17.ini</code> in full on every connect and disconnect, and restarts <code>usrp2m17</code>. From 9.3.71.11 it listens on UDP 17010 (it was 32010, which clashed with P25).</li>
+      <li><b>M17:</b> writes <code>/opt/USRP2M17/USRP2M17.ini</code> in full on every connect and disconnect, and restarts <code>usrp2m17</code>. From 9.3.71.11 (full build 9.3.74) it listens on UDP 17010 (it was 32010, which clashed with P25).</li>
       <li><b>Phone calls</b> are placed with AMI <code>Originate</code> into <code>rpt(&lt;node&gt;,Pv)</code>. Radio <code>*61</code> requests arrive through <code>/run/asl_dvs_tones/req</code> and are dialed within about 2 seconds.</li>
       <li><b>Service:</b> <code>asl_dvs_dashboard</code>, with <code>Restart=always</code> and <code>WatchdogSec=30</code>, so it is restarted if it stops answering. That is why the separate Watchdog script isn't needed.</li>
       <li>The login is shared with SysMon (Chapter 3).</li>
@@ -2486,7 +2487,7 @@ ss -tlnp | grep 9999</pre></li>
     <li>SysMon Overview: Asterisk, analog_bridge and mmdvm_bridge must all be green.</li>
     <li>Dashboard: check the indicator shows the talkgroup or reflector you expect, and that you are on that mode's tab.</li>
     <li>SysMon ASL-DVS tab: node 1999's RX and TX ports in <code>rpt.conf</code> must be Analog_Bridge's pair the other way round.</li>
-    <li>SysMon Ports, and 44helper Config, Port check: no <code>[DUP]</code> and no clash. A known one: M17's old LocalPort 32010 clashes with P25. The Dashboard from 9.3.71.11 uses 17010.</li>
+    <li>SysMon Ports, and 44helper Config, Port check: no <code>[DUP]</code> and no clash. A known one: M17's old LocalPort 32010 clashes with P25. The Dashboard uses 17010 from 9.3.71.11 (Pi02w) and 9.3.74 (full).</li>
     <li>DMR only: SysMon ASL-DVS, check <code>MMDVM_Bridge.ini</code> has a real DMR ID and the network enabled, and STFU (if you use it) has its hotspot password.</li>
     <li>On a Split Tunnel: AllStar working while DVSwitch and M17 fail usually means an unedited <code>AllowedIPs</code>. Use 44helper Split Tunnel, step 4b (Chapter 8).</li>
   </ol>
