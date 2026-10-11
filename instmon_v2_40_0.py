@@ -35,11 +35,11 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.39.1"
+VERSION ="2.40.0"
 DATE_STR ="2026-10-11"
 
-INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
-UNINSTALLER_SCRIPT_GLOB ="uninstall_asl_dvs*.sh"
+INSTALLER_SCRIPT_GLOBS =("install_v*.sh","install_asl_dvs*.sh")
+UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
 
 INTERACTIVE_ONLY_SCRIPT_GLOBS =("wifi_menu*.sh","wifi-menu*.sh")
 
@@ -1715,14 +1715,30 @@ INSTALLABLE_CATEGORIES ={c ["category"]for c in COMPONENTS }
 
 HOME_SCAN_PATTERN_MAP =[
 ("watchdog",["asl_dvs_watchdog*.sh"]),
-("dashboard",["asl_dvs_dashboard*.py"]),
+("dashboard",["dashboard*.py","asl_dvs_dashboard*.py"]),
 ("sysmon",["sysmon*.py","asl_dvs_sysmon*.py","asl_dvs_m17_sysmon*.py","sysmon_svx*.py"]),
 ("wifimon",["wifimon*.py"]),
-("44helper",["asl_dvs_m17_44helper*.py","44helper*.py"]),
+("44helper",["44helper*.py","asl_dvs_m17_44helper*.py"]),
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf"]),
-("scripts",["install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
+("scripts",["install_v*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
 ]
+
+_GLOB_KIND_ALIASES ={
+"asl_dvs_dashboard*.py":"dashboard*.py",
+"asl_dvs_m17_44helper*.py":"44helper*.py",
+"install_asl_dvs*.sh":"install_v*.sh",
+"uninstall_asl_dvs*.sh":"uninstall_all*.sh",
+}
+
+_OLD_NAME_PREFIXES =("asl_dvs_","m17_")
+
+def canonical_stem (stem ):
+    stem =stem .lower ()
+    for prefix in _OLD_NAME_PREFIXES :
+        if stem .startswith (prefix ):
+            stem =stem [len (prefix ):]
+    return stem 
 
 COMMS_RESTART_SERVICES =[
 ("Asterisk","asterisk.service"),
@@ -2868,11 +2884,11 @@ def build_status ():
 
 def is_installer_script (name ):
 
-    return fnmatch .fnmatch (name .lower (),INSTALLER_SCRIPT_GLOB .lower ())
+    return any (fnmatch .fnmatch (name .lower (),g .lower ())for g in INSTALLER_SCRIPT_GLOBS )
 
 def is_uninstaller_script (name ):
 
-    return fnmatch .fnmatch (name .lower (),UNINSTALLER_SCRIPT_GLOB .lower ())
+    return any (fnmatch .fnmatch (name .lower (),g .lower ())for g in UNINSTALLER_SCRIPT_GLOBS )
 
 def is_interactive_only_script (name ):
 
@@ -2936,7 +2952,7 @@ def _gh_kind_for_name (name ):
     for category ,globs in HOME_SCAN_PATTERN_MAP :
         for g in globs :
             if fnmatch .fnmatch (lname ,g .lower ()):
-                return category ,g .lower ()
+                return category ,_GLOB_KIND_ALIASES .get (g ,g ).lower ()
     return None ,None 
 
 def _git_blob_id (data ):
@@ -3504,11 +3520,11 @@ FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
 
 _FU_DEFAULT_STEM = {
-    "dashboard": "asl_dvs_dashboard",
+    "dashboard": "dashboard",
     "sysmon": "sysmon",
     "wifimon": "wifimon",
-    "44helper": "asl_dvs_m17_44helper",
-    "watchdog": "asl_dvs_watchdog",
+    "44helper": "44helper",
+    "watchdog": "watchdog",
     "instmon": "instmon",
 }
 _FU_STEM_RE = re.compile(r"^(?P<stem>.+?)_v\d+(?:[._]\d+)*(?:_\d{8})?(?:[._-].*)?\.(?:py|sh)$", re.IGNORECASE)
@@ -3545,7 +3561,7 @@ def full_update_snapshot():
 
 def _fu_stem_of_name(name):
     m = _FU_STEM_RE.match(name)
-    return (m.group("stem") if m else os.path.splitext(name)[0]).lower()
+    return canonical_stem(m.group("stem") if m else os.path.splitext(name)[0])
 
 def _fu_installed_stem(comp, target, version):
     base = os.path.basename(target)

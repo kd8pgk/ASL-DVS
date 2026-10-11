@@ -40,12 +40,17 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_77_20261011.py` | `sysmon_pi02w_v6_13_67_11_20261011.py` | `instmon_v2_39_1_20261011.py` |
-| `VERSION` | `6.13.77` | `6.13.67.11-pi02w` | `2.39.1` |
+| File name | `sysmon_v6_13_77_20261011.py` | `sysmon_pi02w_v6_13_67_11_20261011.py` | `instmon_v2_40_0.py` |
+| `VERSION` | `6.13.77` | `6.13.67.11-pi02w` | `2.40.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
-read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
-number is never reused: every change gets a new version.
+read it from there. New files are named `<tool>[_<fork>]_vX_Y_Z.py` (for
+example `instmon_v2_40_0.py`): no `asl_dvs_` or `m17_` prefix, no date, and a
+three-part version. The build date stays inside the file. Older files keep
+their old names (`asl_dvs_dashboard_…`, `asl_dvs_m17_44helper_…`, a
+`_YYYYMMDD` date); instmon 2.40.0 and later treat the old and new names of a
+tool as one tool. A version number is never reused: every change gets a new
+version.
 
 ### Which build a node gets
 
@@ -75,7 +80,7 @@ User manual (PDF, 91 pages): every tool, tab and button, with SysMon and 44helpe
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_39_1_20261011.py --install
+   sudo python3 instmon_v2_40_0.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -195,7 +200,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_v6_13_77_20261011.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_11_20261011.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
-| `instmon_v2_39_1_20261011.py` | common |
+| `instmon_v2_40_0.py` | common |
 | `wifimon_v5_28_20261007.py` | common |
 | `asl_dvs_m17_44helper_v0_0_179_20261011.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |

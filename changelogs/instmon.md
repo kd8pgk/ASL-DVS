@@ -1,6 +1,33 @@
 # instmon changelog
 
-Current file: `instmon_v2_39_1_20261011.py`. Newest entries first.
+Current file: `instmon_v2_40_0.py`. Newest entries first.
+
+## 2.40.0 (2026-10-11)
+
+- Knows the new file names. From now on tool files drop the `asl_dvs_` and
+  `m17_` prefixes and the date, and use three-part versions:
+  `dashboard_pi02w_v9_4_0.py`, `dashboard_v9_3_75.py`, `44helper_v0_0_180.py`,
+  `install_v6_7_0.sh`, `uninstall_all_v1_4_0.sh`. Library uploads, USB import,
+  the home-folder scan, GitHub Updates and Full Update all accept them. Every old
+  name is still accepted.
+- A tool's old and new names count as one tool. GitHub Updates shows one row
+  for it and compares GitHub's newest file with the library's newest, whatever
+  either is called. Full Update matches an installed `asl_dvs_dashboard_pi02w_…`
+  with `dashboard_pi02w_…` on GitHub (and `asl_dvs_m17_44helper` with
+  `44helper_…`), so it offers an update, not a build switch or "no build on
+  GitHub".
+- The Install and Run Uninstall buttons on the Scripts library also appear for
+  `install_v*.sh` and `uninstall_all*.sh`.
+- The "doesn't look like a ... file" prompt lists the new name pattern first.
+- This file is the first under the new naming: `instmon_v2_40_0.py`, no date.
+  The date is in `DATE_STR`.
+- Tested with mocks: old and new names give the same library kind and Full
+  Update stem; with an old-name Dashboard Pi02w 9.3.71.13-pi02w installed and
+  `dashboard_pi02w_v9_4_0.py` on GitHub, GitHub Updates lists one row
+  ("Update available") and Full Update plans an update; with the Full build
+  override it plans a switch to `dashboard_v9_3_75.py`; an old-name 44helper in
+  the library is compared with `44helper_v0_0_180.py`; `9.4.0` sorts after
+  `9.3.71.13` and `6.7.0` after `6.6`. The same test fails on 2.39.1.
 
 ## 2.39.1 (2026-10-11)
 
