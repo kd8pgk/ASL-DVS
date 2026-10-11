@@ -1284,5 +1284,206 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
+<section class="part">
+  <div class="pn">PART III</div>
+  <h1>44helper</h1>
+  <p>44helper is the node's setup and repair helper. It installs and removes the radio software, sets up
+    remote access over 44Net or Cloudflare, runs system updates safely, trims SD-card wear, and saves and
+    restores your configuration. SysMon tells you what is wrong; 44helper is usually where you fix it.</p>
+  <ol start="7">
+    <li>44helper basics</li>
+    <li>44Net and remote access</li>
+    <li>Software installers</li>
+    <li>Keeping the system healthy</li>
+    <li>The Config tab</li>
+  </ol>
+</section>
+
+<section class="chapter" id="ch7">
+  <div class="kicker">Chapter 7 · 44helper</div>
+  <h1 class="ch">44helper basics</h1>
+  <p class="ch-lede">How 44helper is laid out, how its step cards work, and the five status tabs: Overview,
+    Services, Ports, Firewall and Actions Log. Open it at <code>http://&lt;pi-address&gt;:9997</code>. It is the
+    same on every Pi.</p>
+
+  <h2><span class="n">7.1</span>The page</h2>
+  <figure>
+    <div class="mock">
+      <div class="bar"><span class="ttl" style="color:var(--vio)">ASL-DVS-M17 44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.175 · Log out all devices · Log out</span></div>
+      <div class="tabs">
+        <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
+        <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
+        <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
+        <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
+        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Firewall</span><span class="tab">Actions Log</span>
+      </div>
+    </div>
+    <figcaption><b>Figure 7.1 · Illustration.</b> 44helper's header and tabs. Row one is 44Net remote access; row two
+      is installers, maintenance, Config and the status tabs.</figcaption>
+  </figure>
+  <table>
+    <tr><th>Tab group</th><th>Tabs</th><th>Chapter</th></tr>
+    <tr><td>Status</td><td>Overview, Services, Ports, Firewall, Actions Log</td><td>7</td></tr>
+    <tr><td>Remote access</td><td>Router Install, Full Tunnel, Split Tunnel, Nodes, Cloudflare</td><td>8</td></tr>
+    <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand</td><td>9</td></tr>
+    <tr><td>Maintenance</td><td>Update, System Optimization</td><td>10</td></tr>
+    <tr><td>Configuration</td><td>Config</td><td>11</td></tr>
+  </table>
+  <h3>Logging in and out</h3>
+  <ul>
+    <li>Log in with the root password. 44helper has its own login, separate from the Dashboard and SysMon.</li>
+    <li><b>Your login doesn't time out</b>, because install jobs can run for a long time. It ends when you press
+      <b>Log out</b>, when anyone presses <b>Log out all devices</b> (which ends every 44helper login, on every
+      browser), or when the Pi reboots.</li>
+    <li>If 44helper restarts while you are logged in, the page reconnects to any running job by itself.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>44helper runs as root and can install, remove and
+    reconfigure anything on the Pi. Keep its port (9997) on your own network. Its Overview warns you if it ever
+    becomes reachable through the 44Net firewall zone.</div>
+
+  <h2><span class="n">7.2</span>How step cards work</h2>
+  <p>Most 44helper tabs are a list of numbered <b>step cards</b>. Each card does one job and shows exactly what it
+    will run:</p>
+  <figure>
+    <div class="mock">
+      <div class="row" style="padding-top:.6em;justify-content:space-between"><span style="color:var(--bright);font-weight:700;font-size:8pt">3. Install the ASL3 packages</span><span class="badge" style="border:1px solid var(--grn);color:var(--grn)">OK</span></div>
+      <div class="row"><span class="txt" style="font-family:var(--mono);background:#070b11;border:1px solid var(--line);padding:.3em .5em;flex:1">sudo apt-get install -y asl3</span></div>
+      <div class="row"><span class="btn c">Run</span><span class="btn">Copy</span></div>
+      <div class="row" style="padding-bottom:.7em"><span class="txt" style="font-family:var(--mono);background:#070b11;border:1px solid var(--line);padding:.3em .5em;flex:1">Reading package lists… Setting up asl3 … done</span></div>
+    </div>
+    <figcaption><b>Figure 7.2 · Illustration.</b> A step card: title and status, the command, Run and Copy, and the output.</figcaption>
+  </figure>
+  <table>
+    <tr><th>Part</th><th>Meaning</th></tr>
+    <tr><td>Status pill</td><td><b>Not run</b>, <b>Running…</b> (with elapsed time), <b>OK</b> or <b>Failed</b>. <b>Manual</b> means you run it yourself over SSH; <b>Config</b> means it saves a restore point.</td></tr>
+    <tr><td>Command box</td><td>The exact command. You can edit it before pressing Run, for example to change a version number. Manual steps are read-only.</td></tr>
+    <tr><td>Run</td><td>Runs the command on the Pi, as root, and streams the output below.</td></tr>
+    <tr><td>Copy</td><td>Copies the command (and its output) so you can run it over SSH or send it to someone.</td></tr>
+    <tr><td>▼ note</td><td>A folded note at the top of each tab, and on some cards. Open it before a first run: it says what the step changes and what can go wrong.</td></tr>
+  </table>
+  <ul>
+    <li>Run the steps <b>in order</b>. Each one assumes the ones before it worked.</li>
+    <li>Every install tab has a <b>Script</b> list (for example Bookworm or Trixie) and a <b>Custom</b> choice for typing any command.</li>
+    <li><b>Purge previous install</b> shows the removal steps. After a double confirmation they run one after another and stop at the first failure. Destructive steps, such as removing <code>/etc/asterisk</code>, are optional and only run if you press their own Run button.</li>
+    <li>Step results last only while the page is open; a reload starts the cards fresh. A job that is still running carries on, and the card picks it up again.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>Whatever is in the command box runs as root, edits included.
+    Only change a command when you know what the change does.</div>
+
+  <h3>Safety checks before an install step</h3>
+  <ul>
+    <li><b>Masked services.</b> At the top of each install tab (and the Update tab) a card checks whether any service the tab needs is <i>masked</i> (blocked from starting). 44helper clears masks by itself and leaves those services <b>off</b>. You can <b>Turn on</b> each one, or <b>Put the mask back (on purpose)</b> so 44helper leaves it alone. While a mask can't be cleared, the card turns red and the tab's install buttons are locked.</li>
+    <li><b>Broken packages.</b> Before any step that installs or removes packages, 44helper asks the package system for unfinished or broken packages. If there are any, the step is refused with "NOT RUN" and a pointer to the Update tab's Package recovery steps (Chapter 10).</li>
+    <li><b>What to do next.</b> When an install step fails, a box opens under it with numbered repair steps. Each one has a button that jumps to the right Update-tab card, and a link brings you back.</li>
+    <li><b>Repair, then purge.</b> If a purge is refused because packages are broken, it offers to repair them in quiet mode and then run the purge again by itself.</li>
+  </ul>
+
+  <h3>The built-in terminal</h3>
+  <p>A few steps need you to answer questions on screen, for example <code>asl-menu</code>, the USRP2M17 installer and
+    Ampersand's first run. Those cards can open a real terminal in the page, but only:</p>
+  <ul>
+    <li>after the terminal has been <b>switched on</b> (from the page with the root password, or by creating <code>/etc/44helper/terminal.enable</code> over SSH);</li>
+    <li>from your local network, never through a tunnel or Cloudflare;</li>
+    <li>with the root password entered again each time you open it;</li>
+    <li>for the one command printed on that card, nothing else.</li>
+  </ul>
+  <p>One terminal at a time. It closes after 10 minutes with no typing, or when you log out.</p>
+
+  <h2><span class="n">7.3</span>Overview tab</h2>
+  <p>The banner at the top sums up the worst finding. The cards below it:</p>
+  <table>
+    <tr><th>Card</th><th>Shows</th></tr>
+    <tr><td>Installed software</td><td>ASL3, DVSwitch, USRP2M17, SVXLink and Ampersand. Each is <b>installed</b> (with version and running services), <b>broken</b> (half-installed packages, or a package present without its program files), <b>leftovers</b> (removed but with settings, folders or unit files left behind), or <b>absent</b>. Click a name to go to its tab.</td></tr>
+    <tr><td>Tunnel / wg0</td><td>Whether the WireGuard interface <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
+    <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up (Pi-hosted or router).</td></tr>
+    <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
+    <tr><td>Self-check findings</td><td>Red if 44helper's own page, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. Amber if <code>wg0.conf</code> (which holds your private key) is not mode 600.</td></tr>
+  </table>
+  <p><b>Re-check</b> reads everything again straight away; otherwise the installed-software list is cached for 20 seconds.</p>
+
+  <h2><span class="n">7.4</span>Services tab</h2>
+  <p>A grouped list of what is running: System (firewalld, systemd-resolved), 44Net Tunnel, AllStarLink / DVSwitch
+    (Asterisk, the bridges, gateway command ports), M17, SVXLink, Ampersand, Cloudflare Tunnel, and <b>Dashboards
+    (should stay private)</b>. Each line is a service or a listening port. Masked services are marked.</p>
+
+  <h2><span class="n">7.5</span>Ports tab</h2>
+  <p>A reference table of every port the node's software uses, checked against what is actually reachable through
+    your remote-access setup. The line above the table says where it looked: the Pi's 44NetConnect zone, the
+    router's forward table, or "none (no tunnel configured yet)".</p>
+  <table>
+    <tr><th>Verdict</th><th>Means</th></tr>
+    <tr><td class="ok">OK</td><td>As it should be.</td></tr>
+    <tr><td class="bad">over-exposed</td><td>A port that must never be public is open: a dashboard, Cockpit, AMI, a loopback-only bridge port, or a gateway command port.</td></tr>
+    <tr><td class="warn">needed-but-not-open</td><td>A port other nodes must reach (IAX2 4569, EchoLink 5198-5199, VOTER 1667, Ampersand hub 4568) is running but not open, so inbound links will fail.</td></tr>
+    <tr><td style="color:var(--muted)">not-listening</td><td>Nothing is running on it, which is normal for software you don't use.</td></tr>
+  </table>
+
+  <h2><span class="n">7.6</span>Firewall tab</h2>
+  <p>44helper uses <b>firewalld</b>. The guardrail at the top warns when <code>wg0</code> is attached to the ASL3
+    image's own <code>allstarlink</code> zone instead of 44helper's <code>44NetConnect</code> zone.</p>
+  <table>
+    <tr><th>Card</th><th>What it does</th></tr>
+    <tr><td>Pi: 44NetConnect zone</td><td>What the 44Net side can reach. Add or remove the services <code>iax2</code>, <code>echolink</code> and <code>rtcm</code>, or a port such as <code>14569/udp</code>.</td></tr>
+    <tr><td>Quick port control (any zone)</td><td>Pick any zone (the active and default zones are marked) and <b>Show zone config</b>. Presets fill in IAX2, EchoLink, VOTER/RTCM or your DVSwitch Mobile port. Then:
+      <b>Add (runtime test)</b> opens it until the next reload, a safe way to try it; <b>Make permanent</b> keeps that one port; <b>Remove</b> closes it everywhere; <b>Commit all runtime changes</b> keeps every test at once; <b>Reload firewalld</b>. An advanced section adds services and moves interfaces between zones.</td></tr>
+    <tr><td>Panic mode</td><td>If firewalld's panic mode (all traffic dropped) is on, a button turns it off.</td></tr>
+    <tr><td>Router: live port-forward table</td><td>With router access set up (Chapter 8), the router's forwards, each with a remove button.</td></tr>
+  </table>
+  <p>As you type a port, a guardrail line checks it: a loopback-only port is <b>blocked</b> in every zone, and a
+    dashboard, AMI or Cockpit port is allowed but flagged red.</p>
+  <div class="call tip"><span class="t">TIP</span>Use <b>Add (runtime test)</b> first. If you lose access, a
+    firewalld reload or a reboot puts things back. Make it permanent once you know it works.</div>
+
+  <h2><span class="n">7.7</span>Actions Log tab</h2>
+  <ul>
+    <li><b>Session log</b>: every command 44helper ran, with OK or FAIL, since it last started. <b>Refresh</b> reads it again.</li>
+    <li><b>Known-good router notes</b>: saved notes about router setups that worked. Click one to read it.</li>
+  </ul>
+
+  <h2><span class="n">7.8</span>Common tasks</h2>
+  <h3>Check the node is safe before going on 44Net</h3>
+  <ol class="steps">
+    <li>Overview: the Self-check findings card should show no red lines.</li>
+    <li>Ports: no row should say <b>over-exposed</b>. IAX2 should be OK, not needed-but-not-open.</li>
+    <li>Firewall: the guardrail should be quiet, and the 44NetConnect zone should list only what you mean to open.</li>
+  </ol>
+  <h3>An install step says "NOT RUN"</h3>
+  <ol class="steps">
+    <li>Read the reason in its output: masked services, or broken packages.</li>
+    <li>For masks, use the card at the top of the tab. For broken packages, follow the "What to do next" buttons to the Update tab.</li>
+    <li>Come back with the link at the top of the Update tab and run the step again.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>How 44helper runs things</h2>
+    <h3>Files</h3>
+    <table>
+      <tr><th>Path</th><th>Holds</th></tr>
+      <tr><td class="mono">/opt/44helper/asl_dvs_m17_44helper.py</td><td>the program (service <code>44helper</code>, port 9997)</td></tr>
+      <tr><td class="mono">/etc/44helper/44helper.conf</td><td>settings: server, identity, tunnels, router access</td></tr>
+      <tr><td class="mono">/etc/44helper/44helper_guard_keep.json</td><td>services you chose to keep masked</td></tr>
+      <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch: must be owned by root and not writable by others</td></tr>
+      <tr><td class="mono">/run/44helper/sessions.json</td><td>logins (mode 600, on tmpfs, so cleared at reboot)</td></tr>
+      <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>the 44Net tunnel config (mode 600)</td></tr>
+    </table>
+    <h3>Jobs</h3>
+    <ul>
+      <li>A step's Run posts <code>{mode, distro, step_id, command_text}</code> to its tab's <code>/api/&lt;tab&gt;/action</code>. The step must exist in that tab's script list; the command text itself runs through the shell, as root.</li>
+      <li><b>Package-changing commands</b> (apt, dpkg) run as their own systemd job, not inside 44helper. They keep going if 44helper restarts, and the page re-attaches to them. Package, build and install-script commands have no time limit; anything else stops after 15 minutes unless the step sets a different limit.</li>
+      <li>Before a package command: an install step on a tab runs the masked-service check, which unmasks and disables any masked service the tab needs; then <code>dpkg --audit</code> must come back empty.</li>
+      <li>The page polls <code>/api/action_status?job_key=…</code> about every half second, and keeps retrying if the connection drops.</li>
+      <li>Every POST needs the login cookie and an <code>X-Requested-With</code> header (CSRF protection). Wrong passwords share one 5-try lockout across the login, the terminal and other password prompts.</li>
+    </ul>
+    <h3>Port roles</h3>
+    <p>Each reference port has a role. <b>peer-inbound</b> ports (4569, 5198-5199, 1667 and 4568, all UDP) should be
+      open when used. <b>mgmt-LAN</b> ports (5038, 8080, 8989, 9090, 9997 and 9999) and <b>loopback-only</b> ports
+      (31100, 31103, 32008, 34008, 32012, 34012, and the command ports 6073-6075 and 54321) must never be exposed.
+      <b>outbound-only</b> (7844, Cloudflare) never needs an opening. "Exposed" means in the 44NetConnect zone
+      (Pi-hosted), in the router's forwards (router, single address), or the whole subnet (router, routed subnet
+      with masquerade off).</p>
+  </div>
+</section>
+
 </body>
 </html>
