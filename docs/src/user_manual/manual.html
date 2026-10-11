@@ -2200,5 +2200,112 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
+<section class="chapter" id="ch13">
+  <div class="kicker">Chapter 13 · instmon</div>
+  <h1 class="ch">instmon</h1>
+  <p class="ch-lede">instmon (Install Monitor) installs, starts, stops, updates and removes the other tools; keeps a
+    library of every version you have had; and makes whole-card backups and clones. Open it at
+    <code>http://&lt;pi-address&gt;:8990</code>. It is one long page of sections, from top to bottom.</p>
+
+  <h2><span class="n">13.1</span>Quick Links</h2>
+  <p>Buttons for Allmon3, the DVSwitch page, Cockpit, the USRP2M17 page and <b>Router</b>. Router finds your
+    network's gateway and opens its web page, if you are on the same network as the Pi.</p>
+
+  <h2><span class="n">13.2</span>GitHub Updates</h2>
+  <p>Check GitHub, Update, Full Update, the Pi Zero 2 W build choice and Quiet System are covered in Chapter 2 (section
+    2.4). In short:</p>
+  <ul>
+    <li><b>Check GitHub</b> compares every tool with this repository and marks the newer ones.</li>
+    <li><b>Full Update</b> updates them all, one at a time, putting the old copy back if a new one fails, with instmon itself last.</li>
+    <li><b>Quiet System</b> pauses SysMon, the Dashboard, 44helper and the Watchdog timer for up to 30 minutes, or until you press <b>Restore</b>.</li>
+  </ul>
+  <p>Each tool's library group also has its own GitHub row, so you can fetch one new version without updating the rest.</p>
+
+  <h2><span class="n">13.3</span>Components</h2>
+  <p>One card per tool: Dashboard, SysMon, wifimon, 44helper, Watchdog and instmon.</p>
+  <table>
+    <tr><th>Part</th><th>Meaning</th></tr>
+    <tr><td>Version and badge</td><td>The installed version, and <b>RUNNING</b>, <b>STOPPED</b>, <b>FAILED</b> or <b>UNKNOWN</b>.</td></tr>
+    <tr><td>Port</td><td>Its web port, and "(not listening)" if the page isn't answering.</td></tr>
+    <tr><td>Start · Stop · Uninstall · Go</td><td>Control the service; <b>Go</b> opens its page. instmon can't stop or uninstall itself from here.</td></tr>
+    <tr><td>Library (nested)</td><td>Press <b>Show</b> for every stored version of that tool (below).</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>As the red banner says: <b>NO CONFIRMATIONS</b>. Stop and
+    Uninstall act the moment you press them. Uninstalling the Dashboard takes Node Control away until you install it
+    again.</div>
+
+  <h2><span class="n">13.4</span>The library</h2>
+  <p>instmon keeps every file it has downloaded or you have uploaded, grouped by tool, plus <b>Scripts (.sh)</b> and
+    <b>Configuration</b>. Each row shows its version, name, size and date, and a badge: <b>INSTALLED</b> (the copy in
+    use), <b>ALT</b> (another version), or <b>READY</b>.</p>
+  <table>
+    <tr><th>Button</th><th>What it does</th></tr>
+    <tr><td>Install</td><td>Installs that version: runs its <code>--install</code>, replacing the one in use. Use it to go back to an older version.</td></tr>
+    <tr><td>Install Config</td><td>Puts a stored config file back in place (Configuration group).</td></tr>
+    <tr><td>Run Script / Install / Run Uninstall</td><td>For <code>.sh</code> files: runs it, as an installer or uninstaller if the name says so. Menu-driven scripts such as <code>wifi_menu.sh</code> show "Interactive — run via SSH" instead.</td></tr>
+    <tr><td>Edit · Download · Delete</td><td>Open it in an editor, save a copy to your computer, or remove it from the library.</td></tr>
+    <tr><td>Upload &amp; stage</td><td>Add a file from your computer to that group. Nothing is installed until you press Install.</td></tr>
+  </table>
+  <div class="call tip"><span class="t">TIP</span>A new version misbehaving? Open that tool's library and press
+    Install on the version you had before, marked ALT. Full Update also leaves the previous copy here.</div>
+
+  <h2><span class="n">13.5</span>Backup &amp; Export</h2>
+  <p><b>Download Full Backup (ZIP)</b> saves the whole library to your computer: every tool version, script and
+    config. That includes 44helper's restore points and the WireGuard config copy kept there (Chapters 8 and 11), so
+    keep the ZIP safe.</p>
+
+  <h2><span class="n">13.6</span>Disk Image &amp; Clone</h2>
+  <p>Whole-drive jobs for the Pi's SD card, or a drive in a USB adapter. The top card checks the tools these jobs need
+    and lists the attached drives, refreshing every 5 seconds. Each job card (folded until you press Show) previews
+    the exact command, has its own console, and has <b>Stop</b> and <b>Reset</b>.</p>
+  <table>
+    <tr><th>Card</th><th>What it does</th><th>Main options</th></tr>
+    <tr><td>Full Format</td><td>Wipes a <i>spare</i> drive and makes one partition (ext4, FAT32 or exFAT). Never offered for the boot disk.</td><td>Quick format: clears only the start, so it is fast but not a secure erase.</td></tr>
+    <tr><td>Backup</td><td>Copies this Pi's whole disk to an image file on another drive.</td><td>Label; Shrink to fit; Verify after copy (sha256 or blake2b); Encrypt (AES-256, passphrase); Pause node services; Freeze filesystem; Continue past read errors; Standard (dd) or Resilient (ddrescue); throttle 5, 10 or 20 MB/s. The card also lists existing backups and has <b>Scheduled Backups</b>: every N hours to a drive, keeping the newest N.</td></tr>
+    <tr><td>Clone</td><td>Copies this Pi's disk straight onto a spare drive, with no file in between.</td><td>Verify; Pause node services; Freeze; Continue past read errors; Direct I/O; dd or ddrescue; throttle.</td></tr>
+    <tr><td>Restore</td><td>Writes a backup image onto a spare drive, never the running disk.</td><td>Passphrase for encrypted images; Verify; throttle (unencrypted only).</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>Format, Clone and Restore erase the destination drive
+    completely. Double-check the drive you pick, and unmount it first. <b>Pause node services</b> takes the node
+    <b>off the air</b> for the whole job (SysMon keeps running so you can watch); a scheduled backup with it ticked
+    goes off the air on its own, unattended. An encrypted backup can't be recovered without its passphrase.</div>
+  <div class="call note"><span class="t">NOTE</span>Without Freeze, an image of a running Pi is "crash-consistent",
+    like pulling the power: ext4 tidies up on the first boot. That is normally fine. For the cleanest image, tick
+    Pause node services and Freeze filesystem.</div>
+
+  <h2><span class="n">13.7</span>System &amp; Comms, Execution Log</h2>
+  <ul>
+    <li><b>Comms SERV Restart</b>: stops Asterisk, Analog_Bridge, MMDVM_Bridge, STFU and Allmon3, waits 3 seconds, then starts them all. It asks first, and every link and call drops.</li>
+    <li><b>Reboot Pi</b> / <b>Shutdown Pi</b>: each asks twice. After Shutdown, someone has to power-cycle the Pi.</li>
+    <li><b>Execution Log</b>: everything instmon has done this session, with <b>Copy Log</b>.</li>
+  </ul>
+
+  <h2><span class="n">13.8</span>Common tasks</h2>
+  <h3>Go back to the previous SysMon</h3>
+  <ol class="steps">
+    <li>Components, SysMon card: press Show on its library.</li>
+    <li>Find the version marked ALT and press Install.</li>
+  </ol>
+  <h3>Keep a spare SD card ready</h3>
+  <ol class="steps">
+    <li>Put a spare card in a USB adapter and plug it into the Pi.</li>
+    <li>Clone: pick the card, tick Verify after copy and Pause node services, then press Clone Now.</li>
+    <li>Label the card with the date. If the main card fails, swap them.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>instmon's files and jobs</h2>
+    <ul>
+      <li><b>Program:</b> <code>/usr/local/bin/instmon.py</code>, service <code>instmon</code>, port 8990. Its own login: cookie <code>instmon_session</code>, 12 hours, kept in memory, so restarting instmon logs everyone out and the page reloads to the login screen.</li>
+      <li><b>Library:</b> <code>/etc/asl_dvs/instmon_library/</code> (<code>$INSTMON_LIBRARY_DIR</code>), one folder per category: <code>dashboard</code>, <code>sysmon</code>, <code>wifimon</code>, <code>44helper</code>, <code>watchdog</code>, <code>instmon</code>, <code>scripts</code>, <code>config</code>. 44helper adds <code>config/wg0.conf</code> and <code>config_restore/</code>.</li>
+      <li><b>Install</b> runs the file's own <code>--install</code>; <b>Uninstall</b> runs <code>--uninstall</code>. A tool is only offered for install if its file supports <code>--install</code> (and <code>--uninstall</code>) and passes the download checks in Chapter 2.</li>
+      <li><b>Version</b> comes from the file's <code>VERSION</code>, <code>APP_VERSION</code> or <code>SCRIPT_VERSION</code> line, or, for <code>.sh</code> scripts, the title line <code># name.sh  vX.Y (date)</code>.</li>
+      <li><b>Router link:</b> reads the default route from <code>/proc/net/route</code>, and probes the gateway on http:80, then https:443, with a 1.5-second limit, cached for 30 seconds. It is only offered when your browser is on that same network.</li>
+      <li><b>Disk jobs:</b> <code>dd</code> or <code>ddrescue</code>, <code>openssl enc</code> with PBKDF2 for encryption, <code>resize2fs</code> and <code>parted</code> for Shrink to fit, and <code>fsfreeze</code> for Freeze. Throttled copies run as a shell pipeline that won't survive an instmon restart.</li>
+    </ul>
+  </div>
+</section>
+
 </body>
 </html>
