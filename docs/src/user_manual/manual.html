@@ -743,5 +743,213 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
+<section class="chapter" id="ch4">
+  <div class="kicker">Chapter 4 · SysMon</div>
+  <h1 class="ch">Node and DVSwitch health</h1>
+  <p class="ch-lede">Five SysMon tabs check the radio side of the node: ASL-DVS (the Asterisk, Allmon3 and DVSwitch
+    config files), DVSM (DVSwitch Mobile accounts), STFU (BrandMeister), M17 (the USRP2M17 bridge) and Phone
+    (autopatch). They read your files and tell you, in plain words, what is set, what is missing and how to fix it.</p>
+
+  <h2><span class="n">4.1</span>How the check tabs read</h2>
+  <p>All five tabs use the same badges, so learn them once:</p>
+  <table>
+    <tr><th>Badge</th><th>Means</th><th>What to do</th></tr>
+    <tr><td class="ok">PASS / OK</td><td>Set, and set to a real value rather than a default placeholder.</td><td>Nothing.</td></tr>
+    <tr><td class="warn">WARN</td><td>Works, but something is off or optional and missing.</td><td>Read the fix line; often it is fine to leave.</td></tr>
+    <tr><td class="bad">FAIL</td><td>Missing, still at a default such as <code>N0CALL</code>, or wrong.</td><td>Follow the fix line under it.</td></tr>
+    <tr><td style="color:var(--blu)">INFO</td><td>A value for your reference, such as a port or talkgroup.</td><td>Compare it with the other side of the link.</td></tr>
+    <tr><td style="color:var(--muted)">NONE</td><td>Listed but turned off (for example a module set to <code>noload</code>).</td><td>Nothing, unless you need it.</td></tr>
+  </table>
+  <p>Many check lines end with a <b>fix</b>: the exact setting to add or the command to run. Copy buttons on each
+    card give you the whole card as text.</p>
+  <div class="call care"><span class="t">CAREFUL</span>The <b>Edit</b> buttons on these tabs open the real config
+    file, and <b>Save</b> overwrites it after one confirmation. SysMon writes the file safely (a power cut can't
+    leave half a file), but it <b>does not keep a backup copy</b> of these files. Take a restore point in 44helper's
+    Config tab first (Chapter 11), or press Copy before you change anything.</div>
+
+  <h2><span class="n">4.2</span>ASL-DVS tab</h2>
+  <p>Four cards, one per group of files. Click a file row, or its <b>Edit</b> button, to open it in the editor.</p>
+  <h3>/etc/asterisk/ — Config Files</h3>
+  <p>Every <code>.conf</code> file in <code>/etc/asterisk</code>. The ones that matter most are checked under their name:</p>
+  <table>
+    <tr><th>File</th><th>Checked</th></tr>
+    <tr><td>rpt.conf</td><td>Callsign is set and not a placeholder; each node number; its <code>rxchannel</code>, and for USRP nodes the RX and TX ports, with a reminder that Analog_Bridge must use the same pair.</td></tr>
+    <tr><td>manager.conf</td><td>At least one AMI user, and that each has a password.</td></tr>
+    <tr><td>echolink.conf</td><td>Callsign, password, EchoLink node number and the ASL node it links to.</td></tr>
+    <tr><td>rpt_http_registrations.conf</td><td>Each node that registers with AllStarLink, and that it has a password.</td></tr>
+    <tr><td>savenode.conf</td><td>Node and password pairs.</td></tr>
+    <tr><td>modules.conf</td><td>Which <code>chan_</code> channel drivers load, are required, or are set to <code>noload</code>. This list is folded away: press <b>▶ Show</b>.</td></tr>
+    <tr><td>extensions.conf</td><td>The area code (<code>HOMENPA</code>, not the 999 default) and node number in <code>[globals]</code>.</td></tr>
+  </table>
+  <p>Lines in a file that set a port get an <code>[OK]</code> or <code>[DUP]</code> badge, the same clash check as the Ports tab.</p>
+  <h3>Allmon3 — Config Files</h3>
+  <p><code>allmon3.ini</code>, <code>web.ini</code>, <code>users</code>, <code>menu.ini</code> and <code>custom.css</code> in
+    <code>/etc/allmon3</code>. <code>users</code> is read-only here: change Allmon3 logins with <code>allmon3-passwd</code>.</p>
+  <h3>DVSwitch — Config Files</h3>
+  <p>The DVSwitch files that exist on this Pi, from either their <code>/opt</code> or <code>/etc</code> location:</p>
+  <table>
+    <tr><th>File</th><th>Checked</th></tr>
+    <tr><td>Analog_Bridge.ini</td><td>DMR ID and repeater ID (not defaults), AMBE mode, TX talkgroup and slot (1 or 2), colour code, software AMBE fallback, and the USRP RX and TX ports.</td></tr>
+    <tr><td>MMDVM_Bridge.ini</td><td>Callsign and DMR ID, location and description, and which modes (DMR, Fusion, P25, NXDN, D-STAR) are enabled, with their addresses. FAIL if no mode is enabled.</td></tr>
+    <tr><td>DVSwitch.ini</td><td>For each mode section: address and ports. For <code>[STFU]</code>, also the BrandMeister server, password, DMR ID and start talkgroup.</td></tr>
+    <tr><td>var.txt</td><td>The DMR networks the <code>dvs</code> menu knows about (BrandMeister, TGIF, DMR+, Other 1 and 2), and their addresses. Passwords are never shown.</td></tr>
+    <tr><td>Analog_Reflector.ini</td><td>If present: callsign, node ID and the USRP port.</td></tr>
+  </table>
+  <h3>D-Star — ircDDBGateway</h3>
+  <p>Checks <code>/etc/ircddbgateway</code> for what the Dashboard's D-STAR gateway linking needs:</p>
+  <ul>
+    <li>the <code>ircddbgatewayd</code> service is running;</li>
+    <li><code>gatewayCallsign</code> is set, and <code>repeaterBand1</code> is a module letter. The card shows the 8-character name the Dashboard uses for the node, such as <code>N0CALL&nbsp;B</code>;</li>
+    <li><code>ircddbEnabled=1</code> (FAIL without it) and <code>dextraEnabled=1</code> (WARN);</li>
+    <li>remote control (optional): when <code>remoteEnabled=1</code>, a password is set, the port is valid and something is listening on it;</li>
+    <li><code>gatewayAddress</code> is blank or one of this Pi's own addresses, never <code>127.x</code> and never the router's address.</li>
+  </ul>
+  <p>Buttons: <b>Edit /etc/ircddbgateway</b>, <b>Restart ircddbgatewayd</b> (asks first; any D-STAR link drops), <b>Refresh</b> and <b>Copy</b>.</p>
+
+  <h2><span class="n">4.3</span>DVSM tab</h2>
+  <p>DVSwitch Mobile (DVSM) is the phone app for talking through your node. This tab reads your files and shows
+    exactly what to type into each of the app's four account types. The <b>Node IP</b> in the tab header is
+    this Pi's address on your network.</p>
+  <table>
+    <tr><th>Card</th><th>Use it for</th><th>Key settings shown</th></tr>
+    <tr><td style="color:var(--blu)">IAX2 Direct</td><td>Phone-mode connection straight to your node.</td><td>Host (LAN and WAN), port, user name and password from <code>iax.conf</code>, CallerID, node. "Phone Mode IAX2" ticked.</td></tr>
+    <tr><td style="color:var(--grn)">IAXRpt</td><td><b>Recommended.</b> Radio mode: least data, and it only sends audio while the channel is active.</td><td>As above, but Caller Num must be <code>0</code> and "Phone Mode IAX2" unticked.</td></tr>
+    <tr><td style="color:var(--vio)">Node Mode</td><td>The app registers as its own AllStarLink node.</td><td>register.allstarlink.org, port 4569, and a <b>spare</b> node number registered to your callsign. Auto Connect unticked.</td></tr>
+    <tr><td style="color:var(--org)">USRP / DVSwitch Bridge</td><td>Connect to Analog_Bridge's USRP port.</td><td>Host (local, LAN or WAN), the TX and RX ports, callsign and DMR ID.</td></tr>
+  </table>
+  <p>Passwords show as <code>●●●●●●●●</code>. Click the eye to see one while you copy it into the app.</p>
+  <h3>Compatibility Checks</h3>
+  <table>
+    <tr><th>Setting (rpt.conf node)</th><th>What it does</th><th>Shown as</th></tr>
+    <tr><td>propagate_dtmf</td><td>Lets DTMF commands from DVSM reach the node.</td><td>INFO if off: only needed for DVSM.</td></tr>
+    <tr><td>phonesendlinks</td><td>Fills the DVSM Status tab's linked-node list.</td><td>INFO if off.</td></tr>
+    <tr><td>propagate_phonedtmf</td><td>Passes phone callers' tones to every linked node, bridges included.</td><td><b>WARN if on.</b> Leave it off unless you need it.</td></tr>
+    <tr><td>remote_dtmf_allowed</td><td>Lets any linked node send commands to this node.</td><td><b>WARN if on.</b></td></tr>
+  </table>
+  <p>It also checks <code>iax.conf</code>: that an <code>[iaxrpt]</code> (or callsign-named) user with a password
+    exists, which IAXRpt needs, and how call tokens are set.</p>
+
+  <h2><span class="n">4.4</span>STFU tab</h2>
+  <p>STFU is DVSwitch's BrandMeister terminal: it connects the node to BrandMeister directly, as a hotspot.
+    Its settings live in the <code>[STFU]</code> section of <code>DVSwitch.ini</code>.</p>
+  <table>
+    <tr><th>Card</th><th>Shows</th></tr>
+    <tr><td>Installation</td><td>Whether the STFU program and its service are installed, running and enabled at boot.</td></tr>
+    <tr><td>Configuration</td><td>BrandMeister server, port (default 62031) and hotspot password (masked); your DMR ID; the USRP ports; start talkgroup; subscriber file; talker alias; log level. A link opens BrandMeister's master-server list.</td></tr>
+    <tr><td>Compatibility Checks</td><td>Server set, password set, DMR ID not a default, ports set, subscriber file found (it turns DMR IDs into callsigns), service running.</td></tr>
+    <tr><td>Sample [STFU] Stanza</td><td>A complete section built from your values, with placeholders for anything missing. <b>Copy Stanza</b> or <b>Edit Stanza</b>.</td></tr>
+    <tr><td>Edit DVSwitch.ini</td><td>Expand to edit the whole file. <b>Save</b>, then <b>Restart STFU</b> to apply.</td></tr>
+  </table>
+  <div class="call tip"><span class="t">TIP</span>The BrandMeister hotspot password is not your BrandMeister login
+    password. Set it on brandmeister.network under <b>Self Care → Hotspot Security</b>.</div>
+
+  <h2><span class="n">4.5</span>M17 tab</h2>
+  <p>The M17 bridge, USRP2M17, links private node 1917 to an M17 reflector. The Dashboard's M17 tab rewrites its
+    settings file every time you connect or disconnect.</p>
+  <table>
+    <tr><th>Card</th><th>Shows</th></tr>
+    <tr><td>Installation</td><td>The program, its service and whether it is running. <b>Restart usrp2m17</b> asks first.</td></tr>
+    <tr><td>Configuration</td><td><code>/opt/USRP2M17/USRP2M17.ini</code>: callsign; the reflector name and address (<code>0.0.0.0</code> means not connected); the M17 and USRP ports; gain; logging.</td></tr>
+    <tr><td>Compatibility Checks</td><td>Callsign set; reflector connected (WARN when idle, which is normal); USRP ports are 32008 and 34008; service running; <code>rpt.conf</code> has a <code>[1917]</code> node whose <code>rxchannel</code> ports match the ini file.</td></tr>
+    <tr><td>Reflector Host File</td><td><code>/var/lib/mmdvm/M17Hosts.json</code>: how many reflectors it lists and how old it is. <b>Update Now</b> downloads a fresh copy.</td></tr>
+    <tr><td>Sample USRP2M17.ini</td><td>A complete file built from your values.</td></tr>
+    <tr><td>Edit USRP2M17.ini</td><td>The real file. Save, then Restart from the Installation card.</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>Edits to <code>USRP2M17.ini</code> don't survive the next M17
+    connect or disconnect on the Dashboard, which rewrites the whole file. Make lasting M17 changes on the
+    Dashboard instead.</div>
+  <div class="call note"><span class="t">NOTE</span>If <code>LocalPort</code> under <code>[M17 Network]</code> is
+    missing, the sample fills in <code>32010</code>. That is the port MMDVM_Bridge uses for P25. The recommended
+    value is <code>17010</code> (see the node configuration guide, section 4).</div>
+
+  <h2><span class="n">4.6</span>Phone tab</h2>
+  <p>The Phone tab shows what Asterisk is set up to do for <b>autopatch</b> (radio dials out) and <b>reverse
+    autopatch</b> (phone calls in to the radio). It is <b>read-only</b>. You set phone networks up on the
+    Dashboard's Edit page, under Phone. The one exception is the Autopatch modules card.</p>
+  <table>
+    <tr><th>Card</th><th>What it tells you</th></tr>
+    <tr><td>Live</td><td>IDLE, DIALING, INCOMING or IN CALL; whether the phone node is linked to your node (it links while the Dashboard Phone tab is open); whether that tab is open (callers get busy when it isn't); which network is in use; phone patch on or off; calls now; sign-in state. Refreshes every 5 seconds.</td></tr>
+    <tr><td>Autopatch node</td><td>The private node the Dashboard made for each phone network.</td></tr>
+    <tr><td>Phone networks</td><td>Each network and its dialing target.</td></tr>
+    <tr><td>Hams Over IP</td><td>Shown only when you have a Hams Over IP account: the account and its sign-in.</td></tr>
+    <tr><td>Dialing rules</td><td>The dialplan contexts Asterisk has for each network.</td></tr>
+    <tr><td>Health checks</td><td>Asterisk running; nodes, files, live state and call routes all consistent. Each check is OK, WARN, FAIL or INFO, with a fix.</td></tr>
+    <tr><td>Router test</td><td>Three tests for calls that won't connect or have one-way audio (below).</td></tr>
+    <tr><td>Autopatch modules</td><td>The Asterisk modules each feature needs, and whether each is loaded. You can change them here (below).</td></tr>
+    <tr><td>Recent call attempts</td><td>Up to 20 phone calls from the last 24 hours, in or out, with the network and the last 4 digits only.</td></tr>
+  </table>
+  <h3>Router test</h3>
+  <ol class="steps">
+    <li><b>Going out:</b> <b>Run outgoing test</b> signs in to your phone provider once and sends one STUN packet. It takes about 5 seconds.</li>
+    <li><b>Call audio:</b> start a <b>Test call</b> on the Dashboard's Phone tab, then press <b>Check audio now</b>. SysMon counts audio packets in and out over 4 seconds. "Out but none in" points to the router forward or the Pi firewall. Audio in but none out is normal on a simplex node while nobody talks.</li>
+    <li><b>Coming in:</b> press <b>Start watching (10 min)</b>, have another Hams Over IP member call your extension, then press <b>Check</b>.</li>
+  </ol>
+  <h3>Autopatch modules</h3>
+  <p>Modules are grouped by feature: <b>Autopatch</b> and <b>Reverse autopatch</b>, each READY, MISSING, OFF, NOT
+    SET UP or ASTERISK DOWN. Modules both features need, and the ones every node needs, are locked (🔒).</p>
+  <ul>
+    <li><b>Activate / Deactivate</b> a feature: sets every module it needs to load and starts it, or sets the modules only it uses to noload and stops them. The confirmation lists exactly which modules.</li>
+    <li>Per module: <b>Load</b> / <b>No load</b> change <code>modules.conf</code> for the next Asterisk restart; <b>Start</b> / <b>Stop</b> load or unload it now.</li>
+    <li>If a module file is missing from the Pi, the card names the package it comes from and offers <b>Reinstall</b>, with the same commands shown for doing it by hand.</li>
+  </ul>
+  <div class="call note"><span class="t">NOTE</span>Unlike the file editors, this card backs up
+    <code>modules.conf</code> before every change. It keeps the last 5 copies next to the file.</div>
+  <p>The full story of the phone dialplan is in <code>docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf</code>.</p>
+
+  <h2><span class="n">4.7</span>Common tasks</h2>
+  <h3>No audio between AllStar and DMR</h3>
+  <ol class="steps">
+    <li>ASL-DVS tab: under <code>rpt.conf</code>, note node 1999's RX and TX ports.</li>
+    <li>Under <code>Analog_Bridge.ini</code>, check that its RX Port and TX Port are the same pair the other way round, as the note says.</li>
+    <li>Ports tab: check that neither port shows <code>[DUP]</code>.</li>
+    <li>Fix the file with Edit, then restart <code>analog_bridge</code> and <code>asterisk</code> on the Overview.</li>
+  </ol>
+  <h3>Set up DVSwitch Mobile</h3>
+  <ol class="steps">
+    <li>DVSM tab: make sure the IAXRpt card shows PASS. If not, follow the Compatibility Checks fix.</li>
+    <li>In the app, add an IAX2 account and copy each field from the IAXRpt card. Use Host (LAN) at home and Host (WAN) away.</li>
+    <li>Untick Phone Mode IAX2 and set Caller Num to 0.</li>
+  </ol>
+  <h3>Get a new node ready for STFU</h3>
+  <ol class="steps">
+    <li>STFU tab: work down the Compatibility Checks until every line shows PASS.</li>
+    <li>Copy the Sample [STFU] Stanza if your file has no <code>[STFU]</code> section, and paste it in with Edit DVSwitch.ini.</li>
+    <li>Save, then Restart STFU.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>Files, endpoints and what is sent to the page</h2>
+    <h3>Where each tab reads</h3>
+    <table>
+      <tr><th>Tab</th><th>Files and commands</th><th>Endpoint</th></tr>
+      <tr><td>ASL-DVS</td><td>every <code>*.conf</code> in <code>/etc/asterisk</code>; <code>/etc/allmon3/*</code>; the DVSwitch files under <code>/opt</code>, <code>/etc</code> and <code>/var/lib/dvswitch/dvs/var.txt</code>; <code>/etc/ircddbgateway</code>, plus <code>ss -Hlunp</code> and <code>ip -o -4 addr</code></td><td><code>/api/asterisk/files</code>, <code>/api/allmon3/files</code>, <code>/api/dvswitch/files</code>, <code>/api/dstar-gw</code></td></tr>
+      <tr><td>DVSM</td><td><code>iax.conf</code>, <code>rpt.conf</code>, Analog_Bridge's ini; the LAN address from the default route</td><td><code>/api/dvsm</code></td></tr>
+      <tr><td>STFU</td><td><code>DVSwitch.ini [STFU]</code>, <code>/opt/STFU</code>, <code>stfu.service</code></td><td><code>/api/stfu</code></td></tr>
+      <tr><td>M17</td><td><code>/opt/USRP2M17/USRP2M17.ini</code>, <code>rpt.conf [1917]</code>, <code>usrp2m17.service</code>, <code>M17Hosts.json</code></td><td><code>/api/m17</code></td></tr>
+      <tr><td>Phone</td><td>Asterisk's files and the CLI (<code>asterisk -rx</code>), <code>/var/log/asterisk/full</code> or <code>messages</code> (last 2 MB), or the journal</td><td><code>/api/phone</code>, <code>/api/phone/routertest</code>, <code>/api/phone/modules</code></td></tr>
+    </table>
+    <h3>Outside connections</h3>
+    <ul>
+      <li><b>DVSM</b> finds your public (WAN) address from <code>api.ipify.org</code>, falling back to <code>checkip.amazonaws.com</code>, with a 2-second limit each. Without internet the WAN rows say "Could not detect".</li>
+      <li><b>M17 host file</b> comes from <code>hostfiles.refcheck.radio</code>, falling back to <code>m17-project.github.io</code>. A download is only kept if it is at least 2 KB and lists at least 10 reflectors. The background poll checks every hour and fetches a new copy when the file is over 24 hours old.</li>
+    </ul>
+    <h3>Secrets</h3>
+    <ul>
+      <li>The DVSM and STFU cards send the account passwords to your logged-in page, masked until you press the eye, so you can copy them into an app.</li>
+      <li>The ASL-DVS checks report only whether a password is set, never its value. <code>var.txt</code> password lines are skipped completely.</li>
+    </ul>
+    <h3>Writes</h3>
+    <ul>
+      <li>File saves go to <code>POST /api/asterisk/file</code>, <code>/api/dvswitch/file</code> and <code>/api/allmon3/file</code>. Each writes a temporary file, keeps the old file's owner and mode, syncs it to disk, and swaps it in place. No backup is kept. Asterisk file names are validated, and the DVSwitch and Allmon3 editors only accept the files in their fixed lists.</li>
+      <li>Autopatch module changes edit only SysMon's own marked block in <code>modules.conf</code>, between <code>; &gt;&gt;&gt; sysmon-phone modules</code> and <code>; &lt;&lt;&lt; sysmon-phone &lt;&lt;&lt;</code>. A conflicting <code>noload</code> elsewhere is commented out with <code>; sysmon-phone off:</code>. If the Dashboard's own block says noload, SysMon warns instead and leaves it, because Save Phone on the Dashboard would undo the change. Backups are named <code>modules.conf.sysmon-bak-YYYYMMDD-HHMMSS</code>, keeping 5. Live start and stop use <code>module load</code> / <code>module unload</code> through the Asterisk CLI.</li>
+      <li>Restarts use <code>systemctl restart</code> on <code>stfu</code>, <code>usrp2m17</code> or <code>ircddbgatewayd</code>.</li>
+    </ul>
+    <h3>Defaults the checks treat as "not set"</h3>
+    <p>Callsigns <code>N0CALL</code>, <code>NOTSET</code>, <code>NONE</code> or blank; the stock placeholder DMR and repeater IDs
+      (such as <code>123456789</code>); the stock STFU server; area code <code>999</code>; and M17 address <code>0.0.0.0</code>.</p>
+  </div>
+</section>
+
 </body>
 </html>
