@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.74"
+VERSION      = "6.13.75"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -8064,6 +8064,7 @@ async function fwDeleteRule(num, btn) {
 }
 
 async function fwUfwEnable() {
+  if (!await confirm("Enable ufw? Incoming traffic without an allow rule will be blocked, including this page and the Dashboard if they have no rule.\n\nSysMon adds an allow rule for the SSH port first if there is none, so SSH stays open.")) return;
   const d = await api("/api/firewall", "POST", {action: "enable"});
   if (!d) { toast("Server unreachable", "err"); return; }
   toast(d.message || (d.ok ? "ufw enabled" : "Failed"), d.ok ? "ok" : "err");
@@ -16623,6 +16624,40 @@ def _ufw_cmd(h: Handler, cmd: list, label: str, stdin: "str | None" = None) -> N
     ok = r.returncode == 0
     _fw_reply(h, ok, f"{label}: {'OK' if ok else r.stderr.strip() or 'failed'}")
 
+def _ssh_listen_port() -> str:
+    try:
+        directives, _files, _trunc = _sec_sshd_directives()
+    except Exception as exc:
+        log.debug("firewall: sshd port: %s", exc)
+        directives = {}
+    port = str(directives.get("port", "22"))
+    return port if port.isdigit() and 0 < int(port) < 65536 else "22"
+
+def _ufw_missing_ssh_ports() -> list:
+    port  = _ssh_listen_port()
+    added = _run(["ufw", "show", "added"], timeout=6)
+    for line in added.splitlines():
+        t = line.split()
+        if len(t) < 3 or t[0] != "ufw" or t[1] not in ("allow", "limit"):
+            continue
+        if "deny" in t or "reject" in t:
+            continue
+        rest = t[2:]
+        if "in" in rest[:1]:
+            rest = rest[1:]
+        if rest and rest[0] in (port, f"{port}/tcp"):
+            return []
+        if port == "22" and rest and rest[0] in ("ssh", "OpenSSH", "22/tcp"):
+            return []
+        if "port" in rest:
+            i = rest.index("port")
+            if i + 1 < len(rest) and rest[i + 1] == port and \
+               ("proto" not in rest or "tcp" in rest):
+                return []
+        if "app" in rest and "OpenSSH" in rest:
+            return []
+    return [port]
+
 def _route_firewall_post(h: Handler, data: dict) -> None:
     if os.geteuid() != 0:
         h.send_json({"ok": False, "message": "root required"}); return
@@ -16663,7 +16698,17 @@ def _route_firewall_post(h: Handler, data: dict) -> None:
         return
 
     if action == "enable":
-        _ufw_cmd(h, ["ufw", "--force", "enable"], "ufw enable")
+        added = []
+        for p in _ufw_missing_ssh_ports():
+            r = subprocess.run(["ufw", "allow", f"{p}/tcp"], capture_output=True,
+                               text=True, timeout=10)
+            if r.returncode != 0:
+                _fw_reply(h, False, f"ufw enable: could not add SSH rule {p}/tcp, "
+                                    f"not enabling: {r.stderr.strip() or 'failed'}")
+                return
+            added.append(f"{p}/tcp")
+        label = "ufw enable" + (f" (added SSH rule {', '.join(added)})" if added else "")
+        _ufw_cmd(h, ["ufw", "--force", "enable"], label)
         return
 
     if action == "disable":

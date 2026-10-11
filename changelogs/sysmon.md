@@ -1,6 +1,21 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_74_20261007.py`. Newest entries first.
+Current file: `sysmon_v6_13_75_20261011.py`. Newest entries first.
+
+## 6.13.75 (2026-10-11)
+
+- Firewall tab, **Enable ufw** now asks first, like Disable ufw. The prompt says
+  that incoming traffic without an allow rule will be blocked, this page and the
+  Dashboard included.
+- Before it turns ufw on, SysMon checks the rules ufw has (`ufw show added`) for
+  an allow or limit rule on the SSH port (from `sshd_config`, 22 if unset; `ssh`
+  and `OpenSSH` count for 22). If there is none it adds `ufw allow <port>/tcp`
+  first, and says so in the result. If adding that rule fails, ufw is not
+  enabled. Before, Enable ran `ufw --force enable` straight away, which could
+  shut out SSH on a node with no rules.
+- Tested: 14 checks of the rule matching (port, profile names, `from ... port`,
+  udp-only and deny rules, a non-default SSH port) and the enable flow with
+  `ufw` mocked.
 
 ## 6.13.74 (2026-10-07)
 
