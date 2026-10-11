@@ -1640,5 +1640,143 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
+<section class="chapter" id="ch9">
+  <div class="kicker">Chapter 9 · 44helper</div>
+  <h1 class="ch">Software installers</h1>
+  <p class="ch-lede">Five tabs install, and remove, the radio software a node runs: ASL3, DVSwitch, SVXLink, M17
+    (USRP2M17) and Ampersand. All five use the step cards from Chapter 7: pick a script, run the steps in order,
+    and read each card's note first.</p>
+
+  <h2><span class="n">9.1</span>Before any install</h2>
+  <ul>
+    <li><b>Pick the right script.</b> Bookworm is Debian 12; Trixie is Debian 13. Check yours with <code>cat /etc/os-release</code>.</li>
+    <li><b>Pause the node on a Pi Zero 2 W.</b> Turn on quiet mode on the Update tab (Chapter 10), or use instmon's Quiet System. A big install competes with everything else for the SD card.</li>
+    <li><b>Watch the masked-service card</b> at the top of the tab. Install buttons stay locked while it is red.</li>
+    <li><b>Afterwards</b>, check the Ports tab (Chapter 7) so nothing you just installed is exposed by mistake.</li>
+  </ul>
+  <div class="call tip"><span class="t">TIP</span>Several tabs end with <b>Save original configs as Restore
+    point</b>. Run it once, after <i>all</i> the software you use is installed and set up. It saves every
+    installed system's config files as your Restore point (Chapter 11). Running it again only adds systems installed
+    since; saved files are never overwritten.</div>
+  <div class="call note"><span class="t">NOTE</span>Cockpit, the web admin console on port 9090, has install
+    steps on several tabs. Install it once from any tab; the others skip it. Its purge step is optional and never
+    runs automatically, because removing it affects the whole node.</div>
+
+  <h2><span class="n">9.2</span>ASL3 tab</h2>
+  <p>Installs AllStarLink 3 from the official repo.allstarlink.org packages. Script: Bookworm or Trixie.</p>
+  <table>
+    <tr><th>#</th><th>Step</th></tr>
+    <tr><td>1–4</td><td>Prerequisites (wget, curl, git, firewalld, alsa-utils…); download and install the ASL3 repository package; refresh the package list.</td></tr>
+    <tr><td>5–6</td><td>Install ASL3 core (<code>asl3</code>) and Allmon3.</td></tr>
+    <tr><td>7–8</td><td>Install and enable Cockpit.</td></tr>
+    <tr><td>9</td><td>Node database and text-to-speech utilities.</td></tr>
+    <tr><td>10</td><td><i>Optional:</i> full ASL3 Appliance branding and firewall defaults (<code>asl3-appliance</code>, <code>asl3-appliance-pi</code>, which pulls in apache2).</td></tr>
+    <tr><td>11–13</td><td>Remove the default Allmon3 account, set your own (fill in Username and Password, not the command), and enable Allmon3.</td></tr>
+    <tr><td>14</td><td>Enable the node-database update timer.</td></tr>
+    <tr><td>15</td><td><b>Manual:</b> <code>sudo asl-menu</code> to set node number, callsign and radio interface. It is a full-screen menu: run it over SSH, or in the built-in terminal (Chapter 7).</td></tr>
+    <tr><td>16</td><td>Save original configs as Restore point.</td></tr>
+  </table>
+  <p><b>Purge</b>: stops the services, purges the ASL3 and Allmon3 packages, removes unused dependencies, the repository
+    and the downloaded file. <i>Optional, manual only:</i> remove <code>/etc/asterisk</code> (your node settings), and Cockpit.</p>
+  <div class="call care"><span class="t">CAREFUL</span>The Allmon3 password step puts the password on the command
+    line, so it is briefly visible in the process list. Don't reuse a password that matters elsewhere.</div>
+
+  <h2><span class="n">9.3</span>DVSwitch tab</h2>
+  <p>Installs DVSwitch Server (Analog_Bridge, MMDVM_Bridge, md380-emu and the gateways) from dvswitch.org's official
+    repository.</p>
+  <table>
+    <tr><th>Script</th><th>Steps</th></tr>
+    <tr><td>Bookworm</td><td>Download and run the repo-install script; refresh; install DVSwitch Server; enable the DVSwitch services and the digital-mode gateways at boot; set callsign, DMR ID and BrandMeister password.</td></tr>
+    <tr><td>Trixie</td><td>Starts with <b>Check what's already here</b> (read-only), then the same repository (DVSwitch has no Trixie packages yet), plus a <b>Test install (changes nothing)</b> step as a safety gate. <b>If the test install fails, stop.</b></td></tr>
+  </table>
+  <ul>
+    <li><b>Set Callsign / DMR ID / BrandMeister password</b> fills in <code>MMDVM_Bridge.ini</code> from three fields, then restarts the bridges. The DMR ID takes your 7-digit ID plus a 2-digit suffix, for example <code>320123401</code>. Check the file afterwards if you use more than one DMR network.</li>
+    <li><b>Web-server clash:</b> ASL3's apache2 (Allmon3) and DVSwitch's lighttpd dashboard both want port 80. Step 1 reports a <code>CLASH</code>. Two optional steps fix it: <b>turn off the DVSwitch web dashboard</b>, or <b>move it to another port</b> (8081 by default; ports used by other suite tools are refused). Both do nothing if there is no clash.</li>
+  </ul>
+  <p><b>Purge</b> is the same for both scripts: it removes anything either could have installed. Optional steps
+    remove leftover config and leftovers from an old third-party build script.</p>
+
+  <h2><span class="n">9.4</span>SVXLink tab</h2>
+  <table>
+    <tr><th>Script</th><th>What it installs</th></tr>
+    <tr><td><b>USRP fork</b> (default)</td><td>Builds DL1HRC's unofficial SvxLink fork from source. It adds a UsrpLogic module, so SvxLink can talk to the DVSwitch bridges over USRP. Steps: conflict check, build dependencies, clone, configure and build, check the USRP part built, create the svxlink user, locate files, switch UsrpLogic on in the config, and a <b>hand-written</b> systemd unit (shown on its card for you to create). Installs under <code>/usr/local</code>.</td></tr>
+    <tr><td>Bookworm / Trixie</td><td>Debian's own <code>svxlink-server</code> package: install, ALSA utilities, add the svxlink user to the audio and serial groups, enable at boot, set callsign. Sound-card and PTT/COS settings stay at their defaults; set them by hand for your hardware.</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>The USRP fork is unofficial and bench-tested only. It is not
+    merged upstream, and its build-step note flags an unpatched crash from a crafted packet. The package and the
+    fork can't run at the same time. One purge covers both: it stops both services, purges the package, and offers
+    the fork's files as optional steps.</div>
+
+  <h2><span class="n">9.5</span>M17 tab</h2>
+  <p>Installs <b>USRP2M17-Selector</b> (mjwgeek, GitHub): the USRP2M17 bridge plus a small web page for picking M17
+    reflectors. It runs the project's own unmodified installer. The project's licence allows personal,
+    non-commercial use only, with no modification or redistribution.</p>
+  <table>
+    <tr><th>Step</th><th>Kind</th></tr>
+    <tr><td>Install git, PHP for Apache; clone USRP2M17-Selector</td><td>Run</td></tr>
+    <tr><td>Run the installer (asks for your callsign)</td><td><b>Manual</b>, or in the built-in terminal</td></tr>
+    <tr><td><code>rpt.conf</code>: add the M17 node stanza (node 1917)</td><td><b>Manual edit</b>: text you apply by hand</td></tr>
+    <tr><td><code>modules.conf</code>: enable <code>chan_usrp</code></td><td><b>Manual edit</b></td></tr>
+    <tr><td><code>extensions.conf</code>: add the M17 extension</td><td><b>Manual edit</b></td></tr>
+    <tr><td>Restart Asterisk; install the sudoers rule for the web page</td><td>Run</td></tr>
+  </table>
+  <p>The three Asterisk file edits are shown as text rather than run automatically, because editing a live Asterisk
+    config unattended is too risky. <b>Purge</b> removes the service, web page, sudoers rule and unit, but
+    <b>never</b> undoes those three edits; revert them by hand.</p>
+  <div class="call tip"><span class="t">TIP</span>After installing, check SysMon's M17 tab (Chapter 4). It confirms
+    the ports (32008 and 34008) and the <code>[1917]</code> node match.</div>
+
+  <h2><span class="n">9.6</span>Ampersand tab</h2>
+  <p>Ampersand is a separate, Asterisk-free AllStar/IAX node project. Pick a <b>Product</b>:</p>
+  <table>
+    <tr><th>Product</th><th>Steps</th></tr>
+    <tr><td>Radio node (<code>amp-server</code>)</td><td>Conflict check; required packages; udev HID rule (COS/PTT access); download and unpack the server; <b>first run</b> in the foreground as a smoke test (built-in terminal); run as a systemd service.</td></tr>
+    <tr><td>Hub node (<code>amp-hub</code>)</td><td>Conflict check; wget; download, unpack and run its <code>install.sh</code>; configure <code>/usr/etc/amp-hub.env</code>; enable and start the hub.</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>Ampersand <b>replaces</b> Asterisk; the two don't share a
+    node. If this Pi already runs ASL3 on IAX 4569/udp, give Ampersand its own node number and IAX port (the hub
+    defaults to 4568), or use a separate Pi. The tab never stops Asterisk or changes ports for you. The download
+    date is pinned in the command box, so change it if a newer build exists.</div>
+
+  <h2><span class="n">9.7</span>Purge clean-up steps (every tab)</h2>
+  <p>Every purge list ends with four extra steps that only touch that tab's own packages and services:</p>
+  <ol class="steps">
+    <li><b>Purge removed-but-not-purged packages.</b> Their leftover masks are what break the next install.</li>
+    <li><b>Unmask this tab's own services.</b> Debian's intentional masks are never touched.</li>
+    <li><b>Remove broken boot links</b> for this tab's services.</li>
+    <li><b>Still left behind</b> (read-only): packages, masks, service files and folders that remain, so nothing is left silently.</li>
+  </ol>
+
+  <h2><span class="n">9.8</span>Common tasks</h2>
+  <h3>Build a new bridge node from a fresh Raspberry Pi OS</h3>
+  <ol class="steps">
+    <li>ASL3 tab: run steps 1 to 14, then run <code>asl-menu</code> (step 15).</li>
+    <li>DVSwitch tab: run every step, including callsign and DMR ID. Fix a port 80 clash if step 1 reports one.</li>
+    <li>M17 tab, if you want M17: run the steps and apply the three file edits by hand.</li>
+    <li>ASL3 tab step 16: save the Restore point.</li>
+    <li>SysMon: work through the ASL-DVS, DVSM, STFU and M17 tabs until every FAIL is gone.</li>
+  </ol>
+  <h3>Start a broken install over</h3>
+  <ol class="steps">
+    <li>On the tab, press <b>Purge previous install</b> and confirm twice.</li>
+    <li>If it stops because packages are broken, press <b>Repair, then purge</b>.</li>
+    <li>Read the <b>Still left behind</b> report, then run the install steps again.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>How the installers are built</h2>
+    <ul>
+      <li>Each tab's steps live in a Python table (<code>_ASL3_SCRIPTS</code>, <code>_DVSWITCH_SCRIPTS</code>, <code>_SVXLINK_SCRIPTS</code>, <code>_M17_SCRIPTS</code>, <code>_AMP_SCRIPTS</code>, <code>_CF_SCRIPTS</code>), keyed by install or purge and then by script. The page fetches them from <code>/api/&lt;tab&gt;/script</code>.</li>
+      <li>Step flags: <code>manual</code> (copy only), <code>fields</code> + <code>cmd_template</code> (form inputs substituted into <code>{{name}}</code>), <code>config_save</code> (Restore point), <code>auto: False</code> (left out of the automatic purge pass), <code>confirm_text</code> (an extra prompt), and <code>timeout</code>.</li>
+      <li>apt commands use <code>DEBIAN_FRONTEND=noninteractive</code> with <code>--force-confdef --force-confold</code>, so an upgrade keeps your edited config files instead of stopping to ask.</li>
+      <li>Each step runs in its own shell, so a <code>cd</code> doesn't carry over; steps use absolute paths such as <code>/tmp/asl-apt-repos.deb13_all.deb</code>.</li>
+      <li>The services each tab's masked-service check covers: ASL3, Asterisk, Allmon3, apache2 and the two ASL3 timers; DVSwitch, the bridges, md380-emu, Analog_Reflector, ircDDBGateway, netcheck, monit, lighttpd, mosquitto and stfu; SVXLink, svxlink, svxlink-usrp and remotetrx; M17, usrp2m17; Ampersand, amp-server and amp-hub; Cloudflare, cloudflared. The Update tab checks all of them.</li>
+      <li>The lighttpd move step backs up <code>lighttpd.conf</code> once (<code>lighttpd.conf.44helper-bak</code>), and checks the new config with <code>lighttpd -tt</code> before restarting.</li>
+      <li>The Overview decides installed, broken, leftovers or absent from <code>dpkg-query</code> status letters, key program files (for example <code>/opt/MMDVM_Bridge/MMDVM_Bridge</code>) and unit states.</li>
+    </ul>
+  </div>
+</section>
+
 </body>
 </html>
