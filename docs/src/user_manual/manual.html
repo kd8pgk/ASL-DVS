@@ -1485,5 +1485,160 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
+<section class="chapter" id="ch8">
+  <div class="kicker">Chapter 8 · 44helper</div>
+  <h1 class="ch">44Net and remote access</h1>
+  <p class="ch-lede">How to make your node reachable from the internet, or reach it yourself while away. 44helper
+    offers three routes: a 44Net tunnel run on the Pi (Full or Split), a 44Net tunnel run on your router, or a
+    Cloudflare Tunnel. This chapter helps you pick one, then walks through each tab, and finishes with the Nodes
+    tab for several nodes on one network.</p>
+
+  <h2><span class="n">8.1</span>Which route?</h2>
+  <table>
+    <tr><th>Route</th><th>Tab</th><th>Best for</th><th>What you need</th></tr>
+    <tr><td>Pi tunnel, Full</td><td>Full Tunnel</td><td>A node that must be reachable by other AllStar nodes, with all its traffic going out through 44Net.</td><td>A 44Net Connect account and tunnel.</td></tr>
+    <tr><td>Pi tunnel, Split</td><td>Split Tunnel</td><td>The same, but only 44Net traffic uses the tunnel. DMR, M17 and everything else take your normal internet. <b>Usually the better choice.</b></td><td>The same, plus one edited line.</td></tr>
+    <tr><td>Router tunnel</td><td>Router Install</td><td>Putting several devices, or a whole routed 44Net subnet, behind one tunnel on an OpenWrt / GL.iNet router.</td><td>SSH access to the router; a single 44Net address or a routed subnet.</td></tr>
+    <tr><td>Cloudflare Tunnel</td><td>Cloudflare</td><td>Reaching the web pages yourself from anywhere, with no port opened at home.</td><td>A free Cloudflare account and domain.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>44Net (AMPRNet) gives amateur stations real public 44.x.x.x
+    addresses. 44Net Connect is ARDC's free WireGuard service that hands you one. Other AllStar nodes can then reach
+    your IAX2 port directly, with no port forwarding on your home router.</div>
+
+  <h2><span class="n">8.2</span>Full Tunnel and Split Tunnel tabs</h2>
+  <p>Both tabs set up a WireGuard tunnel (<code>wg0</code>) on the Pi, with a firewalld zone called
+    <b>44NetConnect</b> that decides what the 44Net side can reach. The only difference is the
+    <code>AllowedIPs</code> line in the tunnel config:</p>
+  <table>
+    <tr><th>Tab</th><th>AllowedIPs</th><th>Effect</th></tr>
+    <tr><td>Full Tunnel</td><td class="mono">0.0.0.0/0</td><td>All the Pi's outbound traffic goes through 44Net. This is the config exactly as the 44Net portal gives it.</td></tr>
+    <tr><td>Split Tunnel</td><td class="mono">44.0.0.0/9, 44.128.0.0/10</td><td>Only 44Net addresses use the tunnel. You edit this line yourself before pasting.</td></tr>
+  </table>
+  <h3>The steps</h3>
+  <ol class="steps">
+    <li><b>Firewall prereq</b>: installs and starts firewalld.<br><b>1a. systemd-resolved prereq</b>: installs WireGuard and systemd-resolved, without which the tunnel can fail to start. A reboot is recommended after this, before step 6.</li>
+    <li><b>Create the 44NetConnect zone.</b></li>
+    <li><b>Add inbound services and ports</b>: tick what other stations may reach. AllStarLink IAX2 and EchoLink/SvxLink are ticked by default; VOTER/RTCM is optional. Asterisk AMI can be added but is flagged red. Full Tunnel also has fields for your DVSwitch Mobile port and a custom port. Split Tunnel offers only IAX2 and EchoLink, because nothing else needs to be reachable.</li>
+    <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card.
+      <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value.
+      <br><b>4b (Split)</b>: <b>Repair AllowedIPs</b> fixes a config pasted unedited. <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
+    <li><b>Attach wg0 to the zone.</b></li>
+    <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations.</li>
+  </ol>
+  <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the
+    network. If you are connected over SSH or Cockpit from outside your home network, that session may drop. Do
+    step 6 from home, or on a keyboard and screen.</div>
+  <div class="call care"><span class="t">CAREFUL</span>A Full Tunnel config pasted into the Split Tunnel tab
+    unedited is the classic cause of "AllStar works but DVSwitch and M17 don't": every DNS lookup goes into the
+    tunnel. Use step 4b's Repair button, then restart the tunnel.</div>
+  <h3>Other buttons</h3>
+  <ul>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel.</li>
+    <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
+    <li><b>Purge</b>: undoes the tunnel and the zone.</li>
+    <li>If one kind is installed and you open the other tab, its steps are locked until you press <b>Acknowledge and unlock</b>, so you can't overwrite a working tunnel by accident.</li>
+  </ul>
+
+  <h2><span class="n">8.3</span>Router Install tab</h2>
+  <p>For an OpenWrt-based router (GL.iNet models are recognised), driven over SSH with a key. Two models:</p>
+  <ul>
+    <li><b>Model B, single address.</b> The router holds your one 44Net Connect address and forwards chosen ports to the Pi.</li>
+    <li><b>Model C, routed subnet.</b> A coordinator gives you a 44.x subnet; the router's LAN uses it, so the Pi and other devices get real 44Net addresses.</li>
+  </ul>
+  <table>
+    <tr><th>Step</th><th>What it does</th></tr>
+    <tr><td>1. Router access</td><td>Access method (none, ssh, api), host, user, SSH key path (for example <code>/etc/44helper/router_id_ed25519</code>) and poll interval. <b>Save</b>, then <b>Test connection / Re-probe</b>.</td></tr>
+    <tr><td>2. Firmware/model detection</td><td>OpenWrt? <code>uci</code> available? GL.iNet model? Read-only.</td></tr>
+    <tr><td>2a. LuCI</td><td>Installs the OpenWrt web interface if it is missing.</td></tr>
+    <tr><td>3. Allocation type</td><td>Choose Model C (routed subnet) or Model B (single address). The steps below change with it.</td></tr>
+    <tr><td>4. Capture config</td><td>Paste the WireGuard config, plus the LAN subnet for Model C. The private key stays on the Pi; the browser never sees it again.</td></tr>
+    <tr><td>5. Apply to router</td><td>Pushes the config to the router with <code>uci</code>.</td></tr>
+    <tr><td>6. Set router LAN IP <i>(Model C)</i></td><td>Moves the router's LAN onto the 44Net subnet. <b>Your connection to the router and the Pi may drop</b>: renew the Pi's address or reboot it, then update the host in step 1.</td></tr>
+    <tr><td>7. Bring up the tunnel</td><td><code>ifup wgclient</code>, then checks its status.</td></tr>
+    <tr><td>8. Pi's address</td><td>Looks up the Pi's address in the router's DHCP leases. Model C can add a static binding.</td></tr>
+    <tr><td>9. Port forwards <i>(B)</i> / Fix firewall zone <i>(C)</i></td><td>B: tick the services to forward from the router's 44.x address to the Pi. C: sets the WireGuard zone to forward, with masquerade off, so devices keep their real addresses.</td></tr>
+    <tr><td>10. Verify</td><td>B: checks outbound traffic uses the 44.x address. C: traces to portal.ampr.org. <b>Save known-good note</b> records the model, firmware and access method (no secrets) for the Actions Log.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>Model B's Verify can't prove that other stations can reach you
+    from outside, because 44helper has no way to test inbound from the internet. Ask another node to link to you.</div>
+
+  <h2><span class="n">8.4</span>Nodes tab</h2>
+  <p>For setups with more than one AllStar node on the same network, such as two Pis behind one router. Each box
+    needs its own IAX2 port, and the nodes need to know about each other.</p>
+  <table>
+    <tr><th>Card</th><th>Shows</th></tr>
+    <tr><td>This Box</td><td>This Pi's IAX2 <code>bindport</code> and whether it falls in the recommended range (4560 to 4580). <b>Edit bindport</b> changes it.</td></tr>
+    <tr><td>Local Nodes</td><td>The nodes defined on this Pi, with their <code>rxchannel</code> and any findings. <b>Edit</b> opens just that node's line.</td></tr>
+    <tr><td>Peer Nodes</td><td>Other nodes on your network. <b>Wired</b> means this Pi's <code>rpt.conf [nodes]</code> already has a line for it. Add one with Node #, IP, port, label and, optionally, its 44helper address. A <b>🔗 44helper</b> button then opens the peer's 44helper, dimmed if it isn't answering.</td></tr>
+  </table>
+  <p>Each finding has a <b>What to do</b> line. Saving an edit shows the line first, backs the file up, then shows the change.</p>
+
+  <h2><span class="n">8.5</span>Cloudflare tab</h2>
+  <p>A Cloudflare Tunnel is an outgoing connection from the Pi to Cloudflare. Cloudflare then serves a hostname you
+    choose, such as <code>node.example.com</code>, and passes the traffic down that connection. Nothing is opened
+    on your router.</p>
+  <h3>token method (persistent)</h3>
+  <ol class="steps">
+    <li><b>Pre-flight</b> (read-only): is cloudflared already installed, which ASL-DVS pages are running, and how it fits with any WireGuard tunnel.</li>
+    <li><b>Install cloudflared</b> from Cloudflare's package repository.</li>
+    <li><b>Install the connector service</b> (manual): copy the <code>sudo cloudflared service install eyJ…</code> command from your tunnel in the Cloudflare Zero Trust dashboard, and run it over SSH. It is done by hand on purpose, so your token never lands in 44helper's log.</li>
+    <li><b>Verify the connector</b>: service status and recent log. The Zero Trust dashboard should show the connector as Healthy.</li>
+    <li><b>Map a Public Hostname and add an Access policy</b> in the Zero Trust dashboard, for example <code>http://localhost:9999</code> for SysMon.</li>
+  </ol>
+  <h3>quick method (test only)</h3>
+  <p>Run <code>cloudflared tunnel --url http://localhost:8989</code> over SSH. It prints a random
+    <code>*.trycloudflare.com</code> address, needs no account, and stops when you press Ctrl-C.</p>
+  <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>bypasses the firewall</b>. Nothing
+    opens inbound, so 44helper's Ports and Firewall tabs can't see what you have published. Anything you map is
+    reachable by the whole internet, protected only by that page's own login. Always put a <b>Cloudflare Access
+    policy</b> (for example, email one-time codes for your address only) in front of every hostname. Never publish
+    44helper itself.</div>
+  <div class="call note"><span class="t">NOTE</span>Cloudflare works with no WireGuard tunnel or with a Split
+    Tunnel. Under a Full Tunnel it still works, but its connection rides the 44Net tunnel and drops whenever the
+    tunnel does.</div>
+
+  <h2><span class="n">8.6</span>Common tasks</h2>
+  <h3>Put a node on 44Net with a Split Tunnel</h3>
+  <ol class="steps">
+    <li>On connect.44net.cloud, request a tunnel and wait for approval. Copy its config and change <code>AllowedIPs</code> to <code>44.0.0.0/9, 44.128.0.0/10</code>.</li>
+    <li>Split Tunnel tab: run steps 1, 1a and 2, reboot, then step 3 with IAX2 ticked.</li>
+    <li>Paste the config in step 4 and write it. Run step 5, then step 6 from home, then Verify.</li>
+    <li>Check the Overview's Self-check findings and the Ports tab (Chapter 7) before you rely on it.</li>
+  </ol>
+  <h3>Reach SysMon from anywhere</h3>
+  <ol class="steps">
+    <li>Cloudflare tab, token method: run steps 1 and 2, then step 3 over SSH.</li>
+    <li>In the Zero Trust dashboard, map <code>sysmon.yourdomain</code> to <code>http://localhost:9999</code>, and add an Access policy for your email address.</li>
+    <li>Open the hostname, pass the Access check, then log in to SysMon as usual.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>What gets written where</h2>
+    <h3>Pi tunnel</h3>
+    <ul>
+      <li><code>/etc/wireguard/wg0.conf</code>, written mode 600 through a temporary file. The page never shows the private key again; status shows "present, permissions 600". The library copy goes to <code>/etc/asl_dvs/instmon_library/config/wg0.conf</code>.</li>
+      <li>The zone is <code>/etc/firewalld/zones/44NetConnect.xml</code>, managed with <code>firewall-cmd --permanent</code>. When firewalld's polkit crash ("unable to guess signature from an empty dict") stops a command, 44helper edits the zone XML directly and reloads.</li>
+      <li>The tunnel runs as <code>wg-quick@wg0</code>, or a custom fallback unit <code>44net-tunnel.service</code> where that template isn't available.</li>
+      <li>Which kind is installed is stored as <code>tunnel.pi.kind</code> in <code>[tunnels]</code> of <code>44helper.conf</code>; the DVSwitch Mobile port as <code>tunnel.pi.dvswitch_mobile_port</code>.</li>
+      <li>The guardrail also checks the ASL3 image's own <code>allstarlink</code> zone: <code>wg0</code> must not be in it.</li>
+    </ul>
+    <h3>Router</h3>
+    <ul>
+      <li>SSH with <code>BatchMode=yes</code>, a 6-second connect timeout and <code>StrictHostKeyChecking=accept-new</code>, using the key you name. Probes are cached for the poll interval (at least 5 s, default 60).</li>
+      <li>Changes use <code>uci</code> on the router (firewall redirects for Model B, <code>firewall.wgzone</code> forward=ACCEPT and masq=0 for Model C, <code>network.lan</code> for the LAN address), then <code>/etc/init.d/firewall reload</code> or a network reload.</li>
+      <li>The Ports tab reads forwards back with <code>uci show firewall</code>.</li>
+    </ul>
+    <h3>Nodes</h3>
+    <p>Reads <code>iax.conf</code> (bindport), <code>rpt.conf</code>, <code>extensions.conf</code> and <code>allmon3.ini</code>, at the
+      paths set in <code>[nodes]</code> of <code>44helper.conf</code>. Peers you add are stored there too (<code>peers</code>,
+      <code>peer_links</code>). Peer 44helpers are probed for reachability and version.</p>
+    <h3>Cloudflare</h3>
+    <p><code>cloudflared.service</code>, with its token and credentials in <code>/etc/cloudflared</code> (removed only by the
+      optional purge step). The edge connection is outbound 7844/udp (QUIC), falling back to TCP. Only one cloudflared
+      service is allowed per machine.</p>
+  </div>
+</section>
+
 </body>
 </html>
