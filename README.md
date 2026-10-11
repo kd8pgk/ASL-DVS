@@ -194,7 +194,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `asl_dvs_dashboard_v9_3_74_20261011.py` | Dashboard, full (current) |
+| `dashboard_v9_3_75.py` | Dashboard, full (current) |
 | `dashboard_pi02w_v9_4_0.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
 | `sysmon_v6_13_77_20261011.py` | SysMon, full (current) |
@@ -232,7 +232,7 @@ per tool and build:
 |---|---|
 | [`sysmon.md`](changelogs/sysmon.md) | `sysmon_v*.py` (full) |
 | [`sysmon_pi02w.md`](changelogs/sysmon_pi02w.md) | `sysmon_pi02w_v*.py` |
-| [`asl_dvs_dashboard.md`](changelogs/asl_dvs_dashboard.md) | `asl_dvs_dashboard_v*.py` (full) |
+| [`dashboard.md`](changelogs/dashboard.md) | `dashboard_v*.py` (full; older: `asl_dvs_dashboard_v*.py`) |
 | [`dashboard_pi02w.md`](changelogs/dashboard_pi02w.md) | `dashboard_pi02w_v*.py` (older: `asl_dvs_dashboard_pi02w_v*.py`) |
 | [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |

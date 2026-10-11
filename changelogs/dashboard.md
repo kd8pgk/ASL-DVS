@@ -1,6 +1,24 @@
 # Dashboard, full build changelog
 
-Current file: `asl_dvs_dashboard_v9_3_74_20261011.py`. Newest entries first.
+Current file: `dashboard_v9_3_75.py`. Newest entries first. Before 9.3.75 the
+file was `asl_dvs_dashboard_v*_<date>.py` and this changelog was
+`asl_dvs_dashboard.md`.
+
+## 9.3.75 (2026-10-11)
+
+- New name: `dashboard_v9_3_75.py` (was `asl_dvs_dashboard_v9_3_74_20261011.py`).
+  No `asl_dvs_` prefix and no date in the name; the date is in `BUILD_DATE`.
+  Versions have three parts (this build already did). Needs instmon 2.40.0 or
+  installer 6.7.0 to be seen as the same tool as the old name.
+- `--uninstall` also removes the installed copy in `/usr/local/lib/asl_dvs/`
+  when its name starts with `dashboard_` (it only knew `asl_dvs_dashboard_`).
+  Same fix as Dashboard 9.4.0-pi02w. The installed paths and service
+  (`/usr/local/bin/asl_dvs_dashboard.py`, `asl_dvs_dashboard.service`) are
+  unchanged.
+- Tested: `--uninstall` with mocks for an installed copy under each name (new
+  and old Pi02w, new and old full): the link, unit and copy are removed; an
+  unrelated name is left alone.
+
 
 ## 9.3.74 (2026-10-11)
 
