@@ -1,6 +1,17 @@
 # Dashboard, full build changelog
 
-Current file: `asl_dvs_dashboard_v9_3_73_20261006.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_v9_3_74_20261011.py`. Newest entries first.
+
+## 9.3.74 (2026-10-11)
+
+- M17: USRP2M17 now listens on UDP 17010 for reflector traffic (`LocalPort` in
+  `[M17 Network]` of `USRP2M17.ini`), was 32010. Same fix as Dashboard Pi02w
+  9.3.71.11: MMDVM_Bridge's stock `[P25 Network]` also listens on 32010, so both
+  programs could hold the port at once and reflector packets could reach
+  MMDVM_Bridge instead of USRP2M17. The new port is written the next time the
+  dashboard connects or disconnects an M17 reflector. Reflectors answer the port
+  USRP2M17 sends from, so nothing else needs to change.
+- Tested: the `USRP2M17.ini` text the dashboard writes now has `LocalPort=17010`.
 
 ## 9.3.73 (2026-10-06)
 
