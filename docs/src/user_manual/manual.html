@@ -36,7 +36,7 @@
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_74_20261007.py</td><td>6.13.74</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_73_20261006.py</td><td>9.3.73</td></tr>
     </table>
-    <span class="draft">DRAFT · PARTS I–II OF V</span>
+    <span class="draft">DRAFT · PARTS I–III OF V</span>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
 </section>
@@ -54,11 +54,11 @@
     <li><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit<span class="st done">THIS DRAFT</span></li>
     <li><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console<span class="st done">THIS DRAFT</span></li>
     <li class="pt">Part III · 44helper</li>
-    <li class="later"><span class="no">7</span>44helper basics: Overview, Services, Ports, Firewall, Actions Log<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">8</span>44Net and remote access: Router Install, Tunnels, Nodes, Cloudflare<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">9</span>Software installers: ASL3, DVSwitch, SVXLink, M17, Ampersand<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">10</span>Keeping the system healthy: Update, System Optimization<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">11</span>The Config tab: restore points, save points, presets, identity<span class="st">LATER STAGE</span></li>
+    <li><span class="no">7</span>44helper basics: Overview, Services, Ports, Firewall, Actions Log<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">8</span>44Net and remote access: Router Install, Tunnels, Nodes, Cloudflare<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">9</span>Software installers: ASL3, DVSwitch, SVXLink, M17, Ampersand<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">10</span>Keeping the system healthy: Update, System Optimization<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">11</span>The Config tab: restore points, save points, presets, identity<span class="st done">THIS DRAFT</span></li>
     <li class="pt">Part IV · The other tools</li>
     <li class="later"><span class="no">12</span>The Dashboard<span class="st">LATER STAGE</span></li>
     <li class="later"><span class="no">13</span>instmon<span class="st">LATER STAGE</span></li>
@@ -1904,6 +1904,160 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li>journald: a drop-in at <code>/etc/systemd/journald.conf.d/44helper-sysopt.conf</code>; Revert removes it.</li>
       <li>Each Revert puts back the state saved the first time that card changed something, not a fixed default. "Nothing to revert yet" means this tab hasn't changed it.</li>
     </ul>
+  </div>
+</section>
+
+<section class="chapter" id="ch11">
+  <div class="kicker">Chapter 11 · 44helper</div>
+  <h1 class="ch">The Config tab</h1>
+  <p class="ch-lede">The Config tab is your safety net for the node's configuration. It saves copies of every config
+    file, restores them in one go, carries node wiring from one Pi to another, compares your files with the stock
+    ones, and checks that callsigns, IDs and ports agree everywhere. Use it before and after any change.</p>
+
+  <h2><span class="n">11.1</span>The ideas</h2>
+  <table>
+    <tr><th>Term</th><th>Means</th></tr>
+    <tr><td>System</td><td>A group of files restored together: <b>ASL3</b>, <b>DVSwitch</b>, <b>USRP2M17</b> or <b>Phone</b>. Only installed systems are saved.</td></tr>
+    <tr><td>Restore point</td><td>The original config, saved <b>once</b> after your installs are finished. Your "known good" baseline.</td></tr>
+    <tr><td>Save point</td><td>A named copy of the current files, taken whenever you like, for example "before reflector change".</td></tr>
+    <tr><td>Automatic copy</td><td>Taken by itself before every restore, preset, standard-value change or undo, so every change on this tab can be undone.</td></tr>
+    <tr><td>Preset</td><td>Just the <i>wiring</i> of a node (private nodes, ports, extensions), with no identity, for copying to another Pi. Today there is one: <b>Travel Node</b>.</td></tr>
+  </table>
+  <p>Up to <b>10</b> points are kept in all. When a new automatic copy would go over the limit, the oldest automatic
+    copies are deleted first; your named save points are never removed for you.</p>
+
+  <h2><span class="n">11.2</span>Restore point</h2>
+  <ul>
+    <li><b>Save Restore point</b>: run it once, after ASL3, DVSwitch and USRP2M17 (whichever you use) are installed and working. The same button is the last step on the install tabs. Saving again only adds systems installed since; files already saved are never overwritten.</li>
+    <li>The status lists each system and file. A file that has changed since the Restore point has <b>View diff</b>, which shows the differences in the box below.</li>
+    <li><b>Retake Restore point</b> replaces it with the current files. The old one is kept as a save point; you are told if that takes you over the limit.</li>
+  </ul>
+
+  <h2><span class="n">11.3</span>Restore</h2>
+  <ol class="steps">
+    <li>Pick a point in <b>From</b>: the Restore point, a save point, an automatic copy, or a preset.</li>
+    <li>Tick the systems to restore. Only those systems' files are written.</li>
+    <li>Press <b>Restore selected</b>. The current files are saved first as an automatic copy, and the output lists each file as written, unchanged or skipped.</li>
+  </ol>
+  <p><b>Delete</b> removes the selected save point or automatic copy.</p>
+  <p>After any change, two cards appear:</p>
+  <ul>
+    <li><b>Restart services</b> ("Config files changed"): buttons to restart exactly the services those files belong to, such as Asterisk, Allmon3, the DVSwitch bridges and usrp2m17. Nothing restarts until you press one.</li>
+    <li><b>Finish: reinstall the tools and reboot</b>: suggested so everything starts clean. It reinstalls the ASL-DVS tools from instmon's library, instmon first, then reboots. Each tool is saved first and put back if its new copy doesn't start. Your callsign, node number and settings are kept. The node reboots only once instmon, the Dashboard and Asterisk are healthy. <b>Not now</b> hides the card.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>While the reinstall runs, don't power the node off. The page
+    says when it is reinstalling, rebooting and done, and reconnects by itself.</div>
+
+  <h2><span class="n">11.4</span>Create save point</h2>
+  <p>Type a name (up to 40 characters: letters, numbers, spaces, <code>_ . -</code>) and press <b>Create save
+    point</b>. It saves the current files of every installed system.</p>
+  <div class="call tip"><span class="t">TIP</span>Make it a habit: take a save point before editing files in
+    SysMon, before an update, and before trying a new reflector setup.</div>
+
+  <h2><span class="n">11.5</span>Travel Node preset</h2>
+  <p>Captures only this node's <b>wiring</b>:</p>
+  <ul>
+    <li>the private nodes (1000 to 1999) in <code>rpt.conf</code> and their <code>[nodes]</code> lines;</li>
+    <li>their extensions, and <code>chan_usrp</code> in <code>modules.conf</code>;</li>
+    <li>the <code>USRP2M17.ini</code> ports and the Analog_Bridge <code>[USRP]</code> ports. The digital-mode ports change with the mode, so they aren't included.</li>
+  </ul>
+  <p><b>Never</b> callsigns, IDs or passwords. <b>Preview</b> shows what would be saved; <b>Save as Travel Node</b> stores
+    it. To use it, pick it in Restore on any node. Applying it also keeps Allmon3 in step with the private nodes,
+    and gives bridge nodes (USRP channels) the standard USRP values. If the preset would remove a private node that
+    EchoLink is attached to, it warns you first.</p>
+
+  <h2><span class="n">11.6</span>Identity</h2>
+  <p>A read-only check that your callsigns, IDs and passwords agree across every file that holds a copy. Values are
+    masked (<code>••••••</code>). <b>Reveal</b> asks for the root password, then shows everything, passwords included,
+    until you press <b>Hide</b> or reload.</p>
+  <table>
+    <tr><th>Band</th><th>Groups</th><th>Rule</th></tr>
+    <tr><td>Same everywhere</td><td>Callsign; ASL node number; DMR ID (7 digits)</td><td>Every copy should hold the same value.</td></tr>
+    <tr><td>Must match</td><td>DMR ID + suffix; AMI secret; ASL node password; BrandMeister password</td><td>Copies that are paired must agree, or the link fails.</td></tr>
+    <tr><td>Stands alone</td><td>values with no partner</td><td>Shown for reference only.</td></tr>
+    <tr><td>Phone accounts</td><td>the Dashboard's phone networks</td><td>Change these on the Dashboard's Phone tab.</td></tr>
+  </table>
+  <p>Each group shows a chip: <b>matches</b>, <b>differs</b> (red), <b>some copies empty</b>, <b>not set</b>, <b>no public
+    node</b>, or <b>one copy</b>. To fix a value, change it in its file; nothing on this card writes.</p>
+
+  <h2><span class="n">11.7</span>Standard configuration</h2>
+  <p>Lists where this node differs from the stock ASL3 and DVSwitch files, with the standard value for each, in groups:</p>
+  <table>
+    <tr><th>Group</th><th>Covers</th><th>Can apply?</th></tr>
+    <tr><td>Bridge nodes</td><td>Private USRP nodes: duplex 0, hangtime 0, althangtime 0, holdofftelem 1, telemdefault 0, telemdynamic 0, linktolink no, nounkeyct 1, tx_timeout 170000.</td><td>yes</td></tr>
+    <tr><td>Template (rpt.conf)</td><td>Stock template values.</td><td>yes</td></tr>
+    <tr><td>Optional efficiency</td><td>Settings that save effort but aren't required.</td><td>yes</td></tr>
+    <tr><td>Wiring</td><td>Ports and links between programs.</td><td>shown only</td></tr>
+    <tr><td>Your choices</td><td>Deliberate local choices.</td><td>shown only</td></tr>
+  </table>
+  <p><b>Apply</b> shows the change, takes an automatic copy and writes it. <b>Undo</b> puts the old values back.
+    Services aren't restarted until you press Restart. Identity and your radio tuning are never listed.</p>
+
+  <h2><span class="n">11.8</span>Digital-mode gateways</h2>
+  <p>Shows the gateway services behind D-STAR and XLX (ircDDBGateway), YSF and FCS, P25, NXDN and STFU. P25 and NXDN
+    are installed but disabled, so out of the box they only start once you open their Dashboard page. <b>Enable and
+    start at boot</b> makes every mode ready right after boot. <b>Undo</b> puts them back as they were.</p>
+
+  <h2><span class="n">11.9</span>Port check</h2>
+  <p>Reads <code>rpt.conf</code>, Analog_Bridge, DVSwitch.ini, MMDVM_Bridge, USRP2M17, ircDDBGateway and the YSF, P25 and NXDN
+    gateways, and reports:</p>
+  <ul>
+    <li>any UDP port two programs both <b>listen</b> on. A sender pointed at a listener is a pair, not a clash;</li>
+    <li>whether each gateway's ports mirror MMDVM_Bridge's, and DVSwitch.ini's RemotePort matches the gateway's command port.</li>
+  </ul>
+  <p><b>Check what is listening now</b> adds the live picture: which ports are reachable from the network, the gateway
+    command ports (which should never be reachable), ports only open through a broad firewall range, and configured
+    ports that nothing is listening on.</p>
+
+  <h2><span class="n">11.10</span>Common tasks</h2>
+  <h3>Undo a change that broke the node</h3>
+  <ol class="steps">
+    <li>Config tab, Restore: pick the save point or automatic copy from before the change.</li>
+    <li>Tick the system involved (usually ASL3 or DVSwitch) and press Restore selected.</li>
+    <li>In Restart services, restart what it lists, or run Finish: reinstall and reboot.</li>
+  </ol>
+  <h3>Copy a working travel setup to a new Pi</h3>
+  <ol class="steps">
+    <li>On the working node: Travel Node preset, Preview, then Save as Travel Node.</li>
+    <li>On the new node, which uses the same instmon library: install the software (Chapter 9), then Restore and pick Travel Node.</li>
+    <li>Identity: fill in this node's own callsign, IDs and passwords in their files until every group shows "matches".</li>
+  </ol>
+  <h3>Before asking for help</h3>
+  <ol class="steps">
+    <li>Identity: no red <b>differs</b> chips.</li>
+    <li>Port check: no clashes, and Check what is listening now is clean.</li>
+    <li>Standard configuration: read the differences, so you can say what isn't stock.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>Where the copies live and how restores are written</h2>
+    <h3>Library</h3>
+    <ul>
+      <li>Everything lives under <code>/etc/asl_dvs/instmon_library/config_restore/</code> (or <code>$INSTMON_LIBRARY_DIR</code>), so instmon's Backup &amp; Export ZIP includes it. Automatic copies go under <code>auto/</code>; each point's ID is <code>YYYY-MM-DD_HHMMSS_name</code>.</li>
+      <li>Files per system:
+        <b>ASL3</b>: <code>rpt.conf</code>, <code>iax.conf</code>, <code>extensions.conf</code>, <code>modules.conf</code>, <code>manager.conf</code>, <code>allmon3.ini</code>; optional <code>echolink.conf</code>, <code>rpt_http_registrations.conf</code>, <code>savenode.conf</code>, <code>simpleusb.conf</code> and the <code>/etc/asterisk/custom/</code> copies.
+        <b>DVSwitch</b>: <code>MMDVM_Bridge.ini</code>, <code>DVSwitch.ini</code>, <code>Analog_Bridge.ini</code>; optional <code>dvsm.macro</code>, <code>var.txt</code>, <code>/etc/ircddbgateway</code>, the YSF, P25 and NXDN gateway ini files.
+        <b>USRP2M17</b>: <code>USRP2M17.ini</code>, <code>/etc/sudoers.d/usrp2m17</code>, plus <code>rpt.conf</code>, <code>modules.conf</code> and <code>extensions.conf</code>.
+        <b>Phone</b>: <code>/etc/asl_dvs/phone.json</code>; optional <code>dvs_phone_*.conf</code> and <code>pjsip.conf</code>.</li>
+      <li>A system counts as installed when its marker exists: <code>rpt.conf</code>, the MMDVM_Bridge or Analog_Bridge program, <code>/opt/USRP2M17</code>, or <code>phone.json</code>.</li>
+    </ul>
+    <h3>Writing a restore</h3>
+    <ul>
+      <li>Each file is written through a <code>.44htmp</code> temporary file, created mode 600 and with <code>O_NOFOLLOW</code>, then given the saved owner and mode and swapped into place. Identical files are left alone ("unchanged"). Files whose folder no longer exists are "skipped".</li>
+      <li>A sudoers file must pass <code>visudo -c</code> before it is put in place.</li>
+      <li>Blocks managed by another tool, between <code>; &gt;&gt;&gt; … managed by … &gt;&gt;&gt;</code> and <code>; &lt;&lt;&lt; … &lt;&lt;&lt;</code> (such as the Dashboard's Phone block), are recognised when a preset is applied.</li>
+    </ul>
+    <h3>Identity scan</h3>
+    <ul>
+      <li>Fields come from <code>44helper.conf</code>, <code>rpt.conf</code>, <code>iax.conf</code>, <code>rpt_http_registrations.conf</code>, <code>manager.conf</code>, <code>echolink.conf</code>, the DVSwitch ini files, <code>var.txt</code>, <code>/etc/ircddbgateway</code> and <code>phone.json</code>. In ini files a <code>;</code> is part of the value; in Asterisk files it starts a comment.</li>
+      <li>Callsigns are compared without a <code>-L</code>/<code>-R</code> suffix. DMR IDs are compared on their first 7 digits for the "same everywhere" band. Only node numbers of 4 digits or more are masked.</li>
+      <li>Reveal uses the same root-password check and lockout as the login. Values are never written to the log.</li>
+    </ul>
+    <h3>Reinstall job</h3>
+    <p>Runs as its own systemd unit, <code>asl-dvs-reinstall</code>, so it survives 44helper restarting itself. Its
+      state and log are in <code>config_restore/reinstall_job.json</code> and <code>reinstall.log</code>. It uses a
+      90-second health guard while the tools come back up.</p>
   </div>
 </section>
 
