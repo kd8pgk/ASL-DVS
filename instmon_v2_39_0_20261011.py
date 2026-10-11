@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import argparse
-import base64
 import collections
 import fcntl
 import fnmatch
@@ -18,6 +17,7 @@ import re
 import secrets
 import shlex
 import shutil
+import stat
 import signal
 import socket
 import ssl
@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.38.3"
-DATE_STR ="2026-10-07"
+VERSION ="2.39.0"
+DATE_STR ="2026-10-11"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
 UNINSTALLER_SCRIPT_GLOB ="uninstall_asl_dvs*.sh"
@@ -1892,6 +1892,203 @@ def compare_before_write (dest_path ,data_bytes ):
             pass 
         raise 
     return True ,"written"
+
+
+def _stage_library_file(category, filename, filedata, force=False, source="upload"):
+    if category not in LIB_SUBDIRS:
+        return 400, {"error": f"Unknown category '{category}'"}
+    if not filename or filedata is None:
+        return 400, {"error": "No file provided"}
+    filename = os.path.basename(filename)
+    ext = os.path.splitext(filename)[1].lower()
+    if ext not in ALLOWED_EXT[category]:
+        return 400, {"error": f"'{ext}' not allowed for category '{category}' (expected {ALLOWED_EXT[category]})"}
+
+    expected_patterns = dict(HOME_SCAN_PATTERN_MAP).get(category, [])
+    name_matches = any(fnmatch.fnmatch(filename.lower(), g.lower()) for g in expected_patterns)
+    if expected_patterns and not name_matches and not force:
+        return 400, {
+            "error": f"'{filename}' doesn't look like a {category} file -- expected a name matching {' / '.join(expected_patterns)}.",
+            "mismatch": True,
+            "expected": expected_patterns,
+        }
+    if expected_patterns and not name_matches and force:
+        log_event(f"{'Imported' if source == 'usb' else 'Uploaded'} {filename} to {category} library despite naming mismatch (forced)", "warn")
+
+    ensure_dirs()
+    dest = safe_join(LIB_SUBDIRS[category], filename)
+    if dest is None:
+        return 400, {"error": "Invalid filename"}
+    wrote, reason = compare_before_write(dest, filedata)
+    verb = "Imported from USB:" if source == "usb" else "Uploaded"
+    log_event(f"{verb} {filename} to {category} library ({reason})", "ok")
+    message = f"Staged {filename} in the {category} library." if wrote else f"{filename} already staged (unchanged)."
+    return 200, {"name": filename, "wrote": wrote, "reason": reason, "message": message, "level": "ok" if wrote else "info"}
+
+_USBIMPORT_MOUNT_ROOT = "/mnt/instmon-usbimport"
+_USBIMPORT_MAX_ENTRIES = 500
+_USBIMPORT_EXTS = tuple(sorted({e for _exts in ALLOWED_EXT.values() for e in _exts}))
+_USBIMPORT_SKIP_NAMES = ("system volume information", "lost+found", "$recycle.bin")
+_USBIMPORT_PLAIN_FS = ("vfat", "exfat", "ext2", "ext3", "ext4")
+_usbimport_lock = threading.Lock()
+
+def _usbimport_valid_drive(name):
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+        return None
+    for d in _list_usb_drives():
+        if d["name"] == name and not d["is_boot_disk"]:
+            return d
+    return None
+
+def _kernel_has_fs(fstype):
+    try:
+        with open("/proc/filesystems", "r") as f:
+            return any(line.split()[-1:] == [fstype] for line in f if line.strip())
+    except OSError:
+        return False
+
+def _usbimport_ntfs_type():
+    if _kernel_has_fs("ntfs3"):
+        return "ntfs3"
+    if shutil.which("mount.ntfs-3g") or os.path.exists("/sbin/mount.ntfs-3g"):
+        return "ntfs-3g"
+    return None
+
+def _usbimport_mount(name):
+    data = _lsblk_json()
+    if data is None:
+        return None, False, "lsblk query failed"
+    node = next((n for n in data.get("blockdevices") or [] if n.get("name") == name), None)
+    if node is None:
+        return None, False, "Drive not found"
+    cand = _find_mount_or_mountable_partition(node)
+    if cand is None:
+        return None, False, "No mountable filesystem found on this drive"
+    dev_path, existing_mp, fstype = cand
+    if existing_mp:
+        return existing_mp, False, None
+    fstype = (fstype or "").lower()
+    if fstype in ("ntfs", "ntfs3"):
+        mtype = _usbimport_ntfs_type()
+        if mtype is None:
+            return None, False, "NTFS driver not installed (apt install ntfs-3g)"
+    elif fstype in _USBIMPORT_PLAIN_FS:
+        mtype = fstype
+    else:
+        return None, False, f"Unsupported filesystem '{fstype}'"
+    mountpoint = os.path.join(_USBIMPORT_MOUNT_ROOT, name)
+    try:
+        os.makedirs(mountpoint, exist_ok=True)
+        res = subprocess.run(
+            ["mount", "-t", mtype, "-o", "ro,nosuid,nodev,noexec", dev_path, mountpoint],
+            capture_output=True, text=True, timeout=20,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log_event(f"USB import: mount of {dev_path} failed: {exc}", "err")
+        return None, False, "Mount failed"
+    if res.returncode != 0:
+        detail = (res.stderr or "").strip().replace("\n", " ")[:200]
+        log_event(f"USB import: mount of {dev_path} ({mtype}) failed: {detail}", "err")
+        return None, False, f"Mount failed: {detail}" if detail else "Mount failed"
+    return mountpoint, True, None
+
+def _usbimport_umount(mountpoint):
+    try:
+        subprocess.run(["umount", mountpoint], capture_output=True, timeout=20, check=True)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        log_event(f"USB import: umount of {mountpoint} failed: {exc}", "warn")
+        return
+    try:
+        os.rmdir(mountpoint)
+    except OSError:
+        pass
+
+def _usbimport_resolve(mountpoint, rel):
+    rel = (rel or "").replace("\\", "/")
+    if "\x00" in rel:
+        return None
+    parts = [p for p in rel.split("/") if p]
+    if any(p in (".", "..") for p in parts):
+        return None
+    base = os.path.realpath(mountpoint)
+    full = os.path.realpath(os.path.join(base, *parts))
+    if full != base and not full.startswith(base + os.sep):
+        return None
+    return full
+
+def _usbimport_run(name, fn):
+    drive = _usbimport_valid_drive(name)
+    if drive is None:
+        return 404, {"error": "Drive not found or not eligible"}
+    job = _diskimg_job_snapshot()
+    if job is not None and not job.get("finished"):
+        return 409, {"error": "A disk-image job is running -- wait for it to finish.", "level": "warn"}
+    with _usbimport_lock:
+        mountpoint, mounted, err = _usbimport_mount(name)
+        if mountpoint is None:
+            return 400, {"error": err or "Mount failed"}
+        try:
+            return fn(mountpoint)
+        finally:
+            if mounted:
+                _usbimport_umount(mountpoint)
+
+def _usbimport_browse(mountpoint, rel):
+    full = _usbimport_resolve(mountpoint, rel)
+    if full is None or not os.path.isdir(full):
+        return 400, {"error": "Invalid path"}
+    dirs, files, truncated = [], [], False
+    try:
+        with os.scandir(full) as it:
+            for e in it:
+                lname = e.name.lower()
+                if e.name.startswith((".", "$")) or lname in _USBIMPORT_SKIP_NAMES:
+                    continue
+                try:
+                    if e.is_symlink():
+                        continue
+                    if e.is_dir(follow_symlinks=False):
+                        dirs.append(e.name)
+                    elif e.is_file(follow_symlinks=False) and os.path.splitext(lname)[1] in _USBIMPORT_EXTS:
+                        st = e.stat(follow_symlinks=False)
+                        files.append({"name": e.name, "size": st.st_size, "mtime": int(st.st_mtime)})
+                except OSError:
+                    continue
+                if len(dirs) + len(files) >= _USBIMPORT_MAX_ENTRIES:
+                    truncated = True
+                    break
+    except OSError as exc:
+        return 500, {"error": f"Could not read directory: {exc}"}
+    dirs.sort(key=str.lower)
+    files.sort(key=lambda f: f["name"].lower())
+    base = os.path.realpath(mountpoint)
+    relpath = "" if full == base else os.path.relpath(full, base).replace(os.sep, "/")
+    return 200, {"path": relpath, "dirs": dirs, "files": files, "truncated": truncated}
+
+def _usbimport_import(mountpoint, rel, category, force):
+    full = _usbimport_resolve(mountpoint, rel)
+    if full is None:
+        return 400, {"error": "Invalid path"}
+    fd = None
+    try:
+        fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return 400, {"error": "Not a regular file"}
+        limit_msg = f"File too large (limit {MAX_UPLOAD_BYTES // (1024 * 1024)}MB -- set INSTMON_MAX_UPLOAD_MB to change)"
+        if st.st_size > MAX_UPLOAD_BYTES:
+            return 400, {"error": limit_msg}
+        with os.fdopen(fd, "rb") as f:
+            fd = None
+            data = f.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            return 400, {"error": limit_msg}
+    except OSError as exc:
+        return 404, {"error": f"Could not read file: {exc.strerror or exc}"}
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return _stage_library_file(category, os.path.basename(full), data, force, "usb")
 
 def systemctl_is_active (service ):
     try :
@@ -6408,6 +6605,7 @@ function _startApp() {
   pollDiskimgJob();
   pollDiskimgBackups();
   pollGateway();
+  usbimportInit();
 }
 
 // Boot-time auth probe: reaching /api/whoami with a 200 IS the proof of
@@ -6421,11 +6619,142 @@ _rawFetch('/api/whoami').then((r) => {
 }).catch(() => { showLoginScreen(_takeAuthMsg()); });
 """
 
+_JS_USBIMPORT = """// USB import card. Every string from the drive (names, models) goes in via
+// textContent, never innerHTML.
+let _usbimpPath = '';
+let _usbimpSig = null;
+function usbimpMsg(t) { const m = document.getElementById('usbimp-msg'); if (m) m.textContent = t || ''; }
+function usbimpClear() {
+  const l = document.getElementById('usbimp-list'); if (l) l.textContent = '';
+  const p = document.getElementById('usbimp-path'); if (p) p.textContent = '';
+  const u = document.getElementById('usbimp-up'); if (u) u.disabled = true;
+  _usbimpPath = '';
+}
+async function usbimpLoadDrives(force) {
+  const sel = document.getElementById('usbimp-drive');
+  if (!sel) return;
+  let data;
+  try { const r = await fetch('/api/usbimport/drives'); data = await r.json(); } catch (e) { return; }
+  const drives = data.drives || [];
+  const sig = JSON.stringify(drives);
+  if (!force && sig === _usbimpSig) return;
+  _usbimpSig = sig;
+  const prev = sel.value;
+  sel.textContent = '';
+  if (!drives.length) {
+    const o = document.createElement('option');
+    o.value = ''; o.textContent = 'No USB drive detected';
+    sel.appendChild(o);
+    usbimpClear(); usbimpMsg('');
+    return;
+  }
+  drives.forEach((d) => {
+    const o = document.createElement('option');
+    o.value = d.name;
+    o.textContent = d.name + ' - ' + (d.model || 'USB drive') + ' (' + fmtBytes(d.size) + ')';
+    sel.appendChild(o);
+  });
+  if (drives.some((d) => d.name === prev)) { sel.value = prev; if (force) usbimpBrowse(_usbimpPath); }
+  else { sel.value = drives[0].name; usbimpClear(); usbimpBrowse(''); }
+}
+async function usbimpBrowse(path) {
+  const sel = document.getElementById('usbimp-drive');
+  const list = document.getElementById('usbimp-list');
+  if (!sel || !sel.value || !list) return;
+  usbimpMsg('Reading drive...');
+  let r, data;
+  try {
+    r = await fetch('/api/usbimport/browse?drive=' + encodeURIComponent(sel.value) + '&path=' + encodeURIComponent(path || ''));
+    data = await r.json();
+  } catch (e) { usbimpMsg('Request failed'); return; }
+  if (!r.ok) { list.textContent = ''; usbimpMsg(data.error || 'Browse failed'); return; }
+  _usbimpPath = data.path || '';
+  document.getElementById('usbimp-path').textContent = '/' + _usbimpPath;
+  document.getElementById('usbimp-up').disabled = !_usbimpPath;
+  list.textContent = '';
+  (data.dirs || []).forEach((n) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    const b = document.createElement('button');
+    b.textContent = '[dir] ' + n;
+    b.addEventListener('click', () => usbimpBrowse((_usbimpPath ? _usbimpPath + '/' : '') + n));
+    row.appendChild(b);
+    list.appendChild(row);
+  });
+  (data.files || []).forEach((f) => {
+    const row = document.createElement('div');
+    row.className = 'row';
+    row.style.marginTop = '.25rem';
+    const nm = document.createElement('span');
+    nm.textContent = f.name;
+    const sz = document.createElement('span');
+    sz.className = 'small muted';
+    sz.textContent = fmtBytes(f.size);
+    const b = document.createElement('button');
+    b.textContent = 'Import';
+    b.addEventListener('click', () => usbimpImport(f.name, b));
+    row.appendChild(nm); row.appendChild(sz); row.appendChild(b);
+    list.appendChild(row);
+  });
+  if (!(data.dirs || []).length && !(data.files || []).length) {
+    const e = document.createElement('div');
+    e.className = 'small muted';
+    e.textContent = 'No importable files (.py, .sh, .conf) here.';
+    list.appendChild(e);
+  }
+  usbimpMsg(data.truncated ? 'Listing truncated -- too many entries in this folder.' : '');
+}
+async function usbimpImport(name, btn) {
+  const drive = document.getElementById('usbimp-drive').value;
+  const cat = document.getElementById('usbimp-cat').value;
+  const path = (_usbimpPath ? _usbimpPath + '/' : '') + name;
+  async function go(force) {
+    const r = await fetch('/api/usbimport/import', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      body: JSON.stringify({drive: drive, path: path, category: cat, force: force})
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) {}
+    return {r, data};
+  }
+  btn.disabled = true;
+  usbimpMsg('Importing...');
+  try {
+    let {r, data} = await go(false);
+    if (!r.ok && data.mismatch) {
+      if (confirm((data.error || 'Filename does not match this category.') + '\\n\\nImport anyway?')) {
+        ({r, data} = await go(true));
+      } else { usbimpMsg('Import cancelled.'); return; }
+    }
+    usbimpMsg(r.ok ? 'Staged: ' + data.name : (data.error || 'Import failed'));
+    showPopup(data.message || data.error || (r.ok ? 'Imported.' : 'Import failed'), data.level || (r.ok ? 'ok' : 'err'));
+    if (r.ok) refreshStatus();
+  } catch (e) {
+    usbimpMsg('Import failed');
+  } finally {
+    btn.disabled = false;
+  }
+}
+function usbimportInit() {
+  const sel = document.getElementById('usbimp-drive');
+  if (!sel) return;
+  sel.addEventListener('change', () => { usbimpClear(); usbimpBrowse(''); });
+  document.getElementById('usbimp-refresh').addEventListener('click', () => usbimpLoadDrives(true));
+  document.getElementById('usbimp-up').addEventListener('click', () => {
+    const parts = _usbimpPath.split('/'); parts.pop(); usbimpBrowse(parts.join('/'));
+  });
+  usbimpLoadDrives(true);
+  setInterval(() => { if (!document.hidden) usbimpLoadDrives(false); }, 5000);
+}
+"""
+
 _JS = (
     _JS_LOG_POLL
     + _JS_STATUS_TOAST
     + _JS_EDITOR
     + _JS_ACTIONS
+    + _JS_USBIMPORT
     + _JS_AUTH
     + _JS_INIT
 )
@@ -6515,6 +6844,31 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="hdr">Components</div>
 <div class="no-confirm-banner">NO CONFIRMATIONS -- Stop and Uninstall act immediately, no prompt.</div>
 <div id="components">{components_html}
+</div>
+
+<div class="card" id="usbimp-card">
+  <div style="font-weight:700;color:var(--text-bright);margin-bottom:.3rem">Import from USB Drive</div>
+  <div class="small muted" style="margin-bottom:.4rem">
+    Copies .py / .sh / .conf files from an attached USB drive into the library below. Same extension,
+    name-match and size rules as a browser upload. The drive is read-only; files on it are never changed or removed.</div>
+  <div class="row">
+    <select id="usbimp-drive" title="Attached USB drives"><option value="">Loading drives&hellip;</option></select>
+    <select id="usbimp-cat" title="Library category to import into">
+      <option value="scripts" selected>Scripts (.sh)</option>
+      <option value="config">Config (.conf)</option>
+      <option value="dashboard">Dashboard (.py)</option>
+      <option value="sysmon">SysMon (.py)</option>
+      <option value="wifimon">WiFiMon (.py)</option>
+      <option value="44helper">44helper (.py)</option>
+      <option value="watchdog">Watchdog (.sh)</option>
+      <option value="instmon">InstMon (.py)</option>
+    </select>
+    <button id="usbimp-refresh">Refresh</button>
+    <button id="usbimp-up" disabled>Up</button>
+    <span class="small muted" id="usbimp-path"></span>
+  </div>
+  <div id="usbimp-list" style="margin-top:.5rem"></div>
+  <div class="small muted" id="usbimp-msg" style="margin-top:.3rem"></div>
 </div>
 
 <div class="hdr">Scripts &amp; Configuration Library</div>
@@ -6800,6 +7154,8 @@ _GET_ROUTES ={
 "/api/download":lambda self :self .handle_download (),
 "/api/backup":lambda self :self .handle_backup (),
 "/api/whoami":lambda self :self ._send_json (200 ,{"ok":True }),
+"/api/usbimport/drives":lambda self :self ._route_usbimport_drives (),
+"/api/usbimport/browse":lambda self :self ._route_usbimport_browse (),
 "/api/diskimg/drives":lambda self :self ._route_diskimg_drives (),
 "/api/diskimg/job":lambda self :self ._route_diskimg_job (),
 "/api/diskimg/backup/list":lambda self :self ._route_diskimg_backup_list (),
@@ -6809,6 +7165,7 @@ _GET_ROUTES ={
 
 _POST_ROUTES ={
 "/api/upload":lambda self :self .handle_upload (),
+"/api/usbimport/import":lambda self :self .handle_usbimport_import (),
 "/api/action":lambda self :self .handle_action (),
 "/api/file":lambda self :self .handle_file_write (),
 "/api/diskimg/preview":lambda self :self .handle_diskimg_preview (),
@@ -7789,39 +8146,54 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         category =fields .get ("category",(None ,b""))[1 ].decode (errors ="replace")
         filename ,filedata =fields .get ("file",(None ,None ))
         force =fields .get ("force",(None ,b""))[1 ].decode (errors ="replace")=="1"
-        if category not in LIB_SUBDIRS :
-            self ._error_json (400 ,f"Unknown category '{category }'")
+        status ,payload =_stage_library_file (category ,filename ,filedata ,force ,"upload")
+        if status !=200 and not payload .get ("mismatch"):
+            self ._error_json (status ,payload ["error"])
             return 
-        if not filename or filedata is None :
-            self ._error_json (400 ,"No file provided")
-            return 
-        filename =os .path .basename (filename )
-        ext =os .path .splitext (filename )[1 ].lower ()
-        if ext not in ALLOWED_EXT [category ]:
-            self ._error_json (400 ,f"'{ext }' not allowed for category '{category }' (expected {ALLOWED_EXT [category ]})")
-            return 
+        self ._send_json (status ,payload )
 
-        expected_patterns =dict (HOME_SCAN_PATTERN_MAP ).get (category ,[])
-        name_matches =any (fnmatch .fnmatch (filename .lower (),g .lower ())for g in expected_patterns )
-        if expected_patterns and not name_matches and not force :
-            self ._send_json (400 ,{
-            "error":f"'{filename }' doesn't look like a {category } file -- expected a name matching {' / '.join (expected_patterns )}.",
-            "mismatch":True ,
-            "expected":expected_patterns ,
-            })
-            return 
-        if expected_patterns and not name_matches and force :
-            log_event (f"Uploaded {filename } to {category } library despite naming mismatch (forced)","warn")
+    def _route_usbimport_drives(self):
+        drives = [
+            {"name": d["name"], "model": d["model"], "size": d["size"]}
+            for d in _list_usb_drives() if not d["is_boot_disk"]
+        ]
+        self._send_json(200, {"drives": drives})
 
-        ensure_dirs ()
-        dest =safe_join (LIB_SUBDIRS [category ],filename )
-        if dest is None :
-            self ._error_json (400 ,"Invalid filename")
-            return 
-        wrote ,reason =compare_before_write (dest ,filedata )
-        log_event (f"Uploaded {filename } to {category } library ({reason })","ok")
-        message =f"Staged {filename } in the {category } library."if wrote else f"{filename } already staged (unchanged)."
-        self ._send_json (200 ,{"name":filename ,"wrote":wrote ,"reason":reason ,"message":message ,"level":"ok"if wrote else "info"})
+    def _route_usbimport_browse(self):
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        name = query.get("drive", [""])[0]
+        rel = query.get("path", [""])[0]
+        status, payload = _usbimport_run(name, lambda mp: _usbimport_browse(mp, rel))
+        if status != 200:
+            self._error_json(status, payload["error"])
+            return
+        self._send_json(200, payload)
+
+    def handle_usbimport_import(self):
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0 or length > 8192:
+            self._error_json(400, "Missing or oversized request body")
+            return
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._error_json(400, "Malformed JSON body")
+            return
+        if not isinstance(body, dict):
+            self._error_json(400, "Malformed JSON body")
+            return
+        name = body.get("drive")
+        rel = body.get("path")
+        category = body.get("category")
+        force = body.get("force") is True
+        if not isinstance(rel, str) or not rel or not isinstance(category, str):
+            self._error_json(400, "Missing 'path' or 'category'")
+            return
+        status, payload = _usbimport_run(name, lambda mp: _usbimport_import(mp, rel, category, force))
+        if status != 200 and not payload.get("mismatch"):
+            self._error_json(status, payload["error"])
+            return
+        self._send_json(status, payload)
 
     def handle_action (self ):
         length =int (self .headers .get ("Content-Length",0 ))

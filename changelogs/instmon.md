@@ -1,6 +1,33 @@
 # instmon changelog
 
-Current file: `instmon_v2_38_3_20261007.py`. Newest entries first.
+Current file: `instmon_v2_39_0_20261011.py`. Newest entries first.
+
+## 2.39.0 (2026-10-11)
+
+- **Import from USB Drive** card, above the library. It lists attached USB
+  drives (never the boot disk), lets you browse their folders, and copies `.py`,
+  `.sh` and `.conf` files into the library category you pick. The extension,
+  file-name and size rules are the same as a browser upload, and so is the
+  "doesn't look like a ... file, import anyway?" prompt. Hidden entries, symlinks
+  and `System Volume Information`, `lost+found` and `$RECYCLE.BIN` are left out,
+  and a folder lists at most 500 entries.
+  - A drive that is not mounted yet is mounted read-only (`ro,nosuid,nodev,noexec`)
+    under `/mnt/instmon-usbimport/<drive>` for each request and unmounted after.
+    A drive already mounted is used where it is. FAT, exFAT, ext2/3/4 and NTFS
+    (with `ntfs3` or `ntfs-3g`) are supported.
+  - Paths are resolved inside the drive only: `..`, NUL bytes and links that
+    point off the drive are refused, and the file is opened with `O_NOFOLLOW`.
+  - It waits while a disk-image job is running.
+  - The drive list refreshes every 5 seconds while the page is visible.
+  - New endpoints, behind the login (and the `X-Requested-With` check for the
+    POST): `GET /api/usbimport/drives`, `GET /api/usbimport/browse`,
+    `POST /api/usbimport/import`.
+- Browser upload and USB import now share one validation and write path.
+  Upload behaves as before.
+- Removed an unused `base64` import.
+- Tested: browse and import against a test folder (hidden entries, symlinked
+  files and folders, `..`, NUL, a name mismatch with and without force, a folder,
+  unchanged re-import), and the card in headless Chromium with the API mocked.
 
 ## 2.38.3 (2026-10-07)
 
