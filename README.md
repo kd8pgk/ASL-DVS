@@ -21,7 +21,7 @@ Scripts:
 
 - `install_asl_dvs_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper.
 - `uninstall_asl_dvs_all_v*.sh`: removes every tool except instmon, and leaves configs in place.
-- `wifi_menu.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
+- `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
 
 Pages that ask for a login use the Pi's root password.
 
@@ -201,7 +201,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_asl_dvs_v6_6_20261006.sh` | common |
 | `uninstall_asl_dvs_all_v1_3.sh` | common |
-| `wifi_menu.sh` | common |
+| `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
 always pick the newest.
@@ -235,7 +235,7 @@ per tool and build:
 | [`asl_dvs_watchdog.md`](changelogs/asl_dvs_watchdog.md) | `asl_dvs_watchdog_v*.sh` |
 | [`install_asl_dvs.md`](changelogs/install_asl_dvs.md) | `install_asl_dvs_v*.sh` |
 | [`uninstall_asl_dvs_all.md`](changelogs/uninstall_asl_dvs_all.md) | `uninstall_asl_dvs_all_v*.sh` |
-| [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu.sh` |
+| [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
 
 Every new version adds an entry at the top of its changelog.
 

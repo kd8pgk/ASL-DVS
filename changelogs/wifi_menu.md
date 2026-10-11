@@ -1,6 +1,14 @@
 # wifi_menu.sh changelog
 
-Current file: `wifi_menu.sh`. Newest entries first.
+Current file: `wifi_menu_v3_1_20261011.sh`. Newest entries first.
+
+## 3.1 (2026-10-11)
+
+- Added the title line `# wifi_menu.sh  v3.1  (2026-10-11)` under the shebang,
+  so instmon shows a version for it. The file had none, so instmon listed it
+  with no version. The file is now versioned in its name like the other tools.
+  No change to what the menu does. The last version in the old header comments
+  was v3, so this is 3.1.
 
 ## Unversioned (2026-10-06)
 
