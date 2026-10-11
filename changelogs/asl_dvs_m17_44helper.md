@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_177_20261011.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_178_20261011.py`. Newest entries first.
+
+## 0.0.178 (2026-10-11)
+
+- Ports tab: the Zello bridge's USRP ports (34012 and 32012) were grouped under
+  **DVSwitch**. They belong to the Zello bridge (for example asl-zello-bridge)
+  and now have their own **Zello** group, between M17 and DVSwitch. The role
+  (loopback-only) and the verdicts are unchanged.
 
 ## 0.0.177 (2026-10-11)
 

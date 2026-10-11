@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.177"
+APP_VERSION = "0.0.178"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -7188,8 +7188,8 @@ _PORT_ROLES: dict[str, tuple[str, str]] = {
     "5038/tcp":         ("AllStarLink",           "mgmt-LAN"),
     "34008/udp":        ("M17 / usrp2m17",         "loopback-only"),
     "32008/udp":        ("M17 / usrp2m17",         "loopback-only"),
-    "34012/udp":        ("DVSwitch",              "loopback-only"),
-    "32012/udp":        ("DVSwitch",              "loopback-only"),
+    "34012/udp":        ("Zello",                 "loopback-only"),
+    "32012/udp":        ("Zello",                 "loopback-only"),
     "31100/udp":        ("DVSwitch",              "loopback-only"),
     "31103/udp":        ("DVSwitch",              "loopback-only"),
     "6073/udp":         ("DVSwitch",              "loopback-only"),
