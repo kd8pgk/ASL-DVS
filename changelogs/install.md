@@ -1,6 +1,40 @@
-# Installer (install_asl_dvs) changelog
+# Installer (install) changelog
 
-Current file: `install_asl_dvs_v6_6_20261006.sh`. Newest entries first.
+Current file: `install_v6_7_0.sh`. Newest entries first. Before 6.7.0 the file
+was `install_asl_dvs_v*_<date>.sh` and this changelog was `install_asl_dvs.md`.
+
+## 6.7.0 (2026-10-11)
+
+- New name: `install_v6_7_0.sh` (was `install_asl_dvs_v6_6_20261006.sh`), and
+  the title line is now `# install.sh  v6.7.0  (2026-10-11)`. Versions have
+  three parts from now on.
+- Finds the new tool file names as well as the old ones:
+  - Dashboard Pi02w: `dashboard_pi02w*.py` and `asl_dvs_dashboard_pi02w*.py`
+  - Dashboard full: `dashboard*.py` and `asl_dvs_dashboard*.py`, without either
+    `_pi02w` name
+  - 44helper: `44helper*.py` and `asl_dvs_m17_44helper*.py`
+- The version list is sorted by the version inside each file (`VERSION`,
+  `APP_VERSION`, `SCRIPT_VERSION`, or a `.sh` title line), newest first, and
+  each line shows that version. It was sorted by file date, which could put an
+  older file first once old and new names sit side by side. Files with the same
+  version are ordered by date. Four-part and three-part versions sort correctly
+  (`9.4.0` comes before `9.3.71.13`).
+- The M17/Zello dashboard is retired. The installer no longer looks for,
+  installs or reports it. If it finds one installed
+  (`asl_dvs_m17_dashboard.service` or `/usr/local/bin/asl_dvs_m17_dashboard.py`),
+  it removes it the way it removes the old watchdog: runs the file's own
+  `--uninstall` when it has one, then disables and stops the service, deletes
+  the unit, the bin link and the file the link points to, and reloads systemd.
+  Its config files are left in place. This also frees port 8989 for the
+  Dashboard.
+- "Must be run as root" names the script by its own file name.
+- Tested: `bash -n`; a harness running the real `file_version`,
+  `stage_and_select` and `retire_m17_dashboard` on a temp library: with old
+  dated and new dateless names side by side the newest version is picked even
+  when an older file is newer on disk, the full build never picks a `_pi02w`
+  file, old names alone still work; the M17 dashboard is removed with and
+  without `--uninstall`, and nothing happens when it isn't installed.
+
 
 ## 6.6 (2026-10-06)
 

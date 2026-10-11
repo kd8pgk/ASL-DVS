@@ -1,6 +1,16 @@
-# Uninstaller (uninstall_asl_dvs_all) changelog
+# Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_asl_dvs_all_v1_3.sh`. Newest entries first.
+Current file: `uninstall_all_v1_4_0.sh`. Newest entries first. Before 1.4.0 the
+file was `uninstall_asl_dvs_all_v*.sh` and this changelog was
+`uninstall_asl_dvs_all.md`.
+
+## 1.4.0 (2026-10-11)
+
+- New name: `uninstall_all_v1_4_0.sh` (was `uninstall_asl_dvs_all_v1_3.sh`),
+  title line `# uninstall_all.sh  v1.4.0  (2026-10-11)`. Versions have three
+  parts from now on. No code change: it still removes the M17/Zello dashboard
+  if an old one is installed.
+
 
 ## 1.3 (2026-10-07)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)
+# install.sh  v6.7.0  (2026-10-11)
 
 set -euo pipefail
 
@@ -43,7 +43,6 @@ SYSMON_CONF_DIR="/etc/sysmon"
 
 M17DASH_BIN="/usr/local/bin/asl_dvs_m17_dashboard.py"
 M17DASH_SERVICE="asl_dvs_m17_dashboard"
-M17DASH_PORT=8989
 
 WIFIMON_BIN="/usr/local/bin/wifimon.py"
 WIFIMON_SERVICE="wifimon"
@@ -58,7 +57,6 @@ SVX_PORT=8991
 
 INSTMON_LIBRARY_DIR="${INSTMON_LIBRARY_DIR:-/etc/asl_dvs/instmon_library}"
 DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/dashboard"
-M17DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/m17_dashboard"
 SYSMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/sysmon"
 WIFIMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/wifimon"
 HELPER_LIB_DIR="${INSTMON_LIBRARY_DIR}/44helper"
@@ -67,11 +65,34 @@ SVX_LIB_DIR="${INSTMON_LIBRARY_DIR}/svx"
 LABELS=(a b c d e f g h i j)
 
 
+file_version() {
+    local v
+    v="$(grep -m1 -oE '^[[:space:]]*(VERSION|APP_VERSION|SCRIPT_VERSION)[[:space:]]*=[[:space:]]*"[^"]+"' "$1" 2>/dev/null \
+         | sed -E 's/.*"([^"]+)"/\1/' || true)"
+    if [[ -z "${v}" ]]; then
+        v="$(head -n 10 "$1" 2>/dev/null \
+             | grep -m1 -oE '^#[[:space:]]*[A-Za-z0-9._-]+\.(sh|py)[[:space:]]+v[0-9]+(\.[0-9]+)*' \
+             | sed -E 's/.*[[:space:]]v//' || true)"
+    fi
+    printf '%s' "${v}"
+}
+
 stage_and_select() {
-    local pattern="$1"
+    local -a patterns excludes
+    read -r -a patterns <<< "$1"
     local label="$2"
     local lib_dir="${3:-}"
-    local exclude="${4:-}"
+    read -r -a excludes <<< "${4:-}"
+    local -a find_expr=("(")
+    local g
+    for g in "${patterns[@]}"; do
+        [[ "${#find_expr[@]}" -gt 1 ]] && find_expr+=("-o")
+        find_expr+=("-name" "${g}")
+    done
+    find_expr+=(")")
+    for g in "${excludes[@]}"; do
+        find_expr+=("!" "-name" "${g}")
+    done
 
     local SCRIPT_DIR
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -89,7 +110,7 @@ stage_and_select() {
         UNIQUE_PATHS+=("${p}")
     done
 
-    info "Searching for ${pattern} in:"
+    info "Searching for ${patterns[*]} in:"
     for p in "${UNIQUE_PATHS[@]}"; do info "  ${p}/"; done
 
     declare -A _sf
@@ -102,15 +123,11 @@ stage_and_select() {
                 _sf["${real}"]=1
                 RAW_FOUND+=("${real}")
             fi
-        done < <(if [[ -n "${exclude}" ]]; then
-                     find "${dir}" -maxdepth 1 -name "${pattern}" ! -name "${exclude}" -print0 2>/dev/null
-                 else
-                     find "${dir}" -maxdepth 1 -name "${pattern}" -print0 2>/dev/null
-                 fi)
+        done < <(find "${dir}" -maxdepth 1 "${find_expr[@]}" -print0 2>/dev/null)
     done
 
     if [[ "${#RAW_FOUND[@]}" -eq 0 ]]; then
-        warn "No ${pattern} files found — ${label} will not be installed"
+        warn "No ${patterns[*]} files found — ${label} will not be installed"
         CHOSEN=""
         return 1
     fi
@@ -132,11 +149,14 @@ stage_and_select() {
         STAGED+=("${dest}")
     done
 
-    local SORTED=()
+    local SORTED=() ver
     mapfile -t SORTED < <(
         for f in "${STAGED[@]}"; do
-            printf '%s %s\n' "$(stat -c '%Y' "${f}" 2>/dev/null || echo 0)" "${f}"
-        done | sort -rn | awk '{print $2}'
+            ver="$(file_version "${f}")"
+            ver="${ver#[vV]}"
+            ver="${ver%%-*}"
+            printf '%s\t%s\t%s\n' "${ver:-0}" "$(stat -c '%Y' "${f}" 2>/dev/null || echo 0)" "${f}"
+        done | sort -t $'\t' -k1,1Vr -k2,2nr | cut -f3-
     )
 
     ok "${#SORTED[@]} file(s) staged"
@@ -157,9 +177,9 @@ stage_and_select() {
     for f in "${SORTED[@]}"; do
         lbl="${LABELS[${IDX}]:-${IDX}}"
         if [[ "${IDX}" -eq 0 ]]; then
-            echo "  ${BLD}${GRN}[${lbl}]${RST}  $(basename "${f}")  ${YEL}← newest  (default)${RST}"
+            echo "  ${BLD}${GRN}[${lbl}]${RST}  $(basename "${f}")  v$(file_version "${f}")  ${YEL}← newest  (default)${RST}"
         else
-            echo "  ${BLD}[${lbl}]${RST}  $(basename "${f}")"
+            echo "  ${BLD}[${lbl}]${RST}  $(basename "${f}")  v$(file_version "${f}")"
         fi
         LABEL_MAP["${lbl}"]="${f}"
         (( IDX++ )) || true
@@ -440,7 +460,7 @@ write_sysmon_seed() {
 hdr "Preflight"
 
 if [[ "${EUID}" -ne 0 ]]; then
-    die "Must be run as root.  Use: sudo bash install_asl_dvs_dashboard.sh"
+    die "Must be run as root.  Use: sudo bash $(basename "$0")"
 fi
 ok "Running as root"
 
@@ -457,32 +477,27 @@ ok "systemd available"
 hdr "Operation"
 
 _dash_exists=false
-_m17dash_exists=false
 _sysmon_exists=false
 _wifimon_exists=false
 _helper_exists=false
 _svx_exists=false
 systemctl is-active --quiet "${DASH_SERVICE}"    2>/dev/null && _dash_exists=true    || true
-systemctl is-active --quiet "${M17DASH_SERVICE}" 2>/dev/null && _m17dash_exists=true || true
 systemctl is-active --quiet "${SYSMON_SERVICE}"  2>/dev/null && _sysmon_exists=true  || true
 systemctl is-active --quiet "${WIFIMON_SERVICE}" 2>/dev/null && _wifimon_exists=true || true
 systemctl is-active --quiet "${HELPER_SERVICE}"  2>/dev/null && _helper_exists=true  || true
 systemctl is-active --quiet "${SVX_SERVICE}"     2>/dev/null && _svx_exists=true     || true
 [[ -f "${DASH_BIN}"     ]] && _dash_exists=true
-[[ -f "${M17DASH_BIN}"  ]] && _m17dash_exists=true
 [[ -f "${SYSMON_BIN}"   ]] && _sysmon_exists=true
 [[ -f "${WIFIMON_BIN}"  ]] && _wifimon_exists=true
 [[ -f "${HELPER_BIN}"   ]] && _helper_exists=true
 [[ -f "${SVX_BIN}"      ]] && _svx_exists=true
 
-if [[ "${_dash_exists}" == "true" || "${_m17dash_exists}" == "true" \
-      || "${_sysmon_exists}" == "true" \
+if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
       || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" \
       || "${_svx_exists}" == "true" ]]; then
     echo
     echo "  ${BLD}Existing installation detected:${RST}"
     [[ "${_dash_exists}"     == "true" ]] && echo "  ${GRN}  ✔${RST}  Dashboard      (${DASH_BIN})"
-    [[ "${_m17dash_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  M17/Zello dash (${M17DASH_BIN})"
     [[ "${_sysmon_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  SysMon         (${SYSMON_BIN})"
     [[ "${_wifimon_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  wifimon        (${WIFIMON_BIN})"
     [[ "${_helper_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  44helper       (${HELPER_BIN})"
@@ -543,17 +558,56 @@ retire_watchdog() {
 }
 retire_watchdog
 
+retire_m17_dashboard() {
+    local unit="/etc/systemd/system/${M17DASH_SERVICE}.service"
+    local target=""
+    if [[ ! -e "${unit}" && ! -e "${M17DASH_BIN}" && ! -L "${M17DASH_BIN}" ]]; then
+        return 0
+    fi
+    hdr "Retiring the M17/Zello dashboard"
+    info "The M17/Zello dashboard is no longer part of ASL-DVS."
+    if [[ -f "${M17DASH_BIN}" ]] && grep -q -- '--uninstall' "${M17DASH_BIN}" 2>/dev/null; then
+        info "Running its own --uninstall…"
+        if python3 "${M17DASH_BIN}" --uninstall; then
+            ok "M17/Zello dashboard --uninstall finished"
+        else
+            warn "M17/Zello dashboard --uninstall reported an error — removing it by hand"
+        fi
+    fi
+    systemctl disable --now "${M17DASH_SERVICE}.service" 2>/dev/null || true
+    if [[ -e "${unit}" ]]; then
+        rm -f "${unit}"
+        ok "Removed ${unit}"
+    fi
+    if [[ -L "${M17DASH_BIN}" ]]; then
+        target="$(readlink -f "${M17DASH_BIN}" 2>/dev/null || true)"
+    fi
+    if [[ -e "${M17DASH_BIN}" || -L "${M17DASH_BIN}" ]]; then
+        rm -f "${M17DASH_BIN}"
+        ok "Removed ${M17DASH_BIN}"
+    fi
+    if [[ -n "${target}" && -f "${target}" && "$(basename "${target}")" == asl_dvs_m17_dashboard* ]]; then
+        rm -f "${target}"
+        ok "Removed ${target}"
+    fi
+    systemctl daemon-reload
+    systemctl reset-failed "${M17DASH_SERVICE}.service" 2>/dev/null || true
+    info "Its config files were left in place."
+}
+retire_m17_dashboard
+
 
 hdr "Dashboard — file discovery"
 CHOSEN=""
 pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
 DASH_VARIANT="${PICKED_BUILD}"
 if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
-    info "Dashboard build: Pi Zero 2 W (asl_dvs_dashboard_pi02w*.py), from ${PICKED_WHY}"
-    stage_and_select "asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
+    info "Dashboard build: Pi Zero 2 W (dashboard_pi02w*.py), from ${PICKED_WHY}"
+    stage_and_select "dashboard_pi02w*.py asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
 else
-    info "Dashboard build: full (asl_dvs_dashboard*.py without _pi02w), from ${PICKED_WHY}"
-    stage_and_select "asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "asl_dvs_dashboard_pi02w*.py" || true
+    info "Dashboard build: full (dashboard*.py without _pi02w), from ${PICKED_WHY}"
+    stage_and_select "dashboard*.py asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" \
+        "dashboard_pi02w*.py asl_dvs_dashboard_pi02w*.py" || true
 fi
 DASH_CHOSEN="${CHOSEN}"
 [[ -z "${DASH_CHOSEN}" ]] && warn "No ${DASH_VARIANT} Dashboard build found -- set DASH_VARIANT=pi02w or =full to choose the other build."
@@ -562,18 +616,6 @@ if [[ -n "${DASH_CHOSEN}" ]]; then
     info "Checking syntax…"
     python3 -m py_compile "${DASH_CHOSEN}" \
         || die "Syntax error in $(basename "${DASH_CHOSEN}") — install aborted"
-    ok "Syntax OK"
-fi
-
-hdr "M17/Zello dashboard — file discovery"
-CHOSEN=""
-stage_and_select "asl_dvs_m17_dashboard*.py" "M17/Zello dashboard" "${M17DASH_LIB_DIR}" || true
-M17DASH_CHOSEN="${CHOSEN}"
-
-if [[ -n "${M17DASH_CHOSEN}" ]]; then
-    info "Checking syntax…"
-    python3 -m py_compile "${M17DASH_CHOSEN}" \
-        || die "Syntax error in $(basename "${M17DASH_CHOSEN}") — install aborted"
     ok "Syntax OK"
 fi
 
@@ -614,7 +656,7 @@ fi
 
 hdr "44helper — file discovery"
 CHOSEN=""
-stage_and_select "asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
+stage_and_select "44helper*.py asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
 HELPER_CHOSEN="${CHOSEN}"
 
 if [[ -n "${HELPER_CHOSEN}" ]]; then
@@ -636,18 +678,15 @@ if [[ -n "${SVX_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
-if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
+if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
       && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" ]]; then
-    die "Nothing to install — no dashboard, M17/Zello dashboard, sysmon, wifimon, 44helper, or SVX dashboard files found."
+    die "Nothing to install — no dashboard, sysmon, wifimon, 44helper, or SVX dashboard files found."
 fi
 
 hdr "Up-to-date check"
 
 uptodate_check "Dashboard" "${DASH_CHOSEN}"    "${DASH_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && DASH_CHOSEN=""
-
-uptodate_check "M17/Zello dashboard" "${M17DASH_CHOSEN}" "${M17DASH_BIN}"
-[[ "${UP_TO_DATE_SKIP}" == "true" ]] && M17DASH_CHOSEN=""
 
 uptodate_check "SysMon"    "${SYSMON_CHOSEN}"  "${SYSMON_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && SYSMON_CHOSEN=""
@@ -661,7 +700,7 @@ uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 uptodate_check "SVX Dashboard" "${SVX_CHOSEN}" "${SVX_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && SVX_CHOSEN=""
 
-if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
+if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
       && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" ]]; then
     ok "All selected files are already up to date — nothing to install."
     exit 0
@@ -669,13 +708,6 @@ fi
 
 hdr "Port checks"
 [[ -n "${DASH_CHOSEN}"    ]] && { info "Dashboard port ${DASH_PORT}:"; check_port "${DASH_PORT}"; }
-if [[ -n "${M17DASH_CHOSEN}" ]]; then
-    if [[ -n "${DASH_CHOSEN}" ]]; then
-        warn "Both Dashboard and M17/Zello dashboard are selected — they share port ${M17DASH_PORT} and will conflict if both end up running."
-    else
-        info "M17/Zello dashboard port ${M17DASH_PORT}:"; check_port "${M17DASH_PORT}"
-    fi
-fi
 [[ -n "${SYSMON_CHOSEN}"  ]] && { info "SysMon port ${SYSMON_PORT}:";  check_port "${SYSMON_PORT}"; }
 [[ -n "${HELPER_CHOSEN}"  ]] && { info "44helper port ${HELPER_PORT}:"; check_port "${HELPER_PORT}"; }
 [[ -n "${SVX_CHOSEN}"     ]] && { info "SVX Dashboard port ${SVX_PORT}:"; check_port "${SVX_PORT}"; }
@@ -749,14 +781,6 @@ if [[ -n "${DASH_CHOSEN}" ]]; then
         "${DASH_SERVICE}" \
         "${_dash_launcher}"
     ok "Service unit: ${DASH_SERVICE_FILE}"
-fi
-
-if [[ -n "${M17DASH_CHOSEN}" ]]; then
-    hdr "Installing M17/Zello dashboard"
-    info "Delegating to: python3 $(basename "${M17DASH_CHOSEN}") --install"
-    python3 "${M17DASH_CHOSEN}" --install \
-        || die "M17/Zello dashboard --install failed — see output above"
-    ok "M17/Zello dashboard installed, enabled, and restarted"
 fi
 
 if [[ -n "${SYSMON_CHOSEN}" ]]; then
@@ -863,7 +887,6 @@ for svc_entry in \
 done
 
 for svc_entry in \
-    "${M17DASH_SERVICE}:${M17DASH_CHOSEN}:${M17DASH_PORT}" \
     "${WIFIMON_SERVICE}:${WIFIMON_CHOSEN}:" \
     "${HELPER_SERVICE}:${HELPER_CHOSEN}:${HELPER_PORT}" \
     "${SVX_SERVICE}:${SVX_CHOSEN}:${SVX_PORT}"; do
@@ -921,7 +944,6 @@ print_urls() {
 }
 
 print_urls "ASL-DVS Node Control Dashboard"      "${DASH_PORT}"    "${DASH_CHOSEN}"
-print_urls "ASL-DVS-M17 Node Control Dashboard"  "${M17DASH_PORT}" "${M17DASH_CHOSEN}"
 print_urls "ASL-DVS System Monitor"              "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
 print_urls "44Net Helper"                        "${HELPER_PORT}"  "${HELPER_CHOSEN}"
 print_urls "SVX Dashboard"                        "${SVX_PORT}"     "${SVX_CHOSEN}"
@@ -938,7 +960,6 @@ fi
 echo
 echo "  ${BLD}Service commands:${RST}"
 [[ -n "${DASH_CHOSEN}"     ]] && echo "    Dashboard      :  systemctl {status|restart|stop} ${DASH_SERVICE}"
-[[ -n "${M17DASH_CHOSEN}"  ]] && echo "    M17/Zello dash :  systemctl {status|restart|stop} ${M17DASH_SERVICE}"
 [[ -n "${SYSMON_CHOSEN}"   ]] && echo "    SysMon         :  systemctl {status|restart|stop} ${SYSMON_SERVICE}"
 [[ -n "${WIFIMON_CHOSEN}"  ]] && echo "    wifimon        :  systemctl {status|restart|stop} ${WIFIMON_SERVICE}"
 [[ -n "${HELPER_CHOSEN}"   ]] && echo "    44helper       :  systemctl {status|restart|stop} ${HELPER_SERVICE}"

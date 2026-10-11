@@ -19,8 +19,8 @@ By KD8PGK, written with Claude (Anthropic).
 
 Scripts:
 
-- `install_asl_dvs_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper.
-- `uninstall_asl_dvs_all_v*.sh`: removes every tool except instmon, and leaves configs in place.
+- `install_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper. It also removes the retired M17/Zello dashboard if it finds one.
+- `uninstall_all_v*.sh`: removes every tool except instmon, and leaves configs in place.
 - `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
 
 Pages that ask for a login use the Pi's root password.
@@ -85,7 +85,7 @@ User manual (PDF, 91 pages): every tool, tab and button, with SysMon and 44helpe
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_asl_dvs_v6_6_20261006.sh
+   sudo bash install_v6_7_0.sh
    ```
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -181,7 +181,7 @@ memory settles from the next restart on.
 ## Removing everything
 
 ```
-sudo bash uninstall_asl_dvs_all_v1_3.sh
+sudo bash uninstall_all_v1_4_0.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
@@ -204,8 +204,8 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `wifimon_v5_28_20261007.py` | common |
 | `asl_dvs_m17_44helper_v0_0_179_20261011.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
-| `install_asl_dvs_v6_6_20261006.sh` | common |
-| `uninstall_asl_dvs_all_v1_3.sh` | common |
+| `install_v6_7_0.sh` | common |
+| `uninstall_all_v1_4_0.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
@@ -219,7 +219,7 @@ because something reads them:
 
 - the first line (`#!...`) and a Python `coding` line;
 - the title line of each `.sh` script (for example
-  `# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)`): instmon reads a
+  `# install.sh  v6.7.0  (2026-10-11)`): instmon reads a
   shell script's version from it.
 
 Text inside strings is left alone, including files the tools write onto the
@@ -238,8 +238,8 @@ per tool and build:
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
 | [`asl_dvs_m17_44helper.md`](changelogs/asl_dvs_m17_44helper.md) | `asl_dvs_m17_44helper_v*.py` |
 | [`asl_dvs_watchdog.md`](changelogs/asl_dvs_watchdog.md) | `asl_dvs_watchdog_v*.sh` |
-| [`install_asl_dvs.md`](changelogs/install_asl_dvs.md) | `install_asl_dvs_v*.sh` |
-| [`uninstall_asl_dvs_all.md`](changelogs/uninstall_asl_dvs_all.md) | `uninstall_asl_dvs_all_v*.sh` |
+| [`install.md`](changelogs/install.md) | `install_v*.sh` (older: `install_asl_dvs_v*.sh`) |
+| [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` (older: `uninstall_asl_dvs_all_v*.sh`) |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
 
 Every new version adds an entry at the top of its changelog.

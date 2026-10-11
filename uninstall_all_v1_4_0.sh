@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_asl_dvs_all.sh  v1.3  (2026-10-07)
+# uninstall_all.sh  v1.4.0  (2026-10-11)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
