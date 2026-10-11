@@ -1,6 +1,24 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_178_20261011.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_179_20261011.py`. Newest entries first.
+
+## 0.0.179 (2026-10-11)
+
+- Ports tab, **Running** column: most rows always said not running. It matched
+  each row's label against the Services tab's labels, and 14 of the 20 rows
+  (IAX2, EchoLink, VOTER, AMI, the Zello and DVSwitch bridge ports, sysmon,
+  Cockpit, Ampersand, Cloudflare and 44helper itself) have no Services row with
+  that name. So IAX2 showed "not listening" while Asterisk was up, and the
+  "needed but not open" warning for a running service with no opening could
+  never appear.
+  - A row now counts as running when its port is listening on this Pi (IPv4 or
+    IPv6, any port of a range such as 5198-5199), or its Services row is up. The
+    Cloudflare edge row (outbound only, nothing listens) follows
+    `cloudflared.service`, and the 44helper row is always running.
+  - With no tunnel set up yet, a running peer port reads OK, not "needed but not
+    open", since there is nothing to open it on.
+- Tested: the Ports rows with listening sockets and services mocked, in each
+  tunnel mode (none, Pi firewalld zone, router forwards).
 
 ## 0.0.178 (2026-10-11)
 

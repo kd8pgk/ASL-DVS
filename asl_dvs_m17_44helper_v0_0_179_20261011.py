@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.178"
+APP_VERSION = "0.0.179"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -7209,10 +7209,29 @@ _PORT_ROLES_NEVER_EXPOSED = {"mgmt-LAN", "loopback-only", "outbound-only"}
 def _port_role(port: str, proto: str) -> tuple[str, str]:
     return _PORT_ROLES.get(f"{port}/{proto}", (_PORT_ROLE_OTHER, _PORT_ROLE_OTHER))
 
-def _port_verdict(role: str, exposed: bool, running: bool) -> str:
+_PORT_RUNNING_LABEL = {"7844/udp": "Cloudflare Tunnel (cloudflared)"}
+
+def _ref_port_listening(port: str, proto: str) -> bool:
+    try:
+        if "-" in port:
+            lo, hi = (int(x) for x in port.split("-", 1))
+            nums = range(lo, hi + 1)
+        else:
+            nums = (int(port),)
+    except ValueError:
+        return False
+    return any(_local_port_listening(n, p) for n in nums for p in (proto, proto + "6"))
+
+def _ref_running(label: str, port: str, proto: str, running_labels: set) -> bool:
+    key = f"{port}/{proto}"
+    if key in _PORT_RUNNING_LABEL:
+        return _PORT_RUNNING_LABEL[key] in running_labels
+    return label in running_labels or _ref_port_listening(port, proto)
+
+def _port_verdict(role: str, exposed: bool, running: bool, tunnel: bool = True) -> str:
     if exposed and role in _PORT_ROLES_NEVER_EXPOSED:
         return "over-exposed"
-    if role == "peer-inbound" and running and not exposed:
+    if role == "peer-inbound" and running and not exposed and tunnel:
         return "needed-but-not-open"
     if not running:
         return "not-listening"
@@ -7235,6 +7254,7 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
     running_labels = {
         item["label"] for group in services_status["groups"].values() for item in group if item["active"]
     }
+    running_labels.add("44helper")
 
     rows = []
     exposure_source = "none (no tunnel configured yet)"
@@ -7246,7 +7266,8 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
         for label, port, proto, purpose, flag_public, system, role in reference:
             port_proto = f"{port}/{proto}"
             exposed = port_proto in exposed_set or label.lower() in exposed_set
-            rows.append(_ports_row(label, port, proto, purpose, flag_public, exposed, label in running_labels, system, role))
+            rows.append(_ports_row(label, port, proto, purpose, flag_public, exposed,
+                                   _ref_running(label, port, proto, running_labels), system, role))
     elif router_mode in ("router_single", "router_subnet"):
         raw_forwards = cfg.get("tunnels", "tunnel.router.forwards", fallback="")
         forwarded_ports = {e.split(":", 1)[1] for e in raw_forwards.split(",") if ":" in e}
@@ -7258,17 +7279,20 @@ def build_ports_status(cfg: configparser.ConfigParser) -> dict:
         for label, port, proto, purpose, flag_public, system, role in reference:
             port_proto = f"{port}/{proto}"
             exposed = zone_open or port_proto in forwarded_ports
-            rows.append(_ports_row(label, port, proto, purpose, flag_public, exposed, label in running_labels, system, role))
+            rows.append(_ports_row(label, port, proto, purpose, flag_public, exposed,
+                                   _ref_running(label, port, proto, running_labels), system, role))
     else:
         for label, port, proto, purpose, flag_public, system, role in reference:
-            rows.append(_ports_row(label, port, proto, purpose, flag_public, False, label in running_labels, system, role))
+            rows.append(_ports_row(label, port, proto, purpose, flag_public, False,
+                                   _ref_running(label, port, proto, running_labels), system, role, tunnel=False))
 
     return {"rows": rows, "exposure_source": exposure_source, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
 
-def _ports_row(label, port, proto, purpose, flag_public, exposed, running, system=None, role=None) -> dict:
+def _ports_row(label, port, proto, purpose, flag_public, exposed, running, system=None, role=None,
+               tunnel=True) -> dict:
     if system is None or role is None:
         system, role = _port_role(port, proto)
-    verdict = _port_verdict(role, exposed, running)
+    verdict = _port_verdict(role, exposed, running, tunnel)
     return {
         "label": label, "port": port, "proto": proto, "purpose": purpose,
         "should_stay_private": flag_public, "exposed": exposed, "running": running,
