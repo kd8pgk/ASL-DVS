@@ -1,6 +1,14 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_76_20261011.py`. Newest entries first.
+Current file: `sysmon_v6_13_77_20261011.py`. Newest entries first.
+
+## 6.13.77 (2026-10-11)
+
+- M17 tab, sample `USRP2M17.ini` stanza: when `[M17 Network]` has no `LocalPort`,
+  the sample now fills in `17010`, the port the full Dashboard writes from 9.3.74.
+  It used to fill in `32010`, which is the P25 bridge's port. Same fix as SysMon
+  Pi02w 6.13.67.10.
+- Tested: the sample stanza with an empty config and with a set `LocalPort`.
 
 ## 6.13.76 (2026-10-11)
 
