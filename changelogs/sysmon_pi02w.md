@@ -1,6 +1,14 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_9_20261007.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_10_20261011.py`. Newest entries first.
+
+## 6.13.67.10-pi02w (2026-10-11)
+
+- M17 tab, sample `USRP2M17.ini` stanza: when `[M17 Network]` has no `LocalPort`,
+  the sample now fills in `17010`, the port the Dashboard writes (9.3.71.11 on).
+  It used to fill in `32010`, which is the P25 bridge's port, so copying the
+  sample onto a node running P25 made M17 and P25 fight over the same UDP port.
+- Tested: the sample stanza with an empty config and with a set `LocalPort`.
 
 ## 6.13.67.9-pi02w (2026-10-07)
 
