@@ -1778,5 +1778,134 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
+<section class="chapter" id="ch10">
+  <div class="kicker">Chapter 10 · 44helper</div>
+  <h1 class="ch">Keeping the system healthy</h1>
+  <p class="ch-lede">Two tabs look after Linux itself. The <b>Update</b> tab updates packages safely, with quiet mode
+    and a set of package-recovery steps for when an update goes wrong. <b>System Optimization</b> cuts down
+    SD-card wear on a small Pi.</p>
+
+  <h2><span class="n">10.1</span>Update tab</h2>
+  <h3>Quiet mode</h3>
+  <p>Before a big upgrade or install, quiet mode pauses everything that competes for the SD card, in this order:</p>
+  <ol>
+    <li>watchdogs and update timers (the ASL-DVS watchdog, monit, the ASL3 node-list and database timers, man-db);</li>
+    <li>background disk users (the performance recorder, PackageKit, the manual-page indexer);</li>
+    <li>the suite web tools (SysMon, the Dashboard, instmon, and the DVSwitch web page);</li>
+    <li>the radio services (Asterisk, Analog_Bridge, MMDVM_Bridge, md380-emu, SvxLink, ircDDBGateway, STFU).</li>
+  </ol>
+  <p><b>Turn off</b> restarts exactly what was paused, in reverse order. 44helper, wifimon, SSH, Cockpit,
+    networking and the firewall are never touched. The card previews the exact commands before you press anything.
+    A banner across the top of every 44helper page reminds you while quiet mode is on.</p>
+  <div class="call care"><span class="t">CAREFUL</span>The node is <b>off the air</b> while quiet mode is on, and
+    it stays on until you turn it off. Unlike instmon's Quiet System, it has no 30-minute auto-restore. You can't
+    turn it on while a package job is running. If something fails to come back, the card shows the likely cause
+    and offers <b>Reboot node</b>.</div>
+
+  <h3>Package lookups and status</h3>
+  <ul>
+    <li><b>Package Lookup — Installed</b> lists every installed package. <b>Version Policy</b> shows installed and candidate versions for one package name, for example <code>dvswitch-server</code>.</li>
+    <li><b>Upgradable Packages</b> and <b>Held Packages</b> cards, and a banner saying whether a <b>reboot is required</b>. <b>Re-check</b> refreshes them.</li>
+  </ul>
+
+  <h3>The update steps</h3>
+  <p>Numbered steps, several with alternatives shown underneath. Steps that change packages have a
+    <b>Run in quiet mode</b> box; leave it ticked on a Pi Zero 2 W.</p>
+  <table>
+    <tr><th>#</th><th>Step</th><th>Alternatives</th></tr>
+    <tr><td>1</td><td>Refresh package index (<code>apt update</code>)</td><td></td></tr>
+    <tr><td>2</td><td>Fix missing/broken packages (<code>dpkg --configure -a</code>, then <code>apt install -f</code>). Safe any time.</td><td>Is apt still running? (read-only) · Reconfigure half-installed packages</td></tr>
+    <tr><td>3</td><td>Upgrade packages (<code>apt upgrade</code>)</td><td>Full upgrade: can <i>remove</i> packages to satisfy new dependencies. Check the Upgradable list first.</td></tr>
+    <tr><td>4</td><td>Autoremove unused packages</td><td>Autoremove + purge configs (not reversible)</td></tr>
+    <tr><td>5</td><td>Clean local package cache</td><td>Autoclean (keeps recent downloads)</td></tr>
+    <tr><td>6</td><td><i>Optional:</i> install Webmin (port 10000, HTTPS)</td><td>Remove Webmin</td></tr>
+    <tr><td>7</td><td><i>Optional:</i> install Ajenti 2</td><td>Remove Ajenti 2</td></tr>
+    <tr><td>8</td><td><i>Optional:</i> install fail2ban (SSH jail)</td><td>Check status (read-only) · Remove fail2ban</td></tr>
+    <tr><td>9</td><td><b>Package recovery 1: check</b> (read-only)</td><td></td></tr>
+    <tr><td>10</td><td><b>Package recovery 2: finish half-installed packages</b></td><td></td></tr>
+    <tr><td>11</td><td><b>Package recovery 3: re-install broken packages</b></td><td></td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span><b>fail2ban:</b> before running step 8, edit the
+    <code>ignoreip</code> line in its command box. It ships with <code>192.168.1.0/24</code>, which is probably not
+    your network. Add your tunnel subnet too if you manage the node over 44Net. A ban lasts 10 minutes and covers
+    SSH (port 22) only, so the web pages stay reachable. To lift a ban, use Custom with
+    <code>fail2ban-client set sshd unbanip &lt;your-ip&gt;</code>.</div>
+
+  <h3>When an install or upgrade was cut off</h3>
+  <p>A power cut or crash in the middle of an upgrade can leave packages half-installed. 44helper then refuses
+    further package steps until this is fixed (Chapter 7). Use the recovery steps:</p>
+  <ol class="steps">
+    <li><b>Step 2's "Is apt still running?"</b>: wait until it says nothing is running.</li>
+    <li><b>Step 9 (check)</b>: lists any problems. If it lists any, <b>don't reboot yet</b>. A half-installed kernel or firmware package can stop the Pi from starting.</li>
+    <li><b>Step 10</b>: finishes ordinary packages first, then kernel and firmware last, at low priority. It stops at the first failure.</li>
+    <li><b>Step 11</b>, only if step 9 or 10 says something needs a reinstall: re-installs from the copy already on the Pi, or downloads just that package.</li>
+    <li><b>Step 9 again</b>: it should list nothing. Now it is safe to reboot.</li>
+  </ol>
+  <div class="call tip"><span class="t">TIP</span>A failed install step on another tab opens a <b>What to do next</b>
+    box. Its buttons jump straight to these cards, and a link at the top of the Update tab takes you back.</div>
+
+  <h2><span class="n">10.2</span>System Optimization tab</h2>
+  <p>Each card shows the current state, an action, a <b>Revert</b> that puts back exactly what was there before
+    this tab changed it, and <b>Copy</b>. The exact commands are shown on every card.</p>
+  <table>
+    <tr><th>Card</th><th>What it does</th><th>Takes effect</th><th>Undo</th></tr>
+    <tr><td>Root fstab — noatime</td><td>Stops the card recording a write every time a file is read.</td><td>at once (remount)</td><td>Revert; one backup of <code>/etc/fstab</code> is kept</td></tr>
+    <tr><td>journald — volatile</td><td>Keeps the system log in memory instead of on the card.</td><td>at once (journald restart)</td><td>Revert</td></tr>
+    <tr><td>rsyslog</td><td>Stops and disables the second, text-file logger.</td><td>at once</td><td>Revert</td></tr>
+    <tr><td>dphys-swapfile — Disable</td><td>Turns off the swap file on the card.</td><td>at once</td><td>Revert (works offline)</td></tr>
+    <tr><td>dphys-swapfile — Uninstall</td><td>Removes the swap-file package entirely, after showing what apt would remove.</td><td>at once</td><td>Reinstall, <b>needs internet</b></td></tr>
+    <tr><td>mandb — Disable rebuild</td><td>Stops the periodic manual-page index rebuild.</td><td>at once</td><td>Revert</td></tr>
+    <tr><td>mandb — Remove package</td><td>Removes <code>man-db</code> entirely.</td><td>at once</td><td>Reinstall, <b>needs internet</b></td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>With journald volatile and rsyslog off, <b>no log survives a
+    crash or power cut</b>. That is the point, but remember it before you go looking for why a node rebooted.
+    Existing logs already on the card are not deleted.</div>
+  <div class="call care"><span class="t">CAREFUL</span>Turning swap off on a 512 MB Pi Zero 2 W is a real
+    out-of-memory risk under load. Check your memory headroom first (Chapter 2, and <code>free -m</code>). Many Pi
+    Zero 2 W systems use zram (compressed swap in memory) instead; that is separate from dphys-swapfile and isn't
+    touched here.</div>
+
+  <h2><span class="n">10.3</span>Common tasks</h2>
+  <h3>Monthly update on a Pi Zero 2 W</h3>
+  <ol class="steps">
+    <li>Config tab: take a save point (Chapter 11).</li>
+    <li>Update tab: turn quiet mode on.</li>
+    <li>Run steps 1, 2 and 3, all with Run in quiet mode ticked. Read the Upgradable list before choosing Full upgrade.</li>
+    <li>Run step 4, then step 9 to confirm nothing is half-installed.</li>
+    <li>Turn quiet mode off. If the banner says a reboot is required, reboot.</li>
+  </ol>
+  <h3>Make the SD card last</h3>
+  <ol class="steps">
+    <li>Apply noatime, journald volatile and rsyslog off. These are low risk and undoable.</li>
+    <li>Disable the mandb rebuild.</li>
+    <li>Leave swap alone unless you know the node has memory to spare.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>How updates and optimizations are applied</h2>
+    <h3>Quiet mode</h3>
+    <ul>
+      <li>The state is kept in <code>/etc/44helper/44helper_quiet_state.json</code>: what was stopped, and why. That is how Turn off restarts exactly that set, even after a 44helper restart.</li>
+      <li>Matching uses unit patterns per tier (for example <code>*sysmon*.service</code>). Anything matching the never-touch list (<code>*44helper*</code>, <code>*wifimon*</code>, <code>ssh*</code>, <code>cockpit*</code>, <code>NetworkManager*</code>, <code>firewalld*</code>, <code>systemd-*</code>, <code>dbus*</code>, <code>wpa_supplicant*</code>, <code>polkit*</code>) is skipped. A running <code>mandb</code> is killed between tiers.</li>
+      <li>Turning on is refused while any dpkg or apt lock is held. Each stop waits up to 150 s.</li>
+      <li>Reboot node schedules <code>systemctl reboot</code> 3 seconds later with <code>systemd-run</code>, so the page can show the reply first.</li>
+    </ul>
+    <h3>Update steps</h3>
+    <ul>
+      <li>Package steps run as systemd jobs. Ticking <b>Run in quiet mode</b> wraps the job in quiet mode, at low CPU and disk priority. The recovery steps run under <code>nice -n 19 ionice -c2 -n7</code>.</li>
+      <li>Step 10 finishes packages whose status letter is U, F, W or t. It does kernel and firmware packages (<code>linux-image</code>, <code>raspi-firmware</code>, <code>initramfs-tools</code> and similar) in a separate last pass, then runs <code>dpkg --configure --pending</code>.</li>
+      <li>Step 11 reinstalls packages flagged R, or with missing list or md5sums files, from <code>/var/cache/apt/archives</code>. It falls back to <code>apt-get download</code> into <code>/tmp/44helper-debs</code>.</li>
+      <li>fail2ban writes <code>/etc/fail2ban/jail.d/44helper-fail2ban.conf</code> with <code>backend = systemd</code>, which is needed once rsyslog is off and <code>/var/log/auth.log</code> no longer exists.</li>
+    </ul>
+    <h3>System Optimization</h3>
+    <ul>
+      <li>noatime: the candidate fstab is checked with <code>findmnt --verify</code> before it is written, then applied with <code>mount -o remount,noatime /</code>.</li>
+      <li>journald: a drop-in at <code>/etc/systemd/journald.conf.d/44helper-sysopt.conf</code>; Revert removes it.</li>
+      <li>Each Revert puts back the state saved the first time that card changed something, not a fixed default. "Nothing to revert yet" means this tab hasn't changed it.</li>
+    </ul>
+  </div>
+</section>
+
 </body>
 </html>
