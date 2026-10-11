@@ -1,6 +1,19 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_10_20261011.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_11_20261011.py`. Newest entries first.
+
+## 6.13.67.11-pi02w (2026-10-11)
+
+- Config editor **Thresholds**: "CPU warn %" and "RSS warn MiB" now do
+  something. In a service's detail panel the CPU and memory badges turn amber
+  with a ⚠ when the service is at or over them. Before, both were saved but
+  never read, and the badges were always plain.
+- All four thresholds (with NRestart warn and crit) now load from the saved
+  config when the page opens. Before, NRestart warn and crit were only picked up
+  after a Save in the editor, so after a reload the badges used the built-in
+  3 and 10 whatever was saved. A blank or non-numeric value keeps the default.
+- Tested in headless Chromium with the API mocked: badges below, at and over each
+  threshold, loaded from config on page start, and changed by a Save.
 
 ## 6.13.67.10-pi02w (2026-10-11)
 
