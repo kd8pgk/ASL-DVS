@@ -1,6 +1,23 @@
 # instmon changelog
 
-Current file: `instmon_v2_39_0_20261011.py`. Newest entries first.
+Current file: `instmon_v2_39_1_20261011.py`. Newest entries first.
+
+## 2.39.1 (2026-10-11)
+
+- USB import: ext3 and ext4 drives are now mounted with `noload` as well as
+  `ro`. A read-only mount still replays the journal of a drive that was not
+  unmounted cleanly, and that writes to the drive. With `noload` nothing is
+  written, so the drive is left exactly as it was. (A drive pulled mid-write may
+  show the files as they were before that write.) ext2, FAT, exFAT and NTFS have
+  no journal to replay and are mounted as before.
+- USB import: no polling of its own. The drive list now comes from the Disk
+  Image card's drive check, which already ran every 5 seconds, so the page asks
+  for the USB drive list once per 5 seconds instead of twice (one `lsblk` run
+  fewer every 5 seconds on a Pi Zero). Refresh still re-reads the drives at once.
+- Tested: the mount command for each filesystem with `mount` mocked, and the card
+  in headless Chromium with the API mocked: the drive list fills from the Disk
+  Image poll, a new drive shows up on the next poll, `/api/usbimport/drives` is
+  only fetched when Refresh is pressed.
 
 ## 2.39.0 (2026-10-11)
 
