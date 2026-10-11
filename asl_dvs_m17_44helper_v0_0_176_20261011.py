@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.175"
+APP_VERSION = "0.0.176"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -960,8 +960,8 @@ PI_INSTALL_PORTS = {
                               "need remote AMI access and have changed manager.conf's default secret."},
     "asl_dvs_dashboard": {"label": "asl_dvs_dashboard", "port_proto": "8989/tcp", "default_on": False,
                            "tabs": ("full", "split"),
-                           "risk": "This node's own control panel, with no login of its own \u2014 adding this "
-                                   "exposes it to every peer on the 44Net mesh, not just your own devices. Same "
+                           "risk": "This node's own control panel \u2014 adding this exposes it, and its root-password "
+                                   "login, to every peer on the 44Net mesh, not just your own devices. Same "
                                    "\u2018risky if public\u2019 flag as on the Ports tab. Only add this if you "
                                    "specifically want remote dashboard access over the tunnel."},
 }
@@ -2829,8 +2829,8 @@ def _cf_token_install_steps() -> list[dict]:
                  "dashboard, :9999 sysmon, :8990 instmon, or this 44helper's port). SECURITY: a Cloudflare Tunnel "
                  "bypasses the firewall, so nothing on the Ports tab can see or flag this exposure. Only tunnel a "
                  "service that has its own auth, and/or put a Cloudflare Access policy in front of the hostname "
-                 "(same dashboard) before exposing anything -- the dashboard 8989 has no login of its own and "
-                 "instmon's auth is opt-in."},
+                 "(same dashboard) before exposing anything -- the dashboard 8989 and sysmon 9999 share one "
+                 "root-password login, which is thin cover on the open internet, and instmon's auth is opt-in."},
     ]
 
 def _cf_token_purge_steps() -> list[dict]:

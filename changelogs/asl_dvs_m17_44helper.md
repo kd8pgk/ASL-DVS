@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_175_20261008.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_176_20261011.py`. Newest entries first.
+
+## 0.0.176 (2026-10-11)
+
+- Cloudflare step 3 note and the Pi install "asl_dvs_dashboard" port warning
+  said the Dashboard (8989) has no login. It does: the Dashboard and SysMon ask
+  for the root password and share one login. Both notes now say so, and still
+  say to put a Cloudflare Access policy in front, since a password alone is thin
+  cover on the open internet.
 
 ## 0.0.175 (2026-10-08)
 
