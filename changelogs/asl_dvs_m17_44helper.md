@@ -1,6 +1,28 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_175_20261008.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_178_20261011.py`. Newest entries first.
+
+## 0.0.178 (2026-10-11)
+
+- Ports tab: the Zello bridge's USRP ports (34012 and 32012) were grouped under
+  **DVSwitch**. They belong to the Zello bridge (for example asl-zello-bridge)
+  and now have their own **Zello** group, between M17 and DVSwitch. The role
+  (loopback-only) and the verdicts are unchanged.
+
+## 0.0.177 (2026-10-11)
+
+- Removed the built-in `[ui] enabled_tabs` default. Nothing read it, and its list
+  named only 10 of the tabs, so it suggested a way to hide tabs that never
+  worked. Every tab shows, as before. An `enabled_tabs` line already in
+  `/etc/44helper/44helper.conf` is left alone and still ignored.
+
+## 0.0.176 (2026-10-11)
+
+- Cloudflare step 3 note and the Pi install "asl_dvs_dashboard" port warning
+  said the Dashboard (8989) has no login. It does: the Dashboard and SysMon ask
+  for the root password and share one login. Both notes now say so, and still
+  say to put a Cloudflare Access policy in front, since a password alone is thin
+  cover on the open internet.
 
 ## 0.0.175 (2026-10-08)
 

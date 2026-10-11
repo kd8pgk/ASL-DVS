@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.74"
+VERSION      = "6.13.76"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -5406,6 +5406,17 @@ window.loadTab_services = function() {
 
 let _cfg_nr_warn = "3";
 let _cfg_nr_crit = "10";
+let _cfg_cpu_warn = "50";
+let _cfg_rss_warn = "200";
+
+function _applyThresholds(t) {
+  if (!t) return;
+  const num = v => (v != null && String(v).trim() !== "" && !isNaN(parseFloat(v))) ? String(v).trim() : null;
+  _cfg_nr_warn  = num(t.nr_warn)      ?? _cfg_nr_warn;
+  _cfg_nr_crit  = num(t.nr_crit)      ?? _cfg_nr_crit;
+  _cfg_cpu_warn = num(t.cpu_warn_pct) ?? _cfg_cpu_warn;
+  _cfg_rss_warn = num(t.rss_warn_mb)  ?? _cfg_rss_warn;
+}
 
 let _dpUnit       = "";
 let _dpActiveView = "";
@@ -5505,8 +5516,14 @@ async function dpRefreshHeader() {
     mkBadge(`NR:${nr}${nr >= parseInt(_cfg_nr_warn) ? "⚠" : ""}`, nrCls);
   }
 
-  if (d.cpu_pct != null) mkBadge(`CPU ${d.cpu_pct}%`, "dpbadge-info");
-  if (d.rss_mb  != null) mkBadge(`${d.rss_mb} MiB`,  "dpbadge-info");
+  if (d.cpu_pct != null) {
+    const hot = d.cpu_pct >= parseFloat(_cfg_cpu_warn);
+    mkBadge(`CPU ${d.cpu_pct}%${hot ? "⚠" : ""}`, hot ? "dpbadge-warn" : "dpbadge-info");
+  }
+  if (d.rss_mb != null) {
+    const big = d.rss_mb >= parseFloat(_cfg_rss_warn);
+    mkBadge(`${d.rss_mb} MiB${big ? "⚠" : ""}`, big ? "dpbadge-warn" : "dpbadge-info");
+  }
 
   if (d.installed && d.owner) {
     const ownCls = (d.owner_is_root && !d.owner_exempt) ? "dpbadge-warn"
@@ -7755,6 +7772,7 @@ function _startApp() {
     if (d && d.ok) {
       _savedEnabledTabs = d.ui?.enabled_tabs || TABS.slice();
       _applyTabVisibilityGated();
+      _applyThresholds(d.thresholds);
     }
   }).catch(() => {});
 
@@ -8064,6 +8082,7 @@ async function fwDeleteRule(num, btn) {
 }
 
 async function fwUfwEnable() {
+  if (!await confirm("Enable ufw? Incoming traffic without an allow rule will be blocked, including this page and the Dashboard if they have no rule.\n\nSysMon adds an allow rule for the SSH port first if there is none, so SSH stays open.")) return;
   const d = await api("/api/firewall", "POST", {action: "enable"});
   if (!d) { toast("Server unreachable", "err"); return; }
   toast(d.message || (d.ok ? "ufw enabled" : "Failed"), d.ok ? "ok" : "err");
@@ -11874,6 +11893,7 @@ async function edReload() {
   set("ed-rss-warn", d.thresholds?.rss_warn_mb);
   set("ed-nr-warn",  d.thresholds?.nr_warn);
   set("ed-nr-crit",  d.thresholds?.nr_crit);
+  _applyThresholds(d.thresholds);
 
   const ta = document.getElementById("ed-pinned");
   if (ta) ta.value = d.services?.pinned || "";
@@ -12016,10 +12036,9 @@ async function edSave() {
   toast("Config saved", "ok");
   _edDirty = false;
 
-  const nrWarn = document.getElementById("ed-nr-warn");
-  const nrCrit = document.getElementById("ed-nr-crit");
-  if (nrWarn) _cfg_nr_warn = nrWarn.value;
-  if (nrCrit) _cfg_nr_crit = nrCrit.value;
+  const val = id => document.getElementById(id)?.value;
+  _applyThresholds({nr_warn: val("ed-nr-warn"), nr_crit: val("ed-nr-crit"),
+                    cpu_warn_pct: val("ed-cpu-warn"), rss_warn_mb: val("ed-rss-warn")});
 }
 
 async function edAllConf(mode) {
@@ -16623,6 +16642,40 @@ def _ufw_cmd(h: Handler, cmd: list, label: str, stdin: "str | None" = None) -> N
     ok = r.returncode == 0
     _fw_reply(h, ok, f"{label}: {'OK' if ok else r.stderr.strip() or 'failed'}")
 
+def _ssh_listen_port() -> str:
+    try:
+        directives, _files, _trunc = _sec_sshd_directives()
+    except Exception as exc:
+        log.debug("firewall: sshd port: %s", exc)
+        directives = {}
+    port = str(directives.get("port", "22"))
+    return port if port.isdigit() and 0 < int(port) < 65536 else "22"
+
+def _ufw_missing_ssh_ports() -> list:
+    port  = _ssh_listen_port()
+    added = _run(["ufw", "show", "added"], timeout=6)
+    for line in added.splitlines():
+        t = line.split()
+        if len(t) < 3 or t[0] != "ufw" or t[1] not in ("allow", "limit"):
+            continue
+        if "deny" in t or "reject" in t:
+            continue
+        rest = t[2:]
+        if "in" in rest[:1]:
+            rest = rest[1:]
+        if rest and rest[0] in (port, f"{port}/tcp"):
+            return []
+        if port == "22" and rest and rest[0] in ("ssh", "OpenSSH", "22/tcp"):
+            return []
+        if "port" in rest:
+            i = rest.index("port")
+            if i + 1 < len(rest) and rest[i + 1] == port and \
+               ("proto" not in rest or "tcp" in rest):
+                return []
+        if "app" in rest and "OpenSSH" in rest:
+            return []
+    return [port]
+
 def _route_firewall_post(h: Handler, data: dict) -> None:
     if os.geteuid() != 0:
         h.send_json({"ok": False, "message": "root required"}); return
@@ -16663,7 +16716,17 @@ def _route_firewall_post(h: Handler, data: dict) -> None:
         return
 
     if action == "enable":
-        _ufw_cmd(h, ["ufw", "--force", "enable"], "ufw enable")
+        added = []
+        for p in _ufw_missing_ssh_ports():
+            r = subprocess.run(["ufw", "allow", f"{p}/tcp"], capture_output=True,
+                               text=True, timeout=10)
+            if r.returncode != 0:
+                _fw_reply(h, False, f"ufw enable: could not add SSH rule {p}/tcp, "
+                                    f"not enabling: {r.stderr.strip() or 'failed'}")
+                return
+            added.append(f"{p}/tcp")
+        label = "ufw enable" + (f" (added SSH rule {', '.join(added)})" if added else "")
+        _ufw_cmd(h, ["ufw", "--force", "enable"], label)
         return
 
     if action == "disable":

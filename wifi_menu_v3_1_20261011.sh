@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# wifi_menu.sh  v3.1  (2026-10-11)
 
 set -euo pipefail
 

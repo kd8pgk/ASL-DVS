@@ -21,7 +21,7 @@ Scripts:
 
 - `install_asl_dvs_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper.
 - `uninstall_asl_dvs_all_v*.sh`: removes every tool except instmon, and leaves configs in place.
-- `wifi_menu.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
+- `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
 
 Pages that ask for a login use the Pi's root password.
 
@@ -40,8 +40,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_74_20261007.py` | `sysmon_pi02w_v6_13_67_9_20261007.py` | `instmon_v2_38_3_20261007.py` |
-| `VERSION` | `6.13.74` | `6.13.67.9-pi02w` | `2.38.3` |
+| File name | `sysmon_v6_13_76_20261011.py` | `sysmon_pi02w_v6_13_67_11_20261011.py` | `instmon_v2_38_3_20261007.py` |
+| `VERSION` | `6.13.76` | `6.13.67.11-pi02w` | `2.38.3` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -68,6 +68,9 @@ Phone dialplan guide (PDF, 24 pages): dialplan nuts and bolts, stock ASL3 next t
 
 Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2M17 bridge-node files, port map, services and firewall for a clean build, with no identity data (placeholders only):
 [`docs/ASL-DVS_Idealized_Node_Configuration.pdf`](docs/ASL-DVS_Idealized_Node_Configuration.pdf)
+
+User manual (PDF, 90 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
+[`docs/ASL-DVS_User_Manual.pdf`](docs/ASL-DVS_User_Manual.pdf)
 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
@@ -189,16 +192,16 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `asl_dvs_dashboard_v9_3_73_20261006.py` | Dashboard, full (current) |
 | `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
-| `sysmon_v6_13_74_20261007.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_67_9_20261007.py` | SysMon, Pi Zero 2 W (current) |
+| `sysmon_v6_13_76_20261011.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_67_11_20261011.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
 | `instmon_v2_38_3_20261007.py` | common |
 | `wifimon_v5_28_20261007.py` | common |
-| `asl_dvs_m17_44helper_v0_0_175_20261008.py` | common |
+| `asl_dvs_m17_44helper_v0_0_178_20261011.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_asl_dvs_v6_6_20261006.sh` | common |
 | `uninstall_asl_dvs_all_v1_3.sh` | common |
-| `wifi_menu.sh` | common |
+| `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
 always pick the newest.
@@ -232,7 +235,7 @@ per tool and build:
 | [`asl_dvs_watchdog.md`](changelogs/asl_dvs_watchdog.md) | `asl_dvs_watchdog_v*.sh` |
 | [`install_asl_dvs.md`](changelogs/install_asl_dvs.md) | `install_asl_dvs_v*.sh` |
 | [`uninstall_asl_dvs_all.md`](changelogs/uninstall_asl_dvs_all.md) | `uninstall_asl_dvs_all_v*.sh` |
-| [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu.sh` |
+| [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
 
 Every new version adds an entry at the top of its changelog.
 

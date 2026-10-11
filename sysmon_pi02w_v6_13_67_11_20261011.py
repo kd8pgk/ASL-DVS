@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.9-pi02w"
+VERSION      = "6.13.67.11-pi02w"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -4530,6 +4530,17 @@ window.loadTab_services = function() {
 
 let _cfg_nr_warn = "3";
 let _cfg_nr_crit = "10";
+let _cfg_cpu_warn = "50";
+let _cfg_rss_warn = "200";
+
+function _applyThresholds(t) {
+  if (!t) return;
+  const num = v => (v != null && String(v).trim() !== "" && !isNaN(parseFloat(v))) ? String(v).trim() : null;
+  _cfg_nr_warn  = num(t.nr_warn)      ?? _cfg_nr_warn;
+  _cfg_nr_crit  = num(t.nr_crit)      ?? _cfg_nr_crit;
+  _cfg_cpu_warn = num(t.cpu_warn_pct) ?? _cfg_cpu_warn;
+  _cfg_rss_warn = num(t.rss_warn_mb)  ?? _cfg_rss_warn;
+}
 
 let _dpUnit       = "";
 let _dpActiveView = "";
@@ -4628,8 +4639,14 @@ async function dpRefreshHeader() {
     mkBadge(`NR:${nr}${nr >= parseInt(_cfg_nr_warn) ? "⚠" : ""}`, nrCls);
   }
 
-  if (d.cpu_pct != null) mkBadge(`CPU ${d.cpu_pct}%`, "dpbadge-info");
-  if (d.rss_mb  != null) mkBadge(`${d.rss_mb} MiB`,  "dpbadge-info");
+  if (d.cpu_pct != null) {
+    const hot = d.cpu_pct >= parseFloat(_cfg_cpu_warn);
+    mkBadge(`CPU ${d.cpu_pct}%${hot ? "⚠" : ""}`, hot ? "dpbadge-warn" : "dpbadge-info");
+  }
+  if (d.rss_mb != null) {
+    const big = d.rss_mb >= parseFloat(_cfg_rss_warn);
+    mkBadge(`${d.rss_mb} MiB${big ? "⚠" : ""}`, big ? "dpbadge-warn" : "dpbadge-info");
+  }
 
   if (d.installed && d.owner) {
     const ownCls = (d.owner_is_root && !d.owner_exempt) ? "dpbadge-warn"
@@ -6835,6 +6852,7 @@ function _startApp() {
     if (d && d.ok) {
       _savedEnabledTabs = d.ui?.enabled_tabs || TABS.slice();
       _applyTabVisibilityGated();
+      _applyThresholds(d.thresholds);
     }
   }).catch(() => {});
 
@@ -9794,6 +9812,7 @@ async function edReload() {
   set("ed-rss-warn", d.thresholds?.rss_warn_mb);
   set("ed-nr-warn",  d.thresholds?.nr_warn);
   set("ed-nr-crit",  d.thresholds?.nr_crit);
+  _applyThresholds(d.thresholds);
 
   const ta = document.getElementById("ed-pinned");
   if (ta) ta.value = d.services?.pinned || "";
@@ -9936,10 +9955,9 @@ async function edSave() {
   toast("Config saved", "ok");
   _edDirty = false;
 
-  const nrWarn = document.getElementById("ed-nr-warn");
-  const nrCrit = document.getElementById("ed-nr-crit");
-  if (nrWarn) _cfg_nr_warn = nrWarn.value;
-  if (nrCrit) _cfg_nr_crit = nrCrit.value;
+  const val = id => document.getElementById(id)?.value;
+  _applyThresholds({nr_warn: val("ed-nr-warn"), nr_crit: val("ed-nr-crit"),
+                    cpu_warn_pct: val("ed-cpu-warn"), rss_warn_mb: val("ed-rss-warn")});
 }
 
 async function edAllConf(mode) {
@@ -20298,7 +20316,7 @@ def _m17_sample_stanza(cfg: dict) -> str:
         f"Callsign={_placeholder(cfg['callsign'], 'your callsign')}",
         f"Address={_placeholder(cfg['address'], 'reflector IP')}",
         f"Name={_placeholder(cfg['name'], 'M17-XXX C')}",
-        f"LocalPort={cfg['m17_local_port'] or '32010'}",
+        f"LocalPort={cfg['m17_local_port'] or '17010'}",
         f"DstPort={cfg['m17_dst_port'] or '17000'}",
         f"GainAdjustdB={cfg['m17_gain'] or '3'}",
         "",
