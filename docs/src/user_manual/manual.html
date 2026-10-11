@@ -951,5 +951,197 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </div>
 </section>
 
+<section class="chapter" id="ch5">
+  <div class="kicker">Chapter 5 · SysMon</div>
+  <h1 class="ch">System care</h1>
+  <p class="ch-lede">The last five SysMon tabs look after the hardware and the Pi itself: Tune (radio audio levels),
+    Hardware (AMBE dongle, audio, power, video), SD Card, Security and Edit (SysMon's own settings). These tabs
+    are where SysMon changes things most, so each section says what it writes and whether it restarts anything.</p>
+
+  <h2><span class="n">5.1</span>Tune tab</h2>
+  <p>For a node with a radio on a USB sound interface run by Asterisk's <b>SimpleUSB</b> driver. A bridge-only node
+    with no radio can ignore this tab.</p>
+  <h3>SimpleUSB — Tune Settings</h3>
+  <table>
+    <tr><th>Control</th><th>What it sets</th></tr>
+    <tr><td>USB Device</td><td>The interface SimpleUSB is using (read-only).</td></tr>
+    <tr><td>RX Mixer Set</td><td>Receive level from the radio into the node, 0 to 1000. Slider or exact number.</td></tr>
+    <tr><td>TX Mix A Set / TX Mix B Set</td><td>Transmit level to the radio on each output channel, 0 to 1000.</td></tr>
+    <tr><td>Advanced settings</td><td>Carrier From and CTCSS From (where COS and tone detect come from: <code>no</code>, <code>usb</code>, <code>usbinvert</code>, <code>pp</code>, <code>ppinvert</code>); RX Boost; De-emphasis; Pre-emphasis; PL Filter; Invert PTT; Legacy Audio Scaling.</td></tr>
+    <tr><td>GPIO pins</td><td>Extra GPIO lines on the USB interface: in, out0 or out1. Pin 3 is PTT, and pins 5 to 8 exist on CM119 chips only.</td></tr>
+    <tr><td>Parallel port pins</td><td>Folded away: pins 1 to 17 as in, out, PTT, COR or CTCSS.</td></tr>
+    <tr><td>RX On Delay / TX Off Delay</td><td>Tick to turn on, then 0 to 100 frames.</td></tr>
+  </table>
+  <p>An amber <b>● unsaved changes</b> appears as soon as you move anything. <b>Reset</b> puts the card back to
+    what is in the file. <b>Save</b> opens a dialog:</p>
+  <ul>
+    <li><b>Save as preset</b>: also store the three levels as Radio 1 to 5, with a name such as "Mobile" or "Base".</li>
+    <li><b>Restart Asterisk after saving</b>: apply now. Without it, the file is saved but Asterisk keeps the old levels until it next restarts.</li>
+  </ul>
+  <h3>The Radio 1 to 5 buttons</h3>
+  <p>The Radio buttons in SysMon's command bar (Chapter 3) are your saved presets. Hover over one to see its
+    three levels. A <code>*</code> after the name means the levels have been changed since you applied that preset.
+    Empty presets are greyed out, and so is every button when no SimpleUSB driver is loaded.</p>
+  <div class="call care"><span class="t">CAREFUL</span>Pressing a Radio preset button writes its levels to
+    <code>simpleusb.conf</code> and <b>restarts Asterisk at once, with no confirmation</b>. Every link drops and
+    the node is off the air for a few seconds. The button spins until Asterisk is back. Pressing the preset that is
+    already applied does nothing.</div>
+  <h3>Node Settings — rpt.conf</h3>
+  <p>Folded away by default; press <b>Show</b>. It lists every node in <code>rpt.conf</code> with its role (radio,
+    USRP bridge, hub, phone node) and four settings:</p>
+  <table>
+    <tr><th>Setting</th><th>Range</th><th>Meaning</th></tr>
+    <tr><td>duplex</td><td>0 to 4</td><td>How the node handles transmit and receive. 0 is right for a bridge node, 2 for a typical full-duplex repeater.</td></tr>
+    <tr><td>telemdefault</td><td>0 to 2</td><td>The default telemetry (voice announcement) mode: 0 off, 1 on, 2 the reduced setting. Bridge nodes use 0.</td></tr>
+    <tr><td>hangtime</td><td>0 to 60000 ms</td><td>How long the transmitter stays keyed after a signal drops.</td></tr>
+    <tr><td>linktolink</td><td>yes / no</td><td>Link-to-link radio mode.</td></tr>
+  </table>
+  <p>Each value says whether it is <i>set on node</i>, inherited <i>from</i> a template, or the <i>default</i>.
+    Nodes written by the Dashboard's phone setup, or set in another file, are locked here and say where to change
+    them. Saving changes only the lines that differ, and can reload <code>app_rpt</code> so the change takes effect
+    without a full restart.</p>
+
+  <h2><span class="n">5.2</span>Hardware tab</h2>
+  <p><b>Copy hardware report</b> at the top copies the whole tab as text, ready for a help request.</p>
+  <table>
+    <tr><th>Card</th><th>What it shows and does</th></tr>
+    <tr><td>AMBE Device</td><td>A ThumbDV or similar AMBE vocoder dongle, if present. You can <b>ping</b> the chip (it answers with its product ID), set the serial port speed (from a fixed list), add or remove a fixed <code>/dev</code> name for it with a udev rule, and <b>reset</b> it. Reset stops the DVSwitch services, resets the chip, then starts Analog_Bridge, MMDVM_Bridge and md380-emu first and the rest 3 seconds later.</td></tr>
+    <tr><td>Audio Device</td><td>The sound interface the node uses.</td></tr>
+    <tr><td>Power &amp; Thermal</td><td>Supply health from the firmware: under-voltage, throttling and temperature limits, now and since boot.</td></tr>
+    <tr><td>Video &amp; GPU Memory</td><td>Two switches that free memory on a headless Pi (below).</td></tr>
+    <tr><td>USB Bus</td><td>Every USB device, as a <b>Flat</b> list or a <b>Tree</b>. "possible AMBE" is only a guess from the chip maker. Only a badge with the exact product name, such as ThumbDV, is a confirmed match.</td></tr>
+    <tr><td>asl-find-sound</td><td>ASL's own sound-device finder, for SimpleUSB setup.</td></tr>
+    <tr><td>ALSA Cards</td><td>Linux sound cards, <b>Playback</b> or <b>Capture</b> side.</td></tr>
+  </table>
+  <h3>Video &amp; GPU Memory</h3>
+  <p>A Pi Zero 2 W used as a node never drives a screen, but the video driver and GPU still hold memory.</p>
+  <ul>
+    <li><b>Disable HDMI and video driver</b> comments out the <code>dtoverlay=vc4-kms-v3d</code> line in <code>/boot/firmware/config.txt</code>.</li>
+    <li><b>Lower GPU memory</b> sets the GPU's share to 16 MB.</li>
+  </ul>
+  <p>Both take effect after a <b>reboot</b>; until then the card marks them as pending. Each can be turned back on the same way.</p>
+  <div class="call care"><span class="t">CAREFUL</span>With the video driver off, a monitor on the HDMI port stays
+    blank, and HDMI sound disappears. If any config file uses a sound card by number, the numbers can shift when
+    the HDMI sound card goes away. When that is a risk, the card lists those lines so you can check them before
+    you reboot.</div>
+  <div class="call note"><span class="t">NOTE</span>These two settings survive an instmon update. SysMon saves them
+    when it is uninstalled for the update, and puts them back if it is reinstalled within 30 minutes (Chapter 2).</div>
+
+  <h2><span class="n">5.3</span>SD Card tab</h2>
+  <p>A Pi runs from its SD card, and SD cards wear out. This tab tells you how the card is doing.</p>
+  <h3>SD Card Health</h3>
+  <table>
+    <tr><th>Section</th><th>Shows</th></tr>
+    <tr><td>Warnings</td><td>Any problem found, in red at the top. The header reads "healthy" or the number of issues.</td></tr>
+    <tr><td>Device / Identity</td><td>The disk, maker, product, serial, manufacture date, firmware and hardware revision, erase size. On eMMC storage, also its own life-time estimate.</td></tr>
+    <tr><td>Capacity</td><td>Card size, and filesystem used and free. Amber from 75 %, red from 90 %. Also inodes used.</td></tr>
+    <tr><td>Filesystem (ext4)</td><td>State (should be <code>clean</code>), mount count, last check, lifetime writes, what happens on errors.</td></tr>
+    <tr><td>I/O counters</td><td>Bytes read and written since boot. This is a guide to wear, not a lifetime total.</td></tr>
+    <tr><td>Errors</td><td>Whether the root filesystem has dropped to <b>READ-ONLY</b> (usually corruption), and how many storage errors the kernel has logged, with the last lines.</td></tr>
+  </table>
+  <h3>Integrity Tests</h3>
+  <p><b>Run fsck -n (advisory)</b> checks the filesystem without changing anything, with a progress bar and a
+    <b>Cancel</b> button. The result is only advisory because the card is in use while it runs. If you leave the
+    tab, the test keeps running in the background.</p>
+  <div class="call tip"><span class="t">TIP</span>To make the card last longer, use 44helper's System Optimization
+    tab (Chapter 10). To keep a spare, take an image with instmon's Disk Image section (Chapter 13).</div>
+
+  <h2><span class="n">5.4</span>Security tab</h2>
+  <p>14 passive checks of the node's security. The bar at the top counts Pass, Warn and Fail, with <b>Re-run checks</b>
+    and <b>Copy</b>. The checks are grouped in four cards:</p>
+  <table>
+    <tr><th>Card</th><th>Check</th><th>Severity</th></tr>
+    <tr><td>DVSwitch</td><td>BrandMeister hotspot password set</td><td>medium</td></tr>
+    <tr><td>AllStarLink</td><td>AMI port not reachable from the network</td><td class="bad">high</td></tr>
+    <tr><td></td><td>AMI has no default or weak password</td><td class="bad">high</td></tr>
+    <tr><td></td><td>IAX2 secret strength</td><td>medium</td></tr>
+    <tr><td></td><td>Legacy <code>chan_sip</code> module disabled</td><td>low</td></tr>
+    <tr><td></td><td><code>/etc/asterisk</code> permissions</td><td>low</td></tr>
+    <tr><td>usrp2m17</td><td>USRP bridge ports bound to 127.0.0.1 only</td><td class="bad">high</td></tr>
+    <tr><td></td><td>M17 gateway port exposure</td><td class="bad">high</td></tr>
+    <tr><td>Cross-cutting</td><td>SSH hardening</td><td>medium</td></tr>
+    <tr><td></td><td>fail2ban jails cover the exposed services</td><td>medium</td></tr>
+    <tr><td></td><td>Monit has authentication</td><td>medium</td></tr>
+    <tr><td></td><td>Dashboard companion app requires a login</td><td class="bad">high</td></tr>
+    <tr><td></td><td>Services run as non-root where possible</td><td>medium</td></tr>
+    <tr><td></td><td>Service files and programs not writable by others</td><td class="bad">high</td></tr>
+  </table>
+  <p>Click a check to open its explanation: <b>what it reads</b>, <b>what the result means</b>, <b>why it
+    matters</b>, <b>how to fix it</b> and references. The amber Owner and Perms values on the Overview jump straight
+    to the matching explanation here.</p>
+  <div class="call note"><span class="t">NOTE</span>The checks only read config files, <code>/sys</code>,
+    <code>/proc</code>, <code>ss</code> and systemd. They never connect to AMI, M17, USRP or the Dashboard, so
+    running them can't trigger fail2ban or fill a security log. Checks that read passwords report only yes or no.</div>
+  <div class="call care"><span class="t">CAREFUL</span>Take a FAIL on the USRP port check seriously. USRP has no
+    password: anyone who can reach that port can key your transmitter under your callsign. Bind it to
+    <code>127.0.0.1</code>.</div>
+
+  <h2><span class="n">5.5</span>Edit tab</h2>
+  <p>SysMon's own settings. Change the fields, then press <b>Save</b> in the bar at the bottom of the page.
+    <b>Reload from file</b> discards your changes.</p>
+  <table>
+    <tr><th>Section</th><th>What it holds</th></tr>
+    <tr><td>Visible Tabs</td><td>Tick the tabs to show. Overview and Edit are always on. A hidden tab stops polling, though an SD card test already running carries on.</td></tr>
+    <tr><td>Identity</td><td>Callsign, node and label for SysMon's own use.</td></tr>
+    <tr><td>Server</td><td>SysMon's port (9999) and bind address (0.0.0.0, meaning every interface). A change needs a SysMon restart, and a banner says so.</td></tr>
+    <tr><td>Thresholds</td><td><b>NRestart warn</b> (3) and <b>NRestart crit</b> (10) colour the restart badge in the service panel. <b>CPU warn %</b> and <b>RSS warn MiB</b> are stored but not used by this version.</td></tr>
+    <tr><td>ASL-DVS Config Files</td><td>Folded away. Every Asterisk, DVSwitch and Allmon3 file with <b>Edit</b>, and <b>Hide</b> / <b>Show</b> to keep files you never touch off the ASL-DVS tab.</td></tr>
+    <tr><td>Pinned Services</td><td>Folded away. The Overview list as text: <code>unit | description | config_path | port | proto</code>, groups as <code>__GROUP__:Name</code>.</td></tr>
+  </table>
+  <p>The bar also has four tools:</p>
+  <ul>
+    <li><b>ASL AllConf</b> shows every Asterisk and Allmon3 file in one window, each under a header, with Copy All. It is ideal for sending your whole setup to someone helping you. <b>DVS AllConf</b> does the same for the DVSwitch files.</li>
+    <li><b>asl_dvs.conf</b> and <b>sysmon.conf</b> open the Dashboard's and SysMon's own config files in the editor.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>AllConf output includes passwords and secrets from your
+    files. Remove them before you post it anywhere public.</div>
+
+  <h2><span class="n">5.6</span>Common tasks</h2>
+  <h3>Set and save radio levels</h3>
+  <ol class="steps">
+    <li>Tune tab: move RX Mixer Set while someone talks to you, until their audio sounds right on Allmon3 or a linked node.</li>
+    <li>Set TX Mix A (and B if used) for correct deviation on your radio.</li>
+    <li>Save, pick a preset slot and name, and tick Restart Asterisk.</li>
+    <li>From then on, one press of that Radio button brings these levels back.</li>
+  </ol>
+  <h3>Free memory on a Pi Zero 2 W</h3>
+  <ol class="steps">
+    <li>Hardware tab, Video &amp; GPU Memory: turn on both options. Check any sound-card lines it lists.</li>
+    <li>Reboot from the command bar. Afterwards the card should no longer show "pending".</li>
+  </ol>
+  <h3>Is my SD card failing?</h3>
+  <ol class="steps">
+    <li>SD Card tab: look for red warnings, READ-ONLY, or kernel storage errors.</li>
+    <li>Run fsck -n. Errors in the result, along with kernel errors, mean it's time to image the card and replace it.</li>
+  </ol>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>What each tab writes</h2>
+    <table>
+      <tr><th>Action</th><th>File or command</th><th>Backup</th></tr>
+      <tr><td>Tune Save</td><td><code>/etc/asterisk/simpleusb.conf</code>; values range-checked; levels mirrored to <code>[radio_tune]</code> in <code>sysmon.conf</code></td><td>none</td></tr>
+      <tr><td>Save as preset</td><td><code>[radio_presets] radioN_values / radioN_title</code> in <code>sysmon.conf</code></td><td>—</td></tr>
+      <tr><td>Restart Asterisk / preset apply</td><td><code>asterisk -rx "module unload chan_simpleusb.so"</code> (allowed to fail), 2 s pause, <code>systemctl restart asterisk</code> (30 s limit). One restart at a time; the page polls <code>/api/radio/stack_status</code> until <code>core show uptime</code> answers.</td><td>—</td></tr>
+      <tr><td>Node Settings Save</td><td>Only changed keys inside the node's own <code>[node]</code> section in <code>rpt.conf</code>, comments kept; optional <code>module reload app_rpt</code></td><td>none</td></tr>
+      <tr><td>Video / GPU memory</td><td><code>/boot/firmware/config.txt</code>: tags the vc4 overlay line with <code>#ASL-DVS-VIDEO-OFF#</code>; adds <code>[all] gpu_mem=16</code> between <code>#ASL-DVS-GPUMEM-BEGIN</code> and <code>-END</code></td><td><code>config.txt.asl_dvs.bak</code> on every write</td></tr>
+      <tr><td>AMBE udev name</td><td><code>/etc/udev/rules.d/99-ambe-sysmon.rules</code> (USB IDs: 4 hex digits; name: letters, digits, <code>_</code> and <code>-</code>, up to 32)</td><td>—</td></tr>
+      <tr><td>Edit Save</td><td><code>/etc/sysmon/sysmon.conf</code> (identity, server, thresholds, pinned list, visible tabs, hidden files)</td><td>—</td></tr>
+    </table>
+    <h3>Reads</h3>
+    <ul>
+      <li><b>Power:</b> <code>vcgencmd get_throttled</code>. <b>Video:</b> <code>/proc/modules</code> (vc4), <code>/sys/class/drm/card*-HDMI-*/status</code>, <code>CmaTotal</code> in <code>/proc/meminfo</code>, <code>vcgencmd get_mem gpu</code> and <code>/proc/asound/cards</code>. A setting is "pending" when <code>config.txt</code> and the live state disagree.</li>
+      <li><b>SD card:</b> the root device's identity from <code>/sys/block</code>, <code>df</code>, <code>tune2fs -l</code> (needs root), the kernel I/O counters, the root mount options, and storage lines from the kernel log. The test runs <code>fsck -n</code> in the background; the page polls it every 1.5 s.</li>
+      <li><b>Security:</b> each check lists its exact source in its explanation. The same checks run from the shell with <code>sysmon.py --selftest</code>.</li>
+    </ul>
+    <h3>Boot-option carry-over on update</h3>
+    <p><code>--uninstall</code> records which boot options were on in <code>/etc/sysmon/boot_restore.json</code>
+      (mode 600) and restores the stock <code>config.txt</code>. <code>--install</code> re-applies them if that
+      record is under 30 minutes old, then deletes it. When updating from a SysMon too old to write the record, a
+      fresh install falls back to <code>config.txt.asl_dvs.bak</code>, but only if that backup is under 30 minutes
+      old and the service file is gone.</p>
+  </div>
+</section>
+
 </body>
 </html>
