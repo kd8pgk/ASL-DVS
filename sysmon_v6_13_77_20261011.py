@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.76"
+VERSION      = "6.13.77"
 BUILD_DATE   = "20261007"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -24009,7 +24009,7 @@ def _m17_sample_stanza(cfg: dict) -> str:
         f"Callsign={_placeholder(cfg['callsign'], 'your callsign')}",
         f"Address={_placeholder(cfg['address'], 'reflector IP')}",
         f"Name={_placeholder(cfg['name'], 'M17-XXX C')}",
-        f"LocalPort={cfg['m17_local_port'] or '32010'}",
+        f"LocalPort={cfg['m17_local_port'] or '17010'}",
         f"DstPort={cfg['m17_dst_port'] or '17000'}",
         f"GainAdjustdB={cfg['m17_gain'] or '3'}",
         "",
