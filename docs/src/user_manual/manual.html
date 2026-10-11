@@ -36,7 +36,6 @@
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_74_20261007.py</td><td>6.13.74</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_73_20261006.py</td><td>9.3.73</td></tr>
     </table>
-    <span class="draft">DRAFT · PARTS I–IV OF V</span>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
 </section>
@@ -46,26 +45,26 @@
   <h1 class="ch">In this manual</h1>
   <ul class="toc">
     <li class="pt">Part I · Getting started</li>
-    <li><span class="no">1</span>The suite at a glance<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">2</span>Installing and updating, in brief<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">1</span>The suite at a glance</li>
+    <li><span class="no">2</span>Installing and updating, in brief</li>
     <li class="pt">Part II · SysMon</li>
-    <li><span class="no">3</span>SysMon basics and live status: Overview, Services, Ports, Journal<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">4</span>Node and DVSwitch health: ASL-DVS, DVSM, STFU, M17, Phone<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">3</span>SysMon basics and live status: Overview, Services, Ports, Journal</li>
+    <li><span class="no">4</span>Node and DVSwitch health: ASL-DVS, DVSM, STFU, M17, Phone</li>
+    <li><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit</li>
+    <li><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console</li>
     <li class="pt">Part III · 44helper</li>
-    <li><span class="no">7</span>44helper basics: Overview, Services, Ports, Firewall, Actions Log<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">8</span>44Net and remote access: Router Install, Tunnels, Nodes, Cloudflare<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">9</span>Software installers: ASL3, DVSwitch, SVXLink, M17, Ampersand<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">10</span>Keeping the system healthy: Update, System Optimization<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">11</span>The Config tab: restore points, save points, presets, identity<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">7</span>44helper basics: Overview, Services, Ports, Firewall, Actions Log</li>
+    <li><span class="no">8</span>44Net and remote access: Router Install, Tunnels, Nodes, Cloudflare</li>
+    <li><span class="no">9</span>Software installers: ASL3, DVSwitch, SVXLink, M17, Ampersand</li>
+    <li><span class="no">10</span>Keeping the system healthy: Update, System Optimization</li>
+    <li><span class="no">11</span>The Config tab: restore points, save points, presets, identity</li>
     <li class="pt">Part IV · The other tools</li>
-    <li><span class="no">12</span>The Dashboard<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">13</span>instmon<span class="st done">THIS DRAFT</span></li>
-    <li><span class="no">14</span>wifimon and wifi_menu.sh<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">12</span>The Dashboard</li>
+    <li><span class="no">13</span>instmon</li>
+    <li><span class="no">14</span>wifimon and wifi_menu.sh</li>
     <li class="pt">Part V · Reference</li>
-    <li class="later"><span class="no">15</span>Troubleshooting and recovery<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">A</span>Appendices: ports, files, services, launcher, glossary<span class="st">LATER STAGE</span></li>
+    <li><span class="no">15</span>Troubleshooting and recovery</li>
+    <li><span class="no">A</span>Appendices: ports, files, services, launcher, glossary</li>
   </ul>
 
   <h2>How to use this manual</h2>
@@ -2419,6 +2418,333 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li><b>Setup from the shell:</b> <code>sudo python3 /usr/local/bin/wifimon.py --setup-wifi</code> adds or imports networks. <code>wifi_menu.sh</code> uses <code>nmcli</code> only and doesn't touch wifimon's reconnect list.</li>
     </ul>
   </div>
+</section>
+
+<section class="part">
+  <div class="pn">PART V</div>
+  <h1>Reference</h1>
+  <p>What to do when something goes wrong, and the facts you'll want to look up: ports, files, services and terms.</p>
+  <ol start="15">
+    <li>Troubleshooting and recovery</li>
+  </ol>
+  <p style="font-size:10.5pt">Appendices A–E: port map, files and paths, services, the launcher and memory savers, glossary.</p>
+</section>
+
+<section class="chapter" id="ch15">
+  <div class="kicker">Chapter 15 · Reference</div>
+  <h1 class="ch">Troubleshooting and recovery</h1>
+  <p class="ch-lede">Recipes for the problems people actually hit, each going from the quickest check to the
+    bigger fix. Before any fix that changes files, take a save point in 44helper's Config tab (Chapter 11). It
+    costs nothing and makes every step below undoable.</p>
+
+  <h2><span class="n">15.1</span>Where to look first</h2>
+  <table>
+    <tr><th>Symptom</th><th>First stop</th></tr>
+    <tr><td>Anything at all</td><td>SysMon Overview: red dots, <code>NR:</code> counts, the Pwr field (Chapter 3)</td></tr>
+    <tr><td>A config looks wrong</td><td>SysMon ASL-DVS, DVSM, STFU and M17 tabs (Chapter 4); 44helper Config: Identity and Port check (Chapter 11)</td></tr>
+    <tr><td>Installs or updates fail</td><td>44helper Update tab, Package recovery (Chapter 10)</td></tr>
+    <tr><td>The Pi went off by itself</td><td>wifimon Shutdown reports (Chapter 14)</td></tr>
+    <tr><td>Remote access is broken</td><td>44helper Overview and Ports (Chapters 7 and 8)</td></tr>
+  </table>
+
+  <h2><span class="n">15.2</span>A page doesn't load</h2>
+  <ol class="steps">
+    <li>Try another tool's page. If none load, the Pi or its network is down: check power and WiFi, and use <code>wifi_menu.sh</code> on a keyboard.</li>
+    <li>If only one is down, check it from SSH. Use the service and port from Appendix C:
+<pre>systemctl status sysmon --no-pager
+journalctl -u sysmon -n 30 --no-pager
+ss -tlnp | grep 9999</pre></li>
+    <li>Start or restart it from instmon's Components card, or with <code>sudo systemctl restart &lt;service&gt;</code>.</li>
+    <li>Still failing after an update? Install the previous version from instmon's library (ALT row, Chapter 13).</li>
+  </ol>
+  <div class="call tip"><span class="t">TIP</span>Login refused every time: set the root password again with
+    <code>sudo passwd root</code>. After 5 wrong tries, the Dashboard and SysMon lock that address out for 15
+    minutes; wait it out.</div>
+
+  <h2><span class="n">15.3</span>No audio, or audio one way only, on digital modes</h2>
+  <ol class="steps">
+    <li>SysMon Overview: Asterisk, analog_bridge and mmdvm_bridge must all be green.</li>
+    <li>Dashboard: check the indicator shows the talkgroup or reflector you expect, and that you are on that mode's tab.</li>
+    <li>SysMon ASL-DVS tab: node 1999's RX and TX ports in <code>rpt.conf</code> must be Analog_Bridge's pair the other way round.</li>
+    <li>SysMon Ports, and 44helper Config, Port check: no <code>[DUP]</code> and no clash. A known one: M17's old LocalPort 32010 clashes with P25. The Dashboard from 9.3.71.11 uses 17010.</li>
+    <li>DMR only: SysMon ASL-DVS, check <code>MMDVM_Bridge.ini</code> has a real DMR ID and the network enabled, and STFU (if you use it) has its hotspot password.</li>
+    <li>On a Split Tunnel: AllStar working while DVSwitch and M17 fail usually means an unedited <code>AllowedIPs</code>. Use 44helper Split Tunnel, step 4b (Chapter 8).</li>
+  </ol>
+
+  <h2><span class="n">15.4</span>Other nodes can't link to me</h2>
+  <ol class="steps">
+    <li>SysMon ASL-DVS: <code>rpt_http_registrations.conf</code> (or <code>iax.conf</code> register lines) has your node and a password. On the full build, the Reg tab shows the live registration.</li>
+    <li>44helper Ports: IAX2 4569/udp must not say <b>needed-but-not-open</b>.</li>
+    <li>Behind a home router with no tunnel, the router must forward UDP 4569 to the Pi. With a 44Net tunnel, the 44NetConnect zone must allow <code>iax2</code> (Chapter 7, Firewall).</li>
+    <li>Two nodes behind one router need different IAX ports: 44helper Nodes tab (Chapter 8).</li>
+  </ol>
+
+  <h2><span class="n">15.5</span>Something broke after a change or update</h2>
+  <table>
+    <tr><th>What changed</th><th>Undo with</th></tr>
+    <tr><td>A config file (edited anywhere)</td><td>44helper Config, Restore, from the save point or automatic copy taken before it, then Restart services.</td></tr>
+    <tr><td>An ASL-DVS tool version</td><td>instmon, that tool's library, Install on the ALT (older) row.</td></tr>
+    <tr><td>Linux packages</td><td>44helper Update: steps 2 and 9 to 11, then re-check the tool tabs.</td></tr>
+    <tr><td>A SysMon Hardware option</td><td>Turn it back off on the same card, then reboot.</td></tr>
+    <tr><td>A 44helper System Optimization card</td><td>That card's Revert.</td></tr>
+    <tr><td>Memory savers suspected</td><td>Turn them off one at a time (Appendix D), starting with the pool cap, and restart the tools.</td></tr>
+  </table>
+
+  <h2><span class="n">15.6</span>The Pi is slow or runs out of memory</h2>
+  <ol class="steps">
+    <li><code>free -m</code>. A Pi Zero 2 W has about 415 MB usable, and zram swap is normal.</li>
+    <li>Check every tool runs through the launcher: <code>ps ax | grep asl_dvs_launch</code> should list each one. A tool started as plain <code>python3 tool.py</code> uses about twice the memory, so run its <code>--install</code> again.</li>
+    <li>Close pages you aren't using. Each open page polls its tool, and Cockpit's page costs about 27 MB while open.</li>
+    <li>SysMon Hardware: turn off the video driver and lower GPU memory (Chapter 5).</li>
+    <li>Turn off services you don't use, such as PackageKit, P25Gateway or Allmon3. The Pi Zero 2 W install manual lists them.</li>
+  </ol>
+
+  <h2><span class="n">15.7</span>The node switched itself off</h2>
+  <ol class="steps">
+    <li>wifimon, Activity log, Shutdown reports: the newest report says which watchdog fired.</li>
+    <li>Low voltage: improve the supply and cable. SysMon's Pwr field shows <code>WARN</code> or <code>⚡ UV</code> when it happens.</li>
+    <li>No connection: check the reconnect list has every network the node might use, and lengthen "Shut down after no connection" if the WiFi is often slow to come back.</li>
+    <li>Report says "stop that wasn't clean": the power was cut or the Pi crashed. Check the SD card (Chapter 5).</li>
+  </ol>
+
+  <h2><span class="n">15.8</span>An install or update keeps failing</h2>
+  <ol class="steps">
+    <li>Read the "NOT RUN" reason on the step. Masked services: use the card at the top of the tab. Broken packages: use the "What to do next" buttons.</li>
+    <li>44helper Update: run "Is apt still running?", then Package recovery 1, 2 and 3, then 1 again. <b>Don't reboot</b> while recovery 1 lists problems.</li>
+    <li>Run the failed step again. If it still fails, Purge on that tab (with Repair, then purge if offered), read "Still left behind", and install again.</li>
+  </ol>
+
+  <h2><span class="n">15.9</span>I lost remote access</h2>
+  <ul>
+    <li><b>After starting a tunnel:</b> on the home network, or with a keyboard and screen, use the tunnel tab's Purge, or <code>sudo systemctl disable --now wg-quick@wg0</code>.</li>
+    <li><b>After a firewall change:</b> a runtime-only test goes away with <code>sudo firewall-cmd --reload</code> or a reboot. On the full build, if ufw was turned on with no SSH rule: <code>sudo ufw allow 22/tcp</code> from a local console, or <code>sudo ufw disable</code>.</li>
+    <li><b>Banned by fail2ban:</b> the web pages still work. In 44helper, Update, Custom: <code>fail2ban-client set sshd unbanip &lt;your-ip&gt;</code>. Bans expire after 10 minutes anyway.</li>
+    <li><b>Cloudflare hostname not answering:</b> 44helper Cloudflare, Verify the connector, and check the Zero Trust dashboard shows it Healthy.</li>
+  </ul>
+
+  <h2><span class="n">15.10</span>Phone calls fail</h2>
+  <ol class="steps">
+    <li>Dashboard Phone tab open? The phone node only links while it is.</li>
+    <li>SysMon Phone tab, Health checks: fix every FAIL. Autopatch modules: both features should be READY.</li>
+    <li>SysMon Phone, Router test: Going out, then Call audio during a Test call, then Coming in.</li>
+    <li>Dashboard Phone, Report: copy it for anyone helping you. The Phone dialplan guide in <code>docs/</code> has the full call flows.</li>
+  </ol>
+
+  <h2><span class="n">15.11</span>The SD card</h2>
+  <ul>
+    <li>SysMon SD Card: READ-ONLY root, kernel storage errors, or fsck errors mean the card is failing. Image or clone it now (instmon, Chapter 13) and replace it.</li>
+    <li>To restore onto a new card: instmon Restore writes a backup image to a card in a USB adapter. Swap it in and boot.</li>
+    <li>To reduce wear: 44helper System Optimization (Chapter 10).</li>
+  </ul>
+
+  <h2><span class="n">15.12</span>Asking for help</h2>
+  <p>Gather plain-text copies. Every tool has Copy buttons:</p>
+  <table>
+    <tr><th>Copy</th><th>From</th></tr>
+    <tr><td>Overview / Services / Ports lists</td><td>SysMon (Chapter 3)</td></tr>
+    <tr><td>A service's journal</td><td>SysMon Journal pop-up, with a filter</td></tr>
+    <tr><td>Hardware report</td><td>SysMon Hardware</td></tr>
+    <tr><td>Security results</td><td>SysMon Security</td></tr>
+    <tr><td>All Asterisk or DVSwitch config files</td><td>SysMon Edit, ASL AllConf / DVS AllConf: <b>remove passwords first</b></td></tr>
+    <tr><td>Phone report</td><td>Dashboard Phone tab</td></tr>
+    <tr><td>Execution log</td><td>instmon</td></tr>
+    <tr><td>Activity log, shutdown report</td><td>wifimon</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>Never post your <code>wg0.conf</code> private key, AMI
+    secret, node password, BrandMeister hotspot password or phone account passwords. The SysMon and 44helper
+    check cards only say whether these are set; AllConf output and raw files contain them in full.</div>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>Recovery commands at a glance</h2>
+<pre><span class="c"># service state, log and port for any tool (Appendix C)</span>
+systemctl status &lt;service&gt; --no-pager
+journalctl -u &lt;service&gt; -n 50 --no-pager
+ss -tulpn | grep &lt;port&gt;
+
+<span class="c"># reinstall a tool from its installed file</span>
+sudo python3 /usr/local/bin/sysmon.py --install
+<span class="c"># SysMon's security checks without the web page</span>
+sudo python3 /usr/local/bin/sysmon.py --selftest
+
+<span class="c"># package system health</span>
+pgrep -a 'apt|dpkg|unattended-upgr'
+sudo dpkg --audit
+sudo dpkg --configure -a
+
+<span class="c"># Asterisk</span>
+sudo asterisk -rx "rpt show registrations"
+sudo asterisk -rx "iax2 show peers"
+sudo asterisk -rx "rpt xnode &lt;node&gt;"
+
+<span class="c"># WiFi and power</span>
+nmcli device status
+vcgencmd get_throttled
+free -m; zramctl</pre>
+  </div>
+</section>
+
+<section class="chapter" id="appA">
+  <div class="kicker">Appendix A</div>
+  <h1 class="ch">Port map</h1>
+  <h2>The ASL-DVS tools</h2>
+  <table>
+    <tr><th>Port</th><th>Tool</th><th>Reach</th></tr>
+    <tr><td class="port">8989/tcp</td><td>Dashboard</td><td>LAN or VPN only</td></tr>
+    <tr><td class="port">8990/tcp</td><td>instmon</td><td>LAN or VPN only</td></tr>
+    <tr><td class="port">8991/tcp</td><td>wifimon</td><td>LAN or VPN only</td></tr>
+    <tr><td class="port">9997/tcp</td><td>44helper</td><td>LAN only, never on 44Net</td></tr>
+    <tr><td class="port">9999/tcp</td><td>SysMon</td><td>LAN or VPN only</td></tr>
+  </table>
+  <h2>The node</h2>
+  <table>
+    <tr><th>Port</th><th>Used by</th><th>Reach</th></tr>
+    <tr><td class="port">4569/udp</td><td>IAX2, AllStar links</td><td>open to peers</td></tr>
+    <tr><td class="port">5198–5199/udp</td><td>EchoLink / SvxLink</td><td>open to peers if used</td></tr>
+    <tr><td class="port">1667/udp</td><td>VOTER / RTCM</td><td>open to peers if used</td></tr>
+    <tr><td class="port">4568/udp</td><td>Ampersand hub IAX</td><td>open to peers if used</td></tr>
+    <tr><td class="port">5038/tcp</td><td>Asterisk AMI</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">34001 / 32001</td><td>USRP: node 1999 ↔ Analog_Bridge</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">34008 / 32008</td><td>USRP: node 1917 ↔ USRP2M17</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">34012 / 32012</td><td>USRP: node 1918 ↔ Zello bridge</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">31100 / 31103</td><td>Analog_Bridge ↔ MMDVM_Bridge (DMR; other modes use their own 3xx00 ranges)</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">17010 → 17000</td><td>USRP2M17 → M17 reflectors</td><td>outbound</td></tr>
+    <tr><td class="port">62031</td><td>BrandMeister (STFU)</td><td>outbound</td></tr>
+    <tr><td class="port">6073 / 6074 / 6075</td><td>YSF / P25 / NXDN gateway command ports</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">54321/udp</td><td>ircDDBGateway remote control</td><td>never public</td></tr>
+    <tr><td class="port">80/tcp</td><td>apache2 (Allmon3) or lighttpd (DVSwitch page)</td><td>LAN</td></tr>
+    <tr><td class="port">8080/tcp</td><td>Ampersand web UI</td><td>LAN</td></tr>
+    <tr><td class="port">9090/tcp</td><td>Cockpit</td><td>LAN</td></tr>
+    <tr><td class="port">10000/tcp</td><td>Webmin (optional)</td><td>LAN</td></tr>
+    <tr><td class="port">7844/udp</td><td>cloudflared</td><td>outbound only</td></tr>
+  </table>
+  <p>The full pairing rules are in <code>docs/ASL-DVS_Idealized_Node_Configuration.pdf</code>, section 4.</p>
+</section>
+
+<section class="chapter" id="appB">
+  <div class="kicker">Appendix B</div>
+  <h1 class="ch">Files and paths</h1>
+  <table>
+    <tr><th>Path</th><th>What</th><th>Written by</th></tr>
+    <tr><td class="mono">/usr/local/bin/asl_dvs_launch.py</td><td>shared launcher</td><td>every tool's --install</td></tr>
+    <tr><td class="mono">/usr/local/lib/asl_dvs/</td><td>Dashboard program (linked from /usr/local/bin)</td><td>Dashboard</td></tr>
+    <tr><td class="mono">/usr/local/lib/asl_dvs_sysmon/</td><td>SysMon program</td><td>SysMon</td></tr>
+    <tr><td class="mono">/opt/44helper/</td><td>44helper program</td><td>44helper</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/asl_dvs.conf</td><td>Dashboard settings and favorites</td><td>Dashboard, installer</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/phone.json</td><td>phone networks</td><td>Dashboard</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/launch_no_*</td><td>memory-saver off switches</td><td>you</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/instmon_library/</td><td>tool versions, scripts, configs; <code>config/wg0.conf</code>; <code>config_restore/</code></td><td>instmon, 44helper</td></tr>
+    <tr><td class="mono">/etc/sysmon/sysmon.conf</td><td>SysMon settings, pinned list, radio presets</td><td>SysMon</td></tr>
+    <tr><td class="mono">/etc/sysmon/console.enable</td><td>console switch (full build)</td><td>SysMon / you</td></tr>
+    <tr><td class="mono">/etc/44helper/44helper.conf</td><td>44helper settings, tunnels, router, peers</td><td>44helper</td></tr>
+    <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch</td><td>44helper / you</td></tr>
+    <tr><td class="mono">/etc/wifimon/wifimon.conf</td><td>wifimon settings and reconnect list</td><td>wifimon</td></tr>
+    <tr><td class="mono">/var/log/wifimon/</td><td>shutdown reports</td><td>wifimon</td></tr>
+    <tr><td class="mono">/run/asl_dvs/auth_session.json</td><td>shared Dashboard and SysMon logins</td><td>Dashboard, SysMon</td></tr>
+    <tr><td class="mono">/run/44helper/sessions.json</td><td>44helper logins</td><td>44helper</td></tr>
+    <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>44Net tunnel (mode 600)</td><td>44helper</td></tr>
+    <tr><td class="mono">/etc/firewalld/zones/44NetConnect.xml</td><td>44Net firewall zone</td><td>44helper</td></tr>
+    <tr><td class="mono">/boot/firmware/config.txt</td><td>video and GPU memory options (backup <code>config.txt.asl_dvs.bak</code>)</td><td>SysMon Hardware</td></tr>
+    <tr><td class="mono">/etc/asterisk/</td><td>ASL3 config</td><td>asl-menu, you, Dashboard (Phone), SysMon, 44helper</td></tr>
+    <tr><td class="mono">/opt/Analog_Bridge, /opt/MMDVM_Bridge</td><td>DVSwitch config</td><td>dvs, you, 44helper</td></tr>
+    <tr><td class="mono">/opt/USRP2M17/USRP2M17.ini</td><td>M17 bridge</td><td>Dashboard (each connect)</td></tr>
+    <tr><td class="mono">/etc/allmon3/</td><td>Allmon3</td><td>allmon3-passwd, you</td></tr>
+  </table>
+</section>
+
+<section class="chapter" id="appC">
+  <div class="kicker">Appendix C</div>
+  <h1 class="ch">Services</h1>
+  <table>
+    <tr><th>Service</th><th>What</th><th>Port</th></tr>
+    <tr><td class="mono">asl_dvs_dashboard</td><td>Dashboard (Restart=always, WatchdogSec=30)</td><td class="port">8989</td></tr>
+    <tr><td class="mono">sysmon</td><td>SysMon</td><td class="port">9999</td></tr>
+    <tr><td class="mono">instmon</td><td>instmon</td><td class="port">8990</td></tr>
+    <tr><td class="mono">wifimon</td><td>wifimon</td><td class="port">8991</td></tr>
+    <tr><td class="mono">44helper</td><td>44helper</td><td class="port">9997</td></tr>
+    <tr><td class="mono">asterisk</td><td>ASL3 / app_rpt</td><td class="port">4569/udp</td></tr>
+    <tr><td class="mono">allmon3</td><td>Allmon3</td><td></td></tr>
+    <tr><td class="mono">analog_bridge · mmdvm_bridge · md380-emu</td><td>DVSwitch</td><td></td></tr>
+    <tr><td class="mono">ysfgateway · p25gateway · nxdngateway · ircddbgatewayd</td><td>digital-mode gateways</td><td></td></tr>
+    <tr><td class="mono">stfu</td><td>BrandMeister terminal</td><td></td></tr>
+    <tr><td class="mono">usrp2m17</td><td>M17 bridge</td><td></td></tr>
+    <tr><td class="mono">asl-zello-bridge</td><td>Zello bridge (full-build SysMon tab)</td><td></td></tr>
+    <tr><td class="mono">wg-quick@wg0 (or 44net-tunnel)</td><td>44Net tunnel</td><td></td></tr>
+    <tr><td class="mono">firewalld</td><td>firewall</td><td></td></tr>
+    <tr><td class="mono">cloudflared</td><td>Cloudflare Tunnel</td><td></td></tr>
+    <tr><td class="mono">cockpit.socket</td><td>Cockpit</td><td class="port">9090</td></tr>
+    <tr><td class="mono">svxlink / svxlink-usrp</td><td>SvxLink</td><td></td></tr>
+    <tr><td class="mono">amp-server / amp-hub</td><td>Ampersand</td><td></td></tr>
+    <tr><td class="mono">asl-dvs-reinstall</td><td>44helper Config reinstall job (temporary)</td><td></td></tr>
+  </table>
+  <pre><span class="c"># start · stop · restart · at boot</span>
+sudo systemctl start|stop|restart &lt;service&gt;
+sudo systemctl enable|disable --now &lt;service&gt;</pre>
+</section>
+
+<section class="chapter" id="appD">
+  <div class="kicker">Appendix D</div>
+  <h1 class="ch">The launcher and memory savers</h1>
+  <p>Every tool's service starts it through <code>/usr/local/bin/asl_dvs_launch.py</code>, which loads the tool as a
+    module so Python keeps the compiled copy in <code>__pycache__</code>:</p>
+  <table>
+    <tr><th>Tool</th><th>Started directly</th><th>Through the launcher</th></tr>
+    <tr><td>SysMon (Pi02w)</td><td>54 MB</td><td>26 MB</td></tr>
+    <tr><td>Dashboard (Pi02w)</td><td>45 MB</td><td>25 MB</td></tr>
+    <tr><td>instmon</td><td>34 MB</td><td>21 MB</td></tr>
+    <tr><td>wifimon</td><td>36 MB</td><td>22 MB</td></tr>
+    <tr><td>44helper</td><td>48 MB</td><td>26 MB</td></tr>
+  </table>
+  <p>Launcher version 2 adds three more savers, each with an off switch:</p>
+  <table>
+    <tr><th>Saver</th><th>What it does</th><th>Off switch</th></tr>
+    <tr><td><code>python3 -OO</code></td><td>Drops built-in help text from the loaded code.</td><td class="mono">/etc/asl_dvs/launch_no_optimize</td></tr>
+    <tr><td><code>MALLOC_ARENA_MAX=2</code></td><td>At most 2 memory pools instead of up to 8 per CPU core.</td><td class="mono">/etc/asl_dvs/launch_no_arena_cap</td></tr>
+    <tr><td><code>malloc_trim</code></td><td>1 minute after start, then every 5 minutes, hands freed memory back to Linux.</td><td class="mono">/etc/asl_dvs/launch_no_trim</td></tr>
+  </table>
+<pre><span class="c"># turn one off for every tool, then restart them</span>
+sudo touch /etc/asl_dvs/launch_no_arena_cap
+sudo systemctl restart sysmon asl_dvs_dashboard instmon wifimon 44helper
+<span class="c"># delete the file and restart to turn it back on</span></pre>
+  <p>With <code>-OO</code>, the first start after an update compiles everything once more, so measure memory after the
+    next restart. Each tool writes the launcher when it installs, and removes it on uninstall once no service uses it.
+    The launcher's text is identical in every tool.</p>
+</section>
+
+<section class="chapter" id="appE">
+  <div class="kicker">Appendix E</div>
+  <h1 class="ch">Glossary</h1>
+  <table>
+    <tr><th>Term</th><th>Meaning</th></tr>
+    <tr><td>44Net / AMPRNet</td><td>The 44.0.0.0/9 and 44.128.0.0/10 address space for amateur radio. <b>44Net Connect</b> is ARDC's free WireGuard tunnel service that gives you one of these addresses.</td></tr>
+    <tr><td>Allmon3</td><td>ASL3's web page for watching node links.</td></tr>
+    <tr><td>AMBE</td><td>The voice codec used by DMR, D-STAR and Fusion. Done in software, or by a USB dongle such as a ThumbDV.</td></tr>
+    <tr><td>AMI</td><td>Asterisk Manager Interface (port 5038): how the Dashboard drives Asterisk. Keep it local.</td></tr>
+    <tr><td>Analog_Bridge / MMDVM_Bridge</td><td>The two DVSwitch programs that turn node audio into digital voice and connect it to the networks.</td></tr>
+    <tr><td>app_rpt</td><td>The Asterisk module that makes a repeater or AllStar node.</td></tr>
+    <tr><td>ASL3</td><td>AllStarLink version 3.</td></tr>
+    <tr><td>Autopatch / reverse autopatch</td><td>The radio dialing out to a phone / a phone calling in to the radio.</td></tr>
+    <tr><td>Bridge node</td><td>A private node (1000–1999) that links Asterisk to a bridge program, such as 1999 for DVSwitch or 1917 for M17.</td></tr>
+    <tr><td>Build: Pi02w / full</td><td>The two builds of the Dashboard and SysMon (Chapter 1).</td></tr>
+    <tr><td>Cockpit</td><td>A general web admin console for the Pi (port 9090).</td></tr>
+    <tr><td>DVSM</td><td>DVSwitch Mobile, the phone app.</td></tr>
+    <tr><td>firewalld / ufw</td><td>The two Linux firewall front ends the suite works with.</td></tr>
+    <tr><td>IAX2</td><td>Asterisk's protocol for node-to-node links (UDP 4569).</td></tr>
+    <tr><td>Launcher</td><td><code>asl_dvs_launch.py</code>, which starts every tool with less memory (Appendix D).</td></tr>
+    <tr><td>Masked</td><td>A systemd service blocked from starting at all.</td></tr>
+    <tr><td>NR</td><td>A service's restart count since it was started.</td></tr>
+    <tr><td>Quiet mode / Quiet System</td><td>Pausing services before big jobs: 44helper's (until turned off) and instmon's (up to 30 minutes).</td></tr>
+    <tr><td>Restore point / save point</td><td>44helper Config copies of your config files (Chapter 11).</td></tr>
+    <tr><td>STFU</td><td>DVSwitch's direct BrandMeister terminal.</td></tr>
+    <tr><td>Split / Full tunnel</td><td>A 44Net tunnel carrying only 44Net traffic, or all traffic.</td></tr>
+    <tr><td>USRP</td><td>A simple UDP audio protocol between Asterisk and bridge programs. It has no password, so keep it on 127.0.0.1.</td></tr>
+    <tr><td>USRP2M17</td><td>The bridge between a node and M17 reflectors.</td></tr>
+    <tr><td>wg0</td><td>The WireGuard tunnel interface.</td></tr>
+    <tr><td>zram</td><td>Compressed swap kept in memory, used on the Pi Zero 2 W.</td></tr>
+  </table>
+  <p style="margin-top:2em;color:var(--muted);font-size:8.5pt">ASL-DVS · KD8PGK · written with Claude (Anthropic) ·
+    CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS. Change history for every tool is in the repository's
+    <code>changelogs/</code> folder.</p>
 </section>
 
 </body>
