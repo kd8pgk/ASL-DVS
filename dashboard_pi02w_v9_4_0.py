@@ -40,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.13-pi02w"
-BUILD_DATE   = "2026-10-06"
+VERSION      = "9.4.0-pi02w"
+BUILD_DATE   = "2026-10-11"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -14315,7 +14315,7 @@ def uninstall_service() -> None:
             target = os.readlink(_INSTALL_LINK)
         os.remove(_INSTALL_LINK)
         print(f"  [-] Removed {_INSTALL_LINK}")
-        if target and os.path.basename(target).startswith("asl_dvs_dashboard_") and os.path.isfile(target):
+        if target and os.path.basename(target).startswith(("dashboard_", "asl_dvs_dashboard_")) and os.path.isfile(target):
             os.remove(target)
             print(f"  [-] Removed {target}")
         for pyc in _pyc_for(target or _INSTALL_LINK):

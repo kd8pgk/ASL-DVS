@@ -1,6 +1,28 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py`. Newest entries first.
+Current file: `dashboard_pi02w_v9_4_0.py`. Newest entries first. Before 9.4.0
+the file was `asl_dvs_dashboard_pi02w_v*_<date>.py` and this changelog was
+`asl_dvs_dashboard_pi02w.md`.
+
+## 9.4.0-pi02w (2026-10-11)
+
+- New name: `dashboard_pi02w_v9_4_0.py` (was
+  `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py`). No `asl_dvs_` prefix and
+  no date in the name; the date is in `BUILD_DATE`.
+- Versions have three parts from now on: 9.3.71.13 is followed by 9.4.0. The
+  Pi02w and full builds are compared separately, so 9.4.0-pi02w being above the
+  full build's numbers means nothing. Needs instmon 2.40.0 or installer 6.7.0 to
+  be seen as the same tool as the old name.
+- `--uninstall` also removes the installed copy in `/usr/local/lib/asl_dvs/`
+  when its name starts with `dashboard_` (it only knew `asl_dvs_dashboard_`).
+  The installed paths and service (`/usr/local/bin/asl_dvs_dashboard.py`,
+  `asl_dvs_dashboard.service`) are unchanged.
+- `BUILD_DATE` was left at 2026-10-06 in 9.3.71.13; it now matches the release.
+- Tested: `--uninstall` with mocks for an installed copy under each name (new
+  and old Pi02w, new and old full): the link, unit and copy are removed; an
+  unrelated name is left alone. The same test fails on 9.3.71.13 for the new
+  names.
+
 
 ## 9.3.71.13-pi02w (2026-10-07)
 
