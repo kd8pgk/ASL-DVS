@@ -13,7 +13,7 @@
       <div class="brand">ASL-DVS NODE CONTROL</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-08</div>
+    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-11</div>
   </div>
   <div class="body">
     <h1>User Manual<br><span>The ASL-DVS Suite</span></h1>
@@ -36,7 +36,7 @@
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_74_20261007.py</td><td>6.13.74</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_73_20261006.py</td><td>9.3.73</td></tr>
     </table>
-    <span class="draft">DRAFT · PART I OF V</span>
+    <span class="draft">DRAFT · PARTS I–II OF V</span>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
 </section>
@@ -49,10 +49,10 @@
     <li><span class="no">1</span>The suite at a glance<span class="st done">THIS DRAFT</span></li>
     <li><span class="no">2</span>Installing and updating, in brief<span class="st done">THIS DRAFT</span></li>
     <li class="pt">Part II · SysMon</li>
-    <li class="later"><span class="no">3</span>SysMon basics and live status: Overview, Services, Ports, Journal<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">4</span>Node and DVSwitch health: ASL-DVS, DVSM, STFU, M17, Phone<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit<span class="st">LATER STAGE</span></li>
-    <li class="later"><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console<span class="st">LATER STAGE</span></li>
+    <li><span class="no">3</span>SysMon basics and live status: Overview, Services, Ports, Journal<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">4</span>Node and DVSwitch health: ASL-DVS, DVSM, STFU, M17, Phone<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit<span class="st done">THIS DRAFT</span></li>
+    <li><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console<span class="st done">THIS DRAFT</span></li>
     <li class="pt">Part III · 44helper</li>
     <li class="later"><span class="no">7</span>44helper basics: Overview, Services, Ports, Firewall, Actions Log<span class="st">LATER STAGE</span></li>
     <li class="later"><span class="no">8</span>44Net and remote access: Router Install, Tunnels, Nodes, Cloudflare<span class="st">LATER STAGE</span></li>
@@ -1140,6 +1140,147 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       record is under 30 minutes old, then deletes it. When updating from a SysMon too old to write the record, a
       fresh install falls back to <code>config.txt.asl_dvs.bak</code>, but only if that backup is under 30 minutes
       old and the service file is gone.</p>
+  </div>
+</section>
+
+<section class="chapter" id="ch6">
+  <div class="kicker">Chapter 6 · SysMon <span class="badge full">FULL</span></div>
+  <h1 class="ch">Full-build tabs</h1>
+  <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds five tabs the Pi Zero 2 W build leaves out to
+    save memory: Firewall, Reg, Net, Zello and Console. Everything in Chapters 3 to 5 also applies to the full
+    build, which has the same tabs.</p>
+  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_74_20261007.py</code>
+    (version <code>6.13.74</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
+    (override)</b> choice, but it uses about twice the memory.</div>
+
+  <figure>
+    <div class="mock"><div class="tabs">
+      <span class="tab">Overview</span><span class="tab">Services</span><span class="tab">Ports</span>
+      <span class="tab on" style="background:var(--org)">Firewall</span><span class="tab">Journal</span><span class="tab">ASL-DVS</span>
+      <span class="tab on" style="background:var(--org)">Reg</span><span class="tab">Phone</span><span class="tab">Tune</span><span class="tab">Hardware</span>
+      <span class="tab on" style="background:var(--org)">Net</span><span class="tab">DVSM</span><span class="tab">STFU</span><span class="tab">M17</span>
+      <span class="tab on" style="background:var(--org)">Zello</span><span class="tab">SD Card</span><span class="tab">Security</span>
+      <span class="tab on" style="background:var(--org)">Console</span><span class="tab">Edit</span>
+    </div></div>
+    <figcaption><b>Figure 6.1 · Illustration.</b> The full build's 19 tabs. The five highlighted are covered here.</figcaption>
+  </figure>
+
+  <h2><span class="n">6.1</span>Firewall tab</h2>
+  <p>Shows and edits the Pi's own firewall. The <b>Backend</b> bar says which firewall SysMon found (ufw, firewalld,
+    nftables or iptables) and whether it is active. A <b>Guide</b> explains ufw, firewalld zones and ASL3's default
+    posture in plain words.</p>
+  <table>
+    <tr><th>Part</th><th>What it does</th></tr>
+    <tr><td>Rule table</td><td>Number, port, action (ALLOW, DENY, LIMIT), source and the known service for each rule. Click a rule for details and <b>Delete</b>, which asks first. Deleting a firewalld service warns you if it is SSH or Cockpit.</td></tr>
+    <tr><td>Add Rule</td><td>Port, protocol (tcp, udp, any), action and an optional source address, then <b>+ Add</b>.</td></tr>
+    <tr><td>Zone details</td><td>For firewalld: which zone each interface is in. A port only opens if it is allowed in the zone of the interface traffic arrives on.</td></tr>
+    <tr><td>Raw firewall output</td><td>The full listing, including rules the table can't show (rich rules), with Copy.</td></tr>
+    <tr><td>Enable / Disable ufw</td><td>Turn the whole ufw firewall on or off. Disable asks first.</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span><b>Enable ufw acts at once, with no confirmation, and adds no
+    rules for you.</b> If there is no rule allowing SSH (22/tcp) and the web pages (8989, 9999, 8990, 8991, 9997)
+    from your network, turning ufw on can lock you out of the Pi. Add those ALLOW rules <i>first</i>, and add
+    IAX2 (4569/udp) so AllStar links keep working.</div>
+  <p>On firewalld, SysMon adds each rule both live and permanently, so it survives a reload or reboot. 44helper's
+    Firewall tab (Chapter 7) has a fuller zone-based editor with built-in guardrails, and works on both builds.</p>
+
+  <h2><span class="n">6.2</span>Reg tab</h2>
+  <p>Checks how your node registers with AllStarLink, which is how other nodes find it.</p>
+  <ul>
+    <li><b>HTTP Registration</b> reads <code>rpt_http_registrations.conf</code>; <b>IAX Registration</b> reads the
+      <code>register =&gt;</code> lines in <code>iax.conf</code>. For each: node numbers valid, a password present, the line
+      syntax correct, and the live state from Asterisk (registered or not).</li>
+    <li><b>Dual registration</b> warns when both HTTP and IAX are active. Pick one and comment out the other; HTTP is
+      ASL3's default.</li>
+    <li><b>Re-check</b> reads it all again. Live state also refreshes in the background every 30 seconds.</li>
+  </ul>
+
+  <h2><span class="n">6.3</span>Net tab</h2>
+  <table>
+    <tr><th>Card</th><th>What it does</th></tr>
+    <tr><td>Hostname &amp; name announcer</td><td>Three steps, each with its command shown, <b>Run</b> and <b>Copy</b>: (1) set the hostname (letters, numbers and dashes, up to 63 characters); (2) install and start <code>avahi-daemon</code>, so the node answers to <code>name.local</code>; (3) test it. The IP address keeps working. You log in once more for each new name, and new backup and image file names use it. AllStar and DVSwitch settings aren't touched, and no reboot is needed.</td></tr>
+    <tr><td>WiFi</td><td>The current WiFi connection and signal.</td></tr>
+    <tr><td>Install mtr</td><td>Shown only if <code>mtr</code> is missing: installs <code>mtr-tiny</code>.</td></tr>
+    <tr><td>mtr trace</td><td>A 5-cycle route trace to a choice of targets, showing where along the path packets are lost.</td></tr>
+    <tr><td>Ping</td><td>5 pings to Google (8.8.8.8), allstarlink.org, or your DVSwitch servers.</td></tr>
+    <tr><td>Reflectors</td><td>Ping or trace any reflector configured on the Dashboard.</td></tr>
+  </table>
+  <p>Only one job runs at a time; <b>Stop</b> ends it. Output appears in the card's console box.</p>
+
+  <h2><span class="n">6.4</span>Zello tab</h2>
+  <p>For <code>asl-zello-bridge</code>, which links private node 1918 to a Zello channel. It is laid out like the
+    STFU and M17 tabs (Chapter 4):</p>
+  <table>
+    <tr><th>Card</th><th>Shows</th></tr>
+    <tr><td>Installation</td><td>The bridge program (<code>/opt/asl-zello-bridge</code>) and its service.</td></tr>
+    <tr><td>Live Status</td><td>Read from the journal, not just whether the process is up: who keyed and unkeyed, and when. <b>Full Journal</b> opens the service panel.</td></tr>
+    <tr><td>Configuration</td><td>The settings in the service's systemd override (Free mode): Zello account and channel, USRP addresses, ports and gain.</td></tr>
+    <tr><td>Compatibility Checks</td><td>USRP ports 34012 / 32012, a <code>[1918]</code> node in <code>rpt.conf</code> that matches them, and credentials present.</td></tr>
+    <tr><td>Sample Override / Edit Override</td><td>A reference copy with placeholders, and the real file with <b>Start</b>, <b>Stop</b>, <b>Restart</b>, <b>Save</b> and <b>Copy</b>.</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>The override holds your Zello password in plain text, and
+    the editor shows it. Save writes it at once; Restart applies it.</div>
+
+  <h2><span class="n">6.5</span>Console tab</h2>
+  <p>A live Asterisk console (<code>asterisk -rvvv</code>) in the browser, plus one-click buttons for the commands you'd
+    otherwise type.</p>
+  <h3>Switching it on and opening it</h3>
+  <ol class="steps">
+    <li>The console starts <b>switched off</b>. Press <b>Enable console</b> and enter the root password.</li>
+    <li>Press <b>Open console</b> and enter the root password again. You need it every time you open the console.</li>
+    <li>Type Asterisk CLI commands as usual. <b>Copy</b> and <b>Clear</b> work on the screen. <b>Close</b> ends the session.</li>
+  </ol>
+  <ul>
+    <li><b>Home network only.</b> It refuses any request that came through a tunnel or proxy (Cloudflare and the like), or from an address outside your LAN.</li>
+    <li><b>Never a shell.</b> The <code>!</code> key, which runs shell commands from the Asterisk CLI, is blocked, and so is Ctrl-Z.</li>
+    <li>Only one console at a time. It closes after 10 minutes with no typing.</li>
+    <li><b>Disable console</b> switches it off again, and needs no password.</li>
+  </ul>
+  <h3>Command buttons</h3>
+  <p>Pick a node in the <b>Node</b> list, then press a button; the result shows below, often with a plain-words summary.</p>
+  <table>
+    <tr><th>Group</th><th>Buttons</th></tr>
+    <tr><td>Nodes</td><td>rpt stats, rpt lstats, node variables, link details, local nodes, registrations, <b>Disconnect all links</b>†</td></tr>
+    <tr><td>Phone</td><td>SIP registrations, endpoints, contacts, <b>Retry sign-in</b>†, SIP log for provider, transports, all calls, call quality, dialplan check, phone settings in Asterisk, phone nodes, phone node clash check, <b>Hang up all calls</b>†</td></tr>
+    <tr><td>AllStar links</td><td>IAX2 peers, registry, channels, link quality</td></tr>
+    <tr><td>Audio and CPU</td><td>codec conversions; audio (RTP) debug on/off; SIP logging on/off</td></tr>
+    <tr><td>Detail level</td><td>verbose 3, verbose 5, debug off</td></tr>
+    <tr><td>Reload</td><td><b>Dialplan reload</b>†, <b>PJSIP reload</b>†</td></tr>
+    <tr><td>Memory</td><td>Swapping now?, programs in swap</td></tr>
+    <tr><td>System</td><td>uptime, version, modules check, <b>Restart Asterisk when idle</b>†</td></tr>
+  </table>
+  <p>† Buttons that change something ask you to confirm. Debug and logging switch themselves off again after 5 minutes.
+    The <b>Troubleshooting</b> card below the buttons runs read-only checks and explains the results.</p>
+
+  <div class="uth">
+    <span class="lbl">UNDER THE HOOD</span>
+    <h2>How the full-build tabs work</h2>
+    <h3>Firewall</h3>
+    <ul>
+      <li>Backend detection order: ufw, firewalld, then nftables or iptables (raw listing only). ufw rules come from <code>ufw status numbered</code>; each row's number is what <code>ufw delete</code> removes.</li>
+      <li>Add runs <code>ufw allow|deny|limit &lt;port&gt;/&lt;proto&gt;</code>, with <code>from &lt;addr&gt;</code> if given. On firewalld, SysMon runs <code>firewall-cmd --add-port</code> both with and without <code>--permanent</code>.</li>
+      <li>Enable runs <code>ufw --force enable</code>; Disable runs <code>ufw disable</code>. Endpoint: <code>POST /api/firewall</code>.</li>
+    </ul>
+    <h3>Reg</h3>
+    <p>Live state: <code>asterisk -rx "rpt show registrations"</code>, part of the background poll (every 30 s), with node
+      numbers matched against the config files. Files: <code>rpt_http_registrations.conf</code>, <code>iax.conf</code>,
+      <code>rpt.conf</code> and Allmon3's <code>allmon3.ini</code>.</p>
+    <h3>Net</h3>
+    <p>The hostname steps run <code>hostnamectl set-hostname</code> and update the <code>127.0.1.1</code> line in <code>/etc/hosts</code>, then install and enable <code>avahi-daemon</code> and <code>libnss-mdns</code>, and test the
+      <code>.local</code> name from the node itself. Every command is shown before it runs, and Copy gives it to you
+      for SSH if SysMon isn't running as root.</p>
+    <h3>Zello</h3>
+    <p>Service <code>asl-zello-bridge</code>; settings in <code>/etc/systemd/system/asl-zello-bridge.service.d/override.conf</code>
+      as <code>Environment=</code> lines (<code>USRP_BIND</code>, <code>USRP_HOST</code>, <code>USRP_RXPORT</code>, <code>USRP_TXPORT</code>,
+      gains and the Zello keys). Expected ports: RX 34012, TX 32012, node 1918. Live status parses
+      <code>Keyed:</code> and <code>UnKeyed:</code> lines from the journal.</p>
+    <h3>Console</h3>
+    <ul>
+      <li>The on/off switch is the file <code>/etc/sysmon/console.enable</code>. It must be a plain file owned by root and not writable by anyone else, or the console stays off. The page writes who switched it on, from where and when. You can also create or remove it from a shell.</li>
+      <li>Opening gives a one-time ticket, valid 60 seconds and tied to your login. The console then runs in a real terminal over a WebSocket, with its home directory in <code>/var/lib/sysmon/console-home</code>.</li>
+      <li>Refused when the request carries proxy headers (<code>Cf-Connecting-Ip</code>, <code>Cf-Ray</code>, <code>X-Forwarded-For</code> and similar), or comes from an address that isn't loopback, link-local or private.</li>
+      <li>The command buttons run fixed commands from an allow-list (<code>/api/console/run</code>). They don't need the console switched on or open. The node number comes from the list of your local nodes.</li>
+    </ul>
   </div>
 </section>
 
