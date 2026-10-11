@@ -28,12 +28,12 @@
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py</td><td>9.3.71.13-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_9_20261007.py</td><td>6.13.67.9-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">asl_dvs_m17_44helper_v0_0_175_20261008.py</td><td>0.0.175</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_11_20261011.py</td><td>6.13.67.11-pi02w</td></tr>
+      <tr><td>44helper</td><td class="mono">asl_dvs_m17_44helper_v0_0_178_20261011.py</td><td>0.0.178</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_38_3_20261007.py</td><td>2.38.3</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_28_20261007.py</td><td>5.28</td></tr>
       <tr><td>Installer</td><td class="mono">install_asl_dvs_v6_6_20261006.sh</td><td>6.6</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_74_20261007.py</td><td>6.13.74</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_76_20261011.py</td><td>6.13.76</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_73_20261006.py</td><td>9.3.73</td></tr>
     </table>
   </div>
@@ -186,7 +186,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">ASL-DVS SYSMON</span><span class="meta">v6.13.67.9-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">ASL-DVS SYSMON</span><span class="meta">v6.13.67.11-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:rgb(0,255,229)">Overview</span>
         <span class="tab" style="border-color:rgb(0,255,229)">Services</span>
@@ -215,7 +215,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44HELPER</span><span class="meta">v0.0.175</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44HELPER</span><span class="meta">v0.0.178</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -263,8 +263,8 @@ sudo systemctl status sysmon</pre>
         <li>SysMon: all 19 tabs. Chapter 6 covers the five extra ones.</li></ul></div>
   </div>
   <p><b>Which build am I running?</b> Look at the version in the page header. A Pi Zero 2 W build version ends
-    in <code>-pi02w</code>, for example <code>6.13.67.9-pi02w</code>. A full build version doesn't, for example
-    <code>6.13.74</code>.</p>
+    in <code>-pi02w</code>, for example <code>6.13.67.11-pi02w</code>. A full build version doesn't, for example
+    <code>6.13.76</code>.</p>
   <div class="call note"><span class="t">NOTE</span>Apart from SysMon, the builds look and work the same, so this
     manual points out the full build only where it differs.</div>
 
@@ -399,9 +399,9 @@ sudo systemctl restart sysmon asl_dvs_dashboard instmon wifimon 44helper</pre>
       <div class="row"><span class="txt">Pi Zero 2 W build:</span><span class="btn c">Pi02w fork (default)</span><span class="btn">Full build (override)</span></div>
       <table>
         <tr><th>Tool</th><th>Installed</th><th>GitHub</th><th></th></tr>
-        <tr><td>SysMon</td><td class="mono">6.13.67.8-pi02w</td><td class="mono">6.13.67.9-pi02w</td><td class="warn">NEWER</td></tr>
-        <tr><td>44helper</td><td class="mono">0.0.174</td><td class="mono">0.0.175</td><td class="warn">NEWER</td></tr>
-        <tr><td>SysMon</td><td class="mono">—</td><td class="mono">6.13.74</td><td style="color:var(--muted)">other build</td></tr>
+        <tr><td>SysMon</td><td class="mono">6.13.67.10-pi02w</td><td class="mono">6.13.67.11-pi02w</td><td class="warn">NEWER</td></tr>
+        <tr><td>44helper</td><td class="mono">0.0.177</td><td class="mono">0.0.178</td><td class="warn">NEWER</td></tr>
+        <tr><td>SysMon</td><td class="mono">—</td><td class="mono">6.13.76</td><td style="color:var(--muted)">other build</td></tr>
       </table>
       <div class="row" style="padding-top:.5em"><span class="btn c">Quiet System</span><span class="btn">Restore</span></div>
     </div>
@@ -503,7 +503,7 @@ sudo bash uninstall_asl_dvs_all_v1_3.sh</pre>
   <h2><span class="n">3.2</span>The page at a glance</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.9-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.11-pi02w</span></div>
       <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
       <div class="cards">
         <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
@@ -858,8 +858,10 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     connect or disconnect on the Dashboard, which rewrites the whole file. Make lasting M17 changes on the
     Dashboard instead.</div>
   <div class="call note"><span class="t">NOTE</span>If <code>LocalPort</code> under <code>[M17 Network]</code> is
-    missing, the sample fills in <code>32010</code>. That is the port MMDVM_Bridge uses for P25. The recommended
-    value is <code>17010</code> (see the node configuration guide, section 4).</div>
+    missing, the sample fills in <code>17010</code>, the port the Dashboard writes from 9.3.71.11 (see the node
+    configuration guide, section 4). SysMon before 6.13.67.10 filled in <code>32010</code>, which is the port
+    MMDVM_Bridge uses for P25. <span class="badge full">FULL</span> The full build's sample still fills in
+    <code>32010</code>, because the full Dashboard (9.3.73) still writes it.</div>
 
   <h2><span class="n">4.6</span>Phone tab</h2>
   <p>The Phone tab shows what Asterisk is set up to do for <b>autopatch</b> (radio dials out) and <b>reverse
@@ -1083,7 +1085,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Visible Tabs</td><td>Tick the tabs to show. Overview and Edit are always on. A hidden tab stops polling, though an SD card test already running carries on.</td></tr>
     <tr><td>Identity</td><td>Callsign, node and label for SysMon's own use.</td></tr>
     <tr><td>Server</td><td>SysMon's port (9999) and bind address (0.0.0.0, meaning every interface). A change needs a SysMon restart, and a banner says so.</td></tr>
-    <tr><td>Thresholds</td><td><b>NRestart warn</b> (3) and <b>NRestart crit</b> (10) colour the restart badge in the service panel. <b>CPU warn %</b> and <b>RSS warn MiB</b> are stored but not used by this version.</td></tr>
+    <tr><td>Thresholds</td><td><b>NRestart warn</b> (3) and <b>NRestart crit</b> (10) colour the restart badge in the service panel. <b>CPU warn %</b> (50) and <b>RSS warn MiB</b> (200) turn the CPU and memory badges amber, with a ⚠, when a service is at or over them. All four load when the page opens.</td></tr>
     <tr><td>ASL-DVS Config Files</td><td>Folded away. Every Asterisk, DVSwitch and Allmon3 file with <b>Edit</b>, and <b>Hide</b> / <b>Show</b> to keep files you never touch off the ASL-DVS tab.</td></tr>
     <tr><td>Pinned Services</td><td>Folded away. The Overview list as text: <code>unit | description | config_path | port | proto</code>, groups as <code>__GROUP__:Name</code>.</td></tr>
   </table>
@@ -1148,8 +1150,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds five tabs the Pi Zero 2 W build leaves out to
     save memory: Firewall, Reg, Net, Zello and Console. Everything in Chapters 3 to 5 also applies to the full
     build, which has the same tabs.</p>
-  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_74_20261007.py</code>
-    (version <code>6.13.74</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
+  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_76_20261011.py</code>
+    (version <code>6.13.76</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
     (override)</b> choice, but it uses about twice the memory.</div>
 
   <figure>
@@ -1174,12 +1176,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Add Rule</td><td>Port, protocol (tcp, udp, any), action and an optional source address, then <b>+ Add</b>.</td></tr>
     <tr><td>Zone details</td><td>For firewalld: which zone each interface is in. A port only opens if it is allowed in the zone of the interface traffic arrives on.</td></tr>
     <tr><td>Raw firewall output</td><td>The full listing, including rules the table can't show (rich rules), with Copy.</td></tr>
-    <tr><td>Enable / Disable ufw</td><td>Turn the whole ufw firewall on or off. Disable asks first.</td></tr>
+    <tr><td>Enable / Disable ufw</td><td>Turn the whole ufw firewall on or off. Both ask first.</td></tr>
   </table>
-  <div class="call care"><span class="t">CAREFUL</span><b>Enable ufw acts at once, with no confirmation, and adds no
-    rules for you.</b> If there is no rule allowing SSH (22/tcp) and the web pages (8989, 9999, 8990, 8991, 9997)
-    from your network, turning ufw on can lock you out of the Pi. Add those ALLOW rules <i>first</i>, and add
-    IAX2 (4569/udp) so AllStar links keep working.</div>
+  <div class="call care"><span class="t">CAREFUL</span><b>Enable ufw blocks everything that has no allow rule.</b>
+    It asks first, and if ufw has no rule for the SSH port (from <code>sshd_config</code>, usually 22/tcp) it adds
+    one before turning ufw on, so SSH stays open. It adds nothing else. Add ALLOW rules for the web pages (8989,
+    9999, 8990, 8991, 9997) from your network <i>first</i>, and IAX2 (4569/udp) so AllStar links keep working.
+    SysMon before 6.13.75 enabled at once, with no prompt and no SSH rule.</div>
   <p>On firewalld, SysMon adds each rule both live and permanently, so it survives a reload or reboot. 44helper's
     Firewall tab (Chapter 7) has a fuller zone-based editor with built-in guardrails, and works on both builds.</p>
 
@@ -1258,7 +1261,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <ul>
       <li>Backend detection order: ufw, firewalld, then nftables or iptables (raw listing only). ufw rules come from <code>ufw status numbered</code>; each row's number is what <code>ufw delete</code> removes.</li>
       <li>Add runs <code>ufw allow|deny|limit &lt;port&gt;/&lt;proto&gt;</code>, with <code>from &lt;addr&gt;</code> if given. On firewalld, SysMon runs <code>firewall-cmd --add-port</code> both with and without <code>--permanent</code>.</li>
-      <li>Enable runs <code>ufw --force enable</code>; Disable runs <code>ufw disable</code>. Endpoint: <code>POST /api/firewall</code>.</li>
+      <li>Enable reads the SSH port from <code>sshd_config</code> (22 if unset), looks in <code>ufw show added</code> for an allow or limit rule on it, runs <code>ufw allow &lt;port&gt;/tcp</code> if there is none (and stops if that fails), then runs <code>ufw --force enable</code>. Disable runs <code>ufw disable</code>. Endpoint: <code>POST /api/firewall</code>.</li>
     </ul>
     <h3>Reg</h3>
     <p>Live state: <code>asterisk -rx "rpt show registrations"</code>, part of the background poll (every 30 s), with node
@@ -1308,7 +1311,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">ASL-DVS-M17 44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.175 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">ASL-DVS-M17 44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.178 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -2377,8 +2380,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </ul>
 
   <h2><span class="n">14.7</span>wifi_menu.sh</h2>
-  <p>A text menu for when the web page isn't reachable but SSH or a keyboard is:</p>
-<pre>sudo bash wifi_menu.sh</pre>
+  <p>A text menu for when the web page isn't reachable but SSH or a keyboard is. The file is
+    <code>wifi_menu_v3_1_20261011.sh</code> (version 3.1); run it from the folder it is in:</p>
+<pre>sudo bash wifi_menu_v3_1_20261011.sh</pre>
   <table>
     <tr><th>Key</th><th>Does</th></tr>
     <tr><td>1</td><td>Refresh status</td></tr>
