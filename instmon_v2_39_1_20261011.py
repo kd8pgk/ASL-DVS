@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.39.0"
+VERSION ="2.39.1"
 DATE_STR ="2026-10-11"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -1976,11 +1976,12 @@ def _usbimport_mount(name):
         mtype = fstype
     else:
         return None, False, f"Unsupported filesystem '{fstype}'"
+    opts = "ro,nosuid,nodev,noexec" + (",noload" if mtype in ("ext3", "ext4") else "")
     mountpoint = os.path.join(_USBIMPORT_MOUNT_ROOT, name)
     try:
         os.makedirs(mountpoint, exist_ok=True)
         res = subprocess.run(
-            ["mount", "-t", mtype, "-o", "ro,nosuid,nodev,noexec", dev_path, mountpoint],
+            ["mount", "-t", mtype, "-o", opts, dev_path, mountpoint],
             capture_output=True, text=True, timeout=20,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
@@ -5152,6 +5153,8 @@ async function pollDrives() {
     const r = await fetch('/api/diskimg/drives');
     const data = await r.json();
     renderDrives(el, data);
+    usbimpApplyDrives((data.drives || []).filter((d) => !d.is_boot_disk)
+      .map((d) => ({name: d.name, model: d.model, size: d.size})), false);
   } catch (e) { /* server restarting or unreachable, ignore this tick */ }
 }
 
@@ -6631,11 +6634,13 @@ function usbimpClear() {
   _usbimpPath = '';
 }
 async function usbimpLoadDrives(force) {
-  const sel = document.getElementById('usbimp-drive');
-  if (!sel) return;
   let data;
   try { const r = await fetch('/api/usbimport/drives'); data = await r.json(); } catch (e) { return; }
-  const drives = data.drives || [];
+  usbimpApplyDrives(data.drives || [], force);
+}
+function usbimpApplyDrives(drives, force) {
+  const sel = document.getElementById('usbimp-drive');
+  if (!sel) return;
   const sig = JSON.stringify(drives);
   if (!force && sig === _usbimpSig) return;
   _usbimpSig = sig;
@@ -6744,8 +6749,6 @@ function usbimportInit() {
   document.getElementById('usbimp-up').addEventListener('click', () => {
     const parts = _usbimpPath.split('/'); parts.pop(); usbimpBrowse(parts.join('/'));
   });
-  usbimpLoadDrives(true);
-  setInterval(() => { if (!document.hidden) usbimpLoadDrives(false); }, 5000);
 }
 """
 
