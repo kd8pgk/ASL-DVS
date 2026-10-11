@@ -45,7 +45,7 @@ li{margin:.15em 0}
 .part .pn{font-size:9pt;letter-spacing:.35em;color:var(--muted);font-weight:700}
 .part h1{font-size:30pt;color:var(--yel);margin:.15em 0 .3em}
 .part p{font-size:11pt;max-width:5.4in}
-.part ol{font-size:10.5pt}
+.part ol{font-size:10.5pt;padding-left:2.4em}
 .kicker{font-size:7.5pt;letter-spacing:.3em;color:var(--muted);font-weight:700;border-bottom:1px solid var(--line);padding-bottom:.35em;text-transform:uppercase}
 h1.ch{font-size:20pt;color:var(--yel);margin:.35em 0 .25em;text-shadow:0 0 10px rgba(255,208,64,.25)}
 .ch-lede{font-size:10.5pt;color:var(--bright);margin-bottom:1em}
