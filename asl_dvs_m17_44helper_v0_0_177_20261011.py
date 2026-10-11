@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.176"
+APP_VERSION = "0.0.177"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -62,9 +62,6 @@ _DEFAULT_CONFIG: dict[str, dict[str, str]] = {
         "user": "",
         "key_path": "",
         "poll_interval_sec": "60",
-    },
-    "ui": {
-        "enabled_tabs": "overview,router_install,full_tunnel,split_tunnel,nodes,asl3,services,ports,firewall,actions_log",
     },
     "nodes": {
         "iax_conf_path": "/etc/asterisk/iax.conf",

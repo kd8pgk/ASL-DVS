@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_176_20261011.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_177_20261011.py`. Newest entries first.
+
+## 0.0.177 (2026-10-11)
+
+- Removed the built-in `[ui] enabled_tabs` default. Nothing read it, and its list
+  named only 10 of the tabs, so it suggested a way to hide tabs that never
+  worked. Every tab shows, as before. An `enabled_tabs` line already in
+  `/etc/44helper/44helper.conf` is left alone and still ignored.
 
 ## 0.0.176 (2026-10-11)
 
