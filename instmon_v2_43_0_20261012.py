@@ -1681,6 +1681,7 @@ COMPONENTS =[
 
 "install_link":"/usr/local/bin/nodecontrol.py",
 "legacy_links":("/usr/local/bin/asl_dvs_dashboard.py",),
+"unit_paths":{"nodecontrol":("/usr/local/bin/nodecontrol.py","/usr/local/lib/asl_dvs/nodecontrol")},
 "category":"dashboard",
 },
 {
@@ -2877,6 +2878,11 @@ def retire_other_units(comp, script_path):
             subprocess.run(["systemctl", "disable", "--now", n + ".service"],
                            capture_output=True, text=True, timeout=30)
             os.remove(unit)
+            for path in comp.get("unit_paths", {}).get(n, ()):
+                if os.path.islink(path) or os.path.isfile(path):
+                    os.remove(path)
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
             subprocess.run(["systemctl", "daemon-reload"], capture_output=True, text=True, timeout=30)
             log_event(f"Retired {n}.service: {os.path.basename(script_path)} installs {comp['name']} under another name", "info")
         except (OSError, subprocess.TimeoutExpired) as exc:

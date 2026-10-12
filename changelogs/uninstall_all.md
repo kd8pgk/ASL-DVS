@@ -1,6 +1,17 @@
-# Uninstaller (uninstall_asl_dvs_all) changelog
+# Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_asl_dvs_all_v1_4.sh`. Newest entries first.
+Current file: `uninstall_all_v1_5.sh`. Newest entries first.
+
+## 1.5 (2026-10-12)
+
+- Renamed `uninstall_all_v….sh` (was `uninstall_asl_dvs_all_v….sh`); the title
+  line is now `# uninstall_all.sh  v1.5`. instmon 2.43.0 runs it as the
+  uninstaller.
+- The Dashboard is uninstalled as `nodecontrol` from
+  `/usr/local/bin/nodecontrol.py`, or from `/usr/local/bin/asl_dvs_dashboard.py`
+  on a node that hasn't switched.
+- Tested in the same container run as installer 7.1: every tool but instmon
+  removed, `/usr/local/lib/asl_dvs/` gone, configs kept.
 
 ## 1.4 (2026-10-12)
 

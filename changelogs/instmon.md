@@ -29,6 +29,9 @@ this instmon goes on a node first.
   whose name starts with a digit, like `44helper_v….py`, is loaded through
   `importlib`, so its compiled copy in `__pycache__` is used instead of being
   recompiled on every start.
+- Retiring `nodecontrol.service` also removes `/usr/local/bin/nodecontrol.py`
+  and `/usr/local/lib/asl_dvs/nodecontrol/`, so nothing stale is left for the
+  old Dashboard's own uninstall to miss.
 - Tested with mocks: which unit and path are picked on an old node, a renamed
   node and a node with both; when the other unit is retired and when it is
   not; the name aliases and Full Update stems for every renamed file; and

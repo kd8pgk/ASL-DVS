@@ -29,6 +29,9 @@ Current file: `44helper_v0_0_181_20261012.py`. Newest entries first.
   `44helper_v….py`, is loaded through `importlib` so its compiled copy in
   `__pycache__` is used. Launcher 2 ran such a file with `runpy.run_path`, which
   compiles it again on every start.
+- Retiring `nodecontrol.service` also removes `/usr/local/bin/nodecontrol.py`
+  and `/usr/local/lib/asl_dvs/nodecontrol/`, so nothing stale is left for the
+  old Dashboard's own uninstall to miss.
 - Tested: install and uninstall with mocks from a fresh node, an old `/opt` copy
   and the new layout; the reinstall job's unit choice, retire step and stems;
   the launcher running a digit-led file (it runs as `__main__`, gets its

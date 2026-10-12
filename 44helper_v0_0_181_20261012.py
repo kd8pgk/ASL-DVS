@@ -10895,6 +10895,7 @@ TOOLS = [
 ]
 CRITICAL = ("instmon", "dashboard")
 STEM_ALIASES = (("asl_dvs_dashboard", "nodecontrol"), ("asl_dvs_m17_44helper", "44helper"))
+UNIT_PATHS = {"nodecontrol": ("/usr/local/bin/nodecontrol.py", "/usr/local/lib/asl_dvs/nodecontrol")}
 VER_RE = re.compile(r"^\s*(?:APP_VERSION|SCRIPT_VERSION|VERSION)\s*=\s*[\"']([^\"']+)[\"']", re.M)
 STEM_RE = re.compile(r"^(.+?)_v\d")
 
@@ -11011,6 +11012,11 @@ def retire_other(units, path):
         run(["systemctl", "disable", "--now", n + ".service"], 30)
         try:
             os.remove(unit)
+            for p in UNIT_PATHS.get(n, ()):
+                if os.path.islink(p) or os.path.isfile(p):
+                    os.remove(p)
+                elif os.path.isdir(p):
+                    shutil.rmtree(p)
         except OSError as exc:
             log("could not remove %s: %s" % (unit, exc))
         run(["systemctl", "daemon-reload"], 30)

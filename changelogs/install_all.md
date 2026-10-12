@@ -1,6 +1,30 @@
-# Installer (install_asl_dvs) changelog
+# Installer (install_all) changelog
 
-Current file: `install_asl_dvs_v7_0_20261012.sh`. Newest entries first.
+Current file: `install_all_v7_1_20261012.sh`. Newest entries first.
+
+## 7.1 (2026-10-12)
+
+- Renamed `install_all_v….sh` (was `install_asl_dvs_v….sh`); the title line
+  instmon reads is now `# install_all.sh  v7.1`. instmon 2.43.0 runs it as the
+  installer.
+- The Dashboard is now `nodecontrol`: files `nodecontrol[_pi02w]_v….py`, unit
+  `nodecontrol.service`, program `/usr/local/bin/nodecontrol.py`. The installer
+  finds the old `asl_dvs_dashboard[_pi02w]_v….py` files too, and on a node not
+  yet switched it shows and checks `asl_dvs_dashboard`.
+- 44helper is found as `44helper_v….py` as well as `asl_dvs_m17_44helper_v….py`.
+- The file search takes several names per tool (and several to leave out).
+- Installing an old-named Dashboard over `nodecontrol` (for example going back a
+  version) first stops and removes `nodecontrol.service`, its
+  `/usr/local/bin/nodecontrol.py` link and `/usr/local/lib/asl_dvs/nodecontrol/`,
+  so two dashboards never share port 8989 and nothing stale is left.
+- The startup check and the service list at the end name whichever Dashboard
+  unit is installed after the run.
+- Tested in a container with `systemctl` and `ss` stubbed, starting from a node
+  installed from the previous files (`asl_dvs_dashboard.service`, 44helper
+  0.0.180): the update moves the Dashboard to `nodecontrol.service` and renames
+  44helper; a second run finds everything up to date; installing the old
+  Dashboard over it retires `nodecontrol` cleanly and a run after that sees the
+  old Dashboard as installed; `uninstall_all` then removes everything.
 
 ## 7.0 (2026-10-12)
 
