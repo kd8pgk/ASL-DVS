@@ -15,7 +15,6 @@ By KD8PGK, written with Claude (Anthropic).
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals (PDF) to open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
-| Watchdog | `asl_dvs_watchdog_v*.sh` | none | Restarts the Dashboard if it stops answering. See the note under [Installing](#installing). |
 
 Scripts:
 
@@ -98,7 +97,7 @@ sudo python3 <file>.py --uninstall
 **Watchdog note:** the installer (v6.4 and later) no longer installs the
 Watchdog, and it removes an installed copy. The Dashboard's own service
 already restarts it with `Restart=always` and `WatchdogSec=30`. The Watchdog
-script stays in the repo, and instmon can still install it.
+script and its changelog are no longer in the repo.
 
 ## Updating from GitHub (instmon)
 
@@ -233,7 +232,6 @@ per tool and build:
 | [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
-| [`asl_dvs_watchdog.md`](changelogs/asl_dvs_watchdog.md) | `asl_dvs_watchdog_v*.sh` |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
