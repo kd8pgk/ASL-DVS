@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.78"
+VERSION      = "6.13.79"
 BUILD_DATE   = "20261012"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -69,7 +69,7 @@ _DEFAULT_CONFIG = {
             "ssh.service | SSH Access | - | 22 | tcp\n"
             "cockpit.service | ASL3 Cockpit admin UI | - | 9090 | tcp\n"
             "__GROUP__:ASL-DVS\n"
-            "asl_dvs_dashboard.service | ASL+DVSwitch Dashboard | - | 8989 | tcp\n"
+            "nodecontrol.service | ASL+DVSwitch Dashboard | - | 8989 | tcp\n"
             "sysmon.service | Sysmon Monitor | - | 9999 | tcp\n"
             "wifimon.service |  | - | - | -\n"
             "instmon.service |  | - | - | -\n"
@@ -199,6 +199,14 @@ def _atomic_write(path: Path, content: str) -> None:
             log.debug("_atomic_write cleanup: %s", e)
         raise
 
+_DASH_UNITS = ("nodecontrol.service", "asl_dvs_dashboard.service")
+
+def _dash_unit() -> str:
+    for u in _DASH_UNITS:
+        if os.path.exists(os.path.join("/etc/systemd/system", u)):
+            return u
+    return _DASH_UNITS[0]
+
 def parse_pinned_services(raw: str) -> list:
     result = []
     for line in raw.splitlines():
@@ -210,6 +218,8 @@ def parse_pinned_services(raw: str) -> list:
             continue
         parts = [p.strip() for p in line.split("|")]
         if len(parts) >= 5:
+            if parts[0] in _DASH_UNITS:
+                parts[0] = _dash_unit()
             result.append({
                 "unit":   parts[0],
                 "desc":   parts[1],
@@ -448,7 +458,7 @@ _ROOT_EXEMPT_UNITS = {
     "asterisk.service", "fail2ban.service",
     "ssh.service", "sshd.service", "cockpit.service", "cockpit.socket",
     "sysmon.service", "instmon.service", "44helper.service",
-    "asl_dvs_dashboard.service",
+    "nodecontrol.service", "asl_dvs_dashboard.service",
 }
 
 _EXECSTART_PATH_RE = re.compile(r"path=([^\s;}]+)")
@@ -14184,8 +14194,8 @@ def _check_monit_auth() -> dict:
                           allow_host_acls=acls, allow_wide_open=wide,
                           has_allow=bool(allows), port_checked=False)
 
-_SEC_DASH_UNIT       = "asl_dvs_dashboard.service"
 _SEC_DASH_CANDIDATES = [
+    Path("/usr/local/bin/nodecontrol.py"),
     Path("/usr/local/lib/asl_dvs_dashboard/asl_dvs_dashboard.py"),
     Path("/usr/local/bin/asl_dvs_dashboard.py"),
     Path("/opt/asl_dvs_dashboard/asl_dvs_dashboard.py"),
@@ -14194,11 +14204,12 @@ _SEC_DASH_CANDIDATES = [
 _SEC_DASH_AUTH_MARKERS = ("_SESSION_COOKIE_NAME", "_require_auth", "/api/login")
 
 def _check_dashboard_web_auth() -> dict:
-    installed = _sec_unit_installed(_SEC_DASH_UNIT)
+    dash_unit = _dash_unit()
+    installed = _sec_unit_installed(dash_unit)
 
     src_path = ""
     exec_start, ran = _sec_run(
-        ["systemctl", "show", "-p", "ExecStart", "--value", _SEC_DASH_UNIT])
+        ["systemctl", "show", "-p", "ExecStart", "--value", dash_unit])
     if ran and exec_start:
         m = re.search(r"(/\S+\.py)", exec_start)
         if m and Path(m.group(1)).exists():
@@ -14211,7 +14222,7 @@ def _check_dashboard_web_auth() -> dict:
 
     if not src_path:
         if not installed:
-            return _check_result(CHK_PASS, notes=["asl_dvs_dashboard is not "
+            return _check_result(CHK_PASS, notes=["the Dashboard (nodecontrol) is not "
                                                    "installed on this node"],
                                   installed=False)
         return _check_result(CHK_WARN, notes=["dashboard service is installed but "
@@ -14261,7 +14272,7 @@ _SEC_NONROOT_FLOOR_UNITS = [
     "asterisk.service", "fail2ban.service",
     "analog_bridge.service", "mmdvm_bridge.service", "md380-emu.service",
     "stfu.service", "usrp2m17.service", "analog_reflector.service",
-    "asl_dvs_dashboard.service",
+    "nodecontrol.service", "asl_dvs_dashboard.service",
 ]
 
 def _sec_nonroot_target_units() -> list:
@@ -26849,10 +26860,10 @@ def _ts_iax_port() -> int:
         return 4569
 
 def _ts_dash_paths():
-    yield from ("/opt/asl_dvs/asl_dvs_dashboard.py", "/usr/local/bin/asl_dvs_dashboard.py",
-                "/opt/asl_dvs_dashboard/asl_dvs_dashboard.py")
+    yield from ("/usr/local/bin/nodecontrol.py", "/opt/asl_dvs/asl_dvs_dashboard.py",
+                "/usr/local/bin/asl_dvs_dashboard.py", "/opt/asl_dvs_dashboard/asl_dvs_dashboard.py")
     try:
-        out = _run(["systemctl", "show", "-p", "ExecStart", "--value", "asl_dvs_dashboard"], timeout=4)
+        out = _run(["systemctl", "show", "-p", "ExecStart", "--value", _dash_unit()], timeout=4)
     except OSError:
         return
     m = re.search(r"(/\S+\.py)", out or "")
@@ -31123,7 +31134,7 @@ def _ts_dash_file() -> "tuple[str, str]":
                 return f, fh.read()
         except OSError:
             tried.append(f)
-    return "", "asl_dvs_dashboard.py not found (looked in " + ", ".join(tried) + " and systemctl)"
+    return "", "the Dashboard (nodecontrol.py) not found (looked in " + ", ".join(tried) + " and systemctl)"
 
 def _ts_vnum(v: str) -> tuple:
     try:
@@ -31156,7 +31167,7 @@ def _ts_dash_page_check(tree) -> "tuple[list, list, int, int]":
 def _ts_dashfile():
     path, text = _ts_dash_file()
     if not path:
-        return _ts_missing("asl_dvs_dashboard.py", text + ". Normal if the dashboard isn't installed on this Pi.")
+        return _ts_missing("nodecontrol.py", text + ". Normal if the dashboard isn't installed on this Pi.")
     cmd = f"read {path} (no connection to port {DASHBOARD_PORT})"
     ver = _ts_dash_version_of(text[:4000])
     rows, raw = [], [f"file: {path}", f"version: {ver or '?'}"]
