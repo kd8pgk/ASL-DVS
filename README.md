@@ -12,7 +12,7 @@ By KD8PGK, written with Claude (Anthropic).
 |---|---|---|---|
 | Dashboard | `nodecontrol_v*.py` | 8989 | Node control. Connect ASL and EchoLink nodes, tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17, manage favorites, Phone. |
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
-| instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals (PDF) to open or download. |
+| instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals and any other PDF to upload, open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
 
@@ -39,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_79_20261012.py` | `sysmon_pi02w_v6_13_67_13_20261012.py` | `instmon_v2_43_0_20261012.py` |
-| `VERSION` | `6.13.79` | `6.13.67.13-pi02w` | `2.43.0` |
+| File name | `sysmon_v6_13_79_20261012.py` | `sysmon_pi02w_v6_13_67_13_20261012.py` | `instmon_v2_44_0_20261012.py` |
+| `VERSION` | `6.13.79` | `6.13.67.13-pi02w` | `2.44.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -74,7 +74,7 @@ User manual (PDF, 91 pages): every tool, tab and button, with SysMon and 44helpe
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_43_0_20261012.py --install
+   sudo python3 instmon_v2_44_0_20261012.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -196,7 +196,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_71_15_20261012.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_79_20261012.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_13_20261012.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_43_0_20261012.py` | common |
+| `instmon_v2_44_0_20261012.py` | common |
 | `wifimon_v5_30_20261012.py` | common |
 | `44helper_v0_0_181_20261012.py` | common |
 | `install_all_v7_1_20261012.sh` | common |

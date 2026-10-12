@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.43.0"
+VERSION ="2.44.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -3222,7 +3222,7 @@ def _docs_fetch_bg():
                            checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
     log_event("Manuals: " + msg, "warn" if failed else "ok")
 
-def docs_stage(filename, data):
+def docs_stage(filename, data, source="usb"):
     stem = os.path.splitext(filename)[0]
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")[:120] + ".pdf"
     if not _DOCS_NAME_RE.match(name):
@@ -3242,9 +3242,21 @@ def docs_stage(filename, data):
         fh.write(data)
     os.chmod(tmp, 0o644)
     os.replace(tmp, dest)
-    log_event(f"Manuals: imported {shown} from USB ({len(data) // 1024} KB)", "ok")
+    how = "uploaded" if source == "upload" else "imported from USB"
+    log_event(f"Manuals: {how} {shown} ({len(data) // 1024} KB)", "ok")
     return 200, {"ok": True, "name": name, "level": "ok",
-                 "message": f"Imported {shown} into Manuals -- open it from the Manuals card."}
+                 "message": f"{'Uploaded' if source == 'upload' else 'Imported'} {shown} into Manuals -- open it from the Manuals card."}
+
+def docs_delete(name):
+    full = docs_path(name)
+    if full is None:
+        return 404, {"error": "No such manual"}
+    try:
+        os.remove(full)
+    except OSError as exc:
+        return 500, {"error": f"Could not delete {name}: {exc}"}
+    log_event(f"Manuals: deleted {name}", "info")
+    return 200, {"ok": True, "message": f"Deleted {name} from Manuals.", "level": "info"}
 
 def docs_start_fetch():
     with _docs_lock:
@@ -4715,9 +4727,10 @@ button,a.btn{font-family:var(--mono);font-size:.8rem;font-weight:700;letter-spac
   transition:all .14s}
 button:hover,a.btn:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
 a.btn{display:inline-block;text-decoration:none;line-height:normal}
-.doc-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:.3rem .5rem;align-items:center;margin-top:.35rem}
+.doc-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto auto;gap:.3rem .5rem;align-items:center;margin-top:.35rem}
 .doc-row .doc-name{overflow-wrap:anywhere}
 .doc-row .doc-meta{display:block}
+@media (max-width:600px){.doc-row{grid-template-columns:repeat(3,auto);justify-content:start}.doc-row .doc-name{grid-column:1/-1}}
 button:active{transform:scale(.95)}
 button.b-del{color:var(--red);border-color:var(--red-dim)}
 button:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
@@ -6498,9 +6511,10 @@ _JS_ACTIONS = """function wireButtons() {
               return;
             }
           }
-          if (msg) msg.textContent = r.ok ? `Staged: ${data.name}` : (data.error || 'Upload failed');
+          if (msg) msg.textContent = r.ok ? (/\\.pdf$/i.test(data.name || '') ? `Added to Manuals: ${data.name}` : `Staged: ${data.name}`) : (data.error || 'Upload failed');
           showPopup(data.message || data.error || (r.ok ? 'Uploaded.' : 'Upload failed'), data.level || (r.ok ? 'ok' : 'err'));
           if (r.ok) { fileInput.value = ''; _pendingUploadFiles.delete(cat); }
+          if (r.ok && /\\.pdf$/i.test(data.name || '')) docsLoad();
         } else if (action === 'save_alternate') {
           await postAction({action: 'save_alternate'});
         } else if (action === 'comms_restart') {
@@ -7062,8 +7076,11 @@ function docsRender(data) {
     const dl = document.createElement('a');
     dl.className = 'btn'; dl.href = url + '&download=1'; dl.download = d.name;
     dl.textContent = 'Download';
+    const del = document.createElement('button');
+    del.className = 'b-del'; del.textContent = 'Delete';
+    del.addEventListener('click', () => docsDelete(d.name, del));
     cell.appendChild(nm); cell.appendChild(meta);
-    row.appendChild(cell); row.appendChild(open); row.appendChild(dl);
+    row.appendChild(cell); row.appendChild(open); row.appendChild(dl); row.appendChild(del);
     list.appendChild(row);
   });
   if (_docsTimer) { clearTimeout(_docsTimer); _docsTimer = null; }
@@ -7080,6 +7097,21 @@ async function docsFetch() {
     let data = {};
     try { data = await r.json(); } catch (e) {}
     if (!r.ok) showPopup(data.message || data.error || 'Could not start the fetch', data.level || 'err');
+  } catch (e) {}
+  docsLoad();
+}
+async function docsDelete(name, btn) {
+  if (!confirm('Delete ' + name + ' from Manuals?')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/docs/delete', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      body: JSON.stringify({name: name})
+    });
+    let data = {};
+    try { data = await r.json(); } catch (e) {}
+    showPopup(data.message || data.error || (r.ok ? 'Deleted.' : 'Delete failed'), data.level || (r.ok ? 'info' : 'err'));
   } catch (e) {}
   docsLoad();
 }
@@ -7228,10 +7260,15 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <button id="docs-fetch">Get from GitHub</button>
     <span class="small muted" id="docs-msg"></span>
   </div>
+  <div class="row" style="margin-top:.4rem">
+    <input type="file" id="file-docs" data-category="docs" accept=".pdf,application/pdf">
+    <button data-action="upload" data-category="docs">Upload PDF</button>
+    <span id="upmsg-docs" class="small muted"></span>
+  </div>
   <div class="small muted" style="margin-top:.35rem">
-    The install, user and configuration manuals (PDF) from the docs folder on GitHub, or from a USB drive with
-    Import from USB Drive above. Open shows one in a new tab in the browser's own PDF reader; Download saves it.
-    Get from GitHub only fetches files that are new or changed.</div>
+    The install, user and configuration manuals (PDF) from the docs folder on GitHub, and any other PDF you
+    upload here or import from a USB drive. Open shows one in a new tab in the browser's own PDF reader;
+    Download saves it. Get from GitHub only fetches files that are new or changed.</div>
   <div id="docs-list" style="margin-top:.5rem"></div>
 </div>
 
@@ -7526,6 +7563,7 @@ _POST_ROUTES ={
 "/api/upload":lambda self :self .handle_upload (),
 "/api/usbimport/import":lambda self :self .handle_usbimport_import (),
 "/api/docs/fetch":lambda self :self .handle_docs_fetch (),
+"/api/docs/delete":lambda self :self .handle_docs_delete (),
 "/api/action":lambda self :self .handle_action (),
 "/api/file":lambda self :self .handle_file_write (),
 "/api/diskimg/preview":lambda self :self .handle_diskimg_preview (),
@@ -8509,6 +8547,16 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         category =fields .get ("category",(None ,b""))[1 ].decode (errors ="replace")
         filename ,filedata =fields .get ("file",(None ,None ))
         force =fields .get ("force",(None ,b""))[1 ].decode (errors ="replace")=="1"
+        if filename and filedata is not None and os .path .splitext (filename )[1 ].lower ()==".pdf":
+            status ,payload =docs_stage (os .path .basename (filename ),filedata ,"upload")
+            if status !=200 :
+                self ._error_json (status ,payload ["error"])
+                return 
+            self ._send_json (status ,payload )
+            return 
+        if category =="docs":
+            self ._error_json (400 ,"Only PDF files go in Manuals.")
+            return 
         status ,payload =_stage_library_file (category ,filename ,filedata ,force ,"upload")
         if status !=200 and not payload .get ("mismatch"):
             self ._error_json (status ,payload ["error"])
@@ -8544,6 +8592,23 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 shutil.copyfileobj(fh, self.wfile, 65536)
             except (BrokenPipeError, ConnectionResetError):
                 pass
+
+    def handle_docs_delete(self):
+        length = int(self.headers.get("Content-Length", 0))
+        if length <= 0 or length > 4096:
+            self._error_json(400, "Missing or oversized request body")
+            return
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._error_json(400, "Malformed JSON body")
+            return
+        name = body.get("name") if isinstance(body, dict) else None
+        status, payload = docs_delete(name)
+        if status != 200:
+            self._error_json(status, payload["error"])
+            return
+        self._send_json(200, payload)
 
     def handle_docs_fetch(self):
         ok, message = docs_start_fetch()
