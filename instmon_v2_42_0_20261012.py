@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.41.0"
+VERSION ="2.42.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -1932,7 +1932,7 @@ def _stage_library_file(category, filename, filedata, force=False, source="uploa
 
 _USBIMPORT_MOUNT_ROOT = "/mnt/instmon-usbimport"
 _USBIMPORT_MAX_ENTRIES = 500
-_USBIMPORT_EXTS = tuple(sorted({e for _exts in ALLOWED_EXT.values() for e in _exts}))
+_USBIMPORT_EXTS = tuple(sorted({e for _exts in ALLOWED_EXT.values() for e in _exts} | {".pdf"}))
 _USBIMPORT_SKIP_NAMES = ("system volume information", "lost+found", "$recycle.bin")
 _USBIMPORT_PLAIN_FS = ("vfat", "exfat", "ext2", "ext3", "ext4")
 _usbimport_lock = threading.Lock()
@@ -2075,25 +2075,32 @@ def _usbimport_import(mountpoint, rel, category, force):
     full = _usbimport_resolve(mountpoint, rel)
     if full is None:
         return 400, {"error": "Invalid path"}
+    is_pdf = os.path.splitext(full)[1].lower() == ".pdf"
+    max_bytes = DOCS_MAX_BYTES if is_pdf else MAX_UPLOAD_BYTES
     fd = None
     try:
         fd = os.open(full, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
             return 400, {"error": "Not a regular file"}
-        limit_msg = f"File too large (limit {MAX_UPLOAD_BYTES // (1024 * 1024)}MB -- set INSTMON_MAX_UPLOAD_MB to change)"
-        if st.st_size > MAX_UPLOAD_BYTES:
+        if is_pdf:
+            limit_msg = f"File too large (limit {DOCS_MAX_BYTES // (1024 * 1024)}MB for a manual)"
+        else:
+            limit_msg = f"File too large (limit {MAX_UPLOAD_BYTES // (1024 * 1024)}MB -- set INSTMON_MAX_UPLOAD_MB to change)"
+        if st.st_size > max_bytes:
             return 400, {"error": limit_msg}
         with os.fdopen(fd, "rb") as f:
             fd = None
-            data = f.read(MAX_UPLOAD_BYTES + 1)
-        if len(data) > MAX_UPLOAD_BYTES:
+            data = f.read(max_bytes + 1)
+        if len(data) > max_bytes:
             return 400, {"error": limit_msg}
     except OSError as exc:
         return 404, {"error": f"Could not read file: {exc.strerror or exc}"}
     finally:
         if fd is not None:
             os.close(fd)
+    if is_pdf:
+        return docs_stage(os.path.basename(full), data)
     return _stage_library_file(category, os.path.basename(full), data, force, "usb")
 
 def systemctl_is_active (service ):
@@ -3159,6 +3166,30 @@ def _docs_fetch_bg():
         _docs_state.update(phase="done", error=None, msg=msg,
                            checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
     log_event("Manuals: " + msg, "warn" if failed else "ok")
+
+def docs_stage(filename, data):
+    stem = os.path.splitext(filename)[0]
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-")[:120] + ".pdf"
+    if not _DOCS_NAME_RE.match(name):
+        return 400, {"error": f"'{filename}' can't be used as a manual's name"}
+    if not data.startswith(b"%PDF-"):
+        return 400, {"error": f"'{filename}' is not a PDF file"}
+    os.makedirs(DOCS_DIR, exist_ok=True)
+    dest = safe_join(DOCS_DIR, name)
+    if dest is None:
+        return 400, {"error": "invalid file name"}
+    shown = name if name == filename else f"{filename} (saved as {name})"
+    if os.path.isfile(dest) and not os.path.islink(dest) and _gh_local_blob_id(dest) == _git_blob_id(data):
+        return 200, {"ok": True, "name": name, "level": "info",
+                     "message": f"{shown} is already in Manuals -- nothing to do."}
+    tmp = dest + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, dest)
+    log_event(f"Manuals: imported {shown} from USB ({len(data) // 1024} KB)", "ok")
+    return 200, {"ok": True, "name": name, "level": "ok",
+                 "message": f"Imported {shown} into Manuals -- open it from the Manuals card."}
 
 def docs_start_fetch():
     with _docs_lock:
@@ -6880,7 +6911,7 @@ async function usbimpBrowse(path) {
   if (!(data.dirs || []).length && !(data.files || []).length) {
     const e = document.createElement('div');
     e.className = 'small muted';
-    e.textContent = 'No importable files (.py, .sh, .conf) here.';
+    e.textContent = 'No importable files (.py, .sh, .conf, .pdf) here.';
     list.appendChild(e);
   }
   usbimpMsg(data.truncated ? 'Listing truncated -- too many entries in this folder.' : '');
@@ -6910,7 +6941,7 @@ async function usbimpImport(name, btn) {
     }
     usbimpMsg(r.ok ? 'Staged: ' + data.name : (data.error || 'Import failed'));
     showPopup(data.message || data.error || (r.ok ? 'Imported.' : 'Import failed'), data.level || (r.ok ? 'ok' : 'err'));
-    if (r.ok) refreshStatus();
+    if (r.ok) { refreshStatus(); if (/\\.pdf$/i.test(name)) docsLoad(); }
   } catch (e) {
     usbimpMsg('Import failed');
   } finally {
@@ -7097,7 +7128,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div style="font-weight:700;color:var(--text-bright);margin-bottom:.3rem">Import from USB Drive</div>
   <div class="small muted" style="margin-bottom:.4rem">
     Copies .py / .sh / .conf files from an attached USB drive into the library below. Same extension,
-    name-match and size rules as a browser upload. The drive is read-only; files on it are never changed or removed.</div>
+    name-match and size rules as a browser upload. A .pdf goes to Manuals, whatever group is picked.
+    The drive is read-only; files on it are never changed or removed.</div>
   <div class="row">
     <select id="usbimp-drive" title="Attached USB drives"><option value="">Loading drives&hellip;</option></select>
     <select id="usbimp-cat" title="Library category to import into">
@@ -7132,8 +7164,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <span class="small muted" id="docs-msg"></span>
   </div>
   <div class="small muted" style="margin-top:.35rem">
-    The install, user and configuration manuals (PDF) from the docs folder on GitHub. Open shows one in a new
-    tab in the browser's own PDF reader; Download saves it. Get from GitHub only fetches files that are new or changed.</div>
+    The install, user and configuration manuals (PDF) from the docs folder on GitHub, or from a USB drive with
+    Import from USB Drive above. Open shows one in a new tab in the browser's own PDF reader; Download saves it.
+    Get from GitHub only fetches files that are new or changed.</div>
   <div id="docs-list" style="margin-top:.5rem"></div>
 </div>
 

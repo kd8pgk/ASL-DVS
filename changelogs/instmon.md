@@ -1,6 +1,21 @@
 # instmon changelog
 
-Current file: `instmon_v2_41_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_42_0_20261012.py`. Newest entries first.
+
+## 2.42.0 (2026-10-12)
+
+- Import from USB Drive takes manuals too, for a node with no internet. `.pdf`
+  files are listed with the others, and importing one puts it in Manuals
+  (`/etc/asl_dvs/instmon_library/docs/`) whatever library group is picked. The
+  name keeps letters, digits, `.`, `_` and `-`; anything else becomes `_`
+  (`ASL-DVS User Manual (copy).pdf` is saved as `ASL-DVS_User_Manual_copy.pdf`).
+  The file must start with `%PDF-`, and the limit is 64 MB, the same as Get from
+  GitHub. Importing the same file again does nothing. The Manuals card updates at
+  once.
+- Tested in headless Chromium with a folder standing in for the stick: the PDF
+  is listed (a `.txt` is not), imports with the Scripts group selected, shows in
+  Manuals and opens as `application/pdf`; an HTML file named `.pdf` is refused;
+  a second import says it is already there; no page errors.
 
 ## 2.41.0 (2026-10-12)
 
