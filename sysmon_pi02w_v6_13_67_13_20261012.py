@@ -22782,11 +22782,15 @@ if not os.path.exists(_OFF + "trim"):
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
 sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
 if name.isidentifier():
-    sys.path.insert(0, os.path.dirname(target))
     runpy.run_module(name, run_name="__main__", alter_sys=True)
 else:
-    runpy.run_path(target, run_name="__main__")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
 '''
 _SERVICE_CONTENT = f"""[Unit]
 Description=ASL-DVS SYSMON

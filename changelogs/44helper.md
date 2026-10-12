@@ -1,6 +1,38 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_180_20261012.py`. Newest entries first.
+Current file: `44helper_v0_0_181_20261012.py`. Newest entries first.
+
+## 0.0.181 (2026-10-12)
+
+- File renamed `44helper_v….py` (was `asl_dvs_m17_44helper_v….py`); this log is
+  now `44helper.md`. The program path, `/usr/local/bin/44helper.py`, and the
+  `/opt` compatibility link are unchanged. Needs instmon 2.43.0 to be offered
+  as the next 44helper by Check GitHub and Full Update.
+- Knows the Dashboard as `nodecontrol`:
+  - Services tab: a `nodecontrol.service` row, plus the old
+    `asl_dvs_dashboard.service` row for a node that hasn't switched.
+  - Labels on the Ports tab, the Port check and the 44Net firewall service
+    read "Dashboard (nodecontrol)". The firewall service keeps its id
+    `asl_dvs_dashboard`, so existing firewall rules still match.
+  - Quiet System pauses `nodecontrol.service` with the other web tools.
+  - The manager.conf restore hint says `systemctl restart nodecontrol`.
+- Config-restore reinstall job:
+  - finds the Dashboard under whichever unit and path are installed, and checks
+    its health under the unit installed after the reinstall (it changes name
+    when an old Dashboard is replaced);
+  - treats `asl_dvs_dashboard` / `nodecontrol` and `asl_dvs_m17_44helper` /
+    `44helper` files as the same tool when picking the newest copy;
+  - before an older Dashboard is put back over `nodecontrol`, retires
+    `nodecontrol.service`, so two dashboards never share port 8989.
+- Launcher version 3 (`/usr/local/bin/asl_dvs_launch.py`, the same text in every
+  tool that writes it): a file whose name starts with a digit, like
+  `44helper_v….py`, is loaded through `importlib` so its compiled copy in
+  `__pycache__` is used. Launcher 2 ran such a file with `runpy.run_path`, which
+  compiles it again on every start.
+- Tested: install and uninstall with mocks from a fresh node, an old `/opt` copy
+  and the new layout; the reinstall job's unit choice, retire step and stems;
+  the launcher running a digit-led file (it runs as `__main__`, gets its
+  arguments, and writes `__pycache__/….opt-2.pyc`; launcher 2 wrote none).
 
 ## 0.0.180 (2026-10-12)
 

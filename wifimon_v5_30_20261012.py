@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.29"
+APP_VERSION = "5.30"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -234,11 +234,15 @@ if not os.path.exists(_OFF + "trim"):
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
 sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
 if name.isidentifier():
-    sys.path.insert(0, os.path.dirname(target))
     runpy.run_module(name, run_name="__main__", alter_sys=True)
 else:
-    runpy.run_path(target, run_name="__main__")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
 '''
 
 SYSTEMD_SERVICE_CONTENT = f"""[Unit]

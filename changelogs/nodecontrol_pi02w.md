@@ -21,6 +21,10 @@ Needs instmon 2.43.0 or later to show it under the new name.
 - Unchanged: `/etc/asl_dvs/asl_dvs.conf`, `phone.json`, the login, port 8989, and
   the `asl_dvs_dashboard` markers on the Phone tab's Asterisk files (existing
   nodes' dialplans carry them, and the Dashboard finds its own blocks by them).
+- Launcher version 3 (the same text in every tool that writes it): a tool file
+  whose name starts with a digit, like `44helper_v….py`, is loaded through
+  `importlib`, so its compiled copy in `__pycache__` is used instead of being
+  recompiled on every start.
 - Tested with mocks against a temporary root: a fresh node, a node on the old
   service with the file in the old flat folder or in `dashboard/`, the new
   layout, installing through either link, and uninstall with a stray old unit;

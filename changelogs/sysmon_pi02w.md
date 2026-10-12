@@ -15,6 +15,10 @@ Knows the Dashboard by its new name, `nodecontrol`, as well as the old
 - Security tab: the Dashboard login check finds the Dashboard through
   `nodecontrol.service` or `/usr/local/bin/nodecontrol.py` first, and the
   root/non-root unit lists include both names.
+- Launcher version 3 (the same text in every tool that writes it): a tool file
+  whose name starts with a digit, like `44helper_v….py`, is loaded through
+  `importlib`, so its compiled copy in `__pycache__` is used instead of being
+  recompiled on every start.
 - Tested with mocks: the pinned row with neither unit, the old one, the new
   one and both; the default list.
 

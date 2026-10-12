@@ -25,6 +25,10 @@ this instmon goes on a node first.
   Full Update rollback): `nodecontrol.service` is disabled and removed first,
   so two dashboards never fight over port 8989. A file that names both units
   (a renamed Dashboard, which moves itself) is left to do it.
+- Launcher version 3 (the same text in every tool that writes it): a tool file
+  whose name starts with a digit, like `44helper_v….py`, is loaded through
+  `importlib`, so its compiled copy in `__pycache__` is used instead of being
+  recompiled on every start.
 - Tested with mocks: which unit and path are picked on an old node, a renamed
   node and a node with both; when the other unit is retired and when it is
   not; the name aliases and Full Update stems for every renamed file; and

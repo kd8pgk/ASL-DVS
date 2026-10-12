@@ -14,7 +14,7 @@ By KD8PGK, written with Claude (Anthropic).
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals (PDF) to open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
-| 44helper | `asl_dvs_m17_44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
+| 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
 | Watchdog | `asl_dvs_watchdog_v*.sh` | none | Restarts the Dashboard if it stops answering. See the note under [Installing](#installing). |
 
 Scripts:
@@ -134,7 +134,10 @@ ExecStart=/usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/instm
 
 The launcher loads the tool as a module instead of running the file directly.
 That way Python keeps the compiled copy in `__pycache__` and reuses it on each
-start. Python recompiles by itself after an update.
+start. Python recompiles by itself after an update. Launcher version 3
+(instmon 2.43.0, wifimon 5.30, 44helper 0.0.181, SysMon Pi02w 6.13.67.13 and
+Dashboard Pi02w 9.3.71.15) does this for a file whose name starts with a digit
+too, such as `44helper_v….py`; version 2 recompiled those on every start.
 
 The result is about half the memory and a faster start:
 
@@ -197,8 +200,8 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_pi02w_v6_13_67_13_20261012.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
 | `instmon_v2_43_0_20261012.py` | common |
-| `wifimon_v5_29_20261012.py` | common |
-| `asl_dvs_m17_44helper_v0_0_180_20261012.py` | common |
+| `wifimon_v5_30_20261012.py` | common |
+| `44helper_v0_0_181_20261012.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_asl_dvs_v7_0_20261012.sh` | common |
 | `uninstall_asl_dvs_all_v1_4.sh` | common |
@@ -232,7 +235,7 @@ per tool and build:
 | [`nodecontrol_pi02w.md`](changelogs/nodecontrol_pi02w.md) | `nodecontrol_pi02w_v*.py` |
 | [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
-| [`asl_dvs_m17_44helper.md`](changelogs/asl_dvs_m17_44helper.md) | `asl_dvs_m17_44helper_v*.py` |
+| [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
 | [`asl_dvs_watchdog.md`](changelogs/asl_dvs_watchdog.md) | `asl_dvs_watchdog_v*.sh` |
 | [`install_asl_dvs.md`](changelogs/install_asl_dvs.md) | `install_asl_dvs_v*.sh` |
 | [`uninstall_asl_dvs_all.md`](changelogs/uninstall_asl_dvs_all.md) | `uninstall_asl_dvs_all_v*.sh` |
