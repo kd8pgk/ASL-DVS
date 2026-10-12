@@ -1,6 +1,31 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_71_15_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_71_16_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.71.16-pi02w (2026-10-12)
+
+D-STAR: linking to a gateway callsign (a repeater such as K8WGR, not a REF/XRF/DCS
+reflector).
+
+- A gateway link goes only through ircDDBGateway remote control, with the target in
+  the 8-character identifier form (`K8WGR  B`: module in position 8). If remote
+  control isn't set up (`remoteEnabled=1`, `remotePassword`, `remotePort` in
+  `/etc/ircddbgateway`) or the link is refused, the Dashboard now says so and stops.
+  Before, it fell back to `dvswitch.sh tune "K8WGR BL"`, which links `K8WGR   ` with
+  no module: the link comes up and carries no audio, and the Dashboard reported
+  success.
+- The `tune CQCQCQ` that followed the remote-control link is now sent before it, so
+  nothing the tune does can change the link afterwards.
+- Disconnect (D-STAR and XLX), `*88` on the D-STAR tab, and moving between the D-STAR
+  and XLX tabs now send the remote-control unlink after the old `       U` tune
+  instead of before it. ircDDBGateway ends unlinked with its reconnect timer stopped,
+  rather than trying to link `       U` every 15 minutes. Nothing is sent when
+  `ircddbgatewayd` isn't running. Leaving for any other tab is unchanged (the
+  gateway is restarted, which drops the link).
+- Reflector links (REF, XRF, DCS, XLX) are unchanged.
+- Tested with mocks (the order of tunes and remote-control calls for each path) and
+  with a fake remote-control server that checks the login hash and the `LNK` packet
+  as ircDDBGateway reads them.
 
 ## 9.3.71.15-pi02w (2026-10-12)
 

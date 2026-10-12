@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_15_20261012.py</td><td>9.3.71.15-pi02w</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_16_20261012.py</td><td>9.3.71.16-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_13_20261012.py</td><td>6.13.67.13-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_44_0_20261012.py</td><td>2.44.0</td></tr>
@@ -173,7 +173,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.15-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.16-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span>
         <span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span>
@@ -808,7 +808,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li>the <code>ircddbgatewayd</code> service is running;</li>
     <li><code>gatewayCallsign</code> is set, and <code>repeaterBand1</code> is a module letter. The card shows the 8-character name the Dashboard uses for the node, such as <code>N0CALL&nbsp;B</code>;</li>
     <li><code>ircddbEnabled=1</code> (FAIL without it) and <code>dextraEnabled=1</code> (WARN);</li>
-    <li>remote control (optional): when <code>remoteEnabled=1</code>, a password is set, the port is valid and something is listening on it;</li>
+    <li>remote control: when <code>remoteEnabled=1</code>, a password is set, the port is valid and something is listening on it. The Dashboard needs it to link to a gateway callsign (Pi02w from 9.3.71.16); reflectors link without it;</li>
     <li><code>gatewayAddress</code> is blank or one of this Pi's own addresses, never <code>127.x</code> and never the router's address.</li>
   </ul>
   <p>Buttons: <b>Edit /etc/ircddbgateway</b>, <b>Restart ircddbgatewayd</b> (asks first; any D-STAR link drops), <b>Refresh</b> and <b>Copy</b>.</p>
@@ -2135,7 +2135,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>YSF</td><td>System Fusion reflectors</td><td>Filter by country and name, or type <code>IP:port</code>.</td></tr>
     <tr><td>FCS</td><td>FCS rooms</td><td>Pick a server, then a room, or type <code>FCS00335</code> or just <code>335</code>.</td></tr>
     <tr><td>P-25 / NXDN</td><td>Talkgroups</td><td>Search by number or address.</td></tr>
-    <tr><td>D-STAR</td><td>REF, XRF and DCS reflectors, or a gateway callsign</td><td>Pick the module letter beside the reflector.</td></tr>
+    <tr><td>D-STAR</td><td>REF, XRF and DCS reflectors, or a gateway callsign</td><td>Pick the module letter beside the reflector. A gateway callsign links through ircDDBGateway remote control (SysMon&rsquo;s D-Star card checks it); without it the Pi02w build refuses the link.</td></tr>
     <tr><td>XLX</td><td>XLX reflectors</td><td>Reflector plus module.</td></tr>
     <tr><td>M17</td><td>M17 reflectors</td><td>Reflector plus module (or All Modules), or type the reflector IP.</td></tr>
     <tr><td>Phone</td><td>Telephone calls</td><td>Below.</td></tr>

@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.15-pi02w"
+VERSION      = "9.3.71.16-pi02w"
 BUILD_DATE   = "2026-10-12"
 
 ASL_NODE        = "652702"
@@ -5297,6 +5297,16 @@ def _ircddb_rc_link(target: str) -> Tuple[bool, str]:
             pass
         sock.close()
 
+def _dstar_rc_unlink() -> None:
+    if _ircddb_rc_settings() is None or not _svc_is_active(_GATEWAY_SERVICE_MAP["DSTAR"]):
+        return
+    remaining = _dvs_settle_until - time.monotonic()
+    if remaining > 0:
+        time.sleep(remaining)
+    ok, why = _ircddb_rc_link("")
+    if not ok:
+        log.warning("D-STAR: remote-control unlink failed (%s)", why)
+
 _FAV_SLOTS = 10
 
 def _tg_blank_row(r) -> bool:
@@ -6484,6 +6494,9 @@ def _leave_page(prev_page: str, next_page: str, force: bool = False) -> None:
     try:
         if prev_page in ("DSTAR", "XLX"):
             _dvs("tune", DSTAR_UNLINK)
+            if next_page in ("DSTAR", "XLX"):
+                _dvs_settle()
+                _dstar_rc_unlink()
         elif prev_page == "PHONE" and prev_page != next_page:
             _phone_hangup_all()
         elif prev_page == "M17" and prev_page != next_page:
@@ -6660,6 +6673,8 @@ def action_tune(mode: str, tg: str, name: str) -> Tuple[bool, str]:
             _dvs("tune", DSTAR_UNLINK)
         _dvs("tune", TG_DISCONNECT)
         _dvs_settle()
+        if mode == "DSTAR":
+            _dstar_rc_unlink()
         if st.page != mode:
             return True, f"{mode} | Disconnected"
         if st.has_asl:
@@ -6749,7 +6764,11 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
         return False, (f"'{base}' is not a D-STAR reflector (REF, XRF or DCS plus 3 "
                        f"digits) or a gateway callsign (3-6 letters/digits)")
     tune_str = _dstar_link_str(base, module)
-    use_rc   = kind == "gateway" and _ircddb_rc_settings() is not None
+    if kind == "gateway" and _ircddb_rc_settings() is None:
+        return False, ("Linking to a D-STAR gateway needs ircDDBGateway remote control "
+                       "(remoteEnabled=1, remotePassword and remotePort in "
+                       "/etc/ircddbgateway). dvswitch.sh tune drops the module "
+                       "letter for a gateway callsign, so the link would carry no audio.")
     _ensure_page(page)
     st = get_state()
     _clear_foreign_link()
@@ -6763,14 +6782,17 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
     remaining = _dvs_settle_until - time.monotonic()
     if remaining > 0:
         time.sleep(remaining)
-    if use_rc:
-        ok, out = _ircddb_rc_link(_dstar_link_target(base, module))
-        if ok:
-            _dvs("tune", "CQCQCQ")
-        else:
-            log.warning("D-STAR: remote-control link to %s failed (%s) — "
-                        "falling back to dvswitch.sh tune", base, out)
-    if not use_rc or not ok:
+    if kind == "gateway":
+        target = _dstar_link_target(base, module)
+        _dvs("tune", "CQCQCQ")
+        _dvs_settle()
+        remaining = _dvs_settle_until - time.monotonic()
+        if remaining > 0:
+            time.sleep(remaining)
+        ok, out = _ircddb_rc_link(target)
+        if not ok:
+            return False, f"D-STAR link to gateway {target.replace(' ', '_')} failed: {out}"
+    else:
         ok, out = _dvs("tune", tune_str)
     if not ok:
         fail_label = "XLX" if is_xlx else "D-STAR"
@@ -6798,13 +6820,10 @@ def action_xlx_connect(name: str, base: str, module: str) -> Tuple[bool, str]:
 
 @_link_locked
 def action_dstar_disconnect() -> Tuple[bool, str]:
-    if _ircddb_rc_settings() is not None:
-        ok, why = _ircddb_rc_link("")
-        if not ok:
-            log.warning("D-STAR: remote-control unlink failed (%s)", why)
     _dvs("tune", DSTAR_UNLINK)
     _dvs("tune", TG_DISCONNECT)
     _dvs_settle()
+    _dstar_rc_unlink()
     set_state(current_fav=None, current_fav_node=None, status="DSTAR | Ready")
     return True, "D-STAR disconnected"
 
@@ -6813,6 +6832,7 @@ def action_xlx_disconnect() -> Tuple[bool, str]:
     _dvs("tune", DSTAR_UNLINK)
     _dvs("tune", TG_DISCONNECT)
     _dvs_settle()
+    _dstar_rc_unlink()
     set_state(current_fav=None, current_fav_node=None, status="XLX | Ready")
     return True, "XLX disconnected"
 
