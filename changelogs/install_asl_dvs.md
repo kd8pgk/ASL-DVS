@@ -1,6 +1,34 @@
 # Installer (install_asl_dvs) changelog
 
-Current file: `install_asl_dvs_v6_6_20261006.sh`. Newest entries first.
+Current file: `install_asl_dvs_v7_0_20261012.sh`. Newest entries first.
+
+## 7.0 (2026-10-12)
+
+Every tool now installs itself the same way, so the installer only finds the
+files and hands each one to its own `--install`.
+
+- The Dashboard and SysMon are installed with `python3 <file> --install`, the
+  same as wifimon and 44helper already were. Each tool puts its file in
+  `/usr/local/lib/asl_dvs/<tool>/`, links `/usr/local/bin/<tool>.py` to it, and
+  writes, enables and restarts its own unit. Before, the installer copied these
+  two over the `/usr/local/bin` path itself and wrote its own unit
+  (`Restart=on-failure`, no systemd watchdog), which differed from the tools'
+  own.
+- Callsign and node setup on a new node, and moving an old
+  `/etc/dvswitch/dvswitch.conf`, still happen here, before the tool installs.
+- The installer no longer writes `/usr/local/bin/asl_dvs_launch.py`; the tools
+  that use it write it. Its copy of the launcher text is gone.
+- 44helper is found at `/usr/local/bin/44helper.py` (44helper 0.0.180 and
+  later), or at `/opt/44helper/asl_dvs_m17_44helper.py` on an older install.
+- wifimon's page (port 8991) is listed with the other URLs at the end, and its
+  start is checked on that port.
+- Removed: the M17/Zello dashboard and SVX Dashboard steps (no longer in the
+  repo). Removing an old Watchdog stays.
+- Tested in a container with `systemctl` and `ss` stubbed: an update over an
+  old layout (Pi Zero 2 W Dashboard in the old flat folder, plain SysMon and
+  wifimon in `/usr/local/bin`, 44helper in `/opt`), a second run that finds
+  everything up to date, and a fresh full-build install that writes both seed
+  configs.
 
 ## 6.6 (2026-10-06)
 

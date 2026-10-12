@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)
+# install_asl_dvs_dashboard.sh  v7.0  (2026-10-12)
 
 set -euo pipefail
 
@@ -29,7 +29,6 @@ fi
 
 DASH_BIN="/usr/local/bin/asl_dvs_dashboard.py"
 DASH_SERVICE="asl_dvs_dashboard"
-DASH_SERVICE_FILE="/etc/systemd/system/${DASH_SERVICE}.service"
 DASH_PORT=8989
 DASH_CONF_DIR="/etc/asl_dvs"
 DASH_CONF="${DASH_CONF_DIR}/asl_dvs.conf"
@@ -37,32 +36,26 @@ LEGACY_CONF="/etc/dvswitch/dvswitch.conf"
 
 SYSMON_BIN="/usr/local/bin/sysmon.py"
 SYSMON_SERVICE="sysmon"
-SYSMON_SERVICE_FILE="/etc/systemd/system/${SYSMON_SERVICE}.service"
 SYSMON_PORT=9999
 SYSMON_CONF_DIR="/etc/sysmon"
 
-M17DASH_BIN="/usr/local/bin/asl_dvs_m17_dashboard.py"
-M17DASH_SERVICE="asl_dvs_m17_dashboard"
-M17DASH_PORT=8989
-
 WIFIMON_BIN="/usr/local/bin/wifimon.py"
 WIFIMON_SERVICE="wifimon"
+WIFIMON_PORT=8991
 
-HELPER_BIN="/opt/44helper/asl_dvs_m17_44helper.py"
+HELPER_BIN="/usr/local/bin/44helper.py"
+HELPER_LEGACY_BIN="/opt/44helper/asl_dvs_m17_44helper.py"
 HELPER_SERVICE="44helper"
 HELPER_PORT=9997
-
-SVX_BIN="/usr/local/bin/svx_dashboard.py"
-SVX_SERVICE="svx_dashboard"
-SVX_PORT=8991
+if [[ ! -e "${HELPER_BIN}" && -e "${HELPER_LEGACY_BIN}" ]]; then
+    HELPER_BIN="${HELPER_LEGACY_BIN}"
+fi
 
 INSTMON_LIBRARY_DIR="${INSTMON_LIBRARY_DIR:-/etc/asl_dvs/instmon_library}"
 DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/dashboard"
-M17DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/m17_dashboard"
 SYSMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/sysmon"
 WIFIMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/wifimon"
 HELPER_LIB_DIR="${INSTMON_LIBRARY_DIR}/44helper"
-SVX_LIB_DIR="${INSTMON_LIBRARY_DIR}/svx"
 
 LABELS=(a b c d e f g h i j)
 
@@ -240,90 +233,6 @@ check_port() {
     fi
 }
 
-LAUNCHER_PATH="/usr/local/bin/asl_dvs_launch.py"
-write_launcher() {
-    cat > "${LAUNCHER_PATH}.tmp" <<'LAUNCHER_EOF'
-#!/usr/bin/env python3
-import os
-import runpy
-import sys
-
-_OFF = "/etc/asl_dvs/launch_no_"
-_AGAIN = "ASL_DVS_LAUNCH"
-
-if _AGAIN in os.environ:
-    if os.environ.pop(_AGAIN) == "arena":
-        os.environ.pop("MALLOC_ARENA_MAX", None)
-else:
-    flags = []
-    env = dict(os.environ)
-    env[_AGAIN] = ""
-    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
-        flags.append("-OO")
-    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
-        env["MALLOC_ARENA_MAX"] = "2"
-        env[_AGAIN] = "arena"
-    if (flags or env[_AGAIN]) and sys.executable:
-        try:
-            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
-        except OSError:
-            pass
-
-def _trim_loop():
-    import time
-    time.sleep(60)
-    try:
-        import ctypes
-        trim = ctypes.CDLL("libc.so.6").malloc_trim
-    except (ImportError, OSError, AttributeError):
-        return
-    trim.argtypes = [ctypes.c_size_t]
-    while True:
-        trim(0)
-        time.sleep(300)
-
-if not os.path.exists(_OFF + "trim"):
-    import threading
-    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
-
-target = os.path.realpath(sys.argv[1])
-name = os.path.splitext(os.path.basename(target))[0]
-sys.argv = [target] + sys.argv[2:]
-if name.isidentifier():
-    sys.path.insert(0, os.path.dirname(target))
-    runpy.run_module(name, run_name="__main__", alter_sys=True)
-else:
-    runpy.run_path(target, run_name="__main__")
-LAUNCHER_EOF
-    chmod 0755 "${LAUNCHER_PATH}.tmp"
-    mv -f "${LAUNCHER_PATH}.tmp" "${LAUNCHER_PATH}"
-    ok "Launcher: ${LAUNCHER_PATH}"
-}
-
-write_service() {
-    local file="$1" desc="$2" bin="$3" sid="$4" launcher="${5:-}"
-    cat > "${file}" <<EOF
-[Unit]
-Description=${desc}
-After=network.target asterisk.service analog_bridge.service
-Wants=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/python3 ${launcher:+${launcher} }${bin}
-Restart=on-failure
-RestartSec=5
-User=root
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=${sid}
-TimeoutStopSec=45
-
-[Install]
-WantedBy=multi-user.target
-EOF
-}
-
 UP_TO_DATE_SKIP=false
 uptodate_check() {
     local label="$1" chosen="$2" installed_bin="$3"
@@ -457,36 +366,26 @@ ok "systemd available"
 hdr "Operation"
 
 _dash_exists=false
-_m17dash_exists=false
 _sysmon_exists=false
 _wifimon_exists=false
 _helper_exists=false
-_svx_exists=false
 systemctl is-active --quiet "${DASH_SERVICE}"    2>/dev/null && _dash_exists=true    || true
-systemctl is-active --quiet "${M17DASH_SERVICE}" 2>/dev/null && _m17dash_exists=true || true
 systemctl is-active --quiet "${SYSMON_SERVICE}"  2>/dev/null && _sysmon_exists=true  || true
 systemctl is-active --quiet "${WIFIMON_SERVICE}" 2>/dev/null && _wifimon_exists=true || true
 systemctl is-active --quiet "${HELPER_SERVICE}"  2>/dev/null && _helper_exists=true  || true
-systemctl is-active --quiet "${SVX_SERVICE}"     2>/dev/null && _svx_exists=true     || true
 [[ -f "${DASH_BIN}"     ]] && _dash_exists=true
-[[ -f "${M17DASH_BIN}"  ]] && _m17dash_exists=true
 [[ -f "${SYSMON_BIN}"   ]] && _sysmon_exists=true
 [[ -f "${WIFIMON_BIN}"  ]] && _wifimon_exists=true
 [[ -f "${HELPER_BIN}"   ]] && _helper_exists=true
-[[ -f "${SVX_BIN}"      ]] && _svx_exists=true
 
-if [[ "${_dash_exists}" == "true" || "${_m17dash_exists}" == "true" \
-      || "${_sysmon_exists}" == "true" \
-      || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" \
-      || "${_svx_exists}" == "true" ]]; then
+if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
+      || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" ]]; then
     echo
     echo "  ${BLD}Existing installation detected:${RST}"
     [[ "${_dash_exists}"     == "true" ]] && echo "  ${GRN}  ✔${RST}  Dashboard      (${DASH_BIN})"
-    [[ "${_m17dash_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  M17/Zello dash (${M17DASH_BIN})"
     [[ "${_sysmon_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  SysMon         (${SYSMON_BIN})"
     [[ "${_wifimon_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  wifimon        (${WIFIMON_BIN})"
     [[ "${_helper_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  44helper       (${HELPER_BIN})"
-    [[ "${_svx_exists}"      == "true" ]] && echo "  ${GRN}  ✔${RST}  SVX Dashboard  (${SVX_BIN})"
     echo
     if [[ "${NONINTERACTIVE}" == "true" ]]; then
         MODE="update"
@@ -565,18 +464,6 @@ if [[ -n "${DASH_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
-hdr "M17/Zello dashboard — file discovery"
-CHOSEN=""
-stage_and_select "asl_dvs_m17_dashboard*.py" "M17/Zello dashboard" "${M17DASH_LIB_DIR}" || true
-M17DASH_CHOSEN="${CHOSEN}"
-
-if [[ -n "${M17DASH_CHOSEN}" ]]; then
-    info "Checking syntax…"
-    python3 -m py_compile "${M17DASH_CHOSEN}" \
-        || die "Syntax error in $(basename "${M17DASH_CHOSEN}") — install aborted"
-    ok "Syntax OK"
-fi
-
 hdr "SysMon — file discovery"
 pick_build "${SYSMON_VARIANT:-}" "${SYSMON_BIN}" "SYSMON_VARIANT"
 SYSMON_VARIANT="${PICKED_BUILD}"
@@ -624,30 +511,15 @@ if [[ -n "${HELPER_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
-hdr "SVX Dashboard — file discovery"
-CHOSEN=""
-stage_and_select "svx_dashboard*.py" "SVX Dashboard" "${SVX_LIB_DIR}" || true
-SVX_CHOSEN="${CHOSEN}"
-
-if [[ -n "${SVX_CHOSEN}" ]]; then
-    info "Checking syntax…"
-    python3 -m py_compile "${SVX_CHOSEN}" \
-        || die "Syntax error in $(basename "${SVX_CHOSEN}") — install aborted"
-    ok "Syntax OK"
-fi
-
-if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" ]]; then
-    die "Nothing to install — no dashboard, M17/Zello dashboard, sysmon, wifimon, 44helper, or SVX dashboard files found."
+if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" ]]; then
+    die "Nothing to install — no dashboard, sysmon, wifimon or 44helper files found."
 fi
 
 hdr "Up-to-date check"
 
 uptodate_check "Dashboard" "${DASH_CHOSEN}"    "${DASH_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && DASH_CHOSEN=""
-
-uptodate_check "M17/Zello dashboard" "${M17DASH_CHOSEN}" "${M17DASH_BIN}"
-[[ "${UP_TO_DATE_SKIP}" == "true" ]] && M17DASH_CHOSEN=""
 
 uptodate_check "SysMon"    "${SYSMON_CHOSEN}"  "${SYSMON_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && SYSMON_CHOSEN=""
@@ -658,54 +530,19 @@ uptodate_check "wifimon"   "${WIFIMON_CHOSEN}" "${WIFIMON_BIN}"
 uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && HELPER_CHOSEN=""
 
-uptodate_check "SVX Dashboard" "${SVX_CHOSEN}" "${SVX_BIN}"
-[[ "${UP_TO_DATE_SKIP}" == "true" ]] && SVX_CHOSEN=""
-
-if [[ -z "${DASH_CHOSEN}" && -z "${M17DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${SVX_CHOSEN}" ]]; then
+if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" ]]; then
     ok "All selected files are already up to date — nothing to install."
     exit 0
 fi
 
 hdr "Port checks"
 [[ -n "${DASH_CHOSEN}"    ]] && { info "Dashboard port ${DASH_PORT}:"; check_port "${DASH_PORT}"; }
-if [[ -n "${M17DASH_CHOSEN}" ]]; then
-    if [[ -n "${DASH_CHOSEN}" ]]; then
-        warn "Both Dashboard and M17/Zello dashboard are selected — they share port ${M17DASH_PORT} and will conflict if both end up running."
-    else
-        info "M17/Zello dashboard port ${M17DASH_PORT}:"; check_port "${M17DASH_PORT}"
-    fi
-fi
 [[ -n "${SYSMON_CHOSEN}"  ]] && { info "SysMon port ${SYSMON_PORT}:";  check_port "${SYSMON_PORT}"; }
 [[ -n "${HELPER_CHOSEN}"  ]] && { info "44helper port ${HELPER_PORT}:"; check_port "${HELPER_PORT}"; }
-[[ -n "${SVX_CHOSEN}"     ]] && { info "SVX Dashboard port ${SVX_PORT}:"; check_port "${SVX_PORT}"; }
-
-hdr "Stopping existing services"
-
-stop_if_installing() {
-    local svc="$1" chosen="$2"
-    if [[ -z "${chosen}" ]]; then
-        info "Skipping stop of ${svc} — not being reinstalled"
-        return
-    fi
-    if systemctl is-active --quiet "${svc}" 2>/dev/null; then
-        info "Stopping ${svc}…"
-        systemctl stop "${svc}"
-        ok "Stopped ${svc}"
-    else
-        info "${svc} not running"
-    fi
-}
-
-stop_if_installing "${DASH_SERVICE}"    "${DASH_CHOSEN}"
-stop_if_installing "${SYSMON_SERVICE}"  "${SYSMON_CHOSEN}"
 
 if [[ -n "${DASH_CHOSEN}" ]]; then
     hdr "Installing Dashboard"
-
-    install -m 0755 "${DASH_CHOSEN}" "${DASH_BIN}"
-    ok "Installed: ${DASH_BIN}"
-    info "Source : $(basename "${DASH_CHOSEN}")"
 
     mkdir -p "${DASH_CONF_DIR}"
     ok "Config dir: ${DASH_CONF_DIR}"
@@ -737,34 +574,14 @@ if [[ -n "${DASH_CHOSEN}" ]]; then
         info "Update mode — config preserved: ${DASH_CONF}"
     fi
 
-    info "Writing service unit…"
-    _dash_launcher=""
-    if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
-        write_launcher
-        _dash_launcher="${LAUNCHER_PATH}"
-    fi
-    write_service "${DASH_SERVICE_FILE}" \
-        "ASL-DVS Node Control Dashboard" \
-        "${DASH_BIN}" \
-        "${DASH_SERVICE}" \
-        "${_dash_launcher}"
-    ok "Service unit: ${DASH_SERVICE_FILE}"
-fi
-
-if [[ -n "${M17DASH_CHOSEN}" ]]; then
-    hdr "Installing M17/Zello dashboard"
-    info "Delegating to: python3 $(basename "${M17DASH_CHOSEN}") --install"
-    python3 "${M17DASH_CHOSEN}" --install \
-        || die "M17/Zello dashboard --install failed — see output above"
-    ok "M17/Zello dashboard installed, enabled, and restarted"
+    info "Delegating to: python3 $(basename "${DASH_CHOSEN}") --install"
+    python3 "${DASH_CHOSEN}" --install \
+        || die "Dashboard --install failed — see output above"
+    ok "Dashboard installed, enabled, and restarted"
 fi
 
 if [[ -n "${SYSMON_CHOSEN}" ]]; then
     hdr "Installing SysMon"
-
-    install -m 0755 "${SYSMON_CHOSEN}" "${SYSMON_BIN}"
-    ok "Installed: ${SYSMON_BIN}"
-    info "Source : $(basename "${SYSMON_CHOSEN}")"
 
     mkdir -p "${SYSMON_CONF_DIR}"
     ok "Config dir: ${SYSMON_CONF_DIR}"
@@ -779,18 +596,10 @@ if [[ -n "${SYSMON_CHOSEN}" ]]; then
         info "SysMon config unchanged"
     fi
 
-    info "Writing service unit…"
-    _sysmon_launcher=""
-    if [[ "${SYSMON_VARIANT}" == "pi02w" ]]; then
-        write_launcher
-        _sysmon_launcher="${LAUNCHER_PATH}"
-    fi
-    write_service "${SYSMON_SERVICE_FILE}" \
-        "ASL-DVS System Monitor" \
-        "${SYSMON_BIN}" \
-        "${SYSMON_SERVICE}" \
-        "${_sysmon_launcher}"
-    ok "Service unit: ${SYSMON_SERVICE_FILE}"
+    info "Delegating to: python3 $(basename "${SYSMON_CHOSEN}") --install"
+    python3 "${SYSMON_CHOSEN}" --install \
+        || die "SysMon --install failed — see output above"
+    ok "SysMon installed, enabled, and restarted"
 fi
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
@@ -809,64 +618,15 @@ if [[ -n "${HELPER_CHOSEN}" ]]; then
     ok "44helper installed, enabled, and restarted"
 fi
 
-if [[ -n "${SVX_CHOSEN}" ]]; then
-    hdr "Installing SVX Dashboard"
-    info "Delegating to: python3 $(basename "${SVX_CHOSEN}") --install"
-    python3 "${SVX_CHOSEN}" --install \
-        || die "SVX Dashboard --install failed — see output above"
-    ok "SVX Dashboard installed, enabled, and restarted"
-fi
-
-hdr "Enabling and starting services"
-
-systemctl daemon-reload
-ok "systemd daemon reloaded"
-
-for svc_entry in \
-    "${DASH_SERVICE}:${DASH_CHOSEN}" \
-    "${SYSMON_SERVICE}:${SYSMON_CHOSEN}"; do
-    svc="${svc_entry%%:*}"
-    chosen="${svc_entry##*:}"
-    [[ -z "${chosen}" ]] && continue
-    systemctl enable "${svc}" || warn "${svc} enable failed — check unit file"
-    ok "${svc} enabled (start on boot)"
-    systemctl restart "${svc}" || warn "${svc} did not (re)start — check: journalctl -u ${svc} -n 30 --no-pager"
-    info "${svc} restarted"
-done
-
 hdr "Startup verification"
 info "Waiting for services to stabilise…"
 sleep 3
 
 for svc_entry in \
     "${DASH_SERVICE}:${DASH_CHOSEN}:${DASH_PORT}" \
-    "${SYSMON_SERVICE}:${SYSMON_CHOSEN}:${SYSMON_PORT}"; do
-    svc="${svc_entry%%:*}"
-    rest="${svc_entry#*:}"
-    chosen="${rest%%:*}"
-    port="${rest##*:}"
-    [[ -z "${chosen}" ]] && continue
-
-    if systemctl is-active --quiet "${svc}"; then
-        ok "${svc} is RUNNING"
-    else
-        warn "${svc} did not start cleanly"
-        systemctl status "${svc}" --no-pager -l || true
-    fi
-
-    if ss -tlnp "sport = :${port}" 2>/dev/null | grep -q ":${port}"; then
-        ok "Listening on port ${port}"
-    else
-        warn "Not yet listening on port ${port} — may still be initialising"
-        warn "Re-check:  ss -tlnp | grep ${port}"
-    fi
-done
-
-for svc_entry in \
-    "${M17DASH_SERVICE}:${M17DASH_CHOSEN}:${M17DASH_PORT}" \
-    "${WIFIMON_SERVICE}:${WIFIMON_CHOSEN}:" \
-    "${HELPER_SERVICE}:${HELPER_CHOSEN}:${HELPER_PORT}" \
-    "${SVX_SERVICE}:${SVX_CHOSEN}:${SVX_PORT}"; do
+    "${SYSMON_SERVICE}:${SYSMON_CHOSEN}:${SYSMON_PORT}" \
+    "${WIFIMON_SERVICE}:${WIFIMON_CHOSEN}:${WIFIMON_PORT}" \
+    "${HELPER_SERVICE}:${HELPER_CHOSEN}:${HELPER_PORT}"; do
     svc="${svc_entry%%:*}"
     rest="${svc_entry#*:}"
     chosen="${rest%%:*}"
@@ -921,27 +681,19 @@ print_urls() {
 }
 
 print_urls "ASL-DVS Node Control Dashboard"      "${DASH_PORT}"    "${DASH_CHOSEN}"
-print_urls "ASL-DVS-M17 Node Control Dashboard"  "${M17DASH_PORT}" "${M17DASH_CHOSEN}"
 print_urls "ASL-DVS System Monitor"              "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
 print_urls "44Net Helper"                        "${HELPER_PORT}"  "${HELPER_CHOSEN}"
-print_urls "SVX Dashboard"                        "${SVX_PORT}"     "${SVX_CHOSEN}"
+print_urls "wifimon"                             "${WIFIMON_PORT}" "${WIFIMON_CHOSEN}"
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
-    echo
-    echo "  ${BLD}wifimon${RST}  ($(basename "${WIFIMON_CHOSEN}"))"
-    sep
-    info "No web UI — runs as a background watchdog."
     info "To add/import WiFi networks: sudo python3 ${WIFIMON_BIN} --setup-wifi"
-    sep
 fi
 
 echo
 echo "  ${BLD}Service commands:${RST}"
 [[ -n "${DASH_CHOSEN}"     ]] && echo "    Dashboard      :  systemctl {status|restart|stop} ${DASH_SERVICE}"
-[[ -n "${M17DASH_CHOSEN}"  ]] && echo "    M17/Zello dash :  systemctl {status|restart|stop} ${M17DASH_SERVICE}"
 [[ -n "${SYSMON_CHOSEN}"   ]] && echo "    SysMon         :  systemctl {status|restart|stop} ${SYSMON_SERVICE}"
 [[ -n "${WIFIMON_CHOSEN}"  ]] && echo "    wifimon        :  systemctl {status|restart|stop} ${WIFIMON_SERVICE}"
 [[ -n "${HELPER_CHOSEN}"   ]] && echo "    44helper       :  systemctl {status|restart|stop} ${HELPER_SERVICE}"
-[[ -n "${SVX_CHOSEN}"      ]] && echo "    SVX Dashboard  :  systemctl {status|restart|stop} ${SVX_SERVICE}"
 echo "    Logs      :  journalctl -u <service> -f"
 echo

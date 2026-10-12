@@ -80,7 +80,7 @@ User manual (PDF, 91 pages): every tool, tab and button, with SysMon and 44helpe
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_asl_dvs_v6_6_20261006.sh
+   sudo bash install_asl_dvs_v7_0_20261012.sh
    ```
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -199,7 +199,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `wifimon_v5_29_20261012.py` | common |
 | `asl_dvs_m17_44helper_v0_0_180_20261012.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
-| `install_asl_dvs_v6_6_20261006.sh` | common |
+| `install_asl_dvs_v7_0_20261012.sh` | common |
 | `uninstall_asl_dvs_all_v1_3.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
@@ -214,7 +214,7 @@ because something reads them:
 
 - the first line (`#!...`) and a Python `coding` line;
 - the title line of each `.sh` script (for example
-  `# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)`): instmon reads a
+  `# install_asl_dvs_dashboard.sh  v7.0  (2026-10-12)`): instmon reads a
   shell script's version from it.
 
 Text inside strings is left alone, including files the tools write onto the
