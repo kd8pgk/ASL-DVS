@@ -1,6 +1,30 @@
 # instmon changelog
 
-Current file: `instmon_v2_45_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_46_0_20261012.py`. Newest entries first.
+
+## 2.46.0 (2026-10-12)
+
+Full Update turns on when only the manuals have changed.
+
+- **Check GitHub** also reads the `docs` folder (one more GitHub API call).
+  Manuals that are new or changed there are listed in the Full Update plan as
+  **Manual NEW** or **Manual CHANGED**, and count toward turning the Full Update
+  button on, so a manuals-only change can be applied without any tool update.
+  The confirm dialog lists them too. If the docs list can't be read, the check
+  still finishes and the last list is kept.
+- The plan refreshes after Get from GitHub, an upload or import to Manuals, a
+  Delete, and a Full Update, so the button goes off once nothing is pending.
+- A manual you delete is remembered in `/etc/asl_dvs/instmon_manuals_deleted.json`.
+  It is not listed in the plan and Full Update no longer brings it back
+  (2.45.0 did). **Get from GitHub** still restores it, and an upload or USB
+  import with that name clears the mark.
+- Tested with GitHub mocked: a check lists new manuals and turns the button on;
+  after Get from GitHub nothing is pending; a manual changed on GitHub shows as
+  CHANGED; Full Update fetches it and the button goes off; a deleted manual
+  stays out of the plan and isn't restored by Full Update, even after GitHub
+  changes it; Get from GitHub restores it; an upload clears the mark; a check
+  survives an unreachable docs list. The 2.45.0 tests still pass. Page in
+  headless Chromium: plan rows, button enabled, confirm text, no script errors.
 
 ## 2.45.0 (2026-10-12)
 
