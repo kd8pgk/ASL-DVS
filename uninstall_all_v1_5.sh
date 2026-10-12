@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_asl_dvs_all.sh  v1.4  (2026-10-12)
+# uninstall_all.sh  v1.5  (2026-10-12)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -12,13 +12,18 @@ warn() { echo "${YEL}  ⚠ ${RST}$*"; }
 echo "== ASL-DVS Suite — Mass Uninstall (instmon, library, and config are left alone) =="
 echo
 
+DASH_PATH=/usr/local/bin/nodecontrol.py
+if [[ ! -e "$DASH_PATH" && -e /usr/local/bin/asl_dvs_dashboard.py ]]; then
+    DASH_PATH=/usr/local/bin/asl_dvs_dashboard.py
+fi
+
 HELPER_PATH=/usr/local/bin/44helper.py
 if [[ ! -e "$HELPER_PATH" && -e /opt/44helper/asl_dvs_m17_44helper.py ]]; then
     HELPER_PATH=/opt/44helper/asl_dvs_m17_44helper.py
 fi
 
 COMPONENTS=(
-    "asl_dvs_dashboard|/usr/local/bin/asl_dvs_dashboard.py|python3"
+    "nodecontrol|${DASH_PATH}|python3"
     "sysmon|/usr/local/bin/sysmon.py|python3"
     "wifimon|/usr/local/bin/wifimon.py|python3"
     "44helper|${HELPER_PATH}|python3"

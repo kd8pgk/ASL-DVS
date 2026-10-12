@@ -1,6 +1,26 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_12_20261012.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_13_20261012.py`. Newest entries first.
+
+## 6.13.67.13-pi02w (2026-10-12)
+
+Knows the Dashboard by its new name, `nodecontrol`, as well as the old
+`asl_dvs_dashboard`. The same change is in the full build (6.13.79).
+
+- Services tab: the pinned Dashboard row follows whichever unit is installed.
+  A saved list that still says `asl_dvs_dashboard.service` keeps working; it
+  shows `nodecontrol.service` once the Dashboard has been renamed (on SysMon's
+  next start; Full Update restarts SysMon after the Dashboard). The default list
+  for a new node names `nodecontrol.service`.
+- Security tab: the Dashboard login check finds the Dashboard through
+  `nodecontrol.service` or `/usr/local/bin/nodecontrol.py` first, and the
+  root/non-root unit lists include both names.
+- Launcher version 3 (the same text in every tool that writes it): a tool file
+  whose name starts with a digit, like `44helper_v….py`, is loaded through
+  `importlib`, so its compiled copy in `__pycache__` is used instead of being
+  recompiled on every start.
+- Tested with mocks: the pinned row with neither unit, the old one, the new
+  one and both; the default list.
 
 ## 6.13.67.12-pi02w (2026-10-12)
 

@@ -1,6 +1,30 @@
 # Dashboard, full build changelog
 
-Current file: `asl_dvs_dashboard_v9_3_75_20261012.py`. Newest entries first.
+Current file: `nodecontrol_v9_3_76_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.76 (2026-10-12)
+
+The Dashboard is now named **nodecontrol**. The same change is in the Pi Zero 2 W build (9.3.71.15-pi02w).
+Needs instmon 2.43.0 or later to show it under the new name.
+
+- File: `nodecontrol_v9_3_76_20261012.py` (was `asl_dvs_dashboard…`).
+- Service: `nodecontrol.service` (was `asl_dvs_dashboard.service`). `--install`
+  stops, disables and removes the old unit before it starts the new one, so
+  port 8989 is never held twice.
+- Program: `/usr/local/bin/nodecontrol.py`, a link into
+  `/usr/local/lib/asl_dvs/nodecontrol/`. `/usr/local/bin/asl_dvs_dashboard.py`
+  stays as a second link to the same file, for older instmon and uninstaller
+  versions. The old copies in `/usr/local/lib/asl_dvs/dashboard/` and directly
+  in `/usr/local/lib/asl_dvs/` are removed; other tools' folders are not touched.
+- `--uninstall` removes both units, both links, the lib file and the empty
+  folders.
+- Unchanged: `/etc/asl_dvs/asl_dvs.conf`, `phone.json`, the login, port 8989, and
+  the `asl_dvs_dashboard` markers on the Phone tab's Asterisk files (existing
+  nodes' dialplans carry them, and the Dashboard finds its own blocks by them).
+- Tested with mocks against a temporary root: a fresh node, a node on the old
+  service with the file in the old flat folder or in `dashboard/`, the new
+  layout, installing through either link, and uninstall with a stray old unit;
+  another tool's folder survives each time.
 
 ## 9.3.75 (2026-10-12)
 

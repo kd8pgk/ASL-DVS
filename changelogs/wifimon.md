@@ -1,6 +1,14 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_29_20261012.py`. Newest entries first.
+Current file: `wifimon_v5_30_20261012.py`. Newest entries first.
+
+## 5.30 (2026-10-12)
+
+- Launcher version 3, the same text instmon 2.43.0, 44helper 0.0.181, SysMon
+  Pi02w 6.13.67.13 and Dashboard Pi02w 9.3.71.15 write: a tool file whose name
+  starts with a digit (`44helper_v….py`) is loaded through `importlib`, so its
+  compiled copy in `__pycache__` is used instead of being recompiled each start.
+  Nothing else changed in wifimon.
 
 ## 5.29 (2026-10-12)
 

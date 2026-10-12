@@ -40,8 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.180"
-APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
+APP_VERSION = "0.0.181"
+APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -337,11 +337,15 @@ if not os.path.exists(_OFF + "trim"):
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
 sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
 if name.isidentifier():
-    sys.path.insert(0, os.path.dirname(target))
     runpy.run_module(name, run_name="__main__", alter_sys=True)
 else:
-    runpy.run_path(target, run_name="__main__")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
 '''
 
 SYSTEMD_SERVICE_CONTENT = f"""[Unit]
@@ -622,7 +626,7 @@ def _reload_firewalld() -> dict:
 
 _WATCHED_DASHBOARD_PORTS: dict[int, str] = {
     9999: "sysmon dashboard",
-    8989: "asl_dvs_dashboard",
+    8989: "Dashboard (nodecontrol)",
     9090: "Cockpit",
 }
 _WATCHED_AMI_PORT = 5038
@@ -1009,7 +1013,7 @@ PI_INSTALL_PORTS = {
                       "risk": "Asterisk's raw manager/control protocol \u2014 flagged \u2018especially risky if "
                               "public\u2019 on the Ports tab reference table. Only add this if you specifically "
                               "need remote AMI access and have changed manager.conf's default secret."},
-    "asl_dvs_dashboard": {"label": "asl_dvs_dashboard", "port_proto": "8989/tcp", "default_on": False,
+    "asl_dvs_dashboard": {"label": "Dashboard (nodecontrol)", "port_proto": "8989/tcp", "default_on": False,
                            "tabs": ("full", "split"),
                            "risk": "This node's own control panel \u2014 adding this exposes it, and its root-password "
                                    "login, to every peer on the 44Net mesh, not just your own devices. Same "
@@ -1616,7 +1620,7 @@ _DV_NO_CLASH_GUARD = ("if ! systemctl is-active --quiet apache2 2>/dev/null || "
                       "exit 0; fi; ")
 
 _DV_RESERVED_PORTS = [("22", "SSH"), ("80", "apache2 / Allmon3"), ("443", "HTTPS"), ("2222", "Web_Proxy"),
-                      ("8080", "Web_Proxy"), ("8989", "asl_dvs_dashboard"), ("8990", "instmon"),
+                      ("8080", "Web_Proxy"), ("8989", "Dashboard (nodecontrol)"), ("8990", "instmon"),
                       ("8991", "wifimon"), ("9090", "Cockpit"), ("9997", "44helper"), ("9999", "sysmon")]
 
 def _dv_web_clash_steps(first_num: int) -> list[dict]:
@@ -3368,7 +3372,7 @@ _QM_TIERS: list[tuple[str, list[str]]] = [
                             "asl3-update-nodelist.timer", "asl3-update-astdb.timer", "man-db.timer"]),
     ("background disk users", ["pmie.service", "pmlogger.service", "pmproxy.service", "pmcd.service",
                                "packagekit.service", "man-db.service"]),
-    ("suite web tools", ["*sysmon*.service", "*asl_dvs_dashboard*.service", "*asl-dvs-dashboard*.service",
+    ("suite web tools", ["*sysmon*.service", "nodecontrol.service", "*asl_dvs_dashboard*.service", "*asl-dvs-dashboard*.service",
                          "*instmon*.service", "*svx_dashboard*.service", "*m17*dashboard*.service",
                          "lighttpd.service"]),
     ("radio services", ["asterisk.service", "analog_bridge.service", "mmdvm_bridge.service",
@@ -4119,7 +4123,7 @@ _UPDATE_STEPS: list[dict] = [
              "in your agent: ssh offers each one in turn and every rejected key writes its own "
              "failure line, so one honest connection attempt can burn 3-4 of your 5 retries — put "
              "IdentitiesOnly=yes in your client's ~/.ssh/config to avoid it. If you do get banned, "
-             "the ban covers port 22 only, so sysmon (9999), asl_dvs_dashboard (8989), instmon "
+             "the ban covers port 22 only, so sysmon (9999), the Dashboard (8989), instmon "
              "(8990) and this tool itself (9997) stay reachable: recover with `fail2ban-client set "
              "sshd unbanip <your-ip>` from the Custom command box, no SSH needed. Take extra care "
              "on the Pi Zero 2W travel node (652702) — there is no console to fall back on, and if "
@@ -7170,7 +7174,8 @@ _SERVICE_UNIT_DEFS: list[tuple[str, str, str, bool]] = [
     ("Ampersand Server (amp-server)", "amp-server.service", "Ampersand", False),
     ("Ampersand Hub (amp-hub)", "amp-hub.service", "Ampersand", False),
     ("Cloudflare Tunnel (cloudflared)", "cloudflared.service", "Cloudflare Tunnel", False),
-    ("asl_dvs_dashboard", "asl_dvs_dashboard.service", "Dashboards (should stay private)", True),
+    ("Dashboard (nodecontrol)", "nodecontrol.service", "Dashboards (should stay private)", True),
+    ("Dashboard (asl_dvs_dashboard, before the rename)", "asl_dvs_dashboard.service", "Dashboards (should stay private)", True),
     ("dvs_dashboard", "dvs_dashboard.service", "Dashboards (should stay private)", True),
 ]
 
@@ -7227,7 +7232,7 @@ _PORTS_REFERENCE: list[tuple[str, str, str, str, bool]] = [
     ("NXDNGateway commands", "6075", "udp", "NXDN gateway remote-command port, used by the dvs tool on this node only — risky if public, never needs forwarding", True),
     ("ircDDBGateway remote control", "54321", "udp", "D-Star gateway remote-control port (its password is the repeater ID, which is public) — risky if public, never needs forwarding", True),
     ("sysmon", "9999", "tcp", "sysmon dashboard", True),
-    ("asl_dvs_dashboard", "8989", "tcp", "asl_dvs_dashboard", True),
+    ("Dashboard (nodecontrol)", "8989", "tcp", "the node's Dashboard", True),
     ("Cockpit", "9090", "tcp", "System management UI", True),
     ("Ampersand web UI", "8080", "tcp", "amp-server / amp-hub web UI — should stay private (bind to LAN or firewall it)", True),
     ("Ampersand IAX (hub)", "4568", "udp", "amp-hub default IAX port — use a distinct port from Asterisk's 4569 if both run on one box", False),
@@ -9254,7 +9259,7 @@ def _cfgr_act_restore(payload: dict) -> dict:
         lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
     if "manager.conf" in written:
         lines.append("manager.conf was restored: if the dashboard then shows Asterisk as unreachable, restart the "
-                     "dashboard (sudo systemctl restart asl_dvs_dashboard).")
+                     "dashboard (sudo systemctl restart nodecontrol).")
     if "simpleusb.conf" in written:
         lines.append("simpleusb.conf was restored: press Restart ASL3 so Asterisk loads it before it saves its own copy.")
     if "phone.json" in written:
@@ -10883,12 +10888,14 @@ DRY = False
 
 TOOLS = [
     ("instmon", "instmon", "instmon", 8990, "/usr/local/bin/instmon.py"),
-    ("Dashboard", "dashboard", "asl_dvs_dashboard", 8989, "/usr/local/bin/asl_dvs_dashboard.py"),
+    ("Dashboard", "dashboard", ("nodecontrol", "asl_dvs_dashboard"), 8989, ("/usr/local/bin/nodecontrol.py", "/usr/local/bin/asl_dvs_dashboard.py")),
     ("SysMon", "sysmon", "sysmon", 9999, "/usr/local/bin/sysmon.py"),
     ("wifimon", "wifimon", "wifimon", 8991, "/usr/local/bin/wifimon.py"),
     ("44helper", "44helper", "44helper", 9997, ("/usr/local/bin/44helper.py", "/opt/44helper/asl_dvs_m17_44helper.py")),
 ]
-CRITICAL = ("instmon", "asl_dvs_dashboard")
+CRITICAL = ("instmon", "dashboard")
+STEM_ALIASES = (("asl_dvs_dashboard", "nodecontrol"), ("asl_dvs_m17_44helper", "44helper"))
+UNIT_PATHS = {"nodecontrol": ("/usr/local/bin/nodecontrol.py", "/usr/local/lib/asl_dvs/nodecontrol")}
 VER_RE = re.compile(r"^\s*(?:APP_VERSION|SCRIPT_VERSION|VERSION)\s*=\s*[\"']([^\"']+)[\"']", re.M)
 STEM_RE = re.compile(r"^(.+?)_v\d")
 
@@ -10983,11 +10990,44 @@ def port_open(port):
         return False
 
 
+def cur_unit(units):
+    names = links_of(units)
+    for n in names:
+        if os.path.exists(os.path.join("/etc/systemd/system", n + ".service")):
+            return n
+    return names[0]
+
+
+def retire_other(units, path):
+    names = links_of(units)
+    if len(names) < 2:
+        return
+    text = read(path)
+    if not any(n + ".service" in text for n in names):
+        return
+    for n in names:
+        unit = os.path.join("/etc/systemd/system", n + ".service")
+        if n + ".service" in text or not os.path.exists(unit):
+            continue
+        run(["systemctl", "disable", "--now", n + ".service"], 30)
+        try:
+            os.remove(unit)
+            for p in UNIT_PATHS.get(n, ()):
+                if os.path.islink(p) or os.path.isfile(p):
+                    os.remove(p)
+                elif os.path.isdir(p):
+                    shutil.rmtree(p)
+        except OSError as exc:
+            log("could not remove %s: %s" % (unit, exc))
+        run(["systemctl", "daemon-reload"], 30)
+        log("retired %s.service: %s installs it under another name" % (n, os.path.basename(path)))
+
+
 def healthy(unit, port, timeout):
     end = time.time() + timeout
     st = ""
     while True:
-        st = sysctl("is-active", unit)
+        st = sysctl("is-active", cur_unit(unit))
         if st == "active" and port_open(port):
             return True, st
         if time.time() >= end:
@@ -11000,7 +11040,11 @@ def healthy(unit, port, timeout):
 
 def stem_of(path):
     m = STEM_RE.match(os.path.basename(path))
-    return m.group(1).lower() if m else ""
+    stem = m.group(1).lower() if m else ""
+    for old, new in STEM_ALIASES:
+        if stem == old or stem.startswith(old + "_"):
+            return new + stem[len(old):]
+    return stem
 
 
 def links_of(link):
@@ -11039,7 +11083,7 @@ def delink(link):
 def plan():
     rows = []
     for label, cat, unit, port, links in TOOLS:
-        link = link_of(unit, links)
+        link = link_of(cur_unit(unit), links)
         row = {"name": label, "category": cat, "unit": unit, "port": port, "link": link, "action": "skip",
                "note": "", "installed": "", "version": "", "file": "", "source": ""}
         rows.append(row)
@@ -11119,6 +11163,7 @@ def drop_superseded(old_target, link):
 def install_and_wait(name, unit, port, path, wait_first=0, link=None):
     if link:
         delink(link)
+    retire_other(unit, path)
     rc = run([interp(path), path, "--install"])
     if rc == 0 and wait_first:
         time.sleep(wait_first)
@@ -11127,7 +11172,7 @@ def install_and_wait(name, unit, port, path, wait_first=0, link=None):
 
 def do_tool(row):
     name, cat, unit, port, link = row["name"], row["category"], row["unit"], row["port"], row["link"]
-    all_links = next((t[4] for t in TOOLS if t[2] == unit), link)
+    all_links = next((t[4] for t in TOOLS if t[1] == cat), link)
     target = os.path.realpath(link)
     try:
         old = backup(cat, target)
@@ -11172,9 +11217,9 @@ def settle(rows):
         for unit, port in want:
             if unit == "asterisk" and sysctl("show", "-p", "LoadState", "--value", unit) != "loaded":
                 continue
-            st = sysctl("is-active", unit)
+            st = sysctl("is-active", cur_unit(unit))
             if st != "active" or (port and not port_open(port)):
-                bad.append("%s (%s)" % (unit, st or "unknown"))
+                bad.append("%s (%s)" % (cur_unit(unit), st or "unknown"))
         if not bad or time.time() >= end:
             return bad
         time.sleep(3)
@@ -11210,8 +11255,8 @@ def main_run():
     step("Settle", "ok" if not bad else "warn", "all services answering" if not bad else "not answering: " + ", ".join(bad))
     crit_bad = []
     for r in todo:
-        if r["unit"] in CRITICAL:
-            st = sysctl("is-active", r["unit"])
+        if r["category"] in CRITICAL:
+            st = sysctl("is-active", cur_unit(r["unit"]))
             if st != "active" or not port_open(r["port"]):
                 crit_bad.append(r["name"])
     if sysctl("show", "-p", "LoadState", "--value", "asterisk") == "loaded" and sysctl("is-active", "asterisk") != "active":
@@ -18598,7 +18643,7 @@ def _render_amp_panel() -> str:
 """.format(warning=_AMP_WARNING)
 
 _CF_WARNING = """Installs and manages a <b>Cloudflare Tunnel (cloudflared)</b> as a persistent,
-  <b>outbound-only</b> connector, so a local service (asl_dvs_dashboard 8989, sysmon 9999,
+  <b>outbound-only</b> connector, so a local service (the Dashboard 8989, sysmon 9999,
   instmon 8990, or this 44helper) can be reached over the internet with <b>no inbound
   port-forward and no public IP</b>. Choose a method: <b>token</b> (default) installs a
   persistent, dashboard-managed cloudflared.service from your Zero Trust tunnel token; <b>quick</b>
@@ -19081,7 +19126,7 @@ def render_page(cfg: configparser.ConfigParser) -> str:
 <div class="wrap">
   {_render_tab_bar()}
   {panels}
-  <div class="ver-tag">asl_dvs_m17_44helper_v{APP_VERSION}.py — stage {APP_STAGE.split(' ')[0]} of 8 — reference copy, not release-stripped</div>
+  <div class="ver-tag">44helper_v{APP_VERSION}.py — stage {APP_STAGE.split(' ')[0]} of 8 — reference copy, not release-stripped</div>
 </div>
 <script>{_JS}</script>
 </body>

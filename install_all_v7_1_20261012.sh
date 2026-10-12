@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_asl_dvs_dashboard.sh  v7.0  (2026-10-12)
+# install_all.sh  v7.1  (2026-10-12)
 
 set -euo pipefail
 
@@ -27,8 +27,19 @@ if [[ ! -t 0 ]]; then
     NONINTERACTIVE=true
 fi
 
-DASH_BIN="/usr/local/bin/asl_dvs_dashboard.py"
-DASH_SERVICE="asl_dvs_dashboard"
+DASH_BIN="/usr/local/bin/nodecontrol.py"
+DASH_LEGACY_BIN="/usr/local/bin/asl_dvs_dashboard.py"
+dash_service() {
+    if [[ ! -f /etc/systemd/system/nodecontrol.service && -f /etc/systemd/system/asl_dvs_dashboard.service ]]; then
+        echo "asl_dvs_dashboard"
+    else
+        echo "nodecontrol"
+    fi
+}
+DASH_SERVICE="$(dash_service)"
+if [[ -e "${DASH_LEGACY_BIN}" && ( ! -e "${DASH_BIN}" || "${DASH_SERVICE}" == "asl_dvs_dashboard" ) ]]; then
+    DASH_BIN="${DASH_LEGACY_BIN}"
+fi
 DASH_PORT=8989
 DASH_CONF_DIR="/etc/asl_dvs"
 DASH_CONF="${DASH_CONF_DIR}/asl_dvs.conf"
@@ -85,6 +96,18 @@ stage_and_select() {
     info "Searching for ${pattern} in:"
     for p in "${UNIQUE_PATHS[@]}"; do info "  ${p}/"; done
 
+    local -a _pats=() _excl=() _find_expr=()
+    IFS='|' read -r -a _pats <<< "${pattern}"
+    [[ -n "${exclude}" ]] && IFS='|' read -r -a _excl <<< "${exclude}"
+    for p in "${_pats[@]}"; do
+        [[ ${#_find_expr[@]} -gt 0 ]] && _find_expr+=(-o)
+        _find_expr+=(-name "${p}")
+    done
+    _find_expr=( \( "${_find_expr[@]}" \) )
+    for p in "${_excl[@]}"; do
+        _find_expr+=(! -name "${p}")
+    done
+
     declare -A _sf
     local RAW_FOUND=()
     local f real
@@ -95,11 +118,7 @@ stage_and_select() {
                 _sf["${real}"]=1
                 RAW_FOUND+=("${real}")
             fi
-        done < <(if [[ -n "${exclude}" ]]; then
-                     find "${dir}" -maxdepth 1 -name "${pattern}" ! -name "${exclude}" -print0 2>/dev/null
-                 else
-                     find "${dir}" -maxdepth 1 -name "${pattern}" -print0 2>/dev/null
-                 fi)
+        done < <(find "${dir}" -maxdepth 1 "${_find_expr[@]}" -print0 2>/dev/null)
     done
 
     if [[ "${#RAW_FOUND[@]}" -eq 0 ]]; then
@@ -349,7 +368,7 @@ write_sysmon_seed() {
 hdr "Preflight"
 
 if [[ "${EUID}" -ne 0 ]]; then
-    die "Must be run as root.  Use: sudo bash install_asl_dvs_dashboard.sh"
+    die "Must be run as root.  Use: sudo bash install_all.sh"
 fi
 ok "Running as root"
 
@@ -369,7 +388,8 @@ _dash_exists=false
 _sysmon_exists=false
 _wifimon_exists=false
 _helper_exists=false
-systemctl is-active --quiet "${DASH_SERVICE}"    2>/dev/null && _dash_exists=true    || true
+systemctl is-active --quiet nodecontrol          2>/dev/null && _dash_exists=true    || true
+systemctl is-active --quiet asl_dvs_dashboard    2>/dev/null && _dash_exists=true    || true
 systemctl is-active --quiet "${SYSMON_SERVICE}"  2>/dev/null && _sysmon_exists=true  || true
 systemctl is-active --quiet "${WIFIMON_SERVICE}" 2>/dev/null && _wifimon_exists=true || true
 systemctl is-active --quiet "${HELPER_SERVICE}"  2>/dev/null && _helper_exists=true  || true
@@ -448,11 +468,11 @@ CHOSEN=""
 pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
 DASH_VARIANT="${PICKED_BUILD}"
 if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
-    info "Dashboard build: Pi Zero 2 W (asl_dvs_dashboard_pi02w*.py), from ${PICKED_WHY}"
-    stage_and_select "asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
+    info "Dashboard build: Pi Zero 2 W (nodecontrol_pi02w*.py), from ${PICKED_WHY}"
+    stage_and_select "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
 else
-    info "Dashboard build: full (asl_dvs_dashboard*.py without _pi02w), from ${PICKED_WHY}"
-    stage_and_select "asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "asl_dvs_dashboard_pi02w*.py" || true
+    info "Dashboard build: full (nodecontrol*.py without _pi02w), from ${PICKED_WHY}"
+    stage_and_select "nodecontrol*.py|asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" || true
 fi
 DASH_CHOSEN="${CHOSEN}"
 [[ -z "${DASH_CHOSEN}" ]] && warn "No ${DASH_VARIANT} Dashboard build found -- set DASH_VARIANT=pi02w or =full to choose the other build."
@@ -501,7 +521,7 @@ fi
 
 hdr "44helper — file discovery"
 CHOSEN=""
-stage_and_select "asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
+stage_and_select "44helper*.py|asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
 HELPER_CHOSEN="${CHOSEN}"
 
 if [[ -n "${HELPER_CHOSEN}" ]]; then
@@ -574,10 +594,20 @@ if [[ -n "${DASH_CHOSEN}" ]]; then
         info "Update mode — config preserved: ${DASH_CONF}"
     fi
 
+    if grep -q 'asl_dvs_dashboard\.service' "${DASH_CHOSEN}" && ! grep -q 'nodecontrol\.service' "${DASH_CHOSEN}" \
+       && [[ -f /etc/systemd/system/nodecontrol.service ]]; then
+        info "Retiring nodecontrol.service: $(basename "${DASH_CHOSEN}") installs the Dashboard under its old name"
+        systemctl disable --now nodecontrol.service 2>/dev/null || true
+        rm -f /etc/systemd/system/nodecontrol.service /usr/local/bin/nodecontrol.py
+        rm -rf /usr/local/lib/asl_dvs/nodecontrol
+        systemctl daemon-reload
+    fi
+
     info "Delegating to: python3 $(basename "${DASH_CHOSEN}") --install"
     python3 "${DASH_CHOSEN}" --install \
         || die "Dashboard --install failed — see output above"
-    ok "Dashboard installed, enabled, and restarted"
+    DASH_SERVICE="$(dash_service)"
+    ok "Dashboard installed, enabled, and restarted (${DASH_SERVICE}.service)"
 fi
 
 if [[ -n "${SYSMON_CHOSEN}" ]]; then

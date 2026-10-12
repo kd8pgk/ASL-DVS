@@ -8,6 +8,7 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
+import io
 import hashlib
 import hmac
 import ipaddress
@@ -39,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.75"
+VERSION      = "9.3.71.15-pi02w"
 BUILD_DATE   = "2026-10-12"
 
 ASL_NODE        = "652702"
@@ -94,10 +95,72 @@ ASL_DVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
 
 _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
 
-_INSTALL_DIR      = "/usr/local/lib/asl_dvs/dashboard"
-_LEGACY_INSTALL_DIR = "/usr/local/lib/asl_dvs"
-_INSTALL_LINK     = "/usr/local/bin/asl_dvs_dashboard.py"
-_SERVICE_PATH     = "/etc/systemd/system/asl_dvs_dashboard.service"
+_INSTALL_DIR      = "/usr/local/lib/asl_dvs/nodecontrol"
+_OLD_INSTALL_DIRS = ("/usr/local/lib/asl_dvs/dashboard", "/usr/local/lib/asl_dvs")
+_INSTALL_LINK     = "/usr/local/bin/nodecontrol.py"
+_LEGACY_LINK      = "/usr/local/bin/asl_dvs_dashboard.py"
+_SERVICE_NAME     = "nodecontrol.service"
+_SERVICE_PATH     = "/etc/systemd/system/nodecontrol.service"
+_LEGACY_SERVICE_NAME = "asl_dvs_dashboard.service"
+_LEGACY_SERVICE_PATH = "/etc/systemd/system/asl_dvs_dashboard.service"
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+import os
+import runpy
+import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
+if name.isidentifier():
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
+'''
 _SERVICE_CONTENT  = f"""[Unit]
 Description=ASL-DVS Node Control Dashboard
 After=network.target
@@ -105,7 +168,7 @@ After=network.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -5567,75 +5630,154 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
-_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-def _parse_astdb(f) -> dict:
-    rows, by_node = [], {}
-    for raw in f:
-        line = raw.strip()
-        if not line or line.startswith(("#", ";")):
-            continue
-        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
-        node = parts[0]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node in by_node:
-            continue
-        call = parts[1] if len(parts) > 1 else ""
-        desc = parts[2] if len(parts) > 2 else ""
-        loc  = parts[3] if len(parts) > 3 else ""
-        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-        rows.append(row)
-        by_node[node] = row
-    return {"rows": rows, "by_node": by_node}
+_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-def _build_astdb(prev):
-    try:
-        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
-    except OSError:
-        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
-    if prev and prev.get("found") and prev["mtime"] == mtime:
-        return prev, False
-    try:
-        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
-            part = _parse_astdb(f)
-    except OSError as e:
-        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
-        part = {"rows": [], "by_node": {}}
-    return {"found": True, "mtime": mtime, **part}, False
+class _LineDB:
 
-_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
-                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
-                                                 "node menu will be empty (turn on "
-                                                 "asl3-update-astdb)", _ASTDB_PATH))
+    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
+        self._path_fn     = path_fn
+        self._node_of     = node_of
+        self._parse       = parse
+        self._missing_msg = missing_msg
+        self._warned      = False
+        self._lock        = threading.Lock()
+        self._index_key   = None
+        self._index       = (0, True, frozenset())
 
-def _load_astdb() -> dict:
-    return _astdb_cache.get()
+    @property
+    def path(self) -> str:
+        return self._path_fn()
 
-def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
+    def stat(self) -> "tuple[bool, int, int]":
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            if self._missing_msg and not self._warned:
+                self._warned = True
+                log.warning(self._missing_msg, self.path)
+            return False, 0, 0
+        self._warned = False
+        return True, int(st.st_mtime), st.st_size
+
+    def index(self) -> "tuple[int, bool, frozenset]":
+        found, mtime, size = self.stat()
+        if not found:
+            return 0, True, frozenset()
+        key = (mtime, size)
+        with self._lock:
+            if self._index_key == key:
+                return self._index
+        seen: "set[str]" = set()
+        repeats = False
+        ctrl: "set[int]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                for i, raw in enumerate(f):
+                    if _CTRL_IN_RE.search(raw.strip()):
+                        ctrl.add(i)
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if node in seen:
+                        repeats = True
+                    else:
+                        seen.add(node)
+        except OSError:
+            return 0, True, frozenset()
+        result = (len(seen), repeats, frozenset(ctrl))
+        with self._lock:
+            self._index_key, self._index = key, result
+        return result
+
+    def total(self) -> int:
+        return self.index()[0]
+
+    def rows(self, raw_ok=None, node_ok=None):
+        _total, repeats, ctrl = self.index()
+        seen: "set[str]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                st = os.fstat(f.fileno())
+                with self._lock:
+                    same = self._index_key == (int(st.st_mtime), st.st_size)
+                if not same:
+                    repeats, raw_ok, ctrl = True, None, frozenset()
+                for i, raw in enumerate(f):
+                    quick = raw_ok is not None and i not in ctrl
+                    if not repeats and quick and not raw_ok(raw):
+                        continue
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if repeats:
+                        if node in seen:
+                            continue
+                        seen.add(node)
+                        if quick and not raw_ok(raw):
+                            continue
+                    if node_ok is not None and not node_ok(node):
+                        continue
+                    yield self._parse(raw, node)
+        except OSError as e:
+            log.warning("Could not read %s: %s", self.path, e)
+
+    def find(self, node: str):
+        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
+                             node_ok=lambda n: n == node):
+            return row
+        return None
+
+def _astdb_node_of(raw: str):
+    line = raw.strip()
+    if not line or line.startswith(("#", ";")):
+        return None
+    node = _strip_ctrl(line.split("|", 1)[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    return str(int(node))
+
+def _astdb_parse(raw: str, node: str):
+    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
+    call = parts[1] if len(parts) > 1 else ""
+    desc = parts[2] if len(parts) > 2 else ""
+    loc  = parts[3] if len(parts) > 3 else ""
+    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+
+_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
+                 "AllStar node list not found at %s — the ASL node menu will be empty "
+                 "(turn on asl3-update-astdb)")
+
+def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
-           "total": len(db["rows"]), "min": min_q,
+    found, mtime, _size = db.stat()
+    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
+           "total": db.total() if found else 0, "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not db["found"] or len(q) < min_q:
+    if not found or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
+        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
+        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
+        def raw_ok(raw):
+            low = raw.lower()
+            return all(w in low for w in words)
+        node_ok = None
     count, matches = 0, []
-    for r in db["rows"]:
+    for r in db.rows(raw_ok, node_ok):
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -5658,11 +5800,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _load_astdb()["by_node"].get(node)
+    row = _astdb.find(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -5685,44 +5827,72 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-def _parse_echodb(text: str) -> dict:
-    rows, by_node = [], {}
-    for raw in text.splitlines():
-        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
-        if len(parts) < 2:
-            continue
-        node, call = parts[0], parts[1]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node == "0" or node in by_node:
-            continue
-        call = call[:24]
-        row = (node, call, f"{node} {call}".lower())
-        rows.append(row)
-        by_node[node] = row
-    rows.sort(key=lambda r: int(r[0]))
-    return {"rows": rows, "by_node": by_node}
+_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
 
-def _build_echodb(prev):
-    out, ok = ami_command(_ECHODB_CMD, timeout=8)
-    if ok and "no such command" not in out.lower():
-        part = _parse_echodb(out)
-        return {"found": True, "mtime": int(time.time()), **part}, False
-    if prev and prev.get("found"):
-        return prev, False
-    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+_echodb_refresh_lock = threading.Lock()
+_echodb_next_try     = 0.0
+_echodb_warned       = False
 
-_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
-                           lambda _r: log.warning("EchoLink station list not available "
-                                                  "(%s failed -- is chan_echolink loaded?)",
-                                                  _ECHODB_CMD))
+def _echodb_node_of(raw: str):
+    parts = raw.split("|", 2)
+    if len(parts) < 2:
+        return None
+    node = _strip_ctrl(parts[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    node = str(int(node))
+    return None if node == "0" else node
 
-def _load_echodb() -> dict:
-    return _echodb_cache.get()
+def _echodb_parse(raw: str, node: str):
+    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
+    return (node, call, f"{node} {call}".lower())
+
+def _echodb_write(text: str) -> None:
+    seen: "set[str]" = set()
+    rows = []
+    for raw in io.StringIO(text):
+        node = _echodb_node_of(raw)
+        if node is None or node in seen:
+            continue
+        seen.add(node)
+        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
+    rows.sort()
+    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
+    tmp = _ECHODB_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for _n, node, call in rows:
+            f.write(f"{node}|{call}\n")
+    os.replace(tmp, _ECHODB_FILE)
+
+def _echodb_refresh() -> None:
+    global _echodb_next_try, _echodb_warned
+    with _echodb_refresh_lock:
+        now = time.time()
+        try:
+            age = now - os.stat(_ECHODB_FILE).st_mtime
+        except OSError:
+            age = None
+        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
+            return
+        out, ok = ami_command(_ECHODB_CMD, timeout=8)
+        if ok and "no such command" not in out.lower():
+            try:
+                _echodb_write(out)
+                _echodb_warned = False
+                return
+            except OSError as e:
+                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
+        _echodb_next_try = now + _ECHODB_TTL
+        if age is None and not _echodb_warned:
+            _echodb_warned = True
+            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
+                        _ECHODB_CMD)
+
+_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
 
 def action_echo_directory(path: str) -> dict:
-    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    _echodb_refresh()
+    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -5734,7 +5904,8 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    row = _load_echodb()["by_node"].get(node)
+    _echodb_refresh()
+    row = _echodb.find(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
@@ -6114,11 +6285,11 @@ def _dvs_settle() -> None:
 _bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
 _bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 3
+_BRIDGE_DOWN_THRESHOLD     = 2
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 3
+_BRIDGE_UP_THRESHOLD    = 2
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6234,7 +6405,7 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
         _link_exit()
 
 def _link_poll_loop() -> None:
-    INTERVAL     = 1.0
+    INTERVAL     = 2.0
     fails        = 0
     last_detect  = time.monotonic()
     while True:
@@ -7808,6 +7979,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
   flex-shrink: 0;
 }
 .ref-mod-sel:focus { border-color: var(--amber); }
+#m17-grid .ref-mod-sel, #qt-M17-mod { width: 7.6rem; }
 .ref-mod-sel option { background: var(--surface2); }
 .btn-conn  { color: var(--teal); border-color: var(--teal-dim); }
 .btn-conn-pink { color: var(--pink); border-color: var(--pink-dim); }
@@ -8328,9 +8500,13 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .cfg-inp:disabled { opacity: .45; cursor: not-allowed; }
 .ph-net { border: 1px solid var(--border); border-radius: 6px; padding: .5rem .6rem; margin: .45rem 0; background: #0f1522; }
 .ph-net-hdr { display: flex; justify-content: space-between; align-items: center; gap: .5rem; margin-bottom: .35rem; font-family: var(--mono); font-size: .8rem; color: var(--text-bright); }
-.ph-fav-row { display: grid; grid-template-columns: 1.2fr 1fr 1fr 2.2rem; gap: .4rem; margin: .25rem 0; }
+.ph-net .cfg-field { justify-content: flex-end; }
+.ph-net .cfg-field > .tab-chk-lbl { min-height: 2.15rem; box-sizing: border-box; }
+.ph-fav-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: .4rem .9rem; margin: .25rem 0; }
+.ph-fav-tone { display: flex; gap: .4rem; min-width: 0; }
+.ph-fav-tone .cfg-inp { flex: 1 1 0; min-width: 0; }
 .ph-fav-clr { padding: .2rem .4rem; }
-@media (max-width: 560px) { .ph-fav-row { grid-template-columns: 1fr 1fr 2.2rem; } .ph-fav-row [data-fk="name"] { grid-column: 1 / -1; } }
+@media (max-width: 560px) { .ph-fav-row { grid-template-columns: 1fr 1fr 2.2rem; gap: .4rem; } .ph-fav-tone { display: contents; } .ph-fav-row [data-fk="name"] { grid-column: 1 / -1; } }
 .ph-hint { font-family: var(--mono); font-size: .68rem; color: #6f8aa8; margin: .25rem 0 0; }
 .ph-howto summary { cursor: pointer; color: var(--teal); }
 .ph-howto p { margin: .35rem 0 0; }
@@ -9235,7 +9411,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
-                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call.</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
               </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
@@ -12174,8 +12350,8 @@ function phFavBlock(n,i){
   h+=favs.map((f,j)=>
     `<div class="ph-fav-row" data-fi="${j}"><input class="cfg-inp" data-fk="name" type="text" maxlength="24" placeholder="${j+1}. Name" value="${esc(f.name)}">`+
     `<input class="cfg-inp" data-fk="number" type="text" inputmode="numeric" maxlength="20" placeholder="Number" value="${esc(f.number)}">`+
-    `<input class="cfg-inp" data-fk="tones" type="password" inputmode="tel" maxlength="32" autocomplete="off" placeholder="${f.has_tones?'Then send: saved':'Then send'}" value="${esc(f.tones||'')}">`+
-    (f.has_tones?`<button type="button" class="btn btn-muted ph-fav-clr" data-fclr="${j}" aria-label="Clear the saved tones for favorite ${j+1}" title="Clear the saved tones">✕</button>`:'<span></span>')+
+    `<div class="ph-fav-tone"><input class="cfg-inp" data-fk="tones" type="password" inputmode="tel" maxlength="32" autocomplete="off" placeholder="${f.has_tones?'Then send: saved':'Then send'}" value="${esc(f.tones||'')}">`+
+    (f.has_tones?`<button type="button" class="btn btn-muted ph-fav-clr" data-fclr="${j}" aria-label="Clear the saved tones for favorite ${j+1}" title="Clear the saved tones">✕</button>`:'')+`</div>`+
     `</div>`).join('');
   h+=`<div class="ph-hint">These favorites show on the Phone tab while this network is picked. Then send: tones sent 1 second after the call answers, such as a PIN like 1234#. A comma waits 1 second. Saved tones are hidden; leave the box blank to keep them, or press ✕ to clear them.</div>`;
   return h+`</div>`;
@@ -12912,7 +13088,7 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:5000);  // Pi02w: idle was 3000
 }
 let _keyedTimer=null;
 async function pollKeyed(){
@@ -12983,7 +13159,7 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedTimer=setTimeout(pollKeyed,500);
+  _keyedTimer=setTimeout(pollKeyed,1000);  // Pi02w: was 500 (the server updates every 2 s)
 }
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 async function pollAbInfo(){
@@ -14047,14 +14223,84 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _pyc_for(src: str) -> list:
+    name = os.path.splitext(os.path.basename(src))[0]
+    return _glob_pyc(os.path.dirname(src), name)
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
+
+def _nc_remove_pyc(dir_path: str, prefix: str) -> None:
+    pycache = os.path.join(dir_path, "__pycache__")
+    if not os.path.isdir(pycache):
+        return
+    for name in os.listdir(pycache):
+        if name.startswith(prefix) and name.endswith(".pyc"):
+            try:
+                os.remove(os.path.join(pycache, name))
+            except OSError:
+                pass
+    try:
+        os.rmdir(pycache)
+    except OSError:
+        pass
+
+def _nc_link(link: str, dest: str) -> None:
+    os.makedirs(os.path.dirname(link), exist_ok=True)
+    tmp_link = link + ".tmp"
+    if os.path.lexists(tmp_link):
+        os.remove(tmp_link)
+    os.symlink(dest, tmp_link)
+    os.replace(tmp_link, link)
+    print(f"  [+] Symlinked {link} -> {dest}")
+
 def install_service() -> None:
     if os.geteuid() != 0:
-        print("ERROR: install requires root  →  sudo python3 asl_dvs_dashboard.py --install",
+        print("ERROR: install requires root  →  sudo python3 nodecontrol.py --install",
               file=sys.stderr)
         sys.exit(1)
 
     current_script = os.path.realpath(__file__)
-    print("Installing asl_dvs_dashboard...")
+    print("Installing nodecontrol...")
 
     os.makedirs(_INSTALL_DIR, exist_ok=True)
     dest = os.path.join(_INSTALL_DIR, os.path.basename(current_script))
@@ -14066,84 +14312,96 @@ def install_service() -> None:
         print(f"  [+] Copied {os.path.basename(current_script)} -> {dest}")
     os.chmod(dest, 0o755)
 
-    tmp_link = _INSTALL_LINK + ".tmp"
-    if os.path.lexists(tmp_link):
-        os.remove(tmp_link)
-    os.symlink(dest, tmp_link)
-    os.replace(tmp_link, _INSTALL_LINK)
-    print(f"  [+] Symlinked {_INSTALL_LINK} -> {dest}")
+    _nc_link(_INSTALL_LINK, dest)
+    _nc_link(_LEGACY_LINK, dest)
+    _nc_remove_pyc(os.path.dirname(_LEGACY_LINK), "asl_dvs_dashboard")
 
     for name in os.listdir(_INSTALL_DIR):
         old = os.path.join(_INSTALL_DIR, name)
         if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
             os.remove(old)
             print(f"  [-] Removed the previous version {old}")
-    for name in os.listdir(_LEGACY_INSTALL_DIR):
-        old = os.path.join(_LEGACY_INSTALL_DIR, name)
-        if name.startswith("asl_dvs_dashboard") and name.endswith(".py") and os.path.isfile(old):
-            os.remove(old)
-            print(f"  [-] Removed the old copy {old}")
-    pycache = os.path.join(_LEGACY_INSTALL_DIR, "__pycache__")
-    if os.path.isdir(pycache):
-        for name in os.listdir(pycache):
-            if name.startswith("asl_dvs_dashboard") and name.endswith(".pyc"):
-                try:
-                    os.remove(os.path.join(pycache, name))
-                except OSError:
-                    pass
-        try:
-            os.rmdir(pycache)
-        except OSError:
-            pass
+    for old_dir in _OLD_INSTALL_DIRS:
+        if not os.path.isdir(old_dir):
+            continue
+        for name in os.listdir(old_dir):
+            old = os.path.join(old_dir, name)
+            if name.startswith(("asl_dvs_dashboard", "nodecontrol")) and name.endswith(".py") and os.path.isfile(old):
+                os.remove(old)
+                print(f"  [-] Removed the old copy {old}")
+        _nc_remove_pyc(old_dir, ("asl_dvs_dashboard", "nodecontrol"))
+    try:
+        os.rmdir(_OLD_INSTALL_DIRS[0])
+        print(f"  [-] Removed the old folder {_OLD_INSTALL_DIRS[0]}")
+    except OSError:
+        pass
+    _write_launcher()
+    _prune_pyc(_INSTALL_DIR)
+
+    if os.path.exists(_LEGACY_SERVICE_PATH):
+        subprocess.run(["systemctl", "disable", "--now", _LEGACY_SERVICE_NAME], stderr=subprocess.DEVNULL)
+        os.remove(_LEGACY_SERVICE_PATH)
+        print(f"  [-] Stopped, disabled and removed {_LEGACY_SERVICE_NAME} (now {_SERVICE_NAME})")
 
     with open(_SERVICE_PATH, "w") as f:
         f.write(_SERVICE_CONTENT)
     print(f"  [+] Wrote service file at {_SERVICE_PATH}")
 
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "asl_dvs_dashboard.service"], check=True)
-    subprocess.run(["systemctl", "restart", "asl_dvs_dashboard.service"], check=True)
-    print("  [+] Enabled and restarted asl_dvs_dashboard.service")
+    subprocess.run(["systemctl", "enable", _SERVICE_NAME], check=True)
+    subprocess.run(["systemctl", "restart", _SERVICE_NAME], check=True)
+    print(f"  [+] Enabled and restarted {_SERVICE_NAME}")
     print(f"\nInstall complete. {ASL_DVS_CONF} was not touched.")
-    print("View logs anytime using:  journalctl -u asl_dvs_dashboard -f")
+    print("View logs anytime using:  journalctl -u nodecontrol -f")
 
 def uninstall_service() -> None:
     if os.geteuid() != 0:
-        print("ERROR: uninstall requires root  →  sudo python3 asl_dvs_dashboard.py --uninstall",
+        print("ERROR: uninstall requires root  →  sudo python3 nodecontrol.py --uninstall",
               file=sys.stderr)
         sys.exit(1)
 
-    print("Uninstalling asl_dvs_dashboard...")
+    print("Uninstalling nodecontrol...")
 
-    subprocess.run(["systemctl", "disable", "--now", "asl_dvs_dashboard.service"],
-                    stderr=subprocess.DEVNULL)
-    print("  [-] Stopped and disabled asl_dvs_dashboard.service")
-
-    if os.path.exists(_SERVICE_PATH):
-        os.remove(_SERVICE_PATH)
-        print(f"  [-] Removed {_SERVICE_PATH}")
+    for unit, path in ((_SERVICE_NAME, _SERVICE_PATH), (_LEGACY_SERVICE_NAME, _LEGACY_SERVICE_PATH)):
+        if not os.path.exists(path):
+            continue
+        subprocess.run(["systemctl", "disable", "--now", unit], stderr=subprocess.DEVNULL)
+        os.remove(path)
+        print(f"  [-] Stopped, disabled and removed {unit}")
     subprocess.run(["systemctl", "daemon-reload"], stderr=subprocess.DEVNULL)
 
-    if os.path.islink(_INSTALL_LINK) or os.path.exists(_INSTALL_LINK):
-        target = None
-        if os.path.islink(_INSTALL_LINK):
-            target = os.path.realpath(_INSTALL_LINK)
-        os.remove(_INSTALL_LINK)
-        print(f"  [-] Removed {_INSTALL_LINK}")
-        if target and os.path.basename(target).startswith("asl_dvs_dashboard_") and os.path.isfile(target):
+    targets = set()
+    for link in (_INSTALL_LINK, _LEGACY_LINK):
+        if not os.path.lexists(link):
+            continue
+        if os.path.islink(link):
+            targets.add(os.path.realpath(link))
+        os.remove(link)
+        print(f"  [-] Removed {link}")
+    _nc_remove_pyc(os.path.dirname(_LEGACY_LINK), "asl_dvs_dashboard")
+    for target in sorted(targets):
+        if os.path.basename(target).startswith(("nodecontrol", "asl_dvs_dashboard")) and os.path.isfile(target):
             os.remove(target)
             print(f"  [-] Removed {target}")
-    for d in (os.path.join(_INSTALL_DIR, "__pycache__"), _INSTALL_DIR, _LEGACY_INSTALL_DIR):
+            _nc_remove_pyc(os.path.dirname(target), os.path.splitext(os.path.basename(target))[0])
+    for d in (_INSTALL_DIR,) + _OLD_INSTALL_DIRS:
+        _nc_remove_pyc(d, ("asl_dvs_dashboard", "nodecontrol"))
         try:
             os.rmdir(d)
         except OSError:
             pass
+    _remove_launcher_if_unused()
+
+    echodb_dir = os.path.dirname(_ECHODB_FILE)
+    if os.path.isdir(echodb_dir):
+        shutil.rmtree(echodb_dir, ignore_errors=True)
+        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
 
 def main() -> None:
     if os.geteuid() != 0:
-        print("ERROR: run as root  →  sudo python3 asl_dvs_dashboard.py", file=sys.stderr)
+        print("ERROR: run as root  →  sudo python3 nodecontrol.py", file=sys.stderr)
         sys.exit(1)
     startup()
     Handler.allow_reuse_address = True

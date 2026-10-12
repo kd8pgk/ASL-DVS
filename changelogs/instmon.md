@@ -1,6 +1,41 @@
 # instmon changelog
 
-Current file: `instmon_v2_42_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_43_0_20261012.py`. Newest entries first.
+
+## 2.43.0 (2026-10-12)
+
+Ready for the renamed tools: the Dashboard becomes `nodecontrol`
+(`nodecontrol.service`, `/usr/local/bin/nodecontrol.py`), 44helper's file
+becomes `44helper_v….py`, and the installer and uninstaller become
+`install_all_v….sh` and `uninstall_all_v….sh`. Old and new names both work, so
+this instmon goes on a node first.
+
+- The Dashboard is found as `nodecontrol`, or as `asl_dvs_dashboard` on a node
+  that hasn't switched yet. Status, Start, Stop, Restart, Quiet System, Full
+  Update and the health checks all use whichever unit is installed. The program
+  is looked up at `/usr/local/bin/nodecontrol.py`, then at the old path.
+- Old and new file names count as the same tool. `asl_dvs_dashboard*.py` and
+  `nodecontrol*.py` are both the Dashboard, `asl_dvs_m17_44helper*.py` and
+  `44helper*.py` are both 44helper, and so on, so the library, Check GitHub and
+  Full Update compare them as one. Full Update sees an installed
+  `asl_dvs_dashboard_pi02w` as the same build as `nodecontrol_pi02w`.
+- `install_all*.sh` and `uninstall_all*.sh` are run as the installer and
+  uninstaller, the same as the old names.
+- Installing an older Dashboard over `nodecontrol` (Install on an ALT file, or a
+  Full Update rollback): `nodecontrol.service` is disabled and removed first,
+  so two dashboards never fight over port 8989. A file that names both units
+  (a renamed Dashboard, which moves itself) is left to do it.
+- Launcher version 3 (the same text in every tool that writes it): a tool file
+  whose name starts with a digit, like `44helper_v….py`, is loaded through
+  `importlib`, so its compiled copy in `__pycache__` is used instead of being
+  recompiled on every start.
+- Retiring `nodecontrol.service` also removes `/usr/local/bin/nodecontrol.py`
+  and `/usr/local/lib/asl_dvs/nodecontrol/`, so nothing stale is left for the
+  old Dashboard's own uninstall to miss.
+- Tested with mocks: which unit and path are picked on an old node, a renamed
+  node and a node with both; when the other unit is retired and when it is
+  not; the name aliases and Full Update stems for every renamed file; and
+  installer and uninstaller detection under both names.
 
 ## 2.42.0 (2026-10-12)
 

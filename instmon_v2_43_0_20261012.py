@@ -35,11 +35,11 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.42.0"
+VERSION ="2.43.0"
 DATE_STR ="2026-10-12"
 
-INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
-UNINSTALLER_SCRIPT_GLOB ="uninstall_asl_dvs*.sh"
+INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
+UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
 
 INTERACTIVE_ONLY_SCRIPT_GLOBS =("wifi_menu*.sh","wifi-menu*.sh")
 
@@ -99,11 +99,15 @@ if not os.path.exists(_OFF + "trim"):
 target = os.path.realpath(sys.argv[1])
 name = os.path.splitext(os.path.basename(target))[0]
 sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
 if name.isidentifier():
-    sys.path.insert(0, os.path.dirname(target))
     runpy.run_module(name, run_name="__main__", alter_sys=True)
 else:
-    runpy.run_path(target, run_name="__main__")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
 '''
 
 SYSTEMD_SERVICE_CONTENT ="""[Unit]
@@ -1671,10 +1675,13 @@ ALLOWED_EXT ={
 COMPONENTS =[
 {
 "name":"Dashboard",
-"service":"asl_dvs_dashboard",
+"service":"nodecontrol",
+"legacy_services":("asl_dvs_dashboard",),
 "port":8989 ,
 
-"install_link":"/usr/local/bin/asl_dvs_dashboard.py",
+"install_link":"/usr/local/bin/nodecontrol.py",
+"legacy_links":("/usr/local/bin/asl_dvs_dashboard.py",),
+"unit_paths":{"nodecontrol":("/usr/local/bin/nodecontrol.py","/usr/local/lib/asl_dvs/nodecontrol")},
 "category":"dashboard",
 },
 {
@@ -1720,14 +1727,21 @@ INSTALLABLE_CATEGORIES ={c ["category"]for c in COMPONENTS }
 
 HOME_SCAN_PATTERN_MAP =[
 ("watchdog",["asl_dvs_watchdog*.sh"]),
-("dashboard",["asl_dvs_dashboard*.py"]),
+("dashboard",["nodecontrol*.py","asl_dvs_dashboard*.py"]),
 ("sysmon",["sysmon*.py","asl_dvs_sysmon*.py","asl_dvs_m17_sysmon*.py","sysmon_svx*.py"]),
 ("wifimon",["wifimon*.py"]),
-("44helper",["asl_dvs_m17_44helper*.py","44helper*.py"]),
+("44helper",["44helper*.py","asl_dvs_m17_44helper*.py"]),
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf"]),
-("scripts",["install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
+("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
 ]
+
+_NAME_GLOB_ALIASES ={
+"asl_dvs_dashboard*.py":"nodecontrol*.py",
+"asl_dvs_m17_44helper*.py":"44helper*.py",
+"install_asl_dvs*.sh":"install_all*.sh",
+"uninstall_asl_dvs*.sh":"uninstall_all*.sh",
+}
 
 COMMS_RESTART_SERVICES =[
 ("Asterisk","asterisk.service"),
@@ -2175,7 +2189,7 @@ def _quiesce_resolve_units(scope="diskimg"):
     for comp in COMPONENTS:
         if comp["category"] in keep:
             continue
-        unit = comp["service"]
+        unit = unit_of(comp)
         if not unit.endswith(".service") and not unit.endswith(".timer"):
             unit = unit + ".service"
         if systemctl_is_active(unit) == "active":
@@ -2579,9 +2593,9 @@ def attempt_rollback (dest_path ,backup_path ,comp ):
         shutil .copy2 (backup_path ,dest_path )
     except OSError :
         return False ,None ,None 
-    subprocess .run (["systemctl","restart",comp ["service"]],capture_output =True ,text =True ,timeout =10 )
+    subprocess .run (["systemctl","restart",unit_of (comp )],capture_output =True ,text =True ,timeout =10 )
     time .sleep (1.5 )
-    state =systemctl_is_active (comp ["service"])
+    state =systemctl_is_active (unit_of (comp ))
     listening =port_open (comp ["port"])
     log_event (f"Rolled back {comp ['name']} to previous version (now {state })","warn")
     return True ,state ,listening 
@@ -2634,19 +2648,19 @@ def install_file_with_verification (data ,dest_path ,comp ):
         return " Rollback attempt failed -- check manually."
 
     restart =subprocess .run (
-    ["systemctl","restart",comp ["service"]],
+    ["systemctl","restart",unit_of (comp )],
     capture_output =True ,text =True ,timeout =10 ,
     )
     result ["restarted"]=True 
     if restart .returncode !=0 :
         err_tail =(restart .stderr or restart .stdout or "unknown error").strip ()[:200 ]
-        log_event (f"systemctl restart {comp ['service']} failed: {err_tail }","err")
-        result ["message"]=f"{comp ['service']} failed to restart: {err_tail }.{rollback_suffix ()}"
+        log_event (f"systemctl restart {unit_of (comp )} failed: {err_tail }","err")
+        result ["message"]=f"{unit_of (comp )} failed to restart: {err_tail }.{rollback_suffix ()}"
         result ["level"]="err"
         return result 
 
     time .sleep (1.5 )
-    state =systemctl_is_active (comp ["service"])
+    state =systemctl_is_active (unit_of (comp ))
     listening =port_open (comp ["port"])
     result ["active"]=state 
     result ["listening"]=listening 
@@ -2795,10 +2809,18 @@ def human_size (num_bytes ):
         num_bytes /=1024 
     return f"{num_bytes :.1f} TB"
 
+def unit_of(comp):
+    names = [comp["service"]] + list(comp.get("legacy_services", ()))
+    if len(names) > 1:
+        for n in names:
+            if os.path.exists(os.path.join(_SYSTEMD_UNIT_DIR, n + ".service")):
+                return n
+    return comp["service"]
+
 def installed_link(comp):
     paths = [comp["install_link"]] + list(comp.get("legacy_links", ()))
     if len(paths) > 1:
-        unit = os.path.join(_SYSTEMD_UNIT_DIR, comp["service"] + ".service")
+        unit = os.path.join(_SYSTEMD_UNIT_DIR, unit_of(comp) + ".service")
         try:
             with open(unit, errors="replace") as fh:
                 unit_text = fh.read()
@@ -2836,6 +2858,39 @@ def delink_install_paths(comp):
             except OSError:
                 pass
             log_event(f"Could not replace the symlink {link} before --install: {exc}", "warn")
+
+def retire_other_units(comp, script_path):
+    names = [comp["service"]] + list(comp.get("legacy_services", ()))
+    if len(names) < 2:
+        return
+    try:
+        with open(script_path, errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return
+    if not any(n + ".service" in text for n in names):
+        return
+    for n in names:
+        unit = os.path.join(_SYSTEMD_UNIT_DIR, n + ".service")
+        if n + ".service" in text or not os.path.exists(unit):
+            continue
+        try:
+            subprocess.run(["systemctl", "disable", "--now", n + ".service"],
+                           capture_output=True, text=True, timeout=30)
+            os.remove(unit)
+            for path in comp.get("unit_paths", {}).get(n, ()):
+                if os.path.islink(path) or os.path.isfile(path):
+                    os.remove(path)
+                elif os.path.isdir(path):
+                    shutil.rmtree(path)
+            subprocess.run(["systemctl", "daemon-reload"], capture_output=True, text=True, timeout=30)
+            log_event(f"Retired {n}.service: {os.path.basename(script_path)} installs {comp['name']} under another name", "info")
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            log_event(f"Could not retire {n}.service before --install: {exc}", "warn")
+
+def prepare_install(comp, script_path):
+    delink_install_paths(comp)
+    retire_other_units(comp, script_path)
 
 def _delink_shell(comp):
     parts = []
@@ -2902,7 +2957,7 @@ def scan_library ():
 def build_status ():
     components =[]
     for comp in COMPONENTS :
-        state =systemctl_is_active (comp ["service"])
+        state =systemctl_is_active (unit_of (comp ))
         listening =port_open (comp ["port"])
         installed_target =resolve_installed_target (comp )
         components .append ({
@@ -2927,11 +2982,11 @@ def build_status ():
 
 def is_installer_script (name ):
 
-    return fnmatch .fnmatch (name .lower (),INSTALLER_SCRIPT_GLOB .lower ())
+    return any (fnmatch .fnmatch (name .lower (),g )for g in INSTALLER_SCRIPT_GLOBS )
 
 def is_uninstaller_script (name ):
 
-    return fnmatch .fnmatch (name .lower (),UNINSTALLER_SCRIPT_GLOB .lower ())
+    return any (fnmatch .fnmatch (name .lower (),g )for g in UNINSTALLER_SCRIPT_GLOBS )
 
 def is_interactive_only_script (name ):
 
@@ -2995,7 +3050,7 @@ def _gh_kind_for_name (name ):
     for category ,globs in HOME_SCAN_PATTERN_MAP :
         for g in globs :
             if fnmatch .fnmatch (lname ,g .lower ()):
-                return category ,g .lower ()
+                return category ,_NAME_GLOB_ALIASES .get (g ,g ).lower ()
     return None ,None 
 
 def _git_blob_id (data ):
@@ -3649,6 +3704,10 @@ def quiet_forget(service):
         if not state or state.get("job_id") != QUIET_JOB_ID:
             return
         names = {service, service + ".service"}
+        for c in COMPONENTS:
+            if c["service"] == service:
+                for n in c.get("legacy_services", ()):
+                    names.update((n, n + ".service"))
         kept = [e for e in state.get("stopped") or [] if e[2] not in names]
         if len(kept) != len(state.get("stopped") or []):
             _quiesce_state_write(QUIET_JOB_ID, kept, started_at=state.get("started_at"))
@@ -3701,10 +3760,10 @@ FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
 
 _FU_DEFAULT_STEM = {
-    "dashboard": "asl_dvs_dashboard",
+    "dashboard": "nodecontrol",
     "sysmon": "sysmon",
     "wifimon": "wifimon",
-    "44helper": "asl_dvs_m17_44helper",
+    "44helper": "44helper",
     "watchdog": "asl_dvs_watchdog",
     "instmon": "instmon",
 }
@@ -3740,9 +3799,15 @@ def full_update_snapshot():
     with _fu_lock:
         return json.loads(json.dumps(_fu_state))
 
+_FU_STEM_ALIASES = (("asl_dvs_dashboard", "nodecontrol"), ("asl_dvs_m17_44helper", "44helper"))
+
 def _fu_stem_of_name(name):
     m = _FU_STEM_RE.match(name)
-    return (m.group("stem") if m else os.path.splitext(name)[0]).lower()
+    stem = (m.group("stem") if m else os.path.splitext(name)[0]).lower()
+    for old, new in _FU_STEM_ALIASES:
+        if stem == old or stem.startswith(old + "_"):
+            return new + stem[len(old):]
+    return stem
 
 def _fu_installed_stem(comp, target, version):
     base = os.path.basename(target)
@@ -3868,7 +3933,7 @@ def _fu_wait_healthy(comp):
     deadline = time.time() + FU_START_TIMEOUT_SEC
     state = "unknown"
     while time.time() < deadline:
-        state = systemctl_is_active(comp["service"])
+        state = systemctl_is_active(unit_of(comp))
         if state == "active" and (comp["port"] is None or port_open(comp["port"])):
             return True, state
         time.sleep(2)
@@ -3896,7 +3961,7 @@ def _fu_update_one(comp, row, new_path):
 
     _fu_set(current=f"{name}: installing v{new_ver}")
     log_event(f"Full Update: {name}: installing {os.path.basename(new_path)}", "info")
-    delink_install_paths(comp)
+    prepare_install(comp, new_path)
     rc = _fu_run_cli(new_path, "--install")
     ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
     if ok:
@@ -3909,7 +3974,7 @@ def _fu_update_one(comp, row, new_path):
     reason = f"v{new_ver} failed ({state})"
     log_event(f"Full Update: {name}: {reason} -- putting v{old_ver} back", "err")
     _fu_set(current=f"{name}: rolling back to v{old_ver}")
-    delink_install_paths(comp)
+    prepare_install(comp, old_path)
     rc = _fu_run_cli(old_path, "--install")
     ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
     if ok:
@@ -4052,7 +4117,7 @@ def _fu_run():
             instmon_pending={"from": row["installed_version"], "to": row["version"]})
     _fu_save()
     log_event(f"Full Update: instmon: installing v{row['version']} -- this page reconnects when it restarts", "info")
-    delink_install_paths(comp)
+    prepare_install(comp, path)
     rc = _fu_run_cli(path, "--install")
     if rc != 0:
         try:
@@ -4179,7 +4244,7 @@ def run_script_bg (script_path ,script_name ,env_overrides =None ):
 def run_self_install_bg (script_path ,script_name ,comp ):
 
     log_event (f"Installing {script_name } ({comp ['name']}) -- running its own --install...","info")
-    delink_install_paths (comp )
+    prepare_install (comp ,script_path )
     try :
         proc =subprocess .Popen (
         [_interp_for (script_path ),script_path ,"--install"],
@@ -8672,12 +8737,12 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (400 ,"instmon cannot start/restart itself from its own panel.")
             return 
         try :
-            subprocess .run (["systemctl","restart",service ],capture_output =True ,text =True ,timeout =10 )
+            subprocess .run (["systemctl","restart",unit_of (comp )],capture_output =True ,text =True ,timeout =10 )
         except (FileNotFoundError ,subprocess .TimeoutExpired )as exc :
             self ._error_json (500 ,f"Could not start {comp ['name']}: {exc }")
             return 
         time .sleep (0.5 )
-        state =systemctl_is_active (service )
+        state =systemctl_is_active (unit_of (comp ))
         log_event (f"Started {comp ['name']} (now {state })","info"if state =="active"else "warn")
         self ._send_json (200 ,{
         "service":service ,
@@ -8697,12 +8762,12 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (400 ,"instmon cannot stop itself.")
             return 
         try :
-            subprocess .run (["systemctl","stop",service ],capture_output =True ,text =True ,timeout =10 )
+            subprocess .run (["systemctl","stop",unit_of (comp )],capture_output =True ,text =True ,timeout =10 )
         except (FileNotFoundError ,subprocess .TimeoutExpired )as exc :
             self ._error_json (500 ,f"Could not stop {comp ['name']}: {exc }")
             return 
         time .sleep (0.5 )
-        state =systemctl_is_active (service )
+        state =systemctl_is_active (unit_of (comp ))
         log_event (f"Stopped {comp ['name']} (now {state })","warn"if state =="active"else "info")
         self ._send_json (200 ,{
         "service":service ,
