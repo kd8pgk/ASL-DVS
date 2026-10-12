@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_asl_dvs_all.sh  v1.3  (2026-10-07)
+# uninstall_asl_dvs_all.sh  v1.4  (2026-10-12)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -12,13 +12,16 @@ warn() { echo "${YEL}  ⚠ ${RST}$*"; }
 echo "== ASL-DVS Suite — Mass Uninstall (instmon, library, and config are left alone) =="
 echo
 
+HELPER_PATH=/usr/local/bin/44helper.py
+if [[ ! -e "$HELPER_PATH" && -e /opt/44helper/asl_dvs_m17_44helper.py ]]; then
+    HELPER_PATH=/opt/44helper/asl_dvs_m17_44helper.py
+fi
+
 COMPONENTS=(
     "asl_dvs_dashboard|/usr/local/bin/asl_dvs_dashboard.py|python3"
-    "asl_dvs_m17_dashboard|/usr/local/bin/asl_dvs_m17_dashboard.py|python3"
     "sysmon|/usr/local/bin/sysmon.py|python3"
     "wifimon|/usr/local/bin/wifimon.py|python3"
-    "44helper|/opt/44helper/asl_dvs_m17_44helper.py|python3"
-    "asl_dvs_watchdog|/usr/local/bin/asl_dvs_watchdog.sh|bash"
+    "44helper|${HELPER_PATH}|python3"
 )
 
 for entry in "${COMPONENTS[@]}"; do
@@ -54,5 +57,5 @@ fi
 echo
 
 echo "== Done =="
-echo "Untouched by design: instmon, /etc/asl_dvs/ (config + instmon_library), /etc/wifimon/wifimon.conf,"
-echo "and both library dirs (/usr/local/lib/asl_dvs, /usr/local/lib/asl_dvs_sysmon)."
+echo "Untouched by design: instmon (and /usr/local/lib/asl_dvs/instmon), /etc/asl_dvs/ (config + instmon_library),"
+echo "/etc/sysmon/, /etc/wifimon/ and /etc/44helper/."

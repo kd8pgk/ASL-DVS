@@ -39,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.74"
-BUILD_DATE   = "2026-10-11"
+VERSION      = "9.3.75"
+BUILD_DATE   = "2026-10-12"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -94,7 +94,8 @@ ASL_DVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
 
 _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
 
-_INSTALL_DIR      = "/usr/local/lib/asl_dvs"
+_INSTALL_DIR      = "/usr/local/lib/asl_dvs/dashboard"
+_LEGACY_INSTALL_DIR = "/usr/local/lib/asl_dvs"
 _INSTALL_LINK     = "/usr/local/bin/asl_dvs_dashboard.py"
 _SERVICE_PATH     = "/etc/systemd/system/asl_dvs_dashboard.service"
 _SERVICE_CONTENT  = f"""[Unit]
@@ -103,6 +104,7 @@ After=network.target
 
 [Service]
 Type=notify
+NotifyAccess=main
 ExecStart=/usr/bin/python3 {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
@@ -14051,19 +14053,48 @@ def install_service() -> None:
               file=sys.stderr)
         sys.exit(1)
 
-    current_script = os.path.abspath(__file__)
+    current_script = os.path.realpath(__file__)
     print("Installing asl_dvs_dashboard...")
 
     os.makedirs(_INSTALL_DIR, exist_ok=True)
     dest = os.path.join(_INSTALL_DIR, os.path.basename(current_script))
-    shutil.copy2(current_script, dest)
+    if current_script != dest:
+        tmp = dest + ".tmp"
+        shutil.copy2(current_script, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+        print(f"  [+] Copied {os.path.basename(current_script)} -> {dest}")
     os.chmod(dest, 0o755)
-    print(f"  [+] Copied {os.path.basename(current_script)} -> {dest}")
 
-    if os.path.islink(_INSTALL_LINK) or os.path.exists(_INSTALL_LINK):
-        os.remove(_INSTALL_LINK)
-    os.symlink(dest, _INSTALL_LINK)
+    tmp_link = _INSTALL_LINK + ".tmp"
+    if os.path.lexists(tmp_link):
+        os.remove(tmp_link)
+    os.symlink(dest, tmp_link)
+    os.replace(tmp_link, _INSTALL_LINK)
     print(f"  [+] Symlinked {_INSTALL_LINK} -> {dest}")
+
+    for name in os.listdir(_INSTALL_DIR):
+        old = os.path.join(_INSTALL_DIR, name)
+        if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
+            os.remove(old)
+            print(f"  [-] Removed the previous version {old}")
+    for name in os.listdir(_LEGACY_INSTALL_DIR):
+        old = os.path.join(_LEGACY_INSTALL_DIR, name)
+        if name.startswith("asl_dvs_dashboard") and name.endswith(".py") and os.path.isfile(old):
+            os.remove(old)
+            print(f"  [-] Removed the old copy {old}")
+    pycache = os.path.join(_LEGACY_INSTALL_DIR, "__pycache__")
+    if os.path.isdir(pycache):
+        for name in os.listdir(pycache):
+            if name.startswith("asl_dvs_dashboard") and name.endswith(".pyc"):
+                try:
+                    os.remove(os.path.join(pycache, name))
+                except OSError:
+                    pass
+        try:
+            os.rmdir(pycache)
+        except OSError:
+            pass
 
     with open(_SERVICE_PATH, "w") as f:
         f.write(_SERVICE_CONTENT)
@@ -14096,12 +14127,17 @@ def uninstall_service() -> None:
     if os.path.islink(_INSTALL_LINK) or os.path.exists(_INSTALL_LINK):
         target = None
         if os.path.islink(_INSTALL_LINK):
-            target = os.readlink(_INSTALL_LINK)
+            target = os.path.realpath(_INSTALL_LINK)
         os.remove(_INSTALL_LINK)
         print(f"  [-] Removed {_INSTALL_LINK}")
         if target and os.path.basename(target).startswith("asl_dvs_dashboard_") and os.path.isfile(target):
             os.remove(target)
             print(f"  [-] Removed {target}")
+    for d in (os.path.join(_INSTALL_DIR, "__pycache__"), _INSTALL_DIR, _LEGACY_INSTALL_DIR):
+        try:
+            os.rmdir(d)
+        except OSError:
+            pass
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
 

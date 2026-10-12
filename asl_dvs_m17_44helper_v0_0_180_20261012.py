@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.179"
+APP_VERSION = "0.0.180"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/asl_dvs_m17_44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -284,7 +284,9 @@ def save_config(cfg: configparser.ConfigParser) -> None:
     except OSError as e:
         log(f"WARNING: could not save {CONFIG_FILE}: {e}")
 
-INSTALL_BIN_PATH = "/opt/44helper/asl_dvs_m17_44helper.py"
+INSTALL_BIN_PATH = "/usr/local/bin/44helper.py"
+INSTALL_DIR = "/usr/local/lib/asl_dvs/44helper"
+LEGACY_BIN_PATH = "/opt/44helper/asl_dvs_m17_44helper.py"
 SYSTEMD_SERVICE_PATH = "/etc/systemd/system/44helper.service"
 
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
@@ -350,8 +352,8 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH}
-Restart=on-failure
-RestartSec=3
+Restart=always
+RestartSec=3s
 User=root
 StandardOutput=journal
 StandardError=journal
@@ -411,7 +413,7 @@ def install_service() -> None:
         print("Error: Installation requires root privileges. Run with 'sudo'.")
         sys.exit(1)
 
-    current_script = os.path.abspath(__file__)
+    current_script = os.path.realpath(__file__)
 
     print(f"Installing {APP_TITLE} v{APP_VERSION} ({APP_STAGE})...")
 
@@ -419,12 +421,44 @@ def install_service() -> None:
     os.chmod(CONFIG_DIR, 0o700)
     print(f"  [+] Ensured {CONFIG_DIR} exists with mode 700")
 
-    install_dir = os.path.dirname(INSTALL_BIN_PATH)
-    os.makedirs(install_dir, exist_ok=True)
-    if current_script != INSTALL_BIN_PATH:
-        shutil.copy2(current_script, INSTALL_BIN_PATH)
-        print(f"  [+] Copied script to {INSTALL_BIN_PATH}")
-    os.chmod(INSTALL_BIN_PATH, 0o755)
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    dest = os.path.join(INSTALL_DIR, os.path.basename(current_script))
+    if current_script != dest:
+        tmp = dest + ".tmp"
+        shutil.copy2(current_script, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+        print(f"  [+] Copied {os.path.basename(current_script)} -> {dest}")
+    os.chmod(dest, 0o755)
+
+    for link in (INSTALL_BIN_PATH, LEGACY_BIN_PATH):
+        os.makedirs(os.path.dirname(link), exist_ok=True)
+        was_plain = os.path.isfile(link) and not os.path.islink(link)
+        tmp_link = link + ".tmp"
+        if os.path.lexists(tmp_link):
+            os.remove(tmp_link)
+        os.symlink(dest, tmp_link)
+        os.replace(tmp_link, link)
+        print(f"  [+] Symlinked {link} -> {dest}")
+        if was_plain:
+            for pyc in _pyc_for(link):
+                try:
+                    os.remove(pyc)
+                except OSError:
+                    pass
+            print(f"  [-] Replaced the old plain copy at {link}")
+    for pyc in _glob_pyc(os.path.dirname(LEGACY_BIN_PATH)):
+        try:
+            os.remove(pyc)
+        except OSError:
+            pass
+
+    for name in os.listdir(INSTALL_DIR):
+        old = os.path.join(INSTALL_DIR, name)
+        if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
+            os.remove(old)
+            print(f"  [-] Removed the previous version {old}")
+    _prune_pyc(INSTALL_DIR)
     _write_launcher()
 
     with open(SYSTEMD_SERVICE_PATH, "w") as f:
@@ -454,13 +488,33 @@ def uninstall_service() -> None:
 
     subprocess.run(["systemctl", "daemon-reload"], stderr=subprocess.DEVNULL)
 
-    if os.path.exists(INSTALL_BIN_PATH):
-        os.remove(INSTALL_BIN_PATH)
-        print(f"  [-] Removed {INSTALL_BIN_PATH}")
-    for pyc in _pyc_for(INSTALL_BIN_PATH):
+    targets = set()
+    for link in (INSTALL_BIN_PATH, LEGACY_BIN_PATH):
+        if not os.path.lexists(link):
+            continue
+        if os.path.islink(link):
+            targets.add(os.path.realpath(link))
+        os.remove(link)
+        print(f"  [-] Removed {link}")
+        for pyc in _pyc_for(link):
+            try:
+                os.remove(pyc)
+            except FileNotFoundError:
+                pass
+    for target in sorted(targets):
+        if os.path.dirname(target) == INSTALL_DIR and os.path.isfile(target):
+            os.remove(target)
+            print(f"  [-] Removed {target}")
+            for pyc in _pyc_for(target):
+                try:
+                    os.remove(pyc)
+                except FileNotFoundError:
+                    pass
+    for d in (os.path.join(INSTALL_DIR, "__pycache__"), INSTALL_DIR, os.path.dirname(INSTALL_DIR),
+              os.path.join(os.path.dirname(LEGACY_BIN_PATH), "__pycache__"), os.path.dirname(LEGACY_BIN_PATH)):
         try:
-            os.remove(pyc)
-        except FileNotFoundError:
+            os.rmdir(d)
+        except OSError:
             pass
     _remove_launcher_if_unused()
 
@@ -10832,7 +10886,7 @@ TOOLS = [
     ("Dashboard", "dashboard", "asl_dvs_dashboard", 8989, "/usr/local/bin/asl_dvs_dashboard.py"),
     ("SysMon", "sysmon", "sysmon", 9999, "/usr/local/bin/sysmon.py"),
     ("wifimon", "wifimon", "wifimon", 8991, "/usr/local/bin/wifimon.py"),
-    ("44helper", "44helper", "44helper", 9997, "/opt/44helper/asl_dvs_m17_44helper.py"),
+    ("44helper", "44helper", "44helper", 9997, ("/usr/local/bin/44helper.py", "/opt/44helper/asl_dvs_m17_44helper.py")),
 ]
 CRITICAL = ("instmon", "asl_dvs_dashboard")
 VER_RE = re.compile(r"^\s*(?:APP_VERSION|SCRIPT_VERSION|VERSION)\s*=\s*[\"']([^\"']+)[\"']", re.M)
@@ -10949,9 +11003,43 @@ def stem_of(path):
     return m.group(1).lower() if m else ""
 
 
+def links_of(link):
+    return list(link) if isinstance(link, (list, tuple)) else [link]
+
+
+def link_of(unit, link):
+    paths = links_of(link)
+    if len(paths) > 1:
+        text = read(os.path.join("/etc/systemd/system", unit + ".service"))
+        for p in paths:
+            if p in text:
+                return p
+        for p in paths:
+            if os.path.lexists(p):
+                return p
+    return paths[0]
+
+
+def delink(link):
+    for p in links_of(link):
+        if not os.path.islink(p):
+            continue
+        target = os.path.realpath(p)
+        tmp = p + ".delink.tmp"
+        try:
+            if os.path.isfile(target):
+                shutil.copy2(target, tmp)
+                os.replace(tmp, p)
+            else:
+                os.remove(p)
+        except OSError as exc:
+            log("could not replace the symlink %s: %s" % (p, exc))
+
+
 def plan():
     rows = []
-    for label, cat, unit, port, link in TOOLS:
+    for label, cat, unit, port, links in TOOLS:
+        link = link_of(unit, links)
         row = {"name": label, "category": cat, "unit": unit, "port": port, "link": link, "action": "skip",
                "note": "", "installed": "", "version": "", "file": "", "source": ""}
         rows.append(row)
@@ -11005,7 +11093,10 @@ def guard_arm(old):
     for args in (["systemctl", "stop", "instmon-update-guard.timer", "instmon-update-guard.service"],
                  ["systemctl", "reset-failed", "instmon-update-guard.service"]):
         run(args, 15)
-    check = "timeout 5 bash -c '</dev/tcp/127.0.0.1/8990' || python3 %s --install" % old
+    l = "/usr/local/bin/instmon.py"
+    check = ("timeout 5 bash -c '</dev/tcp/127.0.0.1/8990' || { if [ -L %s ]; then t=$(readlink -f %s); "
+             "if [ -f \"$t\" ] && cp -p \"$t\" %s.delink.tmp; then mv -f %s.delink.tmp %s; else rm -f %s; fi; fi; "
+             "python3 %s --install; }" % (l, l, l, l, l, l, old))
     return run(["systemd-run", "--quiet", "--collect", "--on-active=%d" % GUARD_SEC,
                 "--unit=instmon-update-guard", "bash", "-c", check], 20) == 0
 
@@ -11025,7 +11116,9 @@ def drop_superseded(old_target, link):
             log("could not remove %s: %s" % (old_target, exc))
 
 
-def install_and_wait(name, unit, port, path, wait_first=0):
+def install_and_wait(name, unit, port, path, wait_first=0, link=None):
+    if link:
+        delink(link)
     rc = run([interp(path), path, "--install"])
     if rc == 0 and wait_first:
         time.sleep(wait_first)
@@ -11034,6 +11127,7 @@ def install_and_wait(name, unit, port, path, wait_first=0):
 
 def do_tool(row):
     name, cat, unit, port, link = row["name"], row["category"], row["unit"], row["port"], row["link"]
+    all_links = next((t[4] for t in TOOLS if t[2] == unit), link)
     target = os.path.realpath(link)
     try:
         old = backup(cat, target)
@@ -11047,7 +11141,7 @@ def do_tool(row):
             step(name, "skipped", "could not set up its rollback timer, left alone")
             return "skipped"
     step(name, "running", "installing v%s" % row["version"])
-    ok, st = install_and_wait(name, unit, port, new, wait)
+    ok, st = install_and_wait(name, unit, port, new, wait, all_links)
     if ok:
         if cat == "instmon":
             guard_stop()
@@ -11055,7 +11149,7 @@ def do_tool(row):
         step(name, "ok", row["note"])
         return "ok"
     step(name, "running", "v%s failed (%s), putting v%s back" % (row["version"], st, row["installed"]))
-    ok2, st2 = install_and_wait(name, unit, port, old, wait)
+    ok2, st2 = install_and_wait(name, unit, port, old, wait, all_links)
     if cat == "instmon":
         guard_stop()
     if ok2:

@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.28"
+APP_VERSION = "5.29"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -183,6 +183,7 @@ def save_wifi_networks(networks: List[Dict[str, object]], quiet: bool = False) -
         print(f"  [+] Saved {len(networks)} network(s) to {CONFIG_FILE}")
 
 INSTALL_BIN_PATH = "/usr/local/bin/wifimon.py"
+INSTALL_DIR = "/usr/local/lib/asl_dvs/wifimon"
 SYSTEMD_SERVICE_PATH = "/etc/systemd/system/wifimon.service"
 
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
@@ -408,7 +409,7 @@ def install_service() -> None:
         print("Error: Installation requires root privileges. Run with 'sudo'.")
         sys.exit(1)
 
-    current_script = os.path.abspath(__file__)
+    current_script = os.path.realpath(__file__)
     fresh = not os.path.exists(CONFIG_FILE) and not os.path.exists(STATE_FILE)
 
     print("Installing wifimon...")
@@ -416,10 +417,37 @@ def install_service() -> None:
         _save_state({"watchdogs": {"wifi": False, "voltage": False}})
         print("  [+] First install: the WiFi and voltage watchdogs start OFF")
 
-    if current_script != INSTALL_BIN_PATH:
-        shutil.copy2(current_script, INSTALL_BIN_PATH)
-        print(f"  [+] Copied script to {INSTALL_BIN_PATH}")
-    os.chmod(INSTALL_BIN_PATH, 0o755)
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    dest = os.path.join(INSTALL_DIR, os.path.basename(current_script))
+    if current_script != dest:
+        tmp = dest + ".tmp"
+        shutil.copy2(current_script, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+        print(f"  [+] Copied {os.path.basename(current_script)} -> {dest}")
+    os.chmod(dest, 0o755)
+
+    was_plain = os.path.isfile(INSTALL_BIN_PATH) and not os.path.islink(INSTALL_BIN_PATH)
+    tmp_link = INSTALL_BIN_PATH + ".tmp"
+    if os.path.lexists(tmp_link):
+        os.remove(tmp_link)
+    os.symlink(dest, tmp_link)
+    os.replace(tmp_link, INSTALL_BIN_PATH)
+    print(f"  [+] Symlinked {INSTALL_BIN_PATH} -> {dest}")
+    if was_plain:
+        for pyc in _pyc_for(INSTALL_BIN_PATH):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+        print(f"  [-] Replaced the old plain copy at {INSTALL_BIN_PATH}")
+
+    for name in os.listdir(INSTALL_DIR):
+        old = os.path.join(INSTALL_DIR, name)
+        if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
+            os.remove(old)
+            print(f"  [-] Removed the previous version {old}")
+    _prune_pyc(INSTALL_DIR)
     _write_launcher()
     if _roam_reapply_saved():
         print(f"  [+] Put back {ROAM_MODPROBE} (Stop chip roaming, set before this update; takes effect after a reboot)")
@@ -484,13 +512,29 @@ def uninstall_service() -> None:
 
     subprocess.run(["systemctl", "daemon-reload"], stderr=subprocess.DEVNULL)
 
-    if os.path.exists(INSTALL_BIN_PATH):
+    target = None
+    if os.path.lexists(INSTALL_BIN_PATH):
+        if os.path.islink(INSTALL_BIN_PATH):
+            target = os.path.realpath(INSTALL_BIN_PATH)
         os.remove(INSTALL_BIN_PATH)
         print(f"  [-] Removed {INSTALL_BIN_PATH}")
     for pyc in _pyc_for(INSTALL_BIN_PATH):
         try:
             os.remove(pyc)
         except FileNotFoundError:
+            pass
+    if target and os.path.dirname(target) == INSTALL_DIR and os.path.isfile(target):
+        os.remove(target)
+        print(f"  [-] Removed {target}")
+        for pyc in _pyc_for(target):
+            try:
+                os.remove(pyc)
+            except FileNotFoundError:
+                pass
+    for d in (os.path.join(INSTALL_DIR, "__pycache__"), INSTALL_DIR, os.path.dirname(INSTALL_DIR)):
+        try:
+            os.rmdir(d)
+        except OSError:
             pass
     _remove_launcher_if_unused()
 

@@ -1,6 +1,72 @@
 # instmon changelog
 
-Current file: `instmon_v2_39_1_20261011.py`. Newest entries first.
+Current file: `instmon_v2_42_0_20261012.py`. Newest entries first.
+
+## 2.42.0 (2026-10-12)
+
+- Import from USB Drive takes manuals too, for a node with no internet. `.pdf`
+  files are listed with the others, and importing one puts it in Manuals
+  (`/etc/asl_dvs/instmon_library/docs/`) whatever library group is picked. The
+  name keeps letters, digits, `.`, `_` and `-`; anything else becomes `_`
+  (`ASL-DVS User Manual (copy).pdf` is saved as `ASL-DVS_User_Manual_copy.pdf`).
+  The file must start with `%PDF-`, and the limit is 64 MB, the same as Get from
+  GitHub. Importing the same file again does nothing. The Manuals card updates at
+  once.
+- Tested in headless Chromium with a folder standing in for the stick: the PDF
+  is listed (a `.txt` is not), imports with the Scripts group selected, shows in
+  Manuals and opens as `application/pdf`; an HTML file named `.pdf` is refused;
+  a second import says it is already there; no page errors.
+
+## 2.41.0 (2026-10-12)
+
+- **Manuals** card, below the library. **Get from GitHub** downloads the PDFs in
+  the repo's `docs` folder into `/etc/asl_dvs/instmon_library/docs/`, only those
+  that are new or changed (the git blob id of the copy on the node is compared
+  with GitHub's list). A download is kept only if its blob id matches the list
+  and it starts with `%PDF-`; 64 MB limit per file. Each manual has **Open**,
+  which shows it in a new tab in the browser's own PDF reader, and **Download**,
+  which saves it. Rows line up at any width.
+- `/api/docs` (list and fetch state), `POST /api/docs/fetch`, and
+  `/api/docs/file?name=...` (`&download=1` to save), all behind the login. The
+  file route only serves names ending in `.pdf` from that folder. PDFs are sent
+  without `X-Frame-Options` and the page's `Content-Security-Policy`: the
+  browser's PDF reader doesn't need them and can refuse to show a PDF under them.
+- Download Full Backup leaves the manuals out; they can be fetched again.
+- Tested in headless Chromium against a stubbed GitHub serving this repo's
+  `docs` folder: the card fills, a second fetch downloads nothing, Open sends
+  `application/pdf` inline with no frame or CSP header, Download saves the file,
+  a `../` name gets 404, no page errors, and no sideways scrolling at 390 px. The
+  fetch was also run against a wrong blob id, a non-PDF, an oversize entry and
+  an unreachable GitHub. The inline PDF viewer itself can't be shown headless.
+
+## 2.40.0 (2026-10-12)
+
+First step of the standard install layout: the program lives in
+`/usr/local/lib/asl_dvs/<tool>/` under its own versioned name, and
+`/usr/local/bin/<tool>.py` is a symlink to it.
+
+- `--install` copies the file to `/usr/local/lib/asl_dvs/instmon/` and points
+  `/usr/local/bin/instmon.py` at it. An old plain copy at that path is replaced
+  (the link is swapped in with one rename, so the path is never missing), and
+  any other version left in the lib folder is removed. Running `--install`
+  through the link itself changes nothing.
+- `--uninstall` removes the link, the lib file, and the lib folder (and
+  `/usr/local/lib/asl_dvs/` if that is then empty).
+- Unit: `Type=notify` with `NotifyAccess=main`; instmon reports ready once it is
+  listening on 8990. `TimeoutStartSec=600` covers a start that first has to bring
+  back services left stopped by a disk-image job.
+- 44helper's path is now `/usr/local/bin/44helper.py`, with
+  `/opt/44helper/asl_dvs_m17_44helper.py` as a fallback. instmon uses whichever
+  path the 44helper unit runs, so a node on 44helper 0.0.179 or older still
+  shows it as installed.
+- Before any `--install` (Install, Full Update and its rollback, and instmon's
+  own update guard), a symlink at the tool's path is replaced with a plain copy
+  of the file it points to. Older tools copy themselves onto that path, and
+  without this the copy would land inside the newer file in the lib folder.
+- Tested with mocks against a temporary root: a fresh install, an install over
+  an old plain copy, and an install over a newer layout; reinstall through the
+  link; uninstall; the 44helper path choice; the de-link step and the guard's
+  shell version of it; and `READY=1` from a real start.
 
 ## 2.39.1 (2026-10-11)
 

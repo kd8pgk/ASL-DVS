@@ -1,6 +1,27 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_28_20261007.py`. Newest entries first.
+Current file: `wifimon_v5_29_20261012.py`. Newest entries first.
+
+## 5.29 (2026-10-12)
+
+Standard install layout (same as instmon 2.40.0): the program lives in
+`/usr/local/lib/asl_dvs/wifimon/` under its own versioned name, and
+`/usr/local/bin/wifimon.py` is a symlink to it. The unit and its `ExecStart`
+are unchanged.
+
+- `--install` copies the file to `/usr/local/lib/asl_dvs/wifimon/` and points
+  `/usr/local/bin/wifimon.py` at it. An old plain copy at that path is replaced
+  in one rename, so the path is never missing, and any other version left in the
+  lib folder is removed. Running `--install` through the link changes nothing.
+- `--uninstall` removes the link, the lib file, and the lib folder (and
+  `/usr/local/lib/asl_dvs/` if that is then empty). Configs, shutdown reports and
+  the 30-minute "Stop chip roaming" carry-over work as before.
+- Rolling back to 5.28 or older: run this version's `--uninstall` first, as
+  Full Update does. instmon 2.40.0 also turns the link into a plain file before
+  any older `--install`, so an older copy never lands inside the lib file.
+- Tested with mocks against a temporary root: a fresh install, an install over
+  an old plain copy and over a newer layout, reinstall through the link, and
+  uninstall.
 
 ## 5.28 (2026-10-07)
 

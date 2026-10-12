@@ -12,7 +12,7 @@ By KD8PGK, written with Claude (Anthropic).
 |---|---|---|---|
 | Dashboard | `asl_dvs_dashboard_v*.py` | 8989 | Node control. Connect ASL and EchoLink nodes, tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17, manage favorites, Phone. |
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
-| instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images. |
+| instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals (PDF) to open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
 | 44helper | `asl_dvs_m17_44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
 | Watchdog | `asl_dvs_watchdog_v*.sh` | none | Restarts the Dashboard if it stops answering. See the note under [Installing](#installing). |
@@ -40,8 +40,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_77_20261011.py` | `sysmon_pi02w_v6_13_67_11_20261011.py` | `instmon_v2_39_1_20261011.py` |
-| `VERSION` | `6.13.77` | `6.13.67.11-pi02w` | `2.39.1` |
+| File name | `sysmon_v6_13_78_20261012.py` | `sysmon_pi02w_v6_13_67_12_20261012.py` | `instmon_v2_42_0_20261012.py` |
+| `VERSION` | `6.13.78` | `6.13.67.12-pi02w` | `2.42.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -75,12 +75,12 @@ User manual (PDF, 91 pages): every tool, tab and button, with SysMon and 44helpe
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_39_1_20261011.py --install
+   sudo python3 instmon_v2_42_0_20261012.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_asl_dvs_v6_6_20261006.sh
+   sudo bash install_asl_dvs_v7_0_20261012.sh
    ```
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -176,11 +176,12 @@ memory settles from the next restart on.
 ## Removing everything
 
 ```
-sudo bash uninstall_asl_dvs_all_v1_3.sh
+sudo bash uninstall_asl_dvs_all_v1_4.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
-instmon's library and `/etc/wifimon/wifimon.conf` in place. To remove instmon
+instmon's library and every tool's config folder (`/etc/sysmon/`,
+`/etc/wifimon/`, `/etc/44helper/`) in place. To remove instmon
 afterwards, run its own `--uninstall`. If the SysMon Hardware tab (either build) turned off
 the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 (reboot to apply).
@@ -189,18 +190,18 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `asl_dvs_dashboard_v9_3_74_20261011.py` | Dashboard, full (current) |
-| `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py` | Dashboard, Pi Zero 2 W (current) |
+| `asl_dvs_dashboard_v9_3_75_20261012.py` | Dashboard, full (current) |
+| `asl_dvs_dashboard_pi02w_v9_3_71_14_20261012.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
-| `sysmon_v6_13_77_20261011.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_67_11_20261011.py` | SysMon, Pi Zero 2 W (current) |
+| `sysmon_v6_13_78_20261012.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_67_12_20261012.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
-| `instmon_v2_39_1_20261011.py` | common |
-| `wifimon_v5_28_20261007.py` | common |
-| `asl_dvs_m17_44helper_v0_0_179_20261011.py` | common |
+| `instmon_v2_42_0_20261012.py` | common |
+| `wifimon_v5_29_20261012.py` | common |
+| `asl_dvs_m17_44helper_v0_0_180_20261012.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
-| `install_asl_dvs_v6_6_20261006.sh` | common |
-| `uninstall_asl_dvs_all_v1_3.sh` | common |
+| `install_asl_dvs_v7_0_20261012.sh` | common |
+| `uninstall_asl_dvs_all_v1_4.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
@@ -214,7 +215,7 @@ because something reads them:
 
 - the first line (`#!...`) and a Python `coding` line;
 - the title line of each `.sh` script (for example
-  `# install_asl_dvs_dashboard.sh  v6.6  (2026-10-06)`): instmon reads a
+  `# install_asl_dvs_dashboard.sh  v7.0  (2026-10-12)`): instmon reads a
   shell script's version from it.
 
 Text inside strings is left alone, including files the tools write onto the
