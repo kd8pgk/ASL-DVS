@@ -1,6 +1,26 @@
 # Uninstaller (uninstall_asl_dvs_all) changelog
 
-Current file: `uninstall_asl_dvs_all_v1_3.sh`. Newest entries first.
+Current file: `uninstall_asl_dvs_all_v1_4.sh`. Newest entries first.
+
+## 1.4 (2026-10-12)
+
+For the standard install layout (each tool in `/usr/local/lib/asl_dvs/<tool>/`,
+linked from `/usr/local/bin`).
+
+- 44helper is found at `/usr/local/bin/44helper.py` (0.0.180 and later), or at
+  `/opt/44helper/asl_dvs_m17_44helper.py` on an older install, and its own
+  `--uninstall` runs from there.
+- Removed the M17/Zello dashboard and Watchdog entries (no longer in the repo;
+  the installer still removes an old Watchdog).
+- The closing note names what is left: instmon and its lib folder,
+  `/etc/asl_dvs/`, and the `/etc/sysmon/`, `/etc/wifimon/` and `/etc/44helper/`
+  config folders. Each tool's own `--uninstall` now removes its lib folder, so
+  the old note about the two library folders being left was dropped.
+- Tested in a container with `systemctl` stubbed: a node with the Dashboard,
+  SysMon, wifimon and instmon in the new layout and 44helper 0.0.179 still in
+  `/opt`, and again with 44helper 0.0.180. Every tool but instmon was removed,
+  including both 44helper links; instmon, the launcher it uses and all config
+  folders stayed.
 
 ## 1.3 (2026-10-07)
 

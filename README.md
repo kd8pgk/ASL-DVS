@@ -176,11 +176,12 @@ memory settles from the next restart on.
 ## Removing everything
 
 ```
-sudo bash uninstall_asl_dvs_all_v1_3.sh
+sudo bash uninstall_asl_dvs_all_v1_4.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
-instmon's library and `/etc/wifimon/wifimon.conf` in place. To remove instmon
+instmon's library and every tool's config folder (`/etc/sysmon/`,
+`/etc/wifimon/`, `/etc/44helper/`) in place. To remove instmon
 afterwards, run its own `--uninstall`. If the SysMon Hardware tab (either build) turned off
 the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 (reboot to apply).
@@ -200,7 +201,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `asl_dvs_m17_44helper_v0_0_180_20261012.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
 | `install_asl_dvs_v7_0_20261012.sh` | common |
-| `uninstall_asl_dvs_all_v1_3.sh` | common |
+| `uninstall_asl_dvs_all_v1_4.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
