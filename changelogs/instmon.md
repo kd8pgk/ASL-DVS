@@ -1,6 +1,26 @@
 # instmon changelog
 
-Current file: `instmon_v2_43_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_44_0_20261012.py`. Newest entries first.
+
+## 2.44.0 (2026-10-12)
+
+- Manuals card: **Upload PDF** adds any PDF from your computer to Manuals, where
+  it can be opened in the browser's own PDF reader or downloaded like the
+  manuals from GitHub. A `.pdf` chosen in any library group's **Upload & stage**
+  goes to Manuals as well (no other library group takes PDFs). The rules are
+  those of a USB import: odd characters in the name become `_`, the file must
+  start with `%PDF-`, and the upload size limit applies (50 MB unless
+  `INSTMON_MAX_UPLOAD_MB` says otherwise). A non-PDF chosen on the Manuals card
+  is refused.
+- Each manual has a **Delete** button (asks first). `POST /api/docs/delete`
+  only removes a `.pdf` in the Manuals folder. A manual from GitHub that is
+  deleted comes back on the next Get from GitHub.
+- On a phone each manual's buttons go on a line under its name.
+- Tested in headless Chromium against the real handlers: a PDF with spaces in
+  its name uploaded on the Manuals card (saved with `_`), a PDF uploaded through
+  the Scripts group's Upload & stage, a `.sh` and an HTML file named `.pdf`
+  refused, Open serving `application/pdf` inline, Delete removing one, a `../`
+  name refused with 404, no page errors, and no sideways scrolling at 390 px.
 
 ## 2.43.0 (2026-10-12)
 

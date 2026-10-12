@@ -30,7 +30,7 @@
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_15_20261012.py</td><td>9.3.71.15-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_13_20261012.py</td><td>6.13.67.13-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_43_0_20261012.py</td><td>2.43.0</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_44_0_20261012.py</td><td>2.44.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_30_20261012.py</td><td>5.30</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_79_20261012.py</td><td>6.13.79</td></tr>
@@ -231,7 +231,7 @@ sudo systemctl status sysmon</pre>
   <div class="grid2">
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.43.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.44.0</span></div>
         <div class="sect">Quick Links</div><div class="sect">GitHub Updates</div>
         <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="btn c">Quiet System</span></div>
         <div class="sect">Components</div><div class="sect">Scripts &amp; Configuration Library</div>
@@ -369,7 +369,7 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
   <ol class="steps">
     <li><b>Get the files.</b> Download the current files from github.com/kd8pgk/ASL-DVS into one folder on the Pi.</li>
     <li><b>Install instmon first.</b> It can then install and update everything else from the browser.
-<pre>sudo python3 instmon_v2_43_0_20261012.py --install</pre></li>
+<pre>sudo python3 instmon_v2_44_0_20261012.py --install</pre></li>
     <li><b>Install the rest</b> with the installer. On a new node it asks for your callsign, node number and a label.
 <pre>sudo bash install_all_v7_1_20261012.sh</pre></li>
   </ol>
@@ -2278,6 +2278,11 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     and must be a PDF before it is kept. From instmon 2.41.0. On a Pi with no internet, import the PDFs from a
     USB stick with Import from USB Drive instead (2.42.0 and later): spaces and other odd characters in the name
     become <code>_</code>, and the file must be a real PDF.</p>
+  <p>From 2.44.0 any PDF can be added from your computer too: pick it with <b>Upload PDF</b> on the Manuals card (or
+    with any library group's <b>Upload &amp; stage</b>; a <code>.pdf</code> always goes to Manuals). The same name and
+    "real PDF" rules apply, up to the upload size limit (50 MB unless <code>INSTMON_MAX_UPLOAD_MB</code> says otherwise).
+    Each manual has <b>Delete</b> as well as Open and Download; a manual from GitHub that you delete comes back on the
+    next Get from GitHub.</p>
 
   <h2><span class="n">13.5</span>Backup &amp; Export</h2>
   <p><b>Download Full Backup (ZIP)</b> saves the whole library to your computer: every tool version, script and
