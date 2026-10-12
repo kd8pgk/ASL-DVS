@@ -1,6 +1,28 @@
 # instmon changelog
 
-Current file: `instmon_v2_40_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_41_0_20261012.py`. Newest entries first.
+
+## 2.41.0 (2026-10-12)
+
+- **Manuals** card, below the library. **Get from GitHub** downloads the PDFs in
+  the repo's `docs` folder into `/etc/asl_dvs/instmon_library/docs/`, only those
+  that are new or changed (the git blob id of the copy on the node is compared
+  with GitHub's list). A download is kept only if its blob id matches the list
+  and it starts with `%PDF-`; 64 MB limit per file. Each manual has **Open**,
+  which shows it in a new tab in the browser's own PDF reader, and **Download**,
+  which saves it. Rows line up at any width.
+- `/api/docs` (list and fetch state), `POST /api/docs/fetch`, and
+  `/api/docs/file?name=...` (`&download=1` to save), all behind the login. The
+  file route only serves names ending in `.pdf` from that folder. PDFs are sent
+  without `X-Frame-Options` and the page's `Content-Security-Policy`: the
+  browser's PDF reader doesn't need them and can refuse to show a PDF under them.
+- Download Full Backup leaves the manuals out; they can be fetched again.
+- Tested in headless Chromium against a stubbed GitHub serving this repo's
+  `docs` folder: the card fills, a second fetch downloads nothing, Open sends
+  `application/pdf` inline with no frame or CSP header, Download saves the file,
+  a `../` name gets 404, no page errors, and no sideways scrolling at 390 px. The
+  fetch was also run against a wrong blob id, a non-PDF, an oversize entry and
+  an unreachable GitHub. The inline PDF viewer itself can't be shown headless.
 
 ## 2.40.0 (2026-10-12)
 

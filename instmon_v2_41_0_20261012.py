@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.40.0"
+VERSION ="2.41.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
@@ -127,6 +127,7 @@ WantedBy=multi-user.target
 
 LIBRARY_DIR =os .environ .get ("INSTMON_LIBRARY_DIR","/etc/asl_dvs/instmon_library")
 CONFIG_DIR =os .environ .get ("INSTMON_CONFIG_DIR","/etc/asl_dvs")
+DOCS_DIR = os.path.join(LIBRARY_DIR, "docs")
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
 
 HOME_SCAN_DIR =os .environ .get ("INSTMON_HOME_SCAN_DIR",os .path .expanduser ("~"))
@@ -3060,6 +3061,120 @@ _gh_fetch_impl =_gh_fetch_https
 def _gh_file_url (name ):
     return GITHUB_RAW_BASE +"/"+urllib .parse .quote (name )
 
+GITHUB_API_DOCS_URL = (f"https://api.github.com/repos/{GITHUB_REPO}/contents/docs"
+                       f"?ref={urllib.parse.quote(GITHUB_BRANCH, safe='')}")
+DOCS_MAX_BYTES = 64 * 1024 * 1024
+_DOCS_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,123}\.pdf$')
+_docs_lock = threading.Lock()
+_docs_state = {"phase": "idle", "error": None, "msg": "", "checked_at": None}
+
+def docs_list():
+    out = []
+    try:
+        names = sorted(os.listdir(DOCS_DIR))
+    except OSError:
+        return out
+    for n in names:
+        full = os.path.join(DOCS_DIR, n)
+        if not _DOCS_NAME_RE.match(n) or not os.path.isfile(full) or os.path.islink(full):
+            continue
+        st = os.stat(full)
+        out.append({"name": n, "size": st.st_size,
+                    "date": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")})
+    return out
+
+def docs_path(name):
+    if not isinstance(name, str) or not _DOCS_NAME_RE.match(name):
+        return None
+    full = safe_join(DOCS_DIR, name)
+    if full is None or not os.path.isfile(full) or os.path.islink(full):
+        return None
+    return full
+
+def _docs_parse_listing(raw):
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GhRejected(f"GitHub's docs list could not be read ({exc})")
+    if not isinstance(data, list):
+        raise GhRejected("GitHub did not return a list for the docs folder")
+    out = []
+    for item in data[:GITHUB_MAX_ENTRIES]:
+        if not isinstance(item, dict) or item.get("type") != "file":
+            continue
+        name, blob, size = item.get("name"), item.get("sha"), item.get("size")
+        if not isinstance(name, str) or not _DOCS_NAME_RE.match(name):
+            continue
+        if not isinstance(blob, str) or not _GH_SHA1_RE.match(blob):
+            continue
+        if not isinstance(size, int) or size <= 0 or size > DOCS_MAX_BYTES:
+            log_event(f"Manuals: skipped {name}: size {size} is outside the {DOCS_MAX_BYTES // 1048576} MB limit", "warn")
+            continue
+        out.append({"name": name, "blob": blob, "size": size})
+    return out
+
+def _docs_fetch_bg():
+    got, same, failed = [], 0, []
+    try:
+        cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
+        os.makedirs(DOCS_DIR, exist_ok=True)
+        for c in cands:
+            dest = safe_join(DOCS_DIR, c["name"])
+            if dest is None:
+                continue
+            if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
+                same += 1
+                continue
+            try:
+                data = _gh_fetch_impl(_gh_file_url("docs/" + c["name"]), DOCS_MAX_BYTES)
+                if _git_blob_id(data) != c["blob"]:
+                    raise GhRejected("the download does not match GitHub's file list")
+                if not data.startswith(b"%PDF-"):
+                    raise GhRejected("not a PDF file")
+            except GhRejected as exc:
+                if _gh_is_network_error(exc):
+                    raise
+                failed.append(c["name"])
+                log_event(f"Manuals: {c['name']} not saved: {exc}", "warn")
+                continue
+            tmp = dest + ".tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(data)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, dest)
+            got.append(c["name"])
+            log_event(f"Manuals: saved {c['name']} ({len(data) // 1024} KB)", "ok")
+    except Exception as exc:
+        msg = str(exc) if isinstance(exc, GhRejected) else f"unexpected error: {exc}"
+        with _docs_lock:
+            _docs_state.update(phase="error", error=msg, msg="",
+                               checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+        log_event(f"Manuals: GitHub fetch failed: {msg}", "err")
+        return
+    parts = [f"{len(got)} downloaded", f"{same} already up to date"]
+    if failed:
+        parts.append(f"{len(failed)} failed (see log)")
+    msg = ", ".join(parts) + "."
+    with _docs_lock:
+        _docs_state.update(phase="done", error=None, msg=msg,
+                           checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    log_event("Manuals: " + msg, "warn" if failed else "ok")
+
+def docs_start_fetch():
+    with _docs_lock:
+        if _docs_state["phase"] == "fetching":
+            return False, "The manuals are already being fetched."
+        _docs_state.update(phase="fetching", error=None, msg="")
+    log_event(f"Manuals: fetching the docs folder from {_gh_source_label()}", "info")
+    threading.Thread(target=_docs_fetch_bg, daemon=True).start()
+    return True, "Getting the manuals from GitHub..."
+
+def docs_status():
+    with _docs_lock:
+        state = dict(_docs_state)
+    state["docs"] = docs_list()
+    return state
+
 def _gh_parse_listing (raw ):
     try :
         data =json .loads (raw .decode ("utf-8"))
@@ -4498,11 +4613,15 @@ _CSS_COMPONENTS = """.card{background:var(--surface);border:1px solid var(--bord
 .b-run{color:var(--grn);border-color:var(--green-dim);background:rgba(0,255,176,.07);text-shadow:0 0 8px rgba(0,255,176,.4)}
 .b-stop{color:var(--red);border-color:var(--red-dim);background:rgba(255,61,90,.08);text-shadow:0 0 8px rgba(255,61,90,.4)}
 .b-start{color:var(--grn);border-color:var(--green-dim);background:rgba(0,255,176,.07);text-shadow:0 0 8px rgba(0,255,176,.4)}
-button{font-family:var(--mono);font-size:.8rem;font-weight:700;letter-spacing:.04em;
+button,a.btn{font-family:var(--mono);font-size:.8rem;font-weight:700;letter-spacing:.04em;
   text-transform:uppercase;background:transparent;color:var(--cyn);
   border:1px solid var(--blue-dim);border-radius:4px;padding:.32rem .85rem;cursor:pointer;
   transition:all .14s}
-button:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
+button:hover,a.btn:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
+a.btn{display:inline-block;text-decoration:none;line-height:normal}
+.doc-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:.3rem .5rem;align-items:center;margin-top:.35rem}
+.doc-row .doc-name{overflow-wrap:anywhere}
+.doc-row .doc-meta{display:block}
 button:active{transform:scale(.95)}
 button.b-del{color:var(--red);border-color:var(--red-dim)}
 button:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
@@ -6665,6 +6784,7 @@ function _startApp() {
   pollDiskimgBackups();
   pollGateway();
   usbimportInit();
+  docsInit();
 }
 
 // Boot-time auth probe: reaching /api/whoami with a 200 IS the proof of
@@ -6808,12 +6928,80 @@ function usbimportInit() {
 }
 """
 
+_JS_DOCS = """// Manuals card. File names go in via textContent and encodeURIComponent.
+let _docsTimer = null;
+function docsRender(data) {
+  const list = document.getElementById('docs-list');
+  const msg = document.getElementById('docs-msg');
+  const btn = document.getElementById('docs-fetch');
+  if (!list) return;
+  const busy = data.phase === 'fetching';
+  btn.disabled = busy;
+  if (busy) msg.textContent = 'Getting the manuals from GitHub...';
+  else if (data.phase === 'error') msg.textContent = 'Last fetch failed: ' + (data.error || '?');
+  else if (data.msg) msg.textContent = (data.checked_at ? data.checked_at + ': ' : '') + data.msg;
+  else msg.textContent = '';
+  list.textContent = '';
+  const docs = data.docs || [];
+  if (!docs.length) {
+    const e = document.createElement('div');
+    e.className = 'small muted';
+    e.textContent = 'No manuals on this node yet. Press Get from GitHub.';
+    list.appendChild(e);
+  }
+  docs.forEach((d) => {
+    const row = document.createElement('div');
+    row.className = 'doc-row';
+    const cell = document.createElement('div');
+    cell.className = 'doc-name';
+    const nm = document.createElement('span');
+    nm.textContent = d.name.replace(/\\.pdf$/i, '').replace(/[_]+/g, ' ');
+    const meta = document.createElement('span');
+    meta.className = 'small muted doc-meta';
+    meta.textContent = fmtBytes(d.size) + ' \u00b7 ' + d.date;
+    const url = '/api/docs/file?name=' + encodeURIComponent(d.name);
+    const open = document.createElement('a');
+    open.className = 'btn'; open.href = url; open.target = '_blank'; open.rel = 'noopener';
+    open.textContent = 'Open';
+    const dl = document.createElement('a');
+    dl.className = 'btn'; dl.href = url + '&download=1'; dl.download = d.name;
+    dl.textContent = 'Download';
+    cell.appendChild(nm); cell.appendChild(meta);
+    row.appendChild(cell); row.appendChild(open); row.appendChild(dl);
+    list.appendChild(row);
+  });
+  if (_docsTimer) { clearTimeout(_docsTimer); _docsTimer = null; }
+  if (busy) _docsTimer = setTimeout(docsLoad, 2000);
+}
+async function docsLoad() {
+  try { const r = await fetch('/api/docs'); if (r.ok) docsRender(await r.json()); } catch (e) {}
+}
+async function docsFetch() {
+  const btn = document.getElementById('docs-fetch');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/docs/fetch', {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}});
+    let data = {};
+    try { data = await r.json(); } catch (e) {}
+    if (!r.ok) showPopup(data.message || data.error || 'Could not start the fetch', data.level || 'err');
+  } catch (e) {}
+  docsLoad();
+}
+function docsInit() {
+  const btn = document.getElementById('docs-fetch');
+  if (!btn) return;
+  btn.addEventListener('click', docsFetch);
+  docsLoad();
+}
+"""
+
 _JS = (
     _JS_LOG_POLL
     + _JS_STATUS_TOAST
     + _JS_EDITOR
     + _JS_ACTIONS
     + _JS_USBIMPORT
+    + _JS_DOCS
     + _JS_AUTH
     + _JS_INIT
 )
@@ -6935,6 +7123,18 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   Run shell scripts or manage alternative configuration files. Per-component version
   libraries (Dashboard, SysMon, etc.) now live inside their component's card above.</div>
 <div id="library">{library_html}
+</div>
+
+<div class="hdr">Manuals</div>
+<div class="card" id="docs-card">
+  <div class="row">
+    <button id="docs-fetch">Get from GitHub</button>
+    <span class="small muted" id="docs-msg"></span>
+  </div>
+  <div class="small muted" style="margin-top:.35rem">
+    The install, user and configuration manuals (PDF) from the docs folder on GitHub. Open shows one in a new
+    tab in the browser's own PDF reader; Download saves it. Get from GitHub only fetches files that are new or changed.</div>
+  <div id="docs-list" style="margin-top:.5rem"></div>
 </div>
 
 <div class="hdr">Backup &amp; Export</div>  <!-- [PHASE 3] -->
@@ -7214,6 +7414,8 @@ _GET_ROUTES ={
 "/api/backup":lambda self :self .handle_backup (),
 "/api/whoami":lambda self :self ._send_json (200 ,{"ok":True }),
 "/api/usbimport/drives":lambda self :self ._route_usbimport_drives (),
+"/api/docs":lambda self :self ._send_json (200 ,docs_status (),extra_headers =[("Cache-Control","no-store")]),
+"/api/docs/file":lambda self :self ._route_docs_file (),
 "/api/usbimport/browse":lambda self :self ._route_usbimport_browse (),
 "/api/diskimg/drives":lambda self :self ._route_diskimg_drives (),
 "/api/diskimg/job":lambda self :self ._route_diskimg_job (),
@@ -7225,6 +7427,7 @@ _GET_ROUTES ={
 _POST_ROUTES ={
 "/api/upload":lambda self :self .handle_upload (),
 "/api/usbimport/import":lambda self :self .handle_usbimport_import (),
+"/api/docs/fetch":lambda self :self .handle_docs_fetch (),
 "/api/action":lambda self :self .handle_action (),
 "/api/file":lambda self :self .handle_file_write (),
 "/api/diskimg/preview":lambda self :self .handle_diskimg_preview (),
@@ -7244,14 +7447,16 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
     def send_response (self ,code ,message =None ):
         super ().send_response (code ,message )
-        self .send_header ("X-Frame-Options","DENY")
         self .send_header ("X-Content-Type-Options","nosniff")
+        self .send_header ("Referrer-Policy","no-referrer")
+        if getattr (self ,"_pdf_response",False ):
+            return
+        self .send_header ("X-Frame-Options","DENY")
         self .send_header (
         "Content-Security-Policy",
         "default-src 'self'; frame-ancestors 'none'; "
         "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
         )
-        self .send_header ("Referrer-Policy","no-referrer")
 
     def _send_json (self ,status ,payload ,extra_headers=None ):
         body =json .dumps (payload ).encode ("utf-8")
@@ -8121,6 +8326,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
             with zipfile .ZipFile (tmp_path ,'w',zipfile .ZIP_DEFLATED )as zf :
                 for root ,dirs ,files in os .walk (LIBRARY_DIR ):
+                    dirs [:]=[d for d in dirs if os .path .join (root ,d )!=DOCS_DIR ]
                     for file in files :
                         full_path =os .path .join (root ,file )
                         rel_path =os .path .relpath (full_path ,LIBRARY_DIR )
@@ -8210,6 +8416,43 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (status ,payload ["error"])
             return 
         self ._send_json (status ,payload )
+
+    def _route_docs_file(self):
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        name = query.get("name", [""])[0]
+        full = docs_path(name)
+        if full is None:
+            self._error_json(404, "No such manual")
+            return
+        disposition = "attachment" if query.get("download", [""])[0] == "1" else "inline"
+        try:
+            size = os.path.getsize(full)
+            fh = open(full, "rb")
+        except OSError as exc:
+            self._error_json(500, f"Could not read {name}: {exc}")
+            return
+        with fh:
+            self._pdf_response = True
+            try:
+                self.send_response(200)
+            finally:
+                self._pdf_response = False
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(size))
+            self.send_header("Content-Disposition", f'{disposition}; filename="{name}"')
+            self.send_header("Cache-Control", "private, no-cache")
+            self.end_headers()
+            try:
+                shutil.copyfileobj(fh, self.wfile, 65536)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+
+    def handle_docs_fetch(self):
+        ok, message = docs_start_fetch()
+        if ok:
+            self._send_json(200, {"ok": True, "message": message, "level": "info"})
+        else:
+            self._send_json(409, {"error": message, "message": message, "level": "warn"})
 
     def _route_usbimport_drives(self):
         drives = [
