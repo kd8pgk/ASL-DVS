@@ -1,6 +1,24 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_77_20261011.py`. Newest entries first.
+Current file: `sysmon_v6_13_78_20261012.py`. Newest entries first.
+
+## 6.13.78 (2026-10-12)
+
+Standard install layout (same as instmon 2.40.0, wifimon 5.29 and 44helper
+0.0.180). The same change is in the Pi Zero 2 W build (6.13.67.12-pi02w).
+
+- `--install` copies the file to `/usr/local/lib/asl_dvs/sysmon/` (was
+  `/usr/local/lib/asl_dvs_sysmon/`) and points `/usr/local/bin/sysmon.py` at it.
+  The link is swapped in with one rename, so the path is never missing. Any
+  other version in the new folder is removed, and so are the SysMon files (and
+  their compiled copies) in the old folder, which is then removed if empty.
+  Anything else in the old folder is left alone. Running `--install` through the
+  link changes nothing. The unit is unchanged.
+- `--uninstall` also removes the empty lib folder, `/usr/local/lib/asl_dvs/` if
+  that is then empty, and the old folder if it is empty.
+- Tested with mocks against a temporary root: a fresh install, an install over
+  the old folder and over the new layout, reinstall through the link, uninstall,
+  and an old folder that holds a file that isn't SysMon's.
 
 ## 6.13.77 (2026-10-11)
 
