@@ -10,7 +10,7 @@ By KD8PGK, written with Claude (Anthropic).
 
 | Tool | File | Port | What it does |
 |---|---|---|---|
-| Dashboard | `asl_dvs_dashboard_v*.py` | 8989 | Node control. Connect ASL and EchoLink nodes, tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17, manage favorites, Phone. |
+| Dashboard | `nodecontrol_v*.py` | 8989 | Node control. Connect ASL and EchoLink nodes, tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17, manage favorites, Phone. |
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals (PDF) to open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
@@ -166,7 +166,7 @@ To turn a saver off for every tool, create its file and restart the services:
 
 ```
 sudo touch /etc/asl_dvs/launch_no_arena_cap
-sudo systemctl restart sysmon asl_dvs_dashboard instmon wifimon 44helper
+sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper
 ```
 
 Delete the file and restart to turn it back on. With `-OO`, the first start
@@ -190,8 +190,8 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `asl_dvs_dashboard_v9_3_75_20261012.py` | Dashboard, full (current) |
-| `asl_dvs_dashboard_pi02w_v9_3_71_14_20261012.py` | Dashboard, Pi Zero 2 W (current) |
+| `nodecontrol_v9_3_76_20261012.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_71_15_20261012.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
 | `sysmon_v6_13_78_20261012.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_12_20261012.py` | SysMon, Pi Zero 2 W (current) |
@@ -228,8 +228,8 @@ per tool and build:
 |---|---|
 | [`sysmon.md`](changelogs/sysmon.md) | `sysmon_v*.py` (full) |
 | [`sysmon_pi02w.md`](changelogs/sysmon_pi02w.md) | `sysmon_pi02w_v*.py` |
-| [`asl_dvs_dashboard.md`](changelogs/asl_dvs_dashboard.md) | `asl_dvs_dashboard_v*.py` (full) |
-| [`asl_dvs_dashboard_pi02w.md`](changelogs/asl_dvs_dashboard_pi02w.md) | `asl_dvs_dashboard_pi02w_v*.py` |
+| [`nodecontrol.md`](changelogs/nodecontrol.md) | `nodecontrol_v*.py` (full) |
+| [`nodecontrol_pi02w.md`](changelogs/nodecontrol_pi02w.md) | `nodecontrol_pi02w_v*.py` |
 | [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
 | [`asl_dvs_m17_44helper.md`](changelogs/asl_dvs_m17_44helper.md) | `asl_dvs_m17_44helper_v*.py` |
