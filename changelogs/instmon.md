@@ -1,6 +1,35 @@
 # instmon changelog
 
-Current file: `instmon_v2_44_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_45_0_20261012.py`. Newest entries first.
+
+## 2.45.0 (2026-10-12)
+
+The manuals come with the install and stay current.
+
+- `--install` downloads the manuals (PDF) from the repo's `docs` folder into the
+  Manuals folder and prints each one. With no internet the install still
+  finishes and says the manuals will follow.
+- When instmon starts and has never downloaded the manuals, it tries in the
+  background after 5 seconds, then 1, 2 and 5 minutes later. A file in
+  `/etc/asl_dvs/instmon_manuals_fetched` records the first successful download,
+  so a manual you delete doesn't come back every restart.
+- Full Update has a Manuals step after the scripts and before instmon's own
+  update. It downloads only the manuals that are new or changed on GitHub, runs
+  even when every tool is current, and lists them under **Manuals** in the
+  summary ("N manual(s) updated"). If it fails, it shows as a skipped row and
+  the tools still update. A manual you deleted comes back on a Full Update, as it
+  does on Get from GitHub.
+- The **Get from GitHub** button, `--install`, the start-up download and Full
+  Update all use the same fetch and the same checks: name, 64 MB limit, git blob
+  id against GitHub's list, `%PDF-` header.
+- There is no setting to turn this off.
+- Manuals card text and the Full Update confirm dialog mention the manuals.
+- Tested with GitHub mocked: `--install` online and offline, the start-up
+  retry after a network error, no re-download of a deleted manual on restart,
+  Full Update taking only new or changed manuals, still checking them when every
+  tool is current, a failed manuals step shown as skipped, and a running Get from
+  GitHub left alone. Page loaded in headless Chromium with no script errors and
+  no sideways scrolling at 390 px.
 
 ## 2.44.0 (2026-10-12)
 

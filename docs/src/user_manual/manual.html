@@ -27,14 +27,14 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_15_20261012.py</td><td>9.3.71.15-pi02w</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_16_20261012.py</td><td>9.3.71.16-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_13_20261012.py</td><td>6.13.67.13-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_44_0_20261012.py</td><td>2.44.0</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_45_0_20261012.py</td><td>2.45.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_30_20261012.py</td><td>5.30</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_79_20261012.py</td><td>6.13.79</td></tr>
-      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_76_20261012.py</td><td>9.3.76</td></tr>
+      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_77_20261012.py</td><td>9.3.77</td></tr>
     </table>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
@@ -173,7 +173,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.15-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.16-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span>
         <span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span>
@@ -231,7 +231,7 @@ sudo systemctl status sysmon</pre>
   <div class="grid2">
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.44.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.45.0</span></div>
         <div class="sect">Quick Links</div><div class="sect">GitHub Updates</div>
         <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="btn c">Quiet System</span></div>
         <div class="sect">Components</div><div class="sect">Scripts &amp; Configuration Library</div>
@@ -369,7 +369,9 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
   <ol class="steps">
     <li><b>Get the files.</b> Download the current files from github.com/kd8pgk/ASL-DVS into one folder on the Pi.</li>
     <li><b>Install instmon first.</b> It can then install and update everything else from the browser.
-<pre>sudo python3 instmon_v2_44_0_20261012.py --install</pre></li>
+<pre>sudo python3 instmon_v2_45_0_20261012.py --install</pre>
+      From 2.45.0 the install also downloads the manuals (PDF) from GitHub, so they are on instmon's Manuals card
+      straight away. With no internet the install still finishes, and instmon downloads them once it can reach GitHub.</li>
     <li><b>Install the rest</b> with the installer. On a new node it asks for your callsign, node number and a label.
 <pre>sudo bash install_all_v7_1_20261012.sh</pre></li>
   </ol>
@@ -462,10 +464,11 @@ sudo bash uninstall_all_v1_5.sh</pre>
     <h3>Full Update, step by step</h3>
     <ol>
       <li>Downloads and checks every new file before anything changes.</li>
+      <li>Downloads the manuals that are new or changed on GitHub (from 2.45.0). A failure here is listed as skipped and the tools still update.</li>
       <li>Pauses the web tools.</li>
       <li>For each tool in turn, saves a copy of the installed file in the library, runs the old <code>--uninstall</code>, and runs the new <code>--install</code>. If the new one fails, it puts the old one back and moves on.</li>
       <li>Updates instmon last. A timer reinstalls the old instmon if the new one isn't answering after 90 seconds.</li>
-      <li>Ends with a summary. New install scripts go only to the Scripts library and are never run for you.</li>
+      <li>Ends with a summary, including any manuals that were downloaded. New install scripts go only to the Scripts library and are never run for you.</li>
     </ol>
     <p>On a Pi Zero 2 W, the build choice decides which build Full Update installs. A tool installed in the other
       build is listed as <b>SWITCH</b> and replaced. On other Pis the choice is hidden and each tool keeps its build.</p>
@@ -2094,10 +2097,10 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">12.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.71.15-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.71.16-pi02w</span></div>
       <div class="row" style="padding-top:.5em;justify-content:space-between"><span><span class="btn">Allmon3</span> <span class="btn">DVSwitch</span> <span class="btn">Cockpit</span></span>
         <span style="font-family:var(--mono);color:var(--grn);font-size:8pt">● TG 3100 ●</span>
-        <span><span class="btn">USRP2M17</span> <span class="btn">WiFiMon</span> <span class="btn">SysMon</span></span></div>
+        <span><span class="btn">InstMon</span> <span class="btn">WiFiMon</span> <span class="btn">SysMon</span></span></div>
       <div class="tabs" style="padding-top:0"><span class="tab">ASL</span><span class="tab">Echo</span><span class="tab on" style="background:var(--blu)">DMR</span><span class="tab">STFU</span><span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span><span class="tab">XLX</span><span class="tab">M17</span><span class="tab">Phone</span><span class="tab">EDIT</span></div>
       <div class="row"><span class="btn">BrandMeister ▾</span><span class="txt" style="border:1px solid var(--line);padding:.3em .6em">TG number…</span><span class="btn c">Tune</span><span class="btn">LH</span><span class="btn">Save</span></div>
       <div class="cards">
@@ -2112,7 +2115,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <table>
     <tr><th>Part</th><th>What it does</th></tr>
     <tr><td>Header</td><td>Callsign, node number, uptime, Log Out, version.</td></tr>
-    <tr><td>Quick links</td><td>Allmon3, the DVSwitch page, Cockpit, USRP2M17, wifimon and SysMon. SysMon is greyed out while it isn't running.</td></tr>
+    <tr><td>Quick links</td><td>Allmon3, the DVSwitch page, Cockpit, instmon, wifimon and SysMon. SysMon is greyed out while it isn't running.</td></tr>
     <tr><td>Indicator</td><td>What you are connected to now (talkgroup, node or reflector). The dots light while traffic passes.</td></tr>
     <tr><td>Quick bar</td><td>Type a number or reflector and press <b>Tune</b> (or Enter). <b>LH</b> opens that network's Last Heard page; <b>Save</b> adds it to your favorites.</td></tr>
     <tr><td>Search card</td><td>On most tabs: search the full list (AllStar nodes, EchoLink stations, reflectors, talkgroups), pick one, then <b>Connect</b>, <b>LH</b> or <b>Save</b>.</td></tr>
@@ -2282,7 +2285,11 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     with any library group's <b>Upload &amp; stage</b>; a <code>.pdf</code> always goes to Manuals). The same name and
     "real PDF" rules apply, up to the upload size limit (50 MB unless <code>INSTMON_MAX_UPLOAD_MB</code> says otherwise).
     Each manual has <b>Delete</b> as well as Open and Download; a manual from GitHub that you delete comes back on the
-    next Get from GitHub.</p>
+    next Get from GitHub or Full Update.</p>
+  <p>From 2.45.0 you don't need to press Get from GitHub on a new node. <code>--install</code> downloads the manuals,
+    and if the node was offline then, instmon tries again when it starts (after 5 seconds, then 1, 2 and 5 minutes
+    later) until one download works. After that first download it only fetches manuals on Get from GitHub and Full
+    Update, both of which take only the files that are new or changed on GitHub. There is no setting to turn this off.</p>
 
   <h2><span class="n">13.5</span>Backup &amp; Export</h2>
   <p><b>Download Full Backup (ZIP)</b> saves the whole library to your computer: every tool version, script and

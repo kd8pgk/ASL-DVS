@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.76"
+VERSION      = "9.3.77"
 BUILD_DATE   = "2026-10-12"
 
 ASL_NODE        = "652702"
@@ -8764,7 +8764,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
       </div>
       <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
       <div class="ql-group ql-right">
-        <a class="ql" data-ql-path="/m17" href="#" target="_blank" rel="noopener">USRP2M17</a>
+        <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
         <a class="ql" data-ql-port="8991" href="#" target="_blank" rel="noopener">WiFiMon</a>
         <a id="lnk-sysmon" class="ql ql-off" href="#" aria-disabled="true" title="SysMon is not running">SysMon</a>
       </div>
