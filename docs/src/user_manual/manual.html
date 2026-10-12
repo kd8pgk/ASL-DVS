@@ -30,7 +30,7 @@
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_16_20261012.py</td><td>9.3.71.16-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_13_20261012.py</td><td>6.13.67.13-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_44_0_20261012.py</td><td>2.44.0</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_45_0_20261012.py</td><td>2.45.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_30_20261012.py</td><td>5.30</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_79_20261012.py</td><td>6.13.79</td></tr>
@@ -231,7 +231,7 @@ sudo systemctl status sysmon</pre>
   <div class="grid2">
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.44.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.45.0</span></div>
         <div class="sect">Quick Links</div><div class="sect">GitHub Updates</div>
         <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="btn c">Quiet System</span></div>
         <div class="sect">Components</div><div class="sect">Scripts &amp; Configuration Library</div>
@@ -369,7 +369,9 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
   <ol class="steps">
     <li><b>Get the files.</b> Download the current files from github.com/kd8pgk/ASL-DVS into one folder on the Pi.</li>
     <li><b>Install instmon first.</b> It can then install and update everything else from the browser.
-<pre>sudo python3 instmon_v2_44_0_20261012.py --install</pre></li>
+<pre>sudo python3 instmon_v2_45_0_20261012.py --install</pre>
+      From 2.45.0 the install also downloads the manuals (PDF) from GitHub, so they are on instmon's Manuals card
+      straight away. With no internet the install still finishes, and instmon downloads them once it can reach GitHub.</li>
     <li><b>Install the rest</b> with the installer. On a new node it asks for your callsign, node number and a label.
 <pre>sudo bash install_all_v7_1_20261012.sh</pre></li>
   </ol>
@@ -462,10 +464,11 @@ sudo bash uninstall_all_v1_5.sh</pre>
     <h3>Full Update, step by step</h3>
     <ol>
       <li>Downloads and checks every new file before anything changes.</li>
+      <li>Downloads the manuals that are new or changed on GitHub (from 2.45.0). A failure here is listed as skipped and the tools still update.</li>
       <li>Pauses the web tools.</li>
       <li>For each tool in turn, saves a copy of the installed file in the library, runs the old <code>--uninstall</code>, and runs the new <code>--install</code>. If the new one fails, it puts the old one back and moves on.</li>
       <li>Updates instmon last. A timer reinstalls the old instmon if the new one isn't answering after 90 seconds.</li>
-      <li>Ends with a summary. New install scripts go only to the Scripts library and are never run for you.</li>
+      <li>Ends with a summary, including any manuals that were downloaded. New install scripts go only to the Scripts library and are never run for you.</li>
     </ol>
     <p>On a Pi Zero 2 W, the build choice decides which build Full Update installs. A tool installed in the other
       build is listed as <b>SWITCH</b> and replaced. On other Pis the choice is hidden and each tool keeps its build.</p>
@@ -2282,7 +2285,11 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     with any library group's <b>Upload &amp; stage</b>; a <code>.pdf</code> always goes to Manuals). The same name and
     "real PDF" rules apply, up to the upload size limit (50 MB unless <code>INSTMON_MAX_UPLOAD_MB</code> says otherwise).
     Each manual has <b>Delete</b> as well as Open and Download; a manual from GitHub that you delete comes back on the
-    next Get from GitHub.</p>
+    next Get from GitHub or Full Update.</p>
+  <p>From 2.45.0 you don't need to press Get from GitHub on a new node. <code>--install</code> downloads the manuals,
+    and if the node was offline then, instmon tries again when it starts (after 5 seconds, then 1, 2 and 5 minutes
+    later) until one download works. After that first download it only fetches manuals on Get from GitHub and Full
+    Update, both of which take only the files that are new or changed on GitHub. There is no setting to turn this off.</p>
 
   <h2><span class="n">13.5</span>Backup &amp; Export</h2>
   <p><b>Download Full Backup (ZIP)</b> saves the whole library to your computer: every tool version, script and

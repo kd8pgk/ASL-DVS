@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.44.0"
+VERSION ="2.45.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -3129,6 +3129,8 @@ DOCS_MAX_BYTES = 64 * 1024 * 1024
 _DOCS_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,123}\.pdf$')
 _docs_lock = threading.Lock()
 _docs_state = {"phase": "idle", "error": None, "msg": "", "checked_at": None}
+_DOCS_FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_manuals_fetched")
+_DOCS_FIRST_FETCH_DELAYS = (5, 60, 120, 300)
 
 def docs_list():
     out = []
@@ -3175,52 +3177,105 @@ def _docs_parse_listing(raw):
         out.append({"name": name, "blob": blob, "size": size})
     return out
 
-def _docs_fetch_bg():
-    got, same, failed = [], 0, []
+def _docs_mark_fetched():
     try:
-        cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
-        os.makedirs(DOCS_DIR, exist_ok=True)
-        for c in cands:
-            dest = safe_join(DOCS_DIR, c["name"])
-            if dest is None:
-                continue
-            if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
-                same += 1
-                continue
-            try:
-                data = _gh_fetch_impl(_gh_file_url("docs/" + c["name"]), DOCS_MAX_BYTES)
-                if _git_blob_id(data) != c["blob"]:
-                    raise GhRejected("the download does not match GitHub's file list")
-                if not data.startswith(b"%PDF-"):
-                    raise GhRejected("not a PDF file")
-            except GhRejected as exc:
-                if _gh_is_network_error(exc):
-                    raise
-                failed.append(c["name"])
-                log_event(f"Manuals: {c['name']} not saved: {exc}", "warn")
-                continue
-            tmp = dest + ".tmp"
-            with open(tmp, "wb") as fh:
-                fh.write(data)
-            os.chmod(tmp, 0o644)
-            os.replace(tmp, dest)
-            got.append(c["name"])
-            log_event(f"Manuals: saved {c['name']} ({len(data) // 1024} KB)", "ok")
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(_DOCS_FETCHED_PATH, "w") as fh:
+            fh.write(datetime.now().strftime("%Y-%m-%d %H:%M") + "\n")
+    except OSError as exc:
+        log_event(f"Manuals: could not write {_DOCS_FETCHED_PATH}: {exc}", "warn")
+
+def _docs_fetch(say=log_event):
+    got, same, failed = [], 0, []
+    cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
+    os.makedirs(DOCS_DIR, exist_ok=True)
+    for c in cands:
+        dest = safe_join(DOCS_DIR, c["name"])
+        if dest is None:
+            continue
+        if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
+            same += 1
+            continue
+        try:
+            data = _gh_fetch_impl(_gh_file_url("docs/" + c["name"]), DOCS_MAX_BYTES)
+            if _git_blob_id(data) != c["blob"]:
+                raise GhRejected("the download does not match GitHub's file list")
+            if not data.startswith(b"%PDF-"):
+                raise GhRejected("not a PDF file")
+        except GhRejected as exc:
+            if _gh_is_network_error(exc):
+                raise
+            failed.append(c["name"])
+            say(f"Manuals: {c['name']} not saved: {exc}", "warn")
+            continue
+        tmp = f"{dest}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dest)
+        got.append(c["name"])
+        say(f"Manuals: saved {c['name']} ({len(data) // 1024} KB)", "ok")
+    _docs_mark_fetched()
+    return got, same, failed
+
+def _docs_summary(got, same, failed):
+    parts = [f"{len(got)} downloaded", f"{same} already up to date"]
+    if failed:
+        parts.append(f"{len(failed)} failed (see log)")
+    return ", ".join(parts) + "."
+
+def _docs_claim():
+    with _docs_lock:
+        if _docs_state["phase"] == "fetching":
+            return False
+        _docs_state.update(phase="fetching", error=None, msg="")
+        return True
+
+def _docs_fetch_bg():
+    try:
+        got, same, failed = _docs_fetch()
     except Exception as exc:
         msg = str(exc) if isinstance(exc, GhRejected) else f"unexpected error: {exc}"
         with _docs_lock:
             _docs_state.update(phase="error", error=msg, msg="",
                                checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
         log_event(f"Manuals: GitHub fetch failed: {msg}", "err")
-        return
-    parts = [f"{len(got)} downloaded", f"{same} already up to date"]
-    if failed:
-        parts.append(f"{len(failed)} failed (see log)")
-    msg = ", ".join(parts) + "."
+        return None
+    msg = _docs_summary(got, same, failed)
     with _docs_lock:
         _docs_state.update(phase="done", error=None, msg=msg,
                            checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
     log_event("Manuals: " + msg, "warn" if failed else "ok")
+    return got, same, failed
+
+def _docs_first_fetch_loop():
+    for delay in _DOCS_FIRST_FETCH_DELAYS:
+        time.sleep(delay)
+        if os.path.exists(_DOCS_FETCHED_PATH):
+            return
+        if not _docs_claim():
+            continue
+        log_event(f"Manuals: first download from {_gh_source_label()}", "info")
+        if _docs_fetch_bg() is not None:
+            return
+    log_event("Manuals: could not reach GitHub -- press Get from GitHub on the Manuals card, "
+              "or run a Full Update, once the node is online", "warn")
+
+def docs_start_first_fetch():
+    if os.path.exists(_DOCS_FETCHED_PATH):
+        return
+    threading.Thread(target=_docs_first_fetch_loop, daemon=True).start()
+
+def docs_install_fetch():
+    print("\nDownloading the manuals from GitHub...")
+    def say(msg, level):
+        print(f"  [{'+' if level == 'ok' else '!'}] {msg.split(': ', 1)[-1]}")
+    try:
+        got, same, failed = _docs_fetch(say)
+    except Exception as exc:
+        print(f"  [!] Manuals not downloaded ({exc}). instmon downloads them when it starts and GitHub can be reached.")
+        return
+    print(f"  [+] Manuals: {_docs_summary(got, same, failed)} Open them on instmon's Manuals card.")
 
 def docs_stage(filename, data, source="usb"):
     stem = os.path.splitext(filename)[0]
@@ -3259,10 +3314,8 @@ def docs_delete(name):
     return 200, {"ok": True, "message": f"Deleted {name} from Manuals.", "level": "info"}
 
 def docs_start_fetch():
-    with _docs_lock:
-        if _docs_state["phase"] == "fetching":
-            return False, "The manuals are already being fetched."
-        _docs_state.update(phase="fetching", error=None, msg="")
+    if not _docs_claim():
+        return False, "The manuals are already being fetched."
     log_event(f"Manuals: fetching the docs folder from {_gh_source_label()}", "info")
     threading.Thread(target=_docs_fetch_bg, daemon=True).start()
     return True, "Getting the manuals from GitHub..."
@@ -3786,7 +3839,7 @@ _FU_ACTIONABLE = ("update", "switch")
 _fu_lock = threading.Lock()
 _fu_state = {
     "running": False, "phase": "", "current": "", "error": "", "banner": False,
-    "updated": [], "skipped": [], "attention": [], "scripts": [], "instmon_pending": None,
+    "updated": [], "skipped": [], "attention": [], "scripts": [], "manuals": [], "instmon_pending": None,
     "plan": None, "plan_at": "",
 }
 
@@ -4024,12 +4077,33 @@ def _fu_finish(error=""):
         parts.append(f"{len(snap['attention'])} NEED ATTENTION")
     if snap["scripts"]:
         parts.append(f"{len(snap['scripts'])} script(s) added to the library")
+    if snap.get("manuals"):
+        parts.append(f"{len(snap['manuals'])} manual(s) updated")
     level = "err" if (snap["attention"] or error) else ("warn" if snap["skipped"] else "ok")
     for r in snap["skipped"]:
         log_event(f"  skipped {r['name']}: {r['note']}", "warn")
     for r in snap["attention"]:
         log_event(f"  NEEDS ATTENTION {r['name']}: {r['note']}", "err")
     _gh_event("Full Update finished" + (f" ({error})" if error else "") + ": " + ", ".join(parts) + ".", level)
+
+def _fu_manuals(skipped):
+    _fu_set(phase="manuals", current="checking the manuals")
+    if not _docs_claim():
+        skipped.append({"name": "Manuals", "note": "a Get from GitHub was already running -- left to finish"})
+        _fu_set(skipped=list(skipped))
+        return
+    result = _docs_fetch_bg()
+    if result is None:
+        with _docs_lock:
+            err = _docs_state["error"]
+        skipped.append({"name": "Manuals", "note": f"not checked: {err}"})
+    else:
+        got, _same, failed = result
+        if failed:
+            skipped.append({"name": "Manuals", "note": f"{', '.join(failed)} not saved (see log)"})
+        _fu_set(manuals=[{"name": n, "note": "new or changed on GitHub"} for n in got])
+        log_event(f"Full Update: manuals: {_docs_summary(got, _same, failed)}", "warn" if failed else "ok")
+    _fu_set(skipped=list(skipped))
 
 def _fu_run():
     _fu_set(phase="checking", current="reading GitHub's file list")
@@ -4049,7 +4123,8 @@ def _fu_run():
     skipped = [{"name": r["name"], "note": r["note"]} for r in rows if r["status"] == "error"]
     _fu_set(skipped=list(skipped))
     if not plan and not scripts:
-        log_event("Full Update: everything is already current -- nothing to do", "ok")
+        log_event("Full Update: every tool is already current", "ok")
+        _fu_manuals(skipped)
         _fu_finish()
         return
 
@@ -4078,6 +4153,7 @@ def _fu_run():
     with _gh_lock:
         _gh_state["entries"] = [_gh_compare(dict(e)) for e in _gh_state["entries"]]
     _fu_set(skipped=list(skipped), scripts=done_scripts)
+    _fu_manuals(skipped)
     if not staged:
         _fu_finish()
         return
@@ -4174,7 +4250,7 @@ def full_update_start():
         if _fu_state["running"]:
             return 409, "Full Update is already running.", "warn"
         _fu_state.update(running=True, phase="starting", current="", error="", banner=False,
-                         updated=[], skipped=[], attention=[], scripts=[], instmon_pending=None)
+                         updated=[], skipped=[], attention=[], scripts=[], manuals=[], instmon_pending=None)
     threading.Thread(target=_fu_run_bg, daemon=True).start()
     return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
 
@@ -4197,7 +4273,7 @@ def full_update_resume_at_startup():
     if not isinstance(saved, dict):
         return
     with _fu_lock:
-        for key in ("phase", "error", "banner", "updated", "skipped", "attention", "scripts", "instmon_pending"):
+        for key in ("phase", "error", "banner", "updated", "skipped", "attention", "scripts", "manuals", "instmon_pending"):
             if key in saved:
                 _fu_state[key] = saved[key]
         _fu_state["running"] = False
@@ -5155,11 +5231,11 @@ function renderQuietFullUpdate(quiet, fu) {
   if (fu && fu.banner && !running) {
     const bad = (fu.attention || []).length || fu.error;
     const cls = bad ? 'err' : ((fu.skipped || []).length ? '' : 'ok');
-    const any = (fu.updated || []).length + (fu.skipped || []).length + (fu.attention || []).length + (fu.scripts || []).length;
+    const any = (fu.updated || []).length + (fu.skipped || []).length + (fu.attention || []).length + (fu.scripts || []).length + (fu.manuals || []).length;
     banners.push(`<div class="fu-banner ${cls}"><div style="flex:1">
       <b>Full Update finished${fu.error ? ' -- ' + escHtml(fu.error) : ''}</b>
       ${_fuList('Updated', fu.updated)}${_fuList('Skipped', fu.skipped)}
-      ${_fuList('NEEDS ATTENTION', fu.attention)}${_fuList('Scripts', fu.scripts)}
+      ${_fuList('NEEDS ATTENTION', fu.attention)}${_fuList('Scripts', fu.scripts)}${_fuList('Manuals', fu.manuals)}
       ${any ? '' : '<div>Nothing needed updating.</div>'}
       </div><button data-action="fu_dismiss">Dismiss</button></div>`);
   }
@@ -6439,7 +6515,7 @@ _JS_ACTIONS = """function wireButtons() {
           const scr = p ? p.scripts.map(n => `  ${n} (Scripts library only, not run)`) : [];
           if (!confirm('Full Update from GitHub?\\n\\n' + (comps.length ? 'One at a time:\\n' + comps.join('\\n') + '\\n\\n' : '') +
                        (scr.length ? 'New scripts:\\n' + scr.join('\\n') + '\\n\\n' : '') +
-                       'GitHub is checked again first. The web tools are paused, each component is uninstalled and the new version installed; one that fails is put back and skipped. instmon goes last -- this page reconnects after it restarts.')) { btn.disabled = false; return; }
+                       'GitHub is checked again first. The web tools are paused, each component is uninstalled and the new version installed; one that fails is put back and skipped. Then the manuals that are new or changed on GitHub are downloaded. instmon goes last -- this page reconnects after it restarts.')) { btn.disabled = false; return; }
           await postAction({action: 'full_update', confirm: true});
         } else if (action === 'gh_update') {
           if (!confirm(`Download ${btn.dataset.name} from GitHub into the ${btn.dataset.category} library? It is checked before it is saved, and nothing runs or installs until you press its button.`)) { btn.disabled = false; return; }
@@ -7056,7 +7132,7 @@ function docsRender(data) {
   if (!docs.length) {
     const e = document.createElement('div');
     e.className = 'small muted';
-    e.textContent = 'No manuals on this node yet. Press Get from GitHub.';
+    e.textContent = 'No manuals yet. They download when instmon can reach GitHub -- press Get from GitHub to try now.';
     list.appendChild(e);
   }
   docs.forEach((d) => {
@@ -7267,7 +7343,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
   <div class="small muted" style="margin-top:.35rem">
     The install, user and configuration manuals (PDF) from the docs folder on GitHub, and any other PDF you
-    upload here or import from a USB drive. Open shows one in a new tab in the browser's own PDF reader;
+    upload here or import from a USB drive. They download when instmon is installed, and a Full Update
+    fetches any that are new or changed on GitHub. Open shows one in a new tab in the browser's own PDF reader;
     Download saves it. Get from GitHub only fetches files that are new or changed.</div>
   <div id="docs-list" style="margin-top:.5rem"></div>
 </div>
@@ -9197,7 +9274,9 @@ def install_service ()->None :
 
     subprocess .run (["systemctl","daemon-reload"],check =True )
     subprocess .run (["systemctl","enable","instmon.service"],check =True )
-    
+
+    docs_install_fetch()
+
     subprocess .run ([
     "systemd-run","--quiet","--collect","--on-active=2",
     "--unit=instmon-selfrestart",
@@ -9279,6 +9358,7 @@ def run ():
 
     _quiesce_startup_sweep ()
     full_update_resume_at_startup ()
+    docs_start_first_fetch()
 
     if HOME_SCAN_ENABLED :
         moved =scan_home_for_new_code ()
