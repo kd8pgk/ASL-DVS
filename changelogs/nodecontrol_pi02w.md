@@ -1,6 +1,16 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_71_15_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_71_16_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.71.16-pi02w (2026-10-12)
+
+The USRP2M17 quick-link button is now an **InstMon** button. The same change is in the full build (9.3.77).
+
+- The right-hand quick links are now InstMon, WiFiMon and SysMon. InstMon has
+  the same look as the other quick-link buttons and opens instmon
+  (`http://<host>:8990/`) in a new tab.
+- The M17 tab is unchanged.
+- File: `nodecontrol_pi02w_v9_3_71_16_20261012.py`.
 
 ## 9.3.71.15-pi02w (2026-10-12)
 
