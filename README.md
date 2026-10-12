@@ -40,8 +40,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_78_20261012.py` | `sysmon_pi02w_v6_13_67_12_20261012.py` | `instmon_v2_42_0_20261012.py` |
-| `VERSION` | `6.13.78` | `6.13.67.12-pi02w` | `2.42.0` |
+| File name | `sysmon_v6_13_78_20261012.py` | `sysmon_pi02w_v6_13_67_12_20261012.py` | `instmon_v2_43_0_20261012.py` |
+| `VERSION` | `6.13.78` | `6.13.67.12-pi02w` | `2.43.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -75,7 +75,7 @@ User manual (PDF, 91 pages): every tool, tab and button, with SysMon and 44helpe
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_42_0_20261012.py --install
+   sudo python3 instmon_v2_43_0_20261012.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -196,7 +196,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_v6_13_78_20261012.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_12_20261012.py` | SysMon, Pi Zero 2 W (current) |
 | `sysmon_v6_5_18_20260823.py` | SysMon, full (older) |
-| `instmon_v2_42_0_20261012.py` | common |
+| `instmon_v2_43_0_20261012.py` | common |
 | `wifimon_v5_29_20261012.py` | common |
 | `asl_dvs_m17_44helper_v0_0_180_20261012.py` | common |
 | `asl_dvs_watchdog_v2_4_20261006.sh` | common |
