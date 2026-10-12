@@ -31,7 +31,7 @@
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_11_20261011.py</td><td>6.13.67.11-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">asl_dvs_m17_44helper_v0_0_179_20261011.py</td><td>0.0.179</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_40_0_20261012.py</td><td>2.40.0</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_28_20261007.py</td><td>5.28</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_29_20261012.py</td><td>5.29</td></tr>
       <tr><td>Installer</td><td class="mono">install_asl_dvs_v6_6_20261006.sh</td><td>6.6</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_77_20261011.py</td><td>6.13.77</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">asl_dvs_dashboard_v9_3_74_20261011.py</td><td>9.3.74</td></tr>
@@ -241,7 +241,7 @@ sudo systemctl status sysmon</pre>
     </figure>
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.28</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.29</span></div>
         <div class="sect">Status</div><div class="sect">Saved networks</div><div class="sect">Nearby networks</div>
         <div class="sect">Radio &amp; device</div><div class="sect">Watchdog</div><div class="sect">Service</div>
         <div class="sect" style="padding-bottom:.6em">Activity log</div>
@@ -304,8 +304,8 @@ sudo systemctl status sysmon</pre>
       <tr><td>wifimon</td><td class="mono">wifimon</td><td class="mono">/usr/local/bin/wifimon.py</td><td class="mono">/etc/wifimon/wifimon.conf</td></tr>
     </table>
     <p>The Dashboard and SysMon program paths are links into <code>/usr/local/lib/asl_dvs/</code> and
-      <code>/usr/local/lib/asl_dvs_sysmon/</code>. From instmon 2.40.0, instmon's path is a link into
-      <code>/usr/local/lib/asl_dvs/instmon/</code>. The installed file keeps its own name, so the version is always
+      <code>/usr/local/lib/asl_dvs_sysmon/</code>. From instmon 2.40.0 and wifimon 5.29, their paths are links into
+      <code>/usr/local/lib/asl_dvs/instmon/</code> and <code>/usr/local/lib/asl_dvs/wifimon/</code>. The installed file keeps its own name, so the version is always
       visible on disk.</p>
 
     <h3>One process each, started through the launcher</h3>
