@@ -189,8 +189,8 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `asl_dvs_dashboard_v9_3_74_20261011.py` | Dashboard, full (current) |
-| `asl_dvs_dashboard_pi02w_v9_3_71_13_20261007.py` | Dashboard, Pi Zero 2 W (current) |
+| `asl_dvs_dashboard_v9_3_75_20261012.py` | Dashboard, full (current) |
+| `asl_dvs_dashboard_pi02w_v9_3_71_14_20261012.py` | Dashboard, Pi Zero 2 W (current) |
 | `asl_dvs_dashboard_v8_0_3_20260822.py` | Dashboard, full (older) |
 | `sysmon_v6_13_78_20261012.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_67_12_20261012.py` | SysMon, Pi Zero 2 W (current) |

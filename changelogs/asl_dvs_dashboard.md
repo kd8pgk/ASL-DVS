@@ -1,6 +1,27 @@
 # Dashboard, full build changelog
 
-Current file: `asl_dvs_dashboard_v9_3_74_20261011.py`. Newest entries first.
+Current file: `asl_dvs_dashboard_v9_3_75_20261012.py`. Newest entries first.
+
+## 9.3.75 (2026-10-12)
+
+Standard install layout (same as instmon 2.40.0, wifimon 5.29, 44helper 0.0.180
+and SysMon). The same change is in the Pi Zero 2 W build (9.3.71.14-pi02w).
+
+- `--install` copies the file to `/usr/local/lib/asl_dvs/dashboard/` (it used to
+  sit directly in `/usr/local/lib/asl_dvs/`, which now holds one folder per tool)
+  and points `/usr/local/bin/asl_dvs_dashboard.py` at it. The link is swapped in
+  with one rename, so the path is never missing. Any other version in the new
+  folder is removed, and so are the old `asl_dvs_dashboard*.py` files (and their
+  compiled copies) directly in `/usr/local/lib/asl_dvs/`. The other tools'
+  folders there are not touched. Running `--install` through the link changes
+  nothing.
+- Unit: adds `NotifyAccess=main`, the same as SysMon and instmon. Otherwise
+  unchanged.
+- `--uninstall` also removes the empty lib folder, and `/usr/local/lib/asl_dvs/`
+  if nothing else is left in it.
+- Tested with mocks against a temporary root: a fresh install, an install over
+  the old flat layout (with another tool's folder next to it) and over the new
+  layout, reinstall through the link, and uninstall.
 
 ## 9.3.74 (2026-10-11)
 
