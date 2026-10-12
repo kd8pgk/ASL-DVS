@@ -1,6 +1,33 @@
 # 44helper changelog
 
-Current file: `asl_dvs_m17_44helper_v0_0_179_20261011.py`. Newest entries first.
+Current file: `asl_dvs_m17_44helper_v0_0_180_20261012.py`. Newest entries first.
+
+## 0.0.180 (2026-10-12)
+
+Standard install layout (same as instmon 2.40.0 and wifimon 5.29). The program
+moves out of `/opt`.
+
+- `--install` copies the file to `/usr/local/lib/asl_dvs/44helper/` under its
+  own versioned name. `/usr/local/bin/44helper.py` is the new program path, and
+  the unit runs it. `/opt/44helper/asl_dvs_m17_44helper.py` becomes a second
+  link to the same file, so instmon 2.39.1 and older, the installer and the
+  uninstaller still find 44helper there. An old plain copy at either path is
+  replaced in one rename, and any other version left in the lib folder is
+  removed.
+- `--uninstall` removes both links, the lib file, the lib folder (and
+  `/usr/local/lib/asl_dvs/` if that is then empty) and `/opt/44helper/` if it is
+  empty. `/etc/44helper/` is left as before.
+- Unit: `Restart=always` (was `on-failure`), `RestartSec=3s`, the same as the
+  other tools.
+- Config-restore reinstall job: 44helper is looked up at the path its unit
+  runs (new path, then `/opt`). Before each `--install`, including a rollback
+  and instmon's rollback timer, a symlink at the tool's path is turned into a
+  plain copy, so an older tool copying itself onto that path cannot write into
+  the newer file in the lib folder.
+- Tested with mocks against a temporary root: a fresh install, an install over
+  an old `/opt` plain copy and over a newer layout, installing through either
+  link, uninstall, and the reinstall job's path choice, symlink step and
+  rollback-timer command.
 
 ## 0.0.179 (2026-10-11)
 
