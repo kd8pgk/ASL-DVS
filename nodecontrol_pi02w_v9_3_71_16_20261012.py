@@ -6772,9 +6772,10 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
     _ensure_page(page)
     st = get_state()
     _clear_foreign_link()
-    _dvs("tune", DSTAR_UNLINK)
-    _dvs("tune", TG_DISCONNECT)
-    _dvs_settle()
+    if kind != "gateway":
+        _dvs("tune", DSTAR_UNLINK)
+        _dvs("tune", TG_DISCONNECT)
+        _dvs_settle()
     bridge = _cfg.bridge_nodes[BRIDGE_SLOT_DIGITAL]
     if st.has_asl and bridge and bridge not in st.bridge_linked_nodes:
         _connect(bridge)
@@ -6784,11 +6785,6 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
         time.sleep(remaining)
     if kind == "gateway":
         target = _dstar_link_target(base, module)
-        _dvs("tune", "CQCQCQ")
-        _dvs_settle()
-        remaining = _dvs_settle_until - time.monotonic()
-        if remaining > 0:
-            time.sleep(remaining)
         ok, out = _ircddb_rc_link(target)
         if not ok:
             return False, f"D-STAR link to gateway {target.replace(' ', '_')} failed: {out}"

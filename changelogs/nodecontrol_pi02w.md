@@ -14,8 +14,13 @@ reflector).
   Before, it fell back to `dvswitch.sh tune "K8WGR BL"`, which links `K8WGR   ` with
   no module: the link comes up and carries no audio, and the Dashboard reported
   success.
-- The `tune CQCQCQ` that followed the remote-control link is now sent before it, so
-  nothing the tune does can change the link afterwards.
+- A gateway link sends no `dvswitch.sh tune` at all: not the `       U` and
+  `disconnect` tunes before it, and not the `CQCQCQ` tune after it. DVSwitch turns
+  every D-Star tune into a remote-control link of its own. Measured on `travel`
+  (2026-10-12 17:28:56): the link to `K8WGR  B` came up, then the `CQCQCQ` tune
+  arrived as `linked "KD8PGK B" to "CQCQCQ  "` and removed it within a second.
+  Linking through remote control drops whatever was linked before, so no unlink
+  is needed first.
 - Disconnect (D-STAR and XLX), `*88` on the D-STAR tab, and moving between the D-STAR
   and XLX tabs now send the remote-control unlink after the old `       U` tune
   instead of before it. ircDDBGateway ends unlinked with its reconnect timer stopped,
