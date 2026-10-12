@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.39.1"
-DATE_STR ="2026-10-11"
+VERSION ="2.40.0"
+DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOB ="install_asl_dvs*.sh"
 UNINSTALLER_SCRIPT_GLOB ="uninstall_asl_dvs*.sh"
@@ -48,6 +48,7 @@ MAX_UPLOAD_BYTES =int (os .environ .get ("INSTMON_MAX_UPLOAD_MB","50"))*1024 *10
 REBOOT_SHUTDOWN_DELAY_SEC =int (os .environ .get ("INSTMON_REBOOT_SHUTDOWN_DELAY_SEC","2"))
 
 INSTALL_BIN_PATH ="/usr/local/bin/instmon.py"
+INSTALL_DIR = "/usr/local/lib/asl_dvs/instmon"
 SYSTEMD_SERVICE_PATH ="/etc/systemd/system/instmon.service"
 
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
@@ -110,10 +111,12 @@ Description=instmon Web Installer & Component Manager
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=/usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/instmon.py
 Restart=always
 RestartSec=3s
+TimeoutStartSec=600
 WatchdogSec=60s
 StandardOutput=journal
 StandardError=journal
@@ -1691,7 +1694,8 @@ COMPONENTS =[
 "name":"44helper",
 "service":"44helper",
 "port":9997 ,
-"install_link":"/opt/44helper/asl_dvs_m17_44helper.py",
+"install_link":"/usr/local/bin/44helper.py",
+"legacy_links":("/opt/44helper/asl_dvs_m17_44helper.py",),
 "category":"44helper",
 },
 {
@@ -2783,9 +2787,56 @@ def human_size (num_bytes ):
         num_bytes /=1024 
     return f"{num_bytes :.1f} TB"
 
+def installed_link(comp):
+    paths = [comp["install_link"]] + list(comp.get("legacy_links", ()))
+    if len(paths) > 1:
+        unit = os.path.join(_SYSTEMD_UNIT_DIR, comp["service"] + ".service")
+        try:
+            with open(unit, errors="replace") as fh:
+                unit_text = fh.read()
+        except OSError:
+            unit_text = ""
+        for p in paths:
+            if p in unit_text:
+                return p
+        for p in paths:
+            if os.path.lexists(p):
+                return p
+    return paths[0]
+
 def resolve_installed_target (comp ):
 
-    return os .path .realpath (comp ["install_link"])
+    return os .path .realpath (installed_link (comp ))
+
+def delink_install_paths(comp):
+    for link in [comp["install_link"]] + list(comp.get("legacy_links", ())):
+        if not os.path.islink(link):
+            continue
+        target = os.path.realpath(link)
+        tmp = link + ".delink.tmp"
+        try:
+            if os.path.isfile(target):
+                shutil.copy2(target, tmp)
+                os.replace(tmp, link)
+                log_event(f"Replaced the symlink {link} with a plain copy of {os.path.basename(target)} before --install", "info")
+            else:
+                os.remove(link)
+                log_event(f"Removed the dangling symlink {link} before --install", "info")
+        except OSError as exc:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            log_event(f"Could not replace the symlink {link} before --install: {exc}", "warn")
+
+def _delink_shell(comp):
+    parts = []
+    for link in [comp["install_link"]] + list(comp.get("legacy_links", ())):
+        q = shlex.quote(link)
+        tq = shlex.quote(link + ".delink.tmp")
+        parts.append(f'if [ -L {q} ]; then t=$(readlink -f {q}); '
+                     f'if [ -f "$t" ] && cp -p "$t" {tq}; then mv -f {tq} {q}; else rm -f {q}; fi; fi')
+    return "; ".join(parts)
 
 def _version_sort_key (ver ):
     if not ver or ver =="?":
@@ -3692,13 +3743,14 @@ def _fu_update_one(comp, row, new_path):
 
     _fu_set(current=f"{name}: uninstalling v{old_ver}")
     log_event(f"Full Update: {name}: uninstalling v{old_ver}", "info")
-    rc = _fu_run_cli(comp["install_link"], "--uninstall")
+    rc = _fu_run_cli(installed_link(comp), "--uninstall")
     if rc != 0:
         log_event(f"Full Update: {name}: --uninstall exited {rc}; installing the new file anyway", "warn")
     quiet_forget(comp["service"])
 
     _fu_set(current=f"{name}: installing v{new_ver}")
     log_event(f"Full Update: {name}: installing {os.path.basename(new_path)}", "info")
+    delink_install_paths(comp)
     rc = _fu_run_cli(new_path, "--install")
     ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
     if ok:
@@ -3711,6 +3763,7 @@ def _fu_update_one(comp, row, new_path):
     reason = f"v{new_ver} failed ({state})"
     log_event(f"Full Update: {name}: {reason} -- putting v{old_ver} back", "err")
     _fu_set(current=f"{name}: rolling back to v{old_ver}")
+    delink_install_paths(comp)
     rc = _fu_run_cli(old_path, "--install")
     ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
     if ok:
@@ -3720,8 +3773,9 @@ def _fu_update_one(comp, row, new_path):
     return "attention", f"{reason}; putting v{old_ver} back also failed ({state}) -- not running"
 
 def _fu_arm_instmon_guard(old_path):
+    comp = next(c for c in COMPONENTS if c["category"] == "instmon")
     check = (f"timeout 5 bash -c '</dev/tcp/127.0.0.1/{PORT}' || "
-             f"{_interp_for(old_path)} {shlex.quote(old_path)} --install")
+             f"{{ {_delink_shell(comp)}; {_interp_for(old_path)} {shlex.quote(old_path)} --install; }}")
     for args in (["systemctl", "stop", "instmon-update-guard.timer", "instmon-update-guard.service"],
                  ["systemctl", "reset-failed", "instmon-update-guard.service"]):
         try:
@@ -3852,6 +3906,7 @@ def _fu_run():
             instmon_pending={"from": row["installed_version"], "to": row["version"]})
     _fu_save()
     log_event(f"Full Update: instmon: installing v{row['version']} -- this page reconnects when it restarts", "info")
+    delink_install_paths(comp)
     rc = _fu_run_cli(path, "--install")
     if rc != 0:
         try:
@@ -3978,6 +4033,7 @@ def run_script_bg (script_path ,script_name ,env_overrides =None ):
 def run_self_install_bg (script_path ,script_name ,comp ):
 
     log_event (f"Installing {script_name } ({comp ['name']}) -- running its own --install...","info")
+    delink_install_paths (comp )
     try :
         proc =subprocess .Popen (
         [_interp_for (script_path ),script_path ,"--install"],
@@ -4038,7 +4094,7 @@ def stage_installed_copy_if_missing (comp ):
 
 def run_self_uninstall_bg (comp ):
 
-    script_path =comp ["install_link"]
+    script_path =installed_link (comp )
     log_event (f"Uninstalling {comp ['name']} -- running its own --uninstall...","info")
     try :
         proc =subprocess .Popen (
@@ -8692,14 +8748,41 @@ def install_service ()->None :
         print ("Error: Installation requires root privileges. Run with 'sudo'.")
         sys .exit (1 )
 
-    current_script =os .path .abspath (__file__ )
+    current_script = os.path.realpath(__file__)
 
     print ("Installing instmon...")
 
-    if current_script !=INSTALL_BIN_PATH :
-        shutil .copy2 (current_script ,INSTALL_BIN_PATH )
-        print (f"  [+] Copied script to {INSTALL_BIN_PATH }")
-    os .chmod (INSTALL_BIN_PATH ,0o755 )
+    os.makedirs(INSTALL_DIR, exist_ok=True)
+    dest = os.path.join(INSTALL_DIR, os.path.basename(current_script))
+    if current_script != dest:
+        tmp = dest + ".tmp"
+        shutil.copy2(current_script, tmp)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, dest)
+        print(f"  [+] Copied {os.path.basename(current_script)} -> {dest}")
+    os.chmod(dest, 0o755)
+
+    was_plain = os.path.isfile(INSTALL_BIN_PATH) and not os.path.islink(INSTALL_BIN_PATH)
+    tmp_link = INSTALL_BIN_PATH + ".tmp"
+    if os.path.lexists(tmp_link):
+        os.remove(tmp_link)
+    os.symlink(dest, tmp_link)
+    os.replace(tmp_link, INSTALL_BIN_PATH)
+    print(f"  [+] Symlinked {INSTALL_BIN_PATH} -> {dest}")
+    if was_plain:
+        for pyc in _pyc_for(INSTALL_BIN_PATH):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+        print(f"  [-] Replaced the old plain copy at {INSTALL_BIN_PATH}")
+
+    for name in os.listdir(INSTALL_DIR):
+        old = os.path.join(INSTALL_DIR, name)
+        if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
+            os.remove(old)
+            print(f"  [-] Removed the previous version {old}")
+    _prune_pyc(INSTALL_DIR)
     _write_launcher()
 
     with open (SYSTEMD_SERVICE_PATH ,"w")as f :
@@ -8738,13 +8821,29 @@ def uninstall_service ()->None :
 
     subprocess .run (["systemctl","daemon-reload"],stderr =subprocess .DEVNULL )
 
-    if os .path .exists (INSTALL_BIN_PATH ):
-        os .remove (INSTALL_BIN_PATH )
-        print (f"  [-] Removed {INSTALL_BIN_PATH }")
+    target = None
+    if os.path.lexists(INSTALL_BIN_PATH):
+        if os.path.islink(INSTALL_BIN_PATH):
+            target = os.path.realpath(INSTALL_BIN_PATH)
+        os.remove(INSTALL_BIN_PATH)
+        print(f"  [-] Removed {INSTALL_BIN_PATH}")
     for pyc in _pyc_for(INSTALL_BIN_PATH):
         try:
             os.remove(pyc)
         except FileNotFoundError:
+            pass
+    if target and os.path.dirname(target) == INSTALL_DIR and os.path.isfile(target):
+        os.remove(target)
+        print(f"  [-] Removed {target}")
+        for pyc in _pyc_for(target):
+            try:
+                os.remove(pyc)
+            except FileNotFoundError:
+                pass
+    for d in (os.path.join(INSTALL_DIR, "__pycache__"), INSTALL_DIR, os.path.dirname(INSTALL_DIR)):
+        try:
+            os.rmdir(d)
+        except OSError:
             pass
     _remove_launcher_if_unused()
 
@@ -8789,6 +8888,7 @@ def run ():
 
     server_address =("",PORT )
     httpd =InstmonServer (server_address ,InstmonHandler )
+    _sd_notify ("READY=1")
     print (f"Starting instmon web installer v{VERSION } on port {PORT }...")
     try :
         httpd .serve_forever ()

@@ -1,6 +1,35 @@
 # instmon changelog
 
-Current file: `instmon_v2_39_1_20261011.py`. Newest entries first.
+Current file: `instmon_v2_40_0_20261012.py`. Newest entries first.
+
+## 2.40.0 (2026-10-12)
+
+First step of the standard install layout: the program lives in
+`/usr/local/lib/asl_dvs/<tool>/` under its own versioned name, and
+`/usr/local/bin/<tool>.py` is a symlink to it.
+
+- `--install` copies the file to `/usr/local/lib/asl_dvs/instmon/` and points
+  `/usr/local/bin/instmon.py` at it. An old plain copy at that path is replaced
+  (the link is swapped in with one rename, so the path is never missing), and
+  any other version left in the lib folder is removed. Running `--install`
+  through the link itself changes nothing.
+- `--uninstall` removes the link, the lib file, and the lib folder (and
+  `/usr/local/lib/asl_dvs/` if that is then empty).
+- Unit: `Type=notify` with `NotifyAccess=main`; instmon reports ready once it is
+  listening on 8990. `TimeoutStartSec=600` covers a start that first has to bring
+  back services left stopped by a disk-image job.
+- 44helper's path is now `/usr/local/bin/44helper.py`, with
+  `/opt/44helper/asl_dvs_m17_44helper.py` as a fallback. instmon uses whichever
+  path the 44helper unit runs, so a node on 44helper 0.0.179 or older still
+  shows it as installed.
+- Before any `--install` (Install, Full Update and its rollback, and instmon's
+  own update guard), a symlink at the tool's path is replaced with a plain copy
+  of the file it points to. Older tools copy themselves onto that path, and
+  without this the copy would land inside the newer file in the lib folder.
+- Tested with mocks against a temporary root: a fresh install, an install over
+  an old plain copy, and an install over a newer layout; reinstall through the
+  link; uninstall; the 44helper path choice; the de-link step and the guard's
+  shell version of it; and `READY=1` from a real start.
 
 ## 2.39.1 (2026-10-11)
 
