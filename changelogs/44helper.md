@@ -1,6 +1,12 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_185x_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_186x_20261013.py`. Newest entries first.
+
+## 0.0.186x (2026-10-13) — testing
+
+- Verify with SysMon: when SysMon cannot run the check, the message now names the
+  first versions that have it: 6.13.67.16-pi02w and, new, 6.13.82 on the full
+  build. Before, it said the full build had no such check. Nothing else changes.
 
 ## 0.0.185x (2026-10-13) — testing
 

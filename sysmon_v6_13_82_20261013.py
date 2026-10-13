@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.81"
+VERSION      = "6.13.82"
 BUILD_DATE   = "20261012"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -1009,6 +1009,33 @@ def _dvsm_read_ab() -> dict:
         "rx_port": "",
         "tx_port": "",
     }
+
+def _usrp_pairs_scan() -> dict:
+    rpt = _dvsm_read_rpt_conf()
+    chans = [n for n in rpt.get("nodes", []) if n.get("usrp_rx")] if rpt.get("raw_ok") else []
+    bridges: list = []
+    ab = _dvsm_read_ab()
+    if ab.get("raw_ok") and (ab.get("rx_port") or ab.get("tx_port")):
+        bridges.append({"bridge": "Analog_Bridge", "listen": ab.get("rx_port", ""), "send": ab.get("tx_port", ""),
+                        "source": ab.get("source", "")})
+    m17 = _m17_read_config()
+    if m17.get("raw_ok") and (m17.get("usrp_local_port") or m17.get("usrp_dst_port")):
+        bridges.append({"bridge": "USRP2M17", "listen": m17.get("usrp_local_port", ""),
+                        "send": m17.get("usrp_dst_port", ""), "source": m17.get("ini_path", "")})
+    pairs: list = []
+    used: set = set()
+    for n in chans:
+        a, b = n["usrp_rx"], n["usrp_tx"]
+        match = [x for x in bridges if x["listen"] == a]
+        if not match:
+            pairs.append({"node": n["id"], "a": a, "b": b, "bridge": "", "state": "no_bridge"})
+        for x in match:
+            used.add(x["bridge"])
+            pairs.append({"node": n["id"], "a": a, "b": b, "bridge": x["bridge"],
+                          "state": "ok" if x["send"] == b else "mismatch", "send": x["send"]})
+    unpaired = [{"bridge": x["bridge"], "listen": x["listen"], "send": x["send"], "source": x["source"]}
+                for x in bridges if x["bridge"] not in used]
+    return {"version": VERSION, "rpt_ok": bool(rpt.get("raw_ok")), "pairs": pairs, "unpaired": unpaired}
 
 _STFU_AB_CANDIDATES = [
     Path("/opt/Analog_Bridge/Analog_Bridge.ini"),
@@ -17295,6 +17322,24 @@ def parse_analog_bridge(content: str) -> list:
                 "txPort — Analog_Bridge sends TX audio out to this port",
             ],
         })
+    if rx_port or tx_port:
+        rpt = _dvsm_read_rpt_conf()
+        nodes = [n for n in rpt.get("nodes", []) if n.get("usrp_rx") == rx_port] if rpt.get("raw_ok") else []
+        good = [n for n in nodes if n.get("usrp_tx") == tx_port]
+        want = f"rxchannel = USRP/127.0.0.1:{rx_port or '?'}:{tx_port or '?'}"
+        if not rpt.get("raw_ok"):
+            st, val, notes = "warn", "rpt.conf unreadable", [rpt.get("error") or "Check /etc/asterisk/rpt.conf"]
+        elif good:
+            st, val, notes = "pass", "node " + ", ".join(n["id"] for n in good), [want]
+        elif nodes:
+            st = "fail"
+            val = "node " + ", ".join(f"{n['id']} ({n.get('rxchannel', '')})" for n in nodes)
+            notes = [f"Asterisk listens on {nodes[0].get('usrp_tx') or '?'}, but txPort sends to {tx_port or '?'}",
+                     "Make txPort and the last port of the rxchannel line the same"]
+        else:
+            st, val = "fail", "no rpt.conf node"
+            notes = [f"No rpt.conf node has {want}", "Audio between AllStar and Analog_Bridge cannot flow"]
+        checks.append({"title": "USRP pair with rpt.conf", "value": val, "status": st, "notes": notes})
 
     return checks
 
@@ -33380,8 +33425,13 @@ def main() -> None:
     parser.add_argument("--selftest", action="store_true",
                          help="Run registry validation + all security checks against this box, "
                               "then exit (no HTTP server started)")
+    parser.add_argument("--usrp-pairs", action="store_true",
+                        help="Print the USRP pairing of rpt.conf, Analog_Bridge.ini and USRP2M17.ini as JSON, then exit")
     args = parser.parse_args()
 
+    if args.usrp_pairs:
+        print("USRP-PAIRS-JSON:" + json.dumps(_usrp_pairs_scan()))
+        return
     if args.install:
         install_service()
         return

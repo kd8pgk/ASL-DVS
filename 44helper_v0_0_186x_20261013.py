@@ -41,7 +41,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.185x"
+APP_VERSION = "0.0.186x"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -10307,8 +10307,8 @@ def _cfgr_act_usrp_verify(payload: dict) -> dict:
         theirs = None
     if not r["success"] or not isinstance(theirs, dict):
         return {"success": False, "output": "\n".join(head + ["", "SysMon could not run the check. The SysMon on this "
-                "node may be older than 6.13.67.16-pi02w (the first with --usrp-pairs), or a full-build SysMon, which "
-                "does not have it.", "", out[-600:]])}
+                "node may be older than the first versions with --usrp-pairs: 6.13.67.16-pi02w (Pi Zero 2 W build) "
+                "or 6.13.82 (full build).", "", out[-600:]])}
     a, b = _cfgr_usrp_key(mine), _cfgr_usrp_key(theirs)
     tail = ["", f"SysMon {theirs.get('version', '?')} checked the same files on its own."]
     if a == b:
