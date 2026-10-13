@@ -13,7 +13,7 @@
       <div class="brand">ASL-DVS NODE CONTROL</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-11</div>
+    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-13</div>
   </div>
   <div class="body">
     <h1>User Manual<br><span>The ASL-DVS Suite</span></h1>
@@ -84,6 +84,8 @@
   <div class="call tip"><span class="t">TIP</span>A quicker or safer way to do something.</div>
   <div class="call care"><span class="t">CAREFUL</span>This changes your node, restarts something or needs a reboot.</div>
   <div class="call full"><span class="t">FULL BUILD</span>Applies to the full build (Pi 3, 4 or 5) only. Also shown as the badge <span class="badge full">FULL</span>.</div>
+  <div class="call work"><span class="t">WORKING</span>Used on a live node and working. Also shown as the badge <span class="badge work">WORKING</span>.</div>
+  <div class="call test"><span class="t">TESTING</span>Built and in use, but still being tested. Expect rough edges, and report what you find. Also shown as the badge <span class="badge test">TESTING</span>.</div>
 
   <h3>Commands and pictures</h3>
   <p>Commands are typed on the Pi, in an SSH session or at a keyboard and screen. Lines starting with <code>#</code>
@@ -882,7 +884,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Live</td><td>IDLE, DIALING, INCOMING or IN CALL; whether the phone node is linked to your node (it links while the Dashboard Phone tab is open); whether that tab is open (callers get busy when it isn't); which network is in use; phone patch on or off; calls now; sign-in state. Refreshes every 5 seconds.</td></tr>
     <tr><td>Autopatch node</td><td>The private node the Dashboard made for each phone network.</td></tr>
     <tr><td>Phone networks</td><td>Each network and its dialing target.</td></tr>
-    <tr><td>Hams Over IP</td><td>Shown only when you have a Hams Over IP account: the account and its sign-in.</td></tr>
+    <tr><td>Hams Over IP <span class="badge test">TESTING</span></td><td>Shown only when you have a Hams Over IP account: the account and its sign-in.</td></tr>
     <tr><td>Dialing rules</td><td>The dialplan contexts Asterisk has for each network.</td></tr>
     <tr><td>Health checks</td><td>Asterisk running; nodes, files, live state and call routes all consistent. Each check is OK, WARN, FAIL or INFO, with a fix.</td></tr>
     <tr><td>Router test</td><td>Three tests for calls that won't connect or have one-way audio (below).</td></tr>
@@ -2138,10 +2140,10 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>YSF</td><td>System Fusion reflectors</td><td>Filter by country and name, or type <code>IP:port</code>.</td></tr>
     <tr><td>FCS</td><td>FCS rooms</td><td>Pick a server, then a room, or type <code>FCS00335</code> or just <code>335</code>.</td></tr>
     <tr><td>P-25 / NXDN</td><td>Talkgroups</td><td>Search by number or address.</td></tr>
-    <tr><td>D-STAR</td><td>REF, XRF and DCS reflectors, or a gateway callsign</td><td>Pick the module letter beside the reflector.</td></tr>
+    <tr><td>D-STAR</td><td>REF, XRF and DCS reflectors, or a gateway callsign</td><td>Pick the module letter beside the reflector. Linking to a gateway callsign is <span class="badge test">TESTING</span> (below).</td></tr>
     <tr><td>XLX</td><td>XLX reflectors</td><td>Reflector plus module.</td></tr>
     <tr><td>M17</td><td>M17 reflectors</td><td>Reflector plus module (or All Modules), or type the reflector IP.</td></tr>
-    <tr><td>Phone</td><td>Telephone calls</td><td>Below.</td></tr>
+    <tr><td>Phone <span class="badge work">WORKING</span></td><td>Telephone calls</td><td>Below. Hams Over IP is <span class="badge test">TESTING</span>.</td></tr>
     <tr><td>EDIT</td><td>Settings and favorites</td><td>Below.</td></tr>
   </table>
   <div class="call care"><span class="t">CAREFUL</span>A red <b>PERMANENT LINK ACTIVE</b> bar means your node
@@ -2150,9 +2152,40 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <div class="call tip"><span class="t">TIP</span>"⚠ Tune Failed" pop-ups say why: the reflector didn't
     answer, a gateway service didn't start, and so on. A gateway that won't start shows in SysMon's Services tab.</div>
 
-  <h2><span class="n">12.3</span>Phone tab</h2>
+  <h3>Linking to a D-STAR gateway <span class="badge test">TESTING</span></h3>
+  <div class="call test"><span class="t">TESTING</span>Linking the node to another D-STAR gateway (a repeater or a
+    hotspot by its callsign) is still being tested. Reflectors (REF, XRF, DCS) are not affected.</div>
+  <p>Besides reflectors, the D-STAR tab can link your node straight to another D-STAR gateway, such as a repeater:</p>
+  <ol class="steps">
+    <li>Type the gateway's callsign in the D-STAR box, for example <code>W1ABC</code>. It is 3 to 6 letters and
+      digits with at least one digit. A name made of REF, XRF or DCS plus 3 digits is always taken as a reflector.</li>
+    <li>Pick the module letter of the far repeater you want, usually <b>A</b>, <b>B</b> or <b>C</b>. You can also type
+      it after the callsign, as in <code>W1ABC B</code>.</li>
+    <li>Press Tune. The pop-up says <i>D-STAR link sent to gateway W1ABC&nbsp;&nbsp;B</i>. That means the link
+      request went out, not that the far end accepted it, so listen or check the far gateway's dashboard.</li>
+    <li><b>Disconnect</b> unlinks it.</li>
+  </ol>
+  <p>What has to be in place, in <code>/etc/ircddbgateway</code>:</p>
+  <table>
+    <tr><th>Setting</th><th>Why</th></tr>
+    <tr><td><code>ircddbEnabled=1</code></td><td>Required. The far gateway is found by its callsign on ircDDB, so it must be registered there too and have the module you picked.</td></tr>
+    <tr><td><code>dextraEnabled=1</code></td><td>Gateway links use DExtra.</td></tr>
+    <tr><td><code>gatewayCallsign</code>, <code>repeaterBand1</code></td><td>Your gateway's callsign and module letter. Together they name your node, such as <code>N0CALL&nbsp;B</code>.</td></tr>
+    <tr><td><code>remoteEnabled=1</code>, <code>remotePassword</code>, <code>remotePort</code></td><td>Optional, but recommended. With ircDDBGateway's remote control on, the Dashboard asks ircDDBGateway directly to link your node to the far gateway and module, so the link keeps the module you picked. Without it, or if remote control doesn't answer, the Dashboard falls back to tuning through <code>dvswitch.sh</code> as it does for a reflector.</td></tr>
+  </table>
+  <p>SysMon's <b>D-Star — ircDDBGateway</b> card (section 4.2) checks every one of these and
+    says what to fix.</p>
+  <div class="call care"><span class="t">CAREFUL</span>The remote-control port lets anyone who knows the password
+    link and unlink your gateway. Keep it on the Pi: <code>gatewayAddress</code> blank or the Pi's own address, and
+    never forward the port on your router.</div>
+
+  <h2><span class="n">12.3</span>Phone tab <span class="badge work">WORKING</span></h2>
   <p>Once the phone system is set up and activated on the EDIT page, the Phone tab places and answers calls through
     Asterisk.</p>
+  <div class="call work"><span class="t">WORKING</span>The phone system works and has been used on a live node.</div>
+  <div class="call test"><span class="t">TESTING</span><b>Hams Over IP</b> as the phone network has been used to make
+    calls, but it is still being tested. If something goes wrong, press <b>Report</b> on the Phone tab and include
+    the text when you ask for help.</div>
   <table>
     <tr><th>Control</th><th>What it does</th></tr>
     <tr><td>Network drop-down</td><td>Which phone network to use. Only the picked network signs in, so two accounts for the same number never compete. The dot shows sign-in state.</td></tr>
