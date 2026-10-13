@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.45.0"
+VERSION ="2.46.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -3131,6 +3131,52 @@ _docs_lock = threading.Lock()
 _docs_state = {"phase": "idle", "error": None, "msg": "", "checked_at": None}
 _DOCS_FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_manuals_fetched")
 _DOCS_FIRST_FETCH_DELAYS = (5, 60, 120, 300)
+_DOCS_DELETED_PATH = os.path.join(CONFIG_DIR, "instmon_manuals_deleted.json")
+_docs_remote = []
+_docs_deleted_lock = threading.Lock()
+
+def _docs_deleted():
+    try:
+        with open(_DOCS_DELETED_PATH) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return set()
+    return {n for n in data if isinstance(n, str)} if isinstance(data, list) else set()
+
+def _docs_mark_deleted(add=(), remove=()):
+    with _docs_deleted_lock:
+        names = _docs_deleted()
+        new = (names | set(add)) - set(remove)
+        if new == names:
+            return
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            tmp = _DOCS_DELETED_PATH + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(sorted(new), fh)
+            os.replace(tmp, _DOCS_DELETED_PATH)
+        except OSError as exc:
+            log_event(f"Manuals: could not write {_DOCS_DELETED_PATH}: {exc}", "warn")
+
+def _docs_pending(cands):
+    deleted = _docs_deleted()
+    out = []
+    for c in cands:
+        dest = safe_join(DOCS_DIR, c["name"])
+        if dest is None:
+            continue
+        if not os.path.isfile(dest):
+            if c["name"] not in deleted:
+                out.append({"name": c["name"], "why": "new"})
+        elif _gh_local_blob_id(dest) != c["blob"]:
+            out.append({"name": c["name"], "why": "changed"})
+    return out
+
+def _docs_refresh_remote():
+    try:
+        _docs_remote[:] = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
+    except GhRejected as exc:
+        log_event(f"Manuals: could not read GitHub's docs list: {exc}", "warn")
 
 def docs_list():
     out = []
@@ -3185,13 +3231,17 @@ def _docs_mark_fetched():
     except OSError as exc:
         log_event(f"Manuals: could not write {_DOCS_FETCHED_PATH}: {exc}", "warn")
 
-def _docs_fetch(say=log_event):
+def _docs_fetch(say=log_event, skip_deleted=False):
     got, same, failed = [], 0, []
     cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
+    _docs_remote[:] = cands
+    deleted = _docs_deleted() if skip_deleted else set()
     os.makedirs(DOCS_DIR, exist_ok=True)
     for c in cands:
         dest = safe_join(DOCS_DIR, c["name"])
         if dest is None:
+            continue
+        if c["name"] in deleted and not os.path.isfile(dest):
             continue
         if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
             same += 1
@@ -3215,6 +3265,7 @@ def _docs_fetch(say=log_event):
         os.replace(tmp, dest)
         got.append(c["name"])
         say(f"Manuals: saved {c['name']} ({len(data) // 1024} KB)", "ok")
+    _docs_mark_deleted(remove=got)
     _docs_mark_fetched()
     return got, same, failed
 
@@ -3231,9 +3282,9 @@ def _docs_claim():
         _docs_state.update(phase="fetching", error=None, msg="")
         return True
 
-def _docs_fetch_bg():
+def _docs_fetch_bg(skip_deleted=False):
     try:
-        got, same, failed = _docs_fetch()
+        got, same, failed = _docs_fetch(skip_deleted=skip_deleted)
     except Exception as exc:
         msg = str(exc) if isinstance(exc, GhRejected) else f"unexpected error: {exc}"
         with _docs_lock:
@@ -3246,6 +3297,7 @@ def _docs_fetch_bg():
         _docs_state.update(phase="done", error=None, msg=msg,
                            checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
     log_event("Manuals: " + msg, "warn" if failed else "ok")
+    _fu_refresh_plan()
     return got, same, failed
 
 def _docs_first_fetch_loop():
@@ -3297,6 +3349,8 @@ def docs_stage(filename, data, source="usb"):
         fh.write(data)
     os.chmod(tmp, 0o644)
     os.replace(tmp, dest)
+    _docs_mark_deleted(remove=[name])
+    _fu_refresh_plan()
     how = "uploaded" if source == "upload" else "imported from USB"
     log_event(f"Manuals: {how} {shown} ({len(data) // 1024} KB)", "ok")
     return 200, {"ok": True, "name": name, "level": "ok",
@@ -3310,6 +3364,8 @@ def docs_delete(name):
         os.remove(full)
     except OSError as exc:
         return 500, {"error": f"Could not delete {name}: {exc}"}
+    _docs_mark_deleted(add=[name])
+    _fu_refresh_plan()
     log_event(f"Manuals: deleted {name}", "info")
     return 200, {"ok": True, "message": f"Deleted {name} from Manuals.", "level": "info"}
 
@@ -3509,6 +3565,7 @@ def _gh_check_bg ():
         parts .append (f"{skipped } file(s) skipped (see log)")
         level ="warn"
     _gh_event ("GitHub check: "+", ".join (parts )+".",level )
+    _docs_refresh_remote()
     full_update_preview()
 
 def gh_start_check ():
@@ -3960,6 +4017,7 @@ def _fu_plan(cands):
 def _fu_publish_plan(rows, scripts):
     public = [{k: v for k, v in r.items() if k != "entry"} for r in rows]
     _fu_set(plan={"components": public, "scripts": [e["name"] for e in scripts],
+                  "manuals": _docs_pending(_docs_remote),
                   "updates": sum(1 for r in rows if r["status"] in _FU_ACTIONABLE)},
             plan_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
@@ -4085,6 +4143,7 @@ def _fu_finish(error=""):
     for r in snap["attention"]:
         log_event(f"  NEEDS ATTENTION {r['name']}: {r['note']}", "err")
     _gh_event("Full Update finished" + (f" ({error})" if error else "") + ": " + ", ".join(parts) + ".", level)
+    _fu_refresh_plan()
 
 def _fu_manuals(skipped):
     _fu_set(phase="manuals", current="checking the manuals")
@@ -4092,7 +4151,7 @@ def _fu_manuals(skipped):
         skipped.append({"name": "Manuals", "note": "a Get from GitHub was already running -- left to finish"})
         _fu_set(skipped=list(skipped))
         return
-    result = _docs_fetch_bg()
+    result = _docs_fetch_bg(skip_deleted=True)
     if result is None:
         with _docs_lock:
             err = _docs_state["error"]
@@ -4253,6 +4312,12 @@ def full_update_start():
                          updated=[], skipped=[], attention=[], scripts=[], manuals=[], instmon_pending=None)
     threading.Thread(target=_fu_run_bg, daemon=True).start()
     return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
+
+def _fu_refresh_plan():
+    with _fu_lock:
+        if _fu_state["plan"] is None or _fu_state["running"]:
+            return
+    full_update_preview()
 
 def full_update_preview():
     try:
@@ -5251,10 +5316,11 @@ function renderQuietFullUpdate(quiet, fu) {
       `<tr><td>${escHtml(c.name)}</td><td><span class="gh-tag ${c.status === 'update' || c.status === 'switch' ? 'gh-upd' : ''}">${_FU_STATUS[c.status] || escHtml(c.status)}</span></td>` +
       `<td>${escHtml(c.note)}</td><td class="muted">${escHtml(c.file)}</td></tr>`).join('') +
       plan.scripts.map(n => `<tr><td>Script</td><td><span class="gh-tag gh-upd">NEW</span></td><td>goes to the Scripts library (not run)</td><td class="muted">${escHtml(n)}</td></tr>`).join('') +
+      (plan.manuals || []).map(d => `<tr><td>Manual</td><td><span class="gh-tag gh-upd">${d.why === 'changed' ? 'CHANGED' : 'NEW'}</span></td><td>goes to the Manuals card</td><td class="muted">${escHtml(d.name)}</td></tr>`).join('') +
       '</table>';
   }
   const fuBtn = document.getElementById('fu-btn');
-  if (fuBtn) fuBtn.disabled = running || !(plan && (plan.updates || plan.scripts.length));
+  if (fuBtn) fuBtn.disabled = running || !(plan && (plan.updates || plan.scripts.length || (plan.manuals || []).length));
   const qb = document.getElementById('quiet-btn');
   if (qb) qb.disabled = running || !!(quiet && (quiet.on || quiet.other));
   const rb = document.getElementById('restore-btn');
@@ -6513,8 +6579,10 @@ _JS_ACTIONS = """function wireButtons() {
           const p = _fuState && _fuState.plan;
           const comps = p ? p.components.filter(c => c.status === 'update' || c.status === 'switch').map(c => `  ${c.name}: ${c.note}`) : [];
           const scr = p ? p.scripts.map(n => `  ${n} (Scripts library only, not run)`) : [];
+          const man = p ? (p.manuals || []).map(d => `  ${d.name} (${d.why})`) : [];
           if (!confirm('Full Update from GitHub?\\n\\n' + (comps.length ? 'One at a time:\\n' + comps.join('\\n') + '\\n\\n' : '') +
                        (scr.length ? 'New scripts:\\n' + scr.join('\\n') + '\\n\\n' : '') +
+                       (man.length ? 'Manuals:\\n' + man.join('\\n') + '\\n\\n' : '') +
                        'GitHub is checked again first. The web tools are paused, each component is uninstalled and the new version installed; one that fails is put back and skipped. Then the manuals that are new or changed on GitHub are downloaded. instmon goes last -- this page reconnects after it restarts.')) { btn.disabled = false; return; }
           await postAction({action: 'full_update', confirm: true});
         } else if (action === 'gh_update') {
