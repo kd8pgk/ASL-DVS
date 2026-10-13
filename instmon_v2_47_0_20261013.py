@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.46.0"
+VERSION ="2.47.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4813,7 +4813,7 @@ _CSS_BASE = """:root{
   --green:#00ffb0; --green-dim:#005538;
   --red2:#ff3d5a; --red-dim:#6b0e20;
   --blue:#22d4ff; --blue-dim:#083a58;
-  --text:#d0dff0; --text-bright:#f0f8ff;
+  --text:#ffffff; --text-bright:#f0f8ff;
   --mono:Arial,Helvetica,sans-serif;
   --sans:Arial,Helvetica,sans-serif;
   /* aliases -- kept so existing var(--cyn)/var(--grn)/var(--yel)/var(--red)
@@ -4841,13 +4841,13 @@ header{background:linear-gradient(90deg,#0f1a2e,#161e2e 50%,#0f1a2e);
 .hdr-right{display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0;white-space:nowrap}
 .logo{font-family:var(--mono);font-size:1.15rem;font-weight:700;color:var(--amber);
   letter-spacing:.08em;text-shadow:0 0 10px rgba(255,208,64,.9),0 0 30px rgba(255,208,64,.5),0 0 60px rgba(255,208,64,.2)}
-.logo-sub{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:#5a7898;margin-top:.15rem}
+.logo-sub{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:#ffffff;margin-top:.15rem}
   letter-spacing:.06em;text-shadow:0 0 8px rgba(255,208,64,.5)}
-.hdr-meta{font-family:var(--mono);font-size:.68rem;color:#5a7898;letter-spacing:.04em;margin-top:.15rem}
+.hdr-meta{font-family:var(--mono);font-size:.68rem;color:#ffffff;letter-spacing:.04em;margin-top:.15rem}
 
 /* ── Layout ── */
 .wrap{max-width:860px;margin:0 auto;padding:1rem;display:flex;flex-direction:column;gap:.55rem}
-.hdr{color:#5a7898;font-family:var(--mono);font-weight:700;font-size:.7rem;
+.hdr{color:#ffffff;font-family:var(--mono);font-weight:700;font-size:.7rem;
   letter-spacing:.24em;text-transform:uppercase;margin:1.2rem 0 .45rem;
   padding-bottom:.25rem;border-bottom:1px solid var(--border)}
 """
@@ -5057,7 +5057,7 @@ _CSS_EDITOR = """/* Editor Overlay (Stage 8/9, Library Card Rework Plan) -- repl
   flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 #uf-textarea{
-  flex:1; background:#0a1020; color:#c8d8e8;
+  flex:1; background:#0a1020; color:#ffffff;
   font-family:var(--mono); font-size:.836rem; line-height:1.65;
   border:none; outline:none; padding:.8rem 1rem;
   resize:none; tab-size:4; white-space:pre; overflow:auto; min-height:0;
@@ -5107,7 +5107,7 @@ _CSS_DISKIMG = """
   font-size:.74rem;background:#0a1020;color:var(--yel);
   border:1px solid var(--border2);border-radius:4px;
   padding:.35rem .55rem;margin-top:.3rem}
-.diskimg-cmd.placeholder{color:var(--muted);opacity:.55;font-style:italic}
+.diskimg-cmd.placeholder{color:var(--muted);font-style:italic}
 /* Backup/Clone use a <textarea> for this field rather than an <input>,
    because the quiesce step (v2.20.0) makes the preview multi-line.
    These rules make a rows="1" textarea sit flush with the single-line
@@ -5119,16 +5119,16 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
    one option on these cards with an on-air consequence, and the job
    banner is deliberately the loudest thing in the panel. */
 .diskimg-quiesce{color:var(--yel)!important;opacity:.95}
-.diskimg-offair{background:#3a1414;border:1px solid #c0392b;color:#ffb3a7;
+.diskimg-offair{background:#3a1414;border:1px solid #c0392b;color:var(--red);
   border-radius:4px;padding:.35rem .55rem;margin:.35rem 0;
   font-weight:600;letter-spacing:.02em;text-align:center}
-.diskimg-cmd-note{font-size:.7rem;color:var(--muted);opacity:.7;margin-top:.15rem}
+.diskimg-cmd-note{font-size:.7rem;color:var(--muted);margin-top:.15rem}
 /* v2.21.0: the honest-limits line under Backup/Clone. Deliberately
    always visible rather than tucked into the checkbox tooltip -- the
    thing people misremember about this feature is what it guarantees. */
 .popup-actions{display:flex;gap:.5rem;justify-content:center;margin-top:.7rem;flex-wrap:wrap}
 .popup-actions button{font-size:.8rem;padding:.3rem .8rem}
-.diskimg-quiesce-note{font-size:.7rem;color:var(--muted);opacity:.75;
+.diskimg-quiesce-note{font-size:.7rem;color:var(--muted);
   margin-top:.3rem;line-height:1.4;border-left:2px solid var(--border2);padding-left:.5rem}
 /* Progress bar (v2.30.0). .indet is the moving-stripes form used for
    steps with no true percentage (quiescing, shrinking, mkfs, ...). */
@@ -5147,7 +5147,7 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
   border-radius:4px;padding:.5rem .6rem;margin-top:.4rem;
   white-space:pre-wrap;word-break:break-all;font-family:var(--mono);
   font-size:.76rem;max-height:220px;overflow-y:auto}
-.diskimg-console.placeholder{color:var(--muted);opacity:.55;font-style:italic}
+.diskimg-console.placeholder{color:var(--muted);font-style:italic}
 .diskimg-console .log-ok{color:var(--grn)}
 .diskimg-console .log-err{color:var(--red)}
 .diskimg-console .log-warn{color:var(--yel)}
@@ -7302,14 +7302,14 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ASL-DVS Install Monitor &mdash; instmon</title>
+<title>Install Monitor &mdash; instmon</title>
 <style>
 {css}</style>
 </head>
 <body>
 <header>
   <div class="hdr-left">
-    <div class="logo">ASL-DVS Install Monitor</div>
+    <div class="logo">Install Monitor</div>
     <div class="logo-sub">Node Software Installer &amp; Component Manager</div>
   </div>
   <div class="hdr-right">
