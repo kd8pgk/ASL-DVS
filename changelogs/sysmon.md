@@ -1,6 +1,13 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_80_20261013.py`. Newest entries first.
+Current file: `sysmon_v6_13_81_20261013.py`. Newest entries first.
+
+## 6.13.81 (2026-10-13)
+
+SysMon's ASL-DVS tab is named **ASL-DVS** again (it was "Node Controller" in
+6.13.80): the tab button, its Edit-page checkbox and the "Hide from ASL-DVS tab"
+labels. The tab is an exception to the "Node Controller" naming. Nothing else
+changes. The same change is in the Pi Zero 2 W build (6.13.67.15-pi02w).
 
 ## 6.13.80 (2026-10-13)
 

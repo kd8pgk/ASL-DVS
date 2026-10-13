@@ -28,12 +28,12 @@
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_17_20261013.py</td><td>9.3.71.17-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_14_20261013.py</td><td>6.13.67.14-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_15_20261013.py</td><td>6.13.67.15-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_46_0_20261012.py</td><td>2.46.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_30_20261012.py</td><td>5.30</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_80_20261013.py</td><td>6.13.80</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_81_20261013.py</td><td>6.13.81</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_77_20261012.py</td><td>9.3.77</td></tr>
     </table>
   </div>
@@ -49,7 +49,7 @@
     <li><span class="no">2</span>Installing and updating, in brief</li>
     <li class="pt">Part II · SysMon</li>
     <li><span class="no">3</span>SysMon basics and live status: Overview, Services, Ports, Journal</li>
-    <li><span class="no">4</span>Node and DVSwitch health: Node Controller, DVSM, STFU, M17, Phone</li>
+    <li><span class="no">4</span>Node and DVSwitch health: ASL-DVS, DVSM, STFU, M17, Phone</li>
     <li><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit</li>
     <li><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console</li>
     <li class="pt">Part III · 44helper</li>
@@ -160,7 +160,7 @@ sudo systemctl status sysmon</pre>
     <tr><td>Talk on a DMR talkgroup or a reflector</td><td>Dashboard, the mode's tab</td></tr>
     <tr><td>Link to another AllStar node</td><td>Dashboard, ASL tab</td></tr>
     <tr><td>Find out why something stopped working</td><td>SysMon, Overview and Services, then the matching check tab</td></tr>
-    <tr><td>Check that my config files agree with each other</td><td>SysMon, Node Controller and DVSM tabs; 44helper, Config tab</td></tr>
+    <tr><td>Check that my config files agree with each other</td><td>SysMon, ASL-DVS and DVSM tabs; 44helper, Config tab</td></tr>
     <tr><td>Save my config before I change it</td><td>44helper, Config tab (restore point)</td></tr>
     <tr><td>Reach my node from outside my home network</td><td>44helper, Router Install / Tunnel tabs or Cloudflare</td></tr>
     <tr><td>Update the suite</td><td>instmon, GitHub Updates</td></tr>
@@ -188,14 +188,14 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.67.14-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.67.15-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:rgb(0,255,229)">Overview</span>
         <span class="tab" style="border-color:rgb(0,255,229)">Services</span>
         <span class="tab" style="border-color:rgb(34,212,255)">Ports</span>
         <span class="tab off">Firewall</span>
         <span class="tab" style="border-color:rgb(212,102,255)">Journal</span>
-        <span class="tab" style="border-color:rgb(255,61,90)">Node Controller</span>
+        <span class="tab" style="border-color:rgb(255,61,90)">ASL-DVS</span>
         <span class="tab off">Reg</span>
         <span class="tab" style="border-color:rgb(0,255,176)">Phone</span>
         <span class="tab" style="border-color:rgb(255,68,204)">Tune</span>
@@ -516,7 +516,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
   <h2><span class="n">3.2</span>The page at a glance</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.14-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.15-pi02w</span></div>
       <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
       <div class="cards">
         <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
@@ -526,7 +526,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
       </div>
       <div class="tabs" style="padding-top:0">
         <span class="tab on" style="background:rgb(0,255,229)">Overview</span><span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Journal</span>
-        <span class="tab">Node Controller</span><span class="tab">Phone</span><span class="tab">Tune</span><span class="tab">Hardware</span><span class="tab">DVSM</span>
+        <span class="tab">ASL-DVS</span><span class="tab">Phone</span><span class="tab">Tune</span><span class="tab">Hardware</span><span class="tab">DVSM</span>
         <span class="tab">STFU</span><span class="tab">M17</span><span class="tab">SD Card</span><span class="tab">Security</span><span class="tab">Edit</span>
       </div>
       <div class="row"><span class="txt" style="color:var(--bright)">Radio:</span><span class="btn">Radio 1</span><span class="btn">Radio 2</span><span class="btn">Radio 3</span><span class="btn">Radio 4</span><span class="btn">Radio 5</span>
@@ -686,7 +686,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
   <ol class="steps">
     <li>On the Overview, note the <code>NR:</code> count. A high count means it keeps crashing.</li>
     <li>Open the Journal tab, click the service, choose 200 lines and filter on <code>error</code>.</li>
-    <li>Fix the cause. It is usually a config file, covered on the Node Controller, DVSM, STFU and M17 tabs (Chapter 4).</li>
+    <li>Fix the cause. It is usually a config file, covered on the ASL-DVS, DVSM, STFU and M17 tabs (Chapter 4).</li>
     <li>On the Overview, press <b>Reset</b>, then <b>Start</b>. Watch the dot turn green.</li>
   </ol>
   <h3>Find out what is using a port</h3>
@@ -758,7 +758,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
 <section class="chapter" id="ch4">
   <div class="kicker">Chapter 4 · SysMon</div>
   <h1 class="ch">Node and DVSwitch health</h1>
-  <p class="ch-lede">Five SysMon tabs check the radio side of the node: Node Controller (the Asterisk, Allmon3 and DVSwitch
+  <p class="ch-lede">Five SysMon tabs check the radio side of the node: ASL-DVS (the Asterisk, Allmon3 and DVSwitch
     config files), DVSM (DVSwitch Mobile accounts), STFU (BrandMeister), M17 (the USRP2M17 bridge) and Phone
     (autopatch). They read your files and tell you, in plain words, what is set, what is missing and how to fix it.</p>
 
@@ -779,7 +779,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     leave half a file), but it <b>does not keep a backup copy</b> of these files. Take a restore point in 44helper's
     Config tab first (Chapter 11), or press Copy before you change anything.</div>
 
-  <h2><span class="n">4.2</span>Node Controller tab</h2>
+  <h2><span class="n">4.2</span>ASL-DVS tab</h2>
   <p>Four cards, one per group of files. Click a file row, or its <b>Edit</b> button, to open it in the editor.</p>
   <h3>/etc/asterisk/ — Config Files</h3>
   <p>Every <code>.conf</code> file in <code>/etc/asterisk</code>. The ones that matter most are checked under their name:</p>
@@ -918,7 +918,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">4.7</span>Common tasks</h2>
   <h3>No audio between AllStar and DMR</h3>
   <ol class="steps">
-    <li>Node Controller tab: under <code>rpt.conf</code>, note node 1999's RX and TX ports.</li>
+    <li>ASL-DVS tab: under <code>rpt.conf</code>, note node 1999's RX and TX ports.</li>
     <li>Under <code>Analog_Bridge.ini</code>, check that its RX Port and TX Port are the same pair the other way round, as the note says.</li>
     <li>Ports tab: check that neither port shows <code>[DUP]</code>.</li>
     <li>Fix the file with Edit, then restart <code>analog_bridge</code> and <code>asterisk</code> on the Overview.</li>
@@ -942,7 +942,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <h3>Where each tab reads</h3>
     <table>
       <tr><th>Tab</th><th>Files and commands</th><th>Endpoint</th></tr>
-      <tr><td>Node Controller</td><td>every <code>*.conf</code> in <code>/etc/asterisk</code>; <code>/etc/allmon3/*</code>; the DVSwitch files under <code>/opt</code>, <code>/etc</code> and <code>/var/lib/dvswitch/dvs/var.txt</code>; <code>/etc/ircddbgateway</code>, plus <code>ss -Hlunp</code> and <code>ip -o -4 addr</code></td><td><code>/api/asterisk/files</code>, <code>/api/allmon3/files</code>, <code>/api/dvswitch/files</code>, <code>/api/dstar-gw</code></td></tr>
+      <tr><td>ASL-DVS</td><td>every <code>*.conf</code> in <code>/etc/asterisk</code>; <code>/etc/allmon3/*</code>; the DVSwitch files under <code>/opt</code>, <code>/etc</code> and <code>/var/lib/dvswitch/dvs/var.txt</code>; <code>/etc/ircddbgateway</code>, plus <code>ss -Hlunp</code> and <code>ip -o -4 addr</code></td><td><code>/api/asterisk/files</code>, <code>/api/allmon3/files</code>, <code>/api/dvswitch/files</code>, <code>/api/dstar-gw</code></td></tr>
       <tr><td>DVSM</td><td><code>iax.conf</code>, <code>rpt.conf</code>, Analog_Bridge's ini; the LAN address from the default route</td><td><code>/api/dvsm</code></td></tr>
       <tr><td>STFU</td><td><code>DVSwitch.ini [STFU]</code>, <code>/opt/STFU</code>, <code>stfu.service</code></td><td><code>/api/stfu</code></td></tr>
       <tr><td>M17</td><td><code>/opt/USRP2M17/USRP2M17.ini</code>, <code>rpt.conf [1917]</code>, <code>usrp2m17.service</code>, <code>M17Hosts.json</code></td><td><code>/api/m17</code></td></tr>
@@ -956,7 +956,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <h3>Secrets</h3>
     <ul>
       <li>The DVSM and STFU cards send the account passwords to your logged-in page, masked until you press the eye, so you can copy them into an app.</li>
-      <li>The Node Controller checks report only whether a password is set, never its value. <code>var.txt</code> password lines are skipped completely.</li>
+      <li>The ASL-DVS checks report only whether a password is set, never its value. <code>var.txt</code> password lines are skipped completely.</li>
     </ul>
     <h3>Writes</h3>
     <ul>
@@ -1104,7 +1104,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Identity</td><td>Callsign, node and label for SysMon's own use.</td></tr>
     <tr><td>Server</td><td>SysMon's port (9999) and bind address (0.0.0.0, meaning every interface). A change needs a SysMon restart, and a banner says so.</td></tr>
     <tr><td>Thresholds</td><td><b>NRestart warn</b> (3) and <b>NRestart crit</b> (10) colour the restart badge in the service panel. <b>CPU warn %</b> (50) and <b>RSS warn MiB</b> (200) turn the CPU and memory badges amber, with a ⚠, when a service is at or over them. All four load when the page opens.</td></tr>
-    <tr><td>Config Files</td><td>Folded away. Every Asterisk, DVSwitch and Allmon3 file with <b>Edit</b>, and <b>Hide</b> / <b>Show</b> to keep files you never touch off the Node Controller tab.</td></tr>
+    <tr><td>Config Files</td><td>Folded away. Every Asterisk, DVSwitch and Allmon3 file with <b>Edit</b>, and <b>Hide</b> / <b>Show</b> to keep files you never touch off the ASL-DVS tab.</td></tr>
     <tr><td>Pinned Services</td><td>Folded away. The Overview list as text: <code>unit | description | config_path | port | proto</code>, groups as <code>__GROUP__:Name</code>.</td></tr>
   </table>
   <p>The bar also has four tools:</p>
@@ -1168,14 +1168,14 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds five tabs the Pi Zero 2 W build leaves out to
     save memory: Firewall, Reg, Net, Zello and Console. Everything in Chapters 3 to 5 also applies to the full
     build, which has the same tabs.</p>
-  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_80_20261013.py</code>
-    (version <code>6.13.80</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
+  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_81_20261013.py</code>
+    (version <code>6.13.81</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
     (override)</b> choice, but it uses about twice the memory.</div>
 
   <figure>
     <div class="mock"><div class="tabs">
       <span class="tab">Overview</span><span class="tab">Services</span><span class="tab">Ports</span>
-      <span class="tab on" style="background:var(--org)">Firewall</span><span class="tab">Journal</span><span class="tab">Node Controller</span>
+      <span class="tab on" style="background:var(--org)">Firewall</span><span class="tab">Journal</span><span class="tab">ASL-DVS</span>
       <span class="tab on" style="background:var(--org)">Reg</span><span class="tab">Phone</span><span class="tab">Tune</span><span class="tab">Hardware</span>
       <span class="tab on" style="background:var(--org)">Net</span><span class="tab">DVSM</span><span class="tab">STFU</span><span class="tab">M17</span>
       <span class="tab on" style="background:var(--org)">Zello</span><span class="tab">SD Card</span><span class="tab">Security</span>
@@ -1776,7 +1776,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li>DVSwitch tab: run every step, including callsign and DMR ID. Fix a port 80 clash if step 1 reports one.</li>
     <li>M17 tab, if you want M17: run the steps and apply the three file edits by hand.</li>
     <li>ASL3 tab step 16: save the Restore point.</li>
-    <li>SysMon: work through the Node Controller, DVSM, STFU and M17 tabs until every FAIL is gone.</li>
+    <li>SysMon: work through the ASL-DVS, DVSM, STFU and M17 tabs until every FAIL is gone.</li>
   </ol>
   <h3>Start a broken install over</h3>
   <ol class="steps">
@@ -2583,7 +2583,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <table>
     <tr><th>Symptom</th><th>First stop</th></tr>
     <tr><td>Anything at all</td><td>SysMon Overview: red dots, <code>NR:</code> counts, the Pwr field (Chapter 3)</td></tr>
-    <tr><td>A config looks wrong</td><td>SysMon Node Controller, DVSM, STFU and M17 tabs (Chapter 4); 44helper Config: Identity and Port check (Chapter 11)</td></tr>
+    <tr><td>A config looks wrong</td><td>SysMon ASL-DVS, DVSM, STFU and M17 tabs (Chapter 4); 44helper Config: Identity and Port check (Chapter 11)</td></tr>
     <tr><td>Installs or updates fail</td><td>44helper Update tab, Package recovery (Chapter 10)</td></tr>
     <tr><td>The Pi went off by itself</td><td>wifimon Shutdown reports (Chapter 14)</td></tr>
     <tr><td>Remote access is broken</td><td>44helper Overview and Ports (Chapters 7 and 8)</td></tr>
@@ -2607,15 +2607,15 @@ ss -tlnp | grep 9999</pre></li>
   <ol class="steps">
     <li>SysMon Overview: Asterisk, analog_bridge and mmdvm_bridge must all be green.</li>
     <li>Dashboard: check the indicator shows the talkgroup or reflector you expect, and that you are on that mode's tab.</li>
-    <li>SysMon Node Controller tab: node 1999's RX and TX ports in <code>rpt.conf</code> must be Analog_Bridge's pair the other way round.</li>
+    <li>SysMon ASL-DVS tab: node 1999's RX and TX ports in <code>rpt.conf</code> must be Analog_Bridge's pair the other way round.</li>
     <li>SysMon Ports, and 44helper Config, Port check: no <code>[DUP]</code> and no clash. A known one: M17's old LocalPort 32010 clashes with P25. The Dashboard uses 17010 from 9.3.71.11 (Pi02w) and 9.3.74 (full).</li>
-    <li>DMR only: SysMon Node Controller, check <code>MMDVM_Bridge.ini</code> has a real DMR ID and the network enabled, and STFU (if you use it) has its hotspot password.</li>
+    <li>DMR only: SysMon ASL-DVS, check <code>MMDVM_Bridge.ini</code> has a real DMR ID and the network enabled, and STFU (if you use it) has its hotspot password.</li>
     <li>On a Split Tunnel: AllStar working while DVSwitch and M17 fail usually means an unedited <code>AllowedIPs</code>. Use 44helper Split Tunnel, step 4b (Chapter 8).</li>
   </ol>
 
   <h2><span class="n">15.4</span>Other nodes can't link to me</h2>
   <ol class="steps">
-    <li>SysMon Node Controller: <code>rpt_http_registrations.conf</code> (or <code>iax.conf</code> register lines) has your node and a password. On the full build, the Reg tab shows the live registration.</li>
+    <li>SysMon ASL-DVS: <code>rpt_http_registrations.conf</code> (or <code>iax.conf</code> register lines) has your node and a password. On the full build, the Reg tab shows the live registration.</li>
     <li>44helper Ports: IAX2 4569/udp must not say <b>needed-but-not-open</b>.</li>
     <li>Behind a home router with no tunnel, the router must forward UDP 4569 to the Pi. With a 44Net tunnel, the 44NetConnect zone must allow <code>iax2</code> (Chapter 7, Firewall).</li>
     <li>Two nodes behind one router need different IAX ports: 44helper Nodes tab (Chapter 8).</li>
