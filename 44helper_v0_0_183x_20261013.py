@@ -41,7 +41,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.182"
+APP_VERSION = "0.0.183x"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -7879,6 +7879,8 @@ header {
 .cfg-id-band{font-family:var(--mono);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:.8rem 0 .2rem}
 .cfg-id-tag{font-weight:bold;color:var(--amber);margin-left:.3rem}
 .cfg-id-val{min-width:10ch;overflow-wrap:anywhere}
+.cfg-id-set{display:inline-flex;gap:.4rem;align-items:center;margin-left:.6rem;flex-wrap:wrap}
+.cfg-id-set input{width:10ch;text-transform:uppercase;font-family:var(--mono)}
 
 .tab-panel {
   border: 1px solid var(--border2);
@@ -8650,10 +8652,6 @@ _CFGR_MANAGER = "/etc/asterisk/manager.conf"
 _CFGR_PH_PJSIP = "/etc/asterisk/dvs_phone_pjsip.conf"
 _CFGR_PH_IAX = "/etc/asterisk/dvs_phone_iax.conf"
 _CFGR_ID_FIELDS: list[dict] = [
-    {"fid": "helper_call", "label": "44helper callsign", "src": "ini", "file": _CFGR_HELPER_CONF,
-     "section": "identity", "key": "callsign", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
-    {"fid": "helper_node", "label": "44helper node", "src": "ini", "file": _CFGR_HELPER_CONF,
-     "section": "identity", "key": "node", "groups": ("node",), "form": "plain", "kind": "value", "expect": True},
     {"fid": "rpt_node", "label": "Public node", "src": "rpt_public", "file": _CFGR_RPT,
      "groups": ("node",), "form": "section_name", "kind": "value", "anchor": True},
     {"fid": "rpt_idrec", "label": "ID recording", "src": "rpt_key", "file": _CFGR_RPT, "key": "idrecording",
@@ -9051,6 +9049,166 @@ def _cfgr_identity_public(reveal: bool = False) -> dict:
     d["revealed"] = reveal
     d["checked_at"] = _cfgr_now()
     return d
+
+_CFGR_ASLDVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
+_CFGR_SETCALL_RE = re.compile(r"^(?=.*\d)(?=.*[A-Z])[A-Z0-9]{3,7}$")
+_CFGR_SETCALL_EXTRA: list[dict] = [
+    {"fid": "asldvs_call", "label": "Dashboard callsign", "src": "ini", "file": _CFGR_ASLDVS_CONF,
+     "section": "config", "key": "callsign", "form": "plain"}]
+_CFGR_SETCALL_LOGINS = frozenset({"ircddb_user", "ircddb_dplus"})
+_CFGR_SETCALL_SERVICES: dict[str, str] = {
+    _CFGR_RPT: "asterisk", _CFGR_ECHOLINK: "asterisk", "/etc/asterisk/custom/echolink.conf": "asterisk",
+    _CFGR_MMDVM: "mmdvm_bridge", _CFGR_IRCDDB: "ircddbgatewayd", _CFGR_YSFGW: "ysfgateway",
+    _CFGR_P25GW: "p25gateway", _CFGR_NXDNGW: "nxdngateway", _CFGR_M17INI: "usrp2m17",
+    _CFGR_ASLDVS_CONF: "nodecontrol"}
+_CFGR_SETCALL_AST_RE = re.compile(r"^(\s*[^=;\s][^=]*?\s*=>?\s*)(.*?)(\s*(?:;.*)?)$")
+_CFGR_SETCALL_INI_RE = re.compile(r"^(\s*[^=;#\s][^=]*?\s*=\s*)(.*?)(\s*)$")
+
+def _cfgr_setcall_new(form: str, value: str, old: str) -> str | None:
+    if form == "idrec":
+        if not old.strip():
+            return "|i" + value
+        cur = _cfgr_id_parse(form, old)
+        if not cur:
+            return None
+        m = _CFGR_CALL_SUFFIX_RE.search(cur.upper())
+        return _cfgr_id_render(form, value + (cur[m.start():] if m else ""), old)
+    return _cfgr_id_render(form, value, old)
+
+def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str) -> list[dict]:
+    ast = path.startswith("/etc/asterisk/")
+    rx = _CFGR_SETCALL_AST_RE if ast else _CFGR_SETCALL_INI_RE
+    mask = _cfgr_managed_mask(lines) if ast else [False] * len(lines)
+    src, key = fd["src"], fd["key"]
+    sec: str | None = ""
+    done: set[str | None] = set()
+    out: list[dict] = []
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        hdr = _CFGR_HDR_RE.match(body)
+        if hdr:
+            sec = None if mask[i] else hdr.group(1).strip()
+            continue
+        if mask[i] or sec is None:
+            continue
+        st = body.strip()
+        if not st or st[0] in "#;" or "=" not in st:
+            continue
+        m = rx.match(body)
+        if not m:
+            continue
+        k = m.group(1).split("=", 1)[0].strip()
+        if src == "flat":
+            ok = k == key
+        elif src == "ini":
+            ok = sec.lower() == fd["section"] and k.lower() == key.lower()
+        elif src == "rpt_key":
+            ok = sec.isdigit() and k.lower() == key
+        else:
+            ok = k.lower() == key
+        if not ok or sec in done:
+            continue
+        done.add(sec)
+        old = m.group(2)
+        q = old[0] if len(old) >= 2 and old[0] == old[-1] and old[0] in "\"'" else ""
+        inner = old[1:-1] if q else old
+        where = (f"[{sec}] {k}" if sec else k)
+        new = _cfgr_setcall_new(fd["form"], value, inner)
+        if new is None:
+            out.append({"line": i, "where": where, "old": inner, "skip": "holds a sound file, left alone"})
+            continue
+        out.append({"line": i, "where": where, "old": inner, "new": new,
+                    "text": m.group(1) + q + new + q + m.group(3) + raw[len(body):]})
+    return out
+
+def _cfgr_act_id_set_callsign(payload: dict, apply: bool) -> dict:
+    value = str(payload.get("callsign", "")).strip().upper()
+    if not _CFGR_SETCALL_RE.match(value):
+        return {"success": False, "output": "A callsign is 3 to 7 letters and digits, with at least one digit."}
+    fields = [fd for fd in _CFGR_ID_FIELDS if "callsign" in fd["groups"]] + _CFGR_SETCALL_EXTRA
+    plan: dict[str, dict] = {}
+    report: list[str] = []
+    missing: list[str] = []
+    logins: list[str] = []
+    for fd in fields:
+        paths = [fd["file"]] + (["/etc/asterisk/custom/echolink.conf"] if fd["src"] == "echolink" else [])
+        for path in paths:
+            if path not in plan:
+                b = _cfgr_read(path)
+                if b is None:
+                    if fd["src"] != "echolink" or path == fd["file"]:
+                        missing.append(f"{fd['label']}: {path}")
+                    plan[path] = {"lines": None, "edits": []}
+                    continue
+                plan[path] = {"lines": b.decode("utf-8", "replace").splitlines(keepends=True), "edits": []}
+            p = plan[path]
+            if p["lines"] is None:
+                continue
+            found = _cfgr_setcall_file(fd, path, p["lines"], value)
+            if not found and fd["src"] != "rpt_key":
+                report.append(f"  {fd['label']}: {path}: no {fd['key']} line, left alone")
+            for e in found:
+                if "skip" in e:
+                    report.append(f"  {fd['label']}: {path} {e['where']}: {e['skip']}")
+                    continue
+                if e["old"] == e["new"]:
+                    report.append(f"  {fd['label']}: {path} {e['where']}: already {e['new']}")
+                    continue
+                p["edits"].append(e)
+                report.append(f"  {fd['label']}: {path} {e['where']}: {e['old'] or '(empty)'} -> {e['new']}")
+                if fd["fid"] in _CFGR_SETCALL_LOGINS:
+                    logins.append(fd["label"])
+    c = globals().get("_cfg")
+    old_helper = c.get("identity", "callsign", fallback="").strip() if c is not None else ""
+    if old_helper != value:
+        report.append(f"  44helper callsign: {CONFIG_FILE} [identity] callsign: {old_helper or '(empty)'} -> {value}")
+    changed = [path for path, p in plan.items() if p["edits"]]
+    services = sorted({_CFGR_SETCALL_SERVICES[path] for path in changed if path in _CFGR_SETCALL_SERVICES})
+    head = [f"Set the callsign to {value} in every file below.", ""]
+    tail: list[str] = []
+    if missing:
+        tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
+    if logins:
+        tail += ["", "Logins changed (" + ", ".join(logins) + "): the ircDDB and DPlus accounts must be registered "
+                 "under the new callsign, or the D-Star gateway will not log in."]
+    if services:
+        tail += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
+    if "nodecontrol" in services:
+        tail += ["Restart the Dashboard (nodecontrol) first: until then it holds the old callsign, and its next Save "
+                 "or M17 connect puts the old callsign back."]
+    if not changed and old_helper == value:
+        return {"success": True, "changes": 0, "output": "\n".join(head + report + tail + ["", "Nothing to change."])}
+    if not apply:
+        return {"success": True, "changes": len(changed) + (old_helper != value),
+                "output": "\n".join(head + report + tail)}
+    groups = [g for g, d in _CFGR_GROUPS.items() if any(path in d["files"] for path in changed)]
+    lines_out = [f"Callsign set to {value}.", ""]
+    if groups:
+        sid, pruned = _cfgr_auto_point(f"callsign {value}", groups)
+        lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
+        lines_out.append("")
+    ok = True
+    for path in changed:
+        p = plan[path]
+        new = list(p["lines"])
+        for e in p["edits"]:
+            new[e["line"]] = e["text"]
+        uid, gid, fmode = _cfgr_meta_of(path)
+        try:
+            res = _cfgr_write_file(path, "".join(new).encode("utf-8"), uid, gid, fmode)
+        except OSError as exc:
+            res = f"NOT written: {exc}"
+        if res.startswith("NOT") or res.startswith("skipped"):
+            ok = False
+        lines_out.append(f"  {path}: {res}")
+    if c is not None and old_helper != value:
+        if not c.has_section("identity"):
+            c.add_section("identity")
+        c.set("identity", "callsign", value)
+        save_config(c)
+        lines_out.append(f"  {CONFIG_FILE}: written")
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG callsign set to {value} in {len(changed)} file(s)")
+    return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
 
 def build_config_status() -> dict:
     snap = _cfgr_snap_dir("restore")
@@ -10536,7 +10694,7 @@ def _cfgr_remove_module(lines: list[str], name: str) -> list[str]:
     return lines[:idx[-1]] + lines[idx[-1] + 1:] if idx else list(lines)
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "gateways_apply", "gateways_revert"})
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "gateways_apply", "gateways_revert", "id_set_callsign"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
 import os
@@ -11080,6 +11238,8 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "reinstall_preview": _cfgr_act_reinstall_preview,
     "reinstall_start": _cfgr_act_reinstall_start,
     "reinstall_dismiss": _cfgr_act_reinstall_dismiss,
+    "id_set_callsign_preview": lambda p: _cfgr_act_id_set_callsign(p, False),
+    "id_set_callsign": lambda p: _cfgr_act_id_set_callsign(p, True),
 }
 
 def _dispatch_config_action(payload: dict) -> dict:
@@ -11572,7 +11732,12 @@ function cfgIdRender(d) {
           gen.forEach(function(r) { h += cfgIdRow(r, gid); });
         }
       } else {
-        if (gid !== 'alone') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) + '</td></tr>';
+        if (gid === 'callsign') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) +
+          ' <span class="cfg-id-set"><input type="text" id="cfg-id-call" maxlength="7" placeholder="NEW CALL" autocomplete="off"' +
+          ' spellcheck="false" value="' + cfgEsc(CFG_ID_CALL) + '" oninput="cfgIdCallInput(this)"' +
+          ' onkeydown="if(event.key===\'Enter\')cfgIdSetCall(document.getElementById(\'cfg-id-call-btn\'));">' +
+          ' <button class="btn-run" id="cfg-id-call-btn" onclick="cfgIdSetCall(this)">Set everywhere</button></span></td></tr>';
+        else if (gid !== 'alone') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) + '</td></tr>';
         mine.forEach(function(r) { h += cfgIdRow(r, gid); });
       }
     });
@@ -11583,6 +11748,30 @@ function cfgIdRender(d) {
 }
 
 var CFG_ID_REVEALED = false;
+var CFG_ID_CALL = '';
+
+function cfgIdCallInput(el) {
+  var v = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7);
+  if (el.value !== v) el.value = v;
+  CFG_ID_CALL = v;
+}
+
+function cfgIdSetCall(btn) {
+  var el = document.getElementById('cfg-id-call');
+  if (el) cfgIdCallInput(el);
+  var call = CFG_ID_CALL;
+  if (!/^(?=.*[0-9])(?=.*[A-Z])[A-Z0-9]{3,7}$/.test(call)) {
+    cfgOut('cfg-id-call-out', 'A callsign is 3 to 7 letters and digits, with at least one digit.', false);
+    return;
+  }
+  cfgPost({action: 'id_set_callsign_preview', callsign: call}, 'cfg-id-call-out', btn).then(function(res) {
+    if (!res.success || !res.changes) return;
+    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
+    cfgPost({action: 'id_set_callsign', callsign: call}, 'cfg-id-call-out', btn).then(function(r) {
+      if (r.success) { CFG_ID_CALL = ''; var e = document.getElementById('cfg-id-call'); if (e) e.value = ''; }
+    });
+  });
+}
 
 function cfgIdButtons() {
   document.getElementById('cfg-id-reveal-btn').style.display = CFG_ID_REVEALED ? 'none' : '';
@@ -11723,7 +11912,9 @@ def _render_config_panel() -> str:
       <span class="cfg-hint" id="cfg-id-state"></span></div>
     <div class="step-body">Callsigns, IDs and passwords in this node's config files, grouped by which copies must hold the
       same value. Values are masked; Reveal shows them all, passwords included, after the root password, until you press
-      Hide or reload the page. Read only: change a value in its file, or for phone accounts on the dashboard's Phone tab.
+      Hide or reload the page. Set everywhere on the Callsign line writes a new callsign to every callsign field listed,
+      to the dashboard's asl_dvs.conf and to 44helper's own config, after a preview and an automatic save point. It
+      restarts nothing. Change other values in their file, or for phone accounts on the dashboard's Phone tab.
       The Travel Node preset never carries any of these.</div>
     <div class="step-actions">
       <button class="btn-copy" id="cfg-id-reveal-btn" onclick="cfgIdAskReveal()">Reveal</button>
@@ -11738,6 +11929,7 @@ def _render_config_panel() -> str:
       <span id="cfg-id-err" style="color:var(--red)"></span>
     </div>
     <div id="cfg-id"></div>
+    <div class="asl3-console shown placeholder" id="cfg-id-call-out">(type a callsign on the Callsign line and press Set everywhere)</div>
   </div>
 
   <div class="step-card">

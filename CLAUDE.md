@@ -41,8 +41,13 @@
   `-pi02w` (for example `9.3.71.3-pi02w`).
 - **The shared launcher** (`/usr/local/bin/asl_dvs_launch.py`) is written by
   several files. Its text must stay identical in all of them.
-- **Install manuals** in `docs/` name the current files and versions. Update
-  the matching manual when a file it lists changes.
+- **Manuals** (the user manual, the dialplan guide and the install manuals in
+  `docs/`) are updated only when the request says so. A code change alone does
+  not update them.
+
+## Workflow
+
+- After a build is pushed, open the pull request and merge it without asking.
 
 ## Before pushing
 
