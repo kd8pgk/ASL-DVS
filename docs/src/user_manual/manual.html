@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_16_20261012.py</td><td>9.3.71.16-pi02w</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_17_20261013.py</td><td>9.3.71.17-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_14_20261013.py</td><td>6.13.67.14-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_46_0_20261012.py</td><td>2.46.0</td></tr>
@@ -175,7 +175,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.16-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.17-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span>
         <span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span>
@@ -2105,7 +2105,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">12.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">ASL-DVS NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.71.16-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.71.17-pi02w</span></div>
       <div class="row" style="padding-top:.5em;justify-content:space-between"><span><span class="btn">Allmon3</span> <span class="btn">DVSwitch</span> <span class="btn">Cockpit</span></span>
         <span style="font-family:var(--mono);color:var(--grn);font-size:8pt">● TG 3100 ●</span>
         <span><span class="btn">InstMon</span> <span class="btn">WiFiMon</span> <span class="btn">SysMon</span></span></div>
@@ -2246,7 +2246,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>Section</th><th>Holds</th></tr>
     <tr><td>Configuration</td><td>Callsign; main node number; Digital Voice Bridge node (1999); M17 Bridge node (1917); the phone nodes (information only); web port (8989); CPUWeight.</td></tr>
     <tr><td>Visible Tabs</td><td>Tick the mode tabs you use.</td></tr>
-    <tr><td>Phone</td><td><b>Activate</b> (sets the phone system up in Asterisk, asks first); phone patch; dial timeout; restart Asterisk if needed; transmitter time-out off while the tab is open, with a safety cap in minutes; <b>Listen only</b> (you hear calls, but nothing from the radio goes into them); how keypad tones are sent; and the <b>Networks</b> list (SIP or IAX2 accounts, with Add network). <b>Save Phone</b>, <b>Reload</b>, and <b>Revert (turn phone off)</b>, which takes it all back out of Asterisk.</td></tr>
+    <tr><td>Phone</td><td><b>Activate</b> (sets the phone system up in Asterisk, asks first); phone patch; <code>*61</code> digit timeout (how long <code>*61</code> from the radio waits for the next digit); restart Asterisk if needed; transmitter time-out off while the tab is open, with a safety cap in minutes; <b>Listen only</b> (you hear calls, but nothing from the radio goes into them); how keypad tones are sent; and the <b>Networks</b> list (SIP or IAX2 accounts, with Add network). <b>Save Phone</b>, <b>Reload</b>, and <b>Revert (turn phone off)</b>, which takes it all back out of Asterisk.</td></tr>
     <tr><td>Favorites lists</td><td>Every mode's favorites, to rename, reorder or delete.</td></tr>
   </table>
   <p><b>Save</b> writes the settings and favorites; <b>Reload</b> throws away unsaved edits; <b>Back</b> returns to the tab you came from.</p>

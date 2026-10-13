@@ -1,6 +1,43 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_71_16_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_71_17_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.71.17-pi02w (2026-10-13)
+
+Phone fixes from an audit of the Phone tab and the Edit page's Phone section,
+and the "Node Controller" naming. Pi Zero 2 W build only; the full build is
+unchanged.
+
+- Edit page, network cards: each card shows only its own hints.
+  - The router hint ("SIP needs UDP 5060 and UDP 10000-20000 forwarded") was
+    the `else` of the Hams Over IP check, so IAX2 cards showed it too. It now
+    shows only on SIP-type cards, and no longer tells everyone to forward ports:
+    signing in usually keeps calls working with nothing forwarded; forward UDP
+    5060 only if incoming calls don't arrive, and the audio ports if audio is
+    one-way. A "SIP by IP address" network, which doesn't sign in, is told it
+    needs the forward for incoming calls.
+  - AmateurWire cards no longer show the Hams Over IP port hint ("SIP on UDP
+    5160, audio on 10000-15000"); they get their own Voicemail Access note.
+- A favorite's saved tones (Straight to the provider and As sound routes) are
+  sent if the call answers any time within the 65-second ring time. Before, the
+  dashboard waited only the `*61` digit timeout plus 15 s (35 s by default) and
+  dropped the tones on a later answer.
+- Wording:
+  - "Dial timeout (ms)" is now "*61 digit timeout (ms)", with a tooltip: it is
+    how long `*61` from the radio waits for the next digit, not how long a call
+    rings. The setting and its saved value are unchanged.
+  - Incoming-call status: an open network with trusted numbers says "trusted
+    numbers only" (others get busy), and a PIN network with trusted numbers says
+    "waiting for PIN (trusted numbers skip it)".
+  - Send keypad tones choices drop the "(v9.3.13 way)" and "(test)" tags:
+    "Straight to the provider", "Through the call", "As sound (tone recordings)".
+- Naming: the page title, logo and login heading say "Node Control" (no
+  "ASL-DVS"); so does the console banner. The service description, the phone
+  report and the config files the dashboard writes are unchanged.
+- Tested: page in headless Chromium (each network type's hints, the four
+  incoming-status cases, title, logo and labels, no script errors); saved-tones
+  wait with a simulated clock (answered at 50 s: sent at 51 s; 9.3.71.16 gave up
+  at 35 s).
 
 ## 9.3.71.16-pi02w (2026-10-12)
 
