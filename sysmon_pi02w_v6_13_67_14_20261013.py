@@ -1890,6 +1890,20 @@ body.offline #offline-bar{display:block}
   padding:.15rem .45rem;background:transparent;cursor:pointer;
   white-space:nowrap;transition:all .14s}
 .jl-btn:hover{filter:brightness(1.6)}
+.dvl-agent{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;
+  padding:.55rem .9rem;border-bottom:1px solid var(--border)}
+.dvl-agent-note{font-family:var(--sans);font-size:var(--fs-xs);color:#fff;flex-basis:100%}
+.dvl-group{padding:.35rem .9rem;background:#131c2d;border-top:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);letter-spacing:.2em;
+  text-transform:uppercase;color:var(--purple)}
+.dvl-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:.45rem;
+  padding:.4rem .9rem;border-top:1px solid var(--border)}
+.dvl-name{min-width:0;font-family:var(--sans);font-size:.902rem;font-weight:bold;
+  color:var(--text-bright);overflow-wrap:anywhere}
+.dvl-sub{font-family:var(--sans);font-size:var(--fs-xs);font-weight:normal;color:#fff;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvl-note{padding:.3rem .9rem;border-top:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);color:var(--amber)}
 
 #jp-overlay{display:none;position:fixed;inset:0;
   background:rgba(0,0,0,.8);backdrop-filter:blur(4px);
@@ -2758,6 +2772,23 @@ body.tab-edit #zone-content{
   </div>
 
   <div id="panel-journal" class="tab-panel">
+    <div class="s3-card" id="dvl-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">DV Gateway Logs</span>
+        <span class="s3-card-meta">files in UTC · journal in local time</span>
+      </div>
+      <div class="dvl-agent">
+        <button class="btn btn-purple btn-sm" id="dvl-agent-btn"
+          onclick="dvlAgentCopy()">⎘ Copy for agent</button>
+        <button class="btn btn-muted btn-sm" onclick="dvlAgentDownload()">⤓ Download .txt</button>
+        <button class="btn btn-muted btn-sm" onclick="dvlLoad()">↻ Refresh</button>
+        <span class="dvl-agent-note" id="dvl-agent-note">The last 50 lines of every log below,
+          plus this boot's warnings. Copy one log at a time with its own Copy button.</span>
+      </div>
+      <div id="dvl-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
     <div class="s3-card">
       <div class="s3-card-hdr">
         <span class="s3-card-title">Running Services — click to view journal</span>
@@ -4891,7 +4922,125 @@ let _jpLines = 200;
 let _jpRaw   = "";
 let _jpFilteredText = "";
 
-window.loadTab_journal = function() { loadJournalList(); };
+window.loadTab_journal = function() { loadJournalList(); dvlLoad(); };
+
+let _dvlSources = [];
+let _dvlAgent = null;
+let _dvlAgentAt = 0;
+
+function _dvlSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+function _dvlAge(t) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+async function dvlLoad() {
+  const d = await api("/api/logs/list");
+  _dvlSources = (d && d.ok) ? (d.sources || []) : [];
+  renderDvlList(d && d.ok ? null : ((d && d.message) || "Could not read the log list"));
+  dvlAgentFetch();
+}
+
+function renderDvlList(err) {
+  const body = document.getElementById("dvl-body");
+  if (!body) return;
+  body.innerHTML = "";
+  if (err || !_dvlSources.length) {
+    body.innerHTML = `<div class="stub-panel" style="min-height:60px">${esc(err || "No DV gateway logs found on this node.")}</div>`;
+    return;
+  }
+  let group = "";
+  _dvlSources.forEach((e, i) => {
+    if (e.group !== group) {
+      group = e.group;
+      const g = document.createElement("div");
+      g.className = "dvl-group";
+      g.textContent = group;
+      body.appendChild(g);
+    }
+    if (e.kind === "none") {
+      const n = document.createElement("div");
+      n.className = "dvl-note";
+      n.textContent = e.note || "no log";
+      body.appendChild(n);
+      return;
+    }
+    const sub = e.kind === "file"
+      ? `${_dvlSize(e.size || 0)} · ${e.mtime ? _dvlAge(e.mtime) : ""}${e.size ? "" : " · empty"}`
+      : (e.note || "systemd journal");
+    const row = document.createElement("div");
+    row.className = "dvl-row";
+    row.innerHTML =
+      `<div class="dvl-name" title="${esc(e.path || e.unit || "")}">${esc(e.label)}` +
+      `<div class="dvl-sub">${esc(sub)}</div></div>` +
+      `<button class="jl-btn" onclick="dvlOpen(${i})">▤ Open</button>` +
+      `<button class="jl-btn" onclick="dvlCopy(${i})">⎘ Copy</button>`;
+    body.appendChild(row);
+  });
+}
+
+function dvlOpen(i) {
+  const e = _dvlSources[i];
+  if (!e) return;
+  if (e.kind === "journal") openJournalPopup(e.unit);
+  else openLogPopup(e.id, e.label);
+}
+
+async function _dvlReadText(e) {
+  const d = await api(`/api/logs/read?id=${encodeURIComponent(e.id)}&lines=200`);
+  if (!d || !d.ok) throw new Error((d && d.message) || "Could not read the log");
+  const shown = d.text ? d.text.split("\n").length : 0;
+  const where = e.kind === "journal" ? `journal: ${e.unit} (local time)` : `${d.path || e.label} (UTC)`;
+  const of = d.total >= 0 ? ` of ${d.total.toLocaleString()}` : "";
+  return `== ${where} · last ${shown}${of} lines ==\n${d.text || ""}\n`;
+}
+
+function dvlCopy(i) {
+  const e = _dvlSources[i];
+  if (!e) return;
+  _copyFetched(_dvlReadText(e));
+}
+
+async function dvlAgentFetch() {
+  const btn = document.getElementById("dvl-agent-btn");
+  const d = await api("/api/logs/agent");
+  if (!d || !d.ok) { _dvlAgent = null; if (btn) btn.textContent = "⎘ Copy for agent"; return null; }
+  _dvlAgent = d.text || "";
+  _dvlAgentAt = Date.now();
+  if (btn) btn.textContent = `⎘ Copy for agent · ${_dvlSize(d.bytes || _dvlAgent.length)}`;
+  return _dvlAgent;
+}
+
+function dvlAgentCopy() {
+  if (_dvlAgent && Date.now() - _dvlAgentAt < 60000) {
+    _copyWithVerify(_dvlAgent);
+    return;
+  }
+  _copyFetched(dvlAgentFetch().then(t => {
+    if (!t) throw new Error("Could not build the log bundle");
+    return t;
+  }));
+}
+
+async function dvlAgentDownload() {
+  let text = _dvlAgent && Date.now() - _dvlAgentAt < 60000 ? _dvlAgent : await dvlAgentFetch();
+  if (!text) { toast("Could not build the log bundle", "err"); return; }
+  const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type: "text/plain"}));
+  a.download = `dv-gateway-logs-${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
 
 async function loadJournalList() {
   const d = await api("/api/journal/list");
@@ -5223,7 +5372,28 @@ async function _copyWithVerify(src) {
     document.body.removeChild(tmp);
   }
   if (!wrote) { toast("Copy failed", "err"); return; }
+  await _clipVerify(src);
+}
 
+async function _copyFetched(textPromise) {
+  textPromise.catch(() => {});
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    try {
+      const blob = textPromise.then(t => new Blob([t], {type: "text/plain"}));
+      await navigator.clipboard.write([new ClipboardItem({"text/plain": blob})]);
+      await _clipVerify(await textPromise);
+      return;
+    } catch (e) {
+      try { await textPromise; } catch (e2) { toast(e2.message || "Copy failed", "err"); return; }
+    }
+  }
+  let text = "";
+  try { text = await textPromise; } catch (e) { toast(e.message || "Copy failed", "err"); return; }
+  if (!text) { toast("Nothing to copy", "err"); return; }
+  await _copyWithVerify(text);
+}
+
+async function _clipVerify(src) {
   try {
     const check = await navigator.clipboard.readText();
     if (check === src) {
@@ -5232,7 +5402,7 @@ async function _copyWithVerify(src) {
       await alertModal(
         `⚠ Clipboard copy may be incomplete (${check.length} of ${src.length} ` +
         `characters). This can happen on some mobile browsers with large ` +
-        `files — try again, or use a desktop browser if this persists.`
+        `files — try again, use a Download button where there is one, or a desktop browser.`
       );
     }
   } catch {
