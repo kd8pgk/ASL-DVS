@@ -41,7 +41,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.186x"
+APP_VERSION = "0.0.187x"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -7748,9 +7748,9 @@ _CSS_BASE = """
   --orange-dim: #703800;
   --cloudflare: #f38020;
   --cloudflare-dim: #5c2d00;
-  --text: #d0dff0;
+  --text: #ffffff;
   --text-bright: #f0f8ff;
-  --muted: #4a6080;
+  --muted: #ffffff;
   --mono: 'Courier New', Courier, monospace;
   --sans: Arial, Helvetica, sans-serif;
 }
@@ -7844,7 +7844,7 @@ header {
   user-select: none;
   flex-shrink: 0;
 }
-.tab:hover { color: var(--text-bright); border-color: #5a7898; background: #253550; }
+.tab:hover { color: var(--text-bright); border-color: #ffffff; background: #253550; }
 
 /* Active-tab color assignment — design plan §10 table.
    Same --mc/--mc-rgb custom-property trick the source dashboard uses for
@@ -7956,7 +7956,7 @@ _CSS_COMPONENTS = """
   font-size: .66rem;
   letter-spacing: .18em;
   text-transform: uppercase;
-  color: #5a7898;
+  color: #ffffff;
   margin-bottom: .4rem;
   display: block;
 }
@@ -8170,7 +8170,7 @@ _CSS_FIREWALL = """
   font-size: .77rem;
   letter-spacing: .12em;
   text-transform: uppercase;
-  color: #5a7898;
+  color: #ffffff;
   margin: .8rem 0 .3rem;
 }
 .svc-row { display: grid; grid-template-columns: 1rem minmax(0, 2fr) minmax(0, 9rem) minmax(0, 1.4fr); align-items: center; gap: .5rem; padding: .2rem 0; font-family: var(--mono); font-size: .84rem; }
@@ -8180,10 +8180,10 @@ _CSS_FIREWALL = """
 .svc-row.flagged { color: var(--amber); }
 #ports-table { display: block; max-width: 100%; overflow-x: auto; }
 #ports-table th, #ports-table td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--border2); }
-#ports-table th { color: #5a7898; font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; }
+#ports-table th { color: #ffffff; font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; }
 #ports-table tr.mismatch { background: rgba(255,61,90,.12); }
 #ports-table tr.mismatch td:first-child { border-left: 3px solid var(--red); }
-#ports-table tr.ports-group td { background: #0c1424; color: #7fa8d8; font-weight: 600; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; padding-top: .5rem; }
+#ports-table tr.ports-group td { background: #0c1424; color: #ffffff; font-weight: 600; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; padding-top: .5rem; }
 .port-verdict.v-danger { color: var(--red); }
 .port-verdict.v-warn   { color: var(--amber); }
 .port-verdict.v-ok     { color: var(--green); }
@@ -8224,16 +8224,17 @@ _CSS_ASL3 = """
   border-radius: 4px; padding: .4rem .6rem; margin-top: .4rem;
 }
 .asl3-console {
-  font-family: var(--mono); font-size: .74rem; color: #b8e6c8; background: #05080f;
+  font-family: var(--mono); font-size: .74rem; color: #ffffff; background: #05080f;
   border: 1px solid var(--border2); border-radius: 4px; padding: .5rem .6rem;
   margin-top: .4rem; white-space: pre-wrap; word-break: break-all;
   max-height: 220px; overflow-y: auto;
 }
 .asl3-console.shown { display: block; }
-.asl3-console.placeholder { color: #5a6478; font-style: italic; }
-.asl3-console.fail { color: #ffb0b8; }
+.asl3-console.placeholder { color: #ffffff; font-style: italic; }
+.asl3-console.ok { color: var(--green); }
+.asl3-console.fail { color: var(--red); }
 #asl3-custom-transcript {
-  font-family: var(--mono); font-size: .74rem; color: #b8e6c8; background: #05080f;
+  font-family: var(--mono); font-size: .74rem; color: #ffffff; background: #05080f;
   border: 1px solid var(--border2); border-radius: 4px; padding: .6rem .7rem;
   margin-top: .6rem; white-space: pre-wrap; word-break: break-all;
   max-height: 320px; overflow-y: auto;
@@ -11419,7 +11420,7 @@ function cfgLabel(g) {
 function cfgOut(outId, text, ok) {
   var out = outId ? document.getElementById(outId) : null;
   if (!out) return;
-  out.className = 'asl3-console shown' + (ok === false ? ' fail' : (ok === null ? ' placeholder' : ''));
+  out.className = 'asl3-console shown' + (ok === false ? ' fail' : (ok === null ? ' placeholder' : (ok === true ? ' ok' : '')));
   out.textContent = text;
 }
 
@@ -11775,7 +11776,7 @@ function cfgRenderReinstall(ri) {
   var tail = (ri.log || []).join('\n');
   if (tail) {
     out.style.display = 'block';
-    out.className = 'asl3-console shown' + (phase === 'done_no_reboot' ? ' fail' : '');
+    out.className = 'asl3-console shown' + (phase === 'done_no_reboot' ? ' fail' : (phase === 'rebooted' ? ' ok' : ''));
     out.textContent = tail;
   }
   if (busy) cfgRiPoll(); else cfgRiStop();
@@ -13303,7 +13304,7 @@ function renderPiInstall(kind, data) {
       html += '<div class="step-actions"><button class="btn-copy" onclick="piCopyStep(this,\\'' + kind + '\\',\\'service_ports\\')">Copy</button></div>';
     }
     var pst = (window._piState || {})[meta.id];
-    var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+    var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
     var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
     html += '<div class="' + consoleCls + '" id="pi-out-' + kind + '-' + meta.id + '">' + consoleTxt + '</div>';
     if (meta.id === 'paste_config') { html += _piDnsCardHtml(kind, data.dns || {}); if (kind === 'split') { html += _piAllowedIpsCardHtml(kind, data.allowed_ips || {}); } if (kind === 'full') { html += _piReflectorPortsCardHtml(kind, data.reflector_egress || {}); } }
@@ -13366,7 +13367,7 @@ function _piDnsCardHtml(kind, dns) {
   html += '</div>';
   html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">On systemd-resolved the resolvectl options are preferred (no resolvconf needed). Full routes all DNS through the tunnel; split routes only *.ampr.org. Restart the tunnel after applying.</div>';
   var pst = (window._piState || {})['set_dns'];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   html += '<div class="' + consoleCls + '" id="pi-dns-out-' + kind + '">' + consoleTxt + '</div>';
   html += '</div>';
@@ -13421,7 +13422,7 @@ function _piAllowedIpsCardHtml(kind, aip) {
     html += '<div class="step-body">AllowedIPs is <code>' + asl3EscapeAttr(current) + '</code>, already narrowed (not the full-tunnel 0.0.0.0/0 shape), so this repair has nothing to do. Edit the config by hand for a different range.</div>';
   }
   var pst = (window._piState || {})['repair_allowed_ips'];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   html += '<div class="' + consoleCls + '" id="pi-aip-out-' + kind + '">' + consoleTxt + '</div>';
   html += '</div>';
@@ -13469,7 +13470,7 @@ function _piReflectorPortsCardHtml(kind, refl) {
   });
   html += '<div class="checklist">';
   order.forEach(function(net) {
-    html += '<div class="step-body" style="margin:.35rem 0 .1rem 0;color:#7fa8d8">' + asl3EscapeAttr(net) + '</div>';
+    html += '<div class="step-body" style="margin:.35rem 0 .1rem 0;color:#ffffff">' + asl3EscapeAttr(net) + '</div>';
     byNet[net].forEach(function(p) {
       var key = p.port + '/' + p.proto;
       var checkedAttr = (p.applied || p.confirmed) ? 'checked' : '';
@@ -13486,7 +13487,7 @@ function _piReflectorPortsCardHtml(kind, refl) {
   html += '<div class="step-actions"><button class="btn-run" onclick="piApplyReflectorPorts()">Apply egress rules for checked</button>';
   html += '<button class="btn-copy" onclick="piRemoveReflectorPorts()">Remove all 44helper egress rules</button></div>';
   var pst = (window._piState || {})['add_reflector_egress'];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   html += '<div class="' + consoleCls + '" id="pi-refl-out-' + kind + '">' + consoleTxt + '</div>';
   html += '</div>';
@@ -13793,7 +13794,7 @@ var PI_PURGE_STEP_META = [
 
 function piPurgeCardHtml(meta, kind) {
   var pst = (window._piState || {})[meta.id];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   var html = '<div class="step-card" id="pi-card-' + kind + '-' + meta.id + '">';
   html += '<div class="step-head"><div class="step-title">' + meta.title + '</div></div>';
@@ -13907,11 +13908,11 @@ function _piConvertPost(stepId, confirmMsg, body, outId, onDone) {
   }).then(function(r) { return r.json(); }).then(function(result) {
     if (result.job_key && result.status === 'running') {
       _piConvertPollJob(result.job_key, outId, function(finalResult) {
-        _piConvertWriteOutput(outId, 'asl3-console shown' + (finalResult.success === false ? ' fail' : ''), finalResult.output || '(no output)');
+        _piConvertWriteOutput(outId, 'asl3-console shown' + (finalResult.success === false ? ' fail' : ' ok'), finalResult.output || '(no output)');
         onDone(finalResult);
       });
     } else {
-      _piConvertWriteOutput(outId, 'asl3-console shown' + (result.success === false ? ' fail' : ''), result.output || '(no output)');
+      _piConvertWriteOutput(outId, 'asl3-console shown' + (result.success === false ? ' fail' : ' ok'), result.output || '(no output)');
       onDone(result);
     }
   });
@@ -15096,7 +15097,7 @@ function asl3RenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="asl3-cmd-' + stateKey + '" value="' + asl3EscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="asl3-btn-' + stateKey + '" onclick="asl3RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="asl3CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="asl3-out-' + stateKey + '">' + (st.output ? asl3EscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="asl3-out-' + stateKey + '">' + (st.output ? asl3EscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -15147,7 +15148,7 @@ function asl3FinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('asl3-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -15422,7 +15423,7 @@ function dvRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="dv-cmd-' + stateKey + '" value="' + dvEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -15473,7 +15474,7 @@ function dvFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('dv-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -15724,7 +15725,7 @@ function svxRenderStepList(mode, distro) {
       if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
       if (step.manual_block) {
         html += '<textarea class="cmd-preview" id="svx-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-          'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+          'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
           'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + svxEscapeAttr(step.cmd) + '</textarea>';
       } else {
         html += '<input type="text" class="asl3-cmd-input" readonly value="' + svxEscapeAttr(step.cmd) + '">';
@@ -15746,7 +15747,7 @@ function svxRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="svx-cmd-' + stateKey + '" value="' + svxEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="svx-btn-' + stateKey + '" onclick="svxRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="svx-out-' + stateKey + '">' + (st.output ? svxEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="svx-out-' + stateKey + '">' + (st.output ? svxEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -15797,7 +15798,7 @@ function svxFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('svx-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -16056,7 +16057,7 @@ function m17RenderStepList(mode, distro) {
       html += '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
       html += '<textarea class="cmd-preview" id="m17-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+        'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
         'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + m17EscapeAttr(step.cmd) + '</textarea>';
       html += '<div class="step-actions"><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
       html += '</div>';
@@ -16091,7 +16092,7 @@ function m17RenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="m17-cmd-' + stateKey + '" value="' + m17EscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="m17-btn-' + stateKey + '" onclick="m17RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="m17-out-' + stateKey + '">' + (st.output ? m17EscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="m17-out-' + stateKey + '">' + (st.output ? m17EscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -16142,7 +16143,7 @@ function m17FinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('m17-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -16401,7 +16402,7 @@ function ampRenderStepList(mode, distro) {
       html += '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
       html += '<textarea class="cmd-preview" id="amp-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+        'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
         'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + ampEscapeAttr(step.cmd) + '</textarea>';
       html += '<div class="step-actions"><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
       html += '</div>';
@@ -16428,7 +16429,7 @@ function ampRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="amp-cmd-' + stateKey + '" value="' + ampEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="amp-btn-' + stateKey + '" onclick="ampRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="amp-out-' + stateKey + '">' + (st.output ? ampEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="amp-out-' + stateKey + '">' + (st.output ? ampEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -16469,7 +16470,7 @@ function ampFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('amp-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -16707,7 +16708,7 @@ function cfRenderStepList(mode, distro) {
       html += '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
       html += '<textarea class="cmd-preview" id="cf-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+        'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
         'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + cfEscapeAttr(step.cmd) + '</textarea>';
       html += '<div class="step-actions"><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
       html += '</div>';
@@ -16734,7 +16735,7 @@ function cfRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="cf-cmd-' + stateKey + '" value="' + cfEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="cf-btn-' + stateKey + '" onclick="cfRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="cf-out-' + stateKey + '">' + (st.output ? cfEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cf-out-' + stateKey + '">' + (st.output ? cfEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -16775,7 +16776,7 @@ function cfFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('cf-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -17012,7 +17013,7 @@ function updStepCardHtml(step, isAlt) {
       '<input type="checkbox" id="upd-quiet-' + stateKey + '" checked> Run in quiet mode (pauses node services, low priority, keeps running if 44helper restarts)</label>';
   }
   html += '<div class="step-actions"><button class="btn-run" id="upd-btn-' + stateKey + '" onclick="updRunStep(this,\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="updCopyStep(this,\\'' + step.id + '\\')">Copy</button></div>';
-  html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="upd-out-' + stateKey + '">' + (st.output ? updEscapeAttr(st.output) : '(not run yet)') + '</div>';
+  html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="upd-out-' + stateKey + '">' + (st.output ? updEscapeAttr(st.output) : '(not run yet)') + '</div>';
   html += '</div>';
   return html;
 }
@@ -17046,7 +17047,7 @@ function updFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('upd-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -17195,7 +17196,7 @@ function updLookupInstalled() {
   out.textContent = 'Running\\u2026';
   fetch('/api/update/lookup_installed', {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}})
     .then(function(r) { return r.json(); }).then(function(result) {
-      out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+      out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
       out.textContent = result.output || '(no output)';
     }).catch(function(e) {
       out.className = 'asl3-console shown fail';
@@ -17215,7 +17216,7 @@ function updLookupPolicy() {
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
     body: JSON.stringify({pkg: pkg})
   }).then(function(r) { return r.json(); }).then(function(result) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }).catch(function(e) {
     out.className = 'asl3-console shown fail';
@@ -17392,7 +17393,7 @@ function sysoptRunAction(action, btn) {
   }).then(function(r) { return r.json(); }).then(function(result) {
     if (result.job_key && result.status === 'running') { sysoptPollJob(result.job_key, out, btn); return; }
     if (out) {
-      out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+      out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
       var lines = [];
       if (result.commands && result.commands.length) {
         lines = lines.concat(result.commands.map(function(c) { return '$ ' + c; }));
@@ -17421,7 +17422,7 @@ function sysoptPollJob(jobKey, out, btn) {
       setTimeout(function() { sysoptPollJob(jobKey, out, btn); }, jobPollMs(1000));
       return;
     }
-    if (out) { out.className = 'asl3-console shown' + (st.success ? '' : ' fail'); out.textContent = st.output || '(no output)'; }
+    if (out) { out.className = 'asl3-console shown' + (st.success ? ' ok' : ' fail'); out.textContent = st.output || '(no output)'; }
     if (btn) btn.disabled = false;
     refreshSystemOpt();
   }).catch(function(e) {
@@ -17929,7 +17930,7 @@ function qmAction(action) {
   if (offBtn) offBtn.disabled = true;
   if (out) { out.className = 'asl3-console shown placeholder'; out.textContent = 'Working\u2026 (stopping or starting services can take a minute)'; }
   return qmPost({action: action, confirm: true}).then(function(res) {
-    if (out) { out.className = 'asl3-console shown' + (res.success ? '' : ' fail'); out.textContent = res.output || '(no output)'; }
+    if (out) { out.className = 'asl3-console shown' + (res.success ? ' ok' : ' fail'); out.textContent = res.output || '(no output)'; }
     if (res.restore_ok === false) _qmLastRestoreFailed = true;
     else if (action === 'off' && res.restore_ok === true) _qmLastRestoreFailed = false;
     refreshQuiet();

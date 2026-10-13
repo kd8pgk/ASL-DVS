@@ -1,6 +1,34 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_186x_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_187x_20261013.py`. Newest entries first.
+
+## 0.0.187x (2026-10-13) — testing
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red. 44helper serves both builds. Only text colours change.
+
+- The grey-blue colours are now plain white `#ffffff`:
+  - `--muted` (was `#4a6080`) and `--text` (was `#d0dff0`)
+  - the typed-in `#5a7898`, `#7fa8d8` and `#5a6478`
+
+  This covers hints, labels, table headers, info banners and verdicts, plain log
+  lines, the login page and the output-box placeholders.
+- Output boxes:
+  - Neutral text (Working…, Running…, placeholders) is white; it was pale
+    green-grey.
+  - A reported success is bright green (`--green`, new `ok` style).
+  - A failure is bright red (`--red`); it was pale pink.
+  - The SvxLink/M17/Ampersand/Cloudflare manual-command boxes are white too.
+- Every place that already knew a result sets the colour: Config tab results,
+  install steps on every tab, the Pi install steps, DNS, AllowedIPs and reflector
+  repairs, and the reinstall log (green when the node rebooted, red when it
+  finished without a reboot).
+- Warnings stay amber. The coloured banners, pills and verdicts are unchanged.
+- Tested:
+  - The Config tab in headless Chromium, before and after: a success shows green
+    `rgb(0,255,176)`, a failure red `rgb(255,61,90)`, a placeholder white.
+  - No old colour codes left.
+  - `node --check` on the page JavaScript.
 
 ## 0.0.186x (2026-10-13) — testing
 
