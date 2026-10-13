@@ -1,6 +1,42 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_78_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_79_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.79 (2026-10-13)
+
+Phone audit fixes and the "Node Control" title, from the Pi Zero 2 W build
+(9.3.71.17-pi02w). The same code as pi02w for these parts.
+
+- **Edit page, network cards:** each card shows only its own hints.
+  - The router hint shows only on SIP-type cards (it was on IAX2 cards too). It
+    no longer tells everyone to forward ports: signing in usually keeps calls
+    working, so forward UDP 5060 only if incoming calls don't arrive, and the
+    audio ports only if audio is one-way.
+  - A "SIP by IP address" network, which doesn't sign in, is told it needs the
+    forward for incoming calls.
+  - AmateurWire cards get their own Voicemail Access note instead of the Hams
+    Over IP port hint.
+- **Saved tones:** a favorite's saved tones (Straight to the provider and As
+  sound routes) are sent if the call answers any time within the 65-second ring
+  time. Before, the dashboard waited only the `*61` digit timeout plus 15 s (35 s
+  by default).
+- **Wording:**
+  - "Dial timeout (ms)" is now "*61 digit timeout (ms)", with a tooltip. The
+    setting and its saved value are unchanged.
+  - Incoming-call status: an open network with trusted numbers says "trusted
+    numbers only"; a PIN network with trusted numbers says "waiting for PIN
+    (trusted numbers skip it)".
+  - The Send keypad tones choices drop the "(v9.3.13 way)" and "(test)" tags.
+- **Naming:** the page title, logo, login heading and console banner say "Node
+  Control" (no "ASL-DVS"). The service description, the command-line help, the
+  phone report and the config files the dashboard writes are unchanged.
+- **Tested:**
+  - In headless Chromium, the hints for each network type (SIP, SIP by IP, Hams
+    Over IP, AmateurWire, IAX2), the label, the tone choices and the titles, with
+    no script errors.
+  - Saved-tones wait with a simulated clock: answered at 50 s, sent at 51 s
+    (9.3.78 gave up).
+  - `node --check` on the page JavaScript.
 
 ## 9.3.78 (2026-10-13)
 
