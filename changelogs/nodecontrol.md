@@ -1,6 +1,30 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_79_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_80_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.80 (2026-10-13)
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red, from the Pi Zero 2 W build (9.3.71.18-pi02w). Only text colours change.
+
+- **Grey-blue to white `#ffffff`:**
+  - `--text` (was `#d0dff0`), `--muted` (was `#4a6080`) and the Edit page's
+    Back/Reload button text (was `#9ab8d0`)
+  - the typed-in `#5a7898`, `#7a9ec0`, `#3a5278`, `#6f8aa8`, `#5a6b7c`,
+    `#4a5a6a` and `#4a5a3a`
+  - the shutdown sub-line `#c98a92`
+- **Failures to bright red `--red`:** the error box, the alert bar, the shutdown
+  message and a failed phone sign-in (they were pale pink or salmon), and a
+  disconnected row's name (it was dark red).
+- **Phone tab result line** under Apply, Activate and Revert: green when the step
+  worked, red when it failed (the `phMsg` helper). It used to be grey-blue
+  whatever the result.
+- Toasts were already green and red. Warnings stay amber.
+- The full build now uses exactly the same text colours as the Pi Zero 2 W build.
+- **Tested** in headless Chromium, before and after: body text
+  `rgb(255,255,255)`; the Phone result line green `rgb(0,255,176)` on success and
+  red `rgb(255,61,90)` on failure; section labels white; no script errors.
+  `node --check` on the page JavaScript.
 
 ## 9.3.79 (2026-10-13)
 

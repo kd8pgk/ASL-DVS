@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.79"
+VERSION      = "9.3.80"
 BUILD_DATE   = "2026-10-13"
 
 ASL_NODE        = "652702"
@@ -7426,9 +7426,9 @@ HTML = r"""<!DOCTYPE html>
   --pink-dim: #700050;
   --fcs: #00c4a0;
   --fcs-dim: #004840;
-  --text: #d0dff0;
+  --text: #ffffff;
   --text-bright: #f0f8ff;
-  --muted: #4a6080;
+  --muted: #ffffff;
   --mono: Arial, Helvetica, sans-serif;
   --sans: Arial, Helvetica, sans-serif;
 }
@@ -7511,7 +7511,7 @@ body.offline header {
   z-index: 1000;
   background: #3a0a0a;
   border-bottom: 1px solid #8b1a1a;
-  color: #ff6b6b;
+  color: var(--red);
   font-family: var(--mono);
   font-size: .858rem;
   text-align: center;
@@ -7561,7 +7561,7 @@ body.offline.perm-linked #perm-link-bar {
   font-size: .66rem;
   letter-spacing: .28em;
   text-transform: uppercase;
-  color: #5a7898;
+  color: #ffffff;
 }
 .sec-lbl-row {
   display: grid;
@@ -7585,7 +7585,7 @@ body.offline.perm-linked #perm-link-bar {
   padding: .1rem .3rem;
   border-radius: 3px;
   border: 1px solid var(--border2);
-  color: #3a5278;
+  color: #ffffff;
   background: transparent;
   letter-spacing: .04em;
   line-height: 1.2;
@@ -7612,7 +7612,7 @@ body.offline.perm-linked #perm-link-bar {
   0%   { box-shadow: 0 0 18px rgba(0,255,176,.85), inset 0 0 10px rgba(0,255,176,.2); }
   100% { box-shadow: none; }
 }
-#tg-indicator.ind-idle{color:#3a5278;border-color:var(--border2)}
+#tg-indicator.ind-idle{color: #ffffff;border-color:var(--border2)}
 #tg-indicator.ind-asl,#tg-indicator.ind-dmr,#tg-indicator.ind-stfu,#tg-indicator.ind-ysf,#tg-indicator.ind-fcs,#tg-indicator.ind-p25,#tg-indicator.ind-nxdn,#tg-indicator.ind-dstar,#tg-indicator.ind-xlx,#tg-indicator.ind-m17,#tg-indicator.ind-echo{color:var(--mc);border-color:rgba(var(--mc-rgb),.4);background:rgba(var(--mc-rgb),.07);text-shadow:0 0 8px rgba(var(--mc-rgb),.5)}
 #tg-indicator.ind-asl{--mc:var(--teal);--mc-rgb:0,255,229}
 #tg-indicator.ind-echo{--mc:var(--amber);--mc-rgb:255,208,64}
@@ -7719,7 +7719,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 #pt-reg-dot.pt-hide{visibility:hidden}
 #pg-PHONE .quick-bar{flex-wrap:wrap}
 #pg-PHONE .quick-inp{min-width:6.5rem}
-#pg-PHONE .pt-signin{font-size:.8em;opacity:.8;white-space:nowrap}#pg-PHONE .pt-signin-bad{color:#ff6b6b;opacity:1}
+#pg-PHONE .pt-signin{font-size:.8em;opacity:.8;white-space:nowrap}#pg-PHONE .pt-signin-bad{color: var(--red);opacity:1}
 #pg-PHONE .btn:disabled{opacity:.35;cursor:default;pointer-events:none}
 .pt-tone{padding:.48rem .7rem}
 .pt-callrow{display:flex;align-items:center;flex-wrap:wrap;gap:.35rem .5rem;padding:.3rem .9rem;border-bottom:1px solid var(--border)}
@@ -7759,7 +7759,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 .row-grid.active-dstar{--mc:var(--pink);--mc-rgb:255,68,204}
 .row-grid.active-xlx{--mc:var(--teal);--mc-rgb:0,255,229}
 
-.row-grid.disc .row-name { color: #6b1825; }
+.row-grid.disc .row-name { color: var(--red); }
 /* ── DMR network-select header ── */
 .net-sel-hdr {
   padding: .55rem .9rem .4rem;
@@ -7793,7 +7793,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body.radio-keyed .ref-row.active-m17{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
 .ref-info { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
 .ref-name { font-family: var(--sans); font-weight: 700; font-size: 1.045rem; color: var(--text-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ref-host { font-family: var(--mono); font-size: .77rem; color: #5a7898; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ref-host { font-family: var(--mono); font-size: .77rem; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ref-mod-sel {
   font-family: var(--mono);
   font-size: .858rem;
@@ -7818,7 +7818,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
 body.radio-keyed .row-grid.active-asl,body.radio-keyed .row-grid.active-echo,body.radio-keyed .row-grid.active-dmr,body.radio-keyed .row-grid.active-stfu,body.radio-keyed .row-grid.active-ysf,body.radio-keyed .row-grid.active-fcs,body.radio-keyed .row-grid.active-p25,body.radio-keyed .row-grid.active-nxdn,body.radio-keyed .row-grid.active-dstar,body.radio-keyed .row-grid.active-xlx{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
 body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow:0 0 8px rgba(255,215,0,.7)}
 
-.row-num  { font-family: var(--mono); font-size: .902rem; color: #5a7898; text-align: right; }
+.row-num  { font-family: var(--mono); font-size: .902rem; color: #ffffff; text-align: right; }
 .row-name {
   font-family: var(--sans);
   font-weight: 700;
@@ -7878,7 +7878,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
-.btn-muted  { color: #7a9ec0;       border-color: var(--border2); }
+.btn-muted  { color: #ffffff;       border-color: var(--border2); }
 .btn-blue   { color: var(--blue);   border-color: var(--blue-dim); }
 .btn-purple { color: var(--purple); border-color: var(--purple-dim); }
 .btn-orange { color: var(--orange); border-color: var(--orange-dim); }
@@ -8068,7 +8068,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .fcs-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .fcs-card .btn:focus-visible,
 .fcs-card .btn-last:focus-visible { outline: 2px solid var(--fcs); outline-offset: 2px; }
-.fcs-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; }
+.fcs-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; }
 .fcs-card-msg.warn { color: var(--amber); }
 .fcs-fav-hdr { color: var(--fcs); }
 @media (prefers-reduced-motion: reduce) {
@@ -8109,7 +8109,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .m17-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .m17-card .btn:focus-visible,
 .m17-card .btn-last:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
-.m17-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; }
+.m17-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; }
 .m17-card-msg.warn { color: var(--amber); }
 .m17-fav-hdr { color: var(--purple); }
 @media (prefers-reduced-motion: reduce) {
@@ -8144,7 +8144,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   transition: border-color .15s;
 }
 .rfc-input  { flex: 1 1 8rem; max-width: 14rem; }
-.rfc-input::placeholder { color: #5a7898; }
+.rfc-input::placeholder { color: #ffffff; }
 .rfc-select { cursor: pointer; flex: 3 1 12rem; max-width: 22rem; }
 .rfc-select.rfc-mod { flex: 0 0 3.6rem; max-width: 3.6rem; padding-left: .4rem; padding-right: .2rem; text-align: center; }
 .rfc-btns { display: flex; gap: .45rem; align-items: center; }
@@ -8154,7 +8154,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .rfc-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .rfc-card .btn:focus-visible,
 .rfc-card .btn-last:focus-visible { outline: 2px solid var(--rc); outline-offset: 2px; }
-.rfc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; overflow-wrap: anywhere; }
+.rfc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; overflow-wrap: anywhere; }
 .rfc-card-msg.warn { color: var(--amber); }
 .xlx-fav-hdr { color: var(--teal); }
 .dstar-fav-hdr { color: var(--pink); }
@@ -8194,7 +8194,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   transition: border-color .15s;
 }
 .ysf-select { cursor: pointer; }
-.ysf-input::placeholder { color: #5a7898; }
+.ysf-input::placeholder { color: #ffffff; }
 #ysf-cc-select  { flex: 1 1 7rem;  max-width: 11rem; }
 #ysf-filter     { flex: 1 1 8rem;  max-width: 14rem; }
 #ysf-ref-select { flex: 3 1 12rem; max-width: 26rem; }
@@ -8204,7 +8204,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ysf-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .ysf-card .btn:focus-visible,
 .ysf-card .btn-last:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
-.ysf-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; overflow-wrap: anywhere; }
+.ysf-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; overflow-wrap: anywhere; }
 .ysf-card-msg.warn { color: var(--amber); }
 .ysf-fav-hdr { color: var(--purple); }
 @media (prefers-reduced-motion: reduce) {
@@ -8243,14 +8243,14 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 }
 .tgc-select { cursor: pointer; flex: 3 1 12rem; max-width: 26rem; }
 .tgc-input  { flex: 1 1 8rem; max-width: 14rem; }
-.tgc-input::placeholder { color: #5a7898; }
+.tgc-input::placeholder { color: #ffffff; }
 .tgc-input:focus, .tgc-select:focus { border-color: var(--tc); box-shadow: 0 0 6px rgba(var(--tc-rgb),.3); }
 .tgc-select:disabled, .tgc-input:disabled { opacity: .4; cursor: default; }
 .tgc-select option { background: var(--surface2); color: var(--text-bright); }
 .tgc-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .tgc-card .btn:focus-visible,
 .tgc-card .btn-last:focus-visible { outline: 2px solid var(--tc); outline-offset: 2px; }
-.tgc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; overflow-wrap: anywhere; }
+.tgc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; overflow-wrap: anywhere; }
 .tgc-card-msg.warn { color: var(--amber); }
 .p25-fav-hdr  { color: var(--orange); }
 .nxdn-fav-hdr { color: var(--lime); }
@@ -8299,7 +8299,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ed-count {
   font-family: var(--mono);
   font-size: .836rem;
-  color: #3a5278;
+  color: #ffffff;
   text-align: right;
   padding: .5rem .9rem;
   border-top: 1px solid var(--border);
@@ -8308,7 +8308,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .cfg-section { padding: .65rem .9rem .5rem; border-bottom: 2px solid var(--border); background: #111828; }
 .cfg-grid    { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .55rem .9rem; margin-top: .4rem; }
 .cfg-field   { display: flex; flex-direction: column; gap: .2rem; }
-.cfg-lbl     { font-family: var(--mono); font-size: .66rem; letter-spacing: .18em; text-transform: uppercase; color: #5a7898; }
+.cfg-lbl     { font-family: var(--mono); font-size: .66rem; letter-spacing: .18em; text-transform: uppercase; color: #ffffff; }
 .srv-meta-row { display:grid; grid-template-columns:1fr 1fr 1.4fr auto; gap:.4rem; padding:.4rem .6rem; border-bottom:1px solid var(--border); align-items:center; }
 .srv-meta-row:last-child { border-bottom:none; }
 .btn-xs { font-family:var(--mono); font-size:.77rem; padding:.25rem .55rem; border-radius:3px; border:1px solid; background:transparent; cursor:pointer; }
@@ -8336,19 +8336,21 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ph-fav-tone .cfg-inp { flex: 1 1 0; min-width: 0; }
 .ph-fav-clr { padding: .2rem .4rem; }
 @media (max-width: 560px) { .ph-fav-row { grid-template-columns: 1fr 1fr 2.2rem; gap: .4rem; } .ph-fav-tone { display: contents; } .ph-fav-row [data-fk="name"] { grid-column: 1 / -1; } }
-.ph-hint { font-family: var(--mono); font-size: .68rem; color: #6f8aa8; margin: .25rem 0 0; }
+.ph-hint { font-family: var(--mono); font-size: .68rem; color: #ffffff; margin: .25rem 0 0; }
 .ph-howto summary { cursor: pointer; color: var(--teal); }
 .ph-howto p { margin: .35rem 0 0; }
 .ph-hint.ph-warn { color: var(--amber); }
 .ph-lines { font-family: var(--mono); font-size: .72rem; color: var(--text-bright); background: rgba(0,0,0,.3); border: 1px solid var(--border); border-radius: 4px; padding: .4rem .6rem; margin: .3rem 0 0; overflow-x: auto; user-select: all; white-space: pre; }
 .ph-msg { font-family: var(--mono); font-size: .75rem; color: var(--muted); margin-top: .35rem; min-height: 1em; }
+.ph-msg.ok { color: var(--green); }
+.ph-msg.fail { color: var(--red); }
 .pt-vm-pin { margin-left: .5rem; padding: .1rem .55rem; font-size: .72rem; vertical-align: middle; }
 .ph-auto-tag { display: none; margin-left: .4rem; padding: 0 .3rem; border: 1px solid var(--teal, #2bb3a3); border-radius: 3px; font-size: .62rem; letter-spacing: .08em; color: var(--teal, #2bb3a3); text-transform: lowercase; }
 .cfg-field.ph-auto-on .ph-auto-tag { display: inline-block; }
-.ph-sub { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; color: #5a7898; margin: .5rem 0 .1rem; grid-column: 1 / -1; }
-.cfg-lbl.cfg-lbl-reserved { color: #4a5a6a; }
+.ph-sub { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; color: #ffffff; margin: .5rem 0 .1rem; grid-column: 1 / -1; }
+.cfg-lbl.cfg-lbl-reserved { color: #ffffff; }
 .tab-enable-row { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; margin-top: .55rem; padding-top: .45rem; border-top: 1px solid var(--border); }
-.tab-chk-lbl { display: flex; align-items: center; gap: .35rem; font-family: var(--mono); font-size: .858rem; color: #7a9ec0; cursor: pointer; user-select: none; }
+.tab-chk-lbl { display: flex; align-items: center; gap: .35rem; font-family: var(--mono); font-size: .858rem; color: #ffffff; cursor: pointer; user-select: none; }
 .tab-chk-lbl input[type=checkbox] { accent-color: var(--amber); width: 14px; height: 14px; cursor: pointer; }
 /* Section collapse toggle button */
 .ed-sec-hdr {
@@ -8359,7 +8361,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   font-size: .66rem;
   letter-spacing: .22em;
   text-transform: uppercase;
-  color: #3a5278;
+  color: #ffffff;
   padding: .5rem .9rem .35rem;
   margin-top: .4rem;
   border-top: 1px solid var(--border);
@@ -8368,7 +8370,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ed-hint {
   font-family: var(--mono);
   font-size: .72rem;
-  color: #5a7898;
+  color: #ffffff;
   padding: .15rem .2rem .35rem;
   line-height: 1.35;
 }
@@ -8376,7 +8378,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   font-family: var(--mono);
   font-size: .55rem;
   letter-spacing: .12em;
-  color: #3a5278;
+  color: #ffffff;
   background: transparent;
   border: 1px solid #1e3050;
   border-radius: 3px;
@@ -8401,14 +8403,14 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   --edit-count:      #ffffff;  /* ed-count status text  (was #6a8aaa) */
   --edit-inp-border: #4a6a90;  /* input borders         (unchanged) */
   --edit-chk-lbl:    #ffffff;  /* tab-checkbox labels   (was #9ab8d0) */
-  --edit-btn-muted:  #9ab8d0;  /* Back/Reload btn text  — unchanged */
+  --edit-btn-muted:  #ffffff;  /* Back/Reload btn text  — unchanged */
   --edit-btn-border: #3d5880;  /* Back/Reload btn border — unchanged */
 }
 
 /* 8.3 — section headers and labels */
 #pg-EDIT .ed-sec-hdr          { color: var(--edit-lbl); }
 #pg-EDIT .cfg-lbl              { color: var(--edit-lbl); }
-#pg-EDIT .cfg-lbl.cfg-lbl-reserved { color: #5a6b7c; }
+#pg-EDIT .cfg-lbl.cfg-lbl-reserved { color: #ffffff; }
 #pg-EDIT .ed-sec-hdr button   { color: var(--edit-sec-btn); border-color: var(--edit-sec-border); }
 #pg-EDIT .ed-sec-hdr button:hover { color: var(--amber); border-color: var(--amber-dim); }
 
@@ -8417,7 +8419,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 #pg-EDIT .cfg-inp             { border-color: var(--edit-inp-border); }
 #pg-EDIT .ed-inp::placeholder,
 #pg-EDIT .cfg-inp::placeholder {
-  color: #5a7898;   /* explicit placeholder so Firefox opacity=54% default doesn't crush it */
+  color: #ffffff;   /* explicit placeholder so Firefox opacity=54% default doesn't crush it */
   opacity: 1;
 }
 
@@ -8448,7 +8450,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   background: rgba(255,208,64,.04);
   font-size: .836rem;
 }
-.ed-inp.url-inp::placeholder { color: #4a5a3a; opacity: 1; }
+.ed-inp.url-inp::placeholder { color: #ffffff; opacity: 1; }
 .ed-inp.url-inp:focus { border-color: var(--amber); background: rgba(255,208,64,.08); }
 .ed-inp.url-inp-row { margin-top: .2rem; }
 
@@ -8543,7 +8545,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   gap: 1.2rem;
 }
 #err-modal-hdr  { font-family: var(--mono); font-size: .792rem; letter-spacing: .22em; text-transform: uppercase; color: var(--red); text-shadow: 0 0 10px rgba(255,61,90,.7); }
-#err-modal-msg  { font-family: var(--mono); font-size: 1.045rem; color: #ffb0b8; line-height: 1.6; white-space: pre-wrap; }
+#err-modal-msg  { font-family: var(--mono); font-size: 1.045rem; color: var(--red); line-height: 1.6; white-space: pre-wrap; }
 #err-modal-btns { display: flex; gap: .6rem; justify-content: flex-end; }
 .perm-disc-btn { font-family: var(--mono); font-size: .7rem; padding: .18rem .52rem; background: transparent; border: 1px solid rgba(255,208,64,.4); color: var(--amber); border-radius: 4px; cursor: pointer; letter-spacing: .04em; white-space: nowrap; }
 .perm-disc-btn:hover { background: rgba(255,208,64,.14); }
@@ -8593,13 +8595,13 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 #wfm-shutdown-msg {
   font-family: var(--mono);
   font-size: 1.02rem;
-  color: #ffb0b8;
+  color: var(--red);
   line-height: 1.6;
 }
 #wfm-shutdown-sub {
   font-family: var(--mono);
   font-size: .74rem;
-  color: #c98a92;
+  color: #ffffff;
   letter-spacing: .03em;
 }
 #ready-bar {
@@ -12410,7 +12412,7 @@ function phActClick(e){
     '<p>Revert (at the bottom of the Phone section) takes it all back out.</p>';
   phDlgOpen('Turn the phone on?',html,'Activate','btn-teal',async restart=>{
     const d=await api({action:'phone-activate',restart},60000);
-    toast(d.message,d.ok?'ok':'err');byId('ph-msg').textContent=d.message;
+    toast(d.message,d.ok?'ok':'err');phMsg(d.message,!!d.ok);
     await phLoad();_pt.loadedAt=0;
   });
   return false;
@@ -12427,7 +12429,7 @@ function phRevertOpen(){
     '<p>Kept: your networks, favorites and passwords, and anything you added to these files by hand. Activate puts the phone back.</p>';
   phDlgOpen('Turn the phone off?',html,'Revert','btn-red',async restart=>{
     const d=await api({action:'phone-revert',restart},90000);
-    toast(d.message,d.ok?'ok':'err');byId('ph-msg').textContent=d.message;
+    toast(d.message,d.ok?'ok':'err');phMsg(d.message,!!d.ok);
     await phLoad();_pt.loadedAt=0;
   });
 }
@@ -12463,8 +12465,14 @@ async function phLoad(){
     byId('ph-totcap').value=d.tot_cap_min||15;
     byId('ph-listen').checked=d.listen_only===true;
     _ph.dirty=false;
-    phRender();_ph.loaded=true;_ph.dirty=false;byId('ph-msg').textContent='';
-  }catch(e){console.error('phLoad() error:',e);byId('ph-msg').textContent='Could not load phone settings'}
+    phRender();_ph.loaded=true;_ph.dirty=false;phMsg('');
+  }catch(e){console.error('phLoad() error:',e);phMsg('Could not load phone settings',false)}
+}
+function phMsg(text,ok){
+  const el=byId('ph-msg');
+  if(!el)return;
+  el.textContent=text||'';
+  el.className='ph-msg'+(ok===true?' ok':ok===false?' fail':'');
 }
 async function phSave(quiet){
   phSyncFromDOM();
@@ -12476,10 +12484,10 @@ async function phSave(quiet){
     networks:_ph.nets.map(n=>{const o=Object.assign({},n,{trusted:String(n.trusted||''),favorites:phFavsOut(n.favs)});
       delete o.favs;delete o._favOpen;delete o._auto;delete o.tone_mode;delete o.register;return o})};
   const d=await api({action:'save-phone',phone});
-  if(!d.ok){toast('Phone: '+d.message,'err');byId('ph-msg').textContent=d.message;return false}
+  if(!d.ok){toast('Phone: '+d.message,'err');phMsg(d.message,false);return false}
   const a=await api({action:'phone-apply',restart:byId('ph-restart').checked},60000);
   toast(a.ok?('Phone: '+d.message+' — '+a.message):('Phone: saved, but Asterisk: '+a.message),a.ok?'ok':'err');
-  byId('ph-msg').textContent=a.message;
+  phMsg(a.message,!!a.ok);
   await phLoad();
   _pt.loadedAt=0;
   return a.ok;
@@ -12760,9 +12768,9 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>D-STAR Reflectors</span><button onclick="toggleEdSection('eds-DSTAR')">Hide</button></div>`;
     h+=`<div id="eds-DSTAR">`;
     h+='<div style="padding:.25rem .6rem .1rem;display:grid;grid-template-columns:1fr 1fr 5rem;gap:.4rem">';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Name</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Reflector Base</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Def. Mod</span></div>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Name</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Reflector Base</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Def. Mod</span></div>';
     h+='<div style="padding:.25rem .6rem .5rem;display:flex;flex-direction:column;gap:.35rem">';
     h+=dg.map(r=>{
       const isBlank=r.name===TG_BLANK_NAME||r.tg===TG_BLANK_ADDR;
@@ -12784,9 +12792,9 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>XLX Reflectors</span><button onclick="toggleEdSection('eds-XLX')">Hide</button></div>`;
     h+=`<div id="eds-XLX">`;
     h+='<div style="padding:.25rem .6rem .1rem;display:grid;grid-template-columns:1fr 1fr 5rem;gap:.4rem">';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Name</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Reflector Base</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Def. Mod</span></div>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Name</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Reflector Base</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Def. Mod</span></div>';
     h+='<div style="padding:.25rem .6rem .5rem;display:flex;flex-direction:column;gap:.35rem">';
     h+=xlxEdRows.map((r,i)=>{
       const isBlank=r.name===TG_BLANK_NAME||r.tg===TG_BLANK_ADDR;
@@ -12811,10 +12819,10 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>M17</span><button onclick="toggleEdSection('eds-M17')">Hide</button></div>`;
     h+=`<div id="eds-M17">`;
     h+='<div style="padding:.25rem .6rem .1rem;display:grid;grid-template-columns:1fr 1fr 5rem 1fr;gap:.4rem">';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Name</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Reflector Base</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Module</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">IP / Host</span></div>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Name</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Reflector Base</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Module</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">IP / Host</span></div>';
     h+='<div style="padding:.25rem .6rem .5rem;display:flex;flex-direction:column;gap:.35rem">';
     h+=m17EdRows.map((r,i)=>{
       const isBlank=r.name===TG_BLANK_NAME||r.ip===TG_BLANK_ADDR;
@@ -12836,7 +12844,7 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>DMR Networks</span><button onclick="toggleEdSection('eds-DMR-NET')">Hide</button></div>`;
     h+=`<div id="eds-DMR-NET">`;
     h+='<div style="padding:.35rem .6rem .1rem">';
-    h+='<div class="srv-meta-row" style="font-family:var(--mono);font-size:.66rem;color:#5a7898;border-bottom:2px solid var(--border2)">';
+    h+='<div class="srv-meta-row" style="font-family:var(--mono);font-size:.66rem;color: #ffffff;border-bottom:2px solid var(--border2)">';
     h+='<span>Name</span><span>Password</span><span>Host:Port</span><span></span></div>';
     Object.entries(dmrSrvRows).forEach(([key,srv])=>{
       // v8.0.10: the DMR server "key" is derived from the user-editable
