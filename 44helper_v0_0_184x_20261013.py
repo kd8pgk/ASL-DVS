@@ -41,7 +41,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.183x"
+APP_VERSION = "0.0.184x"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -9938,9 +9938,13 @@ def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list
             if s["name"] == n["node"]:
                 body = body[:1] + keep_id.get(n["node"], []) + body[1:]
                 if any(_CFGR_USRP_CHAN_RE.match(x) for x in body):
+                    diffs: list[str] = []
                     for k, v in _CFGR_BRIDGE_PROFILE:
-                        body, _old, _found = _cfgr_set_key(body, s["name"], k, v)
-                    notes.append(f"[{n['node']}]: bridge node, standard USRP values applied")
+                        body, old, _found = _cfgr_set_key(body, s["name"], k, v)
+                        if old is None or old.lower() != v.lower():
+                            diffs.append(f"{k} {'(not set here)' if old is None else old} -> {v}")
+                    notes.append(f"Bridge node [{n['node']}]: " + (", ".join(diffs) if diffs
+                                 else "already has the upstream USRP2M17 values, nothing changed"))
             stanza_text += body + [""]
     if stanza_text:
         if first_start is not None:
@@ -10607,6 +10611,11 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
                      "carry them): " + ", ".join(p["_pruned"]))
     if removed:
         lines.append("PRIVATE NODES THAT WILL BE REMOVED: " + ", ".join(removed))
+    bridge = [x for x in notes if x.startswith("Bridge node [")]
+    notes = [x for x in notes if x not in bridge]
+    if bridge:
+        lines += ["BRIDGE NODE VALUES: the preset sets the upstream USRP2M17 values on each bridge node (USRP channel). "
+                  "Saved value -> value written:"] + ["  " + x for x in bridge]
     if not changes:
         lines.append("This node already matches the preset. Nothing to change.")
     for path, (old, new) in changes.items():
@@ -10616,7 +10625,7 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
         lines += [""] + list(d)
     if notes:
         lines += [""] + notes
-    result = {"success": True, "removed": removed, "changes": sorted(changes), "warnings": warnings}
+    result = {"success": True, "removed": removed, "changes": sorted(changes), "warnings": warnings, "bridge": bridge}
     if not apply or not changes:
         result["output"] = "\n".join(lines)
         return result
@@ -11425,6 +11434,7 @@ function cfgApplyPreset(btn, pid) {
               'Files changed: ' + res.changes.join(', ') + '\n';
     if (res.removed && res.removed.length) msg += '\nPRIVATE NODES THAT WILL BE REMOVED: ' + res.removed.join(', ') + '\n';
     if (res.warnings && res.warnings.length) msg += '\nWARNINGS:\n- ' + res.warnings.join('\n- ') + '\n';
+    if (res.bridge && res.bridge.length) msg += '\nBRIDGE NODE VALUES (saved -> written, upstream USRP2M17):\n- ' + res.bridge.join('\n- ') + '\n';
     msg += '\nThe current files are saved first as an automatic copy, so this can be undone.';
     if (!confirm(msg)) return;
     cfgPost({action: 'preset_apply', preset: pid}, 'cfg-restore-out', btn);
@@ -11898,7 +11908,7 @@ def _render_config_panel() -> str:
     <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
       [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
       [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
-      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the standard USRP values. Run it on the travel node; apply it on any node from the Restore list
+      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the upstream USRP2M17 values; Preview lists each value it changes. Run it on the travel node; apply it on any node from the Restore list
       above.</div>
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
