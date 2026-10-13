@@ -29,7 +29,7 @@
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_17_20261013.py</td><td>9.3.71.17-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_15_20261013.py</td><td>6.13.67.15-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_182_20261013.py</td><td>0.0.182</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_46_0_20261012.py</td><td>2.46.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_30_20261012.py</td><td>5.30</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
@@ -217,7 +217,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44HELPER</span><span class="meta">v0.0.181</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44HELPER</span><span class="meta">v0.0.182</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1329,7 +1329,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">ASL-DVS-M17 44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.181 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">M17 44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.182 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -2002,25 +2002,12 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p>Each group shows a chip: <b>matches</b>, <b>differs</b> (red), <b>some copies empty</b>, <b>not set</b>, <b>no public
     node</b>, or <b>one copy</b>. To fix a value, change it in its file; nothing on this card writes.</p>
 
-  <h2><span class="n">11.7</span>Standard configuration</h2>
-  <p>Lists where this node differs from the stock ASL3 and DVSwitch files, with the standard value for each, in groups:</p>
-  <table>
-    <tr><th>Group</th><th>Covers</th><th>Can apply?</th></tr>
-    <tr><td>Bridge nodes</td><td>Private USRP nodes: duplex 0, hangtime 0, althangtime 0, holdofftelem 1, telemdefault 0, telemdynamic 0, linktolink no, nounkeyct 1, tx_timeout 170000.</td><td>yes</td></tr>
-    <tr><td>Template (rpt.conf)</td><td>Stock template values.</td><td>yes</td></tr>
-    <tr><td>Optional efficiency</td><td>Settings that save effort but aren't required.</td><td>yes</td></tr>
-    <tr><td>Wiring</td><td>Ports and links between programs.</td><td>shown only</td></tr>
-    <tr><td>Your choices</td><td>Deliberate local choices.</td><td>shown only</td></tr>
-  </table>
-  <p><b>Apply</b> shows the change, takes an automatic copy and writes it. <b>Undo</b> puts the old values back.
-    Services aren't restarted until you press Restart. Identity and your radio tuning are never listed.</p>
-
-  <h2><span class="n">11.8</span>Digital-mode gateways</h2>
+  <h2><span class="n">11.7</span>Digital-mode gateways</h2>
   <p>Shows the gateway services behind D-STAR and XLX (ircDDBGateway), YSF and FCS, P25, NXDN and STFU. P25 and NXDN
     are installed but disabled, so out of the box they only start once you open their Dashboard page. <b>Enable and
     start at boot</b> makes every mode ready right after boot. <b>Undo</b> puts them back as they were.</p>
 
-  <h2><span class="n">11.9</span>Port check</h2>
+  <h2><span class="n">11.8</span>Port check</h2>
   <p>Reads <code>rpt.conf</code>, Analog_Bridge, DVSwitch.ini, MMDVM_Bridge, USRP2M17, ircDDBGateway and the YSF, P25 and NXDN
     gateways, and reports:</p>
   <ul>
@@ -2031,7 +2018,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     command ports (which should never be reachable), ports only open through a broad firewall range, and configured
     ports that nothing is listening on.</p>
 
-  <h2><span class="n">11.10</span>Common tasks</h2>
+  <h2><span class="n">11.9</span>Common tasks</h2>
   <h3>Undo a change that broke the node</h3>
   <ol class="steps">
     <li>Config tab, Restore: pick the save point or automatic copy from before the change.</li>
@@ -2048,7 +2035,6 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <ol class="steps">
     <li>Identity: no red <b>differs</b> chips.</li>
     <li>Port check: no clashes, and Check what is listening now is clean.</li>
-    <li>Standard configuration: read the differences, so you can say what isn't stock.</li>
   </ol>
 
   <div class="uth">
