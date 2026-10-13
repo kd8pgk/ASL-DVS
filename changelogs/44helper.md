@@ -1,6 +1,41 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_184x_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_185x_20261013.py`. Newest entries first.
+
+## 0.0.185x (2026-10-13) — testing
+
+The Config tab's **Port check** now checks the USRP pairs. 44helper serves both
+builds.
+
+- **The rule:** for every `rxchannel = USRP/127.0.0.1:A:B` in rpt.conf, a bridge
+  must listen on A and send to B. The bridges are:
+  - Analog_Bridge `[USRP]` rxPort/txPort
+  - USRP2M17 `[USRP Network]` LocalPort/DstPort
+
+  It uses whatever node numbers rpt.conf has.
+- **Warnings:**
+  - a bridge that sends to the wrong port;
+  - an rxchannel that no bridge listens on;
+  - a bridge with no rpt.conf node.
+
+  Good pairs are listed under the clash line.
+- The Travel Node preset preview warns when applying it would break a USRP pair
+  that works now.
+- **Verify with SysMon** (new button): runs `sysmon.py --usrp-pairs`, SysMon's own
+  check with its own file readers, and compares the result with 44helper's.
+  - It says "SysMon agrees", or lists what differs.
+  - If SysMon is not installed, it says so.
+  - If SysMon is older than 6.13.67.16-pi02w or is the full build, it says the
+    check is not there.
+- New action: `usrp_verify` (root only, under the Config lock).
+- Tested:
+  - Mock files covering a good pair, a wrong txPort, a missing M17 node, an
+    rxchannel to nowhere and no USRP2M17.ini. 44helper and SysMon gave the same
+    result in every case.
+  - The verify action when SysMon agrees, disagrees, is too old and is not
+    installed.
+  - The Port check in headless Chromium.
+  - `node --check` on the page JavaScript.
 
 ## 0.0.184x (2026-10-13) — testing
 

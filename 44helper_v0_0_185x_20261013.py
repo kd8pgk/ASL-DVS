@@ -41,7 +41,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.184x"
+APP_VERSION = "0.0.185x"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -9225,6 +9225,7 @@ def build_config_status() -> dict:
         changed = _cfgr_changed_files(snap, m)
     clashes, n_ports = _cfgr_port_clashes()
     gw_ok, gw_warn = _cfgr_gateway_pairs()
+    usrp_ok, usrp_warn = _cfgr_usrp_pairs()
     presets = {}
     for pid, plabel in _CFGR_PRESETS.items():
         p = _cfgr_load_preset(pid)
@@ -9246,6 +9247,9 @@ def build_config_status() -> dict:
         "ambe_paired_with": _cfgr_ambe_state()[1],
         "gateway_pairs_ok": gw_ok,
         "gateway_warnings": gw_warn,
+        "usrp_pairs_ok": usrp_ok,
+        "usrp_warnings": usrp_warn,
+        "sysmon_installed": os.path.exists(_CFGR_SYSMON_BIN),
         "gateways": _cfgr_gateway_states(),
         "reinstall": _cfgr_ri_status(),
         "checked_at": _cfgr_now(),
@@ -10208,6 +10212,114 @@ def _cfgr_ambe_state(override: dict[str, bytes] | None = None) -> tuple[str, str
     return (f"Analog_Bridge [AMBE_AUDIO] txPort/rxPort {at}/{ar} is not the mirror of any mode section in "
             "DVSwitch.ini, so audio between Analog_Bridge and MMDVM_Bridge would not flow"), ""
 
+_CFGR_SYSMON_BIN = "/usr/local/bin/sysmon.py"
+
+def _cfgr_usrp_scan(override: dict[str, bytes] | None = None) -> dict:
+    chans: list[dict] = []
+    t = _cfgr_text(_CFGR_RPT, override)
+    if t is not None:
+        lines = _cfgr_lines(t)
+        sec = ""
+        for line in lines:
+            m = _CFGR_HDR_RE.match(line)
+            if m:
+                sec = m.group(1).strip()
+                continue
+            kv = _cfgr_kv(line)
+            if kv and kv[0].lower() == "rxchannel":
+                um = _CFGR_USRP_RX_RE.match(kv[1])
+                if um:
+                    chans.append({"node": sec, "a": um.group(1), "b": um.group(2)})
+    bridges: list[dict] = []
+    t = _cfgr_text(_CFGR_AB, override)
+    if t is not None:
+        d = _cfgr_ini_sections(t).get("usrp", {})
+        bridges.append({"bridge": "Analog_Bridge", "where": "Analog_Bridge.ini [USRP] rxPort/txPort",
+                        "listen": d.get("rxport", ""), "send": d.get("txport", "")})
+    t = _cfgr_text(_CFGR_M17INI, override)
+    if t is not None:
+        d = _cfgr_ini_sections(t).get("usrp network", {})
+        bridges.append({"bridge": "USRP2M17", "where": "USRP2M17.ini [USRP Network] LocalPort/DstPort",
+                        "listen": d.get("localport", ""), "send": d.get("dstport", "")})
+    bridges = [b for b in bridges if _CFGR_PORT_RE.match(b["listen"]) or _CFGR_PORT_RE.match(b["send"])]
+    pairs: list[dict] = []
+    used: set[str] = set()
+    for c in chans:
+        hit = [b for b in bridges if b["listen"] == c["a"]]
+        if not hit:
+            pairs.append({"node": c["node"], "a": c["a"], "b": c["b"], "bridge": "", "state": "no_bridge"})
+            continue
+        for b in hit:
+            used.add(b["bridge"])
+            pairs.append({"node": c["node"], "a": c["a"], "b": c["b"], "bridge": b["bridge"],
+                          "state": "ok" if b["send"] == c["b"] else "mismatch", "send": b["send"]})
+    unpaired = [{"bridge": b["bridge"], "listen": b["listen"], "send": b["send"], "where": b["where"]}
+                for b in bridges if b["bridge"] not in used]
+    return {"pairs": pairs, "unpaired": unpaired}
+
+def _cfgr_usrp_pairs(override: dict[str, bytes] | None = None) -> tuple[list[str], list[str]]:
+    d = _cfgr_usrp_scan(override)
+    ok: list[str] = []
+    warn: list[str] = []
+    for p in d["pairs"]:
+        rx = f"rpt.conf [{p['node']}] rxchannel USRP/…:{p['a']}:{p['b']}"
+        if p["state"] == "ok":
+            ok.append(f"{p['bridge']} ↔ node {p['node']} ({p['a']}/{p['b']})")
+        elif p["state"] == "mismatch":
+            warn.append(f"USRP pair: {rx} expects {p['bridge']} to send to {p['b']}, but it sends to {p['send'] or '(not set)'}. "
+                        "Audio from the bridge would not reach Asterisk")
+        else:
+            warn.append(f"USRP pair: {rx}: no bridge listens on {p['a']} (Analog_Bridge [USRP] rxPort or "
+                        "USRP2M17 [USRP Network] LocalPort). Audio from Asterisk on this node goes nowhere")
+    for b in d["unpaired"]:
+        warn.append(f"USRP pair: {b['where']} {b['listen'] or '(not set)'}/{b['send'] or '(not set)'} has no rpt.conf node "
+                    f"with rxchannel USRP/127.0.0.1:{b['listen'] or '?'}:{b['send'] or '?'}")
+    return ok, warn
+
+def _cfgr_usrp_key(d: dict) -> set[tuple]:
+    out = {("pair", str(p.get("node", "")), str(p.get("a", "")), str(p.get("b", "")), str(p.get("bridge", "")),
+            str(p.get("state", ""))) for p in d.get("pairs", []) if isinstance(p, dict)}
+    out |= {("unpaired", str(b.get("bridge", "")), str(b.get("listen", "")), str(b.get("send", "")))
+            for b in d.get("unpaired", []) if isinstance(b, dict)}
+    return out
+
+def _cfgr_usrp_describe(k: tuple) -> str:
+    if k[0] == "pair":
+        return f"node {k[1]} USRP/…:{k[2]}:{k[3]} -> {k[4] or 'no bridge'}: {k[5]}"
+    return f"{k[1]} {k[2]}/{k[3]}: no rpt.conf node"
+
+def _cfgr_act_usrp_verify(payload: dict) -> dict:
+    mine = _cfgr_usrp_scan()
+    head = ["44helper's USRP pair check:"]
+    ok, warn = _cfgr_usrp_pairs()
+    head += ["  paired: " + x for x in ok] + ["  " + x for x in warn]
+    if not ok and not warn:
+        head.append("  no USRP channels or bridges found")
+    if not os.path.exists(_CFGR_SYSMON_BIN):
+        return {"success": True, "output": "\n".join(head + ["", "SysMon is not installed on this node, so there is "
+                                                             "no second check."])}
+    r = _run_argv(["python3", _CFGR_SYSMON_BIN, "--usrp-pairs"], timeout=60)
+    out = r["output"].strip()
+    line = next((x for x in out.splitlines() if x.startswith("USRP-PAIRS-JSON:")), "")
+    try:
+        theirs = json.loads(line.split(":", 1)[1]) if line else None
+    except ValueError:
+        theirs = None
+    if not r["success"] or not isinstance(theirs, dict):
+        return {"success": False, "output": "\n".join(head + ["", "SysMon could not run the check. The SysMon on this "
+                "node may be older than 6.13.67.16-pi02w (the first with --usrp-pairs), or a full-build SysMon, which "
+                "does not have it.", "", out[-600:]])}
+    a, b = _cfgr_usrp_key(mine), _cfgr_usrp_key(theirs)
+    tail = ["", f"SysMon {theirs.get('version', '?')} checked the same files on its own."]
+    if a == b:
+        tail.append("SysMon agrees: " + (f"{len(a)} item(s), same result." if a else "nothing to pair."))
+        return {"success": True, "output": "\n".join(head + tail)}
+    tail.append("SysMon DISAGREES. Read the files by hand:")
+    tail += ["  only 44helper: " + _cfgr_usrp_describe(k) for k in sorted(a - b)]
+    tail += ["  only SysMon:   " + _cfgr_usrp_describe(k) for k in sorted(b - a)]
+    log("FAIL: CONFIG USRP pair check: SysMon disagrees")
+    return {"success": False, "output": "\n".join(head + tail)}
+
 def _cfgr_ambe_pairing(override: dict[str, bytes] | None = None) -> str:
     return _cfgr_ambe_state(override)[0]
 
@@ -10595,6 +10707,8 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
         warnings.append(pair)
     clashes, _n = _cfgr_port_clashes(override)
     warnings += clashes
+    now_warn = set(_cfgr_usrp_pairs()[1])
+    warnings += [w for w in _cfgr_usrp_pairs(override)[1] if w not in now_warn]
     return changes, removed, notes, warnings, ""
 
 def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
@@ -11249,6 +11363,7 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "reinstall_dismiss": _cfgr_act_reinstall_dismiss,
     "id_set_callsign_preview": lambda p: _cfgr_act_id_set_callsign(p, False),
     "id_set_callsign": lambda p: _cfgr_act_id_set_callsign(p, True),
+    "usrp_verify": _cfgr_act_usrp_verify,
 }
 
 def _dispatch_config_action(payload: dict) -> dict:
@@ -11553,10 +11668,14 @@ function cfgRender(d) {
   if (pc.length) ph += pc.map(function(x) { return '<div class="ov-banner lvl-danger">' + cfgEsc(x) + '</div>'; }).join('');
   if (d.ambe_pairing) ph += '<div class="ov-banner lvl-warn">' + cfgEsc(d.ambe_pairing) + '</div>';
   (d.gateway_warnings || []).forEach(function(x) { ph += '<div class="ov-banner lvl-warn">' + cfgEsc(x) + '</div>'; });
+  (d.usrp_warnings || []).forEach(function(x) { ph += '<div class="ov-banner lvl-warn">' + cfgEsc(x) + '</div>'; });
   if (!ph) ph = '<span class="cfg-hint">No UDP port clashes (' + (d.ports_checked || 0) + ' listening ports checked)' +
     (d.ambe_paired_with ? '; Analog_Bridge and MMDVM_Bridge are paired on the ' + cfgEsc(d.ambe_paired_with) + ' mode' : '') +
     ((d.gateway_pairs_ok || []).length ? '; paired: ' + d.gateway_pairs_ok.map(cfgEsc).join(', ') : '') + '.</span>';
+  if ((d.usrp_pairs_ok || []).length) ph += '<div class="cfg-hint">USRP pairs: ' + d.usrp_pairs_ok.map(cfgEsc).join('; ') + '.</div>';
   ports.innerHTML = ph;
+  var sv = document.getElementById('cfg-usrp-verify-btn');
+  if (sv) sv.title = d.sysmon_installed ? 'Run SysMon\'s own USRP pair check and compare' : 'SysMon is not installed on this node';
   var gwBox = document.getElementById('cfg-gw');
   var gl = d.gateways || [];
   if (!gl.length) gwBox.innerHTML = '<span class="cfg-hint">Could not read the services (systemctl not available).</span>';
@@ -11960,12 +12079,17 @@ def _render_config_panel() -> str:
     <div class="step-body">UDP ports that more than one program listens on, across rpt.conf, Analog_Bridge.ini,
       DVSwitch.ini, MMDVM_Bridge.ini, USRP2M17.ini, ircddbgateway and the YSF, P25 and NXDN gateways. A sender
       pointing at a listener is a pair, not a clash. It also checks that each gateway's ports mirror MMDVM_Bridge's and
-      that DVSwitch.ini's RemotePort matches the gateway's command port. "Check what is listening now" reads the live
+      that DVSwitch.ini's RemotePort matches the gateway's command port, and that each rpt.conf USRP channel
+      (rxchannel = USRP/127.0.0.1:A:B) has a bridge that listens on A and sends to B: Analog_Bridge [USRP] rxPort/txPort
+      or USRP2M17 [USRP Network] LocalPort/DstPort. "Verify with SysMon" runs SysMon's own check, if SysMon is
+      installed, and compares the two. "Check what is listening now" reads the live
       listening ports and the firewall: it shows which ports are reachable from the network, flags the gateway command
       ports and any port that is only open through a broad firewall range, and lists configured ports nothing listens on.</div>
     <div id="cfg-ports"></div>
-    <div class="step-actions"><button class="btn-copy" onclick="cfgListening(this)">Check what is listening now</button></div>
+    <div class="step-actions"><button class="btn-copy" onclick="cfgListening(this)">Check what is listening now</button>
+      <button class="btn-copy" id="cfg-usrp-verify-btn" onclick="cfgPost({action: 'usrp_verify'}, 'cfg-usrp-out', this)">Verify with SysMon</button></div>
     <div id="cfg-listen"></div>
+    <div class="asl3-console shown placeholder" id="cfg-usrp-out">(press Verify with SysMon to compare the USRP pairs with SysMon's own check)</div>
   </div>
 
   <div class="step-card" id="cfg-reinstall" style="display:none">
