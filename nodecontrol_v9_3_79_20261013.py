@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.78"
+VERSION      = "9.3.79"
 BUILD_DATE   = "2026-10-13"
 
 ASL_NODE        = "652702"
@@ -891,7 +891,7 @@ PHONE_TONE_MODES     = ("auto", "rfc4733", "inband", "info", "auto_info")
 _PHONE_TONE_MODE_DEF = "rfc4733"
 PHONE_TONE_PATHS     = ("provider", "node", "sound")
 _PHONE_TONE_PATH_DEF = "provider"
-_PHONE_TONE_PATH_LBL = {"provider": "Straight to the provider (v9.3.13 way)", "node": "Through the call (test)",
+_PHONE_TONE_PATH_LBL = {"provider": "Straight to the provider", "node": "Through the call",
                         "sound": "As sound (tone recordings)"}
 PHONE_DIALING    = ("phone", "ext")
 PHONE_INCOMING   = ("pin", "open", "off")
@@ -1376,9 +1376,9 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
     try:
         dialtime = int(raw.get("dialtime", cur.get("dialtime", _PHONE_DIALTIME_DEF)))
     except (ValueError, TypeError):
-        return None, "Dial timeout must be a number of milliseconds"
+        return None, "*61 digit timeout must be a number of milliseconds"
     if not (_PHONE_DIALTIME_MIN <= dialtime <= _PHONE_DIALTIME_MAX):
-        return None, f"Dial timeout must be {_PHONE_DIALTIME_MIN}–{_PHONE_DIALTIME_MAX} ms"
+        return None, f"*61 digit timeout must be {_PHONE_DIALTIME_MIN}–{_PHONE_DIALTIME_MAX} ms"
     legacy = [f for f in cur.get("favorites", []) if f.get("number")]
     if legacy and nets:
         home = next((n for n in nets if n["id"] == active), None) or nets[0]
@@ -2446,7 +2446,7 @@ def action_phone_dial(number: str) -> Tuple[bool, str]:
     _phone_state_cache[0] = 0.0
     if tones:
         if not by_asterisk:
-            threading.Thread(target=_phone_after_answer, args=(tones, doc.get("dialtime")),
+            threading.Thread(target=_phone_after_answer, args=(tones,),
                              name="phone-then-send", daemon=True).start()
         return True, f"Dialing {num} on {net['name']}… (saved tones go out when it answers)"
     return True, f"Dialing {num} on {net['name']}…"
@@ -2757,13 +2757,9 @@ def _phone_fav_tones(net: dict, num: str, typed: str) -> str:
             return str(f["tones"])
     return ""
 
-def _phone_after_answer(tones: str, dialtime_ms) -> None:
-    try:
-        limit = float(dialtime_ms) / 1000.0
-    except (TypeError, ValueError):
-        limit = _PHONE_DIALTIME_DEF / 1000.0
+def _phone_after_answer(tones: str) -> None:
     start = time.monotonic()
-    deadline, seen = start + limit + 15.0, False
+    deadline, seen = start + _PHONE_RING_MS / 1000.0 + 10.0, False
     while time.monotonic() < deadline:
         state = _phone_call_state(0.0)["state"]
         if state == "in_call":
@@ -7401,7 +7397,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>ASL-DVS Node Control</title>
+<title>Node Control</title>
 <style>
 /* ── :root variables ── */
 :root {
@@ -8738,7 +8734,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 <body>
 <div id="login-screen" class="hidden">
   <form id="login-card" onsubmit="_doLogin(event)">
-    <h2>ASL-DVS Node Control</h2>
+    <h2>Node Control</h2>
     <p class="sub">Sign in with this node's root password.</p>
     <label for="login-pw">Root password</label>
     <input id="login-pw" type="password" autocomplete="current-password" required>
@@ -8750,7 +8746,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 <div id="perm-link-bar">⚠ PERMANENT LINK ACTIVE · Node <span id="perm-link-node">—</span> · Bridging risk<button class="perm-disc-btn" style="margin-left:.9rem" onclick="doBannerDiscPermLink()">Disconnect</button></div>
 <header>
   <div class="hdr-left">
-    <div class="logo">ASL-DVS Node Control</div>
+    <div class="logo">Node Control</div>
     <div class="logo-sub"><span id="hdr-callsign" style="color:var(--amber);display:none"></span><span id="hdr-callsign-sep" class="hidden"> · </span><span style="color:var(--amber)">Node</span> <span id="hdr-node" style="color:var(--amber)">…</span></div>
   </div>
   <div class="hdr-right">
@@ -9225,7 +9221,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <div class="cfg-grid">
                 <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-patch">Phone patch on</label></div>
                 <div class="cfg-field">
-                  <label class="cfg-lbl" for="ph-dialtime">Dial timeout (ms)</label>
+                  <label class="cfg-lbl" for="ph-dialtime" title="How long *61 from the radio waits for the next digit before it gives up">*61 digit timeout (ms)</label>
                   <input id="ph-dialtime" class="cfg-inp" type="text" inputmode="numeric" maxlength="5" placeholder="20000">
                 </div>
                 <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-restart">Restart Asterisk if needed</label></div>
@@ -11930,7 +11926,7 @@ function ptRenderStatus(){
   if(st.configured&&st.activated===false){txt='The phone is off — turn it on with Activate on the Edit page';cls+=' pt-warn'}   // v9.3.48
   else if(!patchOn){txt='Phone patch is off — dialing is blocked';cls+=' pt-warn'}
   else if(c.state==='dialing'){txt='Dialing '+(_pt.lastDialed||'')+'…';cls+=' pt-live'}
-  else if(c.state==='incoming'){txt='Incoming call'+(c.who?' from '+c.who:'')+((net&&net.incoming==='open')?' — connecting':' — waiting for PIN');cls+=' pt-live'}
+  else if(c.state==='incoming'){txt='Incoming call'+(c.who?' from '+c.who:'')+((net&&net.incoming==='open')?((net.trusted||[]).length?' — trusted numbers only':' — connecting'):((net&&(net.trusted||[]).length)?' — waiting for PIN (trusted numbers skip it)':' — waiting for PIN'));cls+=' pt-live'}
   else if(c.state==='in_call'){
     // v9.3.8: your radio audio only goes to the call while you're keyed
     txt='In call'+(c.who?' — '+c.who:((c.number||_pt.lastDialed)?' — '+(c.number||_pt.lastDialed):''))+(_lastKeyed?' · Talking':' · Listening');
@@ -12151,7 +12147,7 @@ const PH_EXT_DEF={hoip:{name:'Hams Over IP',host:'premium.hamsoverip.com',port:'
 // v9.3.54: HOIP wants RFC 2833 tone packets with ulaw; 3191 reads your tones back
 const PH_HOIP_TONE_TEST='3191';
 // v9.3.2: how keypad tones travel on a SIP network (IAX2 has no setting).
-const PH_TONE_PATHS=[['provider','Straight to the provider (v9.3.13 way)'],['node','Through the call (test)'],['sound','As sound (tone recordings)']];
+const PH_TONE_PATHS=[['provider','Straight to the provider'],['node','Through the call'],['sound','As sound (tone recordings)']];
 const PH_BLANK_NET={id:'',name:'',type:'iax2',host:'',port:'',username:'',password:'',caller_id:'',
   dialing:'phone',dial_format:'10',e911:false,allow_intl:false,register:true,incoming:'off',pin:'',
   trusted:'',did:'',lan_net:'',wan_ip:'',has_password:false,has_pin:false,
@@ -12256,11 +12252,14 @@ function phRenderNet(n,i){
   h+=`<div class="ph-hint">Test number adds a Test call row to the Phone tab. An echo test (it plays your voice back) is the quickest way to check the far end can hear you. Ask your network for its number.</div>`;
   if(sip)h+=`<div class="ph-hint">Keypad tones go to this network as tone packets (RFC 2833).</div>`;
   if(n.type==='iax2')h+=`<div class="ph-hint">IAX2 uses port ${esc(_ph.iaxPort||'4569')}, the same one AllStarLink already uses on this Pi.</div>`;
-  else if(hoip)h+=`<div class="ph-hint">Hams Over IP: SIP on UDP 5160, audio (RTP) on UDP 10000-15000. Voicemail Access adds a Voicemail row to the Phone tab.</div>`;
+  else if(n.type==='hoip')h+=`<div class="ph-hint">Hams Over IP: SIP on UDP 5160, audio (RTP) on UDP 10000-15000. Voicemail Access adds a Voicemail row to the Phone tab.</div>`;
+  else if(aw)h+=`<div class="ph-hint">AmateurWire: Voicemail Access adds a Voicemail row to the Phone tab.</div>`;
   if(n.type==='hoip'){
     h+=`<div class="ph-hint">To test keypad tones on Hams Over IP, call ${PH_HOIP_TONE_TEST}: wait for the beep, key some digits then #, and they are read back to you.${n.test_number===PH_HOIP_TONE_TEST?' The Test call row on the Phone tab dials it.':''}</div>`;
   }
-  else h+=`<div class="ph-hint">SIP needs UDP 5060 and UDP 10000-20000 forwarded on your router.</div>`;
+  if(sip)h+=(n.type==='sip_ip'
+    ?`<div class="ph-hint">Behind a router: this network doesn't sign in, so the provider calls your public address. Forward UDP 5060 (SIP) to this Pi for incoming calls, and the audio ports set in rtp.conf (usually UDP 10000-20000) if audio is one-way.</div>`
+    :`<div class="ph-hint">Behind a router: signing in usually keeps calls working with nothing forwarded. Only if incoming calls don't arrive, forward UDP 5060 (SIP) to this Pi, and the audio ports set in rtp.conf (usually UDP 10000-20000) if audio is one-way. Forwarding opens Asterisk to the internet, so try a Test call first.</div>`);
   // v9.3.6: router note, shown once on the first SIP network
   const rn=_ph.router||{};
   if(sip&&rn.text&&_ph.nets.findIndex(x=>x.type!=='iax2')===i)
@@ -14203,7 +14202,7 @@ def main() -> None:
     _bridge_block = "\n".join(_bridge_lines)
     print(f"""
 ╔══════════════════════════════════════════════╗
-║         ASL-DVS Node Control Dashboard       ║
+║         Node Control Dashboard               ║
 ╠══════════════════════════════════════════════╣
 ║  ASL node  : {_cfg.asl_node}{pad}║
 ╠══════════════════════════════════════════════╣
