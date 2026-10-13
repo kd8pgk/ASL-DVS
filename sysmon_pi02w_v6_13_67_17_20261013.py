@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.16-pi02w"
+VERSION      = "6.13.67.17-pi02w"
 BUILD_DATE   = "20261012"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -1405,7 +1405,7 @@ _HTML = r"""<!DOCTYPE html>
   --lime:#d4ff00;--lime-dim:#425200;
   --pink:#ff44cc;--pink-dim:#700050;
   
-  --text:#d0dff0;--text-bright:#f0f8ff;
+  --text:#ffffff;--text-bright:#f0f8ff;
   --sans:Arial,Helvetica,sans-serif;
   
   --fs-xs:.75rem;    
@@ -1574,8 +1574,8 @@ header{background:linear-gradient(90deg,#0f1a2e,#161e2e 50%,#0f1a2e);
 }
 #wfm-shutdown-hdr{font-family:var(--sans);font-size:.88rem;letter-spacing:.22em;
   text-transform:uppercase;color:var(--red);text-shadow:0 0 12px rgba(255,61,90,.8)}
-#wfm-shutdown-msg{font-family:var(--sans);font-size:1.02rem;color:#ffb0b8;line-height:1.6}
-#wfm-shutdown-sub{font-family:var(--sans);font-size:.74rem;color:#c98a92;letter-spacing:.03em}
+#wfm-shutdown-msg{font-family:var(--sans);font-size:1.02rem;color:var(--red);line-height:1.6}
+#wfm-shutdown-sub{font-family:var(--sans);font-size:.74rem;color:#ffffff;letter-spacing:.03em}
 
 #login-screen{display:none;position:fixed;inset:0;z-index:9999;
   align-items:center;justify-content:center;
@@ -1602,7 +1602,7 @@ header{background:linear-gradient(90deg,#0f1a2e,#161e2e 50%,#0f1a2e);
 #login-err{min-height:1.1rem;margin-top:.6rem;font-size:.78rem;color:var(--red)}
 
 #offline-bar{display:none;position:fixed;top:0;left:0;right:0;z-index:1000;
-  background:#3a0a0a;border-bottom:1px solid #8b1a1a;color:#ff6b6b;
+  background:#3a0a0a;border-bottom:1px solid #8b1a1a;color:var(--red);
   font-family:var(--sans);font-size:var(--fs-base);text-align:center;
   padding:.35rem 1rem;letter-spacing:.06em}
 body.offline #offline-bar{display:block}
@@ -2040,7 +2040,7 @@ body.tab-edit #zone-content{
   cursor:pointer;padding:.15rem .55rem;border:1px solid var(--border2);
   border-radius:3px;transition:all .14s}
 #allconf-close:hover{color:var(--red);border-color:var(--red-dim)}
-#allconf-textarea{flex:1;background:#0a1020;color:#c8d8e8;
+#allconf-textarea{flex:1;background:#0a1020;color:#ffffff;
   font-family:var(--sans);font-size:var(--fs-base);line-height:1.65;
   border:none;outline:none;padding:.8rem 1rem;
   resize:none;tab-size:4;white-space:pre;overflow:auto;
@@ -2144,28 +2144,28 @@ body.tab-edit #zone-content{
   text-shadow:0 0 4px rgba(255,170,34,.35)}
 .reg-card-status.info{color:#fff;border-color:var(--border2)}
 
-.ph-note{padding:.6rem .9rem;font-family:var(--sans);font-size:var(--fs-sm);color:#9fb4cc}
-.ph-ro{padding:.4rem .9rem;font-family:var(--sans);font-size:var(--fs-xs);color:#9fb4cc;border-bottom:1px solid var(--border)}
+.ph-note{padding:.6rem .9rem;font-family:var(--sans);font-size:var(--fs-sm);color:#ffffff}
+.ph-ro{padding:.4rem .9rem;font-family:var(--sans);font-size:var(--fs-xs);color:#ffffff;border-bottom:1px solid var(--border)}
 .ph-blk{border-top:1px solid var(--border);padding-bottom:.35rem}
 .ph-blk:first-child{border-top:none}
 .ph-blk-hdr{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;padding:.45rem .9rem 0;font-family:var(--sans);font-size:var(--fs-sm);font-weight:bold;color:#fff}
 .ph-kv{display:grid;grid-template-columns:minmax(110px,32%) 1fr;gap:.18rem .8rem;padding:.35rem .9rem 0;font-family:var(--sans);font-size:var(--fs-sm)}
-.ph-kv .k{color:#9fb4cc;font-size:var(--fs-xs)}
+.ph-kv .k{color:#ffffff;font-size:var(--fs-xs)}
 .ph-kv .v{color:#fff;word-break:break-word}
-.ph-pre{margin:.3rem .9rem .3rem;padding:.4rem .6rem;background:#0b1622;border:1px solid var(--border);border-radius:3px;font-family:monospace;font-size:var(--fs-xs);color:#cfe3ff;white-space:pre-wrap;word-break:break-all}
+.ph-pre{margin:.3rem .9rem .3rem;padding:.4rem .6rem;background:#0b1622;border:1px solid var(--border);border-radius:3px;font-family:monospace;font-size:var(--fs-xs);color:#ffffff;white-space:pre-wrap;word-break:break-all}
 .ph-tbl{width:100%;border-collapse:collapse;font-family:var(--sans);font-size:var(--fs-sm);color:#fff}
-.ph-tbl th{text-align:left;font-size:var(--fs-xs);font-weight:normal;color:#9fb4cc;padding:.3rem .9rem;border-bottom:1px solid var(--border)}
+.ph-tbl th{text-align:left;font-size:var(--fs-xs);font-weight:normal;color:#ffffff;padding:.3rem .9rem;border-bottom:1px solid var(--border)}
 .ph-tbl td{padding:.3rem .9rem;border-top:1px solid var(--border)}
 .ph-tbl tr:first-child td{border-top:none}
 .ph-link{display:inline-block;text-decoration:none}
 .pm-ok{color:var(--green)}
 .pm-bad{color:var(--red)}
 .pm-warn{color:var(--orange)}
-.pm-dim{color:#9fb4cc}
+.pm-dim{color:#ffffff}
 .pm-btns{display:flex;flex-wrap:wrap;gap:.25rem}
 .pm-btns .btn:disabled{opacity:.35;cursor:default}
-.ph-sub{padding:.5rem .9rem .1rem;font-family:var(--sans);font-size:var(--fs-xs);letter-spacing:.2em;text-transform:uppercase;color:#9fb4cc}
-.ph-howto{margin:.5rem .9rem;font-family:var(--mono);font-size:var(--fs-xs);color:#9fb4cc}
+.ph-sub{padding:.5rem .9rem .1rem;font-family:var(--sans);font-size:var(--fs-xs);letter-spacing:.2em;text-transform:uppercase;color:#ffffff}
+.ph-howto{margin:.5rem .9rem;font-family:var(--mono);font-size:var(--fs-xs);color:#ffffff}
 .ph-howto summary{cursor:pointer;color:var(--teal)}
 .ph-howto p{margin:.35rem 0 0}
 .ast-toggle{font-family:var(--sans);font-size:var(--fs-xs);
@@ -2210,9 +2210,9 @@ body.tab-edit #zone-content{
 .hw-check-label{color:var(--text-bright);font-size:var(--fs-base)}
 .hw-check-detail{font-size:var(--fs-xs);color:#fff;
   text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.hw-check-detail.ok{color:#007a50}
-.hw-check-detail.warn{color:#7a5800}
-.hw-check-detail.fail{color:#7a2030}
+.hw-check-detail.ok{color:var(--green)}
+.hw-check-detail.warn{color:var(--amber)}
+.hw-check-detail.fail{color:var(--red)}
 
 .hw-compat-section{padding:.45rem .9rem;background:#0b1420;
   border-top:1px solid var(--border)}
@@ -2367,7 +2367,7 @@ body.tab-edit #zone-content{
   color:#fff;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #uf-status{font-family:var(--sans);font-size:var(--fs-sm);color:#fff}
 
-#uf-textarea{flex:1;background:#0a1020;color:#c8d8e8;
+#uf-textarea{flex:1;background:#0a1020;color:#ffffff;
   font-family:var(--sans);font-size:var(--fs-base);line-height:1.65;
   border:none;outline:none;padding:3.5rem 1rem .8rem 1rem;
   resize:none;tab-size:4;white-space:pre;overflow:auto;
@@ -2471,7 +2471,7 @@ body.tab-edit #zone-content{
 .stfu-sample-btns{display:flex;gap:.4rem;align-items:center}
 
 .stfu-code{font-family:var(--sans);font-size:var(--fs-base);line-height:1.7;
-  color:#c8d8e8;padding:.7rem .9rem;background:#080e18;
+  color:#ffffff;padding:.7rem .9rem;background:#080e18;
   margin:0;white-space:pre;overflow-x:auto;display:block}
 .stfu-ini-section{color:var(--blue)}
 .stfu-ini-key{color:var(--teal)}
@@ -2479,7 +2479,7 @@ body.tab-edit #zone-content{
 
 .stfu-editor-wrap{overflow:hidden;transition:max-height .3s ease;max-height:0}
 .stfu-editor-wrap.open{max-height:600px}
-#stfu-textarea{width:100%;background:#0a1020;color:#c8d8e8;
+#stfu-textarea{width:100%;background:#0a1020;color:#ffffff;
   font-family:var(--sans);font-size:var(--fs-base);line-height:1.65;
   border:none;outline:none;padding:.8rem 1rem;
   resize:none;tab-size:4;white-space:pre;overflow:auto;
@@ -2520,7 +2520,7 @@ body.tab-edit #zone-content{
   background:rgba(255,61,90,.08)}
 .hw-pwr-flag.set-ever{color:var(--amber);border-color:var(--amber-dim);
   background:rgba(255,208,64,.06)}
-.hw-pwr-flag.clear{color:#2a4060;border-color:#1a2a40}
+.hw-pwr-flag.clear{color:#ffffff;border-color:#1a2a40}
 
 .hw-diag-pre{font-family:var(--sans);font-size:var(--fs-xs);line-height:1.5;
   color:var(--text);background:#080e18;padding:.6rem .9rem;margin:0;
@@ -2558,9 +2558,9 @@ body.tab-edit #zone-content{
   justify-content:flex-end;min-width:0}
 .sec-row-detail{font-size:var(--fs-xs);color:#fff;text-align:right;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28ch}
-.sec-row-detail.ok{color:#007a50}
-.sec-row-detail.warn{color:#7a5800}
-.sec-row-detail.fail{color:#7a2030}
+.sec-row-detail.ok{color:var(--green)}
+.sec-row-detail.warn{color:var(--amber)}
+.sec-row-detail.fail{color:var(--red)}
 .sec-sev{font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;
   border:1px solid var(--border2);border-radius:3px;padding:0 .25rem;color:#fff}
 .sec-sev.high{color:var(--red);border-color:var(--red)}
@@ -3827,7 +3827,7 @@ body.tab-edit #zone-content{
         </div>
       </div>
 
-      <div id="radio-dialog-error" style="display:none;font-size:var(--fs-base);color:#f88;margin-bottom:0.7rem"></div>
+      <div id="radio-dialog-error" style="display:none;font-size:var(--fs-base);color:var(--red);margin-bottom:0.7rem"></div>
 
       <div style="display:flex;justify-content:flex-end;gap:0.5rem">
         <button class="btn btn-muted btn-sm" onclick="closeRadioDialog()">Cancel</button>
@@ -3840,7 +3840,7 @@ body.tab-edit #zone-content{
       <div style="font-size:0.9rem;color:#fff;margin-bottom:1rem">node will be briefly offline</div>
       <div style="width:2rem;height:2rem;border:3px solid var(--border2);border-top-color:var(--teal);
         border-radius:50%;animation:spin 1s linear infinite;margin:0 auto 1rem"></div>
-      <div id="radio-dialog-restart-msg" style="font-size:var(--fs-base);color:#f88;display:none;margin-bottom:0.8rem"></div>
+      <div id="radio-dialog-restart-msg" style="font-size:var(--fs-base);color:var(--red);display:none;margin-bottom:0.8rem"></div>
       <div style="display:flex;justify-content:center;gap:0.5rem">
         <button class="btn btn-muted btn-sm" id="radio-dialog-restart-dismiss" style="display:none" onclick="closeRadioDialog()">Dismiss</button>
       </div>
@@ -5972,7 +5972,7 @@ async function loadSimpleUSBTune() {
     renderTuneCard(resp.settings || {});
     setTuneCardOpen(tuneCardDefaultOpen(resp.module));
   } catch (e) {
-    if (body)   body.innerHTML = `<div class="stub-panel" style="color:#f88;min-height:60px">Error: ${e.message}</div>`;
+    if (body)   body.innerHTML = `<div class="stub-panel" style="color:var(--red);min-height:60px">Error: ${e.message}</div>`;
     if (status) status.textContent = "error";
   }
 }
@@ -6033,7 +6033,7 @@ function renderTuneCard(s) {
             cursor: pointer"
           title="Valid range: ${f.min}–${f.max}"
           oninput="tuneSlide('${f.id}')">
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size:var(--fs-sm); color: #5a7898">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; font-size:var(--fs-sm); color: #ffffff">
           <span>Min: ${f.min}</span>
           <span style="text-align: right">Max: ${f.max}</span>
         </div>
@@ -6104,7 +6104,7 @@ function renderTuneCard(s) {
           </label>`;
       }).join("");
       const inner = `
-        <div style="font-size:var(--fs-xs); color: #5a7898">${g.note}</div>
+        <div style="font-size:var(--fs-xs); color: #ffffff">${g.note}</div>
         <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); gap: 0.5rem">
           ${cells}
         </div>`;
@@ -6156,7 +6156,7 @@ function renderTuneCard(s) {
               aria-label="Enable ${f.label}"
               onchange="tuneDelayToggle('${f.id}')">
             <span>${f.label}</span>
-            <span style="font-size:var(--fs-xs); color: #5a7898">${f.hint}</span>
+            <span style="font-size:var(--fs-xs); color: #ffffff">${f.hint}</span>
           </label>
           <input type="number" id="${prefix}-${f.id}"
             value="${val}" min="${f.min}" max="${f.max}" step="1"
@@ -6212,7 +6212,7 @@ function renderTuneCard(s) {
         border-radius: 0.4rem;
         font-size:var(--fs-base);
         border-left: 3px solid var(--blue)">
-        <div style="color: #3a5278; font-weight: 500; margin-bottom: 0.2rem">USB Device</div>
+        <div style="color: #ffffff; font-weight: 500; margin-bottom: 0.2rem">USB Device</div>
         <div style="font-family: var(--sans); color: var(--blue)">${esc(s.devstr || "—")}</div>
       </div>
 
@@ -6236,7 +6236,7 @@ function renderTuneCard(s) {
 
       <div style="
         font-size:var(--fs-base);
-        color: #5a7898;
+        color: #ffffff;
         padding: 0.8rem;
         background: rgba(100,120,140,0.04);
         border-radius: 0.3rem;
@@ -7698,7 +7698,7 @@ function rnSelect(id, list, cur, disabled) {
 }
 
 function rnSrc(src) {
-  return `<div style="font-size:var(--fs-xs);color:#5a7898">${esc(src)}</div>`;
+  return `<div style="font-size:var(--fs-xs);color:#ffffff">${esc(src)}</div>`;
 }
 
 function rnValues(id) {
@@ -7946,7 +7946,7 @@ function renderRptNodes() {
       <div id="rn-row-${id}" style="padding:.7rem .8rem;background:rgba(100,120,140,0.06);border-radius:.4rem;border-left:3px solid var(--blue);display:grid;gap:.5rem">
         <div style="display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap">
           <strong style="color:var(--blue)">${esc(id)}</strong>
-          <span style="font-size:var(--fs-xs);color:#5a7898">${esc(n.role)}${n.private ? " · private" : ""}</span>
+          <span style="font-size:var(--fs-xs);color:#ffffff">${esc(n.role)}${n.private ? " · private" : ""}</span>
         </div>
         ${lock}
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(13rem,1fr));gap:.6rem">
@@ -7957,7 +7957,7 @@ function renderRptNodes() {
               oninput="rnChanged('${id}')" onchange="rnChanged('${id}')"
               aria-label="hangtime in milliseconds (0-60000)"
               style="font-family:var(--sans);font-size:var(--fs-base);background:var(--surface2);border:1px solid var(--border2);border-radius:.3rem;padding:.3rem .5rem;width:7rem;color:var(--text)">
-            <div style="font-size:var(--fs-xs);color:#5a7898">Default 5000 ms · range 0–60000 ms</div>
+            <div style="font-size:var(--fs-xs);color:#ffffff">Default 5000 ms · range 0–60000 ms</div>
             ${rnSrc(v.hangtime.source)}</label>
           <label style="${lab}"><span>linktolink</span>
             <span style="display:flex;align-items:center;gap:.4rem"><input type="checkbox" id="rn-${id}-linktolink" ${v.linktolink.value === "yes" ? "checked" : ""} ${dis ? "disabled" : ""}
@@ -7969,7 +7969,7 @@ function renderRptNodes() {
   }).join("");
   body.innerHTML = `
     <div style="display:grid;gap:1rem;padding:1rem">
-      <div style="font-size:var(--fs-base);color:#5a7898;line-height:1.4">
+      <div style="font-size:var(--fs-base);color:#ffffff;line-height:1.4">
         Values shown are what each node uses. The tag under each one says where it comes from:
         <strong>set on node</strong>, <strong>from</strong> a template, or the ASL3 <strong>default</strong>.
         Saving writes only changed settings into that node's own section of ${esc(d.path)}; templates are never changed.
