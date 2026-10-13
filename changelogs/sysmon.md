@@ -1,6 +1,37 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_83_20261013.py`. Newest entries first.
+Current file: `sysmon_v6_13_84_20261013.py`. Newest entries first.
+
+## 6.13.84 (2026-10-13)
+
+Console -> Troubleshooting: a new **Half tunnel** group, between Network and
+Dashboard. It has the outside-view checks from 44helper's half-tunnel card (checks
+1, 4, 5, 6 and 11–14), so a node with the half tunnel on can be checked from
+SysMon. They are read-only and need no 44helper. Run all and Copy report include
+them.
+
+- Each result shows the half-tunnel state (not set up, test running, or on)
+  and the 44 address from wg0.conf.
+- **Tunnel is up:** the last WireGuard handshake. Under 3 minutes passes, never
+  is a warning, older fails. No wg0.conf at all is info.
+- **Internet uses the normal link:** where `ip route get 1.1.1.1` goes. Into wg0
+  fails with the half tunnel on, and is info without it (a full tunnel).
+- **DNS works:** looks up allstarlink.org and register.allstarlink.org.
+- **LAN tools respond:** the Dashboard, SysMon, instmon and 44helper ports that are
+  listening must answer, and their replies to the LAN gateway must leave by the
+  LAN link, not wg0.
+- **DVSwitch connected:** MMDVM_Bridge / Analog_Bridge running, and the DMR login
+  lines in the newest MMDVM_Bridge log.
+- **usrp2m17 connected:** the service is running.
+- **ASL registration shows your 44 address:** `rpt show registrations` (or `iax2
+  show registry`). A missing 44 address is a warning, since it can take a few
+  minutes. Without a half tunnel it is info.
+- **EchoLink logged in:** the directory list from `echolink dbdump`. Empty is a
+  warning. EchoLink off is info.
+- 44helper's own wait state shows as a warning here, and its skip as info.
+- Tested: mocked unit tests for every result of each check (pass, warn, fail,
+  info), the three half-tunnel states and the catalog order. `py_compile` and
+  `pyflakes` are clean.
 
 ## 6.13.83 (2026-10-13)
 
