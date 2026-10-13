@@ -1,6 +1,30 @@
 # instmon changelog
 
-Current file: `instmon_v2_46_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_47_0_20261013.py`. Newest entries first.
+
+## 2.47.0 (2026-10-13)
+
+Easier to read: the grey-blue text is white, as in 44helper, SysMon, the Dashboard
+and wifimon. instmon serves both builds. Only text colours and the title change.
+
+- **Grey-blue text is now plain white `#ffffff`:**
+  - `--text` (was `#d0dff0`), the body text
+  - the header sub-line, the header meta line and the column headers (was
+    `#5a7898`)
+  - the script editor text (was `#c8d8e8`)
+- **Notes and placeholders are no longer dimmed.** The Disk image notes, the
+  quiesce note and the "(no job running)" placeholders were white at 55–75 %
+  opacity, which made them grey. They are now full white.
+- **The disk-image off-air warning text** is bright red (was pale salmon).
+- Log lines, pop-ups and the Full Update banner were already green for success
+  and red for failure; they are unchanged. Warnings stay amber.
+- **Title:** the page title and logo say "Install Monitor" (was "ASL-DVS Install
+  Monitor"), per the naming rule.
+- Tested:
+  - The page in headless Chromium, before and after: body text
+    `rgb(255,255,255)`, success lines `rgb(0,255,176)`, failure lines
+    `rgb(255,61,90)`, placeholders and notes at full opacity, no script errors.
+  - `node --check` on the page JavaScript.
 
 ## 2.46.0 (2026-10-12)
 
