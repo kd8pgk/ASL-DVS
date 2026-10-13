@@ -27,14 +27,14 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_17_20261013.py</td><td>9.3.71.17-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_15_20261013.py</td><td>6.13.67.15-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_183x_20261013.py</td><td>0.0.183x</td></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_46_0_20261012.py</td><td>2.46.0</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_30_20261012.py</td><td>5.30</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_17_20261013.py</td><td>6.13.67.17-pi02w</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_187x_20261013.py</td><td>0.0.187x</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_31_0_20261013.py</td><td>5.31.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_81_20261013.py</td><td>6.13.81</td></tr>
-      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_77_20261012.py</td><td>9.3.77</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_83_20261013.py</td><td>6.13.83</td></tr>
+      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
     </table>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
@@ -86,6 +86,12 @@
   <div class="call full"><span class="t">FULL BUILD</span>Applies to the full build (Pi 3, 4 or 5) only. Also shown as the badge <span class="badge full">FULL</span>.</div>
   <div class="call work"><span class="t">WORKING</span>Used on a live node and working. Also shown as the badge <span class="badge work">WORKING</span>.</div>
   <div class="call test"><span class="t">TESTING</span>Built and in use, but still being tested. Expect rough edges, and report what you find. Also shown as the badge <span class="badge test">TESTING</span>.</div>
+
+  <h3>Colours on the pages</h3>
+  <p>All five tools use the same colours: plain text is <b>white</b>; a step that worked, and a check that passed, is
+    <b style="color:var(--grn)">green</b>; a failure is <b style="color:var(--red)">red</b>; a warning is
+    <b style="color:var(--yel)">amber</b>. An output box shows white while a step runs and turns green or red when it
+    reports its result.</p>
 
   <h3>Commands and pictures</h3>
   <p>Commands are typed on the Pi, in an SSH session or at a keyboard and screen. Lines starting with <code>#</code>
@@ -175,7 +181,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.17-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.18-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span>
         <span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span>
@@ -188,7 +194,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.67.15-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.67.17-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:rgb(0,255,229)">Overview</span>
         <span class="tab" style="border-color:rgb(0,255,229)">Services</span>
@@ -217,7 +223,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">v0.0.183x</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">v0.0.187x</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -233,7 +239,7 @@ sudo systemctl status sysmon</pre>
   <div class="grid2">
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--blu)">ASL-DVS INSTALL MONITOR</span><span class="meta">v2.46.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--blu)">INSTALL MONITOR</span><span class="meta">v2.47.0</span></div>
         <div class="sect">Quick Links</div><div class="sect">GitHub Updates</div>
         <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="btn c">Quiet System</span></div>
         <div class="sect">Components</div><div class="sect">Scripts &amp; Configuration Library</div>
@@ -243,7 +249,7 @@ sudo systemctl status sysmon</pre>
     </figure>
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.30</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.31.0</span></div>
         <div class="sect">Status</div><div class="sect">Saved networks</div><div class="sect">Nearby networks</div>
         <div class="sect">Radio &amp; device</div><div class="sect">Watchdog</div><div class="sect">Service</div>
         <div class="sect" style="padding-bottom:.6em">Activity log</div>
@@ -371,7 +377,7 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
   <ol class="steps">
     <li><b>Get the files.</b> Download the current files from github.com/kd8pgk/ASL-DVS into one folder on the Pi.</li>
     <li><b>Install instmon first.</b> It can then install and update everything else from the browser.
-<pre>sudo python3 instmon_v2_46_0_20261012.py --install</pre>
+<pre>sudo python3 instmon_v2_47_0_20261013.py --install</pre>
       From 2.45.0 the install also downloads the manuals (PDF) from GitHub, so they are on instmon's Manuals card
       straight away. With no internet the install still finishes, and instmon downloads them once it can reach GitHub.</li>
     <li><b>Install the rest</b> with the installer. On a new node it asks for your callsign, node number and a label.
@@ -516,7 +522,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
   <h2><span class="n">3.2</span>The page at a glance</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.15-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.17-pi02w</span></div>
       <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
       <div class="cards">
         <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
@@ -801,7 +807,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p>The DVSwitch files that exist on this Pi, from either their <code>/opt</code> or <code>/etc</code> location:</p>
   <table>
     <tr><th>File</th><th>Checked</th></tr>
-    <tr><td>Analog_Bridge.ini</td><td>DMR ID and repeater ID (not defaults), AMBE mode, TX talkgroup and slot (1 or 2), colour code, software AMBE fallback, and the USRP RX and TX ports.</td></tr>
+    <tr><td>Analog_Bridge.ini</td><td>DMR ID and repeater ID (not defaults), AMBE mode, TX talkgroup and slot (1 or 2), colour code, software AMBE fallback, and the USRP RX and TX ports. <b>USRP pair with rpt.conf</b>: pass when an <code>rpt.conf</code> node has <code>rxchannel = USRP/127.0.0.1:rxPort:txPort</code>; fail when the node's ports don't mirror <code>[USRP]</code> or no node uses them.</td></tr>
     <tr><td>MMDVM_Bridge.ini</td><td>Callsign and DMR ID, location and description, and which modes (DMR, Fusion, P25, NXDN, D-STAR) are enabled, with their addresses. FAIL if no mode is enabled.</td></tr>
     <tr><td>DVSwitch.ini</td><td>For each mode section: address and ports. For <code>[STFU]</code>, also the BrandMeister server, password, DMR ID and start talkgroup.</td></tr>
     <tr><td>var.txt</td><td>The DMR networks the <code>dvs</code> menu knows about (BrandMeister, TGIF, DMR+, Other 1 and 2), and their addresses. Passwords are never shown.</td></tr>
@@ -1168,8 +1174,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds five tabs the Pi Zero 2 W build leaves out to
     save memory: Firewall, Reg, Net, Zello and Console. Everything in Chapters 3 to 5 also applies to the full
     build, which has the same tabs.</p>
-  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_81_20261013.py</code>
-    (version <code>6.13.81</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
+  <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_83_20261013.py</code>
+    (version <code>6.13.83</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
     (override)</b> choice, but it uses about twice the memory.</div>
 
   <figure>
@@ -1329,7 +1335,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.183x · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.187x · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1985,8 +1991,10 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </ul>
   <p><b>Never</b> callsigns, IDs or passwords. <b>Preview</b> shows what would be saved; <b>Save as Travel Node</b> stores
     it. To use it, pick it in Restore on any node. Applying it also keeps Allmon3 in step with the private nodes,
-    and gives bridge nodes (USRP channels) the standard USRP values. If the preset would remove a private node that
-    EchoLink is attached to, it warns you first.</p>
+    and gives bridge nodes (USRP channels) the upstream USRP2M17 values (duplex, hang times, telemetry, link-to-link,
+    courtesy tone and TX timeout). Preview and the confirm box list, for each bridge node, every value that changes:
+    saved value, then the value written. "(not set here)" means the node had no line of its own. If the preset would
+    remove a private node that EchoLink is attached to, or break a USRP pair that works now, it warns you first.</p>
 
   <h2><span class="n">11.6</span>Identity</h2>
   <p>A check that your callsigns, IDs and passwords agree across every file that holds a copy. Values are
@@ -2030,8 +2038,15 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     gateways, and reports:</p>
   <ul>
     <li>any UDP port two programs both <b>listen</b> on. A sender pointed at a listener is a pair, not a clash;</li>
-    <li>whether each gateway's ports mirror MMDVM_Bridge's, and DVSwitch.ini's RemotePort matches the gateway's command port.</li>
+    <li>whether each gateway's ports mirror MMDVM_Bridge's, and DVSwitch.ini's RemotePort matches the gateway's command port;</li>
+    <li><b>USRP pairs</b>: for every <code>rxchannel = USRP/127.0.0.1:A:B</code> in <code>rpt.conf</code>, a bridge must
+      listen on A and send to B: Analog_Bridge <code>[USRP]</code> rxPort/txPort, or USRP2M17 <code>[USRP Network]</code>
+      LocalPort/DstPort. It warns about a bridge that sends to the wrong port, an rxchannel no bridge listens on, and a
+      bridge with no node. Good pairs are listed under the clash line.</li>
   </ul>
+  <p><b>Verify with SysMon</b> runs SysMon's own USRP pair check (<code>sysmon.py --usrp-pairs</code>), which reads the
+    files with its own code, and compares the two. It says <b>SysMon agrees</b>, or lists what differs. It needs SysMon
+    6.13.67.16-pi02w or 6.13.82 (full) or later; without SysMon it says there is no second check.</p>
   <p><b>Check what is listening now</b> adds the live picture: which ports are reachable from the network, the gateway
     command ports (which should never be reachable), ports only open through a broad firewall range, and configured
     ports that nothing is listening on.</p>
@@ -2109,7 +2124,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">12.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.71.17-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.71.18-pi02w</span></div>
       <div class="row" style="padding-top:.5em;justify-content:space-between"><span><span class="btn">Allmon3</span> <span class="btn">DVSwitch</span> <span class="btn">Cockpit</span></span>
         <span style="font-family:var(--mono);color:var(--grn);font-size:8pt">● TG 3100 ●</span>
         <span><span class="btn">InstMon</span> <span class="btn">WiFiMon</span> <span class="btn">SysMon</span></span></div>
