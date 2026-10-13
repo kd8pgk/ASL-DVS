@@ -1,6 +1,34 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_82_20261013.py`. Newest entries first.
+Current file: `sysmon_v6_13_83_20261013.py`. Newest entries first.
+
+## 6.13.83 (2026-10-13)
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red, from the Pi Zero 2 W build (6.13.67.17-pi02w), plus the tabs only the full
+build has. Only text colours change. The ASL-DVS tab is unchanged.
+
+- **Grey-blue to white `#ffffff`:**
+  - `--text` (was `#d0dff0`)
+  - the typed-in `#9fb4cc`, `#c8d8e8`, `#5a7898`, `#3a5278`, `#cfe3ff`,
+    `#2a4060` and `#c98a92`
+  - on the full-only tabs: the network console text (was `#d8e0f0`) and its
+    pills (was `#8aa0c0`)
+- **Failures to bright red `--red`:**
+  - the radio dialog errors, panel load errors, the alert bar and the shutdown
+    message (they were `#f88`, `#ff6b6b` or `#ffb0b8`)
+  - the network console's error line (was `#ff6b6b`)
+- **Hardware checks and Security rows:** the dark detail text is bright green,
+  amber and red (was `#007a50`, `#7a5800` and `#7a2030`).
+- **Network console results** use the standard colours: pass is green (was
+  `#3ddc84`), warn is amber (was `#ffb020`) and fail is red (was `#ff5c5c`).
+- Results that were already green or red are unchanged.
+- **Tested:**
+  - The page in headless Chromium, before and after: body text
+    `rgb(255,255,255)`; success details and console pass `rgb(0,255,176)`; failure
+    details and console errors `rgb(255,61,90)`; no script errors.
+  - The ASL-DVS mentions are unchanged in number.
+  - `node --check` on the page JavaScript.
 
 ## 6.13.82 (2026-10-13)
 
