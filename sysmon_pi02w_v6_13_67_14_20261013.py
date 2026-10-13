@@ -1915,9 +1915,13 @@ body.offline #offline-bar{display:block}
   border-radius:3px;transition:all .14s}
 #jp-close:hover{color:var(--red);border-color:var(--red-dim)}
 
-#jp-toolbar{display:flex;align-items:center;gap:.4rem;
+#jp-toolbar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
   padding:.35rem 1rem;background:#131c2d;
   border-bottom:1px solid var(--border);flex-shrink:0}
+#jp-info{padding:.25rem 1rem;background:#131c2d;border-bottom:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);color:var(--amber);flex-shrink:0}
+#jp-info[hidden]{display:none}
+.dp-copy-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
 #jp-grep{font-family:var(--sans);font-size:var(--fs-base);padding:.25rem .5rem;
   background:var(--surface2);color:var(--text-bright);
   border:1px solid var(--border2);border-radius:3px;
@@ -3750,6 +3754,7 @@ body.tab-edit #zone-content{
       <button class="btn btn-muted btn-sm"
         onclick="jpRefresh()">↻ Refresh</button>
     </div>
+    <div id="jp-info" hidden></div>
     <div id="jp-body">Select a service from the Journal tab</div>
   </div>
 </div>
@@ -3915,7 +3920,8 @@ body.tab-edit #zone-content{
       
     </div>
 
-    <div class="dpzone-lbl">Status</div>
+    <div class="dp-copy-row"><div class="dpzone-lbl">Status</div>
+      <button class="btn btn-muted btn-sm" onclick="dpStatusCopy()">⎘ Copy</button></div>
     <div id="dpanel-output"><span class="dp-out-dim">Loading…</span></div>
 
   </div>
@@ -4880,6 +4886,7 @@ window.loadTab_ports = function() {
 };
 
 let _jpUnit  = "";
+let _jpFile  = null;
 let _jpLines = 200;
 let _jpRaw   = "";
 let _jpFilteredText = "";
@@ -4920,8 +4927,38 @@ function renderJournalList(services) {
   });
 }
 
+function _jpSvcButtons(show) {
+  ["jp-restart-btn", "jp-start-btn"].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.style.display = show ? "" : "none";
+  });
+}
+
+function _jpSetInfo(text) {
+  const el = document.getElementById("jp-info");
+  if (!el) return;
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+
+async function openLogPopup(id, label) {
+  _jpUnit = "";
+  _jpFile = {id, label};
+  _jpSvcButtons(false);
+  _jpSetInfo("");
+  const title = document.getElementById("jp-title");
+  if (title) title.textContent = `▤ ${label} — Log`;
+  document.getElementById("jp-overlay").classList.add("open");
+  document.getElementById("jp-grep").value = "";
+  jpSetLinesUI(_jpLines);
+  await jpRefresh();
+}
+
 async function openJournalPopup(unit) {
   _jpUnit = unit;
+  _jpFile = null;
+  _jpSvcButtons(true);
+  _jpSetInfo("");
   const title = document.getElementById("jp-title");
   if (title) title.textContent = `▤ ${unit.replace(".service","")} — Journal`;
 
@@ -4936,6 +4973,7 @@ async function openJournalPopup(unit) {
 function closeJournalPopup() {
   document.getElementById("jp-overlay").classList.remove("open");
   _jpUnit = "";
+  _jpFile = null;
 }
 
 function jpOverlayClick(e) {
@@ -4948,6 +4986,7 @@ async function jpCopy() {
 }
 
 async function jpRefresh() {
+  if (_jpFile) return jpRefreshFile();
   if (!_jpUnit) return;
   const body = document.getElementById("jp-body");
   if (body) body.textContent = "Loading…";
@@ -4967,6 +5006,29 @@ async function jpRefresh() {
   }
 
   _jpRaw = d.output || "";
+  jpApplyGrep();
+}
+
+async function jpRefreshFile() {
+  const body = document.getElementById("jp-body");
+  if (body) body.textContent = "Loading…";
+  const want = _jpLines >= 2000 ? "all" : String(_jpLines);
+  const d = await api(`/api/logs/read?id=${encodeURIComponent(_jpFile.id)}&lines=${want}`);
+  if (!d || !d.ok) {
+    if (body) body.innerHTML =
+      `<span class="jp-err">${esc((d && d.message) || "Request failed")}</span>`;
+    _jpRaw = "";
+    _jpFilteredText = "";
+    _jpSetInfo("");
+    return;
+  }
+  _jpRaw = d.text || "";
+  const shown = _jpRaw ? _jpRaw.split("\n").length : 0;
+  const tz = d.tz === "UTC" ? "Times in UTC" : "Times in local time";
+  let info = `${tz} · ${d.path || d.label}`;
+  if (d.total >= 0) info += ` · showing ${shown.toLocaleString()} of ${d.total.toLocaleString()} lines`;
+  if (want === "all" && d.truncated) info += " · cut to the last 2 MB";
+  _jpSetInfo(info);
   jpApplyGrep();
 }
 
@@ -9460,6 +9522,13 @@ function renderSdHealth(d) {
 
   body.innerHTML = html ||
     `<div class="stub-panel" style="min-height:60px">No SD card data</div>`;
+}
+
+async function dpStatusCopy() {
+  const out = document.getElementById("dpanel-output");
+  const text = out ? Array.from(out.children).map(d => d.textContent).join("\n").trim() : "";
+  if (!text || text === "Loading…") { toast("Nothing to copy", "err"); return; }
+  await _copyWithVerify(text);
 }
 
 async function sdKernelLogCopy() {
