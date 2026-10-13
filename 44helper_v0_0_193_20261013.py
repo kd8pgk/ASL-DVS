@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.192"
+APP_VERSION = "0.0.193"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -5305,6 +5305,72 @@ def _wg_dns_preflight() -> dict:
     return {"resolvectl": resolvectl, "resolvconf": bool(resolvconf_path),
             "resolvconf_impl": impl, "resolved_active": resolved_active}
 
+def _wg_resolved_answers() -> tuple[bool, str]:
+    try:
+        r = subprocess.run(["resolvectl", "status"], capture_output=True, text=True, timeout=5)
+    except FileNotFoundError:
+        return False, "resolvectl isn't installed"
+    except subprocess.TimeoutExpired:
+        return False, "resolvectl status got no answer in 5 s"
+    if r.returncode == 0:
+        return True, ""
+    lines = ((r.stderr or "") + (r.stdout or "")).strip().splitlines()
+    return False, lines[0] if lines else f"resolvectl status exit {r.returncode}"
+
+def _wg_conf_dns_need(text: str) -> str:
+    section = ""
+    dns_line = resolvectl_hook = False
+    for raw in text.splitlines():
+        ln = raw.split("#", 1)[0].strip()
+        low = ln.lower()
+        if low.startswith("["):
+            section = low
+            continue
+        if section != "[interface]" or "=" not in ln:
+            continue
+        key, _, val = ln.partition("=")
+        key = key.strip().lower()
+        if key == "dns" and val.strip():
+            dns_line = True
+        elif key in ("preup", "postup") and "resolvectl" in val:
+            resolvectl_hook = True
+    if resolvectl_hook:
+        return "uses resolvectl in a PostUp line"
+    if dns_line:
+        pf = _wg_dns_preflight()
+        if not pf["resolvconf"]:
+            return "has a 'DNS =' line but there's no resolvconf command"
+        if pf["resolvconf_impl"] == "systemd":
+            return "has a 'DNS =' line"
+    return ""
+
+def _wg_dns_gate(out: list[str]) -> bool:
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            text = f.read()
+    except OSError:
+        return True
+    need = _wg_conf_dns_need(text)
+    if not need:
+        return True
+    fix = ("Reboot the Pi (D-Bus is likely in a bad state), or take the DNS setting out of wg0.conf: "
+           "set the DNS card to Off, or delete the 'DNS =' line, then start the tunnel again.")
+    if "no resolvconf" in need:
+        out.append(f"FAIL  wg0.conf {need}, so wg-quick would fail at once. {fix}")
+        return False
+    ok, why = _wg_resolved_answers()
+    if ok:
+        return True
+    out.append(f"wg0.conf {need}, which goes through systemd-resolved, and resolved isn't answering ({why}).")
+    out.append("wg-quick would wait 25 s for it and then fail. Restarting systemd-resolved:")
+    _run_argv(["systemctl", "restart", "systemd-resolved"], timeout=30)
+    ok, why = _wg_resolved_answers()
+    if ok:
+        out.append("ok    systemd-resolved answers again.")
+        return True
+    out.append(f"FAIL  systemd-resolved still isn't answering ({why}). The tunnel was not started. {fix}")
+    return False
+
 def _wg_dns_mode_of(dns_block) -> str:
     for ln in dns_block:
         low = ln.strip().lower()
@@ -5394,6 +5460,13 @@ def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
                     "output": ("The resolvectl options need the 'resolvectl' command (systemd-resolved). "
                                "It is not present \u2014 enable systemd-resolved (step 1a), or use the "
                                "'DNS =' line option instead.")}
+        if dns_mode in ("resolvectl_full", "resolvectl_split") or pf["resolvconf_impl"] == "systemd":
+            ok, why = _wg_resolved_answers()
+            if not ok:
+                return {"success": False, "verified": False,
+                        "output": ("This DNS option goes through systemd-resolved, and it isn't answering (" + why + "). "
+                                   "wg-quick would wait 25 s for it and then fail to start the tunnel. "
+                                   "Run: sudo systemctl restart systemd-resolved (or reboot), then try again.")}
         servers = _valid_dns_servers(dns_servers) or _WG_DNS_DEFAULTS[dns_mode]
         if dns_mode == "dns_line":
             block = [_WG_DNS_BEGIN, "DNS = " + ", ".join(servers), _WG_DNS_END]
@@ -5742,6 +5815,25 @@ ExecStop=wg-quick down /etc/wireguard/wg0.conf
 WantedBy=multi-user.target
 """
 
+_WG_START_WAIT = 90
+
+def _wg_start_report(unit: str, since: int) -> list[str]:
+    try:
+        st = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5).stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        st = "unknown"
+    out = [f"{unit} is {st or 'unknown'}" + (" (systemd is still starting it; press Re-check in a minute)."
+                                            if st == "activating" else ".")]
+    try:
+        j = subprocess.run(["journalctl", "-u", unit, "--since", f"@{since}", "-n", "15", "-l", "--no-pager", "-o", "cat"],
+                           capture_output=True, text=True, timeout=10).stdout.strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        j = ""
+    if j:
+        out.append("Last lines of its log:")
+        out += ["  " + ln for ln in j.splitlines()]
+    return out
+
 def status_enable_tunnel() -> dict:
     wg_status = _wg_show_wg0()
     up = wg_status is not None and bool(wg_status.get("latest_handshake"))
@@ -5752,10 +5844,15 @@ def action_enable_tunnel() -> dict:
     if err:
         return err
 
+    gate: list[str] = []
+    if not _wg_dns_gate(gate):
+        return {"success": False, "verified": False, "output": "\n".join(gate)}
+    t0 = int(time.time())
     if _wg_quick_template_available():
+        unit = "wg-quick@wg0"
         results = [
-            _run_argv(["systemctl", "enable", "wg-quick@wg0"]),
-            _run_argv(["systemctl", "start", "wg-quick@wg0"]),
+            _run_argv(["systemctl", "enable", unit]),
+            _run_argv(["systemctl", "start", unit], timeout=_WG_START_WAIT),
         ]
         used_fallback = False
     else:
@@ -5764,9 +5861,10 @@ def action_enable_tunnel() -> dict:
                 f.write(_ARDC_FALLBACK_UNIT_CONTENT)
         except OSError as e:
             return {"success": False, "verified": False, "output": f"Could not write fallback unit: {e}"}
+        unit = "44net-tunnel.service"
         results = [
             _run_argv(["systemctl", "daemon-reload"]),
-            _run_argv(["systemctl", "enable", "--now", "44net-tunnel.service"]),
+            _run_argv(["systemctl", "enable", "--now", unit], timeout=_WG_START_WAIT),
         ]
         used_fallback = True
 
@@ -5774,7 +5872,10 @@ def action_enable_tunnel() -> dict:
     time.sleep(2)
     status = status_enable_tunnel()
     note = " (used ARDC fallback unit, §1a.3 — standard wg-quick@.service template not found)" if used_fallback else ""
-    return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results) + note}
+    lines = gate + [r["output"] for r in results if r["output"]]
+    if not ok:
+        lines += _wg_start_report(unit, t0)
+    return {"success": ok, "verified": status["done"], "output": "\n".join(lines) + note}
 
 def _pi_purge_tolerant_ok(result: dict) -> bool:
     if result["success"]:
@@ -8421,6 +8522,8 @@ def _half_step2(st: dict, out: list[str]) -> bool:
     temp = _half_temp_conf_text(text) if text is not None else None
     if temp is None:
         out.append("FAIL  couldn't read wg0.conf or find its [Interface] section.")
+        return False
+    if not _wg_dns_gate(out):
         return False
     os.makedirs(_HALF_RUN_DIR, mode=0o700, exist_ok=True)
     with open(_HALF_TEMP_CONF, "w") as fh:
