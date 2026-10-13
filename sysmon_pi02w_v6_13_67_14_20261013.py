@@ -37,8 +37,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.13-pi02w"
-BUILD_DATE   = "20261012"
+VERSION      = "6.13.67.14-pi02w"
+BUILD_DATE   = "20261013"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -14091,6 +14091,293 @@ def _route_journal_fetch(h: Handler) -> None:
         return
     h.send_json({"ok": True, "unit": unit, "lines": n, "output": output})
 
+_DVLOG_ROOT        = Path("/var/log")
+_DVLOG_IRCDDB_DIR  = Path("/var/log/ircddbgateway")
+_DVLOG_DAYS        = 7
+_DVLOG_READ_MAX    = 2_000_000
+_DVLOG_COUNT_MAX   = 20_000_000
+_DVLOG_AGENT_LINES = 50
+_DVLOG_DATED_RE    = re.compile(r"-(\d{4}-\d{2}-\d{2})\.log$")
+_DVLOG_ROOT_RE     = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+_DVLOG_INI_PROGRAMS = (
+    ("mmdvm", "MMDVM_Bridge", "mmdvm_bridge.service",
+     (Path("/opt/MMDVM_Bridge/MMDVM_Bridge.ini"), Path("/etc/MMDVM_Bridge/MMDVM_Bridge.ini"),
+      Path("/etc/dvswitch/MMDVM_Bridge.ini"))),
+    ("ysf", "YSFGateway", "ysfgateway.service",
+     (Path("/opt/YSFGateway/YSFGateway.ini"), Path("/etc/YSFGateway/YSFGateway.ini"),
+      Path("/etc/dvswitch/YSFGateway.ini"))),
+    ("p25", "P25Gateway", "p25gateway.service",
+     (Path("/opt/P25Gateway/P25Gateway.ini"), Path("/etc/P25Gateway/P25Gateway.ini"),
+      Path("/etc/dvswitch/P25Gateway.ini"))),
+    ("nxdn", "NXDNGateway", "nxdngateway.service",
+     (Path("/opt/NXDNGateway/NXDNGateway.ini"), Path("/etc/NXDNGateway/NXDNGateway.ini"),
+      Path("/etc/dvswitch/NXDNGateway.ini"))),
+    ("m17", "USRP2M17", "usrp2m17.service", tuple(_M17_INI_CANDIDATES)),
+)
+
+_DVLOG_JOURNAL_UNITS = (
+    ("analog_bridge.service",  "Analog_Bridge"),
+    ("stfu.service",           "STFU"),
+    ("netcheck.service",       "netcheck"),
+    ("ircddbgatewayd.service", "ircDDBGateway service"),
+)
+
+def _dvlog_under_root(path: Path) -> bool:
+    try:
+        real = Path(os.path.realpath(path))
+    except OSError:
+        return False
+    root = os.path.realpath(_DVLOG_ROOT)
+    return str(real).startswith(root + os.sep) and real.is_file()
+
+def _dvlog_file_entry(src_id: str, label: str, group: str, path: Path) -> "dict | None":
+    if not _dvlog_under_root(path):
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return {"id": src_id, "kind": "file", "group": group, "label": label,
+            "path": str(path), "size": st.st_size, "mtime": int(st.st_mtime), "tz": "UTC"}
+
+def _dvlog_dated_files(folder: Path, root: str) -> "list[Path]":
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    dated = sorted((n for n in names
+                    if n.startswith(root + "-") and _DVLOG_DATED_RE.search(n)
+                    and len(n) == len(root) + 15), reverse=True)
+    out = [folder / n for n in dated[:_DVLOG_DAYS]]
+    if (root + ".log") in names:
+        out.append(folder / (root + ".log"))
+    return out
+
+def _dvlog_unit_installed(unit: str) -> bool:
+    for d in ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system"):
+        if os.path.exists(os.path.join(d, unit)):
+            return True
+    return False
+
+def _dvlog_ini_log_settings(candidates) -> "dict | None":
+    for cand in candidates:
+        content, err = read_path_file(cand)
+        if err:
+            continue
+        sect = _dvs_parse_sections(content).get("LOG", {})
+        return {"ini": str(cand),
+                "file_level": sect.get("FileLevel", "").strip(),
+                "file_path":  sect.get("FilePath", "").strip(),
+                "file_root":  sect.get("FileRoot", "").strip()}
+    return None
+
+def dvlog_sources() -> "list[dict]":
+    out: "list[dict]" = []
+    if _DVLOG_IRCDDB_DIR.is_dir():
+        for p in _dvlog_dated_files(_DVLOG_IRCDDB_DIR, "ircDDBGateway"):
+            m = _DVLOG_DATED_RE.search(p.name)
+            sid = "ircddb:" + (m.group(1) if m else "plain")
+            e = _dvlog_file_entry(sid, p.name, "ircDDBGateway", p)
+            if e:
+                out.append(e)
+        for name in ("Headers", "Links", "STARnet"):
+            e = _dvlog_file_entry("ircddb:" + name, name + ".log", "ircDDBGateway",
+                                  _DVLOG_IRCDDB_DIR / (name + ".log"))
+            if e:
+                out.append(e)
+    for key, prog, unit, cands in _DVLOG_INI_PROGRAMS:
+        cfg = _dvlog_ini_log_settings(cands)
+        if cfg is None:
+            continue
+        files: "list[dict]" = []
+        root = cfg["file_root"] or prog
+        folder = cfg["file_path"]
+        if folder and _DVLOG_ROOT_RE.match(root):
+            for p in _dvlog_dated_files(Path(folder), root):
+                m = _DVLOG_DATED_RE.search(p.name)
+                e = _dvlog_file_entry(f"{key}:" + (m.group(1) if m else "plain"),
+                                      p.name, prog, p)
+                if e:
+                    files.append(e)
+        off = cfg["file_level"] == "0"
+        note = ""
+        if off:
+            note = "file logging off (FileLevel=0 in " + cfg["ini"] + ")"
+        elif not folder:
+            note = "no [Log] FilePath in " + cfg["ini"]
+        elif not files:
+            note = "no log files found in " + folder
+        out.extend(files)
+        if (off or not files) and _dvlog_unit_installed(unit):
+            out.append({"id": "journal:" + unit, "kind": "journal", "group": prog,
+                        "label": unit + " (journal)", "unit": unit, "tz": "local",
+                        "note": note})
+        elif note:
+            out.append({"id": "", "kind": "none", "group": prog, "label": prog,
+                        "note": note})
+    for unit, label in _DVLOG_JOURNAL_UNITS:
+        if _dvlog_unit_installed(unit):
+            out.append({"id": "journal:" + unit, "kind": "journal", "group": label,
+                        "label": unit + " (journal)", "unit": unit, "tz": "local"})
+    return out
+
+def _dvlog_find(src_id: str) -> "dict | None":
+    if not src_id or len(src_id) > 80:
+        return None
+    for e in dvlog_sources():
+        if e.get("id") == src_id:
+            return e
+    return None
+
+def _dvlog_tail(path: Path, lines: int, max_bytes: int = 0) -> "tuple[str, bool]":
+    max_bytes = max_bytes or _DVLOG_READ_MAX
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            want = (lines + 1) if lines > 0 else None
+            buf = b""
+            pos = size
+            while pos > 0 and len(buf) < max_bytes:
+                step = min(65536, pos, max_bytes - len(buf))
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
+                if want is not None and buf.count(b"\n") >= want:
+                    break
+    except OSError as e:
+        return f"[could not read {path}: {e}]", False
+    cut = pos > 0
+    text = buf.decode("utf-8", errors="replace")
+    rows = text.splitlines()
+    if cut and rows:
+        rows = rows[1:]
+    if lines > 0 and len(rows) > lines:
+        rows = rows[-lines:]
+        cut = True
+    return "\n".join(rows), cut
+
+def _dvlog_count_lines(path: Path) -> int:
+    try:
+        if path.stat().st_size > _DVLOG_COUNT_MAX:
+            return -1
+        n = 0
+        last = b"\n"
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                n += chunk.count(b"\n")
+                last = chunk[-1:]
+        return n + (0 if last == b"\n" else 1)
+    except OSError:
+        return -1
+
+def dvlog_read(src_id: str, lines: int) -> dict:
+    e = _dvlog_find(src_id)
+    if e is None or e["kind"] == "none":
+        return {"ok": False, "message": "Unknown log"}
+    if e["kind"] == "journal":
+        n = 2000 if lines <= 0 else max(10, min(lines, 2000))
+        text, err = fetch_journal(e["unit"], n)
+        if err:
+            return {"ok": False, "message": f"Journal fetch failed: {err}"}
+        return {"ok": True, "id": src_id, "label": e["label"], "tz": e["tz"],
+                "text": text, "truncated": False, "total": -1}
+    text, cut = _dvlog_tail(Path(e["path"]), lines)
+    return {"ok": True, "id": src_id, "label": e["label"], "tz": e["tz"],
+            "path": e["path"], "text": text, "truncated": cut,
+            "total": _dvlog_count_lines(Path(e["path"]))}
+
+def _dvlog_boot_warnings(lines: int) -> "tuple[str, str]":
+    try:
+        r = subprocess.run(["journalctl", "-b", "-p", "warning", f"-n{lines}", "--no-pager"],
+                           capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        return "", "journalctl not found on this system"
+    except subprocess.TimeoutExpired:
+        return "", "journalctl timed out"
+    except Exception as e:
+        return "", f"journalctl failed: {e}"
+    if r.returncode != 0 and r.stderr.strip():
+        return "", r.stderr.strip()
+    return r.stdout.strip(), ""
+
+def dvlog_agent_bundle(lines: int = _DVLOG_AGENT_LINES) -> dict:
+    srcs = dvlog_sources()
+    picked: "list[dict]" = []
+    newest_seen: "set[str]" = set()
+    for e in srcs:
+        if e["kind"] == "file":
+            dated = bool(_DVLOG_DATED_RE.search(e["label"]))
+            if dated:
+                if e["group"] in newest_seen:
+                    continue
+                newest_seen.add(e["group"])
+            picked.append(e)
+        elif e["kind"] == "journal":
+            picked.append(e)
+    now = datetime.now()
+    parts = [f"== ASL-DVS DV gateway logs · {get_hostname()} · "
+             f"{now.strftime('%Y-%m-%d %H:%M:%S')} local · last {lines} lines of each =="]
+    empty: "list[str]" = []
+    blocks = 0
+    for e in picked:
+        if e["kind"] == "file":
+            if e.get("size", 0) == 0:
+                empty.append(e["label"])
+                continue
+            text, _cut = _dvlog_tail(Path(e["path"]), lines)
+            total = _dvlog_count_lines(Path(e["path"]))
+            shown = len(text.splitlines())
+            of = f"{total:,}" if total >= 0 else "many"
+            head = f"== {e['path']} (UTC) · last {shown} of {of} lines =="
+        else:
+            text, err = fetch_journal(e["unit"], lines)
+            if err:
+                text = f"[journal fetch failed: {err}]"
+            if not text.strip() or text.strip() == "-- No entries --":
+                empty.append(e["label"])
+                continue
+            head = f"== journal: {e['unit']} (local time) · last {lines} lines =="
+        parts.append("")
+        parts.append(head)
+        parts.append(text)
+        blocks += 1
+    text, err = _dvlog_boot_warnings(lines)
+    parts.append("")
+    parts.append(f"== journal: this boot, warnings and worse (local time) · last {lines} lines ==")
+    parts.append(text if not err else f"[journal fetch failed: {err}]")
+    blocks += 1
+    for e in srcs:
+        if e["kind"] == "none":
+            empty.append(f"{e['group']}: {e['note']}")
+    if empty:
+        parts.append("")
+        parts.append("== empty or not logging: " + "; ".join(empty) + " ==")
+    out = "\n".join(parts) + "\n"
+    return {"ok": True, "text": out, "bytes": len(out.encode("utf-8")), "blocks": blocks,
+            "lines": lines}
+
+def _route_logs_list(h: Handler) -> None:
+    h.send_json({"ok": True, "sources": dvlog_sources()})
+
+def _route_logs_read(h: Handler) -> None:
+    qs = parse_qs(urlparse(h.path).query)
+    src_id = qs.get("id", [""])[0].strip()
+    raw = qs.get("lines", ["200"])[0].strip().lower()
+    if raw == "all":
+        n = 0
+    else:
+        try:
+            n = max(10, min(int(raw), 100000))
+        except ValueError:
+            n = 200
+    d = dvlog_read(src_id, n)
+    h.send_json(d, 200 if d.get("ok") else 404)
+
+def _route_logs_agent(h: Handler) -> None:
+    h.send_json(dvlog_agent_bundle())
+
 def parse_rpt_conf(content: str) -> list:
 
     sections, node_sects = _rpt_scan(content)
@@ -22647,6 +22934,9 @@ _GET_ROUTES = {
     "/api/ports/probe":        _route_ports_probe,
     "/api/journal/list":       _route_journal_list,
     "/api/journal/fetch":      _route_journal_fetch,
+    "/api/logs/list":          _route_logs_list,
+    "/api/logs/read":          _route_logs_read,
+    "/api/logs/agent":         _route_logs_agent,
     "/api/unit_file":          _route_unit_file_get,
     "/api/asterisk/files":     _route_asterisk_list,
     "/api/asterisk/file":      _route_asterisk_get,
