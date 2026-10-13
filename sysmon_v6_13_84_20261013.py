@@ -43,8 +43,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.83"
-BUILD_DATE   = "20261012"
+VERSION      = "6.13.84"
+BUILD_DATE   = "20261013"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -26451,7 +26451,7 @@ _TS: list = []
 
 _TS_BY: dict = {}
 
-_TS_GROUPS = ("Links", "Bridges", "Phone", "Asterisk", "Pi health", "Network", "Dashboard", "Sysmon")
+_TS_GROUPS = ("Links", "Bridges", "Phone", "Asterisk", "Pi health", "Network", "Half tunnel", "Dashboard", "Sysmon")
 
 def _ts(group: str, tid: str, label: str, kind: str = ""):
     def deco(fn):
@@ -31221,6 +31221,273 @@ def _ts_dash_page_check(tree) -> "tuple[list, list, int, int]":
         code = re.sub(r"\$\{[^}]*\}", "", a or b)
         called.update(n for n in _TS_JS_CALL_RE.findall(code) if n not in _TS_JS_NOT_FUNCS)
     return sorted(called - defined), twice, len(called), len(defined)
+
+_TS_HT_MARK = "# 44helper-half-begin"
+_TS_HT_STATE = Path("/run/44helper-half/state.json")
+_TS_HT_WG = Path("/etc/wireguard/wg0.conf")
+_TS_HT_NETS = ("44.0.0.0/9", "44.128.0.0/10")
+_TS_HT_MODE_TXT = {"off": "not set up", "testing": "test running (44helper)", "permanent": "on (permanent)"}
+_TS_HT_DMR_OK = re.compile(r"logged into the master successfully", re.I)
+_TS_HT_DMR_BAD = re.compile(r"timed out|has failed|closing dmr network|login.*fail", re.I)
+
+def _ts_ht_tok(toks: list, key: str) -> str:
+    return toks[toks.index(key) + 1] if key in toks[:-1] else ""
+
+def _ts_ht_ctx() -> dict:
+    try:
+        txt = _TS_HT_WG.read_text(errors="replace")
+    except OSError:
+        txt = None
+    mode = "off"
+    if txt and any(ln.strip() == _TS_HT_MARK for ln in txt.splitlines()):
+        mode = "permanent"
+    else:
+        try:
+            st = json.loads(_TS_HT_STATE.read_text())
+            if isinstance(st, dict) and (st.get("armed_at") or st.get("steps")):
+                mode = "testing"
+        except (OSError, ValueError):
+            pass
+    addr44 = ""
+    for ln in (txt or "").splitlines():
+        k, _, v = ln.split("#", 1)[0].partition("=")
+        if k.strip().lower() != "address" or addr44:
+            continue
+        for part in v.split(","):
+            try:
+                ip = ipaddress.ip_interface(part.strip()).ip
+            except ValueError:
+                continue
+            if ip.version == 4 and any(ip in ipaddress.ip_network(n) for n in _TS_HT_NETS):
+                addr44 = str(ip)
+                break
+    out, _p = _ts_cmd(["ip", "-4", "route", "show", "table", "main", "default"], 5)
+    line = out.splitlines()[0].strip() if out.strip() else ""
+    toks = line.split()
+    return {"mode": mode, "conf": txt is not None, "addr44": addr44,
+            "gw_via": _ts_ht_tok(toks, "via"), "gw_dev": _ts_ht_tok(toks, "dev"), "gw_raw": line}
+
+def _ts_ht_rows(ctx: dict) -> list:
+    return [["Half tunnel", _TS_HT_MODE_TXT[ctx["mode"]]], ["44Net address", ctx["addr44"] or "(none in wg0.conf)"]]
+
+def _ts_ht_route(args: list) -> "tuple[str, str, str]":
+    out, prob = _ts_cmd(["ip", "-4", "route", "get"] + args, 5)
+    first = out.splitlines()[0].strip() if out.strip() else ""
+    if prob or "dev" not in first.split():
+        return "", "", prob or first or "no route"
+    toks = first.split()
+    return _ts_ht_tok(toks, "dev"), _ts_ht_tok(toks, "src"), first
+
+def _ts_ht_result(cmd: str, raw: str, status: str, headline: str, ctx: dict, rows: list = None, note: str = "") -> dict:
+    return {"cmd": cmd, "raw": raw, "summary": {"status": status, "headline": headline,
+                                                "rows": _ts_ht_rows(ctx) + (rows or []), "note": note}}
+
+def _ts_ht_unit_loaded(unit: str) -> bool:
+    out, prob = _ts_cmd(["systemctl", "show", "-p", "LoadState", "--value", unit], 5)
+    return not prob and out.strip() == "loaded"
+
+@_ts("Half tunnel", "ts_ht_tunnel", "Tunnel is up")
+def _ts_ht_tunnel():
+    ctx = _ts_ht_ctx()
+    out, prob = _ts_cmd(["wg", "show", "wg0", "latest-handshakes"], 5)
+    if prob and "not installed" in prob:
+        return _ts_missing("wg show wg0", prob)
+    stamps = []
+    for ln in out.splitlines():
+        t = ln.split()
+        if len(t) == 2 and t[1].isdigit():
+            stamps.append(int(t[1]))
+    cmd = "wg show wg0 latest-handshakes"
+    if not stamps:
+        if not ctx["conf"]:
+            return _ts_ht_result(cmd, out or prob, "info", "No WireGuard tunnel on this Pi", ctx)
+        return _ts_ht_result(cmd, out or prob, "fail", "wg0 isn't up", ctx,
+                             note="Start it on 44helper's tunnel tab, or: sudo systemctl start wg-quick@wg0")
+    last = max(stamps)
+    if last == 0:
+        return _ts_ht_result(cmd, out, "warn", "No contact with the 44Net server yet", ctx,
+                             note="Run it again in a minute. If it stays, check the key and Endpoint on 44helper's tunnel tab")
+    age = int(time.time() - last)
+    ok = age <= 180
+    return _ts_ht_result(cmd, out, "pass" if ok else "fail",
+                         f"Last heard from the 44Net server {age} s ago", ctx, [["Last handshake", f"{age} s ago"]],
+                         "" if ok else "The tunnel stopped talking. Check 44helper's tunnel tab")
+
+@_ts("Half tunnel", "ts_ht_route", "Internet uses the normal link")
+def _ts_ht_route_chk():
+    ctx = _ts_ht_ctx()
+    dev, src, raw = _ts_ht_route(["1.1.1.1"])
+    rows = [["Normal default route", ctx["gw_raw"] or "(none)"], ["1.1.1.1 goes out", f"{dev or '?'}" + (f" from {src}" if src else "")]]
+    cmd = "ip -4 route get 1.1.1.1"
+    if not dev:
+        return _ts_ht_result(cmd, raw, "fail", "No route to the internet", ctx, rows,
+                             "The Pi has no default route: check its gateway (ip route)")
+    if not dev.startswith("wg"):
+        return _ts_ht_result(cmd, raw, "pass", f"Internet goes out {dev}", ctx, rows)
+    if ctx["mode"] == "off":
+        return _ts_ht_result(cmd, raw, "info", "Internet goes into the tunnel (full tunnel)", ctx, rows,
+                             "Expected for a full tunnel. With a half tunnel it would be a fault")
+    return _ts_ht_result(cmd, raw, "fail", "Internet goes into the tunnel", ctx, rows,
+                         "With a half tunnel only ASL and EchoLink use wg0. "
+                         + ("Use Undo now on 44helper's Firewall tab" if ctx["mode"] == "testing"
+                            else "Restart the tunnel: sudo systemctl restart wg-quick@wg0"))
+
+@_ts("Half tunnel", "ts_ht_dns", "DNS works")
+def _ts_ht_dns():
+    ctx = _ts_ht_ctx()
+    rows, bad, raw = [], 0, []
+    for h_ in ("allstarlink.org", "register.allstarlink.org"):
+        out, prob = _ts_cmd(["getent", "ahostsv4", h_], 6)
+        ips = sorted({ln.split()[0] for ln in out.splitlines() if ln.split()})
+        raw.append(f"{h_}: {', '.join(ips) or prob or 'not found'}")
+        rows.append([h_, ", ".join(ips[:2]) or (prob or "not found")])
+        bad += 0 if ips else 1
+    return _ts_ht_result("getent ahostsv4 allstarlink.org register.allstarlink.org", "\n".join(raw),
+                         "fail" if bad else "pass", "Name lookups fail" if bad else "Name lookups work", ctx, rows,
+                         "DVSwitch and usrp2m17 dial by name, so they'll drop. The Network -> Name lookups check shows more"
+                         if bad else "")
+
+@_ts("Half tunnel", "ts_ht_lan", "LAN tools respond")
+def _ts_ht_lan():
+    ctx = _ts_ht_ctx()
+    try:
+        own = int(_cfg.get("server", "port", fallback=str(DEFAULT_PORT)))
+    except ValueError:
+        own = DEFAULT_PORT
+    tools = {DASHBOARD_PORT: "Dashboard", own: "sysmon", 8990: "instmon", 9997: "44helper"}
+    out, prob = _ts_cmd(["ss", "-ltnH"], 5)
+    if prob:
+        return _ts_missing("ss -ltnH", prob)
+    listening = set()
+    for ln in out.splitlines():
+        t = ln.split()
+        if len(t) >= 4 and t[3].rsplit(":", 1)[-1].isdigit():
+            listening.add(int(t[3].rsplit(":", 1)[-1]))
+    lan_ip = ""
+    if ctx["gw_dev"]:
+        a, _p = _ts_cmd(["ip", "-4", "-o", "addr", "show", "dev", ctx["gw_dev"]], 5)
+        t = a.split()
+        lan_ip = _ts_ht_tok(t, "inet").split("/")[0]
+    rows, worst, raw = [], "pass", [f"LAN address {lan_ip or '?'} on {ctx['gw_dev'] or '?'}, gateway {ctx['gw_via'] or '?'}"]
+    for port, name in sorted(tools.items()):
+        if port not in listening:
+            continue
+        try:
+            with _socket.create_connection((lan_ip or "127.0.0.1", port), timeout=2):
+                answers = True
+        except OSError:
+            answers = False
+        if not answers:
+            rows.append([name, f":{port}", [f"doesn't answer on {lan_ip or '127.0.0.1'}", "fail"]])
+            worst = "fail"
+            continue
+        if ctx["gw_via"]:
+            dev, _s, r = _ts_ht_route([ctx["gw_via"], "ipproto", "tcp", "sport", str(port)])
+            raw.append(f"{name} :{port} -> {r}")
+            if dev != ctx["gw_dev"]:
+                rows.append([name, f":{port}", [f"replies to the LAN would go out {dev or '?'}", "fail"]])
+                worst = "fail"
+                continue
+        rows.append([name, f":{port}", ["answers, replies stay on " + (ctx["gw_dev"] or "the LAN"), "pass"]])
+    if not rows:
+        return _ts_ht_result("ss -ltnH + ip route get", "\n".join(raw), "info", "No LAN tools are listening", ctx)
+    res = _ts_ht_result("ss -ltnH + ip route get <gateway> sport <port>", "\n".join(raw), worst,
+                        "LAN tools respond" if worst == "pass" else "A LAN tool is affected", ctx,
+                        note="" if worst == "pass" else "Replies to the LAN going into the tunnel make the pages hang. "
+                        "Use Undo now on 44helper's Firewall tab, or remove the half tunnel")
+    res["summary"]["table"] = {"head": ["Tool", "Port", "State"], "rows": rows}
+    return res
+
+@_ts("Half tunnel", "ts_ht_dvs", "DVSwitch connected")
+def _ts_ht_dvs():
+    ctx = _ts_ht_ctx()
+    units = [u for u in ("mmdvm_bridge.service", "analog_bridge.service") if _ts_ht_unit_loaded(u)]
+    if not units:
+        return _ts_ht_result("systemctl show", "", "info", "DVSwitch isn't installed", ctx)
+    states = {u: get_service_state(u) for u in units}
+    rows = [[u, s] for u, s in states.items()]
+    dmr, last = "", ""
+    logs = sorted(glob.glob("/var/log/mmdvm/MMDVM_Bridge*.log"), key=lambda f: os.path.getmtime(f) if os.path.exists(f) else 0)
+    if logs:
+        try:
+            with open(logs[-1], "rb") as fh:
+                fh.seek(max(0, os.path.getsize(logs[-1]) - 262144))
+                tail = fh.read().decode("utf-8", "replace")
+        except OSError:
+            tail = ""
+        for ln in tail.splitlines():
+            if "DMR" not in ln:
+                continue
+            if _TS_HT_DMR_OK.search(ln):
+                dmr, last = "in", ln.strip()
+            elif _TS_HT_DMR_BAD.search(ln):
+                dmr, last = "out", ln.strip()
+        rows.append(["Log", logs[-1]])
+    raw = "\n".join(f"{u}: {s}" for u, s in states.items()) + ("\n" + last if last else "")
+    if any(s != "active" for s in states.values()):
+        return _ts_ht_result("systemctl is-active", raw, "fail", "A DVSwitch service is stopped", ctx, rows,
+                             "Check the DVSwitch services on the Services tab")
+    if dmr == "out":
+        return _ts_ht_result("MMDVM_Bridge log", raw, "fail", "Lost its DMR master", ctx, rows + [["Last DMR line", last]],
+                             "Run Internet uses the normal link and DNS works first: DVSwitch needs both")
+    if dmr == "in":
+        return _ts_ht_result("MMDVM_Bridge log", raw, "pass", "Logged into its DMR master", ctx, rows)
+    return _ts_ht_result("systemctl is-active", raw, "pass", "Running", ctx, rows,
+                         "No DMR login lines in its log; other modes aren't read")
+
+@_ts("Half tunnel", "ts_ht_usrp", "usrp2m17 connected")
+def _ts_ht_usrp():
+    ctx = _ts_ht_ctx()
+    if not _ts_ht_unit_loaded("usrp2m17.service"):
+        return _ts_ht_result("systemctl show usrp2m17", "", "info", "usrp2m17 isn't installed", ctx)
+    s = get_service_state("usrp2m17.service")
+    return _ts_ht_result("systemctl is-active usrp2m17", s, "pass" if s == "active" else "fail",
+                         "Running" if s == "active" else f"Stopped ({s})", ctx, [["usrp2m17.service", s]],
+                         "" if s == "active" else "Check usrp2m17 on the Services tab")
+
+@_ts("Half tunnel", "ts_ht_reg", "ASL registration shows your 44 address")
+def _ts_ht_reg():
+    ctx = _ts_ht_ctx()
+    if not shutil.which("asterisk"):
+        return _ts_ht_result("rpt show registrations", "", "info", "ASL isn't installed", ctx)
+    if get_service_state("asterisk.service") != "active":
+        return _ts_ht_result("rpt show registrations", "", "fail", "Asterisk isn't running", ctx,
+                             note="Start ASL, then run this again")
+    out, cmd = "", ""
+    for c in ("rpt show registrations", "iax2 show registry"):
+        o, prob = _ts_cmd(["asterisk", "-rx", c], 8)
+        if not prob and o.strip() and "no such command" not in o.lower():
+            out, cmd = o, c
+            break
+    ips = sorted({ip for ip in re.findall(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b", out) if not ip.startswith("127.")})
+    rows = [["Addresses shown", ", ".join(ips) or "none"]]
+    if not out:
+        return _ts_ht_result("rpt show registrations", "", "warn", "No registration shown", ctx, rows)
+    if ctx["mode"] == "off":
+        return _ts_ht_result(cmd, out, "info", "No half tunnel, so nothing to compare", ctx, rows)
+    if ctx["addr44"] and ctx["addr44"] in ips:
+        return _ts_ht_result(cmd, out, "pass", f"Registered as {ctx['addr44']}", ctx, rows)
+    return _ts_ht_result(cmd, out, "warn", "Your 44 address isn't shown yet", ctx, rows,
+                         "Registration can take a few minutes to update after the tunnel starts. If it stays, "
+                         "registration is going out the normal route: Asterisk needs to run as its own user")
+
+@_ts("Half tunnel", "ts_ht_el", "EchoLink logged in")
+def _ts_ht_el():
+    ctx = _ts_ht_ctx()
+    if not shutil.which("asterisk") or get_service_state("asterisk.service") != "active":
+        return _ts_ht_result("echolink dbdump", "", "info", "Asterisk isn't running", ctx)
+    mods, _p = _ts_cmd(["asterisk", "-rx", "module show like chan_echolink"], 8)
+    if "chan_echolink.so" not in mods:
+        return _ts_ht_result("module show like chan_echolink", mods, "info", "EchoLink isn't turned on", ctx)
+    out, prob = _ts_cmd(["asterisk", "-rx", "echolink dbdump"], 10)
+    if prob or "no such command" in out.lower():
+        return _ts_ht_result("echolink dbdump", out or prob, "info", "Can't read EchoLink's state on this ASL version", ctx)
+    n = sum(1 for ln in out.splitlines() if re.search(r"\d{3,}", ln))
+    if n:
+        return _ts_ht_result("echolink dbdump", f"{n} entries", "pass", f"Directory list loaded ({n} entries)", ctx)
+    return _ts_ht_result("echolink dbdump", out, "warn", "Directory list is empty", ctx,
+                         note="The directory can take a few minutes after a restart. If it stays empty, "
+                              "EchoLink can't reach its directory (TCP 5200)")
 
 @_ts("Dashboard", "ts_dashfile", "Dashboard file check")
 def _ts_dashfile():
