@@ -1,6 +1,33 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_16_20261013.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_17_20261013.py`. Newest entries first.
+
+## 6.13.67.17-pi02w (2026-10-13)
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red, as in 44helper 0.0.187x. Only text colours change. The full build is not
+changed.
+
+- The grey-blue colours are now plain white `#ffffff`:
+  - `--text` (was `#d0dff0`, used for body text)
+  - the typed-in `#9fb4cc` (Phone tab notes, labels and table headers),
+    `#c8d8e8` (config editors), `#5a7898` and `#3a5278` (Tune and Hardware
+    hints), `#cfe3ff` and `#2a4060` (the power flag when clear)
+  - the shutdown sub-line `#c98a92`
+- Failures that were pale pink (`#f88`, `#ff6b6b`, `#ffb0b8`) are bright red
+  `--red`: the radio dialog errors, panel load errors, the alert bar and the
+  shutdown message.
+- The Hardware checks and Security rows had dark detail text. It is now bright:
+  - success: `#007a50` -> green `--green`
+  - failure: `#7a2030` -> red `--red`
+  - warning: `#7a5800` -> amber `--amber`
+- Results that were already green or red are unchanged.
+- Tested:
+  - The page in headless Chromium, before and after: body text
+    `rgb(255,255,255)`, a success detail `rgb(0,255,176)`, a failure detail
+    `rgb(255,61,90)`, no script errors.
+  - No old colour codes left.
+  - `node --check` on the page JavaScript.
 
 ## 6.13.67.16-pi02w (2026-10-13)
 
