@@ -1,6 +1,38 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_192_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_193_20261013.py`. Newest entries first.
+
+## 0.0.193 (2026-10-13) — testing
+
+Tunnel start: no more bare "command timed out", and a stuck systemd-resolved is
+caught before it fails the start. Found on magicbox: a `DNS =` line in wg0.conf
+makes wg-quick call `resolvconf`, which on these Pis goes to systemd-resolved.
+resolved was running but not answering on D-Bus, so wg-quick waited 25 s, failed
+and took wg0 down. Step 6 had stopped waiting at 20 s.
+
+- **Step 6, Enable + start the tunnel** (Full and Split tabs):
+  - Waits up to 90 s for the start (was 20 s). It already runs as a background job.
+  - If the start fails or is still running, it shows the unit's state and the last
+    15 lines of its log since the button was pressed, instead of "command timed
+    out".
+- **DNS check before starting** (step 6, and half-tunnel step 2):
+  - It applies when wg0.conf has a `DNS =` line and `resolvconf` is
+    systemd-resolved's, or when a PostUp line uses `resolvectl`.
+  - It asks resolved for its status, with a 5 s limit. If there's no answer, it
+    restarts systemd-resolved once and asks again.
+  - If resolved still doesn't answer, the tunnel is not started. The message says
+    to reboot or take the DNS setting out of wg0.conf.
+  - A `DNS =` line with no `resolvconf` command at all is refused the same way.
+- **DNS card (4a):** the `DNS =` and resolvectl options are refused while
+  systemd-resolved isn't answering, with the restart command. Off is always
+  allowed.
+- Tested:
+  - Mocked unit tests: when the check applies (DNS line, comment, PostUp,
+    openresolv, no resolvconf), the restart path, a refused start that runs
+    nothing, the 90 s wait, and the report.
+  - The report run with magicbox's real log lines.
+  - The DNS card refusals, and half-tunnel step 2 stopping before it changes
+    anything.
 
 ## 0.0.192 (2026-10-13) — testing
 
