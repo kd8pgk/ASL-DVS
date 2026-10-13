@@ -1,6 +1,27 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_194_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_195_20261013.py`. Newest entries first.
+
+## 0.0.195 (2026-10-13) — testing
+
+System Optimization tab: the two swap cards are removed. Turning swap off, or
+removing dphys-swapfile, made low-RAM nodes run out of memory.
+
+- Gone: **dphys-swapfile -- Disable** and **dphys-swapfile -- Uninstall package**,
+  and their actions (`dphys_swap_disable`, `dphys_swap_uninstall`). The server now
+  refuses them as unknown actions.
+- New **Swap -- restore** card. It only shows on a node where this tab turned swap
+  off or removed the package before:
+  - **Revert** turns dphys-swapfile back on the way it was.
+  - **Reinstall** puts the package back with apt (needs internet).
+  - The pill reads green when swap is on.
+- The tab's intro and its line in the tab list no longer mention swap.
+- Tested:
+  - The tab in headless Chromium in three states: never touched (no swap card),
+    disabled by the tab (Revert on, with its command preview), removed by the
+    tab (Reinstall on). No script errors from the tab.
+  - The removed actions refused by the server.
+  - `node --check` on the page JavaScript.
 
 ## 0.0.194 (2026-10-13) — testing
 

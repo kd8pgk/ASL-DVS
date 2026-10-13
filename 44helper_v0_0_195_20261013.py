@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.194"
+APP_VERSION = "0.0.195"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4774,21 +4774,6 @@ def action_sysopt_rsyslog_revert(payload: dict) -> dict:
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "reverted" if outcome["success"] else "one or more steps failed"}
 
-def action_sysopt_swap_disable(payload: dict) -> dict:
-    err = _require_root()
-    if err:
-        return err
-    prior = _sysopt_probe_dphys_swapfile()
-    if not prior.get("applicable"):
-        return {"success": False, "output": "dphys-swapfile is not installed on this node"}
-    outcome = _set_unit_state("dphys-swapfile.service", want_enabled=False, want_active=False)
-    if outcome["success"]:
-        _sysopt_state_set_item("dphys_swap", {"was_enabled": prior["enabled"] == "enabled",
-                                               "was_active": prior["active"] == "active"})
-        log("System Optimization: dphys-swapfile disabled")
-    return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
-            "output": "disabled (swap off)" if outcome["success"] else "one or more steps failed"}
-
 def action_sysopt_swap_revert(payload: dict) -> dict:
     err = _require_root()
     if err:
@@ -4805,33 +4790,11 @@ def action_sysopt_swap_revert(payload: dict) -> dict:
             "output": "reverted (swap restored)" if outcome["success"] else "one or more steps failed"}
 
 def _run_pkg_unit_cp(verb: str, pkg: str) -> subprocess.CompletedProcess:
-    action = {("purge", "dphys-swapfile"): "dphys_swap_uninstall", ("install", "dphys-swapfile"): "dphys_swap_reinstall",
+    action = {("install", "dphys-swapfile"): "dphys_swap_reinstall",
               ("purge", "man-db"): "mandb_remove", ("install", "man-db"): "mandb_reinstall"}[(verb, pkg)]
     res = _run_pkg_unit(f"sysopt_{action}", f"apt-get {verb} -y {_APT_NI_OPTS} {pkg}")
     rc = res["returncode"] if res["returncode"] is not None else (0 if res["success"] else 1)
     return subprocess.CompletedProcess([verb, pkg], rc, res["output"], "")
-
-def action_sysopt_swap_uninstall(payload: dict) -> dict:
-    err = _require_root()
-    if err:
-        return err
-    prior = _sysopt_probe_dphys_swapfile()
-    if not prior.get("applicable"):
-        return {"success": False, "output": "dphys-swapfile is not installed on this node"}
-    _set_unit_state("dphys-swapfile.service", want_enabled=False, want_active=False)
-    dry_run = _apt_dry_run_remove("dphys-swapfile")
-    try:
-        r = _run_pkg_unit_cp("purge", "dphys-swapfile")
-        purge_ok = r.returncode == 0
-        purge_output = ((r.stdout or "") + (r.stderr or "")).strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        purge_ok, purge_output = False, str(exc)
-    result = {"success": purge_ok, "would_remove": dry_run["would_remove"], "output": purge_output,
-              "commands": ["apt-get remove --dry-run dphys-swapfile", "apt-get purge -y dphys-swapfile"]}
-    if purge_ok:
-        _sysopt_state_set_item("dphys_swap_uninstall", {"installed": True})
-        log(f"System Optimization: dphys-swapfile purged (also removed: {dry_run['would_remove']})")
-    return result
 
 def action_sysopt_swap_reinstall(payload: dict) -> dict:
     err = _require_root()
@@ -4927,9 +4890,7 @@ _SYSTEM_OPT_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "journald_volatile_revert": action_sysopt_journald_volatile_revert,
     "rsyslog_disable": action_sysopt_rsyslog_disable,
     "rsyslog_revert": action_sysopt_rsyslog_revert,
-    "dphys_swap_disable": action_sysopt_swap_disable,
     "dphys_swap_revert": action_sysopt_swap_revert,
-    "dphys_swap_uninstall": action_sysopt_swap_uninstall,
     "dphys_swap_reinstall": action_sysopt_swap_reinstall,
     "mandb_timer_disable": action_sysopt_mandb_timer_disable,
     "mandb_timer_revert": action_sysopt_mandb_timer_revert,
@@ -4937,7 +4898,7 @@ _SYSTEM_OPT_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "mandb_reinstall": action_sysopt_mandb_reinstall,
 }
 
-_SYSTEM_OPT_JOB_ACTIONS = {"dphys_swap_uninstall", "dphys_swap_reinstall", "mandb_remove", "mandb_reinstall"}
+_SYSTEM_OPT_JOB_ACTIONS = {"dphys_swap_reinstall", "mandb_remove", "mandb_reinstall"}
 
 def _sysopt_job_text(result: dict) -> dict:
     lines = []
@@ -14759,7 +14720,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("amp", "Ampersand", "t-amp", "Stages 1-4 (amp-server radio node + amp-hub conference hub; S3 tarball install, conflict pre-flight, systemd/udev/env manual blocks)"),
     ("cloudflare", "Cloudflare", "t-cloudflare", "Stages 1-4 (cloudflared connector: token dashboard-managed + quick TryCloudflare; outbound-only, bypasses the firewall, WireGuard-coexistence pre-flight)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
-    ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, dphys-swapfile, fstab noatime, mandb"),
+    ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
     ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
@@ -20004,8 +19965,10 @@ function refreshSystemOpt() {
     sysoptRenderFstab(d.fstab_noatime);
     sysoptRenderJournald(d.journald);
     sysoptRenderUnitCard(d.rsyslog, 'sysopt-rsyslog-pill', 'sysopt-rsyslog-detail', true);
-    sysoptRenderUnitCard(d.dphys_swapfile, 'sysopt-swap-pill', 'sysopt-swap-detail', true);
-    sysoptRenderPackagePresenceCard(d.dphys_swapfile, 'sysopt-swap-uninstall-pill', 'not installed');
+    var swapItems = (d.applied_items || []).filter(function(k) { return k === 'dphys_swap' || k === 'dphys_swap_uninstall'; });
+    var swapCard = document.getElementById('sysopt-swap-restore-card');
+    if (swapCard) { swapCard.style.display = swapItems.length ? '' : 'none'; }
+    if (swapItems.length) { sysoptRenderUnitCard(d.dphys_swapfile, 'sysopt-swap-pill', 'sysopt-swap-detail', false); }
     sysoptRenderUnitCard(d.mandb, 'sysopt-mandb-timer-pill', 'sysopt-mandb-timer-detail', true);
     sysoptRenderPackagePresenceCard(d.mandb, 'sysopt-mandb-remove-pill', 'not installed');
     sysoptApplyRevertAvailability(d.applied_items || []);
@@ -20018,7 +19981,6 @@ function sysoptOutId(action) {
   if (action.indexOf('fstab_noatime') === 0) return 'sysopt-fstab-out';
   if (action.indexOf('journald_volatile') === 0) return 'sysopt-journald-out';
   if (action.indexOf('rsyslog') === 0) return 'sysopt-rsyslog-out';
-  if (action.indexOf('dphys_swap_uninstall') === 0 || action === 'dphys_swap_reinstall') return 'sysopt-swap-uninstall-out';
   if (action.indexOf('dphys_swap') === 0) return 'sysopt-swap-out';
   if (action.indexOf('mandb_timer') === 0) return 'sysopt-mandb-timer-out';
   if (action.indexOf('mandb_remove') === 0 || action === 'mandb_reinstall') return 'sysopt-mandb-remove-out';
@@ -21799,8 +21761,8 @@ def _render_system_opt_panel() -> str:
     return """
 <div class="tab-panel hidden" id="panel-system_opt">
   <div class="ov-banner lvl-info">
-    Reduces SD-card wear on Pi Zero 2W-class nodes: less logging written to disk, no swap
-    thrashing a card, no journal growth, faster boot. Disabling rsyslog and switching journald
+    Reduces SD-card wear on Pi Zero 2W-class nodes: less logging written to disk, no journal
+    growth, faster boot. Disabling rsyslog and switching journald
     to volatile storage both mean <b>no log survives a crash or power loss</b> -- normal and
     expected for this goal, worth knowing before a "why did this node reboot" investigation.
   </div>
@@ -21864,45 +21826,23 @@ Revert: <span id="sysopt-rsyslog-revert-cmd">nothing to revert yet</span></div>
     <div class="asl3-console shown placeholder" id="sysopt-rsyslog-out">(no action run yet)</div>
   </div>
 
-  <div class="step-card">
+  <div class="step-card" id="sysopt-swap-restore-card" style="display:none">
     <div class="step-head">
-      <div class="step-title">dphys-swapfile -- Disable</div>
+      <div class="step-title">Swap -- restore</div>
       <span class="step-pill not_started" id="sysopt-swap-pill">checking…</span>
     </div>
     <div class="step-body" id="sysopt-swap-detail">checking…</div>
-    <div class="ov-banner lvl-warn">Disabling swap on a low-RAM Pi (e.g. a Pi Zero 2W) is a
-      real out-of-memory risk under load -- know your node's headroom before disabling.</div>
+    <div class="ov-banner lvl-warn">Turning swap off or removing dphys-swapfile made low-RAM nodes run out of
+      memory, so those cards were removed. This tab changed swap on this node earlier: put it back here.</div>
     <div class="step-actions">
-      <button class="btn-run" onclick="sysoptRunSimple(this,'dphys_swap_disable','Stop and disable dphys-swapfile (turn swap off) on this node? This is offline-revertible.')">Disable</button>
-      <button class="btn-run" id="sysopt-swap-revert-btn" onclick="sysoptRunSimple(this,'dphys_swap_revert','Restore dphys-swapfile to its enabled/active state from before this tab changed it?')">Revert</button>
-      <button class="btn-copy" onclick="sysoptCopyStep(this,'dphys-swapfile -- Disable','sysopt-swap-cmd','sysopt-swap-out')">Copy</button>
+      <button class="btn-run" id="sysopt-swap-revert-btn" onclick="sysoptRunSimple(this,'dphys_swap_revert','Turn dphys-swapfile back on, the way it was before this tab changed it?')">Revert (turn swap back on)</button>
+      <button class="btn-run" id="sysopt-swap-reinstall-btn" onclick="sysoptRunSimple(this,'dphys_swap_reinstall','Reinstall dphys-swapfile via apt? This node needs internet access right now.')">Reinstall dphys-swapfile</button>
+      <button class="btn-copy" onclick="sysoptCopyStep(this,'Swap -- restore','sysopt-swap-cmd','sysopt-swap-out')">Copy</button>
     </div>
-    <div class="cmd-preview" id="sysopt-swap-cmd">Disable:
-$ systemctl stop dphys-swapfile.service
-$ systemctl disable dphys-swapfile.service
-Revert: <span id="sysopt-swap-revert-cmd">nothing to revert yet</span></div>
-    <div class="asl3-console shown placeholder" id="sysopt-swap-out">(no action run yet)</div>
-  </div>
-
-  <div class="step-card">
-    <div class="step-head">
-      <div class="step-title">dphys-swapfile -- Uninstall package</div>
-      <span class="step-pill not_started" id="sysopt-swap-uninstall-pill">checking…</span>
-    </div>
-    <div class="step-body">Separate from Disable above -- removes the package entirely.
-      <b>Undoing this needs internet access on the node</b> (apt reinstall), unlike Disable's
-      fully-offline revert. Shows the real removal cascade before purging for real.</div>
-    <div class="step-actions">
-      <button class="btn-purge" onclick="sysoptRunDangerous(this,'dphys_swap_uninstall','This will run apt-get purge on dphys-swapfile.','Undoing this needs internet access on this node to reinstall. Continue?')">Uninstall package</button>
-      <button class="btn-run" id="sysopt-swap-reinstall-btn" onclick="sysoptRunSimple(this,'dphys_swap_reinstall','Reinstall dphys-swapfile via apt? This node needs internet access right now.')">Reinstall</button>
-      <button class="btn-copy" onclick="sysoptCopyStep(this,'dphys-swapfile -- Uninstall/Reinstall','sysopt-swap-uninstall-cmd','sysopt-swap-uninstall-out')">Copy</button>
-    </div>
-    <div class="cmd-preview" id="sysopt-swap-uninstall-cmd">Uninstall:
-$ apt-get remove --dry-run dphys-swapfile
-$ apt-get purge -y dphys-swapfile
+    <div class="cmd-preview" id="sysopt-swap-cmd">Revert: <span id="sysopt-swap-revert-cmd">nothing to revert</span>
 Reinstall:
 $ apt-get install -y dphys-swapfile</div>
-    <div class="asl3-console shown placeholder" id="sysopt-swap-uninstall-out">(no action run yet)</div>
+    <div class="asl3-console shown placeholder" id="sysopt-swap-out">(no action run yet)</div>
   </div>
 
   <div class="step-card">
