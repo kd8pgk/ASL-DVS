@@ -1,6 +1,28 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_181_20261012.py`. Newest entries first.
+Current file: `44helper_v0_0_182_20261013.py`. Newest entries first.
+
+## 0.0.182 (2026-10-13)
+
+The Config tab's **Standard configuration** card is removed: its settings were
+breaking nodes. 44helper serves both builds.
+
+- Gone: the card (the list of settings that differ from stock ASL3 and DVSwitch,
+  with Apply and Undo), its `std_preview`, `std_apply` and `std_revert` actions
+  (now refused as unknown), the `standard` part of the Config tab's status, and the
+  helpers only it used. The other Config tab cards are unchanged.
+- Nothing is changed on the node. Settings the card applied before stay as they
+  are. Each Apply took an automatic copy first ("standard ..."), so Config, Restore
+  can put the files back from that copy. `standard_applied.json` is left in the
+  library folder and no longer read.
+- The Travel Node preset still gives bridge nodes (USRP channels) the upstream
+  USRP2M17 values, as before.
+- Naming: the page title, login heading and logo say "44 Helper" (no
+  "ASL-DVS-M17"). The service description, install messages, reports and the API's
+  `app` name are unchanged.
+- Tested: page JavaScript (`node --check`); the Config tab rendered in headless
+  Chromium with real status data (every other card present, no script errors);
+  `std_*` actions refused; status builds without the `standard` key.
 
 ## 0.0.181 (2026-10-12)
 
