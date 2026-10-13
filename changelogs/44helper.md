@@ -1,6 +1,149 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_187x_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_192_20261013.py`. Newest entries first.
+
+## 0.0.192 (2026-10-13) — testing
+
+Audit of the half-tunnel card (0.0.188x–0.0.191x), with fixes. The version drops
+the `x`.
+
+- **Check first:**
+  - Now blocks on `SaveConfig = true` in wg0.conf. wg-quick rewrites the file
+    when the tunnel stops, which would drop the half-tunnel markers and leave
+    Remove permanent with nothing to find.
+  - New note: once on, other nodes and EchoLink reach you at the 44 address
+    only. A router port forward to the IAX or EchoLink ports stops working,
+    because the replies go out the tunnel.
+- **Tunnel server inside 44Net:** the pin to the normal route now also works
+  when the default route has no gateway (for example `default dev ppp0`), in
+  step 3 and in the saved PostUp line. Before, no pin was added, so the tunnel's
+  own packets went into the tunnel.
+- **Check 6 (LAN tools):** it used to connect to the Pi's own LAN address, which
+  always goes over loopback, so it could not fail on a routing problem. It now
+  also checks that each tool's replies to the LAN gateway leave by the LAN link.
+- **Check 10:** the hint for closed ports said to re-run button 5, which is
+  locked once step 5 is done. It now says Undo now, then run the steps again.
+- **Registration probe:** "Unregistered" no longer counts as registered.
+- **Make permanent:**
+  - The home-folder user must be root or a login user (UID 1000 or above).
+    Before, a system user such as `www-data` was accepted, which put the wg0.conf
+    copy (with its private key) in that user's home.
+  - The script and backup are written without following a symlink left in the
+    user's home folder.
+  - If clearing the test setup fails, it says so before the checks run.
+- **Removal script:** if the marked lines can't be taken out, the fallback
+  restores from the root-owned copies first (`/root`, then the instmon library),
+  and the copy in the user's home last.
+- Checked against the code and found correct: the 44Net ranges (44.0.0.0/9 and
+  44.128.0.0/10), the rule order and `suppress_prefixlength 0`, the rp_filter
+  rule (the higher of `all` and `wg0` wins, so 2 on wg0 is enough), the IAX
+  `sport` and EchoLink 5198-5199/udp + 5200/tcp rules, and the PostUp lines
+  (no `#`, which wg-quick would cut off).
+- Tested:
+  - Mocked unit tests for each fix, including a symlink planted in place of the
+    temporary file.
+  - The gateway lookup in the PostUp line, run on sample `ip route` output with
+    and without `via`.
+  - `bash -n` on every PostUp/PostDown line and on the removal script.
+  - `node --check` on the page JavaScript.
+
+## 0.0.191x (2026-10-13) — testing
+
+Half tunnel, stage 4 of 4: **Make permanent** and **Remove permanent**.
+
+- **Make permanent** (button 10) only unlocks when steps 2–6 are done and the
+  last checks, run after them and under 15 minutes old, are all green or grey.
+  It saves each piece in its normal home:
+  - wg0.conf: `Table = off`, AllowedIPs `0.0.0.0/0`, and the routes and rules as
+    PostUp/PostDown lines between `# 44helper-half-begin` / `-end` markers. The
+    lines work out the gateway at start-up, so a travel node on another network
+    still works.
+  - firewalld: the ports the test opened, saved in wg0's zone.
+  - `/etc/sysctl.d/90-44helper-halftunnel.conf`: loose return-path check on wg0.
+- It also writes `remove_half_tunnel.sh` into the chosen user's home folder
+  (default: the UID 1000 user) and `/root`, a 0600 copy of the original wg0.conf
+  next to each, and a login reminder in `/etc/profile.d/`.
+- Then it switches over: clears the test setup, starts the tunnel from the saved
+  wg0.conf, reloads the firewall and re-runs the checks. If a check fails, it
+  takes everything back out and restarts the test with a fresh 15-minute timer.
+  If a check is only waiting (registration), it stays saved.
+- **Remove permanent** (button 11, double confirm) runs the same steps as
+  `remove_half_tunnel.sh`. The script is plain bash, needs no 44helper, and asks
+  for sudo by itself. It removes the marked lines and puts AllowedIPs back, so
+  any other edits to wg0.conf are kept; the backup copy is the fallback.
+- Guard: the Split tab's AllowedIPs repair is switched off while the half tunnel
+  is being tested or is permanent.
+- Tested:
+  - Mocked end-to-end run: Make permanent, the rollback after a failed check
+    (back to test, timer re-armed, steps re-applied), Remove permanent.
+  - The removal script against stub commands: wg0.conf came back byte-identical.
+  - `bash -n` on every PostUp/PostDown line, as wg-quick reads them.
+  - jsdom card render in each state; `node --check` on the page JavaScript.
+
+## 0.0.190x (2026-10-13) — testing
+
+Half tunnel, stage 3 of 4: **Run checks** (button 7), 14 checks in four groups.
+
+- **Tunnel:** up and talking to the 44Net server, running in half mode, no
+  conflicting outbound block rules.
+- **Normal route:** internet still uses the normal link, DNS works, and the LAN
+  tools (dashboard, sysmon, instmon, 44helper) still answer. Replies to your
+  browser must not go out wg0.
+- **Half-tunnel pieces:** the route table, all routing rules, ASL traffic really
+  going into the tunnel from the 44 address, ports open on wg0's zone and the
+  return-path check loose.
+- **Services:** DVSwitch (reads the DMR login lines in its log), usrp2m17, ASL
+  registration showing the 44 address, EchoLink directory loaded.
+- Results are green, red, grey (not installed, skipped) or amber (waiting).
+  Registration and EchoLink go amber for up to 6 minutes while they update.
+- Check first records how services 11–14 looked before the test, so a failure
+  that was already there is labelled that way.
+- A red line on checks 4, 5 or 6 shows a banner recommending Undo now.
+
+## 0.0.189x (2026-10-13) — testing
+
+Half tunnel, stage 2 of 4: the temporary test buttons. Nothing is written to
+disk except under `/run`, so a reboot clears it.
+
+- **1. Arm auto-undo:** a 15-minute systemd timer that runs
+  `/run/44helper-half/undo.sh`, even if the page or SSH drops. Steps stay greyed
+  out until it's armed, and each step needs the one before it.
+- **2. Restart tunnel in half mode:** stops `wg-quick@wg0` and brings wg0 up from
+  a temporary copy in `/run` with `Table = off` and AllowedIPs `0.0.0.0/0`.
+- **3. Add tunnel route table:** table 4444 with a default route via wg0, plus
+  the 44Net routes. A tunnel server inside 44Net is pinned to the normal route.
+- **4. Send ASL and EchoLink into the tunnel:** routing rules at priority
+  1100–1105: Asterisk's user, the IAX port, EchoLink 5198-5199 and 5200, and the
+  44 address. LAN, 44Net and the tunnel server keep their normal routes.
+  - These replace the planned firewall marking + 44-address rule. That would
+    have made ASL answer incoming calls from a different port.
+- **5. Open tunnel ports:** the IAX port and EchoLink, runtime only, on wg0's
+  zone. Ports that were already open are left alone.
+- **6. Loosen the return-path check on wg0:** rp_filter 2.
+- **Run 2–6 in order** stops at the first failure and puts everything back. A
+  failed step puts back its own part first.
+- **8. Undo now** and **9. Keep for now** (cancels the timer).
+- `undo.sh` is rewritten after every step. It keeps going past a stuck piece,
+  logs to `/run/44helper-half/undo.log` (shown on the card) and flags problems.
+- Guard: Commit all runtime changes is refused during a test, and Reload
+  firewalld warns that it closed the test ports.
+
+## 0.0.188x (2026-10-13) — testing
+
+Half tunnel, stage 1 of 4: a new **Half tunnel (ASL + EchoLink only)** card at
+the top of the Firewall tab, with **0. Check first** (read-only).
+
+- It finds the 44 address, the tunnel server, the IAX port (from iax.conf), the
+  EchoLink state, the normal route, the LAN, wg0's firewall zone and Asterisk's
+  user.
+- It blocks on: no wg0.conf, an existing `Table =` line, an odd AllowedIPs, the
+  ARDC fallback unit, firewalld not running, an `ip` command too old, the normal
+  route pointing into the tunnel, wg0 not in a zone, or Full Tunnel outbound
+  block rules.
+- It notes: a split wg0.conf (the test uses a copy), Asterisk running as root,
+  and other programs running as the asterisk user.
+- It backs up wg0.conf to the instmon library as `wg0.conf.pre-halftunnel`.
+- New route `GET /api/firewall/half_status`.
 
 ## 0.0.187x (2026-10-13) — testing
 

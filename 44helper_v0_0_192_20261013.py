@@ -13,6 +13,7 @@ import hmac
 import ipaddress
 import json
 import os
+import pwd
 import random
 import re
 import secrets
@@ -41,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.187x"
+APP_VERSION = "0.0.192"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -5512,8 +5513,9 @@ def status_wg_allowed_ips() -> dict:
         shape = "split"
     else:
         shape = "narrowed-other"
+    half = _half_mode()
     return {"conf_exists": True, "allowed_ips": allowed_ips, "shape": shape,
-            "repairable": shape == "full"}
+            "repairable": shape == "full" and half == "off", "half_mode": half}
 
 def action_wg_repair_allowed_ips() -> dict:
     err = _require_root()
@@ -5528,6 +5530,11 @@ def action_wg_repair_allowed_ips() -> dict:
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Read failed: {e}"}
     before = status_wg_allowed_ips()
+    if before.get("half_mode", "off") != "off":
+        return {"success": False, "verified": False,
+                "output": ("Refused: the half tunnel is " + before["half_mode"] + " on this node. It needs AllowedIPs = 0.0.0.0/0 "
+                           "so nodes outside 44Net can reach you; narrowing it would cut them off. Remove the half tunnel "
+                           "(Firewall tab) first if you want a split tunnel instead.")}
     if before["shape"] == "split":
         return {"success": True, "verified": True,
                 "output": f"AllowedIPs is already the split-tunnel set ({before['allowed_ips']}) -- nothing to do."}
@@ -7625,6 +7632,10 @@ def action_fw_commit_all_runtime() -> dict:
     err = _require_root()
     if err:
         return err
+    if _half_mode() == "testing":
+        return {"success": False, "verified": False,
+                "output": ("Refused: a half-tunnel test is running. Committing now would make its temporary "
+                           "ports permanent behind its back. Use Undo now or Make permanent on the half-tunnel card first.")}
     r = _run_argv(["firewall-cmd", "--runtime-to-permanent"])
     return {"success": r["success"], "verified": r["success"], "output": r["output"]}
 
@@ -7633,7 +7644,11 @@ def action_fw_reload() -> dict:
     if err:
         return err
     r = _reload_firewalld()
-    return {"success": r["success"], "verified": r["success"], "output": r["output"]}
+    out = r["output"]
+    if _half_mode() == "testing":
+        out += ("\nNote: a half-tunnel test is running. The reload closed the ports it opened on the tunnel; "
+                "use Undo now and run the test again.")
+    return {"success": r["success"], "verified": r["success"], "output": out}
 
 def action_fw_add_service_zone(zone: str, service: str) -> dict:
     err = _require_root()
@@ -7723,6 +7738,1639 @@ def action_fw_inspect_zone(zone: str) -> dict:
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         return {"success": False, "output": f"list-all failed: {e}"}
     return {"success": r.returncode == 0, "output": (r.stdout or "") + (r.stderr or "")}
+
+_HALF_RUN_DIR = "/run/44helper-half"
+_HALF_STATE_PATH = os.path.join(_HALF_RUN_DIR, "state.json")
+_HALF_TEMP_CONF = os.path.join(_HALF_RUN_DIR, "wg0.conf")
+_HALF_UNDO_SH = os.path.join(_HALF_RUN_DIR, "undo.sh")
+_HALF_UNDO_LOG = os.path.join(_HALF_RUN_DIR, "undo.log")
+_HALF_UNDO_FAILED = os.path.join(_HALF_RUN_DIR, "undo_failed")
+_HALF_TIMER = "44helper-halfundo"
+_HALF_TIMER_SEC = 15 * 60
+_HALF_TABLE = "4444"
+_HALF_PRIOS = {"main": 1100, "src44": 1101, "uid": 1102, "iax": 1103, "el_udp": 1104, "el_tcp": 1105}
+_HALF_NETS = ("44.0.0.0/9", "44.128.0.0/10")
+_HALF_EL_PORTS = "5198-5199/udp"
+_HALF_CHECKFIRST_MAX_AGE = 30 * 60
+_HALF_CHECKS_MAX_AGE = 15 * 60
+_HALF_WAIT_SEC = 6 * 60
+_HALF_BEGIN = "# 44helper-half-begin"
+_HALF_END = "# 44helper-half-end"
+_HALF_PERM_PATH = str(CONFIG_DIR / "halftunnel.json")
+_HALF_SYSCTL_FILE = "/etc/sysctl.d/90-44helper-halftunnel.conf"
+_HALF_PROFILE_FILE = "/etc/profile.d/44helper-halftunnel.sh"
+_HALF_SCRIPT_NAME = "remove_half_tunnel.sh"
+_HALF_BAK_NAME = "remove_half_tunnel.wg0.conf.bak"
+_HALF_LOCK = threading.Lock()
+_HALF_FEATURES: list[str] = ["check"]
+_HALF_IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})\b")
+
+def _half_lib_pre_path() -> str:
+    library_dir = os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")
+    return os.path.join(library_dir, "config", "wg0.conf.pre-halftunnel")
+
+def _half_q(argv: list[str], timeout: int = 8, input_text: str | None = None) -> tuple[int, str]:
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, input=input_text)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+        return -1, str(exc)
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
+def _half_read_json(path: str) -> dict | None:
+    try:
+        with open(path, "r") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+def _half_write_json(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as fh:
+        json.dump(data, fh, indent=1, sort_keys=True)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+def _half_state() -> dict | None:
+    return _half_read_json(_HALF_STATE_PATH)
+
+def _half_save_state(st: dict) -> None:
+    _half_write_json(_HALF_STATE_PATH, st)
+
+def _half_perm() -> dict | None:
+    return _half_read_json(_HALF_PERM_PATH)
+
+def _half_wg_text(path: str | None = None) -> str | None:
+    try:
+        with open(path or WG0_CONF_PATH, "r", newline="") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+def _half_conf_is_permanent(text: str | None) -> bool:
+    if not text:
+        return False
+    return any(ln.strip() == _HALF_BEGIN for ln in text.splitlines())
+
+def _half_mode() -> str:
+    if _half_conf_is_permanent(_half_wg_text()):
+        return "permanent"
+    st = _half_state()
+    if st and (st.get("armed_at") or st.get("steps")):
+        return "testing"
+    return "off"
+
+def _half_in_44net(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in ipaddress.ip_network(n) for n in _HALF_NETS)
+
+def _half_addr44(parsed: dict) -> str:
+    for part in _wg_conf_field(parsed.get("interface", {}), "Address").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ip = ipaddress.ip_interface(part).ip
+        except ValueError:
+            continue
+        if ip.version == 4 and _half_in_44net(str(ip)):
+            return str(ip)
+    return ""
+
+def _half_endpoint(parsed: dict) -> tuple[str, str]:
+    if not parsed.get("peers"):
+        return "", ""
+    ep = _wg_conf_field(parsed["peers"][0], "Endpoint")
+    if not ep:
+        return "", ""
+    host = ep.rsplit(":", 1)[0].strip("[]") if ":" in ep else ep
+    try:
+        ip = ipaddress.ip_address(host)
+        return host, str(ip) if ip.version == 4 else ""
+    except ValueError:
+        pass
+    rc, out = _half_q(["getent", "ahostsv4", host], timeout=6)
+    if rc == 0:
+        m = _HALF_IP_RE.search(out)
+        if m:
+            return host, m.group(1)
+    return host, ""
+
+def _half_main_default() -> dict:
+    rc, out = _half_q(["ip", "-4", "route", "show", "table", "main", "default"])
+    line = out.splitlines()[0] if rc == 0 and out else ""
+    toks = line.split()
+    via = toks[toks.index("via") + 1] if "via" in toks and toks.index("via") + 1 < len(toks) else ""
+    dev = toks[toks.index("dev") + 1] if "dev" in toks and toks.index("dev") + 1 < len(toks) else ""
+    return {"via": via, "dev": dev, "raw": line}
+
+def _half_lan_nets() -> list[str]:
+    rc, out = _half_q(["ip", "-4", "-o", "addr", "show"])
+    nets: list[str] = []
+    if rc != 0:
+        return nets
+    for line in out.splitlines():
+        toks = line.split()
+        if len(toks) < 4 or "inet" not in toks:
+            continue
+        dev = toks[1].rstrip(":")
+        if dev == "lo" or dev.startswith("wg"):
+            continue
+        try:
+            net = ipaddress.ip_interface(toks[toks.index("inet") + 1]).network
+        except (ValueError, IndexError):
+            continue
+        if net.is_link_local or not net.is_private:
+            continue
+        item = f"{net} ({dev})"
+        if item not in nets:
+            nets.append(item)
+    return nets
+
+def _half_iax_port() -> str:
+    try:
+        return _cfgr_bindport()
+    except Exception:
+        return "4569"
+
+def _half_asterisk_user() -> dict:
+    try:
+        uid = pwd.getpwnam("asterisk").pw_uid
+    except KeyError:
+        uid = None
+    rc, out = _half_q(["ps", "-o", "uid=", "-C", "asterisk"])
+    running = sorted({int(x) for x in out.split() if x.isdigit()}) if rc == 0 else []
+    others: list[str] = []
+    if uid is not None:
+        rc2, out2 = _half_q(["ps", "-u", str(uid), "-o", "comm="])
+        if rc2 == 0:
+            others = sorted({x.strip() for x in out2.splitlines() if x.strip() and x.strip() != "asterisk"})
+    use_uid = uid is not None and uid != 0 and (not running or uid in running)
+    return {"uid": uid, "running_uids": running, "others": others, "use_uid_rule": use_uid}
+
+def _half_echolink_enabled() -> bool:
+    rc, out = _half_q(["asterisk", "-rx", "module show like chan_echolink"])
+    if rc == 0 and "modules loaded" in out:
+        return "chan_echolink.so" in out and not re.search(r"\b0 modules loaded", out)
+    return os.path.exists(_CFGR_ECHOLINK)
+
+def _half_zone() -> str:
+    rc, out = _half_q(["firewall-cmd", "--permanent", "--get-zone-of-interface=wg0"])
+    if rc == 0 and out and "no zone" not in out.lower():
+        return out.split()[0]
+    return _fw_zone_of_iface("wg0")
+
+def _half_unit_loaded(unit: str) -> bool:
+    rc, out = _half_q(["systemctl", "show", "-p", "LoadState", "--value", unit])
+    return rc == 0 and out.strip() == "loaded"
+
+def _half_direct_conflicts() -> list[str]:
+    found: list[str] = []
+    for extra in ([], ["--permanent"]):
+        rc, out = _half_q(["firewall-cmd"] + extra + ["--direct", "--get-all-rules"])
+        if rc != 0:
+            continue
+        for line in out.splitlines():
+            toks = line.split()
+            if "OUTPUT" in toks and ("REJECT" in toks or "DROP" in toks) and line.strip() not in found:
+                found.append(line.strip())
+    return found
+
+def _half_ip_features() -> bool:
+    _rc, out = _half_q(["ip", "rule", "help"])
+    return all(w in out for w in ("uidrange", "sport", "suppress_prefixlength"))
+
+def _half_listening_tcp() -> set[int]:
+    rc, out = _half_q(["ss", "-ltnH"])
+    ports: set[int] = set()
+    if rc != 0:
+        return ports
+    for line in out.splitlines():
+        toks = line.split()
+        if len(toks) >= 4:
+            tail = toks[3].rsplit(":", 1)[-1]
+            if tail.isdigit():
+                ports.add(int(tail))
+    return ports
+
+def _half_tool_ports() -> dict[int, str]:
+    try:
+        own = _cfg.getint("server", "port", fallback=9997)
+    except Exception:
+        own = 9997
+    return {8989: "Dashboard", 9999: "sysmon", 8990: "instmon", own: "44helper"}
+
+def _half_rp_value(scope: str) -> str:
+    try:
+        with open(f"/proc/sys/net/ipv4/conf/{scope}/rp_filter") as fh:
+            return fh.read().strip()
+    except OSError:
+        return ""
+
+_HALF_DMR_OK_RE = re.compile(r"logged into the master successfully", re.I)
+_HALF_DMR_BAD_RE = re.compile(r"timed out|has failed|closing dmr network|login.*fail", re.I)
+
+def _half_probe_dvs() -> dict:
+    units = [u for u in ("mmdvm_bridge.service", "analog_bridge.service") if _half_unit_loaded(u)]
+    if not units:
+        return {"installed": False, "active": False, "dmr": "", "units": []}
+    active = all(_systemctl_is_active(u) for u in units)
+    dmr = ""
+    try:
+        logs = sorted((os.path.join("/var/log/mmdvm", f) for f in os.listdir("/var/log/mmdvm")
+                       if f.startswith("MMDVM_Bridge") and f.endswith(".log")), key=os.path.getmtime)
+    except OSError:
+        logs = []
+    if logs:
+        try:
+            with open(logs[-1], "rb") as fh:
+                fh.seek(max(0, os.path.getsize(logs[-1]) - 262144))
+                tail = fh.read().decode("utf-8", "replace")
+            for line in tail.splitlines():
+                if "DMR" not in line:
+                    continue
+                if _HALF_DMR_OK_RE.search(line):
+                    dmr = "in"
+                elif _HALF_DMR_BAD_RE.search(line):
+                    dmr = "out"
+        except OSError:
+            pass
+    return {"installed": True, "active": active, "dmr": dmr, "units": units}
+
+def _half_probe_usrp() -> dict:
+    if not _half_unit_loaded("usrp2m17.service"):
+        return {"installed": False, "active": False}
+    return {"installed": True, "active": _systemctl_is_active("usrp2m17.service")}
+
+def _half_probe_reg(addr44: str) -> dict:
+    if not shutil.which("asterisk"):
+        return {"available": False, "why": "not installed", "ips": [], "has44": False}
+    if not _systemctl_is_active("asterisk.service"):
+        return {"available": False, "why": "not running", "ips": [], "has44": False}
+    for cmd in ("rpt show registrations", "iax2 show registry"):
+        rc, out = _half_q(["asterisk", "-rx", cmd])
+        if rc != 0 or "no such command" in out.lower():
+            continue
+        ips = [ip for ip in _HALF_IP_RE.findall(out) if not ip.startswith("127.")]
+        if ips:
+            return {"available": True, "why": "", "ips": ips, "has44": bool(addr44) and addr44 in ips,
+                    "registered": bool(re.search(r"(?<!un)registered", out, re.I)), "cmd": cmd}
+    return {"available": True, "why": "no registration shown", "ips": [], "has44": False, "registered": False}
+
+def _half_probe_el(enabled: bool) -> dict:
+    if not enabled:
+        return {"enabled": False, "entries": None}
+    rc, out = _half_q(["asterisk", "-rx", "echolink dbdump"], timeout=10)
+    if rc != 0 or "no such command" in out.lower():
+        return {"enabled": True, "entries": None}
+    return {"enabled": True, "entries": sum(1 for ln in out.splitlines() if re.search(r"\d{3,}", ln))}
+
+def _half_baseline(values: dict) -> dict:
+    listening = _half_listening_tcp()
+    return {
+        "dvs": _half_probe_dvs(),
+        "usrp": _half_probe_usrp(),
+        "reg": _half_probe_reg(values.get("addr44", "")),
+        "el": _half_probe_el(bool(values.get("echolink"))),
+        "tools": sorted(p for p in _half_tool_ports() if p in listening),
+    }
+
+def _half_ports(values: dict) -> list[str]:
+    ports = [f"{values.get('iax_port', '4569')}/udp"]
+    if values.get("echolink"):
+        ports.append(_HALF_EL_PORTS)
+    return ports
+
+def _half_rule_specs(values: dict) -> list[tuple[int, list[str], str]]:
+    t = _HALF_TABLE
+    specs = [(_HALF_PRIOS["main"], ["lookup", "main", "suppress_prefixlength", "0"],
+              "LAN, 44Net and the tunnel server keep their normal routes")]
+    if values.get("addr44"):
+        specs.append((_HALF_PRIOS["src44"], ["from", values["addr44"], "lookup", t],
+                      "anything sent from your 44 address uses the tunnel"))
+    if values.get("use_uid_rule") and values.get("asterisk_uid") is not None:
+        u = str(values["asterisk_uid"])
+        specs.append((_HALF_PRIOS["uid"], ["uidrange", f"{u}-{u}", "lookup", t],
+                      "all of Asterisk's internet traffic (IAX, EchoLink, registration) uses the tunnel"))
+    specs.append((_HALF_PRIOS["iax"], ["ipproto", "udp", "sport", str(values.get("iax_port", "4569")), "lookup", t],
+                  f"IAX port {values.get('iax_port', '4569')} uses the tunnel"))
+    if values.get("echolink"):
+        specs.append((_HALF_PRIOS["el_udp"], ["ipproto", "udp", "sport", "5198-5199", "lookup", t],
+                      "EchoLink 5198-5199 uses the tunnel"))
+        specs.append((_HALF_PRIOS["el_tcp"], ["ipproto", "tcp", "dport", "5200", "lookup", t],
+                      "EchoLink directory login (5200) uses the tunnel"))
+    return specs
+
+def _half_route_cmds(values: dict) -> list[list[str]]:
+    cmds: list[list[str]] = []
+    if values.get("endpoint_in_44") and values.get("gw_dev"):
+        via = ["via", values["gw_via"]] if values.get("gw_via") else []
+        cmds.append(["ip", "-4", "route", "replace", f"{values['endpoint']}/32"] + via + ["dev", values["gw_dev"]])
+    cmds.append(["ip", "-4", "route", "replace", "default", "dev", "wg0", "table", _HALF_TABLE])
+    for net in _HALF_NETS:
+        cmds.append(["ip", "-4", "route", "replace", net, "dev", "wg0"])
+    return cmds
+
+def _half_detect() -> dict:
+    blockers: list[str] = []
+    notes: list[str] = []
+    mode = _half_mode()
+    if mode == "permanent":
+        blockers.append("The half tunnel is already permanent on this node. Use Remove permanent first to test again.")
+    elif mode == "testing":
+        blockers.append("A test is already running. Use Undo now (or let the auto-undo run) before checking again.")
+    if os.geteuid() != 0:
+        blockers.append("44helper isn't running as root, so it can't change the network. Run it from its systemd service.")
+    values: dict = {}
+    text = _half_wg_text()
+    parsed = None
+    if text is None:
+        blockers.append("There's no /etc/wireguard/wg0.conf yet. Set up the tunnel on the Full or Split Tunnel tab first.")
+    else:
+        parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    if parsed is not None:
+        addr44 = _half_addr44(parsed)
+        if not addr44:
+            blockers.append("wg0.conf has no 44Net address (Address = 44.x.x.x/32).")
+        if not parsed["peers"]:
+            blockers.append("wg0.conf has no [Peer] section.")
+        host, ep = _half_endpoint(parsed)
+        if not ep:
+            blockers.append("Couldn't find or look up the tunnel server address (Endpoint) in wg0.conf.")
+        if _wg_conf_field(parsed["interface"], "SaveConfig").lower() == "true":
+            blockers.append("wg0.conf has 'SaveConfig = true'. wg-quick rewrites the file when the tunnel stops and would drop the half-tunnel markers. Remove that line first.")
+        if any(k.strip().lower() == "table" for k in parsed["interface"]):
+            blockers.append("wg0.conf already has its own 'Table =' line. Remove it by hand first; 44helper won't guess which one should win.")
+        aip = status_wg_allowed_ips()
+        if aip["shape"] == "split":
+            notes.append("wg0.conf is set to split (44Net only). The half tunnel needs 0.0.0.0/0 so nodes outside 44Net can reach you. The test uses a copy with that change; your file isn't touched until Make permanent.")
+        elif aip["shape"] not in ("full", "split"):
+            blockers.append(f"AllowedIPs is an unusual range ({aip['allowed_ips'] or 'none'}). Fix it on the tunnel tab first.")
+        values.update({"addr44": addr44, "endpoint_host": host, "endpoint": ep,
+                       "endpoint_in_44": bool(ep) and _half_in_44net(ep),
+                       "aip": aip["allowed_ips"], "aip_shape": aip["shape"]})
+    if _half_q(["firewall-cmd", "--state"])[1].strip() != "running":
+        blockers.append("firewalld isn't running.")
+    if not shutil.which("wg-quick"):
+        blockers.append("wg-quick isn't installed.")
+    if _systemctl_is_active("44net-tunnel.service"):
+        blockers.append("The tunnel is running from the ARDC fallback unit (44net-tunnel.service). The half tunnel only works with wg-quick@wg0.")
+    if not _half_ip_features():
+        blockers.append("This system's 'ip' command is too old for the half tunnel (it needs uidrange, sport and suppress_prefixlength).")
+    md = _half_main_default()
+    if not md["dev"]:
+        blockers.append("No normal default route found, so there's no normal internet route to keep DVSwitch and usrp2m17 on.")
+    elif md["dev"].startswith("wg"):
+        blockers.append(f"The normal default route points into the tunnel ({md['dev']}). Fix that first.")
+    zone = _half_zone()
+    if not zone:
+        blockers.append("wg0 isn't in a firewall zone. Run the attach-interface step on the tunnel tab first.")
+    conflicts = _half_direct_conflicts()
+    if conflicts:
+        blockers.append("Old outbound block rules are loaded. They would stop DVSwitch or usrp2m17 on the normal link: "
+                        + " | ".join(conflicts))
+    notes.append("Once ASL uses the tunnel, other nodes and EchoLink reach you at your 44 address only. A router port forward to this node's IAX or EchoLink ports stops working, because the replies go out the tunnel.")
+    ast = _half_asterisk_user()
+    if ast["uid"] is None:
+        notes.append("There's no 'asterisk' user, so only the IAX and EchoLink ports will use the tunnel. ASL registration will go out the normal way.")
+    elif not ast["use_uid_rule"]:
+        notes.append("Asterisk runs as root here, so only the IAX and EchoLink ports will use the tunnel. ASL registration will likely show your home address.")
+    if ast["others"]:
+        notes.append("Also running as the asterisk user (their internet traffic will use the tunnel too): " + ", ".join(ast["others"]))
+    wg_active = _systemctl_is_active("wg-quick@wg0")
+    if not wg_active and _wg0_interface_present():
+        blockers.append("wg0 is up, but not from wg-quick@wg0. Bring it down or start it with the service first.")
+    elif not wg_active:
+        notes.append("The tunnel isn't running right now. Step 2 starts it in half mode.")
+    if values.get("endpoint_in_44"):
+        notes.append(f"The tunnel server ({values['endpoint']}) is itself a 44Net address, so step 3 also pins it to the normal route.")
+    values.update({
+        "iax_port": _half_iax_port(),
+        "echolink": _half_echolink_enabled(),
+        "asterisk_uid": ast["uid"],
+        "use_uid_rule": ast["use_uid_rule"],
+        "zone": zone,
+        "gw_via": md["via"],
+        "gw_dev": md["dev"],
+        "lan_nets": _half_lan_nets(),
+        "wg_active": wg_active,
+    })
+    values["ports"] = _half_ports(values)
+    return {"ok": not blockers, "blockers": blockers, "notes": notes, "values": values, "at": time.time()}
+
+def _half_check_lines(chk: dict) -> list[str]:
+    v = chk["values"]
+    lines = ["What 44helper found:",
+             f"  44Net address:     {v.get('addr44') or '(none)'}",
+             f"  IAX port:          {v.get('iax_port')}",
+             f"  EchoLink:          {'on' if v.get('echolink') else 'off'}",
+             f"  Tunnel server:     {v.get('endpoint_host') or '?'} ({v.get('endpoint') or 'not found'})",
+             f"  Normal route:      {('via ' + v['gw_via'] + ' ') if v.get('gw_via') else ''}dev {v.get('gw_dev') or '?'}",
+             f"  LAN:               {', '.join(v.get('lan_nets') or []) or '(none found)'}",
+             f"  wg0 firewall zone: {v.get('zone') or '(none)'}",
+             f"  Ports to open:     {', '.join(v.get('ports') or [])}",
+             f"  Asterisk user:     {v.get('asterisk_uid') if v.get('asterisk_uid') is not None else '(none)'}"
+             + ("" if v.get("use_uid_rule") else " (not used)")]
+    for b in chk["blockers"]:
+        lines.append("BLOCKED: " + b)
+    for n in chk["notes"]:
+        lines.append("Note: " + n)
+    lines.append("Ready: arm the auto-undo next." if chk["ok"] else "Not ready: fix the BLOCKED items, then Check first again.")
+    return lines
+
+def action_half_check_first() -> dict:
+    with _HALF_LOCK:
+        chk = _half_detect()
+        out = _half_check_lines(chk)
+        if chk["ok"]:
+            text = _half_wg_text()
+            if text is not None:
+                try:
+                    _wrote, reason = _compare_before_write(_half_lib_pre_path(), text.encode("utf-8"))
+                    out.append(f"Backup of your wg0.conf ({_half_lib_pre_path()}): {reason}.")
+                except OSError as exc:
+                    chk["ok"] = False
+                    out.append(f"BLOCKED: couldn't back up wg0.conf: {exc}")
+            if chk["ok"]:
+                chk["baseline"] = _half_baseline(chk["values"])
+                st = _half_state() or {}
+                st["check"] = chk
+                try:
+                    _half_save_state(st)
+                except OSError as exc:
+                    chk["ok"] = False
+                    out.append(f"BLOCKED: couldn't save the check result in {_HALF_RUN_DIR}: {exc}")
+        log(f"HALF: check first -> {'ready' if chk['ok'] else 'blocked'}")
+        return {"success": chk["ok"], "verified": chk["ok"], "output": "\n".join(out)}
+
+def _half_tail(path: str, n: int = 40) -> list[str]:
+    try:
+        with open(path, "r", errors="replace") as fh:
+            return fh.read().splitlines()[-n:]
+    except OSError:
+        return []
+
+def _half_home_user_default() -> str:
+    try:
+        return pwd.getpwuid(1000).pw_name
+    except KeyError:
+        return "root"
+
+def build_half_status() -> dict:
+    st = _half_state() or {}
+    chk = st.get("check") or {}
+    mode = _half_mode()
+    status = {
+        "features": list(_HALF_FEATURES),
+        "mode": mode,
+        "root": os.geteuid() == 0,
+        "now": time.time(),
+        "check": {"ok": chk.get("ok", False), "at": chk.get("at"), "values": chk.get("values", {}),
+                  "blockers": chk.get("blockers", []), "notes": chk.get("notes", []),
+                  "fresh": bool(chk.get("at")) and time.time() - chk.get("at", 0) < _HALF_CHECKFIRST_MAX_AGE},
+        "undo_log": _half_tail(_HALF_UNDO_LOG),
+        "undo_failed": os.path.exists(_HALF_UNDO_FAILED),
+    }
+    for hook in _HALF_STATUS_HOOKS:
+        hook(status, st)
+    return status
+
+_HALF_STATUS_HOOKS: list[Callable[[dict, dict], None]] = []
+
+def _route_half_status(query: dict) -> tuple[int, str, bytes]:
+    return 200, "application/json", json.dumps(build_half_status()).encode("utf-8")
+
+_HALF_FEATURES.append("test")
+
+_HALF_STEP_TITLES = {
+    2: "Restart tunnel in half mode",
+    3: "Add tunnel route table",
+    4: "Send ASL and EchoLink into the tunnel",
+    5: "Open tunnel ports",
+    6: "Loosen the return-path check on wg0",
+}
+
+def _half_timer_active() -> bool:
+    return _half_q(["systemctl", "is-active", f"{_HALF_TIMER}.timer"])[1].strip() == "active"
+
+def _half_undo_running() -> bool:
+    return _half_q(["systemctl", "is-active", f"{_HALF_TIMER}.service"])[1].strip() in ("active", "activating")
+
+def _half_set_full_aip_text(text: str) -> tuple[str, bool]:
+    lines = text.splitlines(keepends=True)
+    section = None
+    changed = False
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        term = raw[len(body):]
+        low = body.strip().lower()
+        if low == "[interface]":
+            section = "interface"
+            continue
+        if low == "[peer]":
+            section = "peer"
+            continue
+        if section == "peer":
+            m = _AIP_LINE_RE.match(body)
+            if m and m.group(2).strip() != "0.0.0.0/0":
+                lines[i] = m.group(1) + "0.0.0.0/0" + m.group(3) + term
+                changed = True
+    return "".join(lines), changed
+
+def _half_temp_conf_text(text: str) -> str | None:
+    full, _changed = _half_set_full_aip_text(text)
+    return _wg_insert_in_interface(full, ["Table = off"])
+
+def _half_undo_sections(st: dict, only: set[int] | None = None) -> list[str]:
+    q = shlex.quote
+    v = st.get("check", {}).get("values", {})
+    steps = st.get("steps", {})
+    out: list[str] = []
+
+    def want(n: int) -> bool:
+        return str(n) in steps and (only is None or n in only)
+
+    if want(6):
+        orig = steps["6"].get("orig") or "0"
+        out += [
+            "  if [ -e /proc/sys/net/ipv4/conf/wg0/rp_filter ]; then",
+            f"    if sysctl -q -w net.ipv4.conf.wg0.rp_filter={q(orig)} 2>/dev/null; then ok \"6 return-path check on wg0 back to {orig}\"; else bad \"6 return-path check on wg0 is still loose\"; fi",
+            "  else ok \"6 return-path check: wg0 is already gone\"; fi",
+        ]
+    if want(5):
+        zone = steps["5"].get("zone") or v.get("zone") or ""
+        added = steps["5"].get("added") or []
+        if added and zone:
+            out += [
+                f"  for P in {' '.join(q(p) for p in added)}; do",
+                f"    firewall-cmd --zone={q(zone)} --remove-port=\"$P\" >/dev/null 2>&1",
+                f"    if [ \"$(firewall-cmd --zone={q(zone)} --query-port=\"$P\" 2>/dev/null)\" = yes ]; then bad \"5 port $P is still open on {zone}\"; else ok \"5 port $P closed again on {zone}\"; fi",
+                "  done",
+            ]
+        else:
+            out.append("  ok \"5 no ports were opened by the test\"")
+    if want(4):
+        prios = " ".join(str(p) for p in sorted(_HALF_PRIOS.values()))
+        alt = "|".join(str(p) for p in sorted(_HALF_PRIOS.values()))
+        out += [
+            f"  for P in {prios}; do while ip -4 rule del priority \"$P\" 2>/dev/null; do :; done; done",
+            f"  if ip -4 rule show | grep -qE '^({alt}):'; then bad \"4 some ASL/EchoLink routing rules are still loaded\"; else ok \"4 ASL/EchoLink routing rules removed\"; fi",
+        ]
+    if want(3):
+        out += [f"  ip -4 route del {net} dev wg0 2>/dev/null" for net in _HALF_NETS]
+        out.append(f"  ip -4 route flush table {_HALF_TABLE} 2>/dev/null")
+        ep_route = steps["3"].get("endpoint_route") or ""
+        if ep_route:
+            out.append(f"  ip -4 route del {q(ep_route)} 2>/dev/null")
+        out.append(f"  if [ -n \"$(ip -4 route show table {_HALF_TABLE} 2>/dev/null)\" ]; then bad \"3 tunnel route table is not empty\"; else ok \"3 tunnel route table removed\"; fi")
+    if want(2):
+        was_active = bool(steps["2"].get("was_active"))
+        out += [
+            "  if ip link show wg0 >/dev/null 2>&1 && [ -f \"$DIR/wg0.conf\" ]; then",
+            "    wg-quick down \"$DIR/wg0.conf\" >/dev/null 2>&1 || ip link del wg0 2>/dev/null",
+            "  fi",
+            "  if ip link show wg0 >/dev/null 2>&1 && ! systemctl is-active --quiet wg-quick@wg0; then bad \"2 the test tunnel is still up\"; else ok \"2 test tunnel stopped\"; fi",
+        ]
+        if was_active:
+            out += [
+                "  systemctl start wg-quick@wg0 >/dev/null 2>&1",
+                "  if systemctl is-active --quiet wg-quick@wg0; then ok \"2 tunnel restarted from your real wg0.conf\"; else bad \"2 tunnel did not restart -- run: systemctl start wg-quick@wg0\"; fi",
+            ]
+        else:
+            out.append("  ok \"2 tunnel left stopped (it wasn't running before the test)\"")
+    return out
+
+def _half_undo_script(st: dict) -> str:
+    lines = [
+        "#!/bin/bash",
+        f"# 44helper {APP_VERSION} half-tunnel TEST undo, made {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}.",
+        "# Puts back every temporary change from the half-tunnel test buttons, newest first.",
+        "# Safe to run more than once. A reboot also clears all of it.",
+        "set -u",
+        f"DIR={shlex.quote(_HALF_RUN_DIR)}",
+        "LOG=\"$DIR/undo.log\"",
+        "FAILED=0",
+        "ok()  { echo \"ok    $1\"; }",
+        "bad() { echo \"FAIL  $1\"; FAILED=1; }",
+        "main() {",
+        "  echo \"=== Half-tunnel test undo $(date '+%F %T') ===\"",
+    ]
+    sections = _half_undo_sections(st)
+    lines += sections if sections else ["  ok \"nothing had been changed yet\""]
+    lines += [
+        f"  systemctl stop {_HALF_TIMER}.timer >/dev/null 2>&1",
+        "  if [ \"$FAILED\" = 0 ]; then",
+        "    rm -f \"$DIR/state.json\" \"$DIR/wg0.conf\" \"$DIR/undo_failed\"",
+        "    echo \"Done: everything is back to normal.\"",
+        "  else",
+        "    touch \"$DIR/undo_failed\"",
+        "    echo \"Done with problems: anything marked FAIL is still in place. A reboot clears it (all test changes are temporary).\"",
+        "  fi",
+        "  return \"$FAILED\"",
+        "}",
+        "main 2>&1 | tee -a \"$LOG\"",
+        "exit \"${PIPESTATUS[0]}\"",
+        "",
+    ]
+    return "\n".join(lines)
+
+def _half_partial_undo_script(st: dict, steps: set[int]) -> str:
+    return "\n".join([
+        "set -u",
+        f"DIR={shlex.quote(_HALF_RUN_DIR)}",
+        "FAILED=0",
+        "ok()  { echo \"ok    (put back) $1\"; }",
+        "bad() { echo \"FAIL  (put back) $1\"; FAILED=1; }",
+    ] + _half_undo_sections(st, only=steps) + ["exit \"$FAILED\"", ""])
+
+def _half_write_undo(st: dict) -> None:
+    os.makedirs(_HALF_RUN_DIR, mode=0o700, exist_ok=True)
+    tmp = _HALF_UNDO_SH + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(_half_undo_script(st))
+    os.chmod(tmp, 0o700)
+    os.replace(tmp, _HALF_UNDO_SH)
+
+def _half_commit(st: dict) -> None:
+    _half_save_state(st)
+    _half_write_undo(st)
+
+def _half_run_lines(cmds: list[list[str]], out: list[str], timeout: int = 30) -> bool:
+    for argv in cmds:
+        r = _run_argv(argv, timeout=timeout)
+        if r["success"]:
+            out.append("ok    " + " ".join(argv))
+        else:
+            out.append("FAIL  " + " ".join(argv) + (" -- " + r["output"] if r["output"] else ""))
+            return False
+    return True
+
+def _half_put_back(st: dict, n: int, out: list[str]) -> bool:
+    rc, text = _half_q(["bash", "-s"], timeout=120, input_text=_half_partial_undo_script(st, {n}))
+    out.extend(text.splitlines())
+    if rc != 0:
+        out.append(f"Step {n} couldn't be fully put back. Use Undo now, or reboot (test changes are temporary).")
+    return rc == 0
+
+def _half_step2(st: dict, out: list[str]) -> bool:
+    text = _half_wg_text()
+    temp = _half_temp_conf_text(text) if text is not None else None
+    if temp is None:
+        out.append("FAIL  couldn't read wg0.conf or find its [Interface] section.")
+        return False
+    os.makedirs(_HALF_RUN_DIR, mode=0o700, exist_ok=True)
+    with open(_HALF_TEMP_CONF, "w") as fh:
+        fh.write(temp)
+    os.chmod(_HALF_TEMP_CONF, 0o600)
+    out.append(f"ok    temporary copy written: {_HALF_TEMP_CONF} (Table = off, AllowedIPs = 0.0.0.0/0)")
+    was_active = _systemctl_is_active("wg-quick@wg0")
+    st.setdefault("steps", {})["2"] = {"pending": True, "was_active": was_active}
+    _half_commit(st)
+    cmds = []
+    if was_active:
+        cmds.append(["systemctl", "stop", "wg-quick@wg0"])
+    if not _half_run_lines(cmds, out):
+        return False
+    if _wg0_interface_present():
+        out.append("FAIL  wg0 is still up after stopping wg-quick@wg0.")
+        return False
+    if not _half_run_lines([["wg-quick", "up", _HALF_TEMP_CONF]], out):
+        return False
+    md = _half_main_default()
+    if not _wg0_interface_present():
+        out.append("FAIL  wg0 didn't come up.")
+        return False
+    if md["dev"].startswith("wg"):
+        out.append(f"FAIL  the normal default route now points into the tunnel ({md['raw']}).")
+        return False
+    if "lookup 51820" in _half_q(["ip", "-4", "rule", "show"])[1]:
+        out.append("FAIL  the tunnel came up as a full tunnel (wg-quick's own rules are loaded).")
+        return False
+    st["steps"]["2"]["up_at"] = time.time()
+    out.append(f"ok    wg0 is up and the normal route is untouched ({md['raw']})")
+    return True
+
+def _half_step3(st: dict, out: list[str]) -> bool:
+    v = st["check"]["values"]
+    cmds = _half_route_cmds(v)
+    ep_route = f"{v['endpoint']}/32" if v.get("endpoint_in_44") and v.get("gw_dev") else ""
+    st["steps"]["3"] = {"pending": True, "endpoint_route": ep_route}
+    _half_commit(st)
+    if not _half_run_lines(cmds, out):
+        return False
+    table = _half_q(["ip", "-4", "route", "show", "table", _HALF_TABLE])[1]
+    if "default dev wg0" not in table:
+        out.append("FAIL  the tunnel route table didn't take.")
+        return False
+    out.append(f"ok    tunnel route table {_HALF_TABLE}: {table.splitlines()[0] if table else ''}")
+    return True
+
+def _half_step4(st: dict, out: list[str]) -> bool:
+    v = st["check"]["values"]
+    st["steps"]["4"] = {"pending": True}
+    _half_commit(st)
+    for prio in sorted(_HALF_PRIOS.values()):
+        while _half_q(["ip", "-4", "rule", "del", "priority", str(prio)])[0] == 0:
+            pass
+    specs = _half_rule_specs(v)
+    cmds = [["ip", "-4", "rule", "add"] + args + ["priority", str(prio)] for prio, args, _label in specs]
+    if not _half_run_lines(cmds, out):
+        return False
+    shown = _half_q(["ip", "-4", "rule", "show"])[1]
+    missing = [str(p) for p, _a, _l in specs if not re.search(rf"(?m)^{p}:", shown)]
+    if missing:
+        out.append("FAIL  rules didn't load at priority " + ", ".join(missing))
+        return False
+    for _p, _a, label in specs:
+        out.append("      - " + label)
+    return True
+
+def _half_port_covered(zone: str, pp: str) -> bool:
+    if _half_q(["firewall-cmd", f"--zone={zone}", f"--query-port={pp}"])[1].strip() == "yes":
+        return True
+    port, _, proto = pp.partition("/")
+    lo, _, hi = port.partition("-")
+    need = set(range(int(lo), int(hi or lo) + 1))
+    have: set[int] = set()
+    entries = _half_q(["firewall-cmd", f"--zone={zone}", "--list-ports"])[1].split()
+    for svc in _half_q(["firewall-cmd", f"--zone={zone}", "--list-services"])[1].split():
+        info = _half_q(["firewall-cmd", f"--info-service={svc}"])[1]
+        for line in info.splitlines():
+            if line.strip().startswith("ports:"):
+                entries += line.split(":", 1)[1].split()
+    for e in entries:
+        ep, _, eproto = e.partition("/")
+        if eproto != proto:
+            continue
+        a, _, b = ep.partition("-")
+        if a.isdigit() and (not b or b.isdigit()):
+            have |= set(range(int(a), int(b or a) + 1))
+    return need <= have
+
+def _half_step5(st: dict, out: list[str]) -> bool:
+    v = st["check"]["values"]
+    zone = _fw_zone_of_iface("wg0") or v.get("zone") or ""
+    if not zone:
+        out.append("FAIL  wg0 isn't in a firewall zone.")
+        return False
+    st["steps"]["5"] = {"pending": True, "zone": zone, "added": []}
+    _half_commit(st)
+    for pp in v.get("ports") or []:
+        if _half_port_covered(zone, pp):
+            out.append(f"ok    {pp} is already open on {zone} (left alone)")
+            continue
+        st["steps"]["5"]["added"].append(pp)
+        _half_commit(st)
+        if not _half_run_lines([["firewall-cmd", f"--zone={zone}", f"--add-port={pp}"]], out):
+            return False
+        if not _half_port_covered(zone, pp):
+            out.append(f"FAIL  {pp} still isn't open on {zone}.")
+            return False
+    return True
+
+def _half_step6(st: dict, out: list[str]) -> bool:
+    orig = _half_rp_value("wg0")
+    if not orig:
+        out.append("FAIL  wg0 isn't up, so there's nothing to set.")
+        return False
+    st["steps"]["6"] = {"pending": True, "orig": orig}
+    _half_commit(st)
+    if not _half_run_lines([["sysctl", "-q", "-w", "net.ipv4.conf.wg0.rp_filter=2"]], out):
+        return False
+    now = _half_rp_value("wg0")
+    if now != "2":
+        out.append(f"FAIL  rp_filter on wg0 reads {now or '?'}, not 2.")
+        return False
+    out.append(f"ok    return-path check on wg0: {orig} -> 2 (loose); all = {_half_rp_value('all') or '?'}")
+    return True
+
+_HALF_STEP_FNS: dict[int, Callable[[dict, list[str]], bool]] = {
+    2: _half_step2, 3: _half_step3, 4: _half_step4, 5: _half_step5, 6: _half_step6,
+}
+
+def _half_done(st: dict, n: int) -> bool:
+    e = (st.get("steps") or {}).get(str(n))
+    return isinstance(e, dict) and not e.get("pending")
+
+def _half_step_guard(st: dict | None, n: int) -> str:
+    if os.geteuid() != 0:
+        return "44helper isn't running as root."
+    if _half_mode() == "permanent":
+        return "The half tunnel is permanent on this node; the test buttons are off."
+    if not st or not st.get("armed_at"):
+        return "Arm the auto-undo first (button 1)."
+    if not _half_timer_active():
+        return "The auto-undo timer isn't running. Arm it again (button 1) before changing anything."
+    if _half_done(st, n):
+        return f"Step {n} is already done."
+    for m in range(2, n):
+        if not _half_done(st, m):
+            return f"Do step {m} first."
+    return ""
+
+def _half_run_step(n: int) -> dict:
+    st = _half_state()
+    why = _half_step_guard(st, n)
+    if why:
+        return {"success": False, "verified": False, "output": "Refused: " + why}
+    out = [f"Step {n}: {_HALF_STEP_TITLES[n]}"]
+    try:
+        ok = _HALF_STEP_FNS[n](st, out)
+    except (OSError, ValueError, KeyError) as exc:
+        out.append(f"FAIL  {exc}")
+        ok = False
+    if ok:
+        st["steps"][str(n)].pop("pending", None)
+        if all(_half_done(st, m) for m in _HALF_STEP_FNS):
+            st["steps_done_at"] = time.time()
+        _half_commit(st)
+        out.append(f"Step {n} done.")
+    else:
+        put_back = True
+        if str(n) in st.get("steps", {}):
+            put_back = _half_put_back(st, n, out)
+            if put_back:
+                st["steps"].pop(str(n), None)
+                _half_commit(st)
+        out.append(f"Step {n} failed and was put back. Nothing after it was changed." if put_back
+                   else f"Step {n} failed. It stays on the undo list, so Undo now or the timer will still take it out.")
+    log(f"HALF: step {n} -> {'ok' if ok else 'FAILED'}")
+    return {"success": ok, "verified": ok, "output": "\n".join(out)}
+
+def action_half_step(n) -> dict:
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    if n not in _HALF_STEP_FNS:
+        return {"success": False, "verified": False, "output": "Unknown step."}
+    with _HALF_LOCK:
+        return _half_run_step(n)
+
+def _half_run_undo() -> dict:
+    st = _half_state()
+    if not st or not (st.get("armed_at") or st.get("steps")):
+        return {"success": True, "verified": True, "output": "Nothing to undo: no test is running."}
+    if _half_undo_running():
+        return {"success": False, "verified": False, "output": "The auto-undo is running right now. Wait a moment and refresh."}
+    _half_write_undo(st)
+    rc, text = _half_q(["bash", _HALF_UNDO_SH], timeout=180)
+    log(f"HALF: undo -> {'ok' if rc == 0 else 'problems'}")
+    return {"success": rc == 0, "verified": rc == 0 and _half_mode() == "off", "output": text}
+
+def action_half_undo() -> dict:
+    with _HALF_LOCK:
+        return _half_run_undo()
+
+def _half_arm(st: dict) -> dict:
+    out: list[str] = []
+    _half_q(["systemctl", "stop", f"{_HALF_TIMER}.timer"])
+    _half_q(["systemctl", "reset-failed", f"{_HALF_TIMER}.timer", f"{_HALF_TIMER}.service"])
+    now = time.time()
+    st.setdefault("armed_at", now)
+    st["expires_at"] = now + _HALF_TIMER_SEC
+    st.pop("kept_at", None)
+    st.setdefault("steps", {})
+    try:
+        if os.path.exists(_HALF_UNDO_FAILED):
+            os.remove(_HALF_UNDO_FAILED)
+        _half_commit(st)
+    except OSError as exc:
+        return {"success": False, "verified": False, "output": f"Couldn't write {_HALF_RUN_DIR}: {exc}"}
+    ok = _half_run_lines([["systemd-run", f"--unit={_HALF_TIMER}", "--collect",
+                           "--description=44helper half-tunnel test auto-undo",
+                           f"--on-active={_HALF_TIMER_SEC}", "--timer-property=AccuracySec=1s",
+                           "/bin/bash", _HALF_UNDO_SH]], out)
+    active = ok and _half_timer_active()
+    out.append(f"Auto-undo armed: in {_HALF_TIMER_SEC // 60} minutes everything is put back by itself, even if this page or SSH drops."
+               if active else "FAIL  the auto-undo timer didn't start. Nothing has been changed.")
+    log(f"HALF: arm -> {'ok' if active else 'FAILED'}")
+    return {"success": active, "verified": active, "output": "\n".join(out)}
+
+def action_half_arm() -> dict:
+    with _HALF_LOCK:
+        err = _require_root()
+        if err:
+            return err
+        if _half_mode() == "permanent":
+            return {"success": False, "verified": False, "output": "Refused: the half tunnel is already permanent."}
+        if _half_undo_running():
+            return {"success": False, "verified": False, "output": "The auto-undo is running right now. Wait a moment and refresh."}
+        st = _half_state() or {}
+        chk = st.get("check") or {}
+        if not st.get("steps"):
+            if not chk.get("ok"):
+                return {"success": False, "verified": False, "output": "Refused: run Check first (button 0) and clear anything it blocks."}
+            if time.time() - chk.get("at", 0) > _HALF_CHECKFIRST_MAX_AGE:
+                return {"success": False, "verified": False, "output": "Refused: the last Check first is over 30 minutes old. Run it again."}
+        return _half_arm(st)
+
+def action_half_keep() -> dict:
+    with _HALF_LOCK:
+        err = _require_root()
+        if err:
+            return err
+        st = _half_state()
+        if not st or not st.get("armed_at"):
+            return {"success": False, "verified": False, "output": "No test is running."}
+        r = _run_argv(["systemctl", "stop", f"{_HALF_TIMER}.timer"])
+        st["kept_at"] = time.time()
+        st["expires_at"] = None
+        _half_commit(st)
+        stopped = not _half_timer_active()
+        return {"success": stopped, "verified": stopped,
+                "output": ("Auto-undo cancelled. The test changes stay until you use Undo now or reboot."
+                           if stopped else "FAIL  couldn't stop the timer: " + r["output"])}
+
+def action_half_run_all() -> dict:
+    with _HALF_LOCK:
+        out: list[str] = []
+        st = _half_state()
+        if not st or not st.get("armed_at") or not _half_timer_active():
+            return {"success": False, "verified": False, "output": "Refused: arm the auto-undo first (button 1)."}
+        for n in sorted(_HALF_STEP_FNS):
+            if _half_done(_half_state() or {}, n):
+                out.append(f"Step {n} already done.")
+                continue
+            r = _half_run_step(n)
+            out.append(r["output"])
+            if not r["success"]:
+                out.append("Stopped at the failure. Putting everything back to normal:")
+                u = _half_run_undo()
+                out.append(u["output"])
+                return {"success": False, "verified": False, "output": "\n".join(out)}
+        return {"success": True, "verified": True, "output": "\n".join(out)}
+
+def _half_status_test(status: dict, st: dict) -> None:
+    steps = st.get("steps") or {}
+    status["armed"] = bool(st.get("armed_at"))
+    status["timer_active"] = _half_timer_active()
+    status["undo_running"] = _half_undo_running()
+    status["expires_at"] = st.get("expires_at")
+    status["kept"] = bool(st.get("kept_at"))
+    status["steps"] = {str(n): {"title": _HALF_STEP_TITLES[n],
+                                "done": _half_done(st, n),
+                                "pending": bool((steps.get(str(n)) or {}).get("pending"))}
+                       for n in sorted(_HALF_STEP_FNS)}
+    status["all_steps_done"] = all(_half_done(st, n) for n in _HALF_STEP_FNS)
+
+_HALF_STATUS_HOOKS.append(_half_status_test)
+
+_HALF_FEATURES.append("checks")
+_HALF_LAST_PERM_CHECKS: dict = {}
+
+def _half_ctx() -> dict | None:
+    mode = _half_mode()
+    if mode == "testing":
+        st = _half_state() or {}
+        chk = st.get("check") or {}
+        steps = st.get("steps") or {}
+        return {"mode": mode, "values": chk.get("values", {}), "baseline": chk.get("baseline", {}),
+                "ref": st.get("steps_done_at") or st.get("armed_at") or time.time(),
+                "up_at": (steps.get("2") or {}).get("up_at") or st.get("armed_at") or time.time()}
+    if mode == "permanent":
+        perm = _half_perm() or {}
+        return {"mode": mode, "values": perm.get("values", {}), "baseline": perm.get("baseline", {}),
+                "ref": perm.get("restarted_at") or perm.get("made_at") or time.time(),
+                "up_at": perm.get("restarted_at") or perm.get("made_at") or time.time()}
+    return None
+
+def _half_route_dev(args: list[str]) -> tuple[str, str, str]:
+    rc, out = _half_q(["ip", "-4", "route", "get"] + args)
+    if rc != 0:
+        return "", "", out
+    toks = out.split()
+    dev = toks[toks.index("dev") + 1] if "dev" in toks and toks.index("dev") + 1 < len(toks) else ""
+    src = toks[toks.index("src") + 1] if "src" in toks and toks.index("src") + 1 < len(toks) else ""
+    return dev, src, out.splitlines()[0] if out else ""
+
+def _half_tcp_ok(host: str, port: int) -> bool:
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=2):
+            return True
+    except OSError:
+        return False
+
+def _half_lan_ip(dev: str) -> str:
+    rc, out = _half_q(["ip", "-4", "-o", "addr", "show", "dev", dev]) if dev else (1, "")
+    if rc == 0:
+        for line in out.splitlines():
+            toks = line.split()
+            if "inet" in toks:
+                return toks[toks.index("inet") + 1].split("/")[0]
+    return ""
+
+def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
+    v = ctx["values"]
+    bl = ctx.get("baseline") or {}
+    now = time.time()
+    res: list[dict] = []
+
+    def add(n, group, title, level, text, hint=""):
+        res.append({"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint})
+
+    def late(level_if_early="wait"):
+        return level_if_early if now - ctx["ref"] < _HALF_WAIT_SEC else "fail"
+
+    rc, out = _half_q(["wg", "show", "wg0", "latest-handshakes"])
+    stamps = [int(t) for t in out.split() if t.isdigit()] if rc == 0 else []
+    if rc != 0:
+        add(1, "Tunnel", "Tunnel is up", "fail", "wg0 isn't up.",
+            "Check the WireGuard key and config on the tunnel tab. This isn't the half-tunnel rules.")
+    elif not stamps or max(stamps) == 0:
+        add(1, "Tunnel", "Tunnel is up", "wait" if now - ctx["up_at"] < 60 else "fail",
+            "No contact with the 44Net server yet.",
+            "Re-run checks in a minute. If it stays red, check the key and Endpoint on the tunnel tab.")
+    else:
+        age = int(now - max(stamps))
+        add(1, "Tunnel", "Tunnel is up", "pass" if age <= 180 else "fail",
+            f"Last heard from the 44Net server {age}s ago.",
+            "" if age <= 180 else "The tunnel stopped talking. Check the tunnel tab.")
+
+    rules_text = _half_q(["ip", "-4", "rule", "show"])[1]
+    md = _half_main_default()
+    if ctx["mode"] == "testing":
+        temp = _half_wg_text(_HALF_TEMP_CONF) or ""
+        half_on = "Table = off" in temp and _wg0_interface_present()
+    else:
+        half_on = _half_conf_is_permanent(_half_wg_text()) and _systemctl_is_active("wg-quick@wg0")
+    full_rules = "lookup 51820" in rules_text
+    if half_on and not full_rules and not md["dev"].startswith("wg"):
+        add(2, "Tunnel", "Running in half mode", "pass", "The tunnel is up with Table = off.")
+    else:
+        add(2, "Tunnel", "Running in half mode", "fail",
+            "Full-tunnel rules are loaded." if full_rules else "The tunnel isn't running in half mode.",
+            "Use Undo now, then start again from Check first." if ctx["mode"] == "testing"
+            else "Restart the tunnel: systemctl restart wg-quick@wg0")
+
+    conflicts = _half_direct_conflicts()
+    add(3, "Tunnel", "No conflicting rules", "fail" if conflicts else "pass",
+        ("Outbound block rules found: " + " | ".join(conflicts)) if conflicts else "No outbound block rules.",
+        "Remove the Full Tunnel outbound-port blocks before going on." if conflicts else "")
+
+    dev, _src, raw = _half_route_dev(["1.1.1.1"])
+    ok4 = bool(dev) and not dev.startswith("wg")
+    add(4, "Normal route", "Internet still uses the normal link", "pass" if ok4 else "fail",
+        f"1.1.1.1 goes out {dev or '?'}.",
+        "" if ok4 else "This is what broke things last time. Use Undo now.")
+
+    rc5, out5 = _half_q(["getent", "ahostsv4", "allstarlink.org"], timeout=6)
+    add(5, "Normal route", "DNS works", "pass" if rc5 == 0 and out5 else "fail",
+        "allstarlink.org resolves." if rc5 == 0 and out5 else "Name lookups are failing.",
+        "" if rc5 == 0 and out5 else "DVSwitch and usrp2m17 dial by name, so they'll drop. Use Undo now.")
+
+    problems: list[str] = []
+    seen: list[str] = []
+    if client_ip and not client_ip.startswith("127.") and client_ip != "::1":
+        cdev, _s, _r = _half_route_dev([client_ip])
+        if not cdev or cdev.startswith("wg"):
+            problems.append(f"replies to your browser ({client_ip}) would go out {cdev or '?'}")
+        else:
+            seen.append(f"your browser {client_ip} via {cdev}")
+    lan_ip = _half_lan_ip(v.get("gw_dev", "")) or "127.0.0.1"
+    names = _half_tool_ports()
+    gw_via, gw_dev = v.get("gw_via", ""), v.get("gw_dev", "")
+    for port in bl.get("tools") or []:
+        name = names.get(int(port), port)
+        if not _half_tcp_ok(lan_ip, int(port)):
+            problems.append(f"{name} :{port} doesn't answer on {lan_ip}")
+            continue
+        if gw_via:
+            rdev, _rs, _rr = _half_route_dev([gw_via, "ipproto", "tcp", "sport", str(port)])
+            if rdev != gw_dev:
+                problems.append(f"{name} :{port} replies to the LAN ({gw_via}) would go out {rdev or '?'}")
+                continue
+        seen.append(f"{name} :{port}")
+    if problems:
+        add(6, "Normal route", "LAN tools still respond", "fail", "; ".join(problems),
+            "Last time the LAN pages went unresponsive. Use Undo now.")
+    elif seen:
+        add(6, "Normal route", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
+    else:
+        add(6, "Normal route", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
+
+    table = _half_q(["ip", "-4", "route", "show", "table", _HALF_TABLE])[1]
+    main44 = _half_q(["ip", "-4", "route", "show", "dev", "wg0"])[1] if _wg0_interface_present() else ""
+    ok7 = "default dev wg0" in table and all(n in main44 for n in _HALF_NETS)
+    add(7, "Half-tunnel pieces", "Tunnel route table exists", "pass" if ok7 else "fail",
+        f"Table {_HALF_TABLE} and the 44Net routes are in place." if ok7 else "The tunnel route table or 44Net routes are missing.",
+        "" if ok7 else ("Undo now, then run the steps again." if ctx["mode"] == "testing" else "Restart the tunnel."))
+
+    specs = _half_rule_specs(v)
+    missing = [str(p) for p, _a, _l in specs if not re.search(rf"(?m)^{p}:", rules_text)]
+    add(8, "Half-tunnel pieces", "Routing rules are loaded", "fail" if missing else "pass",
+        ("Missing at priority " + ", ".join(missing)) if missing else f"All {len(specs)} rules loaded.",
+        "Undo now, then run the steps again." if missing and ctx["mode"] == "testing" else
+        ("Restart the tunnel." if missing else ""))
+
+    bad9: list[str] = []
+    good9: list[str] = []
+    iax = str(v.get("iax_port", "4569"))
+    dev9, src9, _r9 = _half_route_dev(["1.1.1.1", "ipproto", "udp", "sport", iax])
+    (good9 if dev9 == "wg0" and src9 == v.get("addr44") else bad9).append(
+        f"IAX {iax} -> {dev9 or '?'} from {src9 or '?'}")
+    if v.get("use_uid_rule") and v.get("asterisk_uid") is not None:
+        devu, _su, _ru = _half_route_dev(["1.1.1.1", "uid", str(v["asterisk_uid"])])
+        (good9 if devu == "wg0" else bad9).append(f"Asterisk user -> {devu or '?'}")
+    if v.get("echolink"):
+        deve, _se, _re = _half_route_dev(["1.1.1.1", "ipproto", "udp", "sport", "5198"])
+        (good9 if deve == "wg0" else bad9).append(f"EchoLink -> {deve or '?'}")
+    add(9, "Half-tunnel pieces", "ASL traffic really goes into the tunnel", "fail" if bad9 else "pass",
+        "; ".join(bad9 + good9), "The rules are loaded but traffic doesn't follow them." if bad9 else "")
+
+    zone = _fw_zone_of_iface("wg0") or v.get("zone") or ""
+    closed = [pp for pp in (v.get("ports") or []) if not zone or not _half_port_covered(zone, pp)]
+    rp_all, rp_wg = _half_rp_value("all"), _half_rp_value("wg0")
+    try:
+        rp_eff = max(int(rp_all or 0), int(rp_wg or 0))
+    except ValueError:
+        rp_eff = -1
+    bad10 = []
+    if closed:
+        bad10.append("not open on " + (zone or "?") + ": " + ", ".join(closed))
+    if rp_eff == 1 or rp_eff < 0:
+        bad10.append(f"return-path check is strict (all={rp_all or '?'}, wg0={rp_wg or '?'})")
+    add(10, "Half-tunnel pieces", "Ports open on the tunnel only", "fail" if bad10 else "pass",
+        "; ".join(bad10) if bad10 else f"{', '.join(v.get('ports') or [])} open on {zone}; return-path check loose.",
+        "A firewall reload clears test ports. Use Undo now, then run the steps again." if closed and ctx["mode"] == "testing" else "")
+
+    def was(key: str, failing: bool) -> str:
+        return " (was already failing before the test)" if failing else ""
+
+    d, bd = _half_probe_dvs(), bl.get("dvs") or {}
+    if not d["installed"]:
+        add(11, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
+    elif not d["active"]:
+        add(11, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + was("dvs", not bd.get("active")),
+            "Check the DVSwitch tab or the dashboard.")
+    elif d["dmr"] == "out":
+        add(11, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + was("dvs", bd.get("dmr") == "out"),
+            "Check checks 4 and 5 first; DVSwitch needs the normal route and DNS.")
+    elif d["dmr"] == "in":
+        add(11, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
+    else:
+        add(11, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
+
+    u, bu = _half_probe_usrp(), bl.get("usrp") or {}
+    if not u["installed"]:
+        add(12, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
+    elif u["active"]:
+        add(12, "Services", "usrp2m17 connected", "pass", "Running.")
+    else:
+        add(12, "Services", "usrp2m17 connected", "fail", "Stopped" + was("usrp", not bu.get("active")),
+            "Check the M17 tab or the dashboard.")
+
+    r, br = _half_probe_reg(v.get("addr44", "")), bl.get("reg") or {}
+    if not r["available"] and r["why"] == "not installed":
+        add(13, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
+    elif not r["available"]:
+        add(13, "Services", "ASL registration shows your 44 address", "fail",
+            "Asterisk isn't running" + was("reg", not br.get("available")), "Start ASL, then re-run checks.")
+    elif r["has44"]:
+        add(13, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
+    else:
+        shown = ", ".join(sorted(set(r["ips"]))) or "nothing yet"
+        hint = ("Registration can take a few minutes to update. Re-run checks."
+                if late() == "wait" else
+                "Registration is going out the normal route. Asterisk needs its own user for that (see Check first notes).")
+        add(13, "Services", "ASL registration shows your 44 address", late(), f"Shows {shown}.", hint)
+
+    e, be = _half_probe_el(bool(v.get("echolink"))), bl.get("el") or {}
+    if not e["enabled"]:
+        add(14, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
+    elif e["entries"] is None:
+        add(14, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version. Check it on the dashboard.")
+    elif e["entries"] > 0:
+        add(14, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
+    else:
+        add(14, "Services", "EchoLink logged in", late(),
+            "Directory list is empty" + was("el", (be.get("entries") or 0) == 0 and be.get("entries") is not None),
+            "The directory can take a few minutes. Re-run checks." if late() == "wait" else "EchoLink can't reach its directory.")
+    return res
+
+def _half_checks_summary(results: list[dict]) -> dict:
+    counts = {k: sum(1 for r in results if r["level"] == k) for k in ("pass", "fail", "skip", "wait")}
+    return {"at": time.time(), "results": results, "counts": counts,
+            "all_pass": counts["fail"] == 0 and counts["wait"] == 0}
+
+def _half_checks_text(summary: dict) -> str:
+    tag = {"pass": "ok   ", "fail": "FAIL ", "skip": "skip ", "wait": "wait "}
+    lines = []
+    for r in summary["results"]:
+        lines.append(f"{tag[r['level']]} {r['n']:>2}. {r['title']}: {r['text']}")
+        if r.get("hint") and r["level"] in ("fail", "wait"):
+            lines.append(f"         -> {r['hint']}")
+    c = summary["counts"]
+    lines.append(f"{c['pass']} ok, {c['fail']} failed, {c['wait']} waiting, {c['skip']} skipped.")
+    if summary["all_pass"]:
+        lines.append("All checks pass.")
+    return "\n".join(lines)
+
+def action_half_run_checks(client_ip: str = "") -> dict:
+    global _HALF_LAST_PERM_CHECKS
+    with _HALF_LOCK:
+        ctx = _half_ctx()
+        if ctx is None:
+            return {"success": False, "verified": False, "output": "Nothing to check: no test is running and the half tunnel isn't permanent."}
+        summary = _half_checks_summary(_half_check_list(ctx, client_ip))
+        if ctx["mode"] == "testing":
+            st = _half_state() or {}
+            st["last_checks"] = summary
+            _half_commit(st)
+        else:
+            _HALF_LAST_PERM_CHECKS = summary
+        log(f"HALF: checks -> {summary['counts']}")
+        return {"success": summary["counts"]["fail"] == 0, "verified": summary["all_pass"],
+                "output": _half_checks_text(summary), "checks": summary}
+
+def _half_gate(st: dict) -> tuple[bool, str]:
+    if _half_mode() != "testing":
+        return False, "Only during a test."
+    if not all(_half_done(st, n) for n in _HALF_STEP_FNS):
+        return False, "Run steps 2 to 6 first."
+    lc = st.get("last_checks") or {}
+    if not lc:
+        return False, "Run checks first."
+    if lc.get("at", 0) < (st.get("steps_done_at") or 0):
+        return False, "Run checks again (something changed since the last run)."
+    if time.time() - lc.get("at", 0) > _HALF_CHECKS_MAX_AGE:
+        return False, "The last checks are over 15 minutes old. Run them again."
+    if not lc.get("all_pass"):
+        return False, "Every check must be green or grey."
+    return True, ""
+
+def _half_status_checks(status: dict, st: dict) -> None:
+    status["last_checks"] = (st.get("last_checks") if status["mode"] == "testing"
+                             else (_HALF_LAST_PERM_CHECKS if status["mode"] == "permanent" else None))
+    ok, why = _half_gate(st)
+    status["can_make_permanent"] = ok
+    status["gate_reason"] = why
+
+_HALF_STATUS_HOOKS.append(_half_status_checks)
+
+_HALF_FEATURES.append("permanent")
+
+def _half_perm_block(v: dict) -> list[str]:
+    t = _HALF_TABLE
+    p = _HALF_PRIOS
+    block = [
+        _HALF_BEGIN,
+        f"# Half tunnel (44helper {APP_VERSION}, {datetime.now().strftime('%Y-%m-%d')}): only ASL and EchoLink use the tunnel.",
+        f"# To take it out: ~/{_HALF_SCRIPT_NAME}  (or Remove permanent on 44helper's Firewall tab)",
+        "Table = off",
+    ]
+    if v.get("endpoint_in_44") and v.get("endpoint"):
+        block.append(f"PostUp = ip -4 route replace {v['endpoint']}/32 "
+                     "$(ip -4 route show table main default | head -n1 | grep -oE '(via [0-9.]+ )?dev [^ ]+') || true")
+    block.append(f"PostUp = ip -4 route replace default dev %i table {t} || true")
+    for net in _HALF_NETS:
+        block.append(f"PostUp = ip -4 route replace {net} dev %i || true")
+    block.append(f"PostUp = ip -4 rule add lookup main suppress_prefixlength 0 priority {p['main']} || true")
+    if v.get("addr44"):
+        block.append(f"PostUp = ip -4 rule add from {v['addr44']} lookup {t} priority {p['src44']} || true")
+    if v.get("use_uid_rule"):
+        block.append(f"PostUp = U=$(id -u asterisk) && ip -4 rule add uidrange $U-$U lookup {t} priority {p['uid']} || true")
+    block.append(f"PostUp = ip -4 rule add ipproto udp sport {v.get('iax_port', '4569')} lookup {t} priority {p['iax']} || true")
+    if v.get("echolink"):
+        block.append(f"PostUp = ip -4 rule add ipproto udp sport 5198-5199 lookup {t} priority {p['el_udp']} || true")
+        block.append(f"PostUp = ip -4 rule add ipproto tcp dport 5200 lookup {t} priority {p['el_tcp']} || true")
+    block.append("PostUp = sysctl -q -w net.ipv4.conf.%i.rp_filter=2 || true")
+    prios = " ".join(str(x) for x in sorted(p.values()))
+    block.append(f"PostDown = for P in {prios}; do while ip -4 rule del priority $P 2>/dev/null; do :; done; done; true")
+    block.append(f"PostDown = ip -4 route flush table {t} || true")
+    if v.get("endpoint_in_44") and v.get("endpoint"):
+        block.append(f"PostDown = ip -4 route del {v['endpoint']}/32 || true")
+    block.append(_HALF_END)
+    return block
+
+def _half_perm_conf_text(text: str, v: dict) -> tuple[str | None, bool]:
+    full, changed = _half_set_full_aip_text(text)
+    return _wg_insert_in_interface(full, _half_perm_block(v)), changed
+
+def _half_remove_script(perm: dict) -> str:
+    q = shlex.quote
+    v = perm.get("values", {})
+    alt = "|".join(str(x) for x in sorted(_HALF_PRIOS.values()))
+    ep_route = f"{v['endpoint']}/32" if v.get("endpoint_in_44") and v.get("endpoint") else ""
+    arr = lambda items: "(" + " ".join(q(i) for i in items) + ")"
+    baks = sorted(perm.get("bak_paths") or [], key=lambda b: not b.startswith("/root/"))
+    lines = [
+        "#!/bin/bash",
+        f"# {_HALF_SCRIPT_NAME} -- written by 44helper {perm.get('version', APP_VERSION)} on {perm.get('made_date', '')}.",
+        "# Takes the 44helper \"half tunnel\" back out of this node: ASL and EchoLink stop using",
+        "# the 44Net tunnel, and the tunnel goes back to how it was before. Works without 44helper.",
+        f"# Run it with:  ~/{_HALF_SCRIPT_NAME}   (it asks for sudo by itself)",
+        "if [ \"$(id -u)\" -ne 0 ]; then exec sudo bash \"$0\" \"$@\"; fi",
+        "set -u",
+        f"WG={q(WG0_CONF_PATH)}",
+        f"ORIG_AIP={q(perm.get('orig_aip', ''))}",
+        f"ZONE={q(perm.get('zone', ''))}",
+        f"PORTS={arr(perm.get('ports_added') or [])}",
+        f"PRIOS={q(' '.join(str(x) for x in sorted(_HALF_PRIOS.values())))}",
+        f"TABLE={_HALF_TABLE}",
+        f"EP_ROUTE={q(ep_route)}",
+        f"RP_ORIG={q(str(perm.get('rp_orig') or '0'))}",
+        f"BACKUPS={arr(baks[:1] + [_half_lib_pre_path()] + baks[1:])}",
+        f"COPIES={arr(list(perm.get('script_paths') or []) + list(perm.get('bak_paths') or []))}",
+        f"PROFILE={q(_HALF_PROFILE_FILE)}",
+        f"SYSCTL={q(_HALF_SYSCTL_FILE)}",
+        f"PERM={q(_HALF_PERM_PATH)}",
+        "FAILED=0",
+        "ok()  { echo \"ok    $1\"; }",
+        "bad() { echo \"FAIL  $1\"; FAILED=1; }",
+        "echo \"Removing the 44helper half tunnel...\"",
+        "",
+        "WAS=0",
+        "if systemctl is-active --quiet wg-quick@wg0 || systemctl is-enabled --quiet wg-quick@wg0; then WAS=1; fi",
+        "systemctl stop wg-quick@wg0 >/dev/null 2>&1",
+        "if systemctl is-active --quiet wg-quick@wg0; then bad \"the tunnel didn't stop\"; else ok \"tunnel stopped\"; fi",
+        "",
+        "MARK='^[[:space:]]*# 44helper-half-begin[[:space:]]*$'",
+        "if [ -f \"$WG\" ] && grep -q \"$MARK\" \"$WG\"; then",
+        "  TMP=\"$WG.44helper-tmp\"",
+        "  awk -v aip=\"$ORIG_AIP\" '",
+        "    /^[[:space:]]*# 44helper-half-begin[[:space:]]*$/ { skip = 1; next }",
+        "    /^[[:space:]]*# 44helper-half-end[[:space:]]*$/ { skip = 0; next }",
+        "    skip { next }",
+        "    { low = tolower($0); gsub(/[[:space:]]/, \"\", low) }",
+        "    low == \"[peer]\" { peer = 1 }",
+        "    low == \"[interface]\" { peer = 0 }",
+        "    peer && aip != \"\" && low == \"allowedips=0.0.0.0/0\" { sub(/=.*/, \"= \" aip) }",
+        "    { print }' \"$WG\" > \"$TMP\" && chmod 600 \"$TMP\" && mv \"$TMP\" \"$WG\"",
+        "  if grep -q \"$MARK\" \"$WG\"; then",
+        "    for B in \"${BACKUPS[@]}\"; do",
+        "      if [ -f \"$B\" ] && cp \"$B\" \"$WG\" && chmod 600 \"$WG\"; then ok \"wg0.conf restored from $B\"; break; fi",
+        "    done",
+        "  else",
+        "    ok \"wg0.conf put back (any other edits you made are kept)\"",
+        "  fi",
+        "  if grep -q \"$MARK\" \"$WG\"; then bad \"wg0.conf still has the half-tunnel lines\"; fi",
+        "else",
+        "  ok \"wg0.conf has no half-tunnel lines (already clean)\"",
+        "fi",
+        "",
+        "for P in $PRIOS; do while ip -4 rule del priority \"$P\" 2>/dev/null; do :; done; done",
+        "ip -4 route flush table \"$TABLE\" 2>/dev/null",
+        "[ -n \"$EP_ROUTE\" ] && ip -4 route del \"$EP_ROUTE\" 2>/dev/null",
+        f"if ip -4 rule show | grep -qE '^({alt}):'; then bad \"some half-tunnel routing rules are still loaded\"; else ok \"routing rules removed\"; fi",
+        "",
+        "if [ \"${#PORTS[@]}\" -gt 0 ] && [ -n \"$ZONE\" ]; then",
+        "  for P in \"${PORTS[@]}\"; do firewall-cmd --permanent --zone=\"$ZONE\" --remove-port=\"$P\" >/dev/null 2>&1; done",
+        "  firewall-cmd --reload >/dev/null 2>&1 || systemctl kill -s HUP firewalld >/dev/null 2>&1",
+        "  for P in \"${PORTS[@]}\"; do",
+        "    if [ \"$(firewall-cmd --permanent --zone=\"$ZONE\" --query-port=\"$P\" 2>/dev/null)\" = yes ]; then",
+        "      bad \"port $P is still open on $ZONE (run: firewall-cmd --permanent --zone=$ZONE --remove-port=$P; firewall-cmd --reload)\"",
+        "    else ok \"port $P closed on $ZONE\"; fi",
+        "  done",
+        "else",
+        "  ok \"no ports to close (they were already open before the half tunnel)\"",
+        "fi",
+        "",
+        "rm -f \"$SYSCTL\" && ok \"return-path setting file removed\"",
+        "",
+        "if [ \"$WAS\" = 1 ]; then",
+        "  systemctl start wg-quick@wg0 >/dev/null 2>&1",
+        "  if systemctl is-active --quiet wg-quick@wg0; then ok \"tunnel started again the way it was before\"; else bad \"the tunnel didn't start -- run: systemctl start wg-quick@wg0\"; fi",
+        "fi",
+        "if [ -e /proc/sys/net/ipv4/conf/wg0/rp_filter ]; then sysctl -q -w net.ipv4.conf.wg0.rp_filter=\"$RP_ORIG\" 2>/dev/null; fi",
+        "",
+        "if [ \"$FAILED\" = 0 ]; then",
+        "  rm -f \"$PROFILE\" \"$PERM\" && ok \"login reminder removed\"",
+        "  echo \"Done: the half tunnel is gone.\"",
+        "  rm -f \"${COPIES[@]}\"",
+        "else",
+        "  echo \"Done with problems (see FAIL lines). This script is kept so you can run it again.\"",
+        "fi",
+        "exit \"$FAILED\"",
+        "",
+    ]
+    return "\n".join(lines)
+
+def _half_profile_text() -> str:
+    return "\n".join([
+        f"# 44helper: login reminder that the half tunnel is active. {_HALF_SCRIPT_NAME} removes this file.",
+        "case $- in",
+        f"  *i*) [ -x \"$HOME/{_HALF_SCRIPT_NAME}\" ] && echo \"Half tunnel is active -- to remove: ~/{_HALF_SCRIPT_NAME}\" ;;",
+        "esac",
+        "",
+    ])
+
+def _half_write_owned(path: str, text: str, mode: int, uid: int, gid: int) -> None:
+    tmp = path + ".44helper-tmp"
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        fh.write(text)
+        os.fchmod(fh.fileno(), mode)
+        os.fchown(fh.fileno(), uid, gid)
+    os.replace(tmp, path)
+
+def _half_user_homes(user: str) -> list[tuple[str, int, int]] | None:
+    try:
+        pw = pwd.getpwnam(user)
+    except KeyError:
+        return None
+    if pw.pw_uid != 0 and not 1000 <= pw.pw_uid < 65534:
+        return None
+    if not os.path.isdir(pw.pw_dir):
+        return None
+    homes = [(pw.pw_dir, pw.pw_uid, pw.pw_gid)]
+    if pw.pw_uid != 0:
+        homes.append(("/root", 0, 0))
+    return homes
+
+def _half_wait_handshake(limit: int = 20) -> bool:
+    end = time.time() + limit
+    while time.time() < end:
+        rc, out = _half_q(["wg", "show", "wg0", "latest-handshakes"])
+        if rc == 0 and any(t.isdigit() and int(t) > 0 for t in out.split()):
+            return True
+        time.sleep(2)
+    return False
+
+def _half_files_rollback(track: list[tuple[str, object]], out: list[str]) -> None:
+    for kind, data in reversed(track):
+        try:
+            if kind == "wg0":
+                _wg_write_conf(str(data))
+                out.append("ok    wg0.conf put back")
+            elif kind == "port":
+                zone, pp = data
+                r = _run_argv(["firewall-cmd", "--permanent", f"--zone={zone}", f"--remove-port={pp}"])
+                if not r["success"] and _polkit_signature_crash(r["output"]):
+                    port, proto = pp.split("/")
+                    _zone_xml_remove_child(zone, "port", {"port": port, "protocol": proto})
+                out.append(f"ok    saved port {pp} taken back out")
+            elif kind == "file" and os.path.exists(str(data)):
+                os.remove(str(data))
+                out.append(f"ok    removed {data}")
+        except OSError as exc:
+            out.append(f"FAIL  couldn't put back {kind} {data}: {exc}")
+
+def _half_retest(saved: dict, out: list[str]) -> None:
+    out.append("Starting the temporary test setup again (15-minute timer):")
+    st = {"check": saved.get("check")}
+    r = _half_arm(st)
+    out.append(r["output"])
+    if not r["success"]:
+        return
+    for n in sorted(_HALF_STEP_FNS):
+        rs = _half_run_step(n)
+        out.append(rs["output"])
+        if not rs["success"]:
+            out.append("The test setup didn't fully come back. Use Undo now, or reboot.")
+            return
+
+def _half_make_permanent(user: str) -> dict:
+    out: list[str] = []
+    err = _require_root()
+    if err:
+        return err
+    st = _half_state() or {}
+    ok, why = _half_gate(st)
+    if not ok:
+        return {"success": False, "verified": False, "output": "Refused: " + why}
+    homes = _half_user_homes(user)
+    if homes is None:
+        return {"success": False, "verified": False, "output": f"Refused: '{user}' isn't root or a login user (UID 1000 or above) with a home folder on this Pi."}
+    v = st["check"]["values"]
+    text = _half_wg_text()
+    if text is None:
+        return {"success": False, "verified": False, "output": "Refused: couldn't read wg0.conf."}
+    new_text, aip_changed = _half_perm_conf_text(text, v)
+    if new_text is None:
+        return {"success": False, "verified": False, "output": "Refused: wg0.conf has no [Interface] section."}
+    zone = (st["steps"]["5"] or {}).get("zone") or v.get("zone", "")
+    ports_added = list((st["steps"]["5"] or {}).get("added") or [])
+    script_paths = [os.path.join(h, _HALF_SCRIPT_NAME) for h, _u, _g in homes]
+    bak_paths = [os.path.join(h, _HALF_BAK_NAME) for h, _u, _g in homes]
+    perm = {
+        "made_at": time.time(), "made_date": datetime.now().strftime("%Y-%m-%d %H:%M"), "version": APP_VERSION,
+        "values": v, "baseline": st["check"].get("baseline", {}), "zone": zone, "ports_added": ports_added,
+        "rp_orig": (st["steps"]["6"] or {}).get("orig", "0"),
+        "orig_aip": v.get("aip", "") if aip_changed else "", "user": user,
+        "script_paths": script_paths, "bak_paths": bak_paths,
+    }
+    track: list[tuple[str, object]] = []
+    out.append(f"Saving the half tunnel (home folder: {homes[0][0]}):")
+    try:
+        if not os.path.exists(_half_lib_pre_path()):
+            _compare_before_write(_half_lib_pre_path(), text.encode("utf-8"))
+        for (h, uid, gid), bak in zip(homes, bak_paths):
+            _half_write_owned(bak, text, 0o600, uid, gid)
+            track.append(("file", bak))
+            out.append(f"ok    backup of your wg0.conf: {bak}")
+        for line in _wg_write_conf(new_text):
+            out.append("ok    " + line)
+        track.append(("wg0", text))
+        for pp in ports_added:
+            r = _run_argv(["firewall-cmd", "--permanent", f"--zone={zone}", f"--add-port={pp}"])
+            if not r["success"] and _polkit_signature_crash(r["output"]):
+                port, proto = pp.split("/")
+                _zone_xml_add_child(zone, "port", {"port": port, "protocol": proto})
+                r["success"] = True
+            if not r["success"]:
+                raise OSError(f"firewalld refused port {pp}: {r['output']}")
+            track.append(("port", (zone, pp)))
+            out.append(f"ok    port {pp} saved in zone {zone}")
+        _write_conf_atomic(_HALF_SYSCTL_FILE, "# 44helper half tunnel: loose return-path check on the tunnel.\n"
+                                              "net.ipv4.conf.wg0.rp_filter = 2\n", 0o644)
+        track.append(("file", _HALF_SYSCTL_FILE))
+        out.append(f"ok    {_HALF_SYSCTL_FILE}")
+        _half_write_json(_HALF_PERM_PATH, perm)
+        track.append(("file", _HALF_PERM_PATH))
+        script = _half_remove_script(perm)
+        for (h, uid, gid), sp in zip(homes, script_paths):
+            _half_write_owned(sp, script, 0o700, uid, gid)
+            track.append(("file", sp))
+            out.append(f"ok    removal script: {sp}")
+        _write_conf_atomic(_HALF_PROFILE_FILE, _half_profile_text(), 0o644)
+        track.append(("file", _HALF_PROFILE_FILE))
+        out.append("ok    login reminder added")
+    except (OSError, ValueError) as exc:
+        out.append(f"FAIL  {exc}")
+        out.append("Taking the saved pieces back out:")
+        _half_files_rollback(track, out)
+        out.append("Nothing was made permanent. The test is still running, with its timer.")
+        return {"success": False, "verified": False, "output": "\n".join(out)}
+    saved = json.loads(json.dumps(st))
+    out.append("Switching from the test setup to the saved one:")
+    _half_q(["systemctl", "stop", f"{_HALF_TIMER}.timer"])
+    _half_write_undo(st)
+    urc, utext = _half_q(["bash", _HALF_UNDO_SH], timeout=180)
+    out.extend("      " + ln.replace("Done: everything is back to normal.", "Test setup cleared.")
+               for ln in utext.splitlines())
+    if urc != 0:
+        out.append("FAIL  the test setup didn't fully clear (see the FAIL lines above). The checks below show what that left.")
+    if not _systemctl_is_active("wg-quick@wg0"):
+        _half_run_lines([["systemctl", "start", "wg-quick@wg0"]], out)
+    rl = _reload_firewalld()
+    out.append(("ok    " if rl["success"] else "FAIL  ") + "firewall reloaded")
+    hs = _half_wait_handshake()
+    out.append("ok    tunnel is talking to the 44Net server" if hs else "wait  no contact with the 44Net server yet")
+    perm["restarted_at"] = time.time()
+    _half_write_json(_HALF_PERM_PATH, perm)
+    summary = _half_checks_summary(_half_check_list(_half_ctx() or {"mode": "permanent", "values": v,
+                                                                     "baseline": perm["baseline"],
+                                                                     "ref": time.time(), "up_at": time.time()}))
+    global _HALF_LAST_PERM_CHECKS
+    _HALF_LAST_PERM_CHECKS = summary
+    out.append("Checks after the switch:")
+    out.append(_half_checks_text(summary))
+    if summary["counts"]["fail"]:
+        out.append("A check failed after saving, so the saved half tunnel is being taken back out:")
+        rc, rtext = _half_q(["bash", "-s"], timeout=180, input_text=_half_remove_script(perm))
+        out.extend("      " + ln for ln in rtext.splitlines())
+        _HALF_LAST_PERM_CHECKS = {}
+        if rc == 0:
+            _half_retest(saved, out)
+        else:
+            out.append(f"The removal had problems. Run ~/{_HALF_SCRIPT_NAME} or Remove permanent.")
+        log("HALF: make permanent -> rolled back")
+        return {"success": False, "verified": False, "output": "\n".join(out)}
+    if summary["counts"]["wait"]:
+        out.append("Saved. Some checks are still waiting (registration can take a few minutes). Re-run checks shortly.")
+    else:
+        out.append("Saved. The half tunnel now survives a reboot.")
+    log("HALF: make permanent -> ok")
+    return {"success": True, "verified": summary["all_pass"], "output": "\n".join(out)}
+
+def action_half_make_permanent(user: str = "") -> dict:
+    with _HALF_LOCK:
+        return _half_make_permanent((user or "").strip() or _half_home_user_default())
+
+def action_half_remove_permanent() -> dict:
+    global _HALF_LAST_PERM_CHECKS
+    with _HALF_LOCK:
+        err = _require_root()
+        if err:
+            return err
+        perm = _half_perm()
+        if perm is None and _half_mode() != "permanent":
+            return {"success": True, "verified": True, "output": "The half tunnel isn't permanent on this node. Nothing to remove."}
+        if perm is None:
+            perm = {"values": {}, "zone": _half_zone(), "ports_added": [], "rp_orig": "0", "orig_aip": "",
+                    "script_paths": [], "bak_paths": []}
+        rc, text = _half_q(["bash", "-s"], timeout=180, input_text=_half_remove_script(perm))
+        _HALF_LAST_PERM_CHECKS = {}
+        log(f"HALF: remove permanent -> {'ok' if rc == 0 else 'problems'}")
+        return {"success": rc == 0, "verified": rc == 0 and _half_mode() == "off", "output": text}
+
+def _half_status_perm(status: dict, st: dict) -> None:
+    perm = _half_perm() or {}
+    status["home_user_default"] = _half_home_user_default()
+    status["perm"] = {"made_date": perm.get("made_date", ""), "user": perm.get("user", ""),
+                      "script_paths": perm.get("script_paths", []), "version": perm.get("version", "")}
+
+_HALF_STATUS_HOOKS.append(_half_status_perm)
 
 _CSS_BASE = """
 /* ── :root variables — copied verbatim from asl_dvs_dashboard, design plan §10 ── */
@@ -13411,6 +15059,8 @@ function _piAllowedIpsCardHtml(kind, aip) {
   html += '<span class="step-pill ' + pillCls + '">' + pill + '</span></div>';
   if (!aip.conf_exists || shape === 'no-conf') {
     html += '<div class="step-body">No wg0.conf yet. Paste your config (step 4) first. If you paste it unedited (full-tunnel 0.0.0.0/0), this step offers a one-click fix to the split-tunnel 44Net range.</div>';
+  } else if (aip.half_mode && aip.half_mode !== 'off') {
+    html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Firewall tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
   } else if (shape === 'split') {
     html += '<div class="step-body">AllowedIPs is already the split-tunnel set (<code>' + asl3EscapeAttr(current) + '</code>). Nothing to repair.</div>';
   } else if (shape === 'full') {
@@ -14380,6 +16030,7 @@ function _startApp() {
   refreshPorts();
   refreshFirewall();
   refreshFirewall2();
+  refreshHalfTunnel();
   refreshActionsLog();
   refreshAsl3();
   refreshDvswitch();
@@ -18324,6 +19975,243 @@ function jobHelpSetBack(from) {
 }
 """
 
+_JS_HALF = r"""
+var _htStatus = null;
+var _htOut = null;
+var _htBusy = false;
+var _htSkew = 0;
+var _htRefreshQueued = false;
+var _htSections = [];
+
+function htEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function refreshHalfTunnel() {
+  fetch('/api/firewall/half_status').then(function(r) { return r.json(); }).then(function(d) {
+    _htStatus = d;
+    _htSkew = (d.now || 0) * 1000 - Date.now();
+    htRender();
+  }).catch(function() {});
+}
+
+function htBtn(label, onclick, enabled, extraStyle) {
+  var dis = (!enabled || _htBusy) ? ' disabled style="opacity:.45;cursor:not-allowed' + (extraStyle ? ';' + extraStyle : '') + '"' : (extraStyle ? ' style="' + extraStyle + '"' : '');
+  return '<button class="btn-run" onclick="' + onclick + '"' + dis + '>' + htEsc(label) + '</button>';
+}
+
+function htRow(buttonHtml, note, noteColor) {
+  return '<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.3rem 0">' + buttonHtml +
+    '<span style="font-family:var(--mono);font-size:.75rem;color:' + (noteColor || 'var(--muted)') + '">' + htEsc(note || '') + '</span></div>';
+}
+
+function htRender() {
+  var box = document.getElementById('ht-card');
+  if (!box || !_htStatus) { return; }
+  var d = _htStatus;
+  var pills = {off: ['Off', 'not_started'], testing: ['Testing', 'attempted_unconfirmed'], permanent: ['Permanent', 'done']};
+  var pill = pills[d.mode] || ['?', 'not_started'];
+  var html = '<div class="step-card"><div class="step-head"><div class="step-title">Half tunnel (ASL + EchoLink only)</div>';
+  html += '<span class="step-pill ' + pill[1] + '">' + pill[0] + '</span></div>';
+  html += '<div class="step-body">ASL and EchoLink use the 44Net tunnel. DVSwitch, usrp2m17, DNS and everything else keep the normal internet route. Test with temporary settings first (a reboot clears them), then make it permanent.</div>';
+  if (!d.root) {
+    html += '<div class="step-body" style="color:var(--red)">44helper isn\u2019t running as root, so these buttons can\u2019t change anything. Run it from its systemd service.</div>';
+  }
+  _htSections.forEach(function(fn) { html += fn(d); });
+  var o = _htOut;
+  var cls = 'asl3-console shown' + (o ? (o.working ? '' : (o.success ? ' ok' : ' fail')) : ' placeholder');
+  html += '<div class="' + cls + '" id="ht-out" style="white-space:pre-wrap">' + (o ? htEsc(o.text) : '(not run yet)') + '</div>';
+  html += '</div>';
+  box.innerHTML = html;
+  htTickNow();
+}
+
+function htPost(action, extra, confirmMsg) {
+  if (_htBusy) { return; }
+  if (confirmMsg && !confirm(confirmMsg)) { return; }
+  var body = {action: action};
+  for (var k in (extra || {})) { if (extra.hasOwnProperty(k)) { body[k] = extra[k]; } }
+  _htBusy = true;
+  _htOut = {text: 'Working... (this can take a minute)', success: true, working: true};
+  htRender();
+  fetch('/api/firewall/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    _htBusy = false;
+    _htOut = {text: res.output || '(no output)', success: !!res.success};
+    refreshHalfTunnel();
+  }).catch(function(e) {
+    _htBusy = false;
+    _htOut = {text: 'Request failed: ' + e, success: false};
+    refreshHalfTunnel();
+  });
+}
+
+function htTickNow() {
+  var el = document.getElementById('ht-timer');
+  if (!el || !_htStatus) { return; }
+  var d = _htStatus;
+  if (d.timer_active && d.expires_at) {
+    var left = Math.max(0, Math.round((d.expires_at * 1000 - (Date.now() + _htSkew)) / 1000));
+    var mm = Math.floor(left / 60);
+    var ss = left % 60;
+    el.style.color = left < 120 ? 'var(--amber)' : 'var(--green)';
+    el.textContent = 'Auto-undo in ' + mm + ':' + (ss < 10 ? '0' : '') + ss;
+    if (left <= 0 && !_htRefreshQueued) {
+      _htRefreshQueued = true;
+      setTimeout(function() { _htRefreshQueued = false; refreshHalfTunnel(); }, 5000);
+    }
+  } else if (d.undo_running) {
+    el.style.color = 'var(--amber)';
+    el.textContent = 'The auto-undo is running now...';
+  } else if (d.kept && d.mode === 'testing') {
+    el.style.color = 'var(--amber)';
+    el.textContent = 'Auto-undo cancelled. Undo now or a reboot clears the test.';
+  } else {
+    el.textContent = '';
+  }
+}
+setInterval(htTickNow, 1000);
+
+_htSections.push(function(d) {
+  var c = d.check || {};
+  var v = c.values || {};
+  var html = '';
+  if (c.at) {
+    var when = new Date(c.at * 1000).toLocaleTimeString();
+    html += '<div class="step-body" style="font-family:var(--mono);font-size:.78rem;line-height:1.55">';
+    html += 'Checked ' + htEsc(when) + (c.fresh ? '' : ' (old, run it again)') + '<br>';
+    html += '44Net address: ' + htEsc(v.addr44 || '(none)') + ' &nbsp; IAX port: ' + htEsc(v.iax_port || '?') +
+            ' &nbsp; EchoLink: ' + (v.echolink ? 'on' : 'off') + '<br>';
+    html += 'LAN: ' + htEsc((v.lan_nets || []).join(', ') || '(none found)') + ' &nbsp; wg0 zone: ' + htEsc(v.zone || '(none)') + '<br>';
+    html += 'Tunnel server: ' + htEsc(v.endpoint_host || '?') + ' (' + htEsc(v.endpoint || 'not found') + ')';
+    html += '</div>';
+    (c.blockers || []).forEach(function(b) {
+      html += '<div class="step-body" style="color:var(--red)">Blocked: ' + htEsc(b) + '</div>';
+    });
+    (c.notes || []).forEach(function(n) {
+      html += '<div class="step-body" style="color:var(--amber)">Note: ' + htEsc(n) + '</div>';
+    });
+  }
+  html += htRow(htBtn('0. Check first', "htPost('half_check_first')", d.mode === 'off'),
+                'Read-only. Fills in the values above and backs up wg0.conf.');
+  return html;
+});
+function htStepDone(d, n) { return !!((d.steps || {})[String(n)] || {}).done; }
+
+_htSections.push(function(d) {
+  if ((d.features || []).indexOf('test') === -1) { return ''; }
+  var html = '<div class="step-body" style="margin-top:.5rem;font-weight:bold">Test buttons (temporary, gone on reboot)</div>';
+  var anyStep = false;
+  for (var i = 2; i <= 6; i++) { if (htStepDone(d, i)) { anyStep = true; } }
+  var canArm = d.root && d.mode !== 'permanent' && !d.undo_running &&
+               ((d.check && d.check.ok && d.check.fresh) || anyStep);
+  html += htRow(htBtn(d.timer_active ? '1. Restart the 15-minute timer' : '1. Arm auto-undo (15 min)', "htPost('half_arm')", canArm),
+                d.timer_active ? '' : 'Puts everything back by itself if you lose this page or SSH.');
+  html += '<div id="ht-timer" style="font-family:var(--mono);font-size:.85rem;margin:.2rem 0 .4rem 0"></div>';
+  var prevDone = true;
+  for (var n = 2; n <= 6; n++) {
+    var s = (d.steps || {})[String(n)] || {};
+    var done = !!s.done;
+    var enabled = d.timer_active && !done && prevDone;
+    var note = done ? 'done' : (s.pending ? 'in progress' : '');
+    html += htRow(htBtn(n + '. ' + (s.title || ''), "htPost('half_step', {step: " + n + "})", enabled), note, done ? 'var(--green)' : '');
+    prevDone = prevDone && done;
+  }
+  html += htRow(htBtn('Run 2\u20136 in order', "htPost('half_run_all')", d.timer_active && !d.all_steps_done),
+                'Stops at the first failure and puts everything back.');
+  html += htRow(htBtn('8. Undo now', "htPost('half_undo', {}, 'Put back every test change now?')", d.mode === 'testing', 'border-color:var(--amber)') +
+                htBtn('9. Keep for now', "htPost('half_keep', {}, 'Cancel the auto-undo? The test changes stay until Undo now or a reboot.')", d.timer_active),
+                '');
+  if (d.undo_failed) {
+    html += '<div class="step-body" style="color:var(--red)">The last undo had problems (see the log below). Use Undo now again, or reboot: every test change is temporary.</div>';
+  }
+  if ((d.undo_log || []).length) {
+    html += '<details style="margin-top:.3rem"><summary style="cursor:pointer;color:var(--muted);font-family:var(--mono);font-size:.78rem">Undo log</summary>';
+    html += '<div class="cmd-preview" style="white-space:pre-wrap;max-height:220px;overflow-y:auto">' + htEsc(d.undo_log.join('\n')) + '</div></details>';
+  }
+  return html;
+});
+_htSections.push(function(d) {
+  if ((d.features || []).indexOf('checks') === -1) { return ''; }
+  var html = '<div class="step-body" style="margin-top:.5rem;font-weight:bold">Checks</div>';
+  html += htRow(htBtn('7. Run checks', "htPost('half_checks')", d.mode !== 'off'),
+                d.mode === 'off' ? 'Available during a test or once permanent.' : 'Read-only.');
+  var lc = d.last_checks;
+  if (lc && lc.results) {
+    var colors = {pass: 'var(--green)', fail: 'var(--red)', wait: 'var(--amber)', skip: 'var(--muted)'};
+    var tags = {pass: 'OK', fail: 'FAIL', wait: 'WAIT', skip: 'SKIP'};
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.76rem;margin:.3rem 0">';
+    var group = '';
+    lc.results.forEach(function(r) {
+      if (r.group !== group) {
+        group = r.group;
+        html += '<tr><td colspan="3" style="padding:.35rem 0 .1rem 0;font-weight:bold">' + htEsc(group) + '</td></tr>';
+      }
+      html += '<tr><td style="color:' + colors[r.level] + ';padding-right:.5rem;vertical-align:top">' + tags[r.level] + '</td>';
+      html += '<td style="padding-right:.5rem;vertical-align:top;white-space:nowrap">' + r.n + '. ' + htEsc(r.title) + '</td>';
+      html += '<td style="vertical-align:top">' + htEsc(r.text);
+      if (r.hint && (r.level === 'fail' || r.level === 'wait')) {
+        html += '<br><span style="color:' + colors[r.level] + '">' + htEsc(r.hint) + '</span>';
+      }
+      html += '</td></tr>';
+    });
+    html += '</table></div>';
+    var c = lc.counts || {};
+    html += '<div class="step-body" style="font-family:var(--mono);font-size:.75rem">Last run ' + htEsc(new Date(lc.at * 1000).toLocaleTimeString()) +
+            ': ' + (c.pass || 0) + ' ok, ' + (c.fail || 0) + ' failed, ' + (c.wait || 0) + ' waiting, ' + (c.skip || 0) + ' skipped.</div>';
+    var critical = lc.results.filter(function(r) { return r.level === 'fail' && (r.n === 4 || r.n === 5 || r.n === 6); });
+    if (critical.length && d.mode === 'testing') {
+      html += '<div class="step-body" style="color:var(--red);font-weight:bold;border:1px solid var(--red);border-radius:4px;padding:.4rem">' +
+              'The normal route, DNS or LAN pages are affected. This is what broke things last time. Undo now is recommended.</div>';
+    }
+  }
+  return html;
+});
+var _htUser = null;
+
+function htMakePermanent() {
+  var u = (document.getElementById('ht-user') || {}).value || '';
+  htPost('half_make_permanent', {user: u},
+         'Make the half tunnel permanent? This saves it in wg0.conf, firewalld and a sysctl file, puts remove_half_tunnel.sh in ' +
+         (u === 'root' ? '/root' : 'the home folder of ' + u + ' and /root') + ', restarts the tunnel and re-runs the checks. ' +
+         'If a check fails afterwards it is taken back out by itself.');
+}
+
+function htRemovePermanent() {
+  if (!confirm('Remove the permanent half tunnel? The tunnel goes back to how it was before.')) { return; }
+  htPost('half_remove_permanent', {}, 'Are you sure? This restarts the tunnel.');
+}
+
+_htSections.push(function(d) {
+  if ((d.features || []).indexOf('permanent') === -1) { return ''; }
+  var p = d.perm || {};
+  var html = '<div class="step-body" style="margin-top:.5rem;font-weight:bold">Saving</div>';
+  if (d.mode === 'permanent') {
+    html += '<div class="step-body">Permanent since ' + htEsc(p.made_date || '?') + (p.version ? ' (44helper ' + htEsc(p.version) + ')' : '') + '.';
+    if ((p.script_paths || []).length) {
+      html += ' Removal script: ' + p.script_paths.map(function(x) { return '<code>' + htEsc(x) + '</code>'; }).join(', ');
+    }
+    html += '</div>';
+  } else {
+    if (_htUser === null) { _htUser = d.home_user_default || 'root'; }
+    html += '<div class="step-body">Home folder for <code>remove_half_tunnel.sh</code>: user ' +
+            '<input type="text" id="ht-user" value="' + htEsc(_htUser) + '" oninput="_htUser=this.value" ' +
+            'style="font-family:var(--mono);width:9rem;background:#0a1020;color:var(--text-bright);border:1px solid var(--border2);border-radius:4px;padding:.15rem .4rem">' +
+            ' <span style="font-size:.75rem;color:var(--muted)">(a copy also goes in /root)</span></div>';
+  }
+  html += htRow(htBtn('10. Make permanent', 'htMakePermanent()', !!d.can_make_permanent),
+                d.mode === 'permanent' ? '' : (d.can_make_permanent ? 'All checks pass.' : (d.gate_reason || '')),
+                d.can_make_permanent ? 'var(--green)' : '');
+  html += htRow(htBtn('11. Remove permanent', 'htRemovePermanent()', d.mode === 'permanent', 'border-color:var(--red)'),
+                d.mode === 'permanent' ? 'Same as running ~/remove_half_tunnel.sh' : '');
+  return html;
+});
+// half-tunnel js end
+"""
+
 _JS = (
     _JS_AUTH
     + _JS_EVENTS
@@ -18336,6 +20224,7 @@ _JS = (
     + _JS_ROUTER_INSTALL
     + _JS_SERVICES_PORTS
     + _JS_FIREWALL
+    + _JS_HALF
     + _JS_ACTIONS_LOG
     + _JS_ASL3
     + _JS_DVSWITCH
@@ -18387,6 +20276,7 @@ def _render_firewall_panel() -> str:
     return """
 <div class="tab-panel hidden" id="panel-firewall">
   <div id="fw-guardrail"></div>
+  <div id="ht-card"></div>
   <div class="step-card"><div class="step-head"><div class="step-title">Pi: 44NetConnect zone</div></div>
     <div class="step-body" id="fw-pi-zone">...</div>
     <div class="checklist">
@@ -18438,7 +20328,7 @@ def _render_firewall_panel() -> str:
   <div class="step-card"><div class="step-head"><div class="step-title">Router: live port-forward table</div></div>
     <div class="step-body" id="fw-router-forwards">...</div>
   </div>
-  <button class="btn-recheck" onclick="refreshFirewall();refreshFirewall2()">Re-check</button>
+  <button class="btn-recheck" onclick="refreshFirewall();refreshFirewall2();refreshHalfTunnel()">Re-check</button>
   <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:.6rem" id="fw-checked-at"></span>
 </div>
 """
@@ -19221,6 +21111,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/services/status": _route_services_status,
     "/api/ports/status": _route_ports_status,
     "/api/firewall/status": _route_firewall_status,
+    "/api/firewall/half_status": _route_half_status,
     "/api/pi_install/netcheck_scan": _route_pi_install_netcheck_scan,
     "/api/pi_install/netcheck_journal": _route_pi_install_netcheck_journal,
     "/api/actions_log/notes": _route_actions_log_notes,
@@ -19346,6 +21237,15 @@ _FIREWALL_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "fw_change_interface": lambda p: action_fw_change_interface(p.get("zone", ""), p.get("iface", "")),
     "fw_remove_interface": lambda p: action_fw_remove_interface(p.get("zone", ""), p.get("iface", "")),
     "fw_panic_off": lambda p: action_fw_panic_off(),
+    "half_make_permanent": lambda p: action_half_make_permanent(p.get("user", "")),
+    "half_remove_permanent": lambda p: action_half_remove_permanent(),
+    "half_checks": lambda p: action_half_run_checks(p.get("_client_ip", "")),
+    "half_arm": lambda p: action_half_arm(),
+    "half_step": lambda p: action_half_step(p.get("step")),
+    "half_run_all": lambda p: action_half_run_all(),
+    "half_undo": lambda p: action_half_undo(),
+    "half_keep": lambda p: action_half_keep(),
+    "half_check_first": lambda p: action_half_check_first(),
 }
 
 def _dispatch_firewall_action(payload: dict) -> dict:
@@ -19775,6 +21675,7 @@ class Handler(BaseHTTPRequestHandler):
             if err is not None:
                 self._send(400, "application/json", err)
                 return
+            payload["_client_ip"] = self._client_ip()
             result = _dispatch_firewall_action(payload)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
