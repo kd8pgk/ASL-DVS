@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.193"
+APP_VERSION = "0.0.194"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -5587,8 +5587,9 @@ def status_wg_allowed_ips() -> dict:
     else:
         shape = "narrowed-other"
     half = _half_mode()
+    fx = _fx_mode()
     return {"conf_exists": True, "allowed_ips": allowed_ips, "shape": shape,
-            "repairable": shape == "full" and half == "off", "half_mode": half}
+            "repairable": shape == "full" and half == "off" and fx == "off", "half_mode": half, "fullx_mode": fx}
 
 def action_wg_repair_allowed_ips() -> dict:
     err = _require_root()
@@ -5608,6 +5609,10 @@ def action_wg_repair_allowed_ips() -> dict:
                 "output": ("Refused: the half tunnel is " + before["half_mode"] + " on this node. It needs AllowedIPs = 0.0.0.0/0 "
                            "so nodes outside 44Net can reach you; narrowing it would cut them off. Remove the half tunnel "
                            "(Firewall tab) first if you want a split tunnel instead.")}
+    if before.get("fullx_mode", "off") != "off":
+        return {"success": False, "verified": False,
+                "output": ("Refused: full tunnel with exceptions is " + before["fullx_mode"] + " on this node. Remove it "
+                           "(Full Tunnel tab) first if you want a split tunnel instead.")}
     if before["shape"] == "split":
         return {"success": True, "verified": True,
                 "output": f"AllowedIPs is already the split-tunnel set ({before['allowed_ips']}) -- nothing to do."}
@@ -8186,6 +8191,8 @@ def _half_detect() -> dict:
         blockers.append("A test is already running. Use Undo now (or let the auto-undo run) before checking again.")
     if os.geteuid() != 0:
         blockers.append("44helper isn't running as root, so it can't change the network. Run it from its systemd service.")
+    if _fx_mode() != "off":
+        blockers.append("Full tunnel with exceptions is " + _fx_mode() + " on this node (Full Tunnel tab). Use one or the other: remove it first.")
     values: dict = {}
     text = _half_wg_text()
     parsed = None
@@ -9474,6 +9481,888 @@ def _half_status_perm(status: dict, st: dict) -> None:
                       "script_paths": perm.get("script_paths", []), "version": perm.get("version", "")}
 
 _HALF_STATUS_HOOKS.append(_half_status_perm)
+
+_FX_RUN_DIR = "/run/44helper-fullx"
+_FX_STATE_PATH = os.path.join(_FX_RUN_DIR, "state.json")
+_FX_UNDO_SH = os.path.join(_FX_RUN_DIR, "undo.sh")
+_FX_UNDO_LOG = os.path.join(_FX_RUN_DIR, "undo.log")
+_FX_UNDO_FAILED = os.path.join(_FX_RUN_DIR, "undo_failed")
+_FX_TIMER = "44helper-fullxundo"
+_FX_PRIOS = {"lan": 1150, "hosts": 1160, "ports": 1161}
+_FX_BEGIN = "# 44helper-fullx-begin"
+_FX_END = "# 44helper-fullx-end"
+_FX_PERM_PATH = str(CONFIG_DIR / "fullx.json")
+_FX_PROFILE_FILE = "/etc/profile.d/44helper-fullx.sh"
+_FX_SCRIPT_NAME = "remove_full_exceptions.sh"
+_FX_BAK_NAME = "remove_full_exceptions.wg0.conf.bak"
+_FX_STEP_TITLES = {2: "Keep replies from the LAN address on the LAN link", 3: "Send the bypass list around the tunnel"}
+_FX_HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
+_FX_LAST_PERM_CHECKS: dict = {}
+
+def _fx_lib_pre_path() -> str:
+    library_dir = os.environ.get("INSTMON_LIBRARY_DIR", "/etc/asl_dvs/instmon_library")
+    return os.path.join(library_dir, "config", "wg0.conf.pre-fullx")
+
+def _fx_state() -> dict | None:
+    return _half_read_json(_FX_STATE_PATH)
+
+def _fx_perm() -> dict | None:
+    return _half_read_json(_FX_PERM_PATH)
+
+def _fx_conf_is_permanent(text: str | None) -> bool:
+    return bool(text) and any(ln.strip() == _FX_BEGIN for ln in text.splitlines())
+
+def _fx_mode() -> str:
+    if _fx_conf_is_permanent(_half_wg_text()):
+        return "permanent"
+    st = _fx_state()
+    if st and (st.get("armed_at") or st.get("steps")):
+        return "testing"
+    return "off"
+
+def _fx_parse_list(raw) -> tuple[list[str], list[str], list[str]]:
+    hosts: list[str] = []
+    ports: list[str] = []
+    bad: list[str] = []
+    items = raw if isinstance(raw, list) else re.split(r"[\s,]+", str(raw or ""))
+    for item in items:
+        item = str(item).strip().lower()
+        if not item:
+            continue
+        m = re.fullmatch(r"(?:udp[:/])?(\d{1,5})(?:/udp)?", item)
+        if m:
+            if 1 <= int(m.group(1)) <= 65535:
+                if m.group(1) not in ports:
+                    ports.append(m.group(1))
+            else:
+                bad.append(item)
+            continue
+        try:
+            ip = ipaddress.ip_address(item)
+            if ip.version == 4 and item not in hosts:
+                hosts.append(item)
+            elif ip.version != 4:
+                bad.append(item)
+            continue
+        except ValueError:
+            pass
+        if _FX_HOST_RE.match(item) and "." in item and not item.replace(".", "").isdigit():
+            if item not in hosts:
+                hosts.append(item)
+        else:
+            bad.append(item)
+    return hosts[:20], ports[:20], bad
+
+def _fx_resolve(hosts: list[str]) -> dict[str, list[str]]:
+    res: dict[str, list[str]] = {}
+    for h in hosts:
+        try:
+            ipaddress.ip_address(h)
+            res[h] = [h]
+            continue
+        except ValueError:
+            pass
+        rc, out = _half_q(["getent", "ahostsv4", h], timeout=6)
+        res[h] = sorted({ln.split()[0] for ln in out.splitlines() if ln.split()}) if rc == 0 else []
+    return res
+
+def _fx_dmr_master() -> str:
+    for f in ("/opt/MMDVM_Bridge/MMDVM_Bridge.ini", "/etc/MMDVM_Bridge/MMDVM_Bridge.ini", "/etc/dvswitch/MMDVM_Bridge.ini"):
+        try:
+            with open(f, "r", errors="replace") as fh:
+                txt = fh.read()
+        except OSError:
+            continue
+        sec = ""
+        for raw in txt.splitlines():
+            ln = raw.split(";", 1)[0].strip()
+            m = re.match(r"^\[([^\]]+)\]", ln)
+            if m:
+                sec = m.group(1).strip().lower()
+            elif sec == "dmr network" and ln.lower().startswith("address") and "=" in ln:
+                v = ln.split("=", 1)[1].strip()
+                if v:
+                    return v
+    return ""
+
+def _fx_zone_open(zone: str) -> str:
+    if not zone:
+        return ""
+    ports = _half_q(["firewall-cmd", f"--zone={zone}", "--list-ports"])[1].split()
+    svcs = _half_q(["firewall-cmd", f"--zone={zone}", "--list-services"])[1].split()
+    return ", ".join(svcs + ports) or "nothing"
+
+def _fx_detect() -> dict:
+    blockers: list[str] = []
+    notes: list[str] = []
+    mode = _fx_mode()
+    if mode == "permanent":
+        blockers.append("Full tunnel with exceptions is already permanent here. Use Remove permanent first to test again.")
+    elif mode == "testing":
+        blockers.append("A test is already running. Use Undo now (or let the auto-undo run) before checking again.")
+    if os.geteuid() != 0:
+        blockers.append("44helper isn't running as root, so it can't change the network. Run it from its systemd service.")
+    if _half_mode() != "off":
+        blockers.append("The half tunnel is " + _half_mode() + " on this node (Firewall tab). Use one or the other: remove the half tunnel first.")
+    values: dict = {}
+    text = _half_wg_text()
+    if text is None:
+        blockers.append("There's no /etc/wireguard/wg0.conf yet. Set up the tunnel on this tab first (steps 1 to 6).")
+    else:
+        parsed = _parse_wg_conf_text(text, mask_private_key=True)
+        aip = status_wg_allowed_ips()
+        if aip["shape"] != "full":
+            blockers.append(f"wg0.conf isn't a full tunnel (AllowedIPs = {aip['allowed_ips'] or 'none'}). It needs 0.0.0.0/0.")
+        if any(k.strip().lower() == "table" for k in parsed["interface"]):
+            blockers.append("wg0.conf has a 'Table =' line, so wg-quick doesn't set up its full-tunnel rules. Take it out first.")
+        if _wg_conf_field(parsed["interface"], "SaveConfig").lower() == "true":
+            blockers.append("wg0.conf has 'SaveConfig = true'. wg-quick rewrites the file when the tunnel stops and would drop the markers. Remove that line first.")
+        values["addr44"] = _half_addr44(parsed)
+    if not shutil.which("wg-quick"):
+        blockers.append("wg-quick isn't installed.")
+    if _systemctl_is_active("44net-tunnel.service"):
+        blockers.append("The tunnel is running from the ARDC fallback unit (44net-tunnel.service). This only works with wg-quick@wg0.")
+    elif not _systemctl_is_active("wg-quick@wg0"):
+        blockers.append("The tunnel isn't running. Start it first (step 6), then Check first again.")
+    rules = _half_q(["ip", "-4", "rule", "show"])[1]
+    if _systemctl_is_active("wg-quick@wg0") and "lookup 51820" not in rules:
+        blockers.append("wg-quick's full-tunnel rules (table 51820) aren't loaded, so the tunnel isn't carrying the internet. Restart it: systemctl restart wg-quick@wg0")
+    if not _half_ip_features():
+        blockers.append("This system's 'ip' command is too old (it needs ipproto/dport and suppress_prefixlength).")
+    md = _half_main_default()
+    lan_ip = _half_lan_ip(md["dev"])
+    if not md["dev"]:
+        blockers.append("No normal default route in the main table, so there's no normal link to keep replies on.")
+    elif md["dev"].startswith("wg"):
+        blockers.append(f"The main table's default route points into the tunnel ({md['dev']}). Fix that first.")
+    elif not lan_ip:
+        blockers.append(f"Couldn't find this Pi's address on {md['dev']}.")
+    zone = _half_zone()
+    conflicts = _half_direct_conflicts()
+    if conflicts:
+        notes.append("Outbound block rules are loaded. They also block anything on the bypass list that goes out the tunnel: "
+                     + " | ".join(conflicts))
+    open_now = _fx_zone_open(zone)
+    notes.append(f"With a full tunnel, everything open in wg0's firewall zone ({zone or 'none'}: {open_now or 'nothing'}) "
+                 "is reachable from the whole internet at your 44 address.")
+    notes.append("Step 2 keeps TCP port forwards on your router working (dashboard, SSH from outside). UDP ones, such as an "
+                 "IAX forward to your home address, can't be kept: other nodes reach you at the 44 address instead.")
+    notes.append("All of this Pi's other internet traffic (updates, DNS, Cloudflare) goes through ARDC. Check that it fits "
+                 "ARDC's 44Net acceptable use policy.")
+    dmr = _fx_dmr_master()
+    values.update({"gw_via": md["via"], "gw_dev": md["dev"], "gw_raw": md["raw"], "lan_ip": lan_ip,
+                   "zone": zone, "lan_nets": _half_lan_nets(), "dmr_master": dmr,
+                   "iax_port": _half_iax_port(), "echolink": _half_echolink_enabled()})
+    return {"ok": not blockers, "blockers": blockers, "notes": notes, "values": values, "at": time.time()}
+
+def _fx_check_lines(chk: dict) -> list[str]:
+    v = chk["values"]
+    lines = ["What 44helper found:",
+             f"  44Net address:     {v.get('addr44') or '(none)'}",
+             f"  Normal route:      {v.get('gw_raw') or '(none)'}",
+             f"  LAN address:       {v.get('lan_ip') or '?'} on {v.get('gw_dev') or '?'}",
+             f"  LAN:               {', '.join(v.get('lan_nets') or []) or '(none found)'}",
+             f"  wg0 firewall zone: {v.get('zone') or '(none)'}",
+             f"  DMR master:        {v.get('dmr_master') or '(none in MMDVM_Bridge.ini)'}"]
+    lines += ["BLOCKED: " + b for b in chk["blockers"]]
+    lines += ["Note: " + n for n in chk["notes"]]
+    lines.append("Ready: arm the auto-undo next." if chk["ok"] else "Not ready: fix the BLOCKED items, then Check first again.")
+    return lines
+
+def action_fx_check_first() -> dict:
+    with _HALF_LOCK:
+        chk = _fx_detect()
+        out = _fx_check_lines(chk)
+        if chk["ok"]:
+            text = _half_wg_text()
+            try:
+                _wrote, reason = _compare_before_write(_fx_lib_pre_path(), (text or "").encode("utf-8"))
+                out.append(f"Backup of your wg0.conf ({_fx_lib_pre_path()}): {reason}.")
+                chk["baseline"] = _half_baseline({"addr44": chk["values"].get("addr44", ""),
+                                                  "echolink": chk["values"].get("echolink")})
+                st = _fx_state() or {}
+                st["check"] = chk
+                _half_write_json(_FX_STATE_PATH, st)
+            except OSError as exc:
+                chk["ok"] = False
+                out.append(f"BLOCKED: couldn't save the backup or the check result: {exc}")
+        log(f"FULLX: check first -> {'ready' if chk['ok'] else 'blocked'}")
+        return {"success": chk["ok"], "verified": chk["ok"], "output": "\n".join(out)}
+
+def _fx_timer_active() -> bool:
+    return _half_q(["systemctl", "is-active", f"{_FX_TIMER}.timer"])[1].strip() == "active"
+
+def _fx_undo_running() -> bool:
+    return _half_q(["systemctl", "is-active", f"{_FX_TIMER}.service"])[1].strip() in ("active", "activating")
+
+def _fx_del_rules_sh(prios) -> str:
+    return f"for P in {' '.join(str(p) for p in prios)}; do while ip -4 rule del priority \"$P\" 2>/dev/null; do :; done; done"
+
+def _fx_undo_script() -> str:
+    prios = sorted(_FX_PRIOS.values())
+    alt = "|".join(str(p) for p in prios)
+    return "\n".join([
+        "#!/bin/bash",
+        f"# 44helper {APP_VERSION} full-tunnel-exceptions TEST undo, made {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}.",
+        "set -u",
+        f"DIR={shlex.quote(_FX_RUN_DIR)}",
+        "main() {",
+        "  echo \"=== Full-tunnel exceptions test undo $(date '+%F %T') ===\"",
+        "  " + _fx_del_rules_sh(prios),
+        f"  systemctl stop {_FX_TIMER}.timer >/dev/null 2>&1",
+        f"  if ip -4 rule show | grep -qE '^({alt}):'; then",
+        "    echo \"FAIL  some exception rules are still loaded (a reboot clears them)\"; touch \"$DIR/undo_failed\"; return 1",
+        "  fi",
+        "  echo \"ok    exception rules removed\"",
+        "  rm -f \"$DIR/state.json\" \"$DIR/undo_failed\"",
+        "  echo \"Done: everything is back to normal.\"",
+        "}",
+        "main 2>&1 | tee -a \"$DIR/undo.log\"",
+        "exit \"${PIPESTATUS[0]}\"",
+        "",
+    ])
+
+def _fx_write_undo() -> None:
+    os.makedirs(_FX_RUN_DIR, mode=0o700, exist_ok=True)
+    tmp = _FX_UNDO_SH + ".tmp"
+    with open(tmp, "w") as fh:
+        fh.write(_fx_undo_script())
+    os.chmod(tmp, 0o700)
+    os.replace(tmp, _FX_UNDO_SH)
+
+def _fx_save(st: dict) -> None:
+    _half_write_json(_FX_STATE_PATH, st)
+
+def _fx_done(st: dict, n: int) -> bool:
+    e = (st.get("steps") or {}).get(str(n))
+    return isinstance(e, dict) and not e.get("pending")
+
+def _fx_rule_cmds(v: dict, bypass: dict) -> dict[int, list[list[str]]]:
+    cmds: dict[int, list[list[str]]] = {2: [], 3: []}
+    if v.get("lan_ip"):
+        cmds[2].append(["ip", "-4", "rule", "add", "from", v["lan_ip"], "lookup", "main", "priority", str(_FX_PRIOS["lan"])])
+    for ips in (bypass.get("resolved") or {}).values():
+        for ip in ips:
+            cmds[3].append(["ip", "-4", "rule", "add", "to", ip, "lookup", "main", "priority", str(_FX_PRIOS["hosts"])])
+    for port in bypass.get("ports") or []:
+        cmds[3].append(["ip", "-4", "rule", "add", "ipproto", "udp", "dport", str(port), "lookup", "main",
+                        "priority", str(_FX_PRIOS["ports"])])
+    return cmds
+
+def _fx_del_prio(prio: int) -> None:
+    while _half_q(["ip", "-4", "rule", "del", "priority", str(prio)])[0] == 0:
+        pass
+
+def _fx_step(st: dict, n: int, out: list[str]) -> bool:
+    v = st["check"]["values"]
+    bypass = st.get("bypass") or {}
+    prios = [_FX_PRIOS["lan"]] if n == 2 else [_FX_PRIOS["hosts"], _FX_PRIOS["ports"]]
+    st.setdefault("steps", {})[str(n)] = {"pending": True}
+    _fx_save(st)
+    for p in prios:
+        _fx_del_prio(p)
+    cmds = _fx_rule_cmds(v, bypass)[n]
+    if n == 3 and not cmds:
+        out.append("ok    the bypass list is empty, so nothing goes around the tunnel")
+        return True
+    if not _half_run_lines(cmds, out):
+        return False
+    shown = _half_q(["ip", "-4", "rule", "show"])[1]
+    missing = [str(p) for p in prios if any(c[-1] == str(p) for c in cmds) and not re.search(rf"(?m)^{p}:", shown)]
+    if missing:
+        out.append("FAIL  rules didn't load at priority " + ", ".join(missing))
+        return False
+    if n == 2:
+        out.append(f"      - replies sent from {v['lan_ip']} (connections that came in on {v['gw_dev']}) leave by {v['gw_dev']}")
+    else:
+        for h, ips in (bypass.get("resolved") or {}).items():
+            out.append(f"      - {h}: {', '.join(ips) or 'not found, skipped'} uses the normal link")
+        for port in bypass.get("ports") or []:
+            out.append(f"      - UDP to port {port} uses the normal link")
+    return True
+
+def _fx_guard(st: dict | None, n: int) -> str:
+    if os.geteuid() != 0:
+        return "44helper isn't running as root."
+    if _fx_mode() == "permanent":
+        return "Full tunnel with exceptions is permanent here; the test buttons are off."
+    if not st or not st.get("armed_at"):
+        return "Arm the auto-undo first (button 1)."
+    if not _fx_timer_active():
+        return "The auto-undo timer isn't running. Arm it again (button 1) before changing anything."
+    if n == 3 and not _fx_done(st, 2):
+        return "Do step 2 first."
+    return ""
+
+def _fx_run_step(n: int, raw_list=None) -> dict:
+    st = _fx_state()
+    why = _fx_guard(st, n)
+    if why:
+        return {"success": False, "verified": False, "output": "Refused: " + why}
+    out = [f"Step {n}: {_FX_STEP_TITLES[n]}"]
+    if n == 3 and raw_list is not None:
+        hosts, ports, bad = _fx_parse_list(raw_list)
+        if bad:
+            return {"success": False, "verified": False,
+                    "output": "Refused: these aren't host names, IPv4 addresses or UDP ports: " + ", ".join(bad)}
+        st["bypass"] = {"hosts": hosts, "ports": ports, "resolved": _fx_resolve(hosts)}
+    try:
+        ok = _fx_step(st, n, out)
+    except (OSError, ValueError, KeyError) as exc:
+        out.append(f"FAIL  {exc}")
+        ok = False
+    if ok:
+        st["steps"][str(n)].pop("pending", None)
+        if all(_fx_done(st, m) for m in _FX_STEP_TITLES):
+            st["steps_done_at"] = time.time()
+        _fx_save(st)
+        out.append(f"Step {n} done.")
+    else:
+        for p in ([_FX_PRIOS["lan"]] if n == 2 else [_FX_PRIOS["hosts"], _FX_PRIOS["ports"]]):
+            _fx_del_prio(p)
+        st["steps"].pop(str(n), None)
+        _fx_save(st)
+        out.append(f"Step {n} failed and was put back.")
+    log(f"FULLX: step {n} -> {'ok' if ok else 'FAILED'}")
+    return {"success": ok, "verified": ok, "output": "\n".join(out)}
+
+def action_fx_step(n, raw_list=None) -> dict:
+    try:
+        n = int(n)
+    except (TypeError, ValueError):
+        n = 0
+    if n not in _FX_STEP_TITLES:
+        return {"success": False, "verified": False, "output": "Unknown step."}
+    with _HALF_LOCK:
+        return _fx_run_step(n, raw_list)
+
+def _fx_arm(st: dict) -> dict:
+    out: list[str] = []
+    _half_q(["systemctl", "stop", f"{_FX_TIMER}.timer"])
+    _half_q(["systemctl", "reset-failed", f"{_FX_TIMER}.timer", f"{_FX_TIMER}.service"])
+    now = time.time()
+    st.setdefault("armed_at", now)
+    st["expires_at"] = now + _HALF_TIMER_SEC
+    st.pop("kept_at", None)
+    st.setdefault("steps", {})
+    try:
+        if os.path.exists(_FX_UNDO_FAILED):
+            os.remove(_FX_UNDO_FAILED)
+        _fx_save(st)
+        _fx_write_undo()
+    except OSError as exc:
+        return {"success": False, "verified": False, "output": f"Couldn't write {_FX_RUN_DIR}: {exc}"}
+    ok = _half_run_lines([["systemd-run", f"--unit={_FX_TIMER}", "--collect",
+                           "--description=44helper full-tunnel exceptions test auto-undo",
+                           f"--on-active={_HALF_TIMER_SEC}", "--timer-property=AccuracySec=1s",
+                           "/bin/bash", _FX_UNDO_SH]], out)
+    active = ok and _fx_timer_active()
+    out.append(f"Auto-undo armed: in {_HALF_TIMER_SEC // 60} minutes the exception rules are taken out by themselves."
+               if active else "FAIL  the auto-undo timer didn't start. Nothing has been changed.")
+    log(f"FULLX: arm -> {'ok' if active else 'FAILED'}")
+    return {"success": active, "verified": active, "output": "\n".join(out)}
+
+def action_fx_arm() -> dict:
+    with _HALF_LOCK:
+        err = _require_root()
+        if err:
+            return err
+        if _fx_mode() == "permanent":
+            return {"success": False, "verified": False, "output": "Refused: it's already permanent."}
+        if _fx_undo_running():
+            return {"success": False, "verified": False, "output": "The auto-undo is running right now. Wait a moment and refresh."}
+        st = _fx_state() or {}
+        chk = st.get("check") or {}
+        if not st.get("steps"):
+            if not chk.get("ok"):
+                return {"success": False, "verified": False, "output": "Refused: run Check first (button 0) and clear anything it blocks."}
+            if time.time() - chk.get("at", 0) > _HALF_CHECKFIRST_MAX_AGE:
+                return {"success": False, "verified": False, "output": "Refused: the last Check first is over 30 minutes old. Run it again."}
+        return _fx_arm(st)
+
+def _fx_run_undo() -> dict:
+    st = _fx_state()
+    if not st or not (st.get("armed_at") or st.get("steps")):
+        return {"success": True, "verified": True, "output": "Nothing to undo: no test is running."}
+    if _fx_undo_running():
+        return {"success": False, "verified": False, "output": "The auto-undo is running right now. Wait a moment and refresh."}
+    _fx_write_undo()
+    rc, text = _half_q(["bash", _FX_UNDO_SH], timeout=60)
+    log(f"FULLX: undo -> {'ok' if rc == 0 else 'problems'}")
+    return {"success": rc == 0, "verified": rc == 0 and _fx_mode() == "off", "output": text}
+
+def action_fx_undo() -> dict:
+    with _HALF_LOCK:
+        return _fx_run_undo()
+
+def action_fx_keep() -> dict:
+    with _HALF_LOCK:
+        err = _require_root()
+        if err:
+            return err
+        st = _fx_state()
+        if not st or not st.get("armed_at"):
+            return {"success": False, "verified": False, "output": "No test is running."}
+        r = _run_argv(["systemctl", "stop", f"{_FX_TIMER}.timer"])
+        st["kept_at"] = time.time()
+        st["expires_at"] = None
+        _fx_save(st)
+        stopped = not _fx_timer_active()
+        return {"success": stopped, "verified": stopped,
+                "output": ("Auto-undo cancelled. The exception rules stay until Undo now or a reboot."
+                           if stopped else "FAIL  couldn't stop the timer: " + r["output"])}
+
+def _fx_ctx() -> dict | None:
+    mode = _fx_mode()
+    if mode == "testing":
+        st = _fx_state() or {}
+        chk = st.get("check") or {}
+        return {"mode": mode, "values": chk.get("values", {}), "baseline": chk.get("baseline", {}),
+                "bypass": st.get("bypass") or {}, "steps": st.get("steps") or {},
+                "ref": st.get("steps_done_at") or st.get("armed_at") or time.time()}
+    if mode == "permanent":
+        perm = _fx_perm() or {}
+        v = dict(perm.get("values", {}))
+        md = _half_main_default()
+        if md["dev"] and not md["dev"].startswith("wg"):
+            v.update({"gw_via": md["via"], "gw_dev": md["dev"], "lan_ip": _half_lan_ip(md["dev"]) or v.get("lan_ip", "")})
+        return {"mode": mode, "values": v, "baseline": perm.get("baseline", {}),
+                "bypass": perm.get("bypass") or {}, "steps": {"2": {}, "3": {}},
+                "ref": perm.get("restarted_at") or perm.get("made_at") or time.time()}
+    return None
+
+def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
+    v = ctx["values"]
+    bl = ctx.get("baseline") or {}
+    now = time.time()
+    res: list[dict] = []
+
+    def add(n, group, title, level, text, hint=""):
+        res.append({"n": n, "group": group, "title": title, "level": level, "text": text, "hint": hint})
+
+    def late():
+        return "wait" if now - ctx["ref"] < _HALF_WAIT_SEC else "fail"
+
+    undo = "Use Undo now." if ctx["mode"] == "testing" else "Restart the tunnel: systemctl restart wg-quick@wg0"
+    rc, out = _half_q(["wg", "show", "wg0", "latest-handshakes"])
+    stamps = [int(t) for t in out.split() if t.isdigit()] if rc == 0 else []
+    if rc != 0:
+        add(1, "Tunnel", "Tunnel is up", "fail", "wg0 isn't up.", "Check the tunnel steps on this tab.")
+    elif not stamps or max(stamps) == 0:
+        add(1, "Tunnel", "Tunnel is up", "wait" if now - ctx["ref"] < 60 else "fail", "No contact with the 44Net server yet.",
+            "Re-run checks in a minute. If it stays red, check the key and Endpoint.")
+    else:
+        age = int(now - max(stamps))
+        add(1, "Tunnel", "Tunnel is up", "pass" if age <= 180 else "fail", f"Last heard from the 44Net server {age}s ago.",
+            "" if age <= 180 else "The tunnel stopped talking.")
+
+    rules = _half_q(["ip", "-4", "rule", "show"])[1]
+    full_ok = "lookup 51820" in rules and "suppress_prefixlength 0" in rules
+    add(2, "Tunnel", "Full-tunnel rules are loaded", "pass" if full_ok else "fail",
+        "wg-quick's table 51820 rules are in place." if full_ok else "wg-quick's full-tunnel rules are missing.",
+        "" if full_ok else "Restart the tunnel: systemctl restart wg-quick@wg0")
+
+    dev3, src3, _r3 = _half_route_dev(["1.1.1.1"])
+    add(3, "Tunnel", "Internet goes into the tunnel", "pass" if dev3 == "wg0" else "fail",
+        f"1.1.1.1 goes out {dev3 or '?'}" + (f" from {src3}" if src3 else "") + ".",
+        "" if dev3 == "wg0" else "The full tunnel isn't carrying the internet. " + undo)
+
+    my = check_myip()
+    if my.get("ip"):
+        good = bool(v.get("addr44")) and my["ip"] == v.get("addr44")
+        add(4, "Tunnel", "The internet sees your 44 address", "pass" if good else "fail",
+            f"connect.44net.cloud/myip reports {my['ip']}.",
+            "" if good else "Your traffic isn't leaving through 44Net. " + undo)
+    else:
+        add(4, "Tunnel", "The internet sees your 44 address", "fail", my.get("output", "myip check failed"),
+            "No answer through the tunnel. Check checks 1 and 6.")
+
+    lan_ip, gw_dev = v.get("lan_ip", ""), v.get("gw_dev", "")
+    if lan_ip and gw_dev:
+        dev5, _s5, _r5 = _half_route_dev(["1.1.1.1", "from", lan_ip])
+        add(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "pass" if dev5 == gw_dev else "fail",
+            f"Traffic from {lan_ip} goes out {dev5 or '?'}.",
+            "" if dev5 == gw_dev else ("Step 2 isn't in place. " + undo))
+    else:
+        add(5, "Exceptions", "Replies from the LAN address stay on the LAN link", "fail", "No LAN address found.",
+            "Check first didn't find the normal link.")
+
+    bypass = ctx.get("bypass") or {}
+    resolved = bypass.get("resolved") or {}
+    ports = bypass.get("ports") or []
+    if not resolved and not ports:
+        add(6, "Exceptions", "Bypass list uses the normal link", "skip", "The bypass list is empty.")
+    else:
+        bad6: list[str] = []
+        good6: list[str] = []
+        for h, ips in resolved.items():
+            for ip in ips:
+                d, _s, _r = _half_route_dev([ip])
+                (good6 if d == gw_dev else bad6).append(f"{h} {ip} -> {d or '?'}")
+            if not ips:
+                bad6.append(f"{h} couldn't be looked up")
+        for p in ports:
+            d, _s, _r = _half_route_dev(["1.1.1.1", "ipproto", "udp", "dport", str(p)])
+            (good6 if d == gw_dev else bad6).append(f"UDP {p} -> {d or '?'}")
+        add(6, "Exceptions", "Bypass list uses the normal link", "fail" if bad6 else "pass", "; ".join(bad6 + good6),
+            "Some bypass entries still go into the tunnel. " + undo if bad6 else "")
+
+    rc7, out7 = _half_q(["getent", "ahostsv4", "allstarlink.org"], timeout=6)
+    add(7, "Normal use", "DNS works", "pass" if rc7 == 0 and out7 else "fail",
+        "allstarlink.org resolves." if rc7 == 0 and out7 else "Name lookups are failing.",
+        "" if rc7 == 0 and out7 else "Check the DNS card (4a) on this tab. " + undo)
+
+    problems: list[str] = []
+    seen: list[str] = []
+    if client_ip and not client_ip.startswith("127."):
+        cdev, _s, _r = _half_route_dev([client_ip])
+        if not cdev:
+            problems.append(f"no route back to your browser ({client_ip})")
+        else:
+            seen.append(f"your browser {client_ip} via {cdev}")
+    names = _half_tool_ports()
+    for port in bl.get("tools") or []:
+        name = names.get(int(port), port)
+        if not _half_tcp_ok(lan_ip or "127.0.0.1", int(port)):
+            problems.append(f"{name} :{port} doesn't answer on {lan_ip or '127.0.0.1'}")
+            continue
+        if v.get("gw_via"):
+            rdev, _rs, _rr = _half_route_dev([v["gw_via"], "ipproto", "tcp", "sport", str(port)])
+            if rdev != gw_dev:
+                problems.append(f"{name} :{port} replies to the LAN ({v['gw_via']}) would go out {rdev or '?'}")
+                continue
+        seen.append(f"{name} :{port}")
+    if problems:
+        add(8, "Normal use", "LAN tools still respond", "fail", "; ".join(problems), "The LAN pages may hang. " + undo)
+    elif seen:
+        add(8, "Normal use", "LAN tools still respond", "pass", "OK: " + ", ".join(seen))
+    else:
+        add(8, "Normal use", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
+
+    def was(failing: bool) -> str:
+        return " (was already failing before the test)" if failing else ""
+
+    d, bd = _half_probe_dvs(), bl.get("dvs") or {}
+    if not d["installed"]:
+        add(9, "Services", "DVSwitch connected", "skip", "DVSwitch isn't installed.")
+    elif not d["active"]:
+        add(9, "Services", "DVSwitch connected", "fail", "A DVSwitch service is stopped" + was(not bd.get("active")),
+            "Check the DVSwitch tab or the dashboard.")
+    elif d["dmr"] == "out":
+        add(9, "Services", "DVSwitch connected", "fail", "Lost its DMR master" + was(bd.get("dmr") == "out"),
+            "Put the DMR master on the bypass list (step 3) if it won't take the 44 address.")
+    elif d["dmr"] == "in":
+        add(9, "Services", "DVSwitch connected", "pass", "Logged into its DMR master.")
+    else:
+        add(9, "Services", "DVSwitch connected", "pass", "Running (no DMR login lines in its log; other modes aren't read).")
+
+    u, bu = _half_probe_usrp(), bl.get("usrp") or {}
+    if not u["installed"]:
+        add(10, "Services", "usrp2m17 connected", "skip", "usrp2m17 isn't installed.")
+    else:
+        add(10, "Services", "usrp2m17 connected", "pass" if u["active"] else "fail",
+            "Running." if u["active"] else "Stopped" + was(not bu.get("active")), "" if u["active"] else "Check the M17 tab.")
+
+    r, br = _half_probe_reg(v.get("addr44", "")), bl.get("reg") or {}
+    if not r["available"] and r["why"] == "not installed":
+        add(11, "Services", "ASL registration shows your 44 address", "skip", "ASL isn't installed.")
+    elif not r["available"]:
+        add(11, "Services", "ASL registration shows your 44 address", "fail",
+            "Asterisk isn't running" + was(not br.get("available")), "Start ASL, then re-run checks.")
+    elif r["has44"]:
+        add(11, "Services", "ASL registration shows your 44 address", "pass", f"Registered as {v.get('addr44')}.")
+    else:
+        add(11, "Services", "ASL registration shows your 44 address", late(),
+            f"Shows {', '.join(sorted(set(r['ips']))) or 'nothing yet'}.",
+            "Registration can take a few minutes to update. Re-run checks." if late() == "wait"
+            else "Registration isn't going out the tunnel. Check checks 3 and 4.")
+
+    e, be = _half_probe_el(bool(v.get("echolink"))), bl.get("el") or {}
+    if not e["enabled"]:
+        add(12, "Services", "EchoLink logged in", "skip", "EchoLink isn't turned on.")
+    elif e["entries"] is None:
+        add(12, "Services", "EchoLink logged in", "skip", "Can't read EchoLink's state on this ASL version.")
+    elif e["entries"] > 0:
+        add(12, "Services", "EchoLink logged in", "pass", f"Directory list loaded ({e['entries']} entries).")
+    else:
+        add(12, "Services", "EchoLink logged in", late(),
+            "Directory list is empty" + was((be.get("entries") or 0) == 0 and be.get("entries") is not None),
+            "The directory can take a few minutes. Re-run checks." if late() == "wait" else "EchoLink can't reach its directory.")
+    return res
+
+def action_fx_run_checks(client_ip: str = "") -> dict:
+    global _FX_LAST_PERM_CHECKS
+    with _HALF_LOCK:
+        ctx = _fx_ctx()
+        if ctx is None:
+            return {"success": False, "verified": False, "output": "Nothing to check: no test is running and nothing is permanent."}
+        summary = _half_checks_summary(_fx_check_list(ctx, client_ip))
+        if ctx["mode"] == "testing":
+            st = _fx_state() or {}
+            st["last_checks"] = summary
+            _fx_save(st)
+        else:
+            _FX_LAST_PERM_CHECKS = summary
+        log(f"FULLX: checks -> {summary['counts']}")
+        return {"success": summary["counts"]["fail"] == 0, "verified": summary["all_pass"],
+                "output": _half_checks_text(summary), "checks": summary}
+
+def _fx_gate(st: dict) -> tuple[bool, str]:
+    if _fx_mode() != "testing":
+        return False, "Only during a test."
+    if not all(_fx_done(st, n) for n in _FX_STEP_TITLES):
+        return False, "Run steps 2 and 3 first (step 3 can have an empty list)."
+    lc = st.get("last_checks") or {}
+    if not lc:
+        return False, "Run checks first."
+    if lc.get("at", 0) < (st.get("steps_done_at") or 0):
+        return False, "Run checks again (something changed since the last run)."
+    if time.time() - lc.get("at", 0) > _HALF_CHECKS_MAX_AGE:
+        return False, "The last checks are over 15 minutes old. Run them again."
+    if not lc.get("all_pass"):
+        return False, "Every check must be green or grey."
+    return True, ""
+
+def _fx_perm_block(perm: dict) -> list[str]:
+    p = _FX_PRIOS
+    bypass = perm.get("bypass") or {}
+    hosts = [h for h in bypass.get("hosts") or [] if _FX_HOST_RE.match(h)]
+    ports = [x for x in bypass.get("ports") or [] if str(x).isdigit()]
+    prios = " ".join(str(x) for x in sorted(p.values()))
+    block = [
+        _FX_BEGIN,
+        f"# Full tunnel with exceptions (44helper {APP_VERSION}, {datetime.now().strftime('%Y-%m-%d')}).",
+        f"# To take it out: ~/{_FX_SCRIPT_NAME}  (or Remove permanent on 44helper's Full Tunnel tab)",
+        f"PostUp = {_fx_del_rules_sh(sorted(p.values()))}; true",
+        "PostUp = D=$(ip -4 route show table main default | head -n1 | grep -oE 'dev [^ ]+' | cut -d' ' -f2); "
+        "L=$(ip -4 -o addr show dev \"$D\" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1); "
+        f"[ -n \"$L\" ] && ip -4 rule add from \"$L\" lookup main priority {p['lan']}; true",
+    ]
+    if hosts:
+        block.append(f"PostUp = for H in {' '.join(hosts)}; do for IP in $(getent ahostsv4 \"$H\" | awk '{{print $1}}' | sort -u); "
+                     f"do ip -4 rule add to \"$IP\" lookup main priority {p['hosts']}; done; done; true")
+    if ports:
+        block.append(f"PostUp = for P in {' '.join(ports)}; do ip -4 rule add ipproto udp dport \"$P\" lookup main "
+                     f"priority {p['ports']}; done; true")
+    block.append(f"PostDown = for P in {prios}; do while ip -4 rule del priority $P 2>/dev/null; do :; done; done; true")
+    block.append(_FX_END)
+    return block
+
+def _fx_remove_script(perm: dict) -> str:
+    q = shlex.quote
+    arr = lambda items: "(" + " ".join(q(i) for i in items) + ")"
+    baks = sorted(perm.get("bak_paths") or [], key=lambda b: not b.startswith("/root/"))
+    alt = "|".join(str(x) for x in sorted(_FX_PRIOS.values()))
+    return "\n".join([
+        "#!/bin/bash",
+        f"# {_FX_SCRIPT_NAME} -- written by 44helper {perm.get('version', APP_VERSION)} on {perm.get('made_date', '')}.",
+        "# Takes 44helper's \"full tunnel with exceptions\" back out: the tunnel stays a plain full tunnel.",
+        "# Works without 44helper. It doesn't restart the tunnel.",
+        f"# Run it with:  ~/{_FX_SCRIPT_NAME}   (it asks for sudo by itself)",
+        "if [ \"$(id -u)\" -ne 0 ]; then exec sudo bash \"$0\" \"$@\"; fi",
+        "set -u",
+        f"WG={q(WG0_CONF_PATH)}",
+        f"BACKUPS={arr(baks[:1] + [_fx_lib_pre_path()] + baks[1:])}",
+        f"COPIES={arr(list(perm.get('script_paths') or []) + list(perm.get('bak_paths') or []))}",
+        f"PROFILE={q(_FX_PROFILE_FILE)}",
+        f"PERM={q(_FX_PERM_PATH)}",
+        "FAILED=0",
+        "ok()  { echo \"ok    $1\"; }",
+        "bad() { echo \"FAIL  $1\"; FAILED=1; }",
+        "echo \"Removing the full-tunnel exceptions...\"",
+        "MARK='^[[:space:]]*# 44helper-fullx-begin[[:space:]]*$'",
+        "if [ -f \"$WG\" ] && grep -q \"$MARK\" \"$WG\"; then",
+        "  TMP=\"$WG.44helper-tmp\"",
+        "  awk '/^[[:space:]]*# 44helper-fullx-begin[[:space:]]*$/ { skip = 1; next }",
+        "       /^[[:space:]]*# 44helper-fullx-end[[:space:]]*$/ { skip = 0; next }",
+        "       skip { next } { print }' \"$WG\" > \"$TMP\" && chmod 600 \"$TMP\" && mv \"$TMP\" \"$WG\"",
+        "  if grep -q \"$MARK\" \"$WG\"; then",
+        "    for B in \"${BACKUPS[@]}\"; do",
+        "      if [ -f \"$B\" ] && cp \"$B\" \"$WG\" && chmod 600 \"$WG\"; then ok \"wg0.conf restored from $B\"; break; fi",
+        "    done",
+        "  else",
+        "    ok \"wg0.conf put back (any other edits you made are kept)\"",
+        "  fi",
+        "  if grep -q \"$MARK\" \"$WG\"; then bad \"wg0.conf still has the exception lines\"; fi",
+        "else",
+        "  ok \"wg0.conf has no exception lines (already clean)\"",
+        "fi",
+        _fx_del_rules_sh(sorted(_FX_PRIOS.values())),
+        f"if ip -4 rule show | grep -qE '^({alt}):'; then bad \"some exception rules are still loaded\"; else ok \"exception rules removed\"; fi",
+        "if [ \"$FAILED\" = 0 ]; then",
+        "  rm -f \"$PROFILE\" \"$PERM\" && ok \"login reminder removed\"",
+        "  echo \"Done: the tunnel is a plain full tunnel again.\"",
+        "  rm -f \"${COPIES[@]}\"",
+        "else",
+        "  echo \"Done with problems (see FAIL lines). This script is kept so you can run it again.\"",
+        "fi",
+        "exit \"$FAILED\"",
+        "",
+    ])
+
+def _fx_profile_text() -> str:
+    return "\n".join([
+        f"# 44helper: login reminder that the full-tunnel exceptions are active. {_FX_SCRIPT_NAME} removes this file.",
+        "case $- in",
+        f"  *i*) [ -x \"$HOME/{_FX_SCRIPT_NAME}\" ] && echo \"Full tunnel with exceptions is active -- to remove: ~/{_FX_SCRIPT_NAME}\" ;;",
+        "esac",
+        "",
+    ])
+
+def _fx_retest(saved: dict, out: list[str]) -> None:
+    out.append("Starting the test setup again (15-minute timer):")
+    st = {"check": saved.get("check"), "bypass": saved.get("bypass")}
+    r = _fx_arm(st)
+    out.append(r["output"])
+    if not r["success"]:
+        return
+    for n in sorted(_FX_STEP_TITLES):
+        rs = _fx_run_step(n)
+        out.append(rs["output"])
+        if not rs["success"]:
+            out.append("The test setup didn't fully come back. Use Undo now, or reboot.")
+            return
+
+def _fx_make_permanent(user: str) -> dict:
+    global _FX_LAST_PERM_CHECKS
+    out: list[str] = []
+    err = _require_root()
+    if err:
+        return err
+    st = _fx_state() or {}
+    ok, why = _fx_gate(st)
+    if not ok:
+        return {"success": False, "verified": False, "output": "Refused: " + why}
+    homes = _half_user_homes(user)
+    if homes is None:
+        return {"success": False, "verified": False,
+                "output": f"Refused: '{user}' isn't root or a login user (UID 1000 or above) with a home folder on this Pi."}
+    gate: list[str] = []
+    if not _wg_dns_gate(gate):
+        return {"success": False, "verified": False, "output": "\n".join(["Refused: the tunnel couldn't restart."] + gate)}
+    out += gate
+    text = _half_wg_text()
+    if text is None:
+        return {"success": False, "verified": False, "output": "Refused: couldn't read wg0.conf."}
+    script_paths = [os.path.join(h, _FX_SCRIPT_NAME) for h, _u, _g in homes]
+    bak_paths = [os.path.join(h, _FX_BAK_NAME) for h, _u, _g in homes]
+    perm = {"made_at": time.time(), "made_date": datetime.now().strftime("%Y-%m-%d %H:%M"), "version": APP_VERSION,
+            "values": st["check"]["values"], "baseline": st["check"].get("baseline", {}),
+            "bypass": st.get("bypass") or {}, "user": user, "script_paths": script_paths, "bak_paths": bak_paths}
+    new_text = _wg_insert_in_interface(text, _fx_perm_block(perm))
+    if new_text is None:
+        return {"success": False, "verified": False, "output": "Refused: wg0.conf has no [Interface] section."}
+    track: list[tuple[str, object]] = []
+    out.append(f"Saving the exceptions (home folder: {homes[0][0]}):")
+    try:
+        if not os.path.exists(_fx_lib_pre_path()):
+            _compare_before_write(_fx_lib_pre_path(), text.encode("utf-8"))
+        for (h, uid, gid), bak in zip(homes, bak_paths):
+            _half_write_owned(bak, text, 0o600, uid, gid)
+            track.append(("file", bak))
+            out.append(f"ok    backup of your wg0.conf: {bak}")
+        for line in _wg_write_conf(new_text):
+            out.append("ok    " + line)
+        track.append(("wg0", text))
+        _half_write_json(_FX_PERM_PATH, perm)
+        track.append(("file", _FX_PERM_PATH))
+        script = _fx_remove_script(perm)
+        for (h, uid, gid), sp in zip(homes, script_paths):
+            _half_write_owned(sp, script, 0o700, uid, gid)
+            track.append(("file", sp))
+            out.append(f"ok    removal script: {sp}")
+        _write_conf_atomic(_FX_PROFILE_FILE, _fx_profile_text(), 0o644)
+        track.append(("file", _FX_PROFILE_FILE))
+        out.append("ok    login reminder added")
+    except (OSError, ValueError) as exc:
+        out.append(f"FAIL  {exc}")
+        out.append("Taking the saved pieces back out:")
+        _half_files_rollback(track, out)
+        out.append("Nothing was made permanent. The test is still running, with its timer.")
+        return {"success": False, "verified": False, "output": "\n".join(out)}
+    saved = json.loads(json.dumps(st))
+    out.append("Switching from the test rules to the saved ones (the tunnel restarts):")
+    _half_q(["systemctl", "stop", f"{_FX_TIMER}.timer"])
+    _fx_write_undo()
+    urc, utext = _half_q(["bash", _FX_UNDO_SH], timeout=60)
+    out.extend("      " + ln.replace("Done: everything is back to normal.", "Test rules cleared.") for ln in utext.splitlines())
+    if urc != 0:
+        out.append("FAIL  the test rules didn't fully clear. The checks below show what that left.")
+    _half_run_lines([["systemctl", "restart", "wg-quick@wg0"]], out, timeout=_WG_START_WAIT)
+    hs = _half_wait_handshake()
+    out.append("ok    tunnel is talking to the 44Net server" if hs else "wait  no contact with the 44Net server yet")
+    perm["restarted_at"] = time.time()
+    _half_write_json(_FX_PERM_PATH, perm)
+    summary = _half_checks_summary(_fx_check_list(_fx_ctx() or {"mode": "permanent", "values": perm["values"],
+                                                               "baseline": perm["baseline"], "bypass": perm["bypass"],
+                                                               "steps": {}, "ref": time.time()}))
+    _FX_LAST_PERM_CHECKS = summary
+    out.append("Checks after the switch:")
+    out.append(_half_checks_text(summary))
+    if summary["counts"]["fail"]:
+        out.append("A check failed after saving, so the saved exceptions are being taken back out:")
+        rc, rtext = _half_q(["bash", "-s"], timeout=60, input_text=_fx_remove_script(perm))
+        out.extend("      " + ln for ln in rtext.splitlines())
+        _FX_LAST_PERM_CHECKS = {}
+        if rc == 0:
+            _fx_retest(saved, out)
+        else:
+            out.append(f"The removal had problems. Run ~/{_FX_SCRIPT_NAME} or Remove permanent.")
+        log("FULLX: make permanent -> rolled back")
+        return {"success": False, "verified": False, "output": "\n".join(out)}
+    out.append("Saved. Some checks are still waiting; re-run checks shortly." if summary["counts"]["wait"]
+               else "Saved. The exceptions now survive a reboot.")
+    log("FULLX: make permanent -> ok")
+    return {"success": True, "verified": summary["all_pass"], "output": "\n".join(out)}
+
+def action_fx_make_permanent(user: str = "") -> dict:
+    with _HALF_LOCK:
+        return _fx_make_permanent((user or "").strip() or _half_home_user_default())
+
+def action_fx_remove_permanent() -> dict:
+    global _FX_LAST_PERM_CHECKS
+    with _HALF_LOCK:
+        err = _require_root()
+        if err:
+            return err
+        perm = _fx_perm()
+        if perm is None and _fx_mode() != "permanent":
+            return {"success": True, "verified": True, "output": "The exceptions aren't permanent on this node. Nothing to remove."}
+        rc, text = _half_q(["bash", "-s"], timeout=60, input_text=_fx_remove_script(perm or {}))
+        _FX_LAST_PERM_CHECKS = {}
+        log(f"FULLX: remove permanent -> {'ok' if rc == 0 else 'problems'}")
+        return {"success": rc == 0, "verified": rc == 0 and _fx_mode() == "off", "output": text}
+
+def build_fx_status() -> dict:
+    st = _fx_state() or {}
+    chk = st.get("check") or {}
+    mode = _fx_mode()
+    perm = _fx_perm() or {}
+    steps = st.get("steps") or {}
+    ok, why = _fx_gate(st)
+    v = chk.get("values", {})
+    bp = st.get("bypass") or perm.get("bypass") or {}
+    return {
+        "mode": mode, "root": os.geteuid() == 0, "now": time.time(),
+        "check": {"ok": chk.get("ok", False), "at": chk.get("at"), "values": v,
+                  "blockers": chk.get("blockers", []), "notes": chk.get("notes", []),
+                  "fresh": bool(chk.get("at")) and time.time() - chk.get("at", 0) < _HALF_CHECKFIRST_MAX_AGE},
+        "armed": bool(st.get("armed_at")), "timer_active": _fx_timer_active(), "undo_running": _fx_undo_running(),
+        "expires_at": st.get("expires_at"), "kept": bool(st.get("kept_at")),
+        "steps": {str(n): {"title": _FX_STEP_TITLES[n], "done": _fx_done(st, n),
+                           "pending": bool((steps.get(str(n)) or {}).get("pending"))} for n in sorted(_FX_STEP_TITLES)},
+        "bypass_text": " ".join(list(bp.get("hosts", [])) + list(bp.get("ports", []))),
+        "dmr_master": v.get("dmr_master", ""),
+        "last_checks": st.get("last_checks") if mode == "testing" else (_FX_LAST_PERM_CHECKS if mode == "permanent" else None),
+        "can_make_permanent": ok, "gate_reason": why,
+        "undo_log": _half_tail(_FX_UNDO_LOG), "undo_failed": os.path.exists(_FX_UNDO_FAILED),
+        "home_user_default": _half_home_user_default(),
+        "perm": {"made_date": perm.get("made_date", ""), "version": perm.get("version", ""),
+                 "script_paths": perm.get("script_paths", [])},
+    }
+
+def _route_fx_status(query: dict) -> tuple[int, str, bytes]:
+    return 200, "application/json", json.dumps(build_fx_status()).encode("utf-8")
 
 _CSS_BASE = """
 /* ── :root variables — copied verbatim from asl_dvs_dashboard, design plan §10 ── */
@@ -15162,6 +16051,8 @@ function _piAllowedIpsCardHtml(kind, aip) {
   html += '<span class="step-pill ' + pillCls + '">' + pill + '</span></div>';
   if (!aip.conf_exists || shape === 'no-conf') {
     html += '<div class="step-body">No wg0.conf yet. Paste your config (step 4) first. If you paste it unedited (full-tunnel 0.0.0.0/0), this step offers a one-click fix to the split-tunnel 44Net range.</div>';
+  } else if (aip.fullx_mode && aip.fullx_mode !== 'off') {
+    html += '<div class="step-body">Full tunnel with exceptions is ' + asl3EscapeAttr(aip.fullx_mode) + ' on this node (Full Tunnel tab), so this repair is switched off. Remove it there first to switch to a split tunnel.</div>';
   } else if (aip.half_mode && aip.half_mode !== 'off') {
     html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Firewall tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
   } else if (shape === 'split') {
@@ -15429,6 +16320,7 @@ function piNetcheckRestart() {
 
 function refreshPiInstall(kind) {
   fetch('/api/pi_install/status').then(function(r) { return r.json(); }).then(function(data) { renderPiInstall(kind, data); });
+  if (kind === 'full' && typeof refreshFullX === 'function') { refreshFullX(); }
 }
 
 function piFinishStep(stepId, result) {
@@ -16134,6 +17026,7 @@ function _startApp() {
   refreshFirewall();
   refreshFirewall2();
   refreshHalfTunnel();
+  refreshFullX();
   refreshActionsLog();
   refreshAsl3();
   refreshDvswitch();
@@ -20315,6 +21208,218 @@ _htSections.push(function(d) {
 // half-tunnel js end
 """
 
+_JS_FX = r"""
+var _fxStatus = null;
+var _fxOut = null;
+var _fxBusy = false;
+var _fxSkew = 0;
+var _fxRefreshQueued = false;
+var _fxUser = null;
+var _fxList = null;
+
+function refreshFullX() {
+  fetch('/api/fullx/status').then(function(r) { return r.json(); }).then(function(d) {
+    _fxStatus = d;
+    _fxSkew = (d.now || 0) * 1000 - Date.now();
+    fxRender();
+  }).catch(function() {});
+}
+
+function fxBtn(label, onclick, enabled, extraStyle) {
+  var dis = (!enabled || _fxBusy) ? ' disabled style="opacity:.45;cursor:not-allowed' + (extraStyle ? ';' + extraStyle : '') + '"' : (extraStyle ? ' style="' + extraStyle + '"' : '');
+  return '<button class="btn-run" onclick="' + onclick + '"' + dis + '>' + htEsc(label) + '</button>';
+}
+
+function fxRow(buttonHtml, note, noteColor) {
+  return '<div style="display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.3rem 0">' + buttonHtml +
+    '<span style="font-family:var(--mono);font-size:.75rem;color:' + (noteColor || 'var(--muted)') + '">' + htEsc(note || '') + '</span></div>';
+}
+
+function fxPost(action, extra, confirmMsg) {
+  if (_fxBusy) { return; }
+  if (confirmMsg && !confirm(confirmMsg)) { return; }
+  var body = {action: action};
+  for (var k in (extra || {})) { if (extra.hasOwnProperty(k)) { body[k] = extra[k]; } }
+  _fxBusy = true;
+  _fxOut = {text: 'Working... (this can take a minute)', success: true, working: true};
+  fxRender();
+  fetch('/api/firewall/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    _fxBusy = false;
+    _fxOut = {text: res.output || '(no output)', success: !!res.success};
+    refreshFullX();
+  }).catch(function(e) {
+    _fxBusy = false;
+    _fxOut = {text: 'Request failed: ' + e, success: false};
+    refreshFullX();
+  });
+}
+
+function fxTick() {
+  var el = document.getElementById('fx-timer');
+  if (!el || !_fxStatus) { return; }
+  var d = _fxStatus;
+  if (d.timer_active && d.expires_at) {
+    var left = Math.max(0, Math.round((d.expires_at * 1000 - (Date.now() + _fxSkew)) / 1000));
+    var mm = Math.floor(left / 60);
+    var ss = left % 60;
+    el.style.color = left < 120 ? 'var(--amber)' : 'var(--green)';
+    el.textContent = 'Auto-undo in ' + mm + ':' + (ss < 10 ? '0' : '') + ss;
+    if (left <= 0 && !_fxRefreshQueued) {
+      _fxRefreshQueued = true;
+      setTimeout(function() { _fxRefreshQueued = false; refreshFullX(); }, 5000);
+    }
+  } else if (d.undo_running) {
+    el.style.color = 'var(--amber)';
+    el.textContent = 'The auto-undo is running now...';
+  } else if (d.kept && d.mode === 'testing') {
+    el.style.color = 'var(--amber)';
+    el.textContent = 'Auto-undo cancelled. Undo now or a reboot clears the test.';
+  } else {
+    el.textContent = '';
+  }
+}
+setInterval(fxTick, 1000);
+
+function fxStep3() {
+  var t = (document.getElementById('fx-list') || {}).value || '';
+  fxPost('fx_step', {step: 3, list: t});
+}
+
+function fxMakePermanent() {
+  var u = (document.getElementById('fx-user') || {}).value || '';
+  fxPost('fx_make_permanent', {user: u},
+         'Make the exceptions permanent? This saves them in wg0.conf as PostUp lines, puts remove_full_exceptions.sh in ' +
+         (u === 'root' ? '/root' : 'the home folder of ' + u + ' and /root') + ', restarts the tunnel and re-runs the checks. ' +
+         'If a check fails afterwards they are taken back out by themselves.');
+}
+
+function fxRemovePermanent() {
+  if (!confirm('Remove the permanent exceptions? The tunnel stays a plain full tunnel.')) { return; }
+  fxPost('fx_remove_permanent', {}, 'Are you sure?');
+}
+
+function fxChecksHtml(lc, mode) {
+  if (!lc || !lc.results) { return ''; }
+  var colors = {pass: 'var(--green)', fail: 'var(--red)', wait: 'var(--amber)', skip: 'var(--muted)'};
+  var tags = {pass: 'OK', fail: 'FAIL', wait: 'WAIT', skip: 'SKIP'};
+  var html = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.76rem;margin:.3rem 0">';
+  var group = '';
+  lc.results.forEach(function(r) {
+    if (r.group !== group) {
+      group = r.group;
+      html += '<tr><td colspan="3" style="padding:.35rem 0 .1rem 0;font-weight:bold">' + htEsc(group) + '</td></tr>';
+    }
+    html += '<tr><td style="color:' + colors[r.level] + ';padding-right:.5rem;vertical-align:top">' + tags[r.level] + '</td>';
+    html += '<td style="padding-right:.5rem;vertical-align:top;white-space:nowrap">' + r.n + '. ' + htEsc(r.title) + '</td>';
+    html += '<td style="vertical-align:top">' + htEsc(r.text);
+    if (r.hint && (r.level === 'fail' || r.level === 'wait')) {
+      html += '<br><span style="color:' + colors[r.level] + '">' + htEsc(r.hint) + '</span>';
+    }
+    html += '</td></tr>';
+  });
+  html += '</table></div>';
+  var c = lc.counts || {};
+  html += '<div class="step-body" style="font-family:var(--mono);font-size:.75rem">Last run ' + htEsc(new Date(lc.at * 1000).toLocaleTimeString()) +
+          ': ' + (c.pass || 0) + ' ok, ' + (c.fail || 0) + ' failed, ' + (c.wait || 0) + ' waiting, ' + (c.skip || 0) + ' skipped.</div>';
+  var critical = lc.results.filter(function(r) { return r.level === 'fail' && (r.n === 5 || r.n === 7 || r.n === 8); });
+  if (critical.length && mode === 'testing') {
+    html += '<div class="step-body" style="color:var(--red);font-weight:bold;border:1px solid var(--red);border-radius:4px;padding:.4rem">' +
+            'Replies, DNS or the LAN pages are affected. Undo now is recommended.</div>';
+  }
+  return html;
+}
+
+function fxRender() {
+  var box = document.getElementById('fx-card');
+  if (!box || !_fxStatus) { return; }
+  var d = _fxStatus;
+  var pills = {off: ['Off', 'not_started'], testing: ['Testing', 'attempted_unconfirmed'], permanent: ['Permanent', 'done']};
+  var pill = pills[d.mode] || ['?', 'not_started'];
+  var c = d.check || {};
+  var v = c.values || {};
+  var html = '<div class="step-card"><div class="step-head"><div class="step-title">Full tunnel with exceptions</div>';
+  html += '<span class="step-pill ' + pill[1] + '">' + pill[0] + '</span></div>';
+  html += '<div class="step-body">Everything goes through the 44Net tunnel, except replies to connections that came in on your normal link, and anything on a bypass list you choose. Test with temporary rules first (a reboot clears them), then make it permanent. Use either this or the half tunnel, not both.</div>';
+  if (!d.root) {
+    html += '<div class="step-body" style="color:var(--red)">44helper isn’t running as root, so these buttons can’t change anything.</div>';
+  }
+  if (c.at) {
+    html += '<div class="step-body" style="font-family:var(--mono);font-size:.78rem;line-height:1.55">';
+    html += 'Checked ' + htEsc(new Date(c.at * 1000).toLocaleTimeString()) + (c.fresh ? '' : ' (old, run it again)') + '<br>';
+    html += '44Net address: ' + htEsc(v.addr44 || '(none)') + ' &nbsp; LAN address: ' + htEsc(v.lan_ip || '?') + ' on ' + htEsc(v.gw_dev || '?') + '<br>';
+    html += 'wg0 zone: ' + htEsc(v.zone || '(none)') + ' &nbsp; DMR master: ' + htEsc(v.dmr_master || '(none)');
+    html += '</div>';
+    (c.blockers || []).forEach(function(b) { html += '<div class="step-body" style="color:var(--red)">Blocked: ' + htEsc(b) + '</div>'; });
+    (c.notes || []).forEach(function(n) { html += '<div class="step-body" style="color:var(--amber)">Note: ' + htEsc(n) + '</div>'; });
+  }
+  html += fxRow(fxBtn('0. Check first', "fxPost('fx_check_first')", d.mode === 'off'), 'Read-only. Fills in the values above and backs up wg0.conf.');
+
+  var steps = d.steps || {};
+  var s2 = steps['2'] || {};
+  var s3 = steps['3'] || {};
+  html += '<div class="step-body" style="margin-top:.5rem;font-weight:bold">Test buttons (temporary, gone on reboot)</div>';
+  var canArm = d.root && d.mode !== 'permanent' && !d.undo_running && ((c.ok && c.fresh) || s2.done || s3.done);
+  html += fxRow(fxBtn(d.timer_active ? '1. Restart the 15-minute timer' : '1. Arm auto-undo (15 min)', "fxPost('fx_arm')", canArm),
+                d.timer_active ? '' : 'Takes the rules back out by itself if you lose this page.');
+  html += '<div id="fx-timer" style="font-family:var(--mono);font-size:.85rem;margin:.2rem 0 .4rem 0"></div>';
+  html += fxRow(fxBtn('2. ' + (s2.title || ''), "fxPost('fx_step', {step: 2})", d.timer_active && !s2.done),
+                s2.done ? 'done' : (s2.pending ? 'in progress' : ''), s2.done ? 'var(--green)' : '');
+  if (_fxList === null) { _fxList = d.bypass_text || ''; }
+  html += '<div class="step-body">Bypass list (host names, IPv4 addresses or UDP ports, space or comma separated; leave empty for none):<br>' +
+          '<input type="text" id="fx-list" value="' + htEsc(_fxList) + '" oninput="_fxList=this.value" placeholder="' +
+          htEsc(d.dmr_master ? d.dmr_master + '  62031' : 'master.example.org 62031') + '" ' +
+          'style="font-family:var(--mono);width:100%;max-width:32rem;background:#0a1020;color:var(--text-bright);border:1px solid var(--border2);border-radius:4px;padding:.2rem .4rem"></div>';
+  html += fxRow(fxBtn('3. ' + (s3.title || ''), 'fxStep3()', d.timer_active && s2.done),
+                s3.done ? 'done (press again to change the list)' : (s3.pending ? 'in progress' : ''), s3.done ? 'var(--green)' : '');
+  html += fxRow(fxBtn('8. Undo now', "fxPost('fx_undo', {}, 'Take the test rules back out now?')", d.mode === 'testing', 'border-color:var(--amber)') +
+                fxBtn('9. Keep for now', "fxPost('fx_keep', {}, 'Cancel the auto-undo? The rules stay until Undo now or a reboot.')", d.timer_active), '');
+  if (d.undo_failed) {
+    html += '<div class="step-body" style="color:var(--red)">The last undo had problems (see the log below). Use Undo now again, or reboot.</div>';
+  }
+  if ((d.undo_log || []).length) {
+    html += '<details style="margin-top:.3rem"><summary style="cursor:pointer;color:var(--muted);font-family:var(--mono);font-size:.78rem">Undo log</summary>';
+    html += '<div class="cmd-preview" style="white-space:pre-wrap;max-height:220px;overflow-y:auto">' + htEsc(d.undo_log.join('\n')) + '</div></details>';
+  }
+
+  html += '<div class="step-body" style="margin-top:.5rem;font-weight:bold">Checks</div>';
+  html += fxRow(fxBtn('7. Run checks', "fxPost('fx_checks')", d.mode !== 'off'),
+                d.mode === 'off' ? 'Available during a test or once permanent.' : 'Read-only.');
+  html += fxChecksHtml(d.last_checks, d.mode);
+
+  var p = d.perm || {};
+  html += '<div class="step-body" style="margin-top:.5rem;font-weight:bold">Saving</div>';
+  if (d.mode === 'permanent') {
+    html += '<div class="step-body">Permanent since ' + htEsc(p.made_date || '?') + (p.version ? ' (44helper ' + htEsc(p.version) + ')' : '') + '.';
+    if ((p.script_paths || []).length) {
+      html += ' Removal script: ' + p.script_paths.map(function(x) { return '<code>' + htEsc(x) + '</code>'; }).join(', ');
+    }
+    html += '</div>';
+  } else {
+    if (_fxUser === null) { _fxUser = d.home_user_default || 'root'; }
+    html += '<div class="step-body">Home folder for <code>remove_full_exceptions.sh</code>: user ' +
+            '<input type="text" id="fx-user" value="' + htEsc(_fxUser) + '" oninput="_fxUser=this.value" ' +
+            'style="font-family:var(--mono);width:9rem;background:#0a1020;color:var(--text-bright);border:1px solid var(--border2);border-radius:4px;padding:.15rem .4rem">' +
+            ' <span style="font-size:.75rem;color:var(--muted)">(a copy also goes in /root)</span></div>';
+  }
+  html += fxRow(fxBtn('10. Make permanent', 'fxMakePermanent()', !!d.can_make_permanent),
+                d.mode === 'permanent' ? '' : (d.can_make_permanent ? 'All checks pass.' : (d.gate_reason || '')),
+                d.can_make_permanent ? 'var(--green)' : '');
+  html += fxRow(fxBtn('11. Remove permanent', 'fxRemovePermanent()', d.mode === 'permanent', 'border-color:var(--red)'),
+                d.mode === 'permanent' ? 'Same as running ~/remove_full_exceptions.sh' : '');
+  var o = _fxOut;
+  var cls = 'asl3-console shown' + (o ? (o.working ? '' : (o.success ? ' ok' : ' fail')) : ' placeholder');
+  html += '<div class="' + cls + '" id="fx-out" style="white-space:pre-wrap">' + (o ? htEsc(o.text) : '(not run yet)') + '</div>';
+  html += '</div>';
+  box.innerHTML = html;
+  fxTick();
+}
+// full-tunnel exceptions js end
+"""
+
 _JS = (
     _JS_AUTH
     + _JS_EVENTS
@@ -20328,6 +21433,7 @@ _JS = (
     + _JS_SERVICES_PORTS
     + _JS_FIREWALL
     + _JS_HALF
+    + _JS_FX
     + _JS_ACTIONS_LOG
     + _JS_ASL3
     + _JS_DVSWITCH
@@ -20876,6 +21982,7 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
     other_kind = "split" if kind == "full" else "full"
     other_label = "Split Tunnel" if other_kind == "split" else "Full Tunnel"
     target_allowed_ips = "0.0.0.0/0" if kind == "full" else "44.0.0.0/9, 44.128.0.0/10"
+    fx_div = '<div id="fx-card"></div>' if kind == "full" else ""
     return f"""
 <div class="tab-panel hidden" id="panel-{kind}_tunnel">
   <div class="step-body">
@@ -20901,6 +22008,7 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
   </div></div>
   <div id="pi-lock-banner-{kind}"></div>
   <div id="pi-steps-{kind}"></div>
+  {fx_div}
   <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted)" id="pi-checked-at-{kind}"></span>
   <button class="btn-purge" id="pi-convert-btn-{kind}" style="display:none" onclick="piToggleConvert('{kind}','{other_kind}')">Convert to {other_label}</button>
   <div id="pi-convert-steps-{kind}"></div>
@@ -21215,6 +22323,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/ports/status": _route_ports_status,
     "/api/firewall/status": _route_firewall_status,
     "/api/firewall/half_status": _route_half_status,
+    "/api/fullx/status": _route_fx_status,
     "/api/pi_install/netcheck_scan": _route_pi_install_netcheck_scan,
     "/api/pi_install/netcheck_journal": _route_pi_install_netcheck_journal,
     "/api/actions_log/notes": _route_actions_log_notes,
@@ -21349,6 +22458,14 @@ _FIREWALL_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "half_undo": lambda p: action_half_undo(),
     "half_keep": lambda p: action_half_keep(),
     "half_check_first": lambda p: action_half_check_first(),
+    "fx_check_first": lambda p: action_fx_check_first(),
+    "fx_arm": lambda p: action_fx_arm(),
+    "fx_step": lambda p: action_fx_step(p.get("step"), p.get("list")),
+    "fx_undo": lambda p: action_fx_undo(),
+    "fx_keep": lambda p: action_fx_keep(),
+    "fx_checks": lambda p: action_fx_run_checks(p.get("_client_ip", "")),
+    "fx_make_permanent": lambda p: action_fx_make_permanent(p.get("user", "")),
+    "fx_remove_permanent": lambda p: action_fx_remove_permanent(),
 }
 
 def _dispatch_firewall_action(payload: dict) -> dict:

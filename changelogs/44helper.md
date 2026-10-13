@@ -1,6 +1,90 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_193_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_194_20261013.py`. Newest entries first.
+
+## 0.0.194 (2026-10-13) — testing
+
+New card on the Full Tunnel tab, under the steps: **Full tunnel with exceptions**.
+Everything goes through the 44Net tunnel, as with a plain full tunnel, with two
+exceptions. It works the same way as the half tunnel (Firewall tab): test with
+temporary rules, run the checks, then make it permanent. Only one of the two can be
+in use.
+
+- **0. Check first** (read-only). It blocks on:
+  - no wg0.conf, or an AllowedIPs that isn't 0.0.0.0/0
+  - a `Table =` line or `SaveConfig = true`
+  - the tunnel not running from wg-quick@wg0, or wg-quick's full-tunnel rules
+    (table 51820) not loaded
+  - no normal default route or LAN address
+  - the half tunnel being tested or permanent
+
+  It notes:
+  - Everything open in wg0's firewall zone is reachable from the whole internet;
+    the zone's open services and ports are listed.
+  - Router port forwards for TCP keep working. UDP ones, such as IAX to the home
+    address, can't be kept.
+  - The Pi's other traffic goes through ARDC (their acceptable use policy).
+
+  It also backs up wg0.conf to the instmon library as `wg0.conf.pre-fullx`.
+- **Test buttons.** Routing rules on top of the running tunnel only: no tunnel
+  restart, nothing written to disk except under `/run`.
+  - **1. Arm auto-undo:** the same 15-minute systemd timer as the half tunnel.
+  - **2. Keep replies from the LAN address on the LAN link:** `from <LAN IP>
+    lookup main`, priority 1150. Connections that came in on the normal link
+    (dashboard or SSH through the router) answer the same way. Without it, the
+    replies go into the tunnel and the connection hangs.
+  - **3. Send the bypass list around the tunnel:** host names, IPv4 addresses or
+    UDP ports. Hosts are looked up and each address gets `to <ip> lookup main`
+    (1160); ports get `ipproto udp dport <p> lookup main` (1161). The list can be
+    empty. The page suggests the DMR master from MMDVM_Bridge.ini, but by default
+    DV traffic goes through the tunnel from the 44 address. Pressing 3 again
+    changes the list.
+  - **8. Undo now** and **9. Keep for now**.
+- **7. Run checks**, 12 in four groups:
+  - Tunnel: up, full-tunnel rules loaded, the internet goes into wg0, and
+    connect.44net.cloud/myip sees the 44 address.
+  - Exceptions: replies from the LAN address leave by the LAN link, and the
+    bypass list uses the normal link.
+  - Normal use: DNS, and the LAN tools (and your browser) still answer.
+  - Services: DVSwitch, usrp2m17, ASL registration showing the 44 address,
+    EchoLink. A red line on 5, 7 or 8 shows a banner recommending Undo now.
+- **10. Make permanent:**
+  - Unlocks after steps 2 and 3 and green or grey checks under 15 minutes old.
+  - Saves the rules as PostUp/PostDown lines between `# 44helper-fullx-begin` /
+    `-end` in wg0.conf. The lines find the LAN address and look up the bypass
+    hosts each time the tunnel starts. AllowedIPs isn't touched.
+  - Writes `remove_full_exceptions.sh` and a 0600 copy of wg0.conf to the chosen
+    user's home and `/root`, plus a login reminder.
+  - Restarts the tunnel (after the 0.0.193 DNS check) and re-runs the checks. If
+    one fails, it takes everything out and restarts the test.
+- **11. Remove permanent** (double confirm) runs the same steps as the script. The
+  script needs no 44helper, asks for sudo by itself and doesn't restart the tunnel.
+- **Guards:**
+  - The half tunnel's Check first blocks while this is in use, and the other way
+    round.
+  - The Split tab's AllowedIPs repair is off while this is being tested or is
+    permanent.
+- Dropped from the plan, after checking:
+  - Connmark for UDP replies: Asterisk picks its reply address from the route,
+    so the reply doesn't match the original connection and connmark never
+    applies.
+  - An MSS clamp: the Pi already sets MSS for its own connections from wg0's MTU.
+- Tested:
+  - A mocked end-to-end run: Check first, arm, both steps, a bad list refused,
+    checks, the Make permanent gate, Make permanent, Remove permanent, the
+    rollback after a failed check (back to test, timer re-armed, rules
+    re-applied) and Undo now.
+  - The PostUp/PostDown lines run against stub `ip` and `getent`: the LAN address
+    comes out of `ip -o addr`, there is one rule per looked-up address and per
+    port, and PostDown clears them. `bash -n` on every line, and no `#` in any
+    of them.
+  - The removal script against a real file: wg0.conf comes back without the
+    block, other edits are kept, and the copies are removed.
+  - The card in headless Chromium in each state (off, testing, permanent):
+    buttons enabled and disabled, countdown, the red banner, the list and user
+    posted, the double confirm, and no script errors from the card.
+  - The 0.0.192 and 0.0.193 tests re-run on this version. `node --check` on the
+    page JavaScript.
 
 ## 0.0.193 (2026-10-13) — testing
 
