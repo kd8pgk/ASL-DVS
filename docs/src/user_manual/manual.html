@@ -28,7 +28,7 @@
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_16_20261012.py</td><td>9.3.71.16-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_13_20261012.py</td><td>6.13.67.13-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_14_20261013.py</td><td>6.13.67.14-pi02w</td></tr>
       <tr><td>44helper</td><td class="mono">44helper_v0_0_181_20261012.py</td><td>0.0.181</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_44_0_20261012.py</td><td>2.44.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_30_20261012.py</td><td>5.30</td></tr>
@@ -186,7 +186,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">ASL-DVS SYSMON</span><span class="meta">v6.13.67.13-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">ASL-DVS SYSMON</span><span class="meta">v6.13.67.14-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:rgb(0,255,229)">Overview</span>
         <span class="tab" style="border-color:rgb(0,255,229)">Services</span>
@@ -511,7 +511,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
   <h2><span class="n">3.2</span>The page at a glance</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.13-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.14-pi02w</span></div>
       <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
       <div class="cards">
         <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
@@ -636,7 +636,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
     <tr><td></td><td>Reload</td><td>Asks the program to re-read its settings without restarting. Greyed out for services that don't support it.</td></tr>
     <tr><td>Boot Persistence</td><td>Enable / Disable</td><td>Whether the service starts by itself at boot. Disable asks first. Neither one starts or stops it now.</td></tr>
     <tr><td>Pinned Services</td><td>Pin / Unpin</td><td>Adds the service to the Overview, in a group you pick or a new one, or removes it.</td></tr>
-    <tr><td>Status</td><td>(output)</td><td>The service's current status and its last 50 log lines, with errors in red and warnings in amber.</td></tr>
+    <tr><td>Status</td><td>Copy</td><td>The service's current status and its last 50 log lines, with errors in red and warnings in amber. Copy copies them.</td></tr>
   </table>
   <h3>Editing a service file</h3>
   <p><b>Edit</b> opens the service's systemd file in an editor, with <b>Save</b>, <b>Restart</b>, <b>Reload
@@ -665,8 +665,28 @@ sudo bash uninstall_all_v1_5.sh</pre>
     pairing rules are in <code>docs/ASL-DVS_Idealized_Node_Configuration.pdf</code>, section 4.</div>
 
   <h2><span class="n">3.6</span>Journal tab</h2>
-  <p>The Journal tab lists your pinned services that are installed, followed by any other running service. Click
-    one to open its log in a pop-up window.</p>
+  <p>The Journal tab has two cards. <b>DV Gateway Logs</b> (from 6.13.67.14-pi02w) lists the log files the DV
+    gateways write. <b>Running Services</b> lists your pinned services that are installed, followed by any other
+    running service. Click one to open its log in a pop-up window.</p>
+  <h3>DV Gateway Logs</h3>
+  <p>One row per log, grouped by program, with its size and how long ago it last changed:</p>
+  <table>
+    <tr><th>Program</th><th>Logs</th></tr>
+    <tr><td>ircDDBGateway</td><td>The last 7 days of <code>ircDDBGateway-YYYY-MM-DD.log</code> (link, unlink, D-Plus and remote-control messages), <code>Headers.log</code> (every D-STAR transmission in or out), <code>Links.log</code> (links up now) and <code>STARnet.log</code>, from <code>/var/log/ircddbgateway</code>.</td></tr>
+    <tr><td>MMDVM_Bridge, YSFGateway, P25Gateway, NXDNGateway, USRP2M17</td><td>The last 7 days of dated logs, from the folder and name in each program's <code>.ini</code> (<code>[Log]</code> <code>FilePath</code> and <code>FileRoot</code>). Where file logging is off (<code>FileLevel=0</code>) or no files exist, the row says so and opens the program's journal instead.</td></tr>
+    <tr><td>Analog_Bridge, STFU, netcheck, ircddbgatewayd</td><td>These write no log file; their rows open their journal.</td></tr>
+  </table>
+  <p>The gateways write their file names and timestamps in <b>UTC</b>; the journal is in local time. The log window
+    says which one you are looking at.</p>
+  <table>
+    <tr><th>Button</th><th>What it does</th></tr>
+    <tr><td>Open</td><td>Opens the log in the same pop-up window as a journal, with Lines, the filter and Copy. For a file, All means up to the last 2 MB.</td></tr>
+    <tr><td>Copy (on a row)</td><td>Copies that log's last 200 lines, with a first line naming the file, its time zone and its line count.</td></tr>
+    <tr><td>Copy for agent</td><td>Copies the last 50 lines of every log (the newest dated file for each program) plus this boot's warnings, each with a header line. Empty logs are listed once at the end. The button shows the size before you press it, typically 15&ndash;70 KB. Paste it into a message to an AI agent or a helper.</td></tr>
+    <tr><td>Download .txt</td><td>Saves the same text as a file. Use it if a copy comes out short on a phone.</td></tr>
+  </table>
+  <p>Every Copy reads the clipboard back; if it holds less than was copied, SysMon warns you.</p>
+  <h3>Running Services</h3>
   <table>
     <tr><th>Control</th><th>What it does</th></tr>
     <tr><td>Lines 50 / 200 / All</td><td>How far back to read. All means the last 2,000 lines.</td></tr>
@@ -719,6 +739,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
       <li><b>Services:</b> <code>systemctl show</code> and <code>systemctl list-units</code>. The owner comes from the running process, or from <code>User=</code> in the unit.</li>
       <li><b>Ports:</b> <code>ss -tlnpu</code>, with each process's command line from <code>/proc/&lt;pid&gt;/cmdline</code>.</li>
       <li><b>Journal:</b> <code>journalctl -u &lt;unit&gt; -n &lt;lines&gt;</code>, between 10 and 2,000 lines.</li>
+      <li><b>DV gateway logs:</b> read from the end of each file, never a path sent by the page: the page names a log by an id SysMon built, and every file must be a regular file under <code>/var/log</code>. Read-only.</li>
       <li><b>Power:</b> <code>vcgencmd get_throttled</code>. Its bits give under-voltage, frequency cap, throttling and temperature limit, both now and since boot. Without it, SysMon shows the core voltage instead.</li>
     </ul>
 
@@ -2588,6 +2609,7 @@ ss -tlnp | grep 9999</pre></li>
     <tr><th>Copy</th><th>From</th></tr>
     <tr><td>Overview / Services / Ports lists</td><td>SysMon (Chapter 3)</td></tr>
     <tr><td>A service's journal</td><td>SysMon Journal pop-up, with a filter</td></tr>
+    <tr><td>DV gateway logs (D-STAR links, YSF, P25, NXDN, M17)</td><td>SysMon Journal, DV Gateway Logs: <b>Copy for agent</b> for all of them, or Copy on one row</td></tr>
     <tr><td>Hardware report</td><td>SysMon Hardware</td></tr>
     <tr><td>Security results</td><td>SysMon Security</td></tr>
     <tr><td>All Asterisk or DVSwitch config files</td><td>SysMon Edit, ASL AllConf / DVS AllConf: <b>remove passwords first</b></td></tr>

@@ -39,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_79_20261012.py` | `sysmon_pi02w_v6_13_67_13_20261012.py` | `instmon_v2_44_0_20261012.py` |
-| `VERSION` | `6.13.79` | `6.13.67.13-pi02w` | `2.44.0` |
+| File name | `sysmon_v6_13_79_20261012.py` | `sysmon_pi02w_v6_13_67_14_20261013.py` | `instmon_v2_44_0_20261012.py` |
+| `VERSION` | `6.13.79` | `6.13.67.14-pi02w` | `2.44.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version

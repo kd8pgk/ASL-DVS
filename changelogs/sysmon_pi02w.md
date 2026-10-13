@@ -1,6 +1,47 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_13_20261012.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_14_20261013.py`. Newest entries first.
+
+## 6.13.67.14-pi02w (2026-10-13)
+
+Journal tab: the DV gateway log files, and Copy on every log. Pi Zero 2 W build
+only; the full build is unchanged.
+
+- **DV Gateway Logs card** at the top of the Journal tab. One row per log, grouped
+  by program, with size and age:
+  - ircDDBGateway: the last 7 days of `ircDDBGateway-YYYY-MM-DD.log`, `Headers.log`,
+    `Links.log`, `STARnet.log` (`/var/log/ircddbgateway`).
+  - MMDVM_Bridge, YSFGateway, P25Gateway, NXDNGateway, USRP2M17: the last 7 dated
+    logs, from each `.ini`'s `[Log]` `FilePath` and `FileRoot`. With file logging
+    off (`FileLevel=0`), no `FilePath` or no files, the row says so and opens the
+    program's journal instead.
+  - Analog_Bridge, STFU, netcheck, ircddbgatewayd: their journal (no log file).
+- **Open** shows a log in the journal pop-up, which now takes files as well: Lines
+  50 / 200 / All (a file's All is the last 2 MB), the filter and Copy. A line under
+  the toolbar gives the time zone (gateway files are UTC), the path and how many
+  lines are shown of the total.
+- **Copy** on a row copies that log's last 200 lines, with a header line naming the
+  file, its time zone and its line count.
+- **Copy for agent** copies the last 50 lines of every log (the newest dated file
+  per program) plus this boot's journal warnings, each block with a header line;
+  empty logs are listed once at the end. The button shows the size before it is
+  pressed. **Download .txt** saves the same text.
+- **Copy everywhere a log opens**: the service panel's Status box gains Copy (the
+  journal pop-up and the SD card kernel log had it). Every copy is read back from
+  the clipboard; a short copy brings up a warning that points to Download. A copy
+  that needs a server read first is written inside the tap (promise-backed
+  `ClipboardItem`), so phone browsers allow it.
+- New routes behind the login: `/api/logs/list`, `/api/logs/read?id=&lines=`,
+  `/api/logs/agent`. Read-only. A log is named by an id SysMon built from the
+  config files, never by a path from the page, and must be a regular file under
+  `/var/log` after links are resolved (a `FilePath` elsewhere, or a link out of
+  `/var/log`, is ignored). Files are read from the end, so a large file is never
+  loaded whole.
+- Tested with mocks against a temporary `/var/log` (dated files, `FileLevel=0`, no
+  `[Log]`, a `FilePath` outside `/var/log`, a link out of it, a 2 MB cut, refused
+  ids, the agent bundle's headers and empty list) and in headless Chromium at
+  390 px (open, line buttons, filtered Copy, row Copy, agent Copy fresh and after a
+  read, Download, the short-copy warning, no horizontal scroll).
 
 ## 6.13.67.13-pi02w (2026-10-12)
 
