@@ -2200,6 +2200,41 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li>Calls join with voice keying, so a simplex radio only transmits while the far end talks. Long nonstop talk from the far end is broken for 2 seconds every 10.</li>
   </ul>
 
+  <h3>Why your radio isn't keyed for the whole call</h3>
+  <p>AllStar has a built-in phone patch, the <b>autopatch</b>. While an autopatch call is up, AllStar keys every
+    node linked to it for the whole call, whether anyone is talking or not. The code that would key only on voice is
+    switched off inside AllStar itself, because it cut off the first word. No setting in <code>rpt.conf</code>
+    changes this.</p>
+  <p>On a node with a simplex hotspot that is a <b>dead key</b>: the phone node keys its link to your radio node,
+    your hotspot transmits nonstop, and it never hears you. You hear the caller but can't talk back, and
+    <code>*99</code> seems to do nothing.</p>
+  <p>The Dashboard (9.3.71.8-pi02w and 9.3.73 on) doesn't keep the call in autopatch:</p>
+  <ul>
+    <li><b>Calls you dial</b> (Dial, favorites, Test call, Voicemail) are placed by the Dashboard, and join the phone
+      node with <code>rpt(&lt;node&gt;,Pv)</code> once the far end answers.</li>
+    <li><b>Incoming calls</b> join the same way.</li>
+    <li><b>*61 from the radio</b> still uses autopatch, but only to collect the number. The autopatch ends at once and
+      the Dashboard places the call the same way. Your hotspot is keyed only for those few seconds of dialing.</li>
+  </ul>
+
+  <h3>How <code>Pv</code> works</h3>
+  <ul>
+    <li><b>P</b> (phone mode): the caller joins your node like another linked station. They hear everything on the
+      node, and could key the radio with <code>*99</code>.</li>
+    <li><b>v</b> (voice keying, VOX): no <code>*99</code> needed. The caller's voice keys the transmitter.</li>
+  </ul>
+  <ol class="steps">
+    <li>The far end talks: AllStar detects voice and keys your hotspot.</li>
+    <li>The far end stops: after about 0.4 s of quiet the hotspot unkeys and goes back to receive.</li>
+    <li>You key your radio and talk: your audio goes into the call.</li>
+    <li>When the far end starts talking, about 0.5 s of audio is held back, so the transmitter is up before the
+      first word arrives.</li>
+    <li>If the far end talks for 10 s without a break, the hotspot unkeys for 2 s so you can break in.</li>
+  </ol>
+  <div class="call note"><span class="t">NOTE</span>The trade-offs: you don't hear ringing over the air (you hear
+    the call once it's answered); there is about half a second of delay; nonstop far-end talk gets a 2-second gap
+    every 10 seconds; and a very quiet caller might not trigger the voice keying.</div>
+
   <h2><span class="n">12.4</span>EDIT page</h2>
   <table>
     <tr><th>Section</th><th>Holds</th></tr>
@@ -2241,6 +2276,18 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li><b>Changing tab:</b> drops the links except the needed bridge node, sends a talkgroup disconnect, switches the DVSwitch mode, starts or stops the mode's gateway service (YSF, P25, NXDN, ircDDBGateway), and links the bridge node (1999, or 1917 for M17).</li>
       <li><b>M17:</b> writes <code>/opt/USRP2M17/USRP2M17.ini</code> in full on every connect and disconnect, and restarts <code>usrp2m17</code>. From 9.3.71.11 (full build 9.3.74) it listens on UDP 17010 (it was 32010, which clashed with P25).</li>
       <li><b>Phone calls</b> are placed with AMI <code>Originate</code> into <code>rpt(&lt;node&gt;,Pv)</code>. Radio <code>*61</code> requests arrive through <code>/run/asl_dvs_tones/req</code> and are dialed within about 2 seconds.</li>
+      <li><b>The dead key in AllStar's source</b> (<code>apps/app_rpt.c</code>, AllStarLink app_rpt, master
+        <code>d392975</code>): in the per-link keying loop, <code>mycalltx = myrpt-&gt;callmode</code> keys every
+        link while an autopatch is up; the voice-gated line is inside
+        <code>#ifdef DONT_USE__CAUSES_CLIPPING_OF_FIRST_SYLLABLE_ON_LINK</code>, so it is never built (lines
+        4916–4921). With <code>farenddisconnect=1</code> or a half-duplex node the patch drops as soon as the
+        dialplan ends (line 1294), which is how <code>*61</code> hands over.</li>
+      <li><b>How <code>Pv</code> keys</b>: the <code>v</code> option sets phone VOX on the link (app_rpt.c lines
+        7354–7367). <code>dovox()</code> (<code>rpt_vox.c</code>) turns on after 3 voiced 20 ms frames and off after
+        20 quiet ones. While the caller's link is "receiving", the node keys its other links (lines 4898–4906 and
+        3567–3581). <code>simplexphonedelay</code> (25 × 20 ms) delays the audio, and <code>voxtimeout</code> /
+        <code>voxrecover</code> (10000 / 2000 ms) force the break. These are the values the Dashboard writes for each
+        phone node.</li>
       <li><b>Service:</b> <code>nodecontrol</code> (<code>asl_dvs_dashboard</code> before 9.3.76 / 9.3.71.15-pi02w), with <code>Restart=always</code> and <code>WatchdogSec=30</code>, so it is restarted if it stops answering. That is why the separate Watchdog script isn't needed.</li>
       <li>The login is shared with SysMon (Chapter 3).</li>
     </ul>

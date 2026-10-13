@@ -68,7 +68,7 @@ Phone dialplan guide (PDF, 24 pages): dialplan nuts and bolts, stock ASL3 next t
 Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2M17 bridge-node files, port map, services and firewall for a clean build, with no identity data (placeholders only):
 [`docs/ASL-DVS_Idealized_Node_Configuration.pdf`](docs/ASL-DVS_Idealized_Node_Configuration.pdf)
 
-User manual (PDF, 95 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
+User manual (PDF, 96 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
 [`docs/ASL-DVS_User_Manual.pdf`](docs/ASL-DVS_User_Manual.pdf)
 
 1. Copy the files you want onto the Pi, all in one folder.
