@@ -37,8 +37,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.67.17-pi02w"
-BUILD_DATE   = "20261012"
+VERSION      = "6.13.68-pi02w"
+BUILD_DATE   = "20261013"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -1917,6 +1917,20 @@ body.offline #offline-bar{display:block}
   padding:.15rem .45rem;background:transparent;cursor:pointer;
   white-space:nowrap;transition:all .14s}
 .jl-btn:hover{filter:brightness(1.6)}
+.dvl-agent{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;
+  padding:.55rem .9rem;border-bottom:1px solid var(--border)}
+.dvl-agent-note{font-family:var(--sans);font-size:var(--fs-xs);color:#fff;flex-basis:100%}
+.dvl-group{padding:.35rem .9rem;background:#131c2d;border-top:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);letter-spacing:.2em;
+  text-transform:uppercase;color:var(--purple)}
+.dvl-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:.45rem;
+  padding:.4rem .9rem;border-top:1px solid var(--border)}
+.dvl-name{min-width:0;font-family:var(--sans);font-size:.902rem;font-weight:bold;
+  color:var(--text-bright);overflow-wrap:anywhere}
+.dvl-sub{font-family:var(--sans);font-size:var(--fs-xs);font-weight:normal;color:#fff;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvl-note{padding:.3rem .9rem;border-top:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);color:var(--amber)}
 
 #jp-overlay{display:none;position:fixed;inset:0;
   background:rgba(0,0,0,.8);backdrop-filter:blur(4px);
@@ -1942,9 +1956,13 @@ body.offline #offline-bar{display:block}
   border-radius:3px;transition:all .14s}
 #jp-close:hover{color:var(--red);border-color:var(--red-dim)}
 
-#jp-toolbar{display:flex;align-items:center;gap:.4rem;
+#jp-toolbar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
   padding:.35rem 1rem;background:#131c2d;
   border-bottom:1px solid var(--border);flex-shrink:0}
+#jp-info{padding:.25rem 1rem;background:#131c2d;border-bottom:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);color:var(--amber);flex-shrink:0}
+#jp-info[hidden]{display:none}
+.dp-copy-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
 #jp-grep{font-family:var(--sans);font-size:var(--fs-base);padding:.25rem .5rem;
   background:var(--surface2);color:var(--text-bright);
   border:1px solid var(--border2);border-radius:3px;
@@ -2781,6 +2799,23 @@ body.tab-edit #zone-content{
   </div>
 
   <div id="panel-journal" class="tab-panel">
+    <div class="s3-card" id="dvl-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">DV Gateway Logs</span>
+        <span class="s3-card-meta">files in UTC · journal in local time</span>
+      </div>
+      <div class="dvl-agent">
+        <button class="btn btn-purple btn-sm" id="dvl-agent-btn"
+          onclick="dvlAgentCopy()">⎘ Copy for agent</button>
+        <button class="btn btn-muted btn-sm" onclick="dvlAgentDownload()">⤓ Download .txt</button>
+        <button class="btn btn-muted btn-sm" onclick="dvlLoad()">↻ Refresh</button>
+        <span class="dvl-agent-note" id="dvl-agent-note">The last 50 lines of every log below,
+          plus this boot's warnings. Copy one log at a time with its own Copy button.</span>
+      </div>
+      <div id="dvl-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
     <div class="s3-card">
       <div class="s3-card-hdr">
         <span class="s3-card-title">Running Services — click to view journal</span>
@@ -3777,6 +3812,7 @@ body.tab-edit #zone-content{
       <button class="btn btn-muted btn-sm"
         onclick="jpRefresh()">↻ Refresh</button>
     </div>
+    <div id="jp-info" hidden></div>
     <div id="jp-body">Select a service from the Journal tab</div>
   </div>
 </div>
@@ -3942,7 +3978,8 @@ body.tab-edit #zone-content{
       
     </div>
 
-    <div class="dpzone-lbl">Status</div>
+    <div class="dp-copy-row"><div class="dpzone-lbl">Status</div>
+      <button class="btn btn-muted btn-sm" onclick="dpStatusCopy()">⎘ Copy</button></div>
     <div id="dpanel-output"><span class="dp-out-dim">Loading…</span></div>
 
   </div>
@@ -4907,11 +4944,130 @@ window.loadTab_ports = function() {
 };
 
 let _jpUnit  = "";
+let _jpFile  = null;
 let _jpLines = 200;
 let _jpRaw   = "";
 let _jpFilteredText = "";
 
-window.loadTab_journal = function() { loadJournalList(); };
+window.loadTab_journal = function() { loadJournalList(); dvlLoad(); };
+
+let _dvlSources = [];
+let _dvlAgent = null;
+let _dvlAgentAt = 0;
+
+function _dvlSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+function _dvlAge(t) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+async function dvlLoad() {
+  const d = await api("/api/logs/list");
+  _dvlSources = (d && d.ok) ? (d.sources || []) : [];
+  renderDvlList(d && d.ok ? null : ((d && d.message) || "Could not read the log list"));
+  dvlAgentFetch();
+}
+
+function renderDvlList(err) {
+  const body = document.getElementById("dvl-body");
+  if (!body) return;
+  body.innerHTML = "";
+  if (err || !_dvlSources.length) {
+    body.innerHTML = `<div class="stub-panel" style="min-height:60px">${esc(err || "No DV gateway logs found on this node.")}</div>`;
+    return;
+  }
+  let group = "";
+  _dvlSources.forEach((e, i) => {
+    if (e.group !== group) {
+      group = e.group;
+      const g = document.createElement("div");
+      g.className = "dvl-group";
+      g.textContent = group;
+      body.appendChild(g);
+    }
+    if (e.kind === "none") {
+      const n = document.createElement("div");
+      n.className = "dvl-note";
+      n.textContent = e.note || "no log";
+      body.appendChild(n);
+      return;
+    }
+    const sub = e.kind === "file"
+      ? `${_dvlSize(e.size || 0)} · ${e.mtime ? _dvlAge(e.mtime) : ""}${e.size ? "" : " · empty"}`
+      : (e.note || "systemd journal");
+    const row = document.createElement("div");
+    row.className = "dvl-row";
+    row.innerHTML =
+      `<div class="dvl-name" title="${esc(e.path || e.unit || "")}">${esc(e.label)}` +
+      `<div class="dvl-sub">${esc(sub)}</div></div>` +
+      `<button class="jl-btn" onclick="dvlOpen(${i})">▤ Open</button>` +
+      `<button class="jl-btn" onclick="dvlCopy(${i})">⎘ Copy</button>`;
+    body.appendChild(row);
+  });
+}
+
+function dvlOpen(i) {
+  const e = _dvlSources[i];
+  if (!e) return;
+  if (e.kind === "journal") openJournalPopup(e.unit);
+  else openLogPopup(e.id, e.label);
+}
+
+async function _dvlReadText(e) {
+  const d = await api(`/api/logs/read?id=${encodeURIComponent(e.id)}&lines=200`);
+  if (!d || !d.ok) throw new Error((d && d.message) || "Could not read the log");
+  const shown = d.text ? d.text.split("\n").length : 0;
+  const where = e.kind === "journal" ? `journal: ${e.unit} (local time)` : `${d.path || e.label} (UTC)`;
+  const of = d.total >= 0 ? ` of ${d.total.toLocaleString()}` : "";
+  return `== ${where} · last ${shown}${of} lines ==\n${d.text || ""}\n`;
+}
+
+function dvlCopy(i) {
+  const e = _dvlSources[i];
+  if (!e) return;
+  _copyFetched(_dvlReadText(e));
+}
+
+async function dvlAgentFetch() {
+  const btn = document.getElementById("dvl-agent-btn");
+  const d = await api("/api/logs/agent");
+  if (!d || !d.ok) { _dvlAgent = null; if (btn) btn.textContent = "⎘ Copy for agent"; return null; }
+  _dvlAgent = d.text || "";
+  _dvlAgentAt = Date.now();
+  if (btn) btn.textContent = `⎘ Copy for agent · ${_dvlSize(d.bytes || _dvlAgent.length)}`;
+  return _dvlAgent;
+}
+
+function dvlAgentCopy() {
+  if (_dvlAgent && Date.now() - _dvlAgentAt < 60000) {
+    _copyWithVerify(_dvlAgent);
+    return;
+  }
+  _copyFetched(dvlAgentFetch().then(t => {
+    if (!t) throw new Error("Could not build the log bundle");
+    return t;
+  }));
+}
+
+async function dvlAgentDownload() {
+  let text = _dvlAgent && Date.now() - _dvlAgentAt < 60000 ? _dvlAgent : await dvlAgentFetch();
+  if (!text) { toast("Could not build the log bundle", "err"); return; }
+  const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type: "text/plain"}));
+  a.download = `dv-gateway-logs-${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
 
 async function loadJournalList() {
   const d = await api("/api/journal/list");
@@ -4947,8 +5103,38 @@ function renderJournalList(services) {
   });
 }
 
+function _jpSvcButtons(show) {
+  ["jp-restart-btn", "jp-start-btn"].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.style.display = show ? "" : "none";
+  });
+}
+
+function _jpSetInfo(text) {
+  const el = document.getElementById("jp-info");
+  if (!el) return;
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+
+async function openLogPopup(id, label) {
+  _jpUnit = "";
+  _jpFile = {id, label};
+  _jpSvcButtons(false);
+  _jpSetInfo("");
+  const title = document.getElementById("jp-title");
+  if (title) title.textContent = `▤ ${label} — Log`;
+  document.getElementById("jp-overlay").classList.add("open");
+  document.getElementById("jp-grep").value = "";
+  jpSetLinesUI(_jpLines);
+  await jpRefresh();
+}
+
 async function openJournalPopup(unit) {
   _jpUnit = unit;
+  _jpFile = null;
+  _jpSvcButtons(true);
+  _jpSetInfo("");
   const title = document.getElementById("jp-title");
   if (title) title.textContent = `▤ ${unit.replace(".service","")} — Journal`;
 
@@ -4963,6 +5149,7 @@ async function openJournalPopup(unit) {
 function closeJournalPopup() {
   document.getElementById("jp-overlay").classList.remove("open");
   _jpUnit = "";
+  _jpFile = null;
 }
 
 function jpOverlayClick(e) {
@@ -4975,6 +5162,7 @@ async function jpCopy() {
 }
 
 async function jpRefresh() {
+  if (_jpFile) return jpRefreshFile();
   if (!_jpUnit) return;
   const body = document.getElementById("jp-body");
   if (body) body.textContent = "Loading…";
@@ -4994,6 +5182,29 @@ async function jpRefresh() {
   }
 
   _jpRaw = d.output || "";
+  jpApplyGrep();
+}
+
+async function jpRefreshFile() {
+  const body = document.getElementById("jp-body");
+  if (body) body.textContent = "Loading…";
+  const want = _jpLines >= 2000 ? "all" : String(_jpLines);
+  const d = await api(`/api/logs/read?id=${encodeURIComponent(_jpFile.id)}&lines=${want}`);
+  if (!d || !d.ok) {
+    if (body) body.innerHTML =
+      `<span class="jp-err">${esc((d && d.message) || "Request failed")}</span>`;
+    _jpRaw = "";
+    _jpFilteredText = "";
+    _jpSetInfo("");
+    return;
+  }
+  _jpRaw = d.text || "";
+  const shown = _jpRaw ? _jpRaw.split("\n").length : 0;
+  const tz = d.tz === "UTC" ? "Times in UTC" : "Times in local time";
+  let info = `${tz} · ${d.path || d.label}`;
+  if (d.total >= 0) info += ` · showing ${shown.toLocaleString()} of ${d.total.toLocaleString()} lines`;
+  if (want === "all" && d.truncated) info += " · cut to the last 2 MB";
+  _jpSetInfo(info);
   jpApplyGrep();
 }
 
@@ -5188,7 +5399,28 @@ async function _copyWithVerify(src) {
     document.body.removeChild(tmp);
   }
   if (!wrote) { toast("Copy failed", "err"); return; }
+  await _clipVerify(src);
+}
 
+async function _copyFetched(textPromise) {
+  textPromise.catch(() => {});
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    try {
+      const blob = textPromise.then(t => new Blob([t], {type: "text/plain"}));
+      await navigator.clipboard.write([new ClipboardItem({"text/plain": blob})]);
+      await _clipVerify(await textPromise);
+      return;
+    } catch (e) {
+      try { await textPromise; } catch (e2) { toast(e2.message || "Copy failed", "err"); return; }
+    }
+  }
+  let text = "";
+  try { text = await textPromise; } catch (e) { toast(e.message || "Copy failed", "err"); return; }
+  if (!text) { toast("Nothing to copy", "err"); return; }
+  await _copyWithVerify(text);
+}
+
+async function _clipVerify(src) {
   try {
     const check = await navigator.clipboard.readText();
     if (check === src) {
@@ -5197,7 +5429,7 @@ async function _copyWithVerify(src) {
       await alertModal(
         `⚠ Clipboard copy may be incomplete (${check.length} of ${src.length} ` +
         `characters). This can happen on some mobile browsers with large ` +
-        `files — try again, or use a desktop browser if this persists.`
+        `files — try again, use a Download button where there is one, or a desktop browser.`
       );
     }
   } catch {
@@ -9487,6 +9719,13 @@ function renderSdHealth(d) {
 
   body.innerHTML = html ||
     `<div class="stub-panel" style="min-height:60px">No SD card data</div>`;
+}
+
+async function dpStatusCopy() {
+  const out = document.getElementById("dpanel-output");
+  const text = out ? Array.from(out.children).map(d => d.textContent).join("\n").trim() : "";
+  if (!text || text === "Loading…") { toast("Nothing to copy", "err"); return; }
+  await _copyWithVerify(text);
 }
 
 async function sdKernelLogCopy() {
@@ -14117,6 +14356,293 @@ def _route_journal_fetch(h: Handler) -> None:
         h.send_json({"ok": False, "message": f"Journal fetch failed: {error}"})
         return
     h.send_json({"ok": True, "unit": unit, "lines": n, "output": output})
+
+_DVLOG_ROOT        = Path("/var/log")
+_DVLOG_IRCDDB_DIR  = Path("/var/log/ircddbgateway")
+_DVLOG_DAYS        = 7
+_DVLOG_READ_MAX    = 2_000_000
+_DVLOG_COUNT_MAX   = 20_000_000
+_DVLOG_AGENT_LINES = 50
+_DVLOG_DATED_RE    = re.compile(r"-(\d{4}-\d{2}-\d{2})\.log$")
+_DVLOG_ROOT_RE     = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+_DVLOG_INI_PROGRAMS = (
+    ("mmdvm", "MMDVM_Bridge", "mmdvm_bridge.service",
+     (Path("/opt/MMDVM_Bridge/MMDVM_Bridge.ini"), Path("/etc/MMDVM_Bridge/MMDVM_Bridge.ini"),
+      Path("/etc/dvswitch/MMDVM_Bridge.ini"))),
+    ("ysf", "YSFGateway", "ysfgateway.service",
+     (Path("/opt/YSFGateway/YSFGateway.ini"), Path("/etc/YSFGateway/YSFGateway.ini"),
+      Path("/etc/dvswitch/YSFGateway.ini"))),
+    ("p25", "P25Gateway", "p25gateway.service",
+     (Path("/opt/P25Gateway/P25Gateway.ini"), Path("/etc/P25Gateway/P25Gateway.ini"),
+      Path("/etc/dvswitch/P25Gateway.ini"))),
+    ("nxdn", "NXDNGateway", "nxdngateway.service",
+     (Path("/opt/NXDNGateway/NXDNGateway.ini"), Path("/etc/NXDNGateway/NXDNGateway.ini"),
+      Path("/etc/dvswitch/NXDNGateway.ini"))),
+    ("m17", "USRP2M17", "usrp2m17.service", tuple(_M17_INI_CANDIDATES)),
+)
+
+_DVLOG_JOURNAL_UNITS = (
+    ("analog_bridge.service",  "Analog_Bridge"),
+    ("stfu.service",           "STFU"),
+    ("netcheck.service",       "netcheck"),
+    ("ircddbgatewayd.service", "ircDDBGateway service"),
+)
+
+def _dvlog_under_root(path: Path) -> bool:
+    try:
+        real = Path(os.path.realpath(path))
+    except OSError:
+        return False
+    root = os.path.realpath(_DVLOG_ROOT)
+    return str(real).startswith(root + os.sep) and real.is_file()
+
+def _dvlog_file_entry(src_id: str, label: str, group: str, path: Path) -> "dict | None":
+    if not _dvlog_under_root(path):
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return {"id": src_id, "kind": "file", "group": group, "label": label,
+            "path": str(path), "size": st.st_size, "mtime": int(st.st_mtime), "tz": "UTC"}
+
+def _dvlog_dated_files(folder: Path, root: str) -> "list[Path]":
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    dated = sorted((n for n in names
+                    if n.startswith(root + "-") and _DVLOG_DATED_RE.search(n)
+                    and len(n) == len(root) + 15), reverse=True)
+    out = [folder / n for n in dated[:_DVLOG_DAYS]]
+    if (root + ".log") in names:
+        out.append(folder / (root + ".log"))
+    return out
+
+def _dvlog_unit_installed(unit: str) -> bool:
+    for d in ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system"):
+        if os.path.exists(os.path.join(d, unit)):
+            return True
+    return False
+
+def _dvlog_ini_log_settings(candidates) -> "dict | None":
+    for cand in candidates:
+        content, err = read_path_file(cand)
+        if err:
+            continue
+        sect = _dvs_parse_sections(content).get("LOG", {})
+        return {"ini": str(cand),
+                "file_level": sect.get("FileLevel", "").strip(),
+                "file_path":  sect.get("FilePath", "").strip(),
+                "file_root":  sect.get("FileRoot", "").strip()}
+    return None
+
+def dvlog_sources() -> "list[dict]":
+    out: "list[dict]" = []
+    if _DVLOG_IRCDDB_DIR.is_dir():
+        for p in _dvlog_dated_files(_DVLOG_IRCDDB_DIR, "ircDDBGateway"):
+            m = _DVLOG_DATED_RE.search(p.name)
+            sid = "ircddb:" + (m.group(1) if m else "plain")
+            e = _dvlog_file_entry(sid, p.name, "ircDDBGateway", p)
+            if e:
+                out.append(e)
+        for name in ("Headers", "Links", "STARnet"):
+            e = _dvlog_file_entry("ircddb:" + name, name + ".log", "ircDDBGateway",
+                                  _DVLOG_IRCDDB_DIR / (name + ".log"))
+            if e:
+                out.append(e)
+    for key, prog, unit, cands in _DVLOG_INI_PROGRAMS:
+        cfg = _dvlog_ini_log_settings(cands)
+        if cfg is None:
+            continue
+        files: "list[dict]" = []
+        root = cfg["file_root"] or prog
+        folder = cfg["file_path"]
+        if folder and _DVLOG_ROOT_RE.match(root):
+            for p in _dvlog_dated_files(Path(folder), root):
+                m = _DVLOG_DATED_RE.search(p.name)
+                e = _dvlog_file_entry(f"{key}:" + (m.group(1) if m else "plain"),
+                                      p.name, prog, p)
+                if e:
+                    files.append(e)
+        off = cfg["file_level"] == "0"
+        note = ""
+        if off:
+            note = "file logging off (FileLevel=0 in " + cfg["ini"] + ")"
+        elif not folder:
+            note = "no [Log] FilePath in " + cfg["ini"]
+        elif not files:
+            note = "no log files found in " + folder
+        out.extend(files)
+        if (off or not files) and _dvlog_unit_installed(unit):
+            out.append({"id": "journal:" + unit, "kind": "journal", "group": prog,
+                        "label": unit + " (journal)", "unit": unit, "tz": "local",
+                        "note": note})
+        elif note:
+            out.append({"id": "", "kind": "none", "group": prog, "label": prog,
+                        "note": note})
+    for unit, label in _DVLOG_JOURNAL_UNITS:
+        if _dvlog_unit_installed(unit):
+            out.append({"id": "journal:" + unit, "kind": "journal", "group": label,
+                        "label": unit + " (journal)", "unit": unit, "tz": "local"})
+    return out
+
+def _dvlog_find(src_id: str) -> "dict | None":
+    if not src_id or len(src_id) > 80:
+        return None
+    for e in dvlog_sources():
+        if e.get("id") == src_id:
+            return e
+    return None
+
+def _dvlog_tail(path: Path, lines: int, max_bytes: int = 0) -> "tuple[str, bool]":
+    max_bytes = max_bytes or _DVLOG_READ_MAX
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            want = (lines + 1) if lines > 0 else None
+            buf = b""
+            pos = size
+            while pos > 0 and len(buf) < max_bytes:
+                step = min(65536, pos, max_bytes - len(buf))
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
+                if want is not None and buf.count(b"\n") >= want:
+                    break
+    except OSError as e:
+        return f"[could not read {path}: {e}]", False
+    cut = pos > 0
+    text = buf.decode("utf-8", errors="replace")
+    rows = text.splitlines()
+    if cut and rows:
+        rows = rows[1:]
+    if lines > 0 and len(rows) > lines:
+        rows = rows[-lines:]
+        cut = True
+    return "\n".join(rows), cut
+
+def _dvlog_count_lines(path: Path) -> int:
+    try:
+        if path.stat().st_size > _DVLOG_COUNT_MAX:
+            return -1
+        n = 0
+        last = b"\n"
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                n += chunk.count(b"\n")
+                last = chunk[-1:]
+        return n + (0 if last == b"\n" else 1)
+    except OSError:
+        return -1
+
+def dvlog_read(src_id: str, lines: int) -> dict:
+    e = _dvlog_find(src_id)
+    if e is None or e["kind"] == "none":
+        return {"ok": False, "message": "Unknown log"}
+    if e["kind"] == "journal":
+        n = 2000 if lines <= 0 else max(10, min(lines, 2000))
+        text, err = fetch_journal(e["unit"], n)
+        if err:
+            return {"ok": False, "message": f"Journal fetch failed: {err}"}
+        return {"ok": True, "id": src_id, "label": e["label"], "tz": e["tz"],
+                "text": text, "truncated": False, "total": -1}
+    text, cut = _dvlog_tail(Path(e["path"]), lines)
+    return {"ok": True, "id": src_id, "label": e["label"], "tz": e["tz"],
+            "path": e["path"], "text": text, "truncated": cut,
+            "total": _dvlog_count_lines(Path(e["path"]))}
+
+def _dvlog_boot_warnings(lines: int) -> "tuple[str, str]":
+    try:
+        r = subprocess.run(["journalctl", "-b", "-p", "warning", f"-n{lines}", "--no-pager"],
+                           capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        return "", "journalctl not found on this system"
+    except subprocess.TimeoutExpired:
+        return "", "journalctl timed out"
+    except Exception as e:
+        return "", f"journalctl failed: {e}"
+    if r.returncode != 0 and r.stderr.strip():
+        return "", r.stderr.strip()
+    return r.stdout.strip(), ""
+
+def dvlog_agent_bundle(lines: int = _DVLOG_AGENT_LINES) -> dict:
+    srcs = dvlog_sources()
+    picked: "list[dict]" = []
+    newest_seen: "set[str]" = set()
+    for e in srcs:
+        if e["kind"] == "file":
+            dated = bool(_DVLOG_DATED_RE.search(e["label"]))
+            if dated:
+                if e["group"] in newest_seen:
+                    continue
+                newest_seen.add(e["group"])
+            picked.append(e)
+        elif e["kind"] == "journal":
+            picked.append(e)
+    now = datetime.now()
+    parts = [f"== ASL-DVS DV gateway logs · {get_hostname()} · "
+             f"{now.strftime('%Y-%m-%d %H:%M:%S')} local · last {lines} lines of each =="]
+    empty: "list[str]" = []
+    blocks = 0
+    for e in picked:
+        if e["kind"] == "file":
+            if e.get("size", 0) == 0:
+                empty.append(e["label"])
+                continue
+            text, _cut = _dvlog_tail(Path(e["path"]), lines)
+            total = _dvlog_count_lines(Path(e["path"]))
+            shown = len(text.splitlines())
+            of = f"{total:,}" if total >= 0 else "many"
+            head = f"== {e['path']} (UTC) · last {shown} of {of} lines =="
+        else:
+            text, err = fetch_journal(e["unit"], lines)
+            if err:
+                text = f"[journal fetch failed: {err}]"
+            if not text.strip() or text.strip() == "-- No entries --":
+                empty.append(e["label"])
+                continue
+            head = f"== journal: {e['unit']} (local time) · last {lines} lines =="
+        parts.append("")
+        parts.append(head)
+        parts.append(text)
+        blocks += 1
+    text, err = _dvlog_boot_warnings(lines)
+    parts.append("")
+    parts.append(f"== journal: this boot, warnings and worse (local time) · last {lines} lines ==")
+    parts.append(text if not err else f"[journal fetch failed: {err}]")
+    blocks += 1
+    for e in srcs:
+        if e["kind"] == "none":
+            empty.append(f"{e['group']}: {e['note']}")
+    if empty:
+        parts.append("")
+        parts.append("== empty or not logging: " + "; ".join(empty) + " ==")
+    out = "\n".join(parts) + "\n"
+    return {"ok": True, "text": out, "bytes": len(out.encode("utf-8")), "blocks": blocks,
+            "lines": lines}
+
+def _route_logs_list(h: Handler) -> None:
+    h.send_json({"ok": True, "sources": dvlog_sources()})
+
+def _route_logs_read(h: Handler) -> None:
+    qs = parse_qs(urlparse(h.path).query)
+    src_id = qs.get("id", [""])[0].strip()
+    raw = qs.get("lines", ["200"])[0].strip().lower()
+    if raw == "all":
+        n = 0
+    else:
+        try:
+            n = max(10, min(int(raw), 100000))
+        except ValueError:
+            n = 200
+    d = dvlog_read(src_id, n)
+    h.send_json(d, 200 if d.get("ok") else 404)
+
+def _route_logs_agent(h: Handler) -> None:
+    h.send_json(dvlog_agent_bundle())
 
 def parse_rpt_conf(content: str) -> list:
 
@@ -22704,6 +23230,9 @@ _GET_ROUTES = {
     "/api/ports/probe":        _route_ports_probe,
     "/api/journal/list":       _route_journal_list,
     "/api/journal/fetch":      _route_journal_fetch,
+    "/api/logs/list":          _route_logs_list,
+    "/api/logs/read":          _route_logs_read,
+    "/api/logs/agent":         _route_logs_agent,
     "/api/unit_file":          _route_unit_file_get,
     "/api/asterisk/files":     _route_asterisk_list,
     "/api/asterisk/file":      _route_asterisk_get,
