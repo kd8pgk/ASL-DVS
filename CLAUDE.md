@@ -22,6 +22,9 @@
 - **Code:** when a file gets a new version, drop "ASL-DVS" from its titles and
   headers only (page title, logo/header bar, tab and section titles, console
   banner). Other text in the code, and data it writes, stays as it is.
+- **Exception:** SysMon's **ASL-DVS** tab keeps its name, in the code and in
+  the docs (the tab button, its Edit-page checkbox, "Hide from ASL-DVS tab",
+  and the manual's references to that tab).
 
 ## Repo conventions
 
