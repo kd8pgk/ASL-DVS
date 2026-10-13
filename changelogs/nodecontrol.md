@@ -1,6 +1,25 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_77_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_78_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.78 (2026-10-13)
+
+Two layout fixes from the Pi Zero 2 W build (9.3.71.12-pi02w and 9.3.71.13-pi02w).
+
+- **Edit page, Phone tab:** the network cards line up on tablet-width screens
+  (about 560 to 1200 px).
+  - Fields in a row sit on a common bottom line, so a field whose label wraps
+    to two lines no longer pushes its box lower.
+  - The checkbox rows have the height of a box and sit level with it.
+  - The favorites rows use the same columns and gap as the field grid, with the
+    clear (✕) button inside the "Then send" cell.
+  - The phone layout is unchanged, and so is what is saved.
+- **M17 favorites:** the module drop-down is 7.6 rem wide on the M17 grid and the
+  M17 quick bar, so "All Modules" is no longer clipped to "All Modu". D-STAR and
+  XLX keep the narrow box.
+- Tested in headless Chromium at 390, 800 and 1200 px: the M17 drop-down is
+  121.6 px (7.6 rem), and the favorites rows render with the new tone cell. No
+  script errors; `node --check` on the page JavaScript.
 
 ## 9.3.77 (2026-10-12)
 
