@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.79"
+VERSION      = "6.13.80"
 BUILD_DATE   = "20261012"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -1373,7 +1373,7 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
-<title>ASL-DVS SYSMON</title>
+<title>SYSMON</title>
 <style>
 
 :root{
@@ -2760,7 +2760,7 @@ body.tab-edit #zone-content{
 
 <div id="login-screen">
   <div id="login-card">
-    <h2>ASL-DVS SysMon</h2>
+    <h2>SysMon</h2>
     <p class="sub">Sign in with this node's root password.</p>
     <form onsubmit="_doLogin(event)">
       <label for="login-pw">Root password</label>
@@ -2776,7 +2776,7 @@ body.tab-edit #zone-content{
 
 <header>
   <div>
-    <div class="logo">ASL-DVS SYSMON</div>
+    <div class="logo">SYSMON</div>
     <div class="logo-sub">
       <span id="hdr-callsign">KD8PGK</span>
       <span style="color:#6b4800"> · </span>
@@ -2825,7 +2825,7 @@ body.tab-edit #zone-content{
   <button class="tab-btn"        id="tbtn-journal"
     onclick="switchTab('journal','212,102,255')">Journal</button>
   <button class="tab-btn"        id="tbtn-asldvs"
-    onclick="switchTab('asldvs','255,61,90')">ASL-DVS</button>
+    onclick="switchTab('asldvs','255,61,90')">Node Controller</button>
   <button class="tab-btn"        id="tbtn-reg"
     onclick="switchTab('reg','120,180,255')">Reg</button>
   <button class="tab-btn"        id="tbtn-phone"
@@ -3313,12 +3313,12 @@ body.tab-edit #zone-content{
         <div id="rt-out-box"></div>
         <div class="ph-sub">2 · Call audio</div>
         <div class="ph-nocopy" style="margin:.3rem 0"><button class="btn btn-muted btn-sm" id="rt-audio-btn" onclick="rtAudio()">Check audio now</button>
-          <span class="ph-note">Start a Test call on the dashboard Phone tab first, then press this. It counts packets in and out over 4 seconds.</span></div>
+          <span class="ph-note">Start a Test call on the dashboard Phone tab first, then press this. It counts packets in and out over 4 seconds (SIP calls only).</span></div>
         <div id="rt-audio-box"></div>
         <div class="ph-sub">3 · Coming in</div>
         <div class="ph-nocopy" style="margin:.3rem 0"><button class="btn btn-muted btn-sm" onclick="rtIn(true)">Start watching (10 min)</button>
           <button class="btn btn-muted btn-sm" onclick="rtIn(false)">Check</button>
-          <span class="ph-note">Have another Hams Over IP member call your extension while watching.</span></div>
+          <span class="ph-note">Have someone call your number or extension while watching.</span></div>
         <div id="rt-in-box"></div>
       </div>
     </div>
@@ -4310,7 +4310,7 @@ body.tab-edit #zone-content{
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-journal" value="journal" onchange="edTabVisChanged()">Journal</label>
         <label class="tab-vis-lbl">
-          <input type="checkbox" id="tabchk-asldvs" value="asldvs" onchange="edTabVisChanged()">ASL-DVS</label>
+          <input type="checkbox" id="tabchk-asldvs" value="asldvs" onchange="edTabVisChanged()">Node Controller</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-reg" value="reg" onchange="edTabVisChanged()">Reg</label>
         <label class="tab-vis-lbl">
@@ -4417,7 +4417,7 @@ body.tab-edit #zone-content{
     </div>
 
     <div class="ed-collapsible-hdr" id="ed-asl-hdr" onclick="edToggleAslDvs()">
-      <span class="ed-collapsible-title">ASL-DVS Config Files</span>
+      <span class="ed-collapsible-title">Config Files</span>
       <span class="ed-collapsible-chevron" id="ed-asl-chevron">▶</span>
     </div>
     <div class="ed-collapsible-body collapsed" id="ed-asl-body">
@@ -4425,7 +4425,7 @@ body.tab-edit #zone-content{
       <div class="s3-card" style="margin:.5rem 0 .5rem">
         <div class="s3-card-hdr">
           <span class="s3-card-title">Asterisk — /etc/asterisk/</span>
-          <span class="s3-card-meta">Edit · Hide from ASL-DVS tab</span>
+          <span class="s3-card-meta">Edit · Hide from Node Controller tab</span>
         </div>
         <div id="ed-ast-file-body">
           <div class="stub-panel" style="min-height:50px">Loading…</div>
@@ -4435,7 +4435,7 @@ body.tab-edit #zone-content{
       <div class="s3-card" style="margin:0 0 .5rem">
         <div class="s3-card-hdr">
           <span class="s3-card-title">DVSwitch</span>
-          <span class="s3-card-meta">Edit · Hide from ASL-DVS tab</span>
+          <span class="s3-card-meta">Edit · Hide from Node Controller tab</span>
         </div>
         <div id="ed-dvs-file-body">
           <div class="stub-panel" style="min-height:50px">Loading…</div>
@@ -4445,7 +4445,7 @@ body.tab-edit #zone-content{
       <div class="s3-card" style="margin:0 0 .5rem">
         <div class="s3-card-hdr">
           <span class="s3-card-title">Allmon3 — /etc/allmon3/</span>
-          <span class="s3-card-meta">Edit · Hide from ASL-DVS tab</span>
+          <span class="s3-card-meta">Edit · Hide from Node Controller tab</span>
         </div>
         <div id="ed-allmon3-file-body">
           <div class="stub-panel" style="min-height:50px">Loading…</div>
@@ -18461,10 +18461,11 @@ def _phone_sec_networks(ctx: dict) -> dict:
         idn = [i for i in typed.get("identify", []) if _ph_last([i]).get("endpoint", "") == name]
         match = _ph_last(idn).get("match", "") if idn else ""
         cid = re.sub(r"[^0-9+]", "", kv.get("callerid", ""))
+        dtype = next((d["type"] for d in ctx["dash"]["networks"] if d["id"] == name), "")
         nets.append({
             "id": name, "name": names.get(name, name),
             "type": "sip" if (out_auth or reg) else "sip_ip",
-            "type_label": "SIP with login" if (out_auth or reg) else "SIP by IP address",
+            "type_label": _PH_EXT_LBL.get(dtype) or ("SIP with login" if (out_auth or reg) else "SIP by IP address"),
             "host": host or (_ph_uri_host(_ph_last([reg]).get("server_uri", ""))[0] if reg else ""),
             "port": port, "username": user, "context": kv.get("context", ""),
             "registers": reg is not None, "reg_name": reg["name"] if reg else "",
@@ -18475,6 +18476,8 @@ def _phone_sec_networks(ctx: dict) -> dict:
     return {"found": bool(nets), "networks": nets, "transports": transports,
             "active": ctx["dash"]["active"],
             "note": "" if nets else "No SIP or IAX2 provider is dialed by the dialplan yet"}
+
+_PH_EXT_LBL = {"hoip": "Hams Over IP", "awire": "AmateurWire"}
 
 _PH_FORMATS = {"${EXTEN:1}": "10 digits", "${EXTEN}": "11 digits as dialed", "+${EXTEN}": "+1 and 10 digits"}
 
@@ -18502,7 +18505,8 @@ def _ph_outgoing(plan: dict, cname: str) -> dict:
         nid = m.group(1)
         routed = plan.get(f"dvs-net-{nid}-r", [])
         ext_only = any(e["pattern"] == "_X." and _ph_first_dial([e]) for e in entries)
-        dial = _ph_first_dial(routed or entries)
+        main = [e for e in entries if e["pattern"] == "_X."] if ext_only else []
+        dial = _ph_first_dial(routed or main or entries)
         fmt = "as dialed"
         if not ext_only:
             fm = re.search(r"(\+?\$\{EXTEN(?::1)?\})", dial)
@@ -18710,7 +18714,6 @@ def _ph_modules_conf_check(ctx: dict, nets: list):
     except OSError:
         return None
     sip = any(n["type"] != "iax2" for n in nets)
-    iax = any(n["type"] == "iax2" for n in nets)
     section, block_sec, blocked, found_block = "", "", [], False
     card_off, in_card = [], False
     for raw in text.splitlines():
@@ -18741,7 +18744,7 @@ def _ph_modules_conf_check(ctx: dict, nets: list):
             name = m.group(1)
             pj = name.startswith(("chan_pjsip", "res_pjsip", "res_pjproject", "res_rtp_asterisk",
                                   "res_sorcery", "func_pjsip", "func_sorcery"))
-            if (pj and not sip) or (name.startswith("chan_iax2") and not iax):
+            if pj and not sip:
                 continue
             blocked.append(name)
     if blocked:
@@ -18861,38 +18864,11 @@ def _phone_health_live(C, ctx, dial_sec, nets, nodes, running):
                                ("not running: " + ", ".join(gone)) if gone else "player modules running",
                                "The dashboard's keypad is set to send tones as sound -- Save Phone on the "
                                "dashboard's Edit page (v9.3.16 or later) loads these" if gone else ""))
-        rpt_txt = "\n".join(f"{k} = {v}" for x in ctx["conf"]["rpt.conf"] for k, v, *_ in x["kv"])
-        hl = ctx["dash"].get("hoip_link") or {}
-        if hl.get("username"):
-            user = hl["username"]
-            if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_\-]{2,31}$", user):
-                C.append(_ph_check("hoiplink", "HOIP AllStar Link", "warn", "username in phone.json looks wrong"))
-            else:
-                peer = _ph_cli(f"iax2 show peer {user}", 4)
-                okp = "Name" in peer and "not found" not in peer.lower()
-                C.append(_ph_check("hoiplink", "HOIP AllStar Link account", "ok" if okp else "fail",
-                                   f"IAX2 account '{user}' loaded" if okp else f"Asterisk has no IAX2 account '{user}'",
-                                   "" if okp else "Save Phone on the dashboard's Edit page, then check iax.conf includes "
-                                                  "dvs_phone_iax.conf"))
-            okc = "dvs-hoiplink" in ctx["dialplan"]
-            C.append(_ph_check("hoiplinkctx", "HOIP AllStar Link answering rules", "ok" if okc else "fail",
-                               f"callers join node {hl.get('node') or '?'}" if okc else "[dvs-hoiplink] is missing",
-                               "" if okc else "Save Phone on the dashboard's Edit page"))
-            fq = hl.get("fqdn", "")
-            addr = ""
-            if fq:
-                try:
-                    addr = _socket.gethostbyname(fq)
-                except (OSError, UnicodeError):
-                    addr = ""
-            C.append(_ph_check("hoiplinkdns", "HOIP AllStar Link internet name", "info" if addr else "warn",
-                               f"{fq} points at {addr}" if addr else f"{fq or '(none)'} doesn't resolve",
-                               f"It should be your home's public address, with UDP {hl.get('port') or '4569'} "
-                               f"forwarded to this Pi" if addr else
-                               "Check the dynamic DNS name is set up and updating"))
-        if "dvs_phone_tonecode" in rpt_txt:
-            C.append(_ph_check("radiocodes", "Radio tone codes", "info", "*980-*987 set up",
-                               "During a call: *980 sends *, *981 #, *982 *99, *983-*987 the tone buttons 1-5"))
+        tcodes = sorted({k.strip() for x in ctx["conf"]["rpt.conf"] for k, v, *_ in x["kv"]
+                         if "dvs_phone_tonecode" in v and k.strip().isdigit()})
+        if tcodes:
+            C.append(_ph_check("radiocodes", "Radio tone codes", "info", ", ".join("*" + c for c in tcodes) + " set up",
+                               "During a call: *980 sends *, *981 #, *982 *99"))
         for n in nodes:
             up = "RPT_" in _ph_cli(f"rpt show variables {n['node']}", 4).upper()
             C.append(_ph_check("nodeup", f"Node {n['node']} in app_rpt", "ok" if up else "fail",
@@ -18904,22 +18880,36 @@ def _phone_health_routes(C, ctx, dial_sec, nets, nodes, plan, running):
     check = _ph_modules_conf_check(ctx, nets)
     if check:
         C.append(check)
+    scripts: dict = {}
     for n in nodes:
         for h in n["hangup"]:
-            if h["kind"] != "script":
-                continue
-            p = Path(h["path"])
-            try:
-                st = p.stat()
-                exe = os.access(p, os.X_OK)
-                worldw = bool(st.st_mode & 0o002)
-            except OSError:
-                C.append(_ph_check("script", "Hang-up script", "fail", f"{h['path']} missing",
-                                   "Code *%s can't end incoming calls without it" % h["code"]))
-                continue
-            problem = "not executable" if not exe else ("world-writable" if worldw else "")
-            C.append(_ph_check("script", "Hang-up script", "fail" if problem else "ok",
-                               f"{h['path']} {problem}".strip() if problem else "present and runnable"))
+            if h["kind"] == "script":
+                scripts.setdefault(h["path"], ("Hang-up script", set(), "can't hang up phone calls"))[1].add("*" + h["code"])
+    for x in ctx["conf"]["rpt.conf"]:
+        for k, v, *_ in x["kv"]:
+            if "dvs_phone_tonecode" in v and v.strip().lower().startswith("cmd,") and k.strip().isdigit():
+                p = v.split(",", 1)[1].strip().split()[0]
+                scripts.setdefault(p, ("Radio tone script", set(), "send nothing into the call"))[1].add("*" + k.strip())
+    for exts in plan.values():
+        for e in exts:
+            for st in e["steps"]:
+                m = re.match(r"\s*(/\S*dvs_phone_dialreq)\b", st["args"]) if st["app"].lower() == "system" else None
+                if m:
+                    scripts.setdefault(m.group(1), ("Radio dial script", {"*61"}, "does nothing"))
+    for path, (title, codes, broken) in sorted(scripts.items()):
+        used = ", ".join(sorted(codes))
+        p = Path(path)
+        try:
+            st = p.stat()
+            exe = os.access(p, os.X_OK)
+            worldw = bool(st.st_mode & 0o002)
+        except OSError:
+            C.append(_ph_check("script", title, "fail", f"{path} missing",
+                               f"Without it {used} {broken} -- Save Phone on the dashboard's Edit page writes it"))
+            continue
+        problem = "not executable" if not exe else ("world-writable" if worldw else "")
+        C.append(_ph_check("script", title, "fail" if problem else "ok",
+                           f"{path} {problem}".strip() if problem else f"present and runnable ({used})"))
     for n in nets:
         if n["type"] != "sip_ip" and not n["has_secret"]:
             C.append(_ph_check("secret", f"{n['name']}", "fail", "no password set",
@@ -18935,7 +18925,8 @@ def _phone_health_routes(C, ctx, dial_sec, nets, nodes, plan, running):
         fc = _ph_fw_check("firewall", "Pi firewall (SIP)", _ph_fw_cover(_ph_fw_ctx(ctx), port, port),
                           f"UDP {port}", _ph_fw_fix(ctx, f"UDP {port}"))
         if not fc["note"]:
-            fc["note"] = f"Your router also needs UDP {port} and the audio ports forwarded to the Pi"
+            fc["note"] = (f"If incoming calls don't arrive, forward UDP {port} on your router to the Pi "
+                          f"(signing in usually keeps it open without that)")
         C.append(fc)
     for o in dial_sec.get("outgoing", []):
         if o["kind"] == "dashboard" and o.get("e911"):
@@ -18951,7 +18942,7 @@ def _phone_health_routes(C, ctx, dial_sec, nets, nodes, plan, running):
                 break
     for i in dial_sec.get("incoming", []):
         if i["mode"].startswith("connects straight"):
-            C.append(_ph_check("nopin", f"Incoming on {i['network']}", "warn", "no PIN",
+            C.append(_ph_check("nopin", f"Incoming on {ctx['dash']['names'].get(i['network'], i['network'])}", "warn", "no PIN",
                                "Anyone who dials the number can talk on the air" +
                                (" while the dashboard Phone tab is open" if i["busy_when_tab_closed"] else "")))
     if running:
@@ -19484,8 +19475,10 @@ def _ph_hoip_network_vm(C, ctx, dash, name, running, tr):
     lo, hi, src = _ph_rtp_range(ctx, running)
     C.append(_ph_fw_check("fwrtp", "Pi firewall: audio", _ph_fw_cover(rules, lo, hi),
                           f"UDP {lo}-{hi}", _ph_fw_fix(ctx, f"UDP {lo}-{hi}") + f" (range from {src})"))
-    C.append(_ph_check("router", "Router", "info", f"forward UDP {sip_port} and UDP {lo}-{hi} to this Pi",
-                       "The Pi can't see the router. Turn off SIP ALG there, then prove it with a test call to your HOIP number"))
+    C.append(_ph_check("router", "Router", "info", "usually nothing to forward",
+                       f"The Pi signs in to HOIP and answers to the ports audio arrives from. Only if incoming calls "
+                       f"don't arrive: forward UDP {sip_port} to this Pi (and UDP {lo}-{hi} if audio is one-way), and "
+                       f"turn off SIP ALG. Forwarding opens Asterisk to the internet, so try a test call without it first"))
     vm = dash.get("voicemail_access", "") if re.match(r"^\*?\d{1,6}$", dash.get("voicemail_access", "")) else _PH_HOIP_VM
     plan = ctx["dialplan"]
     ctxs = []
@@ -19663,6 +19656,7 @@ def _pm_needs(ctx: dict) -> dict:
         "playback": bool(apps & {"playback", "background"}),
         "tones_sound": "dvs-tones" in ctx["dialplan"],
         "system": "system" in apps,
+        "callerid": bool(re.search(r"\bCALLERID\(", raw)),
     }
 
 def _pm_rows(need: dict) -> list:
@@ -19678,12 +19672,14 @@ def _pm_rows(need: dict) -> list:
             ("codec_gsm.so", B, True, "converts phone audio")]
     if need["db"]:
         rows.append(("func_db.so", B, True, "reads the dashboard's on/off flags in the dialing rules"))
+    if need.get("callerid"):
+        rows.append(("func_callerid.so", B, True, "sets your caller ID and checks trusted numbers"))
     if need["sip"]:
         for m in ("chan_pjsip.so", "res_pjsip.so", "res_pjsip_session.so", "res_pjsip_sdp_rtp.so",
                   "res_pjproject.so", "res_rtp_asterisk.so"):
             rows.append((m, B, True, "carries every SIP call"))
-    if need["iax"]:
-        rows.append(("chan_iax2.so", B, True, "carries IAX2 calls, and node links"))
+    rows.append(("chan_iax2.so", B, True, "links the phone nodes to your radio node" +
+                 (", and carries IAX2 calls" if need["iax"] else "")))
     rows.append(("app_dial.so", ["autopatch"], False, "places the call to the phone network"))
     rows.append(("app_senddtmf.so", B, False, "the dashboard's *99, # and keypad tones"))
     if need["sip_login"]:
@@ -20014,6 +20010,12 @@ def _rt_channelstats() -> list:
                     "rtt": tok[idx + 10] if len(tok) > idx + 10 else ""})
     return out
 
+def _rt_sip_port() -> int:
+    try:
+        return _ph_sip_port(_ph_load_ctx())
+    except Exception:
+        return 5060
+
 def _rt_test_in(start: bool) -> list:
     C = []
     if not _ph_ast_running():
@@ -20036,7 +20038,7 @@ def _rt_test_in(start: bool) -> list:
     if until > now:
         C.append(_ph_check("watch", "Watching for incoming calls", "info",
                            f"{int((until - now) // 60) + 1} min left",
-                           "Have another Hams Over IP member call your extension, then press Check"))
+                           "Have someone call your number or extension, then press Check"))
     elif not invites:
         C.append(_ph_check("watch", "Watching for incoming calls", "info", "off",
                            "Press Start watching, then have someone call you"))
@@ -20049,7 +20051,7 @@ def _rt_test_in(start: bool) -> list:
         C.append(_ph_check("invite", "Last incoming call", "ok" if ok200 else "warn",
                            f"{when} from {last['addr']}",
                            ("Reached the Pi and was answered" if ok200 else
-                            "Reached the Pi -- so port 5060 gets in" +
+                            f"Reached the Pi -- so UDP {_rt_sip_port()} gets in" +
                             (". Pi replied: " + " → ".join(codes) if codes else ". No answer from the Pi yet"))))
     elif until > now:
         C.append(_ph_check("invite", "Last incoming call", "info", "none yet", ""))
@@ -24140,6 +24142,8 @@ def _pi_ipv4s() -> "set[str]":
     out = _run(["ip", "-o", "-4", "addr", "show"], timeout=4)
     return set(re.findall(r"\binet (\d+\.\d+\.\d+\.\d+)/", out))
 
+_IRCDDB_ENABLE_KEYS = (("ircddbEnabled", "1"), ("ircddbEnabled2", "1"), ("ircddbEnabled3", "0"), ("ircddbEnabled4", "0"))
+
 def _dstar_gw_checks() -> dict:
     kv, prob = _ircddb_read_conf()
     path = str(_IRCDDB_CONF_PATH)
@@ -24173,19 +24177,29 @@ def _dstar_gw_checks() -> dict:
         "pass" if ident else "fail",
         None if ident else "Set repeaterBand1 to a module letter, e.g. B")
 
-    irc = kv.get("ircddbEnabled", "0") == "1"
-    row(f"ircddbEnabled = {kv.get('ircddbEnabled', '(not set)')}", "ircDDB (gateway callsign lookup)",
-        "pass" if irc else "fail",
-        None if irc else "Set ircddbEnabled=1 -- gateway callsigns can't be found without it")
+    def flag(k, d):
+        v = kv.get(k)
+        if v is None:
+            return d == "1", f"{k} not set" + (" (on by default)" if d == "1" else "")
+        return v.strip() == "1", f"{k} = {v}"
 
-    dx = kv.get("dextraEnabled", "0") == "1"
-    row(f"dextraEnabled = {kv.get('dextraEnabled', '(not set)')}", "DExtra (gateway links use it)",
-        "pass" if dx else "warn", None if dx else "Set dextraEnabled=1 to link to gateways")
+    irc = [flag(k, d) for k, d in _IRCDDB_ENABLE_KEYS]
+    irc_on = [t for o, t in irc if o]
+    row("; ".join(irc_on) if irc_on else irc[0][1], "ircDDB (finds gateway callsigns)",
+        "pass" if irc_on else "warn",
+        None if irc_on else "Set ircddbEnabled=1. Reflectors still work without it, "
+                            "but gateway callsigns can't be found")
+
+    dx, dx_txt = flag("dextraEnabled", "1")
+    row(dx_txt, "DExtra (gateway links and XRF reflectors use it)",
+        "pass" if dx else "fail",
+        None if dx else "Set dextraEnabled=1 -- ircDDBGateway refuses gateway links and XRF reflectors without it")
 
     rc_on = kv.get("remoteEnabled", "0") == "1"
     row(f"remoteEnabled = {kv.get('remoteEnabled', '(not set)')}", "Remote control (dashboard gateway links)",
         "pass" if rc_on else "warn",
-        None if rc_on else "Optional: set remoteEnabled=1 so gateway links keep their module "
+        None if rc_on else "Optional: set remoteEnabled=1 so the dashboard hears whether a gateway link was "
+                           "accepted, and links work even with a fixed reconnect "
                            "(without it the dashboard uses dvswitch.sh tune)")
 
     pw = kv.get("remotePassword", "")
@@ -32641,7 +32655,7 @@ def _ph_parse_file(ctx: dict, top: str, fname: str, state: dict, depth: int, man
         state["sec"]["kv"].append((em.group(1).strip(), em.group(2).strip(), n, managed_now))
 
 def _ph_dash_info() -> dict:
-    info = {"phone_node": "", "names": {}, "active": "", "asl_node": "", "tone_path": "", "hoip_link": {},
+    info = {"phone_node": "", "names": {}, "active": "", "asl_node": "", "tone_path": "",
             "bridge_nodes": [], "networks": []}
     try:
         for line in _PH_DASH_CONF.read_text(errors="replace").splitlines():
@@ -32662,14 +32676,12 @@ def _ph_dash_info() -> dict:
         if isinstance(doc, dict):
             info["active"] = str(doc.get("active", ""))[:40]
             info["tone_path"] = str(doc.get("tone_path", ""))[:12]
-            hl = doc.get("hoip_link")
-            if isinstance(hl, dict) and hl.get("enabled"):
-                info["hoip_link"] = {k: str(hl.get(k, ""))[:120] for k in ("username", "fqdn", "port", "node")}
             for n in doc.get("networks", []):
                 if isinstance(n, dict) and n.get("id"):
                     info["names"][str(n["id"])] = str(n.get("name", ""))[:40]
                     info["networks"].append({"id": str(n["id"])[:40], "name": str(n.get("name", ""))[:40],
-                                             "node": str(n.get("node", "") or "")[:7]})
+                                             "node": str(n.get("node", "") or "")[:7],
+                                             "type": str(n.get("type", "") or "")[:12]})
     except (OSError, ValueError):
         pass
     info["phone_nodes"] = {n["node"]: n["name"] for n in info["networks"] if n["node"].isdigit()}
@@ -33404,7 +33416,7 @@ def main() -> None:
 
     print(f"""
 ╔══════════════════════════════════════════════╗
-║           ASL-DVS SYSMON  v{VERSION:<17}║
+║           SYSMON  v{VERSION:<25}║
 ╠══════════════════════════════════════════════╣
 ║  Callsign : {cs:<32}║
 ║  Node     : {nd:<32}║
