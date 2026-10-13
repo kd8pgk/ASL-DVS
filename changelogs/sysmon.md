@@ -1,6 +1,105 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_79_20261012.py`. Newest entries first.
+Current file: `sysmon_v6_13_83_20261013.py`. Newest entries first.
+
+## 6.13.83 (2026-10-13)
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red, from the Pi Zero 2 W build (6.13.67.17-pi02w), plus the tabs only the full
+build has. Only text colours change. The ASL-DVS tab is unchanged.
+
+- **Grey-blue to white `#ffffff`:**
+  - `--text` (was `#d0dff0`)
+  - the typed-in `#9fb4cc`, `#c8d8e8`, `#5a7898`, `#3a5278`, `#cfe3ff`,
+    `#2a4060` and `#c98a92`
+  - on the full-only tabs: the network console text (was `#d8e0f0`) and its
+    pills (was `#8aa0c0`)
+- **Failures to bright red `--red`:**
+  - the radio dialog errors, panel load errors, the alert bar and the shutdown
+    message (they were `#f88`, `#ff6b6b` or `#ffb0b8`)
+  - the network console's error line (was `#ff6b6b`)
+- **Hardware checks and Security rows:** the dark detail text is bright green,
+  amber and red (was `#007a50`, `#7a5800` and `#7a2030`).
+- **Network console results** use the standard colours: pass is green (was
+  `#3ddc84`), warn is amber (was `#ffb020`) and fail is red (was `#ff5c5c`).
+- Results that were already green or red are unchanged.
+- **Tested:**
+  - The page in headless Chromium, before and after: body text
+    `rgb(255,255,255)`; success details and console pass `rgb(0,255,176)`; failure
+    details and console errors `rgb(255,61,90)`; no script errors.
+  - The ASL-DVS mentions are unchanged in number.
+  - `node --check` on the page JavaScript.
+
+## 6.13.82 (2026-10-13)
+
+SysMon checks the USRP pairs on its own, as the Pi Zero 2 W build does since
+6.13.67.16-pi02w. 44helper's Port check can now be verified on a full-build node.
+
+- **DVSwitch tab**, Analog_Bridge card: a new **USRP pair with rpt.conf** row.
+  - Pass when an rpt.conf node has `rxchannel = USRP/127.0.0.1:rxPort:txPort`.
+  - Fail when the node's ports don't mirror `[USRP]`, or no node uses them.
+- **New command-line flag** `--usrp-pairs`: prints the pairing of rpt.conf,
+  Analog_Bridge.ini and USRP2M17.ini as one `USRP-PAIRS-JSON:` line, then exits.
+  44helper's **Verify with SysMon** button runs it.
+- The code is the same as the Pi Zero 2 W build's.
+- Tested:
+  - The same mock cases as the Pi Zero 2 W build: SysMon and 44helper agreed in
+    every case.
+  - The new DVSwitch row.
+  - The flag with no config files.
+
+## 6.13.81 (2026-10-13)
+
+SysMon's ASL-DVS tab is named **ASL-DVS** again (it was "Node Controller" in
+6.13.80): the tab button, its Edit-page checkbox and the "Hide from ASL-DVS tab"
+labels. The tab is an exception to the "Node Controller" naming. Nothing else
+changes. The same change is in the Pi Zero 2 W build (6.13.67.15-pi02w).
+
+## 6.13.80 (2026-10-13)
+
+The Phone tab and D-Star card fixes from an audit against Dashboard 9.3.77 and
+ircDDBGateway's source, and the "Node Controller" naming. The same change is in the Pi Zero 2 W build (6.13.67.14-pi02w).
+
+- Page title, logo and login heading say SysMon / SYSMON (no "ASL-DVS"). The
+  ASL-DVS tab is now the **Node Controller** tab (same tab, same id, so saved tab
+  choices still apply); the Edit page's "ASL-DVS Config Files" is "Config Files".
+  System names and saved settings (paths, markers, the Services group names in
+  `sysmon.conf`) are unchanged.
+- D-Star card:
+  - A setting left out of `/etc/ircddbgateway` now counts as ircDDBGateway's
+    default: `ircddbEnabled`, `ircddbEnabled2` and `dextraEnabled` are on unless
+    the file turns them off. Before, a missing key showed FAIL or WARN.
+  - ircDDB counts as on when any of `ircddbEnabled`, `ircddbEnabled2`-`4` is on.
+    Off is now WARN (reflectors still work; gateway callsigns can't be found).
+  - `dextraEnabled` off is now FAIL: ircDDBGateway refuses gateway links and XRF
+    reflectors without it.
+  - The remote-control hint no longer says it keeps the module (the tune path
+    keeps it too). It says what remote control adds: the dashboard hears whether a
+    link was accepted, and links work with a fixed reconnect.
+- Phone tab:
+  - Dialing rules shows an extension network's real dial line
+    (`PJSIP/${EXTEN}@...`), not its Test call number.
+  - Phone networks shows Hams Over IP and AmateurWire by name.
+  - Health checks: one row per helper script, with the codes it serves and what
+    breaks without it: the hang-up script (`*62`, `*65`; it ends every phone call,
+    not only incoming ones), and new rows for the radio dial script (`*61`) and the
+    radio tone script (`*980`-`*982`). The radio tone codes row lists the codes in
+    `rpt.conf` (the old text named `*983`-`*987`, removed in Dashboard 9.3.71.3).
+  - The checks for the removed Hams Over IP AllStar Link feature are gone.
+  - Router advice: forwarding is no longer the default instruction. Signing in
+    usually keeps the SIP port open; forward only if incoming calls don't arrive
+    (and the audio range if audio is one-way), since forwarding opens Asterisk to
+    the internet.
+  - Autopatch modules: `func_callerid.so` (caller ID and trusted numbers) is
+    listed, and `chan_iax2.so` is always listed and locked, because the phone nodes
+    link to the radio node over IAX2. A `noload` of `chan_iax2.so` is flagged.
+  - Router test: the incoming result names the real SIP port; Call audio says it
+    covers SIP calls only; the incoming hint fits any provider. The no-PIN warning
+    names the network instead of its id.
+- Tested against the files Dashboard 9.3.77 writes for a Hams Over IP and a
+  VoIP.ms network (helper scripts missing, present and world-writable), four
+  `/etc/ircddbgateway` cases (keys left out, DExtra off, ircDDB off, only
+  ircDDB 2 on), and the page in headless Chromium (no script errors).
 
 ## 6.13.79 (2026-10-12)
 

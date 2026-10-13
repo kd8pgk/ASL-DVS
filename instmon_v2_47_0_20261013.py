@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.44.0"
+VERSION ="2.47.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -3129,6 +3129,54 @@ DOCS_MAX_BYTES = 64 * 1024 * 1024
 _DOCS_NAME_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,123}\.pdf$')
 _docs_lock = threading.Lock()
 _docs_state = {"phase": "idle", "error": None, "msg": "", "checked_at": None}
+_DOCS_FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_manuals_fetched")
+_DOCS_FIRST_FETCH_DELAYS = (5, 60, 120, 300)
+_DOCS_DELETED_PATH = os.path.join(CONFIG_DIR, "instmon_manuals_deleted.json")
+_docs_remote = []
+_docs_deleted_lock = threading.Lock()
+
+def _docs_deleted():
+    try:
+        with open(_DOCS_DELETED_PATH) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return set()
+    return {n for n in data if isinstance(n, str)} if isinstance(data, list) else set()
+
+def _docs_mark_deleted(add=(), remove=()):
+    with _docs_deleted_lock:
+        names = _docs_deleted()
+        new = (names | set(add)) - set(remove)
+        if new == names:
+            return
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            tmp = _DOCS_DELETED_PATH + ".tmp"
+            with open(tmp, "w") as fh:
+                json.dump(sorted(new), fh)
+            os.replace(tmp, _DOCS_DELETED_PATH)
+        except OSError as exc:
+            log_event(f"Manuals: could not write {_DOCS_DELETED_PATH}: {exc}", "warn")
+
+def _docs_pending(cands):
+    deleted = _docs_deleted()
+    out = []
+    for c in cands:
+        dest = safe_join(DOCS_DIR, c["name"])
+        if dest is None:
+            continue
+        if not os.path.isfile(dest):
+            if c["name"] not in deleted:
+                out.append({"name": c["name"], "why": "new"})
+        elif _gh_local_blob_id(dest) != c["blob"]:
+            out.append({"name": c["name"], "why": "changed"})
+    return out
+
+def _docs_refresh_remote():
+    try:
+        _docs_remote[:] = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
+    except GhRejected as exc:
+        log_event(f"Manuals: could not read GitHub's docs list: {exc}", "warn")
 
 def docs_list():
     out = []
@@ -3175,52 +3223,111 @@ def _docs_parse_listing(raw):
         out.append({"name": name, "blob": blob, "size": size})
     return out
 
-def _docs_fetch_bg():
-    got, same, failed = [], 0, []
+def _docs_mark_fetched():
     try:
-        cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
-        os.makedirs(DOCS_DIR, exist_ok=True)
-        for c in cands:
-            dest = safe_join(DOCS_DIR, c["name"])
-            if dest is None:
-                continue
-            if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
-                same += 1
-                continue
-            try:
-                data = _gh_fetch_impl(_gh_file_url("docs/" + c["name"]), DOCS_MAX_BYTES)
-                if _git_blob_id(data) != c["blob"]:
-                    raise GhRejected("the download does not match GitHub's file list")
-                if not data.startswith(b"%PDF-"):
-                    raise GhRejected("not a PDF file")
-            except GhRejected as exc:
-                if _gh_is_network_error(exc):
-                    raise
-                failed.append(c["name"])
-                log_event(f"Manuals: {c['name']} not saved: {exc}", "warn")
-                continue
-            tmp = dest + ".tmp"
-            with open(tmp, "wb") as fh:
-                fh.write(data)
-            os.chmod(tmp, 0o644)
-            os.replace(tmp, dest)
-            got.append(c["name"])
-            log_event(f"Manuals: saved {c['name']} ({len(data) // 1024} KB)", "ok")
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(_DOCS_FETCHED_PATH, "w") as fh:
+            fh.write(datetime.now().strftime("%Y-%m-%d %H:%M") + "\n")
+    except OSError as exc:
+        log_event(f"Manuals: could not write {_DOCS_FETCHED_PATH}: {exc}", "warn")
+
+def _docs_fetch(say=log_event, skip_deleted=False):
+    got, same, failed = [], 0, []
+    cands = _docs_parse_listing(_gh_fetch_impl(GITHUB_API_DOCS_URL, GITHUB_LIST_MAX_BYTES))
+    _docs_remote[:] = cands
+    deleted = _docs_deleted() if skip_deleted else set()
+    os.makedirs(DOCS_DIR, exist_ok=True)
+    for c in cands:
+        dest = safe_join(DOCS_DIR, c["name"])
+        if dest is None:
+            continue
+        if c["name"] in deleted and not os.path.isfile(dest):
+            continue
+        if os.path.isfile(dest) and _gh_local_blob_id(dest) == c["blob"]:
+            same += 1
+            continue
+        try:
+            data = _gh_fetch_impl(_gh_file_url("docs/" + c["name"]), DOCS_MAX_BYTES)
+            if _git_blob_id(data) != c["blob"]:
+                raise GhRejected("the download does not match GitHub's file list")
+            if not data.startswith(b"%PDF-"):
+                raise GhRejected("not a PDF file")
+        except GhRejected as exc:
+            if _gh_is_network_error(exc):
+                raise
+            failed.append(c["name"])
+            say(f"Manuals: {c['name']} not saved: {exc}", "warn")
+            continue
+        tmp = f"{dest}.{os.getpid()}.tmp"
+        with open(tmp, "wb") as fh:
+            fh.write(data)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dest)
+        got.append(c["name"])
+        say(f"Manuals: saved {c['name']} ({len(data) // 1024} KB)", "ok")
+    _docs_mark_deleted(remove=got)
+    _docs_mark_fetched()
+    return got, same, failed
+
+def _docs_summary(got, same, failed):
+    parts = [f"{len(got)} downloaded", f"{same} already up to date"]
+    if failed:
+        parts.append(f"{len(failed)} failed (see log)")
+    return ", ".join(parts) + "."
+
+def _docs_claim():
+    with _docs_lock:
+        if _docs_state["phase"] == "fetching":
+            return False
+        _docs_state.update(phase="fetching", error=None, msg="")
+        return True
+
+def _docs_fetch_bg(skip_deleted=False):
+    try:
+        got, same, failed = _docs_fetch(skip_deleted=skip_deleted)
     except Exception as exc:
         msg = str(exc) if isinstance(exc, GhRejected) else f"unexpected error: {exc}"
         with _docs_lock:
             _docs_state.update(phase="error", error=msg, msg="",
                                checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
         log_event(f"Manuals: GitHub fetch failed: {msg}", "err")
-        return
-    parts = [f"{len(got)} downloaded", f"{same} already up to date"]
-    if failed:
-        parts.append(f"{len(failed)} failed (see log)")
-    msg = ", ".join(parts) + "."
+        return None
+    msg = _docs_summary(got, same, failed)
     with _docs_lock:
         _docs_state.update(phase="done", error=None, msg=msg,
                            checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
     log_event("Manuals: " + msg, "warn" if failed else "ok")
+    _fu_refresh_plan()
+    return got, same, failed
+
+def _docs_first_fetch_loop():
+    for delay in _DOCS_FIRST_FETCH_DELAYS:
+        time.sleep(delay)
+        if os.path.exists(_DOCS_FETCHED_PATH):
+            return
+        if not _docs_claim():
+            continue
+        log_event(f"Manuals: first download from {_gh_source_label()}", "info")
+        if _docs_fetch_bg() is not None:
+            return
+    log_event("Manuals: could not reach GitHub -- press Get from GitHub on the Manuals card, "
+              "or run a Full Update, once the node is online", "warn")
+
+def docs_start_first_fetch():
+    if os.path.exists(_DOCS_FETCHED_PATH):
+        return
+    threading.Thread(target=_docs_first_fetch_loop, daemon=True).start()
+
+def docs_install_fetch():
+    print("\nDownloading the manuals from GitHub...")
+    def say(msg, level):
+        print(f"  [{'+' if level == 'ok' else '!'}] {msg.split(': ', 1)[-1]}")
+    try:
+        got, same, failed = _docs_fetch(say)
+    except Exception as exc:
+        print(f"  [!] Manuals not downloaded ({exc}). instmon downloads them when it starts and GitHub can be reached.")
+        return
+    print(f"  [+] Manuals: {_docs_summary(got, same, failed)} Open them on instmon's Manuals card.")
 
 def docs_stage(filename, data, source="usb"):
     stem = os.path.splitext(filename)[0]
@@ -3242,6 +3349,8 @@ def docs_stage(filename, data, source="usb"):
         fh.write(data)
     os.chmod(tmp, 0o644)
     os.replace(tmp, dest)
+    _docs_mark_deleted(remove=[name])
+    _fu_refresh_plan()
     how = "uploaded" if source == "upload" else "imported from USB"
     log_event(f"Manuals: {how} {shown} ({len(data) // 1024} KB)", "ok")
     return 200, {"ok": True, "name": name, "level": "ok",
@@ -3255,14 +3364,14 @@ def docs_delete(name):
         os.remove(full)
     except OSError as exc:
         return 500, {"error": f"Could not delete {name}: {exc}"}
+    _docs_mark_deleted(add=[name])
+    _fu_refresh_plan()
     log_event(f"Manuals: deleted {name}", "info")
     return 200, {"ok": True, "message": f"Deleted {name} from Manuals.", "level": "info"}
 
 def docs_start_fetch():
-    with _docs_lock:
-        if _docs_state["phase"] == "fetching":
-            return False, "The manuals are already being fetched."
-        _docs_state.update(phase="fetching", error=None, msg="")
+    if not _docs_claim():
+        return False, "The manuals are already being fetched."
     log_event(f"Manuals: fetching the docs folder from {_gh_source_label()}", "info")
     threading.Thread(target=_docs_fetch_bg, daemon=True).start()
     return True, "Getting the manuals from GitHub..."
@@ -3456,6 +3565,7 @@ def _gh_check_bg ():
         parts .append (f"{skipped } file(s) skipped (see log)")
         level ="warn"
     _gh_event ("GitHub check: "+", ".join (parts )+".",level )
+    _docs_refresh_remote()
     full_update_preview()
 
 def gh_start_check ():
@@ -3786,7 +3896,7 @@ _FU_ACTIONABLE = ("update", "switch")
 _fu_lock = threading.Lock()
 _fu_state = {
     "running": False, "phase": "", "current": "", "error": "", "banner": False,
-    "updated": [], "skipped": [], "attention": [], "scripts": [], "instmon_pending": None,
+    "updated": [], "skipped": [], "attention": [], "scripts": [], "manuals": [], "instmon_pending": None,
     "plan": None, "plan_at": "",
 }
 
@@ -3907,6 +4017,7 @@ def _fu_plan(cands):
 def _fu_publish_plan(rows, scripts):
     public = [{k: v for k, v in r.items() if k != "entry"} for r in rows]
     _fu_set(plan={"components": public, "scripts": [e["name"] for e in scripts],
+                  "manuals": _docs_pending(_docs_remote),
                   "updates": sum(1 for r in rows if r["status"] in _FU_ACTIONABLE)},
             plan_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
@@ -4024,12 +4135,34 @@ def _fu_finish(error=""):
         parts.append(f"{len(snap['attention'])} NEED ATTENTION")
     if snap["scripts"]:
         parts.append(f"{len(snap['scripts'])} script(s) added to the library")
+    if snap.get("manuals"):
+        parts.append(f"{len(snap['manuals'])} manual(s) updated")
     level = "err" if (snap["attention"] or error) else ("warn" if snap["skipped"] else "ok")
     for r in snap["skipped"]:
         log_event(f"  skipped {r['name']}: {r['note']}", "warn")
     for r in snap["attention"]:
         log_event(f"  NEEDS ATTENTION {r['name']}: {r['note']}", "err")
     _gh_event("Full Update finished" + (f" ({error})" if error else "") + ": " + ", ".join(parts) + ".", level)
+    _fu_refresh_plan()
+
+def _fu_manuals(skipped):
+    _fu_set(phase="manuals", current="checking the manuals")
+    if not _docs_claim():
+        skipped.append({"name": "Manuals", "note": "a Get from GitHub was already running -- left to finish"})
+        _fu_set(skipped=list(skipped))
+        return
+    result = _docs_fetch_bg(skip_deleted=True)
+    if result is None:
+        with _docs_lock:
+            err = _docs_state["error"]
+        skipped.append({"name": "Manuals", "note": f"not checked: {err}"})
+    else:
+        got, _same, failed = result
+        if failed:
+            skipped.append({"name": "Manuals", "note": f"{', '.join(failed)} not saved (see log)"})
+        _fu_set(manuals=[{"name": n, "note": "new or changed on GitHub"} for n in got])
+        log_event(f"Full Update: manuals: {_docs_summary(got, _same, failed)}", "warn" if failed else "ok")
+    _fu_set(skipped=list(skipped))
 
 def _fu_run():
     _fu_set(phase="checking", current="reading GitHub's file list")
@@ -4049,7 +4182,8 @@ def _fu_run():
     skipped = [{"name": r["name"], "note": r["note"]} for r in rows if r["status"] == "error"]
     _fu_set(skipped=list(skipped))
     if not plan and not scripts:
-        log_event("Full Update: everything is already current -- nothing to do", "ok")
+        log_event("Full Update: every tool is already current", "ok")
+        _fu_manuals(skipped)
         _fu_finish()
         return
 
@@ -4078,6 +4212,7 @@ def _fu_run():
     with _gh_lock:
         _gh_state["entries"] = [_gh_compare(dict(e)) for e in _gh_state["entries"]]
     _fu_set(skipped=list(skipped), scripts=done_scripts)
+    _fu_manuals(skipped)
     if not staged:
         _fu_finish()
         return
@@ -4174,9 +4309,15 @@ def full_update_start():
         if _fu_state["running"]:
             return 409, "Full Update is already running.", "warn"
         _fu_state.update(running=True, phase="starting", current="", error="", banner=False,
-                         updated=[], skipped=[], attention=[], scripts=[], instmon_pending=None)
+                         updated=[], skipped=[], attention=[], scripts=[], manuals=[], instmon_pending=None)
     threading.Thread(target=_fu_run_bg, daemon=True).start()
     return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
+
+def _fu_refresh_plan():
+    with _fu_lock:
+        if _fu_state["plan"] is None or _fu_state["running"]:
+            return
+    full_update_preview()
 
 def full_update_preview():
     try:
@@ -4197,7 +4338,7 @@ def full_update_resume_at_startup():
     if not isinstance(saved, dict):
         return
     with _fu_lock:
-        for key in ("phase", "error", "banner", "updated", "skipped", "attention", "scripts", "instmon_pending"):
+        for key in ("phase", "error", "banner", "updated", "skipped", "attention", "scripts", "manuals", "instmon_pending"):
             if key in saved:
                 _fu_state[key] = saved[key]
         _fu_state["running"] = False
@@ -4672,7 +4813,7 @@ _CSS_BASE = """:root{
   --green:#00ffb0; --green-dim:#005538;
   --red2:#ff3d5a; --red-dim:#6b0e20;
   --blue:#22d4ff; --blue-dim:#083a58;
-  --text:#d0dff0; --text-bright:#f0f8ff;
+  --text:#ffffff; --text-bright:#f0f8ff;
   --mono:Arial,Helvetica,sans-serif;
   --sans:Arial,Helvetica,sans-serif;
   /* aliases -- kept so existing var(--cyn)/var(--grn)/var(--yel)/var(--red)
@@ -4700,13 +4841,13 @@ header{background:linear-gradient(90deg,#0f1a2e,#161e2e 50%,#0f1a2e);
 .hdr-right{display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0;white-space:nowrap}
 .logo{font-family:var(--mono);font-size:1.15rem;font-weight:700;color:var(--amber);
   letter-spacing:.08em;text-shadow:0 0 10px rgba(255,208,64,.9),0 0 30px rgba(255,208,64,.5),0 0 60px rgba(255,208,64,.2)}
-.logo-sub{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:#5a7898;margin-top:.15rem}
+.logo-sub{font-size:.68rem;letter-spacing:.18em;text-transform:uppercase;color:#ffffff;margin-top:.15rem}
   letter-spacing:.06em;text-shadow:0 0 8px rgba(255,208,64,.5)}
-.hdr-meta{font-family:var(--mono);font-size:.68rem;color:#5a7898;letter-spacing:.04em;margin-top:.15rem}
+.hdr-meta{font-family:var(--mono);font-size:.68rem;color:#ffffff;letter-spacing:.04em;margin-top:.15rem}
 
 /* ── Layout ── */
 .wrap{max-width:860px;margin:0 auto;padding:1rem;display:flex;flex-direction:column;gap:.55rem}
-.hdr{color:#5a7898;font-family:var(--mono);font-weight:700;font-size:.7rem;
+.hdr{color:#ffffff;font-family:var(--mono);font-weight:700;font-size:.7rem;
   letter-spacing:.24em;text-transform:uppercase;margin:1.2rem 0 .45rem;
   padding-bottom:.25rem;border-bottom:1px solid var(--border)}
 """
@@ -4916,7 +5057,7 @@ _CSS_EDITOR = """/* Editor Overlay (Stage 8/9, Library Card Rework Plan) -- repl
   flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
 }
 #uf-textarea{
-  flex:1; background:#0a1020; color:#c8d8e8;
+  flex:1; background:#0a1020; color:#ffffff;
   font-family:var(--mono); font-size:.836rem; line-height:1.65;
   border:none; outline:none; padding:.8rem 1rem;
   resize:none; tab-size:4; white-space:pre; overflow:auto; min-height:0;
@@ -4966,7 +5107,7 @@ _CSS_DISKIMG = """
   font-size:.74rem;background:#0a1020;color:var(--yel);
   border:1px solid var(--border2);border-radius:4px;
   padding:.35rem .55rem;margin-top:.3rem}
-.diskimg-cmd.placeholder{color:var(--muted);opacity:.55;font-style:italic}
+.diskimg-cmd.placeholder{color:var(--muted);font-style:italic}
 /* Backup/Clone use a <textarea> for this field rather than an <input>,
    because the quiesce step (v2.20.0) makes the preview multi-line.
    These rules make a rows="1" textarea sit flush with the single-line
@@ -4978,16 +5119,16 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
    one option on these cards with an on-air consequence, and the job
    banner is deliberately the loudest thing in the panel. */
 .diskimg-quiesce{color:var(--yel)!important;opacity:.95}
-.diskimg-offair{background:#3a1414;border:1px solid #c0392b;color:#ffb3a7;
+.diskimg-offair{background:#3a1414;border:1px solid #c0392b;color:var(--red);
   border-radius:4px;padding:.35rem .55rem;margin:.35rem 0;
   font-weight:600;letter-spacing:.02em;text-align:center}
-.diskimg-cmd-note{font-size:.7rem;color:var(--muted);opacity:.7;margin-top:.15rem}
+.diskimg-cmd-note{font-size:.7rem;color:var(--muted);margin-top:.15rem}
 /* v2.21.0: the honest-limits line under Backup/Clone. Deliberately
    always visible rather than tucked into the checkbox tooltip -- the
    thing people misremember about this feature is what it guarantees. */
 .popup-actions{display:flex;gap:.5rem;justify-content:center;margin-top:.7rem;flex-wrap:wrap}
 .popup-actions button{font-size:.8rem;padding:.3rem .8rem}
-.diskimg-quiesce-note{font-size:.7rem;color:var(--muted);opacity:.75;
+.diskimg-quiesce-note{font-size:.7rem;color:var(--muted);
   margin-top:.3rem;line-height:1.4;border-left:2px solid var(--border2);padding-left:.5rem}
 /* Progress bar (v2.30.0). .indet is the moving-stripes form used for
    steps with no true percentage (quiescing, shrinking, mkfs, ...). */
@@ -5006,7 +5147,7 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
   border-radius:4px;padding:.5rem .6rem;margin-top:.4rem;
   white-space:pre-wrap;word-break:break-all;font-family:var(--mono);
   font-size:.76rem;max-height:220px;overflow-y:auto}
-.diskimg-console.placeholder{color:var(--muted);opacity:.55;font-style:italic}
+.diskimg-console.placeholder{color:var(--muted);font-style:italic}
 .diskimg-console .log-ok{color:var(--grn)}
 .diskimg-console .log-err{color:var(--red)}
 .diskimg-console .log-warn{color:var(--yel)}
@@ -5155,11 +5296,11 @@ function renderQuietFullUpdate(quiet, fu) {
   if (fu && fu.banner && !running) {
     const bad = (fu.attention || []).length || fu.error;
     const cls = bad ? 'err' : ((fu.skipped || []).length ? '' : 'ok');
-    const any = (fu.updated || []).length + (fu.skipped || []).length + (fu.attention || []).length + (fu.scripts || []).length;
+    const any = (fu.updated || []).length + (fu.skipped || []).length + (fu.attention || []).length + (fu.scripts || []).length + (fu.manuals || []).length;
     banners.push(`<div class="fu-banner ${cls}"><div style="flex:1">
       <b>Full Update finished${fu.error ? ' -- ' + escHtml(fu.error) : ''}</b>
       ${_fuList('Updated', fu.updated)}${_fuList('Skipped', fu.skipped)}
-      ${_fuList('NEEDS ATTENTION', fu.attention)}${_fuList('Scripts', fu.scripts)}
+      ${_fuList('NEEDS ATTENTION', fu.attention)}${_fuList('Scripts', fu.scripts)}${_fuList('Manuals', fu.manuals)}
       ${any ? '' : '<div>Nothing needed updating.</div>'}
       </div><button data-action="fu_dismiss">Dismiss</button></div>`);
   }
@@ -5175,10 +5316,11 @@ function renderQuietFullUpdate(quiet, fu) {
       `<tr><td>${escHtml(c.name)}</td><td><span class="gh-tag ${c.status === 'update' || c.status === 'switch' ? 'gh-upd' : ''}">${_FU_STATUS[c.status] || escHtml(c.status)}</span></td>` +
       `<td>${escHtml(c.note)}</td><td class="muted">${escHtml(c.file)}</td></tr>`).join('') +
       plan.scripts.map(n => `<tr><td>Script</td><td><span class="gh-tag gh-upd">NEW</span></td><td>goes to the Scripts library (not run)</td><td class="muted">${escHtml(n)}</td></tr>`).join('') +
+      (plan.manuals || []).map(d => `<tr><td>Manual</td><td><span class="gh-tag gh-upd">${d.why === 'changed' ? 'CHANGED' : 'NEW'}</span></td><td>goes to the Manuals card</td><td class="muted">${escHtml(d.name)}</td></tr>`).join('') +
       '</table>';
   }
   const fuBtn = document.getElementById('fu-btn');
-  if (fuBtn) fuBtn.disabled = running || !(plan && (plan.updates || plan.scripts.length));
+  if (fuBtn) fuBtn.disabled = running || !(plan && (plan.updates || plan.scripts.length || (plan.manuals || []).length));
   const qb = document.getElementById('quiet-btn');
   if (qb) qb.disabled = running || !!(quiet && (quiet.on || quiet.other));
   const rb = document.getElementById('restore-btn');
@@ -6437,9 +6579,11 @@ _JS_ACTIONS = """function wireButtons() {
           const p = _fuState && _fuState.plan;
           const comps = p ? p.components.filter(c => c.status === 'update' || c.status === 'switch').map(c => `  ${c.name}: ${c.note}`) : [];
           const scr = p ? p.scripts.map(n => `  ${n} (Scripts library only, not run)`) : [];
+          const man = p ? (p.manuals || []).map(d => `  ${d.name} (${d.why})`) : [];
           if (!confirm('Full Update from GitHub?\\n\\n' + (comps.length ? 'One at a time:\\n' + comps.join('\\n') + '\\n\\n' : '') +
                        (scr.length ? 'New scripts:\\n' + scr.join('\\n') + '\\n\\n' : '') +
-                       'GitHub is checked again first. The web tools are paused, each component is uninstalled and the new version installed; one that fails is put back and skipped. instmon goes last -- this page reconnects after it restarts.')) { btn.disabled = false; return; }
+                       (man.length ? 'Manuals:\\n' + man.join('\\n') + '\\n\\n' : '') +
+                       'GitHub is checked again first. The web tools are paused, each component is uninstalled and the new version installed; one that fails is put back and skipped. Then the manuals that are new or changed on GitHub are downloaded. instmon goes last -- this page reconnects after it restarts.')) { btn.disabled = false; return; }
           await postAction({action: 'full_update', confirm: true});
         } else if (action === 'gh_update') {
           if (!confirm(`Download ${btn.dataset.name} from GitHub into the ${btn.dataset.category} library? It is checked before it is saved, and nothing runs or installs until you press its button.`)) { btn.disabled = false; return; }
@@ -7056,7 +7200,7 @@ function docsRender(data) {
   if (!docs.length) {
     const e = document.createElement('div');
     e.className = 'small muted';
-    e.textContent = 'No manuals on this node yet. Press Get from GitHub.';
+    e.textContent = 'No manuals yet. They download when instmon can reach GitHub -- press Get from GitHub to try now.';
     list.appendChild(e);
   }
   docs.forEach((d) => {
@@ -7158,14 +7302,14 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ASL-DVS Install Monitor &mdash; instmon</title>
+<title>Install Monitor &mdash; instmon</title>
 <style>
 {css}</style>
 </head>
 <body>
 <header>
   <div class="hdr-left">
-    <div class="logo">ASL-DVS Install Monitor</div>
+    <div class="logo">Install Monitor</div>
     <div class="logo-sub">Node Software Installer &amp; Component Manager</div>
   </div>
   <div class="hdr-right">
@@ -7267,7 +7411,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
   <div class="small muted" style="margin-top:.35rem">
     The install, user and configuration manuals (PDF) from the docs folder on GitHub, and any other PDF you
-    upload here or import from a USB drive. Open shows one in a new tab in the browser's own PDF reader;
+    upload here or import from a USB drive. They download when instmon is installed, and a Full Update
+    fetches any that are new or changed on GitHub. Open shows one in a new tab in the browser's own PDF reader;
     Download saves it. Get from GitHub only fetches files that are new or changed.</div>
   <div id="docs-list" style="margin-top:.5rem"></div>
 </div>
@@ -9197,7 +9342,9 @@ def install_service ()->None :
 
     subprocess .run (["systemctl","daemon-reload"],check =True )
     subprocess .run (["systemctl","enable","instmon.service"],check =True )
-    
+
+    docs_install_fetch()
+
     subprocess .run ([
     "systemd-run","--quiet","--collect","--on-active=2",
     "--unit=instmon-selfrestart",
@@ -9279,6 +9426,7 @@ def run ():
 
     _quiesce_startup_sweep ()
     full_update_resume_at_startup ()
+    docs_start_first_fetch()
 
     if HOME_SCAN_ENABLED :
         moved =scan_home_for_new_code ()

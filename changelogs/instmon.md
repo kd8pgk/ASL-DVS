@@ -1,6 +1,83 @@
 # instmon changelog
 
-Current file: `instmon_v2_44_0_20261012.py`. Newest entries first.
+Current file: `instmon_v2_47_0_20261013.py`. Newest entries first.
+
+## 2.47.0 (2026-10-13)
+
+Easier to read: the grey-blue text is white, as in 44helper, SysMon, the Dashboard
+and wifimon. instmon serves both builds. Only text colours and the title change.
+
+- **Grey-blue text is now plain white `#ffffff`:**
+  - `--text` (was `#d0dff0`), the body text
+  - the header sub-line, the header meta line and the column headers (was
+    `#5a7898`)
+  - the script editor text (was `#c8d8e8`)
+- **Notes and placeholders are no longer dimmed.** The Disk image notes, the
+  quiesce note and the "(no job running)" placeholders were white at 55–75 %
+  opacity, which made them grey. They are now full white.
+- **The disk-image off-air warning text** is bright red (was pale salmon).
+- Log lines, pop-ups and the Full Update banner were already green for success
+  and red for failure; they are unchanged. Warnings stay amber.
+- **Title:** the page title and logo say "Install Monitor" (was "ASL-DVS Install
+  Monitor"), per the naming rule.
+- Tested:
+  - The page in headless Chromium, before and after: body text
+    `rgb(255,255,255)`, success lines `rgb(0,255,176)`, failure lines
+    `rgb(255,61,90)`, placeholders and notes at full opacity, no script errors.
+  - `node --check` on the page JavaScript.
+
+## 2.46.0 (2026-10-12)
+
+Full Update turns on when only the manuals have changed.
+
+- **Check GitHub** also reads the `docs` folder (one more GitHub API call).
+  Manuals that are new or changed there are listed in the Full Update plan as
+  **Manual NEW** or **Manual CHANGED**, and count toward turning the Full Update
+  button on, so a manuals-only change can be applied without any tool update.
+  The confirm dialog lists them too. If the docs list can't be read, the check
+  still finishes and the last list is kept.
+- The plan refreshes after Get from GitHub, an upload or import to Manuals, a
+  Delete, and a Full Update, so the button goes off once nothing is pending.
+- A manual you delete is remembered in `/etc/asl_dvs/instmon_manuals_deleted.json`.
+  It is not listed in the plan and Full Update no longer brings it back
+  (2.45.0 did). **Get from GitHub** still restores it, and an upload or USB
+  import with that name clears the mark.
+- Tested with GitHub mocked: a check lists new manuals and turns the button on;
+  after Get from GitHub nothing is pending; a manual changed on GitHub shows as
+  CHANGED; Full Update fetches it and the button goes off; a deleted manual
+  stays out of the plan and isn't restored by Full Update, even after GitHub
+  changes it; Get from GitHub restores it; an upload clears the mark; a check
+  survives an unreachable docs list. The 2.45.0 tests still pass. Page in
+  headless Chromium: plan rows, button enabled, confirm text, no script errors.
+
+## 2.45.0 (2026-10-12)
+
+The manuals come with the install and stay current.
+
+- `--install` downloads the manuals (PDF) from the repo's `docs` folder into the
+  Manuals folder and prints each one. With no internet the install still
+  finishes and says the manuals will follow.
+- When instmon starts and has never downloaded the manuals, it tries in the
+  background after 5 seconds, then 1, 2 and 5 minutes later. A file in
+  `/etc/asl_dvs/instmon_manuals_fetched` records the first successful download,
+  so a manual you delete doesn't come back every restart.
+- Full Update has a Manuals step after the scripts and before instmon's own
+  update. It downloads only the manuals that are new or changed on GitHub, runs
+  even when every tool is current, and lists them under **Manuals** in the
+  summary ("N manual(s) updated"). If it fails, it shows as a skipped row and
+  the tools still update. A manual you deleted comes back on a Full Update, as it
+  does on Get from GitHub.
+- The **Get from GitHub** button, `--install`, the start-up download and Full
+  Update all use the same fetch and the same checks: name, 64 MB limit, git blob
+  id against GitHub's list, `%PDF-` header.
+- There is no setting to turn this off.
+- Manuals card text and the Full Update confirm dialog mention the manuals.
+- Tested with GitHub mocked: `--install` online and offline, the start-up
+  retry after a network error, no re-download of a deleted manual on restart,
+  Full Update taking only new or changed manuals, still checking them when every
+  tool is current, a failed manuals step shown as skipped, and a running Get from
+  GitHub left alone. Page loaded in headless Chromium with no script errors and
+  no sideways scrolling at 390 px.
 
 ## 2.44.0 (2026-10-12)
 

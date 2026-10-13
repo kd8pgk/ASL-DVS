@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.30"
+APP_VERSION = "5.31.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -5652,8 +5652,8 @@ _PAGE_HTML = r"""<!doctype html>
 <style>
 :root{
   --bg:#0c1726; --panel:#132338; --panel2:#0e1c2e; --line:#264464;
-  --text:#e8eef5; --muted:#c6d3e0; --amber:#f2a93b; --cyan:#5fd4ea;
-  --good:#52d17f; --warn:#f2a93b; --bad:#f06464;
+  --text:#ffffff; --muted:#ffffff; --amber:#f2a93b; --cyan:#5fd4ea;
+  --good:#00ffb0; --warn:#f2a93b; --bad:#ff3d5a;
 }
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -5663,7 +5663,7 @@ button{font:inherit;cursor:pointer;border-radius:6px;border:1px solid var(--line
   background:#1b3150;color:var(--text);padding:7px 14px}
 button:hover{border-color:var(--cyan)}
 button:disabled{opacity:.55;cursor:default}
-button.danger{border-color:var(--bad);background:#3a1c26;color:#ffdede}
+button.danger{border-color:var(--bad);background:#3a1c26;color:#ffffff}
 button:focus-visible,input:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
 
@@ -5686,7 +5686,7 @@ header .grow{flex:1}
 .badge{font-size:12px;padding:2px 9px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
 
 .banner{max-width:1100px;margin:16px auto 0;padding:12px 16px;border-radius:8px;
-  background:#4a1822;border:1px solid var(--bad);color:#ffe4e4;font-weight:600}
+  background:#4a1822;border:1px solid var(--bad);color:var(--bad);font-weight:600}
 main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;
   grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px;min-width:0}
@@ -5778,7 +5778,7 @@ main{max-width:1100px;margin:0 auto;padding:16px;display:grid;gap:16px;
   border:1px solid var(--line);overflow:hidden;vertical-align:middle}
 .sig span{display:block;height:100%}
 .steps{margin:6px 0 0;padding-left:20px;font-weight:400}
-.banner.job{background:#0f2d3a;border-color:var(--cyan);color:#dff7fd}
+.banner.job{background:#0f2d3a;border-color:var(--cyan);color:#ffffff}
 .arrow{padding:1px 8px;line-height:1.2}
 .form h3{margin:0;font-size:15px;color:var(--cyan)}
 .form input[type=number]{font:inherit;padding:8px 10px;border-radius:6px;border:1px solid var(--line);
@@ -5802,7 +5802,8 @@ a.btnlink:hover{border-color:var(--cyan)}
 .popup{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:10;
   background:var(--panel);border:1px solid var(--cyan);border-radius:10px;padding:16px 22px;
   max-width:90vw;box-shadow:0 12px 40px rgba(0,0,0,.55)}
-.popup.err{border-color:var(--bad)}
+.popup.ok{border-color:var(--good);color:var(--good)}
+.popup.err{border-color:var(--bad);color:var(--bad)}
 .wd-sw{display:flex;align-items:center;justify-content:space-between;gap:10px;
   padding:8px 0;border-bottom:1px solid var(--line)}
 .wd-sw .st{font-weight:600;margin-left:6px}
@@ -6177,7 +6178,7 @@ a.btnlink:hover{border-color:var(--cyan)}
   function showPopup(msg, isErr, ms) {
     const p = $("popup");
     p.textContent = msg;
-    p.className = "popup" + (isErr ? " err" : "");
+    p.className = "popup" + (isErr ? " err" : " ok");
     p.hidden = false;
     clearTimeout(popupTimer);
     popupTimer = setTimeout(() => { p.hidden = true; }, ms || 2500);

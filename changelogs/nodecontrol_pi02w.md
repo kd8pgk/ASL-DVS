@@ -1,36 +1,81 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_71_16_20261012.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_71_18_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.71.18-pi02w (2026-10-13)
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red, as in 44helper 0.0.187x and SysMon 6.13.67.17-pi02w. Only text colours
+change. The full build is not changed.
+
+- The grey-blue colours are now plain white `#ffffff`:
+  - `--text` (was `#d0dff0`), `--muted` (was `#4a6080`) and the Edit page's
+    Back/Reload button text (was `#9ab8d0`)
+  - the typed-in `#5a7898` (section labels, row numbers, reflector hosts,
+    column headers, hints, input placeholders), `#7a9ec0` (card messages and
+    muted buttons), `#3a5278` (the idle TG indicator, the edit count, section
+    headers), `#6f8aa8`, `#5a6b7c`, `#4a5a6a` and `#4a5a3a`
+  - the shutdown sub-line `#c98a92`
+- Failures that were pale pink or salmon are bright red `--red`: the error
+  box, the alert bar, the shutdown message and a failed phone sign-in. A
+  disconnected row's name, which was dark red, is bright red.
+- The Phone tab's result line under Apply, Activate and Revert:
+  - green when the step worked, red when it failed (new `phMsg` helper)
+  - it was grey-blue whatever the result
+- Toasts were already green and red and are unchanged. Warnings stay amber.
+- Tested:
+  - The page in headless Chromium, before and after: body text
+    `rgb(255,255,255)`, the Phone result line green `rgb(0,255,176)` for a
+    success and red `rgb(255,61,90)` for a failure, no script errors.
+  - No old grey-blue text colour left.
+  - `node --check` on the page JavaScript.
+
+## 9.3.71.17-pi02w (2026-10-13)
+
+Phone fixes from an audit of the Phone tab and the Edit page's Phone section,
+and the "Node Controller" naming. Pi Zero 2 W build only; the full build is
+unchanged.
+
+- Edit page, network cards: each card shows only its own hints.
+  - The router hint ("SIP needs UDP 5060 and UDP 10000-20000 forwarded") was
+    the `else` of the Hams Over IP check, so IAX2 cards showed it too. It now
+    shows only on SIP-type cards, and no longer tells everyone to forward ports:
+    signing in usually keeps calls working with nothing forwarded; forward UDP
+    5060 only if incoming calls don't arrive, and the audio ports if audio is
+    one-way. A "SIP by IP address" network, which doesn't sign in, is told it
+    needs the forward for incoming calls.
+  - AmateurWire cards no longer show the Hams Over IP port hint ("SIP on UDP
+    5160, audio on 10000-15000"); they get their own Voicemail Access note.
+- A favorite's saved tones (Straight to the provider and As sound routes) are
+  sent if the call answers any time within the 65-second ring time. Before, the
+  dashboard waited only the `*61` digit timeout plus 15 s (35 s by default) and
+  dropped the tones on a later answer.
+- Wording:
+  - "Dial timeout (ms)" is now "*61 digit timeout (ms)", with a tooltip: it is
+    how long `*61` from the radio waits for the next digit, not how long a call
+    rings. The setting and its saved value are unchanged.
+  - Incoming-call status: an open network with trusted numbers says "trusted
+    numbers only" (others get busy), and a PIN network with trusted numbers says
+    "waiting for PIN (trusted numbers skip it)".
+  - Send keypad tones choices drop the "(v9.3.13 way)" and "(test)" tags:
+    "Straight to the provider", "Through the call", "As sound (tone recordings)".
+- Naming: the page title, logo and login heading say "Node Control" (no
+  "ASL-DVS"); so does the console banner. The service description, the phone
+  report and the config files the dashboard writes are unchanged.
+- Tested: page in headless Chromium (each network type's hints, the four
+  incoming-status cases, title, logo and labels, no script errors); saved-tones
+  wait with a simulated clock (answered at 50 s: sent at 51 s; 9.3.71.16 gave up
+  at 35 s).
 
 ## 9.3.71.16-pi02w (2026-10-12)
 
-D-STAR: linking to a gateway callsign (a repeater such as K8WGR, not a REF/XRF/DCS
-reflector).
+The USRP2M17 quick-link button is now an **InstMon** button. The same change is in the full build (9.3.77).
 
-- A gateway link goes only through ircDDBGateway remote control, with the target in
-  the 8-character identifier form (`K8WGR  B`: module in position 8). If remote
-  control isn't set up (`remoteEnabled=1`, `remotePassword`, `remotePort` in
-  `/etc/ircddbgateway`) or the link is refused, the Dashboard now says so and stops.
-  Before, it fell back to `dvswitch.sh tune "K8WGR BL"`, which links `K8WGR   ` with
-  no module: the link comes up and carries no audio, and the Dashboard reported
-  success.
-- A gateway link sends no `dvswitch.sh tune` at all: not the `       U` and
-  `disconnect` tunes before it, and not the `CQCQCQ` tune after it. DVSwitch turns
-  every D-Star tune into a remote-control link of its own. Measured on `travel`
-  (2026-10-12 17:28:56): the link to `K8WGR  B` came up, then the `CQCQCQ` tune
-  arrived as `linked "KD8PGK B" to "CQCQCQ  "` and removed it within a second.
-  Linking through remote control drops whatever was linked before, so no unlink
-  is needed first.
-- Disconnect (D-STAR and XLX), `*88` on the D-STAR tab, and moving between the D-STAR
-  and XLX tabs now send the remote-control unlink after the old `       U` tune
-  instead of before it. ircDDBGateway ends unlinked with its reconnect timer stopped,
-  rather than trying to link `       U` every 15 minutes. Nothing is sent when
-  `ircddbgatewayd` isn't running. Leaving for any other tab is unchanged (the
-  gateway is restarted, which drops the link).
-- Reflector links (REF, XRF, DCS, XLX) are unchanged.
-- Tested with mocks (the order of tunes and remote-control calls for each path) and
-  with a fake remote-control server that checks the login hash and the `LNK` packet
-  as ircDDBGateway reads them.
+- The right-hand quick links are now InstMon, WiFiMon and SysMon. InstMon has
+  the same look as the other quick-link buttons and opens instmon
+  (`http://<host>:8990/`) in a new tab.
+- The M17 tab is unchanged.
+- File: `nodecontrol_pi02w_v9_3_71_16_20261012.py`.
 
 ## 9.3.71.15-pi02w (2026-10-12)
 

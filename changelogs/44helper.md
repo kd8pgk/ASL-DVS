@@ -1,6 +1,159 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_181_20261012.py`. Newest entries first.
+Current file: `44helper_v0_0_187x_20261013.py`. Newest entries first.
+
+## 0.0.187x (2026-10-13) — testing
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red. 44helper serves both builds. Only text colours change.
+
+- The grey-blue colours are now plain white `#ffffff`:
+  - `--muted` (was `#4a6080`) and `--text` (was `#d0dff0`)
+  - the typed-in `#5a7898`, `#7fa8d8` and `#5a6478`
+
+  This covers hints, labels, table headers, info banners and verdicts, plain log
+  lines, the login page and the output-box placeholders.
+- Output boxes:
+  - Neutral text (Working…, Running…, placeholders) is white; it was pale
+    green-grey.
+  - A reported success is bright green (`--green`, new `ok` style).
+  - A failure is bright red (`--red`); it was pale pink.
+  - The SvxLink/M17/Ampersand/Cloudflare manual-command boxes are white too.
+- Every place that already knew a result sets the colour: Config tab results,
+  install steps on every tab, the Pi install steps, DNS, AllowedIPs and reflector
+  repairs, and the reinstall log (green when the node rebooted, red when it
+  finished without a reboot).
+- Warnings stay amber. The coloured banners, pills and verdicts are unchanged.
+- Tested:
+  - The Config tab in headless Chromium, before and after: a success shows green
+    `rgb(0,255,176)`, a failure red `rgb(255,61,90)`, a placeholder white.
+  - No old colour codes left.
+  - `node --check` on the page JavaScript.
+
+## 0.0.186x (2026-10-13) — testing
+
+- Verify with SysMon: when SysMon cannot run the check, the message now names the
+  first versions that have it: 6.13.67.16-pi02w and, new, 6.13.82 on the full
+  build. Before, it said the full build had no such check. Nothing else changes.
+
+## 0.0.185x (2026-10-13) — testing
+
+The Config tab's **Port check** now checks the USRP pairs. 44helper serves both
+builds.
+
+- **The rule:** for every `rxchannel = USRP/127.0.0.1:A:B` in rpt.conf, a bridge
+  must listen on A and send to B. The bridges are:
+  - Analog_Bridge `[USRP]` rxPort/txPort
+  - USRP2M17 `[USRP Network]` LocalPort/DstPort
+
+  It uses whatever node numbers rpt.conf has.
+- **Warnings:**
+  - a bridge that sends to the wrong port;
+  - an rxchannel that no bridge listens on;
+  - a bridge with no rpt.conf node.
+
+  Good pairs are listed under the clash line.
+- The Travel Node preset preview warns when applying it would break a USRP pair
+  that works now.
+- **Verify with SysMon** (new button): runs `sysmon.py --usrp-pairs`, SysMon's own
+  check with its own file readers, and compares the result with 44helper's.
+  - It says "SysMon agrees", or lists what differs.
+  - If SysMon is not installed, it says so.
+  - If SysMon is older than 6.13.67.16-pi02w or is the full build, it says the
+    check is not there.
+- New action: `usrp_verify` (root only, under the Config lock).
+- Tested:
+  - Mock files covering a good pair, a wrong txPort, a missing M17 node, an
+    rxchannel to nowhere and no USRP2M17.ini. 44helper and SysMon gave the same
+    result in every case.
+  - The verify action when SysMon agrees, disagrees, is too old and is not
+    installed.
+  - The Port check in headless Chromium.
+  - `node --check` on the page JavaScript.
+
+## 0.0.184x (2026-10-13) — testing
+
+The Travel Node preset now lists the bridge-node values it writes, before you apply
+it. 44helper serves both builds.
+
+- The preset still gives each bridge node (a private node with a USRP channel) the
+  upstream USRP2M17 values, as before: duplex, hangtime, althangtime, holdofftelem,
+  telemdefault, telemdynamic, linktolink, nounkeyct and tx_timeout.
+- Preview opens with a **BRIDGE NODE VALUES** block. It lists, per bridge node,
+  each value that changes, saved value -> value written. "(not set here)" means the
+  stanza had no line of its own. A node that already has the values says so.
+- The confirm box before Apply shows the same list. The apply report shows it too.
+- The Config tab's preset text says Preview lists each value it changes.
+- Manuals are not updated.
+- Tested:
+  - Preset rpt.conf build with mock nodes: a bridge node with its own values, one
+    already matching, and a non-USRP node left alone.
+  - Preview output.
+  - The confirm box in headless Chromium; Cancel sends no apply.
+  - `node --check` on the page JavaScript.
+
+## 0.0.183x (2026-10-13) — testing
+
+The Config tab's **Identity** card can now set the callsign. 44helper serves both
+builds. The "x" marks a testing build.
+
+- The 44helper callsign and 44helper node rows are gone from the card.
+  `44helper.conf` itself is unchanged.
+- The Callsign line has a text box and a **Set everywhere** button.
+  - The box shows capitals and accepts 3 to 7 letters and digits, with at least
+    one digit. The server checks the same rule and upper-cases.
+  - Set everywhere previews every line it will change (old and new), asks to
+    confirm, takes an automatic save point, then writes.
+  - Each line keeps its format:
+    - rpt.conf idrecording and idtalkover keep `|i` and any `/R`; a sound file
+      is left alone.
+    - EchoLink keeps `-L`/`-R`.
+    - USRP2M17 keeps the text after the callsign.
+    - Quotes in `var.txt` stay.
+  - Files written: every callsign field the card lists, plus the Dashboard's
+    `/etc/asl_dvs/asl_dvs.conf` (`callsign=`) and 44helper's own
+    `[identity] callsign`. The fields are rpt.conf, echolink.conf (and the custom
+    copy), MMDVM_Bridge.ini, var.txt, /etc/ircddbgateway (gatewayCallsign,
+    repeaterCall1, ircddbUsername, dplusLogin), the YSF, P25 and NXDN gateways and
+    USRP2M17.ini. Files that are not on the node are listed as skipped.
+  - The report warns that the ircDDB and DPlus logins need the new callsign
+    registered.
+  - Nothing is restarted. The report lists the services to restart, and says to
+    restart the Dashboard (`nodecontrol`) first: until then its next Save or M17
+    connect puts the old callsign back.
+  - New actions: `id_set_callsign_preview` and `id_set_callsign`. Both are root
+    only and run under the Config lock. The apply is logged and offers
+    Finish: reinstall and reboot.
+- Tested:
+  - Sandbox with sample files: every format written, a CRLF file kept as CRLF, a
+    managed block and a sound-file ID left alone, missing files skipped, bad
+    input refused, the save point taken, and a second run reported nothing to
+    change.
+  - The card in headless Chromium: the box upper-cases, then preview, confirm and
+    apply, with no script errors from the card.
+  - `node --check` on the page JavaScript.
+
+## 0.0.182 (2026-10-13)
+
+The Config tab's **Standard configuration** card is removed: its settings were
+breaking nodes. 44helper serves both builds.
+
+- Gone: the card (the list of settings that differ from stock ASL3 and DVSwitch,
+  with Apply and Undo), its `std_preview`, `std_apply` and `std_revert` actions
+  (now refused as unknown), the `standard` part of the Config tab's status, and the
+  helpers only it used. The other Config tab cards are unchanged.
+- Nothing is changed on the node. Settings the card applied before stay as they
+  are. Each Apply took an automatic copy first ("standard ..."), so Config, Restore
+  can put the files back from that copy. `standard_applied.json` is left in the
+  library folder and no longer read.
+- The Travel Node preset still gives bridge nodes (USRP channels) the upstream
+  USRP2M17 values, as before.
+- Naming: the page title, login heading and logo say "44 Helper" (no
+  "ASL-DVS-M17"). The service description, install messages, reports and the API's
+  `app` name are unchanged.
+- Tested: page JavaScript (`node --check`); the Config tab rendered in headless
+  Chromium with real status data (every other card present, no script errors);
+  `std_*` actions refused; status builds without the `standard` key.
 
 ## 0.0.181 (2026-10-12)
 

@@ -1,4 +1,4 @@
-# ASL-DVS
+# Node Controller
 
 Web tools for running an AllStarLink (ASL) node with DVSwitch digital voice
 on a Raspberry Pi. Each tool is a single Python or shell file. Each tool runs
@@ -39,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_79_20261012.py` | `sysmon_pi02w_v6_13_67_14_20261013.py` | `instmon_v2_44_0_20261012.py` |
-| `VERSION` | `6.13.79` | `6.13.67.14-pi02w` | `2.44.0` |
+| File name | `sysmon_v6_13_83_20261013.py` | `sysmon_pi02w_v6_13_68_20261013.py` | `instmon_v2_47_0_20261013.py` |
+| `VERSION` | `6.13.83` | `6.13.68-pi02w` | `2.47.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -62,19 +62,19 @@ Step-by-step manuals (PDF):
 - Pi Zero 2 W build: [`docs/ASL-DVS_Pi02w_Install_Manual.pdf`](docs/ASL-DVS_Pi02w_Install_Manual.pdf)
 - Full build (Pi 3, 4 or 5): [`docs/ASL-DVS_Full_Build_Install_Manual.pdf`](docs/ASL-DVS_Full_Build_Install_Manual.pdf)
 
-Phone dialplan guide (PDF, 24 pages): dialplan nuts and bolts, stock ASL3 next to the Phone tab's dialplan (Pi02w 9.3.71.10 and full 9.3.73 on):
+Phone dialplan guide (PDF, 31 pages): dialplan nuts and bolts, stock ASL3 next to the Phone tab's dialplan, the autopatch dead key and how `rpt(node,Pv)` avoids it (Pi02w 9.3.71.10 and full 9.3.73 on). The source is in `docs/src/dialplan_guide/`:
 [`docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf`](docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf)
 
 Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2M17 bridge-node files, port map, services and firewall for a clean build, with no identity data (placeholders only):
 [`docs/ASL-DVS_Idealized_Node_Configuration.pdf`](docs/ASL-DVS_Idealized_Node_Configuration.pdf)
 
-User manual (PDF, 91 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
+User manual (PDF, 96 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
 [`docs/ASL-DVS_User_Manual.pdf`](docs/ASL-DVS_User_Manual.pdf)
 
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_44_0_20261012.py --install
+   sudo python3 instmon_v2_47_0_20261013.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -192,13 +192,13 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_76_20261012.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_71_16_20261012.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_79_20261012.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_67_14_20261013.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_44_0_20261012.py` | common |
-| `wifimon_v5_30_20261012.py` | common |
-| `44helper_v0_0_181_20261012.py` | common |
+| `nodecontrol_v9_3_80_20261013.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_71_18_20261013.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_83_20261013.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_68_20261013.py` | SysMon, Pi Zero 2 W (current) |
+| `instmon_v2_47_0_20261013.py` | common |
+| `wifimon_v5_31_0_20261013.py` | common |
+| `44helper_v0_0_187x_20261013.py` | common |
 | `install_all_v7_1_20261012.sh` | common |
 | `uninstall_all_v1_5.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |

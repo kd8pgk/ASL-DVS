@@ -1,6 +1,33 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_30_20261012.py`. Newest entries first.
+Current file: `wifimon_v5_31_0_20261013.py`. Newest entries first.
+
+## 5.31.0 (2026-10-13)
+
+Easier to read: the grey-blue text is white, successes are green and failures are
+red, as in 44helper, SysMon and the Dashboard. wifimon serves both builds. Only
+colours change.
+
+- **Versions:** from now on, three-part numbers (5.30 -> 5.31.0).
+- **Grey-blue text is now plain white `#ffffff`:**
+  - `--text` (was `#e8eef5`) and `--muted` (was `#c6d3e0`)
+  - the job banner (was `#dff7fd`)
+  - the Disconnect / danger buttons (was `#ffdede`)
+- **Bright green and red, the same shades as the other tools:**
+  - success `--good` (was `#52d17f`) -> `#00ffb0`
+  - failure `--bad` (was `#f06464`) -> `#ff3d5a`
+
+  This colours the signal and status values, badges, the timer, log errors and
+  the meter.
+- **Pop-up messages:** green text and border on success; red text and border on
+  failure. Before, every pop-up had white text and only the border changed.
+- **The red alert banner:** its text is now red (was pale pink).
+- Warnings and the pending banner stay amber.
+- Tested:
+  - The page in headless Chromium, before and after: body text
+    `rgb(255,255,255)`; success and success pop-up `rgb(0,255,176)`; failure,
+    failure pop-up and alert banner `rgb(255,61,90)`; no script errors.
+  - `node --check` on the page JavaScript.
 
 ## 5.30 (2026-10-12)
 

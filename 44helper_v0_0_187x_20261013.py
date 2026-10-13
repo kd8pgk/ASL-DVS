@@ -40,7 +40,8 @@ from pathlib import Path
 from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
-APP_VERSION = "0.0.181"
+APP_HEADER = "44 Helper"
+APP_VERSION = "0.0.187x"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -7747,9 +7748,9 @@ _CSS_BASE = """
   --orange-dim: #703800;
   --cloudflare: #f38020;
   --cloudflare-dim: #5c2d00;
-  --text: #d0dff0;
+  --text: #ffffff;
   --text-bright: #f0f8ff;
-  --muted: #4a6080;
+  --muted: #ffffff;
   --mono: 'Courier New', Courier, monospace;
   --sans: Arial, Helvetica, sans-serif;
 }
@@ -7843,7 +7844,7 @@ header {
   user-select: none;
   flex-shrink: 0;
 }
-.tab:hover { color: var(--text-bright); border-color: #5a7898; background: #253550; }
+.tab:hover { color: var(--text-bright); border-color: #ffffff; background: #253550; }
 
 /* Active-tab color assignment — design plan §10 table.
    Same --mc/--mc-rgb custom-property trick the source dashboard uses for
@@ -7878,6 +7879,8 @@ header {
 .cfg-id-band{font-family:var(--mono);font-size:.78rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:.8rem 0 .2rem}
 .cfg-id-tag{font-weight:bold;color:var(--amber);margin-left:.3rem}
 .cfg-id-val{min-width:10ch;overflow-wrap:anywhere}
+.cfg-id-set{display:inline-flex;gap:.4rem;align-items:center;margin-left:.6rem;flex-wrap:wrap}
+.cfg-id-set input{width:10ch;text-transform:uppercase;font-family:var(--mono)}
 
 .tab-panel {
   border: 1px solid var(--border2);
@@ -7953,7 +7956,7 @@ _CSS_COMPONENTS = """
   font-size: .66rem;
   letter-spacing: .18em;
   text-transform: uppercase;
-  color: #5a7898;
+  color: #ffffff;
   margin-bottom: .4rem;
   display: block;
 }
@@ -8167,7 +8170,7 @@ _CSS_FIREWALL = """
   font-size: .77rem;
   letter-spacing: .12em;
   text-transform: uppercase;
-  color: #5a7898;
+  color: #ffffff;
   margin: .8rem 0 .3rem;
 }
 .svc-row { display: grid; grid-template-columns: 1rem minmax(0, 2fr) minmax(0, 9rem) minmax(0, 1.4fr); align-items: center; gap: .5rem; padding: .2rem 0; font-family: var(--mono); font-size: .84rem; }
@@ -8177,10 +8180,10 @@ _CSS_FIREWALL = """
 .svc-row.flagged { color: var(--amber); }
 #ports-table { display: block; max-width: 100%; overflow-x: auto; }
 #ports-table th, #ports-table td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--border2); }
-#ports-table th { color: #5a7898; font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; }
+#ports-table th { color: #ffffff; font-size: .66rem; letter-spacing: .1em; text-transform: uppercase; }
 #ports-table tr.mismatch { background: rgba(255,61,90,.12); }
 #ports-table tr.mismatch td:first-child { border-left: 3px solid var(--red); }
-#ports-table tr.ports-group td { background: #0c1424; color: #7fa8d8; font-weight: 600; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; padding-top: .5rem; }
+#ports-table tr.ports-group td { background: #0c1424; color: #ffffff; font-weight: 600; font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; padding-top: .5rem; }
 .port-verdict.v-danger { color: var(--red); }
 .port-verdict.v-warn   { color: var(--amber); }
 .port-verdict.v-ok     { color: var(--green); }
@@ -8221,16 +8224,17 @@ _CSS_ASL3 = """
   border-radius: 4px; padding: .4rem .6rem; margin-top: .4rem;
 }
 .asl3-console {
-  font-family: var(--mono); font-size: .74rem; color: #b8e6c8; background: #05080f;
+  font-family: var(--mono); font-size: .74rem; color: #ffffff; background: #05080f;
   border: 1px solid var(--border2); border-radius: 4px; padding: .5rem .6rem;
   margin-top: .4rem; white-space: pre-wrap; word-break: break-all;
   max-height: 220px; overflow-y: auto;
 }
 .asl3-console.shown { display: block; }
-.asl3-console.placeholder { color: #5a6478; font-style: italic; }
-.asl3-console.fail { color: #ffb0b8; }
+.asl3-console.placeholder { color: #ffffff; font-style: italic; }
+.asl3-console.ok { color: var(--green); }
+.asl3-console.fail { color: var(--red); }
 #asl3-custom-transcript {
-  font-family: var(--mono); font-size: .74rem; color: #b8e6c8; background: #05080f;
+  font-family: var(--mono); font-size: .74rem; color: #ffffff; background: #05080f;
   border: 1px solid var(--border2); border-radius: 4px; padding: .6rem .7rem;
   margin-top: .6rem; white-space: pre-wrap; word-break: break-all;
   max-height: 320px; overflow-y: auto;
@@ -8328,9 +8332,6 @@ _CFGR_BRIDGE_PROFILE = (("duplex", "0"), ("hangtime", "0"), ("althangtime", "0")
                         ("telemdefault", "0"), ("telemdynamic", "0"), ("linktolink", "no"), ("nounkeyct", "1"),
                         ("tx_timeout", "170000"))
 _CFGR_USRP_CHAN_RE = re.compile(r"(?i)^\s*rxchannel\s*=\s*usrp/")
-_CFGR_USBRADIO_CHAN_RE = re.compile(r"(?i)^\s*rxchannel\s*=\s*(usbradio|radio)/")
-_CFGR_STD_GROUPS = (("bridge", "Bridge nodes"), ("template", "Template (rpt.conf)"), ("efficiency", "Optional efficiency"),
-                    ("wiring", "Wiring (shown only)"), ("choice", "Your choices (shown only)"))
 _CFGR_P25GW = "/opt/P25Gateway/P25Gateway.ini"
 _CFGR_NXDNGW = "/opt/NXDNGateway/NXDNGateway.ini"
 _CFGR_GATEWAYS: list[tuple[str, str, bool]] = [
@@ -8652,10 +8653,6 @@ _CFGR_MANAGER = "/etc/asterisk/manager.conf"
 _CFGR_PH_PJSIP = "/etc/asterisk/dvs_phone_pjsip.conf"
 _CFGR_PH_IAX = "/etc/asterisk/dvs_phone_iax.conf"
 _CFGR_ID_FIELDS: list[dict] = [
-    {"fid": "helper_call", "label": "44helper callsign", "src": "ini", "file": _CFGR_HELPER_CONF,
-     "section": "identity", "key": "callsign", "groups": ("callsign",), "form": "plain", "kind": "value", "expect": True},
-    {"fid": "helper_node", "label": "44helper node", "src": "ini", "file": _CFGR_HELPER_CONF,
-     "section": "identity", "key": "node", "groups": ("node",), "form": "plain", "kind": "value", "expect": True},
     {"fid": "rpt_node", "label": "Public node", "src": "rpt_public", "file": _CFGR_RPT,
      "groups": ("node",), "form": "section_name", "kind": "value", "anchor": True},
     {"fid": "rpt_idrec", "label": "ID recording", "src": "rpt_key", "file": _CFGR_RPT, "key": "idrecording",
@@ -9054,6 +9051,166 @@ def _cfgr_identity_public(reveal: bool = False) -> dict:
     d["checked_at"] = _cfgr_now()
     return d
 
+_CFGR_ASLDVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
+_CFGR_SETCALL_RE = re.compile(r"^(?=.*\d)(?=.*[A-Z])[A-Z0-9]{3,7}$")
+_CFGR_SETCALL_EXTRA: list[dict] = [
+    {"fid": "asldvs_call", "label": "Dashboard callsign", "src": "ini", "file": _CFGR_ASLDVS_CONF,
+     "section": "config", "key": "callsign", "form": "plain"}]
+_CFGR_SETCALL_LOGINS = frozenset({"ircddb_user", "ircddb_dplus"})
+_CFGR_SETCALL_SERVICES: dict[str, str] = {
+    _CFGR_RPT: "asterisk", _CFGR_ECHOLINK: "asterisk", "/etc/asterisk/custom/echolink.conf": "asterisk",
+    _CFGR_MMDVM: "mmdvm_bridge", _CFGR_IRCDDB: "ircddbgatewayd", _CFGR_YSFGW: "ysfgateway",
+    _CFGR_P25GW: "p25gateway", _CFGR_NXDNGW: "nxdngateway", _CFGR_M17INI: "usrp2m17",
+    _CFGR_ASLDVS_CONF: "nodecontrol"}
+_CFGR_SETCALL_AST_RE = re.compile(r"^(\s*[^=;\s][^=]*?\s*=>?\s*)(.*?)(\s*(?:;.*)?)$")
+_CFGR_SETCALL_INI_RE = re.compile(r"^(\s*[^=;#\s][^=]*?\s*=\s*)(.*?)(\s*)$")
+
+def _cfgr_setcall_new(form: str, value: str, old: str) -> str | None:
+    if form == "idrec":
+        if not old.strip():
+            return "|i" + value
+        cur = _cfgr_id_parse(form, old)
+        if not cur:
+            return None
+        m = _CFGR_CALL_SUFFIX_RE.search(cur.upper())
+        return _cfgr_id_render(form, value + (cur[m.start():] if m else ""), old)
+    return _cfgr_id_render(form, value, old)
+
+def _cfgr_setcall_file(fd: dict, path: str, lines: list[str], value: str) -> list[dict]:
+    ast = path.startswith("/etc/asterisk/")
+    rx = _CFGR_SETCALL_AST_RE if ast else _CFGR_SETCALL_INI_RE
+    mask = _cfgr_managed_mask(lines) if ast else [False] * len(lines)
+    src, key = fd["src"], fd["key"]
+    sec: str | None = ""
+    done: set[str | None] = set()
+    out: list[dict] = []
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        hdr = _CFGR_HDR_RE.match(body)
+        if hdr:
+            sec = None if mask[i] else hdr.group(1).strip()
+            continue
+        if mask[i] or sec is None:
+            continue
+        st = body.strip()
+        if not st or st[0] in "#;" or "=" not in st:
+            continue
+        m = rx.match(body)
+        if not m:
+            continue
+        k = m.group(1).split("=", 1)[0].strip()
+        if src == "flat":
+            ok = k == key
+        elif src == "ini":
+            ok = sec.lower() == fd["section"] and k.lower() == key.lower()
+        elif src == "rpt_key":
+            ok = sec.isdigit() and k.lower() == key
+        else:
+            ok = k.lower() == key
+        if not ok or sec in done:
+            continue
+        done.add(sec)
+        old = m.group(2)
+        q = old[0] if len(old) >= 2 and old[0] == old[-1] and old[0] in "\"'" else ""
+        inner = old[1:-1] if q else old
+        where = (f"[{sec}] {k}" if sec else k)
+        new = _cfgr_setcall_new(fd["form"], value, inner)
+        if new is None:
+            out.append({"line": i, "where": where, "old": inner, "skip": "holds a sound file, left alone"})
+            continue
+        out.append({"line": i, "where": where, "old": inner, "new": new,
+                    "text": m.group(1) + q + new + q + m.group(3) + raw[len(body):]})
+    return out
+
+def _cfgr_act_id_set_callsign(payload: dict, apply: bool) -> dict:
+    value = str(payload.get("callsign", "")).strip().upper()
+    if not _CFGR_SETCALL_RE.match(value):
+        return {"success": False, "output": "A callsign is 3 to 7 letters and digits, with at least one digit."}
+    fields = [fd for fd in _CFGR_ID_FIELDS if "callsign" in fd["groups"]] + _CFGR_SETCALL_EXTRA
+    plan: dict[str, dict] = {}
+    report: list[str] = []
+    missing: list[str] = []
+    logins: list[str] = []
+    for fd in fields:
+        paths = [fd["file"]] + (["/etc/asterisk/custom/echolink.conf"] if fd["src"] == "echolink" else [])
+        for path in paths:
+            if path not in plan:
+                b = _cfgr_read(path)
+                if b is None:
+                    if fd["src"] != "echolink" or path == fd["file"]:
+                        missing.append(f"{fd['label']}: {path}")
+                    plan[path] = {"lines": None, "edits": []}
+                    continue
+                plan[path] = {"lines": b.decode("utf-8", "replace").splitlines(keepends=True), "edits": []}
+            p = plan[path]
+            if p["lines"] is None:
+                continue
+            found = _cfgr_setcall_file(fd, path, p["lines"], value)
+            if not found and fd["src"] != "rpt_key":
+                report.append(f"  {fd['label']}: {path}: no {fd['key']} line, left alone")
+            for e in found:
+                if "skip" in e:
+                    report.append(f"  {fd['label']}: {path} {e['where']}: {e['skip']}")
+                    continue
+                if e["old"] == e["new"]:
+                    report.append(f"  {fd['label']}: {path} {e['where']}: already {e['new']}")
+                    continue
+                p["edits"].append(e)
+                report.append(f"  {fd['label']}: {path} {e['where']}: {e['old'] or '(empty)'} -> {e['new']}")
+                if fd["fid"] in _CFGR_SETCALL_LOGINS:
+                    logins.append(fd["label"])
+    c = globals().get("_cfg")
+    old_helper = c.get("identity", "callsign", fallback="").strip() if c is not None else ""
+    if old_helper != value:
+        report.append(f"  44helper callsign: {CONFIG_FILE} [identity] callsign: {old_helper or '(empty)'} -> {value}")
+    changed = [path for path, p in plan.items() if p["edits"]]
+    services = sorted({_CFGR_SETCALL_SERVICES[path] for path in changed if path in _CFGR_SETCALL_SERVICES})
+    head = [f"Set the callsign to {value} in every file below.", ""]
+    tail: list[str] = []
+    if missing:
+        tail += ["", "Not on this node, skipped:"] + ["  " + m for m in missing]
+    if logins:
+        tail += ["", "Logins changed (" + ", ".join(logins) + "): the ircDDB and DPlus accounts must be registered "
+                 "under the new callsign, or the D-Star gateway will not log in."]
+    if services:
+        tail += ["", "No service is restarted. Restart these for the change to take effect: " + ", ".join(services) + "."]
+    if "nodecontrol" in services:
+        tail += ["Restart the Dashboard (nodecontrol) first: until then it holds the old callsign, and its next Save "
+                 "or M17 connect puts the old callsign back."]
+    if not changed and old_helper == value:
+        return {"success": True, "changes": 0, "output": "\n".join(head + report + tail + ["", "Nothing to change."])}
+    if not apply:
+        return {"success": True, "changes": len(changed) + (old_helper != value),
+                "output": "\n".join(head + report + tail)}
+    groups = [g for g, d in _CFGR_GROUPS.items() if any(path in d["files"] for path in changed)]
+    lines_out = [f"Callsign set to {value}.", ""]
+    if groups:
+        sid, pruned = _cfgr_auto_point(f"callsign {value}", groups)
+        lines_out.append(f"Automatic save point: {sid}" + (f" (removed old: {', '.join(pruned)})" if pruned else ""))
+        lines_out.append("")
+    ok = True
+    for path in changed:
+        p = plan[path]
+        new = list(p["lines"])
+        for e in p["edits"]:
+            new[e["line"]] = e["text"]
+        uid, gid, fmode = _cfgr_meta_of(path)
+        try:
+            res = _cfgr_write_file(path, "".join(new).encode("utf-8"), uid, gid, fmode)
+        except OSError as exc:
+            res = f"NOT written: {exc}"
+        if res.startswith("NOT") or res.startswith("skipped"):
+            ok = False
+        lines_out.append(f"  {path}: {res}")
+    if c is not None and old_helper != value:
+        if not c.has_section("identity"):
+            c.add_section("identity")
+        c.set("identity", "callsign", value)
+        save_config(c)
+        lines_out.append(f"  {CONFIG_FILE}: written")
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG callsign set to {value} in {len(changed)} file(s)")
+    return {"success": ok, "output": "\n".join(lines_out + ["", "Changes:"] + report + tail)}
+
 def build_config_status() -> dict:
     snap = _cfgr_snap_dir("restore")
     m = _cfgr_read_manifest(snap)
@@ -9069,6 +9226,7 @@ def build_config_status() -> dict:
         changed = _cfgr_changed_files(snap, m)
     clashes, n_ports = _cfgr_port_clashes()
     gw_ok, gw_warn = _cfgr_gateway_pairs()
+    usrp_ok, usrp_warn = _cfgr_usrp_pairs()
     presets = {}
     for pid, plabel in _CFGR_PRESETS.items():
         p = _cfgr_load_preset(pid)
@@ -9090,8 +9248,10 @@ def build_config_status() -> dict:
         "ambe_paired_with": _cfgr_ambe_state()[1],
         "gateway_pairs_ok": gw_ok,
         "gateway_warnings": gw_warn,
+        "usrp_pairs_ok": usrp_ok,
+        "usrp_warnings": usrp_warn,
+        "sysmon_installed": os.path.exists(_CFGR_SYSMON_BIN),
         "gateways": _cfgr_gateway_states(),
-        "standard": _cfgr_std_status(),
         "reinstall": _cfgr_ri_status(),
         "checked_at": _cfgr_now(),
     }
@@ -9783,9 +9943,13 @@ def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list
             if s["name"] == n["node"]:
                 body = body[:1] + keep_id.get(n["node"], []) + body[1:]
                 if any(_CFGR_USRP_CHAN_RE.match(x) for x in body):
+                    diffs: list[str] = []
                     for k, v in _CFGR_BRIDGE_PROFILE:
-                        body, _old, _found = _cfgr_set_key(body, s["name"], k, v)
-                    notes.append(f"[{n['node']}]: bridge node, standard USRP values applied")
+                        body, old, _found = _cfgr_set_key(body, s["name"], k, v)
+                        if old is None or old.lower() != v.lower():
+                            diffs.append(f"{k} {'(not set here)' if old is None else old} -> {v}")
+                    notes.append(f"Bridge node [{n['node']}]: " + (", ".join(diffs) if diffs
+                                 else "already has the upstream USRP2M17 values, nothing changed"))
             stanza_text += body + [""]
     if stanza_text:
         if first_start is not None:
@@ -10048,6 +10212,114 @@ def _cfgr_ambe_state(override: dict[str, bytes] | None = None) -> tuple[str, str
         return "", ", ".join(paired)
     return (f"Analog_Bridge [AMBE_AUDIO] txPort/rxPort {at}/{ar} is not the mirror of any mode section in "
             "DVSwitch.ini, so audio between Analog_Bridge and MMDVM_Bridge would not flow"), ""
+
+_CFGR_SYSMON_BIN = "/usr/local/bin/sysmon.py"
+
+def _cfgr_usrp_scan(override: dict[str, bytes] | None = None) -> dict:
+    chans: list[dict] = []
+    t = _cfgr_text(_CFGR_RPT, override)
+    if t is not None:
+        lines = _cfgr_lines(t)
+        sec = ""
+        for line in lines:
+            m = _CFGR_HDR_RE.match(line)
+            if m:
+                sec = m.group(1).strip()
+                continue
+            kv = _cfgr_kv(line)
+            if kv and kv[0].lower() == "rxchannel":
+                um = _CFGR_USRP_RX_RE.match(kv[1])
+                if um:
+                    chans.append({"node": sec, "a": um.group(1), "b": um.group(2)})
+    bridges: list[dict] = []
+    t = _cfgr_text(_CFGR_AB, override)
+    if t is not None:
+        d = _cfgr_ini_sections(t).get("usrp", {})
+        bridges.append({"bridge": "Analog_Bridge", "where": "Analog_Bridge.ini [USRP] rxPort/txPort",
+                        "listen": d.get("rxport", ""), "send": d.get("txport", "")})
+    t = _cfgr_text(_CFGR_M17INI, override)
+    if t is not None:
+        d = _cfgr_ini_sections(t).get("usrp network", {})
+        bridges.append({"bridge": "USRP2M17", "where": "USRP2M17.ini [USRP Network] LocalPort/DstPort",
+                        "listen": d.get("localport", ""), "send": d.get("dstport", "")})
+    bridges = [b for b in bridges if _CFGR_PORT_RE.match(b["listen"]) or _CFGR_PORT_RE.match(b["send"])]
+    pairs: list[dict] = []
+    used: set[str] = set()
+    for c in chans:
+        hit = [b for b in bridges if b["listen"] == c["a"]]
+        if not hit:
+            pairs.append({"node": c["node"], "a": c["a"], "b": c["b"], "bridge": "", "state": "no_bridge"})
+            continue
+        for b in hit:
+            used.add(b["bridge"])
+            pairs.append({"node": c["node"], "a": c["a"], "b": c["b"], "bridge": b["bridge"],
+                          "state": "ok" if b["send"] == c["b"] else "mismatch", "send": b["send"]})
+    unpaired = [{"bridge": b["bridge"], "listen": b["listen"], "send": b["send"], "where": b["where"]}
+                for b in bridges if b["bridge"] not in used]
+    return {"pairs": pairs, "unpaired": unpaired}
+
+def _cfgr_usrp_pairs(override: dict[str, bytes] | None = None) -> tuple[list[str], list[str]]:
+    d = _cfgr_usrp_scan(override)
+    ok: list[str] = []
+    warn: list[str] = []
+    for p in d["pairs"]:
+        rx = f"rpt.conf [{p['node']}] rxchannel USRP/…:{p['a']}:{p['b']}"
+        if p["state"] == "ok":
+            ok.append(f"{p['bridge']} ↔ node {p['node']} ({p['a']}/{p['b']})")
+        elif p["state"] == "mismatch":
+            warn.append(f"USRP pair: {rx} expects {p['bridge']} to send to {p['b']}, but it sends to {p['send'] or '(not set)'}. "
+                        "Audio from the bridge would not reach Asterisk")
+        else:
+            warn.append(f"USRP pair: {rx}: no bridge listens on {p['a']} (Analog_Bridge [USRP] rxPort or "
+                        "USRP2M17 [USRP Network] LocalPort). Audio from Asterisk on this node goes nowhere")
+    for b in d["unpaired"]:
+        warn.append(f"USRP pair: {b['where']} {b['listen'] or '(not set)'}/{b['send'] or '(not set)'} has no rpt.conf node "
+                    f"with rxchannel USRP/127.0.0.1:{b['listen'] or '?'}:{b['send'] or '?'}")
+    return ok, warn
+
+def _cfgr_usrp_key(d: dict) -> set[tuple]:
+    out = {("pair", str(p.get("node", "")), str(p.get("a", "")), str(p.get("b", "")), str(p.get("bridge", "")),
+            str(p.get("state", ""))) for p in d.get("pairs", []) if isinstance(p, dict)}
+    out |= {("unpaired", str(b.get("bridge", "")), str(b.get("listen", "")), str(b.get("send", "")))
+            for b in d.get("unpaired", []) if isinstance(b, dict)}
+    return out
+
+def _cfgr_usrp_describe(k: tuple) -> str:
+    if k[0] == "pair":
+        return f"node {k[1]} USRP/…:{k[2]}:{k[3]} -> {k[4] or 'no bridge'}: {k[5]}"
+    return f"{k[1]} {k[2]}/{k[3]}: no rpt.conf node"
+
+def _cfgr_act_usrp_verify(payload: dict) -> dict:
+    mine = _cfgr_usrp_scan()
+    head = ["44helper's USRP pair check:"]
+    ok, warn = _cfgr_usrp_pairs()
+    head += ["  paired: " + x for x in ok] + ["  " + x for x in warn]
+    if not ok and not warn:
+        head.append("  no USRP channels or bridges found")
+    if not os.path.exists(_CFGR_SYSMON_BIN):
+        return {"success": True, "output": "\n".join(head + ["", "SysMon is not installed on this node, so there is "
+                                                             "no second check."])}
+    r = _run_argv(["python3", _CFGR_SYSMON_BIN, "--usrp-pairs"], timeout=60)
+    out = r["output"].strip()
+    line = next((x for x in out.splitlines() if x.startswith("USRP-PAIRS-JSON:")), "")
+    try:
+        theirs = json.loads(line.split(":", 1)[1]) if line else None
+    except ValueError:
+        theirs = None
+    if not r["success"] or not isinstance(theirs, dict):
+        return {"success": False, "output": "\n".join(head + ["", "SysMon could not run the check. The SysMon on this "
+                "node may be older than the first versions with --usrp-pairs: 6.13.67.16-pi02w (Pi Zero 2 W build) "
+                "or 6.13.82 (full build).", "", out[-600:]])}
+    a, b = _cfgr_usrp_key(mine), _cfgr_usrp_key(theirs)
+    tail = ["", f"SysMon {theirs.get('version', '?')} checked the same files on its own."]
+    if a == b:
+        tail.append("SysMon agrees: " + (f"{len(a)} item(s), same result." if a else "nothing to pair."))
+        return {"success": True, "output": "\n".join(head + tail)}
+    tail.append("SysMon DISAGREES. Read the files by hand:")
+    tail += ["  only 44helper: " + _cfgr_usrp_describe(k) for k in sorted(a - b)]
+    tail += ["  only SysMon:   " + _cfgr_usrp_describe(k) for k in sorted(b - a)]
+    log("FAIL: CONFIG USRP pair check: SysMon disagrees")
+    return {"success": False, "output": "\n".join(head + tail)}
 
 def _cfgr_ambe_pairing(override: dict[str, bytes] | None = None) -> str:
     return _cfgr_ambe_state(override)[0]
@@ -10436,6 +10708,8 @@ def _cfgr_preset_plan(p: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[str
         warnings.append(pair)
     clashes, _n = _cfgr_port_clashes(override)
     warnings += clashes
+    now_warn = set(_cfgr_usrp_pairs()[1])
+    warnings += [w for w in _cfgr_usrp_pairs(override)[1] if w not in now_warn]
     return changes, removed, notes, warnings, ""
 
 def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
@@ -10452,6 +10726,11 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
                      "carry them): " + ", ".join(p["_pruned"]))
     if removed:
         lines.append("PRIVATE NODES THAT WILL BE REMOVED: " + ", ".join(removed))
+    bridge = [x for x in notes if x.startswith("Bridge node [")]
+    notes = [x for x in notes if x not in bridge]
+    if bridge:
+        lines += ["BRIDGE NODE VALUES: the preset sets the upstream USRP2M17 values on each bridge node (USRP channel). "
+                  "Saved value -> value written:"] + ["  " + x for x in bridge]
     if not changes:
         lines.append("This node already matches the preset. Nothing to change.")
     for path, (old, new) in changes.items():
@@ -10461,7 +10740,7 @@ def _cfgr_act_preset_apply(payload: dict, apply: bool) -> dict:
         lines += [""] + list(d)
     if notes:
         lines += [""] + notes
-    result = {"success": True, "removed": removed, "changes": sorted(changes), "warnings": warnings}
+    result = {"success": True, "removed": removed, "changes": sorted(changes), "warnings": warnings, "bridge": bridge}
     if not apply or not changes:
         result["output"] = "\n".join(lines)
         return result
@@ -10532,336 +10811,14 @@ def _cfgr_remove_key(lines: list[str], section: str, key: str) -> list[str]:
             return lines[:i] + lines[i + 1:]
     return list(lines)
 
-def _cfgr_set_module(lines: list[str], name: str, state: str) -> tuple[list[str], str | None]:
-    mask = _cfgr_managed_mask(lines)
-    rx = _cfgr_module_re(name)
-    idx = [i for i, ln in enumerate(lines) if not mask[i] and rx.match(ln)]
-    if not idx:
-        new = list(lines)
-        sec = next((x for x in _cfgr_sections(lines, mask) if x["name"].lower() == "modules"), None)
-        if sec is None:
-            return new + ["", "[modules]", f"{state} => {name}.so"], None
-        last = sec["start"]
-        for i in range(sec["start"] + 1, sec["end"]):
-            if lines[i].strip() and not mask[i]:
-                last = i
-        new.insert(last + 1, f"{state} => {name}.so")
-        return new, None
-    old = rx.match(lines[idx[-1]]).group(2)
-    if old in ("require", "preload") or old == state:
-        return list(lines), old
-    new = list(lines)
-    for i in idx:
-        m = rx.match(lines[i])
-        new[i] = m.group(1) + state + m.group(3)
-    return new, old
-
 def _cfgr_remove_module(lines: list[str], name: str) -> list[str]:
     mask = _cfgr_managed_mask(lines)
     rx = _cfgr_module_re(name)
     idx = [i for i, ln in enumerate(lines) if not mask[i] and rx.match(ln)]
     return lines[:idx[-1]] + lines[idx[-1] + 1:] if idx else list(lines)
 
-def _cfgr_line_delta(before: list[str], new: list[str]) -> tuple[str | None, str]:
-    i = next((j for j in range(len(new)) if j >= len(before) or new[j] != before[j]), len(new) - 1)
-    if len(new) == len(before) + 1:
-        return None, new[i]
-    return before[i], new[i]
-
-def _cfgr_revert_line(lines: list[str], rec: dict) -> tuple[list[str], bool]:
-    mask = _cfgr_managed_mask(lines)
-    lo, hi = 0, len(lines)
-    if rec["kind"] == "ini":
-        span = _cfgr_section_span(lines, mask, rec["section"])
-        if span is None:
-            return list(lines), False
-        lo, hi = span[0] + 1, span[1]
-    for i in range(lo, hi):
-        if not mask[i] and lines[i] == rec["new_line"]:
-            if rec["old_line"] is None:
-                return lines[:i] + lines[i + 1:], True
-            new = list(lines)
-            new[i] = rec["old_line"]
-            return new, True
-    return list(lines), False
-
-def _cfgr_join_like(lines: list[str], orig: bytes) -> bytes:
-    eol = "\r\n" if b"\r\n" in orig else "\n"
-    text = eol.join(lines)
-    if not orig or orig.endswith(b"\n"):
-        text += eol
-    return text.encode("utf-8")
-
-def _cfgr_bridge_nodes() -> list[str]:
-    t = _cfgr_text(_CFGR_RPT)
-    if t is None:
-        return []
-    lines = _cfgr_lines(t)
-    mask = _cfgr_managed_mask(lines)
-    out = []
-    for sec in _cfgr_sections(lines, mask):
-        if not _cfgr_is_private(sec["name"]):
-            continue
-        if any(not mask[i] and _CFGR_USRP_CHAN_RE.match(lines[i]) for i in range(sec["start"] + 1, sec["end"])):
-            out.append(sec["name"])
-    return sorted(set(out), key=int)
-
-def _cfgr_std_checks() -> list[dict]:
-    checks: list[dict] = []
-    for node in _cfgr_bridge_nodes():
-        checks.append({"id": f"bridge_{node}", "group": "bridge", "label": f"Bridge node {node}: standard USRP values",
-                       "apply": True, "edits": [("ini", _CFGR_RPT, node, k, v) for k, v in _CFGR_BRIDGE_PROFILE],
-                       "note": "The upstream USRP2M17 values. A bridge node should not inherit a radio's hang time, "
-                               "telemetry or courtesy tones."})
-    for key, stock, why in (("duplex", "2", "stock is a full-duplex repeater; each node sets its own"),
-                            ("hangtime", "2000", "stock hang time"), ("althangtime", "4000", "stock alternate hang time"),
-                            ("telemdefault", "2", "stock telemetry mode")):
-        checks.append({"id": f"tpl_{key}", "group": "template", "label": f"[node-main] {key}", "apply": True,
-                       "edits": [("ini", _CFGR_RPT, "node-main", key, stock)],
-                       "note": f"Template for every node ({why}). Your own value is fine; stock is the default for a new build."})
-    checks.append({"id": "tpl_status", "group": "template", "label": "[functions-main] status commands 713 and 714",
-                   "apply": True, "edits": [("ini", _CFGR_RPT, "functions-main", "713", "status,13"),
-                                            ("ini", _CFGR_RPT, "functions-main", "714", "status,14")],
-                   "note": "Status report and full system status from the radio."})
-    checks.append({"id": "eff_debug", "group": "efficiency", "label": "Debug logging off", "apply": True,
-                   "edits": [("ini", _CFGR_MMDVM, sec, "Debug", "0") for sec in
-                             ("D-Star Network", "DMR Network", "System Fusion Network", "P25 Network", "NXDN Network")]
-                   + [("ini", _CFGR_AB, "GENERAL", "logLevel", "2")],
-                   "note": "A new build keeps debug on. Turn it off when the node is stable: it writes a lot to the SD card."})
-    checks.append({"id": "eff_usbradio", "group": "efficiency", "label": "Unload chan_usbradio", "apply": True,
-                   "guard": "usbradio", "edits": [("mod", _CFGR_MOD, "chan_usbradio", "noload")],
-                   "note": "Frees memory on a node that uses SimpleUSB. Refused when any node uses the USB Radio channel."})
-    checks.append({"id": "wiring_bindport", "group": "wiring", "label": "IAX port (iax.conf bindport)", "apply": False,
-                   "edits": [("ini", _CFGR_IAX, "general", "bindport", "4569")],
-                   "note": "Wiring: the [nodes] lines in rpt.conf must use the same port. Presets keep them in step."})
-    checks.append({"id": "wiring_usrp", "group": "wiring", "label": "chan_usrp", "apply": False,
-                   "edits": [("mod", _CFGR_MOD, "chan_usrp", "noload")],
-                   "note": "Wiring: loaded on a node with bridge nodes."})
-    checks.append({"id": "choice_savenode", "group": "choice", "label": "savenode ENABLE", "apply": False,
-                   "edits": [("ini", _CFGR_SAVENODE, "", "ENABLE", "0")], "note": "Your choice."})
-    checks.append({"id": "choice_ysf", "group": "choice", "label": "YSFGateway InactivityTimeout", "apply": False,
-                   "edits": [("ini", _CFGR_YSFGW, "Network", "InactivityTimeout", "10")],
-                   "note": "Your choice: 0 never disconnects from a reflector."})
-    return checks
-
-def _cfgr_edit_label(edit: tuple) -> str:
-    return edit[3] if edit[0] == "ini" else edit[2]
-
-def _cfgr_edit_now(edit: tuple, cache: dict[str, str | None]) -> tuple[str, str]:
-    path = edit[1]
-    if path not in cache:
-        cache[path] = _cfgr_text(path)
-    t = cache[path]
-    if t is None:
-        return "na", ""
-    if edit[0] == "mod":
-        st = _cfgr_module_state(_cfgr_lines(t), edit[2])
-        if st is None:
-            return ("ok", "not set") if edit[3] == "noload" else ("differs", "not set")
-        same = st == edit[3] or (st in ("require", "preload") and edit[3] == "load")
-        return ("ok" if same else "differs"), st
-    sec = _cfgr_ini_sections(t)
-    name = edit[2].lower()
-    if name not in sec:
-        return "na", ""
-    v = sec[name].get(edit[3].lower())
-    if v is None:
-        return "differs", "not set"
-    return ("ok" if v.lower() == edit[4].lower() else "differs"), v
-
-def _cfgr_std_state() -> dict:
-    try:
-        with open(os.path.join(_CFGR_DIR, "standard_applied.json"), "r") as f:
-            v = json.load(f)
-    except (OSError, ValueError):
-        return {}
-    return v if isinstance(v, dict) else {}
-
-def _cfgr_std_save(state: dict) -> None:
-    _cfgr_ensure_root_dir()
-    _compare_before_write(os.path.join(_CFGR_DIR, "standard_applied.json"),
-                          json.dumps(state, indent=1, sort_keys=True).encode("utf-8"))
-
-def _cfgr_std_status() -> list[dict]:
-    applied = _cfgr_std_state()
-    labels = dict(_CFGR_STD_GROUPS)
-    cache: dict[str, str | None] = {}
-    out = []
-    for c in _cfgr_std_checks():
-        diff, na = [], 0
-        for e in c["edits"]:
-            st, now = _cfgr_edit_now(e, cache)
-            if st == "na":
-                na += 1
-            elif st == "differs":
-                diff.append((e, now))
-        if na == len(c["edits"]) and c["id"] not in applied:
-            continue
-        single = len(c["edits"]) == 1
-        out.append({"id": c["id"], "group": c["group"], "group_label": labels[c["group"]], "label": c["label"],
-                    "apply": c["apply"], "note": c.get("note", ""), "state": "differs" if diff else "ok",
-                    "now": (diff[0][1] if single else ", ".join(f"{_cfgr_edit_label(e)} {n}" for e, n in diff)) if diff else "",
-                    "stock": (diff[0][0][-1] if single else ", ".join(f"{_cfgr_edit_label(e)} {e[-1]}" for e, _n in diff)) if diff else "",
-                    "applied": c["id"] in applied})
-    return out
-
-def _cfgr_std_plan(check: dict) -> tuple[dict[str, tuple[bytes, bytes]], list[dict], list[str], str]:
-    if check.get("guard") == "usbradio":
-        rt = _cfgr_text(_CFGR_RPT)
-        if rt is not None and any(_CFGR_USBRADIO_CHAN_RE.match(x) for x in _cfgr_lines(rt)):
-            return {}, [], [], "A node in rpt.conf uses the USB Radio channel (Radio/...). chan_usbradio must stay loaded."
-        mt = _cfgr_text(_CFGR_MOD)
-        if mt is None or _cfgr_module_state(_cfgr_lines(mt), "chan_simpleusb") not in ("load", "require", "preload"):
-            return {}, [], [], ("chan_simpleusb is not loaded, so unloading chan_usbradio could leave this node "
-                                "without a radio interface.")
-    origs: dict[str, bytes] = {}
-    lines: dict[str, list[str]] = {}
-    records: list[dict] = []
-    notes: list[str] = []
-    for e in check["edits"]:
-        path = e[1]
-        if path not in lines:
-            b = _cfgr_read(path)
-            if b is None:
-                notes.append(f"{path} not found on this node, skipped")
-                lines[path] = []
-                continue
-            origs[path] = b
-            lines[path] = _cfgr_lines(b.decode("utf-8", "replace"))
-        if path not in origs:
-            continue
-        before = lines[path]
-        if e[0] == "ini":
-            new, old, found = _cfgr_set_key(before, e[2], e[3], e[4])
-            if not found:
-                notes.append(f"{os.path.basename(path)} has no [{e[2]}] section, skipped")
-                continue
-            if new != before:
-                ol, nl = _cfgr_line_delta(before, new)
-                records.append({"kind": "ini", "path": path, "section": e[2], "key": e[3], "old": old, "new": e[4],
-                                "old_line": ol, "new_line": nl})
-                lines[path] = new
-        else:
-            new, old = _cfgr_set_module(before, e[2], e[3])
-            if new != before:
-                ol, nl = _cfgr_line_delta(before, new)
-                records.append({"kind": "mod", "path": path, "name": e[2], "old": old, "new": e[3],
-                                "old_line": ol, "new_line": nl})
-                lines[path] = new
-            elif old in ("require", "preload") and e[3] == "noload":
-                notes.append(f"modules.conf has '{old} {e[2]}'; left as it is.")
-    changes = {}
-    for path, orig in origs.items():
-        data = _cfgr_join_like(lines[path], orig)
-        if data != orig:
-            changes[path] = (orig, data)
-    return changes, records, notes, ""
-
-def _cfgr_std_groups(paths) -> list[str]:
-    return [g for g in _CFGR_GROUPS if any(_cfgr_path_allowed(g, p) for p in paths)]
-
-def _cfgr_act_std(payload: dict, mode: str) -> dict:
-    cid = str(payload.get("id", ""))
-    check = next((c for c in _cfgr_std_checks() if c["id"] == cid), None)
-    state = _cfgr_std_state()
-    if mode == "revert":
-        return _cfgr_std_revert(cid, state)
-    if check is None or not check["apply"]:
-        return {"success": False, "output": "That setting cannot be applied from here."}
-    changes, records, notes, err = _cfgr_std_plan(check)
-    if err:
-        return {"success": False, "output": "Not applied: " + err}
-    lines: list[str] = []
-    if not changes:
-        lines.append("Already standard. Nothing to change.")
-    for path, (old, new) in changes.items():
-        d = difflib.unified_diff(old.decode("utf-8", "replace").splitlines(), new.decode("utf-8", "replace").splitlines(),
-                                 f"now: {path}", f"standard: {path}", lineterm="")
-        lines += [""] + list(d)
-    if notes:
-        lines += [""] + notes
-    result = {"success": True, "changes": sorted(changes)}
-    if mode == "preview" or not changes:
-        result["output"] = "\n".join(lines)
-        return result
-    groups = _cfgr_std_groups(changes)
-    auto_id, dropped = _cfgr_auto_point(f"standard {check['label']}", groups)
-    head = [f"Current files saved first as automatic copy {auto_id}."]
-    ok = True
-    for path, (_old, new) in changes.items():
-        uid, gid, fmode = _cfgr_meta_of(path)
-        res = _cfgr_write_file(path, new, uid, gid, fmode)
-        ok = ok and not res.startswith("NOT")
-        head.append(f"  {path}: {res}")
-    if dropped:
-        head.append("Oldest automatic copies dropped: " + ", ".join(dropped))
-    head.append("Services were NOT restarted. Use the Restart buttons below when ready.")
-    kept = {(r["kind"], r["path"], r.get("section", r.get("name")), r.get("key", "")): r
-            for r in (state.get(cid, {}).get("records") or [])}
-    for r in records:
-        kept.setdefault((r["kind"], r["path"], r.get("section", r.get("name")), r.get("key", "")), r)
-    state[cid] = {"applied_at": _cfgr_now(), "records": list(kept.values())}
-    _cfgr_std_save(state)
-    installed = _cfgr_installed()
-    log(f"{'OK' if ok else 'FAIL'}: CONFIG standard '{check['label']}' applied")
-    result.update({"success": ok, "output": "\n".join(head + [""] + lines),
-                   "restart_groups": [g for g in groups if installed[g]]})
-    return result
-
-def _cfgr_std_revert(cid: str, state: dict) -> dict:
-    recs = (state.get(cid) or {}).get("records") or []
-    if not recs:
-        return {"success": True, "output": "Nothing to undo: this tab has not changed that setting."}
-    origs: dict[str, bytes] = {}
-    lines: dict[str, list[str]] = {}
-    report: list[str] = []
-    for r in recs:
-        path = r.get("path", "")
-        if not any(_cfgr_path_allowed(g, path) for g in _CFGR_GROUPS):
-            report.append(f"{path}: not a file this tab manages, skipped")
-            continue
-        if path not in lines:
-            b = _cfgr_read(path)
-            if b is None:
-                report.append(f"{path}: not found, skipped")
-                continue
-            origs[path] = b
-            lines[path] = _cfgr_lines(b.decode("utf-8", "replace"))
-        what = f"[{r['section']}] {r['key']}" if r["kind"] == "ini" else r["name"]
-        if "new_line" not in r:
-            report.append(f"{what}: not recorded by this version, left as it is")
-            continue
-        lines[path], done = _cfgr_revert_line(lines[path], r)
-        if not done:
-            report.append(f"{what}: changed since (or no longer there), left as it is")
-        elif r["old_line"] is None:
-            report.append(f"{what}: removed again")
-        else:
-            report.append(f"{what}: back to {r['old'] if r['old'] else '(empty)'}")
-    changes = {p: (origs[p], _cfgr_join_like(lines[p], origs[p])) for p in origs if _cfgr_join_like(lines[p], origs[p]) != origs[p]}
-    ok = True
-    head: list[str] = []
-    groups: list[str] = []
-    if changes:
-        groups = _cfgr_std_groups(changes)
-        auto_id, _dropped = _cfgr_auto_point("undo standard", groups)
-        head.append(f"Current files saved first as automatic copy {auto_id}.")
-        for path, (_o, new) in changes.items():
-            uid, gid, fmode = _cfgr_meta_of(path)
-            res = _cfgr_write_file(path, new, uid, gid, fmode)
-            ok = ok and not res.startswith("NOT")
-            head.append(f"  {path}: {res}")
-        head.append("Services were NOT restarted. Use the Restart buttons below when ready.")
-    state.pop(cid, None)
-    _cfgr_std_save(state)
-    log(f"{'OK' if ok else 'FAIL'}: CONFIG standard '{cid}' undone")
-    installed = _cfgr_installed()
-    return {"success": ok, "output": "\n".join(head + [""] + report).strip(),
-            "restart_groups": [g for g in groups if installed[g]]}
-
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "std_apply", "std_revert",
-                               "gateways_apply", "gateways_revert"})
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "gateways_apply", "gateways_revert", "id_set_callsign"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
 import os
@@ -11389,9 +11346,6 @@ def _route_config_reinstall(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_cfgr_ri_status()).encode("utf-8")
 
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
-    "std_preview": lambda p: _cfgr_act_std(p, "preview"),
-    "std_apply": lambda p: _cfgr_act_std(p, "apply"),
-    "std_revert": lambda p: _cfgr_act_std(p, "revert"),
     "save_restore": _cfgr_act_save_restore,
     "retake_restore": _cfgr_act_retake_restore,
     "create_point": _cfgr_act_create_point,
@@ -11408,6 +11362,9 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "reinstall_preview": _cfgr_act_reinstall_preview,
     "reinstall_start": _cfgr_act_reinstall_start,
     "reinstall_dismiss": _cfgr_act_reinstall_dismiss,
+    "id_set_callsign_preview": lambda p: _cfgr_act_id_set_callsign(p, False),
+    "id_set_callsign": lambda p: _cfgr_act_id_set_callsign(p, True),
+    "usrp_verify": _cfgr_act_usrp_verify,
 }
 
 def _dispatch_config_action(payload: dict) -> dict:
@@ -11463,7 +11420,7 @@ function cfgLabel(g) {
 function cfgOut(outId, text, ok) {
   var out = outId ? document.getElementById(outId) : null;
   if (!out) return;
-  out.className = 'asl3-console shown' + (ok === false ? ' fail' : (ok === null ? ' placeholder' : ''));
+  out.className = 'asl3-console shown' + (ok === false ? ' fail' : (ok === null ? ' placeholder' : (ok === true ? ' ok' : '')));
   out.textContent = text;
 }
 
@@ -11593,6 +11550,7 @@ function cfgApplyPreset(btn, pid) {
               'Files changed: ' + res.changes.join(', ') + '\n';
     if (res.removed && res.removed.length) msg += '\nPRIVATE NODES THAT WILL BE REMOVED: ' + res.removed.join(', ') + '\n';
     if (res.warnings && res.warnings.length) msg += '\nWARNINGS:\n- ' + res.warnings.join('\n- ') + '\n';
+    if (res.bridge && res.bridge.length) msg += '\nBRIDGE NODE VALUES (saved -> written, upstream USRP2M17):\n- ' + res.bridge.join('\n- ') + '\n';
     msg += '\nThe current files are saved first as an automatic copy, so this can be undone.';
     if (!confirm(msg)) return;
     cfgPost({action: 'preset_apply', preset: pid}, 'cfg-restore-out', btn);
@@ -11659,44 +11617,6 @@ function cfgListening(btn) {
   });
 }
 
-function cfgStd(btn, id, action) {
-  var c = ((CFG_STATE && CFG_STATE.standard) || []).filter(function(x) { return x.id === id; })[0] || {label: id};
-  if (action === 'std_revert') {
-    if (!confirm('Put back the values this tab replaced for "' + c.label + '"?\n\nThe current files are saved first as an automatic copy.')) return;
-    cfgPost({action: 'std_revert', id: id}, 'cfg-std-out', btn);
-    return;
-  }
-  cfgPost({action: 'std_preview', id: id}, 'cfg-std-out', btn).then(function(res) {
-    if (!res || !res.success || !res.changes || !res.changes.length) return;
-    if (!confirm('Set "' + c.label + '" to the standard value?\n\nThe change is shown below the buttons. The current files are saved first as an automatic copy, and Undo puts the old values back. Services are not restarted until you press Restart.')) return;
-    cfgPost({action: 'std_apply', id: id}, 'cfg-std-out', btn);
-  });
-}
-
-function cfgRenderStd(d) {
-  var box = document.getElementById('cfg-std');
-  var std = d.standard || [];
-  var rows = std.filter(function(c) { return c.state === 'differs' || c.applied; });
-  var same = std.filter(function(c) { return c.state === 'ok' && !c.applied; }).length;
-  var h = '';
-  if (!rows.length) h = '<span class="cfg-hint">Everything this tab knows about matches the stock values.</span>';
-  else {
-    h = '<table class="cfg-table"><tr><th>Setting</th><th>Now</th><th>Stock</th><th></th></tr>';
-    var last = '';
-    rows.forEach(function(c) {
-      if (c.group_label !== last) { h += '<tr><td colspan="4"><b>' + cfgEsc(c.group_label) + '</b></td></tr>'; last = c.group_label; }
-      var btns = '';
-      if (c.apply && c.state === 'differs') btns += '<button class="btn-run" onclick="cfgStd(this,\'' + cfgEsc(c.id) + '\',\'std_apply\')">Apply</button> ';
-      if (c.applied) btns += '<button class="btn-purge" onclick="cfgStd(this,\'' + cfgEsc(c.id) + '\',\'std_revert\')">Undo</button>';
-      if (!c.apply) btns = '<span class="cfg-hint">shown only</span>';
-      h += '<tr><td>' + cfgEsc(c.label) + '<div class="cfg-hint">' + cfgEsc(c.note) + '</div></td><td>' + cfgEsc(c.now || (c.state === 'ok' ? 'matches stock' : '')) +
-           '</td><td>' + cfgEsc(c.stock) + '</td><td>' + btns + '</td></tr>';
-    });
-    h += '</table>';
-  }
-  box.innerHTML = h + (same ? '<div class="cfg-hint">' + same + ' other settings already match stock.</div>' : '');
-}
-
 function cfgGateways(btn, action) {
   var msg = action === 'gateways_apply'
     ? 'Enable and start the digital-mode gateways now?\n\nThey start at every boot afterwards. This does not change any config file.'
@@ -11749,11 +11669,14 @@ function cfgRender(d) {
   if (pc.length) ph += pc.map(function(x) { return '<div class="ov-banner lvl-danger">' + cfgEsc(x) + '</div>'; }).join('');
   if (d.ambe_pairing) ph += '<div class="ov-banner lvl-warn">' + cfgEsc(d.ambe_pairing) + '</div>';
   (d.gateway_warnings || []).forEach(function(x) { ph += '<div class="ov-banner lvl-warn">' + cfgEsc(x) + '</div>'; });
+  (d.usrp_warnings || []).forEach(function(x) { ph += '<div class="ov-banner lvl-warn">' + cfgEsc(x) + '</div>'; });
   if (!ph) ph = '<span class="cfg-hint">No UDP port clashes (' + (d.ports_checked || 0) + ' listening ports checked)' +
     (d.ambe_paired_with ? '; Analog_Bridge and MMDVM_Bridge are paired on the ' + cfgEsc(d.ambe_paired_with) + ' mode' : '') +
     ((d.gateway_pairs_ok || []).length ? '; paired: ' + d.gateway_pairs_ok.map(cfgEsc).join(', ') : '') + '.</span>';
+  if ((d.usrp_pairs_ok || []).length) ph += '<div class="cfg-hint">USRP pairs: ' + d.usrp_pairs_ok.map(cfgEsc).join('; ') + '.</div>';
   ports.innerHTML = ph;
-  cfgRenderStd(d);
+  var sv = document.getElementById('cfg-usrp-verify-btn');
+  if (sv) sv.title = d.sysmon_installed ? 'Run SysMon\'s own USRP pair check and compare' : 'SysMon is not installed on this node';
   var gwBox = document.getElementById('cfg-gw');
   var gl = d.gateways || [];
   if (!gl.length) gwBox.innerHTML = '<span class="cfg-hint">Could not read the services (systemctl not available).</span>';
@@ -11853,7 +11776,7 @@ function cfgRenderReinstall(ri) {
   var tail = (ri.log || []).join('\n');
   if (tail) {
     out.style.display = 'block';
-    out.className = 'asl3-console shown' + (phase === 'done_no_reboot' ? ' fail' : '');
+    out.className = 'asl3-console shown' + (phase === 'done_no_reboot' ? ' fail' : (phase === 'rebooted' ? ' ok' : ''));
     out.textContent = tail;
   }
   if (busy) cfgRiPoll(); else cfgRiStop();
@@ -11939,7 +11862,12 @@ function cfgIdRender(d) {
           gen.forEach(function(r) { h += cfgIdRow(r, gid); });
         }
       } else {
-        if (gid !== 'alone') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) + '</td></tr>';
+        if (gid === 'callsign') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) +
+          ' <span class="cfg-id-set"><input type="text" id="cfg-id-call" maxlength="7" placeholder="NEW CALL" autocomplete="off"' +
+          ' spellcheck="false" value="' + cfgEsc(CFG_ID_CALL) + '" oninput="cfgIdCallInput(this)"' +
+          ' onkeydown="if(event.key===\'Enter\')cfgIdSetCall(document.getElementById(\'cfg-id-call-btn\'));">' +
+          ' <button class="btn-run" id="cfg-id-call-btn" onclick="cfgIdSetCall(this)">Set everywhere</button></span></td></tr>';
+        else if (gid !== 'alone') h += '<tr><td colspan="5"><b>' + cfgEsc(g.label) + '</b> ' + cfgIdChip(g.state) + '</td></tr>';
         mine.forEach(function(r) { h += cfgIdRow(r, gid); });
       }
     });
@@ -11950,6 +11878,30 @@ function cfgIdRender(d) {
 }
 
 var CFG_ID_REVEALED = false;
+var CFG_ID_CALL = '';
+
+function cfgIdCallInput(el) {
+  var v = el.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7);
+  if (el.value !== v) el.value = v;
+  CFG_ID_CALL = v;
+}
+
+function cfgIdSetCall(btn) {
+  var el = document.getElementById('cfg-id-call');
+  if (el) cfgIdCallInput(el);
+  var call = CFG_ID_CALL;
+  if (!/^(?=.*[0-9])(?=.*[A-Z])[A-Z0-9]{3,7}$/.test(call)) {
+    cfgOut('cfg-id-call-out', 'A callsign is 3 to 7 letters and digits, with at least one digit.', false);
+    return;
+  }
+  cfgPost({action: 'id_set_callsign_preview', callsign: call}, 'cfg-id-call-out', btn).then(function(res) {
+    if (!res.success || !res.changes) return;
+    if (!confirm(res.output + '\n\nAn automatic save point is taken first. Write these changes?')) return;
+    cfgPost({action: 'id_set_callsign', callsign: call}, 'cfg-id-call-out', btn).then(function(r) {
+      if (r.success) { CFG_ID_CALL = ''; var e = document.getElementById('cfg-id-call'); if (e) e.value = ''; }
+    });
+  });
+}
 
 function cfgIdButtons() {
   document.getElementById('cfg-id-reveal-btn').style.display = CFG_ID_REVEALED ? 'none' : '';
@@ -12076,7 +12028,7 @@ def _render_config_panel() -> str:
     <div class="step-body">Saves only the wiring from this node: private nodes (1000-1999) in rpt.conf and their
       [nodes] lines, their extensions, chan_usrp in modules.conf, the USRP2M17.ini ports, and the Analog_Bridge.ini
       [USRP] ports (the digital-mode ports change with the mode, so they are not included). Never callsigns, IDs or passwords. Applying it also keeps
-      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the standard USRP values. Run it on the travel node; apply it on any node from the Restore list
+      Allmon3 in step with the private nodes and gives bridge nodes (USRP channels) the upstream USRP2M17 values; Preview lists each value it changes. Run it on the travel node; apply it on any node from the Restore list
       above.</div>
     <div class="step-actions">
       <button class="btn-copy" onclick="cfgPresetCapture(this,false)">Preview</button>
@@ -12090,7 +12042,9 @@ def _render_config_panel() -> str:
       <span class="cfg-hint" id="cfg-id-state"></span></div>
     <div class="step-body">Callsigns, IDs and passwords in this node's config files, grouped by which copies must hold the
       same value. Values are masked; Reveal shows them all, passwords included, after the root password, until you press
-      Hide or reload the page. Read only: change a value in its file, or for phone accounts on the dashboard's Phone tab.
+      Hide or reload the page. Set everywhere on the Callsign line writes a new callsign to every callsign field listed,
+      to the dashboard's asl_dvs.conf and to 44helper's own config, after a preview and an automatic save point. It
+      restarts nothing. Change other values in their file, or for phone accounts on the dashboard's Phone tab.
       The Travel Node preset never carries any of these.</div>
     <div class="step-actions">
       <button class="btn-copy" id="cfg-id-reveal-btn" onclick="cfgIdAskReveal()">Reveal</button>
@@ -12105,17 +12059,7 @@ def _render_config_panel() -> str:
       <span id="cfg-id-err" style="color:var(--red)"></span>
     </div>
     <div id="cfg-id"></div>
-  </div>
-
-  <div class="step-card">
-    <div class="step-head"><div class="step-title">Standard configuration</div></div>
-    <div class="step-body">How this node differs from the stock ASL3 and DVSwitch files, with the standard value for each.
-      Nothing changes by itself: Apply shows the change first, saves the current files as an automatic copy, and Undo
-      puts the old value back. Bridge nodes (the private nodes that use a USRP channel) get the upstream USRP2M17 values,
-      which is also what a preset does to the bridge nodes it applies. Identity (callsigns, IDs, passwords) and this node's
-      radio tuning are never listed.</div>
-    <div id="cfg-std"></div>
-    <div class="asl3-console shown placeholder" id="cfg-std-out">(nothing run yet)</div>
+    <div class="asl3-console shown placeholder" id="cfg-id-call-out">(type a callsign on the Callsign line and press Set everywhere)</div>
   </div>
 
   <div class="step-card">
@@ -12136,12 +12080,17 @@ def _render_config_panel() -> str:
     <div class="step-body">UDP ports that more than one program listens on, across rpt.conf, Analog_Bridge.ini,
       DVSwitch.ini, MMDVM_Bridge.ini, USRP2M17.ini, ircddbgateway and the YSF, P25 and NXDN gateways. A sender
       pointing at a listener is a pair, not a clash. It also checks that each gateway's ports mirror MMDVM_Bridge's and
-      that DVSwitch.ini's RemotePort matches the gateway's command port. "Check what is listening now" reads the live
+      that DVSwitch.ini's RemotePort matches the gateway's command port, and that each rpt.conf USRP channel
+      (rxchannel = USRP/127.0.0.1:A:B) has a bridge that listens on A and sends to B: Analog_Bridge [USRP] rxPort/txPort
+      or USRP2M17 [USRP Network] LocalPort/DstPort. "Verify with SysMon" runs SysMon's own check, if SysMon is
+      installed, and compares the two. "Check what is listening now" reads the live
       listening ports and the firewall: it shows which ports are reachable from the network, flags the gateway command
       ports and any port that is only open through a broad firewall range, and lists configured ports nothing listens on.</div>
     <div id="cfg-ports"></div>
-    <div class="step-actions"><button class="btn-copy" onclick="cfgListening(this)">Check what is listening now</button></div>
+    <div class="step-actions"><button class="btn-copy" onclick="cfgListening(this)">Check what is listening now</button>
+      <button class="btn-copy" id="cfg-usrp-verify-btn" onclick="cfgPost({action: 'usrp_verify'}, 'cfg-usrp-out', this)">Verify with SysMon</button></div>
     <div id="cfg-listen"></div>
+    <div class="asl3-console shown placeholder" id="cfg-usrp-out">(press Verify with SysMon to compare the USRP pairs with SysMon's own check)</div>
   </div>
 
   <div class="step-card" id="cfg-reinstall" style="display:none">
@@ -13355,7 +13304,7 @@ function renderPiInstall(kind, data) {
       html += '<div class="step-actions"><button class="btn-copy" onclick="piCopyStep(this,\\'' + kind + '\\',\\'service_ports\\')">Copy</button></div>';
     }
     var pst = (window._piState || {})[meta.id];
-    var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+    var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
     var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
     html += '<div class="' + consoleCls + '" id="pi-out-' + kind + '-' + meta.id + '">' + consoleTxt + '</div>';
     if (meta.id === 'paste_config') { html += _piDnsCardHtml(kind, data.dns || {}); if (kind === 'split') { html += _piAllowedIpsCardHtml(kind, data.allowed_ips || {}); } if (kind === 'full') { html += _piReflectorPortsCardHtml(kind, data.reflector_egress || {}); } }
@@ -13418,7 +13367,7 @@ function _piDnsCardHtml(kind, dns) {
   html += '</div>';
   html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">On systemd-resolved the resolvectl options are preferred (no resolvconf needed). Full routes all DNS through the tunnel; split routes only *.ampr.org. Restart the tunnel after applying.</div>';
   var pst = (window._piState || {})['set_dns'];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   html += '<div class="' + consoleCls + '" id="pi-dns-out-' + kind + '">' + consoleTxt + '</div>';
   html += '</div>';
@@ -13473,7 +13422,7 @@ function _piAllowedIpsCardHtml(kind, aip) {
     html += '<div class="step-body">AllowedIPs is <code>' + asl3EscapeAttr(current) + '</code>, already narrowed (not the full-tunnel 0.0.0.0/0 shape), so this repair has nothing to do. Edit the config by hand for a different range.</div>';
   }
   var pst = (window._piState || {})['repair_allowed_ips'];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   html += '<div class="' + consoleCls + '" id="pi-aip-out-' + kind + '">' + consoleTxt + '</div>';
   html += '</div>';
@@ -13521,7 +13470,7 @@ function _piReflectorPortsCardHtml(kind, refl) {
   });
   html += '<div class="checklist">';
   order.forEach(function(net) {
-    html += '<div class="step-body" style="margin:.35rem 0 .1rem 0;color:#7fa8d8">' + asl3EscapeAttr(net) + '</div>';
+    html += '<div class="step-body" style="margin:.35rem 0 .1rem 0;color:#ffffff">' + asl3EscapeAttr(net) + '</div>';
     byNet[net].forEach(function(p) {
       var key = p.port + '/' + p.proto;
       var checkedAttr = (p.applied || p.confirmed) ? 'checked' : '';
@@ -13538,7 +13487,7 @@ function _piReflectorPortsCardHtml(kind, refl) {
   html += '<div class="step-actions"><button class="btn-run" onclick="piApplyReflectorPorts()">Apply egress rules for checked</button>';
   html += '<button class="btn-copy" onclick="piRemoveReflectorPorts()">Remove all 44helper egress rules</button></div>';
   var pst = (window._piState || {})['add_reflector_egress'];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   html += '<div class="' + consoleCls + '" id="pi-refl-out-' + kind + '">' + consoleTxt + '</div>';
   html += '</div>';
@@ -13845,7 +13794,7 @@ var PI_PURGE_STEP_META = [
 
 function piPurgeCardHtml(meta, kind) {
   var pst = (window._piState || {})[meta.id];
-  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.output ? '' : ' placeholder'));
+  var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
   var html = '<div class="step-card" id="pi-card-' + kind + '-' + meta.id + '">';
   html += '<div class="step-head"><div class="step-title">' + meta.title + '</div></div>';
@@ -13959,11 +13908,11 @@ function _piConvertPost(stepId, confirmMsg, body, outId, onDone) {
   }).then(function(r) { return r.json(); }).then(function(result) {
     if (result.job_key && result.status === 'running') {
       _piConvertPollJob(result.job_key, outId, function(finalResult) {
-        _piConvertWriteOutput(outId, 'asl3-console shown' + (finalResult.success === false ? ' fail' : ''), finalResult.output || '(no output)');
+        _piConvertWriteOutput(outId, 'asl3-console shown' + (finalResult.success === false ? ' fail' : ' ok'), finalResult.output || '(no output)');
         onDone(finalResult);
       });
     } else {
-      _piConvertWriteOutput(outId, 'asl3-console shown' + (result.success === false ? ' fail' : ''), result.output || '(no output)');
+      _piConvertWriteOutput(outId, 'asl3-console shown' + (result.success === false ? ' fail' : ' ok'), result.output || '(no output)');
       onDone(result);
     }
   });
@@ -15148,7 +15097,7 @@ function asl3RenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="asl3-cmd-' + stateKey + '" value="' + asl3EscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="asl3-btn-' + stateKey + '" onclick="asl3RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="asl3CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="asl3-out-' + stateKey + '">' + (st.output ? asl3EscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="asl3-out-' + stateKey + '">' + (st.output ? asl3EscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -15199,7 +15148,7 @@ function asl3FinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('asl3-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -15474,7 +15423,7 @@ function dvRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="dv-cmd-' + stateKey + '" value="' + dvEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -15525,7 +15474,7 @@ function dvFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('dv-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -15776,7 +15725,7 @@ function svxRenderStepList(mode, distro) {
       if (step.note) html += renderStepWarn(svxEscapeAttr(step.note));
       if (step.manual_block) {
         html += '<textarea class="cmd-preview" id="svx-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-          'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+          'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
           'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + svxEscapeAttr(step.cmd) + '</textarea>';
       } else {
         html += '<input type="text" class="asl3-cmd-input" readonly value="' + svxEscapeAttr(step.cmd) + '">';
@@ -15798,7 +15747,7 @@ function svxRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="svx-cmd-' + stateKey + '" value="' + svxEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="svx-btn-' + stateKey + '" onclick="svxRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="svx-out-' + stateKey + '">' + (st.output ? svxEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="svx-out-' + stateKey + '">' + (st.output ? svxEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -15849,7 +15798,7 @@ function svxFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('svx-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -16108,7 +16057,7 @@ function m17RenderStepList(mode, distro) {
       html += '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(m17EscapeAttr(step.note));
       html += '<textarea class="cmd-preview" id="m17-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+        'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
         'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + m17EscapeAttr(step.cmd) + '</textarea>';
       html += '<div class="step-actions"><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
       html += '</div>';
@@ -16143,7 +16092,7 @@ function m17RenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="m17-cmd-' + stateKey + '" value="' + m17EscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="m17-btn-' + stateKey + '" onclick="m17RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="m17-out-' + stateKey + '">' + (st.output ? m17EscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="m17-out-' + stateKey + '">' + (st.output ? m17EscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -16194,7 +16143,7 @@ function m17FinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('m17-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -16453,7 +16402,7 @@ function ampRenderStepList(mode, distro) {
       html += '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(ampEscapeAttr(step.note));
       html += '<textarea class="cmd-preview" id="amp-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+        'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
         'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + ampEscapeAttr(step.cmd) + '</textarea>';
       html += '<div class="step-actions"><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
       html += '</div>';
@@ -16480,7 +16429,7 @@ function ampRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="amp-cmd-' + stateKey + '" value="' + ampEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="amp-btn-' + stateKey + '" onclick="ampRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="amp-out-' + stateKey + '">' + (st.output ? ampEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="amp-out-' + stateKey + '">' + (st.output ? ampEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -16521,7 +16470,7 @@ function ampFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('amp-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -16759,7 +16708,7 @@ function cfRenderStepList(mode, distro) {
       html += '<span class="step-pill not_started">Manual</span></div>';
       if (step.note) html += renderStepWarn(cfEscapeAttr(step.note));
       html += '<textarea class="cmd-preview" id="cf-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
-        'color:#b8e6c8;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
+        'color:#ffffff;font-family:var(--mono);font-size:.74rem;border:1px solid var(--border2);' +
         'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + cfEscapeAttr(step.cmd) + '</textarea>';
       html += '<div class="step-actions"><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
       html += '</div>';
@@ -16786,7 +16735,7 @@ function cfRenderStepList(mode, distro) {
       html += '<input type="text" class="asl3-cmd-input" id="cf-cmd-' + stateKey + '" value="' + cfEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="cf-btn-' + stateKey + '" onclick="cfRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
-    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="cf-out-' + stateKey + '">' + (st.output ? cfEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cf-out-' + stateKey + '">' + (st.output ? cfEscapeAttr(st.output) : '(not run yet)') + '</div>';
     html += '</div>';
   });
   return html || '<div class="step-body">(no steps defined)</div>';
@@ -16827,7 +16776,7 @@ function cfFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('cf-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -17064,7 +17013,7 @@ function updStepCardHtml(step, isAlt) {
       '<input type="checkbox" id="upd-quiet-' + stateKey + '" checked> Run in quiet mode (pauses node services, low priority, keeps running if 44helper restarts)</label>';
   }
   html += '<div class="step-actions"><button class="btn-run" id="upd-btn-' + stateKey + '" onclick="updRunStep(this,\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="updCopyStep(this,\\'' + step.id + '\\')">Copy</button></div>';
-  html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.output ? '' : ' placeholder')) + '" id="upd-out-' + stateKey + '">' + (st.output ? updEscapeAttr(st.output) : '(not run yet)') + '</div>';
+  html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="upd-out-' + stateKey + '">' + (st.output ? updEscapeAttr(st.output) : '(not run yet)') + '</div>';
   html += '</div>';
   return html;
 }
@@ -17098,7 +17047,7 @@ function updFinishStep(stateKey, result, pill, btn) {
   if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
   var out = document.getElementById('upd-out-' + stateKey);
   if (out) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }
   if (btn) btn.disabled = false;
@@ -17247,7 +17196,7 @@ function updLookupInstalled() {
   out.textContent = 'Running\\u2026';
   fetch('/api/update/lookup_installed', {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}})
     .then(function(r) { return r.json(); }).then(function(result) {
-      out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+      out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
       out.textContent = result.output || '(no output)';
     }).catch(function(e) {
       out.className = 'asl3-console shown fail';
@@ -17267,7 +17216,7 @@ function updLookupPolicy() {
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
     body: JSON.stringify({pkg: pkg})
   }).then(function(r) { return r.json(); }).then(function(result) {
-    out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
     out.textContent = result.output || '(no output)';
   }).catch(function(e) {
     out.className = 'asl3-console shown fail';
@@ -17444,7 +17393,7 @@ function sysoptRunAction(action, btn) {
   }).then(function(r) { return r.json(); }).then(function(result) {
     if (result.job_key && result.status === 'running') { sysoptPollJob(result.job_key, out, btn); return; }
     if (out) {
-      out.className = 'asl3-console shown' + (result.success ? '' : ' fail');
+      out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
       var lines = [];
       if (result.commands && result.commands.length) {
         lines = lines.concat(result.commands.map(function(c) { return '$ ' + c; }));
@@ -17473,7 +17422,7 @@ function sysoptPollJob(jobKey, out, btn) {
       setTimeout(function() { sysoptPollJob(jobKey, out, btn); }, jobPollMs(1000));
       return;
     }
-    if (out) { out.className = 'asl3-console shown' + (st.success ? '' : ' fail'); out.textContent = st.output || '(no output)'; }
+    if (out) { out.className = 'asl3-console shown' + (st.success ? ' ok' : ' fail'); out.textContent = st.output || '(no output)'; }
     if (btn) btn.disabled = false;
     refreshSystemOpt();
   }).catch(function(e) {
@@ -17981,7 +17930,7 @@ function qmAction(action) {
   if (offBtn) offBtn.disabled = true;
   if (out) { out.className = 'asl3-console shown placeholder'; out.textContent = 'Working\u2026 (stopping or starting services can take a minute)'; }
   return qmPost({action: action, confirm: true}).then(function(res) {
-    if (out) { out.className = 'asl3-console shown' + (res.success ? '' : ' fail'); out.textContent = res.output || '(no output)'; }
+    if (out) { out.className = 'asl3-console shown' + (res.success ? ' ok' : ' fail'); out.textContent = res.output || '(no output)'; }
     if (res.restore_ok === false) _qmLastRestoreFailed = true;
     else if (action === 'off' && res.restore_ok === true) _qmLastRestoreFailed = false;
     refreshQuiet();
@@ -19095,13 +19044,13 @@ def render_page(cfg: configparser.ConfigParser) -> str:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{APP_TITLE}</title>
+<title>{APP_HEADER}</title>
 <style>{_CSS}</style>
 </head>
 <body>
 <div id="login-screen">
   <div id="login-card">
-    <h2>{APP_TITLE}</h2>
+    <h2>{APP_HEADER}</h2>
     <p class="sub">Sign in with this node's root password.</p>
     <form onsubmit="_doLogin(event)">
       <label for="login-pw">Root password</label>
@@ -19113,7 +19062,7 @@ def render_page(cfg: configparser.ConfigParser) -> str:
 </div>
 <header>
   <div class="hdr-left">
-    <div class="logo">{APP_TITLE}</div>
+    <div class="logo">{APP_HEADER}</div>
     <div class="logo-sub">{identity_line}</div>
   </div>
   <div class="hdr-right">

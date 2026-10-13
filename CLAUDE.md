@@ -10,6 +10,22 @@
   the uninstaller) serve both builds. When a pi02w change needs one of them,
   say so before changing it.
 
+## Naming: "Node Controller"
+
+- **System names stay.** Paths, file names, service and unit names, markers and
+  keys keep `asl_dvs` / `ASL-DVS` (for example `/etc/asl_dvs`,
+  `asl_dvs_launch.py`, `#ASL-DVS-VIDEO-OFF#`, `ASL-DVS_User_Manual.pdf`, the
+  repo name and its URLs).
+- **Text docs** (manuals, guides): write "Node Controller" where the text says
+  "ASL-DVS". Titles and headers drop "ASL-DVS"; a header that would be left empty
+  says "Node Controller".
+- **Code:** when a file gets a new version, drop "ASL-DVS" from its titles and
+  headers only (page title, logo/header bar, tab and section titles, console
+  banner). Other text in the code, and data it writes, stays as it is.
+- **Exception:** SysMon's **ASL-DVS** tab keeps its name, in the code and in
+  the docs (the tab button, its Edit-page checkbox, "Hide from ASL-DVS tab",
+  and the manual's references to that tab).
+
 ## Repo conventions
 
 - **Comment-stripped copies only.** Scripts in the repo carry no comments or
@@ -22,11 +38,21 @@
 - **Every change gets a new version.** Rename the file
   (`<tool>_vX_Y_Z_YYYYMMDD.py`), update `VERSION` / `APP_VERSION` /
   `SCRIPT_VERSION`, and update the README file list. A pi02w version ends in
-  `-pi02w` (for example `9.3.71.3-pi02w`).
+  `-pi02w`.
+- **Versions have three parts**, `X.Y.Z` (for example `5.31.0`,
+  `9.3.72-pi02w`). No four-part numbers in new builds. A tool still on four
+  parts moves to the next three-part number above it (`9.3.71.18-pi02w` ->
+  `9.3.72-pi02w`), so instmon still sorts the new file as newer. A tool on two
+  parts adds `.0` (`5.30` -> `5.31.0`). No letter suffix (such as `x`).
 - **The shared launcher** (`/usr/local/bin/asl_dvs_launch.py`) is written by
   several files. Its text must stay identical in all of them.
-- **Install manuals** in `docs/` name the current files and versions. Update
-  the matching manual when a file it lists changes.
+- **Manuals** (the user manual, the dialplan guide and the install manuals in
+  `docs/`) are updated only when the request says so. A code change alone does
+  not update them.
+
+## Workflow
+
+- After a build is pushed, open the pull request and merge it without asking.
 
 ## Before pushing
 

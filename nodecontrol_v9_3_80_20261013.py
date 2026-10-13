@@ -8,7 +8,6 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
-import io
 import hashlib
 import hmac
 import ipaddress
@@ -40,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.71.16-pi02w"
-BUILD_DATE   = "2026-10-12"
+VERSION      = "9.3.80"
+BUILD_DATE   = "2026-10-13"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -103,64 +102,6 @@ _SERVICE_NAME     = "nodecontrol.service"
 _SERVICE_PATH     = "/etc/systemd/system/nodecontrol.service"
 _LEGACY_SERVICE_NAME = "asl_dvs_dashboard.service"
 _LEGACY_SERVICE_PATH = "/etc/systemd/system/asl_dvs_dashboard.service"
-_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
-_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
-_LAUNCHER_CODE = '''#!/usr/bin/env python3
-import os
-import runpy
-import sys
-
-_OFF = "/etc/asl_dvs/launch_no_"
-_AGAIN = "ASL_DVS_LAUNCH"
-
-if _AGAIN in os.environ:
-    if os.environ.pop(_AGAIN) == "arena":
-        os.environ.pop("MALLOC_ARENA_MAX", None)
-else:
-    flags = []
-    env = dict(os.environ)
-    env[_AGAIN] = ""
-    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
-        flags.append("-OO")
-    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
-        env["MALLOC_ARENA_MAX"] = "2"
-        env[_AGAIN] = "arena"
-    if (flags or env[_AGAIN]) and sys.executable:
-        try:
-            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
-        except OSError:
-            pass
-
-def _trim_loop():
-    import time
-    time.sleep(60)
-    try:
-        import ctypes
-        trim = ctypes.CDLL("libc.so.6").malloc_trim
-    except (ImportError, OSError, AttributeError):
-        return
-    trim.argtypes = [ctypes.c_size_t]
-    while True:
-        trim(0)
-        time.sleep(300)
-
-if not os.path.exists(_OFF + "trim"):
-    import threading
-    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
-
-target = os.path.realpath(sys.argv[1])
-name = os.path.splitext(os.path.basename(target))[0]
-sys.argv = [target] + sys.argv[2:]
-sys.path.insert(0, os.path.dirname(target))
-if name.isidentifier():
-    runpy.run_module(name, run_name="__main__", alter_sys=True)
-else:
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("__main__", target)
-    main = importlib.util.module_from_spec(spec)
-    sys.modules["__main__"] = main
-    spec.loader.exec_module(main)
-'''
 _SERVICE_CONTENT  = f"""[Unit]
 Description=ASL-DVS Node Control Dashboard
 After=network.target
@@ -168,7 +109,7 @@ After=network.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -950,7 +891,7 @@ PHONE_TONE_MODES     = ("auto", "rfc4733", "inband", "info", "auto_info")
 _PHONE_TONE_MODE_DEF = "rfc4733"
 PHONE_TONE_PATHS     = ("provider", "node", "sound")
 _PHONE_TONE_PATH_DEF = "provider"
-_PHONE_TONE_PATH_LBL = {"provider": "Straight to the provider (v9.3.13 way)", "node": "Through the call (test)",
+_PHONE_TONE_PATH_LBL = {"provider": "Straight to the provider", "node": "Through the call",
                         "sound": "As sound (tone recordings)"}
 PHONE_DIALING    = ("phone", "ext")
 PHONE_INCOMING   = ("pin", "open", "off")
@@ -1435,9 +1376,9 @@ def _phone_validate(raw: dict) -> Tuple[Optional[dict], Optional[str]]:
     try:
         dialtime = int(raw.get("dialtime", cur.get("dialtime", _PHONE_DIALTIME_DEF)))
     except (ValueError, TypeError):
-        return None, "Dial timeout must be a number of milliseconds"
+        return None, "*61 digit timeout must be a number of milliseconds"
     if not (_PHONE_DIALTIME_MIN <= dialtime <= _PHONE_DIALTIME_MAX):
-        return None, f"Dial timeout must be {_PHONE_DIALTIME_MIN}–{_PHONE_DIALTIME_MAX} ms"
+        return None, f"*61 digit timeout must be {_PHONE_DIALTIME_MIN}–{_PHONE_DIALTIME_MAX} ms"
     legacy = [f for f in cur.get("favorites", []) if f.get("number")]
     if legacy and nets:
         home = next((n for n in nets if n["id"] == active), None) or nets[0]
@@ -2505,7 +2446,7 @@ def action_phone_dial(number: str) -> Tuple[bool, str]:
     _phone_state_cache[0] = 0.0
     if tones:
         if not by_asterisk:
-            threading.Thread(target=_phone_after_answer, args=(tones, doc.get("dialtime")),
+            threading.Thread(target=_phone_after_answer, args=(tones,),
                              name="phone-then-send", daemon=True).start()
         return True, f"Dialing {num} on {net['name']}… (saved tones go out when it answers)"
     return True, f"Dialing {num} on {net['name']}…"
@@ -2816,13 +2757,9 @@ def _phone_fav_tones(net: dict, num: str, typed: str) -> str:
             return str(f["tones"])
     return ""
 
-def _phone_after_answer(tones: str, dialtime_ms) -> None:
-    try:
-        limit = float(dialtime_ms) / 1000.0
-    except (TypeError, ValueError):
-        limit = _PHONE_DIALTIME_DEF / 1000.0
+def _phone_after_answer(tones: str) -> None:
     start = time.monotonic()
-    deadline, seen = start + limit + 15.0, False
+    deadline, seen = start + _PHONE_RING_MS / 1000.0 + 10.0, False
     while time.monotonic() < deadline:
         state = _phone_call_state(0.0)["state"]
         if state == "in_call":
@@ -5297,16 +5234,6 @@ def _ircddb_rc_link(target: str) -> Tuple[bool, str]:
             pass
         sock.close()
 
-def _dstar_rc_unlink() -> None:
-    if _ircddb_rc_settings() is None or not _svc_is_active(_GATEWAY_SERVICE_MAP["DSTAR"]):
-        return
-    remaining = _dvs_settle_until - time.monotonic()
-    if remaining > 0:
-        time.sleep(remaining)
-    ok, why = _ircddb_rc_link("")
-    if not ok:
-        log.warning("D-STAR: remote-control unlink failed (%s)", why)
-
 _FAV_SLOTS = 10
 
 def _tg_blank_row(r) -> bool:
@@ -5640,154 +5567,75 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
+_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
+def _parse_astdb(f) -> dict:
+    rows, by_node = [], {}
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
+        node = parts[0]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node in by_node:
+            continue
+        call = parts[1] if len(parts) > 1 else ""
+        desc = parts[2] if len(parts) > 2 else ""
+        loc  = parts[3] if len(parts) > 3 else ""
+        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+        rows.append(row)
+        by_node[node] = row
+    return {"rows": rows, "by_node": by_node}
 
-class _LineDB:
+def _build_astdb(prev):
+    try:
+        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
+    except OSError:
+        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+    if prev and prev.get("found") and prev["mtime"] == mtime:
+        return prev, False
+    try:
+        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
+            part = _parse_astdb(f)
+    except OSError as e:
+        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
+        part = {"rows": [], "by_node": {}}
+    return {"found": True, "mtime": mtime, **part}, False
 
-    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
-        self._path_fn     = path_fn
-        self._node_of     = node_of
-        self._parse       = parse
-        self._missing_msg = missing_msg
-        self._warned      = False
-        self._lock        = threading.Lock()
-        self._index_key   = None
-        self._index       = (0, True, frozenset())
+_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
+                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
+                                                 "node menu will be empty (turn on "
+                                                 "asl3-update-astdb)", _ASTDB_PATH))
 
-    @property
-    def path(self) -> str:
-        return self._path_fn()
+def _load_astdb() -> dict:
+    return _astdb_cache.get()
 
-    def stat(self) -> "tuple[bool, int, int]":
-        try:
-            st = os.stat(self.path)
-        except OSError:
-            if self._missing_msg and not self._warned:
-                self._warned = True
-                log.warning(self._missing_msg, self.path)
-            return False, 0, 0
-        self._warned = False
-        return True, int(st.st_mtime), st.st_size
-
-    def index(self) -> "tuple[int, bool, frozenset]":
-        found, mtime, size = self.stat()
-        if not found:
-            return 0, True, frozenset()
-        key = (mtime, size)
-        with self._lock:
-            if self._index_key == key:
-                return self._index
-        seen: "set[str]" = set()
-        repeats = False
-        ctrl: "set[int]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                for i, raw in enumerate(f):
-                    if _CTRL_IN_RE.search(raw.strip()):
-                        ctrl.add(i)
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if node in seen:
-                        repeats = True
-                    else:
-                        seen.add(node)
-        except OSError:
-            return 0, True, frozenset()
-        result = (len(seen), repeats, frozenset(ctrl))
-        with self._lock:
-            self._index_key, self._index = key, result
-        return result
-
-    def total(self) -> int:
-        return self.index()[0]
-
-    def rows(self, raw_ok=None, node_ok=None):
-        _total, repeats, ctrl = self.index()
-        seen: "set[str]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                st = os.fstat(f.fileno())
-                with self._lock:
-                    same = self._index_key == (int(st.st_mtime), st.st_size)
-                if not same:
-                    repeats, raw_ok, ctrl = True, None, frozenset()
-                for i, raw in enumerate(f):
-                    quick = raw_ok is not None and i not in ctrl
-                    if not repeats and quick and not raw_ok(raw):
-                        continue
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if repeats:
-                        if node in seen:
-                            continue
-                        seen.add(node)
-                        if quick and not raw_ok(raw):
-                            continue
-                    if node_ok is not None and not node_ok(node):
-                        continue
-                    yield self._parse(raw, node)
-        except OSError as e:
-            log.warning("Could not read %s: %s", self.path, e)
-
-    def find(self, node: str):
-        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
-                             node_ok=lambda n: n == node):
-            return row
-        return None
-
-def _astdb_node_of(raw: str):
-    line = raw.strip()
-    if not line or line.startswith(("#", ";")):
-        return None
-    node = _strip_ctrl(line.split("|", 1)[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    return str(int(node))
-
-def _astdb_parse(raw: str, node: str):
-    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
-    call = parts[1] if len(parts) > 1 else ""
-    desc = parts[2] if len(parts) > 2 else ""
-    loc  = parts[3] if len(parts) > 3 else ""
-    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-
-_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
-                 "AllStar node list not found at %s — the ASL node menu will be empty "
-                 "(turn on asl3-update-astdb)")
-
-def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
+def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    found, mtime, _size = db.stat()
-    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
-           "total": db.total() if found else 0, "min": min_q,
+    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
+           "total": len(db["rows"]), "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not found or len(q) < min_q:
+    if not db["found"] or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
-        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
-        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
-        def raw_ok(raw):
-            low = raw.lower()
-            return all(w in low for w in words)
-        node_ok = None
     count, matches = 0, []
-    for r in db.rows(raw_ok, node_ok):
+    for r in db["rows"]:
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -5810,11 +5658,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _astdb.find(node)
+    row = _load_astdb()["by_node"].get(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -5837,72 +5685,44 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
-
-_echodb_refresh_lock = threading.Lock()
-_echodb_next_try     = 0.0
-_echodb_warned       = False
-
-def _echodb_node_of(raw: str):
-    parts = raw.split("|", 2)
-    if len(parts) < 2:
-        return None
-    node = _strip_ctrl(parts[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    node = str(int(node))
-    return None if node == "0" else node
-
-def _echodb_parse(raw: str, node: str):
-    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
-    return (node, call, f"{node} {call}".lower())
-
-def _echodb_write(text: str) -> None:
-    seen: "set[str]" = set()
-    rows = []
-    for raw in io.StringIO(text):
-        node = _echodb_node_of(raw)
-        if node is None or node in seen:
+def _parse_echodb(text: str) -> dict:
+    rows, by_node = [], {}
+    for raw in text.splitlines():
+        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
+        if len(parts) < 2:
             continue
-        seen.add(node)
-        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
-    rows.sort()
-    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
-    tmp = _ECHODB_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        for _n, node, call in rows:
-            f.write(f"{node}|{call}\n")
-    os.replace(tmp, _ECHODB_FILE)
+        node, call = parts[0], parts[1]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node == "0" or node in by_node:
+            continue
+        call = call[:24]
+        row = (node, call, f"{node} {call}".lower())
+        rows.append(row)
+        by_node[node] = row
+    rows.sort(key=lambda r: int(r[0]))
+    return {"rows": rows, "by_node": by_node}
 
-def _echodb_refresh() -> None:
-    global _echodb_next_try, _echodb_warned
-    with _echodb_refresh_lock:
-        now = time.time()
-        try:
-            age = now - os.stat(_ECHODB_FILE).st_mtime
-        except OSError:
-            age = None
-        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
-            return
-        out, ok = ami_command(_ECHODB_CMD, timeout=8)
-        if ok and "no such command" not in out.lower():
-            try:
-                _echodb_write(out)
-                _echodb_warned = False
-                return
-            except OSError as e:
-                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
-        _echodb_next_try = now + _ECHODB_TTL
-        if age is None and not _echodb_warned:
-            _echodb_warned = True
-            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
-                        _ECHODB_CMD)
+def _build_echodb(prev):
+    out, ok = ami_command(_ECHODB_CMD, timeout=8)
+    if ok and "no such command" not in out.lower():
+        part = _parse_echodb(out)
+        return {"found": True, "mtime": int(time.time()), **part}, False
+    if prev and prev.get("found"):
+        return prev, False
+    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
 
-_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
+_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
+                           lambda _r: log.warning("EchoLink station list not available "
+                                                  "(%s failed -- is chan_echolink loaded?)",
+                                                  _ECHODB_CMD))
+
+def _load_echodb() -> dict:
+    return _echodb_cache.get()
 
 def action_echo_directory(path: str) -> dict:
-    _echodb_refresh()
-    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -5914,8 +5734,7 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    _echodb_refresh()
-    row = _echodb.find(node)
+    row = _load_echodb()["by_node"].get(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
@@ -6295,11 +6114,11 @@ def _dvs_settle() -> None:
 _bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
 _bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 2
+_BRIDGE_DOWN_THRESHOLD     = 3
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 2
+_BRIDGE_UP_THRESHOLD    = 3
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6415,7 +6234,7 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
         _link_exit()
 
 def _link_poll_loop() -> None:
-    INTERVAL     = 2.0
+    INTERVAL     = 1.0
     fails        = 0
     last_detect  = time.monotonic()
     while True:
@@ -6494,9 +6313,6 @@ def _leave_page(prev_page: str, next_page: str, force: bool = False) -> None:
     try:
         if prev_page in ("DSTAR", "XLX"):
             _dvs("tune", DSTAR_UNLINK)
-            if next_page in ("DSTAR", "XLX"):
-                _dvs_settle()
-                _dstar_rc_unlink()
         elif prev_page == "PHONE" and prev_page != next_page:
             _phone_hangup_all()
         elif prev_page == "M17" and prev_page != next_page:
@@ -6673,8 +6489,6 @@ def action_tune(mode: str, tg: str, name: str) -> Tuple[bool, str]:
             _dvs("tune", DSTAR_UNLINK)
         _dvs("tune", TG_DISCONNECT)
         _dvs_settle()
-        if mode == "DSTAR":
-            _dstar_rc_unlink()
         if st.page != mode:
             return True, f"{mode} | Disconnected"
         if st.has_asl:
@@ -6764,18 +6578,13 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
         return False, (f"'{base}' is not a D-STAR reflector (REF, XRF or DCS plus 3 "
                        f"digits) or a gateway callsign (3-6 letters/digits)")
     tune_str = _dstar_link_str(base, module)
-    if kind == "gateway" and _ircddb_rc_settings() is None:
-        return False, ("Linking to a D-STAR gateway needs ircDDBGateway remote control "
-                       "(remoteEnabled=1, remotePassword and remotePort in "
-                       "/etc/ircddbgateway). dvswitch.sh tune drops the module "
-                       "letter for a gateway callsign, so the link would carry no audio.")
+    use_rc   = kind == "gateway" and _ircddb_rc_settings() is not None
     _ensure_page(page)
     st = get_state()
     _clear_foreign_link()
-    if kind != "gateway":
-        _dvs("tune", DSTAR_UNLINK)
-        _dvs("tune", TG_DISCONNECT)
-        _dvs_settle()
+    _dvs("tune", DSTAR_UNLINK)
+    _dvs("tune", TG_DISCONNECT)
+    _dvs_settle()
     bridge = _cfg.bridge_nodes[BRIDGE_SLOT_DIGITAL]
     if st.has_asl and bridge and bridge not in st.bridge_linked_nodes:
         _connect(bridge)
@@ -6783,12 +6592,14 @@ def _do_dstar_family_connect(page: str, base: str, module: str, name: str) -> Tu
     remaining = _dvs_settle_until - time.monotonic()
     if remaining > 0:
         time.sleep(remaining)
-    if kind == "gateway":
-        target = _dstar_link_target(base, module)
-        ok, out = _ircddb_rc_link(target)
-        if not ok:
-            return False, f"D-STAR link to gateway {target.replace(' ', '_')} failed: {out}"
-    else:
+    if use_rc:
+        ok, out = _ircddb_rc_link(_dstar_link_target(base, module))
+        if ok:
+            _dvs("tune", "CQCQCQ")
+        else:
+            log.warning("D-STAR: remote-control link to %s failed (%s) — "
+                        "falling back to dvswitch.sh tune", base, out)
+    if not use_rc or not ok:
         ok, out = _dvs("tune", tune_str)
     if not ok:
         fail_label = "XLX" if is_xlx else "D-STAR"
@@ -6816,10 +6627,13 @@ def action_xlx_connect(name: str, base: str, module: str) -> Tuple[bool, str]:
 
 @_link_locked
 def action_dstar_disconnect() -> Tuple[bool, str]:
+    if _ircddb_rc_settings() is not None:
+        ok, why = _ircddb_rc_link("")
+        if not ok:
+            log.warning("D-STAR: remote-control unlink failed (%s)", why)
     _dvs("tune", DSTAR_UNLINK)
     _dvs("tune", TG_DISCONNECT)
     _dvs_settle()
-    _dstar_rc_unlink()
     set_state(current_fav=None, current_fav_node=None, status="DSTAR | Ready")
     return True, "D-STAR disconnected"
 
@@ -6828,7 +6642,6 @@ def action_xlx_disconnect() -> Tuple[bool, str]:
     _dvs("tune", DSTAR_UNLINK)
     _dvs("tune", TG_DISCONNECT)
     _dvs_settle()
-    _dstar_rc_unlink()
     set_state(current_fav=None, current_fav_node=None, status="XLX | Ready")
     return True, "XLX disconnected"
 
@@ -7584,7 +7397,7 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>ASL-DVS Node Control</title>
+<title>Node Control</title>
 <style>
 /* ── :root variables ── */
 :root {
@@ -7613,9 +7426,9 @@ HTML = r"""<!DOCTYPE html>
   --pink-dim: #700050;
   --fcs: #00c4a0;
   --fcs-dim: #004840;
-  --text: #d0dff0;
+  --text: #ffffff;
   --text-bright: #f0f8ff;
-  --muted: #4a6080;
+  --muted: #ffffff;
   --mono: Arial, Helvetica, sans-serif;
   --sans: Arial, Helvetica, sans-serif;
 }
@@ -7698,7 +7511,7 @@ body.offline header {
   z-index: 1000;
   background: #3a0a0a;
   border-bottom: 1px solid #8b1a1a;
-  color: #ff6b6b;
+  color: var(--red);
   font-family: var(--mono);
   font-size: .858rem;
   text-align: center;
@@ -7748,7 +7561,7 @@ body.offline.perm-linked #perm-link-bar {
   font-size: .66rem;
   letter-spacing: .28em;
   text-transform: uppercase;
-  color: #5a7898;
+  color: #ffffff;
 }
 .sec-lbl-row {
   display: grid;
@@ -7772,7 +7585,7 @@ body.offline.perm-linked #perm-link-bar {
   padding: .1rem .3rem;
   border-radius: 3px;
   border: 1px solid var(--border2);
-  color: #3a5278;
+  color: #ffffff;
   background: transparent;
   letter-spacing: .04em;
   line-height: 1.2;
@@ -7799,7 +7612,7 @@ body.offline.perm-linked #perm-link-bar {
   0%   { box-shadow: 0 0 18px rgba(0,255,176,.85), inset 0 0 10px rgba(0,255,176,.2); }
   100% { box-shadow: none; }
 }
-#tg-indicator.ind-idle{color:#3a5278;border-color:var(--border2)}
+#tg-indicator.ind-idle{color: #ffffff;border-color:var(--border2)}
 #tg-indicator.ind-asl,#tg-indicator.ind-dmr,#tg-indicator.ind-stfu,#tg-indicator.ind-ysf,#tg-indicator.ind-fcs,#tg-indicator.ind-p25,#tg-indicator.ind-nxdn,#tg-indicator.ind-dstar,#tg-indicator.ind-xlx,#tg-indicator.ind-m17,#tg-indicator.ind-echo{color:var(--mc);border-color:rgba(var(--mc-rgb),.4);background:rgba(var(--mc-rgb),.07);text-shadow:0 0 8px rgba(var(--mc-rgb),.5)}
 #tg-indicator.ind-asl{--mc:var(--teal);--mc-rgb:0,255,229}
 #tg-indicator.ind-echo{--mc:var(--amber);--mc-rgb:255,208,64}
@@ -7906,7 +7719,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 #pt-reg-dot.pt-hide{visibility:hidden}
 #pg-PHONE .quick-bar{flex-wrap:wrap}
 #pg-PHONE .quick-inp{min-width:6.5rem}
-#pg-PHONE .pt-signin{font-size:.8em;opacity:.8;white-space:nowrap}#pg-PHONE .pt-signin-bad{color:#ff6b6b;opacity:1}
+#pg-PHONE .pt-signin{font-size:.8em;opacity:.8;white-space:nowrap}#pg-PHONE .pt-signin-bad{color: var(--red);opacity:1}
 #pg-PHONE .btn:disabled{opacity:.35;cursor:default;pointer-events:none}
 .pt-tone{padding:.48rem .7rem}
 .pt-callrow{display:flex;align-items:center;flex-wrap:wrap;gap:.35rem .5rem;padding:.3rem .9rem;border-bottom:1px solid var(--border)}
@@ -7946,7 +7759,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 .row-grid.active-dstar{--mc:var(--pink);--mc-rgb:255,68,204}
 .row-grid.active-xlx{--mc:var(--teal);--mc-rgb:0,255,229}
 
-.row-grid.disc .row-name { color: #6b1825; }
+.row-grid.disc .row-name { color: var(--red); }
 /* ── DMR network-select header ── */
 .net-sel-hdr {
   padding: .55rem .9rem .4rem;
@@ -7980,7 +7793,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body.radio-keyed .ref-row.active-m17{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
 .ref-info { display: flex; flex-direction: column; gap: .15rem; min-width: 0; }
 .ref-name { font-family: var(--sans); font-weight: 700; font-size: 1.045rem; color: var(--text-bright); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ref-host { font-family: var(--mono); font-size: .77rem; color: #5a7898; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ref-host { font-family: var(--mono); font-size: .77rem; color: #ffffff; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ref-mod-sel {
   font-family: var(--mono);
   font-size: .858rem;
@@ -8005,7 +7818,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
 body.radio-keyed .row-grid.active-asl,body.radio-keyed .row-grid.active-echo,body.radio-keyed .row-grid.active-dmr,body.radio-keyed .row-grid.active-stfu,body.radio-keyed .row-grid.active-ysf,body.radio-keyed .row-grid.active-fcs,body.radio-keyed .row-grid.active-p25,body.radio-keyed .row-grid.active-nxdn,body.radio-keyed .row-grid.active-dstar,body.radio-keyed .row-grid.active-xlx{background:rgba(200,20,20,.22);border-left:3px solid #e03030;padding-left:calc(.9rem - 3px);box-shadow:inset 3px 0 14px rgba(220,30,30,.18)}
 body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow:0 0 8px rgba(255,215,0,.7)}
 
-.row-num  { font-family: var(--mono); font-size: .902rem; color: #5a7898; text-align: right; }
+.row-num  { font-family: var(--mono); font-size: .902rem; color: #ffffff; text-align: right; }
 .row-name {
   font-family: var(--sans);
   font-weight: 700;
@@ -8065,7 +7878,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
-.btn-muted  { color: #7a9ec0;       border-color: var(--border2); }
+.btn-muted  { color: #ffffff;       border-color: var(--border2); }
 .btn-blue   { color: var(--blue);   border-color: var(--blue-dim); }
 .btn-purple { color: var(--purple); border-color: var(--purple-dim); }
 .btn-orange { color: var(--orange); border-color: var(--orange-dim); }
@@ -8255,7 +8068,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .fcs-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .fcs-card .btn:focus-visible,
 .fcs-card .btn-last:focus-visible { outline: 2px solid var(--fcs); outline-offset: 2px; }
-.fcs-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; }
+.fcs-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; }
 .fcs-card-msg.warn { color: var(--amber); }
 .fcs-fav-hdr { color: var(--fcs); }
 @media (prefers-reduced-motion: reduce) {
@@ -8296,7 +8109,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .m17-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .m17-card .btn:focus-visible,
 .m17-card .btn-last:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
-.m17-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; }
+.m17-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; }
 .m17-card-msg.warn { color: var(--amber); }
 .m17-fav-hdr { color: var(--purple); }
 @media (prefers-reduced-motion: reduce) {
@@ -8331,7 +8144,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   transition: border-color .15s;
 }
 .rfc-input  { flex: 1 1 8rem; max-width: 14rem; }
-.rfc-input::placeholder { color: #5a7898; }
+.rfc-input::placeholder { color: #ffffff; }
 .rfc-select { cursor: pointer; flex: 3 1 12rem; max-width: 22rem; }
 .rfc-select.rfc-mod { flex: 0 0 3.6rem; max-width: 3.6rem; padding-left: .4rem; padding-right: .2rem; text-align: center; }
 .rfc-btns { display: flex; gap: .45rem; align-items: center; }
@@ -8341,7 +8154,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .rfc-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .rfc-card .btn:focus-visible,
 .rfc-card .btn-last:focus-visible { outline: 2px solid var(--rc); outline-offset: 2px; }
-.rfc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; overflow-wrap: anywhere; }
+.rfc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; overflow-wrap: anywhere; }
 .rfc-card-msg.warn { color: var(--amber); }
 .xlx-fav-hdr { color: var(--teal); }
 .dstar-fav-hdr { color: var(--pink); }
@@ -8381,7 +8194,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   transition: border-color .15s;
 }
 .ysf-select { cursor: pointer; }
-.ysf-input::placeholder { color: #5a7898; }
+.ysf-input::placeholder { color: #ffffff; }
 #ysf-cc-select  { flex: 1 1 7rem;  max-width: 11rem; }
 #ysf-filter     { flex: 1 1 8rem;  max-width: 14rem; }
 #ysf-ref-select { flex: 3 1 12rem; max-width: 26rem; }
@@ -8391,7 +8204,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ysf-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .ysf-card .btn:focus-visible,
 .ysf-card .btn-last:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
-.ysf-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; overflow-wrap: anywhere; }
+.ysf-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; overflow-wrap: anywhere; }
 .ysf-card-msg.warn { color: var(--amber); }
 .ysf-fav-hdr { color: var(--purple); }
 @media (prefers-reduced-motion: reduce) {
@@ -8430,14 +8243,14 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 }
 .tgc-select { cursor: pointer; flex: 3 1 12rem; max-width: 26rem; }
 .tgc-input  { flex: 1 1 8rem; max-width: 14rem; }
-.tgc-input::placeholder { color: #5a7898; }
+.tgc-input::placeholder { color: #ffffff; }
 .tgc-input:focus, .tgc-select:focus { border-color: var(--tc); box-shadow: 0 0 6px rgba(var(--tc-rgb),.3); }
 .tgc-select:disabled, .tgc-input:disabled { opacity: .4; cursor: default; }
 .tgc-select option { background: var(--surface2); color: var(--text-bright); }
 .tgc-card .btn:disabled { opacity: .35; cursor: default; pointer-events: none; }
 .tgc-card .btn:focus-visible,
 .tgc-card .btn-last:focus-visible { outline: 2px solid var(--tc); outline-offset: 2px; }
-.tgc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #7a9ec0; overflow-wrap: anywhere; }
+.tgc-card-msg { flex: 0 0 100%; font-size: .78rem; line-height: 1.35; color: #ffffff; overflow-wrap: anywhere; }
 .tgc-card-msg.warn { color: var(--amber); }
 .p25-fav-hdr  { color: var(--orange); }
 .nxdn-fav-hdr { color: var(--lime); }
@@ -8486,7 +8299,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ed-count {
   font-family: var(--mono);
   font-size: .836rem;
-  color: #3a5278;
+  color: #ffffff;
   text-align: right;
   padding: .5rem .9rem;
   border-top: 1px solid var(--border);
@@ -8495,7 +8308,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .cfg-section { padding: .65rem .9rem .5rem; border-bottom: 2px solid var(--border); background: #111828; }
 .cfg-grid    { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: .55rem .9rem; margin-top: .4rem; }
 .cfg-field   { display: flex; flex-direction: column; gap: .2rem; }
-.cfg-lbl     { font-family: var(--mono); font-size: .66rem; letter-spacing: .18em; text-transform: uppercase; color: #5a7898; }
+.cfg-lbl     { font-family: var(--mono); font-size: .66rem; letter-spacing: .18em; text-transform: uppercase; color: #ffffff; }
 .srv-meta-row { display:grid; grid-template-columns:1fr 1fr 1.4fr auto; gap:.4rem; padding:.4rem .6rem; border-bottom:1px solid var(--border); align-items:center; }
 .srv-meta-row:last-child { border-bottom:none; }
 .btn-xs { font-family:var(--mono); font-size:.77rem; padding:.25rem .55rem; border-radius:3px; border:1px solid; background:transparent; cursor:pointer; }
@@ -8523,19 +8336,21 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ph-fav-tone .cfg-inp { flex: 1 1 0; min-width: 0; }
 .ph-fav-clr { padding: .2rem .4rem; }
 @media (max-width: 560px) { .ph-fav-row { grid-template-columns: 1fr 1fr 2.2rem; gap: .4rem; } .ph-fav-tone { display: contents; } .ph-fav-row [data-fk="name"] { grid-column: 1 / -1; } }
-.ph-hint { font-family: var(--mono); font-size: .68rem; color: #6f8aa8; margin: .25rem 0 0; }
+.ph-hint { font-family: var(--mono); font-size: .68rem; color: #ffffff; margin: .25rem 0 0; }
 .ph-howto summary { cursor: pointer; color: var(--teal); }
 .ph-howto p { margin: .35rem 0 0; }
 .ph-hint.ph-warn { color: var(--amber); }
 .ph-lines { font-family: var(--mono); font-size: .72rem; color: var(--text-bright); background: rgba(0,0,0,.3); border: 1px solid var(--border); border-radius: 4px; padding: .4rem .6rem; margin: .3rem 0 0; overflow-x: auto; user-select: all; white-space: pre; }
 .ph-msg { font-family: var(--mono); font-size: .75rem; color: var(--muted); margin-top: .35rem; min-height: 1em; }
+.ph-msg.ok { color: var(--green); }
+.ph-msg.fail { color: var(--red); }
 .pt-vm-pin { margin-left: .5rem; padding: .1rem .55rem; font-size: .72rem; vertical-align: middle; }
 .ph-auto-tag { display: none; margin-left: .4rem; padding: 0 .3rem; border: 1px solid var(--teal, #2bb3a3); border-radius: 3px; font-size: .62rem; letter-spacing: .08em; color: var(--teal, #2bb3a3); text-transform: lowercase; }
 .cfg-field.ph-auto-on .ph-auto-tag { display: inline-block; }
-.ph-sub { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; color: #5a7898; margin: .5rem 0 .1rem; grid-column: 1 / -1; }
-.cfg-lbl.cfg-lbl-reserved { color: #4a5a6a; }
+.ph-sub { font-family: var(--mono); font-size: .7rem; letter-spacing: .12em; text-transform: uppercase; color: #ffffff; margin: .5rem 0 .1rem; grid-column: 1 / -1; }
+.cfg-lbl.cfg-lbl-reserved { color: #ffffff; }
 .tab-enable-row { display: flex; flex-wrap: wrap; gap: .6rem 1.2rem; margin-top: .55rem; padding-top: .45rem; border-top: 1px solid var(--border); }
-.tab-chk-lbl { display: flex; align-items: center; gap: .35rem; font-family: var(--mono); font-size: .858rem; color: #7a9ec0; cursor: pointer; user-select: none; }
+.tab-chk-lbl { display: flex; align-items: center; gap: .35rem; font-family: var(--mono); font-size: .858rem; color: #ffffff; cursor: pointer; user-select: none; }
 .tab-chk-lbl input[type=checkbox] { accent-color: var(--amber); width: 14px; height: 14px; cursor: pointer; }
 /* Section collapse toggle button */
 .ed-sec-hdr {
@@ -8546,7 +8361,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   font-size: .66rem;
   letter-spacing: .22em;
   text-transform: uppercase;
-  color: #3a5278;
+  color: #ffffff;
   padding: .5rem .9rem .35rem;
   margin-top: .4rem;
   border-top: 1px solid var(--border);
@@ -8555,7 +8370,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .ed-hint {
   font-family: var(--mono);
   font-size: .72rem;
-  color: #5a7898;
+  color: #ffffff;
   padding: .15rem .2rem .35rem;
   line-height: 1.35;
 }
@@ -8563,7 +8378,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   font-family: var(--mono);
   font-size: .55rem;
   letter-spacing: .12em;
-  color: #3a5278;
+  color: #ffffff;
   background: transparent;
   border: 1px solid #1e3050;
   border-radius: 3px;
@@ -8588,14 +8403,14 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   --edit-count:      #ffffff;  /* ed-count status text  (was #6a8aaa) */
   --edit-inp-border: #4a6a90;  /* input borders         (unchanged) */
   --edit-chk-lbl:    #ffffff;  /* tab-checkbox labels   (was #9ab8d0) */
-  --edit-btn-muted:  #9ab8d0;  /* Back/Reload btn text  — unchanged */
+  --edit-btn-muted:  #ffffff;  /* Back/Reload btn text  — unchanged */
   --edit-btn-border: #3d5880;  /* Back/Reload btn border — unchanged */
 }
 
 /* 8.3 — section headers and labels */
 #pg-EDIT .ed-sec-hdr          { color: var(--edit-lbl); }
 #pg-EDIT .cfg-lbl              { color: var(--edit-lbl); }
-#pg-EDIT .cfg-lbl.cfg-lbl-reserved { color: #5a6b7c; }
+#pg-EDIT .cfg-lbl.cfg-lbl-reserved { color: #ffffff; }
 #pg-EDIT .ed-sec-hdr button   { color: var(--edit-sec-btn); border-color: var(--edit-sec-border); }
 #pg-EDIT .ed-sec-hdr button:hover { color: var(--amber); border-color: var(--amber-dim); }
 
@@ -8604,7 +8419,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 #pg-EDIT .cfg-inp             { border-color: var(--edit-inp-border); }
 #pg-EDIT .ed-inp::placeholder,
 #pg-EDIT .cfg-inp::placeholder {
-  color: #5a7898;   /* explicit placeholder so Firefox opacity=54% default doesn't crush it */
+  color: #ffffff;   /* explicit placeholder so Firefox opacity=54% default doesn't crush it */
   opacity: 1;
 }
 
@@ -8635,7 +8450,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   background: rgba(255,208,64,.04);
   font-size: .836rem;
 }
-.ed-inp.url-inp::placeholder { color: #4a5a3a; opacity: 1; }
+.ed-inp.url-inp::placeholder { color: #ffffff; opacity: 1; }
 .ed-inp.url-inp:focus { border-color: var(--amber); background: rgba(255,208,64,.08); }
 .ed-inp.url-inp-row { margin-top: .2rem; }
 
@@ -8730,7 +8545,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
   gap: 1.2rem;
 }
 #err-modal-hdr  { font-family: var(--mono); font-size: .792rem; letter-spacing: .22em; text-transform: uppercase; color: var(--red); text-shadow: 0 0 10px rgba(255,61,90,.7); }
-#err-modal-msg  { font-family: var(--mono); font-size: 1.045rem; color: #ffb0b8; line-height: 1.6; white-space: pre-wrap; }
+#err-modal-msg  { font-family: var(--mono); font-size: 1.045rem; color: var(--red); line-height: 1.6; white-space: pre-wrap; }
 #err-modal-btns { display: flex; gap: .6rem; justify-content: flex-end; }
 .perm-disc-btn { font-family: var(--mono); font-size: .7rem; padding: .18rem .52rem; background: transparent; border: 1px solid rgba(255,208,64,.4); color: var(--amber); border-radius: 4px; cursor: pointer; letter-spacing: .04em; white-space: nowrap; }
 .perm-disc-btn:hover { background: rgba(255,208,64,.14); }
@@ -8780,13 +8595,13 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 #wfm-shutdown-msg {
   font-family: var(--mono);
   font-size: 1.02rem;
-  color: #ffb0b8;
+  color: var(--red);
   line-height: 1.6;
 }
 #wfm-shutdown-sub {
   font-family: var(--mono);
   font-size: .74rem;
-  color: #c98a92;
+  color: #ffffff;
   letter-spacing: .03em;
 }
 #ready-bar {
@@ -8921,7 +8736,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 <body>
 <div id="login-screen" class="hidden">
   <form id="login-card" onsubmit="_doLogin(event)">
-    <h2>ASL-DVS Node Control</h2>
+    <h2>Node Control</h2>
     <p class="sub">Sign in with this node's root password.</p>
     <label for="login-pw">Root password</label>
     <input id="login-pw" type="password" autocomplete="current-password" required>
@@ -8933,7 +8748,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 <div id="perm-link-bar">⚠ PERMANENT LINK ACTIVE · Node <span id="perm-link-node">—</span> · Bridging risk<button class="perm-disc-btn" style="margin-left:.9rem" onclick="doBannerDiscPermLink()">Disconnect</button></div>
 <header>
   <div class="hdr-left">
-    <div class="logo">ASL-DVS Node Control</div>
+    <div class="logo">Node Control</div>
     <div class="logo-sub"><span id="hdr-callsign" style="color:var(--amber);display:none"></span><span id="hdr-callsign-sep" class="hidden"> · </span><span style="color:var(--amber)">Node</span> <span id="hdr-node" style="color:var(--amber)">…</span></div>
   </div>
   <div class="hdr-right">
@@ -8952,7 +8767,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
       </div>
       <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
       <div class="ql-group ql-right">
-        <a class="ql" data-ql-path="/m17" href="#" target="_blank" rel="noopener">USRP2M17</a>
+        <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
         <a class="ql" data-ql-port="8991" href="#" target="_blank" rel="noopener">WiFiMon</a>
         <a id="lnk-sysmon" class="ql ql-off" href="#" aria-disabled="true" title="SysMon is not running">SysMon</a>
       </div>
@@ -9408,7 +9223,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <div class="cfg-grid">
                 <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-patch">Phone patch on</label></div>
                 <div class="cfg-field">
-                  <label class="cfg-lbl" for="ph-dialtime">Dial timeout (ms)</label>
+                  <label class="cfg-lbl" for="ph-dialtime" title="How long *61 from the radio waits for the next digit before it gives up">*61 digit timeout (ms)</label>
                   <input id="ph-dialtime" class="cfg-inp" type="text" inputmode="numeric" maxlength="5" placeholder="20000">
                 </div>
                 <div class="cfg-field"><label class="tab-chk-lbl"><input type="checkbox" id="ph-restart">Restart Asterisk if needed</label></div>
@@ -9427,7 +9242,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
-                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call.</p>
               </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
@@ -12113,7 +11928,7 @@ function ptRenderStatus(){
   if(st.configured&&st.activated===false){txt='The phone is off — turn it on with Activate on the Edit page';cls+=' pt-warn'}   // v9.3.48
   else if(!patchOn){txt='Phone patch is off — dialing is blocked';cls+=' pt-warn'}
   else if(c.state==='dialing'){txt='Dialing '+(_pt.lastDialed||'')+'…';cls+=' pt-live'}
-  else if(c.state==='incoming'){txt='Incoming call'+(c.who?' from '+c.who:'')+((net&&net.incoming==='open')?' — connecting':' — waiting for PIN');cls+=' pt-live'}
+  else if(c.state==='incoming'){txt='Incoming call'+(c.who?' from '+c.who:'')+((net&&net.incoming==='open')?((net.trusted||[]).length?' — trusted numbers only':' — connecting'):((net&&(net.trusted||[]).length)?' — waiting for PIN (trusted numbers skip it)':' — waiting for PIN'));cls+=' pt-live'}
   else if(c.state==='in_call'){
     // v9.3.8: your radio audio only goes to the call while you're keyed
     txt='In call'+(c.who?' — '+c.who:((c.number||_pt.lastDialed)?' — '+(c.number||_pt.lastDialed):''))+(_lastKeyed?' · Talking':' · Listening');
@@ -12334,7 +12149,7 @@ const PH_EXT_DEF={hoip:{name:'Hams Over IP',host:'premium.hamsoverip.com',port:'
 // v9.3.54: HOIP wants RFC 2833 tone packets with ulaw; 3191 reads your tones back
 const PH_HOIP_TONE_TEST='3191';
 // v9.3.2: how keypad tones travel on a SIP network (IAX2 has no setting).
-const PH_TONE_PATHS=[['provider','Straight to the provider (v9.3.13 way)'],['node','Through the call (test)'],['sound','As sound (tone recordings)']];
+const PH_TONE_PATHS=[['provider','Straight to the provider'],['node','Through the call'],['sound','As sound (tone recordings)']];
 const PH_BLANK_NET={id:'',name:'',type:'iax2',host:'',port:'',username:'',password:'',caller_id:'',
   dialing:'phone',dial_format:'10',e911:false,allow_intl:false,register:true,incoming:'off',pin:'',
   trusted:'',did:'',lan_net:'',wan_ip:'',has_password:false,has_pin:false,
@@ -12439,11 +12254,14 @@ function phRenderNet(n,i){
   h+=`<div class="ph-hint">Test number adds a Test call row to the Phone tab. An echo test (it plays your voice back) is the quickest way to check the far end can hear you. Ask your network for its number.</div>`;
   if(sip)h+=`<div class="ph-hint">Keypad tones go to this network as tone packets (RFC 2833).</div>`;
   if(n.type==='iax2')h+=`<div class="ph-hint">IAX2 uses port ${esc(_ph.iaxPort||'4569')}, the same one AllStarLink already uses on this Pi.</div>`;
-  else if(hoip)h+=`<div class="ph-hint">Hams Over IP: SIP on UDP 5160, audio (RTP) on UDP 10000-15000. Voicemail Access adds a Voicemail row to the Phone tab.</div>`;
+  else if(n.type==='hoip')h+=`<div class="ph-hint">Hams Over IP: SIP on UDP 5160, audio (RTP) on UDP 10000-15000. Voicemail Access adds a Voicemail row to the Phone tab.</div>`;
+  else if(aw)h+=`<div class="ph-hint">AmateurWire: Voicemail Access adds a Voicemail row to the Phone tab.</div>`;
   if(n.type==='hoip'){
     h+=`<div class="ph-hint">To test keypad tones on Hams Over IP, call ${PH_HOIP_TONE_TEST}: wait for the beep, key some digits then #, and they are read back to you.${n.test_number===PH_HOIP_TONE_TEST?' The Test call row on the Phone tab dials it.':''}</div>`;
   }
-  else h+=`<div class="ph-hint">SIP needs UDP 5060 and UDP 10000-20000 forwarded on your router.</div>`;
+  if(sip)h+=(n.type==='sip_ip'
+    ?`<div class="ph-hint">Behind a router: this network doesn't sign in, so the provider calls your public address. Forward UDP 5060 (SIP) to this Pi for incoming calls, and the audio ports set in rtp.conf (usually UDP 10000-20000) if audio is one-way.</div>`
+    :`<div class="ph-hint">Behind a router: signing in usually keeps calls working with nothing forwarded. Only if incoming calls don't arrive, forward UDP 5060 (SIP) to this Pi, and the audio ports set in rtp.conf (usually UDP 10000-20000) if audio is one-way. Forwarding opens Asterisk to the internet, so try a Test call first.</div>`);
   // v9.3.6: router note, shown once on the first SIP network
   const rn=_ph.router||{};
   if(sip&&rn.text&&_ph.nets.findIndex(x=>x.type!=='iax2')===i)
@@ -12594,7 +12412,7 @@ function phActClick(e){
     '<p>Revert (at the bottom of the Phone section) takes it all back out.</p>';
   phDlgOpen('Turn the phone on?',html,'Activate','btn-teal',async restart=>{
     const d=await api({action:'phone-activate',restart},60000);
-    toast(d.message,d.ok?'ok':'err');byId('ph-msg').textContent=d.message;
+    toast(d.message,d.ok?'ok':'err');phMsg(d.message,!!d.ok);
     await phLoad();_pt.loadedAt=0;
   });
   return false;
@@ -12611,7 +12429,7 @@ function phRevertOpen(){
     '<p>Kept: your networks, favorites and passwords, and anything you added to these files by hand. Activate puts the phone back.</p>';
   phDlgOpen('Turn the phone off?',html,'Revert','btn-red',async restart=>{
     const d=await api({action:'phone-revert',restart},90000);
-    toast(d.message,d.ok?'ok':'err');byId('ph-msg').textContent=d.message;
+    toast(d.message,d.ok?'ok':'err');phMsg(d.message,!!d.ok);
     await phLoad();_pt.loadedAt=0;
   });
 }
@@ -12647,8 +12465,14 @@ async function phLoad(){
     byId('ph-totcap').value=d.tot_cap_min||15;
     byId('ph-listen').checked=d.listen_only===true;
     _ph.dirty=false;
-    phRender();_ph.loaded=true;_ph.dirty=false;byId('ph-msg').textContent='';
-  }catch(e){console.error('phLoad() error:',e);byId('ph-msg').textContent='Could not load phone settings'}
+    phRender();_ph.loaded=true;_ph.dirty=false;phMsg('');
+  }catch(e){console.error('phLoad() error:',e);phMsg('Could not load phone settings',false)}
+}
+function phMsg(text,ok){
+  const el=byId('ph-msg');
+  if(!el)return;
+  el.textContent=text||'';
+  el.className='ph-msg'+(ok===true?' ok':ok===false?' fail':'');
 }
 async function phSave(quiet){
   phSyncFromDOM();
@@ -12660,10 +12484,10 @@ async function phSave(quiet){
     networks:_ph.nets.map(n=>{const o=Object.assign({},n,{trusted:String(n.trusted||''),favorites:phFavsOut(n.favs)});
       delete o.favs;delete o._favOpen;delete o._auto;delete o.tone_mode;delete o.register;return o})};
   const d=await api({action:'save-phone',phone});
-  if(!d.ok){toast('Phone: '+d.message,'err');byId('ph-msg').textContent=d.message;return false}
+  if(!d.ok){toast('Phone: '+d.message,'err');phMsg(d.message,false);return false}
   const a=await api({action:'phone-apply',restart:byId('ph-restart').checked},60000);
   toast(a.ok?('Phone: '+d.message+' — '+a.message):('Phone: saved, but Asterisk: '+a.message),a.ok?'ok':'err');
-  byId('ph-msg').textContent=a.message;
+  phMsg(a.message,!!a.ok);
   await phLoad();
   _pt.loadedAt=0;
   return a.ok;
@@ -12944,9 +12768,9 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>D-STAR Reflectors</span><button onclick="toggleEdSection('eds-DSTAR')">Hide</button></div>`;
     h+=`<div id="eds-DSTAR">`;
     h+='<div style="padding:.25rem .6rem .1rem;display:grid;grid-template-columns:1fr 1fr 5rem;gap:.4rem">';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Name</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Reflector Base</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Def. Mod</span></div>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Name</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Reflector Base</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Def. Mod</span></div>';
     h+='<div style="padding:.25rem .6rem .5rem;display:flex;flex-direction:column;gap:.35rem">';
     h+=dg.map(r=>{
       const isBlank=r.name===TG_BLANK_NAME||r.tg===TG_BLANK_ADDR;
@@ -12968,9 +12792,9 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>XLX Reflectors</span><button onclick="toggleEdSection('eds-XLX')">Hide</button></div>`;
     h+=`<div id="eds-XLX">`;
     h+='<div style="padding:.25rem .6rem .1rem;display:grid;grid-template-columns:1fr 1fr 5rem;gap:.4rem">';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Name</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Reflector Base</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Def. Mod</span></div>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Name</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Reflector Base</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Def. Mod</span></div>';
     h+='<div style="padding:.25rem .6rem .5rem;display:flex;flex-direction:column;gap:.35rem">';
     h+=xlxEdRows.map((r,i)=>{
       const isBlank=r.name===TG_BLANK_NAME||r.tg===TG_BLANK_ADDR;
@@ -12995,10 +12819,10 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>M17</span><button onclick="toggleEdSection('eds-M17')">Hide</button></div>`;
     h+=`<div id="eds-M17">`;
     h+='<div style="padding:.25rem .6rem .1rem;display:grid;grid-template-columns:1fr 1fr 5rem 1fr;gap:.4rem">';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Name</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Reflector Base</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">Module</span>';
-    h+='<span style="font-family:var(--mono);font-size:.66rem;color:#5a7898">IP / Host</span></div>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Name</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Reflector Base</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">Module</span>';
+    h+='<span style="font-family:var(--mono);font-size:.66rem;color: #ffffff">IP / Host</span></div>';
     h+='<div style="padding:.25rem .6rem .5rem;display:flex;flex-direction:column;gap:.35rem">';
     h+=m17EdRows.map((r,i)=>{
       const isBlank=r.name===TG_BLANK_NAME||r.ip===TG_BLANK_ADDR;
@@ -13020,7 +12844,7 @@ function edRender(){
     h+=`<div class="ed-sec-hdr"><span>DMR Networks</span><button onclick="toggleEdSection('eds-DMR-NET')">Hide</button></div>`;
     h+=`<div id="eds-DMR-NET">`;
     h+='<div style="padding:.35rem .6rem .1rem">';
-    h+='<div class="srv-meta-row" style="font-family:var(--mono);font-size:.66rem;color:#5a7898;border-bottom:2px solid var(--border2)">';
+    h+='<div class="srv-meta-row" style="font-family:var(--mono);font-size:.66rem;color: #ffffff;border-bottom:2px solid var(--border2)">';
     h+='<span>Name</span><span>Password</span><span>Host:Port</span><span></span></div>';
     Object.entries(dmrSrvRows).forEach(([key,srv])=>{
       // v8.0.10: the DMR server "key" is derived from the user-editable
@@ -13104,7 +12928,7 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:5000);  // Pi02w: idle was 3000
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
 }
 let _keyedTimer=null;
 async function pollKeyed(){
@@ -13175,7 +12999,7 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedTimer=setTimeout(pollKeyed,1000);  // Pi02w: was 500 (the server updates every 2 s)
+  _keyedTimer=setTimeout(pollKeyed,500);
 }
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 async function pollAbInfo(){
@@ -14239,52 +14063,6 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
-def _write_launcher() -> None:
-    tmp = _LAUNCHER_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(_LAUNCHER_CODE)
-    os.chmod(tmp, 0o755)
-    os.replace(tmp, _LAUNCHER_PATH)
-    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
-
-def _pyc_for(src: str) -> list:
-    name = os.path.splitext(os.path.basename(src))[0]
-    return _glob_pyc(os.path.dirname(src), name)
-
-def _glob_pyc(dir_path: str, name: str = "*") -> list:
-    import glob as _g
-    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
-
-def _prune_pyc(dir_path: str) -> None:
-    for pyc in _glob_pyc(dir_path):
-        name = os.path.basename(pyc).split(".", 1)[0]
-        if not os.path.exists(os.path.join(dir_path, name + ".py")):
-            try:
-                os.remove(pyc)
-            except OSError:
-                pass
-
-def _remove_launcher_if_unused() -> None:
-    if not os.path.exists(_LAUNCHER_PATH):
-        return
-    unit_dir = _SYSTEMD_UNIT_DIR
-    try:
-        names = os.listdir(unit_dir)
-    except OSError:
-        return
-    for n in names:
-        p = os.path.join(unit_dir, n)
-        try:
-            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
-                return
-        except OSError:
-            continue
-    try:
-        os.remove(_LAUNCHER_PATH)
-    except FileNotFoundError:
-        return
-    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
-
 def _nc_remove_pyc(dir_path: str, prefix: str) -> None:
     pycache = os.path.join(dir_path, "__pycache__")
     if not os.path.isdir(pycache):
@@ -14351,8 +14129,6 @@ def install_service() -> None:
         print(f"  [-] Removed the old folder {_OLD_INSTALL_DIRS[0]}")
     except OSError:
         pass
-    _write_launcher()
-    _prune_pyc(_INSTALL_DIR)
 
     if os.path.exists(_LEGACY_SERVICE_PATH):
         subprocess.run(["systemctl", "disable", "--now", _LEGACY_SERVICE_NAME], stderr=subprocess.DEVNULL)
@@ -14406,12 +14182,6 @@ def uninstall_service() -> None:
             os.rmdir(d)
         except OSError:
             pass
-    _remove_launcher_if_unused()
-
-    echodb_dir = os.path.dirname(_ECHODB_FILE)
-    if os.path.isdir(echodb_dir):
-        shutil.rmtree(echodb_dir, ignore_errors=True)
-        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
 
@@ -14440,7 +14210,7 @@ def main() -> None:
     _bridge_block = "\n".join(_bridge_lines)
     print(f"""
 ╔══════════════════════════════════════════════╗
-║         ASL-DVS Node Control Dashboard       ║
+║         Node Control Dashboard               ║
 ╠══════════════════════════════════════════════╣
 ║  ASL node  : {_cfg.asl_node}{pad}║
 ╠══════════════════════════════════════════════╣
