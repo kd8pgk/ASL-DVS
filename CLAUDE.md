@@ -10,6 +10,19 @@
   the uninstaller) serve both builds. When a pi02w change needs one of them,
   say so before changing it.
 
+## Naming: "Node Controller"
+
+- **System names stay.** Paths, file names, service and unit names, markers and
+  keys keep `asl_dvs` / `ASL-DVS` (for example `/etc/asl_dvs`,
+  `asl_dvs_launch.py`, `#ASL-DVS-VIDEO-OFF#`, `ASL-DVS_User_Manual.pdf`, the
+  repo name and its URLs).
+- **Text docs** (manuals, guides): write "Node Controller" where the text says
+  "ASL-DVS". Titles and headers drop "ASL-DVS"; a header that would be left empty
+  says "Node Controller".
+- **Code:** when a file gets a new version, drop "ASL-DVS" from its titles and
+  headers only (page title, logo/header bar, tab and section titles, console
+  banner). Other text in the code, and data it writes, stays as it is.
+
 ## Repo conventions
 
 - **Comment-stripped copies only.** Scripts in the repo carry no comments or

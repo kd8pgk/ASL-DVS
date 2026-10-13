@@ -1,6 +1,52 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_13_20261012.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_14_20261013.py`. Newest entries first.
+
+## 6.13.67.14-pi02w (2026-10-13)
+
+The Phone tab and D-Star card fixes from an audit against Dashboard 9.3.71.16-pi02w and
+ircDDBGateway's source, and the "Node Controller" naming. The same change is in the full build (6.13.80).
+
+- Page title, logo and login heading say SysMon / SYSMON (no "ASL-DVS"). The
+  ASL-DVS tab is now the **Node Controller** tab (same tab, same id, so saved tab
+  choices still apply); the Edit page's "ASL-DVS Config Files" is "Config Files".
+  System names and saved settings (paths, markers, the Services group names in
+  `sysmon.conf`) are unchanged.
+- D-Star card:
+  - A setting left out of `/etc/ircddbgateway` now counts as ircDDBGateway's
+    default: `ircddbEnabled`, `ircddbEnabled2` and `dextraEnabled` are on unless
+    the file turns them off. Before, a missing key showed FAIL or WARN.
+  - ircDDB counts as on when any of `ircddbEnabled`, `ircddbEnabled2`-`4` is on.
+    Off is now WARN (reflectors still work; gateway callsigns can't be found).
+  - `dextraEnabled` off is now FAIL: ircDDBGateway refuses gateway links and XRF
+    reflectors without it.
+  - The remote-control hint no longer says it keeps the module (the tune path
+    keeps it too). It says what remote control adds: the dashboard hears whether a
+    link was accepted, and links work with a fixed reconnect.
+- Phone tab:
+  - Dialing rules shows an extension network's real dial line
+    (`PJSIP/${EXTEN}@...`), not its Test call number.
+  - Phone networks shows Hams Over IP and AmateurWire by name.
+  - Health checks: one row per helper script, with the codes it serves and what
+    breaks without it: the hang-up script (`*62`, `*65`; it ends every phone call,
+    not only incoming ones), and new rows for the radio dial script (`*61`) and the
+    radio tone script (`*980`-`*982`). The radio tone codes row lists the codes in
+    `rpt.conf` (the old text named `*983`-`*987`, removed in Dashboard 9.3.71.3).
+  - The checks for the removed Hams Over IP AllStar Link feature are gone.
+  - Router advice: forwarding is no longer the default instruction. Signing in
+    usually keeps the SIP port open; forward only if incoming calls don't arrive
+    (and the audio range if audio is one-way), since forwarding opens Asterisk to
+    the internet.
+  - Autopatch modules: `func_callerid.so` (caller ID and trusted numbers) is
+    listed, and `chan_iax2.so` is always listed and locked, because the phone nodes
+    link to the radio node over IAX2. A `noload` of `chan_iax2.so` is flagged.
+  - Router test: the incoming result names the real SIP port; Call audio says it
+    covers SIP calls only; the incoming hint fits any provider. The no-PIN warning
+    names the network instead of its id.
+- Tested against the files Dashboard 9.3.71.16-pi02w writes for a Hams Over IP and a
+  VoIP.ms network (helper scripts missing, present and world-writable), four
+  `/etc/ircddbgateway` cases (keys left out, DExtra off, ircDDB off, only
+  ircDDB 2 on), and the page in headless Chromium (no script errors).
 
 ## 6.13.67.13-pi02w (2026-10-12)
 
