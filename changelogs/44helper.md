@@ -1,6 +1,47 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_182_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_183x_20261013.py`. Newest entries first.
+
+## 0.0.183x (2026-10-13) — testing
+
+The Config tab's **Identity** card can now set the callsign. 44helper serves both
+builds. The "x" marks a testing build.
+
+- The 44helper callsign and 44helper node rows are gone from the card.
+  `44helper.conf` itself is unchanged.
+- The Callsign line has a text box and a **Set everywhere** button.
+  - The box shows capitals and accepts 3 to 7 letters and digits, with at least
+    one digit. The server checks the same rule and upper-cases.
+  - Set everywhere previews every line it will change (old and new), asks to
+    confirm, takes an automatic save point, then writes.
+  - Each line keeps its format:
+    - rpt.conf idrecording and idtalkover keep `|i` and any `/R`; a sound file
+      is left alone.
+    - EchoLink keeps `-L`/`-R`.
+    - USRP2M17 keeps the text after the callsign.
+    - Quotes in `var.txt` stay.
+  - Files written: every callsign field the card lists, plus the Dashboard's
+    `/etc/asl_dvs/asl_dvs.conf` (`callsign=`) and 44helper's own
+    `[identity] callsign`. The fields are rpt.conf, echolink.conf (and the custom
+    copy), MMDVM_Bridge.ini, var.txt, /etc/ircddbgateway (gatewayCallsign,
+    repeaterCall1, ircddbUsername, dplusLogin), the YSF, P25 and NXDN gateways and
+    USRP2M17.ini. Files that are not on the node are listed as skipped.
+  - The report warns that the ircDDB and DPlus logins need the new callsign
+    registered.
+  - Nothing is restarted. The report lists the services to restart, and says to
+    restart the Dashboard (`nodecontrol`) first: until then its next Save or M17
+    connect puts the old callsign back.
+  - New actions: `id_set_callsign_preview` and `id_set_callsign`. Both are root
+    only and run under the Config lock. The apply is logged and offers
+    Finish: reinstall and reboot.
+- Tested:
+  - Sandbox with sample files: every format written, a CRLF file kept as CRLF, a
+    managed block and a sound-file ID left alone, missing files skipped, bad
+    input refused, the save point taken, and a second run reported nothing to
+    change.
+  - The card in headless Chromium: the box upper-cases, then preview, confirm and
+    apply, with no script errors from the card.
+  - `node --check` on the page JavaScript.
 
 ## 0.0.182 (2026-10-13)
 
