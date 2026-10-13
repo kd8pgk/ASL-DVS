@@ -38,7 +38,12 @@
 - **Every change gets a new version.** Rename the file
   (`<tool>_vX_Y_Z_YYYYMMDD.py`), update `VERSION` / `APP_VERSION` /
   `SCRIPT_VERSION`, and update the README file list. A pi02w version ends in
-  `-pi02w` (for example `9.3.71.3-pi02w`).
+  `-pi02w`.
+- **Versions have three parts**, `X.Y.Z` (for example `5.31.0`,
+  `9.3.72-pi02w`). No four-part numbers in new builds. A tool still on four
+  parts moves to the next three-part number above it (`9.3.71.18-pi02w` ->
+  `9.3.72-pi02w`), so instmon still sorts the new file as newer. A tool on two
+  parts adds `.0` (`5.30` -> `5.31.0`). No letter suffix (such as `x`).
 - **The shared launcher** (`/usr/local/bin/asl_dvs_launch.py`) is written by
   several files. Its text must stay identical in all of them.
 - **Manuals** (the user manual, the dialplan guide and the install manuals in
