@@ -1,6 +1,27 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_183x_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_184x_20261013.py`. Newest entries first.
+
+## 0.0.184x (2026-10-13) — testing
+
+The Travel Node preset now lists the bridge-node values it writes, before you apply
+it. 44helper serves both builds.
+
+- The preset still gives each bridge node (a private node with a USRP channel) the
+  upstream USRP2M17 values, as before: duplex, hangtime, althangtime, holdofftelem,
+  telemdefault, telemdynamic, linktolink, nounkeyct and tx_timeout.
+- Preview opens with a **BRIDGE NODE VALUES** block. It lists, per bridge node,
+  each value that changes, saved value -> value written. "(not set here)" means the
+  stanza had no line of its own. A node that already has the values says so.
+- The confirm box before Apply shows the same list. The apply report shows it too.
+- The Config tab's preset text says Preview lists each value it changes.
+- Manuals are not updated.
+- Tested:
+  - Preset rpt.conf build with mock nodes: a bridge node with its own values, one
+    already matching, and a non-USRP node left alone.
+  - Preview output.
+  - The confirm box in headless Chromium; Cancel sends no apply.
+  - `node --check` on the page JavaScript.
 
 ## 0.0.183x (2026-10-13) — testing
 
