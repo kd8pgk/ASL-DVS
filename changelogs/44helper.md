@@ -17,8 +17,8 @@ breaking nodes. 44helper serves both builds.
   library folder and no longer read.
 - The Travel Node preset still gives bridge nodes (USRP channels) the upstream
   USRP2M17 values, as before.
-- Naming: the page title, login heading and logo say "M17 44 Helper" (no
-  "ASL-DVS"). The service description, install messages, reports and the API's
+- Naming: the page title, login heading and logo say "44 Helper" (no
+  "ASL-DVS-M17"). The service description, install messages, reports and the API's
   `app` name are unchanged.
 - Tested: page JavaScript (`node --check`); the Config tab rendered in headless
   Chromium with real status data (every other card present, no script errors);
