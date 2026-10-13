@@ -1,6 +1,24 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_67_15_20261013.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_67_16_20261013.py`. Newest entries first.
+
+## 6.13.67.16-pi02w (2026-10-13)
+
+SysMon checks the USRP pairs on its own, so 44helper's Port check can be verified
+against it. The full build is not changed.
+
+- **DVSwitch tab**, Analog_Bridge card: a new **USRP pair with rpt.conf** row.
+  - Pass when an rpt.conf node has `rxchannel = USRP/127.0.0.1:rxPort:txPort`.
+  - Fail when the node's ports don't mirror `[USRP]`, or no node uses them.
+- **New command-line flag** `--usrp-pairs`: prints the pairing of rpt.conf,
+  Analog_Bridge.ini and USRP2M17.ini as one `USRP-PAIRS-JSON:` line, then exits
+  without starting the web server. 44helper's **Verify with SysMon** button runs it.
+- Tested:
+  - Mock files covering a good pair, a wrong txPort, a missing M17 node, an
+    rxchannel to nowhere and no USRP2M17.ini. 44helper and SysMon gave the same
+    result in every case.
+  - The new DVSwitch row.
+  - The flag on a machine with no config files.
 
 ## 6.13.67.15-pi02w (2026-10-13)
 
