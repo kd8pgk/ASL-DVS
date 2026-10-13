@@ -67,8 +67,11 @@ td.port{font-family:var(--mono);color:var(--yel)}
 .call.tip{border-left-color:var(--grn)} .call.tip .t{color:var(--grn)}
 .call.care{border-left-color:var(--red)} .call.care .t{color:var(--red)}
 .call.full{border-left-color:var(--org)} .call.full .t{color:var(--org)}
+.call.test{border-left-color:var(--yel)} .call.test .t{color:var(--yel)}
+.call.work{border-left-color:var(--grn)} .call.work .t{color:var(--grn)}
 .badge{display:inline-block;font-size:6.6pt;font-weight:800;letter-spacing:.12em;padding:.1em .45em;border-radius:3px;vertical-align:1px}
 .badge.full{color:#0b1018;background:var(--org)} .badge.pi{color:#0b1018;background:var(--cyan)}
+.badge.test{color:#0b1018;background:var(--yel)} .badge.work{color:#0b1018;background:var(--grn)}
 
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:.8em;margin:.6em 0 .9em}
 .box{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:.65em .85em;break-inside:avoid}
