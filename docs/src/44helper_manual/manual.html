@@ -1,0 +1,1013 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>44helper Manual</title>
+<link rel="stylesheet" href="manual.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
+    </div>
+    <div class="ed"><b>44helper 0.0.195</b><br>Edition 2026-10-14</div>
+  </div>
+  <div class="body">
+    <h1>44helper Manual<br><span>Every tab in detail</span></h1>
+    <p class="lede">44helper is the node's setup and repair helper: 44Net tunnels, the firewall, the radio software
+      installers, system updates, SD-card care and configuration restore points. This manual goes through it tab by
+      tab and card by card: what each button runs, what a good and a bad result look like, and how to undo it.</p>
+    <div class="chips">
+      <span class="chip c5">STATUS</span><span class="chip c1">44NET</span><span class="chip c2">INSTALLERS</span>
+      <span class="chip c3">UPDATE</span><span class="chip c4">CONFIG</span>
+    </div>
+    <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
+    <table>
+      <tr><th>Tool</th><th>File</th><th>Version</th></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_195_20261013.py</td><td>0.0.195</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_84_20261013.py</td><td>6.13.84 (Half tunnel checks)</td></tr>
+    </table>
+    <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
+      the full build. The other tools are covered in the user manual, <code>docs/ASL-DVS_User_Manual.pdf</code>.</p>
+  </div>
+  <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Contents</div>
+  <h1 class="ch">In this manual</h1>
+  <ul class="toc">
+    <li class="pt">Part I · Basics</li>
+    <li><span class="no">1</span>What 44helper is, installing it, logging in</li>
+    <li><span class="no">2</span>The page, step cards and the safety checks</li>
+    <li class="pt">Part II · Status tabs</li>
+    <li><span class="no">3</span>Overview, Services and Ports</li>
+    <li><span class="no">4</span>Firewall and Actions Log</li>
+    <li><span class="no">5</span>The half tunnel card</li>
+    <li class="pt">Part III · 44Net and remote access</li>
+    <li><span class="no">6</span>Choosing a route</li>
+    <li><span class="no">7</span>Full Tunnel and Split Tunnel tabs</li>
+    <li><span class="no">8</span>Full tunnel with exceptions</li>
+    <li><span class="no">9</span>Router Install, Nodes and Cloudflare</li>
+    <li class="pt">Part IV · Installers</li>
+    <li><span class="no">10</span>ASL3 and DVSwitch</li>
+    <li><span class="no">11</span>SVXLink, M17 and Ampersand</li>
+    <li class="pt">Part V · Maintenance and configuration</li>
+    <li><span class="no">12</span>Update and System Optimization</li>
+    <li><span class="no">13</span>The Config tab</li>
+    <li class="pt">Part VI · Reference</li>
+    <li><span class="no">14</span>Troubleshooting</li>
+    <li><span class="no">15</span>Files, services, timers and routes</li>
+  </ul>
+
+  <h2>Markers used in the text</h2>
+  <div class="call note"><span class="t">NOTE</span>Background, or something worth knowing.</div>
+  <div class="call tip"><span class="t">TIP</span>A quicker or safer way to do something.</div>
+  <div class="call care"><span class="t">CAREFUL</span>This changes your node, restarts something, or can cut you off.</div>
+  <div class="call test"><span class="t">TESTING</span>Built and tested with mocks and in a browser, but not yet proven on
+    many nodes. Expect rough edges and report what you find. Also shown as the badge <span class="badge test">TESTING</span>.</div>
+  <h2>Colours on the page</h2>
+  <p>Plain text is <b>white</b>. A step that worked, and a check that passed, is <b style="color:var(--grn)">green</b>;
+    a failure is <b style="color:var(--red)">red</b>; a warning or a check that is still waiting is
+    <b style="color:var(--yel)">amber</b>; a check that doesn't apply is grey. An output box shows white while a step runs
+    and turns green or red when it reports its result.</p>
+  <h2>Commands</h2>
+  <p>Commands are typed on the Pi, over SSH or at a keyboard and screen. Lines starting with <code>#</code> are notes.
+    <code>&lt;pi-address&gt;</code> is your Pi's IP address or host name. Example identities use <code>N0CALL</code>,
+    <code>&lt;NODE&gt;</code> and the documentation addresses <code>192.168.1.x</code> and <code>44.x.x.x</code>.</p>
+</section>
+
+<section class="part">
+  <div class="pn">PART I</div>
+  <h1>Basics</h1>
+  <p>What 44helper is for, how to install and open it, and how its pages work: step cards, Run and Copy, the checks
+    it makes before it changes anything, and the built-in terminal.</p>
+  <ol><li>What 44helper is, installing it, logging in</li><li>The page, step cards and the safety checks</li></ol>
+</section>
+
+<section class="chapter" id="ch1">
+  <div class="kicker">Chapter 1 · Basics</div>
+  <h1 class="ch">What 44helper is</h1>
+  <p class="ch-lede">SysMon tells you what is wrong with a node; 44helper is usually where you fix it. It runs as
+    root, on port 9997, and every change it makes is shown as the exact command before you run it.</p>
+  <h2><span class="n">1.1</span>What it does</h2>
+  <table>
+    <tr><th>Area</th><th>Tabs</th><th>Chapter</th></tr>
+    <tr><td>Status</td><td>Overview, Services, Ports, Firewall, Actions Log</td><td>3–5</td></tr>
+    <tr><td>Remote access</td><td>Router Install, Full Tunnel, Split Tunnel, Nodes, Cloudflare</td><td>6–9</td></tr>
+    <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand</td><td>10–11</td></tr>
+    <tr><td>Maintenance</td><td>Update, System Optimization</td><td>12</td></tr>
+    <tr><td>Configuration</td><td>Config</td><td>13</td></tr>
+  </table>
+  <h2><span class="n">1.2</span>Installing it</h2>
+  <p>44helper is optional. Install it like the other tools: from instmon's page (Components, or GitHub Updates), with
+    the installer, or by itself:</p>
+<pre>sudo python3 44helper_v0_0_195_20261013.py --install
+<span class="c"># and to remove it</span>
+sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
+  <p><code>--install</code> copies the file into <code>/usr/local/lib/asl_dvs/44helper/</code>, links it as
+    <code>/usr/local/bin/44helper.py</code>, writes <code>44helper.service</code>, which starts through the shared
+    launcher <code>/usr/local/bin/asl_dvs_launch.py</code>, and starts it. Its settings live in
+    <code>/etc/44helper/44helper.conf</code>; an uninstall leaves them in place.</p>
+  <h2><span class="n">1.3</span>Logging in</h2>
+  <ul>
+    <li>Open <code>http://&lt;pi-address&gt;:9997</code> and log in with the Pi's <b>root password</b>. 44helper has its own login, separate from the Dashboard and SysMon.</li>
+    <li>The login <b>doesn't time out</b>, because install jobs can run for a long time. It ends when you press <b>Log out</b>, when anyone presses <b>Log out all devices</b>, or when the Pi reboots.</li>
+    <li>Wrong passwords share one 5-try lockout across the login, the terminal and every other password prompt.</li>
+    <li>If 44helper restarts while you are logged in, the page reconnects to any running job by itself.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>44helper can install, remove and reconfigure anything on the Pi.
+    Keep port 9997 on your own network. Never open it in a firewall zone or publish it through Cloudflare. The
+    Overview's self-check turns red if it ever becomes reachable through the 44Net zone.</div>
+
+  <h2><span class="n">1.4</span>The header</h2>
+  <figure>
+    <div class="mock">
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.195 · Log out all devices · Log out</span></div>
+      <div class="tabs">
+        <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
+        <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
+        <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
+        <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
+        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Firewall</span><span class="tab">Actions Log</span>
+      </div>
+    </div>
+    <figcaption><b>Figure 1.1 · Illustration.</b> The header shows the callsign, node and version. Row one is 44Net
+      remote access; row two is the installers, maintenance, Config and the status tabs.</figcaption>
+  </figure>
+  <p>While quiet mode is on (Update tab, Chapter 12), an amber banner across the top of every tab says so.</p>
+</section>
+
+<section class="chapter" id="ch2">
+  <div class="kicker">Chapter 2 · Basics</div>
+  <h1 class="ch">The page, step cards and the safety checks</h1>
+  <p class="ch-lede">Most tabs are a numbered list of step cards. This chapter explains how a card works, what
+    44helper checks before it runs a step, and what to do when it refuses.</p>
+  <h2><span class="n">2.1</span>A step card</h2>
+  <figure>
+    <div class="mock">
+      <div class="row" style="padding-top:.6em;justify-content:space-between"><span style="color:var(--bright);font-weight:700;font-size:8pt">5. Install ASL3 core</span><span class="badge" style="border:1px solid var(--grn);color:var(--grn)">OK</span></div>
+      <div class="row"><span class="txt" style="font-family:var(--mono);background:#070b11;border:1px solid var(--line);padding:.3em .5em;flex:1">sudo DEBIAN_FRONTEND=noninteractive apt install -y … asl3</span></div>
+      <div class="row"><span class="btn c">Run</span><span class="btn">Copy</span></div>
+      <div class="row" style="padding-bottom:.7em"><span class="txt" style="font-family:var(--mono);background:#070b11;border:1px solid var(--line);padding:.3em .5em;flex:1">Setting up asl3 … done</span></div>
+    </div>
+    <figcaption><b>Figure 2.1 · Illustration.</b> Title and status pill, the command, Run and Copy, and the output.</figcaption>
+  </figure>
+  <table>
+    <tr><th>Part</th><th>Meaning</th></tr>
+    <tr><td>Status pill</td><td><b>Not run</b>, <b>Running…</b> with the elapsed time, <b>OK</b> or <b>Failed</b>. <b>Manual</b> means you run it yourself over SSH (Copy only). <b>Config</b> means it saves a Restore point.</td></tr>
+    <tr><td>Command box</td><td>The exact command. You can edit it before pressing Run, for example to change a version or a date. Manual steps are read-only.</td></tr>
+    <tr><td>Fields</td><td>Some steps ask for values (a callsign, a DMR ID, a password, a port). The command is built from them; the field values never appear in the command box.</td></tr>
+    <tr><td>Run</td><td>Runs the command on the Pi as root and streams the output below it.</td></tr>
+    <tr><td>Copy</td><td>Copies the command, and the output if there is any, to run over SSH or send to someone.</td></tr>
+    <tr><td>▼ note</td><td>A folded note at the top of each tab and on some cards. Open it before the first run: it says what changes and what can go wrong.</td></tr>
+  </table>
+  <ul>
+    <li>Run steps <b>in order</b>: each one assumes the ones before it worked.</li>
+    <li>Every install tab has a <b>Script</b> list (Bookworm, Trixie and others) and a <b>Custom</b> choice for typing any one command.</li>
+    <li><b>Purge previous install</b> shows the removal steps. After a double confirmation they run one after another and stop at the first failure. Steps marked <i>Optional</i> are left out of that pass and only run if you press their own Run button.</li>
+    <li>Results last only while the page is open. A reload starts the cards fresh; a job that is still running carries on, and its card picks it up again.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>Whatever is in the command box runs as root, edits included.</div>
+
+  <h2><span class="n">2.2</span>Checks before a step runs</h2>
+  <table>
+    <tr><th>Check</th><th>What happens</th></tr>
+    <tr><td>Masked services</td><td>A card at the top of each install tab and the Update tab checks whether a service the tab needs is <i>masked</i> (blocked from starting). 44helper clears such masks and leaves the service <b>off</b>. You can <b>Turn on</b> each one, or <b>Put the mask back (on purpose)</b>, which 44helper then leaves alone. While a mask can't be cleared, the card is red and the install buttons are locked.</td></tr>
+    <tr><td>Broken packages</td><td>Before any step that installs or removes packages, 44helper runs <code>dpkg --audit</code>. If anything is unfinished or broken, the step is refused with <b>NOT RUN</b> and a pointer to the Update tab's Package recovery steps.</td></tr>
+    <tr><td>Package locks</td><td>Quiet mode and package steps wait for apt and dpkg to finish; they don't run on top of another package job.</td></tr>
+  </table>
+  <ul>
+    <li><b>What to do next:</b> when an install step fails, a box opens under it with numbered repair steps. Each has a button that jumps to the right Update-tab card, and a link at the top of the Update tab brings you back.</li>
+    <li><b>Repair, then purge:</b> a purge refused because packages are broken offers to repair them in quiet mode and then run the purge again by itself.</li>
+  </ul>
+
+  <h2><span class="n">2.3</span>How long a step may run</h2>
+  <ul>
+    <li><b>Package and install-script commands</b> (apt, dpkg, <code>| bash</code>, <code>install*.sh</code>, builds) have <b>no time limit</b>. They run as their own systemd job, so they carry on if 44helper restarts, and the page re-attaches to them.</li>
+    <li>Anything else stops after <b>15 minutes</b> unless the step sets its own limit.</li>
+    <li>Pi tunnel step 6 waits up to <b>90 seconds</b> for the tunnel to start (Chapter 7).</li>
+  </ul>
+
+  <h2><span class="n">2.4</span>The built-in terminal</h2>
+  <p>A few steps need you to answer questions on screen: <code>asl-menu</code>, the USRP2M17 installer and Ampersand's
+    first run. Their cards can open a real terminal in the page, but only:</p>
+  <ul>
+    <li>after it has been <b>switched on</b>, from the page with the root password, or by creating <code>/etc/44helper/terminal.enable</code> over SSH (owned by root, not writable by others);</li>
+    <li>from your local network, never through a tunnel or Cloudflare;</li>
+    <li>with the root password entered again each time you open it;</li>
+    <li>for the one command printed on that card, nothing else.</li>
+  </ul>
+  <p>One terminal at a time. It closes after 10 minutes with no typing, or when you log out.</p>
+</section>
+
+<section class="part">
+  <div class="pn">PART II</div>
+  <h1>Status tabs</h1>
+  <p>Five tabs that read the node and change little: Overview, Services, Ports, Firewall and Actions Log. The
+    Firewall tab also carries the half tunnel card, which has a chapter of its own.</p>
+  <ol start="3"><li>Overview, Services and Ports</li><li>Firewall and Actions Log</li><li>The half tunnel card</li></ol>
+</section>
+
+<section class="chapter" id="ch3">
+  <div class="kicker">Chapter 3 · Status</div>
+  <h1 class="ch">Overview, Services and Ports</h1>
+  <h2><span class="n">3.1</span>Overview tab</h2>
+  <p>The banner at the top sums up the worst finding. The cards below it:</p>
+  <table>
+    <tr><th>Card</th><th>Shows</th></tr>
+    <tr><td>Installed software</td><td>ASL3, DVSwitch, USRP2M17, SVXLink and Ampersand. Each is <b>installed</b> (version and running services), <b>broken</b> (half-installed packages, or a package without its program files), <b>leftovers</b> (removed, but settings, folders or unit files remain) or <b>absent</b>. Click a name to open its tab.</td></tr>
+    <tr><td>Tunnel / wg0</td><td>Whether <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
+    <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up: on the Pi (full or split) or on a router.</td></tr>
+    <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
+    <tr><td>Self-check findings</td><td><b>Red</b> if 44helper, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. <b>Amber</b> if <code>wg0.conf</code>, which holds your private key, is not mode 600.</td></tr>
+  </table>
+  <p><b>Re-check</b> reads everything again at once; otherwise the installed-software list is cached for 20 seconds.</p>
+
+  <h2><span class="n">3.2</span>Services tab</h2>
+  <p>Grouped lines, one per service or listening port. Masked services are marked.</p>
+  <table>
+    <tr><th>Group</th><th>Services</th></tr>
+    <tr><td>System</td><td>firewalld, systemd-resolved</td></tr>
+    <tr><td>44Net Tunnel</td><td><code>wg-quick@wg0</code>, or the ARDC fallback unit <code>44net-tunnel.service</code></td></tr>
+    <tr><td>AllStarLink / DVSwitch</td><td>Asterisk, MMDVM_Bridge, Analog_Bridge, md380-emu, and the gateway command ports</td></tr>
+    <tr><td>M17</td><td>usrp2m17</td></tr>
+    <tr><td>SVXLink</td><td>svxlink</td></tr>
+    <tr><td>Ampersand</td><td>amp-server, amp-hub</td></tr>
+    <tr><td>Cloudflare Tunnel</td><td>cloudflared</td></tr>
+    <tr><td>Dashboards (should stay private)</td><td>the Dashboard (<code>nodecontrol</code>, or <code>asl_dvs_dashboard</code> on older installs) and <code>dvs_dashboard</code></td></tr>
+  </table>
+
+  <h2><span class="n">3.3</span>Ports tab</h2>
+  <p>A reference table of every port the node's software uses, checked against what is reachable through your
+    remote-access setup. The line above it says where it looked: the Pi's 44NetConnect zone, the router's forward
+    table, or "none (no tunnel configured yet)". <b>Running</b> means something listens on the port (for Cloudflare's
+    outbound row, that <code>cloudflared</code> is up).</p>
+  <table>
+    <tr><th>Port</th><th>Used by</th><th>Role</th></tr>
+    <tr><td class="port">4569/udp</td><td>AllStarLink IAX2</td><td>peer-inbound</td></tr>
+    <tr><td class="port">5198-5199/udp</td><td>EchoLink (Asterisk or SvxLink)</td><td>peer-inbound</td></tr>
+    <tr><td class="port">1667/udp</td><td>VOTER/RTCM</td><td>peer-inbound</td></tr>
+    <tr><td class="port">4568/udp</td><td>Ampersand hub IAX</td><td>peer-inbound</td></tr>
+    <tr><td class="port">5038/tcp</td><td>Asterisk AMI</td><td>mgmt-LAN</td></tr>
+    <tr><td class="port">8989, 9999/tcp</td><td>Dashboard, SysMon</td><td>mgmt-LAN</td></tr>
+    <tr><td class="port">9090/tcp</td><td>Cockpit</td><td>mgmt-LAN</td></tr>
+    <tr><td class="port">8080/tcp</td><td>Ampersand web page</td><td>mgmt-LAN</td></tr>
+    <tr><td class="port">31100, 31103/udp</td><td>Analog_Bridge ↔ MMDVM_Bridge</td><td>loopback-only</td></tr>
+    <tr><td class="port">32008, 34008/udp</td><td>USRP2M17 ↔ Asterisk</td><td>loopback-only</td></tr>
+    <tr><td class="port">32012, 34012/udp</td><td>Zello bridge</td><td>loopback-only</td></tr>
+    <tr><td class="port">6073, 6074, 6075/udp</td><td>YSF, P25, NXDN gateway commands</td><td>loopback-only</td></tr>
+    <tr><td class="port">54321/udp</td><td>ircDDBGateway remote control</td><td>loopback-only</td></tr>
+    <tr><td class="port">7844/udp</td><td>Cloudflare Tunnel edge</td><td>outbound-only</td></tr>
+  </table>
+  <table>
+    <tr><th>Verdict</th><th>Means</th></tr>
+    <tr><td class="ok">OK</td><td>As it should be.</td></tr>
+    <tr><td class="bad">over-exposed</td><td>A mgmt-LAN, loopback-only or outbound-only port is open to the outside. This is the security finding.</td></tr>
+    <tr><td class="warn">needed-but-not-open</td><td>A peer-inbound port is running but not open, so inbound links will fail. Only shown once a tunnel is set up.</td></tr>
+    <tr><td style="color:var(--muted)">not-listening</td><td>Nothing runs on it: normal for software you don't use.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>"Exposed" means in the 44NetConnect zone (Pi tunnel), in the router's
+    forwards (router, single address), or on the whole subnet (router, routed subnet with masquerade off). A Cloudflare
+    Tunnel is never visible here: nothing opens inbound for it (Chapter 9).</div>
+</section>
+
+<section class="chapter" id="ch4">
+  <div class="kicker">Chapter 4 · Status</div>
+  <h1 class="ch">Firewall and Actions Log</h1>
+  <p class="ch-lede">44helper uses <b>firewalld</b>. This tab shows what each zone lets in and changes it, one port
+    or service at a time, with a safe "try it first" path.</p>
+  <h2><span class="n">4.1</span>The cards</h2>
+  <table>
+    <tr><th>Card</th><th>What it does</th></tr>
+    <tr><td>Half tunnel (ASL + EchoLink only) <span class="badge test">TESTING</span></td><td>At the top of the tab. Chapter 5.</td></tr>
+    <tr><td>Guardrail</td><td>Warns when <code>wg0</code> is attached to the ASL3 image's own <code>allstarlink</code> zone instead of 44helper's <code>44NetConnect</code> zone.</td></tr>
+    <tr><td>Pi: 44NetConnect zone</td><td>What the 44Net side can reach. Add or remove the services <code>iax2</code>, <code>echolink</code> and <code>rtcm</code>, or a port such as <code>14569/udp</code>.</td></tr>
+    <tr><td>Quick port control (any zone)</td><td>Section 4.2.</td></tr>
+    <tr><td>Panic mode</td><td>If firewalld's panic mode (all traffic dropped) is on, a button turns it off. 44helper never turns it on.</td></tr>
+    <tr><td>Router: live port-forward table</td><td>With router access set up (Chapter 9), the router's forwards, each with a remove button.</td></tr>
+  </table>
+  <h2><span class="n">4.2</span>Quick port control</h2>
+  <ol class="steps">
+    <li>Pick a zone. The 44NetConnect zone is pinned at the top; the active zones show their interfaces, and the default zone is marked. <b>Show zone config</b> lists everything in it (read-only).</li>
+    <li>Type a port such as <code>4569/udp</code>, or press a preset: IAX2 4569/udp, EchoLink/SvxLink 5198-5199/udp, VOTER/RTCM 1667/udp, or your DVSwitch Mobile port.</li>
+    <li>Press <b>Add (runtime test)</b>. It opens the port until the next firewalld reload, without touching the saved config.</li>
+    <li>When it works, press <b>Make permanent</b>, which saves that one port and reloads. <b>Remove</b> closes it everywhere (runtime and saved).</li>
+  </ol>
+  <table>
+    <tr><th>Button</th><th>Runs</th></tr>
+    <tr><td>Add (runtime test)</td><td class="mono">firewall-cmd --zone=&lt;z&gt; --add-port=&lt;p&gt;</td></tr>
+    <tr><td>Make permanent</td><td class="mono">firewall-cmd --permanent --zone=&lt;z&gt; --add-port=&lt;p&gt; ; --reload</td></tr>
+    <tr><td>Remove</td><td>the same with <code>--remove-port</code>, runtime and permanent, then <code>--reload</code></td></tr>
+    <tr><td>Commit all runtime changes</td><td class="mono">firewall-cmd --runtime-to-permanent</td></tr>
+    <tr><td>Reload firewalld</td><td class="mono">firewall-cmd --reload</td></tr>
+    <tr><td>Advanced</td><td>add or remove a service in a zone (checked against <code>--get-services</code>), move an interface to a zone (<code>--change-interface</code>) or take it out</td></tr>
+  </table>
+  <ul>
+    <li><b>Guardrail as you type:</b> a loopback-only port (Chapter 3) is <b>blocked</b> in every zone, by the server and not just the page. A dashboard, AMI or Cockpit port is allowed but flagged red.</li>
+    <li>Every zone name is checked against firewalld's own list, every port against <code>port/proto</code>, and interface and service names against a strict pattern.</li>
+    <li><b>During a half-tunnel test</b>, Commit all runtime changes is refused (it would save the test's temporary ports), and Reload warns that it closed them.</li>
+  </ul>
+  <div class="call tip"><span class="t">TIP</span>Always use Add (runtime test) first. If you lose access, a reload or a
+    reboot puts things back. Make it permanent once you know it works.</div>
+  <h2><span class="n">4.3</span>Actions Log tab</h2>
+  <ul>
+    <li><b>Session log:</b> every command 44helper ran since it last started, with OK or FAIL. <b>Refresh</b> reads it again. A step that puts a password in its command (such as Allmon3's) shows it here too.</li>
+    <li><b>Known-good router notes:</b> notes saved after a router setup worked (model, firmware and access method, no secrets). Click one to read it.</li>
+  </ul>
+</section>
+
+<section class="chapter" id="ch5">
+  <div class="kicker">Chapter 5 · Status · Firewall tab</div>
+  <h1 class="ch">The half tunnel card <span class="badge test">TESTING</span></h1>
+  <p class="ch-lede">A full tunnel makes your 44 address reachable by anyone, but sends all the Pi's traffic through
+    44Net. A split tunnel keeps the Pi's traffic at home, but only 44Net hosts can reach you. The half tunnel takes the
+    useful half of each: anyone can reach ASL and EchoLink at the 44 address, and everything else keeps the normal
+    route.</p>
+  <h2><span class="n">5.1</span>What changes</h2>
+  <table>
+    <tr><th>Traffic</th><th>Goes</th></tr>
+    <tr><td>Asterisk (AllStar links, registration, EchoLink)</td><td>through the tunnel, from the 44 address</td></tr>
+    <tr><td>Anything sent from the 44 address</td><td>through the tunnel</td></tr>
+    <tr><td>The IAX port and EchoLink 5198-5199/udp, 5200/tcp</td><td>through the tunnel</td></tr>
+    <tr><td>Traffic to 44Net, the LAN, and the tunnel server itself</td><td>its normal route</td></tr>
+    <tr><td>DVSwitch, usrp2m17, DNS, updates, everything else</td><td>the normal internet link</td></tr>
+  </table>
+  <p>How: wg0 runs with <code>Table = off</code> and <code>AllowedIPs = 0.0.0.0/0</code>, so WireGuard accepts packets
+    from any address but adds no routes. A route table (4444) with a default route via wg0 and six routing rules
+    (priority 1100–1105) pick out Asterisk's traffic. The first rule, <code>lookup main suppress_prefixlength 0</code>,
+    keeps the LAN, 44Net and the tunnel server on their normal routes.</p>
+  <div class="call care"><span class="t">CAREFUL</span>With the half tunnel on, other nodes and EchoLink reach you at the
+    44 address only. A router port forward to the IAX or EchoLink ports stops working, because Asterisk's replies go
+    out the tunnel from the 44 address. Everything open in wg0's firewall zone is reachable from the whole internet.</div>
+
+  <h2><span class="n">5.2</span>Before you start</h2>
+  <ul>
+    <li>The Full Tunnel or Split Tunnel tab done, with the tunnel working. A split config is fine: the test uses a copy set to <code>0.0.0.0/0</code>.</li>
+    <li>Asterisk running as its own <code>asterisk</code> user (ASL3 does). As root, only the IAX and EchoLink ports use the tunnel, and registration still shows your home address.</li>
+    <li>Do it from home, on the LAN, not over the tunnel.</li>
+  </ul>
+
+  <h2><span class="n">5.3</span>The buttons</h2>
+  <table>
+    <tr><th>#</th><th>Button</th><th>What it does</th></tr>
+    <tr><td>0</td><td>Check first</td><td>Read-only. Finds the 44 address, the tunnel server, the IAX port (from <code>iax.conf</code>), whether EchoLink is loaded, the normal route, the LAN, wg0's zone and Asterisk's user. Backs up wg0.conf to the instmon library as <code>wg0.conf.pre-halftunnel</code>. Blocks on anything that would break (5.4).</td></tr>
+    <tr><td>1</td><td>Arm auto-undo</td><td>A 15-minute systemd timer that runs <code>/run/44helper-half/undo.sh</code>, even if the page or SSH drops. Nothing below runs until it is armed. Press it again to restart the 15 minutes.</td></tr>
+    <tr><td>2</td><td>Restart tunnel in half mode</td><td>Stops <code>wg-quick@wg0</code> and brings wg0 up from a copy in <code>/run</code> with <code>Table = off</code> and <code>AllowedIPs = 0.0.0.0/0</code>. Checks the normal default route is untouched. Before it starts, the DNS check from Chapter 7 runs.</td></tr>
+    <tr><td>3</td><td>Add tunnel route table</td><td>Table 4444 with a default route via wg0, plus the 44Net routes (44.0.0.0/9, 44.128.0.0/10). A tunnel server inside 44Net is pinned to the normal route.</td></tr>
+    <tr><td>4</td><td>Send ASL and EchoLink into the tunnel</td><td>The routing rules: main without its default (1100), from the 44 address (1101), Asterisk's user (1102), the IAX source port (1103), EchoLink 5198-5199/udp (1104), EchoLink directory 5200/tcp (1105).</td></tr>
+    <tr><td>5</td><td>Open tunnel ports</td><td>The IAX port and EchoLink, runtime only, in wg0's zone. Ports already open are left alone.</td></tr>
+    <tr><td>6</td><td>Loosen the return-path check on wg0</td><td><code>rp_filter = 2</code> on wg0. The kernel uses the higher of <code>all</code> and <code>wg0</code>, so this is enough.</td></tr>
+    <tr><td></td><td>Run 2–6 in order</td><td>Runs the steps it hasn't done yet and stops at the first failure, putting everything back. A failed step puts back its own part first.</td></tr>
+    <tr><td>7</td><td>Run checks</td><td>14 read-only checks (5.5).</td></tr>
+    <tr><td>8</td><td>Undo now</td><td>Runs the undo script now: newest change first, carrying on past a stuck piece, logging to <code>/run/44helper-half/undo.log</code> (shown on the card).</td></tr>
+    <tr><td>9</td><td>Keep for now</td><td>Cancels the timer. The test stays until Undo now or a reboot. The step buttons then need the timer armed again.</td></tr>
+    <tr><td>10</td><td>Make permanent</td><td>5.6.</td></tr>
+    <tr><td>11</td><td>Remove permanent</td><td>5.7. Double confirm.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>Nothing in the test is written to disk except under <code>/run</code>, so a
+    reboot also clears it.</div>
+
+  <h2><span class="n">5.4</span>What Check first blocks on</h2>
+  <ul>
+    <li>no wg0.conf, no 44 address or no <code>[Peer]</code>; a tunnel server it can't find or look up;</li>
+    <li>a <code>Table =</code> line already in wg0.conf, or <code>SaveConfig = true</code> (wg-quick would rewrite the file and drop the markers);</li>
+    <li>an unusual AllowedIPs (neither full nor split);</li>
+    <li>firewalld not running, wg-quick missing, the ARDC fallback unit running, an <code>ip</code> command too old for <code>uidrange</code>, <code>sport</code> and <code>suppress_prefixlength</code>;</li>
+    <li>no normal default route, or one pointing into the tunnel; wg0 in no firewall zone; Full Tunnel outbound block rules loaded;</li>
+    <li>wg0 up but not from <code>wg-quick@wg0</code>; the full tunnel with exceptions in use (Chapter 8); 44helper not running as root.</li>
+  </ul>
+
+  <h2><span class="n">5.5</span>The 14 checks</h2>
+  <p>Each line is <b class="ok">green</b> (pass), <b class="bad">red</b> (fail), grey (doesn't apply) or
+    <b class="warn">amber</b> (waiting). Registration and EchoLink stay amber for up to 6 minutes while they update.
+    Check first records how checks 11–14 looked before the test, so a failure that was already there is labelled that
+    way.</p>
+  <table>
+    <tr><th>#</th><th>Check</th><th>Passes when</th></tr>
+    <tr><td>1</td><td>Tunnel is up</td><td>The 44Net server was heard from in the last 3 minutes.</td></tr>
+    <tr><td>2</td><td>Running in half mode</td><td>wg0 is up with <code>Table = off</code> and none of wg-quick's full-tunnel rules.</td></tr>
+    <tr><td>3</td><td>No conflicting rules</td><td>No outbound REJECT/DROP direct rules are loaded.</td></tr>
+    <tr><td>4</td><td>Internet still uses the normal link</td><td><code>1.1.1.1</code> does not route via wg0.</td></tr>
+    <tr><td>5</td><td>DNS works</td><td><code>allstarlink.org</code> resolves.</td></tr>
+    <tr><td>6</td><td>LAN tools still respond</td><td>The Dashboard, SysMon, instmon and 44helper ports that were listening still answer, their replies to the LAN gateway leave by the LAN link, and replies to your browser don't go out wg0.</td></tr>
+    <tr><td>7</td><td>Tunnel route table exists</td><td>Table 4444 has its default route, and the 44Net routes are on wg0.</td></tr>
+    <tr><td>8</td><td>Routing rules are loaded</td><td>Every rule from step 4 is in place.</td></tr>
+    <tr><td>9</td><td>ASL traffic really goes into the tunnel</td><td>A test lookup for the IAX port, Asterisk's user and EchoLink comes back via wg0, from the 44 address.</td></tr>
+    <tr><td>10</td><td>Ports open on the tunnel only</td><td>The ports are open in wg0's zone and the return-path check is loose.</td></tr>
+    <tr><td>11</td><td>DVSwitch connected</td><td>The bridges run, and the newest MMDVM_Bridge log shows a DMR login.</td></tr>
+    <tr><td>12</td><td>usrp2m17 connected</td><td>The service runs.</td></tr>
+    <tr><td>13</td><td>ASL registration shows your 44 address</td><td><code>rpt show registrations</code> lists the 44 address.</td></tr>
+    <tr><td>14</td><td>EchoLink logged in</td><td><code>echolink dbdump</code> has directory entries.</td></tr>
+  </table>
+  <p>A red line on check 4, 5 or 6 shows a banner recommending <b>Undo now</b>: those are the ones that take the node off
+    the air.</p>
+
+  <h2><span class="n">5.6</span>Make permanent</h2>
+  <p>Unlocks when steps 2–6 are done and the last checks, run after them and under 15 minutes old, are all green or
+    grey. Type the user whose home folder gets the removal script (default: the UID 1000 user; root or a login user,
+    UID 1000 and up, only). Then it:</p>
+  <ol class="steps">
+    <li>Saves each piece in its normal home: wg0.conf gets <code>Table = off</code>, <code>AllowedIPs = 0.0.0.0/0</code> and the routes and rules as PostUp/PostDown lines between <code># 44helper-half-begin</code> and <code># 44helper-half-end</code> (they work out the gateway at start-up, so a travel node on another network still works); firewalld gets the ports in wg0's zone; <code>/etc/sysctl.d/90-44helper-halftunnel.conf</code> gets the return-path setting.</li>
+    <li>Writes <code>remove_half_tunnel.sh</code> and a 0600 copy of the original wg0.conf into that home folder and <code>/root</code>, and a login reminder in <code>/etc/profile.d/</code>.</li>
+    <li>Clears the test, starts the tunnel from the saved wg0.conf, reloads the firewall and runs the checks again.</li>
+    <li>If a check fails, it takes everything back out and restarts the test with a fresh 15-minute timer. If a check is only waiting (registration), it stays saved.</li>
+  </ol>
+  <h2><span class="n">5.7</span>Remove permanent</h2>
+  <p>Runs the same steps as <code>~/remove_half_tunnel.sh</code>. The script is plain bash, needs no 44helper and asks for
+    sudo by itself. It stops the tunnel, removes the marked lines and puts AllowedIPs back (so any other edits to
+    wg0.conf are kept), deletes the rules and routes, closes the ports it opened, removes the sysctl file and starts
+    the tunnel again. If the marked lines can't be taken out, it restores from a backup, root-owned copies first.</p>
+  <div class="call note"><span class="t">NOTE</span>While the half tunnel is being tested or is permanent, the Split
+    tab's AllowedIPs repair is switched off: narrowing AllowedIPs would cut off every node outside 44Net. SysMon 6.13.84
+    (full build) has the outside-view checks too: Console → Troubleshooting → Half tunnel.</div>
+</section>
+
+<section class="part">
+  <div class="pn">PART III</div>
+  <h1>44Net and remote access</h1>
+  <p>How to make the node reachable, or reach it yourself while away: a 44Net tunnel on the Pi (split, full, half,
+    or full with exceptions), a 44Net tunnel on your router, or a Cloudflare Tunnel for the web pages.</p>
+  <ol start="6"><li>Choosing a route</li><li>Full Tunnel and Split Tunnel tabs</li><li>Full tunnel with exceptions</li><li>Router Install, Nodes and Cloudflare</li></ol>
+</section>
+
+<section class="chapter" id="ch6">
+  <div class="kicker">Chapter 6 · Remote access</div>
+  <h1 class="ch">Choosing a route</h1>
+  <p class="ch-lede">44Net (AMPRNet) gives amateur stations real public 44.x.x.x addresses. 44Net Connect is ARDC's free
+    WireGuard service that hands you one. How much of the Pi uses it is up to you.</p>
+  <h2><span class="n">6.1</span>The four Pi tunnel modes</h2>
+  <table>
+    <tr><th></th><th>Split</th><th>Half</th><th>Full with exceptions</th><th>Full</th></tr>
+    <tr><td>Where it is</td><td>Split Tunnel tab</td><td>Firewall tab card</td><td>Full Tunnel tab card</td><td>Full Tunnel tab</td></tr>
+    <tr><td>AllowedIPs</td><td class="mono">44.0.0.0/9, 44.128.0.0/10</td><td class="mono">0.0.0.0/0</td><td class="mono">0.0.0.0/0</td><td class="mono">0.0.0.0/0</td></tr>
+    <tr><td>Pi's internet traffic</td><td>normal link</td><td>normal link</td><td>tunnel</td><td>tunnel</td></tr>
+    <tr><td>What uses the tunnel</td><td>traffic to 44Net</td><td>44Net, plus ASL and EchoLink</td><td>everything except LAN replies and a bypass list</td><td>everything</td></tr>
+    <tr><td>Who can reach the 44 address</td><td>44Net hosts only</td><td>anyone</td><td>anyone</td><td>anyone</td></tr>
+    <tr><td>What registration shows</td><td>home address</td><td>44 address</td><td>44 address</td><td>44 address</td></tr>
+    <tr><td>Router forward for ASL</td><td>needed</td><td>not needed</td><td>not needed</td><td>not needed</td></tr>
+    <tr><td>Works behind CGNAT</td><td>no (for ASL)</td><td>yes</td><td>yes</td><td>yes</td></tr>
+    <tr><td>Router-forwarded dashboard/SSH</td><td>works</td><td>works</td><td>works (step 2)</td><td>hangs</td></tr>
+  </table>
+  <p><b>Why split only lets 44Net in:</b> a packet from an ordinary internet address does arrive down the tunnel, but
+    WireGuard checks its source against <code>AllowedIPs</code> and drops it. That is why a split tunnel keeps your home
+    address and router forward for ASL.</p>
+  <p><b>Half vs full with exceptions:</b> both let anyone reach the 44 address. They differ in what happens to traffic
+    that isn't on a list. With the half tunnel it stays on the normal link, so a new service or an update can't break
+    by surprise. With full with exceptions it goes through the tunnel, so the whole Pi shows up as the 44 address, and
+    each service that misbehaves needs an exception.</p>
+  <h2><span class="n">6.2</span>Which to pick</h2>
+  <ul>
+    <li><b>Split:</b> your ISP gives you a public address with a router forward for ASL, and you want 44Net peers too. The lowest-risk mode.</li>
+    <li><b>Half:</b> ASL should be reachable at the 44 address with no router forward, or you're behind CGNAT, and the rest of the Pi should be left alone. The safest way to do that on a DV node.</li>
+    <li><b>Full with exceptions:</b> the whole Pi behind the 44 address, but forwarded dashboard and SSH connections should still answer.</li>
+    <li><b>Full</b> on its own: a Pi that is only reached through 44Net.</li>
+  </ul>
+  <h2><span class="n">6.3</span>Router and Cloudflare</h2>
+  <table>
+    <tr><th>Route</th><th>Tab</th><th>Best for</th></tr>
+    <tr><td>Router tunnel</td><td>Router Install</td><td>Several devices, or a whole routed 44Net subnet, behind one tunnel on an OpenWrt / GL.iNet router.</td></tr>
+    <tr><td>Cloudflare Tunnel</td><td>Cloudflare</td><td>Opening the web pages yourself from anywhere, with no port opened at home and a Cloudflare login in front. It carries web pages only: it can't carry IAX or EchoLink voice.</td></tr>
+  </table>
+  <div class="call tip"><span class="t">TIP</span>A split tunnel and Cloudflare make a good pair. The tunnel handles radio
+    traffic with 44Net; Cloudflare lets you check the pages from your phone without opening them to 44Net or the
+    internet. Under a full tunnel, cloudflared's own connection goes through ARDC too.</div>
+  <div class="call note"><span class="t">NOTE</span>With a full, half or exceptions tunnel, the Pi's traffic crosses ARDC's
+    network. Check that what you send fits ARDC's 44Net acceptable use policy.</div>
+</section>
+
+<section class="chapter" id="ch7">
+  <div class="kicker">Chapter 7 · Remote access</div>
+  <h1 class="ch">Full Tunnel and Split Tunnel tabs</h1>
+  <p class="ch-lede">Both tabs set up WireGuard (<code>wg0</code>) on the Pi and a firewalld zone called
+    <b>44NetConnect</b> that decides what the 44Net side can reach. The steps are the same; the only difference is the
+    <code>AllowedIPs</code> line in the config you paste.</p>
+  <p>44Net Connect gives every tunnel the same config, with <code>AllowedIPs = 0.0.0.0/0</code>. For the Split tab, change
+    that line to <code>44.0.0.0/9, 44.128.0.0/10</code> before pasting. A 44Net Connect tunnel is a single address, not a
+    routed subnet; for a subnet use the Router Install tab.</p>
+  <h2><span class="n">7.1</span>The steps</h2>
+  <table>
+    <tr><th>#</th><th>Step</th><th>What it does</th></tr>
+    <tr><td>1</td><td>Firewall prereq</td><td>Installs and starts firewalld.</td></tr>
+    <tr><td>1a</td><td>systemd-resolved prereq</td><td>Installs WireGuard and systemd-resolved, without which the tunnel can fail to start. Reboot after this, before step 6.</td></tr>
+    <tr><td>2</td><td>Create the 44NetConnect zone</td><td><code>/etc/firewalld/zones/44NetConnect.xml</code>.</td></tr>
+    <tr><td>3</td><td>Inbound services and ports</td><td>Tick what other stations may reach: <b>AllStarLink IAX2</b> and <b>EchoLink / SvxLink</b> (on by default), <b>VOTER/RTCM</b> (optional). Asterisk AMI can be added but is flagged red. The Full tab also has your DVSwitch Mobile port and a custom port; the Split tab offers only IAX2 and EchoLink.</td></tr>
+    <tr><td>4</td><td>Paste WireGuard config</td><td>Paste the whole <code>[Interface]</code>/<code>[Peer]</code> block and press <b>Write wg0.conf (chmod 600)</b>. A config with no real private key is refused. Leave <b>Also back up a copy to the instmon library</b> ticked so you can recover the tunnel after re-flashing the card. <b>Load from instmon library</b> puts a saved copy back (it shows your private key).</td></tr>
+    <tr><td>4a</td><td>DNS &amp; MTU</td><td>7.2.</td></tr>
+    <tr><td>4b</td><td>Split: Repair AllowedIPs · Full: reflector ports</td><td>7.3.</td></tr>
+    <tr><td>5</td><td>Attach wg0 to the zone</td><td>Moves wg0 into 44NetConnect.</td></tr>
+    <tr><td>6</td><td>Enable + start the tunnel</td><td>7.4.</td></tr>
+  </table>
+  <h2><span class="n">7.2</span>Step 4a: DNS and MTU</h2>
+  <table>
+    <tr><th>DNS option</th><th>Writes into wg0.conf</th><th>Default servers</th></tr>
+    <tr><td>Off</td><td>removes 44helper's DNS lines; the Pi keeps its own resolver</td><td>—</td></tr>
+    <tr><td>All DNS through the tunnel</td><td><code>PostUp = resolvectl dns %i …; resolvectl domain %i ~.</code></td><td>1.1.1.1, 9.9.9.9</td></tr>
+    <tr><td>Only 44Net names</td><td><code>PostUp = resolvectl dns %i …; resolvectl domain %i ~ampr.org ~44.in-addr.arpa</code></td><td>44.0.0.1</td></tr>
+    <tr><td>A <code>DNS =</code> line</td><td><code>DNS = …</code>, which wg-quick hands to <code>resolvconf</code></td><td>1.1.1.1, 9.9.9.9, 44.0.0.1</td></tr>
+  </table>
+  <ul>
+    <li>The lines go between <code># 44helper-dns-begin</code> / <code>-end</code> markers. Off removes only those; a <code>DNS =</code> line that came with the pasted config stays.</li>
+    <li>From 0.0.193 the resolvectl options, and the <code>DNS =</code> line when <code>resolvconf</code> is systemd-resolved's, are refused while systemd-resolved isn't answering.</li>
+    <li><b>MTU:</b> a number from 1280 to 1500 (blank or <code>off</code> removes it), between <code># 44helper-mtu-begin</code> / <code>-end</code>. WireGuard's own default is 1420.</li>
+    <li>Restart the tunnel for either to take effect: <code>sudo systemctl restart wg-quick@wg0</code>.</li>
+  </ul>
+  <div class="call tip"><span class="t">TIP</span>With a full tunnel the Pi's normal DNS lookups already go through the
+    tunnel, so Off is usually fine. A <code>DNS =</code> line is the most fragile option: it depends on
+    <code>resolvconf</code>, and on these Pis that means systemd-resolved over D-Bus.</div>
+  <h2><span class="n">7.3</span>Step 4b</h2>
+  <p><b>Split: Repair AllowedIPs</b> fixes a config pasted unedited. Under a split tunnel a full config sends every DNS
+    lookup into the tunnel, the classic cause of "AllStar works but DVSwitch and M17 don't". Restart the tunnel after.
+    It is switched off while the half tunnel or the full tunnel with exceptions is in use.</p>
+  <p><b>Full: reflector ports</b> adds firewalld direct rules on the OUTPUT chain, scoped to <code>-o wg0</code>: outbound
+    allows for the digital-voice reflectors the node dials out to, never an inbound opening. They only matter if
+    outbound traffic is restricted.</p>
+  <table>
+    <tr><th>Mode</th><th>Port</th><th>Status</th></tr>
+    <tr><td>M17 · YSF · P25 · NXDN</td><td class="port">17000 · 42000 · 41000 · 41400</td><td>confirmed</td></tr>
+    <tr><td>D-STAR DPlus · DExtra · DCS</td><td class="port">20001 · 30001 · 30051</td><td>confirmed</td></tr>
+    <tr><td>MMDVM / XLX</td><td class="port">62030</td><td>confirmed</td></tr>
+    <tr><td>BrandMeister DMR</td><td class="port">62031</td><td>opt-in; confirm against your server</td></tr>
+    <tr><td>DMR+ / HBlink</td><td class="port">55555</td><td>opt-in; can collide with other DMR back-ends</td></tr>
+    <tr><td>XLX / URF interlink</td><td class="port">10002 · 10017</td><td>opt-in; confirm against your reflector</td></tr>
+  </table>
+  <h2><span class="n">7.4</span>Step 6: Enable + start the tunnel</h2>
+  <p>Runs <code>systemctl enable wg-quick@wg0</code> and <code>systemctl start wg-quick@wg0</code> (or the ARDC fallback unit
+    <code>44net-tunnel.service</code> where the wg-quick template is missing). From 0.0.193:</p>
+  <ul>
+    <li><b>DNS check first.</b> When wg0.conf's DNS setting goes through systemd-resolved (a <code>DNS =</code> line with systemd's <code>resolvconf</code>, or a resolvectl PostUp), it asks resolved for its status, with a 5-second limit. If there is no answer it restarts systemd-resolved once; if there is still none, the tunnel is not started, and the message says to reboot or remove the DNS setting. A <code>DNS =</code> line with no <code>resolvconf</code> at all is refused the same way.</li>
+    <li><b>Waits up to 90 seconds</b> for the start (it runs as a background job, so the page doesn't hang).</li>
+    <li><b>On failure</b> it shows the unit's state and the last 15 lines of its log since the button was pressed, instead of "command timed out".</li>
+  </ul>
+  <p><b>Verify</b> then checks your public address through <code>connect.44net.cloud/myip</code> and Asterisk's AllStar
+    registrations.</p>
+  <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the network. If
+    you are connected over SSH or Cockpit from outside your home network, that session may drop. Do step 6 from home,
+    or at a keyboard and screen.</div>
+  <h2><span class="n">7.5</span>The other buttons</h2>
+  <ul>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one with systemd drop-ins under <code>/etc</code>: fix netcheck's unit, loosen a bridge's dependency, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel.</li>
+    <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
+    <li><b>Purge</b>: three steps: stop and disable the tunnel (and the fallback unit), remove <code>/etc/wireguard/wg0.conf</code>, and delete the 44NetConnect zone, which also drops wg0's attachment and every service and port in it. Make sure the instmon library has a copy of wg0.conf first.</li>
+    <li>If one kind is installed and you open the other tab, its steps are locked until you press <b>Acknowledge and unlock</b>.</li>
+  </ul>
+  <div class="call note"><span class="t">NOTE</span>A start that fails after exactly 25 seconds on
+    <code>resolvconf -a wg0</code>, with "Failed to activate service 'org.freedesktop.resolve1': timed out", means
+    systemd-resolved isn't answering on D-Bus. Run <code>sudo systemctl restart systemd-resolved</code>, check
+    <code>timeout 5 resolvectl status</code> answers, and start again; or reboot; or take the <code>DNS =</code> line
+    out.</div>
+</section>
+
+<section class="chapter" id="ch8">
+  <div class="kicker">Chapter 8 · Remote access · Full Tunnel tab</div>
+  <h1 class="ch">Full tunnel with exceptions <span class="badge test">TESTING</span></h1>
+  <p class="ch-lede">A card under the Full Tunnel tab's steps, from 0.0.194. Everything still goes through the tunnel,
+    with two exceptions. It works like the half tunnel: temporary rules first, checks, then make it permanent.</p>
+  <h2><span class="n">8.1</span>The two exceptions</h2>
+  <table>
+    <tr><th>Step</th><th>Rule</th><th>Why</th></tr>
+    <tr><td>2. Keep replies from the LAN address on the LAN link</td><td class="mono">from &lt;LAN IP&gt; lookup main · priority 1150</td><td>A dashboard or SSH connection that comes in through the router's forward arrives on the LAN address. Without this, its replies go into the tunnel and the connection hangs.</td></tr>
+    <tr><td>3. Send the bypass list around the tunnel</td><td class="mono">to &lt;ip&gt; lookup main · 1160<br>ipproto udp dport &lt;p&gt; lookup main · 1161</td><td>Optional. Host names, IPv4 addresses or UDP ports, space or comma separated. Host names are looked up when you press the button. The page suggests the DMR master from <code>MMDVM_Bridge.ini</code>. Press 3 again to change the list; an empty list is fine.</td></tr>
+  </table>
+  <p>Both rules sit ahead of wg-quick's own full-tunnel rules (32764, 32765), and <code>lookup main</code> reaches the
+    normal default route there. In test mode they are plain routing rules on the running tunnel: no restart.</p>
+  <div class="call note"><span class="t">NOTE</span>UDP router forwards, such as IAX to your home address, can't be kept.
+    Asterisk picks its reply address from the route, which is the 44 address, so the reply doesn't match the original
+    connection. Other nodes reach you at the 44 address instead. By default DV traffic also goes through the tunnel
+    from the 44 address; BrandMeister and the reflectors log you in by ID, not by address.</div>
+  <h2><span class="n">8.2</span>The buttons</h2>
+  <ul>
+    <li><b>0. Check first</b> (read-only) blocks on: no wg0.conf, AllowedIPs not 0.0.0.0/0, a <code>Table =</code> line or <code>SaveConfig = true</code>, the tunnel not running from <code>wg-quick@wg0</code>, wg-quick's table 51820 rules not loaded, no normal default route or LAN address, the half tunnel in use. It lists what wg0's zone opens to the whole internet, and backs up wg0.conf as <code>wg0.conf.pre-fullx</code>.</li>
+    <li><b>1. Arm auto-undo</b>: the 15-minute timer (<code>44helper-fullxundo</code>).</li>
+    <li><b>2</b> and <b>3</b>: 8.1. <b>8. Undo now</b> and <b>9. Keep for now</b> as on the half-tunnel card.</li>
+    <li><b>10. Make permanent</b> (8.4) and <b>11. Remove permanent</b>.</li>
+  </ul>
+  <h2><span class="n">8.3</span>The 12 checks</h2>
+  <table>
+    <tr><th>#</th><th>Group</th><th>Check</th><th>Passes when</th></tr>
+    <tr><td>1</td><td>Tunnel</td><td>Tunnel is up</td><td>Handshake under 3 minutes old.</td></tr>
+    <tr><td>2</td><td>Tunnel</td><td>Full-tunnel rules are loaded</td><td>wg-quick's table 51820 rules are in place.</td></tr>
+    <tr><td>3</td><td>Tunnel</td><td>Internet goes into the tunnel</td><td><code>1.1.1.1</code> routes via wg0.</td></tr>
+    <tr><td>4</td><td>Tunnel</td><td>The internet sees your 44 address</td><td><code>connect.44net.cloud/myip</code> reports the 44 address.</td></tr>
+    <tr><td>5</td><td>Exceptions</td><td>Replies from the LAN address stay on the LAN link</td><td>Traffic from the LAN address routes via the LAN link.</td></tr>
+    <tr><td>6</td><td>Exceptions</td><td>Bypass list uses the normal link</td><td>Every listed address and port routes via the LAN link (grey if the list is empty).</td></tr>
+    <tr><td>7</td><td>Normal use</td><td>DNS works</td><td><code>allstarlink.org</code> resolves.</td></tr>
+    <tr><td>8</td><td>Normal use</td><td>LAN tools still respond</td><td>The tools answer and their replies to the LAN leave by the LAN link.</td></tr>
+    <tr><td>9–12</td><td>Services</td><td>DVSwitch, usrp2m17, registration, EchoLink</td><td>As on the half-tunnel card.</td></tr>
+  </table>
+  <p>A red line on 5, 7 or 8 shows a banner recommending Undo now.</p>
+  <h2><span class="n">8.4</span>Make permanent and remove</h2>
+  <ul>
+    <li>Unlocks after steps 2 and 3 and green or grey checks under 15 minutes old.</li>
+    <li>Writes the rules as PostUp/PostDown lines between <code># 44helper-fullx-begin</code> / <code>-end</code> in wg0.conf. They find the LAN address and look up the bypass hosts each time the tunnel starts. AllowedIPs isn't touched.</li>
+    <li>Writes <code>remove_full_exceptions.sh</code> and a 0600 copy of wg0.conf to the chosen home folder and <code>/root</code>, plus a login reminder.</li>
+    <li>Restarts the tunnel (after the DNS check) and runs the checks. If one fails, it takes everything out and restarts the test.</li>
+    <li><b>Remove permanent</b> and the script take the marked lines and the rules out. The tunnel stays a plain full tunnel; it isn't restarted.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>A bypass host is looked up when the tunnel starts. If DNS isn't
+    working yet at boot, that host's rule is missing until the next tunnel restart.</div>
+</section>
+
+<section class="chapter" id="ch9">
+  <div class="kicker">Chapter 9 · Remote access</div>
+  <h1 class="ch">Router Install, Nodes and Cloudflare</h1>
+  <h2><span class="n">9.1</span>Router Install tab</h2>
+  <p>For an OpenWrt-based router (GL.iNet models are recognised), driven over SSH with a key. Two models:</p>
+  <ul>
+    <li><b>Model B, single address:</b> the router holds your one 44Net Connect address and forwards chosen ports to the Pi.</li>
+    <li><b>Model C, routed subnet:</b> a coordinator gives you a 44.x subnet; the router's LAN uses it, so the Pi and other devices get real 44Net addresses.</li>
+  </ul>
+  <table>
+    <tr><th>Step</th><th>What it does</th></tr>
+    <tr><td>1. Router access</td><td>Method (none, ssh, api), host, user, SSH key path (for example <code>/etc/44helper/router_id_ed25519</code>) and poll interval. <b>Save</b>, then <b>Test connection / Re-probe</b>.</td></tr>
+    <tr><td>2. Firmware/model</td><td>OpenWrt? <code>uci</code>? GL.iNet model? Read-only.</td></tr>
+    <tr><td>2a. LuCI</td><td>Installs the OpenWrt web interface if it is missing (up to 15 minutes, with SSH keepalives).</td></tr>
+    <tr><td>3. Allocation type</td><td>Model C or Model B. The steps below change with it.</td></tr>
+    <tr><td>4. Capture config</td><td>Paste the WireGuard config (and the LAN subnet for Model C). The private key stays on the Pi.</td></tr>
+    <tr><td>5. Apply to router</td><td>Pushes the config with <code>uci</code>.</td></tr>
+    <tr><td>6. Router LAN IP <i>(C)</i></td><td>Moves the router's LAN onto the subnet. <b>Your connection may drop</b>: renew the Pi's address or reboot it, then update the host in step 1.</td></tr>
+    <tr><td>7. Bring up the tunnel</td><td><code>ifup wgclient</code>, then its status.</td></tr>
+    <tr><td>8. Pi's address</td><td>From the router's DHCP leases; Model C can add a static binding.</td></tr>
+    <tr><td>9. Forwards <i>(B)</i> / Firewall zone <i>(C)</i></td><td>B: tick the services to forward to the Pi. C: the WireGuard zone forwards, with masquerade off.</td></tr>
+    <tr><td>10. Verify</td><td>B: outbound uses the 44.x address. C: a trace to portal.ampr.org. <b>Save known-good note</b> records the setup for the Actions Log.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>Model B's Verify can't prove other stations reach you from outside:
+    44helper can't test inbound from the internet. Ask another node to link to you.</div>
+
+  <h2><span class="n">9.2</span>Nodes tab</h2>
+  <p>For more than one AllStar node on the same network. Each box needs its own IAX2 port, and the nodes need to know
+    about each other.</p>
+  <table>
+    <tr><th>Card</th><th>Shows</th></tr>
+    <tr><td>This Box</td><td>The IAX2 <code>bindport</code> and whether it is in the recommended range (4560–4580). <b>Edit bindport</b> changes it.</td></tr>
+    <tr><td>Local Nodes</td><td>The nodes on this Pi, with their <code>rxchannel</code> and findings. <b>Edit</b> opens that node's line.</td></tr>
+    <tr><td>Peer Nodes</td><td>Other nodes on the network. <b>Wired</b> means <code>rpt.conf [nodes]</code> already has a line for it. Add one with node number, IP, port, label and, optionally, its 44helper address; a <b>🔗 44helper</b> button then opens it (dimmed if it isn't answering).</td></tr>
+  </table>
+  <p>Each finding has a <b>What to do</b> line. Saving an edit shows the line first, backs the file up, then shows the change.</p>
+
+  <h2><span class="n">9.3</span>Cloudflare tab</h2>
+  <p>A Cloudflare Tunnel is an outgoing connection from the Pi to Cloudflare, which then serves a hostname you choose
+    (such as <code>node.example.com</code>) down that connection. Nothing opens on your router. It carries web pages,
+    not radio traffic.</p>
+  <table>
+    <tr><th>Method</th><th>Steps</th></tr>
+    <tr><td>token (persistent)</td><td>1. <b>Pre-flight</b> (read-only): is cloudflared installed, which pages run, how it fits with any WireGuard tunnel (none, split or full). 2. <b>Install cloudflared</b> from Cloudflare's repository. 3. <b>Install the connector service</b> (manual): run the <code>sudo cloudflared service install eyJ…</code> command from the Zero Trust dashboard over SSH, so the token never reaches 44helper's log. 4. <b>Verify</b> (read-only). 5. <b>Map a Public Hostname and add an Access policy</b> in the dashboard, for example <code>http://localhost:9999</code> for SysMon.</td></tr>
+    <tr><td>quick (test)</td><td>Pre-flight, install, then <code>cloudflared tunnel --url http://localhost:8989</code> over SSH: a random <code>*.trycloudflare.com</code> address, no account, gone at Ctrl-C.</td></tr>
+  </table>
+  <p><b>Purge</b>: uninstall the connector service, remove the package, the four clean-up steps, and optionally the stored
+    credentials in <code>/etc/cloudflared</code>.</p>
+  <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>bypasses the firewall</b>. Nothing opens
+    inbound, so the Ports and Firewall tabs can't see what you published, and the mapping lives in Cloudflare where
+    44helper can't read it. Always put a <b>Cloudflare Access policy</b> (for example, email one-time codes for your
+    address only) in front of every hostname. Never publish 44helper itself.</div>
+</section>
+
+<section class="part">
+  <div class="pn">PART IV</div>
+  <h1>Installers</h1>
+  <p>Five tabs install, and remove, the radio software: ASL3, DVSwitch, SVXLink, M17 (USRP2M17) and Ampersand.
+    Every step is listed here as it appears on the tab.</p>
+  <ol start="10"><li>ASL3 and DVSwitch</li><li>SVXLink, M17 and Ampersand</li></ol>
+</section>
+
+<section class="chapter" id="ch10">
+  <div class="kicker">Chapter 10 · Installers</div>
+  <h1 class="ch">ASL3 and DVSwitch</h1>
+  <h2><span class="n">10.1</span>Before any install</h2>
+  <ul>
+    <li><b>Pick the right script.</b> Bookworm is Debian 12; Trixie is Debian 13. Check with <code>cat /etc/os-release</code>.</li>
+    <li><b>Pause the node on a Pi Zero 2 W:</b> quiet mode on the Update tab (Chapter 12), or instmon's Quiet System.</li>
+    <li><b>Watch the masked-service card</b> at the top of the tab (Chapter 2). Install buttons stay locked while it is red.</li>
+    <li><b>Afterwards</b>, check the Ports tab so nothing you installed is exposed.</li>
+    <li>Cockpit (web admin, port 9090) has install steps on several tabs. Install it once; the others skip it. Its purge step is optional and never runs automatically.</li>
+    <li>apt runs with <code>DEBIAN_FRONTEND=noninteractive</code> and <code>--force-confdef --force-confold</code>, so an upgrade keeps your edited config files instead of stopping to ask.</li>
+  </ul>
+  <div class="call tip"><span class="t">TIP</span>Several tabs end with <b>Save original configs as Restore point</b>.
+    Run it once, after <i>all</i> the software you use is installed and set up (Chapter 13).</div>
+
+  <h2><span class="n">10.2</span>ASL3 tab</h2>
+  <p>AllStarLink 3 from the official repo.allstarlink.org packages. Script: <b>Bookworm</b> or <b>Trixie</b> (same steps,
+    different repository package: <code>asl-apt-repos.deb12_all.deb</code> or <code>deb13</code>).</p>
+  <table>
+    <tr><th>#</th><th>Install step</th><th>Notes</th></tr>
+    <tr><td>1</td><td>Install prerequisites</td><td>wget, curl, git, firewalld, alsa-utils and the like.</td></tr>
+    <tr><td>2–4</td><td>Download ASL3 repo package · Install it · Refresh package index</td><td>The package lands in <code>/tmp</code>.</td></tr>
+    <tr><td>5</td><td>Install ASL3 core</td><td><code>asl3</code></td></tr>
+    <tr><td>6</td><td>Install Allmon3</td><td></td></tr>
+    <tr><td>7–8</td><td>Install Cockpit · Enable Cockpit socket</td><td></td></tr>
+    <tr><td>9</td><td>Install node database / TTS utilities</td><td></td></tr>
+    <tr><td>10</td><td><i>(Optional)</i> Full ASL3 Appliance branding/firewall defaults</td><td><code>asl3-appliance</code>, <code>asl3-appliance-pi</code>; pulls in apache2.</td></tr>
+    <tr><td>11</td><td>Remove default Allmon3 account</td><td></td></tr>
+    <tr><td>12</td><td>Set Allmon3 admin password</td><td>Fill in Username and Password. The password is on the command line briefly (process list, Actions Log).</td></tr>
+    <tr><td>13</td><td>Enable Allmon3 service</td><td></td></tr>
+    <tr><td>14</td><td>Enable node database updater timer</td><td><code>asl3-update-astdb.timer</code></td></tr>
+    <tr><td>15</td><td>Configure node settings (asl-menu)</td><td><b>Manual</b>: node number, callsign, radio interface. Full-screen: over SSH or in the built-in terminal.</td></tr>
+    <tr><td>16</td><td>Save original configs as Restore point</td><td><b>Config</b></td></tr>
+  </table>
+  <table>
+    <tr><th>#</th><th>Purge step</th></tr>
+    <tr><td>1–5</td><td>Stop &amp; disable ASL3-related services · Purge ASL3 and Allmon3 packages · Remove now-unused dependencies · Remove the ASL3 apt repository package · Clean up the downloaded file</td></tr>
+    <tr><td>6–9</td><td>The four clean-up steps (10.4)</td></tr>
+    <tr><td>opt.</td><td>Remove leftover node config (<code>/etc/asterisk</code>, your node settings) · Stop &amp; purge Cockpit</td></tr>
+  </table>
+
+  <h2><span class="n">10.3</span>DVSwitch tab</h2>
+  <p>DVSwitch Server (Analog_Bridge, MMDVM_Bridge, md380-emu and the gateways) from dvswitch.org's repository.</p>
+  <table>
+    <tr><th>Bookworm</th><th>Trixie</th></tr>
+    <tr><td style="font-weight:400;color:var(--text)">
+      1. Download DVSwitch repo-install script<br>2. Run it (adds apt source + key)<br>3. Refresh package index<br>
+      4. Install DVSwitch Server<br>5. Enable DVSwitch services at boot<br>6. Enable the digital-mode gateways at boot<br>
+      7–8. Install Cockpit · Enable Cockpit socket<br>9. Set Callsign / DMR ID / BrandMeister password<br>
+      10. <i>(Optional)</i> Web-server clash: turn off the DVSwitch web dashboard<br>11. <i>(Optional)</i> … move it to another port<br>
+      12. Save original configs as Restore point</td>
+    <td>
+      1. <b>Check what's already here</b> (read-only)<br>2–4. Download and run the repo-install script, refresh<br>
+      5. <b>Test install (changes nothing)</b>: a dry run; <b>if it fails, stop</b><br>6. Install DVSwitch Server<br>
+      7–8. Enable services and gateways at boot<br>9–10. Cockpit<br>11. Callsign / DMR ID / BrandMeister password<br>
+      12–13. <i>(Optional)</i> web-server clash fixes<br>14. Save Restore point</td></tr>
+  </table>
+  <ul>
+    <li><b>Set Callsign / DMR ID / BrandMeister password</b> fills <code>MMDVM_Bridge.ini</code> from three fields and restarts the bridges. The DMR ID is your 7-digit ID plus a 2-digit suffix, for example <code>320123401</code>.</li>
+    <li><b>Web-server clash:</b> ASL3's apache2 (Allmon3) and DVSwitch's lighttpd dashboard both want port 80; step 1 reports a <code>CLASH</code>. Turn the DVSwitch dashboard off, or move it (8081 by default; ports used by the suite are refused). The move backs up <code>lighttpd.conf</code> once and checks the new config with <code>lighttpd -tt</code>. Both do nothing if there is no clash.</li>
+  </ul>
+  <p><b>Purge</b> (same for both scripts): stop and disable the services, purge the packages, autoremove, remove the
+    repository, the four clean-up steps; optional: leftover config, leftovers from the old third-party build script,
+    Cockpit.</p>
+
+  <h2><span class="n">10.4</span>The four clean-up steps (every purge)</h2>
+  <ol class="steps">
+    <li><b>Purge this tab's removed-but-not-purged packages.</b> Their leftover masks are what break the next install.</li>
+    <li><b>Unmask this tab's own services.</b> Debian's intentional masks are never touched.</li>
+    <li><b>Remove broken boot links</b> for this tab's services.</li>
+    <li><b>Still left behind</b> (read-only): packages, masks, unit files and folders that remain, so nothing is left silently.</li>
+  </ol>
+</section>
+
+<section class="chapter" id="ch11">
+  <div class="kicker">Chapter 11 · Installers</div>
+  <h1 class="ch">SVXLink, M17 and Ampersand</h1>
+  <h2><span class="n">11.1</span>SVXLink tab</h2>
+  <table>
+    <tr><th>Script</th><th>Steps</th></tr>
+    <tr><td><b>USRP fork</b> (default)</td><td>1. Check for conflicts (read-only) · 2. Install build dependencies · 3. Clone the USRP fork (editable branch, default <code>usrp</code>) · 4. Configure &amp; build (from source, no time limit) · 5. Check the USRP part was built · 6. Create the svxlink user · 7. Locate installed files · 8. <code>svxlink.conf</code> + <code>UsrpLogic.conf</code>: switch UsrpLogic on · 9. Systemd unit (<b>written by hand</b>, shown on the card) · 10. Set Callsign · 11–12. Cockpit</td></tr>
+    <tr><td>Bookworm / Trixie</td><td>Debian's <code>svxlink-server</code>: 1. Refresh · 2. Install SvxLink Server · 3. ALSA utilities · 4. Add the svxlink user to the audio and serial groups · 5. Set Callsign · 6. Enable at boot · 7–8. Cockpit. Sound card and PTT/COS stay at their defaults: set them for your hardware.</td></tr>
+  </table>
+  <p>The USRP fork (DL1HRC) adds a UsrpLogic module so SvxLink can talk to the DVSwitch bridges over USRP. It installs
+    under <code>/usr/local</code> (config in <code>/usr/local/etc</code>), so it can't collide with the package's files,
+    but the two can't run at the same time.</p>
+  <div class="call care"><span class="t">CAREFUL</span>The fork is unofficial and not merged upstream. A reviewer found
+    UsrpLogic crashes on a crafted short packet; keep it on loopback, never in a firewall zone or through a tunnel.</div>
+  <p><b>Purge</b> covers both: stop and disable SvxLink (package and USRP build), purge the package, autoremove, the four
+    clean-up steps; optional: leftover package config, the build's binaries and config, the hand-written unit, the
+    cloned source, Cockpit.</p>
+
+  <h2><span class="n">11.2</span>M17 tab</h2>
+  <p><b>USRP2M17-Selector</b> (mjwgeek): the USRP2M17 bridge plus a small web page for picking M17 reflectors. It runs the
+    project's own unmodified installer; its licence allows personal, non-commercial use only.</p>
+  <table>
+    <tr><th>#</th><th>Step</th><th>Kind</th></tr>
+    <tr><td>1–3</td><td>Install git · Install PHP for Apache · Clone USRP2M17-Selector</td><td>Run</td></tr>
+    <tr><td>4</td><td>Run the installer (asks for your callsign)</td><td><b>Manual</b>, or the built-in terminal</td></tr>
+    <tr><td>5</td><td><code>rpt.conf</code>: add the M17 node stanza (node 1917)</td><td><b>Manual edit</b></td></tr>
+    <tr><td>6</td><td><code>modules.conf</code>: enable <code>chan_usrp</code></td><td><b>Manual edit</b></td></tr>
+    <tr><td>7</td><td><code>extensions.conf</code>: add the M17 extension</td><td><b>Manual edit</b></td></tr>
+    <tr><td>8</td><td>Restart Asterisk</td><td>Run</td></tr>
+    <tr><td>9</td><td>Save original configs as Restore point</td><td>Config</td></tr>
+    <tr><td>10</td><td>Install sudoers rule for the web page</td><td>Run</td></tr>
+    <tr><td>11–12</td><td>Cockpit</td><td>Run</td></tr>
+  </table>
+  <p>The three Asterisk edits are shown as text, not run, because editing a live Asterisk config unattended is too risky.
+    <b>Purge</b> stops and disables USRP2M17, removes the web page, the sudoers drop-in and the unit, then the four
+    clean-up steps; optional: the clone directory, Cockpit. It <b>never</b> undoes the three edits.</p>
+  <div class="call tip"><span class="t">TIP</span>Afterwards, SysMon's M17 tab checks the ports (32008 and 34008) and the
+    <code>[1917]</code> node match, and the Config tab's Port check checks the USRP pair.</div>
+
+  <h2><span class="n">11.3</span>Ampersand tab</h2>
+  <p>Ampersand is a separate, Asterisk-free AllStar/IAX node. Pick a <b>Product</b>:</p>
+  <table>
+    <tr><th>Product</th><th>Install</th><th>Purge</th></tr>
+    <tr><td>Radio node (<code>amp-server</code>)</td><td>1. Check for conflicts · 2. Install required packages · 3. udev HID rule (COS/PTT) · 4. Download &amp; unpack · 5. First run (foreground smoke test, built-in terminal) · 6. Run as a systemd service</td><td>Stop &amp; disable · remove the unit · the binary · the staged files · clean-up; optional: node config and udev rule</td></tr>
+    <tr><td>Hub (<code>amp-hub</code>)</td><td>1. Check for conflicts · 2. Install wget · 3. Download, unpack &amp; run <code>install.sh</code> · 4. Configure <code>/usr/etc/amp-hub.env</code> · 5. Enable &amp; start</td><td>Stop &amp; disable · remove the unit · the service account · the staged files · clean-up; optional: the env file</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>Ampersand <b>replaces</b> Asterisk; the two don't share a node. On a
+    Pi already running ASL3 on IAX 4569/udp, give Ampersand its own node number and IAX port (the hub defaults to 4568),
+    or use a separate Pi. The tab never stops Asterisk for you. The download date is pinned in the command box: change
+    it if a newer build exists. Its web page (8080) should stay private.</div>
+</section>
+
+<section class="part">
+  <div class="pn">PART V</div>
+  <h1>Maintenance and configuration</h1>
+  <p>Keeping the system healthy (Update, System Optimization) and keeping copies of the node's configuration (Config).</p>
+  <ol start="12"><li>Update and System Optimization</li><li>The Config tab</li></ol>
+</section>
+
+<section class="chapter" id="ch12">
+  <div class="kicker">Chapter 12 · Maintenance</div>
+  <h1 class="ch">Update and System Optimization</h1>
+  <h2><span class="n">12.1</span>Quiet mode</h2>
+  <p>Before a big upgrade or install, quiet mode pauses everything that competes for the SD card, in four tiers:</p>
+  <ol>
+    <li>watchdogs and update timers (the Node Controller watchdog, monit, the ASL3 node-list and database timers, man-db);</li>
+    <li>background disk users (the performance recorder, PackageKit, the manual-page indexer);</li>
+    <li>the suite's web tools (SysMon, the Dashboard, instmon, the SvxLink and M17 dashboards, and lighttpd, the DVSwitch web page);</li>
+    <li>the radio services (Asterisk, the bridges, md380-emu, SvxLink, ircDDBGateway, STFU).</li>
+  </ol>
+  <p><b>Turn off</b> restarts exactly what was paused, in reverse. 44helper, wifimon, SSH, Cockpit, networking and the
+    firewall are never touched. The card shows the commands first. A left-on quiet mode is restored when 44helper
+    starts.</p>
+  <div class="call care"><span class="t">CAREFUL</span>The node is <b>off the air</b> while quiet mode is on, and it stays
+    on until you turn it off: no 30-minute auto-restore, unlike instmon's Quiet System. It can't be turned on while a
+    package job holds apt's locks. If something doesn't come back, the card shows the likely cause and offers
+    <b>Reboot node</b>.</div>
+  <h2><span class="n">12.2</span>Update tab</h2>
+  <ul>
+    <li><b>Package Lookup — Installed</b> lists installed packages; <b>Version Policy</b> shows installed and candidate versions of one package.</li>
+    <li><b>Upgradable Packages</b>, <b>Held Packages</b>, and a banner when a <b>reboot is required</b>. <b>Re-check</b> refreshes them.</li>
+  </ul>
+  <table>
+    <tr><th>#</th><th>Step</th><th>Alternatives</th></tr>
+    <tr><td>1</td><td>Refresh package index (<code>apt update</code>)</td><td></td></tr>
+    <tr><td>2</td><td>Fix missing/broken packages (<code>dpkg --configure -a</code>, <code>apt install -f</code>). Safe any time.</td><td>Is apt still running? (read-only) · Reconfigure half-installed packages</td></tr>
+    <tr><td>3</td><td>Upgrade packages (<code>apt upgrade</code>)</td><td>Full upgrade: can <i>remove</i> packages. Read the Upgradable list first.</td></tr>
+    <tr><td>4</td><td>Autoremove unused packages</td><td>Autoremove + purge configs (not reversible)</td></tr>
+    <tr><td>5</td><td>Clean local package cache</td><td>Autoclean (keeps recent downloads)</td></tr>
+    <tr><td>6–7</td><td><i>Optional:</i> Webmin (port 10000, HTTPS) · Ajenti 2</td><td>Remove each</td></tr>
+    <tr><td>8</td><td><i>Optional:</i> fail2ban (SSH jail)</td><td>Check status · Remove</td></tr>
+    <tr><td>9</td><td><b>Package recovery 1: check</b> (read-only)</td><td></td></tr>
+    <tr><td>10</td><td><b>Package recovery 2: finish half-installed packages</b></td><td></td></tr>
+    <tr><td>11</td><td><b>Package recovery 3: re-install broken packages</b></td><td></td></tr>
+  </table>
+  <p>Steps that change packages have <b>Run in quiet mode</b>; leave it ticked on a Pi Zero 2 W.</p>
+  <div class="call care"><span class="t">CAREFUL</span><b>fail2ban:</b> edit the <code>ignoreip</code> line before step 8. It
+    ships with <code>192.168.1.0/24</code>, which may not be your network; add your tunnel subnet if you manage the node
+    over 44Net. A ban lasts 10 minutes and covers SSH only. To lift one: <code>fail2ban-client set sshd unbanip &lt;ip&gt;</code>.</div>
+  <h3>After a cut-off upgrade</h3>
+  <ol class="steps">
+    <li>Step 2's <b>Is apt still running?</b>: wait until nothing is.</li>
+    <li><b>Step 9</b>: lists problems. If any, <b>don't reboot yet</b>: a half-installed kernel or firmware package can stop the Pi from starting.</li>
+    <li><b>Step 10</b>: finishes ordinary packages first, kernel and firmware last, at low priority; stops at the first failure.</li>
+    <li><b>Step 11</b>, only if 9 or 10 says so: reinstalls from the copy on the Pi, or downloads just that package.</li>
+    <li><b>Step 9</b> again: nothing listed. Now reboot.</li>
+  </ol>
+
+  <h2><span class="n">12.3</span>System Optimization tab</h2>
+  <p>Cuts SD-card wear. Each card shows the current state, an action, a <b>Revert</b> that puts back exactly what was
+    there before this tab changed it, the commands, and <b>Copy</b>.</p>
+  <table>
+    <tr><th>Card</th><th>What it does</th><th>Undo</th></tr>
+    <tr><td>Root fstab — noatime</td><td>Stops a write on every file read. The candidate fstab is checked with <code>findmnt --verify</code>, then <code>mount -o remount,noatime /</code>.</td><td>Revert; one backup of <code>/etc/fstab</code> kept</td></tr>
+    <tr><td>journald — volatile</td><td>Keeps the system log in memory (drop-in <code>/etc/systemd/journald.conf.d/44helper-sysopt.conf</code>).</td><td>Revert</td></tr>
+    <tr><td>rsyslog</td><td>Stops and disables the second, text-file logger.</td><td>Revert</td></tr>
+    <tr><td>mandb — Disable rebuild</td><td>Stops the periodic manual-page index rebuild (<code>man-db.timer</code>).</td><td>Revert</td></tr>
+    <tr><td>mandb — Remove package</td><td>Removes <code>man-db</code>, after showing what apt would remove.</td><td>Reinstall, <b>needs internet</b></td></tr>
+    <tr><td>Swap — restore</td><td>Only on a node where an older 44helper turned swap off or removed <code>dphys-swapfile</code>. <b>Revert</b> turns swap back on; <b>Reinstall</b> puts the package back (needs internet).</td><td>—</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>0.0.195 removed the swap Disable and Uninstall cards: turning swap off
+    ran low-RAM nodes out of memory. Keep swap on. And with journald volatile and rsyslog off, <b>no log survives a crash
+    or power cut</b>; remember that before looking for why a node rebooted.</div>
+</section>
+
+<section class="chapter" id="ch13">
+  <div class="kicker">Chapter 13 · Configuration</div>
+  <h1 class="ch">The Config tab</h1>
+  <p class="ch-lede">The safety net for the node's configuration: copies of every config file, restored in one go,
+    wiring carried from one Pi to another, and checks that callsigns, IDs and ports agree everywhere.</p>
+  <h2><span class="n">13.1</span>The ideas</h2>
+  <table>
+    <tr><th>Term</th><th>Means</th></tr>
+    <tr><td>System</td><td>A group of files restored together: <b>ASL3</b>, <b>DVSwitch</b>, <b>USRP2M17</b> or <b>Phone</b>. Only installed systems are saved.</td></tr>
+    <tr><td>Restore point</td><td>The original config, saved <b>once</b> after your installs are finished.</td></tr>
+    <tr><td>Save point</td><td>A named copy of the current files, any time.</td></tr>
+    <tr><td>Automatic copy</td><td>Taken before every restore, preset, callsign change or undo.</td></tr>
+    <tr><td>Preset</td><td>Only a node's <i>wiring</i> (private nodes, ports, extensions), no identity. Today: <b>Travel Node</b>.</td></tr>
+  </table>
+  <p>Up to <b>10</b> points in all. When a new automatic copy would go over, the oldest automatic copies go first; named
+    save points are never removed for you.</p>
+  <h2><span class="n">13.2</span>The cards</h2>
+  <table>
+    <tr><th>Card</th><th>What it does</th></tr>
+    <tr><td>Restore point</td><td><b>Save Restore point</b> once; saving again only adds systems installed since. Each changed file has <b>View diff</b>. <b>Retake Restore point</b> replaces it, keeping the old one as a save point.</td></tr>
+    <tr><td>Restore</td><td>Pick a point in <b>From</b>, tick the systems, <b>Restore selected</b>. The current files are saved first; the output lists each file as written, unchanged or skipped. <b>Delete</b> removes a save point or automatic copy.</td></tr>
+    <tr><td>Restart services</td><td>After a change: buttons that restart exactly the services those files belong to. Nothing restarts until you press one.</td></tr>
+    <tr><td>Finish: reinstall and reboot</td><td>Reinstalls the Node Controller tools from instmon's library (instmon first, each one put back if its new copy doesn't start) and reboots once instmon, the Dashboard and Asterisk are healthy. Don't power off while it runs.</td></tr>
+    <tr><td>Create save point</td><td>A name of up to 40 characters (letters, numbers, spaces, <code>_ . -</code>).</td></tr>
+    <tr><td>Travel Node preset</td><td>The private nodes (1000–1999) in <code>rpt.conf</code> and their <code>[nodes]</code> lines, their extensions, <code>chan_usrp</code>, the USRP2M17 and Analog_Bridge <code>[USRP]</code> ports. Never callsigns, IDs or passwords. <b>Preview</b>, then <b>Save as Travel Node</b>; apply it from Restore on any node. Bridge nodes get the upstream USRP2M17 values, and it warns before breaking EchoLink or a working USRP pair.</td></tr>
+    <tr><td>Identity</td><td>Checks callsigns, IDs and passwords agree across every file (masked; <b>Reveal</b> needs the root password). Chips: <b>matches</b>, <b>differs</b> (red), <b>some copies empty</b>, <b>not set</b>, <b>no public node</b>, <b>one copy</b>.</td></tr>
+    <tr><td>Set the callsign everywhere <span class="badge test">TESTING</span></td><td>On the Identity card's Callsign line: 3–7 letters and digits with at least one digit. Preview first, an automatic save point, then every callsign field (rpt.conf ID text, EchoLink, MMDVM_Bridge, <code>var.txt</code>, ircDDBGateway, the YSF/P25/NXDN gateways, USRP2M17, the Dashboard's and 44helper's config). Nothing restarts: restart the Dashboard first. The ircDDB and DPlus accounts must exist under the new call.</td></tr>
+    <tr><td>Digital-mode gateways</td><td><b>Enable and start at boot</b> for ircDDBGateway, YSF/FCS, P25, NXDN and STFU, so every mode is ready after boot. <b>Undo</b> puts them back.</td></tr>
+    <tr><td>Port check</td><td>UDP ports two programs both listen on; whether each gateway mirrors MMDVM_Bridge; <b>USRP pairs</b> for every <code>rxchannel = USRP/127.0.0.1:A:B</code>. <b>Verify with SysMon</b> compares with <code>sysmon.py --usrp-pairs</code> (SysMon 6.13.67.16-pi02w / 6.13.82 or later). <b>Check what is listening now</b> adds the live picture: reachable ports, gateway command ports, broad firewall ranges.</td></tr>
+  </table>
+  <h2><span class="n">13.3</span>Common tasks</h2>
+  <h3>Undo a change that broke the node</h3>
+  <ol class="steps">
+    <li>Restore: pick the save point or automatic copy from before the change.</li>
+    <li>Tick the system involved and press Restore selected.</li>
+    <li>Restart what Restart services lists, or run Finish: reinstall and reboot.</li>
+  </ol>
+  <h3>Copy a travel setup to a new Pi</h3>
+  <ol class="steps">
+    <li>On the working node: Travel Node preset, Preview, Save as Travel Node.</li>
+    <li>On the new node, with the same instmon library: install the software (Part IV), then Restore → Travel Node.</li>
+    <li>Identity: set this node's callsign everywhere, and fill in its IDs and passwords until every group matches.</li>
+  </ol>
+  <p>Copies are kept in <code>/etc/asl_dvs/instmon_library/config_restore/</code> (automatic copies under <code>auto/</code>), so
+    instmon's Backup &amp; Export ZIP includes them. Each restored file is written through a
+    temporary file (mode 600, no symlink following), then given the saved owner and mode and swapped into place.</p>
+</section>
+
+<section class="part">
+  <div class="pn">PART VI</div>
+  <h1>Reference</h1>
+  <ol start="14"><li>Troubleshooting</li><li>Files, services, timers and routes</li></ol>
+</section>
+
+<section class="chapter" id="ch14">
+  <div class="kicker">Chapter 14 · Reference</div>
+  <h1 class="ch">Troubleshooting</h1>
+  <h2><span class="n">14.1</span>A step says NOT RUN</h2>
+  <ol class="steps">
+    <li>Read the reason in its output: masked services, or broken packages.</li>
+    <li>Masks: use the card at the top of the tab. Broken packages: follow <b>What to do next</b> to the Update tab's recovery steps.</li>
+    <li>Come back with the link at the top of the Update tab and run the step again.</li>
+  </ol>
+  <h2><span class="n">14.2</span>The tunnel won't start</h2>
+<pre>systemctl status wg-quick@wg0 --no-pager
+journalctl -u wg-quick@wg0 -b -l --no-pager | tail -30
+sudo wg show wg0</pre>
+  <table>
+    <tr><th>The log stops at</th><th>Cause and fix</th></tr>
+    <tr><td><code>resolvconf -a wg0</code>, 25 s, "org.freedesktop.resolve1: timed out"</td><td>systemd-resolved isn't answering on D-Bus. <code>sudo systemctl restart systemd-resolved</code>; if <code>timeout 5 resolvectl status</code> still hangs, reboot. Or remove the <code>DNS =</code> line.</td></tr>
+    <tr><td><code>wg setconf</code>, "Name or service not known… Trying again"</td><td>The Endpoint's host name can't be looked up: check DNS with <code>getent ahostsv4 &lt;host&gt;</code>.</td></tr>
+    <tr><td>a <code>PostUp</code> line</td><td>That hook failed; the error is on the next line.</td></tr>
+    <tr><td><code>nft -f</code> / <code>iptables-restore</code></td><td>wg-quick's full-tunnel firewall step failed: <code>nftables</code> or <code>iptables</code> is missing.</td></tr>
+  </table>
+  <p>Up but no handshake: check the key and the Endpoint on connect.44net.cloud, and that UDP out to the Endpoint isn't
+    blocked. Your <code>Address</code> should be what the portal shows (a single 44Net Connect address is a /32).</p>
+  <h2><span class="n">14.3</span>I lost access after a tunnel change</h2>
+  <ul>
+    <li>A half-tunnel or exceptions <b>test</b> takes itself out after 15 minutes, or at a reboot.</li>
+    <li>A <b>permanent</b> one: log in at a keyboard and screen, or over SSH from the LAN, and run <code>~/remove_half_tunnel.sh</code> or <code>~/remove_full_exceptions.sh</code>.</li>
+    <li>A plain full tunnel and router-forwarded SSH: use the LAN, or the full tunnel with exceptions (Chapter 8).</li>
+  </ul>
+  <h2><span class="n">14.4</span>DVSwitch or M17 stopped after the tunnel came up</h2>
+  <ol class="steps">
+    <li>Split tab: a pasted full config sends DNS into the tunnel. Step 4b, Repair AllowedIPs.</li>
+    <li>Bridges won't start at boot: the netcheck card under step 6 (Chapter 7).</li>
+    <li>Full tunnel: outbound block rules (Full tab 4b) or a master that refuses the 44 address. Try the half tunnel, or put the master on the exceptions bypass list.</li>
+  </ol>
+  <h2><span class="n">14.5</span>The Pi runs out of memory</h2>
+  <p>Check swap is on: <code>swapon --show</code>. If an older 44helper turned it off, use <b>Swap — restore</b>
+    (Chapter 12) or <code>sudo systemctl enable --now dphys-swapfile</code>.</p>
+</section>
+
+<section class="chapter" id="ch15">
+  <div class="kicker">Chapter 15 · Reference</div>
+  <h1 class="ch">Files, services, timers and routes</h1>
+  <h2>Files</h2>
+  <table>
+    <tr><th>Path</th><th>Holds</th></tr>
+    <tr><td class="mono">/usr/local/bin/44helper.py</td><td>the program (a link into <code>/usr/local/lib/asl_dvs/44helper/</code>); <code>/opt/44helper/asl_dvs_m17_44helper.py</code> is a second link for older tools</td></tr>
+    <tr><td class="mono">/etc/44helper/44helper.conf</td><td>settings: server, identity, tunnels, router access, nodes</td></tr>
+    <tr><td class="mono">/etc/44helper/44helper_guard_keep.json</td><td>services you chose to keep masked</td></tr>
+    <tr><td class="mono">/etc/44helper/44helper_quiet_state.json</td><td>what quiet mode paused</td></tr>
+    <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch</td></tr>
+    <tr><td class="mono">/run/44helper/sessions.json</td><td>logins (cleared at reboot)</td></tr>
+    <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>the tunnel config (mode 600); marker blocks <code>44helper-dns</code>, <code>-mtu</code>, <code>-half</code>, <code>-fullx</code></td></tr>
+    <tr><td class="mono">/etc/firewalld/zones/44NetConnect.xml</td><td>the 44Net zone</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/instmon_library/config/</td><td>wg0.conf backups: <code>wg0.conf</code>, <code>wg0.conf.pre-halftunnel</code>, <code>wg0.conf.pre-fullx</code></td></tr>
+    <tr><td class="mono">/etc/asl_dvs/instmon_library/config_restore/</td><td>the Config tab's Restore point, save points and automatic copies</td></tr>
+    <tr><td class="mono">/run/44helper-half/ · /run/44helper-fullx/</td><td>test state, undo scripts and logs (cleared at reboot)</td></tr>
+    <tr><td class="mono">/etc/44helper/halftunnel.json · fullx.json</td><td>what Make permanent saved</td></tr>
+    <tr><td class="mono">/etc/sysctl.d/90-44helper-halftunnel.conf</td><td>loose return-path check on wg0</td></tr>
+    <tr><td class="mono">/etc/profile.d/44helper-halftunnel.sh · 44helper-fullx.sh</td><td>login reminders</td></tr>
+    <tr><td class="mono">~/remove_half_tunnel.sh · ~/remove_full_exceptions.sh</td><td>removal scripts (also in <code>/root</code>), with 0600 wg0.conf copies</td></tr>
+  </table>
+  <h2>Services and timers</h2>
+  <table>
+    <tr><th>Unit</th><th>Purpose</th></tr>
+    <tr><td class="mono">44helper.service</td><td>the page, port 9997</td></tr>
+    <tr><td class="mono">wg-quick@wg0 · 44net-tunnel.service</td><td>the tunnel, or the ARDC fallback unit</td></tr>
+    <tr><td class="mono">44helper-halfundo.timer · 44helper-fullxundo.timer</td><td>the 15-minute auto-undo (transient, made by <code>systemd-run</code>)</td></tr>
+    <tr><td class="mono">44helper-job-*</td><td>package and install jobs, run as their own systemd units</td></tr>
+  </table>
+  <h2>Routing</h2>
+  <table>
+    <tr><th>Priority / table</th><th>Owner</th></tr>
+    <tr><td>1100–1105, table 4444</td><td>half tunnel</td></tr>
+    <tr><td>1150, 1160, 1161</td><td>full tunnel with exceptions</td></tr>
+    <tr><td>32764, 32765, table 51820</td><td>wg-quick's own full-tunnel rules</td></tr>
+  </table>
+  <h2>Web routes</h2>
+  <p>Every route needs the login cookie; every POST also needs an <code>X-Requested-With</code> header. Each tab has
+    <code>/api/&lt;tab&gt;/script</code> (its step list) and <code>/api/&lt;tab&gt;/action</code>; jobs are polled at
+    <code>/api/action_status?job_key=…</code>. The tunnel cards use <code>/api/firewall/half_status</code>,
+    <code>/api/fullx/status</code> and <code>/api/firewall/action</code>.</p>
+</section>
+
+</body>
+</html>

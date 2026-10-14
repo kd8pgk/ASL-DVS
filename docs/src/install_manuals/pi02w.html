@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Pi Zero 2 W Install Manual</title>
+<link rel="stylesheet" href="install.css">
+<style>@page{@bottom-left{content:"INSTALL MANUAL \00B7  PI ZERO 2 W"}}</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
+    </div>
+    <div class="ed"><b>Pi Zero 2 W build</b><br>Edition 2026-10-14</div>
+  </div>
+  <div class="body">
+    <h1>Install Manual<br><span>Pi Zero 2 W</span></h1>
+    <p class="lede">How to install, update and look after the Node Controller web tools on a 512 MB Raspberry Pi
+      Zero 2 W running AllStarLink with DVSwitch.</p>
+    <div class="chips">
+      <span class="chip c1">DASHBOARD</span><span class="chip c2">SYSMON</span><span class="chip c3">INSTMON</span>
+      <span class="chip c4">WIFIMON</span><span class="chip c5">44HELPER</span>
+    </div>
+    <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
+    <table>
+      <tr><th>Tool</th><th>File</th><th>Version</th></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
+      <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_31_0_20261013.py</td><td>5.31.0</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_195_20261013.py</td><td>0.0.195</td></tr>
+    </table>
+  </div>
+  <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Contents</div>
+  <h1 class="ch">In this manual</h1>
+  <ul class="toc">
+    <li><span class="no">1</span>What gets installed: the tools, their ports and what the Pi02w build changes</li>
+    <li><span class="no">2</span>Before you start: what the Pi needs, the root password, free memory</li>
+    <li><span class="no">3</span>Step 1: get the files and install instmon</li>
+    <li><span class="no">4</span>Step 2: install the rest with the installer</li>
+    <li><span class="no">5</span>Step 3: open the pages and log in</li>
+    <li><span class="no">6</span>Step 4: set up wifimon's WiFi list</li>
+    <li><span class="no">7</span>Updating from GitHub with instmon</li>
+    <li><span class="no">8</span>Memory on a 512 MB Pi: the launcher and its off switches</li>
+    <li><span class="no">9</span>Troubleshooting</li>
+    <li><span class="no">10</span>Removing the tools</li>
+    <li><span class="no">11</span>Quick reference</li>
+    <li><span class="no">12</span>Phone and its dialplan: what the Phone tab adds to Asterisk, and where the full guide is</li>
+  </ul>
+  <h2>How to read the commands</h2>
+  <p>Commands are typed on the Pi, in an SSH session or on a keyboard and screen. Lines starting with <code>#</code>
+    are notes, not commands. Replace <code>&lt;pi-address&gt;</code> with the Pi's IP address or host name.</p>
+<pre><span class="c"># a note about the next line</span>
+sudo systemctl status sysmon</pre>
+  <div class="call note"><span class="t">NOTE</span>The scripts on GitHub are comment-stripped copies. Each tool's
+    change history is in the <code>changelogs/</code> folder of the repo.</div>
+  <div class="call note"><span class="t">NOTE</span>44helper has its own manual, tab by tab:
+    <code>docs/ASL-DVS_44helper_Manual.pdf</code>. The user manual covers every tool:
+    <code>docs/ASL-DVS_User_Manual.pdf</code>.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">1 · Overview</div>
+  <h1 class="ch">What gets installed</h1>
+  <p>Each tool is a single file. Each one runs as its own systemd service and serves its own page in the browser.</p>
+  <table>
+    <tr><th>Tool</th><th>Service</th><th>Port</th><th>What it does</th></tr>
+    <tr><td>Dashboard</td><td class="mono">nodecontrol</td><td class="port">8989</td><td>Node control. Connect ASL and EchoLink nodes; tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17; favorites; Phone.</td></tr>
+    <tr><td>SysMon</td><td class="mono">sysmon</td><td class="port">9999</td><td>System monitor and health checks for the node, DVSwitch and its config files.</td></tr>
+    <tr><td>instmon</td><td class="mono">instmon</td><td class="port">8990</td><td>Installer and manager. Install, update, start and stop the other tools; GitHub updates; Quiet System.</td></tr>
+    <tr><td>wifimon</td><td class="mono">wifimon</td><td class="port">8991</td><td>WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network.</td></tr>
+    <tr><td>44helper</td><td class="mono">44helper</td><td class="port">9997</td><td>Optional. 44Net Connect, firewall, router and SvxLink helper.</td></tr>
+  </table>
+  <h2>The Pi Zero 2 W build</h2>
+  <p>SysMon and the Dashboard come in two builds. The Pi02w fork is the lighter one for the 512 MB Pi Zero 2 W. Its
+    files have <code>_pi02w_</code> in the name and its <code>VERSION</code> ends in <code>-pi02w</code>.</p>
+  <div class="grid2">
+    <div class="box"><h4 style="color:var(--cyan)">Dashboard · Pi02w</h4>
+      <p>Keeps every tab, including Phone and all digital modes.</p>
+      <ul><li>Searches the AllStar and EchoLink lists from disk instead of memory.</li>
+        <li>Polls Asterisk and refreshes the page less often.</li></ul></div>
+    <div class="box"><h4 style="color:var(--yel)">SysMon · Pi02w</h4>
+      <p>Drops the heaviest tabs:</p>
+      <ul><li>Console, Net, Reg, Firewall and Zello.</li>
+        <li>Everything else matches the full build.</li></ul></div>
+  </div>
+  <p>instmon, wifimon, 44helper and the installer are common: one build for every Pi.</p>
+  <div class="call note"><span class="t">NOTE</span>The Watchdog script (<code>asl_dvs_watchdog</code>) is not
+    needed. The Dashboard's own service already restarts it if it stops, and the installer removes an old Watchdog
+    if it finds one.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">2 · Preparation</div>
+  <h1 class="ch">Before you start</h1>
+  <h2>What the Pi needs</h2>
+  <ul>
+    <li>A Raspberry Pi Zero 2 W already running AllStarLink with DVSwitch (Analog_Bridge and MMDVM_Bridge) set up.</li>
+    <li><code>python3</code> and <code>systemd</code>. Both come with Raspberry Pi OS.</li>
+    <li>A network connection, and SSH access with <code>sudo</code>.</li>
+  </ul>
+  <h2>Set a root password</h2>
+  <p>The web pages ask for a login, and they check it against the Pi's root password. Raspberry Pi OS ships with root
+    locked, so set a password once:</p>
+<pre>sudo passwd root</pre>
+  <h2>Free up memory first</h2>
+  <p>A Pi Zero 2 W has about 415 MB usable. Check what is free before you add tools:</p>
+<pre>free -m</pre>
+  <p>Services you don't use are the easiest memory to win back. Skip any you do use:</p>
+  <table>
+    <tr><th>Service</th><th>Typical use</th><th>Turn off with</th></tr>
+    <tr><td>PackageKit</td><td>~12 MB swap</td><td class="mono">sudo systemctl mask --now packagekit</td></tr>
+    <tr><td>P25Gateway</td><td>~22 MB swap</td><td class="mono">sudo systemctl disable --now p25gateway</td></tr>
+    <tr><td>Allmon3</td><td>~44 MB swap</td><td class="mono">sudo systemctl disable --now allmon3</td></tr>
+  </table>
+  <p style="font-size:8pt;color:var(--muted)">Figures from a working Pi Zero 2 W node. PackageKit only serves Cockpit's
+    "Software updates" page; apt works without it. Undo with <code>sudo systemctl enable --now &lt;name&gt;</code> (or
+    <code>unmask</code> for packagekit).</p>
+  <div class="call care"><span class="t">CAREFUL</span>Keep swap on. A Pi Zero 2 W needs it: turning swap off, or
+    removing <code>dphys-swapfile</code>, runs the node out of memory. 44helper 0.0.195 removed its swap cards for
+    that reason.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">3 · Step 1</div>
+  <h1 class="ch">Get the files and install instmon</h1>
+  <h2>Get the files</h2>
+  <p>Put all the files in one folder on the Pi, for example your home folder:</p>
+<pre><span class="c"># files from the main branch on GitHub</span>
+cd ~
+B=https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main
+wget $B/instmon_v2_47_0_20261013.py
+wget $B/install_all_v7_1_20261012.sh
+wget $B/nodecontrol_pi02w_v9_3_71_18_20261013.py
+wget $B/sysmon_pi02w_v6_13_68_20261013.py
+wget $B/wifimon_v5_31_0_20261013.py
+<span class="c"># optional</span>
+wget $B/44helper_v0_0_195_20261013.py</pre>
+  <div class="call tip"><span class="t">TIP</span>Newer files may be on GitHub by the time you read this. Check the
+    repo's file list and use the newest <code>_pi02w_</code> SysMon and Dashboard files.</div>
+  <p>instmon goes first. Once it is running, it can install and update everything else from the browser, and it
+    updates itself.</p>
+  <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 1 · instmon</h4>
+<pre>sudo python3 instmon_v2_47_0_20261013.py --install</pre>
+    <p>Then open <code>http://&lt;pi-address&gt;:8990</code> and log in as root.</p></div>
+  <h2>What --install does</h2>
+  <ul>
+    <li>Copies the file into place and writes <code>instmon.service</code>.</li>
+    <li>Writes the shared launcher <code>/usr/local/bin/asl_dvs_launch.py</code> (see Memory, section 8).</li>
+    <li>Enables the service so it starts on boot, and starts it now.</li>
+  </ul>
+  <h2>Optional: stage the other files in instmon</h2>
+  <p>Instead of running the installer by hand (Step 2), you can upload the files on instmon's page, or let
+    <b>Check GitHub</b> download them into instmon's library, and press <b>Install</b> there. The installer also finds
+    files staged in instmon's library.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">4 · Step 2</div>
+  <h1 class="ch">Install the rest with the installer</h1>
+  <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 2 · installer</h4>
+<pre>sudo bash install_all_v7_1_20261012.sh</pre></div>
+  <h2>What it asks</h2>
+  <ol class="steps">
+    <li><b>Operation.</b> If tools are already installed: <code>i</code> install / reinstall, <code>u</code> update binaries only, or <code>q</code> quit. Config is kept either way.</li>
+    <li><b>Version.</b> If more than one version of a tool is found, pick one (Enter takes the newest).</li>
+    <li><b>First-run identity.</b> On a fresh node: your callsign, ASL node number and a display label. They go into <code>/etc/asl_dvs/asl_dvs.conf</code>.</li>
+  </ol>
+  <h2>Where it looks for files</h2>
+  <p>The installer's own folder, the current folder, <code>/root</code>, <code>/home/pi</code>, your home folder,
+    <code>/tmp</code> and instmon's library. Any subset of the tools can be installed: it installs what it finds.</p>
+  <h2>Which build it picks</h2>
+  <p>For SysMon and the Dashboard the build is chosen first, then only that build's files are offered:</p>
+  <ol class="steps">
+    <li><code>SYSMON_VARIANT</code> / <code>DASH_VARIANT</code> = <code>pi02w</code> or <code>full</code>, if set;</li>
+    <li>otherwise the build already installed;</li>
+    <li>otherwise <code>pi02w</code> on a Pi Zero 2 W, <code>full</code> on any other Pi.</li>
+  </ol>
+<pre><span class="c"># force the Pi02w build (sudo needs the variables on its own line)</span>
+sudo SYSMON_VARIANT=pi02w DASH_VARIANT=pi02w bash install_all_v7_1_20261012.sh</pre>
+  <div class="call care"><span class="t">CAREFUL</span>If no file of the chosen build is found, that tool is skipped
+    with a warning. The other build is never used in its place.</div>
+  <h2>Without questions</h2>
+  <p>Add <code>--non-interactive</code> (or <code>-y</code>). It picks the newest files, updates an existing install,
+    and takes the identity from environment variables on a fresh node:</p>
+<pre>sudo AUTO_CALLSIGN=KD8PGK AUTO_NODE=652701 AUTO_LABEL="Travel Node" \
+     bash install_all_v7_1_20261012.sh --non-interactive</pre>
+  <p>When it finishes, the installer checks that each service is running and listening on its port.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">5 · Step 3</div>
+  <h1 class="ch">Open the pages and log in</h1>
+  <table>
+    <tr><th>Page</th><th>Address</th></tr>
+    <tr><td>Dashboard</td><td class="mono">http://&lt;pi-address&gt;:8989</td></tr>
+    <tr><td>SysMon</td><td class="mono">http://&lt;pi-address&gt;:9999</td></tr>
+    <tr><td>instmon</td><td class="mono">http://&lt;pi-address&gt;:8990</td></tr>
+    <tr><td>wifimon</td><td class="mono">http://&lt;pi-address&gt;:8991</td></tr>
+    <tr><td>44helper</td><td class="mono">http://&lt;pi-address&gt;:9997</td></tr>
+  </table>
+  <p>Log in as root with the root password from section 2. The pages use plain HTTP, so only open them on your own
+    network or over a VPN.</p>
+  <div class="call tip"><span class="t">TIP</span>On the first visit to the Dashboard, check that the callsign and
+    node number in the header are right.</div>
+
+  <div class="kicker" style="margin-top:2em">6 · Step 4</div>
+  <h1 class="ch">Set up wifimon</h1>
+  <p>On a first install, wifimon runs with both watchdogs off: it shows the WiFi and the voltage, but doesn't
+    reconnect or shut the node down. When you log in to its page (port 8991) it asks "Turn the watchdogs on?". Add
+    your WiFi networks first, then turn them on there or in the Watchdog card:</p>
+  <ul>
+    <li><b>WiFi watchdog:</b> reconnects to saved networks, and shuts the node down after 3 minutes with no connection. It waits, with no timer, until at least one network is saved.</li>
+    <li><b>Voltage watchdog:</b> shuts the node down after 30 seconds of low voltage.</li>
+  </ul>
+  <p>Updates and reinstalls keep the watchdogs as they were. Add the networks it may reconnect to:</p>
+<pre>sudo python3 /usr/local/bin/wifimon.py --setup-wifi</pre>
+  <p>You can also manage networks and each WiFi adapter on wifimon's page (port 8991).</p>
+  <div class="call care"><span class="t">CAREFUL</span>wifimon shuts the Pi down cleanly on sustained low voltage or a
+    sustained loss of network. Use a good power supply and cable: the Pi Zero 2 W is sensitive to voltage drop.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">7 · Updates</div>
+  <h1 class="ch">Updating from GitHub with instmon</h1>
+  <p>The <b>GitHub Updates</b> card in instmon reads the repo's file list directly.</p>
+  <div class="box"><h4 style="color:var(--blu)">Check GitHub</h4>
+    <p>Shows the newest GitHub copy of each tool and whether it is newer than yours. Full and Pi02w builds get
+      separate rows; rows for the build this Pi isn't using are tagged <b>other build</b>.</p></div>
+  <div class="box" style="margin-top:.6em"><h4 style="color:var(--blu)">Update</h4>
+    <p>Downloads one file into instmon's library and checks it first: the same file GitHub listed, a version line,
+      the right first line, a syntax check and <code>--install</code> support. Nothing installs until you press
+      <b>Install</b>.</p></div>
+  <div class="box" style="margin-top:.6em"><h4 style="color:var(--blu)">Full Update</h4>
+    <ol class="steps">
+      <li>Downloads and checks every new file before anything changes.</li>
+      <li>Pauses the web tools.</li>
+      <li>One tool at a time: saves a copy of the installed file, uninstalls it, installs the new one. If the new one fails, it puts the old one back and moves on.</li>
+      <li>Updates instmon last. A timer reinstalls the old instmon if the new one isn't answering after 90 seconds.</li>
+      <li>Ends with a summary.</li>
+    </ol></div>
+  <h2>The Pi Zero 2 W build choice</h2>
+  <p>On a Pi Zero 2 W the GitHub Updates card shows a <b>Pi Zero 2 W build</b> choice: <b>Pi02w fork (default)</b> or
+    <b>Full build (override)</b>. Full Update installs the chosen build, and switches an installed tool that doesn't
+    match (listed as <b>SWITCH</b>).</p>
+  <h2>Quiet System</h2>
+  <p><b>Quiet System / Restore</b> pauses SysMon, the Dashboard and 44helper before a big upload or install. Asterisk,
+    the bridges, Allmon3, SSH and wifimon keep running. Everything comes back by itself after 30 minutes.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">8 · Memory</div>
+  <h1 class="ch">Memory on a 512 MB Pi</h1>
+  <h2>The launcher</h2>
+  <p>The Pi02w SysMon and Dashboard, instmon, wifimon and 44helper all start through
+    <code>/usr/local/bin/asl_dvs_launch.py</code>:</p>
+<pre>ExecStart=/usr/bin/python3 /usr/local/bin/asl_dvs_launch.py /usr/local/bin/sysmon.py</pre>
+  <p>Started directly, Python compiles the whole file on every start and keeps that memory. The launcher loads the
+    tool as a module instead, so Python saves the compiled copy in <code>__pycache__</code> and reuses it. That is
+    about half the memory, and twice as fast to start.</p>
+  <h2>Three more memory savers</h2>
+  <p>Launcher version 2 also turns these on. Each has an off switch:</p>
+  <table>
+    <tr><th>Saver</th><th>What it does</th><th>Off switch</th></tr>
+    <tr><td>-OO</td><td>Drops the built-in help text (docstrings) from the loaded code.</td><td class="mono">/etc/asl_dvs/launch_no_optimize</td></tr>
+    <tr><td>Pool cap</td><td><code>MALLOC_ARENA_MAX=2</code>: at most 2 memory pools instead of up to 8 per CPU core.</td><td class="mono">/etc/asl_dvs/launch_no_arena_cap</td></tr>
+    <tr><td>Trim</td><td>1 minute after start, then every 5 minutes, hands freed memory back to Linux.</td><td class="mono">/etc/asl_dvs/launch_no_trim</td></tr>
+  </table>
+  <p>To turn one off, create its file and restart the services. Delete the file and restart to turn it back on:</p>
+<pre>sudo touch /etc/asl_dvs/launch_no_arena_cap
+sudo systemctl restart sysmon nodecontrol instmon wifimon</pre>
+  <div class="call note"><span class="t">NOTE</span>The first start after an update compiles everything once more, so
+    memory runs high. Measure after the next restart. With the first launcher version one node fell from about 390
+    to 294 of 415 MiB; the three savers haven't been measured on a Pi yet.</div>
+  <h2>Checking memory</h2>
+  <p>The Pi Zero 2 W uses zram: swap that is compressed in RAM. A program's real size is its RAM plus its swap:</p>
+<pre>for p in $(pgrep -f asl_dvs_launch.py); do
+  printf "%-40s %s\n" "$(tr '\0' ' ' &lt;/proc/$p/cmdline | awk '{print $NF}')" \
+    "$(grep -E 'VmRSS|VmSwap' /proc/$p/status | tr -s ' \n' ' ')"
+done; free -m</pre>
+  <p>Biggest swap users across the whole Pi:</p>
+<pre>for f in /proc/[0-9]*/status; do awk '/^Name:/{n=$2} /^VmSwap:/{if($2&gt;0) printf "%7.1f MB  %s\n",$2/1024,n}' $f 2&gt;/dev/null; done | sort -rn | head -10</pre>
+</section>
+
+<section class="chapter">
+  <div class="kicker">9 · Troubleshooting</div>
+  <h1 class="ch">Troubleshooting</h1>
+  <h2>A page doesn't load</h2>
+<pre><span class="c"># is the service running?</span>
+systemctl status sysmon --no-pager
+<span class="c"># its last 30 log lines</span>
+journalctl -u sysmon -n 30 --no-pager
+<span class="c"># is anything listening on the port?</span>
+ss -tlnp | grep 9999</pre>
+  <p>Use the service name and port of the tool in question (table in section 1).</p>
+  <h2>The login is refused</h2>
+  <p>The pages check the root password. Set or reset it with <code>sudo passwd root</code>.</p>
+  <h2>The installer says "No pi02w … build found"</h2>
+  <p>The <code>_pi02w_</code> file for that tool isn't in any of the folders it searches. Put it next to the installer
+    and run it again.</p>
+  <h2>The Pi is slow or runs out of memory</h2>
+  <ul>
+    <li>Run the memory commands in section 8 and look for the biggest swap users.</li>
+    <li>Check that every tool line shows <code>asl_dvs_launch.py</code>. A tool started as plain <code>python3 tool.py</code> uses about twice the memory: run its <code>--install</code> again.</li>
+    <li>Check that swap is on: <code>swapon --show</code> should list it. If an older 44helper turned it off, use 44helper's System Optimization tab (<b>Swap -- restore</b>), or <code>sudo systemctl enable --now dphys-swapfile</code>.</li>
+    <li>Close Cockpit's page when you're done: its two <code>cockpit-bridge</code> processes use about 27 MB while it is open.</li>
+  </ul>
+  <h2>A tool misbehaves after an update</h2>
+  <p>Turn the memory savers off one at a time (section 8), starting with the pool cap, and restart. If that doesn't
+    help, reinstall the previous version from instmon's library.</p>
+  <h2>SysMon's own checks</h2>
+<pre>sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
+  <p>It runs SysMon's security checks against this Pi and prints PASS / WARN / FAIL for each, without starting the
+    web page.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">10 · Removing</div>
+  <h1 class="ch">Removing the tools</h1>
+  <p>Remove one tool with its own uninstall:</p>
+<pre>sudo python3 /usr/local/bin/sysmon.py --uninstall</pre>
+  <p>Remove every tool except instmon:</p>
+<pre>sudo bash uninstall_all_v1_5.sh</pre>
+  <p>This leaves <code>/etc/asl_dvs/</code>, instmon's library and <code>/etc/wifimon/wifimon.conf</code> in place.
+    Remove instmon last with its own <code>--uninstall</code>. The launcher is removed once no service uses it.</p>
+
+  <div class="kicker" style="margin-top:2em">11 · Quick reference</div>
+  <h1 class="ch">Quick reference</h1>
+  <table>
+    <tr><th>Task</th><th>Command</th></tr>
+    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_47_0_20261013.py --install</td></tr>
+    <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_1_20261012.sh</td></tr>
+    <tr><td>Set the login password</td><td class="mono">sudo passwd root</td></tr>
+    <tr><td>Add WiFi networks</td><td class="mono">sudo python3 /usr/local/bin/wifimon.py --setup-wifi</td></tr>
+    <tr><td>Restart the web tools</td><td class="mono">sudo systemctl restart sysmon nodecontrol instmon wifimon</td></tr>
+    <tr><td>A tool's log</td><td class="mono">journalctl -u &lt;service&gt; -n 30 --no-pager</td></tr>
+    <tr><td>Memory overview</td><td class="mono">free -m · zramctl</td></tr>
+    <tr><td>Saver off switch</td><td class="mono">sudo touch /etc/asl_dvs/launch_no_&lt;optimize|arena_cap|trim&gt;</td></tr>
+    <tr><td>Remove all but instmon</td><td class="mono">sudo bash uninstall_all_v1_5.sh</td></tr>
+  </table>
+  <table>
+    <tr><th>Service</th><th>Port</th><th>Config</th></tr>
+    <tr><td>nodecontrol</td><td class="port">8989</td><td class="mono">/etc/asl_dvs/asl_dvs.conf</td></tr>
+    <tr><td>sysmon</td><td class="port">9999</td><td class="mono">/etc/sysmon/sysmon.conf</td></tr>
+    <tr><td>instmon</td><td class="port">8990</td><td class="mono">/etc/asl_dvs/ · library in /etc/asl_dvs/instmon_library</td></tr>
+    <tr><td>wifimon</td><td class="port">8991</td><td class="mono">/etc/wifimon/wifimon.conf</td></tr>
+    <tr><td>44helper</td><td class="port">9997</td><td class="mono">/etc/44helper/44helper.conf</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">12 · Phone</div>
+  <h1 class="ch">Phone and its dialplan</h1>
+  <p>The Dashboard's Phone tab places and answers calls through Asterisk, the phone engine under AllStarLink. Nothing
+    changes in Asterisk until you tick <b>Activate</b> on the Edit page (Phone section). After that, every
+    <b>Save Phone</b> rewrites the Dashboard's own files and reloads Asterisk.</p>
+  <h2>What Activate adds</h2>
+  <table>
+    <tr><th>File in /etc/asterisk</th><th>What the Dashboard adds</th></tr>
+    <tr><td class="mono">rpt.conf</td><td>One private node per phone network (1000–1999), between its <code>dvs-phone</code> marker lines.</td></tr>
+    <tr><td class="mono">extensions.conf</td><td>One line at the end: <code>#tryinclude dvs_phone_extensions.conf</code> (the phone dialplan).</td></tr>
+    <tr><td class="mono">pjsip.conf / iax.conf</td><td>Include lines for the SIP and IAX2 account files.</td></tr>
+    <tr><td class="mono">modules.conf</td><td>Load lines for the phone modules. New SIP modules need one Asterisk restart.</td></tr>
+    <tr><td class="mono">/var/lib/asterisk</td><td>Three small scripts: hang up, radio tone codes, radio dial requests.</td></tr>
+  </table>
+  <h2>From the radio</h2>
+  <table>
+    <tr><th>Code</th><th>Does</th></tr>
+    <tr><td class="mono">*61 + number</td><td>Dial. The Dashboard places the call (the Phone tab must be open).</td></tr>
+    <tr><td class="mono">*62 or *65</td><td>Hang up.</td></tr>
+    <tr><td class="mono">*63 / *64</td><td>Phone patch on / off.</td></tr>
+    <tr><td class="mono">*980 *981 *982</td><td>Send <code>*</code>, <code>#</code> or <code>*99</code> into the call.</td></tr>
+  </table>
+  <h2>How calls reach the radio</h2>
+  <p>Each phone network has its own node, linked to your radio node only while the Phone tab is open. Calls join that
+    node with voice keying (<code>rpt(node,Pv)</code>), so a simplex radio transmits only while the far end talks and
+    can hear you in the gaps. Tick <b>Listen only</b> to link the phone node one-way: you hear calls, and nothing from
+    the radio goes into them.</p>
+<pre><span class="c"># is the phone node linked, and which way? (R = listen only, T = two-way)</span>
+sudo asterisk -rx "rpt xnode &lt;your-node&gt;" | grep ALINKS
+<span class="c"># the dialing rules Asterisk has loaded for one network</span>
+sudo asterisk -rx "dialplan show dvs-net-&lt;network-id&gt;"</pre>
+  <div class="call tip"><span class="t">TIP</span>SysMon's Phone tab reads all of this from the files, read-only, and
+    checks it: nodes, networks, sign-in, dialing rules and the modules the phone needs.</div>
+  <div class="call note"><span class="t">NOTE</span>The nuts and bolts (dialplan syntax, patterns, every context the
+    Dashboard writes, autopatch, call flows and troubleshooting) are in
+    <code>docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf</code>.</div>
+</section>
+
+</body>
+</html>
