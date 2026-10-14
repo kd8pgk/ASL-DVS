@@ -1,6 +1,51 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_73_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_74_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.74-pi02w (2026-10-14)
+
+The systemd watchdog now checks the right things (reliability plan, Stage 2).
+The full build is not changed.
+
+- **New heartbeat.** Before, the link-poll loop told systemd "alive" at the
+  top of each poll. So a hung web server went unnoticed. Worse, a frozen
+  Asterisk that held the poll on AMI could get the Dashboard killed and
+  restarted for Asterisk's fault. With no ASL and no DVSwitch, there was no
+  poll loop at all, so systemd restarted the Dashboard every 30 s. Now a
+  `sd-heartbeat` thread sends "alive" (every 10 s, `WatchdogSec=30`
+  unchanged) only when both hold:
+  - the link-poll loop started a pass in the last 120 s (or it isn't
+    running), and
+  - the Dashboard answered its own `GET /healthz` within the last 25 s. A
+    `health-probe` thread asks every 10 s on 127.0.0.1, on the port the
+    server is bound to.
+
+  When either fails, the log says which, and systemd restarts the Dashboard
+  within about a minute.
+- **`/healthz`** (new, no login): the same tiny `{"ok":true}` as
+  `/api/ping`, for this probe and for instmon's check after an update.
+- **The poll no longer waits behind a stuck AMI command.** Its
+  `rpt show variables` waits at most 3 s for the AMI lock. When the lock is
+  busy it skips that poll and leaves the page state as it was (before, a
+  failed poll could blank the link state). The log says so once. Commands
+  from the page wait for the lock as before. The `asterisk -rx` fallback
+  still runs outside the lock.
+- The link-mode table is replaced in one step instead of cleared and
+  refilled, so another thread never reads it empty.
+- `USRP2M17.ini` (M17 bridge) is forced to disk before it replaces the old
+  file, like the Dashboard's own config.
+- Tested (unit tests with mocks, 10):
+  - the AMI lock wait gives up in time; calls without a wait still queue;
+    the fallback runs with the lock free; the lock is released on errors
+  - with AMI held, the poll loop keeps running and doesn't touch the page
+    state
+  - the heartbeat rules
+  - against a real server on a free port: `/healthz` answers without login
+    while `/api/status` needs it; "alive" messages reach a real notify
+    socket, stop while the server refuses connections, and resume after
+  - the link-mode swap; the M17 file write and fsync
+  - `ci/check_repo.py` (py_compile, pyflakes, node --check, version,
+    README, changelog, launcher)
 
 ## 9.3.73-pi02w (2026-10-14)
 
