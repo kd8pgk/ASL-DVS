@@ -131,7 +131,7 @@ instmon once by hand. From then on, instmon updates itself.
 
 Every build lands on `main`, the **testing** channel. **Stable** is a list of
 proven builds, one per tool, in [`channels/stable.json`](channels). instmon
-reads it from version 2.49.0 on, with Stable as the default and Testing as an
+reads it from version 2.50.0 on, with Stable as the default and Testing as an
 opt-in; until then instmon keeps updating from `main`.
 
 - **Releases and cosmetic builds.** `X.Y.Z` is a release. `X.Y.Z.N` is a
@@ -144,7 +144,7 @@ opt-in; until then instmon keeps updating from `main`.
   - it has been the newest release for 14 days.
 - **Overrides** in `channels/overrides.json`: `hold` keeps a release off
   stable; `hotfix` puts a release on stable at once.
-- **instmon** is never older than 2.49.0 on stable, the first version that
+- **instmon** is never older than 2.50.0 on stable, the first version that
   reads channels. A build still under an old file name is never promoted.
 - The `promote-stable` workflow rewrites `channels/stable.json` after every
   merge to `main` and once a day. Each entry names the file, version, commit
