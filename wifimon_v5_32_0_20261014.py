@@ -31,7 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.31.0"
+APP_VERSION = "5.32.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -76,6 +76,10 @@ VOLTAGE_WATCHDOG_ON   = True
 
 KEEP_POWERSAVE_OFF    = False
 
+HW_WATCHDOG_ON        = True
+HW_WATCHDOG_SECS      = 15
+LOOP_STALL_SECS       = 180
+
 DEVMODE_CHECK_SECS    = 10
 
 CONFIG_DIR  = "/etc/wifimon"
@@ -95,6 +99,7 @@ HEALTH_FILE         = os.path.join(SHUTDOWN_STATE_DIR, "health.json")
 ROAM_MODPROBE       = "/etc/modprobe.d/wifimon-brcmfmac.conf"
 REPORT_DIR          = "/var/log/wifimon"
 RUN_MARKER          = "/var/lib/wifimon/running.json"
+HW_WD_CONF_FILE     = "/etc/systemd/system.conf.d/90-asl_dvs-hwwatchdog.conf"
 
 _DEFAULT_CONFIG = {
     "network_1": {
@@ -250,10 +255,12 @@ Description=WiFi and Voltage Watchdog + Dashboard (port {HTTP_PORT})
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH}
 Restart=always
 RestartSec=3s
+WatchdogSec=60
 StandardOutput=journal
 StandardError=journal
 
@@ -318,6 +325,46 @@ def _handle_sigterm(signum: int, frame: object) -> None:
 
 signal.signal(signal.SIGTERM, _handle_sigterm)
 signal.signal(signal.SIGINT,  _handle_sigterm)
+
+def _sd_notify(state: str) -> bool:
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return False
+    if addr[0] == "@":
+        addr = "\0" + addr[1:]
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            sock.connect(addr)
+            sock.sendall(state.encode())
+        finally:
+            sock.close()
+        return True
+    except OSError as e:
+        log.warning("Couldn't notify systemd (%s): %s", state, e)
+        return False
+
+_loop_beat = time.monotonic()
+
+def _sd_watchdog_loop() -> None:
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC") or 0)
+    except ValueError:
+        usec = 0
+    if usec <= 0:
+        return
+    every = max(1.0, min(15.0, usec / 1e6 / 4))
+    stalled = False
+    while not _shutdown_event.wait(every):
+        age = time.monotonic() - _loop_beat
+        if age < LOOP_STALL_SECS:
+            if stalled:
+                log.info("Watchdog loop is running again")
+                stalled = False
+            _sd_notify("WATCHDOG=1")
+        elif not stalled:
+            stalled = True
+            log.error("Watchdog loop hasn't run for %d s — letting systemd restart wifimon", int(age))
 
 def _write_launcher() -> None:
     tmp = _LAUNCHER_PATH + ".tmp"
@@ -466,6 +513,7 @@ def install_service() -> None:
     with open(SYSTEMD_SERVICE_PATH, "w") as f:
         f.write(SYSTEMD_SERVICE_CONTENT)
     print(f"  [+] Created service file at {SYSTEMD_SERVICE_PATH}")
+    _apply_hw_watchdog(_saved_hw_watchdog(), verbose=True)
 
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "wifimon.service"], check=True)
@@ -490,6 +538,8 @@ def install_service() -> None:
     if fresh:
         print("  The watchdogs are off: wifimon only watches until you turn them on")
         print("  on its page (it asks when you log in).")
+        print("  The hardware watchdog (reboot if the Pi freezes) is on; turn it off")
+        print("  under Change settings on the Watchdog card.")
     if _root_password_status() != "set":
         print("  [!] root has no usable password, so dashboard login will fail.")
         print("      Set one with:  sudo passwd root")
@@ -515,6 +565,9 @@ def uninstall_service() -> None:
         print(f"  [-] Removed {SYSTEMD_SERVICE_PATH}")
 
     subprocess.run(["systemctl", "daemon-reload"], stderr=subprocess.DEVNULL)
+
+    if _hw_wd_ours():
+        _apply_hw_watchdog(False, verbose=True)
 
     target = None
     if os.path.lexists(INSTALL_BIN_PATH):
@@ -1393,8 +1446,10 @@ def _watchdog_loop() -> None:
     nm_busy_since: Optional[float] = None
     nm_step_in_noted = False
 
+    global _loop_beat
     while not _shutdown_event.is_set():
         loop_start = time.monotonic()
+        _loop_beat = loop_start
 
         try:
             if _networks_changed.is_set():
@@ -2030,6 +2085,7 @@ def _build_status() -> Dict[str, object]:
         "loop_errors": wd["loop_errors"],
         "interface": INTERFACE,
         "recording": _recording_public(),
+        "hw": _hw_wd_status(),
     }
     net = {
         "internet": wd["internet"],
@@ -2949,6 +3005,7 @@ _SETTINGS_SPEC: Dict[str, Tuple[str, type, Optional[float], Optional[float]]] = 
     "ping_target":               ("PING_TARGET", str, None, None),
     "detect_login_pages":        ("DETECT_LOGIN_PAGES", bool, None, None),
     "keep_powersave_off":        ("KEEP_POWERSAVE_OFF", bool, None, None),
+    "hw_watchdog":               ("HW_WATCHDOG_ON", bool, None, None),
 }
 _SETTING_DEFAULTS: Dict[str, object] = {k: globals()[g] for k, (g, _t, _a, _b) in _SETTINGS_SPEC.items()}
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
@@ -2998,13 +3055,15 @@ def _apply_settings(values: Dict[str, object], persist: bool = True) -> Optional
     for key, value in values.items():
         globals()[_SETTINGS_SPEC[key][0]] = value
     if any(before[k] != v for k, v in values.items()
-           if k not in ("detect_login_pages", "keep_powersave_off")):
+           if k not in ("detect_login_pages", "keep_powersave_off", "hw_watchdog")):
         _timers_reset.set()
     notes: List[str] = []
     if "detect_login_pages" in values:
         notes.append(_apply_login_page_detection(bool(values["detect_login_pages"])) or "")
     if "keep_powersave_off" in values:
         notes.append(_apply_keep_powersave_off(bool(values["keep_powersave_off"])) or "")
+    if "hw_watchdog" in values and persist:
+        notes.append(_apply_hw_watchdog(bool(values["hw_watchdog"])) or "")
     if persist:
         _save_state({"settings": _settings_current()})
     return " ".join(n for n in notes if n) or None
@@ -3036,6 +3095,15 @@ def _load_watchdogs() -> None:
     if not (WIFI_WATCHDOG_ON and VOLTAGE_WATCHDOG_ON):
         log.info("Watchdogs: WiFi %s, voltage %s", "on" if WIFI_WATCHDOG_ON else "OFF",
                  "on" if VOLTAGE_WATCHDOG_ON else "OFF")
+
+def _saved_hw_watchdog() -> bool:
+    try:
+        data = json.loads(_read_text(STATE_FILE) or "{}")
+    except ValueError:
+        return bool(HW_WATCHDOG_ON)
+    saved = (data.get("settings") or {}) if isinstance(data, dict) else {}
+    value = saved.get("hw_watchdog") if isinstance(saved, dict) else None
+    return value if isinstance(value, bool) else bool(HW_WATCHDOG_ON)
 
 def _load_saved_settings() -> None:
     try:
@@ -3775,6 +3843,123 @@ def _apply_keep_powersave_off(enabled: bool) -> Optional[str]:
             log.info("Power save turned off in %d saved network(s)", fixed)
     if enabled:
         _ps_check.set()
+    return note
+
+_HW_WD_TAG = "# Written by wifimon"
+_HW_WD_SPAN_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(us|ms|s|min|h)\b")
+_HW_WD_UNIT = {"us": 1e-6, "ms": 1e-3, "s": 1.0, "min": 60.0, "h": 3600.0}
+_hw_wd_lock = threading.Lock()
+_hw_wd_cache: Dict[str, object] = {"at": None, "data": None}
+
+def _hw_wd_body() -> str:
+    return (f"{_HW_WD_TAG}: reboot the Pi if it freezes (Change settings on wifimon's page)\n"
+            "[Manager]\n"
+            f"RuntimeWatchdogSec={HW_WATCHDOG_SECS}s\n"
+            "RebootWatchdogSec=2min\n")
+
+def _hw_wd_device() -> Optional[str]:
+    for dev in ("/dev/watchdog0", "/dev/watchdog"):
+        if os.path.exists(dev):
+            return dev
+    return None
+
+def _hw_wd_conflict() -> Optional[str]:
+    if not shutil.which("systemctl"):
+        return None
+    try:
+        r = subprocess.run(["systemctl", "is-active", "watchdog.service"],
+                           capture_output=True, text=True, timeout=10)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return "watchdog.service" if r.stdout.strip() == "active" else None
+
+def _hw_wd_parse_span(text: str) -> Optional[float]:
+    text = (text or "").strip()
+    if text in ("", "0", "infinity", "off"):
+        return 0.0
+    parts = _HW_WD_SPAN_RE.findall(text)
+    if not parts:
+        return None
+    return sum(float(n) * _HW_WD_UNIT[u] for n, u in parts)
+
+def _hw_wd_runtime() -> Optional[float]:
+    if not shutil.which("systemctl"):
+        return None
+    try:
+        r = subprocess.run(["systemctl", "show", "-p", "RuntimeWatchdogUSec", "--value"],
+                           capture_output=True, text=True, timeout=10)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if r.returncode != 0:
+        return None
+    return _hw_wd_parse_span(r.stdout)
+
+def _hw_wd_ours() -> bool:
+    return (_read_text(HW_WD_CONF_FILE) or "").startswith(_HW_WD_TAG)
+
+def _hw_wd_reexec() -> Optional[str]:
+    try:
+        r = subprocess.run(["systemctl", "daemon-reexec"], capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError) as e:
+        return f"systemd will pick this up after the next reboot ({_log_safe(e)})."
+    if r.returncode != 0:
+        return "systemd will pick this up after the next reboot (" + _log_safe((r.stderr or r.stdout).strip()[:200]) + ")."
+    return None
+
+def _hw_wd_status(max_age: float = 60.0) -> Dict[str, object]:
+    with _hw_wd_lock:
+        at = _hw_wd_cache["at"]
+        if at is not None and time.monotonic() - float(at) < max_age and _hw_wd_cache["data"]:
+            return dict(_hw_wd_cache["data"])
+    data = {"on": bool(HW_WATCHDOG_ON), "secs": HW_WATCHDOG_SECS, "device": _hw_wd_device(),
+            "conflict": _hw_wd_conflict(), "runtime_secs": _hw_wd_runtime(), "file": _hw_wd_ours()}
+    with _hw_wd_lock:
+        _hw_wd_cache["at"], _hw_wd_cache["data"] = time.monotonic(), data
+    return dict(data)
+
+def _apply_hw_watchdog(enabled: bool, verbose: bool = False) -> Optional[str]:
+    def say(msg: str) -> None:
+        if verbose:
+            print(msg)
+    note: Optional[str] = None
+    changed = False
+    try:
+        if enabled:
+            dev = _hw_wd_device()
+            conflict = _hw_wd_conflict()
+            if dev is None:
+                note = "This Pi has no hardware watchdog (/dev/watchdog), so there is nothing to turn on."
+                say("  [i] No hardware watchdog found (/dev/watchdog); skipped")
+            elif conflict:
+                note = f"{conflict} already runs the hardware watchdog, so wifimon leaves it alone."
+                say(f"  [i] {conflict} runs the hardware watchdog; wifimon leaves it alone")
+            elif _read_text(HW_WD_CONF_FILE) != _hw_wd_body():
+                os.makedirs(os.path.dirname(HW_WD_CONF_FILE), exist_ok=True)
+                tmp = HW_WD_CONF_FILE + ".tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+                with os.fdopen(fd, "w") as f:
+                    f.write(_hw_wd_body())
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, HW_WD_CONF_FILE)
+                changed = True
+                log.info("Hardware watchdog on: the Pi reboots if it freezes for %d s", HW_WATCHDOG_SECS)
+                say(f"  [+] Hardware watchdog on ({HW_WD_CONF_FILE}, {HW_WATCHDOG_SECS} s)")
+        elif _hw_wd_ours():
+            os.remove(HW_WD_CONF_FILE)
+            changed = True
+            log.info("Hardware watchdog off (removed %s)", HW_WD_CONF_FILE)
+            say(f"  [-] Hardware watchdog off (removed {HW_WD_CONF_FILE})")
+    except OSError as e:
+        log.warning("Couldn't update %s: %s", HW_WD_CONF_FILE, e)
+        note = f"Couldn't change the hardware watchdog setting: {e}"
+    if changed:
+        problem = _hw_wd_reexec()
+        if problem:
+            log.warning("Hardware watchdog: %s", problem)
+            note = "Hardware watchdog: " + problem
+    with _hw_wd_lock:
+        _hw_wd_cache["at"] = None
     return note
 
 def _keep_powersave_check() -> None:
@@ -6034,6 +6219,8 @@ a.btnlink:hover{border-color:var(--cyan)}
           <span class="hint"></span></div>
         <div class="row"><label class="check"><input type="checkbox" id="s-kps" data-key="keep_powersave_off" data-hint="Default off. When on, power save is off for every saved network and any added later, and wifimon turns it off again if a reconnect switches it back on. Turning this off leaves networks as they are; use each network's Options to change one back."> Keep WiFi power save off (all networks)</label>
           <span class="hint"></span></div>
+        <div class="row"><label class="check"><input type="checkbox" id="s-hwwd" data-key="hw_watchdog" data-hint="Default on. The Pi's watchdog chip reboots the node if Linux freezes for 15 seconds; systemd keeps it fed while the system runs. Off removes wifimon's setting. Not used when watchdog.service already runs the chip."> Reboot the Pi if it freezes (hardware watchdog)</label>
+          <span class="hint"></span></div>
         <p class="err" id="s-err" role="alert"></p>
         <div class="actions">
           <button type="button" id="s-save">Save settings</button>
@@ -6550,10 +6737,22 @@ a.btnlink:hover{border-color:var(--cyan)}
       ["Under-voltage since boot", yesno(p.undervoltage_seen)],
       ["CPU throttled now", yesno(p.throttled_now)],
       ["Trying to reconnect", yesno(wd.reconnecting)],
+      ["Hardware watchdog", hwText(wd.hw)],
       ["Shutdown report", wd.recording
         ? "Recording details (" + wd.recording.count + " snapshots since " + stamp(wd.recording.started_at) + ")"
         : "Not needed right now"],
     ]);
+  }
+
+  function hwText(hw) {
+    if (!hw) return "—";
+    if (hw.conflict) return "Run by " + hw.conflict;
+    if (!hw.device) return "Not found on this Pi";
+    const secs = hw.runtime_secs;
+    if (secs === null || secs === undefined) return hw.on ? "On (systemd state unknown)" : "Off";
+    if (secs > 0) return "On: reboots if the Pi freezes for " + Math.round(secs) + " s"
+      + (hw.on && hw.file ? "" : " (set outside wifimon)");
+    return hw.on ? "Turning on (after the next reboot at the latest)" : "Off";
   }
 
   function renderService(d) {
@@ -7586,6 +7785,7 @@ def run() -> None:
     _load_watchdogs()
     _apply_login_page_detection(DETECT_LOGIN_PAGES)
     _apply_keep_powersave_off(KEEP_POWERSAVE_OFF)
+    _apply_hw_watchdog(HW_WATCHDOG_ON)
     _health_load()
     _recover_pending_change()
     _hotspot_recover()
@@ -7597,6 +7797,8 @@ def run() -> None:
 
     watchdog = threading.Thread(target=_watchdog_loop, name="watchdog", daemon=True)
     watchdog.start()
+    threading.Thread(target=_sd_watchdog_loop, name="sd-watchdog", daemon=True).start()
+    _sd_notify("READY=1")
     threading.Thread(target=_collector_loop, name="status", daemon=True).start()
     threading.Thread(target=_nm_sync_loop, name="nm-sync", daemon=True).start()
     threading.Thread(target=_kmsg_loop, name="kmsg", daemon=True).start()

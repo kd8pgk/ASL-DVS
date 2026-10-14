@@ -1,6 +1,48 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_31_0_20261013.py`. Newest entries first.
+Current file: `wifimon_v5_32_0_20261014.py`. Newest entries first.
+
+## 5.32.0 (2026-10-14)
+
+Two watchdogs over wifimon itself and the whole Pi (reliability plan, Stage 1).
+wifimon serves both builds; nothing changes in the full build's files.
+
+- **Hardware watchdog (new setting, default on).** The Pi's watchdog chip
+  reboots the node if Linux freezes for 15 seconds. systemd feeds the chip
+  while the system runs; wifimon only switches this on or off.
+  - wifimon writes `/etc/systemd/system.conf.d/90-asl_dvs-hwwatchdog.conf`
+    (`RuntimeWatchdogSec=15s`, `RebootWatchdogSec=2min`) and runs
+    `systemctl daemon-reexec` so it takes effect at once. It runs it only
+    when the file changed.
+  - Watchdog card -> Change settings -> **Reboot the Pi if it freezes
+    (hardware watchdog)**. Off removes the file (only if wifimon wrote it).
+  - The Watchdog card shows **Hardware watchdog**: on (with the time), off,
+    "not found on this Pi" (no `/dev/watchdog`), or "run by
+    watchdog.service" (wifimon then leaves the chip alone).
+  - `--install` applies the saved choice (on when never set); `--uninstall`
+    removes the file. The startup of the service applies it too, so it stays
+    in step with the setting.
+- **wifimon has its own systemd watchdog.** The unit is now `Type=notify`
+  with `WatchdogSec=60`. A small thread tells systemd "alive" every 15 s,
+  but only while the monitor loop has started a pass in the last 180 s. If
+  the loop hangs, the web page may still answer, but systemd restarts
+  wifimon within about 4 minutes. Before, a hung loop went unnoticed. The
+  activity log says when the loop stalls.
+- Tested:
+  - Unit tests with mocks (14): the file is written once and `daemon-reexec`
+    runs once; off removes it; a file wifimon didn't write is left alone; no
+    `/dev/watchdog`; watchdog.service running; a failed reexec is reported;
+    the time parser; the setting validates, saves, resets to on and does
+    not restart the countdowns; the unit lines; the "alive" messages stop
+    while the loop is stale and resume when it runs again (real Unix
+    socket); the loop's heartbeat stops while a check blocks.
+  - The page in headless Chromium: the four Hardware watchdog states, the
+    new checkbox (checked by default, with its hint), no horizontal scroll
+    at 390 px, no script errors.
+  - `node --check` on the page JavaScript, `py_compile`, `pyflakes`,
+    `ci/check_repo.py`.
+- Not testable here: a real freeze on a Pi. On the node: `wdctl` shows the
+  timeout, and `systemctl show -p RuntimeWatchdogUSec` shows `15s`.
 
 ## 5.31.0 (2026-10-13)
 
