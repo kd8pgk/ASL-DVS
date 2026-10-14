@@ -29,11 +29,11 @@
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_195_20261013.py</td><td>0.0.195</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_197_20261014.py</td><td>0.0.197</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_31_0_20261013.py</td><td>5.31.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_84_20261013.py</td><td>6.13.84</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
     </table>
   </div>
@@ -53,7 +53,7 @@
     <li><span class="no">5</span>System care: Tune, Hardware, SD Card, Security, Edit</li>
     <li><span class="no">6</span>Full-build tabs: Firewall, Reg, Net, Zello, Console</li>
     <li class="pt">Part III · 44helper</li>
-    <li><span class="no">7</span>44helper basics: Overview, Services, Ports, Firewall, Actions Log</li>
+    <li><span class="no">7</span>44helper basics: Overview, Services, Ports, firewall cards, Actions Log</li>
     <li><span class="no">8</span>44Net and remote access: Router Install, Tunnels, Nodes, Cloudflare</li>
     <li><span class="no">9</span>Software installers: ASL3, DVSwitch, SVXLink, M17, Ampersand</li>
     <li><span class="no">10</span>Keeping the system healthy: Update, System Optimization</li>
@@ -229,7 +229,7 @@ sudo systemctl status sysmon</pre>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
         <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
         <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
-        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Firewall</span><span class="tab">Actions Log</span>
+        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
       </div>
     </div>
     <figcaption><b>Figure 1.4 · Illustration.</b> 44helper (port 9997). The first row is 44Net remote access. The
@@ -1224,7 +1224,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     9999, 8990, 8991, 9997) from your network <i>first</i>, and IAX2 (4569/udp) so AllStar links keep working.
     SysMon before 6.13.75 enabled at once, with no prompt and no SSH rule.</div>
   <p>On firewalld, SysMon adds each rule both live and permanently, so it survives a reload or reboot. 44helper's
-    Firewall tab (Chapter 7) has a fuller zone-based editor with built-in guardrails, and works on both builds.</p>
+    firewall cards on its Full and Split Tunnel tabs (Chapter 7) are a fuller zone-based editor with built-in guardrails, and works on both builds.</p>
 
   <h2><span class="n">6.2</span>Reg tab</h2>
   <p>Checks how your node registers with AllStarLink, which is how other nodes find it.</p>
@@ -1354,20 +1354,20 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
 <section class="chapter" id="ch7">
   <div class="kicker">Chapter 7 · 44helper</div>
   <h1 class="ch">44helper basics</h1>
-  <p class="ch-lede">How 44helper is laid out, how its step cards work, and the five status tabs: Overview,
-    Services, Ports, Firewall and Actions Log. Open it at <code>http://&lt;pi-address&gt;:9997</code>. It is the
+  <p class="ch-lede">How 44helper is laid out, how its step cards work, the four status tabs (Overview,
+    Services, Ports and Actions Log), and the firewall cards on the tunnel tabs. Open it at <code>http://&lt;pi-address&gt;:9997</code>. It is the
     same on every Pi.</p>
 
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.195 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.197 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
         <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
         <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
-        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Firewall</span><span class="tab">Actions Log</span>
+        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
       </div>
     </div>
     <figcaption><b>Figure 7.1 · Illustration.</b> 44helper's header and tabs. Row one is 44Net remote access; row two
@@ -1375,7 +1375,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </figure>
   <table>
     <tr><th>Tab group</th><th>Tabs</th><th>Chapter</th></tr>
-    <tr><td>Status</td><td>Overview, Services, Ports, Firewall, Actions Log</td><td>7</td></tr>
+    <tr><td>Status</td><td>Overview, Services, Ports, Actions Log (the firewall cards are on the tunnel tabs)</td><td>7</td></tr>
     <tr><td>Remote access</td><td>Router Install, Full Tunnel, Split Tunnel, Nodes, Cloudflare</td><td>8</td></tr>
     <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand</td><td>9</td></tr>
     <tr><td>Maintenance</td><td>Update, System Optimization</td><td>10</td></tr>
@@ -1472,17 +1472,20 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td style="color:var(--muted)">not-listening</td><td>Nothing is running on it, which is normal for software you don't use.</td></tr>
   </table>
 
-  <h2><span class="n">7.6</span>Firewall tab</h2>
-  <p>44helper uses <b>firewalld</b>. The guardrail at the top warns when <code>wg0</code> is attached to the ASL3
-    image's own <code>allstarlink</code> zone instead of 44helper's <code>44NetConnect</code> zone.</p>
+  <h2><span class="n">7.6</span>Firewall and port control</h2>
+  <p>44helper uses <b>firewalld</b>. From 0.0.196 there is no Firewall tab: its cards are a <b>Firewall and port
+    control</b> section at the end of the <b>Full Tunnel</b> and <b>Split Tunnel</b> tabs. The section exists once and
+    follows you to whichever of the two you open, keeping what you typed. The half tunnel card is on the Full Tunnel
+    tab, and the router's port-forward table on the Router Install tab (Chapter 8). The guardrail at the top of the
+    section warns when <code>wg0</code> is attached to the ASL3 image's own <code>allstarlink</code> zone instead of
+    44helper's <code>44NetConnect</code> zone.</p>
   <table>
     <tr><th>Card</th><th>What it does</th></tr>
     <tr><td>Pi: 44NetConnect zone</td><td>What the 44Net side can reach. Add or remove the services <code>iax2</code>, <code>echolink</code> and <code>rtcm</code>, or a port such as <code>14569/udp</code>.</td></tr>
     <tr><td>Quick port control (any zone)</td><td>Pick any zone (the active and default zones are marked) and <b>Show zone config</b>. Presets fill in IAX2, EchoLink, VOTER/RTCM or your DVSwitch Mobile port. Then:
       <b>Add (runtime test)</b> opens it until the next reload, a safe way to try it; <b>Make permanent</b> keeps that one port; <b>Remove</b> closes it everywhere; <b>Commit all runtime changes</b> keeps every test at once; <b>Reload firewalld</b>. An advanced section adds services and moves interfaces between zones.</td></tr>
     <tr><td>Panic mode</td><td>If firewalld's panic mode (all traffic dropped) is on, a button turns it off.</td></tr>
-    <tr><td>Router: live port-forward table</td><td>With router access set up (Chapter 8), the router's forwards, each with a remove button.</td></tr>
-    <tr><td>Half tunnel (ASL + EchoLink only) <span class="badge test">TESTING</span></td><td>At the top of the tab, from 0.0.188x. Sends only ASL and EchoLink through a full 44Net tunnel; everything else stays on the normal link. See below.</td></tr>
+    <tr><td>Half tunnel (ASL + EchoLink only) <span class="badge test">TESTING</span></td><td>On the Full Tunnel tab, above Full tunnel with exceptions. Sends only ASL and EchoLink through a full 44Net tunnel; everything else stays on the normal link. See below.</td></tr>
   </table>
   <p>As you type a port, a guardrail line checks it: a loopback-only port is <b>blocked</b> in every zone, and a
     dashboard, AMI or Cockpit port is allowed but flagged red.</p>
@@ -1518,7 +1521,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <ol class="steps">
     <li>Overview: the Self-check findings card should show no red lines.</li>
     <li>Ports: no row should say <b>over-exposed</b>. IAX2 should be OK, not needed-but-not-open.</li>
-    <li>Firewall: the guardrail should be quiet, and the 44NetConnect zone should list only what you mean to open.</li>
+    <li>Full or Split Tunnel tab, Firewall and port control: the guardrail should be quiet, and the 44NetConnect zone should list only what you mean to open.</li>
   </ol>
   <h3>An install step says "NOT RUN"</h3>
   <ol class="steps">
@@ -1571,7 +1574,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>Route</th><th>Tab</th><th>Best for</th><th>What you need</th></tr>
     <tr><td>Pi tunnel, Full</td><td>Full Tunnel</td><td>A node that must be reachable by other AllStar nodes, with all its traffic going out through 44Net.</td><td>A 44Net Connect account and tunnel.</td></tr>
     <tr><td>Pi tunnel, Split</td><td>Split Tunnel</td><td>A node that only 44Net hosts need to reach at the 44 address. Only 44Net traffic uses the tunnel; DMR, M17 and everything else take your normal internet, and other AllStar nodes still reach you at your home address (router forward). <b>The lowest-risk choice.</b></td><td>The same, plus one edited line.</td></tr>
-    <tr><td>Pi tunnel, half <span class="badge test">TESTING</span></td><td>Firewall (card)</td><td>ASL reachable by any node at the 44 address, with no router forward and behind CGNAT; everything else on your normal internet.</td><td>A Full Tunnel set up first.</td></tr>
+    <tr><td>Pi tunnel, half <span class="badge test">TESTING</span></td><td>Full Tunnel (card)</td><td>ASL reachable by any node at the 44 address, with no router forward and behind CGNAT; everything else on your normal internet.</td><td>A Full Tunnel set up first.</td></tr>
     <tr><td>Pi tunnel, full with exceptions <span class="badge test">TESTING</span></td><td>Full Tunnel (card)</td><td>The whole Pi behind the 44 address, while forwarded TCP connections (dashboard, SSH) still answer, and chosen hosts or ports skip the tunnel.</td><td>A running Full Tunnel.</td></tr>
     <tr><td>Router tunnel</td><td>Router Install</td><td>Putting several devices, or a whole routed 44Net subnet, behind one tunnel on an OpenWrt / GL.iNet router.</td><td>SSH access to the router; a single 44Net address or a routed subnet.</td></tr>
     <tr><td>Cloudflare Tunnel</td><td>Cloudflare</td><td>Reaching the web pages yourself from anywhere, with no port opened at home.</td><td>A free Cloudflare account and domain.</td></tr>
@@ -1605,13 +1608,19 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li><b>Add inbound services and ports</b>: tick what other stations may reach. AllStarLink IAX2 and EchoLink/SvxLink are ticked by default; VOTER/RTCM is optional. Asterisk AMI can be added but is flagged red. Full Tunnel also has fields for your DVSwitch Mobile port and a custom port. Split Tunnel offers only IAX2 and EchoLink, because nothing else needs to be reachable.</li>
     <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card.
       <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value. From 0.0.193 the options that go through systemd-resolved are refused while resolved isn't answering.
-      <br><b>4b (Split)</b>: <b>Repair AllowedIPs</b> fixes a config pasted unedited. <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
+      <br><b>4b (Split)</b>: <b>Repair AllowedIPs</b> fixes a config pasted unedited. From 0.0.197 it also offers <b>Fix the tunnel-server route</b> when the tunnel server is itself a 44Net address (see the note below). <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
     <li><b>Attach wg0 to the zone.</b></li>
     <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations. From 0.0.193 the start waits up to 90 seconds. If it fails, the output shows the tunnel's state and the last lines of its log. Before starting, it checks that systemd-resolved answers whenever wg0.conf's DNS setting needs it; if resolved doesn't, it restarts it once, and refuses to start if that doesn't help.</li>
   </ol>
   <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the
     network. If you are connected over SSH or Cockpit from outside your home network, that session may drop. Do
     step 6 from home, or on a keyboard and screen.</div>
+  <div class="call note"><span class="t">NOTE</span>The 44Net Connect dashboard says <b>idle</b>, <code>wg show</code> shows an
+    old handshake, and almost nothing is received? If the tunnel server (<code>Endpoint</code>) is itself a 44.x address,
+    a split tunnel routes WireGuard's own packets back into wg0: <code>ip -4 route get &lt;endpoint&gt;</code> says
+    <code>dev wg0</code>. From 0.0.197 44helper keeps the server on the normal route with two marked lines in wg0.conf
+    (an <i>endpoint pin</i>), adds them before step 6 starts the tunnel, flags the loop red on the Overview, and fixes a
+    running tunnel from step 4b.</div>
   <div class="call note"><span class="t">NOTE</span>A tunnel start that fails after exactly 25 seconds on
     <code>resolvconf -a wg0</code> is systemd-resolved not answering on D-Bus. Restart it
     (<code>sudo systemctl restart systemd-resolved</code>), or reboot, or take the <code>DNS =</code> line out of
@@ -1647,6 +1656,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>8. Pi's address</td><td>Looks up the Pi's address in the router's DHCP leases. Model C can add a static binding.</td></tr>
     <tr><td>9. Port forwards <i>(B)</i> / Fix firewall zone <i>(C)</i></td><td>B: tick the services to forward from the router's 44.x address to the Pi. C: sets the WireGuard zone to forward, with masquerade off, so devices keep their real addresses.</td></tr>
     <tr><td>10. Verify</td><td>B: checks outbound traffic uses the 44.x address. C: traces to portal.ampr.org. <b>Save known-good note</b> records the model, firmware and access method (no secrets) for the Actions Log.</td></tr>
+    <tr><td>Router: live port-forward table</td><td>Under the steps: the router's forwards, read over SSH, each with a <b>Remove</b> button (on the Firewall tab before 0.0.196).</td></tr>
   </table>
   <div class="call note"><span class="t">NOTE</span>Model B's Verify can't prove that other stations can reach you
     from outside, because 44helper has no way to test inbound from the internet. Ask another node to link to you.</div>
@@ -1678,7 +1688,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p>Run <code>cloudflared tunnel --url http://localhost:8989</code> over SSH. It prints a random
     <code>*.trycloudflare.com</code> address, needs no account, and stops when you press Ctrl-C.</p>
   <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>bypasses the firewall</b>. Nothing
-    opens inbound, so 44helper's Ports and Firewall tabs can't see what you have published. Anything you map is
+    opens inbound, so 44helper's Ports tab and firewall cards can't see what you have published. Anything you map is
     reachable by the whole internet, protected only by that page's own login. Always put a <b>Cloudflare Access
     policy</b> (for example, email one-time codes for your address only) in front of every hostname. Never publish
     44helper itself.</div>
