@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.195</b><br>Edition 2026-10-14</div>
+    <div class="ed"><b>44helper 0.0.197</b><br>Edition 2026-10-14</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,8 +27,8 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_195_20261013.py</td><td>0.0.195</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_84_20261013.py</td><td>6.13.84 (Half tunnel checks)</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_197_20261014.py</td><td>0.0.197</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
       the full build. The other tools are covered in the user manual, <code>docs/ASL-DVS_User_Manual.pdf</code>.</p>
@@ -43,9 +43,9 @@
     <li class="pt">Part I · Basics</li>
     <li><span class="no">1</span>What 44helper is, installing it, logging in</li>
     <li><span class="no">2</span>The page, step cards and the safety checks</li>
-    <li class="pt">Part II · Status tabs</li>
+    <li class="pt">Part II · Status tabs and firewall</li>
     <li><span class="no">3</span>Overview, Services and Ports</li>
-    <li><span class="no">4</span>Firewall and Actions Log</li>
+    <li><span class="no">4</span>Firewall and port control, and Actions Log</li>
     <li><span class="no">5</span>The half tunnel card</li>
     <li class="pt">Part III · 44Net and remote access</li>
     <li><span class="no">6</span>Choosing a route</li>
@@ -96,7 +96,7 @@
   <h2><span class="n">1.1</span>What it does</h2>
   <table>
     <tr><th>Area</th><th>Tabs</th><th>Chapter</th></tr>
-    <tr><td>Status</td><td>Overview, Services, Ports, Firewall, Actions Log</td><td>3–5</td></tr>
+    <tr><td>Status</td><td>Overview, Services, Ports, Actions Log; the firewall cards sit on the tunnel tabs</td><td>3–5</td></tr>
     <tr><td>Remote access</td><td>Router Install, Full Tunnel, Split Tunnel, Nodes, Cloudflare</td><td>6–9</td></tr>
     <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand</td><td>10–11</td></tr>
     <tr><td>Maintenance</td><td>Update, System Optimization</td><td>12</td></tr>
@@ -126,13 +126,13 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.195 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.197 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
         <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
         <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
-        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Firewall</span><span class="tab">Actions Log</span>
+        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
       </div>
     </div>
     <figcaption><b>Figure 1.1 · Illustration.</b> The header shows the callsign, node and version. Row one is 44Net
@@ -206,10 +206,11 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
 
 <section class="part">
   <div class="pn">PART II</div>
-  <h1>Status tabs</h1>
-  <p>Five tabs that read the node and change little: Overview, Services, Ports, Firewall and Actions Log. The
-    Firewall tab also carries the half tunnel card, which has a chapter of its own.</p>
-  <ol start="3"><li>Overview, Services and Ports</li><li>Firewall and Actions Log</li><li>The half tunnel card</li></ol>
+  <h1>Status tabs and firewall</h1>
+  <p>Four tabs that read the node and change little: Overview, Services, Ports and Actions Log. Then the firewall
+    cards, which from 0.0.196 sit at the end of the Full and Split Tunnel tabs instead of a Firewall tab of their own,
+    and the half tunnel card on the Full Tunnel tab.</p>
+  <ol start="3"><li>Overview, Services and Ports</li><li>Firewall and port control, and Actions Log</li><li>The half tunnel card</li></ol>
 </section>
 
 <section class="chapter" id="ch3">
@@ -223,7 +224,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <tr><td>Tunnel / wg0</td><td>Whether <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
     <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up: on the Pi (full or split) or on a router.</td></tr>
     <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
-    <tr><td>Self-check findings</td><td><b>Red</b> if 44helper, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. <b>Amber</b> if <code>wg0.conf</code>, which holds your private key, is not mode 600.</td></tr>
+    <tr><td>Self-check findings</td><td><b>Red</b> if 44helper, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. <b>Amber</b> if <code>wg0.conf</code>, which holds your private key, is not mode 600. From 0.0.197: <b>red</b> when the tunnel server routes back into wg0 (a routing loop, section 7.3), <b>amber</b> when it is inside AllowedIPs and the endpoint pin is missing.</td></tr>
   </table>
   <p><b>Re-check</b> reads everything again at once; otherwise the installed-software list is cached for 20 seconds.</p>
 
@@ -277,20 +278,30 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
 
 <section class="chapter" id="ch4">
   <div class="kicker">Chapter 4 · Status</div>
-  <h1 class="ch">Firewall and Actions Log</h1>
-  <p class="ch-lede">44helper uses <b>firewalld</b>. This tab shows what each zone lets in and changes it, one port
-    or service at a time, with a safe "try it first" path.</p>
-  <h2><span class="n">4.1</span>The cards</h2>
+  <h1 class="ch">Firewall and port control, and Actions Log</h1>
+  <p class="ch-lede">44helper uses <b>firewalld</b>. The <b>Firewall and port control</b> section shows what each zone
+    lets in and changes it, one port or service at a time, with a safe "try it first" path.</p>
+  <h2><span class="n">4.1</span>Where it is</h2>
+  <p>Before 0.0.196 these cards had a Firewall tab. Now they are a section at the end of the <b>Full Tunnel</b> and
+    <b>Split Tunnel</b> tabs, under the Purge buttons. The section exists once and moves to whichever of the two tabs you
+    open, so a port you typed or a zone you picked stays as it was, and opening the tab reads the firewall again. It
+    sits outside the tab's step list, so it stays usable while the Split steps are locked. The other two cards moved
+    too:</p>
+  <table>
+    <tr><th>Card</th><th>Now on</th></tr>
+    <tr><td>Half tunnel (ASL + EchoLink only)</td><td>Full Tunnel tab, above Full tunnel with exceptions (Chapter 5)</td></tr>
+    <tr><td>Router: live port-forward table</td><td>Router Install tab, under the steps (Chapter 9)</td></tr>
+  </table>
+  <h2><span class="n">4.2</span>The cards</h2>
   <table>
     <tr><th>Card</th><th>What it does</th></tr>
-    <tr><td>Half tunnel (ASL + EchoLink only) <span class="badge test">TESTING</span></td><td>At the top of the tab. Chapter 5.</td></tr>
     <tr><td>Guardrail</td><td>Warns when <code>wg0</code> is attached to the ASL3 image's own <code>allstarlink</code> zone instead of 44helper's <code>44NetConnect</code> zone.</td></tr>
     <tr><td>Pi: 44NetConnect zone</td><td>What the 44Net side can reach. Add or remove the services <code>iax2</code>, <code>echolink</code> and <code>rtcm</code>, or a port such as <code>14569/udp</code>.</td></tr>
-    <tr><td>Quick port control (any zone)</td><td>Section 4.2.</td></tr>
+    <tr><td>Quick port control (any zone)</td><td>Section 4.3.</td></tr>
     <tr><td>Panic mode</td><td>If firewalld's panic mode (all traffic dropped) is on, a button turns it off. 44helper never turns it on.</td></tr>
-    <tr><td>Router: live port-forward table</td><td>With router access set up (Chapter 9), the router's forwards, each with a remove button.</td></tr>
+    <tr><td>Re-check</td><td>Reads the zones and the guardrail again; "Last checked" shows when.</td></tr>
   </table>
-  <h2><span class="n">4.2</span>Quick port control</h2>
+  <h2><span class="n">4.3</span>Quick port control</h2>
   <ol class="steps">
     <li>Pick a zone. The 44NetConnect zone is pinned at the top; the active zones show their interfaces, and the default zone is marked. <b>Show zone config</b> lists everything in it (read-only).</li>
     <li>Type a port such as <code>4569/udp</code>, or press a preset: IAX2 4569/udp, EchoLink/SvxLink 5198-5199/udp, VOTER/RTCM 1667/udp, or your DVSwitch Mobile port.</li>
@@ -313,7 +324,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   </ul>
   <div class="call tip"><span class="t">TIP</span>Always use Add (runtime test) first. If you lose access, a reload or a
     reboot puts things back. Make it permanent once you know it works.</div>
-  <h2><span class="n">4.3</span>Actions Log tab</h2>
+  <h2><span class="n">4.4</span>Actions Log tab</h2>
   <ul>
     <li><b>Session log:</b> every command 44helper ran since it last started, with OK or FAIL. <b>Refresh</b> reads it again. A step that puts a password in its command (such as Allmon3's) shows it here too.</li>
     <li><b>Known-good router notes:</b> notes saved after a router setup worked (model, firmware and access method, no secrets). Click one to read it.</li>
@@ -321,7 +332,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
 </section>
 
 <section class="chapter" id="ch5">
-  <div class="kicker">Chapter 5 · Status · Firewall tab</div>
+  <div class="kicker">Chapter 5 · Full Tunnel tab</div>
   <h1 class="ch">The half tunnel card <span class="badge test">TESTING</span></h1>
   <p class="ch-lede">A full tunnel makes your 44 address reachable by anyone, but sends all the Pi's traffic through
     44Net. A split tunnel keeps the Pi's traffic at home, but only 44Net hosts can reach you. The half tunnel takes the
@@ -442,7 +453,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">6.1</span>The four Pi tunnel modes</h2>
   <table>
     <tr><th></th><th>Split</th><th>Half</th><th>Full with exceptions</th><th>Full</th></tr>
-    <tr><td>Where it is</td><td>Split Tunnel tab</td><td>Firewall tab card</td><td>Full Tunnel tab card</td><td>Full Tunnel tab</td></tr>
+    <tr><td>Where it is</td><td>Split Tunnel tab</td><td>Full Tunnel tab card</td><td>Full Tunnel tab card</td><td>Full Tunnel tab</td></tr>
     <tr><td>AllowedIPs</td><td class="mono">44.0.0.0/9, 44.128.0.0/10</td><td class="mono">0.0.0.0/0</td><td class="mono">0.0.0.0/0</td><td class="mono">0.0.0.0/0</td></tr>
     <tr><td>Pi's internet traffic</td><td>normal link</td><td>normal link</td><td>tunnel</td><td>tunnel</td></tr>
     <tr><td>What uses the tunnel</td><td>traffic to 44Net</td><td>44Net, plus ASL and EchoLink</td><td>everything except LAN replies and a bypass list</td><td>everything</td></tr>
@@ -519,6 +530,18 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     tunnel, so Off is usually fine. A <code>DNS =</code> line is the most fragile option: it depends on
     <code>resolvconf</code>, and on these Pis that means systemd-resolved over D-Bus.</div>
   <h2><span class="n">7.3</span>Step 4b</h2>
+  <p><b>Split: Fix the tunnel-server route</b> (0.0.197). Some 44Net Connect servers are themselves 44.x addresses.
+    With a split tunnel, wg-quick sends all of 44.0.0.0/9 into wg0, the server included, so WireGuard's own packets
+    loop back into the tunnel: no handshake, almost nothing received, and the 44Net Connect dashboard says
+    <b>idle</b>. <code>ip -4 route get &lt;endpoint&gt;</code> shows <code>dev wg0</code>. 44helper now writes an
+    <i>endpoint pin</i> into wg0.conf whenever it is needed, two lines between <code># 44helper-endpoint-pin-begin</code>
+    / <code>-end</code>:</p>
+<pre>PreUp = ip -4 route replace &lt;server&gt;/32 &lt;normal default route&gt; || true
+PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
+  <p>Every 44helper write of wg0.conf adds, keeps or removes it, and step 6 adds it before starting. A host-name
+    endpoint is looked up when the tunnel starts. It is left out for a full tunnel (wg-quick handles that) and for
+    <code>Table = off</code>. On step 4b a red banner and <b>Fix the tunnel-server route</b> repair an existing config and
+    add the route straight away, so the handshake returns without a restart.</p>
   <p><b>Split: Repair AllowedIPs</b> fixes a config pasted unedited. Under a split tunnel a full config sends every DNS
     lookup into the tunnel, the classic cause of "AllStar works but DVSwitch and M17 don't". Restart the tunnel after.
     It is switched off while the half tunnel or the full tunnel with exceptions is in use.</p>
@@ -550,6 +573,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">7.5</span>The other buttons</h2>
   <ul>
     <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one with systemd drop-ins under <code>/etc</code>: fix netcheck's unit, loosen a bridge's dependency, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel.</li>
+    <li><b>Firewall and port control</b>, at the end of the tab: the 44NetConnect zone and Quick port control (Chapter 4). On the Full Tunnel tab, the half tunnel card (Chapter 5) and Full tunnel with exceptions (Chapter 8) come before it.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
     <li><b>Purge</b>: three steps: stop and disable the tunnel (and the fallback unit), remove <code>/etc/wireguard/wg0.conf</code>, and delete the 44NetConnect zone, which also drops wg0's attachment and every service and port in it. Make sure the instmon library has a copy of wg0.conf first.</li>
     <li>If one kind is installed and you open the other tab, its steps are locked until you press <b>Acknowledge and unlock</b>.</li>
@@ -633,6 +657,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <tr><td>8. Pi's address</td><td>From the router's DHCP leases; Model C can add a static binding.</td></tr>
     <tr><td>9. Forwards <i>(B)</i> / Firewall zone <i>(C)</i></td><td>B: tick the services to forward to the Pi. C: the WireGuard zone forwards, with masquerade off.</td></tr>
     <tr><td>10. Verify</td><td>B: outbound uses the 44.x address. C: a trace to portal.ampr.org. <b>Save known-good note</b> records the setup for the Actions Log.</td></tr>
+    <tr><td>Router: live port-forward table</td><td>Under the steps: the router's forwards, read over SSH, each with a <b>Remove</b> button. It moved here from the Firewall tab in 0.0.196.</td></tr>
   </table>
   <div class="call note"><span class="t">NOTE</span>Model B's Verify can't prove other stations reach you from outside:
     44helper can't test inbound from the internet. Ask another node to link to you.</div>
@@ -660,7 +685,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <p><b>Purge</b>: uninstall the connector service, remove the package, the four clean-up steps, and optionally the stored
     credentials in <code>/etc/cloudflared</code>.</p>
   <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>bypasses the firewall</b>. Nothing opens
-    inbound, so the Ports and Firewall tabs can't see what you published, and the mapping lives in Cloudflare where
+    inbound, so the Ports tab and the firewall cards can't see what you published, and the mapping lives in Cloudflare where
     44helper can't read it. Always put a <b>Cloudflare Access policy</b> (for example, email one-time codes for your
     address only) in front of every hostname. Never publish 44helper itself.</div>
 </section>
@@ -946,8 +971,10 @@ sudo wg show wg0</pre>
     <tr><td>a <code>PostUp</code> line</td><td>That hook failed; the error is on the next line.</td></tr>
     <tr><td><code>nft -f</code> / <code>iptables-restore</code></td><td>wg-quick's full-tunnel firewall step failed: <code>nftables</code> or <code>iptables</code> is missing.</td></tr>
   </table>
-  <p>Up but no handshake: check the key and the Endpoint on connect.44net.cloud, and that UDP out to the Endpoint isn't
-    blocked. Your <code>Address</code> should be what the portal shows (a single 44Net Connect address is a /32).</p>
+  <p>Up but no handshake, or the dashboard says <b>idle</b>: first run <code>ip -4 route get &lt;endpoint&gt;</code>. If it says
+    <code>dev wg0</code>, the tunnel server is routed into its own tunnel: Split tab step 4b, <b>Fix the tunnel-server
+    route</b> (section 7.3). Otherwise check the key and the Endpoint on connect.44net.cloud, and that UDP out to the
+    Endpoint isn't blocked. Your <code>Address</code> should be what the portal shows (a single 44Net Connect address is a /32).</p>
   <h2><span class="n">14.3</span>I lost access after a tunnel change</h2>
   <ul>
     <li>A half-tunnel or exceptions <b>test</b> takes itself out after 15 minutes, or at a reboot.</li>
@@ -977,7 +1004,7 @@ sudo wg show wg0</pre>
     <tr><td class="mono">/etc/44helper/44helper_quiet_state.json</td><td>what quiet mode paused</td></tr>
     <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch</td></tr>
     <tr><td class="mono">/run/44helper/sessions.json</td><td>logins (cleared at reboot)</td></tr>
-    <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>the tunnel config (mode 600); marker blocks <code>44helper-dns</code>, <code>-mtu</code>, <code>-half</code>, <code>-fullx</code></td></tr>
+    <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>the tunnel config (mode 600); marker blocks <code>44helper-dns</code>, <code>-mtu</code>, <code>-endpoint-pin</code>, <code>-half</code>, <code>-fullx</code></td></tr>
     <tr><td class="mono">/etc/firewalld/zones/44NetConnect.xml</td><td>the 44Net zone</td></tr>
     <tr><td class="mono">/etc/asl_dvs/instmon_library/config/</td><td>wg0.conf backups: <code>wg0.conf</code>, <code>wg0.conf.pre-halftunnel</code>, <code>wg0.conf.pre-fullx</code></td></tr>
     <tr><td class="mono">/etc/asl_dvs/instmon_library/config_restore/</td><td>the Config tab's Restore point, save points and automatic copies</td></tr>
