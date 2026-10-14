@@ -1,0 +1,32 @@
+{
+ "channel": "stable",
+ "tools": {
+  "sysmon": {
+   "blob": "3670228770798562e122120ed2aa3a012a27e068",
+   "commit": "9363273de94289fb36e44baf4e72126fb89020a2",
+   "file": "sysmon_v6_13_74_20261007.py",
+   "landed": "2026-10-07T23:38:00Z",
+   "promoted": "2026-10-12T08:54:11Z",
+   "reason": "count",
+   "version": "6.13.74"
+  },
+  "sysmon_pi02w": {
+   "blob": "9cba944eb4b2ab71a7c5d4d4f0e4f5f8343652d3",
+   "commit": "dc4968deba814613bcdde0ac2e591b5f12619618",
+   "file": "sysmon_pi02w_v6_13_67_9_20261007.py",
+   "landed": "2026-10-07T23:05:06Z",
+   "promoted": "2026-10-13T06:43:29Z",
+   "reason": "count",
+   "version": "6.13.67.9-pi02w"
+  },
+  "wifimon": {
+   "blob": "73ee906ff657d3a9bdf067ad9087863306ecf3ac",
+   "commit": "6412f325acf73ae7768afa74025b496c987a9550",
+   "file": "wifimon_v5_27_20261007.py",
+   "landed": "2026-10-07T23:27:19Z",
+   "promoted": "2026-10-13T12:03:48Z",
+   "reason": "count",
+   "version": "5.27"
+  }
+ }
+}
