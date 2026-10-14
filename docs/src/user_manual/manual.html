@@ -29,7 +29,7 @@
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_201_20261014.py</td><td>0.0.201</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_202_20261014.py</td><td>0.0.202</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_31_0_20261013.py</td><td>5.31.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
@@ -1361,7 +1361,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.201 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.202 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1692,8 +1692,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h3>quick method (test only)</h3>
   <p>Run <code>cloudflared tunnel --url http://localhost:8989</code> over SSH. It prints a random
     <code>*.trycloudflare.com</code> address, needs no account, and stops when you press Ctrl-C.</p>
-  <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>bypasses the firewall</b>. Nothing
-    opens inbound, so 44helper's Ports tab and firewall cards can't see what you have published. Anything you map is
+  <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>needs no inbound port</b>: cloudflared only connects out (to Cloudflare on port 7844), so
+    44helper's Ports tab and firewall cards can't see what you have published. Anything you map is
     reachable by the whole internet, protected only by that page's own login. Always put a <b>Cloudflare Access
     policy</b> (for example, email one-time codes for your address only) in front of every hostname. Never publish
     44helper itself.</div>

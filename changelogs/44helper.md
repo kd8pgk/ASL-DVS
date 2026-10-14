@@ -1,6 +1,51 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_201_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_202_20261014.py`. Newest entries first.
+
+## 0.0.202 (2026-10-14) — testing
+
+Fixes from two outside audits of the tunnel tabs, written against 0.0.200. Each claim
+was checked against the current code first.
+
+**Fixed**
+- **wg0.conf is written atomically.** Paste and every other write go to a temporary
+  file created with mode 600, flushed and synced, then renamed over wg0.conf. A power
+  cut mid-write can no longer leave a cut-off file with the private key.
+- **`PersistentKeepalive = Off` (any case)** counts as no keepalive. Adding one now
+  replaces the existing line in the first `[Peer]` instead of adding a second line.
+- **Half tunnel keeps IPv6 entries.** Moving AllowedIPs to 0.0.0.0/0 used to drop
+  `::/0` and any other IPv6 entry. They're kept (with `Table = off` they add no
+  routes), and a `0.0.0.0/0, ::/0` config isn't changed at all. The remove script
+  recognises the line with or without them.
+- **Endpoint pin with a host-name Endpoint.** PreUp looked the name up and so did
+  PostDown, so a changed address left the old route behind. PreUp now records the
+  address in `/run/44helper-endpoint-<iface>` and PostDown deletes that route and the
+  file; the lookup has a 5 s limit. Existing pin lines are updated on the next write.
+- **Exceptions Check first** accepts `Table = auto` (wg-quick's default); only other
+  `Table =` values block it.
+- **Half Check first** tells "firewalld isn't installed" apart from "installed but
+  not running".
+
+**Text**
+- Check first on both cards: "Changes nothing on the tunnel or firewall … saves a
+  backup of wg0.conf" (it said "Read-only").
+- Half check 10: "Ports open in the tunnel's zone, return-path check loose".
+- Cloudflare: a tunnel "needs no inbound port" rather than "bypasses the firewall"
+  (cloudflared still needs its outbound connection, port 7844). Same fix in the user
+  and 44helper manuals.
+
+**Checked and not changed**
+- *Endpoint pin not saved at tunnel start and Restart tunnel:* not a bug.
+  `_wg_write_conf` applies the pin itself, so writing the current text saves it with
+  the pin (tested in 0.0.197).
+- *Test undo doesn't reload firewalld:* a runtime-only port removal applies at once;
+  a reload would only re-read the permanent config.
+- *Exceptions checks only match rule text:* the 12 checks also cover the handshake,
+  `ip route get` and the address the internet sees.
+- *"Every check must be green or grey":* right as written; a waiting check is amber.
+- Only the first `[Peer]` is checked for keepalive: 44Net Connect configs have one peer.
+- The ordering of Make permanent's port writes, and the requests for code comments,
+  are left as they are; the scripts are kept free of comments.
 
 ## 0.0.201 (2026-10-14) — testing
 

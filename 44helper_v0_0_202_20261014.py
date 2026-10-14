@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.201"
+APP_VERSION = "0.0.202"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1047,7 +1047,7 @@ def _ov_handshake_finding(text: str | None) -> dict | None:
         return None
     stamps = [int(t) for t in out.split() if t.isdigit()]
     parsed = _parse_wg_conf_text(text, mask_private_key=True)
-    keepalive = bool(parsed["peers"]) and _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") not in ("", "0", "off")
+    keepalive = bool(parsed["peers"]) and not _wg_keepalive_off(_wg_conf_field(parsed["peers"][0], "PersistentKeepalive"))
     if not stamps or max(stamps) == 0:
         return {"id": "handshake", "fix": [] if keepalive else ["keepalive"],
                 "level": "danger" if keepalive else "warn",
@@ -1308,6 +1308,18 @@ def _wg_set_address32(text: str, target: str) -> str | None:
     return None
 
 def _wg_add_keepalive(text: str) -> str | None:
+    lines = text.splitlines(keepends=True)
+    section, peers = "", 0
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        low = body.strip().lower()
+        if low.startswith("["):
+            section = low
+            peers += low == "[peer]"
+            continue
+        if section == "[peer]" and peers == 1 and re.match(r"^\s*persistentkeepalive\s*=", body, re.I):
+            lines[i] = re.match(r"^\s*", body).group(0) + "PersistentKeepalive = 25" + raw[len(body):]
+            return "".join(lines)
     nl = "\r\n" if "\r\n" in text else "\n"
     out_lines, in_peer, inserted = [], False, False
     for raw in text.splitlines(keepends=True):
@@ -1395,7 +1407,7 @@ def _wg_normalize(text: str, kind: str, opts: dict | None = None) -> dict:
                 text = new
                 changes.append(f"Address {target} changed to {new_addr}.")
     parsed = _parse_wg_conf_text(text, mask_private_key=True)
-    if parsed["peers"] and _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") in ("", "0", "off"):
+    if parsed["peers"] and _wg_keepalive_off(_wg_conf_field(parsed["peers"][0], "PersistentKeepalive")):
         on = bool(opts.get("keepalive", True))
         choices.append({"id": "keepalive", "on": on, "label": "Add PersistentKeepalive = 25 under [Peer]",
                         "detail": "Without it a quiet tunnel goes idle and stations on 44Net can't reach this node "
@@ -1463,7 +1475,7 @@ def action_health_keepalive() -> dict:
     parsed = _parse_wg_conf_text(text, mask_private_key=True)
     if not parsed["peers"]:
         return {"success": False, "verified": False, "output": "wg0.conf has no [Peer] section."}
-    if _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") not in ("", "0", "off"):
+    if not _wg_keepalive_off(_wg_conf_field(parsed["peers"][0], "PersistentKeepalive")):
         return _hl_done({"success": True, "verified": True, "output": "A PersistentKeepalive is already set."})
     pub = _wg_conf_field(parsed["peers"][0], "PublicKey")
     new = _wg_add_keepalive(text)
@@ -3477,7 +3489,7 @@ def _cf_token_install_steps() -> list[dict]:
          "note": "No command to run here. In the Zero Trust dashboard, open your tunnel's Public Hostname tab and "
                  "map a hostname to the LOCAL service you want reachable (e.g. http://localhost:8989 for the "
                  "dashboard, :9999 sysmon, :8990 instmon, or this 44helper's port). SECURITY: a Cloudflare Tunnel "
-                 "bypasses the firewall, so nothing on the Ports tab can see or flag this exposure. Only tunnel a "
+                 "needs no inbound port, so the firewall and the Ports tab can't see or flag what it publishes. Only tunnel a "
                  "service that has its own auth, and/or put a Cloudflare Access policy in front of the hostname "
                  "(same dashboard) before exposing anything -- the dashboard 8989 and sysmon 9999 share one "
                  "root-password login, which is thin cover on the open internet, and instmon's auth is opt-in."},
@@ -5786,9 +5798,7 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
     try:
         wg_dir = os.path.dirname(WG0_CONF_PATH)
         os.makedirs(wg_dir, mode=0o700, exist_ok=True)
-        with open(WG0_CONF_PATH, "w") as f:
-            f.write(config_text)
-        os.chmod(WG0_CONF_PATH, 0o600)
+        _wg_atomic_write(config_text)
         log(f"Wrote {WG0_CONF_PATH} (private key never logged)")
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
@@ -5938,10 +5948,11 @@ def _wg_endpoint_pin_lines(info: dict) -> list[str]:
                 f"PreUp = ip -4 route replace {ep} {_WG_GW_EXPR} || true",
                 f"PostDown = ip -4 route del {ep} || true",
                 _WG_EPPIN_END]
-    look = f"$(getent ahostsv4 {info['host']} | awk 'NR==1{{print $1}}')"
+    look = f"$(timeout 5 getent ahostsv4 {info['host']} | awk 'NR==1{{print $1}}')"
+    rec = "/run/44helper-endpoint-%i"
     return [_WG_EPPIN_BEGIN,
-            f"PreUp = E={look}; [ -n \"$E\" ] && ip -4 route replace \"$E/32\" {_WG_GW_EXPR} || true",
-            f"PostDown = E={look}; [ -n \"$E\" ] && ip -4 route del \"$E/32\" || true",
+            f"PreUp = E={look}; [ -n \"$E\" ] && echo \"$E\" > {rec} && ip -4 route replace \"$E/32\" {_WG_GW_EXPR} || true",
+            f"PostDown = E=$(cat {rec} 2>/dev/null); [ -n \"$E\" ] && ip -4 route del \"$E/32\"; rm -f {rec}; true",
             _WG_EPPIN_END]
 
 def _wg_apply_endpoint_pin(text: str) -> tuple[str, str]:
@@ -6130,6 +6141,34 @@ def status_wg_dns() -> dict:
     return {"conf_exists": exists, "mode": mode, "servers": servers,
             "mtu": mtu, "preflight": pf}
 
+def _wg_atomic_write(text: str) -> None:
+    tmp = WG0_CONF_PATH + ".44helper-tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, WG0_CONF_PATH)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(os.path.dirname(WG0_CONF_PATH) or ".", os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+
+def _wg_keepalive_off(value: str) -> bool:
+    return value.strip().lower() in ("", "0", "off")
+
 def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     out = []
     valid, msg = _validate_wg_config_text(new_text)
@@ -6144,9 +6183,7 @@ def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     new_text, pin_note = _wg_apply_endpoint_pin(new_text)
     if pin_note:
         out.append(pin_note)
-    with open(WG0_CONF_PATH, "w") as f:
-        f.write(new_text)
-    os.chmod(WG0_CONF_PATH, 0o600)
+    _wg_atomic_write(new_text)
     out.append("wg0.conf updated, permissions set to 600.")
     if backup_to_library:
         try:
@@ -8304,7 +8341,7 @@ _PORTS_REFERENCE: list[tuple[str, str, str, str, bool]] = [
     ("Cockpit", "9090", "tcp", "System management UI", True),
     ("Ampersand web UI", "8080", "tcp", "amp-server / amp-hub web UI — should stay private (bind to LAN or firewall it)", True),
     ("Ampersand IAX (hub)", "4568", "udp", "amp-hub default IAX port — use a distinct port from Asterisk's 4569 if both run on one box", False),
-    ("Cloudflare Tunnel (edge)", "7844", "udp", "cloudflared outbound edge connection (QUIC, with TCP fallback) — OUTBOUND-ONLY, never an inbound opening or a forward. A Cloudflare Tunnel bypasses the firewall entirely: nothing opens inbound, so no port here maps to what the tunnel exposes — that is managed in the Zero Trust dashboard and cannot be enumerated locally", False),
+    ("Cloudflare Tunnel (edge)", "7844", "udp", "cloudflared outbound edge connection (QUIC, with TCP fallback) — OUTBOUND-ONLY, never an inbound opening or a forward. A Cloudflare Tunnel needs no inbound opening or port forward (only this outbound connection), so no port here maps to what the tunnel exposes — that is managed in the Zero Trust dashboard and cannot be enumerated locally", False),
 ]
 
 _PORT_ROLE_OTHER = "other"
@@ -9176,8 +9213,10 @@ def _half_detect() -> dict:
         values.update({"addr44": addr44, "endpoint_host": host, "endpoint": ep,
                        "endpoint_in_44": bool(ep) and _half_in_44net(ep),
                        "aip": aip["allowed_ips"], "aip_shape": aip["shape"]})
-    if _half_q(["firewall-cmd", "--state"])[1].strip() != "running":
-        blockers.append("firewalld isn't running.")
+    if not shutil.which("firewall-cmd"):
+        blockers.append("firewalld isn't installed. Run step 1 on this tab first.")
+    elif _half_q(["firewall-cmd", "--state"])[1].strip() != "running":
+        blockers.append("firewalld is installed but isn't running: sudo systemctl start firewalld")
     if not shutil.which("wg-quick"):
         blockers.append("wg-quick isn't installed.")
     if _systemctl_is_active("44net-tunnel.service"):
@@ -9339,9 +9378,12 @@ def _half_set_full_aip_text(text: str) -> tuple[str, bool]:
             continue
         if section == "peer":
             m = _AIP_LINE_RE.match(body)
-            if m and m.group(2).strip() != "0.0.0.0/0":
-                lines[i] = m.group(1) + "0.0.0.0/0" + m.group(3) + term
-                changed = True
+            if m:
+                parts = [x.strip() for x in m.group(2).split(",") if x.strip()]
+                v6 = [x for x in parts if ":" in x]
+                if [x for x in parts if ":" not in x] != ["0.0.0.0/0"]:
+                    lines[i] = m.group(1) + ", ".join(["0.0.0.0/0"] + v6) + m.group(3) + term
+                    changed = True
     return "".join(lines), changed
 
 def _half_temp_conf_text(text: str) -> str | None:
@@ -9963,7 +10005,7 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
         bad10.append("not open on " + (zone or "?") + ": " + ", ".join(closed))
     if rp_eff == 1 or rp_eff < 0:
         bad10.append(f"return-path check is strict (all={rp_all or '?'}, wg0={rp_wg or '?'})")
-    add(10, "Half-tunnel pieces", "Ports open on the tunnel only", "fail" if bad10 else "pass",
+    add(10, "Half-tunnel pieces", "Ports open in the tunnel's zone, return-path check loose", "fail" if bad10 else "pass",
         "; ".join(bad10) if bad10 else f"{', '.join(v.get('ports') or [])} open on {zone}; return-path check loose.",
         "A firewall reload clears test ports. Use Undo now, then run the steps again." if closed and ctx["mode"] == "testing" else "")
 
@@ -10172,7 +10214,7 @@ def _half_remove_script(perm: dict) -> str:
         "    low == \"[peer]\" { peer = 1 }",
         "    low == \"[interface]\" { peer = 0 }",
         "    low == \"[interface]\" && pin != \"\" && !pdone { print; print pin; pdone = 1; next }",
-        "    peer && aip != \"\" && low == \"allowedips=0.0.0.0/0\" { sub(/=.*/, \"= \" aip) }",
+        "    peer && aip != \"\" && low ~ /^allowedips=0\\.0\\.0\\.0\\/0(,|$)/ { sub(/=.*/, \"= \" aip) }",
         "    { print }' \"$WG\" > \"$TMP\" && chmod 600 \"$TMP\" && mv \"$TMP\" \"$WG\"",
         "  if grep -q \"$MARK\" \"$WG\"; then",
         "    for B in \"${BACKUPS[@]}\"; do",
@@ -10604,8 +10646,9 @@ def _fx_detect() -> dict:
         aip = status_wg_allowed_ips()
         if aip["shape"] != "full":
             blockers.append(f"wg0.conf isn't a full tunnel (AllowedIPs = {aip['allowed_ips'] or 'none'}). It needs 0.0.0.0/0.")
-        if any(k.strip().lower() == "table" for k in parsed["interface"]):
-            blockers.append("wg0.conf has a 'Table =' line, so wg-quick doesn't set up its full-tunnel rules. Take it out first.")
+        tbl = [v.strip().lower() for k, v in parsed["interface"].items() if k.strip().lower() == "table"]
+        if any(t != "auto" for t in tbl):
+            blockers.append("wg0.conf has a 'Table =' line other than auto, so wg-quick doesn't set up its full-tunnel rules. Take it out first.")
         if _wg_conf_field(parsed["interface"], "SaveConfig").lower() == "true":
             blockers.append("wg0.conf has 'SaveConfig = true'. wg-quick rewrites the file when the tunnel stops and would drop the markers. Remove that line first.")
         values["addr44"] = _half_addr44(parsed)
@@ -15762,7 +15805,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("svxlink", "SVXLink", "t-svxlink", "Stage 1 (real install/purge steps, same package on both distros)"),
     ("m17", "M17", "t-m17", "Stage 1 (USRP2M17-Selector install helper; manual file-edit steps for rpt.conf/modules.conf/extensions.conf)"),
     ("amp", "Ampersand", "t-amp", "Stages 1-4 (amp-server radio node + amp-hub conference hub; S3 tarball install, conflict pre-flight, systemd/udev/env manual blocks)"),
-    ("cloudflare", "Cloudflare", "t-cloudflare", "Stages 1-4 (cloudflared connector: token dashboard-managed + quick TryCloudflare; outbound-only, bypasses the firewall, WireGuard-coexistence pre-flight)"),
+    ("cloudflare", "Cloudflare", "t-cloudflare", "Stages 1-4 (cloudflared connector: token dashboard-managed + quick TryCloudflare; outbound-only, no inbound ports, WireGuard-coexistence pre-flight)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
     ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),
@@ -22182,7 +22225,7 @@ _htSections.push(function(d) {
     });
   }
   html += htRow(htBtn('0. Check first', "htPost('half_check_first')", d.mode === 'off'),
-                'Read-only. Fills in the values above and backs up wg0.conf.');
+                'Changes nothing on the tunnel or firewall. Fills in the values above and saves a backup of wg0.conf.');
   return html;
 });
 function htStepDone(d, n) { return !!((d.steps || {})[String(n)] || {}).done; }
@@ -22446,7 +22489,7 @@ function fxRender() {
     (c.blockers || []).forEach(function(b) { html += '<div class="step-body" style="color:var(--red)">Blocked: ' + htEsc(b) + '</div>'; });
     (c.notes || []).forEach(function(n) { html += '<div class="step-body" style="color:var(--amber)">Note: ' + htEsc(n) + '</div>'; });
   }
-  html += fxRow(fxBtn('0. Check first', "fxPost('fx_check_first')", d.mode === 'off'), 'Read-only. Fills in the values above and backs up wg0.conf.');
+  html += fxRow(fxBtn('0. Check first', "fxPost('fx_check_first')", d.mode === 'off'), 'Changes nothing on the tunnel or firewall. Fills in the values above and saves a backup of wg0.conf.');
 
   var steps = d.steps || {};
   var s2 = steps['2'] || {};
