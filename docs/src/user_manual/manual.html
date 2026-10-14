@@ -29,7 +29,7 @@
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_197_20261014.py</td><td>0.0.197</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_200_20261014.py</td><td>0.0.200</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_31_0_20261013.py</td><td>5.31.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
@@ -1361,7 +1361,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.197 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.200 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1449,9 +1449,11 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Tunnel / wg0</td><td>Whether the WireGuard interface <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
     <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up (Pi-hosted or router).</td></tr>
     <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
-    <tr><td>Self-check findings</td><td>Red if 44helper's own page, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. Amber if <code>wg0.conf</code> (which holds your private key) is not mode 600.</td></tr>
+    <tr><td>Self-check findings</td><td>Red if 44helper's own page, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. Amber if <code>wg0.conf</code> (which holds your private key) is not mode 600. From 0.0.197, red when the tunnel server routes back into wg0. From 0.0.198 four more checks: the <b>tunnel handshake</b> (red when it is over 3 minutes old with a keepalive set, or there has never been one; amber when old with no keepalive), <b>services that didn't start</b> (red when netcheck failed and DVSwitch services never started, or any service failed; amber for an enabled DVSwitch service that isn't running), a <b>DNS line that can't work</b> (red when it needs systemd-resolved and resolved doesn't answer), and an <b>Address wider than /32</b> (amber).</td></tr>
   </table>
-  <p><b>Re-check</b> reads everything again straight away; otherwise the installed-software list is cached for 20 seconds.</p>
+  <p><b>Re-check</b> reads everything again straight away; otherwise the installed-software list is cached for 20 seconds
+    and the tunnel checks run at most every 30 seconds. From 0.0.199 a finding with a fix shows <b>Fix on the tunnel
+    tab →</b>, which opens the installed tunnel's tab at its row of the Health and fixes card (8.2).</p>
 
   <h2><span class="n">7.4</span>Services tab</h2>
   <p>A grouped list of what is running: System (firewalld, systemd-resolved), 44Net Tunnel, AllStarLink / DVSwitch
@@ -1599,18 +1601,19 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <table>
     <tr><th>Tab</th><th>AllowedIPs</th><th>Effect</th></tr>
     <tr><td>Full Tunnel</td><td class="mono">0.0.0.0/0</td><td>All the Pi's outbound traffic goes through 44Net. This is the config exactly as the 44Net portal gives it.</td></tr>
-    <tr><td>Split Tunnel</td><td class="mono">44.0.0.0/9, 44.128.0.0/10</td><td>Only 44Net addresses use the tunnel. You edit this line yourself before pasting.</td></tr>
+    <tr><td>Split Tunnel</td><td class="mono">44.0.0.0/9, 44.128.0.0/10</td><td>Only 44Net addresses use the tunnel. Paste the portal's config as it is: from 0.0.200 step 4 offers to rewrite this line.</td></tr>
   </table>
   <h3>The steps</h3>
   <ol class="steps">
-    <li><b>Firewall prereq</b>: installs and starts firewalld.<br><b>1a. systemd-resolved prereq</b>: installs WireGuard and systemd-resolved, without which the tunnel can fail to start. A reboot is recommended after this, before step 6.</li>
+    <li><b>Firewall prereq</b>: installs and starts firewalld.<br><b>1a. systemd-resolved prereq</b>: installs WireGuard and systemd-resolved, without which the tunnel can fail to start. From 0.0.200 it is green only when resolved is running and answers; if it doesn't answer, the step restarts it once. If it is still red, reboot.</li>
     <li><b>Create the 44NetConnect zone.</b></li>
     <li><b>Add inbound services and ports</b>: tick what other stations may reach. AllStarLink IAX2 and EchoLink/SvxLink are ticked by default; VOTER/RTCM is optional. Asterisk AMI can be added but is flagged red. Full Tunnel also has fields for your DVSwitch Mobile port and a custom port. Split Tunnel offers only IAX2 and EchoLink, because nothing else needs to be reachable.</li>
-    <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card.
+    <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Check and write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card.
+      <br>From 0.0.200 a panel shows what the check changes before anything is written: it removes <code>SaveConfig = true</code>, and a <code>DNS =</code> line while systemd-resolved isn't answering; it offers to change a wider Address to <b>/32</b> and to add <b>PersistentKeepalive = 25</b> (both ticked); and when AllowedIPs doesn't fit the tab you choose to <b>rewrite it</b> or <b>stop</b> and use the other tab. Press <b>Write wg0.conf</b> to go ahead. Convert uses the same check.
       <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value. From 0.0.193 the options that go through systemd-resolved are refused while resolved isn't answering.
       <br><b>4b (Split)</b>: <b>Repair AllowedIPs</b> fixes a config pasted unedited. From 0.0.197 it also offers <b>Fix the tunnel-server route</b> when the tunnel server is itself a 44Net address (see the note below). <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
     <li><b>Attach wg0 to the zone.</b></li>
-    <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations. From 0.0.193 the start waits up to 90 seconds. If it fails, the output shows the tunnel's state and the last lines of its log. Before starting, it checks that systemd-resolved answers whenever wg0.conf's DNS setting needs it; if resolved doesn't, it restarts it once, and refuses to start if that doesn't help.</li>
+    <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations. From 0.0.193 the start waits up to 90 seconds. If it fails, the output shows the tunnel's state and the last lines of its log. Before starting, it checks that systemd-resolved answers whenever wg0.conf's DNS setting needs it; if resolved doesn't, it restarts it once, and refuses to start if that doesn't help. From 0.0.200, after the start it waits for a handshake, keeps the tunnel server on the normal route, applies the netcheck fixes when DVSwitch is installed, and starts any stopped DVSwitch services, listing each result.</li>
   </ol>
   <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the
     network. If you are connected over SSH or Cockpit from outside your home network, that session may drop. Do
@@ -1625,12 +1628,14 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <code>resolvconf -a wg0</code> is systemd-resolved not answering on D-Bus. Restart it
     (<code>sudo systemctl restart systemd-resolved</code>), or reboot, or take the <code>DNS =</code> line out of
     wg0.conf. With a full tunnel the line isn't needed: lookups already go through the tunnel.</div>
-  <div class="call care"><span class="t">CAREFUL</span>A Full Tunnel config pasted into the Split Tunnel tab
-    unedited is the classic cause of "AllStar works but DVSwitch and M17 don't": every DNS lookup goes into the
-    tunnel. Use step 4b's Repair button, then restart the tunnel.</div>
+  <div class="call care"><span class="t">CAREFUL</span>A Full Tunnel config on the Split Tunnel tab is the classic
+    cause of "AllStar works but DVSwitch and M17 don't": every DNS lookup goes into the tunnel. From 0.0.200 step 4
+    catches it before writing. For a config written by an older version, use step 4b's Repair button, then restart the
+    tunnel.</div>
   <h3>Other buttons</h3>
   <ul>
-    <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel.</li>
+    <li><b>Health and fixes</b>, at the top of both tabs (from 0.0.199): the Overview's tunnel checks, each with a fix button: start the DVSwitch services that didn't start, apply the netcheck fixes, change the Address to /32, add a keepalive, fix the tunnel-server route, restart systemd-resolved or set DNS to Off. <b>Restart tunnel</b> is a separate button; use it from the LAN. Every fix asks first. From 0.0.200 the install prevents these problems, so the card is a safety net for later changes.</li>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel. From 0.0.200 step 6 applies its fixes by itself, except the probe target.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
     <li><b>Purge</b>: undoes the tunnel and the zone.</li>
     <li><b>Full tunnel with exceptions</b> <span class="badge test">TESTING</span> (Full Tunnel tab, under the steps, from 0.0.194): keeps the full tunnel but sends two things around it. <b>Step 2</b> keeps replies from the LAN address on the LAN link, so a dashboard or SSH connection through your router still answers. <b>Step 3</b> is an optional bypass list of host names, addresses or UDP ports. It has the same Check first, 15-minute auto-undo, 12 checks, Make permanent (as marked PostUp lines in wg0.conf, with <code>remove_full_exceptions.sh</code>) and Remove permanent as the half tunnel. Only one of the two can be in use.</li>
@@ -1699,9 +1704,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">8.6</span>Common tasks</h2>
   <h3>Put a node on 44Net with a Split Tunnel</h3>
   <ol class="steps">
-    <li>On connect.44net.cloud, request a tunnel and wait for approval. Copy its config and change <code>AllowedIPs</code> to <code>44.0.0.0/9, 44.128.0.0/10</code>.</li>
+    <li>On connect.44net.cloud, request a tunnel and wait for approval. Copy its config.</li>
     <li>Split Tunnel tab: run steps 1, 1a and 2, reboot, then step 3 with IAX2 ticked.</li>
-    <li>Paste the config in step 4 and write it. Run step 5, then step 6 from home, then Verify.</li>
+    <li>Paste the config in step 4 and press Check and write. Keep <b>Rewrite</b> selected for AllowedIPs and the ticked items, then Write. Run step 5, then step 6 from home, then Verify.</li>
     <li>Check the Overview's Self-check findings and the Ports tab (Chapter 7) before you rely on it.</li>
   </ol>
   <h3>Reach SysMon from anywhere</h3>
@@ -1787,14 +1792,16 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     repository.</p>
   <table>
     <tr><th>Script</th><th>Steps</th></tr>
-    <tr><td>Bookworm</td><td>Download and run the repo-install script; refresh; install DVSwitch Server; enable the DVSwitch services and the digital-mode gateways at boot; set callsign, DMR ID and BrandMeister password.</td></tr>
-    <tr><td>Trixie</td><td>Starts with <b>Check what's already here</b> (read-only), then the same repository (DVSwitch has no Trixie packages yet), plus a <b>Test install (changes nothing)</b> step as a safety gate. <b>If the test install fails, stop.</b></td></tr>
+    <tr><td>Bookworm</td><td>Download and run the repo-install script; refresh; install DVSwitch Server; enable the DVSwitch services and the digital-mode gateways at boot; <b>stop netcheck from blocking boot</b>; set callsign, DMR ID and BrandMeister password.</td></tr>
+    <tr><td>Trixie</td><td>Starts with <b>Check what's already here</b> (read-only), then the same repository (DVSwitch has no Trixie packages yet), plus a <b>Test install (changes nothing)</b> step as a safety gate. <b>If the test install fails, stop.</b> It has the same netcheck step.</td></tr>
   </table>
   <ul>
     <li><b>Set Callsign / DMR ID / BrandMeister password</b> fills in <code>MMDVM_Bridge.ini</code> from three fields, then restarts the bridges. The DMR ID takes your 7-digit ID plus a 2-digit suffix, for example <code>320123401</code>. Check the file afterwards if you use more than one DMR network.</li>
+    <li><b>Stop netcheck from blocking boot</b> (from 0.0.200): DVSwitch's netcheck runs at boot, and when it fails the bridges and gateways never start. This step makes netcheck wait for the network and stops a failed netcheck from keeping the services down. Safe to run again.</li>
     <li><b>Web-server clash:</b> ASL3's apache2 (Allmon3) and DVSwitch's lighttpd dashboard both want port 80. Step 1 reports a <code>CLASH</code>. Two optional steps fix it: <b>turn off the DVSwitch web dashboard</b>, or <b>move it to another port</b> (8081 by default; ports used by other suite tools are refused). Both do nothing if there is no clash.</li>
   </ul>
-  <p><b>Purge</b> is the same for both scripts: it removes anything either could have installed. Optional steps
+  <p><b>Purge</b> is the same for both scripts: it removes anything either could have installed, starting (from 0.0.200)
+    with 44helper's netcheck fixes. Optional steps
     remove leftover config and leftovers from an old third-party build script.</p>
 
   <h2><span class="n">9.4</span>SVXLink tab</h2>

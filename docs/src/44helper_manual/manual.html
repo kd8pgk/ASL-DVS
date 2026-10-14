@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.197</b><br>Edition 2026-10-14</div>
+    <div class="ed"><b>44helper 0.0.200</b><br>Edition 2026-10-14</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_197_20261014.py</td><td>0.0.197</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_200_20261014.py</td><td>0.0.200</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
@@ -126,7 +126,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.197 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.200 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -224,9 +224,18 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <tr><td>Tunnel / wg0</td><td>Whether <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
     <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up: on the Pi (full or split) or on a router.</td></tr>
     <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
-    <tr><td>Self-check findings</td><td><b>Red</b> if 44helper, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. <b>Amber</b> if <code>wg0.conf</code>, which holds your private key, is not mode 600. From 0.0.197: <b>red</b> when the tunnel server routes back into wg0 (a routing loop, section 7.3), <b>amber</b> when it is inside AllowedIPs and the endpoint pin is missing.</td></tr>
+    <tr><td>Self-check findings</td><td><b>Red</b> if 44helper, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. <b>Amber</b> if <code>wg0.conf</code>, which holds your private key, is not mode 600. From 0.0.197: <b>red</b> when the tunnel server routes back into wg0 (a routing loop, section 7.3), <b>amber</b> when it is inside AllowedIPs and the endpoint pin is missing. From 0.0.198 four more checks, each from a problem seen on a real node:
+      <ul style="margin:.3em 0 0 1.1em;padding:0">
+        <li><b>Tunnel handshake</b>: green under 3 minutes old; <b>red</b> when older with a <code>PersistentKeepalive</code> set, or never (the 44Net Connect dashboard's "idle"); <b>amber</b> when older with no keepalive, since a quiet tunnel may only be idle.</li>
+        <li><b>Services that didn't start</b>: <b>red</b> when netcheck failed, listing the DVSwitch services that never started; <b>red</b> for any other failed service; <b>amber</b> for an enabled DVSwitch service that isn't running.</li>
+        <li><b>DNS line that can't work</b>: <b>red</b> when wg0.conf's DNS setting needs systemd-resolved and resolved doesn't answer within 5 seconds, or there is no <code>resolvconf</code>. The next tunnel start would fail.</li>
+        <li><b>Address not a /32</b>: <b>amber</b>, naming the network the wider prefix routes into wg0.</li>
+      </ul></td></tr>
   </table>
-  <p><b>Re-check</b> reads everything again at once; otherwise the installed-software list is cached for 20 seconds.</p>
+  <p><b>Re-check</b> reads everything again at once; otherwise the installed-software list is cached for 20 seconds,
+    and the four checks above run at most every 30 seconds. From 0.0.199 a finding that has a fix shows
+    <b>Fix on the tunnel tab →</b>: it opens the Full or Split tab, whichever is installed, and highlights that row of the
+    Health and fixes card (section 7.6).</p>
 
   <h2><span class="n">3.2</span>Services tab</h2>
   <p>Grouped lines, one per service or listening port. Masked services are marked.</p>
@@ -496,22 +505,41 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <p class="ch-lede">Both tabs set up WireGuard (<code>wg0</code>) on the Pi and a firewalld zone called
     <b>44NetConnect</b> that decides what the 44Net side can reach. The steps are the same; the only difference is the
     <code>AllowedIPs</code> line in the config you paste.</p>
-  <p>44Net Connect gives every tunnel the same config, with <code>AllowedIPs = 0.0.0.0/0</code>. For the Split tab, change
-    that line to <code>44.0.0.0/9, 44.128.0.0/10</code> before pasting. A 44Net Connect tunnel is a single address, not a
-    routed subnet; for a subnet use the Router Install tab.</p>
+  <p>44Net Connect gives every tunnel the same config, with <code>AllowedIPs = 0.0.0.0/0</code>. The Split tab needs
+    <code>44.0.0.0/9, 44.128.0.0/10</code> instead. From 0.0.200 you paste the config as it is: step 4's check offers to
+    rewrite that line. A 44Net Connect tunnel is a single address, not a routed subnet; for a subnet use the Router
+    Install tab.</p>
+  <p>From 0.0.200 the install also prevents the problems the Health and fixes card (section 7.6) repairs: step 1a checks
+    that systemd-resolved answers, step 4 tidies the config before writing it, and step 6 finishes the job after the
+    start.</p>
   <h2><span class="n">7.1</span>The steps</h2>
   <table>
     <tr><th>#</th><th>Step</th><th>What it does</th></tr>
     <tr><td>1</td><td>Firewall prereq</td><td>Installs and starts firewalld.</td></tr>
-    <tr><td>1a</td><td>systemd-resolved prereq</td><td>Installs WireGuard and systemd-resolved, without which the tunnel can fail to start. Reboot after this, before step 6.</td></tr>
+    <tr><td>1a</td><td>systemd-resolved prereq</td><td>Installs WireGuard and systemd-resolved, without which the tunnel can fail to start. From 0.0.200 the step is green only when resolved is running <b>and</b> answers (<code>resolvectl status</code> within 5 seconds); the card shows Running and Answers separately. Running the step restarts resolved once if it isn't answering. If it still doesn't answer, the step stays red: reboot, and if that doesn't help, set DNS to Off at 4a.</td></tr>
     <tr><td>2</td><td>Create the 44NetConnect zone</td><td><code>/etc/firewalld/zones/44NetConnect.xml</code>.</td></tr>
     <tr><td>3</td><td>Inbound services and ports</td><td>Tick what other stations may reach: <b>AllStarLink IAX2</b> and <b>EchoLink / SvxLink</b> (on by default), <b>VOTER/RTCM</b> (optional). Asterisk AMI can be added but is flagged red. The Full tab also has your DVSwitch Mobile port and a custom port; the Split tab offers only IAX2 and EchoLink.</td></tr>
-    <tr><td>4</td><td>Paste WireGuard config</td><td>Paste the whole <code>[Interface]</code>/<code>[Peer]</code> block and press <b>Write wg0.conf (chmod 600)</b>. A config with no real private key is refused. Leave <b>Also back up a copy to the instmon library</b> ticked so you can recover the tunnel after re-flashing the card. <b>Load from instmon library</b> puts a saved copy back (it shows your private key).</td></tr>
+    <tr><td>4</td><td>Paste WireGuard config</td><td>Paste the whole <code>[Interface]</code>/<code>[Peer]</code> block and press <b>Check and write wg0.conf (chmod 600)</b>. A config with no real private key is refused. A panel shows what the check will change (below); nothing is written until you press <b>Write wg0.conf</b>. Leave <b>Also back up a copy to the instmon library</b> ticked so you can recover the tunnel after re-flashing the card. <b>Load from instmon library</b> puts a saved copy back (it shows your private key).</td></tr>
     <tr><td>4a</td><td>DNS &amp; MTU</td><td>7.2.</td></tr>
     <tr><td>4b</td><td>Split: Repair AllowedIPs · Full: reflector ports</td><td>7.3.</td></tr>
     <tr><td>5</td><td>Attach wg0 to the zone</td><td>Moves wg0 into 44NetConnect.</td></tr>
     <tr><td>6</td><td>Enable + start the tunnel</td><td>7.4.</td></tr>
   </table>
+  <h3>The check before writing (step 4, from 0.0.200)</h3>
+  <table>
+    <tr><th>In the pasted config</th><th>What happens</th></tr>
+    <tr><td><code>SaveConfig = true</code></td><td>Removed, always. wg-quick would rewrite the file every time the tunnel stops and drop 44helper's marked lines.</td></tr>
+    <tr><td>A <code>DNS =</code> line</td><td>Removed while systemd-resolved isn't answering, or when there is no <code>resolvconf</code>, so DNS is Off and the start can't fail on it. Set DNS on card 4a once step 1a is green. Kept when resolved answers.</td></tr>
+    <tr><td>One 44Net address wider than /32</td><td><b>Change Address to /32</b>, ticked by default. Untick it only if ARDC gave you a subnet; check the portal.</td></tr>
+    <tr><td>No <code>PersistentKeepalive</code></td><td><b>Add PersistentKeepalive = 25</b>, ticked by default. Without it a quiet tunnel goes idle and stations on 44Net can't reach the node.</td></tr>
+    <tr><td>AllowedIPs that don't fit the tab</td><td>Two choices: <b>Rewrite it</b> to this tab's shape (selected), or <b>Stop</b> and paste it on the other tab. Without a choice nothing is written.</td></tr>
+    <tr><td>Tunnel server inside AllowedIPs</td><td>The endpoint pin is added (7.3).</td></tr>
+  </table>
+  <ul>
+    <li>Convert's write step runs the same check, and so does a config loaded from the library (it fills the paste box).</li>
+    <li>Every other write of wg0.conf (cards 4a and 4b, the Health fixes, the half tunnel and the exceptions) also removes <code>SaveConfig = true</code> and says so.</li>
+    <li>The check sends back only its notes and choices, never the config or its key.</li>
+  </ul>
   <h2><span class="n">7.2</span>Step 4a: DNS and MTU</h2>
   <table>
     <tr><th>DNS option</th><th>Writes into wg0.conf</th><th>Default servers</th></tr>
@@ -565,6 +593,14 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <li><b>Waits up to 90 seconds</b> for the start (it runs as a background job, so the page doesn't hang).</li>
     <li><b>On failure</b> it shows the unit's state and the last 15 lines of its log since the button was pressed, instead of "command timed out".</li>
   </ul>
+  <p>From 0.0.200, after a successful start, step 6 also:</p>
+  <ol class="steps">
+    <li>Waits up to 15 seconds for a handshake. If none comes it warns (check the Endpoint and that the tunnel is approved on the portal) and leaves the tunnel up.</li>
+    <li>Checks the tunnel server's route. If it goes into wg0, it adds the /32 route to the normal link straight away.</li>
+    <li>If <code>netcheck.service</code> is on the node, applies the netcheck fixes (7.5) that apply and aren't in place yet.</li>
+    <li>Starts any enabled DVSwitch services that are stopped.</li>
+  </ol>
+  <p>Each result is a line in the step's output. Convert's enable step does the same.</p>
   <p><b>Verify</b> then checks your public address through <code>connect.44net.cloud/myip</code> and Asterisk's AllStar
     registrations.</p>
   <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the network. If
@@ -572,7 +608,7 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     or at a keyboard and screen.</div>
   <h2><span class="n">7.5</span>The other buttons</h2>
   <ul>
-    <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one with systemd drop-ins under <code>/etc</code>: fix netcheck's unit, loosen a bridge's dependency, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel.</li>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one with systemd drop-ins under <code>/etc</code>: fix netcheck's unit, loosen a bridge's dependency, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel. From 0.0.200 step 6 and the DVSwitch installer apply the first three fixes and the wait-online unit by themselves; the probe target needs your input, so it stays here.</li>
     <li><b>Firewall and port control</b>, at the end of the tab: the 44NetConnect zone and Quick port control (Chapter 4). On the Full Tunnel tab, the half tunnel card (Chapter 5) and Full tunnel with exceptions (Chapter 8) come before it.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
     <li><b>Purge</b>: three steps: stop and disable the tunnel (and the fallback unit), remove <code>/etc/wireguard/wg0.conf</code>, and delete the 44NetConnect zone, which also drops wg0's attachment and every service and port in it. Make sure the instmon library has a copy of wg0.conf first.</li>
@@ -583,6 +619,26 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     systemd-resolved isn't answering on D-Bus. Run <code>sudo systemctl restart systemd-resolved</code>, check
     <code>timeout 5 resolvectl status</code> answers, and start again; or reboot; or take the <code>DNS =</code> line
     out.</div>
+  <h2><span class="n">7.6</span>Health and fixes</h2>
+  <p>A card at the top of the Full and Split Tunnel tabs, from 0.0.199: the Overview's checks for the tunnel, each with a
+    fix button. Like the firewall section, it exists once and moves to whichever tunnel tab you open. From 0.0.200 the
+    install prevents these problems, so on a new tunnel the card should stay green; it is there for later changes, such
+    as a file edited by hand or a service that fails at a reboot.</p>
+  <table>
+    <tr><th>Finding</th><th>Fix</th></tr>
+    <tr><td>Enabled DVSwitch services not running, or netcheck failed</td><td><b>Start them</b>: starts each one and shows the last log lines of any that fail. <b>Apply netcheck fixes</b>: the netcheck card's fixes that apply and aren't in place yet.</td></tr>
+    <tr><td>Address wider than /32</td><td><b>Change to /32</b>, when wg0.conf has exactly one 44Net address. Doesn't restart the tunnel. Check the portal first.</td></tr>
+    <tr><td>Old handshake, no keepalive</td><td><b>Add keepalive (25 s)</b>: adds <code>PersistentKeepalive = 25</code> under <code>[Peer]</code> and applies it to the running tunnel, so no restart is needed.</td></tr>
+    <tr><td>Tunnel server routes into wg0</td><td><b>Fix the tunnel-server route</b> (7.3).</td></tr>
+    <tr><td>DNS setting with systemd-resolved silent</td><td><b>Restart systemd-resolved</b>, then checks it answers. <b>Set DNS to Off</b>: removes 44helper's DNS lines and any <code>DNS =</code> line.</td></tr>
+  </table>
+  <ul>
+    <li><b>Restart tunnel</b> is a separate button: the same DNS check and endpoint pin as step 6, a 90-second limit, and the log on failure.</li>
+    <li>Every fix asks first and says what it changes. The node works out what to act on itself; the page can't name a service or a file.</li>
+    <li>Fixes that write wg0.conf are refused while a half-tunnel or exceptions test is running.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>Restart tunnel can drop an SSH or Cockpit session from outside
+    your home network. Use it from the LAN.</div>
 </section>
 
 <section class="chapter" id="ch8">
@@ -746,20 +802,23 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <tr><td style="font-weight:400;color:var(--text)">
       1. Download DVSwitch repo-install script<br>2. Run it (adds apt source + key)<br>3. Refresh package index<br>
       4. Install DVSwitch Server<br>5. Enable DVSwitch services at boot<br>6. Enable the digital-mode gateways at boot<br>
-      7–8. Install Cockpit · Enable Cockpit socket<br>9. Set Callsign / DMR ID / BrandMeister password<br>
-      10. <i>(Optional)</i> Web-server clash: turn off the DVSwitch web dashboard<br>11. <i>(Optional)</i> … move it to another port<br>
-      12. Save original configs as Restore point</td>
+      7. <b>Stop netcheck from blocking boot</b><br>
+      8–9. Install Cockpit · Enable Cockpit socket<br>10. Set Callsign / DMR ID / BrandMeister password<br>
+      11. <i>(Optional)</i> Web-server clash: turn off the DVSwitch web dashboard<br>12. <i>(Optional)</i> … move it to another port<br>
+      13. Save original configs as Restore point</td>
     <td>
       1. <b>Check what's already here</b> (read-only)<br>2–4. Download and run the repo-install script, refresh<br>
       5. <b>Test install (changes nothing)</b>: a dry run; <b>if it fails, stop</b><br>6. Install DVSwitch Server<br>
-      7–8. Enable services and gateways at boot<br>9–10. Cockpit<br>11. Callsign / DMR ID / BrandMeister password<br>
-      12–13. <i>(Optional)</i> web-server clash fixes<br>14. Save Restore point</td></tr>
+      7–8. Enable services and gateways at boot<br>9. <b>Stop netcheck from blocking boot</b><br>10–11. Cockpit<br>
+      12. Callsign / DMR ID / BrandMeister password<br>13–14. <i>(Optional)</i> web-server clash fixes<br>15. Save Restore point</td></tr>
   </table>
   <ul>
+    <li><b>Stop netcheck from blocking boot</b> (from 0.0.200): DVSwitch's netcheck runs at boot, and when it fails (often because the network isn't up yet) the bridges and gateways never start. This step applies the netcheck card's fixes (7.5): netcheck runs once the network is online, and a failed netcheck no longer keeps the services down. Safe to run again; tunnel step 6 does the same.</li>
     <li><b>Set Callsign / DMR ID / BrandMeister password</b> fills <code>MMDVM_Bridge.ini</code> from three fields and restarts the bridges. The DMR ID is your 7-digit ID plus a 2-digit suffix, for example <code>320123401</code>.</li>
     <li><b>Web-server clash:</b> ASL3's apache2 (Allmon3) and DVSwitch's lighttpd dashboard both want port 80; step 1 reports a <code>CLASH</code>. Turn the DVSwitch dashboard off, or move it (8081 by default; ports used by the suite are refused). The move backs up <code>lighttpd.conf</code> once and checks the new config with <code>lighttpd -tt</code>. Both do nothing if there is no clash.</li>
   </ul>
-  <p><b>Purge</b> (same for both scripts): stop and disable the services, purge the packages, autoremove, remove the
+  <p><b>Purge</b> (same for both scripts): from 0.0.200 it starts by removing 44helper's netcheck fixes (the card's
+    Revert), so nothing is left behind; then stop and disable the services, purge the packages, autoremove, remove the
     repository, the four clean-up steps; optional: leftover config, leftovers from the old third-party build script,
     Cockpit.</p>
 
@@ -984,7 +1043,7 @@ sudo wg show wg0</pre>
   <h2><span class="n">14.4</span>DVSwitch or M17 stopped after the tunnel came up</h2>
   <ol class="steps">
     <li>Split tab: a pasted full config sends DNS into the tunnel. Step 4b, Repair AllowedIPs.</li>
-    <li>Bridges won't start at boot: the netcheck card under step 6 (Chapter 7).</li>
+    <li>Bridges won't start at boot: the Health and fixes card's <b>Apply netcheck fixes</b>, or the netcheck card under step 6 (Chapter 7). From 0.0.200 step 6 and the DVSwitch installer do this by themselves.</li>
     <li>Full tunnel: outbound block rules (Full tab 4b) or a master that refuses the 44 address. Try the half tunnel, or put the master on the exceptions bypass list.</li>
   </ol>
   <h2><span class="n">14.5</span>The Pi runs out of memory</h2>
