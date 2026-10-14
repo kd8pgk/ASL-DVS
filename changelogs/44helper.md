@@ -1,6 +1,49 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_203_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_204_20261014.py`. Newest entries first.
+
+## 0.0.204 (2026-10-14) — testing
+
+Fix: "Reconfigure half-installed packages" (and the other `dpkg --configure`
+steps) failed whenever a package update had a config file you changed.
+
+- **The fault:** a node reported this from Update -> Step 2 alternative
+  "Reconfigure half-installed packages":
+  - `dpkg --configure -a` stopped at "Configuration file
+    '/etc/asterisk/rpt.conf' ... Modified ... What would you like to do?"
+    (and the same for `/etc/firewalld/zones/allstarlink.xml`);
+  - it then failed with "end of file on stdin at conffile prompt";
+  - `asl3-appliance`, `asl3-asterisk-config`, `asl3-asterisk` and
+    `asl3-appliance-pi` were left half-configured.
+
+  The job runs with no keyboard, so dpkg's question could never be answered.
+  The `apt` steps already passed `--force-confdef --force-confold`. The raw
+  `dpkg --configure` commands did not, and `DEBIAN_FRONTEND=noninteractive`
+  does not stop dpkg's config-file questions.
+- **The fix:** every `dpkg --configure` that 44helper runs now passes
+  `--force-confdef --force-confold`:
+  - Step 2 "Fix missing/broken packages";
+  - its alternative "Reconfigure half-installed packages";
+  - the repair sequence: steps 1/4 and 4/4, the ordinary-package,
+    kernel/firmware and `--pending` passes.
+  - dpkg then gives the default answer: **your config file is kept**, and the
+    package's new version is saved next to it as `<file>.dpkg-dist` so you can
+    compare. Nothing else about the steps changes.
+- **The help text** after a stopped package job now shows the same safe
+  command.
+- **On a node that already hit this:** run the step again, or by hand:
+  `sudo dpkg --force-confdef --force-confold --configure -a`.
+- **Install and command time limits are unchanged.**
+- Tested:
+  - The real failure reproduced with dpkg in a test container: a package with
+    an edited config file, upgraded with no keyboard.
+    - The old command fails exactly as reported ("end of file on stdin at
+      conffile prompt", package left unpacked).
+    - The new command finishes it (installed, v2), keeps the edited file and
+      writes `rpt.conf.dpkg-dist`.
+  - The step commands as loaded from the module: both Step 2 commands and
+    the repair sequence carry the options.
+  - `ci/check_repo.py`
 
 ## 0.0.203 (2026-10-14) — testing
 
