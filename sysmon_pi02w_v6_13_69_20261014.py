@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.68-pi02w"
+VERSION      = "6.13.69-pi02w"
 BUILD_DATE   = "20261013"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -11214,11 +11214,52 @@ class _EarlyReturn(Exception):
     pass
 
 _MAX_CONCURRENT_CONNS = 24
-_conn_sem = threading.Semaphore(_MAX_CONCURRENT_CONNS)
+_MAX_CONNS_PER_IP = 12
 
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
-    
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._conn_sem = threading.BoundedSemaphore(_MAX_CONCURRENT_CONNS)
+        self._per_ip_lock = threading.Lock()
+        self._per_ip: dict = {}
+        self._refused_logged_at = 0.0
+
+    def _refused(self, why: str, client_address) -> None:
+        now = time.monotonic()
+        if now - self._refused_logged_at >= 60:
+            self._refused_logged_at = now
+            _log(f"WARN — {why}; refusing {client_address[0]} (logged at most once a minute)")
+
+    def _release_ip(self, ip: str) -> None:
+        with self._per_ip_lock:
+            n = self._per_ip.get(ip, 1) - 1
+            if n <= 0:
+                self._per_ip.pop(ip, None)
+            else:
+                self._per_ip[ip] = n
+
+    def verify_request(self, request, client_address) -> bool:
+        ip = client_address[0]
+        with self._per_ip_lock:
+            if self._per_ip.get(ip, 0) >= _MAX_CONNS_PER_IP:
+                self._refused(f"{_MAX_CONNS_PER_IP} connections already open from one address", client_address)
+                return False
+            self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
+        if not self._conn_sem.acquire(blocking=False):
+            self._release_ip(ip)
+            self._refused(f"{_MAX_CONCURRENT_CONNS} connections already open", client_address)
+            return False
+        return True
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_sem.release()
+            self._release_ip(client_address[0])
+
     def handle_error(self, request, client_address) -> None:
         exc = sys.exc_info()[1]
         if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
@@ -11235,11 +11276,6 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self.connection.settimeout(self.timeout)
-
-    def handle(self) -> None:
-        
-        with _conn_sem:
-            super().handle()
 
     def _accepts_gzip(self) -> bool:
         return "gzip" in self.headers.get("Accept-Encoding", "")

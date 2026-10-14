@@ -1,6 +1,28 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_68_20261013.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_69_20261014.py`. Newest entries first.
+
+## 6.13.69-pi02w (2026-10-14)
+
+Connection limits that refuse instead of queue (reliability plan,
+Stage 3c). The full build is not changed.
+
+- Before, SysMon allowed 24 connections at once, but extra connections queued:
+  each one still got its own thread, which then waited. A burst, or a
+  stuck client, could pile up threads on the 512 MB Pi.
+- Now, past the limit, a new connection is refused at once, with no thread:
+  - at most 24 open connections in all (as before)
+  - new: at most 12 from one address. A browser uses about 6, so one
+    misbehaving client can't take every slot.
+  - The page polls, so a refused request is simply retried on the next poll.
+  - Refusals are logged at most once a minute.
+- The 20-second idle limit per connection is unchanged.
+- Tested against a real server on a free port:
+  - the 13th connection from one address is refused, and no thread is added
+  - the 25th connection overall is refused
+  - slots come back when connections close, and when idle ones time out
+  - 60 requests in a row leave no slot or per-address count behind
+  - `ci/check_repo.py`
 
 ## 6.13.68-pi02w (2026-10-13)
 
