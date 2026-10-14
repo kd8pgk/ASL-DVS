@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.200</b><br>Edition 2026-10-14</div>
+    <div class="ed"><b>44helper 0.0.201</b><br>Edition 2026-10-14</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_200_20261014.py</td><td>0.0.200</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_201_20261014.py</td><td>0.0.201</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
@@ -126,7 +126,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.200 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.201 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -550,6 +550,8 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   </table>
   <ul>
     <li>The lines go between <code># 44helper-dns-begin</code> / <code>-end</code> markers. Off removes only those; a <code>DNS =</code> line that came with the pasted config stays.</li>
+    <li>From 0.0.201 the resolvectl options undo themselves with <code>PreDown = resolvectl revert %i</code>. Earlier versions used PostDown, which wg-quick runs after wg0 is deleted: it failed and stopped the rest of the shutdown. Older files are changed on the next write, step 6 or Restart tunnel, and the Health card offers <b>Move to PreDown</b>.</li>
+    <li>From 0.0.201 a DNS server outside the tunnel's AllowedIPs is refused, because lookups sent to it over wg0 are dropped. On a split tunnel use "only 44Net names" with a 44Net server such as 44.0.0.1, or Off.</li>
     <li>From 0.0.193 the resolvectl options, and the <code>DNS =</code> line when <code>resolvconf</code> is systemd-resolved's, are refused while systemd-resolved isn't answering.</li>
     <li><b>MTU:</b> a number from 1280 to 1500 (blank or <code>off</code> removes it), between <code># 44helper-mtu-begin</code> / <code>-end</code>. WireGuard's own default is 1420.</li>
     <li>Restart the tunnel for either to take effect: <code>sudo systemctl restart wg-quick@wg0</code>.</li>
@@ -601,17 +603,18 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <li>Starts any enabled DVSwitch services that are stopped.</li>
   </ol>
   <p>Each result is a line in the step's output. Convert's enable step does the same.</p>
-  <p><b>Verify</b> then checks your public address through <code>connect.44net.cloud/myip</code> and Asterisk's AllStar
-    registrations.</p>
+  <p><b>Verify</b> then checks your public address through <code>connect.44net.cloud/myip</code> (it answers JSON; read correctly from 0.0.201) and Asterisk's AllStar
+    registrations. On a split tunnel myip shows your home internet address, because connect.44net.cloud isn't a 44Net
+    address; the handshake is what shows the tunnel works there.</p>
   <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the network. If
     you are connected over SSH or Cockpit from outside your home network, that session may drop. Do step 6 from home,
     or at a keyboard and screen.</div>
   <h2><span class="n">7.5</span>The other buttons</h2>
   <ul>
-    <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one with systemd drop-ins under <code>/etc</code>: fix netcheck's unit, loosen a bridge's dependency, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel. From 0.0.200 step 6 and the DVSwitch installer apply the first three fixes and the wait-online unit by themselves; the probe target needs your input, so it stays here.</li>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one: <b>fix netcheck's unit</b> (a drop-in: oneshot, after the network is online), <b>Loosen</b> a bridge, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel. From 0.0.200 step 6 and the DVSwitch installer apply these by themselves, except the probe target, which needs your input.<br><b>Loosen</b> (from 0.0.201): a drop-in can't remove a dependency (systemd.unit(5): "dependencies can only be added in drop-ins"), so the earlier fix left netcheck in <code>Requires=</code>. 44helper now writes a copy of the bridge's unit to <code>/etc/systemd/system/&lt;unit&gt;</code>, first line <code># 44helper netcheck override</code>, with netcheck moved to <code>Wants=</code> and the ordering kept. It counts as done only when <code>systemctl show</code> no longer lists netcheck in Requires. A unit already overridden in <code>/etc</code> by something else is refused. <b>Revert</b> deletes the copies, restores the original script (the first backup is kept), and disables the wait-online unit if 44helper enabled it.</li>
     <li><b>Firewall and port control</b>, at the end of the tab: the 44NetConnect zone and Quick port control (Chapter 4). On the Full Tunnel tab, the half tunnel card (Chapter 5) and Full tunnel with exceptions (Chapter 8) come before it.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
-    <li><b>Purge</b>: three steps: stop and disable the tunnel (and the fallback unit), remove <code>/etc/wireguard/wg0.conf</code>, and delete the 44NetConnect zone, which also drops wg0's attachment and every service and port in it. Make sure the instmon library has a copy of wg0.conf first.</li>
+    <li><b>Purge</b>: three steps: stop and disable the tunnel (and the fallback unit), remove <code>/etc/wireguard/wg0.conf</code>, and delete the 44NetConnect zone, which also drops wg0's attachment and every service and port in it. wg0.conf is copied to the instmon library first. From 0.0.201 step 2 is refused while the tunnel is up (wg-quick needs the file to stop it), and while the half tunnel or exceptions is permanent (use Remove permanent first).</li>
     <li>If one kind is installed and you open the other tab, its steps are locked until you press <b>Acknowledge and unlock</b>.</li>
   </ul>
   <div class="call note"><span class="t">NOTE</span>A start that fails after exactly 25 seconds on
@@ -630,6 +633,7 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <tr><td>Address wider than /32</td><td><b>Change to /32</b>, when wg0.conf has exactly one 44Net address. Doesn't restart the tunnel. Check the portal first.</td></tr>
     <tr><td>Old handshake, no keepalive</td><td><b>Add keepalive (25 s)</b>: adds <code>PersistentKeepalive = 25</code> under <code>[Peer]</code> and applies it to the running tunnel, so no restart is needed.</td></tr>
     <tr><td>Tunnel server routes into wg0</td><td><b>Fix the tunnel-server route</b> (7.3).</td></tr>
+    <tr><td>DNS revert in a PostDown line (0.0.201)</td><td><b>Move to PreDown</b> (7.2). No restart needed.</td></tr>
     <tr><td>DNS setting with systemd-resolved silent</td><td><b>Restart systemd-resolved</b>, then checks it answers. <b>Set DNS to Off</b>: removes 44helper's DNS lines and any <code>DNS =</code> line.</td></tr>
   </table>
   <ul>
