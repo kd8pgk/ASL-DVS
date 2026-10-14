@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.50.0"
-DATE_STR ="2026-10-12"
+VERSION ="2.51.0"
+DATE_STR ="2026-10-14"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -3090,7 +3090,11 @@ _gh_state ={
 "event_seq":0 ,
 "event_msg":"",
 "event_level":"info",
+"gen":0 ,
+"started_at":None ,
 }
+
+GH_CHECK_LIMIT_SEC =int (os .environ .get ("INSTMON_GH_CHECK_LIMIT_SEC","240"))
 
 _gh_version_cache ={}
 _GH_VERSION_CACHE_MAX =200 
@@ -3146,8 +3150,12 @@ def channel_set (choice ,confirm =False ):
     ensure_dirs ()
     compare_before_write (_CHANNEL_PREF_PATH ,json .dumps ({"channel":choice },indent =2 ).encode ("utf-8"))
     with _gh_lock :
-        _gh_state .update (phase ="idle",error =None ,entries =[],skipped =0 ,checked_at =None )
+        was_checking =_gh_state ["phase"]=="checking"
+        _gh_state ["gen"]+=1 
+        _gh_state .update (phase ="idle",error =None ,entries =[],skipped =0 ,checked_at =None ,started_at =None )
     _gh_last_cands [:]=[]
+    if was_checking :
+        log_event ("The running GitHub check was stopped -- the channel changed","warn")
     full_update_preview ()
     if choice =="stable":
         log_event ("Update channel set to Stable (default)","ok")
@@ -3603,6 +3611,11 @@ def _gh_version_of (cand ,local ):
         raise GhRejected ("no version line found in the file")
     return ver 
 
+def _gh_version_known (cand ,local ):
+    if cand ["blob"]in _gh_version_cache :
+        return True 
+    return any (ver and _gh_local_blob_id (full )==cand ["blob"]for _n ,ver ,_key ,full in local )
+
 def _gh_other_build (entry ):
     wanted =_build_wanted_variant ()
     if wanted is None or entry .get ("category")not in ("sysmon","dashboard"):
@@ -3642,15 +3655,27 @@ def _gh_compare (entry ):
     return entry 
 
 def _gh_collect ():
+    entries ,skipped ,cands =_gh_collect_full ()
+    _gh_last_cands [:]=cands 
+    return entries ,skipped 
+
+def _gh_collect_full (gen =None ):
+    def progress (msg ):
+        if gen is not None and _gh_state ["gen"]==gen :
+            log_event (msg ,"info")
     if channel_get ()=="stable":
         cands ,skipped =_gh_stable_cands ()
+        progress (f"GitHub: the stable list has {len (cands )} file(s)")
     else :
         raw =_gh_fetch_impl (GITHUB_API_LIST_URL ,GITHUB_LIST_MAX_BYTES )
         cands ,skipped =_gh_parse_listing (raw )
-    _gh_last_cands[:] = [dict(c) for c in cands]
+        progress (f"GitHub: main lists {len (cands )} file(s)")
+    listed =[dict (c )for c in cands ]
     newest ={}
-    for cand in cands :
+    for n ,cand in enumerate (cands ,1 ):
         local =_gh_local_files (cand ["category"],cand ["glob"])
+        if gen is not None and not _gh_version_known (cand ,local ):
+            progress (f"GitHub: reading {cand ['name']} ({n } of {len (cands )})")
         try :
             ver =_gh_version_of (cand ,local )
         except GhRejected as exc :
@@ -3664,18 +3689,24 @@ def _gh_collect ():
         if kind not in newest or _version_sort_key (ver )>_version_sort_key (newest [kind ]["version"]):
             newest [kind ]=cand 
     entries =[_gh_compare (e )for e in sorted (newest .values (),key =lambda e :(e ["category"],e ["name"]))]
-    return entries ,skipped 
+    return entries ,skipped ,listed 
 
 def _gh_is_network_error(exc):
     text = str(exc)
     return "reach GitHub" in text or "hourly limit" in text or "did not answer" in text
 
-def _gh_check_bg ():
+def _gh_check_current (gen ):
+    return _gh_state ["gen"]==gen and _gh_state ["phase"]=="checking"
+
+def _gh_check_bg (gen =None ):
+    started =time .monotonic ()
     try :
-        entries ,skipped =_gh_collect ()
+        entries ,skipped ,listed =_gh_collect_full (gen )
     except Exception as exc :
         msg =str (exc )if isinstance (exc ,GhRejected )else f"unexpected error: {exc }"
         with _gh_lock :
+            if gen is not None and not _gh_check_current (gen ):
+                return 
             _gh_state ["phase"]="error"
             _gh_state ["error"]=msg 
             _gh_state ["entries"]=[]
@@ -3683,11 +3714,19 @@ def _gh_check_bg ():
         _gh_event (f"GitHub check failed: {msg }","err")
         return 
     with _gh_lock :
-        _gh_state ["phase"]="done"
-        _gh_state ["error"]=None 
-        _gh_state ["entries"]=entries 
-        _gh_state ["skipped"]=skipped 
-        _gh_state ["checked_at"]=datetime .now ().strftime ("%Y-%m-%d %H:%M")
+        if gen is not None and not _gh_check_current (gen ):
+            stale =True 
+        else :
+            stale =False 
+            _gh_last_cands [:]=listed 
+            _gh_state ["phase"]="done"
+            _gh_state ["error"]=None 
+            _gh_state ["entries"]=entries 
+            _gh_state ["skipped"]=skipped 
+            _gh_state ["checked_at"]=datetime .now ().strftime ("%Y-%m-%d %H:%M")
+    if stale :
+        log_event ("An earlier GitHub check finished late -- its result was not used","info")
+        return 
     counts =collections .Counter (e ["status"]for e in entries )
     ups =counts ["update"]+counts ["missing"]
     level ="ok"
@@ -3702,9 +3741,20 @@ def _gh_check_bg ():
     if skipped :
         parts .append (f"{skipped } file(s) skipped (see log)")
         level ="warn"
-    _gh_event ("GitHub check: "+", ".join (parts )+".",level )
+    _gh_event ("GitHub check: "+", ".join (parts )+f". ({time .monotonic ()-started :.0f}s)",level )
     _docs_refresh_remote()
     full_update_preview()
+
+def _gh_check_timeout (gen ):
+    with _gh_lock :
+        if not _gh_check_current (gen ):
+            return 
+        _gh_state ["gen"]+=1 
+        msg =(f"GitHub did not finish answering within {GH_CHECK_LIMIT_SEC //60 } min -- "
+        "check this node's internet connection, then press Check GitHub again")
+        _gh_state .update (phase ="error",error =msg ,entries =[],started_at =None ,
+        checked_at =datetime .now ().strftime ("%Y-%m-%d %H:%M"))
+    _gh_event (f"GitHub check failed: {msg }","err")
 
 def gh_start_check ():
     with _gh_lock :
@@ -3712,10 +3762,16 @@ def gh_start_check ():
             return False ,"A GitHub check is already running."
         if _gh_state ["busy"]:
             return False ,"A GitHub download is running -- wait for it to finish."
+        _gh_state ["gen"]+=1 
+        gen =_gh_state ["gen"]
         _gh_state ["phase"]="checking"
         _gh_state ["error"]=None 
+        _gh_state ["started_at"]=time .monotonic ()
     log_event (f"GitHub check started ({_gh_source_label ()})","info")
-    threading .Thread (target =_gh_check_bg ,daemon =True ).start ()
+    timer =threading .Timer (GH_CHECK_LIMIT_SEC ,_gh_check_timeout ,args =(gen ,))
+    timer .daemon =True 
+    timer .start ()
+    threading .Thread (target =_gh_check_bg ,args =(gen ,),daemon =True ).start ()
     return True ,"Checking GitHub -- results appear in each library group."
 
 def _gh_verify_content (entry ,data ):
@@ -3873,7 +3929,7 @@ def _gh_summary_html ():
     if phase =="idle":
         return f'<span class="muted">Not checked yet. Source: {src }</span>'
     if phase =="checking":
-        return f'<span class="muted">Checking {src }&hellip;</span>'
+        return f'<span class="muted">Checking {src }&hellip; (progress is in the log below)</span>'
     if phase =="error":
         return f'<span style="color:var(--red)">Last check ({esc (when or "")}) failed: {esc (err or "")}</span>'
     ups =sum (1 for e in entries if e .get ("status")in _GH_UPDATABLE )
@@ -5427,12 +5483,19 @@ function logLine(entry) {
   lastLogId = entry.id;
 }
 
+let _pollLogBusy = false;
 async function pollLog() {
+  if (_pollLogBusy) return;
+  _pollLogBusy = true;
   try {
     const r = await fetch(`/api/log?since=${lastLogId}`);
     const data = await r.json();
-    for (const entry of data.entries) logLine(entry);
+    for (const entry of data.entries) {
+      if (typeof entry.id === 'number' && entry.id <= lastLogId) continue;
+      logLine(entry);
+    }
   } catch (e) { /* server restarting or unreachable, ignore this tick */ }
+  finally { _pollLogBusy = false; }
 }
 
 """

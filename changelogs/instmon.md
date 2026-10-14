@@ -1,6 +1,31 @@
 # instmon changelog
 
-Current file: `instmon_v2_50_0_20261014.py`. Newest entries first.
+Current file: `instmon_v2_51_0_20261014.py`. Newest entries first.
+
+## 2.51.0 (2026-10-14)
+
+Fix: a GitHub check could hang, and switching the update channel during a
+check showed the old channel's result. instmon serves both builds.
+
+- **Time limit on Check GitHub.** A check that has not finished after 4 minutes
+  (`INSTMON_GH_CHECK_LIMIT_SEC`, default 240) is marked failed ("GitHub did
+  not finish answering ... check this node's internet connection"), and
+  Check GitHub works again. Before, a check stuck on a slow or dead connection
+  stayed "Checking..." until instmon was restarted.
+- **Switching the channel stops a running check.** The log says "The running
+  GitHub check was stopped -- the channel changed", and when the old check
+  finishes later its result is dropped ("An earlier GitHub check finished late
+  -- its result was not used"). Before, the old Stable result came in after the
+  switch and was shown under the Testing label, so the switch looked like it
+  had not happened.
+- **Progress in the log** during a check: how many files the stable list (or
+  main) has, and each file it has to download to read its version ("GitHub:
+  reading <file> (2 of 3)"). The result line ends with how long the check took.
+  The summary line says "progress is in the log below" while it runs.
+- **No doubled log lines.** When the node answered slowly, two log polls could
+  overlap and print the same line twice (for example "GitHub check started"
+  twice). The page now runs one log poll at a time and skips lines it already
+  has.
 
 ## 2.50.0 (2026-10-14)
 
