@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.199"
+APP_VERSION = "0.0.200"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1195,6 +1195,7 @@ def _hl_read_conf() -> str | None:
 
 def _hl_done(res: dict) -> dict:
     _OV_HEALTH_CACHE["at"] = 0.0
+    _RS_ANSWER_CACHE["at"] = 0.0
     return res
 
 def action_health_start_services() -> dict:
@@ -1256,6 +1257,155 @@ def action_health_netcheck_fixes() -> dict:
     out.append("Revert is on the netcheck card under step 6.")
     return _hl_done({"success": ok, "verified": ok, "output": "\n".join(out)})
 
+def _wg_strip_saveconfig(text: str) -> tuple[str, bool]:
+    section, kept, removed = "", [], False
+    for raw in text.splitlines(keepends=True):
+        st = raw.split("#", 1)[0].strip()
+        if st.startswith("["):
+            section = st.lower()
+        if section == "[interface]" and re.match(r"^saveconfig\s*=\s*true$", st, re.I):
+            removed = True
+            continue
+        kept.append(raw)
+    return ("".join(kept), True) if removed else (text, False)
+
+def _wg_set_address32(text: str, target: str) -> str | None:
+    new_addr = str(ipaddress.ip_interface(target).ip) + "/32"
+    lines = text.splitlines(keepends=True)
+    section = ""
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        low = body.strip().lower()
+        if low.startswith("["):
+            section = low
+            continue
+        if section == "[interface]" and re.match(r"^\s*address\s*=", body, re.I) and target in body:
+            lines[i] = body.replace(target, new_addr, 1) + raw[len(body):]
+            return "".join(lines)
+    return None
+
+def _wg_add_keepalive(text: str) -> str | None:
+    nl = "\r\n" if "\r\n" in text else "\n"
+    out_lines, in_peer, inserted = [], False, False
+    for raw in text.splitlines(keepends=True):
+        low = raw.strip().lower()
+        if low.startswith("[") and in_peer and not inserted:
+            blanks = []
+            while out_lines and not out_lines[-1].strip():
+                blanks.append(out_lines.pop())
+            out_lines.append("PersistentKeepalive = 25" + nl)
+            out_lines += blanks
+            inserted = True
+        if low == "[peer]":
+            in_peer = True
+        out_lines.append(raw)
+    if not in_peer:
+        return None
+    if not inserted:
+        if out_lines and not out_lines[-1].endswith(("\n", "\r")):
+            out_lines[-1] += nl
+        out_lines.append("PersistentKeepalive = 25" + nl)
+    return "".join(out_lines)
+
+def _wg_drop_dns_lines(text: str) -> tuple[str, list[str]]:
+    section, kept, removed = "", [], []
+    for raw in text.splitlines(keepends=True):
+        st = raw.split("#", 1)[0].strip()
+        if st.startswith("["):
+            section = st.lower()
+        if section == "[interface]" and re.match(r"^dns\s*=", st, re.I):
+            removed.append(raw.strip())
+            continue
+        kept.append(raw)
+    return "".join(kept), removed
+
+def _wg_set_allowed_ips(text: str, value: str) -> str | None:
+    lines = text.splitlines(keepends=True)
+    section, peers = "", 0
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        low = body.strip().lower()
+        if low.startswith("["):
+            section = low
+            if low == "[peer]":
+                peers += 1
+            continue
+        if section == "[peer]" and peers == 1 and re.match(r"^\s*allowedips\s*=", body, re.I):
+            lines[i] = re.match(r"^\s*", body).group(0) + "AllowedIPs = " + value + raw[len(body):]
+            return "".join(lines)
+    return None
+
+_PI_TAB_ALLOWED_IPS = {"split": "44.0.0.0/9, 44.128.0.0/10", "full": "0.0.0.0/0"}
+
+def _wg_normalize(text: str, kind: str, opts: dict | None = None) -> dict:
+    opts = opts or {}
+    changes: list[str] = []
+    fixed: list[str] = []
+    choices: list[dict] = []
+    blocker = ""
+    mismatch = None
+    text, sc = _wg_strip_saveconfig(text)
+    if sc:
+        fixed.append("SaveConfig = true removed: wg-quick would rewrite wg0.conf on every stop and drop 44helper's settings.")
+    if re.search(r"^\s*dns\s*=", text, re.I | re.M):
+        need = _wg_conf_dns_need(text)
+        if need:
+            ok, why = (False, "no resolvconf command") if "no resolvconf" in need else _wg_resolved_answers()
+            if not ok:
+                text, removed = _wg_drop_dns_lines(text)
+                fixed.append(f"DNS line removed ({', '.join(removed)}): systemd-resolved isn't answering ({why}), so "
+                               "the tunnel would fail to start. DNS is now Off; set it on the DNS card (4a) once step 1a "
+                               "is green.")
+    target = _hl_address32_target(text)
+    if target:
+        new_addr = str(ipaddress.ip_interface(target).ip) + "/32"
+        on = bool(opts.get("address32", True))
+        choices.append({"id": "address32", "on": on, "label": f"Change Address {target} to {new_addr}",
+                        "detail": "A 44Net Connect tunnel is one address. Check the portal first: untick this only "
+                                  "if ARDC gave you a subnet."})
+        if on:
+            new = _wg_set_address32(text, target)
+            if new is not None:
+                text = new
+                changes.append(f"Address {target} changed to {new_addr}.")
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    if parsed["peers"] and _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") in ("", "0", "off"):
+        on = bool(opts.get("keepalive", True))
+        choices.append({"id": "keepalive", "on": on, "label": "Add PersistentKeepalive = 25 under [Peer]",
+                        "detail": "Without it a quiet tunnel goes idle and stations on 44Net can't reach this node "
+                                  "until it sends something."})
+        if on:
+            new = _wg_add_keepalive(text)
+            if new is not None:
+                text = new
+                changes.append("PersistentKeepalive = 25 added under [Peer].")
+    if kind in _PI_TAB_ALLOWED_IPS and _pi_allowed_ips_mismatch_note(text, kind):
+        want = _PI_TAB_ALLOWED_IPS[kind]
+        other = "Full Tunnel" if kind == "split" else "Split Tunnel"
+        cur = _wg_conf_field(_parse_wg_conf_text(text, mask_private_key=True)["peers"][0], "AllowedIPs")
+        mismatch = {"current": cur, "want": want, "other_tab": other}
+        if opts.get("allowed") == "rewrite":
+            new = _wg_set_allowed_ips(text, want)
+            if new is not None:
+                text = new
+                changes.append(f"AllowedIPs changed from {cur} to {want} for this tab.")
+        else:
+            blocker = (f"AllowedIPs is {cur}, which doesn't fit this tab ({want}). Choose to rewrite it, or paste the "
+                       f"config on the {other} tab instead.")
+    pinned, pin_note = _wg_apply_endpoint_pin(text)
+    if pin_note:
+        fixed.append(pin_note)
+    return {"text": pinned, "changes": fixed + changes, "fixed": fixed, "choices": choices, "mismatch": mismatch,
+            "blocker": blocker}
+
+def action_paste_preview(config_text: str, kind: str = "", opts: dict | None = None) -> dict:
+    valid, msg = _validate_wg_config_text(config_text)
+    if not valid:
+        return {"success": False, "valid": False, "output": f"Rejected: {msg}"}
+    n = _wg_normalize(config_text, kind, opts)
+    return {"success": True, "valid": True, "fixed": n["fixed"], "choices": n["choices"],
+            "mismatch": n["mismatch"], "blocker": n["blocker"], "output": ""}
+
 def action_health_address32() -> dict:
     err = _require_root() or _hl_testing_refusal()
     if err:
@@ -1266,21 +1416,11 @@ def action_health_address32() -> dict:
         return _hl_done({"success": False, "verified": False,
                          "output": "Nothing to change: wg0.conf doesn't have exactly one 44Net address wider than /32."})
     new_addr = str(ipaddress.ip_interface(target).ip) + "/32"
-    lines = text.splitlines(keepends=True)
-    section, done = "", False
-    for i, raw in enumerate(lines):
-        body = raw.rstrip("\r\n")
-        low = body.strip().lower()
-        if low.startswith("["):
-            section = low
-            continue
-        if section == "[interface]" and not done and re.match(r"^\s*address\s*=", body, re.I) and target in body:
-            lines[i] = body.replace(target, new_addr, 1) + raw[len(body):]
-            done = True
-    if not done:
+    new = _wg_set_address32(text, target)
+    if new is None:
         return _hl_done({"success": False, "verified": False, "output": "Couldn't find the Address line to change."})
     try:
-        out = _wg_write_conf("".join(lines))
+        out = _wg_write_conf(new)
     except OSError as e:
         return _hl_done({"success": False, "verified": False, "output": f"Write failed: {e}"})
     out.append(f"Address {target} changed to {new_addr}. The running tunnel still uses the old prefix until it restarts: "
@@ -1300,23 +1440,11 @@ def action_health_keepalive() -> dict:
     if _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") not in ("", "0", "off"):
         return _hl_done({"success": True, "verified": True, "output": "A PersistentKeepalive is already set."})
     pub = _wg_conf_field(parsed["peers"][0], "PublicKey")
-    lines = text.splitlines(keepends=True)
-    nl = "\r\n" if "\r\n" in text else "\n"
-    out_lines, in_peer, inserted = [], False, False
-    for raw in lines:
-        low = raw.strip().lower()
-        if low.startswith("[") and in_peer and not inserted:
-            out_lines.append("PersistentKeepalive = 25" + nl)
-            inserted = True
-        if low == "[peer]":
-            in_peer = True
-        out_lines.append(raw)
-    if in_peer and not inserted:
-        if out_lines and not out_lines[-1].endswith(("\n", "\r")):
-            out_lines[-1] += nl
-        out_lines.append("PersistentKeepalive = 25" + nl)
+    new = _wg_add_keepalive(text)
+    if new is None:
+        return {"success": False, "verified": False, "output": "wg0.conf has no [Peer] section."}
     try:
-        out = _wg_write_conf("".join(out_lines))
+        out = _wg_write_conf(new)
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
     if _wg0_interface_present() and pub:
@@ -1344,16 +1472,7 @@ def action_health_dns_off() -> dict:
         return {"success": False, "verified": False, "output": "No wg0.conf."}
     text2 = _wg_block_remove(text, _WG_DNS_BEGIN, _WG_DNS_END) if any(
         ln.strip() == _WG_DNS_BEGIN for ln in text.splitlines()) else text
-    section, kept, removed = "", [], []
-    for raw in text2.splitlines(keepends=True):
-        st = raw.split("#", 1)[0].strip()
-        if st.startswith("["):
-            section = st.lower()
-        if section == "[interface]" and re.match(r"^dns\s*=", st, re.I):
-            removed.append(raw.strip())
-            continue
-        kept.append(raw)
-    new = "".join(kept)
+    new, removed = _wg_drop_dns_lines(text2)
     if new == text:
         return _hl_done({"success": True, "verified": True, "output": "wg0.conf has no DNS setting; nothing to change."})
     try:
@@ -2158,6 +2277,14 @@ _DV_ENABLE_NOTE = ("Enables and starts whichever of analog_bridge / mmdvm_bridge
                    "any that are missing (a plain `systemctl enable a b c` aborts on the first missing one and "
                    "enables nothing).")
 
+def _dv_netcheck_step(step_id: str, num: int) -> dict:
+    return {"id": step_id, "num": num, "title": "Stop netcheck from blocking boot",
+            "pi_action": "health_netcheck_fixes", "button": "Apply netcheck fixes",
+            "note": "DVSwitch's netcheck runs at boot, and when it fails (often because the network isn't up yet) the "
+                    "bridges and gateways never start. This runs netcheck once the network is online and stops a "
+                    "failed netcheck from keeping the services down. Safe to run again; step 6 of either tunnel tab "
+                    "also does it. Revert is on the netcheck card under tunnel step 6."}
+
 def _dvswitch_install_steps_bookworm() -> list[dict]:
     return [
         {"id": "bw_fetch_repo_script", "num": 1, "title": "Download DVSwitch repo-install script",
@@ -2172,11 +2299,12 @@ def _dvswitch_install_steps_bookworm() -> list[dict]:
          "cmd": _DV_ENABLE_CMD, "note": _DV_ENABLE_NOTE},
         {"id": "bw_enable_gateways", "num": 6, "title": "Enable the digital-mode gateways at boot",
          "cmd": _DV_GATEWAYS_ENABLE_CMD, "note": _DV_GATEWAYS_NOTE},
-        _cockpit_install_step(7),
-        _cockpit_enable_step(8),
-        _dv_config_field_step(9),
-        *_dv_web_clash_steps(10),
-        _config_save_step("dv_save_restore", 12),
+        _dv_netcheck_step("bw_netcheck_safe", 7),
+        _cockpit_install_step(8),
+        _cockpit_enable_step(9),
+        _dv_config_field_step(10),
+        *_dv_web_clash_steps(11),
+        _config_save_step("dv_save_restore", 13),
     ]
 
 def _dvswitch_install_steps_trixie() -> list[dict]:
@@ -2209,11 +2337,12 @@ def _dvswitch_install_steps_trixie() -> list[dict]:
          "cmd": _DV_ENABLE_CMD, "note": _DV_ENABLE_NOTE},
         {"id": "tx_enable_gateways", "num": 8, "title": "Enable the digital-mode gateways at boot",
          "cmd": _DV_GATEWAYS_ENABLE_CMD, "note": _DV_GATEWAYS_NOTE},
-        _cockpit_install_step(9),
-        _cockpit_enable_step(10),
-        _dv_config_field_step(11),
-        *_dv_web_clash_steps(12),
-        _config_save_step("dv_save_restore", 14),
+        _dv_netcheck_step("tx_netcheck_safe", 9),
+        _cockpit_install_step(10),
+        _cockpit_enable_step(11),
+        _dv_config_field_step(12),
+        *_dv_web_clash_steps(13),
+        _config_save_step("dv_save_restore", 15),
     ]
 
 def _dvswitch_purge_steps_bookworm() -> list[dict]:
@@ -2251,9 +2380,15 @@ def _dvswitch_purge_steps_bookworm() -> list[dict]:
 
 def _dvswitch_purge_steps_all() -> list[dict]:
     steps = [dict(s, id=s["id"].replace("bw_", "dv_", 1)) for s in _dvswitch_purge_steps_bookworm()]
-    cockpit = steps.pop()
-    steps[0] = dict(steps[0], note=steps[0]["note"] + " This purge covers BOTH install options (Bookworm "
+    steps.insert(0, {"id": "dv_purge_netcheck_revert", "num": 1, "title": "Remove 44helper's netcheck fixes",
+                     "pi_action": "netcheck_revert", "button": "Remove netcheck fixes",
+                     "note": "Removes the netcheck drop-ins 44helper added (install step 'Stop netcheck from blocking "
+                             "boot', or tunnel step 6) so nothing is left behind once the packages are gone. Does "
+                             "nothing if none were added."})
+    steps[1] = dict(steps[1], note=steps[1]["note"] + " This purge covers BOTH install options (Bookworm "
                                                      "and Trixie) -- it is the same list whichever is selected.")
+    steps = [dict(st, num=i + 1) for i, st in enumerate(steps)]
+    cockpit = steps.pop()
     steps.append({
         "id": "dv_purge_old_script_leftovers", "num": len(steps) + 1,
         "title": "(Optional) Remove leftovers from the old third-party build script",
@@ -5360,11 +5495,23 @@ def action_install_firewalld() -> dict:
     status = status_firewalld_prereq()
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results)}
 
-def status_resolved_prereq() -> dict:
-    r = subprocess.run(["systemctl", "is-active", "systemd-resolved"],
-                        capture_output=True, text=True, timeout=5)
-    active = r.stdout.strip() == "active"
-    return {"done": active, "active": active}
+_RS_ANSWER_CACHE: dict = {"at": 0.0, "data": (False, "")}
+
+def _resolved_answers_cached(force: bool = False) -> tuple[bool, str]:
+    now = time.time()
+    if force or now - _RS_ANSWER_CACHE["at"] > 20:
+        _RS_ANSWER_CACHE.update(at=now, data=_wg_resolved_answers())
+    return _RS_ANSWER_CACHE["data"]
+
+def status_resolved_prereq(force: bool = False) -> dict:
+    try:
+        r = subprocess.run(["systemctl", "is-active", "systemd-resolved"],
+                            capture_output=True, text=True, timeout=5)
+        active = r.stdout.strip() == "active"
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        active = False
+    answers, why = _resolved_answers_cached(force) if active else (False, "")
+    return {"done": active and answers, "active": active, "answers": answers, "why": why}
 
 def _argv_install_resolved() -> list[list[str]]:
     return [
@@ -5379,11 +5526,21 @@ def action_install_resolved() -> dict:
     results = [_run_pkg_unit("pi_resolved_prereq", f"apt-get install -y {_APT_NI_OPTS} wireguard systemd-resolved")
                if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_resolved()]
     ok = all(r["success"] for r in results)
-    status = status_resolved_prereq()
-    note = ("A reboot is recommended before bringing the tunnel up "
-            "(step 6) — per §1a.1, skipping it can cause a resolve1 "
-            "timeout on `wg-quick up` even with the service active.")
-    return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results) + "\n" + note}
+    lines = [r["output"] for r in results if r["output"]]
+    status = status_resolved_prereq(force=True)
+    if status["active"] and not status["answers"]:
+        lines.append(f"systemd-resolved is running but not answering ({status['why']}). Restarting it once:")
+        _run_argv(["systemctl", "restart", "systemd-resolved"], timeout=30)
+        time.sleep(2)
+        status = status_resolved_prereq(force=True)
+    if status["done"]:
+        lines.append("ok    systemd-resolved is running and answers.")
+    elif status["active"]:
+        lines.append(f"FAIL  systemd-resolved still isn't answering ({status['why']}). Reboot the Pi and check this step "
+                     "again. If it still fails, set the DNS card (step 4a) to Off: the tunnel then doesn't need resolved.")
+    else:
+        lines.append("FAIL  systemd-resolved isn't running.")
+    return {"success": ok and status["done"], "verified": status["done"], "output": "\n".join(lines)}
 
 def status_create_zone() -> dict:
     try:
@@ -5529,7 +5686,8 @@ def _pi_allowed_ips_mismatch_note(config_text: str, kind: str) -> str:
                 "double check this is really a full-tunnel config.")
     return ""
 
-def action_paste_config(config_text: str, backup_to_library: bool = True, kind: str = "") -> dict:
+def action_paste_config(config_text: str, backup_to_library: bool = True, kind: str = "",
+                        opts: dict | None = None) -> dict:
     err = _require_root()
     if err:
         return err
@@ -5537,7 +5695,10 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
     if not valid:
         return {"success": False, "verified": False, "output": f"Rejected: {msg}"}
 
-    config_text, pin_note = _wg_apply_endpoint_pin(config_text)
+    norm = _wg_normalize(config_text, kind, opts)
+    if norm["blocker"]:
+        return {"success": False, "verified": False, "output": "Not written. " + norm["blocker"]}
+    config_text = norm["text"]
     try:
         wg_dir = os.path.dirname(WG0_CONF_PATH)
         os.makedirs(wg_dir, mode=0o700, exist_ok=True)
@@ -5548,7 +5709,7 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
 
-    output_lines = ["wg0.conf written, permissions set to 600."] + ([pin_note] if pin_note else [])
+    output_lines = ["wg0.conf written, permissions set to 600."] + norm["changes"]
     if backup_to_library:
         try:
             wrote, reason = _compare_before_write(_wg_library_path(), config_text.encode("utf-8"))
@@ -5556,10 +5717,6 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
             output_lines.append(f"Library backup ({_wg_library_path()}): {reason}.")
         except OSError as e:
             output_lines.append(f"Library backup failed (live wg0.conf was still written OK): {e}")
-
-    mismatch_note = _pi_allowed_ips_mismatch_note(config_text, kind)
-    if mismatch_note:
-        output_lines.append(mismatch_note.strip())
 
     status = status_paste_config()
     if status["done"]:
@@ -5888,6 +6045,9 @@ def status_wg_dns() -> dict:
 
 def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     out = []
+    new_text, sc = _wg_strip_saveconfig(new_text)
+    if sc:
+        out.append("SaveConfig = true removed: wg-quick would rewrite wg0.conf on every stop and drop 44helper's settings.")
     new_text, pin_note = _wg_apply_endpoint_pin(new_text)
     if pin_note:
         out.append(pin_note)
@@ -6374,12 +6534,47 @@ def action_enable_tunnel() -> dict:
 
     ok = all(r["success"] for r in results)
     time.sleep(2)
-    status = status_enable_tunnel()
     note = " (used ARDC fallback unit, §1a.3 — standard wg-quick@.service template not found)" if used_fallback else ""
     lines = gate + [r["output"] for r in results if r["output"]]
     if not ok:
         lines += _wg_start_report(unit, t0)
+    else:
+        lines += _pi_after_start()
+    status = status_enable_tunnel()
     return {"success": ok, "verified": status["done"], "output": "\n".join(lines) + note}
+
+def _pi_after_start() -> list[str]:
+    out = ["", "After the start:"]
+    if _half_wait_handshake(15):
+        out.append("ok    handshake with the 44Net server")
+    else:
+        out.append("WARN  no handshake in 15 s. Check the Endpoint and that the tunnel is approved on the 44Net Connect "
+                   "portal, then use Verify.")
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            ip = _wg_endpoint_info(f.read())["ip"]
+    except OSError:
+        ip = ""
+    if ip and _wg_endpoint_loop_live(ip):
+        r = _wg_pin_live(ip)
+        out.append(("ok    " if r["success"] else "FAIL  ") + f"tunnel server {ip} was routed into wg0; "
+                   + ("now kept on the normal route" if r["success"] else "couldn't pin it: " + r["output"]))
+    elif ip:
+        out.append(f"ok    tunnel server {ip} goes the normal way, not into wg0")
+    try:
+        sc = scan_netcheck()
+    except Exception as exc:
+        log(f"netcheck scan after start failed: {exc}")
+        sc = {}
+    if sc.get("available") and sc.get("netcheck", {}).get("exists"):
+        r = action_health_netcheck_fixes()
+        out.append("netcheck (so a failed check at boot doesn't stop the DVSwitch services):")
+        out += ["  " + ln for ln in r["output"].splitlines()]
+    if _hl_stopped_units():
+        r = action_health_start_services()
+        out.append("DVSwitch services that were enabled but stopped:")
+        out += ["  " + ln for ln in r["output"].splitlines()]
+    return out
 
 def _pi_purge_tolerant_ok(result: dict) -> bool:
     if result["success"]:
@@ -16313,7 +16508,7 @@ var PI_STEP_META = [
   {id: 'attach_interface', num: 5, title: 'Attach wg0 to the zone',
    cmd: 'firewall-cmd --permanent --zone=44NetConnect --add-interface=wg0 && firewall-cmd --reload'},
   {id: 'enable_tunnel', num: 6, title: 'Enable + start the tunnel',
-   cmd: 'systemctl enable --now wg-quick@wg0  (falls back to a custom unit if that template is unavailable, sec 1a.3)',
+   cmd: 'systemctl enable --now wg-quick@wg0  (falls back to a custom unit if that template is unavailable, sec 1a.3); then waits for the handshake, keeps the tunnel server on the normal route, applies the netcheck fixes and starts any stopped DVSwitch services',
    verify: true}
 ];
 
@@ -16365,7 +16560,10 @@ function renderPiInstall(kind, data) {
     if (meta.id === 'firewalld_prereq') {
       html += '<div class="step-body">Installed: ' + step.installed + ' &middot; Active: ' + step.active + '</div>';
     } else if (meta.id === 'resolved_prereq') {
-      html += '<div class="step-body">Per sec 1a.1 (ARDC guide, not the ASL manual) \u2014 required or wg-quick up can fail with a resolve1 timeout. Reboot recommended after install, before step 6.</div>';
+      html += '<div class="step-body">Per sec 1a.1 (ARDC guide, not the ASL manual) \u2014 required or wg-quick up can fail with a resolve1 timeout. Green only when systemd-resolved is running <em>and</em> answers. Running: ' + (step.active ? 'yes' : 'no') + ' &middot; Answers: ' + (step.answers ? 'yes' : 'no') + '</div>';
+      if (step.active && !step.answers) {
+        html += renderStepWarn('systemd-resolved is running but not answering (' + _ovEsc(step.why || '?') + '). Run this step to restart it; if that doesn\\'t help, reboot the Pi. A config with a DNS line would make step 6 fail.');
+      }
     } else if (meta.id === 'create_zone') {
       html += '<div class="step-body">Zones present: ' + ((step.zones||[]).join(', ') || '(none)') + '</div>';
     } else if (meta.id === 'service_ports') {
@@ -16412,12 +16610,10 @@ function renderPiInstall(kind, data) {
           'for what it is and how it works in general \u2014 this step just needs the config block pasted below, not ' +
           'a manual setup.</div>';
         if (kind === 'split') {
-          html += '<div class="step-body">This is the <strong>Split Tunnel</strong> tab \u2014 before pasting, ' +
-            'edit the config\\'s AllowedIPs line to read <code>44.0.0.0/9, 44.128.0.0/10</code>, not ' +
-            'the <code>0.0.0.0/0</code> it comes with by default \u2014 44Net Connect always hands you the ' +
-            'same full-tunnel-shaped config regardless of tab, so this edit is on you, not a separate portal ' +
-            'request. Pasting it unedited will still work, but ' +
-            'you\\'ll get a heads-up about the mismatch after writing it.</div>';
+          html += '<div class="step-body">This is the <strong>Split Tunnel</strong> tab \u2014 the config\\'s ' +
+            'AllowedIPs line must read <code>44.0.0.0/9, 44.128.0.0/10</code>, not the <code>0.0.0.0/0</code> ' +
+            'it comes with \u2014 44Net Connect always hands you the same full-tunnel-shaped config regardless ' +
+            'of tab. Paste it as it is: the check before writing offers to rewrite that line for you.</div>';
         } else {
           html += '<div class="step-body">This is the <strong>Full Tunnel</strong> tab \u2014 the standard config ' +
             'from the portal (AllowedIPs <code>0.0.0.0/0</code>) is what belongs here, unedited.</div>';
@@ -16428,8 +16624,11 @@ function renderPiInstall(kind, data) {
           'Writing the file below will refuse a config that doesn\\'t have one.</li>' +
           '<li>Partial copy \\u2014 make sure the whole block came across, both [Interface] and [Peer] sections ' +
           'including Endpoint, not just part of it.</li>' +
-          '<li>AllowedIPs not matching this tab (see note above) \\u2014 easy to miss since every 44Net Connect ' +
-          'config defaults to the same full-tunnel shape regardless of which tab you\\'re on.</li>' +
+          '<li>AllowedIPs not matching this tab (see note above) \\u2014 the check before writing catches it ' +
+          'and offers to rewrite it.</li>' +
+          '<li>The check also removes <code>SaveConfig = true</code>, adds <code>PersistentKeepalive = 25</code> ' +
+          'if it\\'s missing, offers to change a wider Address to /32, and drops a <code>DNS =</code> line ' +
+          'while systemd-resolved isn\\'t answering. Nothing is written until you press Write.</li>' +
           '<li>Don\\'t paste this config \\u2014 private key included \\u2014 into a forum post, chat, or bug ' +
           'report when asking for help; redact the PrivateKey line first.</li>' +
           '</ul>');
@@ -16438,7 +16637,8 @@ function renderPiInstall(kind, data) {
         }
         html += '<textarea class="wg-paste" id="pi-wg-paste-' + kind + '" placeholder="Paste the WireGuard config block from the 44Net Connect portal here..."></textarea>';
         html += '<label style="display:block;font-family:var(--mono);font-size:.78rem;color:var(--muted);margin:.3rem 0"><input type="checkbox" id="pi-wg-backup-lib-' + kind + '" checked> Also back up a copy to the instmon library (config category) \u2014 lets you recover this without re-requesting a new tunnel if the SD card is ever re-flashed</label>';
-        html += '<div class="step-actions"><button class="btn-run" onclick="piPasteConfig(\\'' + kind + '\\')"' + disabledAttr + '>Write wg0.conf (chmod 600)</button></div>';
+        html += '<div class="step-actions"><button class="btn-run" onclick="piPasteConfig(\\'' + kind + '\\')"' + disabledAttr + '>Check and write wg0.conf (chmod 600)</button></div>';
+        html += '<div id="pi-paste-preview-' + kind + '"></div>';
       }
     } else if (meta.id === 'attach_interface') {
       html += '<div class="step-body">Interfaces in zone: ' + ((step.interfaces||[]).join(', ') || '(none)') + '</div>';
@@ -17096,6 +17296,7 @@ function renderPiConvertStepList(kind, targetKind) {
     'Paste the new ' + targetLabel + ' config</div></div>';
   html += '<textarea class="wg-paste" id="pi-convert-wg-paste-' + kind + '" placeholder="Paste the ' + targetLabel + ' WireGuard config block here..."></textarea>';
   html += '</div>';
+  html += '<div id="pi-convert-preview-' + kind + '"></div>';
 
   var stopDisabled = local.stoppedDone ? ' disabled' : '';
   html += '<div class="step-card"><div class="step-head"><div class="step-title"><span class="step-num">2.</span>' +
@@ -17181,15 +17382,17 @@ function piConvertWrite(kind, targetKind) {
   var ta = document.getElementById('pi-convert-wg-paste-' + kind);
   var text = ta ? ta.value : '';
   if (!text.trim()) { alert('Paste the new config first (step 1).'); return; }
-  _piConvertPost('paste_config',
-    'Write this to /etc/wireguard/wg0.conf (mode 600), replacing the current config? The private key is ' +
-    'never sent back to this browser once saved.',
-    {config_text: text, backup_to_library: true, kind: targetKind},
-    'pi-convert-out-write-' + kind, function(result) {
-    if (result.success !== false) { local.written = true; }
-    piConvertRerender(kind, targetKind);
-    refreshPiInstall('full');
-    refreshPiInstall('split');
+  piPastePreview(text, targetKind, 'pi-convert-preview-' + kind, function(opts) {
+    _piConvertPost('paste_config',
+      'Write this to /etc/wireguard/wg0.conf (mode 600), replacing the current config? The private key is ' +
+      'never sent back to this browser once saved.',
+      {config_text: text, backup_to_library: true, kind: targetKind, opts: opts},
+      'pi-convert-out-write-' + kind, function(result) {
+      if (result.success !== false) { local.written = true; }
+      piConvertRerender(kind, targetKind);
+      refreshPiInstall('full');
+      refreshPiInstall('split');
+    });
   });
 }
 
@@ -17262,6 +17465,10 @@ function piAddPortPreset(portProto) {
 function piPasteConfig(kind) {
   var ta = document.getElementById('pi-wg-paste-' + kind);
   var text = ta ? ta.value : '';
+  if (!text.trim()) { alert('Paste the config first.'); return; }
+  piPastePreview(text, kind, 'pi-paste-preview-' + kind, function(opts) { piPasteWrite(kind, text, opts); });
+}
+function piPasteWrite(kind, text, opts) {
   var backupBox = document.getElementById('pi-wg-backup-lib-' + kind);
   var backupToLibrary = backupBox ? backupBox.checked : true;
   if (!confirm('Write this to /etc/wireguard/wg0.conf (mode 600)? The private key is never sent back to this browser once saved.')) return;
@@ -17269,7 +17476,7 @@ function piPasteConfig(kind) {
   window._piAttempted['paste_config'] = true;
   fetch('/api/pi_install/action', {
     method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify({step: 'paste_config', config_text: text, backup_to_library: backupToLibrary, kind: kind})
+    body: JSON.stringify({step: 'paste_config', config_text: text, backup_to_library: backupToLibrary, kind: kind, opts: opts})
   }).then(function(r){ return r.json(); }).then(function(result){
     window._piState = window._piState || {};
     window._piState['paste_config'] = {status: result.success === false ? 'fail' : 'ok', output: result.output || ''};
@@ -18583,6 +18790,12 @@ function dvRenderStepList(mode, distro) {
     var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
     html += '<span class="step-pill ' + pillClass + '" id="dv-pill-' + stateKey + '">' + pillLabel + '</span></div>';
     if (step.note) html += renderStepWarn(dvEscapeAttr(step.note));
+    if (step.pi_action) {
+      html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">' + dvEscapeAttr(step.button || 'Run') + '</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
+      html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
+      html += '</div>';
+      return;
+    }
     if (step.fields) {
       step.fields.forEach(function(f) {
         html += '<label style="display:block;font-family:var(--mono);font-size:.76rem;color:var(--muted);margin-top:.4rem">' + dvEscapeAttr(f.label) + ':' +
@@ -18696,6 +18909,18 @@ function dvExecuteStep(mode, distro, stepId, cmd, btn) {
   var outEl = document.getElementById('dv-out-' + stateKey);
   if (outEl) { outEl.className = 'asl3-console shown placeholder'; outEl.textContent = 'Running\u2026'; }
   if (btn) btn.disabled = true;
+  var piStep = dvFindStep(mode, distro, stepId);
+  if (piStep && piStep.pi_action) {
+    return fetch('/api/pi_install/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+      body: JSON.stringify({step: piStep.pi_action})
+    }).then(function(r) { return r.json(); }).then(function(result) {
+      return dvFinishStep(stateKey, result, pill, btn);
+    }).catch(function(e) {
+      return dvFinishStep(stateKey, {success: false, output: 'Request failed: ' + e}, pill, btn);
+    });
+  }
   return fetch('/api/dvswitch/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
@@ -18715,7 +18940,7 @@ function dvReconnectRunningJobs(distro) {
   ['install', 'purge'].forEach(function(mode) {
     var steps = ((window._dvScripts || {})[mode] || {})[distro] || [];
     steps.forEach(function(step) {
-      if (step.manual || step.config_save) return;
+      if (step.manual || step.config_save || step.pi_action) return;
       var stateKey = mode + '_' + distro + '_' + step.id;
       var jobKey = 'dv_' + stateKey;
       fetch('/api/action_status?job_key=' + encodeURIComponent(jobKey)).then(function(r) { return r.json(); }).then(function(status) {
@@ -18765,6 +18990,12 @@ function dvResolveCommand(mode, distro, stepId) {
 }
 
 function dvRunStep(btn, mode, distro, stepId) {
+  var piStep = dvFindStep(mode, distro, stepId);
+  if (piStep && piStep.pi_action) {
+    if (!confirm(piStep.title + '?\\n\\n' + (piStep.note || ''))) return;
+    dvExecuteStep(mode, distro, stepId, '', btn);
+    return;
+  }
   var resolved = dvResolveCommand(mode, distro, stepId);
   if (resolved.cmd === null) { alert('Fill in all fields before running.'); return; }
   if (!resolved.cmd.trim()) return;
@@ -18781,6 +19012,9 @@ function dvCopyStep(btn, mode, distro, stepId) {
   var text;
   if (step && step.manual) {
     text = label + '\\n$ ' + step.cmd + '\\n\\n--- output ---\\n(manual step \u2014 not run through this engine)';
+  } else if (step && step.pi_action) {
+    var piOut = document.getElementById('dv-out-' + stateKey);
+    text = label + '\\n(44helper action: ' + step.pi_action + ')\\n\\n--- output ---\\n' + (piOut ? piOut.textContent : '(not run yet)');
   } else {
     var resolved = dvResolveCommand(mode, distro, stepId);
     if (resolved.cmd === null) { alert('Fill in all fields before copying.'); return; }
@@ -22055,6 +22289,79 @@ function hlGoto(id) {
 // health card js end
 """
 
+_JS_PASTE = r"""
+function piPastePreview(text, kind, boxId, onWrite) {
+  var box = document.getElementById(boxId);
+  if (box) box.innerHTML = '<div class="step-body">Checking the config\u2026</div>';
+  fetch('/api/pi_install/action', {
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({step: 'paste_preview', config_text: text, kind: kind})
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    box = document.getElementById(boxId);
+    if (!res.valid) {
+      if (box) box.innerHTML = '<div class="step-warn fail">' + _ovEsc(res.output || 'Rejected.') + '</div>';
+      return;
+    }
+    var fixed = res.fixed || [], choices = res.choices || [], mm = res.mismatch;
+    if (!fixed.length && !choices.length && !mm) {
+      if (box) box.innerHTML = '<div class="step-body">The config needs no changes.</div>';
+      onWrite({});
+      return;
+    }
+    window._pasteGo = window._pasteGo || {};
+    window._pasteGo[boxId] = {choices: choices, mismatch: mm, onWrite: onWrite};
+    var h = '<div class="step-warn" id="' + boxId + '-panel"><strong>Before it\'s written, 44helper will tidy this config:</strong>';
+    if (fixed.length) {
+      h += '<ul style="margin:.35rem 0 0 1.1rem;padding:0">';
+      fixed.forEach(function(t) { h += '<li>' + _ovEsc(t) + '</li>'; });
+      h += '</ul>';
+    }
+    choices.forEach(function(c) {
+      h += '<label style="display:block;margin:.4rem 0 0"><input type="checkbox" id="' + boxId + '-c-' + c.id + '"' +
+        (c.on ? ' checked' : '') + '> ' + _ovEsc(c.label) + '</label>' +
+        '<div style="margin:0 0 0 1.4rem;font-size:.85em;opacity:.85">' + _ovEsc(c.detail) + '</div>';
+    });
+    if (mm) {
+      h += '<div style="margin:.5rem 0 0">AllowedIPs is <code>' + _ovEsc(mm.current) + '</code>, which doesn\'t fit this tab.</div>' +
+        '<label style="display:block;margin:.2rem 0 0"><input type="radio" name="' + boxId + '-allowed" value="rewrite" checked> ' +
+        'Rewrite it to <code>' + _ovEsc(mm.want) + '</code></label>' +
+        '<label style="display:block;margin:.2rem 0 0"><input type="radio" name="' + boxId + '-allowed" value="stop"> ' +
+        'Stop: I\'ll paste it on the ' + _ovEsc(mm.other_tab) + ' tab</label>';
+    }
+    h += '<div class="step-actions"><button class="btn-run" onclick="piPasteGo(\'' + boxId + '\')">Write wg0.conf</button>' +
+      '<button class="btn-copy" onclick="piPasteCancel(\'' + boxId + '\')">Cancel</button></div></div>';
+    if (box) box.innerHTML = h;
+  }).catch(function(e) {
+    var b = document.getElementById(boxId);
+    if (b) b.innerHTML = '<div class="step-warn fail">Check failed: ' + _ovEsc(String(e)) + '</div>';
+  });
+}
+function piPasteGo(boxId) {
+  var st = (window._pasteGo || {})[boxId];
+  if (!st) return;
+  var opts = {};
+  st.choices.forEach(function(c) {
+    var el = document.getElementById(boxId + '-c-' + c.id);
+    opts[c.id] = el ? el.checked : c.on;
+  });
+  if (st.mismatch) {
+    var pick = document.querySelector('input[name="' + boxId + '-allowed"]:checked');
+    if (!pick || pick.value !== 'rewrite') {
+      alert('Not written. Paste this config on the ' + st.mismatch.other_tab + ' tab instead.');
+      return;
+    }
+    opts.allowed = 'rewrite';
+  }
+  piPasteCancel(boxId);
+  st.onWrite(opts);
+}
+function piPasteCancel(boxId) {
+  var b = document.getElementById(boxId);
+  if (b) b.innerHTML = '';
+  if (window._pasteGo) delete window._pasteGo[boxId];
+}
+"""
+
 _JS = (
     _JS_AUTH
     + _JS_EVENTS
@@ -22070,6 +22377,7 @@ _JS = (
     + _JS_HALF
     + _JS_FX
     + _JS_HEALTH
+    + _JS_PASTE
     + _JS_ACTIONS_LOG
     + _JS_ASL3
     + _JS_DVSWITCH
@@ -22970,7 +23278,10 @@ _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "firewalld_prereq": lambda p: action_install_firewalld(),
     "resolved_prereq": lambda p: action_install_resolved(),
     "create_zone": lambda p: action_create_zone(),
-    "paste_config": lambda p: action_paste_config(p.get("config_text", ""), p.get("backup_to_library", True), p.get("kind", "")),
+    "paste_config": lambda p: action_paste_config(p.get("config_text", ""), p.get("backup_to_library", True), p.get("kind", ""),
+                                                  p.get("opts") if isinstance(p.get("opts"), dict) else None),
+    "paste_preview": lambda p: action_paste_preview(p.get("config_text", ""), p.get("kind", ""),
+                                                    p.get("opts") if isinstance(p.get("opts"), dict) else None),
     "health_start_services": lambda p: action_health_start_services(),
     "health_netcheck_fixes": lambda p: action_health_netcheck_fixes(),
     "health_address32": lambda p: action_health_address32(),
