@@ -1,6 +1,59 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_199_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_200_20261014.py`. Newest entries first.
+
+## 0.0.200 (2026-10-14) — testing
+
+The install now prevents the problems the Health and fixes card repairs, so a new
+tunnel doesn't need fixing afterwards. The card stays as a safety net for later changes.
+
+**Step 1a (systemd-resolved)** is green only when resolved is running **and** answers
+(`resolvectl status` within 5 s, cached 20 s). Running the step installs and enables it
+as before, then restarts resolved once if it isn't answering and checks again. If it
+still doesn't answer, the step stays red and says to reboot, or to set DNS to Off at
+4a. The card shows "Running" and "Answers" separately.
+
+**Step 4 (paste config)** checks the config before writing it. The button is now
+**Check and write wg0.conf**; a panel lists what will change, and nothing is written
+until you press **Write wg0.conf**.
+
+| In the pasted config | What happens |
+|---|---|
+| `SaveConfig = true` | Removed, always. wg-quick would rewrite the file and drop 44helper's markers. |
+| `DNS =` line while resolved isn't answering (or there's no resolvconf) | Removed, so DNS is Off. Set it on the DNS card once step 1a is green. Kept when resolved answers. |
+| One 44Net address wider than /32 | **Change to /32**, ticked by default. Untick it if ARDC gave you a subnet. |
+| No `PersistentKeepalive` | **Add PersistentKeepalive = 25**, ticked by default. |
+| AllowedIPs doesn't fit the tab | Two choices: **Rewrite it** to this tab's shape (selected), or **Stop** and paste it on the other tab. Without a choice the write is refused. This replaces the note shown after writing. |
+| Tunnel server inside AllowedIPs | Endpoint pin added (as since 0.0.197). |
+
+- The same check runs on Convert's write step, and on a config loaded from the
+  library (it fills the paste box).
+- Every wg0.conf write (DNS/MTU card, Repair, the Health fixes, the half tunnel and
+  the exceptions) also removes `SaveConfig = true`.
+- New action `paste_preview`. It returns only the notes and choices; the config and
+  its key are never sent back.
+
+**Step 6 (enable the tunnel)**, after a successful start:
+1. Waits up to 15 s for a handshake. If there isn't one, it warns (check the Endpoint
+   and the portal) and leaves the tunnel up.
+2. If the tunnel server is routed into wg0, it adds the live /32 pin.
+3. If `netcheck.service` exists, it applies the netcheck fixes (the Health card's
+   action).
+4. It starts any enabled DVSwitch services that are stopped.
+
+Each result is listed in the step's output. Convert's enable step does the same.
+
+**DVSwitch installer**
+- Install, Bookworm and Trixie: new step **Stop netcheck from blocking boot**, after
+  the gateways are enabled (step 7 on Bookworm, 9 on Trixie; the steps after it move
+  down one). It runs the netcheck fixes and is safe to run again.
+- Purge: new step 1, **Remove 44helper's netcheck fixes** (the netcheck Revert), so
+  no drop-ins are left once the packages are gone. Run-all purge includes it.
+- These steps call 44helper's own actions, not a shell command; Copy gives the step
+  name and its output.
+
+The Health card's Change to /32, Add keepalive and Set DNS to Off now use the same
+code as the paste check.
 
 ## 0.0.199 (2026-10-14) — testing
 
