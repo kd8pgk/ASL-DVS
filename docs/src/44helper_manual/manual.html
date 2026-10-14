@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.201</b><br>Edition 2026-10-14</div>
+    <div class="ed"><b>44helper 0.0.202</b><br>Edition 2026-10-14</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_201_20261014.py</td><td>0.0.201</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_202_20261014.py</td><td>0.0.202</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
@@ -126,7 +126,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.201 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.202 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -744,8 +744,8 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
   </table>
   <p><b>Purge</b>: uninstall the connector service, remove the package, the four clean-up steps, and optionally the stored
     credentials in <code>/etc/cloudflared</code>.</p>
-  <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>bypasses the firewall</b>. Nothing opens
-    inbound, so the Ports tab and the firewall cards can't see what you published, and the mapping lives in Cloudflare where
+  <div class="call care"><span class="t">CAREFUL</span>A Cloudflare Tunnel <b>needs no inbound port</b>: cloudflared only connects out (to Cloudflare on port 7844), so the
+    Ports tab and the firewall cards can't see what you published, and the mapping lives in Cloudflare where
     44helper can't read it. Always put a <b>Cloudflare Access policy</b> (for example, email one-time codes for your
     address only) in front of every hostname. Never publish 44helper itself.</div>
 </section>
