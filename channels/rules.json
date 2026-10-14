@@ -4,7 +4,7 @@
  "fallback_days": 14,
  "cosmetic_since": "2026-10-14T00:00:00Z",
  "floors": {
-  "instmon": "2.49.0"
+  "instmon": "2.50.0"
  },
  "aliases": {
   "asl_dvs_dashboard": "nodecontrol",

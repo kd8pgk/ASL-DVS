@@ -39,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_85_20261014.py` | `sysmon_pi02w_v6_13_69_20261014.py` | `instmon_v2_48_0_20261014.py` |
-| `VERSION` | `6.13.85` | `6.13.69-pi02w` | `2.48.0` |
+| File name | `sysmon_v6_13_85_20261014.py` | `sysmon_pi02w_v6_13_69_20261014.py` | `instmon_v2_49_0_20261014.py` |
+| `VERSION` | `6.13.85` | `6.13.69-pi02w` | `2.49.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -79,7 +79,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_48_0_20261014.py --install
+   sudo python3 instmon_v2_49_0_20261014.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -131,7 +131,7 @@ instmon once by hand. From then on, instmon updates itself.
 
 Every build lands on `main`, the **testing** channel. **Stable** is a list of
 proven builds, one per tool, in [`channels/stable.json`](channels). instmon
-reads it from version 2.49.0 on, with Stable as the default and Testing as an
+reads it from version 2.50.0 on, with Stable as the default and Testing as an
 opt-in; until then instmon keeps updating from `main`.
 
 - **Releases and cosmetic builds.** `X.Y.Z` is a release. `X.Y.Z.N` is a
@@ -144,7 +144,7 @@ opt-in; until then instmon keeps updating from `main`.
   - it has been the newest release for 14 days.
 - **Overrides** in `channels/overrides.json`: `hold` keeps a release off
   stable; `hotfix` puts a release on stable at once.
-- **instmon** is never older than 2.49.0 on stable, the first version that
+- **instmon** is never older than 2.50.0 on stable, the first version that
   reads channels. A build still under an old file name is never promoted.
 - The `promote-stable` workflow rewrites `channels/stable.json` after every
   merge to `main` and once a day. Each entry names the file, version, commit
@@ -239,7 +239,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_74_20261014.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_85_20261014.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_69_20261014.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_48_0_20261014.py` | common |
+| `instmon_v2_49_0_20261014.py` | common |
 | `wifimon_v5_33_0_20261014.py` | common |
 | `44helper_v0_0_203_20261014.py` | common |
 | `install_all_v7_1_20261012.sh` | common |
