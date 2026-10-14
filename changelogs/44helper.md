@@ -1,6 +1,44 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_195_20261013.py`. Newest entries first.
+Current file: `44helper_v0_0_196_20261014.py`. Newest entries first.
+
+## 0.0.196 (2026-10-14) — testing
+
+The Firewall tab is gone. Its cards moved to the tabs they belong with; nothing was
+removed, and every button posts to the same place as before.
+
+- **Full Tunnel and Split Tunnel tabs**, at the end under the Purge buttons, in a
+  new **Firewall and port control** section:
+  - the guardrail (wg0 in the ASL3 `allstarlink` zone);
+  - **Pi: 44NetConnect zone** (add or remove a service or port);
+  - **Quick port control (any zone)**, with its presets, runtime test, Make
+    permanent, Remove, Commit all, Reload, panic off and the advanced tools;
+  - **Re-check** and the "Last checked" time.
+
+  The section exists once and follows you to whichever tunnel tab you open, so a
+  typed port or a picked zone stays as it was. Opening either tab reads the
+  firewall again. It sits outside the tab's step list, so the lock that holds the
+  Split steps while a Full tunnel is installed doesn't catch it.
+- **Half tunnel card** is on the **Full Tunnel** tab, above Full tunnel with
+  exceptions. It needs `AllowedIPs = 0.0.0.0/0`, so it belongs with the full
+  tunnel. Opening the Full tab refreshes it.
+- **Router: live port-forward table** is on the **Router Install** tab, under the
+  steps.
+- Text that pointed at the Firewall tab now names the Full Tunnel tab: the Split
+  tab's AllowedIPs repair refusal and notice, and the half tunnel's Check first
+  blocker on the exceptions card. The comment the half tunnel's Make permanent
+  writes into wg0.conf changes too; nodes already made permanent keep the old line.
+- The server routes (`/api/firewall/status`, `/api/firewall/action`,
+  `/api/firewall/half_status`) are unchanged.
+- Tested in headless Chromium with mocked routes:
+  - No Firewall tab or panel, and one copy of every element.
+  - The section starts on Split, moves to Full and back with what you typed, and
+    fills in on both.
+  - Runtime add, Add service and the router Remove post the same requests as
+    before, from their new tabs.
+  - The half card renders on Full above the exceptions card, and the router
+    table fills on Router Install.
+  - No script errors from these cards. `node --check` on the page JavaScript.
 
 ## 0.0.195 (2026-10-13) — testing
 

@@ -1,6 +1,12 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_84_20261013.py`. Newest entries first.
+Current file: `sysmon_v6_13_85_20261014.py`. Newest entries first.
+
+## 6.13.85 (2026-10-14)
+
+Text only. Two hints in the Console's **Half tunnel** checks said "Use Undo now on
+44helper's Firewall tab". 44helper 0.0.196 moved the half tunnel card to its Full
+Tunnel tab, so the hints now say that. Nothing else changes.
 
 ## 6.13.84 (2026-10-13)
 
