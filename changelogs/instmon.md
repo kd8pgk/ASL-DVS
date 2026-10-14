@@ -1,6 +1,26 @@
 # instmon changelog
 
-Current file: `instmon_v2_47_0_20261013.py`. Newest entries first.
+Current file: `instmon_v2_48_0_20261014.py`. Newest entries first.
+
+## 2.48.0 (2026-10-14)
+
+Web requests can no longer hang a thread forever (reliability plan,
+Stage 3a). instmon serves both builds.
+
+- Every web connection now has a 60-second idle limit. Before, there was
+  none. A phone that dropped off WiFi in the middle of a request, or any
+  client that connected and sent nothing, held one of instmon's threads
+  until instmon restarted. On a 512 MB Pi those added up.
+- The limit counts silence, not total time. A slow upload or download that
+  keeps moving still finishes. Installs, Full Update and disk-image jobs
+  are not affected: they run in their own threads, not on the web
+  connection.
+- Tested:
+  - with a real server on a free port: idle clients are dropped and their
+    threads freed; a client that sends its request a few bytes at a time
+    still gets its answer; normal requests still work; the handler's limit
+    is 60 s
+  - `ci/check_repo.py`
 
 ## 2.47.0 (2026-10-13)
 
