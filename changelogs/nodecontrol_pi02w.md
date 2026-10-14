@@ -1,6 +1,27 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_74_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_75_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.75-pi02w (2026-10-14)
+
+The Dashboard shares the AllStarLink registration state with other tools, so
+wifimon can send an alert when the node drops off AllStarLink (reliability
+plan, Stage 7). The full build is not changed.
+
+- After every registration check, the Dashboard writes
+  `/run/asl_dvs/asl_reg.json`, readable by all:
+  - `node`, `state` (`registered`, `unregistered` or `unknown`);
+  - `since`: when the state last changed;
+  - `checked_at`: this check;
+  - `next_check_secs`: 900 when registered, 60 otherwise, so a reader can
+    tell when the file is stale.
+- `/run` is in memory, so this doesn't wear the SD card. If the file can't be
+  written, the check carries on as before.
+- Nothing changes on the page.
+- Tested (unit tests with mocks, 2): registered, then registered again (`since`
+  kept, `checked_at` moves on), then unregistered (`since` moves, and the
+  next check is in 60 s); mode 644; no `.tmp` left; an unwritable path
+  doesn't break the check. `ci/check_repo.py`.
 
 ## 9.3.74-pi02w (2026-10-14)
 
