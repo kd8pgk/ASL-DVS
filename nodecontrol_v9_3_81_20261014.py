@@ -39,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.80"
-BUILD_DATE   = "2026-10-13"
+VERSION      = "9.3.81"
+BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -7716,6 +7716,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 .pt-call.pt-live{color:var(--green)}
 .pt-call.pt-warn{color:var(--amber)}
 .pt-call.pt-talk{color:#ffd700}
+.pt-rf-note{font-size:.8rem;line-height:1.4;color:var(--amber);border:1px solid var(--amber-dim);border-radius:4px;padding:.5rem .75rem;margin:.6rem .9rem}
 #pt-reg-dot.pt-hide{visibility:hidden}
 #pg-PHONE .quick-bar{flex-wrap:wrap}
 #pg-PHONE .quick-inp{min-width:6.5rem}
@@ -9149,6 +9150,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             <button id="pt-patch-btn" class="btn btn-muted" onclick="ptPatchToggle()">Patch: On</button>
             <button id="pt-rep-btn" class="btn btn-muted" onclick="ptReportOpen()" title="Gather a text report to copy and paste">Report</button>
           </div>
+          <div class="pt-rf-note" role="note"><b>Notice:</b> Sending music over a radio node is a violation of FCC rules. 47 CFR &sect;97.113(a)(4) prohibits music on an amateur station, and that includes a phone system's hold music or a recording played into a call. &sect;97.113(e) also bars retransmitting broadcast stations. Hang up if a call goes to hold music. Radioless nodes and phone systems with no RF link should be fine.</div>
         </div>
         <div id="pg-EDIT" class="hidden">
           <div class="ed-toolbar" style="justify-content:center">
