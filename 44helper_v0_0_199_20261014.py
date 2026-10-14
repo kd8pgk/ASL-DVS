@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.198"
+APP_VERSION = "0.0.199"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -924,6 +924,7 @@ def build_overview_data(cfg: configparser.ConfigParser) -> dict:
         "firewalld_zone": fw_zone,
         "tunnel_names": tunnel_names,
         "self_check": self_check,
+        "tunnel_kind": cfg.get("tunnels", "tunnel.pi.kind", fallback=""),
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -985,6 +986,12 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
     else:
         findings.append({"level": "ok", "msg": f"{WG0_CONF_PATH} permissions OK (600)."})
 
+    findings += _ov_endpoint_findings()
+    findings += _ov_health_findings()
+    return findings
+
+def _ov_endpoint_findings() -> list[dict]:
+    findings: list[dict] = []
     try:
         with open(WG0_CONF_PATH, "r") as f:
             ep = _wg_endpoint_info(f.read())
@@ -992,6 +999,7 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
         ep = None
     if ep and ep["needed"] and _wg_endpoint_loop_live(ep["ip"]):
         findings.append({
+            "id": "endpoint", "fix": ["endpoint_pin"],
             "level": "danger",
             "msg": (f"The tunnel server ({ep['host']}) is a 44Net address inside AllowedIPs and routes back into wg0: "
                     "a routing loop, so the tunnel can't reach it (the 44Net Connect dashboard shows idle). "
@@ -999,12 +1007,11 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
         })
     elif ep and ep["needed"] and not ep["pinned"]:
         findings.append({
+            "id": "endpoint", "fix": ["endpoint_pin"],
             "level": "warn",
             "msg": (f"The tunnel server ({ep['host']}) is inside AllowedIPs and wg0.conf has no endpoint pin. "
                     "The next tunnel start will loop. Fix it on the Split Tunnel tab, step 4b."),
         })
-
-    findings += _ov_health_findings()
     return findings
 
 _OV_HANDSHAKE_MAX = 180
@@ -1029,20 +1036,21 @@ def _ov_handshake_finding(text: str | None) -> dict | None:
     parsed = _parse_wg_conf_text(text, mask_private_key=True)
     keepalive = bool(parsed["peers"]) and _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") not in ("", "0", "off")
     if not stamps or max(stamps) == 0:
-        return {"level": "danger" if keepalive else "warn",
+        return {"id": "handshake", "fix": [] if keepalive else ["keepalive"],
+                "level": "danger" if keepalive else "warn",
                 "msg": ("wg0 is up but has never completed a handshake with the 44Net server, so the tunnel carries nothing "
                         "(the 44Net Connect dashboard shows idle). Check the key and Endpoint, and that the tunnel server "
                         "doesn't route into wg0 (ip -4 route get <endpoint>).")}
     age = int(time.time() - max(stamps))
     if age <= _OV_HANDSHAKE_MAX:
-        return {"level": "ok", "msg": "Tunnel handshake is recent (under 3 minutes)."}
+        return {"id": "handshake", "fix": [], "level": "ok", "msg": "Tunnel handshake is recent (under 3 minutes)."}
     nice = f"{age // 3600} h {age % 3600 // 60} min" if age >= 3600 else f"{age // 60} min"
     if keepalive:
-        return {"level": "danger",
+        return {"id": "handshake", "fix": [], "level": "danger",
                 "msg": (f"Last tunnel handshake {nice} ago, although a keepalive is set: the tunnel isn't reaching the 44Net "
                         "server (the dashboard shows idle). Check ip -4 route get <endpoint> doesn't say wg0, and the key "
                         "and Endpoint.")}
-    return {"level": "warn",
+    return {"id": "handshake", "fix": ["keepalive"], "level": "warn",
             "msg": (f"Last tunnel handshake {nice} ago. With no PersistentKeepalive a quiet tunnel goes idle, and stations "
                     "on 44Net can't reach this node until it sends something. Add PersistentKeepalive = 25 under [Peer].")}
 
@@ -1067,17 +1075,17 @@ def _ov_failed_findings() -> list[dict]:
     findings: list[dict] = []
     if "netcheck.service" in failed and stopped:
         names = " ".join(u.replace(".service", "") for u in stopped)
-        findings.append({"level": "danger",
+        findings.append({"id": "netcheck", "fix": ["start_services", "netcheck_fixes"], "level": "danger",
                          "msg": (f"netcheck failed, so these DVSwitch services never started: {names}. Start them now: "
                                  f"sudo systemctl start {names}. To stop it happening at the next boot, use the netcheck "
                                  "card under step 6 on the Full or Split Tunnel tab.")})
         stopped = []
     if failed:
-        findings.append({"level": "danger",
+        findings.append({"id": "failed", "fix": [], "level": "danger",
                          "msg": "Failed services: " + ", ".join(u.replace(".service", "") for u in failed)
                                 + ". See journalctl -u <name> -b for why."})
     if stopped:
-        findings.append({"level": "warn",
+        findings.append({"id": "stopped", "fix": ["start_services", "netcheck_fixes"], "level": "warn",
                          "msg": "Enabled at boot but not running: " + ", ".join(u.replace(".service", "") for u in stopped) + "."})
     return findings
 
@@ -1088,11 +1096,12 @@ def _ov_dns_finding(text: str | None) -> dict | None:
     if not need:
         return None
     if "no resolvconf" in need:
-        return {"level": "danger", "msg": f"wg0.conf {need}: the next tunnel start will fail. Set the DNS card (step 4a) to Off."}
+        return {"id": "dns", "fix": ["dns_off"], "level": "danger",
+                "msg": f"wg0.conf {need}: the next tunnel start will fail. Set the DNS card (step 4a) to Off."}
     ok, why = _wg_resolved_answers()
     if ok:
         return None
-    return {"level": "danger",
+    return {"id": "dns", "fix": ["restart_resolved", "dns_off"], "level": "danger",
             "msg": (f"wg0.conf {need}, which goes through systemd-resolved, and resolved isn't answering ({why}). The next "
                     "tunnel start will wait 25 s and fail. Run sudo systemctl restart systemd-resolved (or reboot), or set "
                     "the DNS card (step 4a) to Off.")}
@@ -1111,7 +1120,7 @@ def _ov_address_finding(text: str | None) -> dict | None:
             wide.append(str(iface))
     if not wide:
         return None
-    return {"level": "warn",
+    return {"id": "address", "fix": ["address32"] if _hl_address32_target(text) else [], "level": "warn",
             "msg": (f"wg0.conf Address is {', '.join(wide)}, not a single /32. A 44Net Connect tunnel is one address, and a "
                     f"wider prefix routes the whole {', '.join(str(ipaddress.ip_interface(w).network) for w in wide)} into wg0. "
                     "Check it against the portal and change it to /32 unless you were given a subnet.")}
@@ -1147,6 +1156,249 @@ def _ov_health_compute() -> list[dict]:
     except Exception as exc:
         log(f"overview check failed: {exc}")
     return out
+
+def _hl_stopped_units() -> list[str]:
+    states = _ov_unit_states(_OV_DVS_UNITS)
+    return [u for u in _OV_DVS_UNITS if u in states
+            and states[u].get("LoadState") == "loaded" and states[u].get("UnitFileState") == "enabled"
+            and states[u].get("ActiveState") in ("inactive", "failed")]
+
+def _hl_address32_target(text: str | None) -> str:
+    if not text:
+        return ""
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    hits = []
+    for part in _wg_conf_field(parsed["interface"], "Address").split(","):
+        try:
+            iface = ipaddress.ip_interface(part.strip())
+        except ValueError:
+            continue
+        if iface.version == 4 and iface.network.prefixlen != 32 and _half_in_44net(str(iface.ip)):
+            hits.append(part.strip())
+    return hits[0] if len(hits) == 1 else ""
+
+def _hl_testing_refusal() -> dict | None:
+    if _half_mode() == "testing":
+        return {"success": False, "verified": False,
+                "output": "Refused: a half-tunnel test is running. Use Undo now or Make permanent on its card first."}
+    if _fx_mode() == "testing":
+        return {"success": False, "verified": False,
+                "output": "Refused: a full-tunnel-exceptions test is running. Use Undo now or Make permanent on its card first."}
+    return None
+
+def _hl_read_conf() -> str | None:
+    try:
+        with open(WG0_CONF_PATH, "r", newline="") as f:
+            return f.read()
+    except OSError:
+        return None
+
+def _hl_done(res: dict) -> dict:
+    _OV_HEALTH_CACHE["at"] = 0.0
+    return res
+
+def action_health_start_services() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    units = _hl_stopped_units()
+    if not units:
+        return _hl_done({"success": True, "verified": True, "output": "Every enabled DVSwitch service is already running."})
+    out, ok = [], True
+    for u in units:
+        r = _run_argv(["systemctl", "start", u], timeout=60)
+        active = _systemctl_is_active(u)
+        out.append(("ok    " if active else "FAIL  ") + u.replace(".service", "") + (" started" if active else " did not start"))
+        if not active:
+            ok = False
+            if r["output"]:
+                out.append("      " + r["output"].splitlines()[-1])
+            try:
+                j = subprocess.run(["journalctl", "-u", u, "-b", "-n", "8", "--no-pager", "-o", "cat"],
+                                   capture_output=True, text=True, timeout=8).stdout.strip()
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                j = ""
+            out += ["      " + ln for ln in j.splitlines()]
+    if not ok:
+        out.append("Some services didn't start; their last log lines are above. If netcheck failed, use Apply netcheck fixes.")
+    return _hl_done({"success": ok, "verified": ok, "output": "\n".join(out)})
+
+def action_health_netcheck_fixes() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    sc = scan_netcheck()
+    if not sc.get("available") or not sc.get("netcheck", {}).get("exists"):
+        return _hl_done({"success": True, "verified": True, "output": "netcheck.service isn't on this node, so there is nothing to fix."})
+    fx = sc["fixes"]
+    out, ok, did = [], True, False
+    if fx["unit_fix"]["applicable"] and not fx["unit_fix"]["applied"]:
+        r = action_netcheck_fix_unit()
+        did = True
+        ok = ok and r.get("success", False)
+        out.append(("ok    " if r.get("success") else "FAIL  ") + "netcheck: runs once, after the network is online")
+    for unit, b in fx["bridge_fixes"].items():
+        if b["applicable"] and not b["applied"]:
+            r = action_netcheck_fix_bridge(unit)
+            did = True
+            ok = ok and r.get("success", False)
+            out.append(("ok    " if r.get("success") else "FAIL  ") + f"{unit.replace('.service', '')}: no longer stopped by a failed netcheck")
+    if fx["waitonline_fix"]["applicable"]:
+        r = action_netcheck_enable_waitonline()
+        did = True
+        ok = ok and r.get("success", False)
+        out.append(("ok    " if r.get("success") else "FAIL  ") + f"{fx['waitonline_fix']['unit']} enabled")
+    if not did:
+        out.append("The recommended netcheck fixes are already in place.")
+    if fx["target_fix"]["applicable"]:
+        out.append(f"netcheck probes {fx['target_fix']['current'] or '?'}; change it on the netcheck card under step 6 if that "
+                   "target can't be reached at boot.")
+    out.append("Revert is on the netcheck card under step 6.")
+    return _hl_done({"success": ok, "verified": ok, "output": "\n".join(out)})
+
+def action_health_address32() -> dict:
+    err = _require_root() or _hl_testing_refusal()
+    if err:
+        return err
+    text = _hl_read_conf()
+    target = _hl_address32_target(text)
+    if not target:
+        return _hl_done({"success": False, "verified": False,
+                         "output": "Nothing to change: wg0.conf doesn't have exactly one 44Net address wider than /32."})
+    new_addr = str(ipaddress.ip_interface(target).ip) + "/32"
+    lines = text.splitlines(keepends=True)
+    section, done = "", False
+    for i, raw in enumerate(lines):
+        body = raw.rstrip("\r\n")
+        low = body.strip().lower()
+        if low.startswith("["):
+            section = low
+            continue
+        if section == "[interface]" and not done and re.match(r"^\s*address\s*=", body, re.I) and target in body:
+            lines[i] = body.replace(target, new_addr, 1) + raw[len(body):]
+            done = True
+    if not done:
+        return _hl_done({"success": False, "verified": False, "output": "Couldn't find the Address line to change."})
+    try:
+        out = _wg_write_conf("".join(lines))
+    except OSError as e:
+        return _hl_done({"success": False, "verified": False, "output": f"Write failed: {e}"})
+    out.append(f"Address {target} changed to {new_addr}. The running tunnel still uses the old prefix until it restarts: "
+               "press Restart tunnel when you're on the LAN.")
+    return _hl_done({"success": True, "verified": True, "output": "\n".join(out)})
+
+def action_health_keepalive() -> dict:
+    err = _require_root() or _hl_testing_refusal()
+    if err:
+        return err
+    text = _hl_read_conf()
+    if text is None:
+        return {"success": False, "verified": False, "output": "No wg0.conf."}
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    if not parsed["peers"]:
+        return {"success": False, "verified": False, "output": "wg0.conf has no [Peer] section."}
+    if _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") not in ("", "0", "off"):
+        return _hl_done({"success": True, "verified": True, "output": "A PersistentKeepalive is already set."})
+    pub = _wg_conf_field(parsed["peers"][0], "PublicKey")
+    lines = text.splitlines(keepends=True)
+    nl = "\r\n" if "\r\n" in text else "\n"
+    out_lines, in_peer, inserted = [], False, False
+    for raw in lines:
+        low = raw.strip().lower()
+        if low.startswith("[") and in_peer and not inserted:
+            out_lines.append("PersistentKeepalive = 25" + nl)
+            inserted = True
+        if low == "[peer]":
+            in_peer = True
+        out_lines.append(raw)
+    if in_peer and not inserted:
+        if out_lines and not out_lines[-1].endswith(("\n", "\r")):
+            out_lines[-1] += nl
+        out_lines.append("PersistentKeepalive = 25" + nl)
+    try:
+        out = _wg_write_conf("".join(out_lines))
+    except OSError as e:
+        return {"success": False, "verified": False, "output": f"Write failed: {e}"}
+    if _wg0_interface_present() and pub:
+        r = _run_argv(["wg", "set", "wg0", "peer", pub, "persistent-keepalive", "25"])
+        out.append(("ok    " if r["success"] else "FAIL  ") + "applied to the running tunnel" + ("" if r["success"] else ": " + r["output"]))
+    out.append("PersistentKeepalive = 25 added under [Peer]: the Pi now checks in every 25 s.")
+    return _hl_done({"success": True, "verified": True, "output": "\n".join(out)})
+
+def action_health_restart_resolved() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    r = _run_argv(["systemctl", "restart", "systemd-resolved"], timeout=30)
+    ok, why = _wg_resolved_answers()
+    msg = (r["output"] + "\n" if r["output"] else "") + ("ok    systemd-resolved answers." if ok else
+           f"FAIL  systemd-resolved still isn't answering ({why}). Reboot the Pi, or use Set DNS to Off.")
+    return _hl_done({"success": ok, "verified": ok, "output": msg})
+
+def action_health_dns_off() -> dict:
+    err = _require_root() or _hl_testing_refusal()
+    if err:
+        return err
+    text = _hl_read_conf()
+    if text is None:
+        return {"success": False, "verified": False, "output": "No wg0.conf."}
+    text2 = _wg_block_remove(text, _WG_DNS_BEGIN, _WG_DNS_END) if any(
+        ln.strip() == _WG_DNS_BEGIN for ln in text.splitlines()) else text
+    section, kept, removed = "", [], []
+    for raw in text2.splitlines(keepends=True):
+        st = raw.split("#", 1)[0].strip()
+        if st.startswith("["):
+            section = st.lower()
+        if section == "[interface]" and re.match(r"^dns\s*=", st, re.I):
+            removed.append(raw.strip())
+            continue
+        kept.append(raw)
+    new = "".join(kept)
+    if new == text:
+        return _hl_done({"success": True, "verified": True, "output": "wg0.conf has no DNS setting; nothing to change."})
+    try:
+        out = _wg_write_conf(new)
+    except OSError as e:
+        return {"success": False, "verified": False, "output": f"Write failed: {e}"}
+    out += ["removed: " + ln for ln in removed]
+    out.append("DNS setting taken out of wg0.conf; the Pi keeps its own resolver. Restart the tunnel for it to take effect.")
+    return _hl_done({"success": True, "verified": True, "output": "\n".join(out)})
+
+def action_health_restart_tunnel() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    if _half_mode() == "testing":
+        return {"success": False, "verified": False,
+                "output": "Refused: a half-tunnel test is running (it runs wg0 from a copy). Use Undo now first."}
+    if not os.path.exists(WG0_CONF_PATH):
+        return {"success": False, "verified": False, "output": "No wg0.conf."}
+    gate: list[str] = []
+    if not _wg_dns_gate(gate):
+        return _hl_done({"success": False, "verified": False, "output": "\n".join(gate)})
+    cur = _hl_read_conf() or ""
+    if _wg_apply_endpoint_pin(cur)[1]:
+        gate += _wg_write_conf(cur)
+    unit = "wg-quick@wg0" if _wg_quick_template_available() else "44net-tunnel.service"
+    t0 = int(time.time())
+    r = _run_argv(["systemctl", "restart", unit], timeout=_WG_START_WAIT)
+    lines = gate + ([r["output"]] if r["output"] else [])
+    if not r["success"]:
+        lines += _wg_start_report(unit, t0)
+        return _hl_done({"success": False, "verified": False, "output": "\n".join(lines)})
+    hs = _half_wait_handshake()
+    lines.append("ok    tunnel restarted" + ("; handshake with the 44Net server" if hs else "; no handshake yet, check again in a minute"))
+    return _hl_done({"success": True, "verified": hs, "output": "\n".join(lines)})
+
+def build_tunnel_health(force: bool = False) -> dict:
+    items = _ov_endpoint_findings() + _ov_health_findings(force=force)
+    return {"items": items, "conf_exists": os.path.exists(WG0_CONF_PATH),
+            "testing": "half" if _half_mode() == "testing" else ("fullx" if _fx_mode() == "testing" else ""),
+            "root": os.geteuid() == 0, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+def _route_tunnel_health(query: dict) -> tuple[int, str, bytes]:
+    force = (query.get("force") or [""])[0] == "1"
+    return 200, "application/json", json.dumps(build_tunnel_health(force)).encode("utf-8")
 
 def _self_check_worst_level(findings: list[dict]) -> str:
     order = {"danger": 3, "warn": 2, "info": 1, "ok": 0}
@@ -15833,6 +16085,10 @@ function clickTab(id) {
 }
 
 function fwToolsDock(id) {
+  var hl = document.getElementById('hl-card');
+  var hlHome = document.getElementById(id === 'full_tunnel' ? 'hl-home-full' : 'hl-home-split');
+  if (hl && hlHome && hl.parentNode !== hlHome) { hlHome.appendChild(hl); }
+  if (typeof refreshHealth === 'function') { refreshHealth(); }
   var tools = document.getElementById('fw-tools');
   var home = document.getElementById(id === 'full_tunnel' ? 'fw-tools-home-full' : 'fw-tools-home-split');
   if (!tools || !home) { return; }
@@ -15922,6 +16178,7 @@ function _ovDot(level) {
 }
 
 function renderOverview(data) {
+  window._ovTunnelKind = data.tunnel_kind || '';
   // Banner — single worst-level finding drives color/text.
   var levels = {ok: 0, info: 1, warn: 2, danger: 3};
   var worst = 'ok';
@@ -15973,7 +16230,9 @@ function renderOverview(data) {
   var findings = data.self_check || [];
   document.getElementById('ov-findings').innerHTML = findings.length
     ? findings.map(function(f) {
-        return '<div class="ov-finding">' + _ovDot(f.level) + _ovEsc(f.msg) + '</div>';
+        var link = (f.fix && f.fix.length && f.level !== 'ok')
+          ? ' <a href="#" onclick="hlGoto(\\'' + _ovEsc(f.id || '') + '\\');return false" style="white-space:nowrap">Fix on the tunnel tab \u2192</a>' : '';
+        return '<div class="ov-finding">' + _ovDot(f.level) + _ovEsc(f.msg) + link + '</div>';
       }).join('')
     : 'No findings.';
 
@@ -21684,6 +21943,118 @@ function fxRender() {
 // full-tunnel exceptions js end
 """
 
+_JS_HEALTH = r"""
+var _hlData = null;
+var _hlOut = null;
+var _hlBusy = false;
+var _hlScrollTo = '';
+var _hlHighlight = '';
+var _HL_FIX = {
+  start_services: ['Start them', 'Start every enabled DVSwitch service that is stopped?'],
+  netcheck_fixes: ['Apply netcheck fixes', 'Apply the recommended netcheck fixes (systemd drop-ins under /etc, undo with Revert on the netcheck card)?'],
+  address32: ['Change to /32', 'Change the wg0.conf Address to a single /32? Check the 44Net Connect portal first: leave it if ARDC gave you a subnet. The tunnel is not restarted.'],
+  keepalive: ['Add keepalive (25 s)', 'Add PersistentKeepalive = 25 under [Peer] and apply it to the running tunnel?'],
+  restart_resolved: ['Restart systemd-resolved', 'Restart systemd-resolved? Name lookups pause for a moment.'],
+  dns_off: ['Set DNS to Off', 'Take the DNS setting out of wg0.conf (44helper\u2019s DNS lines and any DNS = line)? The Pi keeps its own resolver. Restart the tunnel afterwards.'],
+  endpoint_pin: ['Fix the tunnel-server route', 'Keep the tunnel server on the normal route? This adds two lines to wg0.conf and adds the route now.']
+};
+function hlEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+function refreshHealth(force) {
+  fetch('/api/tunnel/health' + (force === true ? '?force=1' : '')).then(function(r) { return r.json(); }).then(function(d) {
+    _hlData = d;
+    hlRender();
+  }).catch(function() {});
+}
+function hlBtn(label, onclick, enabled) {
+  var dis = (!enabled || _hlBusy) ? ' disabled style="opacity:.45;cursor:not-allowed"' : '';
+  return '<button class="btn-run" onclick="' + onclick + '"' + dis + '>' + hlEsc(label) + '</button>';
+}
+function hlRender() {
+  var box = document.getElementById('hl-card');
+  if (!box || !_hlData) { return; }
+  var d = _hlData;
+  var items = d.items || [];
+  var levels = {ok: 0, info: 1, warn: 2, danger: 3};
+  var worst = 'ok';
+  items.forEach(function(it) { if ((levels[it.level] || 0) > levels[worst]) { worst = it.level; } });
+  var pill = {ok: ['All clear', 'done'], info: ['All clear', 'done'], warn: ['Needs a look', 'attempted_unconfirmed'], danger: ['Needs fixing', 'failed']}[worst];
+  var html = '<div class="step-card"><div class="step-head"><div class="step-title">Health and fixes</div>';
+  html += '<span class="step-pill ' + pill[1] + '">' + pill[0] + '</span></div>';
+  html += '<div class="step-body">The same checks as the Overview, with a fix for each problem. Every fix asks first and says what it changes.</div>';
+  if (d.testing) {
+    html += '<div class="step-body" style="color:var(--amber)">A ' + (d.testing === 'half' ? 'half-tunnel' : 'full-tunnel-exceptions') + ' test is running: fixes that write wg0.conf are refused until it is undone or made permanent.</div>';
+  }
+  if (!items.length) {
+    html += '<div class="step-body">' + _ovDot('ok') + 'Nothing to report.</div>';
+  }
+  items.forEach(function(it) {
+    html += '<div class="step-body" id="hl-row-' + hlEsc(it.id || '') + '" style="border-top:1px solid var(--border2);padding-top:.35rem">' + _ovDot(it.level) + hlEsc(it.msg);
+    var fixes = it.fix || [];
+    if (fixes.length && it.level !== 'ok') {
+      html += '<div class="step-actions" style="margin-top:.25rem">';
+      fixes.forEach(function(f) {
+        var meta = _HL_FIX[f];
+        if (meta) { html += hlBtn(meta[0], "hlFix('" + f + "')", d.root) + ' '; }
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  html += '<div class="step-actions" style="margin-top:.4rem">' + hlBtn('Restart tunnel', "hlFix('restart_tunnel')", d.root && d.conf_exists) +
+          ' <button class="btn-copy" onclick="refreshHealth(true)">Re-check</button>' +
+          ' <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted)">checked ' + hlEsc(d.checked_at || '') + '</span></div>';
+  html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">Restart tunnel briefly drops wg0: SSH or Cockpit from outside your network may disconnect. Use it from the LAN.</div>';
+  var o = _hlOut;
+  var cls = 'asl3-console shown' + (o ? (o.working ? '' : (o.success ? ' ok' : ' fail')) : ' placeholder');
+  html += '<div class="' + cls + '" style="white-space:pre-wrap">' + (o ? hlEsc(o.text) : '(no fix run yet)') + '</div>';
+  html += '</div>';
+  box.innerHTML = html;
+  if (_hlHighlight) {
+    var hrow = document.getElementById('hl-row-' + _hlHighlight);
+    if (hrow) { hrow.style.outline = '1px solid var(--amber)'; }
+  }
+  if (_hlScrollTo) {
+    var row = document.getElementById('hl-row-' + _hlScrollTo);
+    if (row) { row.scrollIntoView({block: 'center'}); _hlScrollTo = ''; }
+  }
+}
+function hlFix(fix) {
+  if (_hlBusy) { return; }
+  var msg = fix === 'restart_tunnel'
+    ? 'Restart the tunnel now? wg0 drops for a moment; a remote SSH or Cockpit session may disconnect.'
+    : (_HL_FIX[fix] || ['', 'Run this fix?'])[1];
+  if (!confirm(msg)) { return; }
+  var step = fix === 'endpoint_pin' ? 'repair_allowed_ips' : 'health_' + fix;
+  _hlBusy = true;
+  _hlOut = {text: 'Working... (this can take a minute)', working: true};
+  hlRender();
+  fetch('/api/pi_install/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({step: step})
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    _hlBusy = false;
+    _hlOut = {text: res.output || '(no output)', success: res.success !== false};
+    refreshHealth(true);
+    if (typeof refreshOverview === 'function') { refreshOverview(true); }
+  }).catch(function(e) {
+    _hlBusy = false;
+    _hlOut = {text: 'Request failed: ' + e, success: false};
+    refreshHealth(true);
+  });
+}
+function hlGoto(id) {
+  var kind = (window._ovTunnelKind === 'full') ? 'full_tunnel' : 'split_tunnel';
+  _hlScrollTo = id;
+  _hlHighlight = id;
+  setTimeout(function() { _hlHighlight = ''; }, 4000);
+  clickTab(kind);
+}
+// health card js end
+"""
+
 _JS = (
     _JS_AUTH
     + _JS_EVENTS
@@ -21698,6 +22069,7 @@ _JS = (
     + _JS_FIREWALL
     + _JS_HALF
     + _JS_FX
+    + _JS_HEALTH
     + _JS_ACTIONS_LOG
     + _JS_ASL3
     + _JS_DVSWITCH
@@ -22229,6 +22601,7 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
     target_allowed_ips = "0.0.0.0/0" if kind == "full" else "44.0.0.0/9, 44.128.0.0/10"
     fx_div = '<div id="ht-card"></div>\n  <div id="fx-card"></div>' if kind == "full" else ""
     fw_home = ('<div id="fw-tools-home-split">' + _render_fw_tools_block() + '</div>') if kind == "split" else '<div id="fw-tools-home-full"></div>'
+    hl_home = '<div id="hl-home-split"><div id="hl-card"></div></div>' if kind == "split" else '<div id="hl-home-full"></div>'
     return f"""
 <div class="tab-panel hidden" id="panel-{kind}_tunnel">
   <div class="step-body">
@@ -22252,6 +22625,7 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
     ASL3-Appliance-specific hardening layer on top, not a universal 44Net
     Connect requirement.{intro_extra}
   </div></div>
+  {hl_home}
   <div id="pi-lock-banner-{kind}"></div>
   <div id="pi-steps-{kind}"></div>
   {fx_div}
@@ -22571,6 +22945,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/firewall/status": _route_firewall_status,
     "/api/firewall/half_status": _route_half_status,
     "/api/fullx/status": _route_fx_status,
+    "/api/tunnel/health": _route_tunnel_health,
     "/api/pi_install/netcheck_scan": _route_pi_install_netcheck_scan,
     "/api/pi_install/netcheck_journal": _route_pi_install_netcheck_journal,
     "/api/actions_log/notes": _route_actions_log_notes,
@@ -22596,6 +22971,13 @@ _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "resolved_prereq": lambda p: action_install_resolved(),
     "create_zone": lambda p: action_create_zone(),
     "paste_config": lambda p: action_paste_config(p.get("config_text", ""), p.get("backup_to_library", True), p.get("kind", "")),
+    "health_start_services": lambda p: action_health_start_services(),
+    "health_netcheck_fixes": lambda p: action_health_netcheck_fixes(),
+    "health_address32": lambda p: action_health_address32(),
+    "health_keepalive": lambda p: action_health_keepalive(),
+    "health_restart_resolved": lambda p: action_health_restart_resolved(),
+    "health_dns_off": lambda p: action_health_dns_off(),
+    "health_restart_tunnel": lambda p: action_health_restart_tunnel(),
     "load_wg_from_library": lambda p: action_load_wg_from_library(),
     "set_dns": lambda p: action_wg_set_dns(p.get("dns_mode", ""), p.get("dns_servers", "")),
     "set_mtu": lambda p: action_wg_set_mtu(p.get("mtu", "")),
