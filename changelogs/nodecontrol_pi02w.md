@@ -1,6 +1,24 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_71_18_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_72_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.72-pi02w (2026-10-14)
+
+The Phone tab carries a notice that sending music over a radio node breaks FCC
+rules. The full build is not changed.
+
+- A boxed amber notice under the Phone tab's Hang Up / Keypad / Patch / Report
+  bar:
+  - music on an amateur station is prohibited by 47 CFR §97.113(a)(4), and
+    that includes a phone system's hold music or a recording played into a call
+  - §97.113(e) also bars retransmitting broadcast stations
+  - hang up if a call goes to hold music
+  - radioless nodes and phone systems with no RF link should be fine
+- Version moves from four parts to three: 9.3.71.18-pi02w -> 9.3.72-pi02w.
+  `BUILD_DATE` is 2026-10-14.
+- Tested:
+  - The page in headless Chromium: the notice shows on the Phone tab in amber
+    `rgb(255,208,64)`, no script errors. `node --check` on the page script.
 
 ## 9.3.71.18-pi02w (2026-10-13)
 
