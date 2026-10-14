@@ -31,13 +31,16 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.32.0"
+APP_VERSION = "5.33.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
 CHECK_INTERVAL            = 5
 PING_TIMEOUT              = 2
 NO_CONN_SHUTDOWN_SECS     = 180
+NETWORK_LOSS_ACTION       = "reboot"
+NET_REBOOT_LIMIT          = 3
+NET_REBOOT_WINDOW_SECS    = 6 * 3600
 LOW_VOLTAGE_THRESHOLD     = 0.90
 LOW_VOLTAGE_SHUTDOWN_SECS = 30
 RECONNECT_INTERVAL_SECS   = 15
@@ -99,6 +102,7 @@ HEALTH_FILE         = os.path.join(SHUTDOWN_STATE_DIR, "health.json")
 ROAM_MODPROBE       = "/etc/modprobe.d/wifimon-brcmfmac.conf"
 REPORT_DIR          = "/var/log/wifimon"
 RUN_MARKER          = "/var/lib/wifimon/running.json"
+NET_REBOOT_FILE     = "/var/lib/wifimon/net_reboots.json"
 HW_WD_CONF_FILE     = "/etc/systemd/system.conf.d/90-asl_dvs-hwwatchdog.conf"
 
 _DEFAULT_CONFIG = {
@@ -806,6 +810,7 @@ _wd: Dict[str, object] = {
     "last_reconnect_ok": None,
     "networks_configured": 0,
     "loop_errors": 0,
+    "net_reboot_held": False,
 }
 
 def _wd_update(**changes: object) -> None:
@@ -1108,13 +1113,14 @@ def _clear_shutdown_state() -> None:
     except OSError as e:
         log.debug("_clear_shutdown_state: %s", e)
 
-def _write_shutdown_state(reason: str, trigger: str) -> None:
+def _write_shutdown_state(reason: str, trigger: str, action: str = "poweroff") -> None:
     try:
         os.makedirs(SHUTDOWN_STATE_DIR, exist_ok=True)
         payload = {
             "active":  True,
             "reason":  reason,
             "trigger": trigger,
+            "action":  action,
             "since":   time.time(),
         }
         tmp_path = SHUTDOWN_STATE_FILE + ".tmp"
@@ -1127,17 +1133,65 @@ def _write_shutdown_state(reason: str, trigger: str) -> None:
     except OSError as e:
         log.warning("_write_shutdown_state: failed to write state file: %s", e)
 
-def do_shutdown(reason: str, trigger: str) -> None:
-    log.critical("Shutting down: %s", reason)
-    _write_shutdown_state(reason, trigger)
+def do_shutdown(reason: str, trigger: str, action: str = "poweroff") -> None:
+    reboot = action == "reboot"
+    log.critical("%s: %s", "Rebooting" if reboot else "Shutting down", reason)
+    _write_shutdown_state(reason, trigger, action)
     _shutdown_report(reason, trigger)
     try:
         subprocess.run(["sync"], timeout=5)
-        subprocess.run(["systemctl", "poweroff"], timeout=10)
+        subprocess.run(["systemctl", "reboot" if reboot else "poweroff"], timeout=10)
     except Exception:
         pass
     time.sleep(15)
-    subprocess.run(["poweroff", "-f"])
+    subprocess.run(["reboot" if reboot else "poweroff", "-f"])
+
+def _net_reboots_load() -> List[float]:
+    try:
+        data = json.loads(_read_text(NET_REBOOT_FILE) or "[]")
+    except ValueError:
+        return []
+    if not isinstance(data, list):
+        return []
+    stamps = sorted(float(t) for t in data if isinstance(t, (int, float)) and not isinstance(t, bool))
+    if not stamps:
+        return []
+    now = max(time.time(), stamps[-1])
+    return [t for t in stamps if now - t < NET_REBOOT_WINDOW_SECS]
+
+def _net_reboots_record(when: Optional[float] = None) -> List[float]:
+    stamps = _net_reboots_load() + [time.time() if when is None else when]
+    try:
+        os.makedirs(os.path.dirname(NET_REBOOT_FILE), exist_ok=True)
+        tmp = NET_REBOOT_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(stamps, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, NET_REBOOT_FILE)
+    except OSError as e:
+        log.warning("Couldn't record the reboot in %s: %s", NET_REBOOT_FILE, e)
+    return stamps
+
+def _net_reboots_public() -> Dict[str, object]:
+    stamps = _net_reboots_load()
+    return {"count": len(stamps), "limit": NET_REBOOT_LIMIT, "window_secs": NET_REBOOT_WINDOW_SECS,
+            "reset_at": (stamps[0] + NET_REBOOT_WINDOW_SECS) if stamps else None}
+
+def _net_loss_act(down_secs: int) -> bool:
+    if NETWORK_LOSS_ACTION != "reboot":
+        _recorder_final("no_conn")
+        do_shutdown(f"No network connection for {down_secs}s", trigger="no_conn")
+        return True
+    done = _net_reboots_load()
+    if len(done) >= NET_REBOOT_LIMIT:
+        return False
+    stamps = _net_reboots_record()
+    _recorder_final("no_conn")
+    do_shutdown(f"No network connection for {down_secs}s — rebooting "
+                f"(reboot {len(stamps)} of {NET_REBOOT_LIMIT} allowed in {NET_REBOOT_WINDOW_SECS // 3600} h)",
+                trigger="no_conn", action="reboot")
+    return True
 
 _health_lock = threading.Lock()
 _health: Dict[str, object] = {"date": None, "blips": 0, "drops": 0, "chip_stalls": None,
@@ -1445,6 +1499,7 @@ def _watchdog_loop() -> None:
     head_start_noted = False
     nm_busy_since: Optional[float] = None
     nm_step_in_noted = False
+    net_reboot_held = False
 
     global _loop_beat
     while not _shutdown_event.is_set():
@@ -1495,6 +1550,9 @@ def _watchdog_loop() -> None:
 
             connected = is_connected()
             _wd_update(connected=connected, last_check_at=time.time())
+            if net_reboot_held and (connected or down_since is None or NETWORK_LOSS_ACTION != "reboot"):
+                net_reboot_held = False
+                _wd_update(net_reboot_held=False)
             if connected:
                 if misses and down_since is None:
                     log.info("Brief blip: %d missed check(s), back without a drop", misses)
@@ -1549,10 +1607,14 @@ def _watchdog_loop() -> None:
                         _health_incr("drops")
                         _wd_update(down_since_mono=down_since, last_drop_at=time.time())
                     if (loop_start - down_since) >= NO_CONN_SHUTDOWN_SECS:
-                        _recorder_final("no_conn")
-                        do_shutdown(f"No network connection for {NO_CONN_SHUTDOWN_SECS}s",
-                                    trigger="no_conn")
-                        break
+                        if _net_loss_act(NO_CONN_SHUTDOWN_SECS):
+                            break
+                        if not net_reboot_held:
+                            net_reboot_held = True
+                            _wd_update(net_reboot_held=True)
+                            log.warning("No network for %ds, but wifimon already rebooted %d times in %d h — "
+                                        "staying up and still trying to reconnect", NO_CONN_SHUTDOWN_SECS,
+                                        NET_REBOOT_LIMIT, NET_REBOOT_WINDOW_SECS // 3600)
 
                     stuck = link_up and (loop_start - down_since) >= STUCK_LINK_SECS
                     waiting = False
@@ -2058,9 +2120,13 @@ def _build_status() -> Dict[str, object]:
             return None
         return max(0.0, total - (now_m - float(since)))
 
+    net_held = bool(wd.get("net_reboot_held")) and NETWORK_LOSS_ACTION == "reboot"
     watchdog = {
         "connected": wd["connected"],
-        "no_conn_remaining": remaining(wd["down_since_mono"], NO_CONN_SHUTDOWN_SECS),
+        "no_conn_remaining": None if net_held else remaining(wd["down_since_mono"], NO_CONN_SHUTDOWN_SECS),
+        "net_action": NETWORK_LOSS_ACTION,
+        "net_reboots": _net_reboots_public(),
+        "net_reboot_held": net_held,
         "no_conn_total": NO_CONN_SHUTDOWN_SECS,
         "lowv_remaining": remaining(wd["lowv_since_mono"], LOW_VOLTAGE_SHUTDOWN_SECS),
         "lowv_total": LOW_VOLTAGE_SHUTDOWN_SECS,
@@ -2998,6 +3064,7 @@ def _check_new_network(body: Dict[str, object]) -> Tuple[Optional[Dict[str, obje
 
 _SETTINGS_SPEC: Dict[str, Tuple[str, type, Optional[float], Optional[float]]] = {
     "no_conn_shutdown_secs":     ("NO_CONN_SHUTDOWN_SECS", int, 60, 86400),
+    "network_loss_action":       ("NETWORK_LOSS_ACTION", str, None, None),
     "low_voltage_shutdown_secs": ("LOW_VOLTAGE_SHUTDOWN_SECS", int, 10, 3600),
     "low_voltage_threshold":     ("LOW_VOLTAGE_THRESHOLD", float, 0.70, 1.00),
     "reconnect_interval_secs":   ("RECONNECT_INTERVAL_SECS", int, 5, 600),
@@ -3008,6 +3075,7 @@ _SETTINGS_SPEC: Dict[str, Tuple[str, type, Optional[float], Optional[float]]] = 
     "hw_watchdog":               ("HW_WATCHDOG_ON", bool, None, None),
 }
 _SETTING_DEFAULTS: Dict[str, object] = {k: globals()[g] for k, (g, _t, _a, _b) in _SETTINGS_SPEC.items()}
+_NET_LOSS_ACTIONS = ("reboot", "poweroff")
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 _timers_reset = threading.Event()
 
@@ -3030,6 +3098,11 @@ def _validate_settings(raw: object) -> Tuple[Optional[Dict[str, object]], str]:
         if kind is bool:
             if not isinstance(value, bool):
                 return None, f"{key} must be on or off."
+            out[key] = value
+            continue
+        if key == "network_loss_action":
+            if value not in _NET_LOSS_ACTIONS:
+                return None, "When the network is lost: pick Reboot or Power off."
             out[key] = value
             continue
         if kind is str:
@@ -3055,7 +3128,7 @@ def _apply_settings(values: Dict[str, object], persist: bool = True) -> Optional
     for key, value in values.items():
         globals()[_SETTINGS_SPEC[key][0]] = value
     if any(before[k] != v for k, v in values.items()
-           if k not in ("detect_login_pages", "keep_powersave_off", "hw_watchdog")):
+           if k not in ("detect_login_pages", "keep_powersave_off", "hw_watchdog", "network_loss_action")):
         _timers_reset.set()
     notes: List[str] = []
     if "detect_login_pages" in values:
@@ -6203,7 +6276,9 @@ a.btnlink:hover{border-color:var(--cyan)}
       <div class="actions"><button type="button" id="btn-settings">Change settings</button></div>
       <form class="form" id="set-form" hidden autocomplete="off" style="margin-top:12px">
         <h3>Watchdog settings</h3>
-        <div class="row"><label for="s-noconn">Shut down after no connection for (seconds)</label>
+        <div class="row"><label for="s-netact">When the network is lost</label>
+          <select id="s-netact" data-key="network_loss_action" data-hint="Default Reboot. Reboot: at most 3 times in 6 hours; after that the node stays up and keeps trying to reconnect. Power off: the node stays off until someone powers it back on (for battery or hotspot nodes)."><option value="reboot">Reboot</option><option value="poweroff">Power off</option></select><span class="hint"></span></div>
+        <div class="row"><label for="s-noconn">Reboot or power off after no connection for (seconds)</label>
           <input type="number" id="s-noconn" data-key="no_conn_shutdown_secs" step="1"><span class="hint"></span></div>
         <div class="row"><label for="s-lowvs">Shut down after low voltage for (seconds)</label>
           <input type="number" id="s-lowvs" data-key="low_voltage_shutdown_secs" step="1"><span class="hint"></span></div>
@@ -6711,6 +6786,7 @@ a.btnlink:hover{border-color:var(--cyan)}
       conn: wd.no_conn_remaining, connTotal: wd.no_conn_total,
       connIdle: wd.wifi_on === false ? "Watchdog off"
         : !wd.networks_configured ? "No saved networks"
+        : wd.net_reboot_held ? "Reboot limit reached, still trying"
         : wd.connected === true ? "Connected" : "Checking…",
       connIdleCls: wd.wifi_active && wd.connected === true ? "" : "idle",
       lowv: wd.lowv_remaining, lowvTotal: wd.lowv_total,
@@ -6720,13 +6796,18 @@ a.btnlink:hover{border-color:var(--cyan)}
     };
     drawTimers();
     const rules = [];
-    if (wd.wifi_active) rules.push(dur(wd.no_conn_total) + " with no connection");
-    if (wd.voltage_on !== false) rules.push(dur(wd.lowv_total) + " of low voltage (below "
-      + wd.low_v_threshold + " V core)");
+    const nr = wd.net_reboots || {};
+    if (wd.wifi_active) rules.push(wd.net_action === "poweroff"
+      ? "Shuts the node down after " + dur(wd.no_conn_total) + " with no connection."
+      : "Reboots the node after " + dur(wd.no_conn_total) + " with no connection (at most "
+        + (nr.limit || 3) + " times in " + Math.round((nr.window_secs || 21600) / 3600)
+        + " hours; after that it stays up and keeps trying).");
+    if (wd.voltage_on !== false) rules.push("Shuts the node down after " + dur(wd.lowv_total)
+      + " of low voltage (below " + wd.low_v_threshold + " V core).");
     $("w-rules").textContent = rules.length
-      ? "Shuts the node down after " + rules.join(", or ") + "."
-        + (wd.wifi_on === false ? " The WiFi watchdog is off: no reconnects, no shutdown on a lost connection."
-          : !wd.wifi_active ? " The WiFi watchdog is waiting for a saved network: no reconnects, no shutdown on a lost connection until one is added." : "")
+      ? rules.join(" ")
+        + (wd.wifi_on === false ? " The WiFi watchdog is off: no reconnects, nothing happens on a lost connection."
+          : !wd.wifi_active ? " The WiFi watchdog is waiting for a saved network: no reconnects, nothing happens on a lost connection until one is added." : "")
         + (wd.voltage_on === false ? " The voltage watchdog is off: no shutdown on low voltage." : "")
       : wd.wifi_on !== false && !wd.wifi_active
         ? "The WiFi watchdog is waiting for a saved network, and the voltage watchdog is off: wifimon only watches until a network is added."
@@ -6737,11 +6818,21 @@ a.btnlink:hover{border-color:var(--cyan)}
       ["Under-voltage since boot", yesno(p.undervoltage_seen)],
       ["CPU throttled now", yesno(p.throttled_now)],
       ["Trying to reconnect", yesno(wd.reconnecting)],
+      ["Reboots for a lost network", netRebootText(wd)],
       ["Hardware watchdog", hwText(wd.hw)],
       ["Shutdown report", wd.recording
         ? "Recording details (" + wd.recording.count + " snapshots since " + stamp(wd.recording.started_at) + ")"
         : "Not needed right now"],
     ]);
+  }
+
+  function netRebootText(wd) {
+    const nr = wd.net_reboots;
+    if (!nr) return "—";
+    let t = nr.count + " of " + nr.limit + " in the last " + Math.round(nr.window_secs / 3600) + " hours";
+    if (nr.count && nr.reset_at) t += " (one frees up " + stamp(nr.reset_at) + ")";
+    if (wd.net_action === "poweroff") t += "; set to Power off";
+    return t;
   }
 
   function hwText(hw) {
@@ -6790,7 +6881,8 @@ a.btnlink:hover{border-color:var(--cyan)}
     renderPortal(d);
     const s = d.shutdown, b = $("banner");
     if (s && s.active) {
-      b.textContent = "This node is shutting down: " + (s.reason || "watchdog triggered");
+      b.textContent = (s.action === "reboot" ? "This node is rebooting: " : "This node is shutting down: ")
+        + (s.reason || "watchdog triggered");
       b.hidden = false;
     } else {
       b.hidden = true;
@@ -7309,7 +7401,7 @@ a.btnlink:hover{border-color:var(--cyan)}
   $("btn-track-all").addEventListener("click", () => post("/api/network/track", { all: true }));
 
   // ── Watchdog settings (v5.3) ─────────────────────────────────────────
-  const setInputs = () => [...$("set-form").querySelectorAll("input[data-key]")];
+  const setInputs = () => [...$("set-form").querySelectorAll("input[data-key], select[data-key]")];
   function fillSettings(values) {
     const st = ((lastData && lastData.watchdog) || {}).settings || {};
     for (const inp of setInputs()) {
@@ -7318,6 +7410,11 @@ a.btnlink:hover{border-color:var(--cyan)}
       if (inp.type === "checkbox") {
         inp.checked = !!values[k];
         hint.textContent = inp.dataset.hint || "Default off.";
+        continue;
+      }
+      if (inp.tagName === "SELECT") {
+        inp.value = values[k];
+        hint.textContent = inp.dataset.hint || "";
         continue;
       }
       inp.value = values[k];
@@ -7341,6 +7438,7 @@ a.btnlink:hover{border-color:var(--cyan)}
     for (const inp of setInputs()) {
       const k = inp.dataset.key;
       if (inp.type === "checkbox") values[k] = inp.checked;
+      else if (inp.tagName === "SELECT") values[k] = inp.value;
       else if (k === "ping_target") values[k] = inp.value.trim();
       else {
         if (inp.value === "" || isNaN(Number(inp.value))) { $("s-err").textContent = "Fill in every number."; return; }
