@@ -1,6 +1,48 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_198_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_199_20261014.py`. Newest entries first.
+
+## 0.0.199 (2026-10-14) — testing
+
+**Health and fixes** card at the top of the Full Tunnel and Split Tunnel tabs: the
+Overview's checks, each with a fix button. Like the firewall section, it exists once
+and moves to whichever tunnel tab you open.
+
+| Finding | Fix |
+|---|---|
+| Enabled DVSwitch services not running, or netcheck failed | **Start them**: starts each one, reports each result, shows the last log lines for any that fail. **Apply netcheck fixes**: runs the netcheck card's own fixes that are applicable and not yet applied (netcheck's unit, each bridge's dependency, the wait-online unit). The probe target needs your input, so it stays on the netcheck card; Revert is there too. |
+| Address wider than /32 | **Change to /32**: only when wg0.conf has exactly one 44Net address. Rewrites that address and nothing else (line endings kept). Doesn't restart the tunnel. The confirm says to check the portal first. |
+| Old handshake, no keepalive | **Add keepalive (25 s)**: adds `PersistentKeepalive = 25` to the first `[Peer]`, and applies it to the running tunnel with `wg set`, so no restart is needed. |
+| Tunnel server routes into wg0 | **Fix the tunnel-server route**: the 0.0.197 fix (step 4b's repair). |
+| DNS setting with systemd-resolved silent | **Restart systemd-resolved**, then checks it answers. **Set DNS to Off**: removes 44helper's DNS lines and any `DNS =` line in `[Interface]` (comments kept). |
+
+- **Restart tunnel** is a separate button: `systemctl restart` after the DNS check
+  and the endpoint pin, a 90 s limit, and the unit's log on failure. It says that a
+  remote SSH or Cockpit session may drop. Refused during a half-tunnel test.
+- Every fix asks first and says what it changes. The server works out the targets
+  itself (for example, which services to start); the page can't name a service or a
+  file. Fixes that write wg0.conf are refused during a half-tunnel or exceptions
+  test, and go through the normal write path (endpoint pin, library backup). After a
+  fix the checks run again.
+- **Overview:** each finding that has a fix gets **Fix on the tunnel tab →**. It opens
+  the Full or Split tab (whichever tunnel is installed) and highlights that row.
+- Findings now carry an id and their fixes. New read-only route
+  `/api/tunnel/health`; the fixes post to `/api/pi_install/action`.
+- Tested:
+  - Mocked unit tests for every fix:
+    - the /32 rewrite changing one address only, with CRLF;
+    - keepalive on the first peer of two, with the live `wg set`;
+    - DNS Off keeping comments;
+    - Start them using only the server's own list (names sent from the page are
+      ignored), with log lines for a service that fails;
+    - netcheck fixes running only what is applicable and not yet applied;
+    - Restart tunnel, the refusals during tests, and the DNS check stopping it;
+    - the health route.
+  - The card in headless Chromium: on Split above the steps, moving to Full, every
+    button posting its action, the confirms, escaping, the Overview links opening
+    the tab and highlighting the row, and the test-running notice.
+  - The 0.0.196–0.0.198 tests re-run on this version. `node --check` caught a
+    quoting bug in the Overview link before release.
 
 ## 0.0.198 (2026-10-14) — testing
 
