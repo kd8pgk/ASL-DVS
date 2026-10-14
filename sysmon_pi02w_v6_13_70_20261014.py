@@ -37,7 +37,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.69-pi02w"
+VERSION      = "6.13.70-pi02w"
 BUILD_DATE   = "20261013"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -1325,12 +1325,63 @@ def _update_state(**kwargs) -> None:
     with _state_lock:
         _state.update(kwargs)
 
+_BG_STALL_SECS   = 180.0
+_HTTP_STALL_SECS = 25.0
+_PROBE_EVERY     = 10.0
+_bg_beat = time.monotonic()
+_http_ok_at = time.monotonic()
+
+def _health_probe_loop(host: str, port: int) -> None:
+    global _http_ok_at
+    import http.client
+    while True:
+        time.sleep(_PROBE_EVERY)
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        try:
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            resp.read()
+            if resp.status == 200:
+                _http_ok_at = time.monotonic()
+        except (OSError, http.client.HTTPException):
+            pass
+        finally:
+            conn.close()
+
+def _heartbeat_problem(now: float) -> str:
+    if now - _bg_beat >= _BG_STALL_SECS:
+        return f"background poll stuck for {int(now - _bg_beat)}s"
+    if now - _http_ok_at >= _HTTP_STALL_SECS:
+        return f"web server not answering /healthz for {int(now - _http_ok_at)}s"
+    return ""
+
+def _sd_heartbeat_loop() -> None:
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC") or 0)
+    except ValueError:
+        usec = 0
+    if usec <= 0:
+        return
+    every = max(1.0, min(10.0, usec / 1e6 / 3))
+    stalled = ""
+    while True:
+        problem = _heartbeat_problem(time.monotonic())
+        if not problem:
+            if stalled:
+                _log("heartbeat: healthy again")
+                stalled = ""
+            _sd_notify("WATCHDOG=1")
+        elif problem.split(" for ")[0] != stalled.split(" for ")[0]:
+            stalled = problem
+            _log(f"heartbeat: {problem} — letting systemd restart SysMon", stderr=True)
+        time.sleep(every)
+
 def _bg_poll_loop() -> None:
+    global _bg_beat
     _log("bg_poll: started")
-    
-    _sd_notify("READY=1")
     poll_count = 0
     while True:
+        _bg_beat = time.monotonic()
         try:
             _update_state(
                 hostname   = get_hostname(),
@@ -1380,8 +1431,6 @@ def _bg_poll_loop() -> None:
                     _log(f"bg_poll: m17hosts error — {exc}", stderr=True)
         except Exception as exc:
             _log(f"bg_poll: error — {exc}", stderr=True)
-        
-        _sd_notify("WATCHDOG=1")
         time.sleep(10)
 
 _HTML = r"""<!DOCTYPE html>
@@ -3052,6 +3101,16 @@ body.tab-edit #zone-content{
     <div class="hw-copybar" style="display:flex;justify-content:flex-end;padding:.2rem 0 .5rem">
       <button class="btn btn-muted btn-sm" onclick="dtCopy(this, hwText)"
         title="Copy the whole Hardware tab as text">⎘ Copy hardware report</button>
+    </div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">Node Health</span>
+        <span class="s3-card-meta" id="hw-health-meta">checking…</span>
+      </div>
+      <div id="hw-health-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
     </div>
 
     <div class="s3-card">
@@ -8225,7 +8284,36 @@ function renderRptNodes() {
 // TAB: Hardware
 // ========================================================================
 // ---- general ----
+let _healthData = null;
+async function loadHealth() {
+  const d = await api("/api/health");
+  const body = document.getElementById("hw-health-body");
+  const meta = document.getElementById("hw-health-meta");
+  if (!body) return;
+  if (!d || !d.checks) {
+    if (meta) meta.textContent = "error";
+    body.innerHTML = '<div class="stub-panel">Server error</div>';
+    return;
+  }
+  _healthData = d.checks;
+  const cls = {pass: "ok", warn: "warn", fail: "hot", unknown: "dim"};
+  const word = {pass: "OK", warn: "WARN", fail: "PROBLEM", unknown: "?"};
+  const bad = d.checks.filter(c => c.status === "fail").length;
+  const warn = d.checks.filter(c => c.status === "warn").length;
+  const unk = d.checks.filter(c => c.status === "unknown").length;
+  if (meta) meta.textContent = bad ? `${bad} problem${bad > 1 ? "s" : ""}` : warn ? `${warn} warning${warn > 1 ? "s" : ""}`
+    : unk ? `OK · ${unk} couldn't be checked` : "all OK";
+  body.innerHTML = '<table class="hw-pwr-tbl">' + d.checks.map(c => {
+    const rows = (c.rows || []).map(r => `<div class="hw-pwr-note">${esc(r[0])}: ${esc(r[1])}</div>`).join("");
+    const note = c.note ? `<div class="hw-pwr-note" style="margin-top:.2rem">${esc(c.note)}</div>` : "";
+    return `<tr><td class="hw-pwr-lbl">${esc(c.title)}</td>
+      <td class="hw-pwr-val ${cls[c.status] || ""}"><b>${word[c.status] || "?"}</b> — ${esc(c.headline)}
+      <details style="margin-top:.15rem"><summary class="hw-pwr-note" style="cursor:pointer">details</summary>${rows}${note}</details></td></tr>`;
+  }).join("") + "</table>";
+}
+
 async function loadHardware() {
+  loadHealth();
   const d = await api("/api/hardware");
   if (d) _hwData = d;
   if (!d) {
@@ -10707,6 +10795,15 @@ function hwText() {
   if (!_hwData) return "";
   const out = _dtStamp("Hardware");
   const d = _hwData;
+  if (_healthData) {
+    out.push("[Node health]");
+    _healthData.forEach(c => {
+      out.push(`  ${c.title}: ${c.status.toUpperCase()} -- ${c.headline}`);
+      (c.rows || []).forEach(r => out.push(`    ${r[0]}: ${r[1]}`));
+      if (c.note) out.push(`    ${c.note}`);
+    });
+    out.push("");
+  }
   out.push("[AMBE device]");
   const am = d.ambe || [];
   if (!am.length) out.push("  none detected");
@@ -11208,7 +11305,7 @@ def _session_cookie_header(token: str, max_age: int) -> str:
 def _clear_session_cookie_header() -> str:
     return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
 
-_PUBLIC_GET_PATHS  = {"/", "/api/ping"}
+_PUBLIC_GET_PATHS  = {"/", "/api/ping", "/healthz"}
 
 class _EarlyReturn(Exception):
     pass
@@ -19738,6 +19835,204 @@ def _dvs_active_units() -> "list[str]":
             active.append(unit)
     return active
 
+_HEALTH_UNITS = ("nodecontrol", "asl_dvs_dashboard", "sysmon", "wifimon", "instmon", "44helper",
+                 "asterisk", "analog_bridge", "mmdvm_bridge", "md380-emu", "usrp2m17", "allmon3")
+_HEALTH_CACHE_SECS = 30.0
+_health_lock = threading.Lock()
+_health_cache: dict = {"at": None, "data": None}
+_HC_KILLED_RE = re.compile(r"Killed process (\d+) \(([^)]+)\)")
+_HC_DISK_USAGE_RE = re.compile(r"take up ([\d.]+)\s*([KMGT]?)B?", re.I)
+_HC_UNIT_MULT = {"": 1 / (1024 * 1024), "K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1024.0 * 1024}
+
+def _hc(cid: str, title: str, status: str, headline: str, rows=None, note: str = "") -> dict:
+    return {"id": cid, "title": title, "status": status, "headline": headline,
+            "rows": rows or [], "note": note}
+
+def _hc_cmd(cmd: list, timeout: int = 6) -> "tuple[str, str]":
+    if not shutil.which(cmd[0]):
+        return "", f"{cmd[0]} not found"
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "", f"{cmd[0]} timed out"
+    except OSError as exc:
+        return "", str(exc)
+    err = (r.stderr.strip().splitlines() or [""])[0]
+    return r.stdout, ("" if r.returncode == 0 else (err or f"{cmd[0]} exited {r.returncode}"))
+
+def _hc_meminfo() -> dict:
+    out = {}
+    try:
+        for ln in Path("/proc/meminfo").read_text().splitlines():
+            k, _, v = ln.partition(":")
+            parts = v.split()
+            if parts and parts[0].isdigit():
+                out[k.strip()] = int(parts[0]) // 1024
+    except OSError:
+        pass
+    return out
+
+def _hc_clock() -> dict:
+    out, prob = _hc_cmd(["timedatectl", "show", "-p", "NTPSynchronized", "-p", "NTP", "-p", "Timezone"])
+    if prob:
+        return _hc("clock", "Clock", "unknown", f"Can't read the clock state ({prob})")
+    kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+    synced, ntp = kv.get("NTPSynchronized") == "yes", kv.get("NTP") == "yes"
+    rows = [["Now", datetime.now().strftime("%Y-%m-%d %H:%M:%S")], ["Time zone", kv.get("Timezone", "?")],
+            ["Time sync", "on" if ntp else "off"], ["Synced", "yes" if synced else "no"]]
+    if synced:
+        return _hc("clock", "Clock", "pass", "Clock is in sync", rows)
+    note = ("The Pi Zero 2 W has no clock battery, so after a power cut its time is wrong until it syncs. "
+            "A wrong clock breaks HTTPS (GitHub updates), AllStarLink registration and some digital-mode logins. "
+            + ("Turn sync on: sudo timedatectl set-ntp true" if not ntp
+               else "Sync is on but hasn't worked: check the internet and that UDP port 123 isn't blocked."))
+    return _hc("clock", "Clock", "warn", "Clock is NOT in sync" if ntp else "Time sync is turned off", rows, note)
+
+def _hc_oom() -> dict:
+    kills = None
+    try:
+        for ln in Path("/proc/vmstat").read_text().splitlines():
+            if ln.startswith("oom_kill "):
+                kills = int(ln.split()[1])
+    except (OSError, ValueError):
+        pass
+    if kills is None:
+        return _hc("oom", "Out-of-memory kills", "unknown", "The kernel doesn't report OOM kills (/proc/vmstat)")
+    rows = [["Since boot", str(kills)]]
+    if kills == 0:
+        return _hc("oom", "Out-of-memory kills", "pass", "None since boot", rows)
+    out, _prob = _hc_cmd(["journalctl", "-k", "-b", "--no-pager", "-o", "short-iso", "-g", "Killed process", "-n", "5"], 8)
+    for ln in out.splitlines():
+        m = _HC_KILLED_RE.search(ln)
+        if m:
+            rows.append([ln.split(" ", 1)[0][:19], f"{m.group(2)} (pid {m.group(1)})"])
+    return _hc("oom", "Out-of-memory kills", "fail",
+               f"The kernel killed {kills} process{'es' if kills != 1 else ''} for lack of memory since boot", rows,
+               "Memory ran out. Something was stopped to free it, and may have restarted since. "
+               "Check Memory per service below for the biggest users.")
+
+def _hc_memory() -> dict:
+    mi = _hc_meminfo()
+    total, avail = mi.get("MemTotal"), mi.get("MemAvailable")
+    if not total or avail is None:
+        return _hc("memory", "Memory", "unknown", "Can't read /proc/meminfo")
+    st, sf = mi.get("SwapTotal", 0), mi.get("SwapFree", 0)
+    used_swap = st - sf
+    zram = False
+    try:
+        zram = any(ln.startswith("/dev/zram") for ln in Path("/proc/swaps").read_text().splitlines())
+    except OSError:
+        pass
+    rows = [["Total", f"{total} MB"], ["Available", f"{avail} MB ({avail * 100 // total}%)"],
+            ["Swap", f"{used_swap} of {st} MB used" + (" (zram)" if zram else "") if st else "none"]]
+    status, notes = "pass", []
+    if avail < 32:
+        status = "fail"
+        notes.append("Less than 32 MB is free: the kernel may start killing processes.")
+    elif avail < 64:
+        status = "warn"
+        notes.append("Less than 64 MB is free.")
+    if st and used_swap * 100 >= st * 75:
+        status = "fail" if status == "fail" else "warn"
+        notes.append("Swap is over 75% used: the Pi will be slow, and an SD card wears faster with swap on it.")
+    head = f"{avail} MB of {total} MB available"
+    return _hc("memory", "Memory", status, head, rows, " ".join(notes))
+
+def _hc_dir_mb(path: str, budget: float = 3.0) -> "float | None":
+    total, deadline = 0, time.monotonic() + budget
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+        if time.monotonic() > deadline:
+            return None
+    return total / (1024 * 1024)
+
+def _hc_disk() -> dict:
+    rows, status, notes = [], "pass", []
+    try:
+        vs = os.statvfs("/")
+        size = vs.f_blocks * vs.f_frsize
+        free = vs.f_bavail * vs.f_frsize
+        pct = free * 100 / size if size else 0
+        rows.append(["Root free", f"{free // (1024 * 1024)} MB of {size // (1024 * 1024)} MB ({pct:.0f}%)"])
+        if pct < 5:
+            status = "fail"
+            notes.append("The root file system is almost full: logs and updates will start failing.")
+        elif pct < 10:
+            status = "warn"
+            notes.append("Less than 10% of the root file system is free.")
+    except OSError as exc:
+        rows.append(["Root free", f"unknown ({exc})"])
+        status = "unknown"
+    out, prob = _hc_cmd(["journalctl", "--disk-usage"])
+    m = _HC_DISK_USAGE_RE.search(out or "")
+    if m:
+        jmb = float(m.group(1)) * _HC_UNIT_MULT.get(m.group(2).upper(), 1.0)
+        rows.append(["Journal", f"{jmb:.0f} MB"])
+        if jmb > 200:
+            status = "fail" if status == "fail" else "warn"
+            notes.append("The journal is over 200 MB. Cap it with SystemMaxUse= in /etc/systemd/journald.conf "
+                         "(for example 50M), then: sudo systemctl restart systemd-journald")
+    else:
+        rows.append(["Journal", f"unknown ({prob or 'no size in the output'})"])
+    vlog = _hc_dir_mb("/var/log")
+    rows.append(["/var/log", f"{vlog:.0f} MB" if vlog is not None else "too many files to count quickly"])
+    if vlog is not None and vlog > 300:
+        status = "fail" if status == "fail" else "warn"
+        notes.append("/var/log is over 300 MB.")
+    head = rows[0][1] if rows else "unknown"
+    return _hc("disk", "Disk and logs", status, f"Root: {head}", rows, " ".join(notes))
+
+def _hc_services() -> dict:
+    rows, warn = [], []
+    for unit in _HEALTH_UNITS:
+        out, prob = _hc_cmd(["systemctl", "show", f"{unit}.service", "-p", "LoadState", "-p", "ActiveState",
+                             "-p", "MemoryCurrent", "-p", "NRestarts"], 5)
+        if prob:
+            continue
+        kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+        if kv.get("LoadState") != "loaded":
+            continue
+        mem = kv.get("MemoryCurrent", "")
+        mem_txt = f"{int(mem) // (1024 * 1024)} MB" if mem.isdigit() else "—"
+        try:
+            restarts = int(kv.get("NRestarts", "0") or 0)
+        except ValueError:
+            restarts = 0
+        if restarts >= 3:
+            warn.append(unit)
+        rows.append([unit, f"{kv.get('ActiveState', '?')} · {mem_txt}" + (f" · restarted {restarts}x" if restarts else "")])
+    if not rows:
+        return _hc("services", "Memory per service", "unknown", "systemctl gave no service data")
+    if warn:
+        return _hc("services", "Memory per service", "warn", f"Restarted 3 or more times: {', '.join(warn)}", rows,
+                   "systemd has restarted these since they were last started by hand or at boot. Check their logs on the Journal tab.")
+    return _hc("services", "Memory per service", "pass", f"{len(rows)} services", rows)
+
+_HEALTH_CHECKS = (_hc_clock, _hc_oom, _hc_memory, _hc_disk, _hc_services)
+
+def get_node_health(max_age: float = _HEALTH_CACHE_SECS) -> list:
+    with _health_lock:
+        at = _health_cache["at"]
+        if at is not None and time.monotonic() - at < max_age and _health_cache["data"] is not None:
+            return _health_cache["data"]
+    data = []
+    for fn in _HEALTH_CHECKS:
+        try:
+            data.append(fn())
+        except Exception as exc:
+            log.debug("health: %s failed: %s", fn.__name__, exc)
+            data.append(_hc(fn.__name__[4:], fn.__name__[4:].title(), "unknown", f"Check failed: {exc}"))
+    with _health_lock:
+        _health_cache["at"], _health_cache["data"] = time.monotonic(), data
+    return data
+
+def _route_health(h: Handler) -> None:
+    h.send_json({"ok": True, "checks": get_node_health()})
+
 def _route_hardware_get(h: Handler) -> None:
     ambe  = get_ambe_devices()
     audio = get_audio_devices()
@@ -23287,6 +23582,8 @@ _GET_ROUTES = {
     "/api/abinfo":             _route_abinfo,
     "/api/hardware":           _route_hardware_get,
     "/api/hardware/diag":      _route_hardware_diag,
+    "/api/health":             _route_health,
+    "/healthz":                lambda h: h.send_ping(),
     "/api/phone":              _route_phone_get,
     "/api/dvsm":               _route_dvsm,
     "/api/stfu":               _route_stfu_get,
@@ -23673,6 +23970,16 @@ def main() -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _sigterm)
+
+    global _http_ok_at
+    probe_host = server.server_address[0]
+    if probe_host in ("0.0.0.0", ""):
+        probe_host = "127.0.0.1"
+    _http_ok_at = time.monotonic()
+    threading.Thread(target=_health_probe_loop, args=(probe_host, server.server_address[1]),
+                     name="health-probe", daemon=True).start()
+    threading.Thread(target=_sd_heartbeat_loop, name="sd-heartbeat", daemon=True).start()
+    _sd_notify("READY=1")
 
     ip = _lan_ip()
     cs = _cfg.get("identity", "callsign", fallback="")

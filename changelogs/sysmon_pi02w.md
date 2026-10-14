@@ -1,6 +1,67 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_69_20261014.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_70_20261014.py`. Newest entries first.
+
+## 6.13.70-pi02w (2026-10-14)
+
+A Node Health card for the things that most often take a Pi Zero 2 W down
+without anyone noticing, and a systemd watchdog that checks the right things
+(reliability plan, Stage 6). The full build is not changed.
+
+- **Node Health card** at the top of the Hardware tab. Each check shows OK,
+  WARN, PROBLEM or ? (couldn't check), with a details line, and is part of
+  "Copy hardware report". New `/api/health` (login needed), cached for 30 s.
+  - **Clock:** `timedatectl` sync state.
+    - WARN when not in sync. The note explains that the Pi Zero 2 W has no
+      clock battery, and what a wrong clock breaks (HTTPS updates, ASL
+      registration).
+    - The note gives the fix: turn sync on, or check UDP 123.
+  - **Out-of-memory kills:** the kernel's `oom_kill` count since boot.
+    PROBLEM when it isn't 0, listing the last 5 killed processes from the
+    kernel log.
+  - **Memory:** available memory, and swap (zram is noted).
+    - WARN below 64 MB available; PROBLEM below 32 MB.
+    - WARN when swap is more than 75% used.
+  - **Disk and logs:** free space on `/`, the journal size, and `/var/log`.
+    - Root: WARN below 10% free, PROBLEM below 5%.
+    - Journal: WARN over 200 MB, with the SystemMaxUse fix in the note.
+    - `/var/log`: WARN over 300 MB. The count gives up after 3 s on huge
+      trees.
+  - **Memory per service:** state, memory and restart count for the suite's
+    services, Asterisk and the bridges. Only the ones installed are listed.
+    WARN when systemd restarted one 3 or more times.
+- **systemd watchdog, done right.** Before, the background poll sent both
+  "ready" (before the web server was listening) and "alive" (at the end of
+  each poll pass). A hung web server went unnoticed, and one slow pass of more
+  than 30 s got SysMon killed. Now:
+  - "ready" is sent once the web server is listening;
+  - a `sd-heartbeat` thread sends "alive" (every 10 s, `WatchdogSec=30`
+    unchanged) only while:
+    - the background poll started a pass in the last 180 s, and
+    - SysMon's own new `/healthz` (no login, same reply as `/api/ping`)
+      answered in the last 25 s. A `health-probe` thread asks every 10 s on
+      the bound address.
+  - The log says which one failed.
+- Tested:
+  - Unit tests with mocks (9):
+    - Clock: synced / not synced / sync off / tool missing
+    - OOM: none / two kills with names from the kernel log / counter
+      missing
+    - Memory: thresholds, zram, no swap
+    - Disk: thresholds, journal size in G, `/var/log` over the limit, a
+      `/var/log` count that gave up, and a real 2 MB directory
+    - Services: memory, "[not set]" memory, the restart warning, units not
+      installed skipped
+    - the 30 s cache, and a check that raises shows "?"
+    - the heartbeat rules
+    - against a real server and a real notify socket: `/healthz` answers
+      without login while `/api/health` needs it; "alive" messages stop
+      while the server refuses connections and resume after
+  - The Hardware tab in headless Chromium, with the checks running for real
+    in a test container: the card comes first, the header reads "OK · 2
+    couldn't be checked" (no systemd there), "Copy hardware report" includes
+    it, no horizontal scroll at 390 px, no script errors.
+  - `ci/check_repo.py`
 
 ## 6.13.69-pi02w (2026-10-14)
 
