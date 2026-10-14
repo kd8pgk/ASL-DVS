@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.47.0"
+VERSION ="2.48.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -7725,6 +7725,7 @@ _POST_ROUTES ={
 
 class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     server_version =f"instmon/{VERSION }"
+    timeout =60 
 
     def send_response (self ,code ,message =None ):
         super ().send_response (code ,message )
