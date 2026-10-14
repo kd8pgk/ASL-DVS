@@ -1,0 +1,46 @@
+name: promote-stable
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-stable
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Recompute and push channels/stable.json
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          for attempt in 1 2 3; do
+            git fetch --quiet origin main
+            git reset --quiet --hard origin/main
+            python3 ci/promote.py
+            if git diff --quiet -- channels/stable.json && git ls-files --error-unmatch channels/stable.json >/dev/null 2>&1; then
+              echo "No change to the stable channel."
+              exit 0
+            fi
+            git add channels/stable.json
+            git commit --quiet -m "Stable channel: recompute channels/stable.json"
+            if git push --quiet origin HEAD:main; then
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          echo "Could not push channels/stable.json after 3 attempts" >&2
+          exit 1
