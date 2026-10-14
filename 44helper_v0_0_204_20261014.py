@@ -43,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.203"
+APP_VERSION = "0.0.204"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1733,7 +1733,7 @@ def _timeout_message(cmd: str, timeout: int) -> str:
         return (f"\ncommand was STOPPED after {timeout}s while changing packages. The system may be "
                 f"half-updated. Do NOT reboot yet. On the Update tab: 1) run 'Is apt still running?' and "
                 f"wait until it reports nothing running, 2) run step 2's 'Reconfigure half-installed "
-                f"packages' (sudo dpkg --configure -a), 3) run step 2 itself, 4) re-run the step that "
+                f"packages' (sudo dpkg --force-confdef --force-confold --configure -a), 3) run step 2 itself, 4) re-run the step that "
                 f"was stopped. Reboot only after all of that succeeds.")
     if "apt" in cmd:
         return (f"\ncommand timed out after {timeout}s and was stopped. It only reads package "
@@ -4495,10 +4495,10 @@ def _start_quiet_apt_job(job_key: str, cmd: str) -> dict:
 def _repair_cmd() -> str:
     return (
         "echo '=== 1/4 finishing interrupted installs ==='; "
-        "sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a; "
+        "sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold --configure -a; "
         "echo '=== 2/4 finishing half-installed packages ==='; ( " + _RECOVER_CONFIGURE_CMD + " ); "
         "echo '=== 3/4 re-installing broken packages ==='; ( " + _RECOVER_REINSTALL_CMD + " ); "
-        "echo '=== 4/4 final pass ==='; sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a; "
+        "echo '=== 4/4 final pass ==='; sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold --configure -a; "
         "a=$(dpkg --audit 2>&1); if [ -n \"$a\" ]; then echo \"$a\"; "
         "echo 'Still broken after the repair -- the purge will NOT be started.'; exit 1; fi; "
         "echo 'Package system is healthy.'"
@@ -4554,13 +4554,13 @@ _RECOVER_CONFIGURE_CMD = (
     "if [ -z \"$pk\" ]; then echo 'No half-installed packages.'; else "
     f"light=$(echo \"$pk\" | grep -vE '{_RECOVER_HEAVY}'); heavy=$(echo \"$pk\" | grep -E '{_RECOVER_HEAVY}'); "
     "if [ -n \"$light\" ]; then echo '=== finishing ordinary packages (one command -- dpkg sorts the order) ==='; "
-    f"sudo {_RECOVER_NICE} dpkg --configure $light || "
+    f"sudo {_RECOVER_NICE} dpkg --force-confdef --force-confold --configure $light || "
     "{ echo 'Finishing the ordinary packages failed -- stopping here. Copy this output.'; echo \"$_MASKHINT\"; exit 1; }; fi; "
     "if [ -n \"$heavy\" ]; then echo '=== finishing kernel/firmware packages (last, one command) ==='; "
-    f"sudo {_RECOVER_NICE} dpkg --configure $heavy || "
+    f"sudo {_RECOVER_NICE} dpkg --force-confdef --force-confold --configure $heavy || "
     "{ echo 'Finishing the kernel/firmware packages failed -- stopping here. Copy this output.'; echo \"$_MASKHINT\"; exit 1; }; fi; fi; "
     "echo '=== pending finishing jobs ==='; "
-    f"sudo {_RECOVER_NICE} dpkg --configure --pending || exit 1; "
+    f"sudo {_RECOVER_NICE} dpkg --force-confdef --force-confold --configure --pending || exit 1; "
     "a=$(dpkg --audit 2>&1); if [ -n \"$a\" ]; then echo \"$a\"; "
     "echo 'Still listed above -- if any say reinstall, run step 11.'; exit 1; fi; "
     "echo 'dpkg --audit is clean.'"
@@ -4604,7 +4604,7 @@ _UPDATE_STEPS: list[dict] = [
     {"id": "apt_update", "num": 1, "title": "Refresh package index",
      "cmd": "sudo apt update"},
     {"id": "fix_missing", "quiet_eligible": True, "num": 2, "title": "Fix missing/broken packages",
-     "cmd": "sudo DEBIAN_FRONTEND=noninteractive dpkg --configure -a; "
+     "cmd": "sudo DEBIAN_FRONTEND=noninteractive dpkg --force-confdef --force-confold --configure -a; "
             "sudo DEBIAN_FRONTEND=noninteractive apt install -f -y "
             "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\"",
      "warning": "Runs dpkg --configure -a first (finishes anything an interrupted install left half-done -- "
@@ -4618,9 +4618,11 @@ _UPDATE_STEPS: list[dict] = [
                      "If it lists anything, a package job is still working -- wait and run this again "
                      "until it says nothing is running. Only then run the options below."},
          {"id": "dpkg_configure", "quiet_eligible": True, "title": "Reconfigure half-installed packages",
-          "cmd": "sudo dpkg --configure -a",
+          "cmd": "sudo dpkg --force-confdef --force-confold --configure -a",
           "warning": "Finishes any package left mid-install after an interrupted apt run. "
-                     "Safe to run, but only needed if a previous operation was killed or crashed."},
+                     "Safe to run, but only needed if a previous operation was killed or crashed. "
+                     "Config files you changed (rpt.conf, firewall zones ...) are kept; the package's "
+                     "new version is saved next to them as .dpkg-dist."},
      ]},
     {"id": "upgrade", "quiet_eligible": True, "num": 3, "title": "Upgrade packages",
      "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt upgrade -y "
