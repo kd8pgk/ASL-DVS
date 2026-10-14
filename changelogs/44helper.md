@@ -1,6 +1,46 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_197_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_198_20261014.py`. Newest entries first.
+
+## 0.0.198 (2026-10-14) — testing
+
+Overview: four new self-check findings, each from something magicbox ran into.
+
+1. **Tunnel handshake.** When wg0 is up:
+   - green when the last handshake is under 3 minutes old;
+   - red when it's older and a `PersistentKeepalive` is set, or there has never
+     been one (the 44Net Connect dashboard's "idle");
+   - amber when it's older with no keepalive, since a quiet tunnel may just be idle.
+     The finding suggests `PersistentKeepalive = 25`.
+
+   There is no amber at 2 minutes: with a keepalive, WireGuard re-handshakes about
+   every 2 minutes, so a healthy tunnel sits just past that.
+2. **Services that didn't start.**
+   - Red when netcheck failed: lists the DVSwitch services that are enabled but
+     never started (Analog_Bridge, MMDVM_Bridge, STFU, the gateways,
+     ircDDBGateway, …), with the start command and a pointer to the netcheck card.
+   - Red for any other failed service.
+   - Amber for an enabled DVSwitch service that isn't running.
+3. **DNS line that can't work.** Red when wg0.conf's DNS setting goes through
+   systemd-resolved and resolved doesn't answer within 5 s, or there's no
+   `resolvconf`: the next tunnel start would fail.
+4. **Address not a /32.** Amber when wg0.conf's `Address` has a wider prefix, naming
+   the network it routes into wg0 (for example `44.27.130.0/24`).
+
+- The four checks run at most every 30 s (the Overview rebuilds every 5 s);
+  **Re-check** runs them at once. The green handshake line has fixed text, so it
+  doesn't trigger a page update every 5 s. A check that errors is logged and
+  skipped; the others still run.
+- The findings' text is now escaped on the page, so `<endpoint>` shows as written.
+  The red banner says "Self-check found a problem that needs fixing" instead of
+  "possible public exposure", which no longer fits every red finding.
+- Tested:
+  - Mocked unit tests for every outcome of each check, including magicbox's case:
+    a 7 h old handshake with a keepalive, a `DNS =` line with resolved silent, a
+    `/24` address, and netcheck failed with four DVSwitch services down.
+  - The cache, Re-check, and one check crashing.
+  - The Overview in headless Chromium: escaping, banner text and colour.
+  - The 0.0.196 and 0.0.197 tests re-run on this version, and `node --check`.
 
 ## 0.0.197 (2026-10-14) — testing
 

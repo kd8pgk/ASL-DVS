@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.197"
+APP_VERSION = "0.0.198"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1004,7 +1004,149 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
                     "The next tunnel start will loop. Fix it on the Split Tunnel tab, step 4b."),
         })
 
+    findings += _ov_health_findings()
     return findings
+
+_OV_HANDSHAKE_MAX = 180
+_OV_DVS_UNITS = ("analog_bridge.service", "mmdvm_bridge.service", "md380-emu.service", "stfu.service",
+                 "ysfgateway.service", "ysfparrot.service", "p25gateway.service", "nxdngateway.service",
+                 "ircddbgatewayd.service", "webproxy.service")
+
+def _ov_q(argv: list[str], timeout: int = 6) -> tuple[int, str]:
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return -1, ""
+    return r.returncode, r.stdout or ""
+
+def _ov_handshake_finding(text: str | None) -> dict | None:
+    if text is None or not _wg0_interface_present():
+        return None
+    rc, out = _ov_q(["wg", "show", "wg0", "latest-handshakes"])
+    if rc != 0:
+        return None
+    stamps = [int(t) for t in out.split() if t.isdigit()]
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    keepalive = bool(parsed["peers"]) and _wg_conf_field(parsed["peers"][0], "PersistentKeepalive") not in ("", "0", "off")
+    if not stamps or max(stamps) == 0:
+        return {"level": "danger" if keepalive else "warn",
+                "msg": ("wg0 is up but has never completed a handshake with the 44Net server, so the tunnel carries nothing "
+                        "(the 44Net Connect dashboard shows idle). Check the key and Endpoint, and that the tunnel server "
+                        "doesn't route into wg0 (ip -4 route get <endpoint>).")}
+    age = int(time.time() - max(stamps))
+    if age <= _OV_HANDSHAKE_MAX:
+        return {"level": "ok", "msg": "Tunnel handshake is recent (under 3 minutes)."}
+    nice = f"{age // 3600} h {age % 3600 // 60} min" if age >= 3600 else f"{age // 60} min"
+    if keepalive:
+        return {"level": "danger",
+                "msg": (f"Last tunnel handshake {nice} ago, although a keepalive is set: the tunnel isn't reaching the 44Net "
+                        "server (the dashboard shows idle). Check ip -4 route get <endpoint> doesn't say wg0, and the key "
+                        "and Endpoint.")}
+    return {"level": "warn",
+            "msg": (f"Last tunnel handshake {nice} ago. With no PersistentKeepalive a quiet tunnel goes idle, and stations "
+                    "on 44Net can't reach this node until it sends something. Add PersistentKeepalive = 25 under [Peer].")}
+
+def _ov_unit_states(units) -> dict[str, dict]:
+    rc, out = _ov_q(["systemctl", "show", "-p", "Id,LoadState,ActiveState,UnitFileState,Result", "--"] + list(units), 8)
+    states: dict[str, dict] = {}
+    if rc != 0:
+        return states
+    for block in out.strip().split("\n\n"):
+        kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        if kv.get("Id"):
+            states[kv["Id"]] = kv
+    return states
+
+def _ov_failed_findings() -> list[dict]:
+    rc, out = _ov_q(["systemctl", "--failed", "--no-legend", "--plain", "--type=service"], 8)
+    failed = [ln.split()[0] for ln in out.splitlines() if ln.split() and ln.split()[0].endswith(".service")] if rc == 0 else []
+    states = _ov_unit_states(_OV_DVS_UNITS)
+    stopped = [u for u, st in states.items()
+               if st.get("LoadState") == "loaded" and st.get("UnitFileState") == "enabled"
+               and st.get("ActiveState") in ("inactive", "failed") and u not in failed]
+    findings: list[dict] = []
+    if "netcheck.service" in failed and stopped:
+        names = " ".join(u.replace(".service", "") for u in stopped)
+        findings.append({"level": "danger",
+                         "msg": (f"netcheck failed, so these DVSwitch services never started: {names}. Start them now: "
+                                 f"sudo systemctl start {names}. To stop it happening at the next boot, use the netcheck "
+                                 "card under step 6 on the Full or Split Tunnel tab.")})
+        stopped = []
+    if failed:
+        findings.append({"level": "danger",
+                         "msg": "Failed services: " + ", ".join(u.replace(".service", "") for u in failed)
+                                + ". See journalctl -u <name> -b for why."})
+    if stopped:
+        findings.append({"level": "warn",
+                         "msg": "Enabled at boot but not running: " + ", ".join(u.replace(".service", "") for u in stopped) + "."})
+    return findings
+
+def _ov_dns_finding(text: str | None) -> dict | None:
+    if not text:
+        return None
+    need = _wg_conf_dns_need(text)
+    if not need:
+        return None
+    if "no resolvconf" in need:
+        return {"level": "danger", "msg": f"wg0.conf {need}: the next tunnel start will fail. Set the DNS card (step 4a) to Off."}
+    ok, why = _wg_resolved_answers()
+    if ok:
+        return None
+    return {"level": "danger",
+            "msg": (f"wg0.conf {need}, which goes through systemd-resolved, and resolved isn't answering ({why}). The next "
+                    "tunnel start will wait 25 s and fail. Run sudo systemctl restart systemd-resolved (or reboot), or set "
+                    "the DNS card (step 4a) to Off.")}
+
+def _ov_address_finding(text: str | None) -> dict | None:
+    if not text:
+        return None
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    wide = []
+    for part in _wg_conf_field(parsed["interface"], "Address").split(","):
+        try:
+            iface = ipaddress.ip_interface(part.strip())
+        except ValueError:
+            continue
+        if iface.version == 4 and iface.network.prefixlen != 32:
+            wide.append(str(iface))
+    if not wide:
+        return None
+    return {"level": "warn",
+            "msg": (f"wg0.conf Address is {', '.join(wide)}, not a single /32. A 44Net Connect tunnel is one address, and a "
+                    f"wider prefix routes the whole {', '.join(str(ipaddress.ip_interface(w).network) for w in wide)} into wg0. "
+                    "Check it against the portal and change it to /32 unless you were given a subnet.")}
+
+_OV_HEALTH_TTL = 30.0
+_OV_HEALTH_CACHE: dict = {"at": 0.0, "data": []}
+
+def _ov_health_findings(force: bool = False) -> list[dict]:
+    now = time.time()
+    if not force and now - _OV_HEALTH_CACHE["at"] < _OV_HEALTH_TTL:
+        return list(_OV_HEALTH_CACHE["data"])
+    data = _ov_health_compute()
+    _OV_HEALTH_CACHE.update(at=time.time(), data=data)
+    return list(data)
+
+def _ov_health_compute() -> list[dict]:
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            text = f.read()
+    except OSError:
+        text = None
+    out: list[dict] = []
+    for fn in (lambda: _ov_handshake_finding(text), lambda: _ov_dns_finding(text), lambda: _ov_address_finding(text)):
+        try:
+            r = fn()
+        except Exception as exc:
+            log(f"overview check failed: {exc}")
+            r = None
+        if r:
+            out.append(r)
+    try:
+        out += _ov_failed_findings()
+    except Exception as exc:
+        log(f"overview check failed: {exc}")
+    return out
 
 def _self_check_worst_level(findings: list[dict]) -> str:
     order = {"danger": 3, "warn": 2, "info": 1, "ok": 0}
@@ -15789,7 +15931,7 @@ function renderOverview(data) {
   var banner = document.getElementById('ov-banner');
   banner.className = 'ov-banner lvl-' + worst;
   banner.textContent = worst === 'danger'
-    ? 'Self-check found a possible public exposure — see findings below.'
+    ? 'Self-check found a problem that needs fixing — see findings below.'
     : (worst === 'warn' ? 'Self-check found something worth a look.' : 'Self-check clear.');
 
   // Installed software card (v0.0.138)
@@ -15831,7 +15973,7 @@ function renderOverview(data) {
   var findings = data.self_check || [];
   document.getElementById('ov-findings').innerHTML = findings.length
     ? findings.map(function(f) {
-        return '<div class="ov-finding">' + _ovDot(f.level) + f.msg + '</div>';
+        return '<div class="ov-finding">' + _ovDot(f.level) + _ovEsc(f.msg) + '</div>';
       }).join('')
     : 'No findings.';
 
@@ -22306,6 +22448,7 @@ def _route_log(query: dict) -> tuple[int, str, bytes]:
 def _route_overview(query: dict) -> tuple[int, str, bytes]:
     if (query.get("force") or [""])[0] == "1":
         _detect_installed_products(force=True)
+        _OV_HEALTH_CACHE["at"] = 0.0
     return 200, "application/json", json.dumps(build_overview_data(_cfg)).encode("utf-8")
 
 def _route_pi_install_status(query: dict) -> tuple[int, str, bytes]:
