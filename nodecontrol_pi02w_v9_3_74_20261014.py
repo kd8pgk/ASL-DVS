@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.73-pi02w"
+VERSION      = "9.3.74-pi02w"
 BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
@@ -490,6 +490,9 @@ _AMI_BLOCK_END_RE   = re.compile(r"\r?\n\r?\n")
 _AMI_LEGACY_END     = "--END COMMAND--"
 _ami_action_seq     = 0
 
+class _AmiBusy(Exception):
+    pass
+
 class _AmiIncomplete(Exception):
     def __init__(self, partial: str):
         super().__init__("AMI reply incomplete")
@@ -620,42 +623,54 @@ def _ami_command_once(cmd_str: str, timeout: float) -> str:
                        f"\r\n").encode())
     return _ami_command_output(_ami_read_reply(_ami_sock, aid))
 
-def ami_command(cmd_str: str, timeout: int = 4, priority: bool = False) -> Tuple[str, bool]:
-    global _ami_reconnect_next_try
+def ami_command(cmd_str: str, timeout: int = 4, priority: bool = False,
+                lock_wait: Optional[float] = None) -> Tuple[str, bool]:
     if _has_ctrl_chars(cmd_str):
         log.warning("AMI: rejected command with control characters: %r", cmd_str)
         return "rejected: illegal characters in command", False
     if _ami_perm_fail:
         out, rc = _asterisk_rx(cmd_str, timeout=timeout, priority=priority)
         return out, rc == 0
-
-    with _ami_lock:
-        if not _ami_available:
-            now = time.monotonic()
-            if now >= _ami_reconnect_next_try:
-                _ami_reconnect_next_try = now + _AMI_RECONNECT_COOLDOWN
-                _ami_connect()
-
-        if _ami_available:
-            try:
-                return _ami_command_once(cmd_str, timeout), True
-            except _AmiIncomplete:
-                _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s")
-                return f"AMI reply to {cmd_str!r} did not finish", False
-            except Exception as e:
-                log.warning("AMI: socket error on command %r: %s — reconnecting", cmd_str, e)
-                _ami_reset()
-                if _ami_connect():
-                    try:
-                        return _ami_command_once(cmd_str, timeout), True
-                    except _AmiIncomplete:
-                        _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s (retry)")
-                        return f"AMI reply to {cmd_str!r} did not finish", False
-                    except Exception as e2:
-                        log.warning("AMI: retry failed: %s — falling back to subprocess", e2)
-                        _ami_reset()
+    if lock_wait is None:
+        _ami_lock.acquire()
+    elif not _ami_lock.acquire(timeout=lock_wait):
+        raise _AmiBusy(cmd_str)
+    try:
+        result = _ami_command_locked(cmd_str, timeout)
+    finally:
+        _ami_lock.release()
+    if result is not None:
+        return result
     out, rc = _asterisk_rx(cmd_str, timeout=timeout, priority=priority)
     return out, rc == 0
+
+def _ami_command_locked(cmd_str: str, timeout: int) -> Optional[Tuple[str, bool]]:
+    global _ami_reconnect_next_try
+    if not _ami_available:
+        now = time.monotonic()
+        if now >= _ami_reconnect_next_try:
+            _ami_reconnect_next_try = now + _AMI_RECONNECT_COOLDOWN
+            _ami_connect()
+
+    if _ami_available:
+        try:
+            return _ami_command_once(cmd_str, timeout), True
+        except _AmiIncomplete:
+            _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s")
+            return f"AMI reply to {cmd_str!r} did not finish", False
+        except Exception as e:
+            log.warning("AMI: socket error on command %r: %s — reconnecting", cmd_str, e)
+            _ami_reset()
+            if _ami_connect():
+                try:
+                    return _ami_command_once(cmd_str, timeout), True
+                except _AmiIncomplete:
+                    _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s (retry)")
+                    return f"AMI reply to {cmd_str!r} did not finish", False
+                except Exception as e2:
+                    log.warning("AMI: retry failed: %s — falling back to subprocess", e2)
+                    _ami_reset()
+    return None
 
 def ami_action(fields: List[Tuple[str, str]], timeout: int = 4) -> Tuple[str, bool]:
     global _ami_reconnect_next_try
@@ -6223,8 +6238,9 @@ def _multi_link_cleanup(keep: Optional[str]) -> None:
         _multi_link_run_lock.release()
 
 def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
-    global _multi_link_count, _poll_ok, _multi_link_left_alone
-    out, ok = ami_command(f"{_AMI_RPT_SHOW_VARS} {_cfg.asl_node}", timeout=2)
+    global _multi_link_count, _poll_ok, _multi_link_left_alone, _link_modes
+    out, ok = ami_command(f"{_AMI_RPT_SHOW_VARS} {_cfg.asl_node}", timeout=2,
+                          lock_wait=_POLL_LOCK_WAIT_SEC)
     _poll_ok = bool(ok and out and "RPT_" in out)
     if not _poll_ok:
         return False, None, False, frozenset()
@@ -6235,8 +6251,7 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
     bridge_linked_nodes: Set[str] = set()
     modes: Dict[str, str] = {}
     adjacent = _parse_rpt_links(out, modes)
-    _link_modes.clear()
-    _link_modes.update(modes)
+    _link_modes = modes
     for tok in adjacent:
         if tok in bridge_set:
             bridge_linked_nodes.add(tok)
@@ -6476,15 +6491,78 @@ def _asl_reg_loop() -> None:
             next_due = time.monotonic() + (_ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC)
         time.sleep(TICK)
 
+_POLL_LOCK_WAIT_SEC = 3.0
+_POLL_STALL_SEC     = 120.0
+_HTTP_STALL_SEC     = 25.0
+_HEALTH_PROBE_SEC   = 10.0
+_poll_beat: Optional[float] = None
+_http_ok_at = time.monotonic()
+_heartbeat_stalled = ""
+
+def _health_probe_loop(port: int) -> None:
+    global _http_ok_at
+    import http.client
+    while True:
+        time.sleep(_HEALTH_PROBE_SEC)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            resp.read()
+            if resp.status == 200:
+                _http_ok_at = time.monotonic()
+        except (OSError, http.client.HTTPException):
+            pass
+        finally:
+            conn.close()
+
+def _heartbeat_problem(now: float) -> str:
+    if _poll_beat is not None and now - _poll_beat >= _POLL_STALL_SEC:
+        return f"link poll loop stuck for {int(now - _poll_beat)}s"
+    if now - _http_ok_at >= _HTTP_STALL_SEC:
+        return f"web server not answering /healthz for {int(now - _http_ok_at)}s"
+    return ""
+
+def _sd_heartbeat_loop() -> None:
+    global _heartbeat_stalled
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC") or 0)
+    except ValueError:
+        usec = 0
+    if usec <= 0:
+        return
+    every = max(1.0, min(10.0, usec / 1e6 / 3))
+    while True:
+        problem = _heartbeat_problem(time.monotonic())
+        if not problem:
+            if _heartbeat_stalled:
+                log.info("heartbeat: healthy again")
+                _heartbeat_stalled = ""
+            _sd_notify("WATCHDOG=1")
+        elif problem.split(" for ")[0] != _heartbeat_stalled.split(" for ")[0]:
+            _heartbeat_stalled = problem
+            log.error("heartbeat: %s — letting systemd restart the Dashboard", problem)
+        time.sleep(every)
+
 def _link_poll_loop() -> None:
+    global _poll_beat
     INTERVAL     = 2.0
     fails        = 0
     last_detect  = time.monotonic()
+    busy_noted   = False
     while True:
         t0 = time.monotonic()
-        _sd_notify("WATCHDOG=1")
+        _poll_beat = t0
         try:
-            keyed, linked_node, bridge_linked, bridge_linked_nodes = _poll_asl_state()
+            try:
+                keyed, linked_node, bridge_linked, bridge_linked_nodes = _poll_asl_state()
+            except _AmiBusy:
+                if not busy_noted:
+                    log.info("_link_poll_loop: AMI busy for over %.0fs — skipping this poll", _POLL_LOCK_WAIT_SEC)
+                    busy_noted = True
+                time.sleep(max(0.1, INTERVAL - (time.monotonic() - t0)))
+                continue
+            busy_noted = False
             set_state(keyed=keyed, linked_node=linked_node, bridge_linked=bridge_linked,
                       bridge_linked_nodes=bridge_linked_nodes,
                       perm_link_nodes=_read_perm_links())
@@ -6928,7 +7006,10 @@ def _write_m17_ini(content: str) -> Tuple[bool, str]:
         p = Path(M17_INI_PATH)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + ".tmp")
-        tmp.write_text(content)
+        with open(tmp, "w") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, p)
         return True, ""
     except Exception as e:
@@ -13644,7 +13725,7 @@ def _session_cookie_header(token: str, max_age: int) -> str:
 def _clear_session_cookie_header() -> str:
     return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
 
-_PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping"}
+_PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping", "/healthz"}
 
 class _EarlyReturn(Exception):
     pass
@@ -14051,6 +14132,7 @@ _GET_ROUTES: dict = {
     "/":               lambda h: h.send_html(),
     "/index.html":     lambda h: h.send_html(),
     "/api/ping":       lambda h: h.send_ping(),
+    "/healthz":        lambda h: h.send_ping(),
     "/api/whoami":     lambda h: h.send_json({"ok": True}),
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
     "/api/status":     lambda h: h.send_status(),
@@ -14531,6 +14613,11 @@ def main() -> None:
 ║  Network   : http://{ip}:{_cfg.port}{npad}║
 ╚══════════════════════════════════════════════╝
 """)
+    global _http_ok_at
+    bound_port = server.server_address[1]
+    _http_ok_at = time.monotonic()
+    threading.Thread(target=_health_probe_loop, args=(bound_port,), name="health-probe", daemon=True).start()
+    threading.Thread(target=_sd_heartbeat_loop, name="sd-heartbeat", daemon=True).start()
     _sd_notify("READY=1")
     try:
         server.serve_forever()
