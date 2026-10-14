@@ -26,12 +26,14 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.33.0"
+APP_VERSION = "5.34.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -103,6 +105,9 @@ ROAM_MODPROBE       = "/etc/modprobe.d/wifimon-brcmfmac.conf"
 REPORT_DIR          = "/var/log/wifimon"
 RUN_MARKER          = "/var/lib/wifimon/running.json"
 NET_REBOOT_FILE     = "/var/lib/wifimon/net_reboots.json"
+ALERTS_FILE         = os.path.join(CONFIG_DIR, "alerts.json")
+ALERTS_QUEUE_FILE   = "/var/lib/wifimon/alerts_queue.json"
+ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
 HW_WD_CONF_FILE     = "/etc/systemd/system.conf.d/90-asl_dvs-hwwatchdog.conf"
 
 _DEFAULT_CONFIG = {
@@ -1136,6 +1141,11 @@ def _write_shutdown_state(reason: str, trigger: str, action: str = "poweroff") -
 def do_shutdown(reason: str, trigger: str, action: str = "poweroff") -> None:
     reboot = action == "reboot"
     log.critical("%s: %s", "Rebooting" if reboot else "Shutting down", reason)
+    try:
+        alert("shutdown", "Rebooting" if reboot else "Powering off", reason,
+              send_now=(trigger == "low_voltage"))
+    except Exception as e:
+        log.warning("Couldn't record the shutdown alert: %s", e)
     _write_shutdown_state(reason, trigger, action)
     _shutdown_report(reason, trigger)
     try:
@@ -1145,6 +1155,289 @@ def do_shutdown(reason: str, trigger: str, action: str = "poweroff") -> None:
         pass
     time.sleep(15)
     subprocess.run(["reboot" if reboot else "poweroff", "-f"])
+
+ALERT_EVENTS = (
+    ("shutdown", "wifimon shuts down or reboots the node"),
+    ("unclean", "The node or wifimon stopped without a clean shutdown"),
+    ("restarts", "A service keeps restarting (3 times in 10 minutes)"),
+    ("oom", "The kernel killed a process for lack of memory"),
+    ("asl_reg", "AllStarLink registration lost for 5 minutes, and back"),
+)
+ALERT_UNITS = ("nodecontrol", "asl_dvs_dashboard", "sysmon", "instmon", "44helper", "asterisk",
+               "analog_bridge", "mmdvm_bridge", "usrp2m17")
+ALERT_REPEAT_SECS = 1800
+ALERT_QUEUE_MAX = 50
+ALERT_QUEUE_TTL = 24 * 3600
+ALERT_RESTART_WINDOW = 600
+ALERT_RESTART_COUNT = 3
+ASL_REG_LOST_SECS = 300
+_alerts_lock = threading.Lock()
+_alerts_sent_at: Dict[str, float] = {}
+_alerts_last: Dict[str, object] = {"at": None, "ok": None, "error": ""}
+
+def _alerts_defaults() -> Dict[str, object]:
+    return {"enabled": False, "kind": "ntfy", "url": "", "token": "",
+            "events": {k: True for k, _d in ALERT_EVENTS}}
+
+def _alerts_cfg() -> Dict[str, object]:
+    cfg = _alerts_defaults()
+    try:
+        data = json.loads(_read_text(ALERTS_FILE) or "{}")
+    except ValueError:
+        data = {}
+    if isinstance(data, dict):
+        if isinstance(data.get("enabled"), bool):
+            cfg["enabled"] = data["enabled"]
+        if data.get("kind") in ("ntfy", "webhook"):
+            cfg["kind"] = data["kind"]
+        for k in ("url", "token"):
+            if isinstance(data.get(k), str):
+                cfg[k] = data[k]
+        ev = data.get("events")
+        if isinstance(ev, dict):
+            for k, _d in ALERT_EVENTS:
+                if isinstance(ev.get(k), bool):
+                    cfg["events"][k] = ev[k]
+    return cfg
+
+def _alerts_queue_load() -> List[Dict[str, object]]:
+    try:
+        data = json.loads(_read_text(ALERTS_QUEUE_FILE) or "[]")
+    except ValueError:
+        return []
+    now = time.time()
+    return [q for q in data if isinstance(q, dict) and now - float(q.get("at") or 0) < ALERT_QUEUE_TTL][-ALERT_QUEUE_MAX:] \
+        if isinstance(data, list) else []
+
+def _alerts_queue_save(queue: List[Dict[str, object]]) -> None:
+    try:
+        _durable_write(ALERTS_QUEUE_FILE, json.dumps(queue[-ALERT_QUEUE_MAX:]).encode("utf-8"), dir_mode=0o755)
+    except OSError as e:
+        log.warning("Couldn't save the alert queue: %s", e)
+
+def _alerts_public() -> Dict[str, object]:
+    cfg = _alerts_cfg()
+    with _alerts_lock:
+        last = dict(_alerts_last)
+        queued = len(_alerts_queue_load())
+    return {"enabled": cfg["enabled"], "kind": cfg["kind"], "url": cfg["url"], "token_set": bool(cfg["token"]),
+            "events": cfg["events"], "event_list": [[k, d] for k, d in ALERT_EVENTS],
+            "queued": queued, "last": last}
+
+def _alerts_validate(raw: object) -> Tuple[Optional[Dict[str, object]], str]:
+    if not isinstance(raw, dict):
+        return None, "No alert settings given."
+    cfg = _alerts_cfg()
+    if "enabled" in raw:
+        if not isinstance(raw["enabled"], bool):
+            return None, "Say whether alerts are on or off."
+        cfg["enabled"] = raw["enabled"]
+    if "kind" in raw:
+        if raw["kind"] not in ("ntfy", "webhook"):
+            return None, "Pick ntfy or webhook."
+        cfg["kind"] = raw["kind"]
+    if "url" in raw:
+        url = raw["url"].strip() if isinstance(raw["url"], str) else None
+        if url is None or len(url) > 500 or (url and not re.match(r"^https?://[^\s/?#]+[^\s]*$", url)):
+            return None, "The address must start with https:// (or http:// on your own network) and have no spaces."
+        cfg["url"] = url
+    if raw.get("clear_token") is True:
+        cfg["token"] = ""
+    elif isinstance(raw.get("token"), str) and raw["token"]:
+        if len(raw["token"]) > 500 or _LOG_CTRL_RE.search(raw["token"]):
+            return None, "That token has characters wifimon can't send."
+        cfg["token"] = raw["token"]
+    if "events" in raw:
+        ev = raw["events"]
+        if not isinstance(ev, dict) or not all(isinstance(v, bool) for v in ev.values()):
+            return None, "Bad event list."
+        for k, _d in ALERT_EVENTS:
+            if k in ev:
+                cfg["events"][k] = ev[k]
+    if cfg["enabled"] and not cfg["url"]:
+        return None, "Enter the address to send alerts to, or leave alerts off."
+    return cfg, ""
+
+def _alerts_save(cfg: Dict[str, object]) -> None:
+    _durable_write(ALERTS_FILE, json.dumps(cfg, sort_keys=True).encode("utf-8"))
+
+def _alert_header(text: str) -> str:
+    return text.encode("latin-1", "replace").decode("latin-1")[:200]
+
+def _alert_send_now(cfg: Dict[str, object], item: Dict[str, object], timeout: float) -> Tuple[bool, str]:
+    url = str(cfg.get("url") or "")
+    if not url:
+        return False, "no address set"
+    headers = {"User-Agent": f"wifimon/{APP_VERSION}"}
+    if cfg.get("token"):
+        headers["Authorization"] = f"Bearer {cfg['token']}"
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(item.get("at") or time.time())))
+    if cfg.get("kind") == "webhook":
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(dict(item, sent_at=time.time())).encode("utf-8")
+    else:
+        headers["Title"] = _alert_header(f"{item.get('host')}: {item.get('title')}")
+        headers["Priority"] = "high" if item.get("level") == "bad" else "default"
+        headers["Tags"] = "warning" if item.get("level") == "bad" else "white_check_mark"
+        body = f"{item.get('message')}\n({when})".encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = resp.status
+    except urllib.error.HTTPError as e:
+        return False, f"the server answered HTTP {e.code}"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return False, _log_safe(getattr(e, "reason", e))
+    if 200 <= code < 300:
+        return True, ""
+    return False, f"the server answered HTTP {code}"
+
+def _alerts_note(ok: bool, error: str) -> None:
+    with _alerts_lock:
+        _alerts_last.update(at=time.time(), ok=ok, error=error)
+
+def alert(event: str, title: str, message: str, level: str = "bad", key: Optional[str] = None,
+          send_now: bool = False, force: bool = False) -> Tuple[bool, str]:
+    cfg = _alerts_cfg()
+    if not force and (not cfg["enabled"] or not cfg["events"].get(event, True) or not cfg["url"]):
+        return False, "alerts are off"
+    key = key or event
+    now = time.time()
+    with _alerts_lock:
+        if not force and now - _alerts_sent_at.get(key, 0.0) < ALERT_REPEAT_SECS:
+            return False, "sent recently"
+        _alerts_sent_at[key] = now
+    item = {"event": event, "title": title, "message": message, "level": level,
+            "host": socket.gethostname(), "at": now}
+    if send_now:
+        ok, err = _alert_send_now(cfg, item, 5.0)
+        _alerts_note(ok, err)
+        if ok:
+            log.info("Alert sent: %s", title)
+            return True, ""
+        if force:
+            return False, err
+    with _alerts_lock:
+        queue = _alerts_queue_load()
+        queue.append(item)
+        _alerts_queue_save(queue)
+    log.info("Alert queued: %s", title)
+    return True, "queued"
+
+def _alerts_flush() -> int:
+    cfg = _alerts_cfg()
+    with _alerts_lock:
+        queue = _alerts_queue_load()
+    if not queue or not cfg["url"]:
+        return 0
+    sent = 0
+    for item in list(queue):
+        ok, err = _alert_send_now(cfg, item, 10.0)
+        _alerts_note(ok, err)
+        if not ok:
+            log.info("Alert not sent yet (%s); %d waiting", err, len(queue) - sent)
+            break
+        sent += 1
+    if sent:
+        with _alerts_lock:
+            rest = _alerts_queue_load()[sent:]
+            _alerts_queue_save(rest)
+        log.info("Sent %d queued alert(s)", sent)
+    return sent
+
+def _vmstat_oom_kills() -> Optional[int]:
+    for ln in (_read_text("/proc/vmstat") or "").splitlines():
+        if ln.startswith("oom_kill "):
+            try:
+                return int(ln.split()[1])
+            except ValueError:
+                return None
+    return None
+
+def _unit_restart_counts() -> Dict[str, int]:
+    if not shutil.which("systemctl"):
+        return {}
+    try:
+        r = subprocess.run(["systemctl", "show", "-p", "Id", "-p", "LoadState", "-p", "NRestarts"]
+                           + [u + ".service" for u in ALERT_UNITS],
+                           capture_output=True, text=True, timeout=15)
+    except (subprocess.SubprocessError, OSError):
+        return {}
+    out: Dict[str, int] = {}
+    for block in r.stdout.split("\n\n"):
+        kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        if kv.get("LoadState") == "loaded" and kv.get("NRestarts", "").isdigit():
+            out[kv.get("Id", "?").replace(".service", "")] = int(kv["NRestarts"])
+    return out
+
+class _AlertWatch:
+    def __init__(self) -> None:
+        self.restarts = _unit_restart_counts()
+        self.restart_hits: Dict[str, List[float]] = {}
+        self.oom = _vmstat_oom_kills()
+        self.reg_alerted = False
+
+    def tick(self, now: float) -> None:
+        counts = _unit_restart_counts()
+        for unit, n in counts.items():
+            prev = self.restarts.get(unit)
+            if prev is not None and n > prev:
+                hits = [t for t in self.restart_hits.get(unit, []) if now - t < ALERT_RESTART_WINDOW]
+                hits += [now] * min(n - prev, ALERT_RESTART_COUNT)
+                self.restart_hits[unit] = hits
+                if len(hits) >= ALERT_RESTART_COUNT:
+                    alert("restarts", f"{unit} keeps restarting",
+                          f"systemd restarted {unit} {len(hits)} times in the last {ALERT_RESTART_WINDOW // 60} minutes "
+                          f"({n} since it was started). Check its log.", key=f"restarts:{unit}")
+            self.restarts[unit] = n
+        kills = _vmstat_oom_kills()
+        if kills is not None and self.oom is not None and kills > self.oom:
+            victims = ""
+            if shutil.which("journalctl"):
+                try:
+                    r = subprocess.run(["journalctl", "-k", "-b", "--no-pager", "-o", "cat", "-g", "Killed process",
+                                        "-n", str(min(5, kills - self.oom))], capture_output=True, text=True, timeout=8)
+                    victims = "; ".join(m.group(1) for m in re.finditer(r"Killed process \d+ \(([^)]+)\)", r.stdout))
+                except (subprocess.SubprocessError, OSError):
+                    pass
+            alert("oom", "Out of memory",
+                  f"The kernel killed {kills - self.oom} process(es) for lack of memory"
+                  + (f": {victims}." if victims else ".") + " Check SysMon's Node Health card.")
+        if kills is not None:
+            self.oom = kills
+        try:
+            reg = json.loads(_read_text(ASL_REG_STATUS_FILE) or "null")
+        except ValueError:
+            reg = None
+        if isinstance(reg, dict):
+            wall = time.time()
+            fresh = wall - float(reg.get("checked_at") or 0) <= float(reg.get("next_check_secs") or 900) * 2 + 120
+            state, node = reg.get("state"), reg.get("node") or "?"
+            if fresh and state == "unregistered" and wall - float(reg.get("since") or wall) >= ASL_REG_LOST_SECS \
+                    and not self.reg_alerted:
+                self.reg_alerted = True
+                alert("asl_reg", f"Node {node} is not registered",
+                      f"AllStarLink registration for node {node} has been lost for "
+                      f"{int((wall - float(reg.get('since') or wall)) // 60)} minutes.", key="asl_reg")
+            elif fresh and state == "registered" and self.reg_alerted:
+                self.reg_alerted = False
+                alert("asl_reg", f"Node {node} is registered again",
+                      f"AllStarLink registration for node {node} is back.", level="ok", key="asl_reg_ok")
+
+def _alerts_loop() -> None:
+    watch = _AlertWatch()
+    last_check = time.monotonic()
+    while not _shutdown_event.wait(30):
+        try:
+            with _state_lock:
+                online = bool(_wd.get("connected"))
+            if online:
+                _alerts_flush()
+            if time.monotonic() - last_check >= 60:
+                last_check = time.monotonic()
+                watch.tick(time.monotonic())
+        except Exception:
+            log.exception("Alert check failed -- continuing")
 
 def _net_reboots_load() -> List[float]:
     try:
@@ -2196,6 +2489,7 @@ def _build_status() -> Dict[str, object]:
         "reports_stamp": _reports_stamp(),
         "hotspot": _hotspot_public(),
         "last_report": _last_report_banner(),
+        "alerts": _alerts_public(),
     }
 
 _KEEP_MIN_SECS = 5
@@ -3639,6 +3933,10 @@ def _marker_check_and_set() -> None:
                 log.warning("%s -- report saved: %s/%s", reason, REPORT_DIR, name)
             except OSError as e:
                 log.warning("%s (couldn't save a report: %s)", reason, e)
+            try:
+                alert("unclean", "Unclean stop", reason + ".")
+            except Exception as e:
+                log.warning("Couldn't record the unclean-stop alert: %s", e)
     marker = {"started_at": _started_wall, "boot_id": _boot_id(), "pid": os.getpid(),
               "version": APP_VERSION}
     try:
@@ -4874,6 +5172,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_settings_reset(body)
         elif path == "/api/watchdogs":
             self._handle_watchdogs(body)
+        elif path == "/api/alerts":
+            self._handle_alerts(body)
+        elif path == "/api/alerts/test":
+            self._handle_alerts_test(body)
         else:
             self._json(404, {"error": "Not found."})
 
@@ -5800,6 +6102,39 @@ class _Handler(BaseHTTPRequestHandler):
             "on" if now["wifi"] else "off", "on" if now["voltage"] else "off")
         self._json(200, {"ok": True, "message": msg, "watchdogs": now})
 
+    def _handle_alerts(self, body: Dict[str, object]) -> None:
+        if body.get("confirm") is not True:
+            self._json(400, {"error": "This change needs confirmation."})
+            return
+        cfg, err = _alerts_validate(body.get("values"))
+        if cfg is None:
+            self._json(400, {"error": err})
+            return
+        try:
+            _alerts_save(cfg)
+        except OSError as e:
+            self._json(500, {"error": f"Couldn't save the alert settings: {e}"})
+            return
+        log.info("Dashboard: alerts %s by %s (%s)", "on" if cfg["enabled"] else "off",
+                 self.client_address[0], cfg["kind"])
+        self._json(200, {"ok": True, "message": "Alert settings saved." + ("" if cfg["enabled"] else " Alerts are off."),
+                         "alerts": _alerts_public()})
+
+    def _handle_alerts_test(self, body: Dict[str, object]) -> None:
+        if body.get("confirm") is not True:
+            self._json(400, {"error": "This needs confirmation."})
+            return
+        if not _alerts_cfg()["url"]:
+            self._json(400, {"error": "Save an address first."})
+            return
+        ok, err = alert("test", "Test alert", "This is a test alert from wifimon. Alerts reach you.",
+                        level="ok", send_now=True, force=True)
+        log.info("Dashboard: test alert by %s: %s", self.client_address[0], "sent" if ok else err)
+        if ok:
+            self._json(200, {"ok": True, "message": "Test alert sent."})
+        else:
+            self._json(502, {"error": f"The test alert didn't go through: {err}"})
+
     def _handle_settings_reset(self, body: Dict[str, object]) -> None:
         if body.get("confirm") is not True:
             self._json(400, {"error": "This change needs confirmation."})
@@ -6302,6 +6637,28 @@ a.btnlink:hover{border-color:var(--cyan)}
           <button type="button" id="s-reset">Reset to defaults</button>
           <button type="button" id="s-cancel">Cancel</button>
         </div>
+      </form>
+    </section>
+
+    <section class="card" id="card-alerts" aria-labelledby="al-h">
+      <h2 id="al-h">Alerts</h2>
+      <p id="al-state" style="margin:0 0 8px">…</p>
+      <div class="actions"><button type="button" id="btn-alerts">Set up alerts</button><button type="button" id="al-test">Send test</button></div>
+      <form class="form" id="al-form" hidden autocomplete="off" style="margin-top:12px">
+        <h3>Alert settings</h3>
+        <div class="row"><label class="check"><input type="checkbox" id="al-on"> Send alerts</label></div>
+        <div class="row"><label for="al-kind">Send with</label>
+          <select id="al-kind"><option value="ntfy">ntfy (phone app)</option><option value="webhook">Webhook (JSON)</option></select>
+          <span class="hint">ntfy: install the ntfy app, subscribe to a topic name only you know, and put https://ntfy.sh/that-topic below. Webhook: wifimon POSTs JSON (host, event, title, message, level, at).</span></div>
+        <div class="row"><label for="al-url">Address</label>
+          <input type="text" id="al-url" spellcheck="false" placeholder="https://ntfy.sh/your-secret-topic"><span class="hint"></span></div>
+        <div class="row"><label for="al-token">Access token (optional)</label>
+          <input type="password" id="al-token" autocomplete="new-password" placeholder="leave blank to keep the current one">
+          <label class="check"><input type="checkbox" id="al-clear"> Remove the saved token</label>
+          <span class="hint">Sent as "Authorization: Bearer …". Stored on the node, readable by root only, never shown again.</span></div>
+        <div class="row" id="al-events"></div>
+        <p class="err" id="al-err" role="alert"></p>
+        <div class="actions"><button type="button" id="al-save">Save</button><button type="button" id="al-cancel">Cancel</button></div>
       </form>
     </section>
 
@@ -6845,6 +7202,53 @@ a.btnlink:hover{border-color:var(--cyan)}
       + (hw.on && hw.file ? "" : " (set outside wifimon)");
     return hw.on ? "Turning on (after the next reboot at the latest)" : "Off";
   }
+
+  function renderAlerts(d) {
+    const a = d.alerts;
+    if (!a) return;
+    let t = a.enabled ? "On: " + (a.kind === "webhook" ? "webhook" : "ntfy") + " to " + a.url : "Off. Nothing is sent.";
+    if (a.queued) t += " · " + a.queued + " waiting to send";
+    if (a.last && a.last.at) t += " · last try " + stamp(a.last.at) + (a.last.ok ? " sent" : " failed (" + a.last.error + ")");
+    $("al-state").textContent = t;
+    $("al-test").disabled = !a.url;
+  }
+  function fillAlerts() {
+    const a = (lastData && lastData.alerts) || {};
+    $("al-on").checked = !!a.enabled;
+    $("al-kind").value = a.kind || "ntfy";
+    $("al-url").value = a.url || "";
+    $("al-token").value = "";
+    $("al-clear").checked = false;
+    $("al-token").placeholder = a.token_set ? "a token is saved -- leave blank to keep it" : "none";
+    const box = $("al-events");
+    box.textContent = "";
+    for (const [k, label] of (a.event_list || [])) {
+      const l = document.createElement("label");
+      l.className = "check";
+      const c = document.createElement("input");
+      c.type = "checkbox"; c.dataset.ev = k; c.checked = (a.events || {})[k] !== false;
+      l.append(c, " " + label);
+      box.append(l, document.createElement("br"));
+    }
+    $("al-err").textContent = "";
+  }
+  $("btn-alerts").addEventListener("click", () => { fillAlerts(); $("al-form").hidden = false; $("al-url").focus(); });
+  $("al-cancel").addEventListener("click", () => { $("al-form").hidden = true; $("al-token").value = ""; });
+  $("al-form").addEventListener("submit", (ev) => ev.preventDefault());
+  $("al-save").addEventListener("click", async () => {
+    const events = {};
+    $("al-events").querySelectorAll("input[data-ev]").forEach(c => { events[c.dataset.ev] = c.checked; });
+    const values = { enabled: $("al-on").checked, kind: $("al-kind").value, url: $("al-url").value.trim(), events: events };
+    if ($("al-clear").checked) values.clear_token = true;
+    else if ($("al-token").value) values.token = $("al-token").value;
+    const r = await post("/api/alerts", { confirm: true, values: values });
+    if (r && r.status === 200) { $("al-form").hidden = true; $("al-token").value = ""; }
+    else if (r) $("al-err").textContent = r.data.error || "";
+  });
+  $("al-test").addEventListener("click", () => {
+    if (!confirm("Send a test alert now?")) return;
+    post("/api/alerts/test", { confirm: true });
+  });
 
   function renderService(d) {
     const sv = d.service || {}, w = d.wifi || {};
@@ -7754,6 +8158,7 @@ a.btnlink:hover{border-color:var(--cyan)}
     renderWatchdog(d);
     renderWatchdogSwitches(d);
     renderService(d);
+    renderAlerts(d);
     handleControl(d);
   }
 
@@ -7896,6 +8301,7 @@ def run() -> None:
     watchdog = threading.Thread(target=_watchdog_loop, name="watchdog", daemon=True)
     watchdog.start()
     threading.Thread(target=_sd_watchdog_loop, name="sd-watchdog", daemon=True).start()
+    threading.Thread(target=_alerts_loop, name="alerts", daemon=True).start()
     _sd_notify("READY=1")
     threading.Thread(target=_collector_loop, name="status", daemon=True).start()
     threading.Thread(target=_nm_sync_loop, name="nm-sync", daemon=True).start()

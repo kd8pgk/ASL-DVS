@@ -1,6 +1,64 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_33_0_20261014.py`. Newest entries first.
+Current file: `wifimon_v5_34_0_20261014.py`. Newest entries first.
+
+## 5.34.0 (2026-10-14)
+
+Alerts: the node tells you when something goes wrong, instead of waiting for
+you to open a page (reliability plan, Stage 7). wifimon serves both builds.
+
+- **New Alerts card**, off until you turn it on.
+  - Set up alerts -> Send with **ntfy** (the ntfy phone app; use a topic only
+    you know, for example `https://ntfy.sh/<your-secret-topic>`) or a
+    **webhook** (wifimon POSTs JSON: host, event, title, message, level, at).
+  - An optional access token is sent as `Authorization: Bearer ...`. It is
+    stored in `/etc/wifimon/alerts.json` (root only) and never shown again.
+  - **Send test** sends one at once and says whether it got through.
+  - The card shows whether alerts are on, how many are waiting, and the last
+    send.
+- **What sends an alert** (each can be turned off):
+  - **Shutdown or reboot by wifimon.**
+    - Low voltage: sent right away, with 5 s to try, before power-off.
+    - Lost network: queued and sent after the reboot or the next power-on.
+  - **Unclean stop:** after a power loss or a wifimon crash, sent once the node
+    is back online.
+  - **A service keeps restarting:** systemd restarted it 3 times in 10
+    minutes. Covers the Dashboard, SysMon, instmon, 44helper, Asterisk,
+    Analog_Bridge, MMDVM_Bridge and USRP2M17.
+  - **Out-of-memory kill:** the kernel's kill counter went up; names the
+    process when the kernel log has it.
+  - **AllStarLink registration** lost for 5 minutes, and a "registered
+    again" when it comes back. Read from the Dashboard's
+    `/run/asl_dvs/asl_reg.json` (Pi Zero 2 W Dashboard 9.3.75 and later). On a
+    node without that file the alert never fires, and nothing else changes.
+- **Sending:** alerts made while offline wait in
+  `/var/lib/wifimon/alerts_queue.json` (up to 50, for up to 24 hours) and go
+  out once the node is online. At most one alert of each kind per 30 minutes
+  (per service for restarts).
+- Tested:
+  - Unit tests (17), against a real HTTP receiver where sending is involved:
+    - settings validation; the token kept, cleared, never in the page data;
+      file mode 600
+    - nothing sent while off or for a switched-off event
+    - ntfy: title, priority, bearer token, UTF-8 text; webhook JSON
+    - offline -> queued; server error -> stays queued; back -> sent and
+      cleared
+    - 30-minute repeat limit; the test alert bypasses it
+    - old entries dropped, queue capped
+    - restart loop: 3 in 10 minutes alerts, 3 spread over 20 minutes doesn't
+    - OOM with the victim's name
+    - registration: not before 5 minutes, then once, then "registered again";
+      a stale or missing file is ignored
+    - `systemctl show` parsing
+    - low-voltage shutdown sends at once, a lost-network reboot queues
+  - The card in headless Chromium:
+    - off by default, Send test greyed out
+    - saving with no address is refused
+    - save with a token and one event off: the token never comes back to the
+      page
+    - Send test reached the local receiver with the token
+    - no horizontal scroll at 390 px, no script errors
+  - `ci/check_repo.py`
 
 ## 5.33.0 (2026-10-14)
 
