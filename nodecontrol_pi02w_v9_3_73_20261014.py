@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.72-pi02w"
+VERSION      = "9.3.73-pi02w"
 BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
@@ -6400,6 +6400,82 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
     finally:
         _link_exit()
 
+_ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
+_ASL_REG_FAST_SEC  = 60.0
+_ASL_REG_SLOW_SEC  = 900.0
+_asl_reg_lock      = threading.Lock()
+_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0}
+
+def _asl_reg_parse(out: str, node: str) -> str:
+    if not out.strip() or not node:
+        return "unknown"
+    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
+    state = "unregistered"
+    for line in out.splitlines():
+        if not pat.search(line):
+            continue
+        low = line.lower()
+        if any(w in low for w in _ASL_REG_BAD_WORDS):
+            return "unregistered"
+        state = "registered" if "regist" in low else "unknown"
+    return state
+
+def _asl_reg_check() -> str:
+    node = (_cfg.asl_node or "").strip()
+    out, ok = ami_command("rpt show registrations", timeout=4)
+    state = _asl_reg_parse(out, node) if ok else "unknown"
+    with _asl_reg_lock:
+        prev = _asl_reg_info["state"]
+        _asl_reg_info.update(state=state, node=node, at=time.monotonic())
+    if state != prev:
+        log.info("asl_reg: node %s is %s", node or "?", state)
+    return state
+
+def _asl_reg_public() -> str:
+    with _asl_reg_lock:
+        return _asl_reg_info["state"]
+
+def _net_signature() -> tuple:
+    sig = []
+    try:
+        for nic in sorted(os.listdir("/sys/class/net")):
+            if nic == "lo":
+                continue
+            vals = []
+            for leaf in ("operstate", "carrier_changes"):
+                try:
+                    vals.append(Path(f"/sys/class/net/{nic}/{leaf}").read_text().strip())
+                except OSError:
+                    vals.append("")
+            sig.append((nic, *vals))
+    except OSError:
+        pass
+    return tuple(sig)
+
+def _asl_reg_loop() -> None:
+    TICK     = 2.0
+    net_sig  = _net_signature()
+    next_due = 0.0
+    while True:
+        now = time.monotonic()
+        sig = _net_signature()
+        if sig != net_sig:
+            net_sig = sig
+            log.info("asl_reg: network change seen — checking registration again")
+            next_due = now + 5.0
+        with _asl_reg_lock:
+            checked_node, checked_at = _asl_reg_info["node"], _asl_reg_info["at"]
+        if checked_at and (_cfg.asl_node or "").strip() != checked_node:
+            next_due = min(next_due, now)
+        if now >= next_due:
+            try:
+                state = _asl_reg_check()
+            except Exception as e:
+                log.warning("asl_reg: check error: %s", e)
+                state = "unknown"
+            next_due = time.monotonic() + (_ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC)
+        time.sleep(TICK)
+
 def _link_poll_loop() -> None:
     INTERVAL     = 2.0
     fails        = 0
@@ -7508,6 +7584,7 @@ def build_status() -> dict:
     return {
         "page":              st["page"],
         "status":            st["status"],
+        "asl_reg":           _asl_reg_public(),
         "current_fav":       st["linked_node"] if (st["page"] == "ASL" and not st["current_fav"] and st["linked_node"]) else st["current_fav"],
         "has_asl":           st["has_asl"],
         "has_dvs":           st["has_dvs"],
@@ -8045,6 +8122,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn:active { transform: scale(.95); }
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
+#asl-tune-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
 .btn-blue   { color: var(--blue);   border-color: var(--blue-dim); }
@@ -8963,7 +9041,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               pattern="[0-9]*" placeholder="Node number…" maxlength="12"
               oninput="ndcQtSync('ASL')"
               onkeydown="if(event.key==='Enter')doConnectByNumber()">
-            <button class="btn btn-teal" onclick="doConnectByNumber()">Tune</button>
+            <button id="asl-tune-btn" class="btn btn-teal" onclick="doConnectByNumber()">Tune</button>
             <button id="lh-btn-ASL" class="btn-last lh-off" onclick="openModeLast('ASL')">LH</button>
             <button id="asl-qt-save-btn" class="btn btn-muted" onclick="ndcQtSave('ASL')" disabled
               aria-label="Save this node to favorites" title="Save to favorites">Save</button>
@@ -11706,8 +11784,16 @@ function applyTabState(d){
     }
   }
 }
+function applyAslReg(d){
+  const b=byId('asl-tune-btn');
+  if(!b)return;
+  const bad=d.asl_reg==='unregistered';
+  b.classList.toggle('asl-unreg',bad);
+  b.title=bad?('Node '+(d.asl_node||'')+' is not registered with AllStarLink'):'';
+}
 function applyServerState(d){
   byId('hdr-node').textContent=d.asl_node;
+  applyAslReg(d);
   const csEl=byId('hdr-callsign');
   const csSep=byId('hdr-callsign-sep');
   if(d.callsign){csEl.textContent=d.callsign;csEl.style.display='inline';csSep.style.display='inline';}
@@ -14151,6 +14237,8 @@ def startup() -> None:
         except Exception:
             pass
         threading.Thread(target=_link_poll_loop, daemon=True).start()
+        if has_asl:
+            threading.Thread(target=_asl_reg_loop, name="asl-reg", daemon=True).start()
 
     if has_asl:
         has_echo = _detect_echo()

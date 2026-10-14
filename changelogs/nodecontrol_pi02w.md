@@ -1,6 +1,43 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_72_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_73_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.73-pi02w (2026-10-14)
+
+The ASL tab's Tune button shows whether the node is registered with
+AllStarLink. The full build is not changed.
+
+- New background check `asl-reg` asks Asterisk `rpt show registrations` (over
+  AMI) and looks for the node set in Edit. It uses SysMon's rule:
+  - a line naming the node with "unregist", "rejected", "failed", "timeout"
+    or "timed out" → unregistered
+  - a line naming the node with "regist" → registered
+  - the node missing from the list → unregistered
+  - Asterisk not answering → unknown
+- `/api/status` carries the result as `asl_reg` (read from a cache, so the
+  status call does no extra work).
+- The Tune button next to the node number box:
+  - registered or unknown: its normal teal look
+  - unregistered: red border, red text with a line through "Tune", and the
+    tooltip "Node N is not registered with AllStarLink". It can still be
+    clicked.
+- How often it checks:
+  - every 60 s while the node is not registered (or the state is unknown)
+  - every 15 min once registered
+  - again 5 s after a network change (an interface going down or up, or a
+    Wi-Fi reconnect, read from `/sys/class/net/*/operstate` and
+    `carrier_changes`), then every 60 s until registered
+  - at once when the node number in Edit changes
+- Tested:
+  - Unit test with a mocked AMI: Registered, Rejected, node missing, no
+    registrations, and AMI down give registered / unregistered / unregistered
+    / unregistered / unknown. With a mocked clock: checks at 0, 60 and 120 s
+    while unregistered, then backs off to 15 min, and a network change at
+    600 s brings a check at 606 s.
+  - The page in headless Chromium: registered teal `rgb(0,255,229)` with no
+    line through; unregistered red `rgb(255,61,90)` with a line through and
+    the tooltip; unknown teal. No script errors. `node --check` on the page
+    script.
 
 ## 9.3.72-pi02w (2026-10-14)
 
