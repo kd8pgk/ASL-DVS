@@ -127,6 +127,44 @@ The **GitHub Updates** card in instmon reads this repo's file list directly.
 To start using this on a node that has an older instmon, install the current
 instmon once by hand. From then on, instmon updates itself.
 
+## Release channels and checks
+
+Every build lands on `main`, the **testing** channel. **Stable** is a list of
+proven builds, one per tool, in [`channels/stable.json`](channels). instmon
+reads it from version 2.49.0 on, with Stable as the default and Testing as an
+opt-in; until then instmon keeps updating from `main`.
+
+- **Releases and cosmetic builds.** `X.Y.Z` is a release. `X.Y.Z.N` is a
+  cosmetic build (text, wording, colors or layout only). Cosmetic builds never
+  go to stable and don't count below.
+- **When a release becomes stable** (each tool on its own count; full and
+  Pi Zero 2 W builds are separate):
+  - four newer releases of that tool are on `main`, and it has been there at
+    least 3 days; or
+  - it has been the newest release for 14 days.
+- **Overrides** in `channels/overrides.json`: `hold` keeps a release off
+  stable; `hotfix` puts a release on stable at once.
+- **instmon** is never older than 2.49.0 on stable, the first version that
+  reads channels. A build still under an old file name is never promoted.
+- The `promote-stable` workflow rewrites `channels/stable.json` after every
+  merge to `main` and once a day. Each entry names the file, version, commit
+  and git blob hash, so a node can fetch that exact file and check it. The
+  rules are in `channels/rules.json`.
+
+The `checks` workflow runs on every pull request (`python3
+ci/check_repo.py --base origin/main` runs it locally). On the files the pull
+request changes it runs `py_compile`, `pyflakes`, `node --check` on the page
+JavaScript and `bash -n`, and checks that:
+
+- each new file's version matches its name, has three or four parts, and ends
+  in `-pi02w` only for the Pi Zero 2 W fork;
+- the version is newer than the file it replaces, and a tool file is never
+  changed in place;
+- a cosmetic build changes only strings, not code;
+- the README lists the file and its changelog names it at the top;
+- each tool has one file, and the shared launcher text is the same everywhere;
+- `channels/stable.json` is not edited by hand.
+
 ## The launcher
 
 The Pi Zero 2 W builds and the common tools start through a small file,
