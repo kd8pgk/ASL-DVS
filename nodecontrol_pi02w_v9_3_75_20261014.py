@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.74-pi02w"
+VERSION      = "9.3.75-pi02w"
 BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
@@ -6419,7 +6419,20 @@ _ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
 _ASL_REG_FAST_SEC  = 60.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
-_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0}
+_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.time()}
+ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
+
+def _asl_reg_write_status(node: str, state: str, since: float) -> None:
+    try:
+        os.makedirs(os.path.dirname(ASL_REG_STATUS_FILE), exist_ok=True)
+        tmp = ASL_REG_STATUS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"node": node, "state": state, "since": since, "checked_at": time.time(),
+                       "next_check_secs": _ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC}, f)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, ASL_REG_STATUS_FILE)
+    except OSError as e:
+        log.debug("asl_reg: couldn't write %s: %s", ASL_REG_STATUS_FILE, e)
 
 def _asl_reg_parse(out: str, node: str) -> str:
     if not out.strip() or not node:
@@ -6441,9 +6454,13 @@ def _asl_reg_check() -> str:
     state = _asl_reg_parse(out, node) if ok else "unknown"
     with _asl_reg_lock:
         prev = _asl_reg_info["state"]
+        if state != prev:
+            _asl_reg_info["since"] = time.time()
         _asl_reg_info.update(state=state, node=node, at=time.monotonic())
+        since = _asl_reg_info["since"]
     if state != prev:
         log.info("asl_reg: node %s is %s", node or "?", state)
+    _asl_reg_write_status(node, state, since)
     return state
 
 def _asl_reg_public() -> str:
