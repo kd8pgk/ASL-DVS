@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-13</div>
+    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-14</div>
   </div>
   <div class="body">
     <h1>User Manual<br><span>The Node Controller Suite</span></h1>
@@ -28,12 +28,12 @@
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_67_17_20261013.py</td><td>6.13.67.17-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_187x_20261013.py</td><td>0.0.187x</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_195_20261013.py</td><td>0.0.195</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_31_0_20261013.py</td><td>5.31.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_83_20261013.py</td><td>6.13.83</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_84_20261013.py</td><td>6.13.84</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
     </table>
   </div>
@@ -364,6 +364,7 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
     <tr><th>Manual</th><th>File in docs/</th></tr>
     <tr><td>Pi Zero 2 W install</td><td class="mono">ASL-DVS_Pi02w_Install_Manual.pdf</td></tr>
     <tr><td>Full build install <span class="badge full">FULL</span></td><td class="mono">ASL-DVS_Full_Build_Install_Manual.pdf</td></tr>
+    <tr><td>44helper, tab by tab</td><td class="mono">ASL-DVS_44helper_Manual.pdf</td></tr>
   </table>
 
   <h2><span class="n">2.1</span>Before you start</h2>
@@ -686,6 +687,21 @@ sudo bash uninstall_all_v1_5.sh</pre>
     <tr><td>Restart / Start</td><td>Restart or start the service from the log window, so you can watch what happens.</td></tr>
     <tr><td>Copy</td><td>Copies the lines you see (after the filter).</td></tr>
   </table>
+  <h3>DV Gateway Logs <span class="badge pi">PI02W</span></h3>
+  <p>From SysMon 6.13.68-pi02w, a card at the top of the Journal tab lists the digital-voice programs' own log files,
+    one row per log, grouped by program, with its size and age:</p>
+  <table>
+    <tr><th>Program</th><th>What the row opens</th></tr>
+    <tr><td>ircDDBGateway</td><td>The last 7 days of <code>ircDDBGateway-YYYY-MM-DD.log</code>, plus <code>Headers.log</code>, <code>Links.log</code> and <code>STARnet.log</code>, from <code>/var/log/ircddbgateway</code>.</td></tr>
+    <tr><td>MMDVM_Bridge, YSFGateway, P25Gateway, NXDNGateway, USRP2M17</td><td>The last 7 dated logs, found from each program's <code>.ini</code> (<code>[Log]</code> <code>FilePath</code> and <code>FileRoot</code>). If file logging is off (<code>FileLevel=0</code>) or there are no files, the row says so and opens the program's journal instead.</td></tr>
+    <tr><td>Analog_Bridge, STFU, netcheck, ircddbgatewayd</td><td>Their journal; they write no log file.</td></tr>
+  </table>
+  <ul>
+    <li><b>Open</b> shows the log in the same pop-up as a journal, with Lines 50 / 200 / All (for a file, All is the last 2 MB), the filter and Copy. A line under the toolbar gives the time zone (gateway files are in UTC), the path, and how many lines are shown out of the total.</li>
+    <li><b>Copy</b> on a row copies that log's last 200 lines, with a header naming the file, its time zone and its line count.</li>
+    <li><b>Copy for agent</b> copies the last 50 lines of every log (the newest file per program) plus this boot's journal warnings, each with a header line, ready to paste to someone helping you. The button shows the size first. <b>Download .txt</b> saves the same text.</li>
+    <li>The service panel's Status box also has <b>Copy</b>. If a copy comes out shorter than expected, a warning points you to Download.</li>
+  </ul>
 
   <h2><span class="n">3.7</span>Common tasks</h2>
   <h3>A service shows red</h3>
@@ -1277,6 +1293,14 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </table>
   <p>† Buttons that change something ask you to confirm. Debug and logging switch themselves off again after 5 minutes.
     The <b>Troubleshooting</b> card below the buttons runs read-only checks and explains the results.</p>
+  <h3>Half tunnel checks</h3>
+  <p>From SysMon 6.13.84, Troubleshooting has a <b>Half tunnel</b> group, between Network and Dashboard. Its eight
+    read-only checks come from 44helper's half-tunnel card (Chapter 7): <b>Tunnel is up</b>, <b>Internet uses the
+    normal link</b>, <b>DNS works</b>, <b>LAN tools respond</b>, <b>DVSwitch connected</b>, <b>usrp2m17 connected</b>,
+    <b>ASL registration shows your 44 address</b> and <b>EchoLink logged in</b>. Each result also says whether the half
+    tunnel is off, being tested or on, and shows the 44 address from <code>wg0.conf</code>. They work without 44helper,
+    and Run all and Copy report include them. With no half tunnel, the checks that only make sense with one report
+    <b>info</b> instead of failing.</p>
 
   <div class="uth">
     <span class="lbl">UNDER THE HOOD</span>
@@ -1316,6 +1340,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p>44helper is the node's setup and repair helper. It installs and removes the radio software, sets up
     remote access over 44Net or Cloudflare, runs system updates safely, trims SD-card wear, and saves and
     restores your configuration. SysMon tells you what is wrong; 44helper is usually where you fix it.</p>
+  <p>These chapters cover every tab. For more detail, tab by tab and card by card, see the 44helper manual:
+    <code>docs/ASL-DVS_44helper_Manual.pdf</code>.</p>
   <ol start="7">
     <li>44helper basics</li>
     <li>44Net and remote access</li>
@@ -1335,7 +1361,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.187x · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.195 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1456,11 +1482,30 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <b>Add (runtime test)</b> opens it until the next reload, a safe way to try it; <b>Make permanent</b> keeps that one port; <b>Remove</b> closes it everywhere; <b>Commit all runtime changes</b> keeps every test at once; <b>Reload firewalld</b>. An advanced section adds services and moves interfaces between zones.</td></tr>
     <tr><td>Panic mode</td><td>If firewalld's panic mode (all traffic dropped) is on, a button turns it off.</td></tr>
     <tr><td>Router: live port-forward table</td><td>With router access set up (Chapter 8), the router's forwards, each with a remove button.</td></tr>
+    <tr><td>Half tunnel (ASL + EchoLink only) <span class="badge test">TESTING</span></td><td>At the top of the tab, from 0.0.188x. Sends only ASL and EchoLink through a full 44Net tunnel; everything else stays on the normal link. See below.</td></tr>
   </table>
   <p>As you type a port, a guardrail line checks it: a loopback-only port is <b>blocked</b> in every zone, and a
     dashboard, AMI or Cockpit port is allowed but flagged red.</p>
   <div class="call tip"><span class="t">TIP</span>Use <b>Add (runtime test)</b> first. If you lose access, a
     firewalld reload or a reboot puts things back. Make it permanent once you know it works.</div>
+  <h3>Half tunnel card <span class="badge test">TESTING</span></h3>
+  <p>With a full tunnel's <code>AllowedIPs = 0.0.0.0/0</code>, anyone on the internet can reach your 44 address, but
+    everything the Pi sends goes through 44Net too. The half tunnel keeps the first part and drops the second: only
+    Asterisk (AllStar links, registration, EchoLink) uses the tunnel. DVSwitch, usrp2m17, DNS and everything else
+    keep the normal route. The card works in numbered buttons:</p>
+  <table>
+    <tr><th>Button</th><th>What it does</th></tr>
+    <tr><td>0. Check first</td><td>Read-only. Finds the 44 address, the tunnel server, the IAX port, EchoLink, the normal route, the LAN and wg0's zone, and blocks on anything that would break (for example <code>SaveConfig = true</code>, a <code>Table =</code> line, or the full tunnel with exceptions in use). Backs up wg0.conf to the instmon library.</td></tr>
+    <tr><td>1. Arm auto-undo</td><td>A 15-minute timer that takes every test change back out by itself, even if the page or SSH drops. Nothing else can run until it is armed.</td></tr>
+    <tr><td>2–6</td><td>The temporary test, one piece per button: restart the tunnel in half mode from a copy in <code>/run</code>, add the tunnel route table, send ASL and EchoLink into it, open the tunnel ports, loosen the return-path check. <b>Run 2–6 in order</b> does them all and puts everything back at the first failure.</td></tr>
+    <tr><td>7. Run checks</td><td>14 checks in four groups: the tunnel, the normal route (internet, DNS, LAN pages), the half-tunnel pieces, and the services. A red line on the normal route shows a banner recommending Undo now.</td></tr>
+    <tr><td>8. Undo now · 9. Keep for now</td><td>Put everything back now, or cancel the timer and keep the test until Undo now or a reboot.</td></tr>
+    <tr><td>10. Make permanent</td><td>Unlocks once steps 2–6 are done and the checks (under 15 minutes old) are all green or grey. Saves the setup in wg0.conf, firewalld and a sysctl file, writes <code>remove_half_tunnel.sh</code> to your home folder and <code>/root</code>, restarts the tunnel and checks again. If a check fails, it takes it all back out and restarts the test.</td></tr>
+    <tr><td>11. Remove permanent</td><td>Same as running <code>~/remove_half_tunnel.sh</code>, which works without 44helper.</td></tr>
+  </table>
+  <div class="call care"><span class="t">CAREFUL</span>With the half tunnel on, other nodes and EchoLink reach you at
+    your 44 address only. A router port forward to the node's IAX or EchoLink port stops working, because the replies
+    go out the tunnel. Everything open in wg0's firewall zone is reachable from the whole internet.</div>
 
   <h2><span class="n">7.7</span>Actions Log tab</h2>
   <ul>
@@ -1517,21 +1562,32 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <div class="kicker">Chapter 8 · 44helper</div>
   <h1 class="ch">44Net and remote access</h1>
   <p class="ch-lede">How to make your node reachable from the internet, or reach it yourself while away. 44helper
-    offers three routes: a 44Net tunnel run on the Pi (Full or Split), a 44Net tunnel run on your router, or a
-    Cloudflare Tunnel. This chapter helps you pick one, then walks through each tab, and finishes with the Nodes
+    offers three routes: a 44Net tunnel run on the Pi (Full or Split, plus two refinements of the full tunnel), a
+    44Net tunnel run on your router, or a Cloudflare Tunnel. This chapter helps you pick one, then walks through each tab, and finishes with the Nodes
     tab for several nodes on one network.</p>
 
   <h2><span class="n">8.1</span>Which route?</h2>
   <table>
     <tr><th>Route</th><th>Tab</th><th>Best for</th><th>What you need</th></tr>
     <tr><td>Pi tunnel, Full</td><td>Full Tunnel</td><td>A node that must be reachable by other AllStar nodes, with all its traffic going out through 44Net.</td><td>A 44Net Connect account and tunnel.</td></tr>
-    <tr><td>Pi tunnel, Split</td><td>Split Tunnel</td><td>The same, but only 44Net traffic uses the tunnel. DMR, M17 and everything else take your normal internet. <b>Usually the better choice.</b></td><td>The same, plus one edited line.</td></tr>
+    <tr><td>Pi tunnel, Split</td><td>Split Tunnel</td><td>A node that only 44Net hosts need to reach at the 44 address. Only 44Net traffic uses the tunnel; DMR, M17 and everything else take your normal internet, and other AllStar nodes still reach you at your home address (router forward). <b>The lowest-risk choice.</b></td><td>The same, plus one edited line.</td></tr>
+    <tr><td>Pi tunnel, half <span class="badge test">TESTING</span></td><td>Firewall (card)</td><td>ASL reachable by any node at the 44 address, with no router forward and behind CGNAT; everything else on your normal internet.</td><td>A Full Tunnel set up first.</td></tr>
+    <tr><td>Pi tunnel, full with exceptions <span class="badge test">TESTING</span></td><td>Full Tunnel (card)</td><td>The whole Pi behind the 44 address, while forwarded TCP connections (dashboard, SSH) still answer, and chosen hosts or ports skip the tunnel.</td><td>A running Full Tunnel.</td></tr>
     <tr><td>Router tunnel</td><td>Router Install</td><td>Putting several devices, or a whole routed 44Net subnet, behind one tunnel on an OpenWrt / GL.iNet router.</td><td>SSH access to the router; a single 44Net address or a routed subnet.</td></tr>
     <tr><td>Cloudflare Tunnel</td><td>Cloudflare</td><td>Reaching the web pages yourself from anywhere, with no port opened at home.</td><td>A free Cloudflare account and domain.</td></tr>
   </table>
+  <table>
+    <tr><th></th><th>Split</th><th>Half</th><th>Full with exceptions</th></tr>
+    <tr><td>Pi's internet traffic</td><td>normal link</td><td>normal link</td><td>tunnel</td></tr>
+    <tr><td>Who can reach the 44 address</td><td>44Net hosts only</td><td>anyone</td><td>anyone</td></tr>
+    <tr><td>What registration shows</td><td>home address</td><td>44 address</td><td>44 address</td></tr>
+    <tr><td>Router forward for ASL</td><td>needed</td><td>not needed</td><td>not needed</td></tr>
+  </table>
+  <p>With a split tunnel, a packet from an ordinary internet address does arrive down the tunnel, but WireGuard drops
+    it, because its source isn't in <code>AllowedIPs</code>. That is why split keeps your home address for ASL.</p>
   <div class="call note"><span class="t">NOTE</span>44Net (AMPRNet) gives amateur stations real public 44.x.x.x
-    addresses. 44Net Connect is ARDC's free WireGuard service that hands you one. Other AllStar nodes can then reach
-    your IAX2 port directly, with no port forwarding on your home router.</div>
+    addresses. 44Net Connect is ARDC's free WireGuard service that hands you one. With a full or half tunnel, other
+    AllStar nodes can then reach your IAX2 port at that address, with no port forwarding on your home router.</div>
 
   <h2><span class="n">8.2</span>Full Tunnel and Split Tunnel tabs</h2>
   <p>Both tabs set up a WireGuard tunnel (<code>wg0</code>) on the Pi, with a firewalld zone called
@@ -1548,14 +1604,18 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li><b>Create the 44NetConnect zone.</b></li>
     <li><b>Add inbound services and ports</b>: tick what other stations may reach. AllStarLink IAX2 and EchoLink/SvxLink are ticked by default; VOTER/RTCM is optional. Asterisk AMI can be added but is flagged red. Full Tunnel also has fields for your DVSwitch Mobile port and a custom port. Split Tunnel offers only IAX2 and EchoLink, because nothing else needs to be reachable.</li>
     <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card.
-      <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value.
+      <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value. From 0.0.193 the options that go through systemd-resolved are refused while resolved isn't answering.
       <br><b>4b (Split)</b>: <b>Repair AllowedIPs</b> fixes a config pasted unedited. <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
     <li><b>Attach wg0 to the zone.</b></li>
-    <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations.</li>
+    <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations. From 0.0.193 the start waits up to 90 seconds. If it fails, the output shows the tunnel's state and the last lines of its log. Before starting, it checks that systemd-resolved answers whenever wg0.conf's DNS setting needs it; if resolved doesn't, it restarts it once, and refuses to start if that doesn't help.</li>
   </ol>
   <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the
     network. If you are connected over SSH or Cockpit from outside your home network, that session may drop. Do
     step 6 from home, or on a keyboard and screen.</div>
+  <div class="call note"><span class="t">NOTE</span>A tunnel start that fails after exactly 25 seconds on
+    <code>resolvconf -a wg0</code> is systemd-resolved not answering on D-Bus. Restart it
+    (<code>sudo systemctl restart systemd-resolved</code>), or reboot, or take the <code>DNS =</code> line out of
+    wg0.conf. With a full tunnel the line isn't needed: lookups already go through the tunnel.</div>
   <div class="call care"><span class="t">CAREFUL</span>A Full Tunnel config pasted into the Split Tunnel tab
     unedited is the classic cause of "AllStar works but DVSwitch and M17 don't": every DNS lookup goes into the
     tunnel. Use step 4b's Repair button, then restart the tunnel.</div>
@@ -1564,6 +1624,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
     <li><b>Purge</b>: undoes the tunnel and the zone.</li>
+    <li><b>Full tunnel with exceptions</b> <span class="badge test">TESTING</span> (Full Tunnel tab, under the steps, from 0.0.194): keeps the full tunnel but sends two things around it. <b>Step 2</b> keeps replies from the LAN address on the LAN link, so a dashboard or SSH connection through your router still answers. <b>Step 3</b> is an optional bypass list of host names, addresses or UDP ports. It has the same Check first, 15-minute auto-undo, 12 checks, Make permanent (as marked PostUp lines in wg0.conf, with <code>remove_full_exceptions.sh</code>) and Remove permanent as the half tunnel. Only one of the two can be in use.</li>
     <li>If one kind is installed and you open the other tab, its steps are locked until you press <b>Acknowledge and unlock</b>, so you can't overwrite a working tunnel by accident.</li>
   </ul>
 
@@ -1650,6 +1711,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li>The tunnel runs as <code>wg-quick@wg0</code>, or a custom fallback unit <code>44net-tunnel.service</code> where that template isn't available.</li>
       <li>Which kind is installed is stored as <code>tunnel.pi.kind</code> in <code>[tunnels]</code> of <code>44helper.conf</code>; the DVSwitch Mobile port as <code>tunnel.pi.dvswitch_mobile_port</code>.</li>
       <li>The guardrail also checks the ASL3 image's own <code>allstarlink</code> zone: <code>wg0</code> must not be in it.</li>
+      <li><b>Half tunnel:</b> test state, the temporary wg0.conf copy and <code>undo.sh</code> in <code>/run/44helper-half/</code> (cleared at reboot), run by the transient timer <code>44helper-halfundo</code>. Routing table 4444, rules at priority 1100–1105. Once permanent: lines between <code># 44helper-half-begin</code> / <code>-end</code> in wg0.conf, <code>/etc/sysctl.d/90-44helper-halftunnel.conf</code>, <code>/etc/44helper/halftunnel.json</code> and a login reminder in <code>/etc/profile.d/</code>.</li>
+      <li><b>Full tunnel with exceptions:</b> <code>/run/44helper-fullx/</code> and the timer <code>44helper-fullxundo</code>; rules at priority 1150 (LAN replies) and 1160–1161 (bypass list), ahead of wg-quick's 32764/32765. Once permanent: lines between <code># 44helper-fullx-begin</code> / <code>-end</code> and <code>/etc/44helper/fullx.json</code>.</li>
     </ul>
     <h3>Router</h3>
     <ul>
@@ -1880,18 +1943,17 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Root fstab — noatime</td><td>Stops the card recording a write every time a file is read.</td><td>at once (remount)</td><td>Revert; one backup of <code>/etc/fstab</code> is kept</td></tr>
     <tr><td>journald — volatile</td><td>Keeps the system log in memory instead of on the card.</td><td>at once (journald restart)</td><td>Revert</td></tr>
     <tr><td>rsyslog</td><td>Stops and disables the second, text-file logger.</td><td>at once</td><td>Revert</td></tr>
-    <tr><td>dphys-swapfile — Disable</td><td>Turns off the swap file on the card.</td><td>at once</td><td>Revert (works offline)</td></tr>
-    <tr><td>dphys-swapfile — Uninstall</td><td>Removes the swap-file package entirely, after showing what apt would remove.</td><td>at once</td><td>Reinstall, <b>needs internet</b></td></tr>
+    <tr><td>Swap — restore</td><td>Only shown on a node where an older 44helper turned swap off or removed <code>dphys-swapfile</code>. <b>Revert</b> turns swap back on; <b>Reinstall</b> puts the package back.</td><td>at once</td><td>—</td></tr>
     <tr><td>mandb — Disable rebuild</td><td>Stops the periodic manual-page index rebuild.</td><td>at once</td><td>Revert</td></tr>
     <tr><td>mandb — Remove package</td><td>Removes <code>man-db</code> entirely.</td><td>at once</td><td>Reinstall, <b>needs internet</b></td></tr>
   </table>
   <div class="call care"><span class="t">CAREFUL</span>With journald volatile and rsyslog off, <b>no log survives a
     crash or power cut</b>. That is the point, but remember it before you go looking for why a node rebooted.
     Existing logs already on the card are not deleted.</div>
-  <div class="call care"><span class="t">CAREFUL</span>Turning swap off on a 512 MB Pi Zero 2 W is a real
-    out-of-memory risk under load. Check your memory headroom first (Chapter 2, and <code>free -m</code>). Many Pi
-    Zero 2 W systems use zram (compressed swap in memory) instead; that is separate from dphys-swapfile and isn't
-    touched here.</div>
+  <div class="call care"><span class="t">CAREFUL</span>44helper 0.0.195 removed the two swap cards (Disable and
+    Uninstall package): turning swap off ran low-RAM nodes out of memory. Keep swap on. If an older version turned it
+    off, use <b>Swap — restore</b>, or run <code>sudo systemctl enable --now dphys-swapfile</code> (or
+    <code>sudo apt-get install -y dphys-swapfile</code> if the package was removed).</div>
 
   <h2><span class="n">10.3</span>Common tasks</h2>
   <h3>Monthly update on a Pi Zero 2 W</h3>
@@ -1906,7 +1968,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <ol class="steps">
     <li>Apply noatime, journald volatile and rsyslog off. These are low risk and undoable.</li>
     <li>Disable the mandb rebuild.</li>
-    <li>Leave swap alone unless you know the node has memory to spare.</li>
+    <li>Leave swap on.</li>
   </ol>
 
   <div class="uth">
@@ -2654,6 +2716,7 @@ ss -tlnp | grep 9999</pre></li>
   <h2><span class="n">15.6</span>The Pi is slow or runs out of memory</h2>
   <ol class="steps">
     <li><code>free -m</code>. A Pi Zero 2 W has about 415 MB usable, and zram swap is normal.</li>
+    <li>Check that swap is on: <code>swapon --show</code> should list it. If an older 44helper turned it off, use 44helper's System Optimization tab (<b>Swap — restore</b>), or <code>sudo systemctl enable --now dphys-swapfile</code>.</li>
     <li>Check every tool runs through the launcher: <code>ps ax | grep asl_dvs_launch</code> should list each one. A tool started as plain <code>python3 tool.py</code> uses about twice the memory, so run its <code>--install</code> again.</li>
     <li>Close pages you aren't using. Each open page polls its tool, and Cockpit's page costs about 27 MB while open.</li>
     <li>SysMon Hardware: turn off the video driver and lower GPU memory (Chapter 5).</li>
