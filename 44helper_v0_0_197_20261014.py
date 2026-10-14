@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.196"
+APP_VERSION = "0.0.197"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -984,6 +984,25 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
         })
     else:
         findings.append({"level": "ok", "msg": f"{WG0_CONF_PATH} permissions OK (600)."})
+
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            ep = _wg_endpoint_info(f.read())
+    except OSError:
+        ep = None
+    if ep and ep["needed"] and _wg_endpoint_loop_live(ep["ip"]):
+        findings.append({
+            "level": "danger",
+            "msg": (f"The tunnel server ({ep['host']}) is a 44Net address inside AllowedIPs and routes back into wg0: "
+                    "a routing loop, so the tunnel can't reach it (the 44Net Connect dashboard shows idle). "
+                    "Fix it on the Split Tunnel tab, step 4b."),
+        })
+    elif ep and ep["needed"] and not ep["pinned"]:
+        findings.append({
+            "level": "warn",
+            "msg": (f"The tunnel server ({ep['host']}) is inside AllowedIPs and wg0.conf has no endpoint pin. "
+                    "The next tunnel start will loop. Fix it on the Split Tunnel tab, step 4b."),
+        })
 
     return findings
 
@@ -5124,6 +5143,7 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
     if not valid:
         return {"success": False, "verified": False, "output": f"Rejected: {msg}"}
 
+    config_text, pin_note = _wg_apply_endpoint_pin(config_text)
     try:
         wg_dir = os.path.dirname(WG0_CONF_PATH)
         os.makedirs(wg_dir, mode=0o700, exist_ok=True)
@@ -5134,7 +5154,7 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
 
-    output_lines = ["wg0.conf written, permissions set to 600."]
+    output_lines = ["wg0.conf written, permissions set to 600."] + ([pin_note] if pin_note else [])
     if backup_to_library:
         try:
             wrote, reason = _compare_before_write(_wg_library_path(), config_text.encode("utf-8"))
@@ -5228,6 +5248,100 @@ def _wg_block_remove(text: str, begin: str, end: str) -> str:
         if not inside:
             out.append(ln)
     return "\n".join(out) + "\n"
+
+_WG_EPPIN_BEGIN = "# 44helper-endpoint-pin-begin"
+_WG_EPPIN_END = "# 44helper-endpoint-pin-end"
+_WG_GW_EXPR = "$(ip -4 route show table main default | head -n1 | grep -oE '(via [0-9.]+ )?dev [^ ]+')"
+
+def _wg_endpoint_info(text: str) -> dict:
+    parsed = _parse_wg_conf_text(text or "", mask_private_key=True)
+    info = {"host": "", "ip": "", "literal": False, "needed": False, "pinned": False}
+    info["pinned"] = any(ln.strip() == _WG_EPPIN_BEGIN for ln in (text or "").splitlines())
+    if not parsed["peers"]:
+        return info
+    peer = parsed["peers"][0]
+    ep = _wg_conf_field(peer, "Endpoint")
+    if not ep:
+        return info
+    host = ep.rsplit(":", 1)[0].strip("[]") if ":" in ep else ep
+    info["host"] = host
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.version != 4:
+            return info
+        info["ip"], info["literal"] = host, True
+    except ValueError:
+        try:
+            r = subprocess.run(["getent", "ahostsv4", host], capture_output=True, text=True, timeout=6)
+            first = (r.stdout or "").split()
+            info["ip"] = first[0] if r.returncode == 0 and first else ""
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            info["ip"] = ""
+    if not info["ip"]:
+        return info
+    nets = []
+    for part in _wg_conf_field(peer, "AllowedIPs").split(","):
+        try:
+            net = ipaddress.ip_network(part.strip(), strict=False)
+        except ValueError:
+            continue
+        if net.version == 4:
+            nets.append(net)
+    if any(n.prefixlen == 0 for n in nets) or any(ln.strip().lower().replace(" ", "") == "table=off" for ln in (text or "").splitlines()):
+        return info
+    ip = ipaddress.ip_address(info["ip"])
+    info["needed"] = any(ip in n for n in nets)
+    return info
+
+def _wg_endpoint_pin_lines(info: dict) -> list[str]:
+    if info["literal"]:
+        ep = info["ip"] + "/32"
+        return [_WG_EPPIN_BEGIN,
+                f"PreUp = ip -4 route replace {ep} {_WG_GW_EXPR} || true",
+                f"PostDown = ip -4 route del {ep} || true",
+                _WG_EPPIN_END]
+    look = f"$(getent ahostsv4 {info['host']} | awk 'NR==1{{print $1}}')"
+    return [_WG_EPPIN_BEGIN,
+            f"PreUp = E={look}; [ -n \"$E\" ] && ip -4 route replace \"$E/32\" {_WG_GW_EXPR} || true",
+            f"PostDown = E={look}; [ -n \"$E\" ] && ip -4 route del \"$E/32\" || true",
+            _WG_EPPIN_END]
+
+def _wg_apply_endpoint_pin(text: str) -> tuple[str, str]:
+    info = _wg_endpoint_info(text)
+    current = _wg_extract_block(text, _WG_EPPIN_BEGIN, _WG_EPPIN_END) if info["pinned"] else None
+    if info["needed"]:
+        want = _wg_endpoint_pin_lines(info)
+        if current is not None and [ln.strip() for ln in current] == [ln.strip() for ln in want[1:-1]]:
+            return text, ""
+        base = _wg_block_remove(text, _WG_EPPIN_BEGIN, _WG_EPPIN_END) if info["pinned"] else text
+        new = _wg_insert_in_interface(base, want)
+        if new is None:
+            return text, ""
+        return new, (f"The tunnel server ({info['host']}) is inside AllowedIPs, so wg0.conf now keeps it on the normal "
+                     "route (endpoint pin). Without it the tunnel's own packets loop back into wg0.")
+    if info["pinned"]:
+        return _wg_block_remove(text, _WG_EPPIN_BEGIN, _WG_EPPIN_END), "Endpoint pin removed from wg0.conf (no longer needed)."
+    return text, ""
+
+def _wg_endpoint_loop_live(ip: str) -> bool:
+    if not ip:
+        return False
+    try:
+        r = subprocess.run(["ip", "-4", "route", "get", ip], capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    toks = (r.stdout or "").split()
+    return r.returncode == 0 and "dev" in toks[:-1] and toks[toks.index("dev") + 1] == "wg0"
+
+def _wg_pin_live(ip: str) -> dict:
+    try:
+        r = subprocess.run(["ip", "-4", "route", "show", "table", "main", "default"], capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return {"success": False, "output": "couldn't read the default route"}
+    m = re.search(r"((?:via [0-9.]+ )?dev \S+)", (r.stdout or "").splitlines()[0] if (r.stdout or "").strip() else "")
+    if not m or m.group(1).split()[-1].startswith("wg"):
+        return {"success": False, "output": "no normal default route to pin the tunnel server to"}
+    return _run_argv(["ip", "-4", "route", "replace", f"{ip}/32"] + m.group(1).split())
 
 def _wg_insert_in_interface(text: str, block_lines):
     out = []
@@ -5380,6 +5494,9 @@ def status_wg_dns() -> dict:
 
 def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     out = []
+    new_text, pin_note = _wg_apply_endpoint_pin(new_text)
+    if pin_note:
+        out.append(pin_note)
     with open(WG0_CONF_PATH, "w") as f:
         f.write(new_text)
     os.chmod(WG0_CONF_PATH, 0o600)
@@ -5549,8 +5666,12 @@ def status_wg_allowed_ips() -> dict:
         shape = "narrowed-other"
     half = _half_mode()
     fx = _fx_mode()
+    ep = _wg_endpoint_info(text)
     return {"conf_exists": True, "allowed_ips": allowed_ips, "shape": shape,
-            "repairable": shape == "full" and half == "off" and fx == "off", "half_mode": half, "fullx_mode": fx}
+            "repairable": shape == "full" and half == "off" and fx == "off", "half_mode": half, "fullx_mode": fx,
+            "endpoint_host": ep["host"], "endpoint_ip": ep["ip"],
+            "endpoint_pin_missing": ep["needed"] and not ep["pinned"],
+            "endpoint_loop_live": ep["needed"] and _wg_endpoint_loop_live(ep["ip"])}
 
 def action_wg_repair_allowed_ips() -> dict:
     err = _require_root()
@@ -5574,6 +5695,22 @@ def action_wg_repair_allowed_ips() -> dict:
         return {"success": False, "verified": False,
                 "output": ("Refused: full tunnel with exceptions is " + before["fullx_mode"] + " on this node. Remove it "
                            "(Full Tunnel tab) first if you want a split tunnel instead.")}
+    if before["shape"] in ("split", "narrowed-other") and (before.get("endpoint_pin_missing") or before.get("endpoint_loop_live")):
+        out = []
+        if before.get("endpoint_pin_missing"):
+            try:
+                out += _wg_write_conf(text)
+            except OSError as e:
+                return {"success": False, "verified": False, "output": f"Write failed: {e}"}
+        live = before.get("endpoint_loop_live") or _wg_endpoint_loop_live(before.get("endpoint_ip", ""))
+        if live and _wg0_interface_present():
+            r = _wg_pin_live(before["endpoint_ip"])
+            out.append(("ok    " if r["success"] else "FAIL  ") + f"route for {before['endpoint_ip']} now: " + (r["output"] or "added"))
+        after = status_wg_allowed_ips()
+        ok = not after.get("endpoint_pin_missing") and not after.get("endpoint_loop_live")
+        out.append("The tunnel server now uses the normal route; a handshake should follow within the keepalive time."
+                   if ok else "The tunnel server still routes into wg0. Restart the tunnel: systemctl restart wg-quick@wg0")
+        return {"success": ok, "verified": ok, "output": "\n".join(out)}
     if before["shape"] == "split":
         return {"success": True, "verified": True,
                 "output": f"AllowedIPs is already the split-tunnel set ({before['allowed_ips']}) -- nothing to do."}
@@ -5813,6 +5950,13 @@ def action_enable_tunnel() -> dict:
     gate: list[str] = []
     if not _wg_dns_gate(gate):
         return {"success": False, "verified": False, "output": "\n".join(gate)}
+    try:
+        with open(WG0_CONF_PATH, "r", newline="") as f:
+            cur = f.read()
+        if _wg_apply_endpoint_pin(cur)[1]:
+            gate += _wg_write_conf(cur)
+    except OSError:
+        pass
     t0 = int(time.time())
     if _wg_quick_template_available():
         unit = "wg-quick@wg0"
@@ -16025,6 +16169,11 @@ function _piAllowedIpsCardHtml(kind, aip) {
     html += '<div class="step-body">Full tunnel with exceptions is ' + asl3EscapeAttr(aip.fullx_mode) + ' on this node (Full Tunnel tab), so this repair is switched off. Remove it there first to switch to a split tunnel.</div>';
   } else if (aip.half_mode && aip.half_mode !== 'off') {
     html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Full Tunnel tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
+  } else if (aip.endpoint_loop_live || aip.endpoint_pin_missing) {
+    html += '<div class="ov-banner lvl-danger">The tunnel server <code>' + asl3EscapeAttr(aip.endpoint_host || '') + '</code> is a 44Net address inside AllowedIPs' +
+            (aip.endpoint_loop_live ? ', and it routes back into wg0 right now: the tunnel can\u2019t reach it, so it never handshakes (the 44Net Connect dashboard shows idle).' : '. The next tunnel start will route it back into wg0.') + '</div>';
+    html += '<div class="step-body">The fix keeps the tunnel server on your normal route: two lines between endpoint-pin markers in wg0.conf, and the route added now.</div>';
+    html += '<div class="step-actions"><button class="btn-run" onclick="piRepairAllowedIps(\\'pin\\')">Fix the tunnel-server route</button></div>';
   } else if (shape === 'split') {
     html += '<div class="step-body">AllowedIPs is already the split-tunnel set (<code>' + asl3EscapeAttr(current) + '</code>). Nothing to repair.</div>';
   } else if (shape === 'full') {
@@ -16043,9 +16192,11 @@ function _piAllowedIpsCardHtml(kind, aip) {
   return html;
 }
 
-function piRepairAllowedIps() {
+function piRepairAllowedIps(what) {
   var kind = 'split';
-  if (!confirm('Rewrite the [Peer] AllowedIPs line in wg0.conf from the full-tunnel 0.0.0.0/0 to the split-tunnel 44Net range (44.0.0.0/9, 44.128.0.0/10)? Only that one line changes and a library backup is refreshed first; you will need to restart the tunnel afterward.')) return;
+  if (what === 'pin') {
+    if (!confirm('Keep the tunnel server on the normal route? This adds two lines to wg0.conf (a library backup is refreshed) and adds the route now.')) return;
+  } else if (!confirm('Rewrite the [Peer] AllowedIPs line in wg0.conf from the full-tunnel 0.0.0.0/0 to the split-tunnel 44Net range (44.0.0.0/9, 44.128.0.0/10)? Only that one line changes and a library backup is refreshed first; you will need to restart the tunnel afterward.')) return;
   var out = document.getElementById('pi-aip-out-' + kind);
   if (out) { out.className = 'asl3-console shown'; out.textContent = 'Working...'; }
   fetch('/api/pi_install/action', {

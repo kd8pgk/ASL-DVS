@@ -1,6 +1,45 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_196_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_197_20261014.py`. Newest entries first.
+
+## 0.0.197 (2026-10-14) — testing
+
+Fix: a split tunnel whose tunnel server is itself a 44Net address looped. Found on
+magicbox: the endpoint `44.27.225.1` sits inside `44.0.0.0/9`, so wg-quick's split
+routes sent the tunnel's own packets back into wg0. There was no handshake for
+hours (92 B received, 780 MiB sent), and the 44Net Connect dashboard showed
+**idle**. wg-quick only avoids this for a full tunnel (fwmark); 44helper's split
+setup did nothing about it.
+
+- **Endpoint pin.** When the tunnel server falls inside a non-full AllowedIPs, wg0.conf
+  gets two lines between `# 44helper-endpoint-pin-begin` / `-end`:
+  - `PreUp = ip -4 route replace <server>/32 <normal default route> || true`
+  - `PostDown = ip -4 route del <server>/32 || true`
+
+  A host-name endpoint is looked up when the tunnel starts. The pin is added, kept
+  or removed every time 44helper writes wg0.conf: the paste step, Repair
+  AllowedIPs, DNS, MTU, and the half and exceptions saves. It is left out for a full
+  tunnel and for `Table = off`. A file that needs no change is not rewritten.
+- **Step 6** adds the pin before starting the tunnel, if it is missing.
+- **Split tab, step 4b**: a red banner when the server routes into wg0 now, or will at
+  the next start, with **Fix the tunnel-server route**. That writes the pin and adds
+  the route straight away, so the handshake comes back without a restart.
+- **Overview self-check**: red when the server routes into wg0 now, amber when the
+  pin is missing.
+- Tested:
+  - Mocked unit tests:
+    - which configs need the pin: magicbox's exact config, full, an endpoint
+      outside 44Net, `Table = off`, a host name;
+    - add, idempotent, removed when no longer needed, an unrelated CRLF file
+      untouched;
+    - `bash -n` and no `#` on the hook lines, and the lines run against stub `ip`
+      and `getent`;
+    - the write path, the repair on a live loop (pin written, route added, then
+      "nothing to do"), step 6, and both Overview findings.
+  - The 4b card in headless Chromium.
+  - The 0.0.192, 0.0.193 and 0.0.196 tests re-run on this version.
+  - `node --check` on the page JavaScript. It caught a quoting bug in the new
+    button before release.
 
 ## 0.0.196 (2026-10-14) — testing
 
