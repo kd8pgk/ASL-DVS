@@ -1,6 +1,67 @@
 # instmon changelog
 
-Current file: `instmon_v2_49_0_20261014.py`. Newest entries first.
+Current file: `instmon_v2_50_0_20261014.py`. Newest entries first.
+
+## 2.50.0 (2026-10-14)
+
+Release channels, and a 60-second check after each update (reliability plan,
+Stage 5). instmon serves both builds. This is the first instmon that reads
+the stable channel, so it is also the oldest instmon the stable channel will
+ever offer.
+
+- **Update channel** on the GitHub Updates card:
+  - **Stable (default)** reads `channels/stable.json` from the repo and
+    downloads each file from the exact commit listed there. The git blob id
+    is checked, as before.
+  - **Testing (opt-in)** is what instmon did until now: the newest file on
+    `main`. Switching to Testing asks first.
+  - Switching clears the last check; press Check GitHub again.
+  - Manuals still come from `main`.
+- **No automatic downgrade:**
+  - **Library newer than stable:** the row says **Ahead of stable**, with a
+    **Get stable** button. Get stable asks first, then puts the older stable
+    file in the library, checked. Nothing installs until you press Install
+    on it.
+  - **Installed version newer than stable:** Full Update leaves the tool as
+    it is ("installed vX is ahead of stable vY -- left alone").
+  - **A tool with no stable build yet** shows "no stable build of X yet".
+  - If the repo has no stable list, the check says so and suggests Testing.
+- **60-second watch after an update.** Before, Full Update accepted a tool
+  once it was running and its port was open. A build that crashed 20 s
+  later, or missed its systemd watchdog, was kept and restarted over and over.
+  - Now Full Update watches each updated tool (except instmon itself) for 60
+    seconds. Every 3 s it checks: the service is still active, its systemd
+    restart count hasn't gone up, its port is open, and it answers HTTP
+    (`/healthz`, or any reply, so older tools count too). One missed answer
+    is tolerated; three in a row fail.
+  - If the watch fails, the existing rollback puts the previous version back.
+  - A manual **Install** gets the same 60-second watch, but only logs the
+    result: you picked that version yourself.
+  - `INSTMON_FU_STABLE_SEC` changes the 60 s (0 turns the watch off).
+- Tested:
+  - Unit tests with mocks (13):
+    - the channel defaults to Stable; Testing needs confirmation
+    - the stable list: bad entries skipped, download URL pinned to the commit
+    - no stable list -> "switch to Testing"
+    - Stable reads the list, never the GitHub file listing; Testing reads
+      the listing
+    - Get stable: refused without its flag, refused on Testing, works on
+      Stable, and the row shows Ahead of stable with the button
+    - Full Update plan: ahead of stable -> left alone; no stable build ->
+      says so
+    - the watch: steady passes; a restart, an inactive service, or 3 missed
+      answers fail; one blip is tolerated
+    - a real HTTP server: a 404 counts as alive, a closed port doesn't
+    - Full Update: an unsteady new version is rolled back to the old file
+  - The 2.49.0 lock tests (7) still pass.
+  - The page in headless Chromium:
+    - the channel choice starts on Stable
+    - a cancelled switch stays on Stable; a confirmed one saves Testing to
+      `instmon_channel.json`
+    - the summary names the channel
+    - the Get stable row
+    - no horizontal scroll at 390 px, no script errors
+  - `ci/check_repo.py`
 
 ## 2.49.0 (2026-10-14)
 

@@ -39,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_85_20261014.py` | `sysmon_pi02w_v6_13_69_20261014.py` | `instmon_v2_49_0_20261014.py` |
-| `VERSION` | `6.13.85` | `6.13.69-pi02w` | `2.49.0` |
+| File name | `sysmon_v6_13_85_20261014.py` | `sysmon_pi02w_v6_13_69_20261014.py` | `instmon_v2_50_0_20261014.py` |
+| `VERSION` | `6.13.85` | `6.13.69-pi02w` | `2.50.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -79,7 +79,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_49_0_20261014.py --install
+   sudo python3 instmon_v2_50_0_20261014.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -107,6 +107,14 @@ script and its changelog are no longer in the repo.
 ## Updating from GitHub (instmon)
 
 The **GitHub Updates** card in instmon reads this repo's file list directly.
+
+- **Update channel** (instmon 2.50.0 and later): **Stable** (default) installs each
+  tool's build from the stable list; **Testing** (opt-in) installs the newest
+  file on `main`. On Stable, a tool newer than stable is left alone, and its row
+  offers **Get stable** to go back. See "Release channels and checks" below.
+- **After each update** Full Update watches the tool for 60 seconds (still running,
+  not restarting, answering on its port) and puts the previous version back if it
+  isn't steady.
 
 - **Check GitHub:** shows the newest GitHub copy of each tool and whether it is newer than what is installed.
   - The full and Pi Zero 2 W builds get separate rows.
@@ -239,7 +247,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_74_20261014.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_85_20261014.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_69_20261014.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_49_0_20261014.py` | common |
+| `instmon_v2_50_0_20261014.py` | common |
 | `wifimon_v5_33_0_20261014.py` | common |
 | `44helper_v0_0_203_20261014.py` | common |
 | `install_all_v7_1_20261012.sh` | common |
