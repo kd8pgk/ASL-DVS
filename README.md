@@ -13,7 +13,7 @@ By KD8PGK, written with Claude (Anthropic).
 | Dashboard | `nodecontrol_v*.py` | 8989 | Node control. Connect ASL and EchoLink nodes, tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17, manage favorites, Phone. |
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals and any other PDF to upload, open or download. |
-| wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
+| wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Powers off on sustained low voltage; reboots (or powers off) on a lost network. Hardware watchdog, and alerts by ntfy or webhook. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
 
 Scripts:
@@ -248,7 +248,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_v6_13_85_20261014.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_70_20261014.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_50_0_20261014.py` | common |
-| `wifimon_v5_33_0_20261014.py` | common |
+| `wifimon_v5_34_0_20261014.py` | common |
 | `44helper_v0_0_203_20261014.py` | common |
 | `install_all_v7_1_20261012.sh` | common |
 | `uninstall_all_v1_5.sh` | common |
