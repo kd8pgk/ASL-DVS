@@ -1,6 +1,53 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_32_0_20261014.py`. Newest entries first.
+Current file: `wifimon_v5_33_0_20261014.py`. Newest entries first.
+
+## 5.33.0 (2026-10-14)
+
+Choose what happens when the network is lost: reboot (new, the default) or
+power off (reliability plan, Stage 4). wifimon serves both builds.
+
+- **New setting on the Watchdog card:** Change settings -> **When the network
+  is lost**: Reboot or Power off.
+  - **Default is Reboot**, also for nodes updating from an older wifimon. Before,
+    a lost network always powered the node off, so a router that took more
+    than 3 minutes to come back left a remote node off until someone visited
+    it.
+  - **Reboot** happens at most 3 times in 6 hours. After that the node stays
+    up and keeps trying to reconnect; the timer reads "Reboot limit reached,
+    still trying". When the oldest reboot is more than 6 hours old, one more
+    reboot is allowed. The count is kept in
+    `/var/lib/wifimon/net_reboots.json`, so it survives the reboots. On a Pi
+    whose clock is behind after a reboot (no network, no real-time clock), the
+    reboots still count, so it errs toward staying up.
+  - **Power off** works as before (for battery or hotspot nodes).
+  - **Low voltage** always powers off; this setting doesn't change that.
+  - The time limit ("Reboot or power off after no connection for") is the
+    same setting as before. Changing the action doesn't restart a countdown
+    that is running.
+- **On the card:**
+  - the rules line says which action applies;
+  - new row **Reboots for a lost network**: "1 of 3 in the last 6 hours (one
+    frees up 14:05:10)";
+  - the red banner says "This node is rebooting" for a reboot.
+- The shutdown state and the shutdown report record the action. The report
+  reason says "rebooting (reboot n of 3 allowed in 6 h)".
+- Tested:
+  - Unit tests with mocks (12):
+    - the reboot record: the 6-hour window, a clock that is behind, bad files
+    - Power off; Reboot counting 1, 2, 3, then refusing the 4th
+    - `do_shutdown` runs `systemctl reboot` / `reboot -f`, or `poweroff` for
+      low voltage
+    - the setting validates, defaults to Reboot, and doesn't restart the
+      countdown
+    - the real monitor loop with the network down: reboots; powers off; at
+      the limit it stays up and clears the hold on reconnect; it reboots
+      again once the oldest reboot leaves the window
+  - The page in headless Chromium: the rules line for both actions, the
+    reboot-count row, the dropdown with its hint, Save writes
+    `network_loss_action`, the held timer text, the reboot banner, no
+    horizontal scroll at 390 px, no script errors.
+  - `ci/check_repo.py`
 
 ## 5.32.0 (2026-10-14)
 
