@@ -21,6 +21,7 @@ import select
 import shlex
 import shutil
 import signal
+import socket
 import stat
 import struct
 import subprocess
@@ -42,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.202"
+APP_VERSION = "0.0.203"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -356,10 +357,12 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH}
 Restart=always
 RestartSec=3s
+WatchdogSec=60
 User=root
 StandardOutput=journal
 StandardError=journal
@@ -2480,7 +2483,7 @@ def _svx_config_field_step(num: int, conf_path: str = "/etc/svxlink/svxlink.conf
         "note": "Best-effort in-place edit — matches on the key name (CALLSIGN=), not the existing value, so "
                 "it works regardless of the installer's shipped placeholder. This only sets the callsign. "
                 "The [SimplexLogic]/[RepeaterLogic] section inside this same svxlink.conf (not a separate "
-                f"file — svxlink.d/ only holds one config file per module, e.g. ModuleEchoLink.conf) also "
+                "file — svxlink.d/ only holds one config file per module, e.g. ModuleEchoLink.conf) also "
                 "needs sound-card device and GPIO pin (PTT/COS) settings that are specific to your hardware — "
                 "those are left as installer defaults; edit them by hand for your actual interface.",
     }
@@ -7810,7 +7813,7 @@ def _build_uci_wg_apply_cmd(iface_name: str, wg: dict) -> str | None:
         "uci set firewall.wgzone.output='ACCEPT'",
         "uci set firewall.wgzone.forward='REJECT'",
         "uci set firewall.wgzone.masq='1'",
-        f"uci delete firewall.wgzone.network 2>/dev/null",
+        "uci delete firewall.wgzone.network 2>/dev/null",
         f"uci add_list firewall.wgzone.network={q(iface_name)}",
         "uci commit firewall",
         "/etc/init.d/firewall reload",
@@ -8045,7 +8048,7 @@ def check_ping_traceroute_44() -> dict:
         "success": ping_ok,
         "other_44_hop": other_44_hop,
         "output": f"ping {'OK' if ping_ok else 'FAILED'} to {target}." +
-                  (f" Traceroute shows another 44.x.x.x hop before the destination." if other_44_hop else " No intermediate 44.x.x.x hop seen — tunnel may not be in the path.") +
+                  (" Traceroute shows another 44.x.x.x hop before the destination." if other_44_hop else " No intermediate 44.x.x.x hop seen — tunnel may not be in the path.") +
                   ("\n" + trace_out if trace_out else ""),
     }
 
@@ -23608,12 +23611,13 @@ def _route_action_status(query: dict) -> tuple[int, str, bytes]:
         return 400, "application/json", json.dumps({"error": "job_key required"}).encode("utf-8")
     return 200, "application/json", json.dumps(_job_status(job_key)).encode("utf-8")
 
-_PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping"}
+_PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping", "/healthz"}
 
 _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/": _route_index,
     "/index.html": _route_index,
     "/api/ping": _route_ping,
+    "/healthz": _route_ping,
     "/api/whoami": _route_whoami,
     "/api/version": _route_version,
     "/api/log": _route_log,
@@ -23801,6 +23805,8 @@ def _dispatch_firewall_action(payload: dict) -> dict:
     return {"success": False, "verified": False, "output": f"Unknown action: {action}"}
 
 class Handler(BaseHTTPRequestHandler):
+    timeout = 30
+
     def log_message(self, fmt: str, *args) -> None:
         log(f"HTTP {self.address_string()} - {fmt % args}")
 
@@ -23916,6 +23922,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Sec-WebSocket-Accept", _ws_accept_key(key))
             self.end_headers()
             self.wfile.flush()
+            self.connection.settimeout(None)
             _term_session(self.connection, tid, lambda: _check_session(token), ip)
         except (BrokenPipeError, ConnectionResetError, OSError):
             pass
@@ -24386,6 +24393,95 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         self._send(404, "text/plain; charset=utf-8", b"not found")
+
+_HB_PROBE_SEC = 15.0
+_HB_HTTP_STALL_SEC = 45.0
+_HB_HTTP_OK_AT = time.monotonic()
+
+def _sd_notify(state: str) -> bool:
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return False
+    if addr[0] == "@":
+        addr = "\0" + addr[1:]
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            sock.connect(addr)
+            sock.sendall(state.encode())
+        finally:
+            sock.close()
+        return True
+    except OSError as exc:
+        log(f"sd_notify {state} failed: {exc}")
+        return False
+
+def _hb_children_running() -> bool:
+    me = str(os.getpid())
+    try:
+        names = os.listdir("/proc")
+    except OSError:
+        return False
+    for name in names:
+        if not name.isdigit() or name == me:
+            continue
+        try:
+            with open(f"/proc/{name}/stat", "rb") as f:
+                raw = f.read()
+        except OSError:
+            continue
+        fields = raw[raw.rfind(b")") + 2:].split()
+        if len(fields) > 1 and fields[1].decode() == me and fields[0] != b"Z":
+            return True
+    return False
+
+def _hb_jobs_running() -> bool:
+    with _JOBS_LOCK:
+        return any(j.get("status") != "done" for j in _JOBS.values())
+
+def _hb_busy() -> bool:
+    return _hb_jobs_running() or _hb_children_running()
+
+def _hb_probe_loop(host: str, port: int) -> None:
+    global _HB_HTTP_OK_AT
+    import http.client
+    while True:
+        time.sleep(_HB_PROBE_SEC)
+        conn = http.client.HTTPConnection(host, port, timeout=10)
+        try:
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            resp.read()
+            if resp.status == 200:
+                _HB_HTTP_OK_AT = time.monotonic()
+        except (OSError, http.client.HTTPException):
+            pass
+        finally:
+            conn.close()
+
+def _hb_ok(now: float) -> bool:
+    return now - _HB_HTTP_OK_AT < _HB_HTTP_STALL_SEC or _hb_busy()
+
+def _hb_loop() -> None:
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC") or 0)
+    except ValueError:
+        usec = 0
+    if usec <= 0:
+        return
+    every = max(1.0, min(15.0, usec / 1e6 / 4))
+    stalled = False
+    while True:
+        if _hb_ok(time.monotonic()):
+            if stalled:
+                log("heartbeat: web server answering again")
+                stalled = False
+            _sd_notify("WATCHDOG=1")
+        elif not stalled:
+            stalled = True
+            log(f"heartbeat: web server not answering /healthz for {int(time.monotonic() - _HB_HTTP_OK_AT)}s "
+                f"and nothing is running -- letting systemd restart 44helper")
+        time.sleep(every)
 
 class _QuietThreadingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -26090,6 +26186,15 @@ def main() -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _sigterm)
+
+    global _HB_HTTP_OK_AT
+    probe_host, probe_port = server.server_address[0], server.server_address[1]
+    if probe_host in ("0.0.0.0", ""):
+        probe_host = "127.0.0.1"
+    _HB_HTTP_OK_AT = time.monotonic()
+    threading.Thread(target=_hb_probe_loop, args=(probe_host, probe_port), name="health-probe", daemon=True).start()
+    threading.Thread(target=_hb_loop, name="sd-heartbeat", daemon=True).start()
+    _sd_notify("READY=1")
 
     try:
         server.serve_forever()
