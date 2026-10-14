@@ -1,6 +1,88 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_200_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_201_20261014.py`. Newest entries first.
+
+## 0.0.201 (2026-10-14) — testing
+
+Fixes from an audit of the Full and Split Tunnel tabs. The serious ones were checked
+against systemd's man page, wg-quick's source and the live myip reply.
+
+**Broken before, fixed now**
+- **netcheck "Loosen bridge" didn't work.** Its drop-in had an empty `Requires=`, but
+  systemd can't clear a dependency from a drop-in (systemd.unit(5): "dependencies can
+  only be added in drop-ins"). The bridge still went down with netcheck, while the
+  Health card, step 6 and the DVSwitch install step printed `ok`. Now 44helper writes a
+  copy of the bridge's unit to `/etc/systemd/system/<unit>` (first line
+  `# 44helper netcheck override`) with netcheck moved from `Requires=` to `Wants=`
+  (ordering kept), and removes the old drop-in. A unit already overridden in `/etc` by
+  something else is refused. A fix counts as done only when the live `Requires=` no
+  longer has netcheck; the Health card and step 6 print FAIL with the reason otherwise.
+  Revert deletes the copies.
+- **Verify always failed.** `connect.44net.cloud/myip` answers JSON (`{"ip": …}`);
+  44helper read the whole reply as the address. This also broke check 4 of the
+  exceptions card and the router Model B verify.
+- **Stopping the tunnel failed with 44helper's DNS on.** The DNS block used
+  `PostDown = resolvectl revert %i`, which wg-quick runs after deleting wg0, so it fails,
+  and wg-quick (`set -e`) stops there: the unit ends failed and later PostDown lines
+  (the tunnel-server route, half/exceptions cleanup) don't run. Now `PreDown`. Old
+  files are changed on the next 44helper write, step 6 or Restart tunnel, and the
+  Health card has a new finding with **Move to PreDown**.
+- **The Split tab offered DNS that breaks every lookup.** "resolvectl — full" or a
+  `DNS =` line with 1.1.1.1 sends lookups into wg0, where a split tunnel has no route
+  for them. A DNS server outside the config's AllowedIPs is now refused; the card says
+  what to use instead.
+- **Removing a permanent half tunnel lost the endpoint pin** when it had started from a
+  split config, so the restored split tunnel looped. The pin is saved at Make
+  permanent and the remove script puts it back; 44helper also re-checks after the script.
+- **wg0.conf could lose its private key.** A begin marker without its end marker made
+  the block removal delete the rest of the file, and the library backup was then
+  overwritten too. Now the text is left alone, and wg0.conf is never written (or backed
+  up) unless the result still has the key, both sections and an Endpoint.
+- **Purge step 2 could delete wg0.conf with the tunnel up,** after which wg-quick
+  couldn't stop it. Refused until step 1 has stopped it.
+- **Pasting, or Purge removing, wg0.conf while the half tunnel or exceptions was
+  permanent** orphaned its rules and files. Refused; use Remove permanent first.
+
+**Smaller fixes**
+- Health card: **Apply netcheck fixes** comes before **Start them** (a service that
+  requires a failed netcheck won't start).
+- Quick port control: port ranges are accepted (the EchoLink 5198-5199/udp preset was
+  always rejected), and the DVSwitch Mobile preset works (its port was missing from the
+  firewall status).
+- netcheck card: Repoint target reads the box on the tab you're on (it read the hidden
+  Full tab's box). A second repoint no longer overwrites the backup of the original
+  script; Revert restores it and removes the backup. Revert also disables the
+  wait-online unit when 44helper was the one that enabled it.
+- Tab lock: the DNS & MTU, Repair AllowedIPs and reflector cards are locked with the
+  steps. Repair records the tunnel as split, and Purge clears the stored kind, so the
+  other tab unlocks.
+- Paste, DNS, MTU, step 6 and Purge step 1 are refused during a half-tunnel or
+  exceptions test (the test's rollback would undo them). The half tunnel and the
+  exceptions can't be armed at the same time.
+- Make permanent (both cards) enables `wg-quick@wg0` at boot if it wasn't, and only
+  says "survives a reboot" when it is.
+- Exceptions: each host on the bypass list is looked up at tunnel start with a 5 s limit,
+  falling back to the addresses found when you tested it.
+- Step 1: when firewalld is new on the Pi, the ports of this page, the Dashboard,
+  instmon, wifimon, Cockpit, SysMon, IAX and EchoLink that are answering are kept open
+  in the default zone (which otherwise allows only SSH). The card warns before.
+- Verify shows `rpt: ok` only when Asterisk answered.
+- ARDC fallback unit: `After=` and `Wants=network-online.target`.
+- Set DNS to Off also removes a user's own `resolvectl` PreUp/PostUp lines.
+- Errors in tunnel and firewall actions come back as a message instead of leaving the
+  console on "Working…".
+- Overview: the tunnel-server check is cached with the other tunnel checks (it ran a
+  DNS lookup every 5 s); the self-check sees a firewalld `cockpit` service and port
+  ranges.
+- The Health card refreshes after netcheck actions, and the zone card after Quick port
+  changes.
+
+**Text**
+- Split netcheck intro: a split tunnel uses plain routes, not fwmark rules.
+- Split step 3, the repair card and its confirms, Purge, the "private key never sent
+  back" lines, "re-run this step", "Pi Install" leftovers, the exceptions check 4 hint
+  (checks 1 and 3) and its `ip` feature check (now tests ipproto and dport).
+- Verify on the Split tab explains that myip shows the home address there.
 
 ## 0.0.200 (2026-10-14) — testing
 

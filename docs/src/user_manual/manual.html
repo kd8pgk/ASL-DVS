@@ -29,7 +29,7 @@
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_200_20261014.py</td><td>0.0.200</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_201_20261014.py</td><td>0.0.201</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_31_0_20261013.py</td><td>5.31.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
@@ -1361,7 +1361,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.200 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.201 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1610,7 +1610,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li><b>Add inbound services and ports</b>: tick what other stations may reach. AllStarLink IAX2 and EchoLink/SvxLink are ticked by default; VOTER/RTCM is optional. Asterisk AMI can be added but is flagged red. Full Tunnel also has fields for your DVSwitch Mobile port and a custom port. Split Tunnel offers only IAX2 and EchoLink, because nothing else needs to be reachable.</li>
     <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Check and write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card.
       <br>From 0.0.200 a panel shows what the check changes before anything is written: it removes <code>SaveConfig = true</code>, and a <code>DNS =</code> line while systemd-resolved isn't answering; it offers to change a wider Address to <b>/32</b> and to add <b>PersistentKeepalive = 25</b> (both ticked); and when AllowedIPs doesn't fit the tab you choose to <b>rewrite it</b> or <b>stop</b> and use the other tab. Press <b>Write wg0.conf</b> to go ahead. Convert uses the same check.
-      <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value. From 0.0.193 the options that go through systemd-resolved are refused while resolved isn't answering.
+      <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value. From 0.0.193 the options that go through systemd-resolved are refused while resolved isn't answering. From 0.0.201 a DNS server outside the tunnel's AllowedIPs is refused: on a split tunnel use "only 44Net names" with a 44Net server such as 44.0.0.1, or Off.
       <br><b>4b (Split)</b>: <b>Repair AllowedIPs</b> fixes a config pasted unedited. From 0.0.197 it also offers <b>Fix the tunnel-server route</b> when the tunnel server is itself a 44Net address (see the note below). <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
     <li><b>Attach wg0 to the zone.</b></li>
     <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations. From 0.0.193 the start waits up to 90 seconds. If it fails, the output shows the tunnel's state and the last lines of its log. Before starting, it checks that systemd-resolved answers whenever wg0.conf's DNS setting needs it; if resolved doesn't, it restarts it once, and refuses to start if that doesn't help. From 0.0.200, after the start it waits for a handshake, keeps the tunnel server on the normal route, applies the netcheck fixes when DVSwitch is installed, and starts any stopped DVSwitch services, listing each result.</li>
@@ -1635,7 +1635,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h3>Other buttons</h3>
   <ul>
     <li><b>Health and fixes</b>, at the top of both tabs (from 0.0.199): the Overview's tunnel checks, each with a fix button: start the DVSwitch services that didn't start, apply the netcheck fixes, change the Address to /32, add a keepalive, fix the tunnel-server route, restart systemd-resolved or set DNS to Off. <b>Restart tunnel</b> is a separate button; use it from the LAN. Every fix asks first. From 0.0.200 the install prevents these problems, so the card is a safety net for later changes.</li>
-    <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel. From 0.0.200 step 6 applies its fixes by itself, except the probe target.</li>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel. From 0.0.200 step 6 applies its fixes by itself, except the probe target. From 0.0.201 a bridge is freed from netcheck by a copy of its unit under <code>/etc/systemd/system</code> (a systemd drop-in can't remove a dependency, so the earlier fix didn't work); Revert deletes the copies.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
     <li><b>Purge</b>: undoes the tunnel and the zone.</li>
     <li><b>Full tunnel with exceptions</b> <span class="badge test">TESTING</span> (Full Tunnel tab, under the steps, from 0.0.194): keeps the full tunnel but sends two things around it. <b>Step 2</b> keeps replies from the LAN address on the LAN link, so a dashboard or SSH connection through your router still answers. <b>Step 3</b> is an optional bypass list of host names, addresses or UDP ports. It has the same Check first, 15-minute auto-undo, 12 checks, Make permanent (as marked PostUp lines in wg0.conf, with <code>remove_full_exceptions.sh</code>) and Remove permanent as the half tunnel. Only one of the two can be in use.</li>

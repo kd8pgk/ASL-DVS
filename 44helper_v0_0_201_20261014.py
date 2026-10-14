@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.200"
+APP_VERSION = "0.0.201"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -936,15 +936,21 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
             "level": "info",
             "msg": (
                 f"{FIREWALLD_ZONE} firewall zone not found yet — nothing to "
-                "audit. Expected before Pi Install (Stage 3) has run."
+                "audit. Expected before the Full or Split Tunnel tab's steps 2 to 6 have run."
             ),
         })
     else:
         exposed_ports = set(fw_zone.get("ports", []))
         exposed_services = set(fw_zone.get("services", []))
 
+        _svc_ports = {"cockpit": 9090}
+
         def _port_exposed(port: int) -> bool:
-            return any(str(port) == p.split("/")[0] for p in exposed_ports)
+            for p in exposed_ports:
+                lo, _, hi = p.split("/")[0].partition("-")
+                if lo.isdigit() and int(lo) <= port <= int(hi if hi.isdigit() else lo):
+                    return True
+            return any(_svc_ports.get(svc) == port for svc in exposed_services)
 
         if _port_exposed(my_port):
             findings.append({
@@ -986,9 +992,16 @@ def _run_self_check(my_port: int, fw_zone: dict | None, wg0_perms_ok: bool | Non
     else:
         findings.append({"level": "ok", "msg": f"{WG0_CONF_PATH} permissions OK (600)."})
 
-    findings += _ov_endpoint_findings()
+    findings += _ov_endpoint_findings_cached()
     findings += _ov_health_findings()
     return findings
+
+_OV_EP_CACHE: dict = {"at": 0.0, "data": []}
+
+def _ov_endpoint_findings_cached(force: bool = False) -> list[dict]:
+    if force or time.time() - _OV_EP_CACHE["at"] >= _OV_HEALTH_TTL:
+        _OV_EP_CACHE.update(data=_ov_endpoint_findings(), at=time.time())
+    return list(_OV_EP_CACHE["data"])
 
 def _ov_endpoint_findings() -> list[dict]:
     findings: list[dict] = []
@@ -1075,23 +1088,28 @@ def _ov_failed_findings() -> list[dict]:
     findings: list[dict] = []
     if "netcheck.service" in failed and stopped:
         names = " ".join(u.replace(".service", "") for u in stopped)
-        findings.append({"id": "netcheck", "fix": ["start_services", "netcheck_fixes"], "level": "danger",
-                         "msg": (f"netcheck failed, so these DVSwitch services never started: {names}. Start them now: "
-                                 f"sudo systemctl start {names}. To stop it happening at the next boot, use the netcheck "
-                                 "card under step 6 on the Full or Split Tunnel tab.")})
+        findings.append({"id": "netcheck", "fix": ["netcheck_fixes", "start_services"], "level": "danger",
+                         "msg": (f"netcheck failed, so these DVSwitch services never started: {names}. Apply the netcheck "
+                                 "fixes first (while netcheck still fails, a service that requires it won't start), then "
+                                 f"start them: sudo systemctl start {names}.")})
         stopped = []
     if failed:
         findings.append({"id": "failed", "fix": [], "level": "danger",
                          "msg": "Failed services: " + ", ".join(u.replace(".service", "") for u in failed)
                                 + ". See journalctl -u <name> -b for why."})
     if stopped:
-        findings.append({"id": "stopped", "fix": ["start_services", "netcheck_fixes"], "level": "warn",
+        findings.append({"id": "stopped", "fix": ["netcheck_fixes", "start_services"], "level": "warn",
                          "msg": "Enabled at boot but not running: " + ", ".join(u.replace(".service", "") for u in stopped) + "."})
     return findings
 
 def _ov_dns_finding(text: str | None) -> dict | None:
     if not text:
         return None
+    if _wg_legacy_fix(text)[1]:
+        return {"id": "dns_predown", "fix": ["dns_predown"], "level": "warn",
+                "msg": ("wg0.conf undoes the tunnel DNS in a PostDown line, which runs after wg0 is gone and fails. "
+                        "wg-quick then stops the shutdown there, so the unit ends up failed and later cleanup lines "
+                        "(like the tunnel-server route) don't run. Move it to PreDown.")}
     need = _wg_conf_dns_need(text)
     if not need:
         return None
@@ -1195,6 +1213,7 @@ def _hl_read_conf() -> str | None:
 
 def _hl_done(res: dict) -> dict:
     _OV_HEALTH_CACHE["at"] = 0.0
+    _OV_EP_CACHE["at"] = 0.0
     _RS_ANSWER_CACHE["at"] = 0.0
     return res
 
@@ -1236,18 +1255,22 @@ def action_health_netcheck_fixes() -> dict:
     if fx["unit_fix"]["applicable"] and not fx["unit_fix"]["applied"]:
         r = action_netcheck_fix_unit()
         did = True
-        ok = ok and r.get("success", False)
-        out.append(("ok    " if r.get("success") else "FAIL  ") + "netcheck: runs once, after the network is online")
+        good = bool(r.get("success") and r.get("verified"))
+        ok = ok and good
+        out.append(("ok    " if good else "FAIL  ") + "netcheck: runs once, after the network is online"
+                   + ("" if good else ": " + r.get("output", "").strip().splitlines()[-1] if r.get("output", "").strip() else ""))
     for unit, b in fx["bridge_fixes"].items():
         if b["applicable"] and not b["applied"]:
             r = action_netcheck_fix_bridge(unit)
             did = True
-            ok = ok and r.get("success", False)
-            out.append(("ok    " if r.get("success") else "FAIL  ") + f"{unit.replace('.service', '')}: no longer stopped by a failed netcheck")
+            good = bool(r.get("success") and r.get("verified"))
+            ok = ok and good
+            out.append(("ok    " if good else "FAIL  ") + f"{unit.replace('.service', '')}: "
+                       + ("no longer stopped by a failed netcheck" if good else r.get("output", "").strip().replace("\n", " ")))
     if fx["waitonline_fix"]["applicable"]:
         r = action_netcheck_enable_waitonline()
         did = True
-        ok = ok and r.get("success", False)
+        ok = ok and bool(r.get("success") and r.get("verified"))
         out.append(("ok    " if r.get("success") else "FAIL  ") + f"{fx['waitonline_fix']['unit']} enabled")
     if not did:
         out.append("The recommended netcheck fixes are already in place.")
@@ -1307,13 +1330,14 @@ def _wg_add_keepalive(text: str) -> str | None:
         out_lines.append("PersistentKeepalive = 25" + nl)
     return "".join(out_lines)
 
-def _wg_drop_dns_lines(text: str) -> tuple[str, list[str]]:
+def _wg_drop_dns_lines(text: str, hooks: bool = False) -> tuple[str, list[str]]:
     section, kept, removed = "", [], []
     for raw in text.splitlines(keepends=True):
         st = raw.split("#", 1)[0].strip()
         if st.startswith("["):
             section = st.lower()
-        if section == "[interface]" and re.match(r"^dns\s*=", st, re.I):
+        if section == "[interface]" and (re.match(r"^dns\s*=", st, re.I) or (
+                hooks and re.match(r"^(pre|post)(up|down)\s*=.*\bresolvectl\b", st, re.I))):
             removed.append(raw.strip())
             continue
         kept.append(raw)
@@ -1350,12 +1374,14 @@ def _wg_normalize(text: str, kind: str, opts: dict | None = None) -> dict:
     if re.search(r"^\s*dns\s*=", text, re.I | re.M):
         need = _wg_conf_dns_need(text)
         if need:
-            ok, why = (False, "no resolvconf command") if "no resolvconf" in need else _wg_resolved_answers()
+            ok, why = (False, "") if "no resolvconf" in need else _wg_resolved_answers()
             if not ok:
                 text, removed = _wg_drop_dns_lines(text)
-                fixed.append(f"DNS line removed ({', '.join(removed)}): systemd-resolved isn't answering ({why}), so "
-                               "the tunnel would fail to start. DNS is now Off; set it on the DNS card (4a) once step 1a "
-                               "is green.")
+                cause = (f"systemd-resolved isn't answering ({why})" if why else
+                         "there is no resolvconf command, which a DNS = line needs")
+                fixed.append(f"DNS line removed ({', '.join(removed)}): {cause}, so "
+                             "the tunnel would fail to start. DNS is now Off; set it on the DNS card (4a) once step 1a "
+                             "is green.")
     target = _hl_address32_target(text)
     if target:
         new_addr = str(ipaddress.ip_interface(target).ip) + "/32"
@@ -1472,7 +1498,7 @@ def action_health_dns_off() -> dict:
         return {"success": False, "verified": False, "output": "No wg0.conf."}
     text2 = _wg_block_remove(text, _WG_DNS_BEGIN, _WG_DNS_END) if any(
         ln.strip() == _WG_DNS_BEGIN for ln in text.splitlines()) else text
-    new, removed = _wg_drop_dns_lines(text2)
+    new, removed = _wg_drop_dns_lines(text2, hooks=True)
     if new == text:
         return _hl_done({"success": True, "verified": True, "output": "wg0.conf has no DNS setting; nothing to change."})
     try:
@@ -1481,6 +1507,22 @@ def action_health_dns_off() -> dict:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
     out += ["removed: " + ln for ln in removed]
     out.append("DNS setting taken out of wg0.conf; the Pi keeps its own resolver. Restart the tunnel for it to take effect.")
+    return _hl_done({"success": True, "verified": True, "output": "\n".join(out)})
+
+def action_health_dns_predown() -> dict:
+    err = _require_root() or _hl_testing_refusal()
+    if err:
+        return err
+    text = _hl_read_conf()
+    if text is None:
+        return {"success": False, "verified": False, "output": "No wg0.conf."}
+    if not _wg_legacy_fix(text)[1]:
+        return _hl_done({"success": True, "verified": True, "output": "Already a PreDown line; nothing to change."})
+    try:
+        out = _wg_write_conf(text)
+    except OSError as e:
+        return _hl_done({"success": False, "verified": False, "output": f"Write failed: {e}"})
+    out.append("Takes effect from the next tunnel stop; no restart needed.")
     return _hl_done({"success": True, "verified": True, "output": "\n".join(out)})
 
 def action_health_restart_tunnel() -> dict:
@@ -1496,8 +1538,11 @@ def action_health_restart_tunnel() -> dict:
     if not _wg_dns_gate(gate):
         return _hl_done({"success": False, "verified": False, "output": "\n".join(gate)})
     cur = _hl_read_conf() or ""
-    if _wg_apply_endpoint_pin(cur)[1]:
-        gate += _wg_write_conf(cur)
+    if _wg_apply_endpoint_pin(cur)[1] or _wg_legacy_fix(cur)[1]:
+        try:
+            gate += _wg_write_conf(cur)
+        except OSError as e:
+            return _hl_done({"success": False, "verified": False, "output": "\n".join(gate + [f"Write failed: {e}"])})
     unit = "wg-quick@wg0" if _wg_quick_template_available() else "44net-tunnel.service"
     t0 = int(time.time())
     r = _run_argv(["systemctl", "restart", unit], timeout=_WG_START_WAIT)
@@ -1510,7 +1555,7 @@ def action_health_restart_tunnel() -> dict:
     return _hl_done({"success": True, "verified": hs, "output": "\n".join(lines)})
 
 def build_tunnel_health(force: bool = False) -> dict:
-    items = _ov_endpoint_findings() + _ov_health_findings(force=force)
+    items = _ov_endpoint_findings_cached(force) + _ov_health_findings(force=force)
     return {"items": items, "conf_exists": os.path.exists(WG0_CONF_PATH),
             "testing": "half" if _half_mode() == "testing" else ("fullx" if _fx_mode() == "testing" else ""),
             "root": os.geteuid() == 0, "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
@@ -5473,9 +5518,12 @@ def status_firewalld_prereq() -> dict:
     installed = shutil.which("firewall-cmd") is not None
     active = False
     if installed:
-        r = subprocess.run(["systemctl", "is-active", "firewalld"],
-                            capture_output=True, text=True, timeout=5)
-        active = r.stdout.strip() == "active"
+        try:
+            r = subprocess.run(["systemctl", "is-active", "firewalld"],
+                                capture_output=True, text=True, timeout=5)
+            active = r.stdout.strip() == "active"
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            active = False
     done = installed and active
     return {"done": done, "installed": installed, "active": active}
 
@@ -5489,11 +5537,46 @@ def action_install_firewalld() -> dict:
     err = _require_root()
     if err:
         return err
+    fresh = shutil.which("firewall-cmd") is None
     results = [_run_pkg_unit("pi_firewalld_prereq", f"apt-get install -y {_APT_NI_OPTS} firewalld")
                if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_firewalld()]
     ok = all(r["success"] for r in results)
     status = status_firewalld_prereq()
-    return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results)}
+    lines = [r["output"] for r in results if r["output"]]
+    if fresh and status["done"]:
+        lines += _firewalld_keep_lan_ports()
+    return {"success": ok, "verified": status["done"], "output": "\n".join(lines)}
+
+_FW_KEEP_PORTS = ["8989/tcp", "8990/tcp", "8991/tcp", "9090/tcp", "9999/tcp", "4569/udp", "5198-5199/udp"]
+
+def _firewalld_keep_lan_ports() -> list[str]:
+    zone = _fw_default_zone()
+    if not zone:
+        return ["WARN  couldn't read firewalld's default zone. Check that this page, SysMon and IAX still answer from the LAN."]
+    listening = set()
+    for flag, proto in (("-Hltn", "tcp"), ("-Hlun", "udp")):
+        try:
+            r = subprocess.run(["ss", flag], capture_output=True, text=True, timeout=5)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+        for ln in r.stdout.splitlines():
+            parts = ln.split()
+            if len(parts) >= 4 and ":" in parts[3]:
+                listening.add(f"{parts[3].rsplit(':', 1)[1]}/{proto}")
+    want = [f"{_cfg.getint('server', 'port', fallback=9997)}/tcp"]
+    for pp in _FW_KEEP_PORTS:
+        port, proto = pp.split("/")
+        lo, _, hi = port.partition("-")
+        if any(f"{n}/{proto}" in listening for n in range(int(lo), int(hi or lo) + 1)) and pp not in want:
+            want.append(pp)
+    out = [f"firewalld is new on this Pi. Its default zone ({zone}) allows only SSH, so these ports that were "
+           "already answering are kept open there:"]
+    for pp in want:
+        r = _run_argv(["firewall-cmd", "--permanent", f"--zone={zone}", f"--add-port={pp}"])
+        out.append(("ok    " if r["success"] else "FAIL  ") + pp + ("" if r["success"] else ": " + r["output"]))
+    rl = _reload_firewalld()
+    out.append(("ok    " if rl["success"] else "FAIL  ") + "firewall reloaded")
+    return out
 
 _RS_ANSWER_CACHE: dict = {"at": 0.0, "data": (False, "")}
 
@@ -5579,10 +5662,11 @@ def _valid_port_proto(s: str) -> bool:
     port_s, proto = parts
     if proto not in ("udp", "tcp"):
         return False
-    if not port_s.isdigit():
+    lo_s, _, hi_s = port_s.partition("-")
+    if not lo_s.isdigit() or (hi_s and not hi_s.isdigit()) or (_ and not hi_s):
         return False
-    port = int(port_s)
-    return 1 <= port <= 65535
+    lo, hi = int(lo_s), int(hi_s or lo_s)
+    return 1 <= lo <= hi <= 65535
 
 def action_add_service(service: str) -> dict:
     err = _require_root()
@@ -5688,7 +5772,7 @@ def _pi_allowed_ips_mismatch_note(config_text: str, kind: str) -> str:
 
 def action_paste_config(config_text: str, backup_to_library: bool = True, kind: str = "",
                         opts: dict | None = None) -> dict:
-    err = _require_root()
+    err = _require_root() or _wg_conf_replace_refusal()
     if err:
         return err
     valid, msg = _validate_wg_config_text(config_text)
@@ -5786,6 +5870,9 @@ def _wg_extract_block(text: str, begin: str, end: str):
     return out
 
 def _wg_block_remove(text: str, begin: str, end: str) -> str:
+    stripped = [ln.strip() for ln in text.splitlines()]
+    if begin in stripped and end not in stripped[stripped.index(begin):]:
+        return text
     out = []
     inside = False
     for ln in text.splitlines():
@@ -6045,9 +6132,15 @@ def status_wg_dns() -> dict:
 
 def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     out = []
+    valid, msg = _validate_wg_config_text(new_text)
+    if not valid:
+        raise OSError(f"refused to write wg0.conf, the result isn't a whole config ({msg}). The file was left as it was")
     new_text, sc = _wg_strip_saveconfig(new_text)
     if sc:
         out.append("SaveConfig = true removed: wg-quick would rewrite wg0.conf on every stop and drop 44helper's settings.")
+    new_text, lg = _wg_legacy_fix(new_text)
+    if lg:
+        out.append("DNS revert moved from PostDown to PreDown: after wg0 is gone it failed and stopped the tunnel's other cleanup.")
     new_text, pin_note = _wg_apply_endpoint_pin(new_text)
     if pin_note:
         out.append(pin_note)
@@ -6064,8 +6157,41 @@ def _wg_write_conf(new_text: str, backup_to_library: bool = True):
             out.append(f"Library backup failed (live wg0.conf still written OK): {e}")
     return out
 
+def _wg_dns_outside_tunnel(text: str, servers: list[str]) -> list[str]:
+    parsed = _parse_wg_conf_text(text, mask_private_key=True)
+    nets = []
+    for peer in parsed["peers"]:
+        for part in _wg_conf_field(peer, "AllowedIPs").split(","):
+            try:
+                nets.append(ipaddress.ip_network(part.strip(), strict=False))
+            except ValueError:
+                continue
+    out = []
+    for srv in servers:
+        try:
+            a = ipaddress.ip_address(srv)
+        except ValueError:
+            continue
+        if not any(a.version == n.version and a in n for n in nets):
+            out.append(srv)
+    return out
+
+def _wg_legacy_fix(text: str) -> tuple[str, bool]:
+    lines = text.splitlines(keepends=True)
+    inside, changed = False, False
+    for i, raw in enumerate(lines):
+        st = raw.strip()
+        if st == _WG_DNS_BEGIN:
+            inside = True
+        elif st == _WG_DNS_END:
+            inside = False
+        elif inside and re.match(r"^\s*postdown\s*=\s*resolvectl revert %i\s*$", raw.rstrip("\r\n"), re.I):
+            lines[i] = raw.replace("PostDown", "PreDown", 1).replace("postdown", "PreDown", 1)
+            changed = True
+    return ("".join(lines), True) if changed else (text, False)
+
 def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
-    err = _require_root()
+    err = _require_root() or _hl_testing_refusal()
     if err:
         return err
     if dns_mode not in ("off", "resolvectl_full", "resolvectl_split", "dns_line"):
@@ -6100,17 +6226,24 @@ def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
                                    "wg-quick would wait 25 s for it and then fail to start the tunnel. "
                                    "Run: sudo systemctl restart systemd-resolved (or reboot), then try again.")}
         servers = _valid_dns_servers(dns_servers) or _WG_DNS_DEFAULTS[dns_mode]
+        outside = _wg_dns_outside_tunnel(text, servers)
+        if outside:
+            return {"success": False, "verified": False,
+                    "output": (f"Refused: {', '.join(outside)} isn't inside this tunnel's AllowedIPs, so lookups sent to it "
+                               "over wg0 would be dropped and name resolution would stop. On a split tunnel use "
+                               "'resolvectl - split (44Net names only)' with a 44Net server such as 44.0.0.1, or "
+                               "leave DNS Off.")}
         if dns_mode == "dns_line":
             block = [_WG_DNS_BEGIN, "DNS = " + ", ".join(servers), _WG_DNS_END]
         elif dns_mode == "resolvectl_full":
             block = [_WG_DNS_BEGIN,
                      "PostUp = resolvectl dns %i " + " ".join(servers) + "; resolvectl domain %i ~.",
-                     "PostDown = resolvectl revert %i",
+                     "PreDown = resolvectl revert %i",
                      _WG_DNS_END]
         else:
             block = [_WG_DNS_BEGIN,
                      "PostUp = resolvectl dns %i " + " ".join(servers) + "; resolvectl domain %i " + _WG_SPLIT_DNS_DOMAINS,
-                     "PostDown = resolvectl revert %i",
+                     "PreDown = resolvectl revert %i",
                      _WG_DNS_END]
         inserted = _wg_insert_in_interface(new_text, block)
         if inserted is None:
@@ -6133,7 +6266,7 @@ def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
     return {"success": True, "verified": verified, "output": "\n".join(out)}
 
 def action_wg_set_mtu(mtu: str = "") -> dict:
-    err = _require_root()
+    err = _require_root() or _hl_testing_refusal()
     if err:
         return err
     if not os.path.exists(WG0_CONF_PATH):
@@ -6283,10 +6416,15 @@ def action_wg_repair_allowed_ips() -> dict:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
     after = status_wg_allowed_ips()
     verified = after["shape"] == "split"
+    if verified:
+        if "tunnels" not in _cfg:
+            _cfg["tunnels"] = {}
+        _cfg["tunnels"]["tunnel.pi.kind"] = "split"
+        save_config(_cfg)
     plural = "s" if changed != 1 else ""
     out.append(f"AllowedIPs narrowed to the split-tunnel set: {after['allowed_ips']} "
                f"({changed} peer line{plural} rewritten).")
-    out.append("Restart the tunnel so a fresh handshake restores DVSwitch/usrp2m17 name resolution:  "
+    out.append("Restart the tunnel so wg-quick sets up the narrower routes and DNS lookups leave the tunnel again:  "
                "systemctl restart wg-quick@wg0")
     return {"success": True, "verified": verified, "output": "\n".join(out)}
 
@@ -6460,7 +6598,8 @@ def _wg_quick_template_available() -> bool:
 _ARDC_FALLBACK_UNIT_PATH = "/etc/systemd/system/44net-tunnel.service"
 _ARDC_FALLBACK_UNIT_CONTENT = """[Unit]
 Description=WireGuard single device 44Net Connect tunnel
-Requires=network-online.target
+Wants=network-online.target
+After=network-online.target
 
 [Service]
 Type=oneshot
@@ -6497,7 +6636,7 @@ def status_enable_tunnel() -> dict:
     return {"done": up, "wg_status": wg_status, "wg0_present": _wg0_interface_present()}
 
 def action_enable_tunnel() -> dict:
-    err = _require_root()
+    err = _require_root() or _hl_testing_refusal()
     if err:
         return err
 
@@ -6507,10 +6646,10 @@ def action_enable_tunnel() -> dict:
     try:
         with open(WG0_CONF_PATH, "r", newline="") as f:
             cur = f.read()
-        if _wg_apply_endpoint_pin(cur)[1]:
+        if _wg_apply_endpoint_pin(cur)[1] or _wg_legacy_fix(cur)[1]:
             gate += _wg_write_conf(cur)
-    except OSError:
-        pass
+    except OSError as e:
+        gate.append(f"wg0.conf not updated: {e}")
     t0 = int(time.time())
     if _wg_quick_template_available():
         unit = "wg-quick@wg0"
@@ -6583,7 +6722,7 @@ def _pi_purge_tolerant_ok(result: dict) -> bool:
     return any(phrase in low for phrase in ("not loaded", "not found", "not exist", "no such", "invalid zone"))
 
 def action_purge_disable_tunnel() -> dict:
-    err = _require_root()
+    err = _require_root() or _hl_testing_refusal()
     if err:
         return err
     lines = []
@@ -6608,10 +6747,26 @@ def action_purge_disable_tunnel() -> dict:
                   "Result: tunnel still shows a handshake \u2014 check manually (wg show wg0).")
     return {"success": all_ok, "verified": verified, "output": "\n".join(lines)}
 
-def action_purge_remove_wg0_conf() -> dict:
-    err = _require_root()
+def _wg_conf_replace_refusal() -> dict | None:
+    err = _hl_testing_refusal()
     if err:
         return err
+    for name, mode, card in (("half tunnel", _half_mode(), "Half tunnel"), ("full tunnel with exceptions", _fx_mode(),
+                                                                            "Full tunnel with exceptions")):
+        if mode == "permanent":
+            return {"success": False, "verified": False,
+                    "output": (f"Refused: the {name} is permanent, and its lines in wg0.conf are how it is removed. "
+                               f"Use Remove permanent on the {card} card (Full Tunnel tab) first.")}
+    return None
+
+def action_purge_remove_wg0_conf() -> dict:
+    err = _require_root() or _wg_conf_replace_refusal()
+    if err:
+        return err
+    if _wg0_interface_present():
+        return {"success": False, "verified": False,
+                "output": ("Refused: the tunnel is still up. wg-quick needs wg0.conf to stop it, so run step 1 "
+                           "(stop and disable) first.")}
     output_lines = []
     try:
         if os.path.exists(WG0_CONF_PATH):
@@ -6631,7 +6786,7 @@ def action_purge_remove_wg0_conf() -> dict:
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Remove failed: {e}"}
     if "tunnels" in _cfg:
-        for key in ("tunnel.pi.mode", "tunnel.pi.interface", "tunnel.pi.config_path"):
+        for key in ("tunnel.pi.mode", "tunnel.pi.interface", "tunnel.pi.config_path", "tunnel.pi.kind"):
             _cfg["tunnels"].pop(key, None)
         save_config(_cfg)
         output_lines.append("Cleared tunnel.pi.* entries from this tool's own config store.")
@@ -6658,9 +6813,16 @@ def check_myip() -> dict:
     try:
         req = urllib.request.Request("https://connect.44net.cloud/myip", headers={"User-Agent": "44helper"})
         with urllib.request.urlopen(req, timeout=8) as resp:
-            ip = resp.read().decode("utf-8", errors="replace").strip()
+            body = resp.read().decode("utf-8", errors="replace").strip()
     except (urllib.error.URLError, OSError, TimeoutError) as e:
         return {"success": False, "ip": None, "output": f"myip check failed: {e}"}
+    ip = body
+    try:
+        data = json.loads(body)
+        if isinstance(data, dict):
+            ip = str(data.get("ip", "")).strip()
+    except ValueError:
+        pass
     is_44 = ip.startswith("44.")
     return {"success": is_44, "ip": ip, "output": f"connect.44net.cloud/myip reports: {ip}"}
 
@@ -6857,6 +7019,7 @@ def scan_netcheck() -> dict:
             "in_etc": _unit_in_etc(b.get("FragmentPath", "")),
             "dropins": [p for p in b.get("DropInPaths", "").split() if p],
             "our_dropin": _netcheck_our_dropin_exists(unit),
+            "our_override": _netcheck_our_override_exists(unit),
         })
 
     backend = _network_backend()
@@ -6902,11 +7065,13 @@ def scan_netcheck() -> dict:
     if hard:
         verdict.append({"level": "warn", "message":
             "Hard-gated on netcheck (Requires= AND After=): " + ", ".join(hard) +
-            " -- a netcheck failure keeps these down. Fix: Requires= -> Wants= so they start and retry."})
+            " -- a netcheck failure keeps these down. Fix: move netcheck from Requires= to Wants= (44helper writes a "
+            "copy of the unit under /etc/systemd/system, since a drop-in can't remove a dependency)."})
     if soft:
         verdict.append({"level": "info", "message":
             "Requires=netcheck but NOT After= : " + ", ".join(soft) +
-            " -- Requires alone does not reliably block, and the missing ordering is a race."})
+            " -- with no After= they start alongside netcheck, so a netcheck failure doesn't block them, but stopping or "
+            "restarting netcheck stops them too."})
     if bridges and not any(b["exists"] for b in bridges):
         verdict.append({"level": "info", "message":
             "None of the DVSwitch bridge units were found loaded here -- if they run under different "
@@ -6995,14 +7160,14 @@ def _netcheck_fixes_summary(netcheck: dict, bridges: list, backend: dict) -> dic
     bridge_fixes = {}
     for b in bridges:
         bridge_fixes[b["unit"]] = {
-            "applicable": b["exists"] and (b["hard_blocked"] or b["requires_netcheck"]),
-            "applied": b["our_dropin"],
+            "applicable": b["exists"] and b["requires_netcheck"],
+            "applied": b["exists"] and not b["requires_netcheck"] and b["our_override"],
         }
     script = netcheck.get("script", {})
     backup_exists = os.path.isfile(_netcheck_script_library_path())
     wait_enabled = backend.get("wait_enabled", "")
     any_applied = (netcheck["our_dropin"]
-                   or any(b["our_dropin"] for b in bridges)
+                   or any(b["our_dropin"] or b["our_override"] for b in bridges)
                    or backup_exists)
     return {
         "unit_fix": {"applicable": nc_applicable, "applied": netcheck["our_dropin"]},
@@ -7042,6 +7207,39 @@ def action_netcheck_fix_unit() -> dict:
                       f"netcheck now Type={after['type']}, ordered after network-online.target="
                       f"{after['ordered_after_network_online']}."}
 
+_NETCHECK_OVERRIDE_TAG = "# 44helper netcheck override"
+
+def _netcheck_override_path(unit: str) -> str:
+    return f"/etc/systemd/system/{unit}"
+
+def _netcheck_our_override_exists(unit: str) -> bool:
+    try:
+        with open(_netcheck_override_path(unit), "r") as f:
+            return f.readline().strip() == _NETCHECK_OVERRIDE_TAG
+    except OSError:
+        return False
+
+def _netcheck_override_text(vendor: str) -> str:
+    out, in_unit, wants_added = [], False, False
+    for raw in vendor.splitlines():
+        st = raw.strip()
+        if st.startswith("["):
+            if in_unit and not wants_added:
+                out.append("Wants=netcheck.service")
+                wants_added = True
+            in_unit = st.lower() == "[unit]"
+            out.append(raw)
+            continue
+        if in_unit and re.match(r"^requires\s*=", st, re.I):
+            toks = [t for t in st.split("=", 1)[1].split() if t != _NETCHECK_UNIT]
+            if toks:
+                out.append("Requires=" + " ".join(toks))
+            continue
+        out.append(raw)
+    if in_unit and not wants_added:
+        out.append("Wants=netcheck.service")
+    return _NETCHECK_OVERRIDE_TAG + "\n" + "\n".join(out).rstrip("\n") + "\n"
+
 def action_netcheck_fix_bridge(unit: str) -> dict:
     err = _require_root()
     if err:
@@ -7049,32 +7247,54 @@ def action_netcheck_fix_bridge(unit: str) -> dict:
     if unit not in _NETCHECK_BRIDGE_UNITS:
         return {"success": False, "verified": False,
                 "output": f"Refused: '{unit}' is not a known DVSwitch bridge unit."}
-    show = _systemctl_show(unit, ["LoadState", "Requires"])
+    show = _systemctl_show(unit, ["LoadState", "Requires", "FragmentPath", "DropInPaths"])
     if show.get("LoadState", "") != "loaded":
         return {"success": False, "verified": False, "output": f"{unit} is not loaded here -- nothing to change."}
-    others = [r for r in show.get("Requires", "").split() if r and r != _NETCHECK_UNIT]
-    lines = [
-        "# 44helper v0.0.93 netcheck fix -- reversible: delete this file (or use",
-        "# Revert) and daemon-reload. Drops netcheck from Requires= (so a netcheck",
-        "# failure no longer keeps this bridge down) and demotes it to Wants=,",
-        "# keeping the ordering.",
-        "[Unit]",
-        "Requires=",
-    ]
-    if others:
-        lines.append("Requires=" + " ".join(others))
-    lines.append("Wants=netcheck.service")
-    lines.append(f"After=netcheck.service {_NETCHECK_NET_ONLINE}")
-    content = "\n".join(lines) + "\n"
-    path = _write_netcheck_dropin(unit, content)
+    frag = show.get("FragmentPath", "")
+    ours = _netcheck_our_override_exists(unit)
+    if _NETCHECK_UNIT not in show.get("Requires", "").split():
+        return {"success": True, "verified": True,
+                "output": f"{unit} doesn't require netcheck (Requires='{show.get('Requires', '')}') -- nothing to change."}
+    if not ours and frag.startswith("/etc/"):
+        return {"success": False, "verified": False,
+                "output": f"{unit} is already overridden by {frag}, which 44helper didn't write. Edit that file by hand: "
+                          "change Requires=netcheck.service to Wants=netcheck.service, then systemctl daemon-reload."}
+    out = []
+    if not ours:
+        try:
+            with open(frag, "r") as f:
+                vendor = f.read()
+        except OSError as e:
+            return {"success": False, "verified": False, "output": f"Couldn't read {unit}'s unit file {frag or '(none)'}: {e}"}
+        path = _netcheck_override_path(unit)
+        try:
+            tmp = path + ".44htmp"
+            with open(tmp, "w") as f:
+                f.write(_netcheck_override_text(vendor))
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, path)
+        except OSError as e:
+            return {"success": False, "verified": False, "output": f"Write failed: {e}"}
+        out.append(f"Wrote {path}: a copy of {frag} with netcheck moved from Requires= to Wants= (a drop-in can't remove a dependency).")
+    legacy = _netcheck_dropin_path(unit)
+    if os.path.isfile(legacy):
+        try:
+            os.remove(legacy)
+            os.rmdir(_netcheck_dropin_dir(unit))
+        except OSError:
+            pass
+        out.append(f"Removed the old drop-in {legacy}, which couldn't do this.")
     rl = _daemon_reload()
-    after = _systemctl_show(unit, ["Requires", "Wants"])
-    req_after = after.get("Requires", "").split()
-    verified = _NETCHECK_UNIT not in req_after and _NETCHECK_UNIT in after.get("Wants", "").split()
-    return {"success": rl["success"], "verified": verified,
-            "output": f"Wrote {path}\n{rl['output']}\n"
-                      f"{unit}: Requires now '{after.get('Requires', '')}', Wants '{after.get('Wants', '')}'.\n"
-                      "This bridge will now start even if netcheck fails."}
+    if rl["output"]:
+        out.append(rl["output"])
+    after = _systemctl_show(unit, ["Requires", "Wants", "DropInPaths"])
+    verified = _NETCHECK_UNIT not in after.get("Requires", "").split()
+    if verified:
+        out.append(f"{unit}: Requires '{after.get('Requires', '')}', Wants '{after.get('Wants', '')}'. "
+                   "It now starts even if netcheck fails.")
+    else:
+        out.append(f"{unit} still requires netcheck. Another drop-in adds it: {after.get('DropInPaths', '') or '(none listed)'}.")
+    return {"success": rl["success"] and verified, "verified": verified, "output": "\n".join(out)}
 
 def action_netcheck_fix_target(target: str = "", timeout: str = "") -> dict:
     err = _require_root()
@@ -7102,7 +7322,13 @@ def action_netcheck_fix_target(target: str = "", timeout: str = "") -> dict:
             text = f.read()
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Read failed: {e}"}
-    _changed, bak_msg = _compare_before_write(_netcheck_script_library_path(), text.encode("utf-8"))
+    if os.path.isfile(_netcheck_script_library_path()):
+        bak_msg = "kept the first backup, the original script"
+    else:
+        try:
+            _changed, bak_msg = _compare_before_write(_netcheck_script_library_path(), text.encode("utf-8"))
+        except OSError as e:
+            return {"success": False, "verified": False, "output": f"Backup failed, script left unchanged: {e}"}
     new_text = text.replace(old_target, t, 1)
     if new_text == text:
         return {"success": False, "verified": False,
@@ -7132,16 +7358,34 @@ def action_netcheck_enable_waitonline() -> dict:
     if backend["manager"] == "unknown" or not unit:
         return {"success": False, "verified": False,
                 "output": "Network backend is unknown -- refusing to enable a wait-online unit blindly."}
+    before = _sc_is_enabled(unit)
     r = _run_argv(["systemctl", "enable", unit])
     after = _sc_is_enabled(unit)
+    if r["success"] and before not in ("enabled", "enabled-runtime", "static") and after == "enabled":
+        try:
+            os.makedirs(os.path.dirname(_netcheck_waitonline_marker()), mode=0o700, exist_ok=True)
+            with open(_netcheck_waitonline_marker(), "w") as f:
+                f.write(unit + "\n")
+        except OSError:
+            pass
     return {"success": r["success"], "verified": after in ("enabled", "enabled-runtime", "static"),
             "output": f"{r['output']}\n{unit} is now {after}."}
+
+def _netcheck_waitonline_marker() -> str:
+    return os.path.join(os.path.dirname(_netcheck_script_library_path()), "netcheck.waitonline")
 
 def action_netcheck_revert() -> dict:
     err = _require_root()
     if err:
         return err
     removed = []
+    for unit in _NETCHECK_BRIDGE_UNITS:
+        if _netcheck_our_override_exists(unit):
+            try:
+                os.remove(_netcheck_override_path(unit))
+                removed.append(_netcheck_override_path(unit))
+            except OSError as e:
+                return {"success": False, "verified": False, "output": f"Failed removing {_netcheck_override_path(unit)}: {e}"}
     for unit in [_NETCHECK_UNIT] + _NETCHECK_BRIDGE_UNITS:
         p = _netcheck_dropin_path(unit)
         if os.path.isfile(p):
@@ -7167,15 +7411,31 @@ def action_netcheck_revert() -> dict:
                 f.write(data)
             os.chmod(tmp, st.st_mode & 0o777)
             os.replace(tmp, script_path)
+            os.remove(lib)
             restored = f"Restored {script_path} from the library backup."
         except OSError as e:
             restored = f"(script restore failed: {e})"
+    marker = _netcheck_waitonline_marker()
+    if os.path.isfile(marker):
+        try:
+            with open(marker, "r") as f:
+                wunit = f.read().strip()
+        except OSError:
+            wunit = ""
+        if wunit in ("NetworkManager-wait-online.service", "systemd-networkd-wait-online.service"):
+            r = _run_argv(["systemctl", "disable", wunit])
+            if r["success"]:
+                removed.append(f"{wunit} disabled again (44helper had enabled it)")
+                try:
+                    os.remove(marker)
+                except OSError:
+                    pass
     rl = _daemon_reload()
     if not removed and not restored:
         return {"success": True, "verified": True,
                 "output": "No 44helper netcheck changes were present -- nothing to revert."}
     return {"success": rl["success"], "verified": True,
-            "output": "Removed:\n" + ("\n".join(removed) or "(no drop-ins)") + f"\n{restored}\n{rl['output']}"}
+            "output": "Removed:\n" + ("\n".join(removed) or "(no unit changes)") + f"\n{restored}\n{rl['output']}"}
 
 def action_netcheck_restart() -> dict:
     err = _require_root()
@@ -8267,6 +8527,7 @@ def build_firewall_status(cfg: configparser.ConfigParser) -> dict:
         "wg0_zone": _fw_zone_of_iface("wg0"),
         "panic": _fw_panic_on(),
         "port_roles": {k: v[1] for k, v in _PORT_ROLES.items()},
+        "dvswitch_mobile_port": cfg.get("tunnels", "tunnel.pi.dvswitch_mobile_port", fallback=""),
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -9462,6 +9723,9 @@ def action_half_arm() -> dict:
             return err
         if _half_mode() == "permanent":
             return {"success": False, "verified": False, "output": "Refused: the half tunnel is already permanent."}
+        if _fx_mode() != "off":
+            return {"success": False, "verified": False,
+                    "output": f"Refused: full tunnel with exceptions is {_fx_mode()}. Use one or the other, not both."}
         if _half_undo_running():
             return {"success": False, "verified": False, "output": "The auto-undo is running right now. Wait a moment and refresh."}
         st = _half_state() or {}
@@ -9873,6 +10137,7 @@ def _half_remove_script(perm: dict) -> str:
         "set -u",
         f"WG={q(WG0_CONF_PATH)}",
         f"ORIG_AIP={q(perm.get('orig_aip', ''))}",
+        f"PIN={q(chr(10).join(perm.get('pin_block') or []))}",
         f"ZONE={q(perm.get('zone', ''))}",
         f"PORTS={arr(perm.get('ports_added') or [])}",
         f"PRIOS={q(' '.join(str(x) for x in sorted(_HALF_PRIOS.values())))}",
@@ -9897,13 +10162,16 @@ def _half_remove_script(perm: dict) -> str:
         "MARK='^[[:space:]]*# 44helper-half-begin[[:space:]]*$'",
         "if [ -f \"$WG\" ] && grep -q \"$MARK\" \"$WG\"; then",
         "  TMP=\"$WG.44helper-tmp\"",
-        "  awk -v aip=\"$ORIG_AIP\" '",
+        "  if grep -q '^[[:space:]]*# 44helper-endpoint-pin-begin' \"$WG\"; then PIN=''; fi",
+        "  PIN=\"$PIN\" awk -v aip=\"$ORIG_AIP\" '",
+        "    BEGIN { pin = ENVIRON[\"PIN\"] }",
         "    /^[[:space:]]*# 44helper-half-begin[[:space:]]*$/ { skip = 1; next }",
         "    /^[[:space:]]*# 44helper-half-end[[:space:]]*$/ { skip = 0; next }",
         "    skip { next }",
         "    { low = tolower($0); gsub(/[[:space:]]/, \"\", low) }",
         "    low == \"[peer]\" { peer = 1 }",
         "    low == \"[interface]\" { peer = 0 }",
+        "    low == \"[interface]\" && pin != \"\" && !pdone { print; print pin; pdone = 1; next }",
         "    peer && aip != \"\" && low == \"allowedips=0.0.0.0/0\" { sub(/=.*/, \"= \" aip) }",
         "    { print }' \"$WG\" > \"$TMP\" && chmod 600 \"$TMP\" && mv \"$TMP\" \"$WG\"",
         "  if grep -q \"$MARK\" \"$WG\"; then",
@@ -9932,7 +10200,9 @@ def _half_remove_script(perm: dict) -> str:
         "    else ok \"port $P closed on $ZONE\"; fi",
         "  done",
         "else",
-        "  ok \"no ports to close (they were already open before the half tunnel)\"",
+        ("  echo \"note  the list of ports the half tunnel opened is missing, so none were closed. Check the zone: "
+         "firewall-cmd --zone=$ZONE --list-ports\"" if perm.get("ports_unknown") else
+         "  ok \"no ports to close (they were already open before the half tunnel)\""),
         "fi",
         "",
         "rm -f \"$SYSCTL\" && ok \"return-path setting file removed\"",
@@ -10033,6 +10303,20 @@ def _half_retest(saved: dict, out: list[str]) -> None:
             out.append("The test setup didn't fully come back. Use Undo now, or reboot.")
             return
 
+def _half_pin_block(text: str) -> list[str]:
+    pinned, _note = _wg_apply_endpoint_pin(text)
+    lines = _wg_extract_block(pinned, _WG_EPPIN_BEGIN, _WG_EPPIN_END)
+    return [_WG_EPPIN_BEGIN] + [ln.strip() for ln in lines] + [_WG_EPPIN_END] if lines else []
+
+def _wg_enable_at_boot(out: list[str]) -> bool:
+    if _sc_is_enabled("wg-quick@wg0") in ("enabled", "enabled-runtime"):
+        return True
+    r = _run_argv(["systemctl", "enable", "wg-quick@wg0"])
+    good = r["success"] and _sc_is_enabled("wg-quick@wg0") in ("enabled", "enabled-runtime")
+    out.append(("ok    " if good else "FAIL  ") + "tunnel enabled at boot (systemctl enable wg-quick@wg0)"
+               + ("" if good else ": " + r["output"]))
+    return good
+
 def _half_make_permanent(user: str) -> dict:
     out: list[str] = []
     err = _require_root()
@@ -10062,6 +10346,7 @@ def _half_make_permanent(user: str) -> dict:
         "rp_orig": (st["steps"]["6"] or {}).get("orig", "0"),
         "orig_aip": v.get("aip", "") if aip_changed else "", "user": user,
         "script_paths": script_paths, "bak_paths": bak_paths,
+        "pin_block": _half_pin_block(text) if aip_changed else [],
     }
     track: list[tuple[str, object]] = []
     out.append(f"Saving the half tunnel (home folder: {homes[0][0]}):")
@@ -10140,10 +10425,12 @@ def _half_make_permanent(user: str) -> dict:
             out.append(f"The removal had problems. Run ~/{_HALF_SCRIPT_NAME} or Remove permanent.")
         log("HALF: make permanent -> rolled back")
         return {"success": False, "verified": False, "output": "\n".join(out)}
+    boot = _wg_enable_at_boot(out)
     if summary["counts"]["wait"]:
         out.append("Saved. Some checks are still waiting (registration can take a few minutes). Re-run checks shortly.")
     else:
-        out.append("Saved. The half tunnel now survives a reboot.")
+        out.append("Saved. The half tunnel now survives a reboot." if boot else
+                   "Saved, but the tunnel isn't enabled at boot, so after a reboot it stays down until you start it.")
     log("HALF: make permanent -> ok")
     return {"success": True, "verified": summary["all_pass"], "output": "\n".join(out)}
 
@@ -10161,10 +10448,20 @@ def action_half_remove_permanent() -> dict:
         if perm is None and _half_mode() != "permanent":
             return {"success": True, "verified": True, "output": "The half tunnel isn't permanent on this node. Nothing to remove."}
         if perm is None:
-            perm = {"values": {}, "zone": _half_zone(), "ports_added": [], "rp_orig": "0", "orig_aip": "",
+            perm = {"values": {}, "zone": _half_zone(), "ports_added": [], "ports_unknown": True, "rp_orig": "0", "orig_aip": "",
                     "script_paths": [], "bak_paths": []}
         rc, text = _half_q(["bash", "-s"], timeout=180, input_text=_half_remove_script(perm))
         _HALF_LAST_PERM_CHECKS = {}
+        cur = _hl_read_conf()
+        if rc == 0 and cur and _wg_apply_endpoint_pin(cur)[1]:
+            try:
+                text += "\n" + "\n".join("ok    " + ln for ln in _wg_write_conf(cur))
+                if _systemctl_is_active("wg-quick@wg0"):
+                    r = _run_argv(["systemctl", "restart", "wg-quick@wg0"], timeout=_WG_START_WAIT)
+                    text += "\n" + ("ok    tunnel restarted with the tunnel-server route" if r["success"]
+                                     else "FAIL  tunnel restart: " + r["output"])
+            except OSError as e:
+                text += f"\nFAIL  couldn't add the tunnel-server route to wg0.conf: {e}"
         log(f"HALF: remove permanent -> {'ok' if rc == 0 else 'problems'}")
         return {"success": rc == 0, "verified": rc == 0 and _half_mode() == "off", "output": text}
 
@@ -10321,7 +10618,8 @@ def _fx_detect() -> dict:
     rules = _half_q(["ip", "-4", "rule", "show"])[1]
     if _systemctl_is_active("wg-quick@wg0") and "lookup 51820" not in rules:
         blockers.append("wg-quick's full-tunnel rules (table 51820) aren't loaded, so the tunnel isn't carrying the internet. Restart it: systemctl restart wg-quick@wg0")
-    if not _half_ip_features():
+    _rc, iphelp = _half_q(["ip", "rule", "help"])
+    if not all(w in iphelp for w in ("ipproto", "dport", "suppress_prefixlength")):
         blockers.append("This system's 'ip' command is too old (it needs ipproto/dport and suppress_prefixlength).")
     md = _half_main_default()
     lan_ip = _half_lan_ip(md["dev"])
@@ -10563,6 +10861,9 @@ def action_fx_arm() -> dict:
             return err
         if _fx_mode() == "permanent":
             return {"success": False, "verified": False, "output": "Refused: it's already permanent."}
+        if _half_mode() != "off":
+            return {"success": False, "verified": False,
+                    "output": f"Refused: the half tunnel is {_half_mode()}. Use one or the other, not both."}
         if _fx_undo_running():
             return {"success": False, "verified": False, "output": "The auto-undo is running right now. Wait a moment and refresh."}
         st = _fx_state() or {}
@@ -10669,7 +10970,7 @@ def _fx_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
             "" if good else "Your traffic isn't leaving through 44Net. " + undo)
     else:
         add(4, "Tunnel", "The internet sees your 44 address", "fail", my.get("output", "myip check failed"),
-            "No answer through the tunnel. Check checks 1 and 6.")
+            "No answer through the tunnel. Check checks 1 and 3.")
 
     lan_ip, gw_dev = v.get("lan_ip", ""), v.get("gw_dev", "")
     if lan_ip and gw_dev:
@@ -10832,9 +11133,18 @@ def _fx_perm_block(perm: dict) -> list[str]:
         "L=$(ip -4 -o addr show dev \"$D\" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1); "
         f"[ -n \"$L\" ] && ip -4 rule add from \"$L\" lookup main priority {p['lan']}; true",
     ]
-    if hosts:
-        block.append(f"PostUp = for H in {' '.join(hosts)}; do for IP in $(getent ahostsv4 \"$H\" | awk '{{print $1}}' | sort -u); "
-                     f"do ip -4 rule add to \"$IP\" lookup main priority {p['hosts']}; done; done; true")
+    saved = bypass.get("resolved") or {}
+    for h in hosts:
+        known = []
+        for ip in saved.get(h) or []:
+            try:
+                if ipaddress.ip_address(str(ip)).version == 4:
+                    known.append(str(ip))
+            except ValueError:
+                continue
+        fallback = f"[ -n \"$IPS\" ] || IPS=\"{' '.join(known)}\"; " if known else ""
+        block.append(f"PostUp = IPS=$(timeout 5 getent ahostsv4 {h} | awk '{{print $1}}' | sort -u); {fallback}"
+                     f"for IP in $IPS; do ip -4 rule add to \"$IP\" lookup main priority {p['hosts']}; done; true")
     if ports:
         block.append(f"PostUp = for P in {' '.join(ports)}; do ip -4 rule add ipproto udp dport \"$P\" lookup main "
                      f"priority {p['ports']}; done; true")
@@ -11004,8 +11314,10 @@ def _fx_make_permanent(user: str) -> dict:
             out.append(f"The removal had problems. Run ~/{_FX_SCRIPT_NAME} or Remove permanent.")
         log("FULLX: make permanent -> rolled back")
         return {"success": False, "verified": False, "output": "\n".join(out)}
+    boot = _wg_enable_at_boot(out)
     out.append("Saved. Some checks are still waiting; re-run checks shortly." if summary["counts"]["wait"]
-               else "Saved. The exceptions now survive a reboot.")
+               else ("Saved. The exceptions now survive a reboot." if boot else
+                     "Saved, but the tunnel isn't enabled at boot, so after a reboot it stays down until you start it."))
     log("FULLX: make permanent -> ok")
     return {"success": True, "verified": summary["all_pass"], "output": "\n".join(out)}
 
@@ -16399,7 +16711,7 @@ function renderOverview(data) {
       wg0html += '<br>Address: ' + data.wg0_conf.interface.Address;
     }
   } else {
-    wg0html += '<br>' + _ovDot('info') + 'No wg0.conf found yet (expected before Pi Install)';
+    wg0html += '<br>' + _ovDot('info') + 'No wg0.conf found yet (expected before step 4 on the Full or Split Tunnel tab)';
   }
   if (data.wg_status) {
     if (data.wg_status.latest_handshake) wg0html += '<br>Handshake: ' + data.wg_status.latest_handshake;
@@ -16559,6 +16871,9 @@ function renderPiInstall(kind, data) {
 
     if (meta.id === 'firewalld_prereq') {
       html += '<div class="step-body">Installed: ' + step.installed + ' &middot; Active: ' + step.active + '</div>';
+      if (!step.installed) {
+        html += renderStepWarn('firewalld starts at once with a default zone that allows only SSH from the LAN. This step keeps this page\\'s port open, and the Dashboard, instmon, wifimon, Cockpit, SysMon, IAX and EchoLink ports that are answering now. Anything else that should be reachable from the LAN or through a router forward needs adding afterwards.');
+      }
     } else if (meta.id === 'resolved_prereq') {
       html += '<div class="step-body">Per sec 1a.1 (ARDC guide, not the ASL manual) \u2014 required or wg-quick up can fail with a resolve1 timeout. Green only when systemd-resolved is running <em>and</em> answers. Running: ' + (step.active ? 'yes' : 'no') + ' &middot; Answers: ' + (step.answers ? 'yes' : 'no') + '</div>';
       if (step.active && !step.answers) {
@@ -16588,7 +16903,7 @@ function renderPiInstall(kind, data) {
         html += '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;margin:.1rem 0 .5rem 1.5rem;line-height:1.5">Per the DVSwitch install guide, this is the UDP port a remote DVSwitch Mobile client connects to \u2014 whatever you set as both txPort and rxPort in Analog_Bridge\\'s [USRP] stanza. Not the same as the loopback-only AMBE bridge ports below.</div>';
         html += '<label>Custom port (e.g. 14569/udp): <input type="text" id="pi-custom-port-' + kind + '" style="font-family:var(--mono);background:#0a1020;color:var(--text-bright);border:1px solid var(--border2);border-radius:4px;padding:.2rem .4rem"' + disabledAttr + '> <button class="btn-run" onclick="piAddPort(\\'' + kind + '\\')"' + disabledAttr + '>Add</button></label>';
       } else {
-        html += '<div class="step-body">Split Tunnel intentionally offers a smaller set here \u2014 ASL3/IAX2 and EchoLink/SvxLink only. DVSwitch, USRP2M17, and Zello don\\'t need inbound exposure at all (see the note below), so there\\'s no DVSwitch Mobile field or generic custom-port field on this tab by design.</div>';
+        html += '<div class="step-body">Split Tunnel needs only ASL3/IAX2 and EchoLink/SvxLink open (the others above are optional and usually stay off). DVSwitch, USRP2M17, and Zello don\\'t need inbound exposure at all (see the note below), so there\\'s no DVSwitch Mobile field or generic custom-port field on this tab by design.</div>';
       }
       html += '</div><div class="step-body">Current ports in zone: ' + ((step.ports||[]).join(', ') || '(none)') + '</div>';
       html += '<div class="step-body">DVSwitch\\'s AMBE bridge ports (31100/31103), the USRP2M17 gateway ' +
@@ -16597,10 +16912,10 @@ function renderPiInstall(kind, data) {
         'table), not something a remote 44Net peer ever needs to reach.</div>';
     } else if (meta.id === 'paste_config') {
       if (step.done) {
-        html += '<div class="step-body">wg0.conf present, permissions 600. (Not re-displayed \u2014 private key never sent back to the browser.)</div>';
+        html += '<div class="step-body">wg0.conf present, permissions 600. (Not shown here; the private key only comes back to the browser through Load from instmon library.)</div>';
         html += '<div class="step-body">Library backup: ' + (step.library_backup_exists ?
           'present (instmon Version Library \u2192 config \u2192 wg0.conf).' :
-          'none yet \u2014 check the box next time you write this file, or re-run this step to create one.') + '</div>';
+          'none yet \u2014 any 44helper write of wg0.conf (for example the DNS & MTU card) makes one.') + '</div>';
       } else {
         html += '<div class="step-body">Get this from your 44Net Connect dashboard at ' +
           '<a href="https://connect.44net.cloud/" target="_blank" rel="noopener noreferrer">connect.44net.cloud</a> ' +
@@ -16648,6 +16963,9 @@ function renderPiInstall(kind, data) {
         html += '<div class="step-body">Handshake: ' + step.wg_status.latest_handshake + '</div>';
       }
       html += '<div class="step-actions"><button class="btn-run" onclick="piVerify(\\'' + kind + '\\')">Verify (connect.44net.cloud/myip + rpt show registrations)</button><span id="pi-verify-out-' + kind + '" class="step-body"></span></div>';
+      if (kind === 'split') {
+        html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">On a split tunnel, myip normally shows your home internet address: connect.44net.cloud is not a 44Net address, so that check goes the normal way. The handshake above is what shows the tunnel works.</div>';
+      }
     }
 
     if (meta.cmd) {
@@ -16662,7 +16980,11 @@ function renderPiInstall(kind, data) {
     var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
     var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
     html += '<div class="' + consoleCls + '" id="pi-out-' + kind + '-' + meta.id + '">' + consoleTxt + '</div>';
-    if (meta.id === 'paste_config') { html += _piDnsCardHtml(kind, data.dns || {}); if (kind === 'split') { html += _piAllowedIpsCardHtml(kind, data.allowed_ips || {}); } if (kind === 'full') { html += _piReflectorPortsCardHtml(kind, data.reflector_egress || {}); } }
+    if (meta.id === 'paste_config') {
+      var subCards = _piDnsCardHtml(kind, data.dns || {}) + (kind === 'split' ? _piAllowedIpsCardHtml(kind, data.allowed_ips || {}) : '') +
+        (kind === 'full' ? _piReflectorPortsCardHtml(kind, data.reflector_egress || {}) : '');
+      html += locked ? '<fieldset disabled style="border:0;padding:0;margin:0;min-width:0">' + subCards + '</fieldset>' : subCards;
+    }
     if (meta.id === 'enable_tunnel') { html += _piNetcheckCardHtml(kind); }
     html += '</div>';
   });
@@ -16720,7 +17042,9 @@ function _piDnsCardHtml(kind, dns) {
   html += '<label>MTU: <input type="text" id="pi-dns-mtu-' + kind + '" value="' + asl3EscapeAttr(mtu) + '" placeholder="(blank = default)" style="' + inpStyle + ';width:8rem"></label>';
   html += '<button class="btn-run" onclick="piSetMtu(\\'' + kind + '\\')">Apply MTU</button>';
   html += '</div>';
-  html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">On systemd-resolved the resolvectl options are preferred (no resolvconf needed). Full routes all DNS through the tunnel; split routes only *.ampr.org. Restart the tunnel after applying.</div>';
+  html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">On systemd-resolved the resolvectl options are preferred (no resolvconf needed). Full sends all DNS to the servers given, over the tunnel; split sends only ampr.org names and 44Net reverse lookups. ' +
+    (kind === 'split' ? '<b>This tunnel only carries 44Net addresses</b>: use split (44Net names only) with a 44Net server such as 44.0.0.1, or Off. A server outside 44Net is refused, because its lookups would be dropped. ' : '') +
+    'Restart the tunnel after applying.</div>';
   var pst = (window._piState || {})['set_dns'];
   var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
   var consoleTxt = (pst && pst.output) ? asl3EscapeAttr(pst.output) : '(not run yet)';
@@ -16779,11 +17103,12 @@ function _piAllowedIpsCardHtml(kind, aip) {
     html += '<div class="step-body">AllowedIPs is already the split-tunnel set (<code>' + asl3EscapeAttr(current) + '</code>). Nothing to repair.</div>';
   } else if (shape === 'full') {
     html += renderStepWarn('This wg0.conf still carries the portal default <code>AllowedIPs = 0.0.0.0/0</code> (full tunnel). On the Split Tunnel tab that routes ALL traffic, DNS included, into wg0, which is the exact cause of the breakage where ASL keeps working (it dials cached peer IPs) but DVSwitch and usrp2m17 fail (they resolve by hostname). Narrowing the peer AllowedIPs to <code>44.0.0.0/9, 44.128.0.0/10</code> sends only 44Net traffic through the tunnel.');
-    html += '<div class="step-body">Current: <code>' + asl3EscapeAttr(current) + '</code> becomes <code>44.0.0.0/9, 44.128.0.0/10</code>. Only the [Peer] AllowedIPs line is rewritten; the private key, endpoint, and every other line stay byte-for-byte unchanged. A library backup is refreshed as part of the write.</div>';
+    html += '<div class="step-body">Current: <code>' + asl3EscapeAttr(current) + '</code> becomes <code>44.0.0.0/9, 44.128.0.0/10</code>. Each [Peer] AllowedIPs line of 0.0.0.0/0 is rewritten; the private key and Endpoint are not touched. The tidy-up 44helper does on every write also applies (SaveConfig removed, and the endpoint pin added when the tunnel server is a 44Net address). The library backup is updated after the write.</div>';
     html += '<div class="step-actions"><button class="btn-run" onclick="piRepairAllowedIps()">Repair AllowedIPs (44Net split range)</button></div>';
-    html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">After repairing, restart the tunnel so a fresh handshake restores name resolution:  systemctl restart wg-quick@wg0</div>';
+    html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">After repairing, restart the tunnel so wg-quick sets up the narrower routes and DNS leaves the tunnel again:  systemctl restart wg-quick@wg0</div>';
   } else {
-    html += '<div class="step-body">AllowedIPs is <code>' + asl3EscapeAttr(current) + '</code>, already narrowed (not the full-tunnel 0.0.0.0/0 shape), so this repair has nothing to do. Edit the config by hand for a different range.</div>';
+    html += current ? '<div class="step-body">AllowedIPs is <code>' + asl3EscapeAttr(current) + '</code>, already narrowed (not the full-tunnel 0.0.0.0/0 shape), so this repair has nothing to do. Edit the config by hand for a different range.</div>'
+      : '<div class="step-body">wg0.conf has no AllowedIPs line under [Peer], so there is nothing to repair. Check the config against the portal.</div>';
   }
   var pst = (window._piState || {})['repair_allowed_ips'];
   var consoleCls = 'asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder')));
@@ -16796,8 +17121,8 @@ function _piAllowedIpsCardHtml(kind, aip) {
 function piRepairAllowedIps(what) {
   var kind = 'split';
   if (what === 'pin') {
-    if (!confirm('Keep the tunnel server on the normal route? This adds two lines to wg0.conf (a library backup is refreshed) and adds the route now.')) return;
-  } else if (!confirm('Rewrite the [Peer] AllowedIPs line in wg0.conf from the full-tunnel 0.0.0.0/0 to the split-tunnel 44Net range (44.0.0.0/9, 44.128.0.0/10)? Only that one line changes and a library backup is refreshed first; you will need to restart the tunnel afterward.')) return;
+    if (!confirm('Keep the tunnel server on the normal route? This adds two lines to wg0.conf (the library backup is updated too) and adds the route now.')) return;
+  } else if (!confirm('Rewrite the [Peer] AllowedIPs line in wg0.conf from the full-tunnel 0.0.0.0/0 to the split-tunnel 44Net range (44.0.0.0/9, 44.128.0.0/10)? Only that line changes, plus the usual SaveConfig and endpoint-pin tidy-up; the library backup is updated after the write. Restart the tunnel afterward.')) return;
   var out = document.getElementById('pi-aip-out-' + kind);
   if (out) { out.className = 'asl3-console shown'; out.textContent = 'Working...'; }
   fetch('/api/pi_install/action', {
@@ -16905,7 +17230,7 @@ function _piNetcheckCardHtml(kind) {
   if (kind === 'full') {
     intro = 'On a full tunnel this is the usual culprit when Analog_Bridge / MMDVM_Bridge / STFU will not start: netcheck.service fails at boot (its probe or readiness signaling breaks once wg0 takes the default route) and drags the bridges down with it. Scan reads the units and script read-only and reports what it finds -- no changes are made here.';
   } else {
-    intro = 'Production split-tunnel usually does NOT hit this -- DVSwitch traffic is kept off the tunnel by policy routing (fwmark + ip rule), so netcheck keeps working. Only run this if the DVSwitch bridges have actually failed to start. Scan is read-only and changes nothing.';
+    intro = 'A split tunnel usually does NOT hit this -- only 44Net addresses are routed into wg0, so netcheck\\'s probe keeps the normal route and keeps working. Only run this if the DVSwitch bridges have actually failed to start. Scan is read-only and changes nothing.';
   }
   var html = '<div class="step-card" id="pi-netcheck-card-' + kind + '">';
   html += '<details><summary style="cursor:pointer;font-family:var(--mono);color:var(--amber)">Troubleshooting: bridge startup (netcheck)</summary>';
@@ -16967,7 +17292,7 @@ function _piNetcheckRender(data) {
     fixHtml += '</div>';
     if (fx.target_fix && fx.target_fix.applicable) {
       anyFix = true;
-      fixHtml += '<div class="step-body" style="font-size:.75rem;margin-top:.3rem">Repoint probe to <input type="text" id="pi-netcheck-target" value="1.1.1.1" style="width:9rem;font-family:var(--mono);background:#0a1020;color:var(--text-bright);border:1px solid var(--border2);border-radius:4px;padding:.15rem .35rem"> <button class="btn-run" onclick="piNetcheckFixTarget()">Repoint target</button> <span style="color:var(--muted)">(reachable through the tunnel; script backed up to the instmon library first)</span></div>';
+      fixHtml += '<div class="step-body" style="font-size:.75rem;margin-top:.3rem">Repoint probe to <input type="text" class="pi-netcheck-target" value="1.1.1.1" style="width:9rem;font-family:var(--mono);background:#0a1020;color:var(--text-bright);border:1px solid var(--border2);border-radius:4px;padding:.15rem .35rem"> <button class="btn-run" onclick="piNetcheckFixTarget(this)">Repoint target</button> <span style="color:var(--muted)">(reachable through the tunnel; script backed up to the instmon library first)</span></div>';
     }
     var tail = '<div class="step-actions" style="margin-top:.4rem">';
     if (fx.any_applied) { tail += '<button class="btn-copy" onclick="piNetcheckRevert()">Revert all 44helper netcheck changes</button>'; }
@@ -17016,17 +17341,21 @@ function _pnPost(action, extra, confirmMsg) {
   var body = {step: action};
   for (var k in extra) { if (extra.hasOwnProperty(k)) { body[k] = extra[k]; } }
   fetch('/api/pi_install/action', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}, body: JSON.stringify(body)})
-    .then(function(r) { return r.json(); }).then(function(result) { _pnActionOut(result.output || '(no output)'); piNetcheckScan(); });
+    .then(function(r) { return r.json(); }).then(function(result) {
+      _pnActionOut(result.output || '(no output)');
+      piNetcheckScan();
+      if (typeof refreshHealth === 'function') { refreshHealth(true); }
+    }).catch(function(e) { _pnActionOut('Request failed: ' + e); });
 }
 
 function piNetcheckFixUnit() {
   _pnPost('netcheck_fix_unit', {}, 'Write a systemd drop-in for netcheck.service (Type=oneshot, RemainAfterExit=yes, ordered after network-online.target)? Reversible via Revert.');
 }
 function piNetcheckFixBridge(unit) {
-  _pnPost('netcheck_fix_bridge', {unit: unit}, 'Loosen ' + unit + ' so a netcheck failure no longer keeps it down (Requires -> Wants, ordering kept)? It will then START EVEN IF netcheck fails. Reversible via Revert.');
+  _pnPost('netcheck_fix_bridge', {unit: unit}, 'Loosen ' + unit + ' so a netcheck failure no longer keeps it down? 44helper copies its unit file to /etc/systemd/system/' + unit + ' with netcheck as Wants= instead of Requires= (ordering kept; a drop-in cannot remove a dependency). It will then START EVEN IF netcheck fails. Revert deletes the copy.');
 }
-function piNetcheckFixTarget() {
-  var el = document.getElementById('pi-netcheck-target');
+function piNetcheckFixTarget(btn) {
+  var el = btn && btn.parentNode ? btn.parentNode.querySelector('.pi-netcheck-target') : null;
   var t = el ? el.value : '1.1.1.1';
   _pnPost('netcheck_fix_target', {target: t}, 'Repoint the netcheck probe to ' + t + '? The script is backed up to the instmon library first; only the target token changes.');
 }
@@ -17034,7 +17363,7 @@ function piNetcheckEnableWait() {
   _pnPost('netcheck_enable_waitonline', {}, 'Enable the network wait-online unit for the detected backend?');
 }
 function piNetcheckRevert() {
-  _pnPost('netcheck_revert', {}, 'Remove ALL 44helper netcheck drop-ins and restore the script from the library backup?');
+  _pnPost('netcheck_revert', {}, 'Remove ALL of 44helper\\'s netcheck changes (the netcheck drop-in, the bridge unit copies, and the wait-online unit if 44helper enabled it) and restore the script from the library backup?');
 }
 function piNetcheckRestart() {
   _pnPost('netcheck_restart', {}, 'Restart netcheck + the DVSwitch bridges now? With the tunnel up this can briefly drop an active bridge.');
@@ -17176,9 +17505,10 @@ function piPurgeCardHtml(meta, kind) {
 
 function renderPiPurgeStepList(kind) {
   var html = renderStepWarn('Each step below runs independently \u2014 click Run on the ones you want. ' +
-    'Together they stop/disable the tunnel, delete wg0.conf, and delete the 44NetConnect firewall zone. None of ' +
-    'this is reversible automatically, and firewalld/systemd-resolved themselves are deliberately left installed ' +
-    '(they\\'re generic system packages, not Pi-Install-specific).');
+    'Together they stop/disable the tunnel, delete wg0.conf, and delete the 44NetConnect firewall zone. Run them in order: ' +
+    'wg0.conf can only be removed once the tunnel is stopped. wg0.conf is copied to the instmon library first, so ' +
+    'step 4\\'s Load from instmon library can bring it back; the zone is not restored automatically. ' +
+    'firewalld/systemd-resolved themselves are deliberately left installed (they\\'re generic system packages).');
   PI_PURGE_STEP_META.forEach(function(meta) { html += piPurgeCardHtml(meta, kind); });
   return html;
 }
@@ -17218,9 +17548,9 @@ function piTogglePurge(kind) {
     window._piPurgeShown[kind] = false;
     return;
   }
-  if (!confirm('This will let you undo the Pi Install steps: stop/disable the WireGuard tunnel, delete ' +
+  if (!confirm('This will let you undo the tunnel steps: stop/disable the WireGuard tunnel, delete ' +
     'wg0.conf, and delete the 44NetConnect firewall zone. Continue?')) return;
-  if (!confirm('Are you sure? These steps are destructive and cannot be undone automatically. Confirm again ' +
+  if (!confirm('Are you sure? These steps are destructive; only wg0.conf can be loaded back (from the instmon library). Confirm again ' +
     'to show them.')) return;
   document.getElementById('pi-purge-steps-' + kind).innerHTML = renderPiPurgeStepList(kind);
   window._piPurgeShown[kind] = true;
@@ -17385,7 +17715,7 @@ function piConvertWrite(kind, targetKind) {
   piPastePreview(text, targetKind, 'pi-convert-preview-' + kind, function(opts) {
     _piConvertPost('paste_config',
       'Write this to /etc/wireguard/wg0.conf (mode 600), replacing the current config? The private key is ' +
-      'never sent back to this browser once saved.',
+      'only shown again here if you use Load from instmon library.',
       {config_text: text, backup_to_library: true, kind: targetKind, opts: opts},
       'pi-convert-out-write-' + kind, function(result) {
       if (result.success !== false) { local.written = true; }
@@ -17471,7 +17801,7 @@ function piPasteConfig(kind) {
 function piPasteWrite(kind, text, opts) {
   var backupBox = document.getElementById('pi-wg-backup-lib-' + kind);
   var backupToLibrary = backupBox ? backupBox.checked : true;
-  if (!confirm('Write this to /etc/wireguard/wg0.conf (mode 600)? The private key is never sent back to this browser once saved.')) return;
+  if (!confirm('Write this to /etc/wireguard/wg0.conf (mode 600)? This page only shows the private key again if you use Load from instmon library.')) return;
   window._piAttempted = window._piAttempted || {};
   window._piAttempted['paste_config'] = true;
   fetch('/api/pi_install/action', {
@@ -17504,7 +17834,7 @@ function piVerify(kind) {
   fetch('/api/pi_install/verify').then(function(r){ return r.json(); }).then(function(result){
     var out2 = document.getElementById('pi-verify-out-' + kind);
     if (out2) {
-      out2.textContent = 'myip: ' + (result.myip.output || '') + '  |  rpt: ' + (result.rpt.output ? 'ok' : 'unavailable');
+      out2.textContent = 'myip: ' + (result.myip.output || '') + '  |  rpt: ' + (result.rpt.success ? 'ok' : ('not registered or unavailable' + (result.rpt.output ? ' (' + result.rpt.output.split('\\n')[0] + ')' : '')));
     }
   });
 }
@@ -18174,7 +18504,7 @@ function refreshFirewall() {
     var zone = data.pi_zone;
     document.getElementById('fw-pi-zone').innerHTML = zone
       ? ('Services: ' + (zone.services.join(', ') || '(none)') + '<br>Ports: ' + (zone.ports.join(', ') || '(none)') + '<br>Interfaces: ' + (zone.interfaces.join(', ') || '(none)'))
-      : '44NetConnect zone not found (Pi Install not run yet, or not Pi-hosted).';
+      : '44NetConnect zone not found (step 2 on the Full or Split Tunnel tab not run yet, or the tunnel is on a router).';
 
     var fw = data.router_forwards;
     var fwHtml;
@@ -18311,8 +18641,11 @@ function fw2Post(action, extra, refreshAfter) {
     body: JSON.stringify(body)
   }).then(function(r){ return r.json(); }).then(function(result) {
     fw2Out(result.output || '(no output)');
-    if (refreshAfter) { refreshFirewall2(); refreshPorts(); }
-  });
+    if (refreshAfter) {
+      refreshFirewall2(); refreshPorts();
+      if (typeof refreshFirewall === 'function') { refreshFirewall(); }
+    }
+  }).catch(function(e) { fw2Out('Request failed: ' + e); });
 }
 
 function fw2AddRuntime() {
@@ -22185,11 +22518,12 @@ var _hlScrollTo = '';
 var _hlHighlight = '';
 var _HL_FIX = {
   start_services: ['Start them', 'Start every enabled DVSwitch service that is stopped?'],
-  netcheck_fixes: ['Apply netcheck fixes', 'Apply the recommended netcheck fixes (systemd drop-ins under /etc, undo with Revert on the netcheck card)?'],
+  netcheck_fixes: ['Apply netcheck fixes', 'Apply the recommended netcheck fixes? netcheck waits for the network (a drop-in), each bridge gets a copy of its unit under /etc/systemd/system with netcheck as Wants= instead of Requires=, and the wait-online unit is enabled. Revert on the netcheck card undoes all three.'],
   address32: ['Change to /32', 'Change the wg0.conf Address to a single /32? Check the 44Net Connect portal first: leave it if ARDC gave you a subnet. The tunnel is not restarted.'],
   keepalive: ['Add keepalive (25 s)', 'Add PersistentKeepalive = 25 under [Peer] and apply it to the running tunnel?'],
   restart_resolved: ['Restart systemd-resolved', 'Restart systemd-resolved? Name lookups pause for a moment.'],
   dns_off: ['Set DNS to Off', 'Take the DNS setting out of wg0.conf (44helper\u2019s DNS lines and any DNS = line)? The Pi keeps its own resolver. Restart the tunnel afterwards.'],
+  dns_predown: ['Move to PreDown', 'Change the DNS revert line in wg0.conf from PostDown to PreDown? Nothing else changes and the tunnel is not restarted.'],
   endpoint_pin: ['Fix the tunnel-server route', 'Keep the tunnel server on the normal route? This adds two lines to wg0.conf and adds the route now.']
 };
 function hlEsc(s) {
@@ -23289,6 +23623,7 @@ _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "health_restart_resolved": lambda p: action_health_restart_resolved(),
     "health_dns_off": lambda p: action_health_dns_off(),
     "health_restart_tunnel": lambda p: action_health_restart_tunnel(),
+    "health_dns_predown": lambda p: action_health_dns_predown(),
     "load_wg_from_library": lambda p: action_load_wg_from_library(),
     "set_dns": lambda p: action_wg_set_dns(p.get("dns_mode", ""), p.get("dns_servers", "")),
     "set_mtu": lambda p: action_wg_set_mtu(p.get("mtu", "")),
@@ -23314,6 +23649,13 @@ _PI_INSTALL_SERVICE_PORTS_ACTIONS: dict[str, Callable[[dict], dict]] = {
 }
 _PI_INSTALL_JOB_STEPS = {"firewalld_prereq", "resolved_prereq", "create_zone", "attach_interface", "enable_tunnel",
                          "purge_disable_tunnel", "purge_remove_wg0_conf", "purge_delete_zone", "convert_prune"}
+
+def _dispatch_guarded(fn, payload: dict) -> dict:
+    try:
+        return fn(payload)
+    except (OSError, subprocess.SubprocessError, ValueError) as e:
+        log(f"action failed: {e}")
+        return {"success": False, "verified": False, "output": f"Failed: {e}"}
 
 def _dispatch_pi_install_action(payload: dict) -> dict:
     step = payload.get("step", "")
@@ -23817,7 +24159,7 @@ class Handler(BaseHTTPRequestHandler):
             if err is not None:
                 self._send(400, "application/json", err)
                 return
-            result = _dispatch_pi_install_action(payload)
+            result = _dispatch_guarded(_dispatch_pi_install_action, payload)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
@@ -23836,7 +24178,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, "application/json", err)
                 return
             payload["_client_ip"] = self._client_ip()
-            result = _dispatch_firewall_action(payload)
+            result = _dispatch_guarded(_dispatch_firewall_action, payload)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
