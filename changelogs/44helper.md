@@ -1,6 +1,49 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_202_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_203_20261014.py`. Newest entries first.
+
+## 0.0.203 (2026-10-14) — testing
+
+Web connections get an idle limit, and 44helper gets a systemd watchdog
+(reliability plan, Stage 3b). 44helper serves both builds.
+
+- **Install and command time limits are not changed.** The per-step limits
+  (`_effective_timeout`, the 900 s and longer step limits, and steps with no
+  limit) are exactly as before. Installs keep running as their own systemd
+  units, so they never depend on a web connection or on 44helper staying up.
+- **Web connections:** a 30-second idle limit per connection. Before, there
+  was none, so a client that connected and went silent held a thread until
+  44helper restarted. The limit counts silence, not total time.
+  - The browser terminal is exempt: the limit is lifted as soon as the
+    terminal connection opens, so an idle terminal stays open (its own idle
+    rule still applies).
+  - The live event stream keeps the limit only for writes, so a browser that
+    vanished frees its stream slot.
+- **Watchdog:** the unit is now `Type=notify` with `WatchdogSec=60`.
+  - A `health-probe` thread asks 44helper's own new `/healthz` (no login, same
+    reply as `/api/ping`) every 15 s.
+  - A `sd-heartbeat` thread tells systemd "alive" while that answered in the
+    last 45 s.
+  - **It also says "alive" whenever anything is running:** a job, or any
+    child process (an install step, a command, a terminal, a journal
+    follower). So a long install never gets 44helper restarted, however long
+    it takes. Only an idle 44helper whose web server stops answering is
+    restarted.
+- Code tidy: three strings marked `f"..."` with nothing to fill in are now
+  plain strings (same text). pyflakes is clean again, so the `checks` workflow
+  passes on 44helper files.
+- Tested (7):
+  - the unit lines
+  - the handler limit, and that it is lifted after the terminal's 101 reply
+  - a child process counts as running, and a zombie doesn't
+  - a running job counts
+  - against a real notify socket: "alive" while healthy; none when stale and
+    idle; "alive" again while a job runs although stale; none after the job
+    ends; "alive" again once healthy
+  - against a real server: `/healthz` answers without login, and the probe
+    records it
+  - idle clients are dropped and their threads freed
+  - `ci/check_repo.py`
 
 ## 0.0.202 (2026-10-14) — testing
 
