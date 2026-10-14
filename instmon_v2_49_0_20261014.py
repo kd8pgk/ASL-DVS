@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.48.0"
+VERSION ="2.49.0"
 DATE_STR ="2026-10-12"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -1913,6 +1913,61 @@ def compare_before_write (dest_path ,data_bytes ):
     return True ,"written"
 
 
+LOCKS_PATH = os.path.join(CONFIG_DIR, "instmon_locks.json")
+_locks_mutex = threading.Lock()
+
+def _locks_read():
+    try:
+        with open(LOCKS_PATH) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for cat, names in data.items():
+        if cat in LIB_SUBDIRS and isinstance(names, list):
+            out[cat] = {n for n in names if isinstance(n, str)}
+    return out
+
+def lib_locked(category, name):
+    return bool(category) and bool(name) and os.path.basename(name) in _locks_read().get(category, set())
+
+def lib_locked_path(path):
+    d, n = os.path.split(os.path.realpath(path))
+    for cat, cdir in LIB_SUBDIRS.items():
+        if os.path.realpath(cdir) == d:
+            return lib_locked(cat, n)
+    return False
+
+def lib_lock_set(category, name, locked, confirm=False):
+    if category not in LIB_SUBDIRS:
+        return 400, {"error": f"Unknown category '{category}'"}
+    target = safe_join(LIB_SUBDIRS[category], name or "")
+    if target is None or not os.path.isfile(target):
+        return 404, {"error": f"Library file not found: {name}"}
+    name = os.path.basename(target)
+    if not locked and not confirm:
+        return 400, {"error": f"Unlocking {name} needs confirmation."}
+    with _locks_mutex:
+        locks = _locks_read()
+        names = locks.setdefault(category, set())
+        if locked:
+            names.add(name)
+        else:
+            names.discard(name)
+        ensure_dirs()
+        payload = {c: sorted(v) for c, v in sorted(locks.items()) if v}
+        compare_before_write(LOCKS_PATH, json.dumps(payload, indent=2).encode("utf-8"))
+    if locked:
+        log_event(f"Locked {name} in the {category} library: it can't be deleted or overwritten", "ok")
+        return 200, {"message": f"{name} is locked: it can't be deleted or overwritten until you unlock it.", "level": "ok"}
+    log_event(f"Unlocked {name} in the {category} library", "warn")
+    return 200, {"message": f"{name} is unlocked: it can be deleted or overwritten again.", "level": "warn"}
+
+def _locked_msg(name):
+    return f"{name} is locked in the library -- uncheck Lock on its row first (it asks to confirm)."
+
 def _stage_library_file(category, filename, filedata, force=False, source="upload"):
     if category not in LIB_SUBDIRS:
         return 400, {"error": f"Unknown category '{category}'"}
@@ -1938,6 +1993,9 @@ def _stage_library_file(category, filename, filedata, force=False, source="uploa
     dest = safe_join(LIB_SUBDIRS[category], filename)
     if dest is None:
         return 400, {"error": "Invalid filename"}
+    if os.path.isfile(dest) and lib_locked(category, filename) and file_sha256(dest) != hashlib.sha256(filedata).hexdigest():
+        log_event(f"Refused to overwrite locked {filename} in the {category} library", "warn")
+        return 409, {"error": _locked_msg(filename)}
     wrote, reason = compare_before_write(dest, filedata)
     verb = "Imported from USB:" if source == "usb" else "Uploaded"
     log_event(f"{verb} {filename} to {category} library ({reason})", "ok")
@@ -3644,6 +3702,8 @@ def _gh_apply (entry ):
     dest =safe_join (LIB_SUBDIRS [category ],name )
     if dest is None :
         raise GhRejected ("invalid file name")
+    if os .path .isfile (dest )and lib_locked (category ,name )and _gh_local_blob_id (dest )!=entry ["blob"]:
+        raise GhRejected (_locked_msg (name ))
     wrote ,reason =compare_before_write (dest ,data )
     with _file_meta_cache_lock :
         _file_meta_cache .clear ()
@@ -4552,9 +4612,16 @@ def render_components_html (components ,library =None ):
 
 def render_library_group_html (title ,category ,entries ,action_label ,nested =False ):
     rows =[]
+    locked_names =_locks_read ().get (category ,set ())
     for e in entries :
 
         name =esc (e ["name"])
+        is_locked =e ["name"]in locked_names 
+        lock_html =(f'<label class="lib-lock small" title="Locked: this file can\'t be deleted or overwritten. Uncheck to unlock (asks first).">'
+        f'<input type="checkbox" class="lib-lock-cb" data-category="{category }" data-name="{name }"{" checked"if is_locked else ""}> Lock</label>')
+        del_btn =(f'<button class="b-del" data-action="delete" data-category="{category }" data-name="{name }" disabled title="Locked -- uncheck Lock to delete">Delete</button>'
+        if is_locked else 
+        f'<button class="b-del" data-action="delete" data-category="{category }" data-name="{name }">Delete</button>')
 
         if e ["installed"]is True :
             badge ,bcls ="INSTALLED","b-inst"
@@ -4603,7 +4670,8 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
         {run_btn }
         <button data-action="edit" data-category="{category }" data-name="{name }">Edit</button>
         <button data-action="download" data-category="{category }" data-name="{name }">Download</button>  <!-- [PHASE 3] -->
-        <button class="b-del" data-action="delete" data-category="{category }" data-name="{name }">Delete</button>
+        {del_btn }
+        {lock_html }
       </div>
       <div class="librow-bot small muted">
         <span>Source: library</span>
@@ -4906,6 +4974,8 @@ _CSS_LIBRARY = """.libgrp{margin-bottom:.9rem}
 .librow:hover{background:var(--surface2)}
 .librow-top{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center}
 .librow-actions{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+.lib-lock{display:inline-flex;gap:.3rem;align-items:center;cursor:pointer;margin-left:.2rem}
+.lib-lock input{margin:0}
 .librow-bot{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
 .ver{font-family:var(--mono);color:var(--yel);font-weight:700;min-width:5.5rem;text-shadow:0 0 6px rgba(255,208,64,.35)}
 input[type=file]{color:var(--muted);font-size:.78rem;max-width:100%}
@@ -6472,6 +6542,17 @@ _JS_ACTIONS = """function wireButtons() {
     });
   });
   restoreUploadSelections();
+  document.querySelectorAll('input.lib-lock-cb').forEach(cb => {
+    if (cb._wired) return;
+    cb._wired = true;
+    cb.addEventListener('change', async () => {
+      const on = cb.checked;
+      if (!on && !confirm(`Unlock ${cb.dataset.name}? It can then be deleted or overwritten.`)) { cb.checked = true; return; }
+      cb.disabled = true;
+      await postAction({action: 'lib_lock', category: cb.dataset.category, name: cb.dataset.name, locked: on, confirm: !on});
+      await refreshStatus();
+    });
+  });
   document.querySelectorAll('button[data-action]').forEach(btn => {
     if (btn._wired) return;
     btn._wired = true;
@@ -7667,6 +7748,7 @@ _ACTION_HANDLERS ={
 "stop":lambda self ,body :self ._action_stop (body ),
 "install_config":lambda self ,body :self ._action_install_config (body ),
 "delete":lambda self ,body :self ._action_delete (body ),
+"lib_lock":lambda self ,body :self ._action_lib_lock (body ),
 "run_script":lambda self ,body :self ._action_run_script (body ),
 "save_alternate":lambda self ,body :self ._action_save_alternate (),
 "comms_restart":lambda self ,body :self ._action_comms_restart (body ),
@@ -8648,6 +8730,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if target is None :
             self ._error_json (404 ,f"File '{filename }' not found in library")
             return 
+        if lib_locked_path (target ):
+            log_event (f"Refused to save an edit to locked {filename }","warn")
+            self ._error_json (409 ,_locked_msg (os .path .basename (target )))
+            return 
 
         ext =os .path .splitext (filename )[1 ].lower ()
         if ext in (".py",".sh"):
@@ -9054,9 +9140,24 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if target is None or not os .path .isfile (target ):
             self ._error_json (404 ,f"Library file not found: {name }")
             return 
+        if lib_locked (category ,name ):
+            log_event (f"Refused to delete locked {name } from the {category } library","warn")
+            self ._error_json (409 ,_locked_msg (name ))
+            return 
         os .remove (target )
         log_event (f"Deleted {name } from {category } library","warn")
         self ._send_json (200 ,{"deleted":name ,"message":f"Deleted {name } from the library.","level":"warn"})
+
+    def _action_lib_lock (self ,body ):
+        locked =body .get ("locked")
+        if not isinstance (locked ,bool ):
+            self ._error_json (400 ,"Say locked: true or false")
+            return 
+        code ,payload =lib_lock_set (body .get ("category"),body .get ("name"),locked ,body .get ("confirm")is True )
+        if code !=200 :
+            self ._error_json (code ,payload ["error"])
+            return 
+        self ._send_json (200 ,payload )
 
     def _action_run_script (self ,body ):
         if not body .get ("confirm"):

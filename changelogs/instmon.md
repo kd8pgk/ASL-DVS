@@ -1,6 +1,45 @@
 # instmon changelog
 
-Current file: `instmon_v2_48_0_20261014.py`. Newest entries first.
+Current file: `instmon_v2_49_0_20261014.py`. Newest entries first.
+
+## 2.49.0 (2026-10-14)
+
+A lock on every library version, so a file you want to keep can't be deleted
+or replaced by accident. instmon serves both builds.
+
+- **Lock checkbox** on each version row of each component card and library
+  group, next to Install, Edit, Download and Delete.
+  - Checking it locks the file at once.
+  - Unchecking asks first: "Unlock X? It can then be deleted or overwritten."
+    Cancel keeps it locked.
+  - Locks are kept in `/etc/asl_dvs/instmon_locks.json`, so they survive
+    restarts and updates. New files start unlocked.
+- **While a file is locked**, instmon refuses (on the page and on the server):
+  - **Delete:** the button is greyed out, and the server answers 409 if asked
+    anyway.
+  - **Overwriting it with different content:** Upload & stage, USB import,
+    GitHub download into the library, and Edit -> Save. Uploading the
+    identical file is still fine.
+  - Install, Download and Edit (to read) still work.
+- instmon never deleted library files on its own. Each tool's own `--install`
+  and `--uninstall` manage only that tool's installed copy under
+  `/usr/local/lib/asl_dvs/`, not the library, so the lock doesn't affect
+  them.
+- Tested:
+  - against a real instmon server (7 tests):
+    - delete refused while locked
+    - unlock refused without confirmation, then allowed with it
+    - the lock is saved to disk
+    - upload: a different file is refused, the identical file and a new name
+      are accepted
+    - Edit -> Save refused while locked and allowed after unlocking
+    - GitHub download refused while locked
+    - bad requests (unknown category, missing file, `../` paths, non-boolean)
+    - the row renders the checkbox and greys out Delete
+  - the page in headless Chromium: check -> locked and Delete greyed; unlock
+    cancelled -> stays locked; unlock confirmed -> unlocked; no horizontal
+    scroll at 390 px; no script errors
+  - `ci/check_repo.py`
 
 ## 2.48.0 (2026-10-14)
 
