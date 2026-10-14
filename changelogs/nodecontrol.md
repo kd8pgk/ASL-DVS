@@ -1,6 +1,43 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_82_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_83_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.83 (2026-10-14)
+
+The full-build port of Pi Zero 2 W Dashboards 9.3.74-pi02w and 9.3.75-pi02w
+(reliability plan, Stages 2 and 7). The code is the same as the fork's. The
+only difference is the full build's 1-second poll.
+
+- **A systemd watchdog that checks the right things.** Before, the link-poll
+  loop said "alive" at the top of each poll. A hung web server went
+  unnoticed. A frozen Asterisk holding the poll on AMI could get the
+  Dashboard restarted. With no ASL and no DVSwitch nothing said "alive" at
+  all, so systemd restarted the Dashboard every 30 s. Now a `sd-heartbeat`
+  thread says "alive" (every 10 s, `WatchdogSec=30` unchanged) only while:
+  - the poll loop started a pass in the last 120 s (or isn't running), and
+  - the Dashboard answered its own `GET /healthz` within 25 s (the
+    `health-probe` thread asks every 10 s on 127.0.0.1).
+- **`/healthz`** (new, no login): the same `{"ok":true}` as `/api/ping`.
+  instmon 2.50.0 uses it after an update.
+- **The poll no longer queues behind a stuck AMI command.** Its read waits at
+  most 3 s for the AMI lock, then skips that poll and leaves the page state
+  alone. Page commands still wait for the lock. The `asterisk -rx` fallback
+  still runs outside the lock.
+- The link-mode table is replaced in one step, and `USRP2M17.ini` is forced
+  to disk before it replaces the old file.
+- **Registration status for alerts:** after every AllStarLink registration
+  check, the Dashboard writes `/run/asl_dvs/asl_reg.json` (node, state,
+  since, checked_at, next_check_secs). wifimon 5.34.0 reads it for its
+  "registration lost" alert. Nothing changes on the page.
+- Tested: the same unit tests as the fork, run against this file (12):
+  - the AMI lock wait, the fallback outside the lock, the lock released on
+    errors
+  - the poll loop keeps going while AMI is held
+  - the heartbeat rules, with a real server and a real notify socket
+  - `/healthz` public, `/api/status` not
+  - the link-mode swap, the M17 file write and fsync
+  - the registration file contents, mode 644, and an unwritable path
+  - `ci/check_repo.py`
 
 ## 9.3.82 (2026-10-14)
 
