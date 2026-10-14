@@ -2,7 +2,7 @@
 
 Current file: `44helper_v0_0_203_20261014.py`. Newest entries first.
 
-## 0.0.203 (2026-10-14)
+## 0.0.203 (2026-10-14) — testing
 
 Web connections get an idle limit, and 44helper gets a systemd watchdog
 (reliability plan, Stage 3b). 44helper serves both builds.
