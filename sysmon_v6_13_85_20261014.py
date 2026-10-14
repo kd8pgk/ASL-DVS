@@ -43,8 +43,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.84"
-BUILD_DATE   = "20261013"
+VERSION      = "6.13.85"
+BUILD_DATE   = "20261014"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -31329,7 +31329,7 @@ def _ts_ht_route_chk():
                              "Expected for a full tunnel. With a half tunnel it would be a fault")
     return _ts_ht_result(cmd, raw, "fail", "Internet goes into the tunnel", ctx, rows,
                          "With a half tunnel only ASL and EchoLink use wg0. "
-                         + ("Use Undo now on 44helper's Firewall tab" if ctx["mode"] == "testing"
+                         + ("Use Undo now on 44helper's Full Tunnel tab" if ctx["mode"] == "testing"
                             else "Restart the tunnel: sudo systemctl restart wg-quick@wg0"))
 
 @_ts("Half tunnel", "ts_ht_dns", "DNS works")
@@ -31394,7 +31394,7 @@ def _ts_ht_lan():
     res = _ts_ht_result("ss -ltnH + ip route get <gateway> sport <port>", "\n".join(raw), worst,
                         "LAN tools respond" if worst == "pass" else "A LAN tool is affected", ctx,
                         note="" if worst == "pass" else "Replies to the LAN going into the tunnel make the pages hang. "
-                        "Use Undo now on 44helper's Firewall tab, or remove the half tunnel")
+                        "Use Undo now on 44helper's Full Tunnel tab, or remove the half tunnel")
     res["summary"]["table"] = {"head": ["Tool", "Port", "State"], "rows": rows}
     return res
 

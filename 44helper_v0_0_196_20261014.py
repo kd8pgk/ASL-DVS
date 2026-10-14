@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.195"
+APP_VERSION = "0.0.196"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2009,7 +2009,7 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "bytes with no surrounding try/catch — a single malformed packet can crash the process — "
                  "and this was still unpatched as of the last review on PR #547. Keep whatever UDP port this "
                  "logic listens on bound to 127.0.0.1 only; do NOT add it to a firewalld zone or route it "
-                 "over the WireGuard tunnel (same loopback-only handling the Ports/Firewall tabs already use "
+                 "over the WireGuard tunnel (same loopback-only handling the Ports tab and the tunnel tabs' firewall cards already use "
                  "for the DVSwitch/M17 USRP channels). BENCH-ONLY: this tool cannot exercise an actual build "
                  "of a third-party fork in its own sandbox — confirm the build completes and installs "
                  "cleanly on real hardware (652702/652703) before relying on it."},
@@ -5569,7 +5569,7 @@ def action_wg_repair_allowed_ips() -> dict:
         return {"success": False, "verified": False,
                 "output": ("Refused: the half tunnel is " + before["half_mode"] + " on this node. It needs AllowedIPs = 0.0.0.0/0 "
                            "so nodes outside 44Net can reach you; narrowing it would cut them off. Remove the half tunnel "
-                           "(Firewall tab) first if you want a split tunnel instead.")}
+                           "(Full Tunnel tab) first if you want a split tunnel instead.")}
     if before.get("fullx_mode", "off") != "off":
         return {"success": False, "verified": False,
                 "output": ("Refused: full tunnel with exceptions is " + before["fullx_mode"] + " on this node. Remove it "
@@ -9092,7 +9092,7 @@ def _half_perm_block(v: dict) -> list[str]:
     block = [
         _HALF_BEGIN,
         f"# Half tunnel (44helper {APP_VERSION}, {datetime.now().strftime('%Y-%m-%d')}): only ASL and EchoLink use the tunnel.",
-        f"# To take it out: ~/{_HALF_SCRIPT_NAME}  (or Remove permanent on 44helper's Firewall tab)",
+        f"# To take it out: ~/{_HALF_SCRIPT_NAME}  (or Remove permanent on 44helper's Full Tunnel tab)",
         "Table = off",
     ]
     if v.get("endpoint_in_44") and v.get("endpoint"):
@@ -9564,7 +9564,7 @@ def _fx_detect() -> dict:
     if os.geteuid() != 0:
         blockers.append("44helper isn't running as root, so it can't change the network. Run it from its systemd service.")
     if _half_mode() != "off":
-        blockers.append("The half tunnel is " + _half_mode() + " on this node (Firewall tab). Use one or the other: remove the half tunnel first.")
+        blockers.append("The half tunnel is " + _half_mode() + " on this node (Full Tunnel tab). Use one or the other: remove the half tunnel first.")
     values: dict = {}
     text = _half_wg_text()
     if text is None:
@@ -10465,7 +10465,6 @@ header {
 .tab.t-update{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-services{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-ports{--mc:var(--purple);--mc-rgb:212,102,255}
-.tab.t-firewall{--mc:var(--red);--mc-rgb:255,61,90}
 .tab.t-system-opt{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-actions-log{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-config{--mc:var(--green);--mc-rgb:0,255,176}
@@ -14724,7 +14723,6 @@ TABS: list[tuple[str, str, str, str]] = [
     ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
-    ("firewall", "Firewall", "t-firewall", "Stage 7 (done)"),
     ("actions_log", "Actions Log", "t-actions-log", "Stage 8 (done)"),
 ]
 
@@ -15545,6 +15543,17 @@ function clickTab(id) {
     el.classList.toggle('hidden', el.id !== 'panel-' + id);
   });
   if (typeof guardOnTab === 'function') guardOnTab(id);
+  if (id === 'full_tunnel' || id === 'split_tunnel') { fwToolsDock(id); }
+}
+
+function fwToolsDock(id) {
+  var tools = document.getElementById('fw-tools');
+  var home = document.getElementById(id === 'full_tunnel' ? 'fw-tools-home-full' : 'fw-tools-home-split');
+  if (!tools || !home) { return; }
+  if (tools.parentNode !== home) { home.appendChild(tools); }
+  if (typeof refreshFirewall === 'function') { refreshFirewall(); }
+  if (typeof refreshFirewall2 === 'function') { refreshFirewall2(); }
+  if (id === 'full_tunnel' && typeof refreshHalfTunnel === 'function') { refreshHalfTunnel(); }
 }
 
 // ── Shared amber ".step-warn" commentary/disclaimer renderer. Wraps the
@@ -16015,7 +16024,7 @@ function _piAllowedIpsCardHtml(kind, aip) {
   } else if (aip.fullx_mode && aip.fullx_mode !== 'off') {
     html += '<div class="step-body">Full tunnel with exceptions is ' + asl3EscapeAttr(aip.fullx_mode) + ' on this node (Full Tunnel tab), so this repair is switched off. Remove it there first to switch to a split tunnel.</div>';
   } else if (aip.half_mode && aip.half_mode !== 'off') {
-    html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Firewall tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
+    html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Full Tunnel tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
   } else if (shape === 'split') {
     html += '<div class="step-body">AllowedIPs is already the split-tunnel set (<code>' + asl3EscapeAttr(current) + '</code>). Nothing to repair.</div>';
   } else if (shape === 'full') {
@@ -17167,7 +17176,7 @@ function renderRouterInstall(data) {
   // Step 11: done
   html += '<div class="stub-card"><span class="stub-title">11. Done</span>Once verify (step 10) passes, this Pi has ' +
     (isModelB ? 'a working forwarded path through the router\\'s single 44Net Connect address' : 'its own working 44.x.x.x address via the router\\'s routed subnet') +
-    '. Check Overview/Ports/Firewall tabs (Stage 7) for ongoing monitoring.</div>';
+    '. Check the Overview and Ports tabs, and the firewall cards on the tunnel tabs, for ongoing monitoring.</div>';
 
   document.getElementById('router-steps').innerHTML = html;
   document.getElementById('router-checked-at').textContent =
@@ -21443,11 +21452,13 @@ def _render_ports_panel() -> str:
 </div>
 """
 
-def _render_firewall_panel() -> str:
+def _render_fw_tools_block() -> str:
     return """
-<div class="tab-panel hidden" id="panel-firewall">
+<div id="fw-tools">
+  <div class="step-card"><div class="step-head"><div class="step-title">Firewall and port control</div></div>
+    <div class="step-body">What the 44Net side, or any other firewalld zone, can reach. The same cards show on the Full Tunnel and Split Tunnel tabs.</div>
+  </div>
   <div id="fw-guardrail"></div>
-  <div id="ht-card"></div>
   <div class="step-card"><div class="step-head"><div class="step-title">Pi: 44NetConnect zone</div></div>
     <div class="step-body" id="fw-pi-zone">...</div>
     <div class="checklist">
@@ -21496,13 +21507,11 @@ def _render_firewall_panel() -> str:
     </details>
     <div class="asl3-console shown placeholder" id="fw2-out">(not run yet)</div>
   </div>
-  <div class="step-card"><div class="step-head"><div class="step-title">Router: live port-forward table</div></div>
-    <div class="step-body" id="fw-router-forwards">...</div>
-  </div>
-  <button class="btn-recheck" onclick="refreshFirewall();refreshFirewall2();refreshHalfTunnel()">Re-check</button>
+  <button class="btn-recheck" onclick="refreshFirewall();refreshFirewall2()">Re-check</button>
   <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:.6rem" id="fw-checked-at"></span>
 </div>
 """
+
 
 def _render_actions_log_panel() -> str:
     return """
@@ -21914,6 +21923,9 @@ def _render_router_install_panel() -> str:
     mutating actions against the router happen until Stage 5/6.
   </div></div>
   <div id="router-steps"></div>
+  <div class="step-card"><div class="step-head"><div class="step-title">Router: live port-forward table</div></div>
+    <div class="step-body" id="fw-router-forwards">...</div>
+  </div>
   <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted)" id="router-checked-at"></span>
 </div>
 """
@@ -21922,7 +21934,8 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
     other_kind = "split" if kind == "full" else "full"
     other_label = "Split Tunnel" if other_kind == "split" else "Full Tunnel"
     target_allowed_ips = "0.0.0.0/0" if kind == "full" else "44.0.0.0/9, 44.128.0.0/10"
-    fx_div = '<div id="fx-card"></div>' if kind == "full" else ""
+    fx_div = '<div id="ht-card"></div>\n  <div id="fx-card"></div>' if kind == "full" else ""
+    fw_home = ('<div id="fw-tools-home-split">' + _render_fw_tools_block() + '</div>') if kind == "split" else '<div id="fw-tools-home-full"></div>'
     return f"""
 <div class="tab-panel hidden" id="panel-{kind}_tunnel">
   <div class="step-body">
@@ -21954,6 +21967,7 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
   <div id="pi-convert-steps-{kind}"></div>
   <button class="btn-purge" id="pi-purge-btn-{kind}" onclick="piTogglePurge('{kind}')">Purge {label} (undo tunnel/zone)</button>
   <div id="pi-purge-steps-{kind}"></div>
+  {fw_home}
 </div>
 """
 
@@ -22059,7 +22073,6 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "config": _render_config_panel,
     "services": _render_services_panel,
     "ports": _render_ports_panel,
-    "firewall": _render_firewall_panel,
     "actions_log": _render_actions_log_panel,
 }
 
