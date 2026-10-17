@@ -2,40 +2,40 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "109e4f12bc1f6c0ff668d86c8bb1ed31102f0ea7",
-   "commit": "a38fe7ee2396d2d5ffd9cae3017ffe91237ec350",
-   "file": "44helper_v0_0_182_20261013.py",
-   "landed": "2026-10-13T07:50:08Z",
-   "promoted": "2026-10-16T07:50:08Z",
+   "blob": "63248a44baaa20bc805d07aa829980b54d83f484",
+   "commit": "4f71164b928145dd1eed91a6d2c2215060069a5e",
+   "file": "44helper_v0_0_200_20261014.py",
+   "landed": "2026-10-14T08:49:39Z",
+   "promoted": "2026-10-17T08:49:39Z",
    "reason": "count",
-   "version": "0.0.182"
+   "version": "0.0.200"
   },
   "nodecontrol": {
-   "blob": "f4935c8ba38ffd772c651ce9abf7ae9a17fd279d",
-   "commit": "7c68beb1a2c92003296b4b5ea5fe221f5bdd6c9a",
-   "file": "nodecontrol_v9_3_77_20261012.py",
-   "landed": "2026-10-12T23:56:46Z",
-   "promoted": "2026-10-15T23:56:46Z",
+   "blob": "8df9711895955e7a5ac3da4b786379cd298ae26a",
+   "commit": "e175ab38cc1d950105533c2ad08340becd531876",
+   "file": "nodecontrol_v9_3_79_20261013.py",
+   "landed": "2026-10-13T12:46:49Z",
+   "promoted": "2026-10-16T12:46:49Z",
    "reason": "count",
-   "version": "9.3.77"
+   "version": "9.3.79"
   },
   "nodecontrol_pi02w": {
-   "blob": "447d7e23379445f7ed15feabe3f62a79377b7bd5",
-   "commit": "4ac227600de925b9a3936bbc205a983a63e81c82",
-   "file": "nodecontrol_pi02w_v9_3_71_17_20261013.py",
-   "landed": "2026-10-13T07:18:09Z",
-   "promoted": "2026-10-16T07:18:09Z",
+   "blob": "fabbdbdd4b3838821a3989bdb23e114b44927d37",
+   "commit": "f3d2dffad58677e44643c3d9954dd3968aaf449e",
+   "file": "nodecontrol_pi02w_v9_3_71_18_20261013.py",
+   "landed": "2026-10-13T12:00:24Z",
+   "promoted": "2026-10-16T12:00:24Z",
    "reason": "count",
-   "version": "9.3.71.17-pi02w"
+   "version": "9.3.71.18-pi02w"
   },
   "sysmon": {
-   "blob": "53901012f29538e62e3f937c3e9b7d84bce54855",
-   "commit": "782a4f982e994c3769e4d23d081f080de63296ed",
-   "file": "sysmon_v6_13_81_20261013.py",
-   "landed": "2026-10-13T07:31:20Z",
-   "promoted": "2026-10-16T07:31:20Z",
+   "blob": "ca734f60fbdf4007008f688b209ad0506a6a10bd",
+   "commit": "3d149920962ae1a577c3cd10417de1d0bca81212",
+   "file": "sysmon_v6_13_82_20261013.py",
+   "landed": "2026-10-13T11:36:15Z",
+   "promoted": "2026-10-16T11:36:15Z",
    "reason": "count",
-   "version": "6.13.81"
+   "version": "6.13.82"
   },
   "sysmon_pi02w": {
    "blob": "799c0a5101eb72cd7a6cc83a0351eec650e12f0c",
