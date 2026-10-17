@@ -38,13 +38,13 @@
    "version": "6.13.82"
   },
   "sysmon_pi02w": {
-   "blob": "799c0a5101eb72cd7a6cc83a0351eec650e12f0c",
-   "commit": "ba6bf564839a2ca1a2ca71666731de2308ada885",
-   "file": "sysmon_pi02w_v6_13_67_16_20261013.py",
-   "landed": "2026-10-13T10:37:16Z",
-   "promoted": "2026-10-16T10:37:16Z",
+   "blob": "335a7eb942c49ea2f0935e264354179b93d32598",
+   "commit": "07ebcd896c3484ddb9a6afc06321038f2a0c9b99",
+   "file": "sysmon_pi02w_v6_13_67_17_20261013.py",
+   "landed": "2026-10-13T11:55:09Z",
+   "promoted": "2026-10-17T12:02:21Z",
    "reason": "count",
-   "version": "6.13.67.16-pi02w"
+   "version": "6.13.67.17-pi02w"
   },
   "wifimon": {
    "blob": "178d8c71fd81c51ce4618bc3817d0235aa79ae04",
