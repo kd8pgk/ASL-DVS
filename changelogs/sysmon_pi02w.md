@@ -1,6 +1,53 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_70_20261014.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_71_20261017.py`. Newest entries first.
+
+## 6.13.71-pi02w (2026-10-17)
+
+The Reg tab is back, and a new **ASL** field in the header shows on every
+tab whether the node is registered. The Security tab is gone. The full build
+is not changed.
+
+- **Why:** on a slow cellular hotspot (a Franklin T10, for example) ASL3 can
+  take minutes to come up and register. Before, nothing on the page said
+  whether the node was connected yet.
+- **ASL field in the header**, next to Pwr. It shows the live state from
+  `rpt show registrations`, and how long it has been in that state:
+  - `REG` (green): every listed node is registered.
+  - `WAIT 2m` (amber): a request is out, or HTTP registration is set up but
+    Asterisk lists no node yet.
+  - `NOT REG 5m` (red): a node is unregistered, rejected or timed out.
+  - `ASL DOWN 3m` (red): the Asterisk CLI isn't answering, so ASL3 isn't
+    running yet.
+  - `—`: no HTTP registration is set up (IAX-only, or a private node).
+  - Hover for each node's state, the time the state began, and when it was
+    last checked. Click it to open the Reg tab.
+- **Faster checks while not registered.** The background poll checks
+  `rpt show registrations` every 10 s until the node registers, then every
+  30 s as before.
+- **Reg tab restored** from the full build (removed in 6.13.67-pi02w):
+  - the HTTP Registration and IAX Registration cards, with every config
+    check, and routes `/api/reg/http` and `/api/reg/iax`
+  - the "Live registration" rows add how long the node has been in a state
+    other than registered, for example "not registered (for 5 min)"
+  - new: the tab refreshes itself every 15 s while it is open and the page is
+    visible
+  - the tab and its Edit-page checkbox are back. A saved Visible Tabs list
+    from an older version (one that still names Security) gets Reg turned on.
+    After you save the Edit page once, your own choice is kept.
+- **Security tab removed:** the tab, its Edit-page checkbox, the 14 checks,
+  route `/api/security/checks`, and `--selftest` (which ran only those
+  checks). On Overview, the owner and unit-mode cells no longer link to it;
+  their hover text is unchanged. Result: 24,008 -> 22,022 lines.
+- Tested:
+  - unit tests with mocks: the header state for each case (registered,
+    request sent, unregistered, CLI down, nothing listed with and without
+    HTTP registration set up), "since" kept while the state holds and reset
+    when it changes, and the 10 s / 30 s poll rule
+  - the page in headless Chromium: the header field in each state, the Reg
+    tab cards and its timer, no Security tab, no script errors, no
+    horizontal scroll at 390 px
+  - `ci/check_repo.py`
 
 ## 6.13.70-pi02w (2026-10-14)
 
