@@ -1,6 +1,33 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_213_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_214_20261018.py`. Newest entries first.
+
+## 0.0.214 (2026-10-18) — testing
+
+- **AllStar on your 44 address from the Split Tunnel tab.** The Half tunnel card
+  (ASL + EchoLink only) now shows on the Split Tunnel tab as well as the Full Tunnel
+  tab. It sends Asterisk's traffic (the asterisk user, anything from your 44 address,
+  IAX 4569 and EchoLink) through the tunnel, so AllStar registers and links with your
+  44 address and other nodes reach you there without a router port forward. DVSwitch,
+  usrp2m17, DNS and everything else stay on the normal route. Same steps as before:
+  Check first, the test with auto-undo, Make permanent, remove script.
+- **The half tunnel works with the split-tunnel routing.** Check first stopped with
+  "wg0.conf already has its own 'Table =' line" on a split tunnel that had 0.0.212's
+  routing lines (Table 4445). It now tells 44helper's own lines apart from yours. The
+  test copy and the permanent config leave out the split-tunnel routing lines and the
+  older tunnel-server route line, and Remove permanent puts the split-tunnel routing
+  back.
+- **Half tunnel without the tunnel-server route line.** WireGuard now marks its own
+  packets (FwMark 0x4444) in half mode, and a rule at priority 1099 sends marked
+  packets to the normal route. The 44Net ranges go into the tunnel by rule (priorities
+  1107 and 1108) and no longer sit in the main table. A tunnel server on a 44Net address
+  (such as 44.27.225.1) is then always reached on whichever adapter is up, so a WiFi
+  change no longer loops the tunnel. Check 7 now tests 44Net through wg0 and the marked
+  packets on the normal route. A half tunnel made permanent by an earlier version keeps
+  its own lines until it is removed and made again.
+- **Overview: AllStar registration.** With the half tunnel on, the card warns when
+  AllStar still registers from an address outside the tunnel. With it off, it points to
+  the Half tunnel card.
 
 ## 0.0.213 (2026-10-18) — testing
 

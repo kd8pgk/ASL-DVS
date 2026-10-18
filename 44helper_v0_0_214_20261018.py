@@ -43,8 +43,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.213"
-APP_STAGE = "v0.0.213: split tunnel routing table 4445 (half tunnel keeps 4444); history in changelogs/44helper.md"
+APP_VERSION = "0.0.214"
+APP_STAGE = "v0.0.214: half tunnel on the Split Tunnel tab, marked tunnel packets instead of the endpoint pin; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -7628,7 +7628,7 @@ def asl_registration_info() -> dict:
             else:
                 via = "public"
         e["via"] = via
-    return {"available": True, "entries": entries, "error": "",
+    return {"available": True, "entries": entries, "error": "", "half_mode": _half_mode(),
             "raw": "" if entries else "\n".join(r.stdout.strip().splitlines()[:6])}
 
 def check_rpt_registrations() -> dict:
@@ -9685,7 +9685,9 @@ _HALF_UNDO_FAILED = os.path.join(_HALF_RUN_DIR, "undo_failed")
 _HALF_TIMER = "44helper-halfundo"
 _HALF_TIMER_SEC = 15 * 60
 _HALF_TABLE = "4444"
-_HALF_PRIOS = {"main": 1100, "src44": 1101, "uid": 1102, "iax": 1103, "el_udp": 1104, "el_tcp": 1105}
+_HALF_PRIOS = {"main": 1100, "src44": 1101, "uid": 1102, "iax": 1103, "el_udp": 1104, "el_tcp": 1105,
+               "mark": 1099, "net1": 1107, "net2": 1108}
+_HALF_MARK = "0x4444"
 _HALF_NETS = ("44.0.0.0/9", "44.128.0.0/10")
 _HALF_EL_PORTS = "5198-5199/udp"
 _HALF_CHECKFIRST_MAX_AGE = 30 * 60
@@ -10000,10 +10002,17 @@ def _half_rule_specs(values: dict) -> list[tuple[int, list[str], str]]:
                       "EchoLink 5198-5199 uses the tunnel"))
         specs.append((_HALF_PRIOS["el_tcp"], ["ipproto", "tcp", "dport", "5200", "lookup", t],
                       "EchoLink directory login (5200) uses the tunnel"))
+    if values.get("fwmark"):
+        specs.append((_HALF_PRIOS["mark"], ["fwmark", values["fwmark"], "lookup", "main"],
+                      "the tunnel's own packets (marked) take the normal route"))
+        for key, net in zip(("net1", "net2"), _HALF_NETS):
+            specs.append((_HALF_PRIOS[key], ["to", net, "lookup", t], f"44Net ({net}) uses the tunnel"))
     return specs
 
 def _half_route_cmds(values: dict) -> list[list[str]]:
     cmds: list[list[str]] = []
+    if values.get("fwmark"):
+        return [["ip", "-4", "route", "replace", "default", "dev", "wg0", "table", _HALF_TABLE]]
     if values.get("endpoint_in_44") and values.get("gw_dev"):
         via = ["via", values["gw_via"]] if values.get("gw_via") else []
         cmds.append(["ip", "-4", "route", "replace", f"{values['endpoint']}/32"] + via + ["dev", values["gw_dev"]])
@@ -10042,11 +10051,11 @@ def _half_detect() -> dict:
             blockers.append("Couldn't find or look up the tunnel server address (Endpoint) in wg0.conf.")
         if _wg_conf_field(parsed["interface"], "SaveConfig").lower() == "true":
             blockers.append("wg0.conf has 'SaveConfig = true'. wg-quick rewrites the file when the tunnel stops and would drop the half-tunnel markers. Remove that line first.")
-        if any(k.strip().lower() == "table" for k in parsed["interface"]):
-            blockers.append("wg0.conf already has its own 'Table =' line. Remove it by hand first; 44helper won't guess which one should win.")
+        if _wg_user_routing(text):
+            blockers.append("wg0.conf already has its own 'Table =' or 'FwMark =' line. Remove it by hand first; 44helper won't guess which one should win.")
         aip = status_wg_allowed_ips()
         if aip["shape"] == "split":
-            notes.append("wg0.conf is set to split (44Net only). The half tunnel needs 0.0.0.0/0 so nodes outside 44Net can reach you. The test uses a copy with that change; your file isn't touched until Make permanent.")
+            notes.append("wg0.conf is set to split (44Net only). The half tunnel needs 0.0.0.0/0 so nodes outside 44Net can reach you. The test uses a copy with that change (and without the split-tunnel routing lines); your file isn't touched until Make permanent.")
         elif aip["shape"] not in ("full", "split"):
             blockers.append(f"AllowedIPs is an unusual range ({aip['allowed_ips'] or 'none'}). Fix it on the tunnel tab first.")
         values.update({"addr44": addr44, "endpoint_host": host, "endpoint": ep,
@@ -10088,8 +10097,9 @@ def _half_detect() -> dict:
     elif not wg_active:
         notes.append("The tunnel isn't running right now. Step 2 starts it in half mode.")
     if values.get("endpoint_in_44"):
-        notes.append(f"The tunnel server ({values['endpoint']}) is itself a 44Net address, so step 3 also pins it to the normal route.")
+        notes.append(f"The tunnel server ({values['endpoint']}) is itself a 44Net address. WireGuard marks its own packets ({_HALF_MARK}), so they always take the normal route, on whichever adapter is up.")
     values.update({
+        "fwmark": _HALF_MARK,
         "iax_port": _half_iax_port(),
         "echolink": _half_echolink_enabled(),
         "asterisk_uid": ast["uid"],
@@ -10225,9 +10235,17 @@ def _half_set_full_aip_text(text: str) -> tuple[str, bool]:
                     changed = True
     return "".join(lines), changed
 
-def _half_temp_conf_text(text: str) -> str | None:
+def _half_strip_routing(text: str) -> str:
+    for begin, end in ((_WG_RT_BEGIN, _WG_RT_END), (_WG_EPPIN_BEGIN, _WG_EPPIN_END)):
+        if any(ln.strip() == begin for ln in text.splitlines()):
+            text = _wg_block_remove(text, begin, end)
+    return text
+
+def _half_temp_conf_text(text: str, mark: str = "") -> str | None:
+    if mark:
+        text = _half_strip_routing(text)
     full, _changed = _half_set_full_aip_text(text)
-    return _wg_insert_in_interface(full, ["Table = off"])
+    return _wg_insert_in_interface(full, ["Table = off"] + ([f"FwMark = {mark}"] if mark else []))
 
 def _half_undo_sections(st: dict, only: set[int] | None = None) -> list[str]:
     q = shlex.quote
@@ -10362,7 +10380,8 @@ def _half_put_back(st: dict, n: int, out: list[str]) -> bool:
 
 def _half_step2(st: dict, out: list[str]) -> bool:
     text = _half_wg_text()
-    temp = _half_temp_conf_text(text) if text is not None else None
+    mark = ((st.get("check") or {}).get("values") or {}).get("fwmark", "")
+    temp = _half_temp_conf_text(text, mark) if text is not None else None
     if temp is None:
         out.append("FAIL  couldn't read wg0.conf or find its [Interface] section.")
         return False
@@ -10372,7 +10391,7 @@ def _half_step2(st: dict, out: list[str]) -> bool:
     with open(_HALF_TEMP_CONF, "w") as fh:
         fh.write(temp)
     os.chmod(_HALF_TEMP_CONF, 0o600)
-    out.append(f"ok    temporary copy written: {_HALF_TEMP_CONF} (Table = off, AllowedIPs = 0.0.0.0/0)")
+    out.append(f"ok    temporary copy written: {_HALF_TEMP_CONF} (Table = off{', FwMark = ' + mark if mark else ''}, AllowedIPs = 0.0.0.0/0)")
     was_active = _systemctl_is_active("wg-quick@wg0")
     st.setdefault("steps", {})["2"] = {"pending": True, "was_active": was_active}
     _half_commit(st)
@@ -10403,7 +10422,7 @@ def _half_step2(st: dict, out: list[str]) -> bool:
 def _half_step3(st: dict, out: list[str]) -> bool:
     v = st["check"]["values"]
     cmds = _half_route_cmds(v)
-    ep_route = f"{v['endpoint']}/32" if v.get("endpoint_in_44") and v.get("gw_dev") else ""
+    ep_route = f"{v['endpoint']}/32" if v.get("endpoint_in_44") and v.get("gw_dev") and not v.get("fwmark") else ""
     st["steps"]["3"] = {"pending": True, "endpoint_route": ep_route}
     _half_commit(st)
     if not _half_run_lines(cmds, out):
@@ -10804,10 +10823,23 @@ def _half_check_list(ctx: dict, client_ip: str = "") -> list[dict]:
         add(6, "Normal route", "LAN tools still respond", "skip", "No LAN tools were running before the test.")
 
     table = _half_q(["ip", "-4", "route", "show", "table", _HALF_TABLE])[1]
-    main44 = _half_q(["ip", "-4", "route", "show", "dev", "wg0"])[1] if _wg0_interface_present() else ""
-    ok7 = "default dev wg0" in table and all(n in main44 for n in _HALF_NETS)
-    add(7, "Half-tunnel pieces", "Tunnel route table exists", "pass" if ok7 else "fail",
-        f"Table {_HALF_TABLE} and the 44Net routes are in place." if ok7 else "The tunnel route table or 44Net routes are missing.",
+    if v.get("fwmark"):
+        net_dev, _ns, _nr = _half_route_dev(["44.0.0.1"])
+        bad7 = [] if "default dev wg0" in table else [f"table {_HALF_TABLE} has no default route into wg0"]
+        if net_dev != "wg0":
+            bad7.append(f"44Net goes out {net_dev or '?'}")
+        if v.get("endpoint"):
+            ep_dev, _es, _er = _half_route_dev([v["endpoint"], "mark", v["fwmark"]])
+            if not ep_dev or ep_dev.startswith("wg"):
+                bad7.append(f"the tunnel's own packets to {v['endpoint']} go out {ep_dev or '?'}")
+        ok7 = not bad7
+        text7 = (f"Table {_HALF_TABLE} is in place, 44Net goes into wg0 and the tunnel's own packets take the normal route."
+                 if ok7 else "; ".join(bad7))
+    else:
+        main44 = _half_q(["ip", "-4", "route", "show", "dev", "wg0"])[1] if _wg0_interface_present() else ""
+        ok7 = "default dev wg0" in table and all(n in main44 for n in _HALF_NETS)
+        text7 = f"Table {_HALF_TABLE} and the 44Net routes are in place." if ok7 else "The tunnel route table or 44Net routes are missing."
+    add(7, "Half-tunnel pieces", "Tunnel route table exists", "pass" if ok7 else "fail", text7,
         "" if ok7 else ("Undo now, then run the steps again." if ctx["mode"] == "testing" else "Restart the tunnel."))
 
     specs = _half_rule_specs(v)
@@ -10973,12 +11005,17 @@ def _half_perm_block(v: dict) -> list[str]:
         f"# To take it out: ~/{_HALF_SCRIPT_NAME}  (or Remove permanent on 44helper's Full Tunnel tab)",
         "Table = off",
     ]
-    if v.get("endpoint_in_44") and v.get("endpoint"):
+    mark = v.get("fwmark", "")
+    pin = bool(v.get("endpoint_in_44") and v.get("endpoint")) and not mark
+    if mark:
+        block.append(f"FwMark = {mark}")
+    if pin:
         block.append(f"PostUp = ip -4 route replace {v['endpoint']}/32 "
                      "$(ip -4 route show table main default | head -n1 | grep -oE '(via [0-9.]+ )?dev [^ ]+') || true")
     block.append(f"PostUp = ip -4 route replace default dev %i table {t} || true")
-    for net in _HALF_NETS:
-        block.append(f"PostUp = ip -4 route replace {net} dev %i || true")
+    if not mark:
+        for net in _HALF_NETS:
+            block.append(f"PostUp = ip -4 route replace {net} dev %i || true")
     block.append(f"PostUp = ip -4 rule add lookup main suppress_prefixlength 0 priority {p['main']} || true")
     if v.get("addr44"):
         block.append(f"PostUp = ip -4 rule add from {v['addr44']} lookup {t} priority {p['src44']} || true")
@@ -10988,16 +11025,22 @@ def _half_perm_block(v: dict) -> list[str]:
     if v.get("echolink"):
         block.append(f"PostUp = ip -4 rule add ipproto udp sport 5198-5199 lookup {t} priority {p['el_udp']} || true")
         block.append(f"PostUp = ip -4 rule add ipproto tcp dport 5200 lookup {t} priority {p['el_tcp']} || true")
+    if mark:
+        block.append(f"PostUp = ip -4 rule add fwmark {mark} lookup main priority {p['mark']} || true")
+        for key, net in zip(("net1", "net2"), _HALF_NETS):
+            block.append(f"PostUp = ip -4 rule add to {net} lookup {t} priority {p[key]} || true")
     block.append("PostUp = sysctl -q -w net.ipv4.conf.%i.rp_filter=2 || true")
     prios = " ".join(str(x) for x in sorted(p.values()))
     block.append(f"PostDown = for P in {prios}; do while ip -4 rule del priority $P 2>/dev/null; do :; done; done; true")
     block.append(f"PostDown = ip -4 route flush table {t} || true")
-    if v.get("endpoint_in_44") and v.get("endpoint"):
+    if pin:
         block.append(f"PostDown = ip -4 route del {v['endpoint']}/32 || true")
     block.append(_HALF_END)
     return block
 
 def _half_perm_conf_text(text: str, v: dict) -> tuple[str | None, bool]:
+    if v.get("fwmark"):
+        text = _half_strip_routing(text)
     full, changed = _half_set_full_aip_text(text)
     return _wg_insert_in_interface(full, _half_perm_block(v)), changed
 
@@ -11334,15 +11377,15 @@ def action_half_remove_permanent() -> dict:
         rc, text = _half_q(["bash", "-s"], timeout=180, input_text=_half_remove_script(perm))
         _HALF_LAST_PERM_CHECKS = {}
         cur = _hl_read_conf()
-        if rc == 0 and cur and _wg_apply_endpoint_pin(cur)[1]:
+        if rc == 0 and cur and (_wg_apply_split_routing(cur)[1] or _wg_apply_endpoint_pin(cur)[1]):
             try:
                 text += "\n" + "\n".join("ok    " + ln for ln in _wg_write_conf(cur))
                 if _systemctl_is_active("wg-quick@wg0"):
                     r = _run_argv(["systemctl", "restart", "wg-quick@wg0"], timeout=_WG_START_WAIT)
-                    text += "\n" + ("ok    tunnel restarted with the tunnel-server route" if r["success"]
+                    text += "\n" + ("ok    tunnel restarted with the split-tunnel routing" if r["success"]
                                      else "FAIL  tunnel restart: " + r["output"])
             except OSError as e:
-                text += f"\nFAIL  couldn't add the tunnel-server route to wg0.conf: {e}"
+                text += f"\nFAIL  couldn't put the split-tunnel routing back in wg0.conf: {e}"
         log(f"HALF: remove permanent -> {'ok' if rc == 0 else 'problems'}")
         return {"success": rc == 0, "verified": rc == 0 and _half_mode() == "off", "output": text}
 
@@ -17494,7 +17537,10 @@ function fwToolsDock(id) {
   if (tools.parentNode !== home) { home.appendChild(tools); }
   if (typeof refreshFirewall === 'function') { refreshFirewall(); }
   if (typeof refreshFirewall2 === 'function') { refreshFirewall2(); }
-  if (id === 'full_tunnel' && typeof refreshHalfTunnel === 'function') { refreshHalfTunnel(); }
+  var ht = document.getElementById('ht-card');
+  var htHome = document.getElementById(id === 'full_tunnel' ? 'ht-home-full' : 'ht-home-split');
+  if (ht && htHome && ht.parentNode !== htHome) { htHome.appendChild(ht); }
+  if (typeof refreshHalfTunnel === 'function') { refreshHalfTunnel(); }
 }
 
 // ── Shared amber ".step-warn" commentary/disclaimer renderer. Wraps the
@@ -17629,6 +17675,12 @@ function renderOverview(data) {
         return _ovDot(e.registered ? 'ok' : 'danger') + 'Node ' + _ovEsc(e.node) + ' ' + _ovEsc(e.state) +
                '<br>Registered as ' + where + '<br><span style="color:var(--muted)">' + _ovEsc(e.host) + '</span>';
       }).join('<br>');
+      var offTunnel = reg.entries.some(function(e) { return e.ip && e.via !== 'tunnel'; });
+      if (reg.half_mode && reg.half_mode !== 'off' && offTunnel) {
+        regEl.innerHTML += '<br>' + _ovDot('warn') + 'The half tunnel is ' + _ovEsc(reg.half_mode) + ', but AllStar still registers from an address outside the tunnel. Registration can take a few minutes to update; if it stays, run the checks on the Half tunnel card.';
+      } else if (offTunnel && data.wg0_conf) {
+        regEl.innerHTML += '<br><span style="color:var(--muted)">To register with your 44 address, use the Half tunnel card on the Split or Full Tunnel tab.</span>';
+      }
     }
   }
 
@@ -18019,7 +18071,7 @@ function _piAllowedIpsCardHtml(kind, aip) {
   } else if (aip.fullx_mode && aip.fullx_mode !== 'off') {
     html += '<div class="step-body">Full tunnel with exceptions is ' + asl3EscapeAttr(aip.fullx_mode) + ' on this node (Full Tunnel tab), so this repair is switched off. Remove it there first to switch to a split tunnel.</div>';
   } else if (aip.half_mode && aip.half_mode !== 'off') {
-    html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Full Tunnel tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
+    html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Half tunnel card, below). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, and its own routing replaces this one, so this card is switched off.</div>';
   } else if (shape === 'split' && aip.routing === 'policy') {
     html += '<div class="step-body">The 44Net routes are in their own table (' + '4445' + ') and WireGuard marks its own packets, so the tunnel server is always reached on the normal route, through whichever adapter is up. No tunnel-server route line or NetworkManager hook is needed.</div>';
     if (!aip.routing_live) {
@@ -23356,7 +23408,7 @@ function htRender() {
   var pill = pills[d.mode] || ['?', 'not_started'];
   var html = '<div class="step-card"><div class="step-head"><div class="step-title">Half tunnel (ASL + EchoLink only)</div>';
   html += '<span class="step-pill ' + pill[1] + '">' + pill[0] + '</span></div>';
-  html += '<div class="step-body">ASL and EchoLink use the 44Net tunnel. DVSwitch, usrp2m17, DNS and everything else keep the normal internet route. Test with temporary settings first (a reboot clears them), then make it permanent.</div>';
+  html += '<div class="step-body">ASL and EchoLink use the 44Net tunnel, so AllStar registers and links with your 44 address and other nodes can reach you there without a router port forward. DVSwitch, usrp2m17, DNS and everything else keep the normal internet route. Test with temporary settings first (a reboot clears them), then make it permanent.</div>';
   if (!d.root) {
     html += '<div class="step-body" style="color:var(--red)">44helper isn\u2019t running as root, so these buttons can\u2019t change anything. Run it from its systemd service.</div>';
   }
@@ -24538,7 +24590,8 @@ def _render_pi_tunnel_panel(kind: str, label: str, intro_extra: str = "") -> str
     other_kind = "split" if kind == "full" else "full"
     other_label = "Split Tunnel" if other_kind == "split" else "Full Tunnel"
     target_allowed_ips = "0.0.0.0/0" if kind == "full" else "44.0.0.0/9, 44.128.0.0/10"
-    fx_div = '<div id="ht-card"></div>\n  <div id="fx-card"></div>' if kind == "full" else ""
+    fx_div = ('<div id="ht-home-full"><div id="ht-card"></div></div>\n  <div id="fx-card"></div>' if kind == "full"
+              else '<div id="ht-home-split"></div>')
     fw_home = ('<div id="fw-tools-home-split">' + _render_fw_tools_block() + '</div>') if kind == "split" else '<div id="fw-tools-home-full"></div>'
     hl_home = '<div id="hl-home-split"><div id="hl-card"></div></div>' if kind == "split" else '<div id="hl-home-full"></div>'
     return f"""
