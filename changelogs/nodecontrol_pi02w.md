@@ -1,6 +1,18 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_85_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_86_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.86-pi02w (2026-10-18)
+
+A **Listen** button for Node Listen. Pi02w only; the full build is unchanged.
+
+- **Listen button** next to the connection indicator in the quick-link row (on a
+  phone, beside the indicator in the row above the links, where there was room).
+  It opens Node Listen (`nodelisten`) in a new tab to hear the node in the browser.
+- It shows only when Node Listen is running. The page asks the new
+  `GET /api/nodelisten-status` once at start; the server reads the port from
+  `/etc/asl_dvs/nodelisten.conf` (default 8993) and checks it answers on
+  127.0.0.1, cached 15 s. Without Node Listen the row looks as before.
 
 ## 9.3.85-pi02w (2026-10-18)
 

@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.85-pi02w"
+VERSION      = "9.3.86-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -4270,11 +4270,15 @@ _detection_cache: Dict[str, Tuple[Optional[bool], float]] = {
     "echo":   (None, 0.0),
     "sysmon": (None, 0.0),
     "m17":    (None, 0.0),
+    "nodelisten": (None, 0.0),
 }
 _STFU_CACHE_TTL   = 60.0
 _ECHO_CACHE_TTL   = 120.0
 _SYSMON_PORT      = 9999
 _SYSMON_CACHE_TTL = 15.0
+_NODELISTEN_CONF      = "/etc/asl_dvs/nodelisten.conf"
+_NODELISTEN_PORT      = 8993
+_NODELISTEN_CACHE_TTL = 15.0
 _M17_CACHE_TTL    = 60.0
 _detection_lock = threading.Lock()
 
@@ -4420,6 +4424,27 @@ def _detect_m17() -> bool:
 
 def action_sysmon_status() -> dict:
     return {"running": _detect_sysmon(), "port": _SYSMON_PORT}
+
+def _nodelisten_port() -> int:
+    try:
+        text = Path(_NODELISTEN_CONF).read_text(errors="replace")
+    except OSError:
+        return _NODELISTEN_PORT
+    m = re.search(r"^\s*port\s*=\s*(\d{4,5})\s*$", text, re.M)
+    if m and 1024 <= int(m.group(1)) <= 65535:
+        return int(m.group(1))
+    return _NODELISTEN_PORT
+
+def action_nodelisten_status() -> dict:
+    port = _nodelisten_port()
+    def _probe():
+        try:
+            s = _socket.create_connection(("127.0.0.1", port), timeout=1.0)
+            s.close()
+            return True
+        except OSError:
+            return False
+    return {"running": _cached_detect("nodelisten", _NODELISTEN_CACHE_TTL, _probe), "port": port}
 
 def _gw_path(val: str, base_dir: str) -> str:
     val = _strip_ctrl(val).strip().strip('"').strip("'")
@@ -8002,6 +8027,21 @@ body.offline.perm-linked #perm-link-bar {
 }
 
 /* ── TG indicator ── */
+.tg-wrap {
+  grid-column: 2;
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 0;
+}
+.ql.ql-listen {
+  color: var(--green);
+  border-color: rgba(0,255,176,.45);
+  background: rgba(0,255,176,.08);
+  text-shadow: 0 0 8px rgba(0,255,176,.4);
+  flex: 0 0 auto;
+}
 #tg-indicator {
   grid-column: 2;
   justify-self: center;
@@ -8370,7 +8410,9 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
     padding-top: .15rem;
   }
   .ql-group { display: contents; }
+  .tg-wrap { grid-column: 1 / -1; grid-row: 1; max-width: 96%; }
   #tg-indicator { grid-column: 1 / -1; grid-row: 1; max-width: 92%; }
+  .ql.ql-listen { grid-row: auto; font-size: .66rem; padding: .3rem .5rem; letter-spacing: .04em; }
   .ql {
     grid-row: 2;
     font-size: clamp(.45rem, 2.1vw, .66rem);
@@ -9197,7 +9239,10 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         <a class="ql" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
         <a class="ql" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
       </div>
-      <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
+      <div class="tg-wrap">
+        <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
+        <a id="lnk-listen" class="ql ql-listen hidden" href="#" target="_blank" rel="noopener" title="Listen to this node in the browser (Node Listen)" aria-label="Listen to this node">&#128266; Listen</a>
+      </div>
       <div class="ql-group ql-right">
         <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
         <a class="ql" data-ql-port="8991" href="#" target="_blank" rel="noopener">WiFiMon</a>
@@ -13409,6 +13454,7 @@ function _startApp(){
   },60_000);
   _initQuickLinks();
   _probeSysMon();
+  _probeNodeListen();
 }
 
 /* ── Root-password auth (v8.0.9) ──────────────────────────────────────────
@@ -13529,6 +13575,21 @@ async function _probeSysMon() {
         try{sessionStorage.setItem('sysmonReturn',JSON.stringify({page:curPage}));}catch(_){}
         try{navigator.sendBeacon('/api/action', new Blob([JSON.stringify({action:'cpuweight-away'})], {type:'application/json'}));}catch(_){}
       }, {once:true});
+    }
+  } catch (_) {}
+}
+async function _probeNodeListen() {
+  const a = document.getElementById('lnk-listen');
+  if (!a) return;
+  try {
+    const r = await fetch('/api/nodelisten-status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.running) {
+      a.href = `http://${window.location.hostname}:${d.port}/`;
+      a.classList.remove('hidden');
+    } else {
+      a.classList.add('hidden');
     }
   } catch (_) {}
 }
@@ -14164,6 +14225,7 @@ _GET_ROUTES: dict = {
     "/healthz":        lambda h: h.send_ping(),
     "/api/whoami":     lambda h: h.send_json({"ok": True}),
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
+    "/api/nodelisten-status": lambda h: h.send_json(action_nodelisten_status()),
     "/api/status":     lambda h: h.send_status(),
     "/api/keyed":      lambda h: h.send_json(action_get_keyed()),
     "/api/talkgroups":     lambda h: h.send_json(action_get_talkgroups()),
