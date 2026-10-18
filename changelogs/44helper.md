@@ -1,6 +1,57 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_208_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_209_20261018.py`. Newest entries first.
+
+## 0.0.209 (2026-10-18) — testing
+
+A **Boot** tab, next to Services: what happened when the node last started, in one
+place, for reading, copying and agents. 44helper serves both builds, so the tab is on
+the full build too. Read-only, except "Save a copy now".
+
+- **This boot**: boot time and uptime, this boot's line from
+  `/var/lib/44helper/boot.log`, where the journal is kept (disk or memory only) and
+  how many boots it holds, the clock (NTP, synchronised), the Pi's power and
+  temperature limits (`vcgencmd get_throttled`), the boot order, wifimon's newest
+  shutdown report and tunnel watchdog state, and every tool's version. A findings
+  list below it names what went wrong: netready not ready in time, failed units,
+  units systemd restarted, the clock not synchronised, under-voltage, an unclean
+  stop before this boot, the tunnel watchdog acting or giving up, the boot order
+  incomplete, and the Health card's warnings.
+- **Timeline**: from `systemctl show` (so it works with an in-memory journal), the
+  seconds after boot that time sync, wait-online, the tunnel, netready and its late
+  follow-up, netcheck, the DVSwitch services, Asterisk and the Node Controller tools
+  started and became active, with result, restarts and enabled state.
+- **Logs**, each read when you press View or Copy: the boot log; this boot's journal
+  for the tunnel, netready, netcheck and DVSwitch (`-o short-monotonic`); the previous
+  boot's (when the journal keeps it); `systemd-analyze` (time, critical chain of the
+  tunnel and netready, blame); the clock; kernel lines for WiFi, link, power and
+  storage; power limits; the tunnel now (`wg show`, rules, routes, the route to the
+  endpoint with WireGuard's fwmark); wifimon (watchdog status, lost-network reboots,
+  its tunnel and shutdown lines, newest shutdown report); the Dashboard's boot tune
+  and disconnect lines; instmon's held backups.
+- **Saved copies**: the journal is often kept in memory only (System Optimization),
+  so the previous boot was gone after a reboot. 44helper now saves the boot report
+  to `/var/lib/44helper/boots/` 6 minutes after each boot and updates it at 25
+  minutes (after the late follow-up), one file per boot, the newest 5 kept, at most
+  64 KB each, mode 0600. View, Copy or Download each; **Save a copy now** updates
+  this boot's.
+- **Copy boot report** and **Download .txt**: one plain-text report (header with the
+  host, boot and versions, findings, timeline, every log), times in seconds after
+  boot, at most 60 KB. Secrets are removed: PrivateKey and PresharedKey lines,
+  `password=`/`token:`-style values, `--token` arguments and long token strings.
+- **For agents and scripts**: `GET /api/boot/report?format=json` (logged in) returns
+  the same data with fixed keys (`summary`, `findings`, `timeline`, `sections`,
+  `snapshots`); `?format=text` the text report. Over SSH:
+  `sudo python3 /usr/local/bin/44helper.py --boot-report [--json]`. Also
+  `/api/boot/status`, `/api/boot/section?id=…` and `/api/boot/snapshot?name=…`.
+- Works without the other tools' newer versions: a missing boot log, tunnel watchdog
+  status, Dashboard or instmon shows "not there" instead of failing.
+- The console banner and install messages say "44 Helper".
+- Tested: the back end with stub commands (status, findings, timeline levels,
+  redaction, size caps, sections, routes, saving, one file per boot, keeping 5, name
+  checks, the save schedule at boot and after a restart), the CLI in a container
+  without systemd, and the tab in headless Chromium (render, View, Copy, Download,
+  Save, phone width). Not yet run on a Pi.
 
 ## 0.0.208 (2026-10-18) — testing
 
