@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.82-pi02w"
+VERSION      = "9.3.83-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -6488,7 +6488,7 @@ def _asl_reg_public() -> str:
 
 _SVC_CHECK_SEC = 15.0
 _svc_lock      = threading.Lock()
-_SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn")
+_SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn", "ircddb")
 _svc_state     = {k: "unknown" for k in _SVC_KEYS}
 
 def _svc_unit_states(groups: dict) -> dict:
@@ -6519,6 +6519,7 @@ def _svc_check() -> dict:
         "ysf":  ("ysfgateway.service",),
         "p25":  ("p25gateway.service",),
         "nxdn": ("nxdngateway.service",),
+        "ircddb": ("ircddbgatewayd.service",),
     })
     if res["stfu"] == "none" and Path("/opt/STFU/STFU").is_file():
         out, _ = run(["pgrep", "-x", "STFU"], timeout=3)
@@ -8302,7 +8303,8 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
 #dmr-connect-btn.svc-down, #stfu-connect-btn.svc-down, #ysf-connect-btn.svc-down,
-#p25-connect-btn.svc-down, #nxdn-connect-btn.svc-down, #fcs-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
+#p25-connect-btn.svc-down, #nxdn-connect-btn.svc-down, #fcs-connect-btn.svc-down,
+#dstar-connect-btn.svc-down, #xlx-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 #asl-connect-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
@@ -9406,19 +9408,12 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-DSTAR" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-DSTAR-base" class="quick-inp" type="text" placeholder="REF001 or callsign…" maxlength="12"
-              style="max-width:150px" title="Reflector (REF001, XRF012, DCS001) or gateway callsign (W1ABC)"
-              onkeydown="if(event.key==='Enter')dstarQuickConnect()">
-            <select id="qt-DSTAR-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn-pink" onclick="dstarQuickConnect()">Connect</button>
-            <button class="btn btn-muted" onclick="dstarQuickSave()" title="Save to favorites">Save</button>
-          </div>
           <div id="dstar-card" class="rfc-card rfc-dstar">
             <input id="dstar-filter" class="rfc-input" type="search" maxlength="40"
-              placeholder="Search: REF, XRF, DCS or number" aria-label="Search D-STAR reflectors"
+              placeholder="REF001 or callsign" aria-label="Search D-STAR reflectors"
+              title="Search, or type a reflector (REF001, XRF012, DCS001) or gateway callsign (W1ABC)"
               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-              oninput="lcFilterSoon('DSTAR')" disabled>
+              oninput="lcFilterSoon('DSTAR')" onkeydown="if(event.key==='Enter')lcConnect('DSTAR')">
             <select id="dstar-ref-select" class="rfc-select" aria-label="D-STAR reflector"
               onchange="lcButtons('DSTAR')" disabled>
               <option value="">Select reflector…</option>
@@ -9442,18 +9437,12 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-XLX" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-XLX-base" class="quick-inp" type="text" placeholder="XLX334…" maxlength="12"
-              style="max-width:130px"
-              onkeydown="if(event.key==='Enter')xlxQuickConnect()">
-            <select id="qt-XLX-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn" onclick="xlxQuickConnect()">Connect</button>
-          </div>
           <div id="xlx-card" class="rfc-card rfc-xlx">
             <input id="xlx-filter" class="rfc-input" type="search" maxlength="40"
-              placeholder="Search: 307, DAM or address" aria-label="Search XLX reflectors"
+              placeholder="XLX334, 307 or DAM" aria-label="Search XLX reflectors"
+              title="Search, or type a reflector (XLX334)"
               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-              oninput="lcFilterSoon('XLX')" disabled>
+              oninput="lcFilterSoon('XLX')" onkeydown="if(event.key==='Enter')lcConnect('XLX')">
             <select id="xlx-ref-select" class="rfc-select" aria-label="XLX reflector"
               onchange="lcButtons('XLX')" disabled>
               <option value="">Select reflector…</option>
@@ -10301,15 +10290,6 @@ function buildModuleOptions(selected,includeAll){
   return h;
 }
 function initModuleSelects(){
-  // Populate the quick-bar module dropdowns on first load
-  ['qt-DSTAR-mod','qt-XLX-mod'].forEach(id=>{
-    const el=byId(id);
-    if(el&&!el.dataset.init){
-      el.innerHTML=buildModuleOptions('A');
-      el.value='A';
-      el.dataset.init='1';
-    }
-  });
   // M17's quick-bar dropdown includes the @ALL wildcard and defaults to it
   // (join every module on the reflector) rather than defaulting to 'A' like
   // DSTAR/XLX above — matches the saved-row default in action_save_m17().
@@ -10691,7 +10671,9 @@ function openFcsLast(){
      typed        v9.3.80/81: a RegExp; search text it matches Connects
                   (doQuickTune) with no row picked; the search box stays
                   usable when the list is missing (STFU, P25, NXDN, YSF)
-     typedSave    Save also takes the typed text, then the last one tuned
+     typedSave    true: Save also takes the typed text, then the last one
+                  tuned; a function(k,t): the payload for typed text t
+     typedConnect function(k,t) linking typed text t (default doQuickTune)
      typedHint    added to the missing-list warning */
 const LC_TTL_MS=300000;
 const LC_CFG={};
@@ -10837,17 +10819,20 @@ function lcConnect(k){
   const r=lcSelected(k);
   if(r){LC_CFG[k].connect(k,r);return;}
   const t=lcTyped(k);
-  if(t)doQuickTune(k,t);
+  if(!t)return;
+  if(LC_CFG[k].typedConnect)LC_CFG[k].typedConnect(k,t);
+  else doQuickTune(k,t);
 }
 async function lcSave(k){
   // Save the picked entry into the next free favorite slot for this tab,
   // then re-draw the grids from the server so the new row shows up below.
   const s=_lc[k];
   if(!s||s.saving)return;
-  let r=lcSelected(k);
-  if(!r&&LC_CFG[k].typedSave){const t=lcTyped(k)||s.last;if(t)r=[t];}
-  if(!r)return;
-  const payload=LC_CFG[k].save(k,r);
+  const c=LC_CFG[k];
+  const r=lcSelected(k);let payload=null;
+  if(r)payload=c.save(k,r);
+  else if(typeof c.typedSave==='function'){const t=lcTyped(k);if(t)payload=c.typedSave(k,t);}
+  else if(c.typedSave){const t=lcTyped(k)||s.last;if(t)payload=c.save(k,[t]);}
   if(!payload)return;
   s.saving=true;lcButtons(k);
   try{
@@ -11122,6 +11107,10 @@ function openM17Last(){
    and stores http://address as the favorite's Last Heard link.
    Extra element: <page>-mod-select. */
 function lcRefMod(k){const m=lcEl(k,'mod-select');return m?m.value:'';}
+function lcRefPickMod(k,r){
+  const p=String((lcEl(k,'filter')||{}).value||'').trim().toUpperCase().split(/\s+/);
+  return p.length===2&&/^[A-Z]$/.test(p[1])&&p[0]===r.id?p[1]:lcRefMod(k);
+}
 function lcRefFromFav(v){
   // current_fav is the tune string itself, e.g. "XLX307AL" or "REF001CL".
   const s=String(v||'').trim().toUpperCase();
@@ -11167,20 +11156,35 @@ function lcRefCard(k,what,file,save,connect){
     ready:(k,r)=>!!(r&&lcRefMod(k)),
     lh:r=>lcHostUrl(r.addr),
     connect:(k,r)=>{
-      const mod=lcRefMod(k);
+      const mod=lcRefPickMod(k,r);
       if(!mod)return;
       if(curTg&&curTg.mode===k&&curTg.tg===r.id+mod+'L'){
         toast('Already connected to '+r.id+' Mod-'+mod,'ok');return;
       }
       connect(r.id,mod);
     },
-    save:(k,r)=>{const mod=lcRefMod(k);return mod?{action:save,base:r.id,module:mod}:null;},
+    save:(k,r)=>{const mod=lcRefPickMod(k,r);return mod?{action:save,base:r.id,module:mod}:null;},
   });
 }
 lcRefCard('XLX','XLX reflector','/var/lib/mmdvm/XLXHosts.txt','save-xlx-favorite',
           (id,mod)=>xlxConnect(id,id,mod));
 lcRefCard('DSTAR','D-STAR reflector','/var/lib/mmdvm/','save-dstar-favorite',
           (id,mod)=>dstarConnect(id,mod,id+' Mod-'+mod));
+function lcRefTyped(k,t){
+  const p=String(t).trim().toUpperCase().split(/\s+/);
+  return {base:p[0],mod:p[1]||lcRefMod(k)||'A'};
+}
+Object.assign(LC_CFG.DSTAR,{
+  typed:/^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
+  typedHint:'You can still type a reflector or gateway callsign.',
+  typedConnect:(k,t)=>{const {base,mod}=lcRefTyped(k,t);dstarConnect(base,mod,`${base} Mod-${mod}`);},
+  typedSave:(k,t)=>{const {base,mod}=lcRefTyped(k,t);return {action:'save-dstar-favorite',base,module:mod};},
+});
+Object.assign(LC_CFG.XLX,{
+  typed:/^XLX\d{3}(?:\s+[A-Z])?$/i,
+  typedHint:'You can still type a reflector (XLX334).',
+  typedConnect:(k,t)=>{const {base,mod}=lcRefTyped(k,t);xlxConnect(`${base} Mod-${mod}`,base,mod);},
+});
 
 /* ── YSF reflector card (v8.8.3; engine v9.0.4) ─────────────────────────────
    Country menu + text filter + Reflector menu + Connect + LH + Save, fed by
@@ -11408,34 +11412,6 @@ async function doM17Disconnect(){
     },
     30000
   );
-}
-async function reflectorQuickConnect(baseId,modId,errMsg,connectFn){
-  const base=byId(baseId).value.trim().toUpperCase();
-  const mod=(byId(modId).value||'A').toUpperCase();
-  if(!base){toast(errMsg,'err');return;}
-  await connectFn(base,mod);
-}
-async function dstarQuickConnect(){
-  await reflectorQuickConnect('qt-DSTAR-base','qt-DSTAR-mod',
-    'Enter a reflector or gateway callsign (e.g. REF001 or W1ABC)',
-    (raw,m)=>{const {base,mod}=dstarSplit(raw,m);return dstarConnect(base,mod,`${base} Mod-${mod}`);});
-}
-async function dstarQuickSave(){
-  const el=byId('qt-DSTAR-base'),msel=byId('qt-DSTAR-mod');
-  const {base,mod}=dstarSplit(el?el.value:'',msel?msel.value:'A');
-  if(!base){toast('Enter a reflector or gateway callsign first','err');return;}
-  const d=await api({action:'save-dstar-favorite',base,module:mod},10000);
-  if(d.ok){
-    toast(d.message,/already in favorites/.test(d.message)?'info':'ok');
-    await loadTgData();
-  }else{
-    toast(d.message||'Could not save the favorite','err');
-  }
-}
-async function xlxQuickConnect(){
-  await reflectorQuickConnect('qt-XLX-base','qt-XLX-mod',
-    'Enter a reflector (e.g. XLX334)',
-    (base,mod)=>xlxConnect(`${base} Mod-${mod}`,base,mod));
 }
 async function m17QuickConnect(){
   // Custom rather than reflectorQuickConnect(): that helper uppercases and
@@ -11947,6 +11923,9 @@ function applySvcWarn(d){
   set('stfu-connect-btn',(s.stfu==='inactive'?['STFU']:[]).concat(ab));
   set('ysf-connect-btn',(s.ysf==='inactive'?['YSFGateway']:[]).concat(ab));
   set('fcs-connect-btn',(s.ysf==='inactive'?['YSFGateway']:[]).concat(ab));
+  const irc=(s.ircddb==='inactive'?['ircDDBGateway']:[]).concat(ab);
+  set('dstar-connect-btn',irc);
+  set('xlx-connect-btn',irc);
   set('p25-connect-btn',(s.p25==='inactive'?['P25Gateway']:[]).concat(ab));
   set('nxdn-connect-btn',(s.nxdn==='inactive'?['NXDNGateway']:[]).concat(ab));
 }

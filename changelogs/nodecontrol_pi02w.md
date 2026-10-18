@@ -1,6 +1,30 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_82_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_83_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.83-pi02w (2026-10-18)
+
+D-STAR and XLX tabs lose their top row; their Connect buttons warn when ircDDBGateway
+or Analog_Bridge is down. The full build is not changed.
+
+- **D-STAR, XLX: top row removed.** The reflector box, its module menu, Connect (and
+  D-STAR's Save) above the search row are gone. The search row's own A–Z module menu
+  stays.
+- **Connect takes the top row's job.** When no reflector is picked from the menu,
+  Connect (or Enter in the search box) links what is typed there with the module
+  menu's letter, through the same connect calls the top row used: a D-STAR reflector
+  (`REF001`, `XRF012`, `DCS001`) or gateway callsign (`W1ABC`), or an XLX reflector
+  (`XLX334`). A module letter typed after a space (`W1ABC B`, `XLX334 C`) wins over the
+  menu, also for a reflector picked from the list. Plain search words and numbers
+  ("DAM", "307") stay searches. The search box stays usable when the list is missing.
+- **Save.** D-STAR Save takes the picked reflector, or else the typed reflector or
+  callsign with its module, like the old top-row Save. XLX Save is unchanged (picked
+  reflector only).
+- **Connect warning.** The 15 s service check also covers `ircddbgatewayd.service`
+  (status `svc.ircddb`). D-STAR and XLX Connect show red with a strike-through when
+  ircDDBGateway or Analog_Bridge isn't running, with a hover note naming what is down.
+- The page code for the old rows (`dstarQuickConnect`, `dstarQuickSave`,
+  `xlxQuickConnect`, `reflectorQuickConnect`) is removed.
 
 ## 9.3.82-pi02w (2026-10-18)
 
