@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.84-pi02w"
+VERSION      = "9.3.85-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -6738,11 +6738,9 @@ def _leave_page(prev_page: str, next_page: str, force: bool = False) -> None:
         elif prev_page == "PHONE" and prev_page != next_page:
             _phone_hangup_all()
         elif prev_page == "M17" and prev_page != next_page:
-            ok, err = _write_m17_ini(_m17_ini_placeholder(_effective_callsign(get_state())))
-            if ok:
-                _svc_restart(M17_SERVICE)
-            else:
-                log.warning("_leave_page: M17 placeholder ini write failed: %s", err)
+            ok, err = _m17_disconnect_core()
+            if not ok:
+                log.warning("_leave_page: M17 disconnect: %s", err)
     except Exception as e:
         log.warning("_leave_page: %s -> %s teardown error: %s", prev_page, next_page, e)
     _gateway_svc_leave(prev_page, next_page)
@@ -7159,22 +7157,24 @@ def action_m17_connect(name: str, base: str, ip: str, module: str) -> Tuple[bool
     return True, f"M17 connected: {name} ({base} Mod-{module})"
 
 @_link_locked
+def _m17_disconnect_core() -> Tuple[bool, str]:
+    st = get_state()
+    callsign = _effective_callsign(st)
+    m17_node = _cfg.bridge_nodes[BRIDGE_SLOT_M17]
+    if st.has_asl and m17_node:
+        _disconnect(m17_node)
+    ok, err = _write_m17_ini(_m17_ini_placeholder(callsign))
+    if ok:
+        _svc_restart(M17_SERVICE)
+    set_state(current_fav=None, current_fav_node=None, status="M17 | Ready — pick a reflector")
+    if not ok:
+        return False, f"Disconnected link, but ini write failed: {err}"
+    return True, "M17 disconnected"
+
 def action_m17_disconnect() -> Tuple[bool, str]:
     _link_enter()
     try:
-        st = get_state()
-        callsign = _effective_callsign(st)
-
-        m17_node = _cfg.bridge_nodes[BRIDGE_SLOT_M17]
-        if st.has_asl and m17_node:
-            _disconnect(m17_node)
-        ok, err = _write_m17_ini(_m17_ini_placeholder(callsign))
-        if ok:
-            _svc_restart(M17_SERVICE)
-        set_state(current_fav=None, current_fav_node=None, status="M17 | Ready — pick a reflector")
-        if not ok:
-            return False, f"Disconnected link, but ini write failed: {err}"
-        return True, "M17 disconnected"
+        return _m17_disconnect_core()
     finally:
         _link_exit()
 
