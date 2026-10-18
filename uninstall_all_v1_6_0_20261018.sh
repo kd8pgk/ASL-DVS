@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_all.sh  v1.5  (2026-10-12)
+# uninstall_all.sh  v1.6.0  (2026-10-18)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -27,6 +27,7 @@ COMPONENTS=(
     "sysmon|/usr/local/bin/sysmon.py|python3"
     "wifimon|/usr/local/bin/wifimon.py|python3"
     "44helper|${HELPER_PATH}|python3"
+    "nodelisten|/usr/local/bin/nodelisten.py|python3"
 )
 
 for entry in "${COMPONENTS[@]}"; do
@@ -64,3 +65,6 @@ echo
 echo "== Done =="
 echo "Untouched by design: instmon (and /usr/local/lib/asl_dvs/instmon), /etc/asl_dvs/ (config + instmon_library),"
 echo "/etc/sysmon/, /etc/wifimon/ and /etc/44helper/."
+if grep -q 'nodelisten' /etc/asterisk/rpt.conf 2>/dev/null; then
+    warn "rpt.conf still mentions nodelisten — check /etc/asterisk/rpt.conf"
+fi
