@@ -19,7 +19,7 @@ By KD8PGK, written with Claude (Anthropic).
 
 Scripts:
 
-- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper.
+- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Listen when you ask for it.
 - `uninstall_all_v*.sh`: removes every tool except instmon, and leaves configs in place.
 - `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
 
@@ -40,7 +40,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_86_20261014.py` | `sysmon_pi02w_v6_13_73_20261018.py` | `instmon_v2_57_0_20261018.py` |
+| File name | `sysmon_v6_13_86_20261014.py` | `sysmon_pi02w_v6_13_73_20261018.py` | `instmon_v2_58_0_20261018.py` |
 | `VERSION` | `6.13.86` | `6.13.73-pi02w` | `2.57.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -80,12 +80,12 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_57_0_20261018.py --install
+   sudo python3 instmon_v2_58_0_20261018.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_1_20261012.sh
+   sudo bash install_all_v7_2_0_20261018.sh
    ```
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
@@ -108,8 +108,12 @@ script and its changelog are no longer in the repo.
 ## Node Listen
 
 Node Listen plays a node's audio in a web browser, about half a second behind
-the node. It is not in the installer yet. Install it on its own, or stage it
-in instmon's library and press Install there:
+the node. It is optional. The installer (7.2.0 and later) asks before it
+installs it on a node that doesn't have it (non-interactive: set
+`INSTALL_NODELISTEN=1`), and always updates it once it is installed. instmon
+(2.58.0 and later) lists it with the other tools: its library, GitHub Updates
+and Full Update, which updates it only where it is installed. It also installs
+on its own:
 
 ```
 sudo python3 nodelisten_v0_1_0_20261018.py --install
@@ -274,11 +278,11 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_86_20261018.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_86_20261014.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_73_20261018.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_57_0_20261018.py` | common |
+| `instmon_v2_58_0_20261018.py` | common |
 | `wifimon_v5_38_0_20261018.py` | common |
 | `44helper_v0_0_215_20261018.py` | common |
 | `nodelisten_v0_1_0_20261018.py` | common |
-| `install_all_v7_1_20261012.sh` | common |
+| `install_all_v7_2_0_20261018.sh` | common |
 | `uninstall_all_v1_5.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
@@ -311,6 +315,7 @@ per tool and build:
 | [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
+| [`nodelisten.md`](changelogs/nodelisten.md) | `nodelisten_v*.py` |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |

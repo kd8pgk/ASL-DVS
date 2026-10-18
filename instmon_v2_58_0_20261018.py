@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.57.0"
+VERSION ="2.58.0"
 DATE_STR ="2026-10-18"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -1670,6 +1670,7 @@ LIB_SUBDIRS ={
 "sysmon":os .path .join (LIBRARY_DIR ,"sysmon"),
 "wifimon":os .path .join (LIBRARY_DIR ,"wifimon"),
 "44helper":os .path .join (LIBRARY_DIR ,"44helper"),
+"nodelisten":os .path .join (LIBRARY_DIR ,"nodelisten"),
 "watchdog":os .path .join (LIBRARY_DIR ,"watchdog"),
 "instmon":os .path .join (LIBRARY_DIR ,"instmon"),
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
@@ -1681,6 +1682,7 @@ ALLOWED_EXT ={
 "sysmon":(".py",),
 "wifimon":(".py",),
 "44helper":(".py",),
+"nodelisten":(".py",),
 "watchdog":(".sh",),
 "instmon":(".py",),
 "scripts":(".sh",),
@@ -1722,6 +1724,13 @@ COMPONENTS =[
 "category":"44helper",
 },
 {
+"name":"Node Listen",
+"service":"nodelisten",
+"port":8993 ,
+"install_link":"/usr/local/bin/nodelisten.py",
+"category":"nodelisten",
+},
+{
 "name":"Watchdog",
 
 "service":"asl_dvs_watchdog.timer",
@@ -1746,6 +1755,7 @@ HOME_SCAN_PATTERN_MAP =[
 ("sysmon",["sysmon*.py","asl_dvs_sysmon*.py","asl_dvs_m17_sysmon*.py","sysmon_svx*.py"]),
 ("wifimon",["wifimon*.py"]),
 ("44helper",["44helper*.py","asl_dvs_m17_44helper*.py"]),
+("nodelisten",["nodelisten*.py"]),
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
@@ -4185,7 +4195,7 @@ def _build_wanted_variant():
         return None
     return BUILD_PI02W_SUFFIX if build_pref_get() == "fork" else ""
 
-FU_ORDER = ("44helper", "wifimon", "dashboard", "sysmon", "watchdog", "instmon")
+FU_ORDER = ("44helper", "wifimon", "nodelisten", "dashboard", "sysmon", "watchdog", "instmon")
 FU_START_TIMEOUT_SEC = int(os.environ.get("INSTMON_FU_START_TIMEOUT_SEC", "60"))
 FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
@@ -4195,6 +4205,7 @@ _FU_DEFAULT_STEM = {
     "sysmon": "sysmon",
     "wifimon": "wifimon",
     "44helper": "44helper",
+    "nodelisten": "nodelisten",
     "watchdog": "asl_dvs_watchdog",
     "instmon": "instmon",
 }
@@ -5251,6 +5262,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("SysMon","sysmon","install"),
     ("wifimon","wifimon","install"),
     ("44helper","44helper","install"),
+    ("Node Listen","nodelisten","install"),
     ("Watchdog","watchdog","install"),
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
@@ -7247,7 +7259,7 @@ _JS_ACTIONS = """function wireButtons() {
         } else if (action === 'gh_check') {
           await postAction({action: 'gh_check'});
         } else if (action === 'quiet') {
-          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper and the watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
+          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper, Node Listen and the watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
           await postAction({action: 'quiet'});
         } else if (action === 'restore') {
           await postAction({action: 'restore'});
@@ -8045,8 +8057,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div class="row" style="margin-top:.6rem">
     <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
     <button id="restore-btn" data-action="restore" disabled>Restore</button>
-    <span class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper
-    and the watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
+    <span class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
+    Node Listen and the watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
   </div>
 </div>
 
@@ -8070,6 +8082,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="sysmon">SysMon (.py)</option>
       <option value="wifimon">WiFiMon (.py)</option>
       <option value="44helper">44helper (.py)</option>
+      <option value="nodelisten">Node Listen (.py)</option>
       <option value="watchdog">Watchdog (.sh)</option>
       <option value="instmon">InstMon (.py)</option>
     </select>

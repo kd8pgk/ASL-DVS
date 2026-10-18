@@ -1,6 +1,19 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_1_20261012.sh`. Newest entries first.
+Current file: `install_all_v7_2_0_20261018.sh`. Newest entries first.
+
+## 7.2.0 (2026-10-18)
+
+- **Node Listen** (`nodelisten_v….py`, port 8993) is a new, optional step after
+  44helper.
+  - Already installed: it is found, version-picked and updated like the other tools.
+  - Not installed: the installer asks "Install Node Listen? [y/N]" (default no) when a
+    `nodelisten*.py` file is around. Non-interactive runs skip it unless
+    `INSTALL_NODELISTEN=1` (or `y` / `yes` / `true`) is set.
+  - It installs with the file's own `--install`, checks its port (read from
+    `/etc/asl_dvs/nodelisten.conf`, default 8993), and shows in the existing-install
+    list, the startup check, the URLs and the service commands.
+- Moves to the three-part version numbers (7.1 -> 7.2.0).
 
 ## 7.1 (2026-10-12)
 

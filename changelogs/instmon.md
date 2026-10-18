@@ -1,6 +1,18 @@
 # instmon changelog
 
-Current file: `instmon_v2_57_0_20261018.py`. Newest entries first.
+Current file: `instmon_v2_58_0_20261018.py`. Newest entries first.
+
+## 2.58.0 (2026-10-18)
+
+- **Node Listen** (`nodelisten`, port 8993) joins the tools instmon manages:
+  - a component card (status, port, install, start, stop, restart, uninstall), as for
+    wifimon and 44helper;
+  - a library group (`/etc/asl_dvs/instmon_library/nodelisten`) for `nodelisten*.py`,
+    with uploads, the home-folder scan, USB import and GitHub Updates;
+  - **Full Update** updates it after wifimon, and only where it is installed ("not
+    installed -- left alone" otherwise), like every other tool;
+  - **Quiet System** pauses it with SysMon, the Dashboard and 44helper (the button's
+    text says so).
 
 ## 2.57.0 (2026-10-18)
 

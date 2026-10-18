@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.1  (2026-10-12)
+# install_all.sh  v7.2.0  (2026-10-18)
 
 set -euo pipefail
 
@@ -62,11 +62,17 @@ if [[ ! -e "${HELPER_BIN}" && -e "${HELPER_LEGACY_BIN}" ]]; then
     HELPER_BIN="${HELPER_LEGACY_BIN}"
 fi
 
+NODELISTEN_BIN="/usr/local/bin/nodelisten.py"
+NODELISTEN_SERVICE="nodelisten"
+NODELISTEN_PORT=8993
+NODELISTEN_CONF="/etc/asl_dvs/nodelisten.conf"
+
 INSTMON_LIBRARY_DIR="${INSTMON_LIBRARY_DIR:-/etc/asl_dvs/instmon_library}"
 DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/dashboard"
 SYSMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/sysmon"
 WIFIMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/wifimon"
 HELPER_LIB_DIR="${INSTMON_LIBRARY_DIR}/44helper"
+NODELISTEN_LIB_DIR="${INSTMON_LIBRARY_DIR}/nodelisten"
 
 LABELS=(a b c d e f g h i j)
 
@@ -205,6 +211,16 @@ stage_and_select() {
     else
         info "Skipping: ${label}"
     fi
+}
+
+any_file() {
+    local pattern="$1" lib_dir="${2:-}" d script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    for d in "${script_dir}" "$(pwd)" "/root" "/home/pi" "/home/${SUDO_USER:-pi}" "/tmp" ${lib_dir:+"${lib_dir}"}; do
+        [[ -d "${d}" ]] || continue
+        [[ -n "$(find "${d}" -maxdepth 1 -name "${pattern}" -print -quit 2>/dev/null)" ]] && return 0
+    done
+    return 1
 }
 
 pick_build() {
@@ -388,24 +404,29 @@ _dash_exists=false
 _sysmon_exists=false
 _wifimon_exists=false
 _helper_exists=false
+_nodelisten_exists=false
 systemctl is-active --quiet nodecontrol          2>/dev/null && _dash_exists=true    || true
 systemctl is-active --quiet asl_dvs_dashboard    2>/dev/null && _dash_exists=true    || true
 systemctl is-active --quiet "${SYSMON_SERVICE}"  2>/dev/null && _sysmon_exists=true  || true
 systemctl is-active --quiet "${WIFIMON_SERVICE}" 2>/dev/null && _wifimon_exists=true || true
 systemctl is-active --quiet "${HELPER_SERVICE}"  2>/dev/null && _helper_exists=true  || true
+systemctl is-active --quiet "${NODELISTEN_SERVICE}" 2>/dev/null && _nodelisten_exists=true || true
 [[ -f "${DASH_BIN}"     ]] && _dash_exists=true
 [[ -f "${SYSMON_BIN}"   ]] && _sysmon_exists=true
 [[ -f "${WIFIMON_BIN}"  ]] && _wifimon_exists=true
 [[ -f "${HELPER_BIN}"   ]] && _helper_exists=true
+[[ -f "${NODELISTEN_BIN}" ]] && _nodelisten_exists=true
 
 if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
-      || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" ]]; then
+      || "${_wifimon_exists}" == "true" || "${_helper_exists}" == "true" \
+      || "${_nodelisten_exists}" == "true" ]]; then
     echo
     echo "  ${BLD}Existing installation detected:${RST}"
     [[ "${_dash_exists}"     == "true" ]] && echo "  ${GRN}  ✔${RST}  Dashboard      (${DASH_BIN})"
     [[ "${_sysmon_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  SysMon         (${SYSMON_BIN})"
     [[ "${_wifimon_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  wifimon        (${WIFIMON_BIN})"
     [[ "${_helper_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  44helper       (${HELPER_BIN})"
+    [[ "${_nodelisten_exists}" == "true" ]] && echo "  ${GRN}  ✔${RST}  Node Listen    (${NODELISTEN_BIN})"
     echo
     if [[ "${NONINTERACTIVE}" == "true" ]]; then
         MODE="update"
@@ -531,9 +552,45 @@ if [[ -n "${HELPER_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
+hdr "Node Listen — file discovery"
+CHOSEN=""
+_nl_want=true
+if [[ "${_nodelisten_exists}" != "true" ]]; then
+    if ! any_file "nodelisten*.py" "${NODELISTEN_LIB_DIR}"; then
+        _nl_want=false
+        info "No nodelisten*.py file found — Node Listen (optional) skipped"
+    elif [[ "${NONINTERACTIVE}" == "true" ]]; then
+        if [[ "${INSTALL_NODELISTEN:-}" =~ ^([1yY]|yes|YES|true|TRUE)$ ]]; then
+            info "Non-interactive: INSTALL_NODELISTEN is set — installing Node Listen"
+        else
+            _nl_want=false
+            info "Node Listen is optional and not installed — skipped (set INSTALL_NODELISTEN=1 to install it)"
+        fi
+    else
+        echo "  Node Listen is optional: it plays this node's audio in a web browser (port ${NODELISTEN_PORT})."
+        echo "  It changes nothing in Asterisk until you pick a node on its page."
+        read -r -p "  Install Node Listen? [y/N]: " _nl_ans </dev/tty
+        case "${_nl_ans,,}" in
+            y|yes) ;;
+            *) _nl_want=false; info "Skipping Node Listen" ;;
+        esac
+    fi
+fi
+if [[ "${_nl_want}" == "true" ]]; then
+    stage_and_select "nodelisten*.py" "Node Listen" "${NODELISTEN_LIB_DIR}" || true
+fi
+NODELISTEN_CHOSEN="${CHOSEN}"
+
+if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
+    info "Checking syntax…"
+    python3 -m py_compile "${NODELISTEN_CHOSEN}" \
+        || die "Syntax error in $(basename "${NODELISTEN_CHOSEN}") — install aborted"
+    ok "Syntax OK"
+fi
+
 if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" ]]; then
-    die "Nothing to install — no dashboard, sysmon, wifimon or 44helper files found."
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]]; then
+    die "Nothing to install — no dashboard, sysmon, wifimon, 44helper or Node Listen files found."
 fi
 
 hdr "Up-to-date check"
@@ -550,8 +607,11 @@ uptodate_check "wifimon"   "${WIFIMON_CHOSEN}" "${WIFIMON_BIN}"
 uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && HELPER_CHOSEN=""
 
+uptodate_check "Node Listen" "${NODELISTEN_CHOSEN}" "${NODELISTEN_BIN}"
+[[ "${UP_TO_DATE_SKIP}" == "true" ]] && NODELISTEN_CHOSEN=""
+
 if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
-      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" ]]; then
+      && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]]; then
     ok "All selected files are already up to date — nothing to install."
     exit 0
 fi
@@ -560,6 +620,11 @@ hdr "Port checks"
 [[ -n "${DASH_CHOSEN}"    ]] && { info "Dashboard port ${DASH_PORT}:"; check_port "${DASH_PORT}"; }
 [[ -n "${SYSMON_CHOSEN}"  ]] && { info "SysMon port ${SYSMON_PORT}:";  check_port "${SYSMON_PORT}"; }
 [[ -n "${HELPER_CHOSEN}"  ]] && { info "44helper port ${HELPER_PORT}:"; check_port "${HELPER_PORT}"; }
+if [[ -n "${NODELISTEN_CHOSEN}" && "${_nodelisten_exists}" != "true" ]]; then
+    _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
+    NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
+    info "Node Listen port ${NODELISTEN_PORT}:"; check_port "${NODELISTEN_PORT}"
+fi
 
 if [[ -n "${DASH_CHOSEN}" ]]; then
     hdr "Installing Dashboard"
@@ -648,6 +713,16 @@ if [[ -n "${HELPER_CHOSEN}" ]]; then
     ok "44helper installed, enabled, and restarted"
 fi
 
+if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
+    hdr "Installing Node Listen"
+    info "Delegating to: python3 $(basename "${NODELISTEN_CHOSEN}") --install"
+    python3 "${NODELISTEN_CHOSEN}" --install \
+        || die "Node Listen --install failed — see output above"
+    ok "Node Listen installed, enabled, and restarted"
+    _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
+    NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
+fi
+
 hdr "Startup verification"
 info "Waiting for services to stabilise…"
 sleep 3
@@ -656,7 +731,8 @@ for svc_entry in \
     "${DASH_SERVICE}:${DASH_CHOSEN}:${DASH_PORT}" \
     "${SYSMON_SERVICE}:${SYSMON_CHOSEN}:${SYSMON_PORT}" \
     "${WIFIMON_SERVICE}:${WIFIMON_CHOSEN}:${WIFIMON_PORT}" \
-    "${HELPER_SERVICE}:${HELPER_CHOSEN}:${HELPER_PORT}"; do
+    "${HELPER_SERVICE}:${HELPER_CHOSEN}:${HELPER_PORT}" \
+    "${NODELISTEN_SERVICE}:${NODELISTEN_CHOSEN}:${NODELISTEN_PORT}"; do
     svc="${svc_entry%%:*}"
     rest="${svc_entry#*:}"
     chosen="${rest%%:*}"
@@ -714,6 +790,7 @@ print_urls "ASL-DVS Node Control Dashboard"      "${DASH_PORT}"    "${DASH_CHOSE
 print_urls "ASL-DVS System Monitor"              "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
 print_urls "44Net Helper"                        "${HELPER_PORT}"  "${HELPER_CHOSEN}"
 print_urls "wifimon"                             "${WIFIMON_PORT}" "${WIFIMON_CHOSEN}"
+print_urls "Node Listen"                         "${NODELISTEN_PORT}" "${NODELISTEN_CHOSEN}"
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     info "To add/import WiFi networks: sudo python3 ${WIFIMON_BIN} --setup-wifi"
@@ -725,5 +802,6 @@ echo "  ${BLD}Service commands:${RST}"
 [[ -n "${SYSMON_CHOSEN}"   ]] && echo "    SysMon         :  systemctl {status|restart|stop} ${SYSMON_SERVICE}"
 [[ -n "${WIFIMON_CHOSEN}"  ]] && echo "    wifimon        :  systemctl {status|restart|stop} ${WIFIMON_SERVICE}"
 [[ -n "${HELPER_CHOSEN}"   ]] && echo "    44helper       :  systemctl {status|restart|stop} ${HELPER_SERVICE}"
+[[ -n "${NODELISTEN_CHOSEN}" ]] && echo "    Node Listen    :  systemctl {status|restart|stop} ${NODELISTEN_SERVICE}"
 echo "    Logs      :  journalctl -u <service> -f"
 echo
