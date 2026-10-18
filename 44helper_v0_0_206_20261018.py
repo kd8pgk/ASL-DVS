@@ -43,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.205"
+APP_VERSION = "0.0.206"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1006,6 +1006,14 @@ def _ov_endpoint_findings_cached(force: bool = False) -> list[dict]:
         _OV_EP_CACHE.update(data=_ov_endpoint_findings(), at=time.time())
     return list(_OV_EP_CACHE["data"])
 
+def _wg_pin_outdated() -> bool:
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            text = f.read()
+    except OSError:
+        return False
+    return bool(_wg_apply_endpoint_pin(text)[1])
+
 def _ov_endpoint_findings() -> list[dict]:
     findings: list[dict] = []
     try:
@@ -1027,6 +1035,15 @@ def _ov_endpoint_findings() -> list[dict]:
             "level": "warn",
             "msg": (f"The tunnel server ({ep['host']}) is inside AllowedIPs and wg0.conf has no endpoint pin. "
                     "The next tunnel start will loop. Fix it on the Split Tunnel tab, step 4b."),
+        })
+    elif ep and ep["needed"] and _wg_pin_outdated():
+        findings.append({
+            "id": "endpoint", "fix": ["endpoint_pin"],
+            "level": "warn",
+            "msg": ("wg0.conf has an older endpoint pin that gives up silently when the tunnel starts before the "
+                    "normal default route exists (at boot), so the tunnel comes up in a routing loop with no "
+                    "handshake. Update it: the new pin waits up to 30 s for the route, and otherwise fails the "
+                    "start so it is retried."),
         })
     return findings
 
@@ -5923,6 +5940,7 @@ def _wg_block_remove(text: str, begin: str, end: str) -> str:
 _WG_EPPIN_BEGIN = "# 44helper-endpoint-pin-begin"
 _WG_EPPIN_END = "# 44helper-endpoint-pin-end"
 _WG_GW_EXPR = "$(ip -4 route show table main default | head -n1 | grep -oE '(via [0-9.]+ )?dev [^ ]+')"
+_WG_GW_WAIT = ("for T in $(seq 30); do R=" + _WG_GW_EXPR + " || true; [ -n \"$R\" ] && break; sleep 1; done")
 
 def _wg_endpoint_info(text: str) -> dict:
     parsed = _parse_wg_conf_text(text or "", mask_private_key=True)
@@ -5968,13 +5986,13 @@ def _wg_endpoint_pin_lines(info: dict) -> list[str]:
     if info["literal"]:
         ep = info["ip"] + "/32"
         return [_WG_EPPIN_BEGIN,
-                f"PreUp = ip -4 route replace {ep} {_WG_GW_EXPR} || true",
+                f"PreUp = {_WG_GW_WAIT}; [ -n \"$R\" ] && ip -4 route replace {ep} $R",
                 f"PostDown = ip -4 route del {ep} || true",
                 _WG_EPPIN_END]
     look = f"$(timeout 5 getent ahostsv4 {info['host']} | awk 'NR==1{{print $1}}')"
     rec = "/run/44helper-endpoint-%i"
     return [_WG_EPPIN_BEGIN,
-            f"PreUp = E={look}; [ -n \"$E\" ] && echo \"$E\" > {rec} && ip -4 route replace \"$E/32\" {_WG_GW_EXPR} || true",
+            f"PreUp = {_WG_GW_WAIT}; E={look}; [ -n \"$R\" ] && [ -n \"$E\" ] && echo \"$E\" > {rec} && ip -4 route replace \"$E/32\" $R",
             f"PostDown = E=$(cat {rec} 2>/dev/null); [ -n \"$E\" ] && ip -4 route del \"$E/32\"; rm -f {rec}; true",
             _WG_EPPIN_END]
 
@@ -6417,7 +6435,7 @@ def status_wg_allowed_ips() -> dict:
     return {"conf_exists": True, "allowed_ips": allowed_ips, "shape": shape,
             "repairable": shape == "full" and half == "off" and fx == "off", "half_mode": half, "fullx_mode": fx,
             "endpoint_host": ep["host"], "endpoint_ip": ep["ip"],
-            "endpoint_pin_missing": ep["needed"] and not ep["pinned"],
+            "endpoint_pin_missing": ep["needed"] and (not ep["pinned"] or bool(_wg_apply_endpoint_pin(text)[1])),
             "endpoint_loop_live": ep["needed"] and _wg_endpoint_loop_live(ep["ip"])}
 
 def action_wg_repair_allowed_ips() -> dict:
@@ -6900,6 +6918,9 @@ def action_boot_order_apply() -> dict:
         if os.path.exists(WG0_CONF_PATH):
             _boot_write(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN, 0o644)
             out.append("ok    wg-quick@wg0 retries every 20 s if it fails to start (for example DNS not ready yet)")
+            if _wg_pin_outdated():
+                out += ["ok    " + ln for ln in _wg_write_conf(_hl_read_conf() or "")]
+                out.append("ok    endpoint pin updated: at boot it waits up to 30 s for the normal route, or fails the start so it is retried")
         units = _boot_dv_units()
         for u in units:
             _boot_write(_boot_dropin_path(u), _boot_dv_dropin_text(u), 0o644)
