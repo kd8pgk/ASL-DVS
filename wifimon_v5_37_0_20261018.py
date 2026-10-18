@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.36.0"
+APP_VERSION = "5.37.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -606,6 +606,14 @@ def uninstall_service() -> None:
 
     if os.path.isdir(REPORT_DIR):
         print(f"  [i] Shutdown reports kept in {REPORT_DIR} (delete it by hand if unwanted)")
+
+    if os.path.exists(KEEPOFF_UNIT_PATH) or os.path.exists(KEEPOFF_SCRIPT_PATH):
+        subprocess.run(["systemctl", "disable", KEEPOFF_UNIT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        for path in (KEEPOFF_UNIT_PATH, KEEPOFF_SCRIPT_PATH):
+            if os.path.exists(path):
+                os.remove(path)
+                print(f"  [-] Removed {path}")
+        subprocess.run(["systemctl", "daemon-reload"], stderr=subprocess.DEVNULL)
 
     if os.path.exists(NM_CONF_FILE):
         os.remove(NM_CONF_FILE)
@@ -1654,6 +1662,8 @@ class _TunnelGuard:
             return
         up = _tg_uptime()
         if up < cfg["boot_delay"]:
+            if self._boot_loop_fix():
+                return
             _tg_set(state="waiting", detail=f"giving the boot order {int(cfg['boot_delay'] - up)} s more")
             return
         if _tg_test_running():
@@ -1676,7 +1686,7 @@ class _TunnelGuard:
             _tg_set(bad=self.bad, tries=self.tries, next_at=None, **{k: v for k, v in info.items() if k != "loop"})
             return
         self.bad += 1
-        if self.bad < cfg["bad_checks"]:
+        if self.bad < cfg["bad_checks"] and not info.get("loop"):
             _tg_set(state="watching", detail=f"{problem} ({self.bad} of {cfg['bad_checks']} checks)", bad=self.bad,
                     hs_age=info.get("hs_age"))
             return
@@ -1690,6 +1700,19 @@ class _TunnelGuard:
                     bad=self.bad, next_at=self.next_at, hs_age=info.get("hs_age"))
             return
         self._act(problem, info, cfg)
+
+    def _boot_loop_fix(self) -> bool:
+        if _tg_test_running() or _tg_unit_prop(TG_UNIT, "ActiveState") != "active":
+            return False
+        route, ip = _tg_lan_route(), _tg_endpoint_ip()
+        if not route or not ip or not _tg_loop(ip):
+            return False
+        rc, out = _tg_run(["ip", "-4", "route", "replace", f"{ip}/32"] + route.split())
+        result = f"route {ip}/32 {route}: " + ("added" if rc == 0 else f"failed ({out.strip()})")
+        log.warning("Tunnel watchdog: routing loop during boot (the tunnel server routes back into wg0) -- %s", result)
+        _tg_set(state="waiting", detail="fixed a routing loop during boot; the boot order has the rest of its time",
+                last_action="routing loop during boot", last_result=result, last_at=time.time())
+        return True
 
     def _act(self, problem: str, info: Dict[str, object], cfg: Dict[str, object]) -> None:
         self.acted = True
@@ -3131,6 +3154,7 @@ def _save_dev_modes() -> None:
         _save_state({"device_modes": data})
     except OSError as e:
         log.warning("Couldn't save the adapter settings to %s: %s", STATE_FILE, e)
+    _keepoff_sync()
 
 def _set_dev_mode(key: str, name: str, mode: str, persist: bool = True) -> None:
     with _devmode_lock:
@@ -3144,6 +3168,128 @@ def _set_dev_mode(key: str, name: str, mode: str, persist: bool = True) -> None:
     if persist:
         _save_dev_modes()
     _devmode_wake.set()
+
+KEEPOFF_SCRIPT_PATH = "/usr/local/sbin/wifimon-keepoff"
+KEEPOFF_UNIT = "wifimon-keepoff.service"
+KEEPOFF_UNIT_PATH = "/etc/systemd/system/" + KEEPOFF_UNIT
+KEEPOFF_WAIT = 20
+_KEEPOFF_UNIT_TEXT = f"""[Unit]
+Description=wifimon: keep Keep-off WiFi adapters off at boot
+After=NetworkManager.service
+Before=network-online.target NetworkManager-wait-online.service
+
+[Service]
+Type=oneshot
+ExecStart={KEEPOFF_SCRIPT_PATH}
+TimeoutStartSec={KEEPOFF_WAIT + 25}
+
+[Install]
+WantedBy=NetworkManager.service
+"""
+_KEEPOFF_SCRIPT = """#!/usr/bin/env python3
+import array, fcntl, os, socket, struct, subprocess, sys, time
+
+KEYS = %(keys)r
+WAIT = %(wait)d
+
+def key_of(name):
+    buf = array.array("B", struct.pack("II", 0x00000020, 32) + bytes(32))
+    addr, _n = buf.buffer_info()
+    ifr = struct.pack("16sP", name.encode()[:15], addr)
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            fcntl.ioctl(sock.fileno(), 0x8946, ifr)
+        size = struct.unpack_from("I", buf.tobytes(), 4)[0]
+        data = buf.tobytes()[8:8 + size]
+        if size == 6 and any(data):
+            return ":".join("%%02x" %% b for b in data)
+    except (OSError, struct.error):
+        pass
+    try:
+        with open("/sys/class/net/%%s/addr_assign_type" %% name) as f:
+            perm = f.read().strip() == "0"
+        if perm:
+            with open("/sys/class/net/%%s/address" %% name) as f:
+                mac = f.read().strip().lower()
+            if mac and mac != "00:00:00:00:00:00":
+                return mac
+    except OSError:
+        pass
+    return "if:" + name
+
+def nmcli(*args):
+    try:
+        r = subprocess.run(["nmcli"] + list(args), capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return 1, ""
+    return r.returncode, r.stdout
+
+def physical():
+    out = []
+    for n in os.listdir("/sys/class/net"):
+        if os.path.exists("/sys/class/net/%%s/device" %% n):
+            out.append(n)
+    return out
+
+end = time.monotonic() + WAIT
+while True:
+    devs = physical()
+    keyed = {key_of(n): n for n in devs}
+    off = [keyed[k] for k in KEYS if k in keyed]
+    if off and not [n for n in devs if n not in off]:
+        print("no other network adapter; leaving %%s alone" %% ", ".join(off))
+        sys.exit(0)
+    pending = len(off) < len(KEYS)
+    for dev in off:
+        rc, _out = nmcli("device", "set", dev, "autoconnect", "no")
+        if rc != 0:
+            pending = True
+            continue
+        rc, state = nmcli("-g", "GENERAL.STATE", "device", "show", dev)
+        if "connect" in state and "disconnected" not in state:
+            nmcli("device", "disconnect", dev)
+            print("kept %%s off at boot (it was %%s)" %% (dev, state.strip()))
+    if not pending:
+        sys.exit(0)
+    if time.monotonic() >= end:
+        print("not every Keep-off adapter was ready within %%d s" %% WAIT)
+        sys.exit(0)
+    time.sleep(1)
+"""
+
+def _keepoff_write(path: str, text: str, mode: int) -> bool:
+    if _read_text(path) == text:
+        return False
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+    return True
+
+def _keepoff_sync() -> None:
+    with _devmode_lock:
+        keys = sorted(k for k, v in _dev_modes.items() if v["mode"] == "off")
+    if os.geteuid() != 0 or not shutil.which("systemctl") or not shutil.which("nmcli"):
+        return
+    try:
+        if keys:
+            _keepoff_write(KEEPOFF_SCRIPT_PATH, _KEEPOFF_SCRIPT % {"keys": keys, "wait": KEEPOFF_WAIT}, 0o755)
+            if _keepoff_write(KEEPOFF_UNIT_PATH, _KEEPOFF_UNIT_TEXT, 0o644):
+                _run_text(["systemctl", "daemon-reload"], timeout=30)
+            if _run_text(["systemctl", "is-enabled", KEEPOFF_UNIT]).strip() != "enabled":
+                subprocess.run(["systemctl", "enable", KEEPOFF_UNIT], capture_output=True, timeout=30)
+                log.info("Keep off: %s set up, so Keep-off adapters stay off from the start of each boot", KEEPOFF_UNIT)
+        elif os.path.exists(KEEPOFF_UNIT_PATH) or os.path.exists(KEEPOFF_SCRIPT_PATH):
+            subprocess.run(["systemctl", "disable", KEEPOFF_UNIT], capture_output=True, timeout=30)
+            for path in (KEEPOFF_UNIT_PATH, KEEPOFF_SCRIPT_PATH):
+                if os.path.exists(path):
+                    os.remove(path)
+            _run_text(["systemctl", "daemon-reload"], timeout=30)
+            log.info("Keep off: no adapter is set to Keep off any more -- removed %s", KEEPOFF_UNIT)
+    except (OSError, subprocess.SubprocessError) as e:
+        log.warning("Keep off: couldn't update %s: %s", KEEPOFF_UNIT, _log_safe(e))
 
 def _load_dev_modes() -> None:
     txt = _read_text(STATE_FILE)
@@ -8683,6 +8829,7 @@ def run() -> None:
     _marker_check_and_set()
     _load_saved_interface()
     _load_dev_modes()
+    _keepoff_sync()
     _load_saved_settings()
     _load_watchdogs()
     _apply_login_page_detection(DETECT_LOGIN_PAGES)

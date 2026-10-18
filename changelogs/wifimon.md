@@ -1,6 +1,32 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_36_0_20261018.py`. Newest entries first.
+Current file: `wifimon_v5_37_0_20261018.py`. Newest entries first.
+
+## 5.37.0 (2026-10-18)
+
+From magicbox's boot report. wifimon serves both builds.
+
+- **Keep off holds from the start of the boot.** Keep off used
+  `nmcli device set … autoconnect no`, which NetworkManager forgets at a reboot, so at
+  boot NetworkManager brought the Keep-off adapter up, the tunnel started through it,
+  and wifimon disconnected it 13 s later, which took the tunnel server's route with it
+  (a routing loop). While any adapter is set to Keep off, wifimon now installs
+  `wifimon-keepoff.service` (`/usr/local/sbin/wifimon-keepoff`). It runs right after
+  NetworkManager starts and before `network-online.target`, so before the tunnel:
+  for each Keep-off adapter (found by its permanent MAC, as wifimon does) it sets
+  autoconnect off and disconnects it if it is connecting. It waits up to 20 s for the
+  adapters to appear, and leaves an adapter alone when it is the only one. When no
+  adapter is set to Keep off any more, the unit is removed. Uninstall removes it too.
+- **Tunnel watchdog: a routing loop is fixed at once.** A loop (the tunnel server
+  routed into wg0) is definite and the fix only adds a route, so the watchdog no longer
+  waits for 3 bad checks: it re-adds the route at the first check. During the wait
+  after boot it also fixes a loop (route only; nothing restarted), then leaves the
+  rest to the boot order.
+- Tested: the Keep-off script against a fake `/sys/class/net` with a stub nmcli
+  (connecting adapter disconnected, missing adapter waited for, only adapter left
+  alone), the unit written, enabled and removed as modes change, and the watchdog
+  suite (35 checks: loop at the first check, loop during the boot wait, no LAN
+  route).
 
 ## 5.36.0 (2026-10-18)
 

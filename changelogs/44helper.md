@@ -1,6 +1,35 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_209_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_210_20261018.py`. Newest entries first.
+
+## 0.0.210 (2026-10-18) — testing
+
+From magicbox's first boot report: at boot NetworkManager brought up wlan0, the tunnel
+pinned its server's route through wlan0, then wifimon (wlan0 set to Keep off)
+disconnected wlan0 13 s later. The kernel dropped every route through wlan0, the pin
+with it, so the tunnel server was routed into wg0 (a routing loop) and the tunnel
+never got another handshake. wlan1 connected at 73 s, but nothing put the route back.
+
+- **The tunnel server's route follows the network.** The boot order now installs a
+  NetworkManager hook, `/etc/NetworkManager/dispatcher.d/90-44helper-endpoint`. When
+  an interface comes up, goes down, renews DHCP or connectivity changes, and wg0 is up
+  with an endpoint pin in wg0.conf, it moves the tunnel server's /32 route to the
+  current default route (skipping wg interfaces) and logs it
+  (`journalctl -t 44helper-endpoint`). It covers WiFi moving between adapters, roaming
+  and Ethernet coming and going. Only with NetworkManager; otherwise not required.
+- **Set the boot order** writes the hook, fixes a routing loop that is there right
+  now (puts the route back on the normal link), and lists "follow network changes"
+  and an older tunnel-server route line among what is missing, so the Health card and
+  the 6b card offer it. **Remove** deletes the hook.
+- **Boot tab:** a "Tunnel" line (server on the normal route, or routed into wg0) and
+  findings for a routing loop and for the older route line; repeated kernel lines are
+  shown once with a count (seven identical "Modules linked in" lines had filled the
+  section); the kernel filter also shows USB WiFi drivers (mt76, rtl8, rtw); a wifimon
+  report counts as this boot's when this boot's wifimon log names it (file times are
+  wrong when the clock starts behind); no doubled `$` header lines.
+- Tested: the hook with stub commands (pin moved after an adapter change, left alone
+  when right, wg0 down, wrong action, only a wg default, no pin), set/status/remove
+  with mocks, the Boot tab back end (51 checks).
 
 ## 0.0.209 (2026-10-18) — testing
 
