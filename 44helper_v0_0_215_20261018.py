@@ -43,8 +43,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.214"
-APP_STAGE = "v0.0.214: half tunnel on the Split Tunnel tab, marked tunnel packets instead of the endpoint pin; history in changelogs/44helper.md"
+APP_VERSION = "0.0.215"
+APP_STAGE = "v0.0.215: firewall-cmd gets 60 s to answer; the Overview reads the firewall zone from a cache; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -618,7 +618,16 @@ def _zone_xml_remove_child(zone: str, tag: str, attrib: dict[str, str]) -> None:
             root.remove(child)
     _zone_xml_write(zone, root)
 
+_FW_CMD_TIMEOUT = 60
+_FW_ZONE_INFO_TTL = 30.0
+_FW_ZONE_INFO_CACHE: dict = {"at": 0.0, "zone": None, "info": None, "busy": False}
+_FW_ZONE_INFO_LOCK = threading.Lock()
+
+def _fw_timeout(argv: list[str], timeout: int) -> int:
+    return max(timeout, _FW_CMD_TIMEOUT) if argv and argv[0] == "firewall-cmd" else timeout
+
 def _reload_firewalld() -> dict:
+    _FW_ZONE_INFO_CACHE["at"] = 0.0
     r = _run_argv(["firewall-cmd", "--reload"])
     if not r["success"] and _polkit_signature_crash(r["output"]):
         r2 = _run_argv(["systemctl", "kill", "-s", "HUP", "firewalld"])
@@ -711,7 +720,7 @@ def _firewalld_zone_info(zone: str = FIREWALLD_ZONE) -> dict | None:
     try:
         r = subprocess.run(
             ["firewall-cmd", f"--zone={zone}", "--list-all"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT,
         )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return None
@@ -728,6 +737,41 @@ def _firewalld_zone_info(zone: str = FIREWALLD_ZONE) -> dict | None:
         elif line.startswith("interfaces:"):
             info["interfaces"] = line.split(":", 1)[1].split()
     return info
+
+def _fw_zone_info_refresh(zone: str) -> None:
+    try:
+        info = _firewalld_zone_info(zone)
+    finally:
+        with _FW_ZONE_INFO_LOCK:
+            _FW_ZONE_INFO_CACHE["busy"] = False
+    with _FW_ZONE_INFO_LOCK:
+        _FW_ZONE_INFO_CACHE.update(at=time.time(), zone=zone, info=info)
+
+def _firewalld_zone_info_cached(zone: str = FIREWALLD_ZONE) -> dict | None:
+    with _FW_ZONE_INFO_LOCK:
+        c = _FW_ZONE_INFO_CACHE
+        have = c["zone"] == zone and c["at"] > 0
+        if have and time.time() - c["at"] < _FW_ZONE_INFO_TTL:
+            return c["info"]
+        start = not c["busy"]
+        if start:
+            c["busy"] = True
+    if not have:
+        if start:
+            _fw_zone_info_refresh(zone)
+        else:
+            end = time.time() + _FW_CMD_TIMEOUT
+            while time.time() < end:
+                with _FW_ZONE_INFO_LOCK:
+                    if not _FW_ZONE_INFO_CACHE["busy"]:
+                        break
+                time.sleep(0.5)
+        with _FW_ZONE_INFO_LOCK:
+            return _FW_ZONE_INFO_CACHE["info"] if _FW_ZONE_INFO_CACHE["zone"] == zone else None
+    if start:
+        threading.Thread(target=_fw_zone_info_refresh, args=(zone,), name="fw-zone-info", daemon=True).start()
+    with _FW_ZONE_INFO_LOCK:
+        return _FW_ZONE_INFO_CACHE["info"]
 
 def _configured_tunnel_names(cfg: configparser.ConfigParser) -> list[str]:
     if "tunnels" not in cfg:
@@ -912,7 +956,7 @@ def build_overview_data(cfg: configparser.ConfigParser) -> dict:
     wg0_conf = _parse_wg0_conf()
     wg0_perms_ok = _wg0_conf_perms_ok()
     wg_status = _wg_show_wg0()
-    fw_zone = _firewalld_zone_info()
+    fw_zone = _firewalld_zone_info_cached()
     tunnel_names = _configured_tunnel_names(cfg)
 
     self_check = _run_self_check(my_port, fw_zone, wg0_perms_ok)
@@ -1055,7 +1099,7 @@ _OV_DVS_UNITS = ("analog_bridge.service", "Analog_Bridge.service", "mmdvm_bridge
 
 def _ov_q(argv: list[str], timeout: int = 6) -> tuple[int, str]:
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=_fw_timeout(argv, timeout))
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return -1, ""
     return r.returncode, r.stdout or ""
@@ -1756,7 +1800,7 @@ PI_INSTALL_PORTS = {
 def _run_argv(argv: list[str], timeout: int = 20) -> dict:
     log(f"RUN: {' '.join(argv)}")
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=_fw_timeout(argv, timeout))
         ok = r.returncode == 0
         out = (r.stdout or "") + (r.stderr or "")
         log(f"{'OK' if ok else 'FAIL'} (exit {r.returncode}): {' '.join(argv)}")
@@ -5797,7 +5841,7 @@ def action_install_resolved() -> dict:
 
 def status_create_zone() -> dict:
     try:
-        r = subprocess.run(["firewall-cmd", "--get-zones"], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["firewall-cmd", "--get-zones"], capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {"done": False, "zones": []}
     zones = r.stdout.split() if r.returncode == 0 else []
@@ -6844,7 +6888,7 @@ def status_wg_reflector_egress() -> dict:
     try:
         r = subprocess.run(
             ["firewall-cmd", "--permanent", "--direct", "--get-all-rules"],
-            capture_output=True, text=True, timeout=5)
+            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
         available = r.returncode == 0
         all_rules = r.stdout or ""
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -9306,7 +9350,7 @@ def _ports_row(label, port, proto, purpose, flag_public, exposed, running, syste
 def check_allstarlink_zone_guardrail() -> dict:
     try:
         r = subprocess.run(["firewall-cmd", "--zone=allstarlink", "--list-interfaces"],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {"applicable": False, "wg0_attached": False}
     if r.returncode != 0:
@@ -9413,7 +9457,7 @@ _FW_SVC_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 def _fw_get_zones() -> list[str]:
     try:
         r = subprocess.run(["firewall-cmd", "--get-zones"],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     return r.stdout.split() if r.returncode == 0 else []
@@ -9421,7 +9465,7 @@ def _fw_get_zones() -> list[str]:
 def _fw_get_services() -> list[str]:
     try:
         r = subprocess.run(["firewall-cmd", "--get-services"],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     return r.stdout.split() if r.returncode == 0 else []
@@ -9429,7 +9473,7 @@ def _fw_get_services() -> list[str]:
 def _fw_default_zone() -> str:
     try:
         r = subprocess.run(["firewall-cmd", "--get-default-zone"],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
@@ -9437,7 +9481,7 @@ def _fw_default_zone() -> str:
 def _fw_active_zones() -> dict:
     try:
         r = subprocess.run(["firewall-cmd", "--get-active-zones"],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return {}
     if r.returncode != 0:
@@ -9455,7 +9499,7 @@ def _fw_active_zones() -> dict:
 def _fw_zone_of_iface(iface: str = "wg0") -> str:
     try:
         r = subprocess.run(["firewall-cmd", f"--get-zone-of-interface={iface}"],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return ""
     return r.stdout.strip() if r.returncode == 0 else ""
@@ -9463,7 +9507,7 @@ def _fw_zone_of_iface(iface: str = "wg0") -> str:
 def _fw_panic_on() -> bool:
     try:
         r = subprocess.run(["firewall-cmd", "--query-panic"],
-                           capture_output=True, text=True, timeout=5)
+                           capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
     return r.stdout.strip() == "on"
@@ -9505,7 +9549,7 @@ def action_fw_add_port_runtime(zone: str, port_proto: str) -> dict:
         return {"success": False, "verified": False, "output": "Blocked by guardrail: " + guard["message"]}
     r = _run_argv(["firewall-cmd", f"--zone={zone}", f"--add-port={port_proto}"])
     verify = subprocess.run(["firewall-cmd", f"--zone={zone}", f"--query-port={port_proto}"],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     verified = verify.returncode == 0 and verify.stdout.strip() == "yes"
     out = [r["output"]]
     if guard["level"] == "warn":
@@ -9535,7 +9579,7 @@ def action_fw_promote_port(zone: str, port_proto: str) -> dict:
     results = [r_add, _reload_firewalld()]
     ok = all(x["success"] for x in results)
     verify = subprocess.run(["firewall-cmd", "--permanent", f"--zone={zone}", f"--query-port={port_proto}"],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     verified = verify.returncode == 0 and verify.stdout.strip() == "yes"
     out = [x["output"] for x in results]
     if guard["level"] == "warn":
@@ -9560,7 +9604,7 @@ def action_fw_remove_port(zone: str, port_proto: str) -> dict:
         r_perm["output"] += "\n[44helper] firewalld polkit crash detected -- removed <port> from zone XML directly."
     rl = _reload_firewalld()
     verify = subprocess.run(["firewall-cmd", f"--zone={zone}", f"--query-port={port_proto}"],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     verified = verify.returncode == 0 and verify.stdout.strip() == "no"
     ok = r_perm["success"] and rl["success"]
     return {"success": ok, "verified": verified, "output": "\n".join([r_rt["output"], r_perm["output"], rl["output"]])}
@@ -9604,7 +9648,7 @@ def action_fw_add_service_zone(zone: str, service: str) -> dict:
     results = [r_add, _reload_firewalld()]
     ok = all(x["success"] for x in results)
     verify = subprocess.run(["firewall-cmd", "--permanent", f"--zone={zone}", f"--query-service={service}"],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     verified = verify.returncode == 0 and verify.stdout.strip() == "yes"
     return {"success": ok, "verified": verified, "output": "\n".join(x["output"] for x in results)}
 
@@ -9625,7 +9669,7 @@ def action_fw_remove_service_zone(zone: str, service: str) -> dict:
     results = [r_rm, _reload_firewalld()]
     ok = all(x["success"] for x in results)
     verify = subprocess.run(["firewall-cmd", "--permanent", f"--zone={zone}", f"--query-service={service}"],
-                            capture_output=True, text=True, timeout=5)
+                            capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     verified = verify.returncode == 0 and verify.stdout.strip() == "no"
     return {"success": ok, "verified": verified, "output": "\n".join(x["output"] for x in results)}
 
@@ -9671,7 +9715,7 @@ def action_fw_inspect_zone(zone: str) -> dict:
         return {"success": False, "output": f"'{zone}' is not a configured zone."}
     try:
         r = subprocess.run(["firewall-cmd", f"--zone={zone}", "--list-all"],
-                           capture_output=True, text=True, timeout=6)
+                           capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (FileNotFoundError, subprocess.TimeoutExpired) as e:
         return {"success": False, "output": f"list-all failed: {e}"}
     return {"success": r.returncode == 0, "output": (r.stdout or "") + (r.stderr or "")}
@@ -9710,7 +9754,7 @@ def _half_lib_pre_path() -> str:
 
 def _half_q(argv: list[str], timeout: int = 8, input_text: str | None = None) -> tuple[int, str]:
     try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, input=input_text)
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=_fw_timeout(argv, timeout), input=input_text)
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
         return -1, str(exc)
     return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
@@ -10063,8 +10107,12 @@ def _half_detect() -> dict:
                        "aip": aip["allowed_ips"], "aip_shape": aip["shape"]})
     if not shutil.which("firewall-cmd"):
         blockers.append("firewalld isn't installed. Run step 1 on this tab first.")
-    elif _half_q(["firewall-cmd", "--state"])[1].strip() != "running":
-        blockers.append("firewalld is installed but isn't running: sudo systemctl start firewalld")
+    else:
+        rc_fw, fw_state = _half_q(["firewall-cmd", "--state"])
+        if rc_fw == -1 and "timed out" in fw_state:
+            blockers.append(f"firewalld didn't answer within {_FW_CMD_TIMEOUT} s. It's running but very slow on this Pi right now; try Check first again in a minute.")
+        elif fw_state.strip() != "running":
+            blockers.append("firewalld is installed but isn't running: sudo systemctl start firewalld")
     if not shutil.which("wg-quick"):
         blockers.append("wg-quick isn't installed.")
     if _systemctl_is_active("44net-tunnel.service"):
@@ -15118,7 +15166,7 @@ def _cfgr_fw_service_ports(name: str) -> list[tuple[int, int, str]]:
 
 def _cfgr_firewall_info() -> dict | None:
     try:
-        az = subprocess.run(["firewall-cmd", "--get-active-zones"], capture_output=True, text=True, timeout=15)
+        az = subprocess.run(["firewall-cmd", "--get-active-zones"], capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
     except (OSError, subprocess.SubprocessError):
         return None
     if az.returncode != 0:
@@ -15129,7 +15177,7 @@ def _cfgr_firewall_info() -> dict | None:
     for name in names:
         name = name.split(" ")[0]
         try:
-            r = subprocess.run(["firewall-cmd", f"--zone={name}", "--list-all"], capture_output=True, text=True, timeout=15)
+            r = subprocess.run(["firewall-cmd", f"--zone={name}", "--list-all"], capture_output=True, text=True, timeout=_FW_CMD_TIMEOUT)
         except (OSError, subprocess.SubprocessError):
             continue
         if r.returncode != 0:
@@ -23427,7 +23475,7 @@ function htPost(action, extra, confirmMsg) {
   var body = {action: action};
   for (var k in (extra || {})) { if (extra.hasOwnProperty(k)) { body[k] = extra[k]; } }
   _htBusy = true;
-  _htOut = {text: 'Working... (this can take a minute)', success: true, working: true};
+  _htOut = {text: 'Working... (this can take a few minutes: every firewall question can take 20 s on a Pi Zero)', success: true, working: true};
   htRender();
   fetch('/api/firewall/action', {
     method: 'POST',
