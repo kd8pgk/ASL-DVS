@@ -47,13 +47,13 @@
    "version": "6.13.67.17-pi02w"
   },
   "wifimon": {
-   "blob": "da1454bf6e6bfbb81181aa1581bd44cd9026a473",
-   "commit": "1120c0e1e11826d1d42f6bf819c720291637dea8",
-   "file": "wifimon_v5_31_0_20261013.py",
-   "landed": "2026-10-13T12:03:48Z",
-   "promoted": "2026-10-18T06:18:08Z",
+   "blob": "f491a760b07ef603938c83f662c05dd2a88ae6f2",
+   "commit": "d013662542dc064c61ba6b3c8797434c2cf73036",
+   "file": "wifimon_v5_32_0_20261014.py",
+   "landed": "2026-10-14T17:22:47Z",
+   "promoted": "2026-10-18T06:48:35Z",
    "reason": "count",
-   "version": "5.31.0"
+   "version": "5.32.0"
   }
  }
 }
