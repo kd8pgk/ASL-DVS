@@ -1,6 +1,23 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_78_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_79_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.79-pi02w (2026-10-18)
+
+Echo tab: the same change 9.3.78 made to the ASL tab. The full build is not changed.
+
+- **Tune row removed.** The node-number box and its Tune, LH and Save buttons above
+  the search row are gone.
+- **Connect takes Tune's jobs.** A bare node number (1–7 digits) in the search box
+  connects that node with Connect or Enter when no station is picked from the menu,
+  even one that isn't logged in right now. A station picked from the menu still wins.
+  The search box stays usable when the station list is missing or empty, for typed
+  numbers.
+- **Save.** Saves the picked station, or else the typed number, or else the last node
+  connected by number.
+- **LH opens the Edit tab's Echo Last Heard address.** It no longer opens EchoLink's
+  logins page. It is greyed out while that address is blank.
+- The page code left over from the two Tune rows is removed.
 
 ## 9.3.78-pi02w (2026-10-18)
 

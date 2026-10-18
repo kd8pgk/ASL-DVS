@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.78-pi02w"
+VERSION      = "9.3.79-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -9177,27 +9177,18 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         </div>
         <!-- ECHO -->
         <div id="pg-ECHO" class="hidden">
-          <div class="quick-bar">
-            <input id="echo-input" class="quick-inp" type="text" inputmode="numeric"
-              pattern="[0-9]*" placeholder="EchoLink node (e.g. 9999)…" maxlength="7"
-              oninput="ndcQtSync('ECHO')"
-              onkeydown="if(event.key==='Enter')doEchoConnectByNumber()">
-            <button class="btn btn-amber" onclick="doEchoConnectByNumber()">Tune</button>
-            <button id="lh-btn-ECHO" class="btn-last lh-off" onclick="openModeLast('ECHO')">LH</button>
-            <button id="echo-qt-save-btn" class="btn btn-muted" onclick="ndcQtSave('ECHO')" disabled
-              aria-label="Save this node to favorites" title="Save to favorites">Save</button>
-          </div>
           <div id="echo-card" class="tgc-card tgc-echo">
             <input id="echo-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: node or callsign" aria-label="Search EchoLink stations"
-              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ECHO')" disabled>
+              placeholder="Node # or call" aria-label="Search EchoLink stations"
+              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ECHO')"
+              onkeydown="if(event.key==='Enter')ndcConnect('ECHO')">
             <select id="echo-ref-select" class="tgc-select" aria-label="EchoLink station"
               onchange="ndcButtons('ECHO')" disabled>
               <option value="">Type to search…</option>
             </select>
             <button id="echo-connect-btn" class="btn btn-amber" onclick="ndcConnect('ECHO')" disabled>Connect</button>
-            <button id="lh-btn-ECHONODE" class="btn-last lh-off" onclick="ndcLast('ECHO')"
-              aria-label="Open the EchoLink logins page" aria-disabled="true">LH</button>
+            <button id="lh-btn-ECHO" class="btn-last lh-off" onclick="openModeLast('ECHO')"
+              aria-label="Open the EchoLink Last Heard page set on the Edit tab">LH</button>
             <button id="echo-save-btn" class="btn btn-muted" onclick="ndcSave('ECHO')" disabled
               aria-label="Save this station to favorites" title="Save to favorites">Save</button>
             <div id="echo-card-msg" class="tgc-card-msg" role="status" hidden></div>
@@ -11537,12 +11528,13 @@ async function aslConnect(node,name){
    its jobs (typed: a bare node number in the search box connects/saves even
    when it is not listed; Save falls back to the last number connected).  LH
    is lh-btn-ASL, the Edit tab's ASL Last Heard URL (openModeLast).
-   ECHO: chan_echolink's "echolink dbdump" (stations logged in right now),
-   LH opens EchoLink's logins page (it has no page per node). */
+   ECHO: chan_echolink's "echolink dbdump" (stations logged in right now).
+   v9.3.79: same as ASL (typed, no quick bar, LH is lh-btn-ECHO). */
 const NDC_TTL_MS=300000;
 const NDC={
   ASL:{card:'asl-card',msg:'asl-card-msg',filter:'asl-filter',sel:'asl-ref-select',
-    connectBtn:'asl-connect-btn',saveBtn:'asl-save-btn',typed:true,
+    connectBtn:'asl-connect-btn',saveBtn:'asl-save-btn',
+    typed:n=>doConnectByNumber(n),
     api:'/api/asl-directory',saveAction:'save-asl-favorite',favApi:'/api/asl-nodes',
     favsLoaded:n=>{_lastAslNodes=n;renderASLGrid(_lastAslNodes,_lastLinkedNode);},
     connect:(node,name)=>aslConnect(node,name),
@@ -11555,26 +11547,23 @@ const NDC={
     foundMsg:(d,total)=>total.toLocaleString()+' nodes listed'+
       (d.mtime?', dated '+new Date(d.mtime*1000).toLocaleDateString():''),
     noMatch:q=>'No nodes match "'+q+'".',
-    searchErr:'Could not search the node list. Try again.',
-    qtBad:'ASL node must be a number (up to 7 digits)'},
+    searchErr:'Could not search the node list. Try again.'},
   ECHO:{card:'echo-card',msg:'echo-card-msg',filter:'echo-filter',sel:'echo-ref-select',
-    connectBtn:'echo-connect-btn',saveBtn:'echo-save-btn',lhBtn:'lh-btn-ECHONODE',
-    qtInput:'echo-input',qtBtn:'echo-qt-save-btn',
+    connectBtn:'echo-connect-btn',saveBtn:'echo-save-btn',
+    typed:n=>doEchoConnectByNumber(n),
     api:'/api/echo-directory',saveAction:'save-echo-favorite',favApi:'/api/echo-nodes',
     favsLoaded:n=>{_lastEchoNodes=n;renderEchoGrid(_lastEchoNodes,_lastEchoFav);},
     connect:(node,name)=>echoConnect(node,name),
-    lhUrl:r=>'https://www.echolink.org/logins.jsp',
     optText:m=>[m[0],m[1]].filter(Boolean).join(' · '),
     noListOpt:'No station list',selectOpt:'Select station…',
     listErr:'Could not check the EchoLink station list. Reopen this tab to try again.',
-    emptyMsg:'The EchoLink station list is empty. EchoLink may still be logging in; reopen this tab in a few minutes.',
-    missingMsg:'EchoLink station list not available. Is EchoLink turned on in Asterisk?',
+    emptyMsg:'The EchoLink station list is empty. EchoLink may still be logging in; reopen this tab in a few minutes. You can still type a node number.',
+    missingMsg:'EchoLink station list not available. Is EchoLink turned on in Asterisk? You can still type a node number.',
     missingRetryMs:60000,
     foundMsg:(d,total)=>total.toLocaleString()+' stations logged in'+
       (d.mtime?' as of '+new Date(d.mtime*1000).toLocaleTimeString():''),
     noMatch:q=>'No logged-in stations match "'+q+'".',
-    searchErr:'Could not search the station list. Try again.',
-    qtBad:'EchoLink node numbers are 1–7 digits'},
+    searchErr:'Could not search the station list. Try again.'},
 };
 const _ndc={};
 Object.keys(NDC).forEach(k=>{_ndc[k]={timer:0,seq:0,rows:{},saving:false,found:false,checked:0,total:0,qtLast:''};});
@@ -11591,17 +11580,15 @@ function ndcSelected(k){
   return v&&_ndc[k].rows[v]?_ndc[k].rows[v]:null;
 }
 function ndcTyped(k){
-  if(!NDC[k].typed)return '';
   const inp=byId(NDC[k].filter);
   const v=inp?inp.value.trim():'';
   return /^\d{1,7}$/.test(v)?v:'';
 }
 function ndcButtons(k){
   const c=NDC[k],r=ndcSelected(k),t=ndcTyped(k);
-  const cb=byId(c.connectBtn),sv=byId(c.saveBtn),lh=byId(c.lhBtn);
+  const cb=byId(c.connectBtn),sv=byId(c.saveBtn);
   if(cb)cb.disabled=!r&&!t;
-  if(sv)sv.disabled=(!r&&!t&&!(c.typed&&_ndc[k].qtLast))||_ndc[k].saving;
-  if(lh){lh.classList.toggle('lh-off',!r);lh.setAttribute('aria-disabled',r?'false':'true');}
+  if(sv)sv.disabled=(!r&&!t&&!_ndc[k].qtLast)||_ndc[k].saving;
 }
 async function ndcCardEnter(k){
   const c=NDC[k],st=_ndc[k];
@@ -11624,7 +11611,6 @@ function ndcFound(k,d){
   const inp=byId(c.filter),sel=byId(c.sel);
   st.found=!!(d.found&&d.total);
   st.total=d.total||0;
-  if(inp)inp.disabled=!st.found&&!c.typed;
   if(!st.found){
     st.rows={};
     if(sel){sel.innerHTML='<option value="">'+c.noListOpt+'</option>';sel.disabled=true;}
@@ -11686,12 +11672,8 @@ async function ndcSearch(k){
 }
 function ndcConnect(k){
   const r=ndcSelected(k);
-  if(!r){const t=ndcTyped(k);if(t)doConnectByNumber(t);return;}
+  if(!r){const t=ndcTyped(k);if(t)NDC[k].typed(t);return;}
   NDC[k].connect(r[0],[r[0],r[1]].filter(Boolean).join(' '));
-}
-function ndcLast(k){
-  const r=ndcSelected(k);
-  if(r)openLast(NDC[k].lhUrl(r));
 }
 async function ndcSaveNode(k,node){
   const c=NDC[k];
@@ -11708,28 +11690,10 @@ async function ndcSaveNode(k,node){
 }
 async function ndcSave(k){
   const r=ndcSelected(k),st=_ndc[k];
-  const node=r?r[0]:(ndcTyped(k)||(NDC[k].typed?st.qtLast:''));
+  const node=r?r[0]:(ndcTyped(k)||st.qtLast);
   if(!node||st.saving)return;
-  st.saving=true;ndcButtons(k);ndcQtSync(k);
-  try{await ndcSaveNode(k,node);}finally{st.saving=false;ndcButtons(k);ndcQtSync(k);}
-}
-function ndcQtPick(k){
-  const inp=byId(NDC[k].qtInput);
-  const v=inp?inp.value.trim():'';
-  return v||_ndc[k].qtLast;
-}
-function ndcQtSync(k){
-  const b=byId(NDC[k].qtBtn);
-  if(b)b.disabled=_ndc[k].saving||!ndcQtPick(k);
-}
-async function ndcQtSave(k){
-  const st=_ndc[k];
-  if(st.saving)return;
-  const node=ndcQtPick(k);
-  if(!node){ndcQtSync(k);return;}
-  if(!/^\d{1,7}$/.test(node)){toast(NDC[k].qtBad,'err');return;}
-  st.saving=true;ndcQtSync(k);ndcButtons(k);
-  try{await ndcSaveNode(k,node);}finally{st.saving=false;ndcQtSync(k);ndcButtons(k);}
+  st.saving=true;ndcButtons(k);
+  try{await ndcSaveNode(k,node);}finally{st.saving=false;ndcButtons(k);}
 }
 async function doConnectByNumber(node){
   const inp=byId('asl-filter');
@@ -11753,9 +11717,8 @@ async function echoConnect(node,name){
     30000
   );}finally{undimGrid('ECHO');}
 }
-async function doEchoConnectByNumber(){
-  const inp=byId('echo-input');
-  const node=inp?inp.value.trim():'';
+async function doEchoConnectByNumber(node){
+  const inp=byId('echo-filter');
   if(!node){toast('Enter a node number first','err');return}
   if(!/^\d{1,7}$/.test(node)){toast('EchoLink node numbers are 1–7 digits','err');return}   // v9.3.56
   if(busy)return;
@@ -11763,7 +11726,7 @@ async function doEchoConnectByNumber(){
   try{await apiAction(
     {action:'echo-connect-by-number',node},
     `Echo connecting ${node}…`,
-    d=>{_ndc.ECHO.qtLast=node;if(inp)inp.value='';ndcQtSync('ECHO');_lastEchoFav=node;setIndicator(node,'ECHO',false);renderEchoGrid(_lastEchoNodes,node);showReady(`Echo READY — ${node}`);},  // v9.3.59 Save memory
+    d=>{_ndc.ECHO.qtLast=node;if(inp&&inp.value.trim()===node){inp.value='';ndcSearch('ECHO');}else ndcButtons('ECHO');_lastEchoFav=node;setIndicator(node,'ECHO',false);renderEchoGrid(_lastEchoNodes,node);showReady(`Echo READY — ${node}`);},  // v9.3.59 Save memory
     30000
   );}finally{undimGrid('ECHO');}
 }
