@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.75-pi02w"
+VERSION      = "9.3.76-pi02w"
 BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
@@ -14224,20 +14224,134 @@ def _dvs_startup_init() -> None:
         _dvs("tune", TG_DISCONNECT)
         set_state(current_dvs_mode="DMR")
 
-def _is_fresh_boot() -> bool:
+def _boot_id() -> str:
     try:
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except Exception:
+        return ""
+
+def _is_fresh_boot() -> bool:
+    boot_id = _boot_id()
+    if not boot_id:
         return True
     try:
         marker = Path(_BOOT_MARKER_PATH)
         prev = marker.read_text().strip() if marker.is_file() else None
-        fresh = prev != boot_id
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(boot_id)
-        return fresh
+        return prev != boot_id
     except Exception:
         return True
+
+def _mark_boot_done() -> None:
+    boot_id = _boot_id()
+    if not boot_id:
+        return
+    try:
+        marker = Path(_BOOT_MARKER_PATH)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(boot_id)
+    except Exception as exc:
+        log.warning("startup: could not write the boot marker: %s", exc)
+
+_BOOT_AB_WAIT = 300
+_BOOT_ASTERISK_SETTLE = 30
+_BOOT_ASTERISK_WAIT = 120
+
+def _abinfo_this_boot() -> "dict | None":
+    try:
+        up = float(Path("/proc/uptime").read_text().split()[0])
+    except Exception:
+        up = 0.0
+    booted = time.time() - up
+    try:
+        files = [f for f in _glob.glob("/tmp/ABInfo_*.json") if _is_root_owned(f) and os.path.getmtime(f) >= booted]
+    except Exception:
+        files = []
+    return _read_abinfo() if files else None
+
+def _dvs_apply_live(fresh_boot: bool, live_ab: "dict | None") -> None:
+    if live_ab:
+        ab_mode    = live_ab.get("tlv", {}).get("ambe_mode", "")
+        ab_last_tg = live_ab.get("last_tune", "")
+        ab_gw      = str(live_ab.get("digital", {}).get("gw", "0")).strip()
+        ab_active  = bool(ab_gw and ab_gw != "0")
+        if ab_mode in DIGITAL_MODES:
+            if ab_active or not fresh_boot:
+                reason = (f"active call gw={ab_gw}" if ab_active
+                          else "idle, process restart same boot")
+                log.info(
+                    "startup: AB live in %s (%s) — preserving connection",
+                    ab_mode, reason,
+                )
+                set_state(
+                    current_dvs_mode = ab_mode,
+                    current_fav      = ab_last_tg or None,
+                    current_fav_node  = None,
+                )
+            else:
+                log.info(
+                    "startup: AB live in %s (idle, fresh boot) — re-establishing server connection",
+                    ab_mode,
+                )
+                if ab_mode == "DMR":
+                    _dvs_startup_init()
+                else:
+                    _dvs("tune", TG_DISCONNECT)
+                    _dvs_settle()
+                    _dvs("mode", ab_mode)
+                    set_state(
+                        current_dvs_mode = ab_mode,
+                        current_fav      = None,
+                        current_fav_node = None,
+                    )
+        else:
+            _dvs_startup_init()
+    else:
+        _dvs_startup_init()
+
+def _dvs_boot_init() -> None:
+    try:
+        end = time.monotonic() + _BOOT_AB_WAIT
+        live_ab = _abinfo_this_boot()
+        if live_ab is None:
+            log.info("startup: fresh boot — waiting up to %d s for Analog_Bridge before the startup tune", _BOOT_AB_WAIT)
+        while live_ab is None and time.monotonic() < end:
+            time.sleep(5)
+            live_ab = _abinfo_this_boot()
+        if live_ab is None:
+            log.warning("startup: Analog_Bridge didn't report in %d s — sending the startup tune anyway", _BOOT_AB_WAIT)
+        _dvs_apply_live(True, live_ab)
+    except Exception as exc:
+        log.warning("startup: boot DVSwitch init failed: %s", exc)
+    finally:
+        _mark_boot_done()
+
+def _asterisk_up_secs() -> "float | None":
+    try:
+        r = subprocess.run(["systemctl", "show", "asterisk", "-p", "ActiveState", "-p", "ActiveEnterTimestampMonotonic"],
+                           capture_output=True, text=True, timeout=5)
+    except Exception:
+        return None
+    props = dict(ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
+    if props.get("ActiveState") != "active":
+        return None
+    try:
+        since = int(props.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
+    except ValueError:
+        return None
+    return time.monotonic() - since if since > 0 else None
+
+def _asl_boot_disconnect() -> None:
+    try:
+        end = time.monotonic() + _BOOT_ASTERISK_WAIT
+        while time.monotonic() < end:
+            up = _asterisk_up_secs()
+            if up is not None and up >= _BOOT_ASTERISK_SETTLE:
+                break
+            time.sleep(3)
+        log.info("startup: fresh boot — disconnect-all once Asterisk has settled")
+        _disconnect_all()
+    except Exception as exc:
+        log.warning("startup: boot disconnect-all failed: %s", exc)
 
 def _harden_existing_conf_perms() -> None:
     try:
@@ -14290,45 +14404,12 @@ def startup() -> None:
         if has_stfu:
             set_state(stfu_server=detect_stfu_server())
 
-        live_ab = _read_abinfo()
-        if live_ab:
-            ab_mode    = live_ab.get("tlv", {}).get("ambe_mode", "")
-            ab_last_tg = live_ab.get("last_tune", "")
-            ab_gw      = str(live_ab.get("digital", {}).get("gw", "0")).strip()
-            ab_active  = bool(ab_gw and ab_gw != "0")
-            if ab_mode in DIGITAL_MODES:
-                if ab_active or not fresh_boot:
-                    reason = (f"active call gw={ab_gw}" if ab_active
-                              else "idle, process restart same boot")
-                    log.info(
-                        "startup: AB live in %s (%s) — preserving connection",
-                        ab_mode, reason,
-                    )
-                    set_state(
-                        current_dvs_mode = ab_mode,
-                        current_fav      = ab_last_tg or None,
-                        current_fav_node  = None,
-                    )
-                else:
-                    log.info(
-                        "startup: AB live in %s (idle, fresh boot) — re-establishing server connection",
-                        ab_mode,
-                    )
-                    if ab_mode == "DMR":
-                        _dvs_startup_init()
-                    else:
-                        _dvs("tune", TG_DISCONNECT)
-                        _dvs_settle()
-                        _dvs("mode", ab_mode)
-                        set_state(
-                            current_dvs_mode = ab_mode,
-                            current_fav      = None,
-                            current_fav_node = None,
-                        )
-            else:
-                _dvs_startup_init()
+        if fresh_boot:
+            threading.Thread(target=_dvs_boot_init, name="dvs-boot-init", daemon=True).start()
         else:
-            _dvs_startup_init()
+            _dvs_apply_live(False, _read_abinfo())
+    if not (has_dvs and fresh_boot):
+        _mark_boot_done()
 
     if has_asl or has_dvs:
         try:
@@ -14343,8 +14424,7 @@ def startup() -> None:
         has_echo = _detect_echo()
         set_state(has_echo=has_echo)
         if fresh_boot:
-            _disconnect_all()
-            time.sleep(0.5)
+            threading.Thread(target=_asl_boot_disconnect, name="asl-boot-disconnect", daemon=True).start()
         else:
             log.info("startup: process restart within same boot — skipping ASL disconnect-all")
         _write_event_script()

@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.51.0"
+VERSION ="2.52.0"
 DATE_STR ="2026-10-14"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -1536,6 +1536,15 @@ def _diskimg_schedule_watch_job(job_id, dest_drive_path):
     if state == "done":
         _diskimg_schedule_prune(dest_drive_path, cfg.get("retention"))
 
+DISKIMG_BOOT_GRACE = 900
+
+def _diskimg_uptime() -> float:
+    try:
+        with open("/proc/uptime") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return float(DISKIMG_BOOT_GRACE)
+
 def _diskimg_schedule_tick():
     cfg = _diskimg_schedule_load()
     if not cfg.get("enabled"):
@@ -1554,6 +1563,12 @@ def _diskimg_schedule_tick():
         cfg["last_skip_at"] = time.time()
         cfg["last_skip_message"] = reason
         _diskimg_schedule_save(cfg)
+
+    up = _diskimg_uptime()
+    if up < DISKIMG_BOOT_GRACE:
+        skip(f"the node booted {int(up // 60)} min ago; scheduled backups wait {DISKIMG_BOOT_GRACE // 60} min after boot "
+             "so the network, the tunnel and the radio services can start first")
+        return
 
     with _diskimg_job_lock:
         job_running = _diskimg_job is not None and _diskimg_job.get("state") == "running"
