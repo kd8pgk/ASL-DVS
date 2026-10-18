@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.55.0"
+VERSION ="2.56.0"
 DATE_STR ="2026-10-18"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -2880,6 +2880,11 @@ def _interp_for (path ):
     
     return "bash"if path .lower ().endswith (".sh")else "python3"
 
+def _cli_env ():
+    env =os .environ .copy ()
+    env ["PYTHONUNBUFFERED"]="1"
+    return env
+
 _FILE_META_CACHE_MAX =2000 
 _file_meta_cache =collections .OrderedDict ()
 _file_meta_cache_lock =threading .Lock ()
@@ -4356,7 +4361,8 @@ def _fu_stage(entry):
 def _fu_run_cli(script_path, flag):
     try:
         proc = subprocess.Popen([_interp_for(script_path), script_path, flag],
-                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1)
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                env=_cli_env())
     except OSError as exc:
         log_event(f"Could not run {os.path.basename(script_path)} {flag}: {exc}", "err")
         return None
@@ -4800,7 +4806,7 @@ def run_self_install_bg (script_path ,script_name ,comp ):
         proc =subprocess .Popen (
         [_interp_for (script_path ),script_path ,"--install"],
         stdout =subprocess .PIPE ,stderr =subprocess .STDOUT ,
-        text =True ,bufsize =1 ,
+        text =True ,bufsize =1 ,env =_cli_env (),
         )
         for line in proc .stdout :
             log_event (line .rstrip ("\n"),"info")
@@ -4864,7 +4870,7 @@ def run_self_uninstall_bg (comp ):
         proc =subprocess .Popen (
         [_interp_for (script_path ),script_path ,"--uninstall"],
         stdout =subprocess .PIPE ,stderr =subprocess .STDOUT ,
-        text =True ,bufsize =1 ,
+        text =True ,bufsize =1 ,env =_cli_env (),
         )
         for line in proc .stdout :
             log_event (line .rstrip ("\n"),"info")

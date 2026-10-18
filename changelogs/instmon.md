@@ -1,6 +1,16 @@
 # instmon changelog
 
-Current file: `instmon_v2_55_0_20261018.py`. Newest entries first.
+Current file: `instmon_v2_56_0_20261018.py`. Newest entries first.
+
+## 2.56.0 (2026-10-18)
+
+- **Install and uninstall output shows up as it happens.** A tool's `--install` and
+  `--uninstall` now run with `PYTHONUNBUFFERED=1`, so each line it prints reaches the
+  log right away. Before, Python held its printed lines until the script finished,
+  and only the lines from programs it ran (such as systemctl's "Created symlink")
+  came through. So during a slow step (magicbox: 44helper's install waiting for its
+  restart to finish) the log looked stuck. Applies to Full Update and to the
+  Install / Uninstall buttons.
 
 ## 2.55.0 (2026-10-18)
 
