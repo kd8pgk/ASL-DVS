@@ -1,6 +1,16 @@
 # Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_all_v1_5.sh`. Newest entries first.
+Current file: `uninstall_all_v1_6_0_20261018.sh`. Newest entries first.
+
+## 1.6.0 (2026-10-18)
+
+- Removes **Node Listen** too, with its own `--uninstall`
+  (`/usr/local/bin/nodelisten.py`), after 44helper. That takes its `outstreamcmd`
+  line out of `/etc/asterisk/rpt.conf` (backup in `/etc/asl_dvs/nodelisten_backups/`)
+  and says to restart Asterisk; its config `/etc/asl_dvs/nodelisten.conf` stays,
+  like the other configs.
+- At the end, warns if rpt.conf still mentions nodelisten.
+- Moves to the three-part version numbers (1.5 -> 1.6.0).
 
 ## 1.5 (2026-10-12)
 

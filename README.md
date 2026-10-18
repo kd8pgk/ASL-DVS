@@ -260,7 +260,7 @@ memory settles from the next restart on.
 ## Removing everything
 
 ```
-sudo bash uninstall_all_v1_5.sh
+sudo bash uninstall_all_v1_6_0_20261018.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
@@ -283,7 +283,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `44helper_v0_0_215_20261018.py` | common |
 | `nodelisten_v0_2_0_20261018.py` | common |
 | `install_all_v7_2_0_20261018.sh` | common |
-| `uninstall_all_v1_5.sh` | common |
+| `uninstall_all_v1_6_0_20261018.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
