@@ -1,6 +1,30 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_75_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_76_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.76-pi02w (2026-10-18)
+
+Fresh-boot start-up fixes from a boot audit (44helper's boot order now makes
+Analog_Bridge wait up to 3 minutes for the network and the tunnel).
+
+- **The fresh-boot DVSwitch tune waits for Analog_Bridge.** On a fresh boot the
+  Dashboard sent its startup tune (DMR server, or disconnect and re-select the mode)
+  straight away. With Analog_Bridge still waiting for the network the tune went
+  nowhere, and the boot marker, written first, stopped it being tried again. Now
+  the tune runs in a background thread that waits up to 5 minutes for
+  Analog_Bridge's `/tmp/ABInfo_*.json` from this boot, then tunes (or tunes anyway
+  after the limit). The boot marker is written only after that, so a Dashboard
+  restart during the wait tries again. A restart within the same boot still
+  keeps the live links, unchanged.
+- **The tune no longer runs before the service reports ready**, so a slow
+  `dvswitch.sh` can't push the Dashboard past systemd's 90 s start limit.
+- **Fresh-boot disconnect-all waits for Asterisk to settle.** It now runs in the
+  background once Asterisk has been active for 30 s (at most 2 minutes), so it
+  doesn't race Asterisk's own start-up.
+- Tested (mocks): the tune waits for Analog_Bridge and then tunes; with no report
+  it tunes after the limit; the marker is written only afterwards; disconnect-all
+  waits for a settled Asterisk; `startup()` on a fresh boot starts both in the
+  background and returns at once; a same-boot restart keeps the live links.
 
 ## 9.3.75-pi02w (2026-10-14)
 
