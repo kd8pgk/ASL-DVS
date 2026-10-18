@@ -20,13 +20,13 @@
    "version": "9.3.79"
   },
   "nodecontrol_pi02w": {
-   "blob": "40dd6737cb9c8f9ad3d40400db50b421eb10cda6",
-   "commit": "4888470950b705fb5670938b3320f2380982ad62",
-   "file": "nodecontrol_pi02w_v9_3_72_20261014.py",
-   "landed": "2026-10-14T15:50:16Z",
-   "promoted": "2026-10-18T06:53:49Z",
+   "blob": "c2cfed8454967edf57c2003cdee7e687d8d3a7e9",
+   "commit": "baa064c8bfb3a4ddd1bc90477737c39b5cdc8b81",
+   "file": "nodecontrol_pi02w_v9_3_73_20261014.py",
+   "landed": "2026-10-14T16:01:46Z",
+   "promoted": "2026-10-18T12:02:32Z",
    "reason": "count",
-   "version": "9.3.72-pi02w"
+   "version": "9.3.73-pi02w"
   },
   "sysmon": {
    "blob": "ca734f60fbdf4007008f688b209ad0506a6a10bd",
@@ -38,13 +38,13 @@
    "version": "6.13.82"
   },
   "sysmon_pi02w": {
-   "blob": "335a7eb942c49ea2f0935e264354179b93d32598",
-   "commit": "07ebcd896c3484ddb9a6afc06321038f2a0c9b99",
-   "file": "sysmon_pi02w_v6_13_67_17_20261013.py",
-   "landed": "2026-10-13T11:55:09Z",
-   "promoted": "2026-10-17T12:02:21Z",
+   "blob": "cb1c01dc9c6426cbb2ce5a06f7b53f6d621d4d0a",
+   "commit": "f12abf4120e44de489fd144ca47f3d3440c1df8c",
+   "file": "sysmon_pi02w_v6_13_68_20261013.py",
+   "landed": "2026-10-13T15:57:54Z",
+   "promoted": "2026-10-18T12:02:32Z",
    "reason": "count",
-   "version": "6.13.67.17-pi02w"
+   "version": "6.13.68-pi02w"
   },
   "wifimon": {
    "blob": "4456754cbebe9eb66f2189e53fecb6c3a27058f1",
