@@ -10,6 +10,15 @@
    "reason": "count",
    "version": "0.0.204"
   },
+  "instmon": {
+   "blob": "a84588688aa074bb9e2ddde8b9759e9beb0a6b68",
+   "commit": "0597bd9a813239b774b524c4115953da4df25681",
+   "file": "instmon_v2_50_0_20261014.py",
+   "landed": "2026-10-14T18:39:17Z",
+   "promoted": "2026-10-18T15:48:19Z",
+   "reason": "count",
+   "version": "2.50.0"
+  },
   "nodecontrol": {
    "blob": "8df9711895955e7a5ac3da4b786379cd298ae26a",
    "commit": "e175ab38cc1d950105533c2ad08340becd531876",
