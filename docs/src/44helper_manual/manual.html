@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.202</b><br>Edition 2026-10-14</div>
+    <div class="ed"><b>44helper 0.0.207</b><br>Edition 2026-10-18</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_202_20261014.py</td><td>0.0.202</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_207_20261018.py</td><td>0.0.207</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
@@ -126,7 +126,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.202 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.207 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -566,12 +566,20 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <b>idle</b>. <code>ip -4 route get &lt;endpoint&gt;</code> shows <code>dev wg0</code>. 44helper now writes an
     <i>endpoint pin</i> into wg0.conf whenever it is needed, two lines between <code># 44helper-endpoint-pin-begin</code>
     / <code>-end</code>:</p>
-<pre>PreUp = ip -4 route replace &lt;server&gt;/32 &lt;normal default route&gt; || true
+<pre>PreUp = (wait up to 30 s for the normal default route); ip -4 route replace &lt;server&gt;/32 &lt;that route&gt;
 PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
-  <p>Every 44helper write of wg0.conf adds, keeps or removes it, and step 6 adds it before starting. A host-name
-    endpoint is looked up when the tunnel starts. It is left out for a full tunnel (wg-quick handles that) and for
+  <p>From 0.0.206 the PreUp line waits up to 30 seconds for the Pi's normal default route. Before, it copied the route
+    straight away and gave up silently if there wasn't one yet, which happens when the tunnel starts early at boot:
+    the tunnel then came up in a routing loop with no handshake. Now, if there is still no route after 30 seconds, the
+    line fails, so the tunnel start fails and the boot order's retry (7.7) starts it again 20 seconds later. A
+    host-name endpoint is looked up at that point and the address is saved in <code>/run/44helper-endpoint-wg0</code>,
+    so PostDown removes exactly that route.</p>
+  <p>Every 44helper write of wg0.conf adds, keeps, updates or removes it, and step 6 adds it before starting. It is left out for a full tunnel (wg-quick handles that) and for
     <code>Table = off</code>. On step 4b a red banner and <b>Fix the tunnel-server route</b> repair an existing config and
-    add the route straight away, so the handshake returns without a restart.</p>
+    add the route straight away, so the handshake returns without a restart. From 0.0.207, a pin in the older form
+    (before 0.0.206) gets an <b>amber</b> banner instead: the tunnel works now, but that line can fail at boot.
+    <b>Update the tunnel-server route</b> rewrites the two lines; nothing restarts. <b>Set the boot order</b> (7.7)
+    updates it too.</p>
   <p><b>Split: Repair AllowedIPs</b> fixes a config pasted unedited. Under a split tunnel a full config sends every DNS
     lookup into the tunnel, the classic cause of "AllStar works but DVSwitch and M17 don't". Restart the tunnel after.
     It is switched off while the half tunnel or the full tunnel with exceptions is in use.</p>
@@ -600,6 +608,7 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <li>Waits up to 15 seconds for a handshake. If none comes it warns (check the Endpoint and that the tunnel is approved on the portal) and leaves the tunnel up.</li>
     <li>Checks the tunnel server's route. If it goes into wg0, it adds the /32 route to the normal link straight away.</li>
     <li>If <code>netcheck.service</code> is on the node, applies the netcheck fixes (7.5) that apply and aren't in place yet.</li>
+    <li>Sets the boot order (7.7, from 0.0.205).</li>
     <li>Starts any enabled DVSwitch services that are stopped.</li>
   </ol>
   <p>Each result is a line in the step's output. Convert's enable step does the same.</p>
@@ -632,7 +641,8 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <tr><td>Enabled DVSwitch services not running, or netcheck failed</td><td><b>Start them</b>: starts each one and shows the last log lines of any that fail. <b>Apply netcheck fixes</b>: the netcheck card's fixes that apply and aren't in place yet.</td></tr>
     <tr><td>Address wider than /32</td><td><b>Change to /32</b>, when wg0.conf has exactly one 44Net address. Doesn't restart the tunnel. Check the portal first.</td></tr>
     <tr><td>Old handshake, no keepalive</td><td><b>Add keepalive (25 s)</b>: adds <code>PersistentKeepalive = 25</code> under <code>[Peer]</code> and applies it to the running tunnel, so no restart is needed.</td></tr>
-    <tr><td>Tunnel server routes into wg0</td><td><b>Fix the tunnel-server route</b> (7.3).</td></tr>
+    <tr><td>Tunnel server routes into wg0, or wg0.conf has the older pin</td><td><b>Fix the tunnel-server route</b> (7.3).</td></tr>
+    <tr><td>Boot order not set (red when the tunnel isn't enabled at boot)</td><td><b>Set the boot order</b> (7.7).</td></tr>
     <tr><td>DNS revert in a PostDown line (0.0.201)</td><td><b>Move to PreDown</b> (7.2). No restart needed.</td></tr>
     <tr><td>DNS setting with systemd-resolved silent</td><td><b>Restart systemd-resolved</b>, then checks it answers. <b>Set DNS to Off</b>: removes 44helper's DNS lines and any <code>DNS =</code> line.</td></tr>
   </table>
@@ -643,6 +653,25 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
   </ul>
   <div class="call care"><span class="t">CAREFUL</span>Restart tunnel can drop an SSH or Cockpit session from outside
     your home network. Use it from the LAN.</div>
+  <h2><span class="n">7.7</span>Boot order (step 6b)</h2>
+  <p>From 0.0.205. After a reboot the tunnel has to come back by itself, and the DVSwitch services have to wait for it.
+    Without this, they could start before the network, the tunnel or DNS were up: netcheck failed, the gateways
+    couldn't reach their servers, and a tunnel start that failed at boot was never tried again. Step 6 sets it; the
+    <b>6b. Boot order</b> card under step 6 shows what is in place, with <b>Set the boot order</b> and <b>Remove</b>; the
+    Health card offers it when something is missing. It takes effect at the next boot; nothing running is restarted.</p>
+  <table>
+    <tr><th>Piece</th><th>What it does</th></tr>
+    <tr><td><code>44helper-netready.service</code></td><td>A oneshot that runs <code>/usr/local/sbin/44helper-netready</code> after <code>network-online.target</code> and the tunnel. It waits up to 180 seconds until there is a default route, the tunnel has a handshake (only when <code>wg-quick@wg0</code> is enabled) and names resolve, then finishes either way. Its journal line says which was missing: <code>journalctl -b -u 44helper-netready</code>.</td></tr>
+    <tr><td>DVSwitch drop-ins <code>44helper-boot.conf</code></td><td>netcheck and each DVSwitch service that is installed (bridges, md380-emu, STFU, the gateways, ircDDBGateway, webproxy) start after it (<code>After=</code>/<code>Wants=</code>). All but netcheck also restart 15 seconds after a failure.</td></tr>
+    <tr><td>Tunnel drop-in for <code>wg-quick@wg0</code></td><td><code>Restart=on-failure</code> every 20 seconds, with no limit, so a start that fails at boot (DNS or the network not ready, or the pin finding no route) is tried again.</td></tr>
+    <tr><td>Enabled at boot</td><td><code>wg-quick@wg0</code>, and the network's wait-online unit (<code>NetworkManager-wait-online</code> or <code>systemd-networkd-wait-online</code>), if they weren't.</td></tr>
+  </table>
+  <p><b>Remove</b> deletes the unit, the script and the drop-ins; the tunnel stays enabled at boot. The DVSwitch
+    install step <b>Start DVSwitch after the network is ready</b> sets the DVSwitch part, and DVSwitch purge step 1
+    removes it (Chapter 10).</p>
+  <div class="call note"><span class="t">NOTE</span>wifimon 5.35.0 adds a <b>tunnel watchdog</b> as a safety net for
+    what the boot order can't cover: five minutes after boot, and every minute after that, it restarts a tunnel that has
+    no handshake and then the DVSwitch services. See the user manual's wifimon chapter.</div>
 </section>
 
 <section class="chapter" id="ch8">
@@ -806,23 +835,23 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <tr><td style="font-weight:400;color:var(--text)">
       1. Download DVSwitch repo-install script<br>2. Run it (adds apt source + key)<br>3. Refresh package index<br>
       4. Install DVSwitch Server<br>5. Enable DVSwitch services at boot<br>6. Enable the digital-mode gateways at boot<br>
-      7. <b>Stop netcheck from blocking boot</b><br>
+      7. <b>Start DVSwitch after the network is ready</b><br>
       8–9. Install Cockpit · Enable Cockpit socket<br>10. Set Callsign / DMR ID / BrandMeister password<br>
       11. <i>(Optional)</i> Web-server clash: turn off the DVSwitch web dashboard<br>12. <i>(Optional)</i> … move it to another port<br>
       13. Save original configs as Restore point</td>
     <td>
       1. <b>Check what's already here</b> (read-only)<br>2–4. Download and run the repo-install script, refresh<br>
       5. <b>Test install (changes nothing)</b>: a dry run; <b>if it fails, stop</b><br>6. Install DVSwitch Server<br>
-      7–8. Enable services and gateways at boot<br>9. <b>Stop netcheck from blocking boot</b><br>10–11. Cockpit<br>
+      7–8. Enable services and gateways at boot<br>9. <b>Start DVSwitch after the network is ready</b><br>10–11. Cockpit<br>
       12. Callsign / DMR ID / BrandMeister password<br>13–14. <i>(Optional)</i> web-server clash fixes<br>15. Save Restore point</td></tr>
   </table>
   <ul>
-    <li><b>Stop netcheck from blocking boot</b> (from 0.0.200): DVSwitch's netcheck runs at boot, and when it fails (often because the network isn't up yet) the bridges and gateways never start. This step applies the netcheck card's fixes (7.5): netcheck runs once the network is online, and a failed netcheck no longer keeps the services down. Safe to run again; tunnel step 6 does the same.</li>
+    <li><b>Start DVSwitch after the network is ready</b> (0.0.200 as "Stop netcheck from blocking boot"; boot order from 0.0.205): DVSwitch's netcheck runs at boot, and when it fails (often because the network isn't up yet) the bridges and gateways never start. This step applies the netcheck card's fixes (7.5) and the DVSwitch part of the boot order (7.7): netcheck, the bridges and the gateways wait for the network, the tunnel and DNS, and restart after a failure. Safe to run again; tunnel step 6 does the same.</li>
     <li><b>Set Callsign / DMR ID / BrandMeister password</b> fills <code>MMDVM_Bridge.ini</code> from three fields and restarts the bridges. The DMR ID is your 7-digit ID plus a 2-digit suffix, for example <code>320123401</code>.</li>
     <li><b>Web-server clash:</b> ASL3's apache2 (Allmon3) and DVSwitch's lighttpd dashboard both want port 80; step 1 reports a <code>CLASH</code>. Turn the DVSwitch dashboard off, or move it (8081 by default; ports used by the suite are refused). The move backs up <code>lighttpd.conf</code> once and checks the new config with <code>lighttpd -tt</code>. Both do nothing if there is no clash.</li>
   </ul>
   <p><b>Purge</b> (same for both scripts): from 0.0.200 it starts by removing 44helper's netcheck fixes (the card's
-    Revert), so nothing is left behind; then stop and disable the services, purge the packages, autoremove, remove the
+    Revert) and, from 0.0.205, the DVSwitch boot-order drop-ins, so nothing is left behind; then stop and disable the services, purge the packages, autoremove, remove the
     repository, the four clean-up steps; optional: leftover config, leftovers from the old third-party build script,
     Cockpit.</p>
 
@@ -1050,7 +1079,14 @@ sudo wg show wg0</pre>
     <li>Bridges won't start at boot: the Health and fixes card's <b>Apply netcheck fixes</b>, or the netcheck card under step 6 (Chapter 7). From 0.0.200 step 6 and the DVSwitch installer do this by themselves.</li>
     <li>Full tunnel: outbound block rules (Full tab 4b) or a master that refuses the 44 address. Try the half tunnel, or put the master on the exceptions bypass list.</li>
   </ol>
-  <h2><span class="n">14.5</span>The Pi runs out of memory</h2>
+  <h2><span class="n">14.5</span>The tunnel or DVSwitch doesn't come back after a reboot</h2>
+  <ol class="steps">
+    <li>Health card: if it offers <b>Set the boot order</b>, or step 4b shows the amber older-pin banner, press it, then reboot (7.3, 7.7).</li>
+    <li>See what happened at this boot: <code>journalctl -b -u wg-quick@wg0 -u 44helper-netready -u netcheck --no-pager | head -80</code>. The netready line says whether the network, the tunnel handshake or DNS was late.</li>
+    <li>A routing loop after boot (Overview, red): <b>Fix the tunnel-server route</b>; with 0.0.206 or later the pin waits for the route, so it shouldn't come back.</li>
+    <li>wifimon's tunnel watchdog (5.35.0) restarts a tunnel with no handshake after five minutes and then the DVSwitch services; its card on the wifimon page shows what it did.</li>
+  </ol>
+  <h2><span class="n">14.6</span>The Pi runs out of memory</h2>
   <p>Check swap is on: <code>swapon --show</code>. If an older 44helper turned it off, use <b>Swap — restore</b>
     (Chapter 12) or <code>sudo systemctl enable --now dphys-swapfile</code>.</p>
 </section>
