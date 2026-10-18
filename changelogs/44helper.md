@@ -1,6 +1,27 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_206_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_207_20261018.py`. Newest entries first.
+
+## 0.0.207 (2026-10-18) — testing
+
+**Step 4b wording for an older endpoint pin.** After 0.0.206 an existing wg0.conf with
+the old tunnel-server route line showed step 4b's red banner, "The next tunnel start
+will route it back into wg0", which isn't what's going on: the tunnel works, and the
+old line only fails at boot.
+
+- New status field `endpoint_pin_outdated` (the pin is there but in the old form).
+- In that case step 4b shows an amber banner instead: wg0.conf has an older
+  tunnel-server route line; the tunnel works now, but the line gives up if the tunnel
+  starts before the normal route exists (which can happen at boot), and the tunnel
+  then comes up in a routing loop. Underneath, it explains what the new line does,
+  with an **Update the tunnel-server route** button (the same repair as before:
+  only those two lines change, nothing restarts).
+- A live loop and a missing pin keep the red banner and **Fix the tunnel-server
+  route**.
+
+Tested: the status field for an old, missing and current pin; step 4b in headless
+Chromium for each case (banner, colour, button, and the repair posted); the 0.0.206
+pin tests.
 
 ## 0.0.206 (2026-10-18) — testing
 

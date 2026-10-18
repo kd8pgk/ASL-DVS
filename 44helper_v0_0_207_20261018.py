@@ -43,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.206"
+APP_VERSION = "0.0.207"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -6436,6 +6436,7 @@ def status_wg_allowed_ips() -> dict:
             "repairable": shape == "full" and half == "off" and fx == "off", "half_mode": half, "fullx_mode": fx,
             "endpoint_host": ep["host"], "endpoint_ip": ep["ip"],
             "endpoint_pin_missing": ep["needed"] and (not ep["pinned"] or bool(_wg_apply_endpoint_pin(text)[1])),
+            "endpoint_pin_outdated": ep["needed"] and ep["pinned"] and bool(_wg_apply_endpoint_pin(text)[1]),
             "endpoint_loop_live": ep["needed"] and _wg_endpoint_loop_live(ep["ip"])}
 
 def action_wg_repair_allowed_ips() -> dict:
@@ -17387,6 +17388,10 @@ function _piAllowedIpsCardHtml(kind, aip) {
     html += '<div class="step-body">Full tunnel with exceptions is ' + asl3EscapeAttr(aip.fullx_mode) + ' on this node (Full Tunnel tab), so this repair is switched off. Remove it there first to switch to a split tunnel.</div>';
   } else if (aip.half_mode && aip.half_mode !== 'off') {
     html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Full Tunnel tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
+  } else if (aip.endpoint_pin_outdated && !aip.endpoint_loop_live) {
+    html += '<div class="ov-banner lvl-warn">wg0.conf has an older tunnel-server route line (endpoint pin) for <code>' + asl3EscapeAttr(aip.endpoint_host || '') + '</code>. The tunnel works now, but that line gives up if the tunnel starts before the normal network route exists, which can happen at boot; the tunnel then comes up in a routing loop with no handshake.</div>';
+    html += '<div class="step-body">Update it: the new line waits up to 30 s for the normal route, and if there is still none it fails the start so the tunnel is retried. Only those two lines in wg0.conf change; nothing is restarted.</div>';
+    html += '<div class="step-actions"><button class="btn-run" onclick="piRepairAllowedIps(\\'pin\\')">Update the tunnel-server route</button></div>';
   } else if (aip.endpoint_loop_live || aip.endpoint_pin_missing) {
     html += '<div class="ov-banner lvl-danger">The tunnel server <code>' + asl3EscapeAttr(aip.endpoint_host || '') + '</code> is a 44Net address inside AllowedIPs' +
             (aip.endpoint_loop_live ? ', and it routes back into wg0 right now: the tunnel can\u2019t reach it, so it never handshakes (the 44Net Connect dashboard shows idle).' : '. The next tunnel start will route it back into wg0.') + '</div>';
