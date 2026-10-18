@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.54.0"
+VERSION ="2.55.0"
 DATE_STR ="2026-10-18"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4201,7 +4201,7 @@ _fu_lock = threading.Lock()
 _fu_state = {
     "running": False, "phase": "", "current": "", "error": "", "banner": False,
     "updated": [], "skipped": [], "attention": [], "scripts": [], "manuals": [], "instmon_pending": None,
-    "plan": None, "plan_at": "",
+    "plan": None, "plan_at": "", "wait_end": 0.0, "wait_what": "",
 }
 
 def full_update_running():
@@ -4214,7 +4214,7 @@ def _fu_set(**kw):
 
 def _fu_save():
     with _fu_lock:
-        payload = {k: v for k, v in _fu_state.items() if k not in ("plan", "plan_at")}
+        payload = {k: v for k, v in _fu_state.items() if k not in ("plan", "plan_at", "wait_end", "wait_what")}
     try:
         ensure_dirs()
         compare_before_write(_FU_STATE_PATH, json.dumps(payload, indent=2).encode("utf-8"))
@@ -4223,7 +4223,17 @@ def _fu_save():
 
 def full_update_snapshot():
     with _fu_lock:
-        return json.loads(json.dumps(_fu_state))
+        snap = json.loads(json.dumps(_fu_state))
+    end = snap.pop("wait_end", 0.0)
+    left = int(end - time.monotonic() + 0.999) if end else 0
+    snap["wait_left"] = max(0, left) if snap.get("running") and snap.get("wait_what") else 0
+    return snap
+
+def _fu_wait_begin(secs, what):
+    _fu_set(wait_end=time.monotonic() + secs, wait_what=what)
+
+def _fu_wait_end():
+    _fu_set(wait_end=0.0, wait_what="")
 
 _FU_STEM_ALIASES = (("asl_dvs_dashboard", "nodecontrol"), ("asl_dvs_m17_44helper", "44helper"))
 
@@ -4360,14 +4370,18 @@ def _fu_run_cli(script_path, flag):
         return None
     return proc.returncode
 
-def _fu_wait_healthy(comp):
+def _fu_wait_healthy(comp, what="start and answer"):
     deadline = time.time() + FU_START_TIMEOUT_SEC
     state = "unknown"
-    while time.time() < deadline:
-        state = systemctl_is_active(unit_of(comp))
-        if state == "active" and (comp["port"] is None or port_open(comp["port"])):
-            return True, state
-        time.sleep(2)
+    _fu_wait_begin(FU_START_TIMEOUT_SEC, what)
+    try:
+        while time.time() < deadline:
+            state = systemctl_is_active(unit_of(comp))
+            if state == "active" and (comp["port"] is None or port_open(comp["port"])):
+                return True, state
+            time.sleep(2)
+    finally:
+        _fu_wait_end()
     if state == "active":
         return False, f"running but not answering on port {comp['port']}"
     return False, state
@@ -4456,13 +4470,18 @@ def _fu_update_one(comp, row, new_path):
     prepare_install(comp, new_path)
     rc = _fu_run_cli(new_path, "--install")
     if rc == 0:
+        _fu_set(current=f"{name}: v{new_ver} installed")
         log_event(f"Full Update: {name}: waiting up to {FU_START_TIMEOUT_SEC}s for v{new_ver} to start and answer", "info")
-    ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
+    ok, state = _fu_wait_healthy(comp, f"v{new_ver} to start and answer") if rc == 0 else (False, f"--install exited {rc}")
     if ok and comp["category"] != "instmon" and FU_STABLE_SEC > 0:
-        _fu_set(current=f"{name}: watching v{new_ver} for {FU_STABLE_SEC}s")
+        _fu_set(current=f"{name}: v{new_ver} is up")
         log_event(f"Full Update: {name}: v{new_ver} is up; watching it for {FU_STABLE_SEC}s to make sure it stays up "
-                  "(the log is quiet meanwhile)", "info")
-        ok, state = _watch_steady(comp)
+                  "(the Full Update card counts it down)", "info")
+        _fu_wait_begin(FU_STABLE_SEC, f"v{new_ver} to stay up")
+        try:
+            ok, state = _watch_steady(comp)
+        finally:
+            _fu_wait_end()
     if ok:
         if row.get("status") == "switch":
             log_event(f"Full Update: {name} switched: {row['note']}", "ok")
@@ -4475,7 +4494,9 @@ def _fu_update_one(comp, row, new_path):
     _fu_set(current=f"{name}: rolling back to v{old_ver}")
     prepare_install(comp, old_path)
     rc = _fu_run_cli(old_path, "--install")
-    ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
+    if rc == 0:
+        log_event(f"Full Update: {name}: waiting up to {FU_START_TIMEOUT_SEC}s for v{old_ver} to start and answer", "info")
+    ok, state = _fu_wait_healthy(comp, f"v{old_ver} to start and answer") if rc == 0 else (False, f"--install exited {rc}")
     if ok:
         log_event(f"Full Update: {name} rolled back to v{old_ver}", "warn")
         return "skipped", f"{reason}; rolled back to v{old_ver}"
@@ -5701,6 +5722,20 @@ function _fuList(title, items) {
   return `<div><b>${title}</b><ul>${items.map(r => `<li>${escHtml(r.name)}: ${escHtml(r.note)}</li>`).join('')}</ul></div>`;
 }
 
+let _fuProgText = '';
+let _fuWaitWhat = '';
+let _fuWaitEnd = 0;
+function _fuProgTick() {
+  const prog = document.getElementById('fu-progress');
+  if (!prog) return;
+  let t = _fuProgText;
+  if (t && _fuWaitEnd) {
+    const left = Math.max(0, Math.ceil((_fuWaitEnd - Date.now()) / 1000));
+    t += ` -- waiting for ${_fuWaitWhat}: ${left}s left`;
+  }
+  prog.textContent = t;
+}
+
 function renderQuietFullUpdate(quiet, fu) {
   _fuState = fu;
   const running = !!(fu && fu.running);
@@ -5725,8 +5760,10 @@ function renderQuietFullUpdate(quiet, fu) {
   const bEl = document.getElementById('fu-banners');
   if (bEl) bEl.innerHTML = banners.join('');
 
-  const prog = document.getElementById('fu-progress');
-  if (prog) prog.textContent = running ? `Full Update running: ${fu.phase}${fu.current ? ' -- ' + fu.current : ''}` : '';
+  _fuProgText = running ? `Full Update running: ${fu.phase}${fu.current ? ' -- ' + fu.current : ''}` : '';
+  _fuWaitWhat = running && fu.wait_left > 0 ? (fu.wait_what || '') : '';
+  _fuWaitEnd = _fuWaitWhat ? Date.now() + fu.wait_left * 1000 : 0;
+  _fuProgTick();
   const planEl = document.getElementById('fu-plan');
   const plan = fu && fu.plan;
   if (planEl) {
@@ -7458,6 +7495,7 @@ function _startApp() {
   // visible again, rather than waiting out the rest of the interval.
   setInterval(() => { if (!document.hidden) pollLog(); }, 2000);
   setInterval(() => { if (!document.hidden) refreshStatus(); }, 5000);
+  setInterval(() => { if (!document.hidden && _fuWaitEnd) _fuProgTick(); }, 1000);
   setInterval(() => { if (!document.hidden) pollDrives(); }, 5000);
   // Job progress polls faster than everything else -- this is the one
   // panel someone is likely watching live while a multi-GB copy runs.
