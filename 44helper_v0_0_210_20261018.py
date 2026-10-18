@@ -43,8 +43,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.209"
-APP_STAGE = "v0.0.209: Boot tab (timeline, boot logs, saved copies of each boot, copyable report); history in changelogs/44helper.md"
+APP_VERSION = "0.0.210"
+APP_STAGE = "v0.0.210: tunnel-server route follows network changes; Boot tab loop finding; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -6889,6 +6889,27 @@ done
 echo "clock not synchronised after %(wait)ds; starting the tunnel anyway"
 exit 0
 """ % {"wait": _BOOT_TIME_WAIT}
+_BOOT_NM_DIR = "/etc/NetworkManager/dispatcher.d"
+_BOOT_NM_HOOK_PATH = _BOOT_NM_DIR + "/90-44helper-endpoint"
+_BOOT_NM_HOOK = """#!/bin/bash
+IFACE="$1"
+ACTION="$2"
+case "$ACTION" in up|down|dhcp4-change|connectivity-change|reapply) ;; *) exit 0 ;; esac
+case "$IFACE" in wg*) exit 0 ;; esac
+ip link show wg0 >/dev/null 2>&1 || exit 0
+grep -qx '%(begin)s' %(wgconf)s 2>/dev/null || exit 0
+EP=$(wg show wg0 endpoints 2>/dev/null | awk 'NR==1{print $2}')
+EP=${EP%%:*}
+case "$EP" in *.*.*.*) ;; *) exit 0 ;; esac
+R=$(ip -4 route show table main default | grep -v ' dev wg' | head -n1 | grep -oE '(via [0-9.]+ )?dev [^ ]+')
+[ -n "$R" ] || exit 0
+CUR=$(ip -4 route show table main "$EP/32" | grep -oE '(via [0-9.]+ )?dev [^ ]+')
+[ "$CUR" = "$R" ] && exit 0
+if ip -4 route replace "$EP/32" $R; then
+  logger -t 44helper-endpoint "tunnel server $EP now routed $R ($IFACE $ACTION)"
+fi
+exit 0
+""" % {"begin": _WG_EPPIN_BEGIN, "wgconf": WG0_CONF_PATH}
 _BOOT_UNIT_TEXT = f"""[Unit]
 Description=44helper: wait until the network, the 44Net tunnel and DNS are ready
 After=network-online.target {_BOOT_WG_UNIT} nss-lookup.target
@@ -6983,6 +7004,10 @@ def status_boot_order() -> dict:
         missing.append("tunnel retry")
     if conf and wg_enabled not in ("enabled", "enabled-runtime"):
         missing.append("tunnel enabled at boot")
+    if conf and os.path.isdir(_BOOT_NM_DIR) and not _boot_file_is(_BOOT_NM_HOOK_PATH, _BOOT_NM_HOOK):
+        missing.append("follow network changes")
+    if conf and _wg_pin_outdated():
+        missing.append("tunnel-server route (older form)")
     late = [u for u in units if not _boot_file_is(_boot_dropin_path(u), _boot_dv_dropin_text(u))]
     if late:
         missing.append("DVSwitch ordering (" + ", ".join(u.replace(".service", "") for u in late) + ")")
@@ -6991,6 +7016,7 @@ def status_boot_order() -> dict:
         missing.append(backend["wait_unit"] + " enabled")
     last, last_now = _boot_last()
     return {"done": not missing, "missing": missing, "dv_units": units, "conf_exists": conf,
+            "nm_hook": os.path.exists(_BOOT_NM_HOOK_PATH),
             "last_boot": last, "last_boot_now": last_now,
             "wg_enabled": wg_enabled, "wait_unit": backend["wait_unit"], "wait_enabled": backend["wait_enabled"],
             "any_applied": os.path.exists(_BOOT_UNIT_PATH) or os.path.exists(_BOOT_SCRIPT_PATH)
@@ -7027,6 +7053,16 @@ def action_boot_order_apply() -> dict:
             if _wg_pin_outdated():
                 out += ["ok    " + ln for ln in _wg_write_conf(_hl_read_conf() or "")]
                 out.append("ok    endpoint pin updated: at boot it waits up to 30 s for the normal route, or fails the start so it is retried")
+            if os.path.isdir(_BOOT_NM_DIR):
+                _boot_write(_BOOT_NM_HOOK_PATH, _BOOT_NM_HOOK, 0o755)
+                out.append("ok    the tunnel server's route follows the network: when WiFi or Ethernet comes up, goes down or "
+                           "changes, NetworkManager moves it to the current connection")
+                info = _wg_endpoint_info(_hl_read_conf() or "")
+                if info["needed"] and _wg0_interface_present() and _wg_endpoint_loop_live(info["ip"]):
+                    r = _wg_pin_live(info["ip"])
+                    ok = ok and r["success"]
+                    out.append(("ok    " if r["success"] else "FAIL  ") + "routing loop now: tunnel server route put back on the "
+                               "normal link" + ("" if r["success"] else ": " + r["output"]))
         units = _boot_dv_units()
         for u in units:
             _boot_write(_boot_dropin_path(u), _boot_dv_dropin_text(u), 0o644)
@@ -7087,7 +7123,7 @@ def action_boot_order_revert() -> dict:
     if err:
         return err
     removed = []
-    for path in [_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH] + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS]:
+    for path in [_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH, _BOOT_NM_HOOK_PATH] + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS]:
         if os.path.exists(path):
             try:
                 os.remove(path)
@@ -17641,7 +17677,7 @@ function _piBootCardHtml(kind, b) {
   var html = '<div class="step-card" id="pi-boot-card-' + kind + '">';
   html += '<div class="step-head"><div class="step-title"><span class="step-num">6b.</span>Boot order</div>';
   html += '<span class="step-pill ' + (done ? 'done' : 'attempted_unconfirmed') + '">' + (done ? 'Set' : 'Not set') + '</span></div>';
-  html += '<div class="step-body">After a reboot the tunnel must come back by itself, and the DVSwitch services must wait for it. This makes the tunnel start at boot (after waiting up to 90 s for the clock to sync) and retry every 20 s if a start fails, and makes netcheck, the bridges and the gateways wait (up to 3 minutes) until the network is up, the tunnel has a handshake and names resolve; the bridges and gateways restart 15 s after a failure, netcheck every 30 s. If the network is later than that, a follow-up restarts the DVSwitch services once it is ready. It also applies the netcheck fixes. Step 6 sets it; it takes effect at the next boot.</div>';
+  html += '<div class="step-body">After a reboot the tunnel must come back by itself, and the DVSwitch services must wait for it. This makes the tunnel start at boot (after waiting up to 90 s for the clock to sync) and retry every 20 s if a start fails, and makes netcheck, the bridges and the gateways wait (up to 3 minutes) until the network is up, the tunnel has a handshake and names resolve; the bridges and gateways restart 15 s after a failure, netcheck every 30 s. If the network is later than that, a follow-up restarts the DVSwitch services once it is ready. With NetworkManager, the tunnel server&#39;s route also follows the network: when WiFi or Ethernet comes up, goes down or moves to another adapter, it moves to the current connection. It also applies the netcheck fixes and updates an older tunnel-server route line. Step 6 sets it; it takes effect at the next boot.</div>';
   if (!done && b.missing && b.missing.length) {
     html += '<div class="step-body">Missing: ' + asl3EscapeAttr(b.missing.join('; ')) + '</div>';
   }
@@ -17662,8 +17698,8 @@ function _piBootCardHtml(kind, b) {
 
 function piBootOrder(what, kind) {
   var msg = what === 'apply'
-    ? 'Set the boot order? The tunnel starts at boot and retries if it fails, and the DVSwitch services wait for the network, the tunnel and DNS. Takes effect at the next boot; nothing running is restarted.'
-    : 'Remove the boot-order settings? The wait-for-network unit, the tunnel retry and the DVSwitch drop-ins are deleted; the tunnel stays enabled at boot.';
+    ? 'Set the boot order? The tunnel starts at boot and retries if it fails, and the DVSwitch services wait for the network, the tunnel and DNS. Takes effect at the next boot; nothing running is restarted (a routing loop right now is fixed straight away).'
+    : 'Remove the boot-order settings? The wait-for-network unit, the network-change hook, the tunnel retry and the DVSwitch drop-ins are deleted; the tunnel stays enabled at boot.';
   if (!confirm(msg)) return;
   var out = document.getElementById('pi-boot-out-' + kind);
   if (out) { out.className = 'asl3-console shown'; out.textContent = 'Working...'; }
@@ -18948,7 +18984,8 @@ function bootRefresh() {
                                        : 'in memory only: earlier boots are in the saved copies below'],
       ['Clock', 'NTP ' + _ovEsc(c.ntp || '?') + ', synchronised ' + _ovEsc(c.synced || '?')],
       ['Power', p.available ? (p.flags.length ? _ovEsc(p.flags.join(', ')) : 'no limits since boot') : 'not available'],
-      ['Boot order', bo.done ? 'set' : ('missing: ' + _ovEsc((bo.missing || []).join('; ')))]
+      ['Boot order', bo.done ? 'set' : ('missing: ' + _ovEsc((bo.missing || []).join('; ')))],
+      ['Tunnel', (s.tunnel && s.tunnel.loop ? '<span style="color:var(--red)">' : '<span>') + _ovEsc(s.tunnel_line || '') + '</span>']
     ];
     if (s.last_report) {
       rows.push(['wifimon report', _ovEsc(s.last_report.name) + ' (' + _ovEsc(s.last_report.at) +
@@ -24233,7 +24270,7 @@ _BT_THROTTLE_BITS = ((0, "under-voltage now"), (1, "frequency capped now"), (2, 
                      (3, "soft temperature limit now"), (16, "under-voltage since boot"),
                      (17, "frequency capped since boot"), (18, "throttled since boot"),
                      (19, "soft temperature limit since boot"))
-_BT_KERNEL_RE = re.compile(r"wlan|brcmf|voltage|throttl|wireguard|wg0|eth0|link is|carrier|oom|mmc|i/o error|ext4", re.I)
+_BT_KERNEL_RE = re.compile(r"wlan|brcmf|mt76|mt7601u|rtl8|rtw|voltage|throttl|wireguard|wg0|eth0|link is|carrier|oom|mmc|i/o error|ext4", re.I)
 _BT_WIFIMON_RE = re.compile(r"tunnel|handshake|network|reboot|shut|offline|reconnect|watchdog", re.I)
 _BT_INSTMON_RE = re.compile(r"boot|backup|disk image|diskimg", re.I)
 _bt_snap_lock = threading.Lock()
@@ -24437,7 +24474,10 @@ def _bt_last_report(btime: int) -> dict | None:
     if not rows:
         return None
     mtime, name = max(rows)
-    return {"name": name, "kind": name.split("-", 1)[0], "at": _bt_fmt_time(mtime), "this_boot": mtime >= btime}
+    this_boot = mtime >= btime
+    if not this_boot:
+        this_boot = name in _bt_run(["journalctl", "-b", "0", "-u", "wifimon", "-o", "cat", "--no-pager", "-n", "3000"], 20)
+    return {"name": name, "kind": name.split("-", 1)[0], "at": _bt_fmt_time(mtime), "this_boot": this_boot}
 
 def _bt_tunnel_guard() -> dict | None:
     try:
@@ -24463,6 +24503,18 @@ def _bt_identity() -> str:
     bits = [cfg.get("identity", "callsign", fallback="").strip(), cfg.get("identity", "node", fallback="").strip()]
     return " ".join(("Node " + b) if i == 1 else b for i, b in enumerate(bits) if b)
 
+def _bt_tunnel_state() -> dict:
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            text = f.read()
+    except OSError:
+        return {"conf": False, "endpoint": "", "pin_needed": False, "loop": False, "pin_outdated": False, "up": False}
+    info = _wg_endpoint_info(text)
+    up = _wg0_interface_present()
+    return {"conf": True, "endpoint": info["ip"], "pin_needed": info["needed"], "up": up,
+            "loop": bool(info["needed"] and up and _wg_endpoint_loop_live(info["ip"])),
+            "pin_outdated": bool(_wg_apply_endpoint_pin(text)[1]) if info["needed"] and info["pinned"] else False}
+
 def _bt_collect() -> dict:
     bid = _bt_boot_id()
     btime = _bt_btime()
@@ -24474,19 +24526,29 @@ def _bt_collect() -> dict:
     except Exception as exc:
         boot_order = {"done": False, "missing": [f"could not check: {exc}"]}
     timeline = _bt_timeline()
-    summary = {
+    summary: dict = {
         "boot_id": bid, "boot_at": _bt_fmt_time(btime), "uptime_s": int(up), "uptime": _bt_fmt_dur(up),
         "host": os.uname().nodename, "node": _bt_identity(), "journal": _bt_journal_info(), "clock": _bt_clock(),
         "power": _bt_power(), "boot_log_this_boot": log_now, "boot_order": boot_order,
         "last_report": _bt_last_report(btime), "tunnel_guard": _bt_tunnel_guard(), "versions": _bt_versions(),
-        "wg_conf": os.path.exists(WG0_CONF_PATH),
+        "wg_conf": os.path.exists(WG0_CONF_PATH), "tunnel": _bt_tunnel_state(),
     }
+    summary["tunnel_line"] = _bt_tunnel_line(summary["tunnel"])
     return {"summary": summary, "timeline": timeline, "boot_log": log_all,
             "loaded": {r["unit"] for r in timeline}}
 
 def _bt_findings(ctx: dict) -> list[dict]:
     s = ctx["summary"]
     out: list[dict] = []
+    tun = s["tunnel"]
+    if tun["loop"]:
+        out.append({"level": "danger", "msg": f"Routing loop: the route to the tunnel server ({tun['endpoint']}) goes into wg0, so the "
+                                              "tunnel can't reach it. Usually the network changed after the tunnel started (for example "
+                                              "WiFi moved to another adapter). Health card: Fix the tunnel-server route; Set the boot "
+                                              "order makes the route follow network changes."})
+    if tun["pin_outdated"]:
+        out.append({"level": "warn", "msg": "wg0.conf has the older tunnel-server route line (before 0.0.206), which can fail at boot. "
+                                            "Set the boot order updates it."})
     for ln in s["boot_log_this_boot"]:
         if "not ready" in ln:
             out.append({"level": "warn", "msg": "At this boot: " + ln.split(": ", 1)[-1]})
@@ -24530,7 +24592,22 @@ def _bt_journal_argv(ctx: dict, which: str, n: int) -> list[str]:
 
 def _bt_filtered(argv: list[str], rx, keep: int) -> str:
     out = _bt_run(argv, 20)
-    lines = [ln for ln in out.splitlines() if rx.search(ln)]
+    lines: list[str] = []
+    counts: dict[str, int] = {}
+    first: dict[str, int] = {}
+    for ln in out.splitlines():
+        if not rx.search(ln):
+            continue
+        body = re.sub(r"^\s*\[\s*[\d.]+\]\s*", "", ln)
+        if body in counts:
+            counts[body] += 1
+            continue
+        counts[body] = 1
+        first[body] = len(lines)
+        lines.append(ln)
+    for body, n in counts.items():
+        if n > 1:
+            lines[first[body]] += f"  (repeated {n} times)"
     return "\n".join(lines[-keep:]) if lines else "(no matching lines)"
 
 def _bt_sec_bootlog(ctx: dict) -> tuple[str, str]:
@@ -24557,7 +24634,7 @@ def _bt_sec_analyze(ctx: dict) -> tuple[str, str]:
                   _bt_run(["systemd-analyze", "critical-chain", "--no-pager"] + chain, 20)]
     blame = _bt_run(["systemd-analyze", "blame", "--no-pager"], 20).splitlines()[:20]
     parts += ["", "$ systemd-analyze blame | head -20", "\n".join(blame)]
-    return "systemd-analyze", "\n".join(parts)
+    return "", "\n".join(parts)
 
 def _bt_sec_clock(ctx: dict) -> tuple[str, str]:
     return "timedatectl status; timedatectl timesync-status", (
@@ -24587,7 +24664,7 @@ def _bt_sec_tunnel(ctx: dict) -> tuple[str, str]:
         if m:
             argv = ["ip", "-4", "route", "get", m.group(1)] + (["mark", mark] if mark else [])
             parts += ["", "$ " + " ".join(argv), _bt_run(argv, 6)]
-    return "wg show wg0; ip rule; ip route", "\n".join(parts)
+    return "", "\n".join(parts)
 
 def _bt_sec_wifimon(ctx: dict) -> tuple[str, str]:
     tg = ctx["summary"]["tunnel_guard"]
@@ -24601,7 +24678,7 @@ def _bt_sec_wifimon(ctx: dict) -> tuple[str, str]:
     if rep:
         body = _bt_read(os.path.join(_BT_WIFIMON_REPORTS, rep["name"]), 4096)
         parts += ["", f"$ cat {_BT_WIFIMON_REPORTS}/{rep['name']}  (newest shutdown report, {rep['at']})", body or "(unreadable)"]
-    return "wifimon", "\n".join(parts)
+    return "", "\n".join(parts)
 
 def _bt_sec_dashboard(ctx: dict) -> tuple[str, str]:
     units = [u for u in _BT_TOOLS[1][1] if u in ctx["loaded"]]
@@ -24643,6 +24720,16 @@ def _bt_section(ctx: dict, sid: str) -> dict | None:
             return {"id": s_id, "title": title, "cmd": cmd, "text": _bt_redact(_bt_tail(text or "(no output)", limit))}
     return None
 
+def _bt_tunnel_line(t: dict) -> str:
+    if not t["conf"]:
+        return "no wg0.conf"
+    if not t["up"]:
+        return "wg0 is not up"
+    if not t["pin_needed"]:
+        return "up" + (f", server {t['endpoint']}" if t["endpoint"] else "")
+    return (f"up, server {t['endpoint']} " + ("routed into wg0 (routing loop)" if t["loop"] else "on the normal route")
+            + (", older route line in wg0.conf" if t["pin_outdated"] else ""))
+
 def _bt_report_text(ctx: dict, findings: list[dict], sections: list[dict]) -> str:
     s = ctx["summary"]
     lvl = {"danger": "BAD ", "warn": "WARN", "info": "INFO", "ok": "OK  "}
@@ -24657,6 +24744,7 @@ def _bt_report_text(ctx: dict, findings: list[dict], sections: list[dict]) -> st
         f"Clock: NTP {s['clock']['ntp'] or '?'}, synchronised {s['clock']['synced'] or '?'}",
         "Power: " + ((", ".join(s["power"]["flags"]) or "no limits since boot") if s["power"]["available"] else "not available"),
         "Boot order: " + ("set" if s["boot_order"]["done"] else "missing " + "; ".join(s["boot_order"]["missing"])),
+        "Tunnel: " + _bt_tunnel_line(s["tunnel"]),
     ]
     head += ["This boot (boot.log): " + ln for ln in s["boot_log_this_boot"]] or ["This boot (boot.log): no line"]
     if s["last_report"]:
@@ -24680,7 +24768,7 @@ def _bt_report_text(ctx: dict, findings: list[dict], sections: list[dict]) -> st
         texts[i] = _bt_tail(texts[i], int(len(texts[i].encode("utf-8")) * 0.7))
     body = []
     for sec, text in zip(sections, texts):
-        body += ["", f"== {sec['title']} ==", f"$ {sec['cmd']}" if sec["cmd"] else "", text]
+        body += ["", f"== {sec['title']} =="] + ([f"$ {sec['cmd']}"] if sec["cmd"] else []) + [text]
     return header + "\n" + "\n".join(body) + "\n"
 
 def build_boot_report(fmt: str = "text") -> dict:
