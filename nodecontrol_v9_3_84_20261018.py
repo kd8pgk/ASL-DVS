@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.83"
+VERSION      = "9.3.84"
 BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
@@ -4915,7 +4915,9 @@ def _parse_m17_hosts(text: str) -> dict:
             stats["no_m17"] += 1
             continue
 
-        row = {"id": rid, "label": label, "addr": addr, "lh_url": url}
+        ip  = _m17_text(e.get("ipv4"), _M17_ADDR_MAX) or \
+              _m17_text(e.get("ipv6"), _M17_ADDR_MAX)
+        row = {"id": rid, "label": label, "addr": addr, "lh_url": url, "ip": ip}
         if mods:
             row["modules"] = mods
         out.append(row)
@@ -6300,6 +6302,70 @@ def _asl_reg_public() -> str:
     with _asl_reg_lock:
         return _asl_reg_info["state"]
 
+_SVC_AB_UNITS  = ("analog_bridge.service", "Analog_Bridge.service")
+_SVC_CHECK_SEC = 15.0
+_svc_lock      = threading.Lock()
+_SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn", "ircddb", "m17")
+_svc_state     = {k: "unknown" for k in _SVC_KEYS}
+
+def _svc_unit_states(groups: dict) -> dict:
+    units = [u for us in groups.values() for u in us]
+    out, rc = run(["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", "--", *units], timeout=4)
+    blocks = out.split("\n\n") if rc == 0 else []
+    if len(blocks) != len(units):
+        return {k: "unknown" for k in groups}
+    res, i = {}, 0
+    for k, us in groups.items():
+        state = "none"
+        for _u in us:
+            f = dict(ln.split("=", 1) for ln in blocks[i].splitlines() if "=" in ln)
+            i += 1
+            if f.get("LoadState") != "loaded":
+                continue
+            if f.get("ActiveState") in ("active", "activating", "reloading"):
+                state = "active"
+            elif state != "active":
+                state = "inactive"
+        res[k] = state
+    return res
+
+def _svc_check() -> dict:
+    res = _svc_unit_states({
+        "ab":   _SVC_AB_UNITS,
+        "stfu": ("stfu.service",),
+        "ysf":  ("ysfgateway.service",),
+        "p25":  ("p25gateway.service",),
+        "nxdn": ("nxdngateway.service",),
+        "ircddb": ("ircddbgatewayd.service",),
+        "m17":  (M17_SERVICE + ".service",),
+    })
+    if res["stfu"] == "none" and Path("/opt/STFU/STFU").is_file():
+        out, _ = run(["pgrep", "-x", "STFU"], timeout=3)
+        res["stfu"] = "active" if out.strip() else "inactive"
+    return res
+
+def _svc_public() -> dict:
+    with _svc_lock:
+        return dict(_svc_state)
+
+def _svc_loop() -> None:
+    global _status_etag
+    while True:
+        try:
+            new = _svc_check()
+        except Exception as e:
+            log.warning("svc: check error: %s", e)
+            new = {k: "unknown" for k in _SVC_KEYS}
+        with _svc_lock:
+            changed = new != _svc_state
+            if changed:
+                _svc_state.update(new)
+        if changed:
+            log.info("svc: %s", ", ".join(f"{k} {v}" for k, v in new.items()))
+            with _lock:
+                _status_etag = ""
+        time.sleep(_SVC_CHECK_SEC)
+
 def _net_signature() -> tuple:
     sig = []
     try:
@@ -6487,11 +6553,9 @@ def _leave_page(prev_page: str, next_page: str, force: bool = False) -> None:
         elif prev_page == "PHONE" and prev_page != next_page:
             _phone_hangup_all()
         elif prev_page == "M17" and prev_page != next_page:
-            ok, err = _write_m17_ini(_m17_ini_placeholder(_effective_callsign(get_state())))
-            if ok:
-                _svc_restart(M17_SERVICE)
-            else:
-                log.warning("_leave_page: M17 placeholder ini write failed: %s", err)
+            ok, err = _m17_disconnect_core()
+            if not ok:
+                log.warning("_leave_page: M17 disconnect: %s", err)
     except Exception as e:
         log.warning("_leave_page: %s -> %s teardown error: %s", prev_page, next_page, e)
     _gateway_svc_leave(prev_page, next_page)
@@ -6908,22 +6972,24 @@ def action_m17_connect(name: str, base: str, ip: str, module: str) -> Tuple[bool
     return True, f"M17 connected: {name} ({base} Mod-{module})"
 
 @_link_locked
+def _m17_disconnect_core() -> Tuple[bool, str]:
+    st = get_state()
+    callsign = _effective_callsign(st)
+    m17_node = _cfg.bridge_nodes[BRIDGE_SLOT_M17]
+    if st.has_asl and m17_node:
+        _disconnect(m17_node)
+    ok, err = _write_m17_ini(_m17_ini_placeholder(callsign))
+    if ok:
+        _svc_restart(M17_SERVICE)
+    set_state(current_fav=None, current_fav_node=None, status="M17 | Ready — pick a reflector")
+    if not ok:
+        return False, f"Disconnected link, but ini write failed: {err}"
+    return True, "M17 disconnected"
+
 def action_m17_disconnect() -> Tuple[bool, str]:
     _link_enter()
     try:
-        st = get_state()
-        callsign = _effective_callsign(st)
-
-        m17_node = _cfg.bridge_nodes[BRIDGE_SLOT_M17]
-        if st.has_asl and m17_node:
-            _disconnect(m17_node)
-        ok, err = _write_m17_ini(_m17_ini_placeholder(callsign))
-        if ok:
-            _svc_restart(M17_SERVICE)
-        set_state(current_fav=None, current_fav_node=None, status="M17 | Ready — pick a reflector")
-        if not ok:
-            return False, f"Disconnected link, but ini write failed: {err}"
-        return True, "M17 disconnected"
+        return _m17_disconnect_core()
     finally:
         _link_exit()
 
@@ -7516,6 +7582,7 @@ def build_status() -> dict:
         "page":              st["page"],
         "status":            st["status"],
         "asl_reg":           _asl_reg_public(),
+        "svc":               _svc_public(),
         "current_fav":       st["linked_node"] if (st["page"] == "ASL" and not st["current_fav"] and st["linked_node"]) else st["current_fav"],
         "has_asl":           st["has_asl"],
         "has_dvs":           st["has_dvs"],
@@ -7984,7 +8051,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
   flex-shrink: 0;
 }
 .ref-mod-sel:focus { border-color: var(--amber); }
-#m17-grid .ref-mod-sel, #qt-M17-mod { width: 7.6rem; }
+#m17-grid .ref-mod-sel { width: 7.6rem; }
 .ref-mod-sel option { background: var(--surface2); }
 .btn-conn  { color: var(--teal); border-color: var(--teal-dim); }
 .btn-conn-pink { color: var(--pink); border-color: var(--pink-dim); }
@@ -8053,7 +8120,10 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn:active { transform: scale(.95); }
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
-#asl-tune-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; }
+#dmr-connect-btn.svc-down, #stfu-connect-btn.svc-down, #ysf-connect-btn.svc-down,
+#p25-connect-btn.svc-down, #nxdn-connect-btn.svc-down, #fcs-connect-btn.svc-down,
+#dstar-connect-btn.svc-down, #xlx-connect-btn.svc-down, #m17-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
+#asl-connect-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
 .btn-blue   { color: var(--blue);   border-color: var(--blue-dim); }
@@ -8967,27 +9037,18 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
       </div>
       <div class="tab-panel">
         <div id="pg-ASL" class="hidden">
-          <div class="quick-bar">
-            <input id="cbn-input" class="quick-inp" type="text" inputmode="numeric"
-              pattern="[0-9]*" placeholder="Node number…" maxlength="12"
-              oninput="ndcQtSync('ASL')"
-              onkeydown="if(event.key==='Enter')doConnectByNumber()">
-            <button id="asl-tune-btn" class="btn btn-teal" onclick="doConnectByNumber()">Tune</button>
-            <button id="lh-btn-ASL" class="btn-last lh-off" onclick="openModeLast('ASL')">LH</button>
-            <button id="asl-qt-save-btn" class="btn btn-muted" onclick="ndcQtSave('ASL')" disabled
-              aria-label="Save this node to favorites" title="Save to favorites">Save</button>
-          </div>
           <div id="asl-card" class="tgc-card tgc-asl">
             <input id="asl-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: node, callsign or place" aria-label="Search AllStar nodes"
-              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ASL')" disabled>
+              placeholder="Node #, call or place" aria-label="Search AllStar nodes"
+              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ASL')"
+              onkeydown="if(event.key==='Enter')ndcConnect('ASL')">
             <select id="asl-ref-select" class="tgc-select" aria-label="AllStar node"
               onchange="ndcButtons('ASL')" disabled>
               <option value="">Type to search…</option>
             </select>
             <button id="asl-connect-btn" class="btn btn-teal" onclick="ndcConnect('ASL')" disabled>Connect</button>
-            <button id="lh-btn-ASLNODE" class="btn-last lh-off" onclick="ndcLast('ASL')"
-              aria-label="Open this node's page on the AllStar stats site" aria-disabled="true">LH</button>
+            <button id="lh-btn-ASL" class="btn-last lh-off" onclick="openModeLast('ASL')"
+              aria-label="Open the AllStar Last Heard page set on the Edit tab">LH</button>
             <button id="asl-save-btn" class="btn btn-muted" onclick="ndcSave('ASL')" disabled
               aria-label="Save this node to favorites" title="Save to favorites">Save</button>
             <div id="asl-card-msg" class="tgc-card-msg" role="status" hidden></div>
@@ -9000,27 +9061,18 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         </div>
         <!-- ECHO -->
         <div id="pg-ECHO" class="hidden">
-          <div class="quick-bar">
-            <input id="echo-input" class="quick-inp" type="text" inputmode="numeric"
-              pattern="[0-9]*" placeholder="EchoLink node (e.g. 9999)…" maxlength="7"
-              oninput="ndcQtSync('ECHO')"
-              onkeydown="if(event.key==='Enter')doEchoConnectByNumber()">
-            <button class="btn btn-amber" onclick="doEchoConnectByNumber()">Tune</button>
-            <button id="lh-btn-ECHO" class="btn-last lh-off" onclick="openModeLast('ECHO')">LH</button>
-            <button id="echo-qt-save-btn" class="btn btn-muted" onclick="ndcQtSave('ECHO')" disabled
-              aria-label="Save this node to favorites" title="Save to favorites">Save</button>
-          </div>
           <div id="echo-card" class="tgc-card tgc-echo">
             <input id="echo-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: node or callsign" aria-label="Search EchoLink stations"
-              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ECHO')" disabled>
+              placeholder="Node # or call" aria-label="Search EchoLink stations"
+              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ECHO')"
+              onkeydown="if(event.key==='Enter')ndcConnect('ECHO')">
             <select id="echo-ref-select" class="tgc-select" aria-label="EchoLink station"
               onchange="ndcButtons('ECHO')" disabled>
               <option value="">Type to search…</option>
             </select>
             <button id="echo-connect-btn" class="btn btn-amber" onclick="ndcConnect('ECHO')" disabled>Connect</button>
-            <button id="lh-btn-ECHONODE" class="btn-last lh-off" onclick="ndcLast('ECHO')"
-              aria-label="Open the EchoLink logins page" aria-disabled="true">LH</button>
+            <button id="lh-btn-ECHO" class="btn-last lh-off" onclick="openModeLast('ECHO')"
+              aria-label="Open the EchoLink Last Heard page set on the Edit tab">LH</button>
             <button id="echo-save-btn" class="btn btn-muted" onclick="ndcSave('ECHO')" disabled
               aria-label="Save this station to favorites" title="Save to favorites">Save</button>
             <div id="echo-card-msg" class="tgc-card-msg" role="status" hidden></div>
@@ -9037,7 +9089,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               placeholder="TG number…" maxlength="12"
               oninput="dmrSaveSync()"
               onkeydown="if(event.key==='Enter')doQuickTune('DMR')">
-            <button class="btn btn-blue" onclick="doQuickTune('DMR')">Tune</button>
+            <button id="dmr-connect-btn" class="btn btn-blue" onclick="doQuickTune('DMR')">Connect</button>
             <button id="lh-btn-DMR" class="btn-last lh-off" onclick="openDmrLast()">LH</button>
             <button id="dmr-save-btn" class="btn btn-muted" onclick="dmrQuickSave()" disabled
               aria-label="Save this talkgroup to favorites" title="Save to favorites">Save</button>
@@ -9050,22 +9102,18 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         </div>
         <!-- STFU -->
         <div id="pg-STFU" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-STFU" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="TG or ID#…" maxlength="12"
-              onkeydown="if(event.key==='Enter')doQuickTune('STFU')">
-            <button class="btn btn-green" onclick="doQuickTune('STFU')">Tune</button>
-            <button id="lh-btn-STFU" class="btn-last lh-off" onclick="openModeLast('STFU')">LH</button>
-          </div>
           <div id="stfu-card" class="tgc-card tgc-stfu">
             <input id="stfu-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: number or name" aria-label="Search STFU talkgroups"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('STFU')" disabled>
+              placeholder="TG, ID or name" aria-label="Search STFU talkgroups"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('STFU')"
+              onkeydown="if(event.key==='Enter')lcConnect('STFU')">
             <select id="stfu-ref-select" class="tgc-select" aria-label="STFU talkgroup"
               onchange="lcButtons('STFU')" disabled>
               <option value="">Select talkgroup…</option>
             </select>
             <button id="stfu-connect-btn" class="btn btn-green" onclick="lcConnect('STFU')" disabled>Connect</button>
+            <button id="lh-btn-STFU" class="btn-last lh-off" onclick="openModeLast('STFU')"
+              aria-label="Open the STFU Last Heard page set on the Edit tab">LH</button>
             <button id="stfu-save-btn" class="btn btn-muted" onclick="lcSave('STFU')" disabled
               aria-label="Save this talkgroup to favorites" title="Save to favorites">Save</button>
             <div id="stfu-card-msg" class="tgc-card-msg" role="status" hidden></div>
@@ -9078,19 +9126,15 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-YSF" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-YSF" class="quick-inp" type="text" placeholder="IP:port or reflector…" maxlength="40"
-              onkeydown="if(event.key==='Enter')doQuickTune('YSF')">
-            <button class="btn btn-purple" onclick="doQuickTune('YSF')">Tune</button>
-          </div>
           <div id="ysf-card" class="ysf-card">
             <select id="ysf-cc-select" class="ysf-select" aria-label="Filter by country"
               onchange="lcFill('YSF',true)" disabled>
               <option value="*">All countries</option>
             </select>
             <input id="ysf-filter" class="ysf-input" type="search" maxlength="40"
-              placeholder="Filter: name or number" aria-label="Filter reflectors by text"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('YSF')" disabled>
+              placeholder="Name, # or IP:port" aria-label="Filter reflectors by text"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('YSF')"
+              onkeydown="if(event.key==='Enter')lcConnect('YSF')">
             <select id="ysf-ref-select" class="ysf-select" aria-label="YSF reflector"
               onchange="lcButtons('YSF')" disabled>
               <option value="">Select reflector…</option>
@@ -9110,14 +9154,6 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-FCS" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-FCS" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="Room (e.g. FCS00335 or 335)" maxlength="20"
-              onkeydown="if(event.key==='Enter')doQuickTune('FCS')">
-            <button class="btn btn-conn-fcs" onclick="doQuickTune('FCS')">Tune</button>
-            <button id="lh-btn-FCSNET" class="btn-last lh-off" onclick="openModeLast('FCS')"
-              title="FCS network Last Heard" aria-label="Open FCS network Last Heard">LH</button>
-          </div>
           <div id="fcs-card" class="fcs-card">
             <select id="fcs-srv-select" class="fcs-select" aria-label="FCS server"
               onchange="fcsFillRooms(false)" disabled>
@@ -9129,7 +9165,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             </select>
             <button id="fcs-connect-btn" class="btn btn-conn-fcs" onclick="fcsConnect()" disabled>Connect</button>
             <button id="lh-btn-FCS" class="btn-last lh-off" onclick="openFcsLast()"
-              aria-label="Open Last Heard for this server" aria-disabled="true">LH</button>
+              aria-label="Open Last Heard for this server, or the FCS network">LH</button>
             <button id="fcs-save-btn" class="btn btn-muted" onclick="fcsSave()" disabled
               aria-label="Save this room to favorites" title="Save to favorites">Save</button>
             <div id="fcs-card-msg" class="fcs-card-msg" role="status" hidden></div>
@@ -9142,16 +9178,11 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-P25" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-P25" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="TG number…" maxlength="12"
-              onkeydown="if(event.key==='Enter')doQuickTune('P25')">
-            <button class="btn btn-orange" onclick="doQuickTune('P25')">Tune</button>
-          </div>
           <div id="p25-card" class="tgc-card tgc-p25">
             <input id="p25-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: number or address" aria-label="Search P25 talkgroups"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('P25')" disabled>
+              placeholder="TG # or host" aria-label="Search P25 talkgroups"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('P25')"
+              onkeydown="if(event.key==='Enter')lcConnect('P25')">
             <select id="p25-ref-select" class="tgc-select" aria-label="P25 talkgroup"
               onchange="lcButtons('P25')" disabled>
               <option value="">Select talkgroup…</option>
@@ -9171,16 +9202,11 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-NXDN" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-NXDN" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="TG number…" maxlength="12"
-              onkeydown="if(event.key==='Enter')doQuickTune('NXDN')">
-            <button class="btn btn-lime" onclick="doQuickTune('NXDN')">Tune</button>
-          </div>
           <div id="nxdn-card" class="tgc-card tgc-nxdn">
             <input id="nxdn-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: number or address" aria-label="Search NXDN talkgroups"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('NXDN')" disabled>
+              placeholder="TG # or host" aria-label="Search NXDN talkgroups"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('NXDN')"
+              onkeydown="if(event.key==='Enter')lcConnect('NXDN')">
             <select id="nxdn-ref-select" class="tgc-select" aria-label="NXDN talkgroup"
               onchange="lcButtons('NXDN')" disabled>
               <option value="">Select talkgroup…</option>
@@ -9200,19 +9226,12 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-DSTAR" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-DSTAR-base" class="quick-inp" type="text" placeholder="REF001 or callsign…" maxlength="12"
-              style="max-width:150px" title="Reflector (REF001, XRF012, DCS001) or gateway callsign (W1ABC)"
-              onkeydown="if(event.key==='Enter')dstarQuickConnect()">
-            <select id="qt-DSTAR-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn-pink" onclick="dstarQuickConnect()">Tune</button>
-            <button class="btn btn-muted" onclick="dstarQuickSave()" title="Save to favorites">Save</button>
-          </div>
           <div id="dstar-card" class="rfc-card rfc-dstar">
             <input id="dstar-filter" class="rfc-input" type="search" maxlength="40"
-              placeholder="Search: REF, XRF, DCS or number" aria-label="Search D-STAR reflectors"
+              placeholder="REF001 or callsign" aria-label="Search D-STAR reflectors"
+              title="Search, or type a reflector (REF001, XRF012, DCS001) or gateway callsign (W1ABC)"
               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-              oninput="lcFilterSoon('DSTAR')" disabled>
+              oninput="lcFilterSoon('DSTAR')" onkeydown="if(event.key==='Enter')lcConnect('DSTAR')">
             <select id="dstar-ref-select" class="rfc-select" aria-label="D-STAR reflector"
               onchange="lcButtons('DSTAR')" disabled>
               <option value="">Select reflector…</option>
@@ -9236,18 +9255,12 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-XLX" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-XLX-base" class="quick-inp" type="text" placeholder="XLX334…" maxlength="12"
-              style="max-width:130px"
-              onkeydown="if(event.key==='Enter')xlxQuickConnect()">
-            <select id="qt-XLX-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn" onclick="xlxQuickConnect()">Tune</button>
-          </div>
           <div id="xlx-card" class="rfc-card rfc-xlx">
             <input id="xlx-filter" class="rfc-input" type="search" maxlength="40"
-              placeholder="Search: 307, DAM or address" aria-label="Search XLX reflectors"
+              placeholder="XLX334, 307 or DAM" aria-label="Search XLX reflectors"
+              title="Search, or type a reflector (XLX334)"
               autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-              oninput="lcFilterSoon('XLX')" disabled>
+              oninput="lcFilterSoon('XLX')" onkeydown="if(event.key==='Enter')lcConnect('XLX')">
             <select id="xlx-ref-select" class="rfc-select" aria-label="XLX reflector"
               onchange="lcButtons('XLX')" disabled>
               <option value="">Select reflector…</option>
@@ -9271,13 +9284,6 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-M17" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-M17-ip" class="quick-inp" type="text" placeholder="Reflector IP…" maxlength="45"
-              style="max-width:160px"
-              onkeydown="if(event.key==='Enter')m17QuickConnect()">
-            <select id="qt-M17-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn" onclick="m17QuickConnect()">Connect</button>
-          </div>
           <div id="m17-card" class="m17-card">
             <select id="m17-ref-select" class="m17-select" aria-label="M17 reflector"
               onchange="m17FillModules(false)" disabled>
@@ -9289,7 +9295,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             </select>
             <button id="m17-connect-btn" class="btn btn-conn" onclick="m17CardConnect()" disabled>Connect</button>
             <button id="lh-btn-M17" class="btn-last lh-off" onclick="openM17Last()"
-              title="Last Heard" aria-label="Last Heard" aria-disabled="true">LH</button>
+              title="Last Heard (reflector IP)" aria-label="Open this reflector's IP address" aria-disabled="true">LH</button>
             <button id="m17-save-btn" class="btn btn-muted" onclick="m17CardSave()" disabled
               aria-label="Save this reflector to favorites" title="Save to favorites">Save</button>
             <div id="m17-card-msg" class="m17-card-msg" role="status" hidden></div>
@@ -10094,26 +10100,6 @@ function buildModuleOptions(selected,includeAll){
   }
   return h;
 }
-function initModuleSelects(){
-  // Populate the quick-bar module dropdowns on first load
-  ['qt-DSTAR-mod','qt-XLX-mod'].forEach(id=>{
-    const el=byId(id);
-    if(el&&!el.dataset.init){
-      el.innerHTML=buildModuleOptions('A');
-      el.value='A';
-      el.dataset.init='1';
-    }
-  });
-  // M17's quick-bar dropdown includes the @ALL wildcard and defaults to it
-  // (join every module on the reflector) rather than defaulting to 'A' like
-  // DSTAR/XLX above — matches the saved-row default in action_save_m17().
-  const m17el=byId('qt-M17-mod');
-  if(m17el&&!m17el.dataset.init){
-    m17el.innerHTML=buildModuleOptions('@ALL',true);
-    m17el.value='@ALL';
-    m17el.dataset.init='1';
-  }
-}
 function getReflectorMod(gridId,i){
   const sel=document.querySelector('#'+gridId+' .ref-mod-sel[data-idx="'+i+'"]');
   return sel?sel.value:'A';
@@ -10273,7 +10259,7 @@ function _refreshLhBtns(){
   _updateLhBtn('lh-btn-ASL',  modeNetUrls.ASL||'');
   _updateLhBtn('lh-btn-ECHO', modeNetUrls.ECHO||'');
   _updateLhBtn('lh-btn-STFU', modeNetUrls.STFU||'');
-  _updateLhBtn('lh-btn-FCSNET', modeNetUrls.FCS||'');   // v8.8.1: FCS network LH
+  fcsCardButtons();   // v9.3.82: card LH falls back to the FCS network LH
   dmrSaveSync();   // v8.9.6: DMR Save follows the network dropdown
   // P25/NXDN moved to per-row LH buttons (like YSF/FCS) — no quick-bar button to update.
 }
@@ -10381,7 +10367,7 @@ function fcsCardButtons(){
   btn.disabled=!(s&&rsel.value);
   const sv=byId('fcs-save-btn');
   if(sv)sv.disabled=!(s&&rsel.value)||_fcs.saving;
-  const url=s?(s.lh_url||''):'';
+  const url=fcsLhUrl(s);
   _updateLhBtn('lh-btn-FCS',url);
   if(lh)lh.setAttribute('aria-disabled',url?'false':'true');
 }
@@ -10438,10 +10424,10 @@ async function fcsSave(){
     }
   }finally{_fcs.saving=false;fcsCardButtons();}
 }
+function fcsLhUrl(s){return (s&&s.lh_url)||modeNetUrls.FCS||'';}
 function openFcsLast(){
   const ssel=byId('fcs-srv-select');
-  const s=ssel?_fcs.byId[ssel.value]:null;
-  openLast(s?s.lh_url||'':'');
+  openLast(fcsLhUrl(ssel?_fcs.byId[ssel.value]:null));
 }
 
 
@@ -10481,14 +10467,21 @@ function openFcsLast(){
      keep(k,r)    extra filter besides the search words (e.g. country)
      clear(k)     reset that extra filter when it hides the tuned entry
      rebuilt(k,d) run when a changed list has been indexed (extra menus)
-     emptied(k)   run when the list comes back missing or empty */
+     emptied(k)   run when the list comes back missing or empty
+     typed        v9.3.80/81: a RegExp; search text it matches Connects
+                  (doQuickTune) with no row picked; the search box stays
+                  usable when the list is missing (STFU, P25, NXDN, YSF)
+     typedSave    true: Save also takes the typed text, then the last one
+                  tuned; a function(k,t): the payload for typed text t
+     typedConnect function(k,t) linking typed text t (default doQuickTune)
+     typedHint    added to the missing-list warning */
 const LC_TTL_MS=300000;
 const LC_CFG={};
 const _lc={};
 function lcDef(k,cfg){
   LC_CFG[k]=cfg;
   _lc[k]={loaded:false,loading:false,saving:false,at:0,tried:0,rows:[],by:{},
-          total:0,base:'',sig:'',tuned:'',applied:null,timer:0};
+          total:0,base:'',sig:'',tuned:'',applied:null,timer:0,last:''};
 }
 function lcEl(k,s){return byId(k.toLowerCase()+'-'+s);}
 function lcMsg(k,text,kind){
@@ -10521,7 +10514,9 @@ async function lcLoad(k){
   }finally{s.loading=false}
 }
 function lcSetDisabled(k,off){
-  ['filter','ref-select'].concat(LC_CFG[k].ctl||[]).forEach(n=>{const el=lcEl(k,n);if(el)el.disabled=off;});
+  ['filter','ref-select'].concat(LC_CFG[k].ctl||[]).forEach(n=>{
+    if(n==='filter'&&LC_CFG[k].typed)return;
+    const el=lcEl(k,n);if(el)el.disabled=off;});
 }
 function lcBuild(k,d){
   const s=_lc[k],c=LC_CFG[k],rsel=lcEl(k,'ref-select');
@@ -10531,7 +10526,7 @@ function lcBuild(k,d){
     if(c.emptied)c.emptied(k);
     rsel.innerHTML='<option value="">'+c.none+'</option>';
     lcSetDisabled(k,true);
-    lcMsg(k,c.empty(d),'warn');
+    lcMsg(k,c.empty(d)+(c.typed?' '+c.typedHint:''),'warn');
     lcButtons(k);
     return;
   }
@@ -10555,6 +10550,7 @@ function lcDated(d){
   return dated?' List dated '+dated+'.':'';
 }
 function lcFilterSoon(k){
+  lcButtons(k);
   const s=_lc[k];
   clearTimeout(s.timer);
   s.timer=setTimeout(()=>lcFill(k,true),150);
@@ -10582,13 +10578,19 @@ function lcSelected(k){
   const rsel=lcEl(k,'ref-select');
   return rsel&&rsel.value&&_lc[k]?_lc[k].by[rsel.value]||null:null;
 }
+function lcTyped(k){
+  const re=LC_CFG[k].typed;
+  if(!re)return '';
+  const v=String((lcEl(k,'filter')||{}).value||'').trim();
+  return re.test(v)?v:'';
+}
 function lcButtons(k){
   const r=lcSelected(k),c=LC_CFG[k];
-  const ok=c.ready?c.ready(k,r):!!r;
+  const pick=c.ready?c.ready(k,r):!!r,t=lcTyped(k);
   const btn=lcEl(k,'connect-btn');
-  if(btn)btn.disabled=!ok;
+  if(btn)btn.disabled=!(pick||t);
   const sv=lcEl(k,'save-btn');
-  if(sv)sv.disabled=!ok||_lc[k].saving;
+  if(sv)sv.disabled=!(pick||(c.typedSave&&(t||_lc[k].last)))||_lc[k].saving;
   const url=r?c.lh(r):'';
   _updateLhBtn('lh-btn-'+k+'REF',url);
   const lh=byId('lh-btn-'+k+'REF');
@@ -10615,16 +10617,22 @@ function lcCardSync(k,d){
 }
 function lcConnect(k){
   const r=lcSelected(k);
-  if(r)LC_CFG[k].connect(k,r);
+  if(r){LC_CFG[k].connect(k,r);return;}
+  const t=lcTyped(k);
+  if(!t)return;
+  if(LC_CFG[k].typedConnect)LC_CFG[k].typedConnect(k,t);
+  else doQuickTune(k,t);
 }
 async function lcSave(k){
   // Save the picked entry into the next free favorite slot for this tab,
   // then re-draw the grids from the server so the new row shows up below.
   const s=_lc[k];
   if(!s||s.saving)return;
-  const r=lcSelected(k);
-  if(!r)return;
-  const payload=LC_CFG[k].save(k,r);
+  const c=LC_CFG[k];
+  const r=lcSelected(k);let payload=null;
+  if(r)payload=c.save(k,r);
+  else if(typeof c.typedSave==='function'){const t=lcTyped(k);if(t)payload=c.typedSave(k,t);}
+  else if(c.typedSave){const t=lcTyped(k)||s.last;if(t)payload=c.save(k,[t]);}
   if(!payload)return;
   s.saving=true;lcButtons(k);
   try{
@@ -10694,6 +10702,8 @@ function lcTgCard(k,named){
 lcTgCard('P25',false);
 lcTgCard('NXDN',false);
 lcTgCard('STFU',true);
+['P25','NXDN','STFU'].forEach(k=>Object.assign(LC_CFG[k],
+  {typed:/^\d{1,8}$/,typedSave:true,typedHint:'You can still type a number.'}));
 
 /* ── M17 browse card (v8.6.2 — Stage 2 of the M17 tab rework) ───────────────
    Reflector / Module menus + Connect + LH, fed by /api/m17-hosts (parsed from
@@ -10823,7 +10833,7 @@ function m17CardButtons(){
   btn.disabled=!(r&&msel.value);
   const sv=byId('m17-save-btn');
   if(sv)sv.disabled=!(r&&msel.value)||_m17c.saving;
-  const url=r?(r.lh_url||''):'';
+  const url=r?lcHostUrl(r.ip):'';   // v9.3.84: the reflector's IP, no port
   _updateLhBtn('lh-btn-M17',url);
   if(lh)lh.setAttribute('aria-disabled',url?'false':'true');
 }
@@ -10879,7 +10889,7 @@ async function m17CardSave(){
 function openM17Last(){
   const rsel=byId('m17-ref-select');
   const r=rsel?_m17c.byId[rsel.value]:null;
-  openLast(r?r.lh_url||'':'');
+  openLast(r?lcHostUrl(r.ip):'');
 }
 
 /* ── XLX / D-STAR reflector cards (v8.9.1, v8.9.3; engine v9.0.3) ───────────
@@ -10897,6 +10907,10 @@ function openM17Last(){
    and stores http://address as the favorite's Last Heard link.
    Extra element: <page>-mod-select. */
 function lcRefMod(k){const m=lcEl(k,'mod-select');return m?m.value:'';}
+function lcRefPickMod(k,r){
+  const p=String((lcEl(k,'filter')||{}).value||'').trim().toUpperCase().split(/\s+/);
+  return p.length===2&&/^[A-Z]$/.test(p[1])&&p[0]===r.id?p[1]:lcRefMod(k);
+}
 function lcRefFromFav(v){
   // current_fav is the tune string itself, e.g. "XLX307AL" or "REF001CL".
   const s=String(v||'').trim().toUpperCase();
@@ -10942,20 +10956,35 @@ function lcRefCard(k,what,file,save,connect){
     ready:(k,r)=>!!(r&&lcRefMod(k)),
     lh:r=>lcHostUrl(r.addr),
     connect:(k,r)=>{
-      const mod=lcRefMod(k);
+      const mod=lcRefPickMod(k,r);
       if(!mod)return;
       if(curTg&&curTg.mode===k&&curTg.tg===r.id+mod+'L'){
         toast('Already connected to '+r.id+' Mod-'+mod,'ok');return;
       }
       connect(r.id,mod);
     },
-    save:(k,r)=>{const mod=lcRefMod(k);return mod?{action:save,base:r.id,module:mod}:null;},
+    save:(k,r)=>{const mod=lcRefPickMod(k,r);return mod?{action:save,base:r.id,module:mod}:null;},
   });
 }
 lcRefCard('XLX','XLX reflector','/var/lib/mmdvm/XLXHosts.txt','save-xlx-favorite',
           (id,mod)=>xlxConnect(id,id,mod));
 lcRefCard('DSTAR','D-STAR reflector','/var/lib/mmdvm/','save-dstar-favorite',
           (id,mod)=>dstarConnect(id,mod,id+' Mod-'+mod));
+function lcRefTyped(k,t){
+  const p=String(t).trim().toUpperCase().split(/\s+/);
+  return {base:p[0],mod:p[1]||lcRefMod(k)||'A'};
+}
+Object.assign(LC_CFG.DSTAR,{
+  typed:/^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
+  typedHint:'You can still type a reflector or gateway callsign.',
+  typedConnect:(k,t)=>{const {base,mod}=lcRefTyped(k,t);dstarConnect(base,mod,`${base} Mod-${mod}`);},
+  typedSave:(k,t)=>{const {base,mod}=lcRefTyped(k,t);return {action:'save-dstar-favorite',base,module:mod};},
+});
+Object.assign(LC_CFG.XLX,{
+  typed:/^XLX\d{3}(?:\s+[A-Z])?$/i,
+  typedHint:'You can still type a reflector (XLX334).',
+  typedConnect:(k,t)=>{const {base,mod}=lcRefTyped(k,t);xlxConnect(`${base} Mod-${mod}`,base,mod);},
+});
 
 /* ── YSF reflector card (v8.8.3; engine v9.0.4) ─────────────────────────────
    Country menu + text filter + Reflector menu + Connect + LH + Save, fed by
@@ -11030,6 +11059,7 @@ lcDef('YSF',{
   },
   save:(k,r)=>({action:'save-ysf-favorite',ref:ysfTuneValue(r)}),
 });
+Object.assign(LC_CFG.YSF,{typed:/^(?:\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+):\d{1,5}$/,typedHint:'You can still type an IP:port address.'});
 
 /* endAction(refreshDelay) — uniform action teardown: hide the working
    overlay, release the busy latch, schedule a refresh (v7.744; was
@@ -11183,47 +11213,6 @@ async function doM17Disconnect(){
     30000
   );
 }
-async function reflectorQuickConnect(baseId,modId,errMsg,connectFn){
-  const base=byId(baseId).value.trim().toUpperCase();
-  const mod=(byId(modId).value||'A').toUpperCase();
-  if(!base){toast(errMsg,'err');return;}
-  await connectFn(base,mod);
-}
-async function dstarQuickConnect(){
-  await reflectorQuickConnect('qt-DSTAR-base','qt-DSTAR-mod',
-    'Enter a reflector or gateway callsign (e.g. REF001 or W1ABC)',
-    (raw,m)=>{const {base,mod}=dstarSplit(raw,m);return dstarConnect(base,mod,`${base} Mod-${mod}`);});
-}
-async function dstarQuickSave(){
-  const el=byId('qt-DSTAR-base'),msel=byId('qt-DSTAR-mod');
-  const {base,mod}=dstarSplit(el?el.value:'',msel?msel.value:'A');
-  if(!base){toast('Enter a reflector or gateway callsign first','err');return;}
-  const d=await api({action:'save-dstar-favorite',base,module:mod},10000);
-  if(d.ok){
-    toast(d.message,/already in favorites/.test(d.message)?'info':'ok');
-    await loadTgData();
-  }else{
-    toast(d.message||'Could not save the favorite','err');
-  }
-}
-async function xlxQuickConnect(){
-  await reflectorQuickConnect('qt-XLX-base','qt-XLX-mod',
-    'Enter a reflector (e.g. XLX334)',
-    (base,mod)=>xlxConnect(`${base} Mod-${mod}`,base,mod));
-}
-async function m17QuickConnect(){
-  // Custom rather than reflectorQuickConnect(): that helper uppercases and
-  // treats the field as a reflector callsign/base. M17's quick-bar field is
-  // a plain IP/hostname with no separate name/base field, so ip doubles as
-  // both the display name and the ini-identity base for ad-hoc lookups
-  // (saved rows in Edit have proper name/base pairs — see m17SyncFromDOM).
-  const ipEl=byId('qt-M17-ip');
-  const modEl=byId('qt-M17-mod');
-  const ip=ipEl?ipEl.value.trim():'';
-  const mod=((modEl&&modEl.value)||'@ALL').toUpperCase();
-  if(!ip){toast('Enter a reflector IP first','err');return;}
-  await m17Connect(ip,ip,ip,mod);
-}
 async function tuneTG(mode,tg,name){
   if(busy)return;
   if(tg!==TG_DISCONNECT&&curTg&&curTg.mode===mode&&curTg.tg===tg)return;
@@ -11304,10 +11293,10 @@ async function dmrQuickSave(){
     }
   }finally{_dmrSaving=false;dmrSaveSync();}
 }
-async function doQuickTune(mode){
+async function doQuickTune(mode,typed){
   if(busy)return;
   const inp=byId('qt-'+mode);
-  const tg=inp?inp.value.trim():'';
+  const tg=typed!==undefined?String(typed).trim():(inp?inp.value.trim():'');
   if(!tg){
     // DMR with empty field: retune the currently-selected network
     if(mode==='DMR'){
@@ -11332,6 +11321,12 @@ async function doQuickTune(mode){
       if(mode==='DMR'&&/^\d{1,8}$/.test(tg))_dmrQtLast={net:dmrSaveNet(),tg};   // v8.9.6
       if(inp)inp.value='';
       if(mode==='DMR')dmrSaveSync();
+      if(LC_CFG[mode]&&LC_CFG[mode].typed){
+        _lc[mode].last=tg;
+        const f=lcEl(mode,'filter');
+        if(f&&f.value.trim()===tg){f.value='';lcFill(mode,false);}
+        lcButtons(mode);
+      }
       setIndicator(tg,mode,false,tg);
       _pendingTune={tg,mode,name:tg,at:Date.now()};
       pollAbInfo();
@@ -11356,47 +11351,46 @@ async function aslConnect(node,name){
    favorite row makes.  Save (card or quick bar) goes to the tab's
    save-*-favorite action.  One "saving" flag per tab is shared by the card
    and quick-bar Save buttons so the two can't run at once.
-   ASL: /var/lib/asterisk/astdb.txt, LH opens the node's AllStar stats page.
-   ECHO: chan_echolink's "echolink dbdump" (stations logged in right now),
-   LH opens EchoLink's logins page (it has no page per node). */
+   ASL: /var/lib/asterisk/astdb.txt.  v9.3.78: no quick bar; the card takes
+   its jobs (typed: a bare node number in the search box connects/saves even
+   when it is not listed; Save falls back to the last number connected).  LH
+   is lh-btn-ASL, the Edit tab's ASL Last Heard URL (openModeLast).
+   ECHO: chan_echolink's "echolink dbdump" (stations logged in right now).
+   v9.3.79: same as ASL (typed, no quick bar, LH is lh-btn-ECHO). */
 const NDC_TTL_MS=300000;
 const NDC={
   ASL:{card:'asl-card',msg:'asl-card-msg',filter:'asl-filter',sel:'asl-ref-select',
-    connectBtn:'asl-connect-btn',saveBtn:'asl-save-btn',lhBtn:'lh-btn-ASLNODE',
-    qtInput:'cbn-input',qtBtn:'asl-qt-save-btn',
+    connectBtn:'asl-connect-btn',saveBtn:'asl-save-btn',
+    typed:n=>doConnectByNumber(n),
     api:'/api/asl-directory',saveAction:'save-asl-favorite',favApi:'/api/asl-nodes',
     favsLoaded:n=>{_lastAslNodes=n;renderASLGrid(_lastAslNodes,_lastLinkedNode);},
     connect:(node,name)=>aslConnect(node,name),
-    lhUrl:r=>'https://stats.allstarlink.org/stats/'+encodeURIComponent(r[0]),
     optText:m=>[m[0],m[1],m[3]||m[2]||''].filter(Boolean).join(' · '),
     noListOpt:'No node list',selectOpt:'Select node…',
     listErr:'Could not check the AllStar node list. Reopen this tab to try again.',
-    emptyMsg:'The AllStar node list is empty. Run: sudo asl3-update-astdb',
-    missingMsg:'AllStar node list not found. Turn on asl3-update-astdb.',
+    emptyMsg:'The AllStar node list is empty. Run: sudo asl3-update-astdb. You can still type a node number.',
+    missingMsg:'AllStar node list not found. Turn on asl3-update-astdb. You can still type a node number.',
     missingRetryMs:0,
     foundMsg:(d,total)=>total.toLocaleString()+' nodes listed'+
       (d.mtime?', dated '+new Date(d.mtime*1000).toLocaleDateString():''),
     noMatch:q=>'No nodes match "'+q+'".',
-    searchErr:'Could not search the node list. Try again.',
-    qtBad:'ASL node must be a number (up to 7 digits)'},
+    searchErr:'Could not search the node list. Try again.'},
   ECHO:{card:'echo-card',msg:'echo-card-msg',filter:'echo-filter',sel:'echo-ref-select',
-    connectBtn:'echo-connect-btn',saveBtn:'echo-save-btn',lhBtn:'lh-btn-ECHONODE',
-    qtInput:'echo-input',qtBtn:'echo-qt-save-btn',
+    connectBtn:'echo-connect-btn',saveBtn:'echo-save-btn',
+    typed:n=>doEchoConnectByNumber(n),
     api:'/api/echo-directory',saveAction:'save-echo-favorite',favApi:'/api/echo-nodes',
     favsLoaded:n=>{_lastEchoNodes=n;renderEchoGrid(_lastEchoNodes,_lastEchoFav);},
     connect:(node,name)=>echoConnect(node,name),
-    lhUrl:r=>'https://www.echolink.org/logins.jsp',
     optText:m=>[m[0],m[1]].filter(Boolean).join(' · '),
     noListOpt:'No station list',selectOpt:'Select station…',
     listErr:'Could not check the EchoLink station list. Reopen this tab to try again.',
-    emptyMsg:'The EchoLink station list is empty. EchoLink may still be logging in; reopen this tab in a few minutes.',
-    missingMsg:'EchoLink station list not available. Is EchoLink turned on in Asterisk?',
+    emptyMsg:'The EchoLink station list is empty. EchoLink may still be logging in; reopen this tab in a few minutes. You can still type a node number.',
+    missingMsg:'EchoLink station list not available. Is EchoLink turned on in Asterisk? You can still type a node number.',
     missingRetryMs:60000,
     foundMsg:(d,total)=>total.toLocaleString()+' stations logged in'+
       (d.mtime?' as of '+new Date(d.mtime*1000).toLocaleTimeString():''),
     noMatch:q=>'No logged-in stations match "'+q+'".',
-    searchErr:'Could not search the station list. Try again.',
-    qtBad:'EchoLink node numbers are 1–7 digits'},
+    searchErr:'Could not search the station list. Try again.'},
 };
 const _ndc={};
 Object.keys(NDC).forEach(k=>{_ndc[k]={timer:0,seq:0,rows:{},saving:false,found:false,checked:0,total:0,qtLast:''};});
@@ -11412,12 +11406,16 @@ function ndcSelected(k){
   const v=sel?sel.value:'';
   return v&&_ndc[k].rows[v]?_ndc[k].rows[v]:null;
 }
+function ndcTyped(k){
+  const inp=byId(NDC[k].filter);
+  const v=inp?inp.value.trim():'';
+  return /^\d{1,7}$/.test(v)?v:'';
+}
 function ndcButtons(k){
-  const c=NDC[k],r=ndcSelected(k);
-  const cb=byId(c.connectBtn),sv=byId(c.saveBtn),lh=byId(c.lhBtn);
-  if(cb)cb.disabled=!r;
-  if(sv)sv.disabled=!r||_ndc[k].saving;
-  if(lh){lh.classList.toggle('lh-off',!r);lh.setAttribute('aria-disabled',r?'false':'true');}
+  const c=NDC[k],r=ndcSelected(k),t=ndcTyped(k);
+  const cb=byId(c.connectBtn),sv=byId(c.saveBtn);
+  if(cb)cb.disabled=!r&&!t;
+  if(sv)sv.disabled=(!r&&!t&&!_ndc[k].qtLast)||_ndc[k].saving;
 }
 async function ndcCardEnter(k){
   const c=NDC[k],st=_ndc[k];
@@ -11440,7 +11438,6 @@ function ndcFound(k,d){
   const inp=byId(c.filter),sel=byId(c.sel);
   st.found=!!(d.found&&d.total);
   st.total=d.total||0;
-  if(inp)inp.disabled=!st.found;
   if(!st.found){
     st.rows={};
     if(sel){sel.innerHTML='<option value="">'+c.noListOpt+'</option>';sel.disabled=true;}
@@ -11454,6 +11451,7 @@ function ndcFound(k,d){
   return true;
 }
 function ndcSearchSoon(k){
+  ndcButtons(k);
   clearTimeout(_ndc[k].timer);
   _ndc[k].timer=setTimeout(()=>ndcSearch(k),300);
 }
@@ -11501,12 +11499,8 @@ async function ndcSearch(k){
 }
 function ndcConnect(k){
   const r=ndcSelected(k);
-  if(!r)return;
+  if(!r){const t=ndcTyped(k);if(t)NDC[k].typed(t);return;}
   NDC[k].connect(r[0],[r[0],r[1]].filter(Boolean).join(' '));
-}
-function ndcLast(k){
-  const r=ndcSelected(k);
-  if(r)openLast(NDC[k].lhUrl(r));
 }
 async function ndcSaveNode(k,node){
   const c=NDC[k];
@@ -11523,38 +11517,20 @@ async function ndcSaveNode(k,node){
 }
 async function ndcSave(k){
   const r=ndcSelected(k),st=_ndc[k];
-  if(!r||st.saving)return;
-  st.saving=true;ndcButtons(k);ndcQtSync(k);
-  try{await ndcSaveNode(k,r[0]);}finally{st.saving=false;ndcButtons(k);ndcQtSync(k);}
+  const node=r?r[0]:(ndcTyped(k)||st.qtLast);
+  if(!node||st.saving)return;
+  st.saving=true;ndcButtons(k);
+  try{await ndcSaveNode(k,node);}finally{st.saving=false;ndcButtons(k);}
 }
-function ndcQtPick(k){
-  const inp=byId(NDC[k].qtInput);
-  const v=inp?inp.value.trim():'';
-  return v||_ndc[k].qtLast;
-}
-function ndcQtSync(k){
-  const b=byId(NDC[k].qtBtn);
-  if(b)b.disabled=_ndc[k].saving||!ndcQtPick(k);
-}
-async function ndcQtSave(k){
-  const st=_ndc[k];
-  if(st.saving)return;
-  const node=ndcQtPick(k);
-  if(!node){ndcQtSync(k);return;}
-  if(!/^\d{1,7}$/.test(node)){toast(NDC[k].qtBad,'err');return;}
-  st.saving=true;ndcQtSync(k);ndcButtons(k);
-  try{await ndcSaveNode(k,node);}finally{st.saving=false;ndcQtSync(k);ndcButtons(k);}
-}
-async function doConnectByNumber(){
-  const inp=byId('cbn-input');
-  const node=inp?inp.value.trim():'';
+async function doConnectByNumber(node){
+  const inp=byId('asl-filter');
   if(!node){toast('Enter a node number first','err');return}
   if(busy)return;
   dimGrid('ASL');
   try{await apiAction(
     {action:'connect-by-number',node},
     `Connecting node ${node}…`,
-    d=>{if(/^\d{1,7}$/.test(node))_ndc.ASL.qtLast=node;if(inp)inp.value='';ndcQtSync('ASL');curTg={mode:'ASL',tg:node};setIndicator(node,'ASL',false);renderASLGrid(_lastAslNodes,node);showReady(`ASL READY — ${node}`);},  // v8.9.7 Save memory; A5 writer 5/7 (optimistic render) — see applyGridState comment
+    d=>{_ndc.ASL.qtLast=node;if(inp&&inp.value.trim()===node){inp.value='';ndcSearch('ASL');}else ndcButtons('ASL');curTg={mode:'ASL',tg:node};setIndicator(node,'ASL',false);renderASLGrid(_lastAslNodes,node);showReady(`ASL READY — ${node}`);},  // v8.9.7 Save memory; A5 writer 5/7 (optimistic render) — see applyGridState comment
     30000
   );}finally{undimGrid('ASL');}
 }
@@ -11568,9 +11544,8 @@ async function echoConnect(node,name){
     30000
   );}finally{undimGrid('ECHO');}
 }
-async function doEchoConnectByNumber(){
-  const inp=byId('echo-input');
-  const node=inp?inp.value.trim():'';
+async function doEchoConnectByNumber(node){
+  const inp=byId('echo-filter');
   if(!node){toast('Enter a node number first','err');return}
   if(!/^\d{1,7}$/.test(node)){toast('EchoLink node numbers are 1–7 digits','err');return}   // v9.3.56
   if(busy)return;
@@ -11578,7 +11553,7 @@ async function doEchoConnectByNumber(){
   try{await apiAction(
     {action:'echo-connect-by-number',node},
     `Echo connecting ${node}…`,
-    d=>{_ndc.ECHO.qtLast=node;if(inp)inp.value='';ndcQtSync('ECHO');_lastEchoFav=node;setIndicator(node,'ECHO',false);renderEchoGrid(_lastEchoNodes,node);showReady(`Echo READY — ${node}`);},  // v9.3.59 Save memory
+    d=>{_ndc.ECHO.qtLast=node;if(inp&&inp.value.trim()===node){inp.value='';ndcSearch('ECHO');}else ndcButtons('ECHO');_lastEchoFav=node;setIndicator(node,'ECHO',false);renderEchoGrid(_lastEchoNodes,node);showReady(`Echo READY — ${node}`);},  // v9.3.59 Save memory
     30000
   );}finally{undimGrid('ECHO');}
 }
@@ -11716,15 +11691,36 @@ function applyTabState(d){
   }
 }
 function applyAslReg(d){
-  const b=byId('asl-tune-btn');
+  const b=byId('asl-connect-btn');
   if(!b)return;
   const bad=d.asl_reg==='unregistered';
   b.classList.toggle('asl-unreg',bad);
   b.title=bad?('Node '+(d.asl_node||'')+' is not registered with AllStarLink'):'';
 }
+function applySvcWarn(d){
+  const s=(d&&d.svc)||{};
+  const ab=s.ab==='inactive'?['Analog_Bridge']:[];
+  const set=(id,bad)=>{
+    const b=byId(id);
+    if(!b)return;
+    b.classList.toggle('svc-down',bad.length>0);
+    b.title=bad.length?bad.join(' and ')+(bad.length>1?' are':' is')+' not running':'';
+  };
+  set('dmr-connect-btn',ab);
+  set('stfu-connect-btn',(s.stfu==='inactive'?['STFU']:[]).concat(ab));
+  set('ysf-connect-btn',(s.ysf==='inactive'?['YSFGateway']:[]).concat(ab));
+  set('fcs-connect-btn',(s.ysf==='inactive'?['YSFGateway']:[]).concat(ab));
+  const irc=(s.ircddb==='inactive'?['ircDDBGateway']:[]).concat(ab);
+  set('dstar-connect-btn',irc);
+  set('xlx-connect-btn',irc);
+  set('m17-connect-btn',(s.m17==='inactive'?['USRP2M17']:[]).concat(ab));
+  set('p25-connect-btn',(s.p25==='inactive'?['P25Gateway']:[]).concat(ab));
+  set('nxdn-connect-btn',(s.nxdn==='inactive'?['NXDNGateway']:[]).concat(ab));
+}
 function applyServerState(d){
   byId('hdr-node').textContent=d.asl_node;
   applyAslReg(d);
+  applySvcWarn(d);
   const csEl=byId('hdr-callsign');
   const csSep=byId('hdr-callsign-sep');
   if(d.callsign){csEl.textContent=d.callsign;csEl.style.display='inline';csSep.style.display='inline';}
@@ -11840,7 +11836,6 @@ function applyGridState(d,changed){
     fcsCardSync(d);   // v8.4.2: follow the tuned FCS room in the browse card
     Object.keys(LC_CFG).forEach(k=>lcCardSync(k,d));   // v9.0.2 browse-card engine: P25 / NXDN / STFU / XLX / D-STAR / YSF
     m17CardSync(d);   // v8.6.2: follow the connected M17 reflector in the browse card
-    initModuleSelects();
   }
 }
 async function refresh(){
@@ -11968,7 +11963,6 @@ async function loadTgData(){
     renderXlxGrid(_lastXlxRefs,curTg&&curTg.mode==='XLX'?curTg.tg:null);
     renderM17Grid(_lastM17Refs,curTg&&curTg.mode==='M17'?curTg.tg:null);
     renderASLGrid(_lastAslNodes,_lastLinkedNode);  // A5 writer 7/7 — boot draw; see applyGridState comment
-    initModuleSelects();
     _refreshLhBtns();
   }catch(e){
     console.error('loadTgData() error:',e);
@@ -13221,7 +13215,7 @@ let _appStarted=false;
 function _startApp(){
   if(_appStarted)return;
   _appStarted=true;
-  refresh().then(()=>{loadTgData();schedulePoll();pollKeyed();initModuleSelects();pollAbInfo();});
+  refresh().then(()=>{loadTgData();schedulePoll();pollKeyed();pollAbInfo();});
   setInterval(pollAbInfo,10_000);
   setInterval(()=>{
     if(!_uptimeAt)return;
@@ -14171,6 +14165,8 @@ def startup() -> None:
         threading.Thread(target=_link_poll_loop, daemon=True).start()
         if has_asl:
             threading.Thread(target=_asl_reg_loop, name="asl-reg", daemon=True).start()
+    if has_dvs:
+        threading.Thread(target=_svc_loop, name="svc-check", daemon=True).start()
 
     if has_asl:
         has_echo = _detect_echo()
