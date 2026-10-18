@@ -1,6 +1,19 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_214_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_215_20261018.py`. Newest entries first.
+
+## 0.0.215 (2026-10-18) — testing
+
+- **firewall-cmd gets 60 s to answer.** On a busy Pi Zero 2 W each `firewall-cmd` call
+  can take 18-21 s (magicbox). 44helper gave it 5-8 s, so it read a running firewalld as
+  "isn't running" and the tunnel's zone as "(none)", and the half tunnel's Check first
+  stopped on both. Every firewall-cmd call now waits up to 60 s. When firewalld still
+  doesn't answer, Check first says so ("didn't answer within 60 s") instead of
+  "isn't running".
+- **The Overview no longer piles up firewall-cmd runs.** It refreshes every 5 s and
+  started a new firewall-cmd each time, killed after 5 s on a slow Pi. It now reads the
+  tunnel zone from a cache kept for 30 s and refreshed in the background, one run at a
+  time; a firewall reload clears it.
 
 ## 0.0.214 (2026-10-18) — testing
 
