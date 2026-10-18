@@ -1,6 +1,41 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_202_20261014.py`. Newest entries first.
+Current file: `44helper_v0_0_203_20261018.py`. Newest entries first.
+
+## 0.0.203 (2026-10-18) — testing
+
+**Boot order.** Reported: after a reboot the WireGuard tunnel didn't come back, and the
+DVSwitch services couldn't reach the internet and didn't start, until the
+troubleshooting steps were run by hand. Nothing ordered the DVSwitch services after the
+tunnel, a failed tunnel start at boot was never retried, and since 0.0.201 the bridges
+no longer wait for netcheck at all, so they could start before there was a network.
+
+New **6b. Boot order** card under step 6 (both tunnel tabs). Step 6 sets it
+automatically, and the Health card offers **Set the boot order** when it's missing.
+- `44helper-netready.service` (oneshot) runs `/usr/local/sbin/44helper-netready` after
+  `network-online.target` and `wg-quick@wg0`. It waits up to 180 s until there's a
+  default route, the tunnel has a handshake (only when wg-quick@wg0 is enabled), and
+  names resolve, then exits 0 either way and logs which one was missing.
+- Drop-ins `44helper-boot.conf` for netcheck and each loaded DVSwitch service
+  (bridges, md380-emu, STFU, the gateways, ircDDBGateway, webproxy):
+  `After=`/`Wants=44helper-netready.service`. All but netcheck also get
+  `Restart=on-failure`, `RestartSec=15`.
+- Drop-in for `wg-quick@wg0`: `Restart=on-failure`, `RestartSec=20`,
+  `StartLimitIntervalSec=0`, so a start that fails at boot (DNS or resolved not
+  ready yet) is retried instead of leaving the tunnel down.
+- Enables `wg-quick@wg0` at boot, and the network's wait-online unit, if they aren't.
+- Takes effect at the next boot; nothing running is restarted. **Remove** deletes the
+  unit, the script and the drop-ins; the tunnel stays enabled at boot.
+- Health card: red when wg0.conf exists but the tunnel isn't enabled at boot, amber
+  when any other boot-order piece is missing.
+
+DVSwitch installer: the install step is now **Start DVSwitch after the network is
+ready** (netcheck fixes plus the DVSwitch boot order), and purge step 1 removes both.
+
+Tested: the wait script run with stub commands (ready after the handshake; gives up
+after the limit and exits 0); `systemd-analyze verify` on the new unit and on a oneshot
+unit with the retry settings; apply, status, the Health finding and Remove with mocks;
+the card in headless Chromium; the 0.0.201 and 0.0.202 suites.
 
 ## 0.0.202 (2026-10-14) — testing
 

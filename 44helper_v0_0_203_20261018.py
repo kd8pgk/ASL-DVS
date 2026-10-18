@@ -42,7 +42,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.202"
+APP_VERSION = "0.0.203"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1154,6 +1154,21 @@ def _ov_health_findings(force: bool = False) -> list[dict]:
     _OV_HEALTH_CACHE.update(at=time.time(), data=data)
     return list(data)
 
+def _ov_boot_finding(text: str | None) -> dict | None:
+    if not text:
+        return None
+    st = status_boot_order()
+    if st["done"]:
+        return None
+    if st["wg_enabled"] not in ("enabled", "enabled-runtime"):
+        return {"id": "boot_order", "fix": ["boot_order"], "level": "danger",
+                "msg": "The tunnel isn't enabled at boot, so it stays down after a reboot. Set the boot order to enable it "
+                       "and make DVSwitch wait for it."}
+    return {"id": "boot_order", "fix": ["boot_order"], "level": "warn",
+            "msg": ("After a reboot the tunnel or the DVSwitch services may come up in the wrong order (missing: "
+                    + "; ".join(st["missing"]) + "). Set the boot order so DVSwitch waits for the network, the tunnel "
+                    "and DNS, and the tunnel retries if its first start fails.")}
+
 def _ov_health_compute() -> list[dict]:
     try:
         with open(WG0_CONF_PATH, "r") as f:
@@ -1161,7 +1176,8 @@ def _ov_health_compute() -> list[dict]:
     except OSError:
         text = None
     out: list[dict] = []
-    for fn in (lambda: _ov_handshake_finding(text), lambda: _ov_dns_finding(text), lambda: _ov_address_finding(text)):
+    for fn in (lambda: _ov_handshake_finding(text), lambda: _ov_dns_finding(text), lambda: _ov_address_finding(text),
+               lambda: _ov_boot_finding(text)):
         try:
             r = fn()
         except Exception as exc:
@@ -2335,12 +2351,13 @@ _DV_ENABLE_NOTE = ("Enables and starts whichever of analog_bridge / mmdvm_bridge
                    "enables nothing).")
 
 def _dv_netcheck_step(step_id: str, num: int) -> dict:
-    return {"id": step_id, "num": num, "title": "Stop netcheck from blocking boot",
-            "pi_action": "health_netcheck_fixes", "button": "Apply netcheck fixes",
-            "note": "DVSwitch's netcheck runs at boot, and when it fails (often because the network isn't up yet) the "
-                    "bridges and gateways never start. This runs netcheck once the network is online and stops a "
-                    "failed netcheck from keeping the services down. Safe to run again; step 6 of either tunnel tab "
-                    "also does it. Revert is on the netcheck card under tunnel step 6."}
+    return {"id": step_id, "num": num, "title": "Start DVSwitch after the network is ready",
+            "pi_action": "dv_boot_ready", "button": "Set the boot order",
+            "note": "At boot the DVSwitch services can start before the network, the 44Net tunnel or DNS are up; "
+                    "netcheck then fails and the gateways can't reach their servers. This applies the netcheck "
+                    "fixes, and makes netcheck, the bridges and the gateways wait (up to 3 minutes) for the "
+                    "network, the tunnel handshake and DNS, with a retry if one still fails. Safe to run again; "
+                    "step 6 of either tunnel tab also does it. Remove is on the boot-order card under tunnel step 6."}
 
 def _dvswitch_install_steps_bookworm() -> list[dict]:
     return [
@@ -2437,11 +2454,12 @@ def _dvswitch_purge_steps_bookworm() -> list[dict]:
 
 def _dvswitch_purge_steps_all() -> list[dict]:
     steps = [dict(s, id=s["id"].replace("bw_", "dv_", 1)) for s in _dvswitch_purge_steps_bookworm()]
-    steps.insert(0, {"id": "dv_purge_netcheck_revert", "num": 1, "title": "Remove 44helper's netcheck fixes",
-                     "pi_action": "netcheck_revert", "button": "Remove netcheck fixes",
-                     "note": "Removes the netcheck drop-ins 44helper added (install step 'Stop netcheck from blocking "
-                             "boot', or tunnel step 6) so nothing is left behind once the packages are gone. Does "
-                             "nothing if none were added."})
+    steps.insert(0, {"id": "dv_purge_netcheck_revert", "num": 1, "title": "Remove 44helper's netcheck and boot-order settings",
+                     "pi_action": "dv_boot_undo", "button": "Remove them",
+                     "note": "Removes the netcheck fixes and the DVSwitch boot-order drop-ins 44helper added (install "
+                             "step 'Start DVSwitch after the network is ready', or tunnel step 6) so nothing is left "
+                             "behind once the packages are gone. The tunnel's own boot settings stay. Does nothing if "
+                             "none were added."})
     steps[1] = dict(steps[1], note=steps[1]["note"] + " This purge covers BOTH install options (Bookworm "
                                                      "and Trixie) -- it is the same list whichever is selected.")
     steps = [dict(st, num=i + 1) for i, st in enumerate(steps)]
@@ -6746,11 +6764,216 @@ def _pi_after_start() -> list[str]:
         r = action_health_netcheck_fixes()
         out.append("netcheck (so a failed check at boot doesn't stop the DVSwitch services):")
         out += ["  " + ln for ln in r["output"].splitlines()]
+    r = action_boot_order_apply()
+    out.append("Boot order (so the tunnel comes back after a reboot and DVSwitch waits for it):")
+    out += ["  " + ln for ln in r["output"].splitlines()]
     if _hl_stopped_units():
         r = action_health_start_services()
         out.append("DVSwitch services that were enabled but stopped:")
         out += ["  " + ln for ln in r["output"].splitlines()]
     return out
+
+_BOOT_UNIT = "44helper-netready.service"
+_BOOT_UNIT_PATH = "/etc/systemd/system/44helper-netready.service"
+_BOOT_SCRIPT_PATH = "/usr/local/sbin/44helper-netready"
+_BOOT_DROPIN_NAME = "44helper-boot.conf"
+_BOOT_WG_UNIT = "wg-quick@wg0.service"
+_BOOT_LIMIT = 180
+_BOOT_SCRIPT = """#!/bin/bash
+LIMIT=%(limit)d
+WANT_WG=0
+if [ -f %(wgconf)s ] && systemctl is-enabled --quiet wg-quick@wg0 2>/dev/null; then WANT_WG=1; fi
+T=0
+while :; do
+  NET=0; TUN=1; DNS=0
+  ip -4 route show default | grep -q . && NET=1
+  if [ "$WANT_WG" = 1 ]; then
+    TUN=0
+    HS=$(wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}' | sort -n | tail -n1)
+    [ -n "$HS" ] && [ "$HS" -gt 0 ] 2>/dev/null && TUN=1
+  fi
+  for N in deb.debian.org dvswitch.org; do
+    if timeout 5 getent ahosts "$N" >/dev/null 2>&1; then DNS=1; break; fi
+  done
+  if [ "$NET" = 1 ] && [ "$TUN" = 1 ] && [ "$DNS" = 1 ]; then
+    echo "ready after ${T}s: network up, tunnel handshake done (or no tunnel), names resolve"
+    exit 0
+  fi
+  if [ "$T" -ge "$LIMIT" ]; then
+    echo "not ready after ${LIMIT}s (network=$NET tunnel=$TUN dns=$DNS); starting the services anyway"
+    exit 0
+  fi
+  sleep 3
+  T=$((T + 3))
+done
+""" % {"limit": _BOOT_LIMIT, "wgconf": WG0_CONF_PATH}
+_BOOT_UNIT_TEXT = f"""[Unit]
+Description=44helper: wait until the network, the 44Net tunnel and DNS are ready
+After=network-online.target {_BOOT_WG_UNIT} nss-lookup.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+TimeoutStartSec={_BOOT_LIMIT + 30}
+ExecStart={_BOOT_SCRIPT_PATH}
+"""
+_BOOT_DV_DROPIN = f"""[Unit]
+After={_BOOT_UNIT}
+Wants={_BOOT_UNIT}
+"""
+_BOOT_DV_RESTART = """[Service]
+Restart=on-failure
+RestartSec=15
+"""
+_BOOT_WG_DROPIN = """[Unit]
+StartLimitIntervalSec=0
+
+[Service]
+Restart=on-failure
+RestartSec=20
+"""
+
+def _boot_dropin_path(unit: str) -> str:
+    return f"/etc/systemd/system/{unit}.d/{_BOOT_DROPIN_NAME}"
+
+def _boot_dv_units() -> list[str]:
+    units = [u for u in (_NETCHECK_UNIT,) + _OV_DVS_UNITS
+             if _systemctl_show(u, ["LoadState"]).get("LoadState", "") == "loaded"]
+    return units
+
+def _boot_dv_dropin_text(unit: str) -> str:
+    return _BOOT_DV_DROPIN + ("" if unit == _NETCHECK_UNIT else "\n" + _BOOT_DV_RESTART)
+
+def _boot_file_is(path: str, text: str) -> bool:
+    try:
+        with open(path, "r") as f:
+            return f.read() == text
+    except OSError:
+        return False
+
+def status_boot_order() -> dict:
+    units = _boot_dv_units()
+    conf = os.path.exists(WG0_CONF_PATH)
+    wg_enabled = _sc_is_enabled(_BOOT_WG_UNIT) if conf else ""
+    backend = _network_backend()
+    missing = []
+    if not _boot_file_is(_BOOT_SCRIPT_PATH, _BOOT_SCRIPT) or not _boot_file_is(_BOOT_UNIT_PATH, _BOOT_UNIT_TEXT):
+        missing.append("the wait-for-network unit")
+    if conf and not _boot_file_is(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN):
+        missing.append("tunnel retry")
+    if conf and wg_enabled not in ("enabled", "enabled-runtime"):
+        missing.append("tunnel enabled at boot")
+    late = [u for u in units if not _boot_file_is(_boot_dropin_path(u), _boot_dv_dropin_text(u))]
+    if late:
+        missing.append("DVSwitch ordering (" + ", ".join(u.replace(".service", "") for u in late) + ")")
+    wait_ok = backend["manager"] == "unknown" or backend["wait_enabled"] in ("enabled", "enabled-runtime", "static")
+    if not wait_ok:
+        missing.append(backend["wait_unit"] + " enabled")
+    return {"done": not missing, "missing": missing, "dv_units": units, "conf_exists": conf,
+            "wg_enabled": wg_enabled, "wait_unit": backend["wait_unit"], "wait_enabled": backend["wait_enabled"],
+            "any_applied": os.path.exists(_BOOT_UNIT_PATH) or os.path.exists(_BOOT_SCRIPT_PATH)
+                           or any(os.path.exists(_boot_dropin_path(u)) for u in (_BOOT_WG_UNIT,) + tuple(units))}
+
+def _boot_write(path: str, text: str, mode: int) -> None:
+    os.makedirs(os.path.dirname(path), mode=0o755, exist_ok=True)
+    tmp = path + ".44htmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+    os.chmod(tmp, mode)
+    os.replace(tmp, path)
+
+def action_boot_order_apply() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    out, ok = [], True
+    try:
+        _boot_write(_BOOT_SCRIPT_PATH, _BOOT_SCRIPT, 0o755)
+        _boot_write(_BOOT_UNIT_PATH, _BOOT_UNIT_TEXT, 0o644)
+        out.append(f"ok    {_BOOT_UNIT}: waits up to {_BOOT_LIMIT} s at boot for the network, the tunnel handshake and DNS")
+        if os.path.exists(WG0_CONF_PATH):
+            _boot_write(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN, 0o644)
+            out.append("ok    wg-quick@wg0 retries every 20 s if it fails to start (for example DNS not ready yet)")
+        units = _boot_dv_units()
+        for u in units:
+            _boot_write(_boot_dropin_path(u), _boot_dv_dropin_text(u), 0o644)
+        if units:
+            out.append("ok    starts after the network is ready: " + ", ".join(u.replace(".service", "") for u in units))
+            out.append("      (all but netcheck also restart 15 s after a failure)")
+    except OSError as e:
+        return {"success": False, "verified": False, "output": "\n".join(out + [f"FAIL  write failed: {e}"])}
+    rl = _daemon_reload()
+    if not rl["success"]:
+        ok = False
+        out.append("FAIL  systemctl daemon-reload: " + rl["output"])
+    if os.path.exists(WG0_CONF_PATH) and _sc_is_enabled(_BOOT_WG_UNIT) not in ("enabled", "enabled-runtime"):
+        r = _run_argv(["systemctl", "enable", _BOOT_WG_UNIT])
+        good = _sc_is_enabled(_BOOT_WG_UNIT) in ("enabled", "enabled-runtime")
+        ok = ok and good
+        out.append(("ok    " if good else "FAIL  ") + "tunnel enabled at boot" + ("" if good else ": " + r["output"]))
+    backend = _network_backend()
+    if backend["manager"] != "unknown" and backend["wait_enabled"] not in ("enabled", "enabled-runtime", "static"):
+        r = action_netcheck_enable_waitonline()
+        ok = ok and bool(r.get("verified"))
+        out.append(("ok    " if r.get("verified") else "FAIL  ") + f"{backend['wait_unit']} enabled (network-online means the network is really up)")
+    st = status_boot_order()
+    if st["done"]:
+        out.append("Takes effect at the next boot. Nothing running was restarted.")
+    else:
+        ok = False
+        out.append("Still missing: " + "; ".join(st["missing"]))
+    return {"success": ok, "verified": st["done"], "output": "\n".join(out)}
+
+def action_dv_boot_ready() -> dict:
+    a = action_health_netcheck_fixes()
+    b = action_boot_order_apply()
+    return {"success": a.get("success", False) and b.get("success", False),
+            "verified": bool(a.get("verified")) and bool(b.get("verified")),
+            "output": "netcheck:\n" + a.get("output", "") + "\n\nBoot order:\n" + b.get("output", "")}
+
+def action_dv_boot_undo() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    a = action_netcheck_revert()
+    removed = []
+    for u in (_NETCHECK_UNIT,) + _OV_DVS_UNITS:
+        path = _boot_dropin_path(u)
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                removed.append(path)
+                os.rmdir(os.path.dirname(path))
+            except OSError:
+                pass
+    rl = _daemon_reload()
+    return {"success": a.get("success", False) and rl["success"], "verified": True,
+            "output": a.get("output", "") + "\n" + ("Boot-order drop-ins removed:\n" + "\n".join(removed) if removed
+                                                  else "No DVSwitch boot-order drop-ins were present.")}
+
+def action_boot_order_revert() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    removed = []
+    for path in [_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH] + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS]:
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                removed.append(path)
+                if path.endswith(_BOOT_DROPIN_NAME):
+                    try:
+                        os.rmdir(os.path.dirname(path))
+                    except OSError:
+                        pass
+            except OSError as e:
+                return {"success": False, "verified": False, "output": f"Failed removing {path}: {e}"}
+    rl = _daemon_reload()
+    if not removed:
+        return {"success": True, "verified": True, "output": "No boot-order settings from 44helper were present."}
+    return {"success": rl["success"], "verified": True,
+            "output": "Removed:\n" + "\n".join(removed) + "\nThe tunnel stays enabled at boot; services start in their own order again."}
 
 def _pi_purge_tolerant_ok(result: dict) -> bool:
     if result["success"]:
@@ -7494,6 +7717,7 @@ def build_pi_install_status(cfg: configparser.ConfigParser) -> dict:
         "enable_tunnel": status_enable_tunnel(),
     }
     return {"steps": steps, "services_catalog": PI_INSTALL_SERVICES, "ports_catalog": PI_INSTALL_PORTS,
+            "boot_order": status_boot_order(),
             "dns": status_wg_dns(),
             "allowed_ips": status_wg_allowed_ips(),
             "reflector_egress": status_wg_reflector_egress(),
@@ -17028,7 +17252,7 @@ function renderPiInstall(kind, data) {
         (kind === 'full' ? _piReflectorPortsCardHtml(kind, data.reflector_egress || {}) : '');
       html += locked ? '<fieldset disabled style="border:0;padding:0;margin:0;min-width:0">' + subCards + '</fieldset>' : subCards;
     }
-    if (meta.id === 'enable_tunnel') { html += _piNetcheckCardHtml(kind); }
+    if (meta.id === 'enable_tunnel') { html += _piBootCardHtml(kind, data.boot_order || {}) + _piNetcheckCardHtml(kind); }
     html += '</div>';
   });
   document.getElementById('pi-steps-' + kind).innerHTML = html;
@@ -17266,6 +17490,46 @@ function piRemoveReflectorPorts() {
     window._piState['add_reflector_egress'] = {status: result.success === false ? 'fail' : 'ok', output: result.output || ''};
     refreshPiInstall('full');
   });
+}
+
+function _piBootCardHtml(kind, b) {
+  var done = !!b.done;
+  var html = '<div class="step-card" id="pi-boot-card-' + kind + '">';
+  html += '<div class="step-head"><div class="step-title"><span class="step-num">6b.</span>Boot order</div>';
+  html += '<span class="step-pill ' + (done ? 'done' : 'attempted_unconfirmed') + '">' + (done ? 'Set' : 'Not set') + '</span></div>';
+  html += '<div class="step-body">After a reboot the tunnel must come back by itself, and the DVSwitch services must wait for it. This makes the tunnel start at boot and retry every 20 s if a start fails, and makes netcheck, the bridges and the gateways wait (up to 3 minutes) until the network is up, the tunnel has a handshake and names resolve; the bridges and gateways also restart 15 s after a failure. Step 6 sets it; it takes effect at the next boot.</div>';
+  if (!done && b.missing && b.missing.length) {
+    html += '<div class="step-body">Missing: ' + asl3EscapeAttr(b.missing.join('; ')) + '</div>';
+  }
+  html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">Tunnel at boot: ' + asl3EscapeAttr(b.wg_enabled || 'no wg0.conf') +
+    ' &middot; ' + asl3EscapeAttr(b.wait_unit || 'wait-online') + ': ' + asl3EscapeAttr(b.wait_enabled || '?') +
+    ' &middot; DVSwitch units: ' + ((b.dv_units || []).length || 'none') + '</div>';
+  html += '<div class="step-actions"><button class="btn-run" onclick="piBootOrder(\\'apply\\', \\'' + kind + '\\')">' + (done ? 'Set again' : 'Set the boot order') + '</button>';
+  if (b.any_applied) { html += '<button class="btn-copy" onclick="piBootOrder(\\'revert\\', \\'' + kind + '\\')">Remove</button>'; }
+  html += '</div>';
+  var pst = (window._piState || {})['boot_order'];
+  html += '<div class="asl3-console shown' + (pst && pst.status === 'fail' ? ' fail' : (pst && pst.status === 'ok' ? ' ok' : (pst && pst.output ? '' : ' placeholder'))) + '" id="pi-boot-out-' + kind + '">' + (pst && pst.output ? asl3EscapeAttr(pst.output) : '(not run yet)') + '</div>';
+  html += '</div>';
+  return html;
+}
+
+function piBootOrder(what, kind) {
+  var msg = what === 'apply'
+    ? 'Set the boot order? The tunnel starts at boot and retries if it fails, and the DVSwitch services wait for the network, the tunnel and DNS. Takes effect at the next boot; nothing running is restarted.'
+    : 'Remove the boot-order settings? The wait-for-network unit, the tunnel retry and the DVSwitch drop-ins are deleted; the tunnel stays enabled at boot.';
+  if (!confirm(msg)) return;
+  var out = document.getElementById('pi-boot-out-' + kind);
+  if (out) { out.className = 'asl3-console shown'; out.textContent = 'Working...'; }
+  fetch('/api/pi_install/action', {
+    method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({step: what === 'apply' ? 'boot_order_apply' : 'boot_order_revert'})
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    window._piState = window._piState || {};
+    window._piState['boot_order'] = {status: res.success === false ? 'fail' : 'ok', output: res.output || ''};
+    refreshPiInstall('full');
+    refreshPiInstall('split');
+    if (typeof refreshHealth === 'function') { refreshHealth(true); }
+  }).catch(function(e) { if (out) { out.textContent = 'Request failed: ' + e; } });
 }
 
 function _piNetcheckCardHtml(kind) {
@@ -22566,6 +22830,7 @@ var _HL_FIX = {
   keepalive: ['Add keepalive (25 s)', 'Add PersistentKeepalive = 25 under [Peer] and apply it to the running tunnel?'],
   restart_resolved: ['Restart systemd-resolved', 'Restart systemd-resolved? Name lookups pause for a moment.'],
   dns_off: ['Set DNS to Off', 'Take the DNS setting out of wg0.conf (44helper\u2019s DNS lines and any DNS = line)? The Pi keeps its own resolver. Restart the tunnel afterwards.'],
+  boot_order: ['Set the boot order', 'Make the tunnel start at boot and retry if it fails, and make netcheck, the bridges and the gateways wait (up to 3 minutes) for the network, the tunnel and DNS? Takes effect at the next boot; nothing running is restarted. Remove is on the boot-order card under step 6.'],
   dns_predown: ['Move to PreDown', 'Change the DNS revert line in wg0.conf from PostDown to PreDown? Nothing else changes and the tunnel is not restarted.'],
   endpoint_pin: ['Fix the tunnel-server route', 'Keep the tunnel server on the normal route? This adds two lines to wg0.conf and adds the route now.']
 };
@@ -23667,6 +23932,11 @@ _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "health_dns_off": lambda p: action_health_dns_off(),
     "health_restart_tunnel": lambda p: action_health_restart_tunnel(),
     "health_dns_predown": lambda p: action_health_dns_predown(),
+    "health_boot_order": lambda p: _hl_done(action_boot_order_apply()),
+    "boot_order_apply": lambda p: action_boot_order_apply(),
+    "boot_order_revert": lambda p: action_boot_order_revert(),
+    "dv_boot_ready": lambda p: action_dv_boot_ready(),
+    "dv_boot_undo": lambda p: action_dv_boot_undo(),
     "load_wg_from_library": lambda p: action_load_wg_from_library(),
     "set_dns": lambda p: action_wg_set_dns(p.get("dns_mode", ""), p.get("dns_servers", "")),
     "set_mtu": lambda p: action_wg_set_mtu(p.get("mtu", "")),
