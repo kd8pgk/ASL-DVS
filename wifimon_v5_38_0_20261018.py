@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.37.0"
+APP_VERSION = "5.38.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -607,6 +607,12 @@ def uninstall_service() -> None:
     if os.path.isdir(REPORT_DIR):
         print(f"  [i] Shutdown reports kept in {REPORT_DIR} (delete it by hand if unwanted)")
 
+    if os.path.exists(KEEPOFF_NM_CONF):
+        os.remove(KEEPOFF_NM_CONF)
+        subprocess.run(["nmcli", "general", "reload", "conf"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        print(f"  [-] Removed {KEEPOFF_NM_CONF} (Keep-off adapters are managed again from the next boot)")
+
     if os.path.exists(KEEPOFF_UNIT_PATH) or os.path.exists(KEEPOFF_SCRIPT_PATH):
         subprocess.run(["systemctl", "disable", KEEPOFF_UNIT], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for path in (KEEPOFF_UNIT_PATH, KEEPOFF_SCRIPT_PATH):
@@ -1065,6 +1071,12 @@ def _attempt_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[st
 
     _reconnecting = False
 
+def _boot_join_now() -> bool:
+    if _tg_uptime() >= NET_LOSS_BOOT_GRACE:
+        return False
+    state = next((str(d.get("state") or "") for d in _wifi_devices() if d["device"] == INTERFACE), "")
+    return state == "disconnected"
+
 def maybe_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[str],
                     allow_rejoin: bool = False, interrupt_nm: bool = False) -> None:
     global _reconnecting
@@ -1450,6 +1462,8 @@ def _alerts_loop() -> None:
 
 TG_FILE = os.path.join(CONFIG_DIR, "tunnel_guard.json")
 TG_STATUS_FILE = "/run/asl_dvs/tunnel_guard.json"
+TG_RESTART_WAIT = 240
+TG_LATE_UNIT = "44helper-netready-late.service"
 TG_WG_CONF = "/etc/wireguard/wg0.conf"
 TG_UNIT = "wg-quick@wg0.service"
 TG_IFACE = "wg0"
@@ -1731,12 +1745,14 @@ class _TunnelGuard:
                 steps.append(f"route {ip}/32 {route}: " + ("added" if rc == 0 else f"failed ({out})"))
                 ok = rc == 0 and _tg_wait_hs(TG_WAIT_HS)
         if not ok:
-            rc, out = _tg_run(["systemctl", "restart", TG_UNIT], timeout=90)
+            rc, out = _tg_run(["systemctl", "restart", TG_UNIT], timeout=TG_RESTART_WAIT)
             steps.append("tunnel restart: " + ("ok" if rc == 0 else f"failed ({out.splitlines()[-1] if out else rc})"))
             ok = rc == 0 and _tg_wait_hs(TG_WAIT_HS)
         if ok:
             steps.append("handshake back")
-            if cfg["restart_dv"]:
+            if cfg["restart_dv"] and _tg_unit_prop(TG_LATE_UNIT, "ActiveState") in ("active", "activating"):
+                steps.append("DVSwitch services left to 44helper's late follow-up, which is restarting them")
+            elif cfg["restart_dv"]:
                 steps.append(_tg_restart_dv())
             self.bad, self.tries, self.next_at = 0, 0, 0.0
             result = "; ".join(steps)
@@ -2130,6 +2146,7 @@ def _watchdog_loop() -> None:
     misses = 0
     first_miss_at: Optional[float] = None
     head_start_noted = False
+    ever_online = False
     nm_busy_since: Optional[float] = None
     nm_step_in_noted = False
     net_reboot_held = False
@@ -2187,6 +2204,7 @@ def _watchdog_loop() -> None:
                 net_reboot_held = False
                 _wd_update(net_reboot_held=False)
             if connected:
+                ever_online = True
                 if misses and down_since is None:
                     log.info("Brief blip: %d missed check(s), back without a drop", misses)
                     _health_incr("blips")
@@ -2236,8 +2254,12 @@ def _watchdog_loop() -> None:
                 else:
                     if down_since is None:
                         down_since = first_miss_at
-                        log.warning("Network lost — starting shutdown timer")
-                        _health_incr("drops")
+                        if _tg_uptime() < NET_LOSS_BOOT_GRACE and not ever_online:
+                            log.info("No network yet after boot -- waiting for it (no shutdown or reboot in the first "
+                                     "%d min)", NET_LOSS_BOOT_GRACE // 60)
+                        else:
+                            log.warning("Network lost — starting shutdown timer")
+                            _health_incr("drops")
                         _wd_update(down_since_mono=down_since, last_drop_at=time.time())
                     if (loop_start - down_since) >= NO_CONN_SHUTDOWN_SECS and _net_loss_boot_grace_over():
                         if _net_loss_act(NO_CONN_SHUTDOWN_SECS):
@@ -2252,7 +2274,7 @@ def _watchdog_loop() -> None:
                     stuck = link_up and (loop_start - down_since) >= STUCK_LINK_SECS
                     waiting = False
                     if wifi_networks and not link_up:
-                        if (loop_start - down_since) < NM_HEAD_START_SECS:
+                        if (loop_start - down_since) < NM_HEAD_START_SECS and not _boot_join_now():
                             waiting = True
                             if not head_start_noted:
                                 head_start_noted = True
@@ -2907,6 +2929,11 @@ def _load_saved_interface() -> None:
         name = json.loads(txt).get("interface")
     except (ValueError, AttributeError):
         return
+    if isinstance(name, str) and _IFACE_RE.match(name):
+        for _ in range(10):
+            if os.path.isdir(f"/sys/class/net/{name}/wireless"):
+                break
+            time.sleep(1)
     if isinstance(name, str) and _IFACE_RE.match(name) \
             and os.path.isdir(f"/sys/class/net/{name}/wireless"):
         _set_interface(name, persist=False)
@@ -3172,91 +3199,6 @@ def _set_dev_mode(key: str, name: str, mode: str, persist: bool = True) -> None:
 KEEPOFF_SCRIPT_PATH = "/usr/local/sbin/wifimon-keepoff"
 KEEPOFF_UNIT = "wifimon-keepoff.service"
 KEEPOFF_UNIT_PATH = "/etc/systemd/system/" + KEEPOFF_UNIT
-KEEPOFF_WAIT = 20
-_KEEPOFF_UNIT_TEXT = f"""[Unit]
-Description=wifimon: keep Keep-off WiFi adapters off at boot
-After=NetworkManager.service
-Before=network-online.target NetworkManager-wait-online.service
-
-[Service]
-Type=oneshot
-ExecStart={KEEPOFF_SCRIPT_PATH}
-TimeoutStartSec={KEEPOFF_WAIT + 25}
-
-[Install]
-WantedBy=NetworkManager.service
-"""
-_KEEPOFF_SCRIPT = """#!/usr/bin/env python3
-import array, fcntl, os, socket, struct, subprocess, sys, time
-
-KEYS = %(keys)r
-WAIT = %(wait)d
-
-def key_of(name):
-    buf = array.array("B", struct.pack("II", 0x00000020, 32) + bytes(32))
-    addr, _n = buf.buffer_info()
-    ifr = struct.pack("16sP", name.encode()[:15], addr)
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-            fcntl.ioctl(sock.fileno(), 0x8946, ifr)
-        size = struct.unpack_from("I", buf.tobytes(), 4)[0]
-        data = buf.tobytes()[8:8 + size]
-        if size == 6 and any(data):
-            return ":".join("%%02x" %% b for b in data)
-    except (OSError, struct.error):
-        pass
-    try:
-        with open("/sys/class/net/%%s/addr_assign_type" %% name) as f:
-            perm = f.read().strip() == "0"
-        if perm:
-            with open("/sys/class/net/%%s/address" %% name) as f:
-                mac = f.read().strip().lower()
-            if mac and mac != "00:00:00:00:00:00":
-                return mac
-    except OSError:
-        pass
-    return "if:" + name
-
-def nmcli(*args):
-    try:
-        r = subprocess.run(["nmcli"] + list(args), capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.SubprocessError):
-        return 1, ""
-    return r.returncode, r.stdout
-
-def physical():
-    out = []
-    for n in os.listdir("/sys/class/net"):
-        if os.path.exists("/sys/class/net/%%s/device" %% n):
-            out.append(n)
-    return out
-
-end = time.monotonic() + WAIT
-while True:
-    devs = physical()
-    keyed = {key_of(n): n for n in devs}
-    off = [keyed[k] for k in KEYS if k in keyed]
-    if off and not [n for n in devs if n not in off]:
-        print("no other network adapter; leaving %%s alone" %% ", ".join(off))
-        sys.exit(0)
-    pending = len(off) < len(KEYS)
-    for dev in off:
-        rc, _out = nmcli("device", "set", dev, "autoconnect", "no")
-        if rc != 0:
-            pending = True
-            continue
-        rc, state = nmcli("-g", "GENERAL.STATE", "device", "show", dev)
-        if "connect" in state and "disconnected" not in state:
-            nmcli("device", "disconnect", dev)
-            print("kept %%s off at boot (it was %%s)" %% (dev, state.strip()))
-    if not pending:
-        sys.exit(0)
-    if time.monotonic() >= end:
-        print("not every Keep-off adapter was ready within %%d s" %% WAIT)
-        sys.exit(0)
-    time.sleep(1)
-"""
-
 def _keepoff_write(path: str, text: str, mode: int) -> bool:
     if _read_text(path) == text:
         return False
@@ -3268,28 +3210,61 @@ def _keepoff_write(path: str, text: str, mode: int) -> bool:
     os.replace(tmp, path)
     return True
 
+KEEPOFF_NM_CONF = "/etc/NetworkManager/conf.d/90-wifimon-keepoff.conf"
+
+def _keepoff_spec(key: str) -> str:
+    return ("interface-name:" + key[3:]) if key.startswith("if:") else ("mac:" + key)
+
+def _keepoff_nm_text(keys: List[str]) -> str:
+    return "[keyfile]\nunmanaged-devices+=" + ";".join(_keepoff_spec(k) for k in keys) + "\n"
+
+def _keepoff_nm_keys() -> List[str]:
+    m = re.search(r"unmanaged-devices\+?=(.*)", _read_text(KEEPOFF_NM_CONF) or "")
+    out = []
+    for spec in (m.group(1).strip().split(";") if m else []):
+        if spec.startswith("mac:"):
+            out.append(spec[4:].lower())
+        elif spec.startswith("interface-name:"):
+            out.append("if:" + spec[15:])
+    return out
+
 def _keepoff_sync() -> None:
     with _devmode_lock:
-        keys = sorted(k for k, v in _dev_modes.items() if v["mode"] == "off")
-    if os.geteuid() != 0 or not shutil.which("systemctl") or not shutil.which("nmcli"):
+        offs = {k: v["name"] for k, v in _dev_modes.items() if v["mode"] == "off"}
+    if os.geteuid() != 0 or not shutil.which("nmcli"):
         return
+    keys = sorted(offs)
     try:
-        if keys:
-            _keepoff_write(KEEPOFF_SCRIPT_PATH, _KEEPOFF_SCRIPT % {"keys": keys, "wait": KEEPOFF_WAIT}, 0o755)
-            if _keepoff_write(KEEPOFF_UNIT_PATH, _KEEPOFF_UNIT_TEXT, 0o644):
-                _run_text(["systemctl", "daemon-reload"], timeout=30)
-            if _run_text(["systemctl", "is-enabled", KEEPOFF_UNIT]).strip() != "enabled":
-                subprocess.run(["systemctl", "enable", KEEPOFF_UNIT], capture_output=True, timeout=30)
-                log.info("Keep off: %s set up, so Keep-off adapters stay off from the start of each boot", KEEPOFF_UNIT)
-        elif os.path.exists(KEEPOFF_UNIT_PATH) or os.path.exists(KEEPOFF_SCRIPT_PATH):
+        if os.path.exists(KEEPOFF_UNIT_PATH) or os.path.exists(KEEPOFF_SCRIPT_PATH):
             subprocess.run(["systemctl", "disable", KEEPOFF_UNIT], capture_output=True, timeout=30)
             for path in (KEEPOFF_UNIT_PATH, KEEPOFF_SCRIPT_PATH):
                 if os.path.exists(path):
                     os.remove(path)
             _run_text(["systemctl", "daemon-reload"], timeout=30)
-            log.info("Keep off: no adapter is set to Keep off any more -- removed %s", KEEPOFF_UNIT)
+            log.info("Keep off: replaced %s with a NetworkManager setting", KEEPOFF_UNIT)
+        before = _keepoff_nm_keys()
+        if keys:
+            changed = _keepoff_write(KEEPOFF_NM_CONF, _keepoff_nm_text(keys), 0o644)
+        else:
+            changed = os.path.exists(KEEPOFF_NM_CONF)
+            if changed:
+                os.remove(KEEPOFF_NM_CONF)
+        if changed:
+            _nmcli_ok(["general", "reload", "conf"], timeout=20)
+            names = {d.get("hw"): str(d["device"]) for d in _wifi_devices()}
+            for k in keys:
+                if k in names:
+                    _nmcli_ok(["device", "set", names[k], "managed", "no"], timeout=20)
+            for k in before:
+                if k not in keys and k in names:
+                    _nmcli_ok(["device", "set", names[k], "managed", "yes"], timeout=20)
+            if keys:
+                log.info("Keep off: NetworkManager now ignores %s from the start of every boot (%s)",
+                         ", ".join(offs[k] for k in keys), KEEPOFF_NM_CONF)
+            else:
+                log.info("Keep off: no adapter is set to Keep off any more -- removed %s", KEEPOFF_NM_CONF)
     except (OSError, subprocess.SubprocessError) as e:
-        log.warning("Keep off: couldn't update %s: %s", KEEPOFF_UNIT, _log_safe(e))
+        log.warning("Keep off: couldn't update %s: %s", KEEPOFF_NM_CONF, _log_safe(e))
 
 def _load_dev_modes() -> None:
     txt = _read_text(STATE_FILE)
@@ -3381,13 +3356,15 @@ def _devmode_tick() -> None:
                 renamed = True
         if renamed:
             _save_dev_modes()
+        nm_off = set(_keepoff_nm_keys())
         for d in devs:
             key = d.get("hw")
             m = modes.get(key) if key else None
             if not m:
                 continue
             name, state = str(d["device"]), str(d.get("state") or "")
-            if state == "unmanaged":
+            ours = m["mode"] == "off" and key in nm_off
+            if state == "unmanaged" and not ours:
                 _devmode_note(key, "NetworkManager isn't managing this adapter, so wifimon can't control it.")
                 continue
             if m["mode"] == "off":
@@ -3407,6 +3384,10 @@ def _devmode_tick() -> None:
                         if alt:
                             break
                     if not alt:
+                        if state == "unmanaged":
+                            ok, msg = _nmcli_ok(["device", "set", name, "managed", "yes"], timeout=20)
+                            log.warning("Keep off: %s is the only WiFi adapter -- letting NetworkManager use it until the "
+                                        "next boot%s", name, "" if ok else f" (failed: {msg})")
                         _devmode_note(key, "The watchdog is using this adapter and there's no other one "
                                            "to move it to, so it isn't being kept off.")
                         continue
@@ -3415,6 +3396,8 @@ def _devmode_tick() -> None:
                     _grace_start(f"watchdog moved from {name} to {alt} (Keep off)")
                     _set_interface(alt)
                 _devmode_note(key, None)
+                if state == "unmanaged":
+                    continue
                 if key not in _devmode_applied:
                     ok, _m = _nmcli_ok(["device", "set", name, "autoconnect", "no"])
                     if ok:
@@ -3423,6 +3406,10 @@ def _devmode_tick() -> None:
                     ok, msg = _nmcli_ok(["device", "disconnect", name])
                     if ok:
                         _devmode_log_off(name)
+                        watched = next((str(o.get("state") or "") for o in devs if o["device"] == INTERFACE), "")
+                        if INTERFACE != name and watched == "disconnected":
+                            _nmcli_ok(["-w", "0", "device", "connect", INTERFACE], timeout=10)
+                            log.info("Keep off: asked NetworkManager to connect %s now", INTERFACE)
                     else:
                         log.warning("Keep off: couldn't disconnect %s: %s", name, msg)
                 continue
