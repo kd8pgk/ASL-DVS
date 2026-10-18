@@ -1,6 +1,49 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_207_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_208_20261018.py`. Newest entries first.
+
+## 0.0.208 (2026-10-18) — testing
+
+Boot order fixes from an audit of what happens at boot across the suite.
+
+- **Wait for the clock before the tunnel starts.** The Pi has no real-time clock;
+  after an unclean power-off its clock can start up to about an hour behind, and a
+  WireGuard server drops handshakes whose timestamp isn't newer than the last one
+  it saw. On a full tunnel the time sync itself went into the dead tunnel. The
+  tunnel drop-in now runs `/usr/local/sbin/44helper-timewait` first
+  (`ExecStartPre`): in the first 10 minutes after boot, when NTP is on, it waits up
+  to 90 s for `NTPSynchronized=yes`, then starts the tunnel either way. Before wg0
+  is up, time sync goes over the LAN, so a full tunnel can't deadlock.
+  `TimeoutStartSec=210` on the tunnel.
+- **Capitalised unit names.** The boot order (and the Overview and Health checks)
+  now include `Analog_Bridge`, `MMDVM_Bridge` and `STFU`, so nodes with those names
+  get the ordering and restarts.
+- **netcheck in the boot order.** **Set the boot order** now applies the netcheck
+  fixes too (step 6 and the DVSwitch step use it), and "Set" only shows when no
+  bridge still requires netcheck (a failed dependency isn't covered by
+  `Restart=`). netcheck itself is retried 30 s after a failure, up to 10 times in
+  15 minutes.
+- **Late network.** When netready gives up after 180 s it still lets the services
+  start, and now also starts `44helper-netready-late`, which watches up to 20 more
+  minutes and, once the network, the tunnel and DNS are ready, restarts the enabled
+  DVSwitch services once (gateways that started without a network otherwise stay
+  disconnected).
+- **Boot log.** netready writes one line per boot (and the late follow-up's
+  result) to `/var/lib/44helper/boot.log`, keeping 20 lines, so the result survives
+  a volatile journal. The 6b card shows this boot's line; the Health card warns when
+  this boot wasn't ready in time.
+- **Step 6 loop check** uses WireGuard's fwmark (`ip route get … mark`), so a
+  healthy full tunnel isn't seen as a routing loop.
+- **Quiet mode left on across a reboot** is restored in the background, so
+  44helper's startup no longer waits for the DVSwitch units (which wait for netready)
+  and can't overrun its start limit.
+- Tested: both scripts with stub commands (ready, timeout with the late follow-up,
+  late ready restarting the enabled units in order, late still not ready, the
+  20-line log; the clock wait synced, never synced, skipped after 10 minutes and
+  with NTP off); `systemd-analyze verify` on the new drop-ins; apply, status,
+  Remove, the Health finding, the fwmark lookup and the background quiet restore
+  with mocks; the 6b card in headless Chromium; the 0.0.201, 0.0.202 and 0.0.206
+  suites.
 
 ## 0.0.207 (2026-10-18) — testing
 

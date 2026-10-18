@@ -43,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.207"
+APP_VERSION = "0.0.208"
 APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1048,8 +1048,8 @@ def _ov_endpoint_findings() -> list[dict]:
     return findings
 
 _OV_HANDSHAKE_MAX = 180
-_OV_DVS_UNITS = ("analog_bridge.service", "mmdvm_bridge.service", "md380-emu.service", "stfu.service",
-                 "ysfgateway.service", "ysfparrot.service", "p25gateway.service", "nxdngateway.service",
+_OV_DVS_UNITS = ("analog_bridge.service", "Analog_Bridge.service", "mmdvm_bridge.service", "MMDVM_Bridge.service",
+                 "md380-emu.service", "stfu.service", "STFU.service", "ysfgateway.service", "ysfparrot.service", "p25gateway.service", "nxdngateway.service",
                  "ircddbgatewayd.service", "webproxy.service")
 
 def _ov_q(argv: list[str], timeout: int = 6) -> tuple[int, str]:
@@ -1179,6 +1179,10 @@ def _ov_boot_finding(text: str | None) -> dict | None:
         return None
     st = status_boot_order()
     if st["done"]:
+        if st.get("last_boot_now") and ": not ready" in st.get("last_boot", ""):
+            return {"id": "boot_late", "fix": [], "level": "warn",
+                    "msg": "At this boot the network, the tunnel or DNS wasn't ready in time: " + st["last_boot"].split(": ", 1)[-1]
+                           + ". A follow-up restarts the DVSwitch services once it is; see journalctl -b -u 44helper-netready."}
         return None
     if st["wg_enabled"] not in ("enabled", "enabled-runtime"):
         return {"id": "boot_order", "fix": ["boot_order"], "level": "danger",
@@ -4294,8 +4298,14 @@ def _qm_startup_sweep() -> None:
                 log("QUIET: " + _qm_off("startup sweep, after package job").get("output", "").replace("\n", " | "))
             threading.Thread(target=_wait_then_restore, daemon=True).start()
             return
-        log("QUIET: startup found quiet mode left on -- restoring now")
-        log("QUIET: " + _qm_off("startup sweep").get("output", "").replace("\n", " | "))
+        log("QUIET: startup found quiet mode left on -- restoring in the background")
+
+        def _restore_now():
+            try:
+                log("QUIET: " + _qm_off("startup sweep").get("output", "").replace("\n", " | "))
+            except Exception as exc:
+                log(f"QUIET: startup restore error: {exc}")
+        threading.Thread(target=_restore_now, daemon=True).start()
     except Exception as exc:
         log(f"QUIET: startup sweep error (continuing startup): {exc}")
 
@@ -6013,11 +6023,21 @@ def _wg_apply_endpoint_pin(text: str) -> tuple[str, str]:
         return _wg_block_remove(text, _WG_EPPIN_BEGIN, _WG_EPPIN_END), "Endpoint pin removed from wg0.conf (no longer needed)."
     return text, ""
 
+def _wg_fwmark() -> str:
+    try:
+        r = subprocess.run(["wg", "show", "wg0", "fwmark"], capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    mark = (r.stdout or "").strip() if r.returncode == 0 else ""
+    return mark if mark and mark != "off" and re.match(r"^(0x[0-9a-fA-F]+|\d+)$", mark) else ""
+
 def _wg_endpoint_loop_live(ip: str) -> bool:
     if not ip:
         return False
+    mark = _wg_fwmark()
     try:
-        r = subprocess.run(["ip", "-4", "route", "get", ip], capture_output=True, text=True, timeout=5)
+        r = subprocess.run(["ip", "-4", "route", "get", ip] + (["mark", mark] if mark else []),
+                           capture_output=True, text=True, timeout=5)
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
     toks = (r.stdout or "").split()
@@ -6785,9 +6805,7 @@ def _pi_after_start() -> list[str]:
         log(f"netcheck scan after start failed: {exc}")
         sc = {}
     if sc.get("available") and sc.get("netcheck", {}).get("exists"):
-        r = action_health_netcheck_fixes()
-        out.append("netcheck (so a failed check at boot doesn't stop the DVSwitch services):")
-        out += ["  " + ln for ln in r["output"].splitlines()]
+        out.append("The boot order below also applies the netcheck fixes.")
     r = action_boot_order_apply()
     out.append("Boot order (so the tunnel comes back after a reboot and DVSwitch waits for it):")
     out += ["  " + ln for ln in r["output"].splitlines()]
@@ -6803,8 +6821,21 @@ _BOOT_SCRIPT_PATH = "/usr/local/sbin/44helper-netready"
 _BOOT_DROPIN_NAME = "44helper-boot.conf"
 _BOOT_WG_UNIT = "wg-quick@wg0.service"
 _BOOT_LIMIT = 180
+_BOOT_LATE_LIMIT = 1200
+_BOOT_LOG = "/var/lib/44helper/boot.log"
+_BOOT_TIME_SCRIPT_PATH = "/usr/local/sbin/44helper-timewait"
+_BOOT_TIME_WAIT = 90
 _BOOT_SCRIPT = """#!/bin/bash
+MODE=${1:-boot}
 LIMIT=%(limit)d
+[ "$MODE" = late ] && LIMIT=%(late)d
+LOG=%(log)s
+BOOT=$(cut -c1-8 /proc/sys/kernel/random/boot_id 2>/dev/null)
+note() {
+  echo "$1"
+  mkdir -p "$(dirname "$LOG")"
+  { tail -n 19 "$LOG" 2>/dev/null; echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') boot $BOOT $MODE: $1"; } > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+}
 WANT_WG=0
 if [ -f %(wgconf)s ] && systemctl is-enabled --quiet wg-quick@wg0 2>/dev/null; then WANT_WG=1; fi
 T=0
@@ -6820,17 +6851,44 @@ while :; do
     if timeout 5 getent ahosts "$N" >/dev/null 2>&1; then DNS=1; break; fi
   done
   if [ "$NET" = 1 ] && [ "$TUN" = 1 ] && [ "$DNS" = 1 ]; then
-    echo "ready after ${T}s: network up, tunnel handshake done (or no tunnel), names resolve"
+    if [ "$MODE" = late ]; then
+      for U in %(units)s; do
+        systemctl is-enabled --quiet "$U" 2>/dev/null && systemctl restart "$U"
+      done
+      note "ready ${T}s later; restarted the enabled DVSwitch services"
+    else
+      note "ready after ${T}s: network up, tunnel handshake done (or no tunnel), names resolve"
+    fi
     exit 0
   fi
   if [ "$T" -ge "$LIMIT" ]; then
-    echo "not ready after ${LIMIT}s (network=$NET tunnel=$TUN dns=$DNS); starting the services anyway"
+    if [ "$MODE" = late ]; then
+      note "still not ready after ${LIMIT}s more (network=$NET tunnel=$TUN dns=$DNS)"
+      exit 0
+    fi
+    note "not ready after ${LIMIT}s (network=$NET tunnel=$TUN dns=$DNS); starting the services anyway, watching %(late_min)d more minutes"
+    systemd-run --no-block --quiet --unit=44helper-netready-late "$0" late >/dev/null 2>&1 || true
     exit 0
   fi
   sleep 3
   T=$((T + 3))
 done
-""" % {"limit": _BOOT_LIMIT, "wgconf": WG0_CONF_PATH}
+""" % {"limit": _BOOT_LIMIT, "late": _BOOT_LATE_LIMIT, "late_min": _BOOT_LATE_LIMIT // 60, "log": _BOOT_LOG,
+       "wgconf": WG0_CONF_PATH, "units": " ".join(("netcheck.service",) + _OV_DVS_UNITS)}
+_BOOT_TIME_SCRIPT = """#!/bin/bash
+UP=$(cut -d. -f1 /proc/uptime)
+[ "${UP:-0}" -gt 600 ] && exit 0
+command -v timedatectl >/dev/null 2>&1 || exit 0
+[ "$(timedatectl show -p NTP --value 2>/dev/null)" = yes ] || exit 0
+T=0
+while [ "$T" -lt %(wait)d ]; do
+  [ "$(timedatectl show -p NTPSynchronized --value 2>/dev/null)" = yes ] && exit 0
+  sleep 3
+  T=$((T + 3))
+done
+echo "clock not synchronised after %(wait)ds; starting the tunnel anyway"
+exit 0
+""" % {"wait": _BOOT_TIME_WAIT}
 _BOOT_UNIT_TEXT = f"""[Unit]
 Description=44helper: wait until the network, the 44Net tunnel and DNS are ready
 After=network-online.target {_BOOT_WG_UNIT} nss-lookup.target
@@ -6850,12 +6908,23 @@ _BOOT_DV_RESTART = """[Service]
 Restart=on-failure
 RestartSec=15
 """
-_BOOT_WG_DROPIN = """[Unit]
+_BOOT_WG_DROPIN = f"""[Unit]
 StartLimitIntervalSec=0
 
 [Service]
+ExecStartPre={_BOOT_TIME_SCRIPT_PATH}
+TimeoutStartSec={_BOOT_TIME_WAIT + 120}
 Restart=on-failure
 RestartSec=20
+"""
+_BOOT_NETCHECK_RESTART = """
+[Unit]
+StartLimitIntervalSec=900
+StartLimitBurst=10
+
+[Service]
+Restart=on-failure
+RestartSec=30
 """
 
 def _boot_dropin_path(unit: str) -> str:
@@ -6867,7 +6936,28 @@ def _boot_dv_units() -> list[str]:
     return units
 
 def _boot_dv_dropin_text(unit: str) -> str:
-    return _BOOT_DV_DROPIN + ("" if unit == _NETCHECK_UNIT else "\n" + _BOOT_DV_RESTART)
+    return _BOOT_DV_DROPIN + (_BOOT_NETCHECK_RESTART if unit == _NETCHECK_UNIT else "\n" + _BOOT_DV_RESTART)
+
+def _boot_last() -> tuple[str, bool]:
+    try:
+        with open(_BOOT_LOG, "r") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+    except OSError:
+        return "", False
+    if not lines:
+        return "", False
+    try:
+        with open("/proc/sys/kernel/random/boot_id", "r") as f:
+            boot = f.read().strip()[:8]
+    except OSError:
+        boot = ""
+    return lines[-1], bool(boot) and f" boot {boot} " in lines[-1]
+
+def _boot_netcheck_required_by(units: list[str]) -> list[str]:
+    if _NETCHECK_UNIT not in units:
+        return []
+    return [u for u in units if u != _NETCHECK_UNIT
+            and _NETCHECK_UNIT in _systemctl_show(u, ["Requires"]).get("Requires", "").split()]
 
 def _boot_file_is(path: str, text: str) -> bool:
     try:
@@ -6884,6 +6974,11 @@ def status_boot_order() -> dict:
     missing = []
     if not _boot_file_is(_BOOT_SCRIPT_PATH, _BOOT_SCRIPT) or not _boot_file_is(_BOOT_UNIT_PATH, _BOOT_UNIT_TEXT):
         missing.append("the wait-for-network unit")
+    if conf and not _boot_file_is(_BOOT_TIME_SCRIPT_PATH, _BOOT_TIME_SCRIPT):
+        missing.append("wait for the clock")
+    req = _boot_netcheck_required_by(units)
+    if req:
+        missing.append("netcheck still required by " + ", ".join(u.replace(".service", "") for u in req))
     if conf and not _boot_file_is(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN):
         missing.append("tunnel retry")
     if conf and wg_enabled not in ("enabled", "enabled-runtime"):
@@ -6894,7 +6989,9 @@ def status_boot_order() -> dict:
     wait_ok = backend["manager"] == "unknown" or backend["wait_enabled"] in ("enabled", "enabled-runtime", "static")
     if not wait_ok:
         missing.append(backend["wait_unit"] + " enabled")
+    last, last_now = _boot_last()
     return {"done": not missing, "missing": missing, "dv_units": units, "conf_exists": conf,
+            "last_boot": last, "last_boot_now": last_now,
             "wg_enabled": wg_enabled, "wait_unit": backend["wait_unit"], "wait_enabled": backend["wait_enabled"],
             "any_applied": os.path.exists(_BOOT_UNIT_PATH) or os.path.exists(_BOOT_SCRIPT_PATH)
                            or any(os.path.exists(_boot_dropin_path(u)) for u in (_BOOT_WG_UNIT,) + tuple(units))}
@@ -6912,13 +7009,21 @@ def action_boot_order_apply() -> dict:
     if err:
         return err
     out, ok = [], True
+    if _NETCHECK_UNIT in _boot_dv_units():
+        r = action_health_netcheck_fixes()
+        out.append("netcheck:")
+        out += ["  " + ln for ln in r.get("output", "").splitlines()]
+        ok = ok and bool(r.get("success"))
     try:
         _boot_write(_BOOT_SCRIPT_PATH, _BOOT_SCRIPT, 0o755)
         _boot_write(_BOOT_UNIT_PATH, _BOOT_UNIT_TEXT, 0o644)
         out.append(f"ok    {_BOOT_UNIT}: waits up to {_BOOT_LIMIT} s at boot for the network, the tunnel handshake and DNS")
         if os.path.exists(WG0_CONF_PATH):
+            _boot_write(_BOOT_TIME_SCRIPT_PATH, _BOOT_TIME_SCRIPT, 0o755)
             _boot_write(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN, 0o644)
             out.append("ok    wg-quick@wg0 retries every 20 s if it fails to start (for example DNS not ready yet)")
+            out.append(f"ok    at boot the tunnel first waits up to {_BOOT_TIME_WAIT} s for the clock to sync (no real-time "
+                       "clock: a clock that is behind makes the server drop the handshake)")
             if _wg_pin_outdated():
                 out += ["ok    " + ln for ln in _wg_write_conf(_hl_read_conf() or "")]
                 out.append("ok    endpoint pin updated: at boot it waits up to 30 s for the normal route, or fails the start so it is retried")
@@ -6927,7 +7032,9 @@ def action_boot_order_apply() -> dict:
             _boot_write(_boot_dropin_path(u), _boot_dv_dropin_text(u), 0o644)
         if units:
             out.append("ok    starts after the network is ready: " + ", ".join(u.replace(".service", "") for u in units))
-            out.append("      (all but netcheck also restart 15 s after a failure)")
+            out.append("      (the others restart 15 s after a failure; netcheck is retried every 30 s, up to 10 times)")
+            out.append(f"ok    if the network isn't ready after {_BOOT_LIMIT} s, a follow-up watches {_BOOT_LATE_LIMIT // 60} "
+                       "more minutes and restarts the DVSwitch services once it is")
     except OSError as e:
         return {"success": False, "verified": False, "output": "\n".join(out + [f"FAIL  write failed: {e}"])}
     rl = _daemon_reload()
@@ -6953,11 +7060,7 @@ def action_boot_order_apply() -> dict:
     return {"success": ok, "verified": st["done"], "output": "\n".join(out)}
 
 def action_dv_boot_ready() -> dict:
-    a = action_health_netcheck_fixes()
-    b = action_boot_order_apply()
-    return {"success": a.get("success", False) and b.get("success", False),
-            "verified": bool(a.get("verified")) and bool(b.get("verified")),
-            "output": "netcheck:\n" + a.get("output", "") + "\n\nBoot order:\n" + b.get("output", "")}
+    return action_boot_order_apply()
 
 def action_dv_boot_undo() -> dict:
     err = _require_root()
@@ -6984,7 +7087,7 @@ def action_boot_order_revert() -> dict:
     if err:
         return err
     removed = []
-    for path in [_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH] + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS]:
+    for path in [_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH] + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS]:
         if os.path.exists(path):
             try:
                 os.remove(path)
@@ -17528,13 +17631,16 @@ function _piBootCardHtml(kind, b) {
   var html = '<div class="step-card" id="pi-boot-card-' + kind + '">';
   html += '<div class="step-head"><div class="step-title"><span class="step-num">6b.</span>Boot order</div>';
   html += '<span class="step-pill ' + (done ? 'done' : 'attempted_unconfirmed') + '">' + (done ? 'Set' : 'Not set') + '</span></div>';
-  html += '<div class="step-body">After a reboot the tunnel must come back by itself, and the DVSwitch services must wait for it. This makes the tunnel start at boot and retry every 20 s if a start fails, and makes netcheck, the bridges and the gateways wait (up to 3 minutes) until the network is up, the tunnel has a handshake and names resolve; the bridges and gateways also restart 15 s after a failure. Step 6 sets it; it takes effect at the next boot.</div>';
+  html += '<div class="step-body">After a reboot the tunnel must come back by itself, and the DVSwitch services must wait for it. This makes the tunnel start at boot (after waiting up to 90 s for the clock to sync) and retry every 20 s if a start fails, and makes netcheck, the bridges and the gateways wait (up to 3 minutes) until the network is up, the tunnel has a handshake and names resolve; the bridges and gateways restart 15 s after a failure, netcheck every 30 s. If the network is later than that, a follow-up restarts the DVSwitch services once it is ready. It also applies the netcheck fixes. Step 6 sets it; it takes effect at the next boot.</div>';
   if (!done && b.missing && b.missing.length) {
     html += '<div class="step-body">Missing: ' + asl3EscapeAttr(b.missing.join('; ')) + '</div>';
   }
   html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">Tunnel at boot: ' + asl3EscapeAttr(b.wg_enabled || 'no wg0.conf') +
     ' &middot; ' + asl3EscapeAttr(b.wait_unit || 'wait-online') + ': ' + asl3EscapeAttr(b.wait_enabled || '?') +
     ' &middot; DVSwitch units: ' + ((b.dv_units || []).length || 'none') + '</div>';
+  if (b.last_boot) {
+    html += '<div class="step-body" style="font-size:.75rem">' + (b.last_boot_now ? 'This boot: ' : 'Last recorded boot: ') + asl3EscapeAttr(b.last_boot) + '</div>';
+  }
   html += '<div class="step-actions"><button class="btn-run" onclick="piBootOrder(\\'apply\\', \\'' + kind + '\\')">' + (done ? 'Set again' : 'Set the boot order') + '</button>';
   if (b.any_applied) { html += '<button class="btn-copy" onclick="piBootOrder(\\'revert\\', \\'' + kind + '\\')">Remove</button>'; }
   html += '</div>';
