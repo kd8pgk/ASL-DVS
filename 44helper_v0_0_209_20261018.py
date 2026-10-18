@@ -43,8 +43,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.208"
-APP_STAGE = "v0.0.175: Config tab audit fixes: identity checks, safe temp files on restore, Hide race, wording; history in changelogs/44helper.md"
+APP_VERSION = "0.0.209"
+APP_STAGE = "v0.0.209: Boot tab (timeline, boot logs, saved copies of each boot, copyable report); history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -424,7 +424,7 @@ def install_service() -> None:
 
     current_script = os.path.realpath(__file__)
 
-    print(f"Installing {APP_TITLE} v{APP_VERSION} ({APP_STAGE})...")
+    print(f"Installing {APP_HEADER} v{APP_VERSION} ({APP_STAGE})...")
 
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     os.chmod(CONFIG_DIR, 0o700)
@@ -486,7 +486,7 @@ def uninstall_service() -> None:
         print("Error: Uninstallation requires root privileges. Run with 'sudo'.")
         sys.exit(1)
 
-    print(f"Uninstalling {APP_TITLE}...")
+    print(f"Uninstalling {APP_HEADER}...")
 
     subprocess.run(["systemctl", "disable", "--now", "44helper.service"], stderr=subprocess.DEVNULL)
     print("  [-] Stopped and disabled 44helper.service")
@@ -11905,6 +11905,7 @@ header {
 .tab.t-amp{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-cloudflare{--mc:var(--cloudflare);--mc-rgb:243,128,32}
 .tab.t-update{--mc:var(--orange);--mc-rgb:255,170,34}
+.tab.t-boot{--mc:var(--amber);--mc-rgb:255,208,64}
 .tab.t-services{--mc:var(--green);--mc-rgb:0,255,176}
 .tab.t-ports{--mc:var(--purple);--mc-rgb:212,102,255}
 .tab.t-system-opt{--mc:var(--green);--mc-rgb:0,255,176}
@@ -12242,6 +12243,13 @@ _CSS_LOG = """
 .log-line.plain { color: var(--muted); }
 .note-item { padding: .2rem 0; font-family: var(--mono); font-size: .84rem; }
 .note-item a { color: var(--teal); cursor: pointer; text-decoration: underline; }
+.bt-find { font-family: var(--mono); font-size: .78rem; padding: .15rem 0; }
+.bt-sec { border-top: 1px solid var(--border2); padding: .35rem 0; }
+.bt-sec-head { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.bt-sec-title { flex: 1 1 14rem; font-family: var(--mono); font-size: .8rem; }
+.bt-out { max-height: 420px; }
+.bt-copy-box { width: 100%; min-height: 8rem; font-family: var(--mono); font-size: .72rem; margin-top: .4rem;
+  background: #05080f; color: #ffffff; border: 1px solid var(--border2); border-radius: 4px; }
 """
 
 _CSS_ASL3 = """
@@ -16163,6 +16171,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
     ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),
+    ("boot", "Boot", "t-boot", "0.0.209: boot timeline, logs, saved copies, copyable report"),
     ("services", "Services", "t-services", "Stage 7 (done)"),
     ("ports", "Ports", "t-ports", "Stage 7 (done)"),
     ("actions_log", "Actions Log", "t-actions-log", "Stage 8 (done)"),
@@ -16986,6 +16995,7 @@ function clickTab(id) {
   });
   if (typeof guardOnTab === 'function') guardOnTab(id);
   if (id === 'full_tunnel' || id === 'split_tunnel') { fwToolsDock(id); }
+  if (id === 'boot' && typeof bootRefresh === 'function') { bootRefresh(); }
 }
 
 function fwToolsDock(id) {
@@ -18866,6 +18876,255 @@ function routerAddCustomForward() {
   var proto = document.getElementById('rt-fwd-proto').value;
   if (!port) return;
   routerAddForward('custom-' + port, port, proto);
+}
+"""
+
+_JS_BOOT = """
+var _btData = null;
+var _btCache = {};
+
+function _btLvl(l) {
+  return l === 'danger' ? 'danger' : (l === 'warn' ? 'warn' : (l === 'ok' ? 'ok' : 'info'));
+}
+
+function _btSecs(v) {
+  return (v === null || v === undefined) ? '—' : Number(v).toFixed(1) + ' s';
+}
+
+function _btCopy(text, btn) {
+  function done(ok) {
+    if (!btn) return;
+    var o = btn.getAttribute('data-original-label') || btn.textContent;
+    btn.setAttribute('data-original-label', o);
+    btn.textContent = ok ? 'Copied!' : 'Selected below: press Ctrl+C';
+    btn.classList.toggle('copied', ok);
+    setTimeout(function() { btn.textContent = o; btn.classList.remove('copied'); }, ok ? 1200 : 5000);
+  }
+  function viaBox() {
+    var box = document.getElementById('bt-copy-box');
+    box.value = text;
+    box.style.display = '';
+    box.focus();
+    box.select();
+    var ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    if (ok) { box.style.display = 'none'; }
+    done(ok);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(function() { done(true); }).catch(viaBox);
+  } else {
+    viaBox();
+  }
+}
+
+function _btBusy(btn, on, label) {
+  if (!btn) return;
+  if (on) {
+    btn.setAttribute('data-idle-label', btn.textContent);
+    btn.textContent = label || 'Working...';
+    btn.disabled = true;
+  } else {
+    btn.textContent = btn.getAttribute('data-idle-label') || btn.textContent;
+    btn.disabled = false;
+  }
+}
+
+function _btSectionText(x) {
+  return '== ' + x.title + ' ==\\n' + (x.cmd ? '$ ' + x.cmd + '\\n' : '') + (x.text || '');
+}
+
+function bootRefresh() {
+  fetch('/api/boot/status').then(function(r) { return r.json(); }).then(function(d) {
+    _btData = d;
+    _btCache = {};
+    var s = d.summary || {};
+    var j = s.journal || {}, c = s.clock || {}, p = s.power || {}, bo = s.boot_order || {};
+    var lines = s.boot_log_this_boot || [];
+    var rows = [
+      ['Booted', _ovEsc(s.boot_at) + ' (up ' + _ovEsc(s.uptime) + ', boot ' + _ovEsc(s.boot_id) + ')'],
+      ['This boot', lines.length ? lines.map(_ovEsc).join('<br>') : 'no line in the boot log yet'],
+      ['Journal', j.storage === 'disk' ? ('kept on disk, ' + j.boots + ' boot(s) in it')
+                                       : 'in memory only: earlier boots are in the saved copies below'],
+      ['Clock', 'NTP ' + _ovEsc(c.ntp || '?') + ', synchronised ' + _ovEsc(c.synced || '?')],
+      ['Power', p.available ? (p.flags.length ? _ovEsc(p.flags.join(', ')) : 'no limits since boot') : 'not available'],
+      ['Boot order', bo.done ? 'set' : ('missing: ' + _ovEsc((bo.missing || []).join('; ')))]
+    ];
+    if (s.last_report) {
+      rows.push(['wifimon report', _ovEsc(s.last_report.name) + ' (' + _ovEsc(s.last_report.at) +
+                 (s.last_report.this_boot ? ', written this boot' : '') + ')']);
+    }
+    if (s.tunnel_guard) {
+      rows.push(['Tunnel watchdog', _ovEsc((s.tunnel_guard.state || '?') + ' ' + (s.tunnel_guard.detail || ''))]);
+    }
+    var v = s.versions || {};
+    rows.push(['Versions', Object.keys(v).map(function(k) { return _ovEsc(k + ' ' + v[k]); }).join(', ')]);
+    var h = '<table class="cfg-table">';
+    rows.forEach(function(r) { h += '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; });
+    document.getElementById('bt-summary').innerHTML = h + '</table>';
+
+    var f = d.findings || [];
+    document.getElementById('bt-findings').innerHTML = f.length
+      ? f.map(function(x) { return '<div class="bt-find">' + _ovDot(_btLvl(x.level)) + _ovEsc(x.msg) + '</div>'; }).join('')
+      : '<div class="bt-find">' + _ovDot('ok') + 'Nothing found for this boot.</div>';
+
+    var t = '<table class="cfg-table"><tr><th></th><th>Unit</th><th>State</th><th>Started</th><th>Active at</th>' +
+            '<th>Restarts</th><th>At boot</th></tr>';
+    (d.timeline || []).forEach(function(r) {
+      t += '<tr><td>' + _ovDot(_btLvl(r.level)) + '</td><td>' + _ovEsc(r.unit) + '</td><td>' +
+           _ovEsc(r.active + '/' + r.sub) + (r.result && r.result !== 'success' ? ' (' + _ovEsc(r.result) + ')' : '') +
+           '</td><td>' + _btSecs(r.started_s) + '</td><td>' + _btSecs(r.active_s) + '</td><td>' + r.restarts +
+           '</td><td>' + _ovEsc(r.enabled) + '</td></tr>';
+    });
+    document.getElementById('bt-timeline').innerHTML = t + '</table>';
+
+    var sh = '';
+    (d.sections || []).forEach(function(x) {
+      sh += '<div class="bt-sec"><div class="bt-sec-head"><span class="bt-sec-title">' + _ovEsc(x.title) + '</span>' +
+            '<button class="btn-copy" onclick="bootShowSection(\\'' + x.id + '\\')">View</button>' +
+            '<button class="btn-copy" onclick="bootCopySection(\\'' + x.id + '\\', this)">Copy</button></div>' +
+            '<div class="asl3-console shown bt-out" id="bt-sec-' + x.id + '" style="display:none"></div></div>';
+    });
+    document.getElementById('bt-sections').innerHTML = sh;
+
+    var sn = d.snapshots || [];
+    var nh = '';
+    if (!sn.length) {
+      nh = '<div class="cfg-hint">No saved copies yet. One is saved 6 minutes after each boot and updated at 25 minutes.</div>';
+    }
+    sn.forEach(function(x) {
+      var id = x.name.replace(/[^A-Za-z0-9]/g, '_');
+      nh += '<div class="bt-sec"><div class="bt-sec-head"><span class="bt-sec-title">' + _ovEsc(x.name) +
+            '<span class="cfg-hint"> saved ' + _ovEsc(x.saved_at) + ', ' + Math.max(1, Math.round(x.size / 1024)) + ' KB' +
+            (x.this_boot ? ', this boot' : '') + '</span></span>' +
+            '<button class="btn-copy" onclick="bootShowSnap(\\'' + x.name + '\\', \\'' + id + '\\')">View</button>' +
+            '<button class="btn-copy" onclick="bootCopySnap(\\'' + x.name + '\\', this)">Copy</button>' +
+            '<button class="btn-copy" onclick="bootDownloadSnap(\\'' + x.name + '\\', this)">Download</button></div>' +
+            '<div class="asl3-console shown bt-out" id="bt-snap-' + id + '" style="display:none"></div></div>';
+    });
+    document.getElementById('bt-snaps').innerHTML = nh;
+    document.getElementById('bt-snap-dir').textContent = d.snap_dir || '';
+    document.getElementById('bt-checked-at').textContent = 'Last checked: ' + (d.checked_at || '');
+  }).catch(function() {
+    document.getElementById('bt-summary').textContent = 'Could not read the boot status.';
+  });
+}
+
+function _btGetSection(id) {
+  if (_btCache['s:' + id]) { return Promise.resolve(_btCache['s:' + id]); }
+  return fetch('/api/boot/section?id=' + encodeURIComponent(id)).then(function(r) { return r.json(); }).then(function(x) {
+    var text = x.error ? ('(' + x.error + ')') : _btSectionText(x);
+    _btCache['s:' + id] = text;
+    return text;
+  });
+}
+
+function _btGetSnap(name) {
+  if (_btCache['n:' + name]) { return Promise.resolve(_btCache['n:' + name]); }
+  return fetch('/api/boot/snapshot?name=' + encodeURIComponent(name)).then(function(r) { return r.json(); }).then(function(x) {
+    var text = x.error ? ('(' + x.error + ')') : (x.text || '');
+    _btCache['n:' + name] = text;
+    return text;
+  });
+}
+
+function _btToggle(el, getter) {
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.textContent = 'Reading...';
+  getter().then(function(text) { el.textContent = text; }).catch(function() { el.textContent = 'Could not read it.'; });
+}
+
+function bootShowSection(id) {
+  _btToggle(document.getElementById('bt-sec-' + id), function() { return _btGetSection(id); });
+}
+
+function bootShowSnap(name, id) {
+  _btToggle(document.getElementById('bt-snap-' + id), function() { return _btGetSnap(name); });
+}
+
+function bootCopySection(id, btn) {
+  var cached = _btCache['s:' + id];
+  if (cached) { _btCopy(cached, btn); return; }
+  _btBusy(btn, true, 'Reading...');
+  _btGetSection(id).then(function(text) { _btBusy(btn, false); _btCopy(text, btn); })
+    .catch(function() { _btBusy(btn, false); });
+}
+
+function bootCopySnap(name, btn) {
+  var cached = _btCache['n:' + name];
+  if (cached) { _btCopy(cached, btn); return; }
+  _btBusy(btn, true, 'Reading...');
+  _btGetSnap(name).then(function(text) { _btBusy(btn, false); _btCopy(text, btn); })
+    .catch(function() { _btBusy(btn, false); });
+}
+
+function _btDownload(text, filename) {
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type: 'text/plain'}));
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(a.href); }, 5000);
+}
+
+function _btReportName() {
+  var s = (_btData && _btData.summary) || {};
+  return 'boot-report-' + String(s.host || 'node').replace(/[^A-Za-z0-9_.-]/g, '_') + '-' + (s.boot_id || 'now') + '.txt';
+}
+
+function _btGetReport() {
+  if (_btCache.report) { return Promise.resolve(_btCache.report); }
+  return fetch('/api/boot/report').then(function(r) {
+    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+    return r.text();
+  }).then(function(t) { _btCache.report = t; return t; });
+}
+
+function bootCopyReport(btn) {
+  var cached = _btCache.report;
+  if (cached) { _btCopy(cached, btn); return; }
+  _btBusy(btn, true, 'Building...');
+  _btGetReport().then(function(t) {
+    _btBusy(btn, false);
+    _btCopy(t, btn);
+  }).catch(function() { _btBusy(btn, false); alert('Could not build the boot report.'); });
+}
+
+function bootDownloadReport(btn) {
+  _btBusy(btn, true, 'Building...');
+  _btGetReport().then(function(t) {
+    _btBusy(btn, false);
+    _btDownload(t, _btReportName());
+  }).catch(function() { _btBusy(btn, false); alert('Could not build the boot report.'); });
+}
+
+function bootDownloadSnap(name, btn) {
+  _btBusy(btn, true, 'Reading...');
+  _btGetSnap(name).then(function(t) { _btBusy(btn, false); _btDownload(t, name); })
+    .catch(function() { _btBusy(btn, false); });
+}
+
+function bootSaveNow(btn) {
+  _btBusy(btn, true, 'Saving...');
+  var out = document.getElementById('bt-save-out');
+  fetch('/api/pi_install/action', {method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+        body: JSON.stringify({step: 'boot_snapshot_save'})})
+    .then(function(r) { return r.json(); }).then(function(res) {
+      _btBusy(btn, false);
+      out.style.display = '';
+      out.className = 'asl3-console shown ' + (res.success ? 'ok' : 'fail');
+      out.textContent = res.output || '';
+      bootRefresh();
+    }).catch(function() {
+      _btBusy(btn, false);
+      out.style.display = '';
+      out.className = 'asl3-console shown fail';
+      out.textContent = 'Could not save.';
+    });
 }
 """
 
@@ -23152,6 +23411,7 @@ _JS = (
     + _JS_INIT
     + _JS_ROUTER_INSTALL
     + _JS_SERVICES_PORTS
+    + _JS_BOOT
     + _JS_FIREWALL
     + _JS_HALF
     + _JS_FX
@@ -23184,6 +23444,44 @@ def _render_tab_bar() -> str:
         if tab_id == "nodes":
             buttons.append('<div class="tab-break"></div>')
     return '<div class="tabs">' + "".join(buttons) + "</div>"
+
+def _render_boot_panel() -> str:
+    return """
+<div class="tab-panel hidden" id="panel-boot">
+  <div class="step-card"><div class="step-head"><div class="step-title">This boot</div></div>
+    <div class="step-body">What happened when the node last started: the tunnel, the boot order, DVSwitch and the
+      Node Controller tools. Read-only. The report below is for asking for help, or for an agent: secrets are removed.</div>
+    <div id="bt-summary" class="step-body">Loading...</div>
+    <div id="bt-findings"></div>
+    <div class="step-actions">
+      <button class="btn-copy" onclick="bootCopyReport(this)">Copy boot report</button>
+      <button class="btn-copy" onclick="bootDownloadReport(this)">Download .txt</button>
+      <button class="btn-copy" onclick="bootSaveNow(this)">Save a copy now</button>
+    </div>
+    <textarea id="bt-copy-box" class="bt-copy-box" readonly style="display:none"></textarea>
+    <div class="asl3-console shown" id="bt-save-out" style="display:none"></div>
+    <div class="cfg-hint">For an agent or a script: <code>GET /api/boot/report?format=json</code> (logged in), or over SSH
+      <code>sudo python3 /usr/local/bin/44helper.py --boot-report</code> (add <code>--json</code> for JSON).</div>
+  </div>
+  <div class="step-card"><div class="step-head"><div class="step-title">Timeline</div></div>
+    <div class="step-body">Seconds after boot that each unit started and became active (the latest start, so a unit
+      restarted later shows that time). Red: failed. Amber: restarted by systemd, or the late follow-up ran.</div>
+    <div id="bt-timeline"></div>
+  </div>
+  <div class="step-card"><div class="step-head"><div class="step-title">Logs</div></div>
+    <div class="step-body">Each one is read when you press View or Copy.</div>
+    <div id="bt-sections"></div>
+  </div>
+  <div class="step-card"><div class="step-head"><div class="step-title">Saved copies of earlier boots</div></div>
+    <div class="step-body">The boot report is saved 6 minutes after each boot and updated at 25 minutes, one file per
+      boot, the newest 5 kept, in <code id="bt-snap-dir"></code>. They are there even when the journal is kept in
+      memory only.</div>
+    <div id="bt-snaps"></div>
+  </div>
+  <button class="btn-recheck" onclick="bootRefresh()">Re-check</button>
+  <span style="font-family:var(--mono);font-size:.7rem;color:var(--muted);margin-left:.6rem" id="bt-checked-at"></span>
+</div>
+"""
 
 def _render_services_panel() -> str:
     return """
@@ -23825,6 +24123,7 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "update": _render_update_panel,
     "system_opt": _render_system_opt_panel,
     "config": _render_config_panel,
+    "boot": _render_boot_panel,
     "services": _render_services_panel,
     "ports": _render_ports_panel,
     "actions_log": _render_actions_log_panel,
@@ -23896,6 +24195,614 @@ def _route_index(query: dict) -> tuple[int, str, bytes]:
 def _route_version(query: dict) -> tuple[int, str, bytes]:
     payload = {"app": APP_TITLE, "version": APP_VERSION, "stage": APP_STAGE}
     return 200, "application/json", json.dumps(payload).encode("utf-8")
+
+_BT_DIR = "/var/lib/44helper/boots"
+_BT_KEEP = 5
+_BT_SNAP_MAX = 64 * 1024
+_BT_REPORT_MAX = 60 * 1024
+_BT_SECTION_MAX = 6 * 1024
+_BT_JOURNAL_MAX = 16 * 1024
+_BT_SNAP_AT = (360, 1500)
+_BT_SNAP_RE = re.compile(r"^\d{8}-\d{6}_[0-9a-f]{8}\.txt$")
+_BT_TG_STATUS = "/run/asl_dvs/tunnel_guard.json"
+_BT_WIFIMON_REBOOTS = "/var/lib/wifimon/net_reboots.json"
+_BT_WIFIMON_REPORTS = "/var/log/wifimon"
+_BT_REPORT_RE = re.compile(r"^(shutdown|test|unclean)-\d{8}-\d{6}(-\d+)?\.json$")
+_BT_TOOLS = (
+    ("instmon", ("instmon.service",), ("/usr/local/bin/instmon.py",)),
+    ("Dashboard", ("nodecontrol.service", "asl_dvs_dashboard.service"),
+     ("/usr/local/bin/nodecontrol.py", "/usr/local/bin/asl_dvs_dashboard.py")),
+    ("SysMon", ("sysmon.service",), ("/usr/local/bin/sysmon.py",)),
+    ("wifimon", ("wifimon.service",), ("/usr/local/bin/wifimon.py",)),
+)
+_BT_VER_RE = re.compile(r"^\s*(?:APP_VERSION|SCRIPT_VERSION|VERSION)\s*=\s*[\"']([^\"']+)[\"']", re.M)
+_BT_LATE_UNIT = "44helper-netready-late.service"
+_BT_BASE_UNITS = ("systemd-timesyncd.service", "time-sync.target", "NetworkManager-wait-online.service",
+                  "systemd-networkd-wait-online.service", "network-online.target", _BOOT_WG_UNIT, _BOOT_UNIT,
+                  _BT_LATE_UNIT, _NETCHECK_UNIT)
+_BT_PROPS = ("Id", "LoadState", "ActiveState", "SubState", "Result", "NRestarts",
+             "ActiveEnterTimestampMonotonic", "InactiveExitTimestampMonotonic", "UnitFileState")
+_BT_SECRET_RES = (
+    (re.compile(r"(?im)^(\s*(?:PrivateKey|PresharedKey)\s*=\s*).+$"), r"\1(hidden)"),
+    (re.compile(r"(?i)\b(password|passwd|passphrase|token|secret|api[_-]?key|psk)(\s*[=:]\s*)([^\s,;]+)"), r"\1\2(hidden)"),
+    (re.compile(r"(?i)(--token[ =])\S+"), r"\1(hidden)"),
+    (re.compile(r"[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{10,}"), "(hidden token)"),
+    (re.compile(r"[A-Za-z0-9+/_\-]{80,}={0,2}"), "(hidden)"),
+)
+_BT_THROTTLE_BITS = ((0, "under-voltage now"), (1, "frequency capped now"), (2, "throttled now"),
+                     (3, "soft temperature limit now"), (16, "under-voltage since boot"),
+                     (17, "frequency capped since boot"), (18, "throttled since boot"),
+                     (19, "soft temperature limit since boot"))
+_BT_KERNEL_RE = re.compile(r"wlan|brcmf|voltage|throttl|wireguard|wg0|eth0|link is|carrier|oom|mmc|i/o error|ext4", re.I)
+_BT_WIFIMON_RE = re.compile(r"tunnel|handshake|network|reboot|shut|offline|reconnect|watchdog", re.I)
+_BT_INSTMON_RE = re.compile(r"boot|backup|disk image|diskimg", re.I)
+_bt_snap_lock = threading.Lock()
+
+def _bt_redact(text: str) -> str:
+    for rx, rep in _BT_SECRET_RES:
+        text = rx.sub(rep, text)
+    return text
+
+def _bt_run(argv: list[str], timeout: int = 10) -> str:
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except FileNotFoundError:
+        return f"({argv[0]} not found)"
+    except subprocess.TimeoutExpired:
+        return f"(timed out after {timeout} s)"
+    except OSError as e:
+        return f"(could not run {argv[0]}: {e})"
+    out = (r.stdout or "").rstrip()
+    err = (r.stderr or "").strip()
+    return (out + ("\n" if out and err else "") + err) if err else out
+
+def _bt_tail(text: str, limit: int) -> str:
+    raw = text.encode("utf-8")
+    if len(raw) <= limit:
+        return text
+    cut = raw[-limit:].decode("utf-8", "ignore")
+    nl = cut.find("\n")
+    if nl != -1:
+        cut = cut[nl + 1:]
+    return f"(earlier lines cut; the last {max(1, limit // 1024)} KB are shown)\n" + cut
+
+def _bt_read(path: str, limit: int = _BT_SECTION_MAX) -> str | None:
+    try:
+        with open(path, "r", errors="replace") as f:
+            return _bt_tail(f.read(), limit)
+    except OSError:
+        return None
+
+def _bt_uptime() -> float:
+    try:
+        with open("/proc/uptime", "r") as f:
+            return float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+def _bt_btime() -> int:
+    try:
+        with open("/proc/stat", "r") as f:
+            for ln in f:
+                if ln.startswith("btime "):
+                    return int(ln.split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    return int(time.time() - _bt_uptime())
+
+def _bt_boot_id() -> str:
+    try:
+        with open("/proc/sys/kernel/random/boot_id", "r") as f:
+            bid = f.read().strip()[:8].lower()
+    except OSError:
+        return ""
+    return bid if re.match(r"^[0-9a-f]{8}$", bid) else ""
+
+def _bt_fmt_time(ts: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(ts))
+
+def _bt_fmt_dur(secs: float) -> str:
+    s = int(secs)
+    if s < 120:
+        return f"{s} s"
+    if s < 7200:
+        return f"{s // 60} min"
+    if s < 172800:
+        return f"{s // 3600} h {(s % 3600) // 60} min"
+    return f"{s // 86400} days {(s % 86400) // 3600} h"
+
+def _bt_units() -> list[str]:
+    units = list(_BT_BASE_UNITS) + list(_OV_DVS_UNITS) + ["asterisk.service"]
+    for _name, us, _paths in _BT_TOOLS:
+        units += list(us)
+    units.append("44helper.service")
+    seen: list[str] = []
+    for u in units:
+        if u not in seen:
+            seen.append(u)
+    return seen
+
+def _bt_show_many(units: list[str]) -> list[dict]:
+    try:
+        r = subprocess.run(["systemctl", "show", "--property=" + ",".join(_BT_PROPS)] + units,
+                           capture_output=True, text=True, timeout=15)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+    blocks: list[dict] = []
+    cur: dict = {}
+    for ln in (r.stdout or "").splitlines():
+        if not ln.strip():
+            if cur:
+                blocks.append(cur)
+                cur = {}
+            continue
+        if "=" in ln:
+            k, v = ln.split("=", 1)
+            cur[k] = v
+    if cur:
+        blocks.append(cur)
+    return blocks
+
+def _bt_mono_secs(value: str) -> float | None:
+    try:
+        v = int(value or 0)
+    except ValueError:
+        return None
+    return round(v / 1e6, 1) if v > 0 else None
+
+def _bt_timeline() -> list[dict]:
+    rows = []
+    for b in _bt_show_many(_bt_units()):
+        if b.get("LoadState") != "loaded":
+            continue
+        unit = b.get("Id", "")
+        active = b.get("ActiveState", "")
+        result = b.get("Result", "")
+        try:
+            restarts = int(b.get("NRestarts") or 0)
+        except ValueError:
+            restarts = 0
+        if active == "failed" or (result and result != "success"):
+            level = "danger"
+        elif restarts > 0 or unit == _BT_LATE_UNIT:
+            level = "warn"
+        elif active == "active":
+            level = "ok"
+        else:
+            level = "info"
+        rows.append({"unit": unit, "active": active, "sub": b.get("SubState", ""), "result": result,
+                     "restarts": restarts, "started_s": _bt_mono_secs(b.get("InactiveExitTimestampMonotonic", "")),
+                     "active_s": _bt_mono_secs(b.get("ActiveEnterTimestampMonotonic", "")),
+                     "enabled": b.get("UnitFileState", ""), "level": level})
+    rows.sort(key=lambda r: (r["active_s"] is None and r["started_s"] is None,
+                             r["started_s"] if r["started_s"] is not None else (r["active_s"] or 0)))
+    return rows
+
+def _bt_versions() -> dict:
+    out = {"44helper": APP_VERSION}
+    for name, _units, paths in _BT_TOOLS:
+        ver = ""
+        for p in paths:
+            try:
+                with open(os.path.realpath(p), "r", errors="replace") as f:
+                    head = f.read(400000)
+            except OSError:
+                continue
+            m = _BT_VER_RE.search(head)
+            if m:
+                ver = m.group(1)
+                break
+        out[name] = ver or "not found"
+    return out
+
+def _bt_journal_info() -> dict:
+    out = _bt_run(["journalctl", "--list-boots", "--no-pager", "-q"], 15)
+    boots = len([ln for ln in out.splitlines() if re.match(r"^\s*-?\d+\s+[0-9a-f]{32}\b", ln)])
+    volatile = False
+    try:
+        with open(_SYSOPT_JOURNALD_DROPIN_PATH, "r") as f:
+            volatile = "storage=volatile" in f.read().lower().replace(" ", "")
+    except OSError:
+        pass
+    try:
+        on_disk = os.path.isdir("/var/log/journal") and bool(os.listdir("/var/log/journal"))
+    except OSError:
+        on_disk = False
+    return {"storage": "memory" if volatile or not on_disk else "disk", "boots": boots}
+
+def _bt_clock() -> dict:
+    out = _bt_run(["timedatectl", "show", "-p", "NTP", "-p", "NTPSynchronized", "-p", "Timezone"], 8)
+    d = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+    return {"ntp": d.get("NTP", ""), "synced": d.get("NTPSynchronized", ""), "timezone": d.get("Timezone", "")}
+
+def _bt_power() -> dict:
+    out = _bt_run(["vcgencmd", "get_throttled"], 5)
+    m = re.search(r"throttled=(0x[0-9a-fA-F]+)", out)
+    if not m:
+        return {"available": False, "raw": out, "flags": []}
+    v = int(m.group(1), 16)
+    return {"available": True, "raw": m.group(1), "flags": [d for b, d in _BT_THROTTLE_BITS if (v >> b) & 1]}
+
+def _bt_last_report(btime: int) -> dict | None:
+    try:
+        names = [n for n in os.listdir(_BT_WIFIMON_REPORTS) if _BT_REPORT_RE.match(n)]
+    except OSError:
+        return None
+    rows = []
+    for n in names:
+        try:
+            rows.append((os.path.getmtime(os.path.join(_BT_WIFIMON_REPORTS, n)), n))
+        except OSError:
+            continue
+    if not rows:
+        return None
+    mtime, name = max(rows)
+    return {"name": name, "kind": name.split("-", 1)[0], "at": _bt_fmt_time(mtime), "this_boot": mtime >= btime}
+
+def _bt_tunnel_guard() -> dict | None:
+    try:
+        with open(_BT_TG_STATUS, "r") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+def _bt_boot_log_lines(bid: str) -> tuple[list[str], list[str]]:
+    try:
+        with open(_BOOT_LOG, "r") as f:
+            lines = [ln.rstrip("\n") for ln in f if ln.strip()]
+    except OSError:
+        return [], []
+    return lines, [ln for ln in lines if bid and f" boot {bid} " in ln]
+
+def _bt_identity() -> str:
+    try:
+        cfg = _cfg
+    except NameError:
+        return ""
+    bits = [cfg.get("identity", "callsign", fallback="").strip(), cfg.get("identity", "node", fallback="").strip()]
+    return " ".join(("Node " + b) if i == 1 else b for i, b in enumerate(bits) if b)
+
+def _bt_collect() -> dict:
+    bid = _bt_boot_id()
+    btime = _bt_btime()
+    up = _bt_uptime()
+    log_all, log_now = _bt_boot_log_lines(bid)
+    try:
+        bo = status_boot_order()
+        boot_order = {"done": bool(bo.get("done")), "missing": list(bo.get("missing") or [])}
+    except Exception as exc:
+        boot_order = {"done": False, "missing": [f"could not check: {exc}"]}
+    timeline = _bt_timeline()
+    summary = {
+        "boot_id": bid, "boot_at": _bt_fmt_time(btime), "uptime_s": int(up), "uptime": _bt_fmt_dur(up),
+        "host": os.uname().nodename, "node": _bt_identity(), "journal": _bt_journal_info(), "clock": _bt_clock(),
+        "power": _bt_power(), "boot_log_this_boot": log_now, "boot_order": boot_order,
+        "last_report": _bt_last_report(btime), "tunnel_guard": _bt_tunnel_guard(), "versions": _bt_versions(),
+        "wg_conf": os.path.exists(WG0_CONF_PATH),
+    }
+    return {"summary": summary, "timeline": timeline, "boot_log": log_all,
+            "loaded": {r["unit"] for r in timeline}}
+
+def _bt_findings(ctx: dict) -> list[dict]:
+    s = ctx["summary"]
+    out: list[dict] = []
+    for ln in s["boot_log_this_boot"]:
+        if "not ready" in ln:
+            out.append({"level": "warn", "msg": "At this boot: " + ln.split(": ", 1)[-1]})
+    if not s["boot_log_this_boot"] and s["wg_conf"] and s["uptime_s"] > _BOOT_LIMIT + 60:
+        out.append({"level": "info", "msg": "44helper-netready left no line for this boot (the boot order may not be set)."})
+    for r in ctx["timeline"]:
+        if r["level"] == "danger":
+            out.append({"level": "danger", "msg": f"{r['unit']} is {r['active']} (result: {r['result'] or 'none'})."})
+        elif r["restarts"] > 0:
+            out.append({"level": "warn", "msg": f"{r['unit']} was restarted {r['restarts']} time(s) by systemd this boot."})
+    if s["clock"]["ntp"] == "yes" and s["clock"]["synced"] != "yes":
+        out.append({"level": "warn", "msg": "The clock isn't synchronised. A clock that is behind can stop the tunnel's handshake."})
+    volts = [flag for flag in s["power"]["flags"] if "voltage" in flag]
+    if volts:
+        out.append({"level": "warn", "msg": f"Power: {' and '.join(volts)}. Check the supply and cable."})
+    if s["journal"]["storage"] == "memory":
+        out.append({"level": "info", "msg": "The journal is kept in memory only, so earlier boots are only in the saved copies."})
+    rep = s["last_report"]
+    if rep and rep["this_boot"] and rep["kind"] == "unclean":
+        out.append({"level": "warn", "msg": f"wifimon found the previous boot ended without a clean stop (power lost or a crash): {rep['name']}."})
+    tg = s["tunnel_guard"]
+    if tg and str(tg.get("state", "")) in ("watching", "acting", "backing off", "gave up"):
+        out.append({"level": "warn", "msg": f"wifimon tunnel watchdog: {tg.get('state')} {tg.get('detail') or ''}".strip()})
+    if s["wg_conf"] and not s["boot_order"]["done"]:
+        out.append({"level": "warn", "msg": "Boot order not complete: " + "; ".join(s["boot_order"]["missing"]) + "."})
+    try:
+        for f in _ov_health_compute():
+            if f.get("level") in ("warn", "danger") and f.get("id") not in ("boot_order", "boot_late"):
+                out.append({"level": f["level"], "msg": "Health: " + str(f.get("msg", ""))})
+    except Exception:
+        pass
+    return out
+
+def _bt_journal_argv(ctx: dict, which: str, n: int) -> list[str]:
+    units = [u for u in (_BOOT_WG_UNIT, _BOOT_UNIT, _BT_LATE_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS
+             if u in ctx["loaded"] or u in (_BOOT_WG_UNIT, _BOOT_UNIT, _BT_LATE_UNIT)]
+    argv = ["journalctl", "-b", which, "-o", "short-monotonic", "--no-pager", "-n", str(n)]
+    for u in units:
+        argv += ["-u", u]
+    return argv
+
+def _bt_filtered(argv: list[str], rx, keep: int) -> str:
+    out = _bt_run(argv, 20)
+    lines = [ln for ln in out.splitlines() if rx.search(ln)]
+    return "\n".join(lines[-keep:]) if lines else "(no matching lines)"
+
+def _bt_sec_bootlog(ctx: dict) -> tuple[str, str]:
+    return f"cat {_BOOT_LOG}", ("\n".join(ctx["boot_log"]) if ctx["boot_log"]
+                               else "(no boot log yet: 0.0.208 or later writes it at each boot once the boot order is set)")
+
+def _bt_sec_journal(ctx: dict) -> tuple[str, str]:
+    argv = _bt_journal_argv(ctx, "0", 400)
+    return " ".join(argv), _bt_tail(_bt_run(argv, 20), _BT_JOURNAL_MAX)
+
+def _bt_sec_previous(ctx: dict) -> tuple[str, str]:
+    argv = _bt_journal_argv(ctx, "-1", 200)
+    if ctx["summary"]["journal"]["boots"] < 2:
+        why = ("the journal is kept in memory only" if ctx["summary"]["journal"]["storage"] == "memory"
+               else "the journal holds no earlier boot yet")
+        return " ".join(argv), f"Not kept: {why}. The saved copies in {_BT_DIR} hold the earlier boots."
+    return " ".join(argv), _bt_run(argv, 20)
+
+def _bt_sec_analyze(ctx: dict) -> tuple[str, str]:
+    chain = [u for u in (_BOOT_WG_UNIT, _BOOT_UNIT) if u in ctx["loaded"]]
+    parts = ["$ systemd-analyze", _bt_run(["systemd-analyze"], 15)]
+    if chain:
+        parts += ["", "$ systemd-analyze critical-chain " + " ".join(chain),
+                  _bt_run(["systemd-analyze", "critical-chain", "--no-pager"] + chain, 20)]
+    blame = _bt_run(["systemd-analyze", "blame", "--no-pager"], 20).splitlines()[:20]
+    parts += ["", "$ systemd-analyze blame | head -20", "\n".join(blame)]
+    return "systemd-analyze", "\n".join(parts)
+
+def _bt_sec_clock(ctx: dict) -> tuple[str, str]:
+    return "timedatectl status; timedatectl timesync-status", (
+        _bt_run(["timedatectl", "status"], 8) + "\n\n" + _bt_run(["timedatectl", "timesync-status"], 8))
+
+def _bt_sec_kernel(ctx: dict) -> tuple[str, str]:
+    argv = ["journalctl", "-k", "-b", "0", "-o", "short-monotonic", "--no-pager"]
+    return " ".join(argv) + " | (WiFi, link, power, WireGuard, storage lines)", _bt_filtered(argv, _BT_KERNEL_RE, 80)
+
+def _bt_sec_power(ctx: dict) -> tuple[str, str]:
+    p = ctx["summary"]["power"]
+    if not p["available"]:
+        return "vcgencmd get_throttled", p["raw"] or "(not available on this machine)"
+    return "vcgencmd get_throttled", f"throttled={p['raw']}\n" + (", ".join(p["flags"]) if p["flags"] else "no power or temperature limits since boot")
+
+def _bt_sec_tunnel(ctx: dict) -> tuple[str, str]:
+    if not _wg0_interface_present():
+        return "wg show wg0", "wg0 is not up."
+    parts = ["$ wg show wg0", _bt_run(["wg", "show", "wg0"], 6)]
+    mark = _wg_fwmark()
+    parts += ["", "$ ip -4 rule", _bt_run(["ip", "-4", "rule"], 6), "", "$ ip -4 route", _bt_run(["ip", "-4", "route"], 6)]
+    if mark:
+        parts += ["", "$ ip -4 route show table " + str(int(mark, 0)), _bt_run(["ip", "-4", "route", "show", "table", str(int(mark, 0))], 6)]
+    for ln in _bt_run(["wg", "show", "wg0", "endpoints"], 6).splitlines():
+        ep = ln.split("\t")[-1].strip()
+        m = re.match(r"^(\d+\.\d+\.\d+\.\d+):\d+$", ep)
+        if m:
+            argv = ["ip", "-4", "route", "get", m.group(1)] + (["mark", mark] if mark else [])
+            parts += ["", "$ " + " ".join(argv), _bt_run(argv, 6)]
+    return "wg show wg0; ip rule; ip route", "\n".join(parts)
+
+def _bt_sec_wifimon(ctx: dict) -> tuple[str, str]:
+    tg = ctx["summary"]["tunnel_guard"]
+    parts = [f"$ cat {_BT_TG_STATUS}",
+             json.dumps(tg, indent=1, sort_keys=True) if tg is not None else "(not there: wifimon 5.35.0 or later writes it)"]
+    nr = _bt_read(_BT_WIFIMON_REBOOTS, 2048)
+    parts += ["", f"$ cat {_BT_WIFIMON_REBOOTS}", nr if nr is not None else "(none)"]
+    argv = ["journalctl", "-b", "0", "-u", "wifimon", "-o", "short-monotonic", "--no-pager", "-n", "600"]
+    parts += ["", "$ " + " ".join(argv) + " | (tunnel, network, shutdown lines)", _bt_filtered(argv, _BT_WIFIMON_RE, 60)]
+    rep = ctx["summary"]["last_report"]
+    if rep:
+        body = _bt_read(os.path.join(_BT_WIFIMON_REPORTS, rep["name"]), 4096)
+        parts += ["", f"$ cat {_BT_WIFIMON_REPORTS}/{rep['name']}  (newest shutdown report, {rep['at']})", body or "(unreadable)"]
+    return "wifimon", "\n".join(parts)
+
+def _bt_sec_dashboard(ctx: dict) -> tuple[str, str]:
+    units = [u for u in _BT_TOOLS[1][1] if u in ctx["loaded"]]
+    if not units:
+        return "journalctl -b -u nodecontrol", "(no Dashboard unit on this node)"
+    argv = ["journalctl", "-b", "0", "-o", "short-monotonic", "--no-pager", "-n", "800"]
+    for u in units:
+        argv += ["-u", u]
+    return " ".join(argv) + " | grep startup", _bt_filtered(argv, re.compile(r"startup"), 40)
+
+def _bt_sec_instmon(ctx: dict) -> tuple[str, str]:
+    if "instmon.service" not in ctx["loaded"]:
+        return "journalctl -b -u instmon", "(no instmon unit on this node)"
+    argv = ["journalctl", "-b", "0", "-u", "instmon", "-o", "short-monotonic", "--no-pager", "-n", "400"]
+    return " ".join(argv) + " | (boot and backup lines)", _bt_filtered(argv, _BT_INSTMON_RE, 30)
+
+_BT_SECTIONS = (
+    ("bootlog", "Boot history (44helper boot log)", _bt_sec_bootlog),
+    ("journal", "This boot: tunnel, netready, netcheck and DVSwitch", _bt_sec_journal),
+    ("previous", "Previous boot", _bt_sec_previous),
+    ("analyze", "Boot timing (systemd-analyze)", _bt_sec_analyze),
+    ("clock", "Clock", _bt_sec_clock),
+    ("kernel", "Kernel: WiFi, link, power, storage", _bt_sec_kernel),
+    ("power", "Power and temperature limits", _bt_sec_power),
+    ("tunnel", "Tunnel now: wg0, rules and routes", _bt_sec_tunnel),
+    ("wifimon", "wifimon: tunnel watchdog, lost network, shutdown report", _bt_sec_wifimon),
+    ("dashboard", "Dashboard: boot tune and disconnect", _bt_sec_dashboard),
+    ("instmon", "instmon: backups held after boot", _bt_sec_instmon),
+)
+
+def _bt_section(ctx: dict, sid: str) -> dict | None:
+    for s_id, title, fn in _BT_SECTIONS:
+        if s_id == sid:
+            try:
+                cmd, text = fn(ctx)
+            except Exception as exc:
+                cmd, text = "", f"(could not read: {exc})"
+            limit = _BT_JOURNAL_MAX if sid == "journal" else _BT_SECTION_MAX
+            return {"id": s_id, "title": title, "cmd": cmd, "text": _bt_redact(_bt_tail(text or "(no output)", limit))}
+    return None
+
+def _bt_report_text(ctx: dict, findings: list[dict], sections: list[dict]) -> str:
+    s = ctx["summary"]
+    lvl = {"danger": "BAD ", "warn": "WARN", "info": "INFO", "ok": "OK  "}
+    head = [
+        "Node Controller boot report",
+        f"Generated {_bt_fmt_time(time.time())} by 44helper {APP_VERSION}. Times are seconds after boot; secrets are removed.",
+        f"Host: {s['host']}" + (f"  ({s['node']})" if s["node"] else ""),
+        f"Boot: {s['boot_id']} at {s['boot_at']}, up {s['uptime']}",
+        "Versions: " + ", ".join(f"{k} {v}" for k, v in s["versions"].items()),
+        "Journal: " + ("kept on disk" if s["journal"]["storage"] == "disk" else "kept in memory only")
+        + f", {s['journal']['boots']} boot(s) in it",
+        f"Clock: NTP {s['clock']['ntp'] or '?'}, synchronised {s['clock']['synced'] or '?'}",
+        "Power: " + ((", ".join(s["power"]["flags"]) or "no limits since boot") if s["power"]["available"] else "not available"),
+        "Boot order: " + ("set" if s["boot_order"]["done"] else "missing " + "; ".join(s["boot_order"]["missing"])),
+    ]
+    head += ["This boot (boot.log): " + ln for ln in s["boot_log_this_boot"]] or ["This boot (boot.log): no line"]
+    if s["last_report"]:
+        r = s["last_report"]
+        head.append(f"Newest wifimon report: {r['name']} ({r['at']}{', written this boot' if r['this_boot'] else ''})")
+    tg = s["tunnel_guard"]
+    if tg is not None:
+        head.append(f"Tunnel watchdog: {tg.get('state', '?')} {tg.get('detail') or ''}".rstrip())
+    head += ["", "== Findings =="] + ([f"{lvl.get(f['level'], 'INFO')}  {f['msg']}" for f in findings] or ["none"])
+    head += ["", "== Timeline (started / active at, seconds after boot) =="]
+    for r in ctx["timeline"]:
+        st = "-" if r["started_s"] is None else f"{r['started_s']:.1f}"
+        ac = "-" if r["active_s"] is None else f"{r['active_s']:.1f}"
+        head.append(f"{lvl.get(r['level'], 'INFO')}  {r['unit']:<40} {r['active'] + '/' + r['sub']:<20} "
+                    f"result={r['result'] or '-':<10} restarts={r['restarts']:<3} started={st:>8} active={ac:>8} {r['enabled']}")
+    header = _bt_redact("\n".join(head))
+    budget = _BT_REPORT_MAX - len(header.encode("utf-8")) - 512
+    texts = [sec["text"] for sec in sections]
+    while sum(len(t.encode("utf-8")) for t in texts) > budget and budget > 0:
+        i = max(range(len(texts)), key=lambda k: len(texts[k]))
+        texts[i] = _bt_tail(texts[i], int(len(texts[i].encode("utf-8")) * 0.7))
+    body = []
+    for sec, text in zip(sections, texts):
+        body += ["", f"== {sec['title']} ==", f"$ {sec['cmd']}" if sec["cmd"] else "", text]
+    return header + "\n" + "\n".join(body) + "\n"
+
+def build_boot_report(fmt: str = "text") -> dict:
+    ctx = _bt_collect()
+    findings = _bt_findings(ctx)
+    sections = [_bt_section(ctx, sid) for sid, _t, _f in _BT_SECTIONS]
+    text = _bt_report_text(ctx, findings, sections)
+    if fmt == "json":
+        return {"generated": _bt_fmt_time(time.time()), "version": APP_VERSION, "summary": ctx["summary"],
+                "findings": findings, "timeline": ctx["timeline"], "sections": sections,
+                "snapshots": [{k: v for k, v in s.items() if k != "mtime"} for s in _bt_snapshots()]}
+    return {"text": text}
+
+def build_boot_status() -> dict:
+    ctx = _bt_collect()
+    return {"summary": ctx["summary"], "timeline": ctx["timeline"], "findings": _bt_findings(ctx),
+            "sections": [{"id": sid, "title": t} for sid, t, _f in _BT_SECTIONS],
+            "snapshots": [{k: v for k, v in s.items() if k != "mtime"} for s in _bt_snapshots()],
+            "snap_dir": _BT_DIR, "checked_at": _bt_fmt_time(time.time())}
+
+def build_boot_section(sid: str) -> dict | None:
+    if sid not in {s for s, _t, _f in _BT_SECTIONS}:
+        return None
+    return _bt_section(_bt_collect(), sid)
+
+def _bt_snapshots() -> list[dict]:
+    try:
+        names = [n for n in os.listdir(_BT_DIR) if _BT_SNAP_RE.match(n)]
+    except OSError:
+        return []
+    bid = _bt_boot_id()
+    rows = []
+    for n in names:
+        try:
+            st = os.stat(os.path.join(_BT_DIR, n))
+        except OSError:
+            continue
+        b = n.split("_", 1)[1][:8]
+        rows.append({"name": n, "boot_id": b, "saved_at": _bt_fmt_time(st.st_mtime), "size": st.st_size,
+                     "mtime": st.st_mtime, "this_boot": b == bid})
+    rows.sort(key=lambda r: r["mtime"], reverse=True)
+    return rows
+
+def read_boot_snapshot(name: str) -> dict | None:
+    if not _BT_SNAP_RE.match(name or "") or name not in {s["name"] for s in _bt_snapshots()}:
+        return None
+    text = _bt_read(os.path.join(_BT_DIR, name), _BT_SNAP_MAX)
+    return None if text is None else {"name": name, "text": text}
+
+def _bt_snap_taken() -> float:
+    bid = _bt_boot_id()
+    for s in _bt_snapshots():
+        if s["boot_id"] == bid:
+            return s["mtime"] - _bt_btime()
+    return -1.0
+
+def _bt_save_snapshot() -> str:
+    bid = _bt_boot_id()
+    if not bid:
+        return ""
+    with _bt_snap_lock:
+        os.makedirs(_BT_DIR, mode=0o700, exist_ok=True)
+        mine = [s["name"] for s in _bt_snapshots() if s["boot_id"] == bid]
+        name = mine[0] if mine else time.strftime("%Y%m%d-%H%M%S", time.localtime(_bt_btime())) + "_" + bid + ".txt"
+        text = _bt_tail(build_boot_report()["text"], _BT_SNAP_MAX)
+        path = os.path.join(_BT_DIR, name)
+        tmp = path + ".tmp"
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.replace(tmp, path)
+        for old in _bt_snapshots()[_BT_KEEP:]:
+            try:
+                os.remove(os.path.join(_BT_DIR, old["name"]))
+            except OSError:
+                pass
+    return name
+
+def _bt_snapshot_loop() -> None:
+    for at in _BT_SNAP_AT:
+        up = _bt_uptime()
+        if up < at:
+            time.sleep(at - up)
+        elif _bt_snap_taken() >= at:
+            continue
+        try:
+            name = _bt_save_snapshot()
+            if name:
+                log(f"Boot tab: saved this boot's logs to {_BT_DIR}/{name}")
+        except Exception as exc:
+            log(f"Boot tab: could not save this boot's logs: {exc}")
+
+def action_boot_snapshot_save() -> dict:
+    try:
+        name = _bt_save_snapshot()
+    except OSError as e:
+        return {"success": False, "verified": False, "output": f"FAIL  could not save: {e}"}
+    if not name:
+        return {"success": False, "verified": False, "output": "FAIL  no boot id (/proc/sys/kernel/random/boot_id)"}
+    log(f"Boot tab: saved this boot's logs to {_BT_DIR}/{name} (by hand)")
+    return {"success": True, "verified": True,
+            "output": f"OK    saved {_BT_DIR}/{name}. Each boot keeps one copy; the newest {_BT_KEEP} boots are kept."}
+
+def _route_boot_status(query: dict) -> tuple[int, str, bytes]:
+    return 200, "application/json", json.dumps(build_boot_status()).encode("utf-8")
+
+def _route_boot_section(query: dict) -> tuple[int, str, bytes]:
+    sec = build_boot_section((query.get("id") or [""])[0])
+    if sec is None:
+        return 404, "application/json", json.dumps({"error": "unknown section"}).encode("utf-8")
+    return 200, "application/json", json.dumps(sec).encode("utf-8")
+
+def _route_boot_report(query: dict) -> tuple[int, str, bytes]:
+    if (query.get("format") or ["text"])[0] == "json":
+        return 200, "application/json", json.dumps(build_boot_report("json")).encode("utf-8")
+    return 200, "text/plain; charset=utf-8", build_boot_report()["text"].encode("utf-8")
+
+def _route_boot_snapshot(query: dict) -> tuple[int, str, bytes]:
+    snap = read_boot_snapshot((query.get("name") or [""])[0])
+    if snap is None:
+        return 404, "application/json", json.dumps({"error": "no such saved copy"}).encode("utf-8")
+    return 200, "application/json", json.dumps(snap).encode("utf-8")
 
 def _route_ping(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", b'{"ok":true}'
@@ -24052,6 +24959,10 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/config/listeners": _route_config_listeners,
     "/api/config/reinstall": _route_config_reinstall,
     "/api/action_status": _route_action_status,
+    "/api/boot/status": _route_boot_status,
+    "/api/boot/section": _route_boot_section,
+    "/api/boot/report": _route_boot_report,
+    "/api/boot/snapshot": _route_boot_snapshot,
 }
 
 _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
@@ -24063,6 +24974,7 @@ _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "paste_preview": lambda p: action_paste_preview(p.get("config_text", ""), p.get("kind", ""),
                                                     p.get("opts") if isinstance(p.get("opts"), dict) else None),
     "health_start_services": lambda p: action_health_start_services(),
+    "boot_snapshot_save": lambda p: action_boot_snapshot_save(),
     "health_netcheck_fixes": lambda p: action_health_netcheck_fixes(),
     "health_address32": lambda p: action_health_address32(),
     "health_keepalive": lambda p: action_health_keepalive(),
@@ -26571,7 +27483,7 @@ def main() -> None:
     host = _cfg.get("server", "host", fallback="0.0.0.0")
     port = _cfg.getint("server", "port", fallback=9997)
 
-    log(f"{APP_TITLE} v{APP_VERSION} ({APP_STAGE}) starting on {host}:{port}")
+    log(f"{APP_HEADER} v{APP_VERSION} ({APP_STAGE}) starting on {host}:{port}")
     log("Serving plaintext HTTP only (no built-in TLS). Keep this on a "
         "trusted LAN/VPN, or put a TLS-terminating reverse proxy in front "
         "of it if reachable from anywhere less trusted.")
@@ -26582,6 +27494,7 @@ def main() -> None:
 
     _qm_startup_sweep()
     _sessions_load()
+    threading.Thread(target=_bt_snapshot_loop, name="boot-snapshot", daemon=True).start()
 
     server = _QuietThreadingHTTPServer((host, port), Handler)
 
@@ -26612,9 +27525,19 @@ if __name__ == "__main__":
     )
     parser.add_argument("--install", action="store_true", help="Install as a systemd service & start")
     parser.add_argument("--uninstall", action="store_true", help="Stop & remove the systemd service")
+    parser.add_argument("--boot-report", action="store_true", help="Print the Boot tab's report (with --json: as JSON) and exit")
+    parser.add_argument("--json", action="store_true", help="With --boot-report: print JSON")
     args = parser.parse_args()
 
-    if args.install:
+    if args.boot_report:
+        _out, sys.stdout = sys.stdout, sys.stderr
+        try:
+            _cfg = load_config()
+            _rep = json.dumps(build_boot_report("json"), indent=1) + "\n" if args.json else build_boot_report()["text"]
+        finally:
+            sys.stdout = _out
+        sys.stdout.write(_rep)
+    elif args.install:
         install_service()
     elif args.uninstall:
         uninstall_service()
