@@ -1,6 +1,43 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_76_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_77_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.77-pi02w (2026-10-18)
+
+Fresh-boot fixes from the boot audit: the boot disconnect-all now waits for the
+network, a Dashboard restart no longer repeats it, and clock steps from NTP no longer
+upset the boot checks or the registration time. The full build is not changed.
+
+- **Boot disconnect-all waits for the network.** It ran 30 s after Asterisk started,
+  which could be before WiFi and the 44Net tunnel were up, so links made afterwards
+  (startup macro, permanent links) stayed up. If Asterisk was late, it ran after
+  2 minutes with no Asterisk at all. Now it waits (at most 7.5 minutes from the
+  Dashboard's start) until Asterisk has been up 30 s and, when 44helper's boot order
+  is in place, `44helper-netready` has finished. Without 44helper it waits for
+  Asterisk only. If Asterisk never starts, disconnect-all is skipped and the log says
+  so.
+- **A Dashboard restart doesn't run disconnect-all again.** A marker for this boot
+  (`/run/asl_dvs/boot_disconnect_done`, holding the boot id) is written as soon as
+  disconnect-all has run, and a restart during the rest of the fresh-boot work skips
+  it. The boot marker is now written once all the fresh-boot work is done.
+- **The startup tune waits from Analog_Bridge's start.** The 5-minute wait for
+  Analog_Bridge counts from when `analog_bridge.service` (or `Analog_Bridge.service`)
+  became active, not from the Dashboard's start, with a limit of 10 minutes after
+  boot. Without an Analog_Bridge unit the wait is unchanged.
+- **Analog_Bridge's report survives a clock step.** The "from this boot" check on
+  `/tmp/ABInfo_*.json` is made against Analog_Bridge's start time from systemd (5 s
+  margin) instead of the boot time, so a file written before NTP moved the clock
+  forward is still used. Without an Analog_Bridge unit the old check is kept.
+- **"Not registered since" survives a clock step.** The time since the registration
+  state last changed is counted on the monotonic clock; before, NTP moving the clock
+  forward by hours made a fresh "unregistered" look hours old, and wifimon alerted at
+  once. `asl_reg.json` keeps the same fields.
+- **Phone setup refresh waits for Asterisk.** It tries again every 15 s for up to
+  5 minutes instead of one try at 20 s.
+- Tested (mocks): disconnect-all with and without 44helper, a late or missing
+  Asterisk, a netready unit not in this boot; the tune limits; ABInfo across a
+  3-hour clock step; the restart marker; registration "since" after a 5-hour clock
+  step; the Phone refresh retry.
 
 ## 9.3.76-pi02w (2026-10-18)
 

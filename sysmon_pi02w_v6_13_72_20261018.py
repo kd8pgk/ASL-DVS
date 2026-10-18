@@ -8,6 +8,7 @@ import glob
 import gzip
 import hmac
 import io
+import ipaddress
 import json
 import logging
 import os
@@ -37,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.71-pi02w"
+VERSION      = "6.13.72-pi02w"
 BUILD_DATE   = "20261017"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -658,6 +659,7 @@ _REGISTER_RE = re.compile(
 )
 _REG_LIVE_NODE_RE  = re.compile(r'\b(\d{4,6})\b')
 _REG_LIVE_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
+_REG_LIVE_ADDR_RE = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5})\b')
 
 def get_live_registrations() -> dict:
 
@@ -670,11 +672,15 @@ def get_live_registrations() -> dict:
         }
 
     nodes: "dict[str, str]" = {}
+    perceived: "dict[str, str]" = {}
     for line in out.splitlines():
         m = _REG_LIVE_NODE_RE.search(line)
         if not m:
             continue
         node = m.group(1)
+        pm = _REG_LIVE_ADDR_RE.search(line)
+        if pm:
+            perceived[node] = pm.group(1)
         low  = line.lower()
         if any(w in low for w in _REG_LIVE_BAD_WORDS):
             nodes[node] = "unregistered"
@@ -682,7 +688,18 @@ def get_live_registrations() -> dict:
             nodes[node] = "registered"
         else:
             nodes[node] = "unknown"
-    return {"ok": True, "raw": out, "error": None, "nodes": nodes}
+    return {"ok": True, "raw": out, "error": None, "nodes": nodes, "perceived": perceived}
+
+def _reg_addr_path(addr: str) -> str:
+    try:
+        ip = ipaddress.ip_address(addr.rsplit(":", 1)[0])
+    except ValueError:
+        return ""
+    if ip in ipaddress.ip_network("44.0.0.0/8"):
+        return "through the 44Net tunnel"
+    if ip.is_private:
+        return "a private address (check NAT)"
+    return "your public internet address (not the 44Net tunnel)"
 
 _SAVENODE_KV_RE = re.compile(r'^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(\S+)\s*(?:#.*)?$')
 
@@ -5638,7 +5655,8 @@ function renderRegHeader(sm) {
   el.textContent = m[0] + (sm.state === "ok" || sm.state === "none" ? "" : " " + age(sm.age_s));
   el.className   = m[1];
   const lines = [m[2], `In this state since ${sm.since_text}`];
-  Object.keys(sm.nodes || {}).forEach(n => lines.push(`Node ${n}: ${sm.nodes[n]}`));
+  Object.keys(sm.nodes || {}).forEach(n => lines.push(`Node ${n}: ${sm.nodes[n]}` +
+    ((sm.perceived || {})[n] ? ` as ${sm.perceived[n]}` : "")));
   if (sm.error) lines.push(sm.error);
   lines.push(`Checked ${sm.checked_age_s}s ago`);
   el.title = lines.join("\n");
@@ -11770,6 +11788,7 @@ def _reg_live_checks(entries: list, label: str) -> list:
         return checks
 
     live_nodes = reg_live.get("nodes", {})
+    perceived = reg_live.get("perceived", {})
     configured_nodes = {n for n, _ in entries}
     for nid in sorted(configured_nodes, key=str):
         live_state = live_nodes.get(nid, "not shown")
@@ -11779,6 +11798,15 @@ def _reg_live_checks(entries: list, label: str) -> list:
                 "value":  "registered", "status": "pass",
                 "note":   None, "url": None,
             })
+            if perceived.get(nid):
+                path = _reg_addr_path(perceived[nid])
+                checks.append({
+                    "title":  f"Registered as [{nid}]",
+                    "value":  perceived[nid], "status": "pass",
+                    "note":   ("The address and port the AllStarLink server sees this node at"
+                               + (f": {path}." if path else ".")),
+                    "url":    None,
+                })
         elif live_state == "unregistered":
             checks.append({
                 "title":  f"Live registration [{nid}]",
@@ -11930,7 +11958,7 @@ def _reg_live_summary(rl: dict, prev: "dict | None") -> dict:
     now = time.time()
     since = prev["since"] if prev and prev.get("state") == state else now
     return {"state": state, "since": since, "checked": now,
-            "nodes": nodes, "error": rl.get("error")}
+            "nodes": nodes, "perceived": dict(rl.get("perceived") or {}), "error": rl.get("error")}
 
 def _reg_summary_for_page() -> "dict | None":
     sm = get_state_snapshot().get("reg_summary")

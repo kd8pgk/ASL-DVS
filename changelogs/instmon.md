@@ -1,6 +1,23 @@
 # instmon changelog
 
-Current file: `instmon_v2_52_0_20261018.py`. Newest entries first.
+Current file: `instmon_v2_53_0_20261018.py`. Newest entries first.
+
+## 2.53.0 (2026-10-18)
+
+- **Start-up recovery after a power loss no longer holds up instmon or reports false
+  failures.** When a disk image or Quiet System was cut off by a power loss, instmon
+  restarted each stopped service with a blocking `systemctl start` (up to 30 s each)
+  before serving its page. Services held at boot behind `44helper-netready` timed out
+  and were reported "did NOT come back … A reboot is recommended" while they were
+  still starting. Now services that are already running, or already have a start job
+  queued, are left alone; the rest are started without waiting (`systemctl start
+  --no-block`), and a background check watches them for up to 5 minutes
+  (`INSTMON_QUIESCE_RECOVER_WAIT_SEC`, default 300) before reporting only the ones
+  that really didn't come back. A service systemd refuses to start (missing or masked
+  unit) is still reported at once and kept in the quiesce state file.
+- Tested (mocks): active and queued units skipped; no-block start; state cleared and
+  "back on the air" logged when they come up; a unit still queued at 5 minutes is the
+  only one reported; a refused start reported at once; no blocking start used.
 
 ## 2.52.0 (2026-10-18)
 

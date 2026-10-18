@@ -43,8 +43,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.211"
-APP_STAGE = "v0.0.211: boot audit phase 1 (netcheck never fails, netready deadline, DNS PreDown, Asterisk bind, ASL3 updates); history in changelogs/44helper.md"
+APP_VERSION = "0.0.212"
+APP_STAGE = "v0.0.212: split tunnel on policy routing, replace config, registration address; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -928,6 +928,7 @@ def build_overview_data(cfg: configparser.ConfigParser) -> dict:
         "tunnel_names": tunnel_names,
         "self_check": self_check,
         "tunnel_kind": cfg.get("tunnels", "tunnel.pi.kind", fallback=""),
+        "asl_reg": asl_registration_info() if shutil.which("asterisk") else None,
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -1470,6 +1471,18 @@ def _wg_drop_dns_lines(text: str, hooks: bool = False) -> tuple[str, list[str]]:
         kept.append(raw)
     return "".join(kept), removed
 
+def _wg_drop_iface_key(text: str, key: str) -> tuple[str, list[str]]:
+    section, kept, removed = "", [], []
+    for raw in text.splitlines(keepends=True):
+        st = raw.split("#", 1)[0].strip()
+        if st.startswith("["):
+            section = st.lower()
+        if section == "[interface]" and re.match(r"^" + re.escape(key) + r"\s*=", st, re.I):
+            removed.append(raw.strip())
+            continue
+        kept.append(raw)
+    return "".join(kept), removed
+
 def _wg_set_allowed_ips(text: str, value: str) -> str | None:
     lines = text.splitlines(keepends=True)
     section, peers = "", 0
@@ -1545,6 +1558,19 @@ def _wg_normalize(text: str, kind: str, opts: dict | None = None) -> dict:
         else:
             blocker = (f"AllowedIPs is {cur}, which doesn't fit this tab ({want}). Choose to rewrite it, or paste the "
                        f"config on the {other} tab instead.")
+    raw_servers = []
+    for m in re.finditer(r"(?im)^\s*dns\s*=\s*(.+)$", text):
+        raw_servers += [x.strip() for x in m.group(1).split(",") if x.strip()]
+    if raw_servers:
+        outside = _wg_dns_outside_tunnel(text, raw_servers)
+        if outside:
+            text, removed = _wg_drop_dns_lines(text)
+            fixed.append(f"DNS line removed ({', '.join(removed)}): {', '.join(outside)} isn't inside this tunnel's "
+                         "AllowedIPs, so lookups sent to it over wg0 would be dropped and names would stop resolving. "
+                         "Set 44Net DNS on the DNS card (4a) if you want it.")
+    text, rt_note = _wg_apply_split_routing(text)
+    if rt_note:
+        fixed.append(rt_note)
     pinned, pin_note = _wg_apply_endpoint_pin(text)
     if pin_note:
         fixed.append(pin_note)
@@ -1709,7 +1735,7 @@ PI_INSTALL_STEPS = [
 
 PI_INSTALL_SERVICES = {
     "iax2": {"label": "AllStarLink IAX2", "default_on": True, "tabs": ("full", "split")},
-    "echolink": {"label": "EchoLink / SvxLink", "default_on": True, "tabs": ("full", "split")},
+    "echolink": {"label": "EchoLink / SvxLink", "default_on": True, "tabs": ("full",)},
     "rtcm": {"label": "VOTER/RTCM", "default_on": False, "tabs": ("full", "split")},
 }
 
@@ -4284,7 +4310,8 @@ def _qm_on(reason: str = "manual") -> dict:
             return {"success": False, "output": "A package job is running (locked: " + ", ".join(busy) +
                     "). Wait for it to finish, then try again."}
         plan = _qm_resolve_plan()
-        state = {"active": True, "reason": reason, "started_at": time.time(), "stopped": [], "job_unit": None}
+        state = {"active": True, "reason": reason, "started_at": time.time(), "stopped": [], "job_unit": None,
+                 "boot_id": _bt_boot_id()}
         _qm_write_state(state)
         lines = [f"Quiet mode ON ({reason}) -- {len(plan)} unit(s) to pause."]
         tier, killed = None, False
@@ -4362,6 +4389,12 @@ def _qm_startup_sweep() -> None:
     try:
         state = _qm_read_state()
         if not state.get("active"):
+            return
+        bid = state.get("boot_id")
+        earlier = (bid != _bt_boot_id()) if bid else float(state.get("started_at") or 0) < _bt_btime()
+        if earlier:
+            _qm_clear_state()
+            log("QUIET: quiet mode was left on before a reboot; the reboot already started everything again -- cleared")
             return
         job_unit = state.get("job_unit")
         if job_unit and _qm_unit_running(job_unit):
@@ -5786,11 +5819,25 @@ def action_create_zone() -> dict:
     status = status_create_zone()
     return {"success": ok, "verified": status["done"], "output": "\n".join(r["output"] for r in results)}
 
+def _service_fallback_ports(service: str) -> list[str]:
+    if service == "iax2":
+        return [f"{_cfgr_bindport()}/udp"]
+    if service == "echolink":
+        return ["5198-5199/udp", "5200/tcp"]
+    return []
+
 def status_service_ports() -> dict:
     zone = _firewalld_zone_info()
     if zone is None:
-        return {"done": False, "zone_exists": False, "services": [], "ports": []}
-    return {"done": True, "zone_exists": True, "services": zone["services"], "ports": zone["ports"]}
+        return {"done": False, "zone_exists": False, "services": [], "ports": [], "iax_open": False}
+    services = list(zone["services"])
+    for svc in ("iax2", "echolink"):
+        fb = _service_fallback_ports(svc)
+        if svc not in services and fb and all(pp in zone["ports"] for pp in fb):
+            services.append(svc)
+    iax_open = "iax2" in services
+    return {"done": iax_open, "zone_exists": True, "services": services, "ports": zone["ports"],
+            "iax_open": iax_open, "iax_port": f"{_cfgr_bindport()}/udp"}
 
 def _valid_port_proto(s: str) -> bool:
     parts = s.split("/")
@@ -5812,6 +5859,14 @@ def action_add_service(service: str) -> dict:
     if service not in PI_INSTALL_SERVICES:
         return {"success": False, "verified": False, "output": f"Unknown service '{service}'"}
     r_add = _run_argv(["firewall-cmd", "--permanent", f"--zone={FIREWALLD_ZONE}", f"--add-service={service}"])
+    if not r_add["success"] and "INVALID_SERVICE" in r_add["output"] and _service_fallback_ports(service):
+        outs = [f"firewalld has no '{service}' service here, so its ports are opened instead:"]
+        for pp in _service_fallback_ports(service):
+            r = action_add_port(pp)
+            outs.append(("ok    " if r.get("verified") else "FAIL  ") + pp)
+        st = status_service_ports()
+        good = all(pp in st.get("ports", []) for pp in _service_fallback_ports(service))
+        return {"success": good, "verified": good, "output": "\n".join(outs)}
     if not r_add["success"] and _polkit_signature_crash(r_add["output"]):
         _zone_xml_add_child(FIREWALLD_ZONE, "service", {"name": service})
         r_add["success"] = True
@@ -5897,10 +5952,10 @@ def _pi_allowed_ips_mismatch_note(config_text: str, kind: str) -> str:
     given = {p.strip() for p in allowed_ips.split(",")} if allowed_ips else set()
     if not given:
         return ""
-    if kind == "split" and given != _PI_SPLIT_ALLOWED_IPS and given & _PI_FULL_ALLOWED_IPS:
-        return (" Note: AllowedIPs looks like full-tunnel (0.0.0.0/0), not the "
-                "44.0.0.0/9, 44.128.0.0/10 split-tunnel shape expected on the Split "
-                "Tunnel tab — double check this is really a split-tunnel config.")
+    if kind == "split" and given != _PI_SPLIT_ALLOWED_IPS:
+        return (" Note: AllowedIPs isn't the 44.0.0.0/9, 44.128.0.0/10 split-tunnel shape expected on the Split "
+                "Tunnel tab (anything else, such as 0.0.0.0/0, ::/0, 0.0.0.0/1 or 44.0.0.0/8, sends more than 44Net "
+                "into the tunnel) — double check this is really a split-tunnel config.")
     if kind == "full" and given == _PI_SPLIT_ALLOWED_IPS:
         return (" Note: AllowedIPs looks like split-tunnel (44.0.0.0/9, 44.128.0.0/10), "
                 "not the 0.0.0.0/0 full-tunnel shape expected on the Full Tunnel tab — "
@@ -5920,6 +5975,24 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
     if norm["blocker"]:
         return {"success": False, "verified": False, "output": "Not written. " + norm["blocker"]}
     config_text = norm["text"]
+    carried: list[str] = []
+    old = _hl_read_conf() if os.path.exists(WG0_CONF_PATH) else None
+    if old is not None:
+        for begin, end, what in ((_WG_DNS_BEGIN, _WG_DNS_END, "DNS"), (_WG_MTU_BEGIN, _WG_MTU_END, "MTU")):
+            blk = _wg_extract_block(old, begin, end)
+            has_old = any(ln.strip() == begin for ln in old.splitlines())
+            has_new = any(ln.strip() == begin for ln in config_text.splitlines())
+            if has_old and blk and not has_new:
+                new = _wg_insert_in_interface(config_text, [begin] + [ln.rstrip("\r\n") for ln in blk] + [end])
+                if new is not None:
+                    config_text = new
+                    carried.append(what)
+        try:
+            _compare_before_write(WG0_CONF_PATH + ".pre-replace", old.encode("utf-8"))
+            os.chmod(WG0_CONF_PATH + ".pre-replace", 0o600)
+            carried.append("backup")
+        except OSError:
+            pass
     try:
         wg_dir = os.path.dirname(WG0_CONF_PATH)
         os.makedirs(wg_dir, mode=0o700, exist_ok=True)
@@ -5929,6 +6002,11 @@ def action_paste_config(config_text: str, backup_to_library: bool = True, kind: 
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
 
     output_lines = ["wg0.conf written, permissions set to 600."] + norm["changes"]
+    if old is not None:
+        kept = [c for c in carried if c != "backup"]
+        output_lines.append("Replaced the previous config" + (" (saved as wg0.conf.pre-replace)" if "backup" in carried else "")
+                            + (f"; kept its {' and '.join(kept)} settings" if kept else "")
+                            + ". Restart the tunnel (step 6 or the Health card) to use it.")
     if backup_to_library:
         try:
             wrote, reason = _compare_before_write(_wg_library_path(), config_text.encode("utf-8"))
@@ -6027,6 +6105,72 @@ _WG_EPPIN_END = "# 44helper-endpoint-pin-end"
 _WG_GW_EXPR = "$(ip -4 route show table main default | head -n1 | grep -oE '(via [0-9.]+ )?dev [^ ]+')"
 _WG_GW_WAIT = ("for T in $(seq 30); do R=" + _WG_GW_EXPR + " || true; [ -n \"$R\" ] && break; sleep 1; done")
 
+_WG_RT_BEGIN = "# 44helper-routing-begin"
+_WG_RT_END = "# 44helper-routing-end"
+_WG_RT_TABLE = "4444"
+_WG_RT_MARK = "0x4444"
+_WG_RT_PRIO = "10044"
+
+def _wg_rt_lines() -> list[str]:
+    rule = f"not fwmark {_WG_RT_MARK} table {_WG_RT_TABLE} priority {_WG_RT_PRIO}"
+    return [_WG_RT_BEGIN, f"Table = {_WG_RT_TABLE}", f"FwMark = {_WG_RT_MARK}",
+            f"PostUp = ip -4 rule del {rule} 2>/dev/null || true; ip -4 rule add {rule}",
+            f"PostDown = ip -4 rule del {rule} || true",
+            _WG_RT_END]
+
+def _wg_peer_allowed_nets(text: str) -> list:
+    nets, section = [], ""
+    for raw in (text or "").splitlines():
+        st = raw.split("#", 1)[0].strip()
+        if st.startswith("["):
+            section = st.lower()
+            continue
+        m = re.match(r"^allowedips\s*=\s*(.*)$", st, re.I)
+        if section == "[peer]" and m:
+            for part in m.group(1).split(","):
+                try:
+                    nets.append(ipaddress.ip_network(part.strip(), strict=False))
+                except ValueError:
+                    continue
+    return nets
+
+def _wg_is_split(text: str) -> bool:
+    nets = _wg_peer_allowed_nets(text)
+    n44 = ipaddress.ip_network("44.0.0.0/8")
+    return bool(nets) and all(n.version == 4 and n.prefixlen >= 8 and n.subnet_of(n44) for n in nets)
+
+def _wg_user_routing(text: str) -> bool:
+    base = _wg_block_remove(text, _WG_RT_BEGIN, _WG_RT_END) if _WG_RT_BEGIN in text else text
+    return bool(re.search(r"(?im)^\s*(table|fwmark)\s*=", base))
+
+def _wg_apply_split_routing(text: str) -> tuple[str, str]:
+    has = any(ln.strip() == _WG_RT_BEGIN for ln in text.splitlines())
+    base = _wg_block_remove(text, _WG_RT_BEGIN, _WG_RT_END) if has else text
+    if _wg_is_split(base) and not _wg_user_routing(base):
+        want = _wg_rt_lines()
+        if has:
+            cur = _wg_extract_block(text, _WG_RT_BEGIN, _WG_RT_END)
+            if cur is not None and [ln.strip() for ln in cur] == [ln.strip() for ln in want[1:-1]]:
+                return text, ""
+        new = _wg_insert_in_interface(base, want)
+        if new is None:
+            return text, ""
+        return new, ("Split tunnel routing: the 44Net routes now live in their own table (4444) and WireGuard's own "
+                     "packets are marked, so they always take the normal route, on whichever adapter is up. The "
+                     "tunnel-server route line and the NetworkManager hook aren't needed any more. Takes effect when "
+                     "the tunnel restarts.")
+    if has:
+        return base, "Split tunnel routing block removed (this config isn't a 44Net-only split tunnel)."
+    return text, ""
+
+def _wg_routing_outdated() -> bool:
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            text = f.read()
+    except OSError:
+        return False
+    return bool(_wg_apply_split_routing(text)[1])
+
 def _wg_endpoint_info(text: str) -> dict:
     parsed = _parse_wg_conf_text(text or "", mask_private_key=True)
     info = {"host": "", "ip": "", "literal": False, "needed": False, "pinned": False}
@@ -6061,7 +6205,9 @@ def _wg_endpoint_info(text: str) -> dict:
             continue
         if net.version == 4:
             nets.append(net)
-    if any(n.prefixlen == 0 for n in nets) or any(ln.strip().lower().replace(" ", "") == "table=off" for ln in (text or "").splitlines()):
+    tables = [ln.split("=", 1)[1].strip().lower() for ln in (text or "").splitlines()
+              if re.match(r"^\s*table\s*=", ln, re.I)]
+    if any(n.prefixlen == 0 for n in nets) or any(t not in ("auto", "main") for t in tables):
         return info
     ip = ipaddress.ip_address(info["ip"])
     info["needed"] = any(ip in n for n in nets)
@@ -6315,6 +6461,9 @@ def _wg_write_conf(new_text: str, backup_to_library: bool = True):
     new_text, sc = _wg_strip_saveconfig(new_text)
     if sc:
         out.append("SaveConfig = true removed: wg-quick would rewrite wg0.conf on every stop and drop 44helper's settings.")
+    new_text, rt_note = _wg_apply_split_routing(new_text)
+    if rt_note:
+        out.append(rt_note)
     new_text, lg = _wg_legacy_fix(new_text)
     if lg:
         out.append("DNS undo line is now 'PreDown = resolvectl revert %i || true': in PostDown, or without '|| true', it could "
@@ -6383,6 +6532,7 @@ def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
         return {"success": False, "verified": False, "output": f"Read failed: {e}"}
 
     new_text = _wg_block_remove(text, _WG_DNS_BEGIN, _WG_DNS_END)
+    new_text, raw_dns = _wg_drop_dns_lines(new_text)
     if dns_mode != "off":
         pf = _wg_dns_preflight()
         if dns_mode == "dns_line" and not pf["resolvconf"]:
@@ -6461,6 +6611,7 @@ def action_wg_set_mtu(mtu: str = "") -> dict:
         return {"success": False, "verified": False, "output": f"Read failed: {e}"}
 
     new_text = _wg_block_remove(text, _WG_MTU_BEGIN, _WG_MTU_END)
+    new_text, raw_mtu = _wg_drop_iface_key(new_text, "mtu")
     if mtu and mtu.lower() != "off":
         inserted = _wg_insert_in_interface(new_text, [_WG_MTU_BEGIN, "MTU = " + mtu, _WG_MTU_END])
         if inserted is None:
@@ -6536,7 +6687,57 @@ def status_wg_allowed_ips() -> dict:
             "endpoint_host": ep["host"], "endpoint_ip": ep["ip"],
             "endpoint_pin_missing": ep["needed"] and (not ep["pinned"] or bool(_wg_apply_endpoint_pin(text)[1])),
             "endpoint_pin_outdated": ep["needed"] and ep["pinned"] and bool(_wg_apply_endpoint_pin(text)[1]),
-            "endpoint_loop_live": ep["needed"] and _wg_endpoint_loop_live(ep["ip"])}
+            "endpoint_loop_live": ep["needed"] and _wg_endpoint_loop_live(ep["ip"]),
+            "routing": _wg_routing_state(text), "routing_live": _wg_routing_live()}
+
+def _wg_routing_state(text: str) -> str:
+    if any(ln.strip() == _WG_RT_BEGIN for ln in text.splitlines()):
+        return "policy" if not _wg_apply_split_routing(text)[1] else "outdated"
+    if _wg_is_split(text):
+        return "custom" if _wg_user_routing(text) else "outdated"
+    return "n/a"
+
+def _wg_routing_live() -> bool:
+    rc, out = _ov_q(["ip", "-4", "rule", "show"])
+    return rc == 0 and f"lookup {_WG_RT_TABLE}" in out
+
+def action_split_routing() -> dict:
+    err = _require_root() or _hl_testing_refusal()
+    if err:
+        return err
+    text = _hl_read_conf()
+    if text is None:
+        return {"success": False, "verified": False, "output": "No wg0.conf yet; paste your config (step 4) first."}
+    if not _wg_is_split(text) or _wg_user_routing(_wg_block_remove(text, _WG_RT_BEGIN, _WG_RT_END)):
+        return {"success": False, "verified": False,
+                "output": "Not changed: this wg0.conf isn't a plain 44Net split tunnel (AllowedIPs outside 44/8, or its own "
+                          "Table/FwMark lines)."}
+    out: list[str] = []
+    try:
+        out += _wg_write_conf(text)
+    except OSError as e:
+        return {"success": False, "verified": False, "output": f"Write failed: {e}"}
+    unit = "wg-quick@wg0"
+    if _sc_is_active(unit):
+        r = _run_argv(["systemctl", "restart", unit], timeout=_WG_START_WAIT)
+        out.append(("ok    " if r["success"] else "FAIL  ") + "tunnel restarted" + ("" if r["success"] else ": " + r["output"]))
+        end = time.monotonic() + 30
+        hs_ok = False
+        while time.monotonic() < end:
+            rc, hs = _ov_q(["wg", "show", "wg0", "latest-handshakes"])
+            st = [int(t) for t in hs.split() if t.isdigit()]
+            if st and max(st) > 0 and int(time.time()) - max(st) < 60:
+                hs_ok = True
+                break
+            time.sleep(2)
+        out.append(("ok    " if hs_ok else "FAIL  ") + ("handshake" if hs_ok else "no handshake within 30 s"))
+    else:
+        out.append("The tunnel isn't running; the new routing is used when it starts.")
+    live = _wg_routing_live()
+    if _sc_is_active(unit):
+        out.append(("ok    " if live else "FAIL  ") + f"routing rule for table {_WG_RT_TABLE} " + ("in place" if live else "missing"))
+    ok = not any(ln.startswith("FAIL") for ln in out)
+    return {"success": ok, "verified": ok, "output": "\n".join(out)}
 
 def action_wg_repair_allowed_ips() -> dict:
     err = _require_root()
@@ -6831,9 +7032,10 @@ def action_enable_tunnel() -> dict:
     t0 = int(time.time())
     if _wg_quick_template_available():
         unit = "wg-quick@wg0"
+        verb = "restart" if _sc_is_active(unit) else "start"
         results = [
             _run_argv(["systemctl", "enable", unit]),
-            _run_argv(["systemctl", "start", unit], timeout=_WG_START_WAIT),
+            _run_argv(["systemctl", verb, unit], timeout=_WG_START_WAIT),
         ]
         used_fallback = False
     else:
@@ -6965,6 +7167,7 @@ done
 """ % {"limit": _BOOT_LIMIT, "late": _BOOT_LATE_LIMIT, "late_min": _BOOT_LATE_LIMIT // 60, "log": _BOOT_LOG,
        "wgconf": WG0_CONF_PATH, "units": " ".join(("netcheck.service",) + _OV_DVS_UNITS + ("asterisk.service",))}
 _BOOT_TIME_SCRIPT = """#!/bin/bash
+grep -qE '^[[:space:]]*AllowedIPs[[:space:]]*=.*0\\.0\\.0\\.0/0' %(wgconf)s 2>/dev/null || exit 0
 UP=$(cut -d. -f1 /proc/uptime)
 [ "${UP:-0}" -gt 600 ] && exit 0
 command -v timedatectl >/dev/null 2>&1 || exit 0
@@ -6977,7 +7180,7 @@ while [ "$T" -lt %(wait)d ]; do
 done
 echo "clock not synchronised after %(wait)ds; starting the tunnel anyway"
 exit 0
-""" % {"wait": _BOOT_TIME_WAIT}
+""" % {"wait": _BOOT_TIME_WAIT, "wgconf": WG0_CONF_PATH}
 _BOOT_NM_DIR = "/etc/NetworkManager/dispatcher.d"
 _BOOT_NM_HOOK_PATH = _BOOT_NM_DIR + "/90-44helper-endpoint"
 _BOOT_NM_HOOK = """#!/bin/bash
@@ -7081,6 +7284,13 @@ def _boot_file_is(path: str, text: str) -> bool:
     except OSError:
         return False
 
+def _wg_conf_has_pin() -> bool:
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            return any(ln.strip() == _WG_EPPIN_BEGIN for ln in f)
+    except OSError:
+        return False
+
 def status_boot_order() -> dict:
     units = _boot_dv_units()
     conf = os.path.exists(WG0_CONF_PATH)
@@ -7098,8 +7308,10 @@ def status_boot_order() -> dict:
         missing.append("tunnel retry")
     if conf and wg_enabled not in ("enabled", "enabled-runtime"):
         missing.append("tunnel enabled at boot")
-    if conf and os.path.isdir(_BOOT_NM_DIR) and not _boot_file_is(_BOOT_NM_HOOK_PATH, _BOOT_NM_HOOK):
+    if conf and os.path.isdir(_BOOT_NM_DIR) and _wg_conf_has_pin() and not _boot_file_is(_BOOT_NM_HOOK_PATH, _BOOT_NM_HOOK):
         missing.append("follow network changes")
+    if conf and _wg_routing_outdated():
+        missing.append("split tunnel routing (older form)")
     if conf and _wg_pin_outdated():
         missing.append("tunnel-server route (older form)")
     late = [u for u in units if not _boot_file_is(_boot_dropin_path(u), _boot_dv_dropin_text(u))]
@@ -7149,10 +7361,11 @@ def action_boot_order_apply() -> dict:
             out.append("ok    wg-quick@wg0 retries every 20 s if it fails to start (for example DNS not ready yet)")
             out.append(f"ok    at boot the tunnel first waits up to {_BOOT_TIME_WAIT} s for the clock to sync (no real-time "
                        "clock: a clock that is behind makes the server drop the handshake)")
-            if _wg_pin_outdated():
+            if _wg_routing_outdated() or _wg_pin_outdated():
                 out += ["ok    " + ln for ln in _wg_write_conf(_hl_read_conf() or "")]
-                out.append("ok    endpoint pin updated: at boot it waits up to 30 s for the normal route, or fails the start so it is retried")
-            if os.path.isdir(_BOOT_NM_DIR):
+                if not _wg_conf_has_pin():
+                    out.append("      Restart the tunnel (Health card, from the LAN) or reboot to use the new routing.")
+            if os.path.isdir(_BOOT_NM_DIR) and _wg_conf_has_pin():
                 _boot_write(_BOOT_NM_HOOK_PATH, _BOOT_NM_HOOK, 0o755)
                 out.append("ok    the tunnel server's route follows the network: when WiFi or Ethernet comes up, goes down or "
                            "changes, NetworkManager moves it to the current connection")
@@ -7368,6 +7581,54 @@ def check_myip() -> dict:
         pass
     is_44 = ip.startswith("44.")
     return {"success": is_44, "ip": ip, "output": f"connect.44net.cloud/myip reports: {ip}"}
+
+_ASL_REG_LINE_RE = re.compile(r"^(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$")
+
+def parse_rpt_registrations(text: str) -> list[dict]:
+    out = []
+    seen_header = False
+    for line in (text or "").splitlines():
+        if not seen_header:
+            seen_header = "perceived" in line.lower()
+            continue
+        m = _ASL_REG_LINE_RE.match(line.strip())
+        if not m:
+            continue
+        host, user, perceived, _refresh, state = m.groups()
+        ip, port = "", ""
+        pm = re.match(r"^(\d+\.\d+\.\d+\.\d+):(\d+)$", perceived)
+        if pm:
+            ip, port = pm.group(1), pm.group(2)
+        out.append({"host": host, "node": user, "perceived": perceived, "ip": ip, "port": port, "state": state,
+                    "registered": state.lower().startswith("registered")})
+    return out
+
+def asl_registration_info() -> dict:
+    try:
+        r = subprocess.run(["asterisk", "-rx", "rpt show registrations"], capture_output=True, text=True, timeout=8)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return {"available": False, "entries": [], "error": "asterisk isn't answering"}
+    if r.returncode != 0:
+        return {"available": False, "entries": [], "error": (r.stderr or r.stdout or "").strip()[:200]}
+    try:
+        with open(WG0_CONF_PATH, "r") as f:
+            wg_addrs = _wg0_conf_addresses(f.read())
+    except OSError:
+        wg_addrs = []
+    entries = parse_rpt_registrations(r.stdout)
+    for e in entries:
+        via = ""
+        if e["ip"]:
+            ip = ipaddress.ip_address(e["ip"])
+            if e["ip"] in wg_addrs or ip in ipaddress.ip_network("44.0.0.0/8"):
+                via = "tunnel"
+            elif ip.is_private:
+                via = "private"
+            else:
+                via = "public"
+        e["via"] = via
+    return {"available": True, "entries": entries, "error": "",
+            "raw": "" if entries else "\n".join(r.stdout.strip().splitlines()[:6])}
 
 def check_rpt_registrations() -> dict:
     try:
@@ -17349,6 +17610,27 @@ function renderOverview(data) {
   }
   document.getElementById('ov-wg0').innerHTML = wg0html;
 
+  var reg = data.asl_reg, regEl = document.getElementById('ov-aslreg');
+  if (regEl) {
+    if (!reg) {
+      regEl.innerHTML = _ovDot('info') + 'Asterisk isn\\'t installed.';
+    } else if (!reg.available) {
+      regEl.innerHTML = _ovDot('warn') + 'Couldn\\'t read <code>rpt show registrations</code>: ' + _ovEsc(reg.error || 'no answer');
+    } else if (!(reg.entries || []).length) {
+      regEl.innerHTML = _ovDot('warn') + 'No AllStar registrations listed.' +
+        (reg.raw ? '<pre style="white-space:pre-wrap;font-size:.7rem;margin:.3rem 0 0">' + _ovEsc(reg.raw) + '</pre>' : '');
+    } else {
+      var viaText = {tunnel: 'through the 44Net tunnel', 'public': 'your public internet address (not the tunnel)',
+                     'private': 'a private address (check NAT)'};
+      regEl.innerHTML = reg.entries.map(function(e) {
+        var where = e.ip ? ('<b>' + _ovEsc(e.ip) + '</b>:' + _ovEsc(e.port) + (viaText[e.via] ? ' &middot; ' + viaText[e.via] : ''))
+                         : _ovEsc(e.perceived);
+        return _ovDot(e.registered ? 'ok' : 'danger') + 'Node ' + _ovEsc(e.node) + ' ' + _ovEsc(e.state) +
+               '<br>Registered as ' + where + '<br><span style="color:var(--muted)">' + _ovEsc(e.host) + '</span>';
+      }).join('<br>');
+    }
+  }
+
   // Configured tunnels card
   var tNames = data.tunnel_names || [];
   document.getElementById('ov-tunnels').innerHTML = tNames.length
@@ -17533,7 +17815,7 @@ function renderPiInstall(kind, data) {
         html += '<div style="color:var(--muted);font-family:var(--mono);font-size:.75rem;margin:.1rem 0 .5rem 1.5rem;line-height:1.5">Per the DVSwitch install guide, this is the UDP port a remote DVSwitch Mobile client connects to \u2014 whatever you set as both txPort and rxPort in Analog_Bridge\\'s [USRP] stanza. Not the same as the loopback-only AMBE bridge ports below.</div>';
         html += '<label>Custom port (e.g. 14569/udp): <input type="text" id="pi-custom-port-' + kind + '" style="font-family:var(--mono);background:#0a1020;color:var(--text-bright);border:1px solid var(--border2);border-radius:4px;padding:.2rem .4rem"' + disabledAttr + '> <button class="btn-run" onclick="piAddPort(\\'' + kind + '\\')"' + disabledAttr + '>Add</button></label>';
       } else {
-        html += '<div class="step-body">Split Tunnel needs only ASL3/IAX2 and EchoLink/SvxLink open (the others above are optional and usually stay off). DVSwitch, USRP2M17, and Zello don\\'t need inbound exposure at all (see the note below), so there\\'s no DVSwitch Mobile field or generic custom-port field on this tab by design.</div>';
+        html += '<div class="step-body">Split Tunnel needs only ASL3/IAX2 open (the others above are optional and usually stay off). Only 44Net hosts can reach this node through a split tunnel: WireGuard drops packets from addresses outside AllowedIPs, so EchoLink (its peers are not on 44Net) is not offered here. DVSwitch, USRP2M17, and Zello don\\'t need inbound exposure at all (see the note below), so there\\'s no DVSwitch Mobile field or generic custom-port field on this tab by design.</div>';
       }
       html += '</div><div class="step-body">Current ports in zone: ' + ((step.ports||[]).join(', ') || '(none)') + '</div>';
       html += '<div class="step-body">DVSwitch\\'s AMBE bridge ports (31100/31103), the USRP2M17 gateway ' +
@@ -17546,6 +17828,13 @@ function renderPiInstall(kind, data) {
         html += '<div class="step-body">Library backup: ' + (step.library_backup_exists ?
           'present (instmon Version Library \u2192 config \u2192 wg0.conf).' :
           'none yet \u2014 any 44helper write of wg0.conf (for example the DNS & MTU card) makes one.') + '</div>';
+        html += '<div class="step-actions"><button class="btn-copy" onclick="piReplaceShow(\\'' + kind + '\\')">Replace the config (new key or tunnel server)</button></div>';
+        html += '<div id="pi-replace-' + kind + '" style="display:none">';
+        html += '<div class="step-body">Paste the new config from the 44Net Connect portal. It gets the same check before writing; the DNS and MTU settings and the boot order are kept, and the old file is saved as wg0.conf.pre-replace.</div>';
+        html += '<textarea class="wg-paste" id="pi-wg-paste-' + kind + '" placeholder="Paste the new WireGuard config block here..."></textarea>';
+        html += '<input type="checkbox" id="pi-wg-backup-lib-' + kind + '" checked style="display:none">';
+        html += '<div class="step-actions"><button class="btn-run" onclick="piPasteConfig(\\'' + kind + '\\')"' + disabledAttr + '>Check and replace wg0.conf</button></div>';
+        html += '<div id="pi-paste-preview-' + kind + '"></div></div>';
       } else {
         html += '<div class="step-body">Get this from your 44Net Connect dashboard at ' +
           '<a href="https://connect.44net.cloud/" target="_blank" rel="noopener noreferrer">connect.44net.cloud</a> ' +
@@ -17592,7 +17881,7 @@ function renderPiInstall(kind, data) {
       if (step.wg_status && step.wg_status.latest_handshake) {
         html += '<div class="step-body">Handshake: ' + step.wg_status.latest_handshake + '</div>';
       }
-      html += '<div class="step-actions"><button class="btn-run" onclick="piVerify(\\'' + kind + '\\')">Verify (connect.44net.cloud/myip + rpt show registrations)</button><span id="pi-verify-out-' + kind + '" class="step-body"></span></div>';
+      html += '<div class="step-actions"><button class="btn-run" onclick="piVerify(\\'' + kind + '\\')">Verify the tunnel and the AllStar registration</button><span id="pi-verify-out-' + kind + '" class="step-body"></span></div>';
       if (kind === 'split') {
         html += '<div class="step-body" style="font-size:.75rem;color:var(--muted)">On a split tunnel, myip normally shows your home internet address: connect.44net.cloud is not a 44Net address, so that check goes the normal way. The handshake above is what shows the tunnel works.</div>';
       }
@@ -17618,7 +17907,12 @@ function renderPiInstall(kind, data) {
     if (meta.id === 'enable_tunnel') { html += _piBootCardHtml(kind, data.boot_order || {}) + _piNetcheckCardHtml(kind); }
     html += '</div>';
   });
+  var _rpBox = document.getElementById('pi-replace-' + kind), _rpTa = document.getElementById('pi-wg-paste-' + kind);
+  var _rpOpen = !!(_rpBox && _rpBox.style.display !== 'none'), _rpText = _rpTa ? _rpTa.value : '';
   document.getElementById('pi-steps-' + kind).innerHTML = html;
+  var _rpBox2 = document.getElementById('pi-replace-' + kind), _rpTa2 = document.getElementById('pi-wg-paste-' + kind);
+  if (_rpBox2 && _rpOpen) { _rpBox2.style.display = ''; }
+  if (_rpTa2 && _rpText) { _rpTa2.value = _rpText; }
   document.getElementById('pi-checked-at-' + kind).textContent = 'Last checked: ' + (data.checked_at || '');
   var convertBtn = document.getElementById('pi-convert-btn-' + kind);
   if (convertBtn) {
@@ -17712,11 +18006,12 @@ function _piAllowedIpsCardHtml(kind, aip) {
   var shape = aip.shape || 'no-conf';
   var current = aip.allowed_ips || '';
   var pill, pillCls;
-  if (shape === 'split') { pill = 'Narrowed'; pillCls = 'done'; }
+  if (shape === 'split' && aip.routing === 'policy' && (aip.routing_live || !aip.conf_exists)) { pill = 'Set'; pillCls = 'done'; }
+  else if (shape === 'split') { pill = aip.routing === 'policy' ? 'Restart needed' : 'Older routing'; pillCls = 'attempted_unconfirmed'; }
   else if (shape === 'full') { pill = 'Full tunnel'; pillCls = 'attempted_unconfirmed'; }
   else { pill = 'n/a'; pillCls = 'not_started'; }
   var html = '<div class="step-card" id="pi-aip-card-' + kind + '">';
-  html += '<div class="step-head"><div class="step-title"><span class="step-num">4b.</span>Split-tunnel AllowedIPs repair</div>';
+  html += '<div class="step-head"><div class="step-title"><span class="step-num">4b.</span>Split tunnel routing</div>';
   html += '<span class="step-pill ' + pillCls + '">' + pill + '</span></div>';
   if (!aip.conf_exists || shape === 'no-conf') {
     html += '<div class="step-body">No wg0.conf yet. Paste your config (step 4) first. If you paste it unedited (full-tunnel 0.0.0.0/0), this step offers a one-click fix to the split-tunnel 44Net range.</div>';
@@ -17724,6 +18019,16 @@ function _piAllowedIpsCardHtml(kind, aip) {
     html += '<div class="step-body">Full tunnel with exceptions is ' + asl3EscapeAttr(aip.fullx_mode) + ' on this node (Full Tunnel tab), so this repair is switched off. Remove it there first to switch to a split tunnel.</div>';
   } else if (aip.half_mode && aip.half_mode !== 'off') {
     html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Full Tunnel tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
+  } else if (shape === 'split' && aip.routing === 'policy') {
+    html += '<div class="step-body">The 44Net routes are in their own table (' + '4444' + ') and WireGuard marks its own packets, so the tunnel server is always reached on the normal route, through whichever adapter is up. No tunnel-server route line or NetworkManager hook is needed.</div>';
+    if (!aip.routing_live) {
+      html += '<div class="ov-banner lvl-warn">wg0.conf has the new routing, but the running tunnel still uses the old one. Restart the tunnel (from the LAN) to use it.</div>';
+      html += '<div class="step-actions"><button class="btn-run" onclick="piSplitRouting()">Restart the tunnel with the new routing</button></div>';
+    }
+  } else if (shape === 'split' && aip.routing === 'outdated') {
+    html += '<div class="ov-banner lvl-warn">This split tunnel keeps the tunnel server on the normal route with a route copied when the tunnel starts' + (aip.endpoint_loop_live ? ', and right now it routes back into wg0 (routing loop)' : '') + '. If WiFi or Ethernet changes after that, the route can disappear and the tunnel loops.</div>';
+    html += '<div class="step-body">Switch to policy routing: three lines in wg0.conf (Table 4444, FwMark 0x4444 and a routing rule) replace the tunnel-server route line. WireGuard&#39;s own packets then always use the normal route, on any adapter. The tunnel is restarted to use it (a LAN session stays up).</div>';
+    html += '<div class="step-actions"><button class="btn-run" onclick="piSplitRouting()">Switch to policy routing</button></div>';
   } else if (aip.endpoint_pin_outdated && !aip.endpoint_loop_live) {
     html += '<div class="ov-banner lvl-warn">wg0.conf has an older tunnel-server route line (endpoint pin) for <code>' + asl3EscapeAttr(aip.endpoint_host || '') + '</code>. The tunnel works now, but that line gives up if the tunnel starts before the normal network route exists, which can happen at boot; the tunnel then comes up in a routing loop with no handshake.</div>';
     html += '<div class="step-body">Update it: the new line waits up to 30 s for the normal route, and if there is still none it fails the start so the tunnel is retried. Only those two lines in wg0.conf change; nothing is restarted.</div>';
@@ -17750,6 +18055,22 @@ function _piAllowedIpsCardHtml(kind, aip) {
   html += '<div class="' + consoleCls + '" id="pi-aip-out-' + kind + '">' + consoleTxt + '</div>';
   html += '</div>';
   return html;
+}
+
+function piSplitRouting() {
+  if (!confirm('Write policy routing for the split tunnel into wg0.conf and restart the tunnel? The library backup is updated. A session from the LAN stays up.')) return;
+  var out = document.getElementById('pi-aip-out-split');
+  if (out) { out.className = 'asl3-console shown'; out.textContent = 'Working...'; }
+  fetch('/api/pi_install/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({step: 'split_routing'})
+  }).then(function(r) { return r.json(); }).then(function(result) {
+    window._piState = window._piState || {};
+    window._piState['repair_allowed_ips'] = {status: result.success === false ? 'fail' : 'ok', output: result.output || ''};
+    refreshPiInstall('full');
+    refreshPiInstall('split');
+  });
 }
 
 function piRepairAllowedIps(what) {
@@ -18469,6 +18790,11 @@ function piAddDvswitchMobilePort() {
 function piAddPortPreset(portProto) {
   _piConfirmAndPost('service_ports', 'firewall-cmd --permanent --zone=44NetConnect --add-port=' + portProto + ' && firewall-cmd --reload', {action: 'add_port', port: portProto});
 }
+function piReplaceShow(kind) {
+  var el = document.getElementById('pi-replace-' + kind);
+  if (el) { el.style.display = el.style.display === 'none' ? '' : 'none'; }
+}
+
 function piPasteConfig(kind) {
   var ta = document.getElementById('pi-wg-paste-' + kind);
   var text = ta ? ta.value : '';
@@ -18511,7 +18837,10 @@ function piVerify(kind) {
   fetch('/api/pi_install/verify').then(function(r){ return r.json(); }).then(function(result){
     var out2 = document.getElementById('pi-verify-out-' + kind);
     if (out2) {
-      out2.textContent = 'myip: ' + (result.myip.output || '') + '  |  rpt: ' + (result.rpt.success ? 'ok' : ('not registered or unavailable' + (result.rpt.output ? ' (' + result.rpt.output.split('\\n')[0] + ')' : '')));
+      var lines = (result.tunnel || []).map(function(c) { return (c.ok ? 'ok    ' : 'FAIL  ') + c.text; });
+      lines.push('public address (connect.44net.cloud/myip): ' + (result.myip.output || '?'));
+      out2.style.whiteSpace = 'pre-wrap';
+      out2.textContent = lines.join('\\n');
     }
   });
 }
@@ -24278,6 +24607,10 @@ def _render_overview_panel() -> str:
       <div class="ov-card-body" id="ov-wg0">…</div>
     </div>
     <div class="ov-card">
+      <span class="ov-card-title">AllStar registration</span>
+      <div class="ov-card-body" id="ov-aslreg">…</div>
+    </div>
+    <div class="ov-card">
       <span class="ov-card-title">Configured tunnels</span>
       <div class="ov-card-body" id="ov-tunnels">…</div>
     </div>
@@ -24704,6 +25037,7 @@ def _bt_tunnel_state() -> dict:
     info = _wg_endpoint_info(text)
     up = _wg0_interface_present()
     return {"conf": True, "endpoint": info["ip"], "pin_needed": info["needed"], "up": up,
+            "routing": _wg_routing_state(text), "routing_live": _wg_routing_live() if up else False,
             "loop": bool(info["needed"] and up and _wg_endpoint_loop_live(info["ip"])),
             "pin_outdated": bool(_wg_apply_endpoint_pin(text)[1]) if info["needed"] and info["pinned"] else False}
 
@@ -24755,6 +25089,14 @@ def _bt_findings(ctx: dict) -> list[dict]:
         elif r.get("never_started"):
             out.append({"level": "warn", "msg": f"{r['unit']} is enabled but never started this boot (a unit it requires "
                                                 "may have failed, for example netcheck)."})
+    cyc = [ln for ln in _bt_run(["journalctl", "-b", "0", "-p", "warning", "-o", "cat", "--no-pager", "-n", "3000"], 20).splitlines()
+           if "ordering cycle" in ln.lower()]
+    if cyc:
+        out.append({"level": "danger", "msg": "systemd found an ordering cycle at this boot and dropped a unit's start: "
+                                              + cyc[0][:200]})
+    if s["tunnel"].get("routing") == "outdated":
+        out.append({"level": "warn", "msg": "The split tunnel still uses the tunnel-server route copied at start. Switch to "
+                                            "policy routing on card 4b (Split Tunnel tab) or Set the boot order."})
     tws = by_unit.get("systemd-time-wait-sync.service")
     if tws and tws["enabled"] == "enabled" and (tws["active_s"] or 0) - (tws["started_s"] or 0) > 30:
         out.append({"level": "info", "msg": f"systemd-time-wait-sync is enabled and held time-sync.target for "
@@ -24941,7 +25283,8 @@ def _bt_tunnel_line(t: dict) -> str:
     if not t["up"]:
         return "wg0 is not up"
     if not t["pin_needed"]:
-        return "up" + (f", server {t['endpoint']}" if t["endpoint"] else "")
+        rt = {"policy": ", policy routing (table 4444)" + ("" if t.get("routing_live") else ", not active until the tunnel restarts")}
+        return "up" + (f", server {t['endpoint']}" if t["endpoint"] else "") + rt.get(t.get("routing", ""), "")
     return (f"up, server {t['endpoint']} " + ("routed into wg0 (routing loop)" if t["loop"] else "on the normal route")
             + (", older route line in wg0.conf" if t["pin_outdated"] else ""))
 
@@ -25140,8 +25483,37 @@ def _route_nodes_edit_snippet(query: dict) -> tuple[int, str, bytes]:
     scope = query.get("scope", [""])[0]
     return 200, "application/json", json.dumps(build_node_snippet(_cfg, scope)).encode("utf-8")
 
+def _pi_verify_tunnel() -> list[dict]:
+    out: list[dict] = []
+    if not _wg0_interface_present():
+        return [{"ok": False, "text": "wg0 is not up"}]
+    rc, hs = _ov_q(["wg", "show", "wg0", "latest-handshakes"])
+    stamps = [int(t) for t in hs.split() if t.isdigit()]
+    age = int(time.time()) - max(stamps) if stamps and max(stamps) > 0 else -1
+    out.append({"ok": 0 <= age < 180, "text": ("no handshake yet" if age < 0 else f"last handshake {age} s ago")})
+    rc, addr = _ov_q(["ip", "-4", "-o", "addr", "show", "dev", "wg0"])
+    m = re.search(r"inet\s+([\d.]+)", addr)
+    out.append({"ok": bool(m), "text": ("wg0 has " + m.group(1)) if m else "wg0 has no IPv4 address"})
+    rc, r44 = _ov_q(["ip", "-4", "route", "get", "44.0.0.1"])
+    out.append({"ok": " dev wg0" in r44, "text": "44Net (44.0.0.1) goes " + ("through wg0" if " dev wg0" in r44 else "NOT through wg0")})
+    rc, eps = _ov_q(["wg", "show", "wg0", "endpoints"])
+    me = re.search(r"\s(\d+\.\d+\.\d+\.\d+):\d+", eps)
+    if me:
+        loop = _wg_endpoint_loop_live(me.group(1))
+        out.append({"ok": not loop, "text": f"tunnel server {me.group(1)} " + ("routed into wg0: routing loop" if loop else "on the normal route")})
+    try:
+        r = subprocess.run(["getent", "ahostsv4", "deb.debian.org"], capture_output=True, text=True, timeout=6)
+        out.append({"ok": r.returncode == 0, "text": "names resolve" if r.returncode == 0 else "names do NOT resolve"})
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    reg = asl_registration_info() if shutil.which("asterisk") else None
+    for e in (reg or {}).get("entries", []):
+        out.append({"ok": e["registered"], "text": f"AllStar node {e['node']} {e['state']}"
+                    + (f", registered as {e['ip']}:{e['port']}" if e["ip"] else "")})
+    return out
+
 def _route_pi_install_verify(query: dict) -> tuple[int, str, bytes]:
-    result = {"myip": check_myip(), "rpt": check_rpt_registrations()}
+    result = {"myip": check_myip(), "rpt": check_rpt_registrations(), "tunnel": _pi_verify_tunnel()}
     return 200, "application/json", json.dumps(result).encode("utf-8")
 
 def _route_router_status(query: dict) -> tuple[int, str, bytes]:
@@ -25294,6 +25666,7 @@ _PI_INSTALL_SIMPLE_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "set_dns": lambda p: action_wg_set_dns(p.get("dns_mode", ""), p.get("dns_servers", "")),
     "set_mtu": lambda p: action_wg_set_mtu(p.get("mtu", "")),
     "repair_allowed_ips": lambda p: action_wg_repair_allowed_ips(),
+    "split_routing": lambda p: action_split_routing(),
     "add_reflector_egress": lambda p: action_wg_add_reflector_egress(p.get("ports")),
     "remove_reflector_egress": lambda p: action_wg_remove_reflector_egress(p.get("ports")),
     "netcheck_fix_unit": lambda p: action_netcheck_fix_unit(),

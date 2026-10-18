@@ -1,6 +1,18 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_71_20261017.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_72_20261018.py`. Newest entries first.
+
+## 6.13.72-pi02w (2026-10-18)
+The Reg tab shows the address the node is registered as. The full build is not
+changed.
+
+- **Registered as.** For each registered node the Reg tab adds a "Registered as"
+  line with the address and port the AllStarLink server sees it at (from the
+  Perceived column of `rpt show registrations`), and whether that is through the
+  44Net tunnel, your public internet address or a private address. The ASL field's
+  tooltip in the header shows it too.
+- Tested: the parser on `rpt show registrations` output (registered node, perceived
+  44.x address, through the tunnel) and the Reg tab checks.
 
 ## 6.13.71-pi02w (2026-10-17)
 
