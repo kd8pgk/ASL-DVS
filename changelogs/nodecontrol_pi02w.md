@@ -1,6 +1,21 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_84_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_85_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.85-pi02w (2026-10-18)
+
+Leaving the M17 tab runs M17's Disconnect first. The full build gets the same change in
+9.3.84.
+
+- **M17 disconnects when you leave its tab.** Switching from M17 to any other tab (or
+  connecting from another tab's favorites while M17 is active) now does exactly what
+  M17's Disconnect button does, before anything else in the switch: drop the ASL link
+  to the M17 bridge node, write the placeholder M17 ini, restart USRP2M17 and clear
+  the M17 connection. Before, the switch wrote the ini and restarted USRP2M17 but left
+  the bridge-node link to the new tab's general link clean-up, which ran afterwards.
+  Both now share one helper (`_m17_disconnect_core`).
+- Opening the Edit tab doesn't change the server's page, so M17 stays connected while
+  you are on Edit. Re-clicking the M17 tab (re-tune) doesn't disconnect.
 
 ## 9.3.84-pi02w (2026-10-18)
 
