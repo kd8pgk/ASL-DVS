@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.56.0"
+VERSION ="2.57.0"
 DATE_STR ="2026-10-18"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4206,8 +4206,12 @@ _fu_lock = threading.Lock()
 _fu_state = {
     "running": False, "phase": "", "current": "", "error": "", "banner": False,
     "updated": [], "skipped": [], "attention": [], "scripts": [], "manuals": [], "instmon_pending": None,
-    "plan": None, "plan_at": "", "wait_end": 0.0, "wait_what": "",
+    "plan": None, "plan_at": "", "wait_end": 0.0, "wait_what": "", "stopping": False, "in_progress": None,
 }
+_fu_stop_ev = threading.Event()
+_FU_JOB_UNIT = "instmon-fu-job"
+_FU_JOB_LOG = os.path.join(CONFIG_DIR, "instmon_fu_job.log")
+_FU_NO_STOP_PHASES = ("instmon", "recovering")
 
 def full_update_running():
     with _fu_lock:
@@ -4358,7 +4362,69 @@ def _fu_stage(entry):
         _file_meta_cache.clear()
     return dest
 
-def _fu_run_cli(script_path, flag):
+def _fu_job_active():
+    return systemctl_is_active(_FU_JOB_UNIT + ".service") in ("active", "activating", "deactivating", "reloading")
+
+def _fu_job_log_drain(pos, final=False):
+    try:
+        with open(_FU_JOB_LOG, "rb") as fh:
+            fh.seek(pos)
+            data = fh.read()
+    except OSError:
+        return pos
+    if not final:
+        data = data[:data.rfind(b"\n") + 1]
+    for line in data.decode("utf-8", "replace").splitlines():
+        log_event(line, "info")
+    return pos + len(data)
+
+def _fu_job_stop():
+    for args in (["systemctl", "stop", _FU_JOB_UNIT + ".service"],
+                 ["systemctl", "reset-failed", _FU_JOB_UNIT + ".service"]):
+        try:
+            subprocess.run(args, capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+def _fu_run_cli(script_path, flag, stoppable=True):
+    if not shutil.which("systemd-run"):
+        return _fu_run_cli_direct(script_path, flag)
+    label = f"{os.path.basename(script_path)} {flag}"
+    _fu_job_stop()
+    try:
+        ensure_dirs()
+        open(_FU_JOB_LOG, "w").close()
+        proc = subprocess.Popen(["systemd-run", "--quiet", "--wait", "--collect", f"--unit={_FU_JOB_UNIT}",
+                                 "--service-type=exec", "--setenv=PYTHONUNBUFFERED=1",
+                                 "-p", f"StandardOutput=append:{_FU_JOB_LOG}", "-p", "StandardError=inherit",
+                                 "-p", f"RuntimeMaxSec={SCRIPT_TIMEOUT_SEC}",
+                                 _interp_for(script_path), script_path, flag],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    except OSError as exc:
+        log_event(f"Could not run {label}: {exc}", "err")
+        return None
+    pos, stop_sent = 0, False
+    deadline = time.monotonic() + SCRIPT_TIMEOUT_SEC + 30
+    while proc.poll() is None:
+        pos = _fu_job_log_drain(pos)
+        if stoppable and not stop_sent and _fu_stop_ev.is_set():
+            stop_sent = True
+            log_event(f"Full Update: stopping {label}", "warn")
+            threading.Thread(target=_fu_job_stop, daemon=True).start()
+        if time.monotonic() > deadline:
+            proc.kill()
+            _fu_job_stop()
+            _fu_job_log_drain(pos, final=True)
+            log_event(f"{label} timed out ({SCRIPT_TIMEOUT_SEC}s), killed", "err")
+            return None
+        time.sleep(0.5)
+    _fu_job_log_drain(pos, final=True)
+    err = (proc.stderr.read() or "").strip()
+    if err:
+        log_event(f"{label}: {err[:300]}", "warn")
+    return proc.returncode
+
+def _fu_run_cli_direct(script_path, flag):
     try:
         proc = subprocess.Popen([_interp_for(script_path), script_path, flag],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
@@ -4376,12 +4442,14 @@ def _fu_run_cli(script_path, flag):
         return None
     return proc.returncode
 
-def _fu_wait_healthy(comp, what="start and answer"):
+def _fu_wait_healthy(comp, what="start and answer", stoppable=True):
     deadline = time.time() + FU_START_TIMEOUT_SEC
     state = "unknown"
     _fu_wait_begin(FU_START_TIMEOUT_SEC, what)
     try:
         while time.time() < deadline:
+            if stoppable and _fu_stop_ev.is_set():
+                return False, "stopped by you"
             state = systemctl_is_active(unit_of(comp))
             if state == "active" and (comp["port"] is None or port_open(comp["port"])):
                 return True, state
@@ -4422,7 +4490,7 @@ def _http_alive(port):
             conn.close()
     return False
 
-def _watch_steady(comp, secs=None):
+def _watch_steady(comp, secs=None, stop_ev=None):
     secs = FU_STABLE_SEC if secs is None else secs
     unit = unit_of(comp)
     base = _unit_nrestarts(unit)
@@ -4430,6 +4498,8 @@ def _watch_steady(comp, secs=None):
     http_fails = 0
     while time.monotonic() < deadline:
         time.sleep(min(FU_STABLE_POLL_SEC, max(0.0, deadline - time.monotonic())))
+        if stop_ev is not None and stop_ev.is_set():
+            return False, "stopped by you"
         state = systemctl_is_active(unit)
         if state != "active":
             return False, f"stopped running within {secs}s ({state})"
@@ -4463,18 +4533,37 @@ def _fu_update_one(comp, row, new_path):
         return "skipped", f"couldn't save a copy of the installed version ({stage_err}) -- left alone"
     old_path = os.path.join(LIB_SUBDIRS[comp["category"]], old_name)
     old_ver, new_ver = row["installed_version"], row["version"]
+    _fu_set(in_progress={"category": comp["category"], "name": name, "old_path": old_path,
+                         "old_ver": old_ver, "new_ver": new_ver})
+    _fu_save()
 
     _fu_set(current=f"{name}: uninstalling v{old_ver}")
     log_event(f"Full Update: {name}: uninstalling v{old_ver}", "info")
     rc = _fu_run_cli(installed_link(comp), "--uninstall")
-    if rc != 0:
-        log_event(f"Full Update: {name}: --uninstall exited {rc}; installing the new file anyway", "warn")
     quiet_forget(comp["service"])
+    if _fu_stop_ev.is_set():
+        ok, state = False, "stopped by you"
+    else:
+        if rc != 0:
+            log_event(f"Full Update: {name}: --uninstall exited {rc}; installing the new file anyway", "warn")
+        ok, state = _fu_try_new(comp, row, new_path)
+    if ok:
+        if row.get("status") == "switch":
+            log_event(f"Full Update: {name} switched: {row['note']}", "ok")
+            return "updated", row["note"]
+        log_event(f"Full Update: {name} updated v{old_ver} -> v{new_ver}", "ok")
+        return "updated", f"v{old_ver} -> v{new_ver}"
+    return _fu_put_back(comp, old_path, old_ver,
+                        "stopped by you" if state == "stopped by you" else f"v{new_ver} failed ({state})")
 
+def _fu_try_new(comp, row, new_path):
+    name, new_ver = comp["name"], row["version"]
     _fu_set(current=f"{name}: installing v{new_ver}")
     log_event(f"Full Update: {name}: installing {os.path.basename(new_path)}", "info")
     prepare_install(comp, new_path)
     rc = _fu_run_cli(new_path, "--install")
+    if _fu_stop_ev.is_set():
+        return False, "stopped by you"
     if rc == 0:
         _fu_set(current=f"{name}: v{new_ver} installed")
         log_event(f"Full Update: {name}: waiting up to {FU_START_TIMEOUT_SEC}s for v{new_ver} to start and answer", "info")
@@ -4485,24 +4574,21 @@ def _fu_update_one(comp, row, new_path):
                   "(the Full Update card counts it down)", "info")
         _fu_wait_begin(FU_STABLE_SEC, f"v{new_ver} to stay up")
         try:
-            ok, state = _watch_steady(comp)
+            ok, state = _watch_steady(comp, stop_ev=_fu_stop_ev)
         finally:
             _fu_wait_end()
-    if ok:
-        if row.get("status") == "switch":
-            log_event(f"Full Update: {name} switched: {row['note']}", "ok")
-            return "updated", row["note"]
-        log_event(f"Full Update: {name} updated v{old_ver} -> v{new_ver}", "ok")
-        return "updated", f"v{old_ver} -> v{new_ver}"
+    return ok, state
 
-    reason = f"v{new_ver} failed ({state})"
+def _fu_put_back(comp, old_path, old_ver, reason):
+    name = comp["name"]
     log_event(f"Full Update: {name}: {reason} -- putting v{old_ver} back", "err")
     _fu_set(current=f"{name}: rolling back to v{old_ver}")
     prepare_install(comp, old_path)
-    rc = _fu_run_cli(old_path, "--install")
+    rc = _fu_run_cli(old_path, "--install", stoppable=False)
     if rc == 0:
         log_event(f"Full Update: {name}: waiting up to {FU_START_TIMEOUT_SEC}s for v{old_ver} to start and answer", "info")
-    ok, state = _fu_wait_healthy(comp, f"v{old_ver} to start and answer") if rc == 0 else (False, f"--install exited {rc}")
+    ok, state = (_fu_wait_healthy(comp, f"v{old_ver} to start and answer", stoppable=False) if rc == 0
+                 else (False, f"--install exited {rc}"))
     if ok:
         log_event(f"Full Update: {name} rolled back to v{old_ver}", "warn")
         return "skipped", f"{reason}; rolled back to v{old_ver}"
@@ -4528,7 +4614,9 @@ def _fu_arm_instmon_guard(old_path):
     return r.returncode == 0, (r.stderr or "").strip()[:200]
 
 def _fu_finish(error=""):
-    _fu_set(running=False, phase="done", current="", error=error, banner=True)
+    if not error and _fu_stop_ev.is_set():
+        error = "stopped by you"
+    _fu_set(running=False, phase="done", current="", error=error, banner=True, stopping=False, in_progress=None)
     _fu_save()
     snap = full_update_snapshot()
     parts = [f"{len(snap['updated'])} updated"]
@@ -4593,6 +4681,8 @@ def _fu_run():
     done_scripts, staged = [], []
     _fu_set(phase="downloading")
     for row in plan:
+        if _fu_stop_ev.is_set():
+            break
         _fu_set(current=f"downloading {row['file']}")
         try:
             path = _fu_stage(row["entry"])
@@ -4603,6 +4693,8 @@ def _fu_run():
         log_event(f"Full Update: downloaded and checked {row['file']}", "ok")
         staged.append((row, path))
     for entry in scripts:
+        if _fu_stop_ev.is_set():
+            break
         _fu_set(current=f"downloading {entry['name']}")
         try:
             msg, _lvl = _gh_apply(entry)
@@ -4615,8 +4707,9 @@ def _fu_run():
     with _gh_lock:
         _gh_state["entries"] = [_gh_compare(dict(e)) for e in _gh_state["entries"]]
     _fu_set(skipped=list(skipped), scripts=done_scripts)
-    _fu_manuals(skipped)
-    if not staged:
+    if not _fu_stop_ev.is_set():
+        _fu_manuals(skipped)
+    if not staged or _fu_stop_ev.is_set():
         _fu_finish()
         return
 
@@ -4634,6 +4727,10 @@ def _fu_run():
         if comp["category"] == "instmon":
             instmon_job = (comp, row, path)
             continue
+        if _fu_stop_ev.is_set():
+            skipped.append({"name": comp["name"], "note": "not updated: Full Update was stopped"})
+            _fu_set(skipped=list(skipped))
+            continue
         _fu_set(phase="updating")
         with _running_installs_lock:
             _running_installs.add(comp["service"])
@@ -4642,6 +4739,8 @@ def _fu_run():
         finally:
             with _running_installs_lock:
                 _running_installs.discard(comp["service"])
+            _fu_set(in_progress=None)
+            _fu_save()
         {"updated": updated, "skipped": skipped, "attention": attention}[outcome].append(
             {"name": comp["name"], "note": note})
         _fu_set(updated=list(updated), skipped=list(skipped), attention=list(attention))
@@ -4651,6 +4750,11 @@ def _fu_run():
         quiet_restore()
 
     if instmon_job is None:
+        _fu_finish()
+        return
+    if _fu_stop_ev.is_set():
+        skipped.append({"name": "instmon", "note": "not updated: Full Update was stopped"})
+        _fu_set(skipped=list(skipped))
         _fu_finish()
         return
 
@@ -4663,12 +4767,28 @@ def _fu_run():
         _fu_set(skipped=list(skipped))
         _fu_finish()
         return
+    with _fu_lock:
+        if _fu_state.get("stopping"):
+            stop_now = True
+        else:
+            _fu_state["phase"] = "instmon"
+            stop_now = False
+    if stop_now:
+        skipped.append({"name": "instmon", "note": "not updated: Full Update was stopped"})
+        _fu_set(skipped=list(skipped))
+        try:
+            subprocess.run(["systemctl", "stop", "instmon-update-guard.timer"],
+                           capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        _fu_finish()
+        return
     _fu_set(phase="instmon", current=f"instmon: installing v{row['version']}",
             instmon_pending={"from": row["installed_version"], "to": row["version"]})
     _fu_save()
     log_event(f"Full Update: instmon: installing v{row['version']} -- this page reconnects when it restarts", "info")
     prepare_install(comp, path)
-    rc = _fu_run_cli(path, "--install")
+    rc = _fu_run_cli(path, "--install", stoppable=False)
     if rc != 0:
         try:
             subprocess.run(["systemctl", "stop", "instmon-update-guard.timer"],
@@ -4711,8 +4831,10 @@ def full_update_start():
     with _fu_lock:
         if _fu_state["running"]:
             return 409, "Full Update is already running.", "warn"
-        _fu_state.update(running=True, phase="starting", current="", error="", banner=False,
-                         updated=[], skipped=[], attention=[], scripts=[], manuals=[], instmon_pending=None)
+        _fu_state.update(running=True, phase="starting", current="", error="", banner=False, stopping=False,
+                         updated=[], skipped=[], attention=[], scripts=[], manuals=[], instmon_pending=None,
+                         in_progress=None)
+        _fu_stop_ev.clear()
     threading.Thread(target=_fu_run_bg, daemon=True).start()
     return 200, "Full Update started -- progress shows on the GitHub Updates card and in the log.", "info"
 
@@ -4755,7 +4877,82 @@ def full_update_resume_at_startup():
             _fu_state["instmon_pending"] = None
         _fu_finish()
     elif saved.get("phase") not in ("done", ""):
-        _fu_finish("instmon restarted in the middle of the update")
+        job = saved.get("in_progress")
+        comp = None
+        if isinstance(job, dict):
+            comp = next((c for c in COMPONENTS if c["category"] == job.get("category")), None)
+        if comp is None:
+            _fu_finish("instmon restarted in the middle of the update")
+            return
+        with _fu_lock:
+            _fu_state.update(running=True, phase="recovering", current=f"{comp['name']}: checking it after the restart")
+        threading.Thread(target=_fu_recover_bg, args=(comp, job), name="fu-recover", daemon=True).start()
+
+def _fu_recover_bg(comp, job):
+    try:
+        _fu_recover(comp, job)
+    except Exception as exc:
+        log_event(f"Full Update: recovery error: {exc}", "err")
+        _fu_finish(f"instmon restarted in the middle of the update; recovery error: {exc}")
+
+def _fu_recover(comp, job):
+    name = comp["name"]
+    old_ver, new_ver = str(job.get("old_ver") or "?"), str(job.get("new_ver") or "?")
+    log_event(f"Full Update: instmon restarted while it was updating {name} -- checking {name}", "warn")
+    with _running_installs_lock:
+        _running_installs.add(comp["service"])
+    try:
+        if _fu_job_active():
+            log_event(f"Full Update: {name}: its install step is still running -- waiting for it to finish", "info")
+            _fu_set(current=f"{name}: waiting for its install step to finish")
+            end = time.monotonic() + SCRIPT_TIMEOUT_SEC + 30
+            while _fu_job_active() and time.monotonic() < end:
+                time.sleep(2)
+        _fu_job_stop()
+        target = resolve_installed_target(comp)
+        installed = bool(target) and os.path.isfile(target) and os.path.isfile(
+            os.path.join(_SYSTEMD_UNIT_DIR, unit_of(comp) + ".service"))
+        if installed:
+            _fu_set(current=f"{name}: checking that it runs")
+            ok, state = _fu_wait_healthy(comp, f"{name} to answer", stoppable=False)
+        else:
+            ok, state = False, "not installed"
+        if ok:
+            ver = str(read_installed_version(target) or "?")
+            bucket = "updated" if ver == new_ver else "skipped"
+            note = (f"v{old_ver} -> v{ver} (finished while instmon restarted)" if bucket == "updated"
+                    else f"instmon restarted mid-update; v{ver} is running")
+            log_event(f"Full Update: {name}: v{ver} is installed and answering", "ok")
+        else:
+            old_path = job.get("old_path")
+            if not (isinstance(old_path, str) and os.path.isfile(old_path)):
+                bucket, note = "attention", f"{state} after instmon restarted, and v{old_ver} isn't in the library to put back"
+                log_event(f"Full Update: {name} NEEDS ATTENTION -- {note}", "err")
+            else:
+                bucket, note = _fu_put_back(comp, old_path, old_ver, f"{state} after instmon restarted")
+    finally:
+        with _running_installs_lock:
+            _running_installs.discard(comp["service"])
+    with _fu_lock:
+        _fu_state.setdefault(bucket, []).append({"name": name, "note": note})
+    if quiet_status()["on"]:
+        quiet_restore()
+    _fu_finish("instmon restarted in the middle of the update")
+
+def full_update_stop():
+    with _fu_lock:
+        if not _fu_state["running"]:
+            return 409, "Full Update isn't running.", "info"
+        if _fu_state["phase"] in _FU_NO_STOP_PHASES:
+            return 409, "Full Update can't be stopped at this step -- let it finish.", "warn"
+        if _fu_state.get("stopping"):
+            return 200, "Full Update is already stopping.", "info"
+        _fu_state["stopping"] = True
+        current = _fu_state.get("current") or ""
+    _fu_stop_ev.set()
+    log_event("Full Update: Stop pressed" + (f" during: {current}" if current else "")
+              + " -- the tool being updated goes back to the version it had; the rest are skipped", "warn")
+    return 200, "Stopping: the tool being updated goes back to the version it had; the rest are skipped.", "warn"
 
 def full_update_dismiss():
     _fu_set(banner=False)
@@ -5780,6 +5977,13 @@ function renderQuietFullUpdate(quiet, fu) {
       (plan.manuals || []).map(d => `<tr><td>Manual</td><td><span class="gh-tag gh-upd">${d.why === 'changed' ? 'CHANGED' : 'NEW'}</span></td><td>goes to the Manuals card</td><td class="muted">${escHtml(d.name)}</td></tr>`).join('') +
       '</table>';
   }
+  const stopBtn = document.getElementById('fu-stop-btn');
+  if (stopBtn) {
+    const canStop = running && !['instmon', 'recovering'].includes(fu.phase);
+    stopBtn.style.display = canStop ? '' : 'none';
+    stopBtn.disabled = !!fu.stopping;
+    stopBtn.textContent = fu.stopping ? 'Stopping...' : 'Stop Full Update';
+  }
   const fuBtn = document.getElementById('fu-btn');
   if (fuBtn) fuBtn.disabled = running || !(plan && (plan.updates || plan.scripts.length || (plan.manuals || []).length));
   const qb = document.getElementById('quiet-btn');
@@ -5789,7 +5993,7 @@ function renderQuietFullUpdate(quiet, fu) {
   // While Full Update runs every other button waits (the server refuses
   // them anyway); only buttons disabled here are re-enabled afterwards.
   document.querySelectorAll('button[data-action], #diskimg-refresh-btn, #backup-btn').forEach(b => {
-    if (['fu_dismiss', 'full_update', 'quiet', 'restore', 'toggle_lib', 'toggle_diskimg_card', 'go', 'router',
+    if (['fu_dismiss', 'fu_stop', 'full_update', 'quiet', 'restore', 'toggle_lib', 'toggle_diskimg_card', 'go', 'router',
          'download', 'diskimg_backup_download'].includes(b.dataset.action)) return;
     if (running && !b.disabled) { b.disabled = true; b.dataset.fuDisabled = '1'; }
     else if (!running && b.dataset.fuDisabled) { b.disabled = false; delete b.dataset.fuDisabled; }
@@ -7049,6 +7253,9 @@ _JS_ACTIONS = """function wireButtons() {
           await postAction({action: 'restore'});
         } else if (action === 'fu_dismiss') {
           await postAction({action: 'fu_dismiss'});
+        } else if (action === 'fu_stop') {
+          if (!confirm('Stop Full Update? The tool being updated now goes back to the version it had (from its library), the tools not reached yet are skipped, and the paused web tools are restarted. This can take a couple of minutes.')) { btn.disabled = false; return; }
+          await postAction({action: 'fu_stop', confirm: true});
         } else if (action === 'full_update') {
           const p = _fuState && _fuState.plan;
           const comps = p ? p.components.filter(c => c.status === 'update' || c.status === 'switch').map(c => `  ${c.name}: ${c.note}`) : [];
@@ -7823,12 +8030,14 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   <div class="row">
     <button data-action="gh_check">Check GitHub</button>
     <button class="b-comms" id="fu-btn" data-action="full_update" disabled>Full Update</button>
+    <button class="b-danger" id="fu-stop-btn" data-action="fu_stop" style="display:none">Stop Full Update</button>
     <span id="gh-summary" class="small">{github_html}</span>
   </div>
   <div class="small muted" style="margin-top:.35rem">
     Full Update: pauses the web tools, downloads and checks every newer file first, then uninstalls the old and
     installs the new one component at a time (instmon last). A component that fails is put back, skipped and
-    listed at the end. New install scripts only go to the Scripts library -- they are never run for you.</div>
+    listed at the end. New install scripts only go to the Scripts library -- they are never run for you.
+    Stop Full Update puts the tool it is on back to the version it had and skips the rest.</div>
   <div id="channel-choice" class="row small" style="margin-top:.35rem"></div>
   <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
   <div id="fu-progress"></div>
@@ -8160,11 +8369,12 @@ _ACTION_HANDLERS ={
 "restore":lambda self ,body :self ._action_restore (body ),
 "full_update":lambda self ,body :self ._action_full_update (body ),
 "fu_dismiss":lambda self ,body :self ._action_fu_dismiss (body ),
+"fu_stop":lambda self ,body :self ._action_fu_stop (body ),
 "build_pref":lambda self ,body :self ._action_build_pref (body ),
 "gh_channel":lambda self ,body :self ._action_gh_channel (body ),
 }
 
-_ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss",)
+_ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss", "fu_stop")
 
 _GET_ROUTES ={
 "/":lambda self :self ._route_index (),
@@ -9620,6 +9830,13 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self._error_json(400, "Full Update requires confirm:true in the request body")
             return
         code, msg, level = full_update_start()
+        self._send_json(code, {"message": msg, "level": level})
+
+    def _action_fu_stop(self, body):
+        if not body.get("confirm"):
+            self._error_json(400, "Stopping Full Update requires confirm:true in the request body")
+            return
+        code, msg, level = full_update_stop()
         self._send_json(code, {"message": msg, "level": level})
 
     def _action_fu_dismiss(self, body):
