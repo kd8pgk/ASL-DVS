@@ -1,6 +1,22 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_81_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_82_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.82-pi02w (2026-10-18)
+
+FCS tab loses its top row; its Connect warns like YSF's. The full build is not
+changed.
+
+- **FCS: top row removed.** The room box, its Connect and the network LH above the
+  Server / Room menus are gone. Rooms are picked from the menus only; there is no
+  typed room any more.
+- **LH falls back to the FCS network.** The card's LH opens the picked server's Last
+  Heard page; with no server picked (or a server with no page) it opens the Edit tab's
+  FCS Last Heard address, which the removed network LH used to open. It is greyed out
+  only when neither exists.
+- **Connect warning.** FCS Connect shows red with a strike-through when YSFGateway
+  (which FCS runs through) or Analog_Bridge isn't running, with a hover note naming
+  what is down. It uses the `ysf` state the server already reports.
 
 ## 9.3.81-pi02w (2026-10-18)
 

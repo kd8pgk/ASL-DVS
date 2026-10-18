@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.81-pi02w"
+VERSION      = "9.3.82-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -8302,7 +8302,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
 #dmr-connect-btn.svc-down, #stfu-connect-btn.svc-down, #ysf-connect-btn.svc-down,
-#p25-connect-btn.svc-down, #nxdn-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
+#p25-connect-btn.svc-down, #nxdn-connect-btn.svc-down, #fcs-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 #asl-connect-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
@@ -9334,14 +9334,6 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-FCS" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-FCS" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="Room (e.g. FCS00335 or 335)" maxlength="20"
-              onkeydown="if(event.key==='Enter')doQuickTune('FCS')">
-            <button class="btn btn-conn-fcs" onclick="doQuickTune('FCS')">Connect</button>
-            <button id="lh-btn-FCSNET" class="btn-last lh-off" onclick="openModeLast('FCS')"
-              title="FCS network Last Heard" aria-label="Open FCS network Last Heard">LH</button>
-          </div>
           <div id="fcs-card" class="fcs-card">
             <select id="fcs-srv-select" class="fcs-select" aria-label="FCS server"
               onchange="fcsFillRooms(false)" disabled>
@@ -9353,7 +9345,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             </select>
             <button id="fcs-connect-btn" class="btn btn-conn-fcs" onclick="fcsConnect()" disabled>Connect</button>
             <button id="lh-btn-FCS" class="btn-last lh-off" onclick="openFcsLast()"
-              aria-label="Open Last Heard for this server" aria-disabled="true">LH</button>
+              aria-label="Open Last Heard for this server, or the FCS network">LH</button>
             <button id="fcs-save-btn" class="btn btn-muted" onclick="fcsSave()" disabled
               aria-label="Save this room to favorites" title="Save to favorites">Save</button>
             <div id="fcs-card-msg" class="fcs-card-msg" role="status" hidden></div>
@@ -10487,7 +10479,7 @@ function _refreshLhBtns(){
   _updateLhBtn('lh-btn-ASL',  modeNetUrls.ASL||'');
   _updateLhBtn('lh-btn-ECHO', modeNetUrls.ECHO||'');
   _updateLhBtn('lh-btn-STFU', modeNetUrls.STFU||'');
-  _updateLhBtn('lh-btn-FCSNET', modeNetUrls.FCS||'');   // v8.8.1: FCS network LH
+  fcsCardButtons();   // v9.3.82: card LH falls back to the FCS network LH
   dmrSaveSync();   // v8.9.6: DMR Save follows the network dropdown
   // P25/NXDN moved to per-row LH buttons (like YSF/FCS) — no quick-bar button to update.
 }
@@ -10595,7 +10587,7 @@ function fcsCardButtons(){
   btn.disabled=!(s&&rsel.value);
   const sv=byId('fcs-save-btn');
   if(sv)sv.disabled=!(s&&rsel.value)||_fcs.saving;
-  const url=s?(s.lh_url||''):'';
+  const url=fcsLhUrl(s);
   _updateLhBtn('lh-btn-FCS',url);
   if(lh)lh.setAttribute('aria-disabled',url?'false':'true');
 }
@@ -10652,10 +10644,10 @@ async function fcsSave(){
     }
   }finally{_fcs.saving=false;fcsCardButtons();}
 }
+function fcsLhUrl(s){return (s&&s.lh_url)||modeNetUrls.FCS||'';}
 function openFcsLast(){
   const ssel=byId('fcs-srv-select');
-  const s=ssel?_fcs.byId[ssel.value]:null;
-  openLast(s?s.lh_url||'':'');
+  openLast(fcsLhUrl(ssel?_fcs.byId[ssel.value]:null));
 }
 
 
@@ -11954,6 +11946,7 @@ function applySvcWarn(d){
   set('dmr-connect-btn',ab);
   set('stfu-connect-btn',(s.stfu==='inactive'?['STFU']:[]).concat(ab));
   set('ysf-connect-btn',(s.ysf==='inactive'?['YSFGateway']:[]).concat(ab));
+  set('fcs-connect-btn',(s.ysf==='inactive'?['YSFGateway']:[]).concat(ab));
   set('p25-connect-btn',(s.p25==='inactive'?['P25Gateway']:[]).concat(ab));
   set('nxdn-connect-btn',(s.nxdn==='inactive'?['NXDNGateway']:[]).concat(ab));
 }
