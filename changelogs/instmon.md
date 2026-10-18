@@ -1,6 +1,25 @@
 # instmon changelog
 
-Current file: `instmon_v2_56_0_20261018.py`. Newest entries first.
+Current file: `instmon_v2_57_0_20261018.py`. Newest entries first.
+
+## 2.57.0 (2026-10-18)
+
+- **Stop Full Update.** A Stop Full Update button shows on the GitHub Updates card while
+  Full Update runs. It stops the install step that is running, puts the tool being
+  updated back to the version it had (from its library copy, the same way a failed
+  update is put back), skips the tools not reached yet and instmon, restarts the paused
+  web tools, and the finished banner says "stopped by you". Putting the old version
+  back is never stopped halfway. The button is hidden while instmon installs itself.
+- **A tool's install survives an instmon restart.** Full Update now runs each tool's
+  `--uninstall` / `--install` as its own systemd unit (`instmon-fu-job`, through
+  `systemd-run --wait`, capped at the 10-minute script limit) and reads its output from
+  a log file. Restarting instmon no longer kills the install halfway through and leaves
+  the tool removed. Without `systemd-run` it runs the step directly, as before.
+- **Recovery after a restart in the middle of an update.** Full Update records which
+  tool it is on. If instmon restarts before that tool is done, on startup it waits for
+  a still-running install step to finish, then checks the tool: if it is installed
+  and answering it is kept (listed as updated when it is the new version), otherwise
+  the version it had is put back from the library. Then the finished banner shows.
 
 ## 2.56.0 (2026-10-18)
 
