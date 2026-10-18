@@ -29,9 +29,9 @@
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_207_20261018.py</td><td>0.0.207</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_208_20261018.py</td><td>0.0.208</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_35_0_20261018.py</td><td>5.35.0</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_36_0_20261018.py</td><td>5.36.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
@@ -249,7 +249,7 @@ sudo systemctl status sysmon</pre>
     </figure>
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.35.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.36.0</span></div>
         <div class="sect">Status</div><div class="sect">Saved networks</div><div class="sect">Nearby networks</div>
         <div class="sect">Radio &amp; device</div><div class="sect">Watchdog</div><div class="sect">Service</div>
         <div class="sect" style="padding-bottom:.6em">Activity log</div>
@@ -1361,7 +1361,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.207 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.208 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1636,8 +1636,10 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <ul>
     <li><b>6b. Boot order</b>, under step 6 (from 0.0.205): makes the tunnel come back by itself after a reboot, and the DVSwitch services wait for it.
       <ul>
-        <li>The tunnel is enabled at boot, and if a start fails (network or DNS not ready yet) systemd tries again every 20 seconds.</li>
-        <li><code>44helper-netready</code> waits up to 3 minutes at boot until there is a network route, the tunnel has a handshake and names resolve. netcheck, the bridges, md380-emu, STFU, the gateways, ircDDBGateway and webproxy start after it, and all but netcheck restart 15 seconds after a failure.</li>
+        <li>The tunnel is enabled at boot, and if a start fails (network or DNS not ready yet) systemd tries again every 20 seconds. From 0.0.208 it first waits up to 90 seconds for the clock to sync, because the Pi's clock can start behind after a power cut and the tunnel server then ignores its handshakes.</li>
+        <li><code>44helper-netready</code> waits up to 3 minutes at boot until there is a network route, the tunnel has a handshake and names resolve. netcheck, the bridges (including <code>Analog_Bridge</code> and <code>MMDVM_Bridge</code> from 0.0.208), md380-emu, STFU, the gateways, ircDDBGateway and webproxy start after it, and all but netcheck restart 15 seconds after a failure. netcheck is retried after 30 seconds (from 0.0.208).</li>
+        <li>From 0.0.208, if the network still isn't ready after 3 minutes, a follow-up watches for 20 more minutes and restarts the DVSwitch services once it is.</li>
+        <li>From 0.0.208 each boot's result is kept in <code>/var/lib/44helper/boot.log</code> (the last 20 boots), and the card shows this boot's line. Set the boot order also applies the netcheck fixes.</li>
         <li>The network's wait-online unit is enabled, so "network online" means the network is really up.</li>
       </ul>
       Step 6 sets it; the card shows what is in place, with <b>Set the boot order</b> and <b>Remove</b>. It takes effect at the next boot; nothing running is restarted. <code>journalctl -b -u 44helper-netready</code> shows whether the network, the tunnel or DNS was late.</li>
@@ -2593,7 +2595,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">14.5</span>Watchdog</h2>
   <table>
     <tr><th>Watchdog</th><th>Does</th><th>Default</th></tr>
-    <tr><td>WiFi watchdog</td><td>Reconnects to the reconnect list. If there is no connection for the set time, it shuts the node down cleanly. It waits, with no timer, while no networks are saved.</td><td>shut down after 180 s offline; retry every 15 s</td></tr>
+    <tr><td>WiFi watchdog</td><td>Reconnects to the reconnect list. If there is no connection for the set time, it shuts the node down cleanly. It waits, with no timer, while no networks are saved. From 5.36.0 it doesn't shut down or reboot in the first 10 minutes after boot, so a router that is slower to start after a power cut than the Pi isn't mistaken for a lost network.</td><td>shut down after 180 s offline; retry every 15 s</td></tr>
     <tr><td>Voltage watchdog</td><td>Shuts the node down cleanly after a sustained low-voltage spell.</td><td>below 0.90 V core for 30 s</td></tr>
   </table>
   <p>Two bars count up while a problem lasts: <b>No connection</b> and <b>Low voltage</b>. After you change networks,
@@ -2623,7 +2625,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <table>
     <tr><th>When</th><th>What it does</th></tr>
     <tr><td>Every minute</td><td>Checks the tunnel, but only when <code>/etc/wireguard/wg0.conf</code> exists and the tunnel is enabled at boot, the Pi has been up more than the wait after boot (5 minutes, so 44helper's boot order goes first), there is a normal network route, and no 44helper half-tunnel or exceptions test is running. A tunnel you stopped is left alone; one systemd is still starting is waited for.</td></tr>
-    <tr><td>Counts as bad</td><td>The tunnel failed or wg0 is missing; it has never had a handshake; its last handshake is over 3 minutes old while a keepalive is set (without a keepalive a quiet tunnel can just be idle); or the tunnel server is routed into wg0 (a routing loop).</td></tr>
+    <tr><td>Counts as bad</td><td>The tunnel failed or wg0 is missing; it has never had a handshake; its last handshake is over 3 minutes old while a keepalive is set; or the tunnel server is routed into wg0 (a routing loop). Without a keepalive a quiet tunnel only handshakes when traffic goes through it, so from 5.36.0 the watchdog first sends one ping into the tunnel (to 44.0.0.1) and checks again 6 seconds later; only a tunnel that still has no fresh handshake counts as bad.</td></tr>
     <tr><td>After 3 bad checks in a row</td><td>A routing loop: re-adds the tunnel server's route on the normal link (a live route; wg0.conf is never edited) and waits a minute. Otherwise, or if that didn't help: restarts the tunnel and waits a minute for a handshake.</td></tr>
     <tr><td>Handshake back</td><td>Restarts netcheck, the bridges, md380-emu, STFU, the gateways, ircDDBGateway and webproxy (the enabled ones), in that order, so services that started without the tunnel reconnect.</td></tr>
     <tr><td>Still down</td><td>Tries again after 10 minutes, 30 minutes, then hourly; at most 6 times per boot, then shows "Gave up for this boot". It never reboots.</td></tr>
@@ -2634,6 +2636,10 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li>With alerts set up on the Alerts card, it sends "Tunnel has no handshake", "Tunnel is back" and "Tunnel watchdog gave up" (the <b>tunnel</b> event).</li>
     <li>Its state is also in <code>/run/asl_dvs/tunnel_guard.json</code>, and every action is in the Activity log.</li>
   </ul>
+  <div class="call note"><span class="t">NOTE</span>wifimon 5.35.0 checked for a routing loop without WireGuard's
+    firewall mark, so every full tunnel looked like a loop: about 8 minutes after each boot it added a stray route, sent
+    a false "Tunnel has no handshake" alert and restarted the DVSwitch services. 5.36.0 checks the route the way
+    WireGuard's own packets take it. Update wifimon if you use a full tunnel.</div>
   <div class="call care"><span class="t">CAREFUL</span>Restarting a full tunnel can drop an SSH or Cockpit session that
     comes in from outside your network. Turn the watchdog off on its card while you work on the tunnel by hand, or stop
     the tunnel (a stopped tunnel is left alone).</div>
