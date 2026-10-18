@@ -13,7 +13,7 @@ By KD8PGK, written with Claude (Anthropic).
 | Dashboard | `nodecontrol_v*.py` | 8989 | Node control. Connect ASL and EchoLink nodes, tune DMR, YSF, P25, NXDN, D-STAR, XLX and M17, manage favorites, Phone. |
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals and any other PDF to upload, open or download. |
-| wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Shuts the Pi down cleanly on sustained low voltage or lost network. |
+| wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Powers off on sustained low voltage; reboots (or powers off) on a lost network. Hardware watchdog, and alerts by ntfy or webhook. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab). |
 
 Scripts:
@@ -39,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_85_20261014.py` | `sysmon_pi02w_v6_13_68_20261013.py` | `instmon_v2_47_0_20261013.py` |
-| `VERSION` | `6.13.85` | `6.13.68-pi02w` | `2.47.0` |
+| File name | `sysmon_v6_13_86_20261014.py` | `sysmon_pi02w_v6_13_71_20261017.py` | `instmon_v2_51_0_20261014.py` |
+| `VERSION` | `6.13.86` | `6.13.70-pi02w` | `2.51.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -79,7 +79,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_47_0_20261013.py --install
+   sudo python3 instmon_v2_51_0_20261014.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -108,6 +108,14 @@ script and its changelog are no longer in the repo.
 
 The **GitHub Updates** card in instmon reads this repo's file list directly.
 
+- **Update channel** (instmon 2.50.0 and later): **Stable** (default) installs each
+  tool's build from the stable list; **Testing** (opt-in) installs the newest
+  file on `main`. On Stable, a tool newer than stable is left alone, and its row
+  offers **Get stable** to go back. See "Release channels and checks" below.
+- **After each update** Full Update watches the tool for 60 seconds (still running,
+  not restarting, answering on its port) and puts the previous version back if it
+  isn't steady.
+
 - **Check GitHub:** shows the newest GitHub copy of each tool and whether it is newer than what is installed.
   - The full and Pi Zero 2 W builds get separate rows.
   - Rows for the build this Pi Zero 2 W isn't using are tagged "other build".
@@ -126,6 +134,44 @@ The **GitHub Updates** card in instmon reads this repo's file list directly.
 
 To start using this on a node that has an older instmon, install the current
 instmon once by hand. From then on, instmon updates itself.
+
+## Release channels and checks
+
+Every build lands on `main`, the **testing** channel. **Stable** is a list of
+proven builds, one per tool, in [`channels/stable.json`](channels). instmon
+reads it from version 2.50.0 on, with Stable as the default and Testing as an
+opt-in; until then instmon keeps updating from `main`.
+
+- **Releases and cosmetic builds.** `X.Y.Z` is a release. `X.Y.Z.N` is a
+  cosmetic build (text, wording, colors or layout only). Cosmetic builds never
+  go to stable and don't count below.
+- **When a release becomes stable** (each tool on its own count; full and
+  Pi Zero 2 W builds are separate):
+  - four newer releases of that tool are on `main`, and it has been there at
+    least 3 days; or
+  - it has been the newest release for 14 days.
+- **Overrides** in `channels/overrides.json`: `hold` keeps a release off
+  stable; `hotfix` puts a release on stable at once.
+- **instmon** is never older than 2.50.0 on stable, the first version that
+  reads channels. A build still under an old file name is never promoted.
+- The `promote-stable` workflow rewrites `channels/stable.json` after every
+  merge to `main` and once a day. Each entry names the file, version, commit
+  and git blob hash, so a node can fetch that exact file and check it. The
+  rules are in `channels/rules.json`.
+
+The `checks` workflow runs on every pull request (`python3
+ci/check_repo.py --base origin/main` runs it locally). On the files the pull
+request changes it runs `py_compile`, `pyflakes`, `node --check` on the page
+JavaScript and `bash -n`, and checks that:
+
+- each new file's version matches its name, has three or four parts, and ends
+  in `-pi02w` only for the Pi Zero 2 W fork;
+- the version is newer than the file it replaces, and a tool file is never
+  changed in place;
+- a cosmetic build changes only strings, not code;
+- the README lists the file and its changelog names it at the top;
+- each tool has one file, and the shared launcher text is the same everywhere;
+- `channels/stable.json` is not edited by hand.
 
 ## The launcher
 
@@ -197,13 +243,13 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_80_20261013.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_71_18_20261013.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_85_20261014.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_68_20261013.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_47_0_20261013.py` | common |
-| `wifimon_v5_31_0_20261013.py` | common |
-| `44helper_v0_0_203_20261018.py` | common |
+| `nodecontrol_v9_3_83_20261014.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_75_20261014.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_86_20261014.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_71_20261017.py` | SysMon, Pi Zero 2 W (current) |
+| `instmon_v2_51_0_20261014.py` | common |
+| `wifimon_v5_34_0_20261014.py` | common |
+| `44helper_v0_0_205_20261018.py` | common |
 | `install_all_v7_1_20261012.sh` | common |
 | `uninstall_all_v1_5.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |

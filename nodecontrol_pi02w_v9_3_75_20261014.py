@@ -8,6 +8,7 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
+import io
 import hashlib
 import hmac
 import ipaddress
@@ -39,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.80"
-BUILD_DATE   = "2026-10-13"
+VERSION      = "9.3.75-pi02w"
+BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -102,6 +103,64 @@ _SERVICE_NAME     = "nodecontrol.service"
 _SERVICE_PATH     = "/etc/systemd/system/nodecontrol.service"
 _LEGACY_SERVICE_NAME = "asl_dvs_dashboard.service"
 _LEGACY_SERVICE_PATH = "/etc/systemd/system/asl_dvs_dashboard.service"
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+import os
+import runpy
+import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
+if name.isidentifier():
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
+'''
 _SERVICE_CONTENT  = f"""[Unit]
 Description=ASL-DVS Node Control Dashboard
 After=network.target
@@ -109,7 +168,7 @@ After=network.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -431,6 +490,9 @@ _AMI_BLOCK_END_RE   = re.compile(r"\r?\n\r?\n")
 _AMI_LEGACY_END     = "--END COMMAND--"
 _ami_action_seq     = 0
 
+class _AmiBusy(Exception):
+    pass
+
 class _AmiIncomplete(Exception):
     def __init__(self, partial: str):
         super().__init__("AMI reply incomplete")
@@ -561,42 +623,54 @@ def _ami_command_once(cmd_str: str, timeout: float) -> str:
                        f"\r\n").encode())
     return _ami_command_output(_ami_read_reply(_ami_sock, aid))
 
-def ami_command(cmd_str: str, timeout: int = 4, priority: bool = False) -> Tuple[str, bool]:
-    global _ami_reconnect_next_try
+def ami_command(cmd_str: str, timeout: int = 4, priority: bool = False,
+                lock_wait: Optional[float] = None) -> Tuple[str, bool]:
     if _has_ctrl_chars(cmd_str):
         log.warning("AMI: rejected command with control characters: %r", cmd_str)
         return "rejected: illegal characters in command", False
     if _ami_perm_fail:
         out, rc = _asterisk_rx(cmd_str, timeout=timeout, priority=priority)
         return out, rc == 0
-
-    with _ami_lock:
-        if not _ami_available:
-            now = time.monotonic()
-            if now >= _ami_reconnect_next_try:
-                _ami_reconnect_next_try = now + _AMI_RECONNECT_COOLDOWN
-                _ami_connect()
-
-        if _ami_available:
-            try:
-                return _ami_command_once(cmd_str, timeout), True
-            except _AmiIncomplete:
-                _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s")
-                return f"AMI reply to {cmd_str!r} did not finish", False
-            except Exception as e:
-                log.warning("AMI: socket error on command %r: %s — reconnecting", cmd_str, e)
-                _ami_reset()
-                if _ami_connect():
-                    try:
-                        return _ami_command_once(cmd_str, timeout), True
-                    except _AmiIncomplete:
-                        _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s (retry)")
-                        return f"AMI reply to {cmd_str!r} did not finish", False
-                    except Exception as e2:
-                        log.warning("AMI: retry failed: %s — falling back to subprocess", e2)
-                        _ami_reset()
+    if lock_wait is None:
+        _ami_lock.acquire()
+    elif not _ami_lock.acquire(timeout=lock_wait):
+        raise _AmiBusy(cmd_str)
+    try:
+        result = _ami_command_locked(cmd_str, timeout)
+    finally:
+        _ami_lock.release()
+    if result is not None:
+        return result
     out, rc = _asterisk_rx(cmd_str, timeout=timeout, priority=priority)
     return out, rc == 0
+
+def _ami_command_locked(cmd_str: str, timeout: int) -> Optional[Tuple[str, bool]]:
+    global _ami_reconnect_next_try
+    if not _ami_available:
+        now = time.monotonic()
+        if now >= _ami_reconnect_next_try:
+            _ami_reconnect_next_try = now + _AMI_RECONNECT_COOLDOWN
+            _ami_connect()
+
+    if _ami_available:
+        try:
+            return _ami_command_once(cmd_str, timeout), True
+        except _AmiIncomplete:
+            _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s")
+            return f"AMI reply to {cmd_str!r} did not finish", False
+        except Exception as e:
+            log.warning("AMI: socket error on command %r: %s — reconnecting", cmd_str, e)
+            _ami_reset()
+            if _ami_connect():
+                try:
+                    return _ami_command_once(cmd_str, timeout), True
+                except _AmiIncomplete:
+                    _ami_reset(f"no complete reply to {cmd_str!r} within {timeout}s (retry)")
+                    return f"AMI reply to {cmd_str!r} did not finish", False
+                except Exception as e2:
+                    log.warning("AMI: retry failed: %s — falling back to subprocess", e2)
+                    _ami_reset()
+    return None
 
 def ami_action(fields: List[Tuple[str, str]], timeout: int = 4) -> Tuple[str, bool]:
     global _ami_reconnect_next_try
@@ -5567,75 +5641,154 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
-_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-def _parse_astdb(f) -> dict:
-    rows, by_node = [], {}
-    for raw in f:
-        line = raw.strip()
-        if not line or line.startswith(("#", ";")):
-            continue
-        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
-        node = parts[0]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node in by_node:
-            continue
-        call = parts[1] if len(parts) > 1 else ""
-        desc = parts[2] if len(parts) > 2 else ""
-        loc  = parts[3] if len(parts) > 3 else ""
-        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-        rows.append(row)
-        by_node[node] = row
-    return {"rows": rows, "by_node": by_node}
+_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-def _build_astdb(prev):
-    try:
-        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
-    except OSError:
-        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
-    if prev and prev.get("found") and prev["mtime"] == mtime:
-        return prev, False
-    try:
-        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
-            part = _parse_astdb(f)
-    except OSError as e:
-        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
-        part = {"rows": [], "by_node": {}}
-    return {"found": True, "mtime": mtime, **part}, False
+class _LineDB:
 
-_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
-                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
-                                                 "node menu will be empty (turn on "
-                                                 "asl3-update-astdb)", _ASTDB_PATH))
+    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
+        self._path_fn     = path_fn
+        self._node_of     = node_of
+        self._parse       = parse
+        self._missing_msg = missing_msg
+        self._warned      = False
+        self._lock        = threading.Lock()
+        self._index_key   = None
+        self._index       = (0, True, frozenset())
 
-def _load_astdb() -> dict:
-    return _astdb_cache.get()
+    @property
+    def path(self) -> str:
+        return self._path_fn()
 
-def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
+    def stat(self) -> "tuple[bool, int, int]":
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            if self._missing_msg and not self._warned:
+                self._warned = True
+                log.warning(self._missing_msg, self.path)
+            return False, 0, 0
+        self._warned = False
+        return True, int(st.st_mtime), st.st_size
+
+    def index(self) -> "tuple[int, bool, frozenset]":
+        found, mtime, size = self.stat()
+        if not found:
+            return 0, True, frozenset()
+        key = (mtime, size)
+        with self._lock:
+            if self._index_key == key:
+                return self._index
+        seen: "set[str]" = set()
+        repeats = False
+        ctrl: "set[int]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                for i, raw in enumerate(f):
+                    if _CTRL_IN_RE.search(raw.strip()):
+                        ctrl.add(i)
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if node in seen:
+                        repeats = True
+                    else:
+                        seen.add(node)
+        except OSError:
+            return 0, True, frozenset()
+        result = (len(seen), repeats, frozenset(ctrl))
+        with self._lock:
+            self._index_key, self._index = key, result
+        return result
+
+    def total(self) -> int:
+        return self.index()[0]
+
+    def rows(self, raw_ok=None, node_ok=None):
+        _total, repeats, ctrl = self.index()
+        seen: "set[str]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                st = os.fstat(f.fileno())
+                with self._lock:
+                    same = self._index_key == (int(st.st_mtime), st.st_size)
+                if not same:
+                    repeats, raw_ok, ctrl = True, None, frozenset()
+                for i, raw in enumerate(f):
+                    quick = raw_ok is not None and i not in ctrl
+                    if not repeats and quick and not raw_ok(raw):
+                        continue
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if repeats:
+                        if node in seen:
+                            continue
+                        seen.add(node)
+                        if quick and not raw_ok(raw):
+                            continue
+                    if node_ok is not None and not node_ok(node):
+                        continue
+                    yield self._parse(raw, node)
+        except OSError as e:
+            log.warning("Could not read %s: %s", self.path, e)
+
+    def find(self, node: str):
+        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
+                             node_ok=lambda n: n == node):
+            return row
+        return None
+
+def _astdb_node_of(raw: str):
+    line = raw.strip()
+    if not line or line.startswith(("#", ";")):
+        return None
+    node = _strip_ctrl(line.split("|", 1)[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    return str(int(node))
+
+def _astdb_parse(raw: str, node: str):
+    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
+    call = parts[1] if len(parts) > 1 else ""
+    desc = parts[2] if len(parts) > 2 else ""
+    loc  = parts[3] if len(parts) > 3 else ""
+    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+
+_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
+                 "AllStar node list not found at %s — the ASL node menu will be empty "
+                 "(turn on asl3-update-astdb)")
+
+def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
-           "total": len(db["rows"]), "min": min_q,
+    found, mtime, _size = db.stat()
+    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
+           "total": db.total() if found else 0, "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not db["found"] or len(q) < min_q:
+    if not found or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
+        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
+        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
+        def raw_ok(raw):
+            low = raw.lower()
+            return all(w in low for w in words)
+        node_ok = None
     count, matches = 0, []
-    for r in db["rows"]:
+    for r in db.rows(raw_ok, node_ok):
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -5658,11 +5811,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _load_astdb()["by_node"].get(node)
+    row = _astdb.find(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -5685,44 +5838,72 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-def _parse_echodb(text: str) -> dict:
-    rows, by_node = [], {}
-    for raw in text.splitlines():
-        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
-        if len(parts) < 2:
-            continue
-        node, call = parts[0], parts[1]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node == "0" or node in by_node:
-            continue
-        call = call[:24]
-        row = (node, call, f"{node} {call}".lower())
-        rows.append(row)
-        by_node[node] = row
-    rows.sort(key=lambda r: int(r[0]))
-    return {"rows": rows, "by_node": by_node}
+_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
 
-def _build_echodb(prev):
-    out, ok = ami_command(_ECHODB_CMD, timeout=8)
-    if ok and "no such command" not in out.lower():
-        part = _parse_echodb(out)
-        return {"found": True, "mtime": int(time.time()), **part}, False
-    if prev and prev.get("found"):
-        return prev, False
-    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+_echodb_refresh_lock = threading.Lock()
+_echodb_next_try     = 0.0
+_echodb_warned       = False
 
-_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
-                           lambda _r: log.warning("EchoLink station list not available "
-                                                  "(%s failed -- is chan_echolink loaded?)",
-                                                  _ECHODB_CMD))
+def _echodb_node_of(raw: str):
+    parts = raw.split("|", 2)
+    if len(parts) < 2:
+        return None
+    node = _strip_ctrl(parts[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    node = str(int(node))
+    return None if node == "0" else node
 
-def _load_echodb() -> dict:
-    return _echodb_cache.get()
+def _echodb_parse(raw: str, node: str):
+    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
+    return (node, call, f"{node} {call}".lower())
+
+def _echodb_write(text: str) -> None:
+    seen: "set[str]" = set()
+    rows = []
+    for raw in io.StringIO(text):
+        node = _echodb_node_of(raw)
+        if node is None or node in seen:
+            continue
+        seen.add(node)
+        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
+    rows.sort()
+    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
+    tmp = _ECHODB_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for _n, node, call in rows:
+            f.write(f"{node}|{call}\n")
+    os.replace(tmp, _ECHODB_FILE)
+
+def _echodb_refresh() -> None:
+    global _echodb_next_try, _echodb_warned
+    with _echodb_refresh_lock:
+        now = time.time()
+        try:
+            age = now - os.stat(_ECHODB_FILE).st_mtime
+        except OSError:
+            age = None
+        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
+            return
+        out, ok = ami_command(_ECHODB_CMD, timeout=8)
+        if ok and "no such command" not in out.lower():
+            try:
+                _echodb_write(out)
+                _echodb_warned = False
+                return
+            except OSError as e:
+                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
+        _echodb_next_try = now + _ECHODB_TTL
+        if age is None and not _echodb_warned:
+            _echodb_warned = True
+            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
+                        _ECHODB_CMD)
+
+_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
 
 def action_echo_directory(path: str) -> dict:
-    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    _echodb_refresh()
+    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -5734,7 +5915,8 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    row = _load_echodb()["by_node"].get(node)
+    _echodb_refresh()
+    row = _echodb.find(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
@@ -6056,8 +6238,9 @@ def _multi_link_cleanup(keep: Optional[str]) -> None:
         _multi_link_run_lock.release()
 
 def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
-    global _multi_link_count, _poll_ok, _multi_link_left_alone
-    out, ok = ami_command(f"{_AMI_RPT_SHOW_VARS} {_cfg.asl_node}", timeout=2)
+    global _multi_link_count, _poll_ok, _multi_link_left_alone, _link_modes
+    out, ok = ami_command(f"{_AMI_RPT_SHOW_VARS} {_cfg.asl_node}", timeout=2,
+                          lock_wait=_POLL_LOCK_WAIT_SEC)
     _poll_ok = bool(ok and out and "RPT_" in out)
     if not _poll_ok:
         return False, None, False, frozenset()
@@ -6068,8 +6251,7 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
     bridge_linked_nodes: Set[str] = set()
     modes: Dict[str, str] = {}
     adjacent = _parse_rpt_links(out, modes)
-    _link_modes.clear()
-    _link_modes.update(modes)
+    _link_modes = modes
     for tok in adjacent:
         if tok in bridge_set:
             bridge_linked_nodes.add(tok)
@@ -6114,11 +6296,11 @@ def _dvs_settle() -> None:
 _bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
 _bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 3
+_BRIDGE_DOWN_THRESHOLD     = 2
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 3
+_BRIDGE_UP_THRESHOLD    = 2
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6233,15 +6415,171 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
     finally:
         _link_exit()
 
+_ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
+_ASL_REG_FAST_SEC  = 60.0
+_ASL_REG_SLOW_SEC  = 900.0
+_asl_reg_lock      = threading.Lock()
+_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.time()}
+ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
+
+def _asl_reg_write_status(node: str, state: str, since: float) -> None:
+    try:
+        os.makedirs(os.path.dirname(ASL_REG_STATUS_FILE), exist_ok=True)
+        tmp = ASL_REG_STATUS_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({"node": node, "state": state, "since": since, "checked_at": time.time(),
+                       "next_check_secs": _ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC}, f)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, ASL_REG_STATUS_FILE)
+    except OSError as e:
+        log.debug("asl_reg: couldn't write %s: %s", ASL_REG_STATUS_FILE, e)
+
+def _asl_reg_parse(out: str, node: str) -> str:
+    if not out.strip() or not node:
+        return "unknown"
+    pat = re.compile(r"(?<!\d)" + re.escape(node) + r"(?!\d)")
+    state = "unregistered"
+    for line in out.splitlines():
+        if not pat.search(line):
+            continue
+        low = line.lower()
+        if any(w in low for w in _ASL_REG_BAD_WORDS):
+            return "unregistered"
+        state = "registered" if "regist" in low else "unknown"
+    return state
+
+def _asl_reg_check() -> str:
+    node = (_cfg.asl_node or "").strip()
+    out, ok = ami_command("rpt show registrations", timeout=4)
+    state = _asl_reg_parse(out, node) if ok else "unknown"
+    with _asl_reg_lock:
+        prev = _asl_reg_info["state"]
+        if state != prev:
+            _asl_reg_info["since"] = time.time()
+        _asl_reg_info.update(state=state, node=node, at=time.monotonic())
+        since = _asl_reg_info["since"]
+    if state != prev:
+        log.info("asl_reg: node %s is %s", node or "?", state)
+    _asl_reg_write_status(node, state, since)
+    return state
+
+def _asl_reg_public() -> str:
+    with _asl_reg_lock:
+        return _asl_reg_info["state"]
+
+def _net_signature() -> tuple:
+    sig = []
+    try:
+        for nic in sorted(os.listdir("/sys/class/net")):
+            if nic == "lo":
+                continue
+            vals = []
+            for leaf in ("operstate", "carrier_changes"):
+                try:
+                    vals.append(Path(f"/sys/class/net/{nic}/{leaf}").read_text().strip())
+                except OSError:
+                    vals.append("")
+            sig.append((nic, *vals))
+    except OSError:
+        pass
+    return tuple(sig)
+
+def _asl_reg_loop() -> None:
+    TICK     = 2.0
+    net_sig  = _net_signature()
+    next_due = 0.0
+    while True:
+        now = time.monotonic()
+        sig = _net_signature()
+        if sig != net_sig:
+            net_sig = sig
+            log.info("asl_reg: network change seen — checking registration again")
+            next_due = now + 5.0
+        with _asl_reg_lock:
+            checked_node, checked_at = _asl_reg_info["node"], _asl_reg_info["at"]
+        if checked_at and (_cfg.asl_node or "").strip() != checked_node:
+            next_due = min(next_due, now)
+        if now >= next_due:
+            try:
+                state = _asl_reg_check()
+            except Exception as e:
+                log.warning("asl_reg: check error: %s", e)
+                state = "unknown"
+            next_due = time.monotonic() + (_ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC)
+        time.sleep(TICK)
+
+_POLL_LOCK_WAIT_SEC = 3.0
+_POLL_STALL_SEC     = 120.0
+_HTTP_STALL_SEC     = 25.0
+_HEALTH_PROBE_SEC   = 10.0
+_poll_beat: Optional[float] = None
+_http_ok_at = time.monotonic()
+_heartbeat_stalled = ""
+
+def _health_probe_loop(port: int) -> None:
+    global _http_ok_at
+    import http.client
+    while True:
+        time.sleep(_HEALTH_PROBE_SEC)
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            resp.read()
+            if resp.status == 200:
+                _http_ok_at = time.monotonic()
+        except (OSError, http.client.HTTPException):
+            pass
+        finally:
+            conn.close()
+
+def _heartbeat_problem(now: float) -> str:
+    if _poll_beat is not None and now - _poll_beat >= _POLL_STALL_SEC:
+        return f"link poll loop stuck for {int(now - _poll_beat)}s"
+    if now - _http_ok_at >= _HTTP_STALL_SEC:
+        return f"web server not answering /healthz for {int(now - _http_ok_at)}s"
+    return ""
+
+def _sd_heartbeat_loop() -> None:
+    global _heartbeat_stalled
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC") or 0)
+    except ValueError:
+        usec = 0
+    if usec <= 0:
+        return
+    every = max(1.0, min(10.0, usec / 1e6 / 3))
+    while True:
+        problem = _heartbeat_problem(time.monotonic())
+        if not problem:
+            if _heartbeat_stalled:
+                log.info("heartbeat: healthy again")
+                _heartbeat_stalled = ""
+            _sd_notify("WATCHDOG=1")
+        elif problem.split(" for ")[0] != _heartbeat_stalled.split(" for ")[0]:
+            _heartbeat_stalled = problem
+            log.error("heartbeat: %s — letting systemd restart the Dashboard", problem)
+        time.sleep(every)
+
 def _link_poll_loop() -> None:
-    INTERVAL     = 1.0
+    global _poll_beat
+    INTERVAL     = 2.0
     fails        = 0
     last_detect  = time.monotonic()
+    busy_noted   = False
     while True:
         t0 = time.monotonic()
-        _sd_notify("WATCHDOG=1")
+        _poll_beat = t0
         try:
-            keyed, linked_node, bridge_linked, bridge_linked_nodes = _poll_asl_state()
+            try:
+                keyed, linked_node, bridge_linked, bridge_linked_nodes = _poll_asl_state()
+            except _AmiBusy:
+                if not busy_noted:
+                    log.info("_link_poll_loop: AMI busy for over %.0fs — skipping this poll", _POLL_LOCK_WAIT_SEC)
+                    busy_noted = True
+                time.sleep(max(0.1, INTERVAL - (time.monotonic() - t0)))
+                continue
+            busy_noted = False
             set_state(keyed=keyed, linked_node=linked_node, bridge_linked=bridge_linked,
                       bridge_linked_nodes=bridge_linked_nodes,
                       perm_link_nodes=_read_perm_links())
@@ -6685,7 +7023,10 @@ def _write_m17_ini(content: str) -> Tuple[bool, str]:
         p = Path(M17_INI_PATH)
         p.parent.mkdir(parents=True, exist_ok=True)
         tmp = p.with_name(p.name + ".tmp")
-        tmp.write_text(content)
+        with open(tmp, "w") as f:
+            f.write(content)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, p)
         return True, ""
     except Exception as e:
@@ -7341,6 +7682,7 @@ def build_status() -> dict:
     return {
         "page":              st["page"],
         "status":            st["status"],
+        "asl_reg":           _asl_reg_public(),
         "current_fav":       st["linked_node"] if (st["page"] == "ASL" and not st["current_fav"] and st["linked_node"]) else st["current_fav"],
         "has_asl":           st["has_asl"],
         "has_dvs":           st["has_dvs"],
@@ -7716,6 +8058,7 @@ body:not(.tabs-ready) .tab:not(#tab-edit) { display: none; }
 .pt-call.pt-live{color:var(--green)}
 .pt-call.pt-warn{color:var(--amber)}
 .pt-call.pt-talk{color:#ffd700}
+.pt-rf-note{font-size:.8rem;line-height:1.4;color:var(--amber);border:1px solid var(--amber-dim);border-radius:4px;padding:.5rem .75rem;margin:.6rem .9rem}
 #pt-reg-dot.pt-hide{visibility:hidden}
 #pg-PHONE .quick-bar{flex-wrap:wrap}
 #pg-PHONE .quick-inp{min-width:6.5rem}
@@ -7877,6 +8220,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn:active { transform: scale(.95); }
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
+#asl-tune-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
 .btn-blue   { color: var(--blue);   border-color: var(--blue-dim); }
@@ -8795,7 +9139,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               pattern="[0-9]*" placeholder="Node number…" maxlength="12"
               oninput="ndcQtSync('ASL')"
               onkeydown="if(event.key==='Enter')doConnectByNumber()">
-            <button class="btn btn-teal" onclick="doConnectByNumber()">Tune</button>
+            <button id="asl-tune-btn" class="btn btn-teal" onclick="doConnectByNumber()">Tune</button>
             <button id="lh-btn-ASL" class="btn-last lh-off" onclick="openModeLast('ASL')">LH</button>
             <button id="asl-qt-save-btn" class="btn btn-muted" onclick="ndcQtSave('ASL')" disabled
               aria-label="Save this node to favorites" title="Save to favorites">Save</button>
@@ -9149,6 +9493,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             <button id="pt-patch-btn" class="btn btn-muted" onclick="ptPatchToggle()">Patch: On</button>
             <button id="pt-rep-btn" class="btn btn-muted" onclick="ptReportOpen()" title="Gather a text report to copy and paste">Report</button>
           </div>
+          <div class="pt-rf-note" role="note"><b>Notice:</b> Sending music over a radio node is a violation of FCC rules. 47 CFR &sect;97.113(a)(4) prohibits music on an amateur station, and that includes a phone system's hold music or a recording played into a call. &sect;97.113(e) also bars retransmitting broadcast stations. Hang up if a call goes to hold music. Radioless nodes and phone systems with no RF link should be fine.</div>
         </div>
         <div id="pg-EDIT" class="hidden">
           <div class="ed-toolbar" style="justify-content:center">
@@ -9242,7 +9587,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
-                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call.</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
               </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
@@ -11537,8 +11882,16 @@ function applyTabState(d){
     }
   }
 }
+function applyAslReg(d){
+  const b=byId('asl-tune-btn');
+  if(!b)return;
+  const bad=d.asl_reg==='unregistered';
+  b.classList.toggle('asl-unreg',bad);
+  b.title=bad?('Node '+(d.asl_node||'')+' is not registered with AllStarLink'):'';
+}
 function applyServerState(d){
   byId('hdr-node').textContent=d.asl_node;
+  applyAslReg(d);
   const csEl=byId('hdr-callsign');
   const csSep=byId('hdr-callsign-sep');
   if(d.callsign){csEl.textContent=d.callsign;csEl.style.display='inline';csSep.style.display='inline';}
@@ -12928,7 +13281,7 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:5000);  // Pi02w: idle was 3000
 }
 let _keyedTimer=null;
 async function pollKeyed(){
@@ -12999,7 +13352,7 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedTimer=setTimeout(pollKeyed,500);
+  _keyedTimer=setTimeout(pollKeyed,1000);  // Pi02w: was 500 (the server updates every 2 s)
 }
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 async function pollAbInfo(){
@@ -13389,7 +13742,7 @@ def _session_cookie_header(token: str, max_age: int) -> str:
 def _clear_session_cookie_header() -> str:
     return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
 
-_PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping"}
+_PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping", "/healthz"}
 
 class _EarlyReturn(Exception):
     pass
@@ -13796,6 +14149,7 @@ _GET_ROUTES: dict = {
     "/":               lambda h: h.send_html(),
     "/index.html":     lambda h: h.send_html(),
     "/api/ping":       lambda h: h.send_ping(),
+    "/healthz":        lambda h: h.send_ping(),
     "/api/whoami":     lambda h: h.send_json({"ok": True}),
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
     "/api/status":     lambda h: h.send_status(),
@@ -13982,6 +14336,8 @@ def startup() -> None:
         except Exception:
             pass
         threading.Thread(target=_link_poll_loop, daemon=True).start()
+        if has_asl:
+            threading.Thread(target=_asl_reg_loop, name="asl-reg", daemon=True).start()
 
     if has_asl:
         has_echo = _detect_echo()
@@ -14063,6 +14419,52 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _pyc_for(src: str) -> list:
+    name = os.path.splitext(os.path.basename(src))[0]
+    return _glob_pyc(os.path.dirname(src), name)
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
+
 def _nc_remove_pyc(dir_path: str, prefix: str) -> None:
     pycache = os.path.join(dir_path, "__pycache__")
     if not os.path.isdir(pycache):
@@ -14129,6 +14531,8 @@ def install_service() -> None:
         print(f"  [-] Removed the old folder {_OLD_INSTALL_DIRS[0]}")
     except OSError:
         pass
+    _write_launcher()
+    _prune_pyc(_INSTALL_DIR)
 
     if os.path.exists(_LEGACY_SERVICE_PATH):
         subprocess.run(["systemctl", "disable", "--now", _LEGACY_SERVICE_NAME], stderr=subprocess.DEVNULL)
@@ -14182,6 +14586,12 @@ def uninstall_service() -> None:
             os.rmdir(d)
         except OSError:
             pass
+    _remove_launcher_if_unused()
+
+    echodb_dir = os.path.dirname(_ECHODB_FILE)
+    if os.path.isdir(echodb_dir):
+        shutil.rmtree(echodb_dir, ignore_errors=True)
+        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
 
@@ -14220,6 +14630,11 @@ def main() -> None:
 ║  Network   : http://{ip}:{_cfg.port}{npad}║
 ╚══════════════════════════════════════════════╝
 """)
+    global _http_ok_at
+    bound_port = server.server_address[1]
+    _http_ok_at = time.monotonic()
+    threading.Thread(target=_health_probe_loop, args=(bound_port,), name="health-probe", daemon=True).start()
+    threading.Thread(target=_sd_heartbeat_loop, name="sd-heartbeat", daemon=True).start()
     _sd_notify("READY=1")
     try:
         server.serve_forever()

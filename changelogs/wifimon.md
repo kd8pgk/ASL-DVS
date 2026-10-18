@@ -1,6 +1,153 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_31_0_20261013.py`. Newest entries first.
+Current file: `wifimon_v5_34_0_20261014.py`. Newest entries first.
+
+## 5.34.0 (2026-10-14)
+
+Alerts: the node tells you when something goes wrong, instead of waiting for
+you to open a page (reliability plan, Stage 7). wifimon serves both builds.
+
+- **New Alerts card**, off until you turn it on.
+  - Set up alerts -> Send with **ntfy** (the ntfy phone app; use a topic only
+    you know, for example `https://ntfy.sh/<your-secret-topic>`) or a
+    **webhook** (wifimon POSTs JSON: host, event, title, message, level, at).
+  - An optional access token is sent as `Authorization: Bearer ...`. It is
+    stored in `/etc/wifimon/alerts.json` (root only) and never shown again.
+  - **Send test** sends one at once and says whether it got through.
+  - The card shows whether alerts are on, how many are waiting, and the last
+    send.
+- **What sends an alert** (each can be turned off):
+  - **Shutdown or reboot by wifimon.**
+    - Low voltage: sent right away, with 5 s to try, before power-off.
+    - Lost network: queued and sent after the reboot or the next power-on.
+  - **Unclean stop:** after a power loss or a wifimon crash, sent once the node
+    is back online.
+  - **A service keeps restarting:** systemd restarted it 3 times in 10
+    minutes. Covers the Dashboard, SysMon, instmon, 44helper, Asterisk,
+    Analog_Bridge, MMDVM_Bridge and USRP2M17.
+  - **Out-of-memory kill:** the kernel's kill counter went up; names the
+    process when the kernel log has it.
+  - **AllStarLink registration** lost for 5 minutes, and a "registered
+    again" when it comes back. Read from the Dashboard's
+    `/run/asl_dvs/asl_reg.json` (Pi Zero 2 W Dashboard 9.3.75 and later). On a
+    node without that file the alert never fires, and nothing else changes.
+- **Sending:** alerts made while offline wait in
+  `/var/lib/wifimon/alerts_queue.json` (up to 50, for up to 24 hours) and go
+  out once the node is online. At most one alert of each kind per 30 minutes
+  (per service for restarts).
+- Tested:
+  - Unit tests (17), against a real HTTP receiver where sending is involved:
+    - settings validation; the token kept, cleared, never in the page data;
+      file mode 600
+    - nothing sent while off or for a switched-off event
+    - ntfy: title, priority, bearer token, UTF-8 text; webhook JSON
+    - offline -> queued; server error -> stays queued; back -> sent and
+      cleared
+    - 30-minute repeat limit; the test alert bypasses it
+    - old entries dropped, queue capped
+    - restart loop: 3 in 10 minutes alerts, 3 spread over 20 minutes doesn't
+    - OOM with the victim's name
+    - registration: not before 5 minutes, then once, then "registered again";
+      a stale or missing file is ignored
+    - `systemctl show` parsing
+    - low-voltage shutdown sends at once, a lost-network reboot queues
+  - The card in headless Chromium:
+    - off by default, Send test greyed out
+    - saving with no address is refused
+    - save with a token and one event off: the token never comes back to the
+      page
+    - Send test reached the local receiver with the token
+    - no horizontal scroll at 390 px, no script errors
+  - `ci/check_repo.py`
+
+## 5.33.0 (2026-10-14)
+
+Choose what happens when the network is lost: reboot (new, the default) or
+power off (reliability plan, Stage 4). wifimon serves both builds.
+
+- **New setting on the Watchdog card:** Change settings -> **When the network
+  is lost**: Reboot or Power off.
+  - **Default is Reboot**, also for nodes updating from an older wifimon. Before,
+    a lost network always powered the node off, so a router that took more
+    than 3 minutes to come back left a remote node off until someone visited
+    it.
+  - **Reboot** happens at most 3 times in 6 hours. After that the node stays
+    up and keeps trying to reconnect; the timer reads "Reboot limit reached,
+    still trying". When the oldest reboot is more than 6 hours old, one more
+    reboot is allowed. The count is kept in
+    `/var/lib/wifimon/net_reboots.json`, so it survives the reboots. On a Pi
+    whose clock is behind after a reboot (no network, no real-time clock), the
+    reboots still count, so it errs toward staying up.
+  - **Power off** works as before (for battery or hotspot nodes).
+  - **Low voltage** always powers off; this setting doesn't change that.
+  - The time limit ("Reboot or power off after no connection for") is the
+    same setting as before. Changing the action doesn't restart a countdown
+    that is running.
+- **On the card:**
+  - the rules line says which action applies;
+  - new row **Reboots for a lost network**: "1 of 3 in the last 6 hours (one
+    frees up 14:05:10)";
+  - the red banner says "This node is rebooting" for a reboot.
+- The shutdown state and the shutdown report record the action. The report
+  reason says "rebooting (reboot n of 3 allowed in 6 h)".
+- Tested:
+  - Unit tests with mocks (12):
+    - the reboot record: the 6-hour window, a clock that is behind, bad files
+    - Power off; Reboot counting 1, 2, 3, then refusing the 4th
+    - `do_shutdown` runs `systemctl reboot` / `reboot -f`, or `poweroff` for
+      low voltage
+    - the setting validates, defaults to Reboot, and doesn't restart the
+      countdown
+    - the real monitor loop with the network down: reboots; powers off; at
+      the limit it stays up and clears the hold on reconnect; it reboots
+      again once the oldest reboot leaves the window
+  - The page in headless Chromium: the rules line for both actions, the
+    reboot-count row, the dropdown with its hint, Save writes
+    `network_loss_action`, the held timer text, the reboot banner, no
+    horizontal scroll at 390 px, no script errors.
+  - `ci/check_repo.py`
+
+## 5.32.0 (2026-10-14)
+
+Two watchdogs over wifimon itself and the whole Pi (reliability plan, Stage 1).
+wifimon serves both builds; nothing changes in the full build's files.
+
+- **Hardware watchdog (new setting, default on).** The Pi's watchdog chip
+  reboots the node if Linux freezes for 15 seconds. systemd feeds the chip
+  while the system runs; wifimon only switches this on or off.
+  - wifimon writes `/etc/systemd/system.conf.d/90-asl_dvs-hwwatchdog.conf`
+    (`RuntimeWatchdogSec=15s`, `RebootWatchdogSec=2min`) and runs
+    `systemctl daemon-reexec` so it takes effect at once. It runs it only
+    when the file changed.
+  - Watchdog card -> Change settings -> **Reboot the Pi if it freezes
+    (hardware watchdog)**. Off removes the file (only if wifimon wrote it).
+  - The Watchdog card shows **Hardware watchdog**: on (with the time), off,
+    "not found on this Pi" (no `/dev/watchdog`), or "run by
+    watchdog.service" (wifimon then leaves the chip alone).
+  - `--install` applies the saved choice (on when never set); `--uninstall`
+    removes the file. The startup of the service applies it too, so it stays
+    in step with the setting.
+- **wifimon has its own systemd watchdog.** The unit is now `Type=notify`
+  with `WatchdogSec=60`. A small thread tells systemd "alive" every 15 s,
+  but only while the monitor loop has started a pass in the last 180 s. If
+  the loop hangs, the web page may still answer, but systemd restarts
+  wifimon within about 4 minutes. Before, a hung loop went unnoticed. The
+  activity log says when the loop stalls.
+- Tested:
+  - Unit tests with mocks (14): the file is written once and `daemon-reexec`
+    runs once; off removes it; a file wifimon didn't write is left alone; no
+    `/dev/watchdog`; watchdog.service running; a failed reexec is reported;
+    the time parser; the setting validates, saves, resets to on and does
+    not restart the countdowns; the unit lines; the "alive" messages stop
+    while the loop is stale and resume when it runs again (real Unix
+    socket); the loop's heartbeat stops while a check blocks.
+  - The page in headless Chromium: the four Hardware watchdog states, the
+    new checkbox (checked by default, with its hint), no horizontal scroll
+    at 390 px, no script errors.
+  - `node --check` on the page JavaScript, `py_compile`, `pyflakes`,
+    `ci/check_repo.py`.
+- Not testable here: a real freeze on a Pi. On the node: `wdctl` shows the
+  timeout, and `systemctl show -p RuntimeWatchdogUSec` shows `15s`.
 
 ## 5.31.0 (2026-10-13)
 

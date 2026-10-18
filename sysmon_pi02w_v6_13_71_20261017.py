@@ -37,8 +37,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.68-pi02w"
-BUILD_DATE   = "20261013"
+VERSION      = "6.13.71-pi02w"
+BUILD_DATE   = "20261017"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -109,7 +109,7 @@ _DEFAULT_CONFIG = {
     },
     "ui": {
 
-        "enabled_tabs": "overview,services,ports,journal,asldvs,phone,tune,hardware,dvsm,stfu,m17,sdcard,security,edit",
+        "enabled_tabs": "overview,services,ports,journal,asldvs,reg,phone,tune,hardware,dvsm,stfu,m17,sdcard,edit",
     },
 }
 
@@ -1295,6 +1295,7 @@ _state: dict = {
     "port_conflicts": {},
 
     "reg_live":       None,
+    "reg_summary":    None,
 
     "needs_restart":  False,
 
@@ -1325,12 +1326,63 @@ def _update_state(**kwargs) -> None:
     with _state_lock:
         _state.update(kwargs)
 
+_BG_STALL_SECS   = 180.0
+_HTTP_STALL_SECS = 25.0
+_PROBE_EVERY     = 10.0
+_bg_beat = time.monotonic()
+_http_ok_at = time.monotonic()
+
+def _health_probe_loop(host: str, port: int) -> None:
+    global _http_ok_at
+    import http.client
+    while True:
+        time.sleep(_PROBE_EVERY)
+        conn = http.client.HTTPConnection(host, port, timeout=5)
+        try:
+            conn.request("GET", "/healthz")
+            resp = conn.getresponse()
+            resp.read()
+            if resp.status == 200:
+                _http_ok_at = time.monotonic()
+        except (OSError, http.client.HTTPException):
+            pass
+        finally:
+            conn.close()
+
+def _heartbeat_problem(now: float) -> str:
+    if now - _bg_beat >= _BG_STALL_SECS:
+        return f"background poll stuck for {int(now - _bg_beat)}s"
+    if now - _http_ok_at >= _HTTP_STALL_SECS:
+        return f"web server not answering /healthz for {int(now - _http_ok_at)}s"
+    return ""
+
+def _sd_heartbeat_loop() -> None:
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC") or 0)
+    except ValueError:
+        usec = 0
+    if usec <= 0:
+        return
+    every = max(1.0, min(10.0, usec / 1e6 / 3))
+    stalled = ""
+    while True:
+        problem = _heartbeat_problem(time.monotonic())
+        if not problem:
+            if stalled:
+                _log("heartbeat: healthy again")
+                stalled = ""
+            _sd_notify("WATCHDOG=1")
+        elif problem.split(" for ")[0] != stalled.split(" for ")[0]:
+            stalled = problem
+            _log(f"heartbeat: {problem} — letting systemd restart SysMon", stderr=True)
+        time.sleep(every)
+
 def _bg_poll_loop() -> None:
+    global _bg_beat
     _log("bg_poll: started")
-    
-    _sd_notify("READY=1")
     poll_count = 0
     while True:
+        _bg_beat = time.monotonic()
         try:
             _update_state(
                 hostname   = get_hostname(),
@@ -1360,9 +1412,12 @@ def _bg_poll_loop() -> None:
                     _update_state(port_conflicts=pc)
                 except Exception as exc:
                     _log(f"bg_poll: port_conflicts error — {exc}", stderr=True)
+
+            prev_reg = get_state_snapshot().get("reg_summary")
+            if poll_count % 3 == 0 or not prev_reg or prev_reg.get("state") != "ok":
                 try:
                     rl = get_live_registrations()
-                    _update_state(reg_live=rl)
+                    _update_state(reg_live=rl, reg_summary=_reg_live_summary(rl, prev_reg))
                 except Exception as exc:
                     _log(f"bg_poll: reg_live error — {exc}", stderr=True)
 
@@ -1380,8 +1435,6 @@ def _bg_poll_loop() -> None:
                     _log(f"bg_poll: m17hosts error — {exc}", stderr=True)
         except Exception as exc:
             _log(f"bg_poll: error — {exc}", stderr=True)
-        
-        _sd_notify("WATCHDOG=1")
         time.sleep(10)
 
 _HTML = r"""<!DOCTYPE html>
@@ -1700,8 +1753,6 @@ body.offline #offline-bar{display:block}
   text-align:left;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ov-mode.perm-warn{color:var(--amber)}
 .ov-mode.perm-fail{color:var(--red);text-shadow:0 0 6px rgba(255,61,90,.4)}
-.ov-owner.sec-link,.ov-mode.sec-link{cursor:pointer;text-decoration:underline;
-  text-decoration-style:dotted;text-underline-offset:2px}
 
 .pc-ok {font-family:var(--sans);font-size:var(--fs-xs);color:var(--green);
   text-shadow:0 0 4px rgba(0,255,176,.4);white-space:nowrap;text-align:center}
@@ -2161,6 +2212,10 @@ body.tab-edit #zone-content{
 .reg-card-status.warn{color:var(--orange);border-color:var(--orange);
   text-shadow:0 0 4px rgba(255,170,34,.35)}
 .reg-card-status.info{color:#fff;border-color:var(--border2)}
+.reg-live-note{font-family:var(--sans);font-size:var(--fs-xs);color:#fff;
+  line-height:1.5;margin:0 0 .6rem}
+.reg-live-note code{color:var(--teal)}
+.sf-reg{cursor:pointer}
 
 .ph-note{padding:.6rem .9rem;font-family:var(--sans);font-size:var(--fs-sm);color:#ffffff}
 .ph-ro{padding:.4rem .9rem;font-family:var(--sans);font-size:var(--fs-xs);color:#ffffff;border-bottom:1px solid var(--border)}
@@ -2555,59 +2610,8 @@ body.tab-edit #zone-content{
 .hw-usb-badge.ambe{color:var(--green);border-color:var(--green-dim)}
 .hw-usb-badge.ftdi{color:var(--amber);border-color:var(--amber-dim)}
 
-.sec-summary{display:flex;align-items:center;gap:.8rem;flex-wrap:wrap;
-  padding:.5rem .9rem;background:#131c2d;
-  border:1px solid var(--border2);border-radius:4px;margin-bottom:.6rem;
-  font-family:var(--sans);font-size:var(--fs-base)}
-.sec-sum-item{display:flex;align-items:center;gap:.3rem;font-size:var(--fs-xs);
-  letter-spacing:.1em;text-transform:uppercase;color:#fff}
-.sec-sum-n{font-size:var(--fs-md);font-weight:bold}
-.sec-sum-n.pass{color:var(--green)}
-.sec-sum-n.warn{color:var(--orange)}
-.sec-sum-n.fail{color:var(--red)}
-.sec-sum-n.other{color:var(--text-bright)}
-.sec-sum-ts{margin-left:auto;color:#fff;font-size:var(--fs-xs)}
-
-#panel-security .s3-card-meta{margin-left:.5rem}
-.sec-scope-note{padding:.35rem .9rem .55rem;color:#fff;
-  font-family:var(--sans);font-size:var(--fs-xs);line-height:1.5}
-
-.sec-row-actions{display:flex;align-items:center;gap:.35rem;
-  justify-content:flex-end;min-width:0}
-.sec-row-detail{font-size:var(--fs-xs);color:#fff;text-align:right;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:28ch}
-.sec-row-detail.ok{color:var(--green)}
-.sec-row-detail.warn{color:var(--amber)}
-.sec-row-detail.fail{color:var(--red)}
-.sec-sev{font-size:var(--fs-xs);letter-spacing:.08em;text-transform:uppercase;
-  border:1px solid var(--border2);border-radius:3px;padding:0 .25rem;color:#fff}
-.sec-sev.high{color:var(--red);border-color:var(--red)}
-.sec-sev.medium{color:var(--orange);border-color:var(--orange)}
-.sec-sev.low{color:#fff}
 .ast-toggle.on{color:var(--text-bright);border-color:var(--teal)}
 
-.sec-note{white-space:normal;line-height:1.55;
-  background:#0b1420;border-top:1px solid var(--border);
-  padding:.45rem .9rem .55rem 2.2rem}
-.sec-note-h{display:block;color:var(--teal);font-size:var(--fs-xs);
-  letter-spacing:.14em;text-transform:uppercase;margin:.35rem 0 .15rem}
-.sec-note-h:first-child{margin-top:0}
-.sec-note-raw{white-space:pre-wrap;word-break:break-word;
-  font-family:var(--sans);font-size:var(--fs-xs);
-  color:var(--text);background:#070d16;border:1px solid var(--border);
-  border-radius:3px;padding:.4rem .5rem;margin-top:.2rem;
-  max-height:16rem;overflow:auto}
-.sec-note-p{white-space:pre-wrap;display:block;margin:0 0 .1rem}
-.sec-refs{display:block;margin-top:.15rem}
-.sec-refs a{color:var(--teal);text-decoration:none;display:block;
-  padding:.08rem 0;word-break:break-word}
-.sec-refs a:hover{text-decoration:underline}
-.sec-refs .sec-ref-plain{display:block;padding:.08rem 0;color:#fff}
-.sec-cmd{font-family:var(--sans);color:var(--teal);
-  background:#0b1420;border:1px solid var(--border);border-radius:3px;
-  padding:0 .25rem}
-.sec-redacted{color:var(--green);font-size:var(--fs-xs)}
-.sec-busy{opacity:.55;pointer-events:none}
 </style>
 </head>
 <body>
@@ -2664,6 +2668,7 @@ body.tab-edit #zone-content{
   <div class="sf"><span class="sl">Mem</span><span class="sv" id="s-mem">…</span></div>
   <div class="sf sf-temp"><span class="sl">Temp</span><span class="sv" id="s-temp">—</span></div>
   <div class="sf"><span class="sl">Pwr</span><span class="sv" id="s-volt" title="Power health — vcgencmd get_throttled">—</span></div>
+  <div class="sf sf-reg" id="sf-reg" onclick="regJump()"><span class="sl">ASL</span><span class="sv" id="s-reg" title="AllStarLink registration — rpt show registrations">…</span></div>
 </div>
 
 <div id="zone-cmdbar">
@@ -2678,6 +2683,8 @@ body.tab-edit #zone-content{
     onclick="switchTab('journal','212,102,255')">Journal</button>
   <button class="tab-btn"        id="tbtn-asldvs"
     onclick="switchTab('asldvs','255,61,90')">ASL-DVS</button>
+  <button class="tab-btn"        id="tbtn-reg"
+    onclick="switchTab('reg','120,180,255')">Reg</button>
   <button class="tab-btn"        id="tbtn-phone"
     onclick="switchTab('phone','0,255,176')">Phone</button>
   <button class="tab-btn"        id="tbtn-tune"
@@ -2692,8 +2699,6 @@ body.tab-edit #zone-content{
     onclick="switchTab('m17','124,255,60')">M17</button>
   <button class="tab-btn"        id="tbtn-sdcard"
     onclick="switchTab('sdcard','180,140,255')">SD Card</button>
-  <button class="tab-btn"        id="tbtn-security"
-    onclick="switchTab('security','255,90,120')">Security</button>
   <button class="tab-btn"        id="tbtn-edit"
     onclick="switchTab('edit','255,208,64')">Edit</button>
   <div class="cmdbar-spacer"></div>
@@ -2888,6 +2893,42 @@ body.tab-edit #zone-content{
 
   </div>
 
+  <div id="panel-reg" class="tab-panel">
+
+    <div class="reg-live-note" id="reg-live-note">Live state from <code>rpt show registrations</code>, checked every 10 s until the node registers, then every 30 s. This tab refreshes every 15 s while open.</div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">HTTP Registration</span>
+        <span class="reg-card-status" id="reg-http-status">—</span>
+        <span class="s3-card-meta" id="reg-http-meta">—</span>
+        <div style="display:flex;gap:.3rem;margin-left:auto">
+          <button class="btn btn-muted btn-sm" id="reg-http-refresh"
+                  onclick="loadTab_reg()">↻ Re-check</button>
+        </div>
+      </div>
+      <div id="reg-http-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">IAX Registration</span>
+        <span class="reg-card-status" id="reg-iax-status">—</span>
+        <span class="s3-card-meta" id="reg-iax-meta">—</span>
+        <div style="display:flex;gap:.3rem;margin-left:auto">
+          <button class="btn btn-muted btn-sm" id="reg-iax-refresh"
+                  onclick="loadTab_reg()">↻ Re-check</button>
+        </div>
+      </div>
+      <div id="reg-iax-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
+
+  </div>
+
   <div id="panel-phone" class="tab-panel">
 
     <div class="ph-ro">Read-only view of what Asterisk is set up to do for autopatch. Change phone settings in the ASL-DVS Dashboard → Edit → Phone. The one exception is the Autopatch modules card, which can load, stop and set modules.</div>
@@ -3052,6 +3093,16 @@ body.tab-edit #zone-content{
     <div class="hw-copybar" style="display:flex;justify-content:flex-end;padding:.2rem 0 .5rem">
       <button class="btn btn-muted btn-sm" onclick="dtCopy(this, hwText)"
         title="Copy the whole Hardware tab as text">⎘ Copy hardware report</button>
+    </div>
+
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">Node Health</span>
+        <span class="s3-card-meta" id="hw-health-meta">checking…</span>
+      </div>
+      <div id="hw-health-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
     </div>
 
     <div class="s3-card">
@@ -3508,92 +3559,6 @@ body.tab-edit #zone-content{
 
   </div>
 
-  <div id="panel-security" class="tab-panel">
-
-    <div class="sec-summary">
-      <span class="sec-sum-item">Pass <span class="sec-sum-n pass" id="sec-n-pass">–</span></span>
-      <span class="sec-sum-item">Warn <span class="sec-sum-n warn" id="sec-n-warn">–</span></span>
-      <span class="sec-sum-item">Fail <span class="sec-sum-n fail" id="sec-n-fail">–</span></span>
-      <span class="sec-sum-item">Checks <span class="sec-sum-n other" id="sec-n-total">–</span></span>
-      <button class="btn btn-muted btn-sm" id="sec-rerun-all"
-              onclick="secRerun()">&#8635; Re-run checks</button>
-      <button class="btn btn-muted btn-sm" id="sec-copy"
-              onclick="dtCopy(this, secText)"
-              title="Copy every check result as text">&#9112; Copy</button>
-      <span class="sec-sum-ts" id="sec-last-run">not run yet</span>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">DVSwitch</span>
-        <span class="reg-card-status" id="sec-status-dvswitch">&mdash;</span>
-        <span class="s3-card-meta" id="sec-meta-dvswitch">&mdash;</span>
-        <div style="display:flex;gap:.3rem;margin-left:auto">
-          <button class="btn btn-muted btn-sm sec-card-rerun"
-                  onclick="secRerun()">&#8635; Re-run</button>
-        </div>
-      </div>
-      <div id="sec-body-dvswitch">
-        <div class="stub-panel" style="min-height:60px">Loading&hellip;</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">AllStarLink</span>
-        <span class="reg-card-status" id="sec-status-asl">&mdash;</span>
-        <span class="s3-card-meta" id="sec-meta-asl">&mdash;</span>
-        <div style="display:flex;gap:.3rem;margin-left:auto">
-          <button class="btn btn-muted btn-sm sec-card-rerun"
-                  onclick="secRerun()">&#8635; Re-run</button>
-        </div>
-      </div>
-      <div id="sec-body-asl">
-        <div class="stub-panel" style="min-height:60px">Loading&hellip;</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">usrp2m17</span>
-        <span class="reg-card-status" id="sec-status-usrp2m17">&mdash;</span>
-        <span class="s3-card-meta" id="sec-meta-usrp2m17">&mdash;</span>
-        <div style="display:flex;gap:.3rem;margin-left:auto">
-          <button class="btn btn-muted btn-sm sec-card-rerun"
-                  onclick="secRerun()">&#8635; Re-run</button>
-        </div>
-      </div>
-      <div id="sec-body-usrp2m17">
-        <div class="stub-panel" style="min-height:60px">Loading&hellip;</div>
-      </div>
-    </div>
-
-    <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">Cross-cutting</span>
-        <span class="reg-card-status" id="sec-status-cross-cutting">&mdash;</span>
-        <span class="s3-card-meta" id="sec-meta-cross-cutting">&mdash;</span>
-        <div style="display:flex;gap:.3rem;margin-left:auto">
-          <button class="btn btn-muted btn-sm sec-card-rerun"
-                  onclick="secRerun()">&#8635; Re-run</button>
-        </div>
-      </div>
-      <div id="sec-body-cross-cutting">
-        <div class="stub-panel" style="min-height:60px">Loading&hellip;</div>
-      </div>
-    </div>
-
-    <div class="sec-scope-note">
-      Passive checks only &mdash; every result above comes from config files,
-      /sys, /proc, <span class="sec-cmd">ss -tlnpu</span> and
-      systemd state. This tab never connects to AMI, M17, USRP or the
-      dashboard, so running it cannot pollute security.log or trip fail2ban.
-      Checks that read credentials report booleans only; no secret value is
-      sent to this page.
-    </div>
-
-  </div>
-
   <div id="panel-edit" class="tab-panel">
 
     <div class="ed-section">
@@ -3610,6 +3575,8 @@ body.tab-edit #zone-content{
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-asldvs" value="asldvs" onchange="edTabVisChanged()">ASL-DVS</label>
         <label class="tab-vis-lbl">
+          <input type="checkbox" id="tabchk-reg" value="reg" onchange="edTabVisChanged()">Reg</label>
+        <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-phone" value="phone" onchange="edTabVisChanged()">Phone</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-tune" value="tune" onchange="edTabVisChanged()">Tune</label>
@@ -3623,8 +3590,6 @@ body.tab-edit #zone-content{
           <input type="checkbox" id="tabchk-m17" value="m17" onchange="edTabVisChanged()">M17</label>
         <label class="tab-vis-lbl">
           <input type="checkbox" id="tabchk-sdcard" value="sdcard" onchange="edTabVisChanged()">SD Card</label>
-        <label class="tab-vis-lbl">
-          <input type="checkbox" id="tabchk-security" value="security" onchange="edTabVisChanged()">Security</label>
         <label class="tab-vis-lbl locked" title="Always on — cannot be hidden">
           <input type="checkbox" id="tabchk-edit" value="edit" checked disabled>Edit</label>
       </div>
@@ -4076,7 +4041,7 @@ function doLogout() {
 }
 
 
-const TABS = ["overview","services","ports","journal","asldvs","phone","tune","hardware","dvsm","stfu","m17","sdcard","security","edit"];
+const TABS = ["overview","services","ports","journal","asldvs","reg","phone","tune","hardware","dvsm","stfu","m17","sdcard","edit"];
 
 let _enabledTabSet = new Set(TABS);
 
@@ -4096,6 +4061,7 @@ function _applyTabVisibilityGated() {
 function stopTabPolling(tab) {
   let cleared = false;
   if (tab === "ports"    && _ptRefreshTimer) { clearInterval(_ptRefreshTimer); _ptRefreshTimer = null; cleared = true; }
+  if (tab === "reg"      && _regRefreshTimer) { clearInterval(_regRefreshTimer); _regRefreshTimer = null; cleared = true; }
   if (tab === "phone"    && _phRefreshTimer) { clearInterval(_phRefreshTimer); _phRefreshTimer = null; cleared = true; }
   if (tab === "services" && _s3RefreshTimer) { clearInterval(_s3RefreshTimer); _s3RefreshTimer = null; cleared = true; }
   if (tab === "sdcard"   && _sdTestTimer)    { clearInterval(_sdTestTimer);    _sdTestTimer    = null; cleared = true; }
@@ -4209,6 +4175,7 @@ async function pollStatus() {
   if (d.wifimon_shutdown && d.wifimon_shutdown.active) showWfmShutdown(d.wifimon_shutdown);
 
   window._portConflicts = d.port_conflicts || {};
+  if ("reg_summary" in d) renderRegHeader(d.reg_summary);
 
   if (d.callsign) document.getElementById("hdr-callsign").textContent = d.callsign;
   if (d.node)     document.getElementById("hdr-node").textContent     = d.node;
@@ -4424,25 +4391,6 @@ function renderOvRow(card, svc) {
   card.appendChild(row);
 }
 
-function _ovSecurityJump(checkId) {
-  if (!_enabledTabSet.has("security")) return;
-  switchTab("security", "255,90,120");
-  setTimeout(() => {
-    if (typeof secToggle === "function" && !_secOpen.has(checkId + ":why")) {
-      secToggle(checkId, "why");
-    }
-    document.getElementById("sec-row-" + checkId)
-            ?.scrollIntoView({block: "center", behavior: "smooth"});
-  }, 350);
-}
-
-function _ovWireSecurityJump(el, checkId, why) {
-  if (!_enabledTabSet.has("security")) return;
-  el.classList.add("sec-link");
-  el.title = (el.title ? el.title + "\n\n" : "") + why;
-  el.onclick = e => { e.preventDefault(); e.stopPropagation(); _ovSecurityJump(checkId); };
-}
-
 function _ovOwnerCell(svc) {
   const el = document.createElement("span");
   el.className = "ov-owner";
@@ -4466,10 +4414,6 @@ function _ovOwnerCell(svc) {
     bits.push("this unit does not require root");
   }
   el.title = bits.join("; ");
-  if (svc.owner_is_root && !svc.owner_exempt) {
-    _ovWireSecurityJump(el, "service_nonroot",
-                         "Click for the Security tab's explanation");
-  }
   return el;
 }
 
@@ -4494,10 +4438,6 @@ function _ovModeCell(svc) {
   if      (svc.perm_verdict === "fail") el.classList.add("perm-fail");
   else if (svc.perm_verdict === "warn") el.classList.add("perm-warn");
   el.title = lines.join("\n");
-  if (svc.perm_verdict === "fail" || svc.perm_verdict === "warn") {
-    _ovWireSecurityJump(el, "unit_file_perms",
-                         "Click for the Security tab's explanation");
-  }
   return el;
 }
 
@@ -5510,6 +5450,7 @@ function pauseAllPolling() {
   stopTabPolling("services");
   stopTabPolling("sdcard");
   stopTabPolling("phone");
+  stopTabPolling("reg");
   console.info("[sysmon] All polling paused (navigating to dashboard)");
 }
 
@@ -5654,6 +5595,54 @@ function dstarGwCopy(btn) {
   dvsmCopy(btn, lines.join("\n"));
 }
 
+let _regRefreshTimer = null;
+const _REG_HTTP_IDS = {body: "reg-http-body", meta: "reg-http-meta", status: "reg-http-status"};
+const _REG_IAX_IDS  = {body: "reg-iax-body",  meta: "reg-iax-meta",  status: "reg-iax-status"};
+
+window.loadTab_reg = async function() {
+  if (!_enabledTabSet.has("reg")) return;
+  if (!_regRefreshTimer) _regRefreshTimer = setInterval(() => {
+    if (document.visibilityState === "visible" && !_pausedByNavigation) loadTab_reg();
+  }, 15000);
+  const [dHttp, dIax] = await Promise.all([api("/api/reg/http"), api("/api/reg/iax")]);
+
+  if (!dHttp || !dHttp.ok) { _regShowUnreachable(_REG_HTTP_IDS); }
+  else                     { renderRegChecks(dHttp.checks, dHttp.status, _REG_HTTP_IDS); }
+
+  if (!dIax || !dIax.ok) { _regShowUnreachable(_REG_IAX_IDS); }
+  else                   { renderRegChecks(dIax.checks, dIax.status, _REG_IAX_IDS); }
+};
+
+function regJump() {
+  if (!_enabledTabSet.has("reg")) return;
+  switchTab("reg", "120,180,255");
+}
+
+function renderRegHeader(sm) {
+  const el = document.getElementById("s-reg");
+  if (!el) return;
+  if (!sm) {
+    el.textContent = "…"; el.className = "sv";
+    el.title = "AllStarLink registration — not checked yet";
+    return;
+  }
+  const age = s => s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + "m" : Math.floor(s / 3600) + "h";
+  const map = {
+    ok:   ["REG",      "sv ok",   "Registered"],
+    wait: ["WAIT",     "sv warn", "Waiting for registration"],
+    fail: ["NOT REG",  "sv hot",  "Not registered"],
+    down: ["ASL DOWN", "sv hot",  "Asterisk isn't answering — ASL3 not running yet"],
+    none: ["—",        "sv",      "No HTTP registration configured (see the Reg tab)"],
+  };
+  const m = map[sm.state] || ["?", "sv", sm.state];
+  el.textContent = m[0] + (sm.state === "ok" || sm.state === "none" ? "" : " " + age(sm.age_s));
+  el.className   = m[1];
+  const lines = [m[2], `In this state since ${sm.since_text}`];
+  Object.keys(sm.nodes || {}).forEach(n => lines.push(`Node ${n}: ${sm.nodes[n]}`));
+  if (sm.error) lines.push(sm.error);
+  lines.push(`Checked ${sm.checked_age_s}s ago`);
+  el.title = lines.join("\n");
+}
 let _phData = {};
 
 window.phCopyCard = async function(pfx) {
@@ -7153,31 +7142,6 @@ document.addEventListener("DOMContentLoaded", () => {
   })();
 });
 
-let _secData = null;
-let _secBusy = false;
-const _secOpen = new Set();
-
-const _SEC_LAYER_IDS = ["dvswitch", "asl", "usrp2m17", "cross-cutting"];
-
-function secToggle(id, kind) {
-  const key   = id + ":" + kind;
-  const panel = document.getElementById("sec-" + kind + "-" + id);
-  const btn   = document.getElementById("sec-btn-" + kind + "-" + id);
-  if (!panel) return;
-  const show = panel.hidden;
-  panel.hidden = !show;
-  if (show) _secOpen.add(key); else _secOpen.delete(key);
-  if (btn) {
-    btn.classList.toggle("on", show);
-    btn.setAttribute("aria-expanded", show ? "true" : "false");
-  }
-}
-
-window.loadTab_security = function() {
-  if (!_enabledTabSet.has("security")) return;
-  _secFetch(false);
-};
-
 window.addEventListener("beforeunload", () => {
   stopStatusPolling();
 });
@@ -7278,6 +7242,17 @@ function ptSetProto(proto) {
   });
   if (_ptAll.length) renderPorts(_ptShown());
   loadPorts();
+}
+
+// ========================================================================
+// TAB: Reg
+// ========================================================================
+// ---- general ----
+function _regShowUnreachable(ids) {
+  const body = document.getElementById(ids.body);
+  if (body) body.innerHTML = '<div class="stub-panel" style="min-height:60px">Server unreachable</div>';
+  const status = document.getElementById(ids.status);
+  if (status) { status.className = "reg-card-status"; status.textContent = "—"; }
 }
 
 // ========================================================================
@@ -8225,7 +8200,36 @@ function renderRptNodes() {
 // TAB: Hardware
 // ========================================================================
 // ---- general ----
+let _healthData = null;
+async function loadHealth() {
+  const d = await api("/api/health");
+  const body = document.getElementById("hw-health-body");
+  const meta = document.getElementById("hw-health-meta");
+  if (!body) return;
+  if (!d || !d.checks) {
+    if (meta) meta.textContent = "error";
+    body.innerHTML = '<div class="stub-panel">Server error</div>';
+    return;
+  }
+  _healthData = d.checks;
+  const cls = {pass: "ok", warn: "warn", fail: "hot", unknown: "dim"};
+  const word = {pass: "OK", warn: "WARN", fail: "PROBLEM", unknown: "?"};
+  const bad = d.checks.filter(c => c.status === "fail").length;
+  const warn = d.checks.filter(c => c.status === "warn").length;
+  const unk = d.checks.filter(c => c.status === "unknown").length;
+  if (meta) meta.textContent = bad ? `${bad} problem${bad > 1 ? "s" : ""}` : warn ? `${warn} warning${warn > 1 ? "s" : ""}`
+    : unk ? `OK · ${unk} couldn't be checked` : "all OK";
+  body.innerHTML = '<table class="hw-pwr-tbl">' + d.checks.map(c => {
+    const rows = (c.rows || []).map(r => `<div class="hw-pwr-note">${esc(r[0])}: ${esc(r[1])}</div>`).join("");
+    const note = c.note ? `<div class="hw-pwr-note" style="margin-top:.2rem">${esc(c.note)}</div>` : "";
+    return `<tr><td class="hw-pwr-lbl">${esc(c.title)}</td>
+      <td class="hw-pwr-val ${cls[c.status] || ""}"><b>${word[c.status] || "?"}</b> — ${esc(c.headline)}
+      <details style="margin-top:.15rem"><summary class="hw-pwr-note" style="cursor:pointer">details</summary>${rows}${note}</details></td></tr>`;
+  }).join("") + "</table>";
+}
+
 async function loadHardware() {
+  loadHealth();
   const d = await api("/api/hardware");
   if (d) _hwData = d;
   if (!d) {
@@ -9821,200 +9825,6 @@ function renderSdTests(d) {
 }
 
 // ========================================================================
-// TAB: Security
-// ========================================================================
-// ---- general ----
-function _secIcon(status) {
-  if (status === "pass") return ["ok",   "✓"];
-  if (status === "fail") return ["fail", "✗"];
-  if (status === "warn") return ["warn", "⚠"];
-  return ["pend", "◌"];
-}
-
-function _secRowDetail(c) {
-  const d = c.detail || {};
-  if (Array.isArray(d.binds) && d.binds.length) {
-    const bad = d.binds.filter(b => b.verdict && b.verdict !== "pass");
-    if (bad.length) {
-      const b = bad[0];
-      return `${b.addr || "?"}:${b.port} ${b.scope}` +
-             (bad.length > 1 ? ` +${bad.length - 1}` : "");
-    }
-    const listening = d.binds.filter(b => b.scope !== "not_listening");
-    return listening.length ? `${listening.length} bind(s), all local/VPN`
-                            : "configured, not listening";
-  }
-  if (Array.isArray(d.units) && d.units.length) {
-    const bad = d.units.filter(u => u.verdict !== "pass");
-    return bad.length ? `${bad.length} unit(s) as root` : `${d.units.length} unit(s) ok`;
-  }
-  if (Array.isArray(d.reasons) && d.reasons.length) return d.reasons[0];
-  if (Array.isArray(d.notes)   && d.notes.length)   return d.notes[0];
-  if (Array.isArray(d.findings) && d.findings.length) return d.findings[0];
-  if (d.jails && d.jails.length) return d.jails.join(", ");
-  return "";
-}
-
-function _secRefs(refs) {
-  if (!Array.isArray(refs) || !refs.length) return "";
-  const items = refs.map(r => r && r.url
-    ? `<a href="${_esc(r.url)}" target="_blank" rel="noopener noreferrer"
-         >&#8599; ${_esc(r.label)}</a>`
-    : `<span class="sec-ref-plain">&#8226; ${_esc((r && r.label) || "")}</span>`
-  ).join("");
-  return `<span class="sec-note-h">References</span>
-    <span class="sec-refs">${items}</span>`;
-}
-
-function _secNoteWhy(c) {
-  const p = t => `<span class="sec-note-p">${_esc(t)}</span>`;
-  return `<div class="ast-check-note sec-note" id="sec-why-${_esc(c.id)}"${
-      _secOpen.has(c.id + ":why") ? "" : " hidden"}>
-    <span class="sec-note-h">Severity</span>
-    <span class="sec-sev ${_esc(c.severity)}">${_esc(c.severity)}</span>
-    <span class="sec-note-h">What this check reads</span>${p(c.source)}
-    <span class="sec-note-h">What the result means</span>${p(c.meaning)}
-    ${c.risk ? `<span class="sec-note-h">Why it matters</span>${p(c.risk)}` : ""}
-    <span class="sec-note-h">How to fix it</span>${p(c.remediation)}
-    ${_secRefs(c.references)}
-  </div>`;
-}
-
-function _secNoteRaw(c) {
-  let body;
-  try { body = JSON.stringify(c.detail, null, 2); }
-  catch (e) { body = String(c.detail); }
-  const redacted = c.sensitive
-    ? `<div class="sec-redacted">&#128274; This check reads credential
-         material. What you see below is all the backend produces for it:
-         booleans and lengths, redacted server-side before the response was
-         built. No secret value is sent to this page.</div>`
-    : "";
-  return `<div class="ast-check-note sec-note" id="sec-raw-${_esc(c.id)}"${
-      _secOpen.has(c.id + ":raw") ? "" : " hidden"}>
-    <span class="sec-note-h">Raw check output</span>
-    ${redacted}
-    <div class="sec-note-raw">${_esc(body)}</div>
-  </div>`;
-}
-
-function _secRow(c) {
-  const [icls, ichar] = _secIcon(c.status);
-  const dcls = c.status === "pass" ? "ok" : c.status === "fail" ? "fail"
-             : c.status === "warn" ? "warn" : "";
-  const id   = _esc(c.id);
-  const whyOn = _secOpen.has(c.id + ":why") ? " on" : "";
-  const rawOn = _secOpen.has(c.id + ":raw") ? " on" : "";
-  return `<div class="hw-check-row" id="sec-row-${id}">
-    <span class="hw-check-icon ${icls}">${ichar}</span>
-    <span class="hw-check-label">${_esc(c.label)}</span>
-    <span class="sec-row-actions">
-      <span class="sec-row-detail ${dcls}" title="${_esc(_secRowDetail(c))}"
-        >${_esc(_secRowDetail(c))}</span>
-      <button class="ast-toggle${whyOn}" id="sec-btn-why-${id}"
-              aria-expanded="${_secOpen.has(c.id + ":why")}"
-              title="source, meaning and fix"
-              onclick="secToggle('${id}','why')">?</button>
-      <button class="ast-toggle${rawOn}" id="sec-btn-raw-${id}"
-              aria-expanded="${_secOpen.has(c.id + ":raw")}"
-              title="raw check output"
-              onclick="secToggle('${id}','raw')">raw</button>
-    </span>
-  </div>` + _secNoteWhy(c) + _secNoteRaw(c);
-}
-
-function _secSetCard(layerId, layer, checks) {
-  const body   = document.getElementById("sec-body-" + layerId);
-  const badge  = document.getElementById("sec-status-" + layerId);
-  const meta   = document.getElementById("sec-meta-" + layerId);
-  if (!body) return;
-
-  if (badge) {
-    const st = (layer && layer.status) || "info";
-    badge.className   = "reg-card-status " + (st === "not_implemented" || st === "error" ? "info" : st);
-    badge.textContent = st.replace("_", " ").toUpperCase();
-  }
-  if (meta) {
-    const c = (layer && layer.counts) || {};
-    meta.textContent = c.fail ? `${c.fail} issue${c.fail === 1 ? "" : "s"}`
-                     : c.warn ? `${c.warn} warning${c.warn === 1 ? "" : "s"}`
-                     : c.total ? "all clear" : "—";
-  }
-  if (!checks.length) {
-    body.innerHTML = '<div class="stub-panel" style="min-height:60px">No checks in this layer</div>';
-    return;
-  }
-  body.innerHTML = checks.map(_secRow).join("");
-}
-
-function _secShowUnreachable() {
-  _SEC_LAYER_IDS.forEach(l => {
-    const body = document.getElementById("sec-body-" + l);
-    if (body) body.innerHTML =
-      '<div class="stub-panel" style="min-height:60px">Server unreachable</div>';
-    const badge = document.getElementById("sec-status-" + l);
-    if (badge) { badge.className = "reg-card-status"; badge.textContent = "—"; }
-  });
-  ["pass","warn","fail","total"].forEach(k => {
-    const el = document.getElementById("sec-n-" + k);
-    if (el) el.textContent = "–";
-  });
-}
-
-function secRender(d) {
-  _secData = d;
-  const sum = d.summary || {};
-  const set = (id, v) => { const el = document.getElementById(id);
-                            if (el) el.textContent = (v === undefined ? "–" : v); };
-  set("sec-n-pass",  sum.pass);
-  set("sec-n-warn",  sum.warn);
-  set("sec-n-fail",  sum.fail);
-  set("sec-n-total", sum.total);
-
-  const ts = document.getElementById("sec-last-run");
-  if (ts) {
-    const when = d.last_run_timestamp
-      ? new Date(d.last_run_timestamp * 1000).toLocaleTimeString()
-      : "never";
-    ts.textContent = d.cached
-      ? `last run ${when} · cached (${d.cache_age_sec || 0}s old)`
-      : `last run ${when}`;
-  }
-
-  const byLayer = {};
-  (d.layers || []).forEach(l => { byLayer[l.id] = l; });
-  _SEC_LAYER_IDS.forEach(l => {
-    _secSetCard(l, byLayer[l], (d.checks || []).filter(c => c.layer === l));
-  });
-}
-
-function _secSetBusy(busy) {
-  _secBusy = busy;
-  const all = document.getElementById("sec-rerun-all");
-  if (all) {
-    all.disabled    = busy;
-    all.textContent = busy ? "Running…" : "↻ Re-run checks";
-  }
-  document.querySelectorAll(".sec-card-rerun").forEach(b => { b.disabled = busy; });
-  const bar = document.querySelector("#panel-security .sec-summary");
-  if (bar) bar.classList.toggle("sec-busy", busy);
-}
-
-async function _secFetch(refresh) {
-  if (_secBusy) return;
-  _secSetBusy(true);
-  try {
-    const d = await api("/api/security/checks" + (refresh ? "?refresh=1" : ""));
-    if (!d || !d.ok) { _secShowUnreachable(); return; }
-    secRender(d);
-  } finally {
-    _secSetBusy(false);
-  }
-}
-
-function secRerun() { _secFetch(true); }
-
-// ========================================================================
 // TAB: Edit
 // ========================================================================
 // ---- general ----
@@ -10707,6 +10517,15 @@ function hwText() {
   if (!_hwData) return "";
   const out = _dtStamp("Hardware");
   const d = _hwData;
+  if (_healthData) {
+    out.push("[Node health]");
+    _healthData.forEach(c => {
+      out.push(`  ${c.title}: ${c.status.toUpperCase()} -- ${c.headline}`);
+      (c.rows || []).forEach(r => out.push(`    ${r[0]}: ${r[1]}`));
+      if (c.note) out.push(`    ${c.note}`);
+    });
+    out.push("");
+  }
   out.push("[AMBE device]");
   const am = d.ambe || [];
   if (!am.length) out.push("  none detected");
@@ -10764,30 +10583,6 @@ function hwText() {
   const a = g.alsa || {};
   if (!a.available) out.push("  " + (a.error || "aplay not available"));
   else { out.push("Playback:", a.playback || "", "Capture:", a.capture || ""); }
-  return out.join("\n").trimEnd();
-}
-function secText() {
-  const d = _secData;
-  if (!d || !d.checks) return "";
-  const s = d.summary || {};
-  const out = _dtStamp(`Security - pass ${s.pass ?? "-"}, warn ${s.warn ?? "-"}, fail ${s.fail ?? "-"}, checks ${s.total ?? "-"}`);
-  const byLayer = {};
-  (d.layers || []).forEach(l => { byLayer[l.id] = l; });
-  _SEC_LAYER_IDS.forEach(id => {
-    const cs = d.checks.filter(c => c.layer === id);
-    if (!cs.length) return;
-    const l = byLayer[id] || {};
-    out.push(`[${id}] ${(l.status || "").toUpperCase()}`);
-    cs.forEach(c => {
-      const det = _secRowDetail(c);
-      out.push(`  ${String(c.status || "").toUpperCase().padEnd(5)} ${c.label}${det ? " - " + det : ""}`);
-      if (c.status && c.status !== "pass" && c.status !== "info") {
-        if (c.meaning) out.push("        Meaning: " + c.meaning);
-        if (c.remediation) out.push("        Fix: " + c.remediation);
-      }
-    });
-    out.push("");
-  });
   return out.join("\n").trimEnd();
 }
 
@@ -11208,17 +11003,58 @@ def _session_cookie_header(token: str, max_age: int) -> str:
 def _clear_session_cookie_header() -> str:
     return f"{_SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
 
-_PUBLIC_GET_PATHS  = {"/", "/api/ping"}
+_PUBLIC_GET_PATHS  = {"/", "/api/ping", "/healthz"}
 
 class _EarlyReturn(Exception):
     pass
 
 _MAX_CONCURRENT_CONNS = 24
-_conn_sem = threading.Semaphore(_MAX_CONCURRENT_CONNS)
+_MAX_CONNS_PER_IP = 12
 
 class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
     daemon_threads = True
-    
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._conn_sem = threading.BoundedSemaphore(_MAX_CONCURRENT_CONNS)
+        self._per_ip_lock = threading.Lock()
+        self._per_ip: dict = {}
+        self._refused_logged_at = 0.0
+
+    def _refused(self, why: str, client_address) -> None:
+        now = time.monotonic()
+        if now - self._refused_logged_at >= 60:
+            self._refused_logged_at = now
+            _log(f"WARN — {why}; refusing {client_address[0]} (logged at most once a minute)")
+
+    def _release_ip(self, ip: str) -> None:
+        with self._per_ip_lock:
+            n = self._per_ip.get(ip, 1) - 1
+            if n <= 0:
+                self._per_ip.pop(ip, None)
+            else:
+                self._per_ip[ip] = n
+
+    def verify_request(self, request, client_address) -> bool:
+        ip = client_address[0]
+        with self._per_ip_lock:
+            if self._per_ip.get(ip, 0) >= _MAX_CONNS_PER_IP:
+                self._refused(f"{_MAX_CONNS_PER_IP} connections already open from one address", client_address)
+                return False
+            self._per_ip[ip] = self._per_ip.get(ip, 0) + 1
+        if not self._conn_sem.acquire(blocking=False):
+            self._release_ip(ip)
+            self._refused(f"{_MAX_CONCURRENT_CONNS} connections already open", client_address)
+            return False
+        return True
+
+    def process_request_thread(self, request, client_address) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._conn_sem.release()
+            self._release_ip(client_address[0])
+
     def handle_error(self, request, client_address) -> None:
         exc = sys.exc_info()[1]
         if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
@@ -11235,11 +11071,6 @@ class Handler(BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self.connection.settimeout(self.timeout)
-
-    def handle(self) -> None:
-        
-        with _conn_sem:
-            super().handle()
 
     def _accepts_gzip(self) -> bool:
         return "gzip" in self.headers.get("Accept-Encoding", "")
@@ -11496,6 +11327,7 @@ def _route_status(h: Handler) -> None:
         "port_conflicts": snap.get("port_conflicts", {}),
         "needs_restart":  snap.get("needs_restart", False),
         "wifimon_shutdown": snap.get("wifimon_shutdown") or {"active": False},
+        "reg_summary":    _reg_summary_for_page(),
     })
 
 def _route_log(h: Handler) -> None:
@@ -11559,2088 +11391,557 @@ def _route_abinfo(h: Handler) -> None:
         "ts":        digital.get("ts",     ""),
     })
 
-CHK_PASS            = "pass"
-CHK_WARN            = "warn"
-CHK_FAIL            = "fail"
-CHK_NOT_IMPLEMENTED = "not_implemented"
-CHK_ERROR           = "error"
+_REGISTER_LOOSE_RE = re.compile(r'^\s*register\s*[=:]', re.IGNORECASE)
 
-_SECURITY_LAYERS     = {"dvswitch", "asl", "usrp2m17", "cross-cutting"}
-_SECURITY_SEVERITIES = {"high", "medium", "low"}
+_PLACEHOLDER_NODES = frozenset({"1999", "1998"})
 
-_SECURITY_STATUS_RANK = {
-    CHK_PASS: 0, CHK_NOT_IMPLEMENTED: 1, CHK_ERROR: 2, CHK_WARN: 3, CHK_FAIL: 4,
-}
-_SECURITY_SUBPROC_TIMEOUT = 2
+_PRIVATE_NODE_MAX  = 2000
 
-def _check_result(status: str, **raw) -> dict:
-    return {"status": status, "raw": raw}
+_STATPOST_URL_RE   = re.compile(
+    r'^https?://stats\.allstarlink\.org/uhandler\b', re.IGNORECASE
+)
 
-def _sec_worst(statuses) -> str:
-    worst = CHK_PASS
-    for s in statuses:
-        if _SECURITY_STATUS_RANK.get(s, 0) > _SECURITY_STATUS_RANK.get(worst, 0):
-            worst = s
-    return worst
-_SECURITY_RUNCTX: dict = {}
+_NODE_LOOKUP_VALUES = frozenset({"dns", "file", "both"})
 
-def _sec_ctx(key: str, producer):
-    if key not in _SECURITY_RUNCTX:
-        try:
-            _SECURITY_RUNCTX[key] = producer()
-        except Exception as exc:
-            log.debug("security: ctx %s failed: %s", key, exc)
-            _SECURITY_RUNCTX[key] = None
-    return _SECURITY_RUNCTX[key]
+_DEFAULT_DNS_DOMAIN = "nodes.allstarlink.org"
 
-def _sec_run(cmd: list, timeout: int = _SECURITY_SUBPROC_TIMEOUT) -> "tuple[str, bool]":
-    deadline = _SECURITY_RUNCTX.get("_deadline")
-    if deadline is not None:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0.2:
-            log.debug("security: run budget spent, skipping %s", cmd[:2])
-            return "", False
-        timeout = max(1, min(timeout, int(remaining)))
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return (r.stdout or "").strip(), True
-    except subprocess.TimeoutExpired:
-        log.debug("security: %s timed out after %ss", cmd[:2], timeout)
-        return "", False
-    except (FileNotFoundError, PermissionError, OSError) as exc:
-        log.debug("security: %s unavailable: %s", cmd[:2], exc)
-        return "", False
-    except Exception as exc:
-        log.debug("security: %s failed: %s", cmd[:2], exc)
-        return "", False
+def _scan_register_lines(content: str) -> dict:
 
-def _sec_have_binary(name: str) -> bool:
-    return bool(shutil.which(name))
+    entries:   list = []
+    malformed: list = []
+    passwords: dict = {}
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";") or stripped.startswith("#"):
+            continue
+        m = _REGISTER_RE.match(line)
+        if m:
+            node, pwd = m.group(1).strip(), m.group(2).strip()
+            entries.append((node, bool(pwd)))
+            if pwd:
+                passwords[node] = pwd
+            continue
+        if _REGISTER_LOOSE_RE.match(line):
+            malformed.append(stripped)
+    return {"entries": entries, "malformed": malformed, "passwords": passwords}
 
-def _sec_installed_units() -> set:
-    def _produce():
-        out, ran = _sec_run(
-            ["systemctl", "list-unit-files", "--no-pager", "--no-legend", "--type=service"],
-            timeout=3)
-        if not ran or not out:
-            return set()
-        names = set()
-        for line in out.splitlines():
-            parts = line.split()
-            if parts:
-                names.add(parts[0].strip())
-        return names
-    return _sec_ctx("units", _produce) or set()
+def _reg_scan_allmon3(content: str) -> "dict[str, dict]":
 
-def _sec_unit_installed(unit: str) -> bool:
-    return unit in _sec_installed_units()
+    nodes: "dict[str, dict]" = {}
+    section = ""
+    kv: "dict[str, str]" = {}
 
-def _sec_unit_props(units: list, props: list) -> "dict[str, dict]":
-    if not units:
-        return {}
-    args = ["systemctl", "show"]
-    for pr in props:
-        args += ["-p", pr]
-    args += list(units)
-    out, ran = _sec_run(args, timeout=3)
-    if not ran or not out:
-        return {}
+    def _flush(sec: str, kv: dict) -> None:
+        if sec and sec.isdigit():
+            nodes[sec] = dict(kv)
 
-    result: "dict[str, dict]" = {}
-    for block in out.split("\n\n"):
-        kv: dict = {}
-        for line in block.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                kv[k.strip()] = v.strip()
-        unit = kv.get("Id", "")
-        if unit:
-            result[unit] = kv
-    return result
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        sm = _DVS_SECTION_RE.match(raw_line)
+        if sm:
+            _flush(section, kv)
+            section, kv = sm.group(1).strip(), {}
+            continue
+        m = _DVS_KV_RE.match(raw_line)
+        if m:
+            kv[m.group(1)] = m.group(2).strip()
+    _flush(section, kv)
+    return nodes
 
-def _sec_ss_entries() -> list:
-    def _produce():
-        raw = _ss_tlnpu_fetch()
-        return _parse_ss_entries(raw) if raw else []
-    return _sec_ctx("ss_entries", _produce) or []
+def _reg_scan_rpt_conf(content: str) -> "tuple[dict, dict]":
 
-_SEC_VPN_IFACE_PREFIXES = ("wg", "tailscale", "tun", "tap", "zt", "nebula")
+    sections, node_sects = _rpt_scan(content)
+    general_kv = next((kv for s, kv in sections.items()
+                        if s.strip().lower() == "general"), {})
+    return node_sects, general_kv
 
-def _sec_vpn_interfaces() -> "dict[str, dict]":
-    def _produce():
-        out: "dict[str, dict]" = {}
-        base = Path("/sys/class/net")
-        try:
-            names = sorted(p.name for p in base.iterdir())
-        except Exception as exc:
-            log.debug("security: /sys/class/net unreadable: %s", exc)
-            return out
-        for name in names:
-            if not name.startswith(_SEC_VPN_IFACE_PREFIXES):
-                continue
-            operstate = ""
-            flags_up  = False
-            try:
-                operstate = (base / name / "operstate").read_text().strip().lower()
-            except Exception as exc:
-                log.debug("security: operstate %s: %s", name, exc)
-            try:
-                raw_flags = (base / name / "flags").read_text().strip()
-                flags_up  = bool(int(raw_flags, 16) & 0x1)
-            except Exception as exc:
-                log.debug("security: flags %s: %s", name, exc)
-            up = (operstate == "up") or (flags_up and operstate != "down")
-            out[name] = {"operstate": operstate or "unknown",
-                          "flags_up": flags_up, "up": up}
-        return out
-    return _sec_ctx("vpn_ifaces", _produce) or {}
+_REG_STATUS_RANK = {"fail": 3, "warn": 2, "info": 1, "none": 1, "pass": 0}
 
-def _sec_addr_iface_map() -> "dict[str, str]":
-    def _produce():
-        out: "dict[str, str]" = {}
-        raw, ran = _sec_run(["ip", "-o", "addr", "show"])
-        if not ran or not raw:
-            return out
-        for line in raw.splitlines():
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            iface = parts[1].split("@", 1)[0]
-            if parts[2] not in ("inet", "inet6"):
-                continue
-            addr = parts[3].split("/", 1)[0].split("%", 1)[0]
-            out.setdefault(addr, iface)
-        return out
-    return _sec_ctx("addr_iface", _produce) or {}
+def _reg_overall_status(checks: list) -> str:
+    if not checks:
+        return "info"
+    worst = max(checks, key=lambda c: _REG_STATUS_RANK.get(c.get("status"), 1))
+    return worst.get("status") or "info"
 
-def _sec_norm_addr(addr: str) -> str:
-    a = (addr or "").strip()
-    if a.startswith("[") and a.endswith("]"):
-        a = a[1:-1]
-    a = a.split("%", 1)[0]
-    if a in ("*", ""):
-        return "0.0.0.0"
-    return a
+def _reg_load_context() -> dict:
+    http_content, http_err = read_asterisk_file("rpt_http_registrations.conf")
+    iax_content,  iax_err  = read_asterisk_file("iax.conf")
+    rpt_content,  rpt_err  = read_asterisk_file("rpt.conf")
 
-def _sec_classify_bind(addr: str) -> dict:
-    a = _sec_norm_addr(addr)
+    empty_scan = {"entries": [], "malformed": [], "passwords": {}}
+    http_scan = _scan_register_lines(http_content) if not http_err else dict(empty_scan)
+    iax_scan  = _scan_register_lines(iax_content)  if not iax_err  else dict(empty_scan)
 
-    if a.startswith("127.") or a in ("::1", "0:0:0:0:0:0:0:1"):
-        return {"scope": "loopback", "verdict": CHK_PASS, "iface": "lo",
-                "vpn_up": None, "addr": a}
-    if a in ("0.0.0.0", "::", "0:0:0:0:0:0:0:0"):
-        return {"scope": "wildcard", "verdict": CHK_FAIL, "iface": "",
-                "vpn_up": None, "addr": a}
+    return {
+        "http_content": http_content, "http_err": http_err, "http_scan": http_scan,
+        "iax_content":  iax_content,  "iax_err":  iax_err,  "iax_scan":  iax_scan,
+        "rpt_content":  rpt_content,  "rpt_err":  rpt_err,
+    }
 
-    iface = _sec_addr_iface_map().get(a, "")
-    if not iface:
-        return {"scope": "unknown", "verdict": CHK_WARN, "iface": "",
-                "vpn_up": None, "addr": a}
+def _reg_node_password_checks(entries: list, label: str) -> list:
+    checks = []
+    for node, has_pwd in entries:
+        node_ok = node.isdigit() and len(node) >= 4
+        checks.append({
+            "title":  f"{label} Node {node}",
+            "value":  node if node_ok else "invalid",
+            "status": "pass" if node_ok else "fail",
+            "note":   None, "url": None,
+        })
+        checks.append({
+            "title":  "Password", "value": None,
+            "status": "pass" if has_pwd else "fail",
+            "note":   _ASL_NOTE, "url": _ASL_URL,
+        })
+    return checks
 
-    vpn = _sec_vpn_interfaces().get(iface)
-    if vpn is not None:
-        return {"scope": "vpn", "verdict": CHK_PASS if vpn["up"] else CHK_WARN,
-                "iface": iface, "vpn_up": vpn["up"], "addr": a}
+def _reg_dual_check(http_active: bool, iax_active: bool) -> list:
+    if http_active and iax_active:
+        return [{
+            "title":  "Dual registration",
+            "value":  "HTTP and IAX both active",
+            "status": "warn",
+            "note":   ("Don't register with both — wastes server load for "
+                       "no gain. Pick one, comment out the other."),
+            "url":    "https://allstarlink.github.io/adv-topics/httpreg/",
+        }]
+    return [{
+        "title":  "Dual registration",
+        "value":  "single protocol only",
+        "status": "pass",
+        "note":   None, "url": None,
+    }]
 
-    return {"scope": "lan", "verdict": CHK_FAIL, "iface": iface,
-            "vpn_up": None, "addr": a}
+def _reg_syntax_checks(scan: dict, label: str) -> list:
+    malformed = scan["malformed"]
+    if malformed:
+        return [{
+            "title":  f"{label} register line syntax",
+            "value":  malformed[0][:60],
+            "status": "fail",
+            "note":   ("Looks like a register line but doesn't match the "
+                       "required register=> node:password@host syntax "
+                       "(missing arrow is a common copy/paste mistake)."),
+            "url":    None,
+        }]
+    return [{
+        "title":  f"{label} register line syntax",
+        "value":  "no malformed lines",
+        "status": "pass",
+        "note":   None, "url": None,
+    }]
 
-def _sec_binds_for_port(port: str, proto: str = "") -> list:
-    port = str(port).strip()
-    if not port.isdigit():
+def _reg_placeholder_check(entries: list, label: str) -> list:
+    if not entries:
         return []
-    out = []
-    for e in _sec_ss_entries():
-        if e["port"] != port:
-            continue
-        if proto and e["proto"] != proto:
-            continue
-        cls = _sec_classify_bind(e["addr"])
-        out.append({
-            "port": e["port"], "proto": e["proto"], "addr": cls["addr"],
-            "scope": cls["scope"], "verdict": cls["verdict"],
-            "iface": cls["iface"], "vpn_up": cls["vpn_up"],
-            "process": e.get("process", ""),
+    hits = [n for n, _ in entries if n in _PLACEHOLDER_NODES]
+    if hits:
+        return [{
+            "title":  f"{label} placeholder node number",
+            "value":  hits[0],
+            "status": "fail",
+            "note":   "Template default left unchanged — set your real assigned node number.",
+            "url":    None,
+        }]
+    return [{
+        "title":  f"{label} placeholder node number",
+        "value":  "none found",
+        "status": "pass",
+        "note":   None, "url": None,
+    }]
+
+def _reg_module_checks(http_active: bool, iax_active: bool) -> list:
+    if not http_active and not iax_active:
+        return []
+    http_mod = module_state("res_rpt_http_registrations.so")
+    if http_active and http_mod == "noload":
+        return [{
+            "title":  "res_rpt_http_registrations.so",
+            "value":  "noload",
+            "status": "fail",
+            "note":   "HTTP registration is configured but the module is set to noload in modules.conf.",
+            "url":    None,
+        }]
+    if http_active:
+        return [{
+            "title":  "res_rpt_http_registrations.so",
+            "value":  http_mod,
+            "status": "pass" if http_mod in ("load", "require", "blank") else "warn",
+            "note":   None, "url": None,
+        }]
+    if iax_active and http_mod in ("load", "require"):
+        return [{
+            "title":  "res_rpt_http_registrations.so",
+            "value":  http_mod,
+            "status": "warn",
+            "note":   "Only IAX registration is configured, but the HTTP registration module is still loaded.",
+            "url":    None,
+        }]
+    return [{
+        "title":  "res_rpt_http_registrations.so",
+        "value":  http_mod,
+        "status": "pass",
+        "note":   None, "url": None,
+    }]
+
+def _reg_node_coverage_checks(node_sects: dict, registered_nodes: set) -> list:
+    checks = []
+    for nid in sorted(node_sects.keys(), key=int):
+        is_private = nid.isdigit() and int(nid) < _PRIVATE_NODE_MAX
+        if is_private:
+            checks.append({
+                "title":  f"rpt.conf node {nid}",
+                "value":  "private node — registration not required",
+                "status": "pass",
+                "note":   None, "url": None,
+            })
+        elif registered_nodes and nid not in registered_nodes:
+            checks.append({
+                "title":  f"rpt.conf node {nid}",
+                "value":  "no matching registration entry",
+                "status": "warn",
+                "note":   ("Node exists in rpt.conf but isn't in either registration "
+                           "file — check for a typo'd node number."),
+                "url":    None,
+            })
+        else:
+            checks.append({
+                "title":  f"rpt.conf node {nid}",
+                "value":  "has matching registration entry",
+                "status": "pass",
+                "note":   None, "url": None,
+            })
+    return checks
+
+def _reg_lookup_settings_checks(general_kv: dict) -> list:
+    checks = []
+    method = general_kv.get("node_lookup_method", "").strip().lower()
+    if method:
+        checks.append({
+            "title":  "node_lookup_method",
+            "value":  method,
+            "status": "pass" if method in _NODE_LOOKUP_VALUES else "warn",
+            "note":   (None if method in _NODE_LOOKUP_VALUES
+                       else f"Expected one of {', '.join(sorted(_NODE_LOOKUP_VALUES))}."),
+            "url":    None,
         })
-    return out
+    domain = general_kv.get("dns_node_domain", "").strip()
+    if domain and domain != _DEFAULT_DNS_DOMAIN:
+        checks.append({
+            "title":  "dns_node_domain",
+            "value":  domain,
+            "status": "info",
+            "note":   f"Overridden from the default ({_DEFAULT_DNS_DOMAIN}) — confirm this is intentional.",
+            "url":    None,
+        })
+    return checks
 
-def _sec_exposure_verdict(targets: list) -> "tuple[str, list, list]":
-    rows:  list = []
-    notes: list = []
-    statuses:  list = []
-
-    for t in targets:
-        port  = str(t.get("port", "")).strip()
-        proto = t.get("proto", "")
-        if not port.isdigit():
+def _reg_statpost_checks(node_sects: dict, http_entries: list) -> list:
+    checks = []
+    for nid in sorted(node_sects.keys(), key=int):
+        kv = node_sects[nid]
+        statpost = kv.get("statpost_url", "").strip()
+        if not statpost:
             continue
-        binds = _sec_binds_for_port(port, proto)
-        if not binds:
-            rows.append({"port": port, "proto": proto or "-", "addr": "",
-                          "scope": "not_listening", "verdict": CHK_PASS,
-                          "iface": "", "vpn_up": None, "process": "",
-                          "role": t.get("role", ""), "source": t.get("source", "")})
-            notes.append(f"{t.get('role', 'port')} {port}/{proto or '?'}: "
-                          f"configured but nothing is listening")
+        url_ok = bool(_STATPOST_URL_RE.match(statpost))
+        checks.append({
+            "title":  f"statpost {nid}",
+            "value":  statpost if url_ok else "unexpected URL",
+            "status": "pass" if url_ok else "warn",
+            "note":   None, "url": None,
+        })
+        has_reg_entry = any(n == nid and pwd for n, pwd in http_entries)
+        checks.append({
+            "title":  f"statpost {nid} credential",
+            "value":  ("matches HTTP registration password" if has_reg_entry
+                       else "no matching HTTP registration password"),
+            "status": "pass" if has_reg_entry else "warn",
+            "note":   (None if has_reg_entry else
+                       ("statpost can 401 even on an otherwise healthy node if this "
+                        "node/password pair drifts from rpt_http_registrations.conf — "
+                        "this doesn't block registration itself.")),
+            "url":    None,
+        })
+    return checks
+
+def _reg_ami_checks(http_passwords: dict) -> list:
+    checks = []
+
+    allmon3_path = _ALLMON3_DIR / "allmon3.ini"
+    allmon3_content, allmon3_err = read_path_file(allmon3_path) if allmon3_path.is_file() \
+        else ("", f"File not found: {allmon3_path}")
+    manager_content, manager_err = read_asterisk_file("manager.conf")
+
+    if allmon3_err or manager_err:
+        return checks
+
+    allmon3_nodes = _reg_scan_allmon3(allmon3_content)
+    manager_users = {s: kv for s, kv in _parse_sections(manager_content).items()
+                      if s.strip().lower() != "general"}
+
+    for nid in sorted(allmon3_nodes.keys(), key=lambda n: (not n.isdigit(), n)):
+        am_user = allmon3_nodes[nid].get("user", "").strip()
+        am_pass = allmon3_nodes[nid].get("pass", "").strip()
+        if not am_user:
             continue
-        for b in binds:
-            b = dict(b)
-            b["role"]   = t.get("role", "")
-            b["source"] = t.get("source", "")
-            rows.append(b)
-            statuses.append(b["verdict"])
 
-    if not rows:
-        return CHK_WARN, rows, ["no ports could be read from config"]
-    return _sec_worst(statuses) if statuses else CHK_PASS, rows, notes
-
-_SEC_WEAK_SECRETS = frozenset({
-    "", "password", "passw0rd", "pass", "secret", "changeme", "change-me",
-    "letmein", "admin", "administrator", "root", "test", "guest", "default",
-    "asterisk", "allstar", "allstarlink", "node", "radio", "repeater",
-    "dvswitch", "brandmeister", "hotspot", "iaxrpt", "manager", "monitor",
-    "12345", "123456", "1234567", "12345678", "123456789", "1234567890",
-    "0000", "1111", "1234", "qwerty", "abc123", "supersecret", "mypassword",
-})
-
-_SEC_DEFAULT_AMI_USERS = frozenset({
-    "admin", "administrator", "manager", "asterisk", "allmon", "allmon3",
-    "monitor", "dvswitch", "user", "test",
-})
-
-def _sec_identity() -> dict:
-    def _produce():
-        rpt  = _dvsm_read_rpt_conf()
-        iax  = _dvsm_read_iax_conf()
-        cfg_cs = _cfg.get("identity", "callsign", fallback="").strip()
-        cfg_nd = _cfg.get("identity", "node",     fallback="").strip()
-
-        callsign = (rpt.get("callsign", "")
-                    or iax.get("iaxrpt_callerid", "")
-                    or cfg_cs).strip().upper()
-
-        nodes = [n["id"] for n in rpt.get("nodes", []) if n.get("id")]
-        if cfg_nd and cfg_nd not in nodes:
-            nodes.append(cfg_nd)
-        for r in iax.get("registers", []):
-            nid = str(r.get("node", "")).strip()
-            if nid and nid not in nodes:
-                nodes.append(nid)
-
-        dmr_id = ""
-        mb = _sec_read_mmdvm_bridge()
-        if mb.get("raw_ok"):
-            dmr_id = mb["sections"].get("GENERAL", {}).get("Id", "").strip()
-        if not dmr_id:
-            ab_content, ab_path = _sec_read_first(_STFU_AB_CANDIDATES)
-            if ab_content:
-                ambe = _dvs_parse_sections(ab_content).get("AMBE_AUDIO", {})
-                dmr_id = (ambe.get("gatewayDmrId", "")
-                          or ambe.get("repeaterID", "")).strip()
-
-        return {"callsign": callsign, "nodes": nodes, "dmr_id": dmr_id}
-    return _sec_ctx("identity", _produce) or {"callsign": "", "nodes": [], "dmr_id": ""}
-
-def _sec_secret_facts(secret: str, label: str = "") -> dict:
-    s = (secret or "").strip()
-    ident = _sec_identity()
-    cs    = ident["callsign"]
-    nodes = {str(n).strip() for n in ident["nodes"] if str(n).strip()}
-    dmr   = str(ident["dmr_id"]).strip()
-
-    su = s.upper()
-    matches_callsign = bool(cs) and (
-        su == cs or (su.startswith(cs) and su[len(cs):].isdigit() and len(su) > len(cs))
-    )
-    matches_node = bool(s) and s in nodes
-    matches_dmr  = bool(s) and bool(dmr) and s == dmr
-
-    return {
-        "label":            label,
-        "present":          bool(s),
-        "length":           len(s),
-        "matches_callsign": matches_callsign,
-        "matches_node":     matches_node,
-        "matches_dmr_id":   matches_dmr,
-        "known_weak":       s.lower() in _SEC_WEAK_SECRETS,
-        "all_same_char":    bool(s) and len(set(s)) == 1,
-        "too_short":        bool(s) and len(s) < 8,
-    }
-
-def _sec_facts_verdict(facts: list) -> "tuple[str, list]":
-    reasons: list = []
-    status = CHK_PASS
-    for f in facts:
-        who = f.get("label") or "secret"
-        if not f["present"]:
-            reasons.append(f"{who}: not set")
-            status = _sec_worst([status, CHK_FAIL]); continue
-        if f["matches_callsign"]:
-            reasons.append(f"{who}: equals the node callsign")
-            status = _sec_worst([status, CHK_FAIL])
-        if f["matches_node"]:
-            reasons.append(f"{who}: equals a node number")
-            status = _sec_worst([status, CHK_FAIL])
-        if f["matches_dmr_id"]:
-            reasons.append(f"{who}: equals the DMR ID")
-            status = _sec_worst([status, CHK_FAIL])
-        if f["known_weak"]:
-            reasons.append(f"{who}: known-weak/default value")
-            status = _sec_worst([status, CHK_FAIL])
-        if f["all_same_char"]:
-            reasons.append(f"{who}: single repeated character")
-            status = _sec_worst([status, CHK_FAIL])
-        if f["too_short"] and not any((f["matches_callsign"], f["matches_node"],
-                                        f["matches_dmr_id"], f["known_weak"],
-                                        f["all_same_char"])):
-            reasons.append(f"{who}: shorter than 8 characters")
-            status = _sec_worst([status, CHK_WARN])
-    if not facts:
-        return CHK_WARN, ["no secret found to evaluate"]
-    if not reasons:
-        reasons.append("no weak-secret pattern matched")
-    return status, reasons
-
-def _sec_read_first(candidates) -> "tuple[str, str]":
-    for cand in candidates:
-        content, err = read_path_file(cand)
-        if not err:
-            return content, str(cand)
-    return "", ""
-
-_SEC_MB_CANDIDATES = [
-    Path("/opt/MMDVM_Bridge/MMDVM_Bridge.ini"),
-    Path("/etc/MMDVM_Bridge/MMDVM_Bridge.ini"),
-    Path("/etc/dvswitch/MMDVM_Bridge.ini"),
-]
-_SEC_MB_BINARIES = [
-    Path("/opt/MMDVM_Bridge/MMDVM_Bridge"),
-    Path("/usr/local/bin/MMDVM_Bridge"),
-]
-_SEC_MONIT_CANDIDATES = [
-    Path("/etc/monit/monitrc"),
-    Path("/etc/monitrc"),
-    Path("/etc/monit.conf"),
-]
-_SEC_SSHD_CONFIG     = Path("/etc/ssh/sshd_config")
-_SEC_SSHD_CONFIG_DIR = Path("/etc/ssh/sshd_config.d")
-_SEC_ASTERISK_DIR    = _AST_DIR
-_SEC_ASTERISK_EXPECTED_MODE  = 0o750
-_SEC_ASTERISK_EXPECTED_GROUP = "asterisk"
-_SEC_ASTERISK_SECRET_FILES   = ("iax.conf", "manager.conf", "rpt.conf")
-
-def _sec_read_mmdvm_bridge() -> dict:
-    def _produce():
-        content, path = _sec_read_first(_SEC_MB_CANDIDATES)
-        installed = (any(p.exists() for p in _SEC_MB_BINARIES)
-                     or _sec_unit_installed("mmdvm_bridge.service"))
-        if not content:
-            return {"raw_ok": False, "path": "", "sections": {},
-                     "installed": installed}
-        return {"raw_ok": True, "path": path,
-                 "sections": _dvs_parse_sections(content), "installed": True}
-    return _sec_ctx("mmdvm_bridge", _produce) or {
-        "raw_ok": False, "path": "", "sections": {}, "installed": False}
-
-def _sec_read_manager_conf() -> dict:
-    def _produce():
-        content, err = read_asterisk_file("manager.conf")
-        if err:
-            return {"raw_ok": False, "error": err, "sections": {}}
-        return {"raw_ok": True, "error": "", "sections": _parse_sections(content),
-                 "has_permit": bool(re.search(r"(?mi)^\s*permit\s*=", content)),
-                 "has_deny":   bool(re.search(r"(?mi)^\s*deny\s*=",   content))}
-    return _sec_ctx("manager_conf", _produce) or {
-        "raw_ok": False, "error": "read failed", "sections": {}}
-
-def _sec_read_iax() -> dict:
-    return _sec_ctx("iax_conf", _dvsm_read_iax_conf) or {"raw_ok": False}
-
-def _sec_read_rpt() -> dict:
-    return _sec_ctx("rpt_conf", _dvsm_read_rpt_conf) or {"raw_ok": False}
-
-def _sec_read_m17() -> dict:
-    return _sec_ctx("m17_ini", _m17_read_config) or {"raw_ok": False}
-
-def _check_usrp_port_exposure() -> dict:
-    targets: list = []
-
-    m17 = _sec_read_m17()
-    if m17.get("raw_ok"):
-        for key, role in (("usrp_local_port", "usrp2m17 USRP listen"),
-                          ("usrp_dst_port",   "usrp2m17 USRP peer")):
-            val = str(m17.get(key, "")).strip()
-            if val.isdigit():
-                targets.append({"port": val, "proto": "udp", "role": role,
-                                 "source": m17.get("ini_path", "USRP2M17.ini")})
-
-    ab = _dvsm_read_ab()
-    if ab.get("raw_ok"):
-        for key, role in (("rx_port", "Analog_Bridge USRP rx"),
-                          ("tx_port", "Analog_Bridge USRP tx")):
-            val = str(ab.get(key, "")).strip()
-            if val.isdigit():
-                targets.append({"port": val, "proto": "udp", "role": role,
-                                 "source": ab.get("source", "Analog_Bridge.ini")})
-
-    rpt = _sec_read_rpt()
-    for node in rpt.get("nodes", []):
-        for key, role in (("usrp_rx", f"rpt.conf node {node.get('id','')} USRP rx"),
-                          ("usrp_tx", f"rpt.conf node {node.get('id','')} USRP tx")):
-            val = str(node.get(key, "")).strip()
-            if val.isdigit():
-                targets.append({"port": val, "proto": "udp", "role": role,
-                                 "source": str(_RPT_CONF)})
-
-    seen, uniq = set(), []
-    for t in targets:
-        key = (t["port"], t["proto"])
-        if key in seen:
-            continue
-        seen.add(key)
-        uniq.append(t)
-
-    if not uniq:
-        return _check_result(
-            CHK_WARN, binds=[], notes=["no USRP ports found in USRP2M17.ini, "
-                                        "Analog_Bridge.ini or rpt.conf"],
-            vpn=_sec_vpn_summary())
-
-    status, rows, notes = _sec_exposure_verdict(uniq)
-    return _check_result(status, binds=rows, notes=notes, vpn=_sec_vpn_summary())
-
-def _check_m17_port_exposure() -> dict:
-    m17 = _sec_read_m17()
-    if not m17.get("raw_ok"):
-        return _check_result(
-            CHK_WARN, binds=[],
-            notes=[m17.get("error") or "USRP2M17.ini not readable"],
-            vpn=_sec_vpn_summary())
-
-    targets = []
-    for key, role in (("m17_local_port", "M17 local"),
-                      ("m17_dst_port",   "M17 reflector")):
-        val = str(m17.get(key, "")).strip()
-        if val.isdigit():
-            targets.append({"port": val, "proto": "udp", "role": role,
-                             "source": m17.get("ini_path", "USRP2M17.ini")})
-
-    if not targets:
-        return _check_result(
-            CHK_WARN, binds=[],
-            notes=["no M17 ports configured in USRP2M17.ini [M17 NETWORK]"],
-            vpn=_sec_vpn_summary())
-
-    status, rows, notes = _sec_exposure_verdict(targets)
-    addr = str(m17.get("address", "")).strip()
-    if addr == _M17_PLACEHOLDER_ADDRESS:
-        notes.append("USRP2M17.ini Address is still the 0.0.0.0 placeholder "
-                      "(bridge not pointed at a reflector)")
-    return _check_result(status, binds=rows, notes=notes, vpn=_sec_vpn_summary())
-
-def _check_ami_port_exposure() -> dict:
-    mgr = _sec_read_manager_conf()
-    if not mgr.get("raw_ok"):
-        return _check_result(CHK_WARN, binds=[],
-                              notes=[mgr.get("error") or "manager.conf unreadable"],
-                              enabled=None, vpn=_sec_vpn_summary())
-
-    general = mgr["sections"].get("general", {})
-    enabled = general.get("enabled", "").strip().lower()
-    if enabled and enabled not in ("yes", "true", "on", "1"):
-        return _check_result(CHK_PASS, binds=[], enabled=False,
-                              notes=["AMI is disabled in manager.conf "
-                                     "([general] enabled=no) -- nothing listening"],
-                              acl_checked=False, vpn=_sec_vpn_summary())
-
-    bindaddr = general.get("bindaddr", "").strip() or "0.0.0.0"
-    port     = general.get("port", "").strip() or "5038"
-
-    targets = [{"port": port, "proto": "tcp", "role": "AMI",
-                 "source": str(_AST_DIR / "manager.conf")}]
-    status, rows, notes = _sec_exposure_verdict(targets)
-
-    cfg_cls = _sec_classify_bind(bindaddr)
-    if not rows or all(r["scope"] == "not_listening" for r in rows):
-        status = cfg_cls["verdict"]
-        notes.append(f"not currently listening; manager.conf bindaddr is "
-                      f"{cfg_cls['addr']} ({cfg_cls['scope']})")
-    else:
-        status = _sec_worst([status, cfg_cls["verdict"]])
-
-    notes.append("bind address only -- manager.conf permit=/deny= ACL lines "
-                  "are NOT evaluated by this check (v1 limitation)")
-
-    return _check_result(
-        status, binds=rows, notes=notes, enabled=True,
-        configured_bindaddr=cfg_cls["addr"], configured_scope=cfg_cls["scope"],
-        configured_port=port,
-        acl_lines_present=bool(mgr.get("has_permit") or mgr.get("has_deny")),
-        acl_checked=False, vpn=_sec_vpn_summary())
-
-def _sec_vpn_summary() -> dict:
-    ifaces = _sec_vpn_interfaces()
-    return {
-        "interfaces": [{"name": n, "operstate": v["operstate"], "up": v["up"]}
-                        for n, v in sorted(ifaces.items())],
-        "any_up": any(v["up"] for v in ifaces.values()),
-        "present": bool(ifaces),
-    }
-
-_SEC_IAX_DOCUMENTED_STANZAS = {"allstar-public", "allstar-pub"}
-
-def _check_iax2_secret_strength() -> dict:
-    iax = _sec_read_iax()
-    if not iax.get("raw_ok"):
-        return _check_result(CHK_WARN, evaluated=0,
-                              reasons=[iax.get("error") or "iax.conf unreadable"])
-
-    facts:   list = []
-    skipped: list = []
-    for cand in iax.get("iaxrpt_candidates", []):
-        name = str(cand.get("name", "")).strip() or "user"
-        if name.lower() in _SEC_IAX_DOCUMENTED_STANZAS:
-            skipped.append(name)
-            continue
-        facts.append(_sec_secret_facts(cand.get("secret", ""), f"[{name}] secret"))
-    for reg in iax.get("registers", []):
-        node = str(reg.get("node", "")).strip() or "?"
-        facts.append(_sec_secret_facts(reg.get("password", ""),
-                                        f"register=> node {node}"))
-
-    if not facts:
-        http_content, http_err = read_asterisk_file("rpt_http_registrations.conf")
-        reasons = []
-        if skipped:
-            reasons.append(f"skipped documented AllStar stanza(s): "
-                            f"{', '.join(skipped)}")
-        if not http_err and http_content.strip():
-            reasons.append("no local IAX2 client secret is defined, and this node "
-                            "registers over HTTP (rpt_http_registrations.conf) -- "
-                            "nothing to grade")
-            return _check_result(CHK_PASS, evaluated=0, reasons=reasons,
-                                  http_registration=True)
-        reasons.append("no IAX2 user secrets or register= lines found in iax.conf, "
-                        "and no HTTP registration config either")
-        return _check_result(CHK_WARN, evaluated=0, reasons=reasons,
-                              http_registration=False)
-
-    status, reasons = _sec_facts_verdict(facts)
-    if skipped:
-        reasons.insert(0, f"skipped documented AllStar stanza(s): "
-                           f"{', '.join(skipped)} (protected by ASL token validation)")
-    return _check_result(
-        status,
-        evaluated=len(facts),
-        reasons=reasons,
-        secret_matches_callsign=any(f["matches_callsign"] for f in facts),
-        secret_matches_node=any(f["matches_node"] or f["matches_dmr_id"] for f in facts),
-        secret_is_known_weak=any(f["known_weak"] or f["all_same_char"] for f in facts),
-        secret_length=min([f["length"] for f in facts if f["present"]] or [0]),
-    )
-
-def _check_ami_default_credentials() -> dict:
-    mgr = _sec_read_manager_conf()
-    if not mgr.get("raw_ok"):
-        return _check_result(CHK_WARN, evaluated=0,
-                              reasons=[mgr.get("error") or "manager.conf unreadable"])
-
-    users = {name: kv for name, kv in mgr["sections"].items()
-             if name.lower() != "general"}
-    if not users:
-        return _check_result(CHK_WARN, evaluated=0,
-                              reasons=["no AMI users configured in manager.conf"])
-
-    facts:   list = []
-    reasons: list = []
-    default_user = False
-    for name, kv in users.items():
-        if name.strip().lower() in _SEC_DEFAULT_AMI_USERS:
-            default_user = True
-            reasons.append(f"user '{name}': default/predictable username")
-        facts.append(_sec_secret_facts(kv.get("secret", ""), f"user '{name}' secret"))
-
-    status, sec_reasons = _sec_facts_verdict(facts)
-    reasons.extend(sec_reasons)
-
-    if default_user:
-        status = _sec_worst([status, CHK_WARN])
-
-    return _check_result(
-        status,
-        evaluated=len(facts),
-        reasons=reasons,
-        username_is_default=default_user,
-        secret_matches_callsign=any(f["matches_callsign"] for f in facts),
-        secret_is_known_weak=any(f["known_weak"] or f["all_same_char"]
-                                  or not f["present"] for f in facts),
-    )
-
-def _check_brandmeister_hotspot_password() -> dict:
-    mb = _sec_read_mmdvm_bridge()
-    if not mb.get("raw_ok"):
-        if not mb.get("installed"):
-            return _check_result(CHK_PASS, evaluated=0,
-                                  reasons=["MMDVM_Bridge is not installed on this "
-                                           "node -- no DMR network password to check"])
-        return _check_result(CHK_WARN, evaluated=0,
-                              reasons=["MMDVM_Bridge is installed but "
-                                       "MMDVM_Bridge.ini is missing or unreadable"])
-
-    sections = mb["sections"]
-    net = sections.get("DMR NETWORK", {}) or sections.get("DMR_NETWORK", {})
-    if not net:
-        return _check_result(CHK_WARN, evaluated=0,
-                              reasons=["no [DMR Network] section in MMDVM_Bridge.ini"])
-
-    enabled = str(net.get("Enable", "")).strip().lower()
-    if enabled in ("0", "no", "false", "off"):
-        return _check_result(CHK_PASS, evaluated=0,
-                              reasons=["[DMR Network] is disabled in MMDVM_Bridge.ini"])
-
-    facts = [_sec_secret_facts(net.get("Password", ""), "[DMR Network] Password")]
-    status, reasons = _sec_facts_verdict(facts)
-    f = facts[0]
-
-    return _check_result(
-        status,
-        evaluated=1,
-        reasons=reasons,
-        password_matches_callsign=f["matches_callsign"],
-        password_is_known_default=f["known_weak"] or f["all_same_char"] or not f["present"],
-        password_length=f["length"],
-    )
-
-def _check_chan_sip_disabled() -> dict:
-    conf_state = module_state("chan_sip.so")
-
-    loaded   = None
-    peers    = None
-    ast_seen = False
-    if _sec_have_binary("asterisk"):
-        out, ran = _sec_run(["asterisk", "-rx", "module show like chan_sip"])
-        if ran and out:
-            ast_seen = True
-            loaded   = "chan_sip.so" in out.lower()
-            if loaded:
-                pout, pran = _sec_run(["asterisk", "-rx", "sip show peers"])
-                if pran and pout:
-                    m = re.search(r"(\d+)\s+sip peers", pout, re.IGNORECASE)
-                    peers = int(m.group(1)) if m else None
-
-    notes = [f"modules.conf state: {conf_state}"]
-    if not ast_seen:
-        notes.append("Asterisk CLI not reachable -- verdict from modules.conf alone")
-
-    if loaded is True:
-        if peers:
-            status = CHK_FAIL
-            notes.append(f"chan_sip is loaded and has {peers} configured peer(s)")
+        mgr_kv = next((kv for s, kv in manager_users.items() if s.strip() == am_user), None)
+        if mgr_kv is None:
+            checks.append({
+                "title":  f"AMI user [{nid}]",
+                "value":  f"'{am_user}' not found in manager.conf",
+                "status": "warn",
+                "note":   "Allmon3 will fail to connect locally even though AllStarLink registration can still succeed.",
+                "url":    None,
+            })
         else:
-            status = CHK_WARN
-            notes.append("chan_sip is loaded but has no configured peers")
-    elif loaded is False:
-        status = CHK_PASS
-        notes.append("chan_sip is not loaded in the running Asterisk")
-    else:
-        status = CHK_PASS if conf_state == "noload" else CHK_WARN
-        if conf_state != "noload":
-            notes.append("chan_sip is not set to noload in modules.conf")
+            checks.append({
+                "title":  f"AMI user [{nid}]",
+                "value":  f"'{am_user}' found in manager.conf",
+                "status": "pass",
+                "note":   None, "url": None,
+            })
+            mgr_secret = mgr_kv.get("secret", "").strip()
+            if am_pass and mgr_secret:
+                if am_pass != mgr_secret:
+                    checks.append({
+                        "title":  f"AMI credential [{nid}]",
+                        "value":  "allmon3.ini password != manager.conf secret",
+                        "status": "warn",
+                        "note":   f"[{am_user}] secret in manager.conf has drifted from the password in allmon3.ini's [{nid}] stanza.",
+                        "url":    None,
+                    })
+                else:
+                    checks.append({
+                        "title":  f"AMI credential [{nid}]",
+                        "value":  "allmon3.ini password matches manager.conf secret",
+                        "status": "pass",
+                        "note":   None, "url": None,
+                    })
 
-    return _check_result(status, notes=notes, modules_conf_state=conf_state,
-                          loaded=loaded, peers=peers)
+        reg_pwd = http_passwords.get(nid)
+        if reg_pwd and am_pass:
+            checks.append({
+                "title":  f"Registration vs AMI password [{nid}]",
+                "value":  "match" if reg_pwd == am_pass else "differ",
+                "status": "pass" if reg_pwd == am_pass else "info",
+                "note":   (None if reg_pwd == am_pass else
+                           "AllStarLink registration and local AMI access are separate credentials — this is only worth a look if you intended them to match."),
+                "url":    None,
+            })
+    return checks
 
-def _check_monit_auth() -> dict:
-    path = None
-    for cand in _SEC_MONIT_CANDIDATES:
-        if cand.exists():
-            path = cand
-            break
-
-    if path is None:
-        if not _sec_have_binary("monit") and not _sec_unit_installed("monit.service"):
-            return _check_result(CHK_PASS, notes=["monit is not installed on this "
-                                                   "node -- nothing to configure"],
-                                  installed=False)
-        return _check_result(CHK_WARN, notes=["monit appears installed but no "
-                                               "monitrc was found"], installed=True)
-
-    try:
-        st   = path.stat()
-        mode = st.st_mode & 0o777
-    except Exception as exc:
-        return _check_result(CHK_WARN, notes=[f"{path}: {exc}"], installed=True)
-
-    content, err = read_path_file(path)
-    if err:
-        return _check_result(CHK_WARN, notes=[f"{path}: {err} (mode {oct(mode)})"],
-                              installed=True, mode=oct(mode))
-    if "[truncated" in content:
-        return _check_result(
-            CHK_WARN,
-            notes=[f"{path} exceeds the 64 KB read cap and was truncated -- "
-                   f"`allow` lines past that point cannot be seen, so auth "
-                   f"configuration cannot be verified (mode {oct(mode)})"],
-            installed=True, mode=oct(mode), truncated=True)
-
-    mode_ok  = (mode & 0o077) == 0
-    owner_ok = (st.st_uid == 0)
-
-    allows = [a.strip() for a in
-              re.findall(r"(?mi)^\s*allow\s+(.+?)\s*$", content)]
-    creds, acls, wide = [], [], []
-    for a in allows:
-        first = a.split()[0] if a.split() else ""
-        low   = first.lower().rstrip(",")
-        if low.startswith("@") or (":" in low and not low.startswith("/")):
-            creds.append("@group" if low.startswith("@") else "user:password")
-        else:
-            acls.append(low)
-            if low in ("0.0.0.0/0.0.0.0", "0.0.0.0/0", "0.0.0.0",
-                       "::/0", "::0/0", "any"):
-                wide.append(low)
-
-    notes = [f"config: {path}",
-             f"mode: {oct(mode)} (monit requires no more than 0700)",
-             f"allow lines: {len(allows)} "
-             f"({len(creds)} credential, {len(acls)} host ACL)"]
-
-    status = CHK_PASS
-    if not allows:
-        status = CHK_WARN
-        notes.append("no `allow` line at all -- monit's HTTP interface has no "
-                      "access control, and monit will not serve it either")
-    elif not creds and wide:
-        status = CHK_WARN
-        notes.append(f"the only access control is a wide-open host ACL "
-                      f"({', '.join(wide)}) with no credentials")
-    elif not creds:
-        notes.append("host-ACL access control only (no username/password); "
-                      "acceptable when the ACL is loopback or a trusted subnet")
-    if not mode_ok:
-        status = _sec_worst([status, CHK_WARN])
-        notes.append(f"mode {oct(mode)} grants group/other access -- any "
-                      f"credentials in this file are readable by other users")
-    if not owner_ok:
-        status = _sec_worst([status, CHK_FAIL])
-        notes.append(f"control file is owned by uid {st.st_uid}, not root -- "
-                      f"monit requires the control file be owned by the user "
-                      f"it runs as, and this node's monit runs as root, so "
-                      f"monit will refuse to start against this file "
-                      f"regardless of its mode")
-
-    notes.append("auth configuration only -- whether port 2812 is bound or "
-                  "firewalled is NOT checked (v1 limitation)")
-
-    return _check_result(status, notes=notes, installed=True, mode=oct(mode),
-                          mode_ok=mode_ok, owner_ok=owner_ok, owner_uid=st.st_uid,
-                          allow_credentials=len(creds),
-                          allow_host_acls=acls, allow_wide_open=wide,
-                          has_allow=bool(allows), port_checked=False)
-
-_SEC_DASH_CANDIDATES = [
-    Path("/usr/local/bin/nodecontrol.py"),
-    Path("/usr/local/lib/asl_dvs_dashboard/asl_dvs_dashboard.py"),
-    Path("/usr/local/bin/asl_dvs_dashboard.py"),
-    Path("/opt/asl_dvs_dashboard/asl_dvs_dashboard.py"),
-    Path("/usr/local/lib/asl_dvs_sysmon/asl_dvs_dashboard.py"),
-]
-_SEC_DASH_AUTH_MARKERS = ("_SESSION_COOKIE_NAME", "_require_auth", "/api/login")
-
-def _check_dashboard_web_auth() -> dict:
-    dash_unit = _dash_unit()
-    installed = _sec_unit_installed(dash_unit)
-
-    src_path = ""
-    exec_start, ran = _sec_run(
-        ["systemctl", "show", "-p", "ExecStart", "--value", dash_unit])
-    if ran and exec_start:
-        paths = re.findall(r"(/\S+\.py)", exec_start)
-        if paths and Path(paths[-1]).exists():
-            src_path = paths[-1]
-    if not src_path:
-        for cand in _SEC_DASH_CANDIDATES:
-            if cand.exists():
-                src_path = str(cand)
-                break
-
-    if not src_path:
-        if not installed:
-            return _check_result(CHK_PASS, notes=["the Dashboard (nodecontrol) is not "
-                                                   "installed on this node"],
-                                  installed=False)
-        return _check_result(CHK_WARN, notes=["dashboard service is installed but "
-                                               "its source file could not be located "
-                                               "-- cannot confirm it requires auth"],
-                              installed=True)
-
-    content, err = read_path_file(Path(src_path))
-    if err:
-        return _check_result(CHK_WARN, notes=[f"{src_path}: {err}"],
-                              installed=True, source=src_path)
-
-    found   = [m for m in _SEC_DASH_AUTH_MARKERS if m in content]
-    missing = [m for m in _SEC_DASH_AUTH_MARKERS if m not in content]
-    vm      = re.search(r'(?m)^\s*VERSION\s*=\s*["\']([^"\']+)["\']', content)
-    version = vm.group(1) if vm else ""
-
-    shared_ok = _SHARED_AUTH_DIR.exists()
-    notes = [f"source: {src_path}",
-             f"dashboard version: {version or 'unknown'}",
-             f"auth markers found: {', '.join(found) if found else 'none'}"]
-    if shared_ok:
-        notes.append(f"shared session store present: {_SHARED_AUTH_DIR}")
-
-    if not missing:
-        status = CHK_PASS
-    elif found:
-        status = CHK_WARN
-        notes.append(f"partial auth implementation -- missing: {', '.join(missing)}")
-    else:
-        status = CHK_FAIL
-        notes.append("no session-auth markers at all -- this dashboard build "
-                      "serves its API unauthenticated on port "
-                      f"{DASHBOARD_PORT}")
-
-    return _check_result(status, notes=notes, installed=True, source=src_path,
-                          version=version, markers_found=found,
-                          markers_missing=missing, probed=False)
-
-_SEC_ROOT_EXEMPT_UNITS = _ROOT_EXEMPT_UNITS
-_SEC_SELF_EXCLUDED_UNITS = {
-    "sysmon.service", "instmon.service", "44helper.service",
-    "wifimon.service",
+_REG_LIVE_UNREG_NOTE = {
+    "HTTP": ("Config says this node should be registered but the live "
+             "state disagrees — check for a NAT/carrier issue (e.g. a "
+             "hotspot connection that intercepts and redirects HTTP "
+             "traffic) or a blocked outbound HTTPS path."),
+    "IAX": ("Config says this node should be registered but the live "
+            "state disagrees — check for a NAT/carrier issue or a "
+            "blocked outbound UDP/4569 path (IAX2)."),
 }
 
-_SEC_NONROOT_FLOOR_UNITS = [
-    "asterisk.service", "fail2ban.service",
-    "analog_bridge.service", "mmdvm_bridge.service", "md380-emu.service",
-    "stfu.service", "usrp2m17.service", "analog_reflector.service",
-    "nodecontrol.service", "asl_dvs_dashboard.service",
-]
-
-def _sec_nonroot_target_units() -> list:
-    out, seen = [], set()
-    for unit in _SEC_NONROOT_FLOOR_UNITS:
-        if unit not in seen:
-            seen.add(unit); out.append(unit)
-    for entry in _pinned:
-        unit = entry.get("unit", "")
-        if (not unit or unit in seen or unit in _SEC_SELF_EXCLUDED_UNITS
-                or not _validate_unit(unit)):
-            continue
-        seen.add(unit); out.append(unit)
-    return out
-
-def _check_service_nonroot() -> dict:
-    rows:     list = []
-    statuses: list = []
-
-    present = [u for u in _sec_nonroot_target_units() if _sec_unit_installed(u)]
-    props   = _sec_unit_props(present, ["Id", "User", "Group"])
-
-    for unit in present:
-        kv = props.get(unit)
-        if kv is None:
-            rows.append({"unit": unit, "user": "", "group": "",
-                          "exempt": unit in _SEC_ROOT_EXEMPT_UNITS,
-                          "verdict": CHK_WARN,
-                          "note": "systemctl show returned nothing for this unit"})
-            statuses.append(CHK_WARN)
-            continue
-
-        user    = kv.get("User", "")
-        group   = kv.get("Group", "")
-        as_root = (user == "" or user == "root")
-        exempt  = unit in _SEC_ROOT_EXEMPT_UNITS
-
-        if not as_root:
-            verdict, note = CHK_PASS, f"runs as {user}"
-        elif exempt:
-            verdict, note = CHK_PASS, "root by design (documented exemption)"
-        else:
-            verdict, note = CHK_WARN, "runs as root but does not require it"
-
-        rows.append({"unit": unit, "user": user or "root", "group": group,
-                      "exempt": exempt, "verdict": verdict, "note": note})
-        statuses.append(verdict)
-
-    if not rows:
-        return _check_result(CHK_WARN, units=[],
-                              notes=["none of the target units are installed"])
-
-    return _check_result(_sec_worst(statuses), units=rows,
-                          notes=[f"{len(rows)} unit(s) inspected; exemptions: "
-                                 f"{', '.join(sorted(_SEC_ROOT_EXEMPT_UNITS))}"])
-
-_SEC_DROPIN_ROOTS = [
-    Path("/etc/systemd/system"), Path("/run/systemd/system"),
-    Path("/usr/lib/systemd/system"), Path("/lib/systemd/system"),
-]
-
-def _sec_unit_dropins(unit: str) -> list:
-    out = []
-    for root in _SEC_DROPIN_ROOTS:
-        d = root / f"{unit}.d"
-        try:
-            if not d.is_dir():
-                continue
-            out.append(_stat_mode_info(str(d)))
-            for f in sorted(d.glob("*.conf")):
-                out.append(_stat_mode_info(str(f)))
-        except Exception as exc:
-            log.debug("security: dropins %s: %s", d, exc)
-    return out
-
-def _check_unit_file_perms() -> dict:
-    present = [u for u in _sec_nonroot_target_units() if _sec_unit_installed(u)]
-    props   = _sec_unit_props(present, ["Id", "FragmentPath", "ExecStart"])
-
-    rows:     list = []
-    statuses: list = []
-    checked   = 0
-
-    for unit in present:
-        kv = props.get(unit)
-        if kv is None:
-            rows.append({"unit": unit, "verdict": CHK_WARN, "artifacts": [],
-                          "note": "systemctl show returned nothing for this unit"})
-            statuses.append(CHK_WARN)
-            continue
-
-        frag = (kv.get("FragmentPath") or "").strip()
-        m    = _EXECSTART_PATH_RE.search(kv.get("ExecStart", "") or "")
-        binp = m.group(1) if m else ""
-
-        infos = []
-        if frag:
-            infos.append(_stat_mode_info(frag))
-        if binp:
-            infos.append(_stat_mode_info(binp))
-        infos.extend(_sec_unit_dropins(unit))
-        checked += len(infos)
-
-        verdict, reasons = _perm_verdict(*infos)
-        status = {"ok": CHK_PASS, "warn": CHK_WARN, "fail": CHK_FAIL}[verdict]
-        if not frag:
-            status  = _sec_worst([status, CHK_WARN])
-            reasons.append("systemd reported no FragmentPath for this unit")
-
-        rows.append({
-            "unit":      unit,
-            "verdict":   status,
-            "reasons":   reasons,
-            "artifacts": [{"path": i["path"], "mode": i["mode"],
-                            "owner": f"{i['owner']}:{i['group']}" if i["exists"] else "",
-                            "exists": i["exists"]} for i in infos],
+def _reg_live_checks(entries: list, label: str) -> list:
+    checks = []
+    snap = get_state_snapshot()
+    reg_live = snap.get("reg_live")
+    sm = snap.get("reg_summary")
+    for_txt = (f" (for {_reg_age_text(time.time() - sm['since'])})"
+               if sm and sm.get("state") != "ok" else "")
+    if reg_live is None:
+        checks.append({
+            "title":  "Live registration state",
+            "value":  "not yet polled",
+            "status": "info",
+            "note":   "First background poll hasn't run yet — refresh in a moment.",
+            "url":    None,
         })
-        statuses.append(status)
+        return checks
+    if not reg_live.get("ok"):
+        checks.append({
+            "title":  "Live registration state",
+            "value":  (reg_live.get("error") or "unavailable") + for_txt,
+            "status": "warn",
+            "note":   "Couldn't reach the Asterisk CLI — the checks above are config-only until this clears.",
+            "url":    None,
+        })
+        return checks
 
-    if not rows:
-        return _check_result(CHK_WARN, units=[], artifacts_checked=0,
-                              notes=["none of the target units are installed"])
+    live_nodes = reg_live.get("nodes", {})
+    configured_nodes = {n for n, _ in entries}
+    for nid in sorted(configured_nodes, key=str):
+        live_state = live_nodes.get(nid, "not shown")
+        if live_state == "registered":
+            checks.append({
+                "title":  f"Live registration [{nid}]",
+                "value":  "registered", "status": "pass",
+                "note":   None, "url": None,
+            })
+        elif live_state == "unregistered":
+            checks.append({
+                "title":  f"Live registration [{nid}]",
+                "value":  "not registered" + for_txt,
+                "status": "fail",
+                "note":   _REG_LIVE_UNREG_NOTE.get(label, _REG_LIVE_UNREG_NOTE["HTTP"]),
+                "url":    None,
+            })
+        else:
+            checks.append({
+                "title":  f"Live registration [{nid}]",
+                "value":  live_state + for_txt,
+                "status": "warn",
+                "note":   ("Node is configured but didn't show up clearly in "
+                           "`rpt show registrations` output — worth a manual look."),
+                "url":    None,
+            })
+    return checks
 
-    return _check_result(
-        _sec_worst(statuses), units=rows, artifacts_checked=checked,
-        notes=[f"{len(rows)} unit(s), {checked} file(s)/directory(ies) inspected"])
+def get_http_reg_status(ctx: dict = None) -> dict:
+    ctx = ctx or _reg_load_context()
+    checks: list = []
 
-def _sec_sshd_directives() -> "tuple[dict, list, list]":
-    directives: dict = {}
-    read_files: list = []
-    truncated:  list = []
-    seen:       set  = set()
+    http_scan, iax_scan = ctx["http_scan"], ctx["iax_scan"]
+    http_entries, iax_entries = http_scan["entries"], iax_scan["entries"]
+    http_active, iax_active = bool(http_entries), bool(iax_entries)
 
-    def _walk(path: Path, depth: int = 0) -> None:
-        if depth > 4 or str(path) in seen:
-            return
-        seen.add(str(path))
-        content, err = read_path_file(path)
-        if err:
-            return
-        read_files.append(str(path))
-        if "[truncated" in content:
-            truncated.append(str(path))
-        for line in content.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split(None, 1)
-            if len(parts) != 2:
-                continue
-            key, val = parts[0].lower(), parts[1].strip()
-            if key == "match":
-                break
-            if key == "include":
-                for pattern in val.split():
-                    if not pattern.startswith("/"):
-                        pattern = str(_SEC_SSHD_CONFIG.parent / pattern)
-                    try:
-                        matches = sorted(Path("/").glob(pattern.lstrip("/")))
-                    except Exception as exc:
-                        log.debug("security: sshd Include %s: %s", pattern, exc)
-                        continue
-                    for m in matches:
-                        if m.is_file():
-                            _walk(m, depth + 1)
-                continue
-            directives.setdefault(key, val.split()[0].lower())
+    if ctx["http_err"]:
+        checks.append({
+            "title": "rpt_http_registrations.conf", "value": ctx["http_err"],
+            "status": "fail", "note": None, "url": None,
+        })
+    elif not http_active:
+        checks.append({
+            "title": "HTTP registration", "value": "not configured",
+            "status": "fail", "note": None, "url": None,
+        })
+    else:
+        checks.extend(_reg_node_password_checks(http_entries, "HTTP"))
 
-    if _SEC_SSHD_CONFIG.exists():
-        _walk(_SEC_SSHD_CONFIG)
-    try:
-        if _SEC_SSHD_CONFIG_DIR.is_dir():
-            for f in sorted(_SEC_SSHD_CONFIG_DIR.glob("*.conf")):
-                _walk(f, 1)
-    except Exception as exc:
-        log.debug("security: sshd_config.d: %s", exc)
+    if http_active or iax_active:
+        checks.extend(_reg_dual_check(http_active, iax_active))
 
-    return directives, read_files, truncated
+    checks.extend(_reg_syntax_checks(http_scan, "HTTP"))
+    checks.extend(_reg_placeholder_check(http_entries, "HTTP"))
+    checks.extend(_reg_module_checks(http_active, iax_active))
 
-def _check_ssh_hardening() -> dict:
-    if not _SEC_SSHD_CONFIG.exists() and not _sec_have_binary("sshd"):
-        return _check_result(CHK_PASS, notes=["no sshd on this node"],
-                              installed=False)
+    if ctx["rpt_err"]:
+        checks.append({
+            "title": "rpt.conf", "value": ctx["rpt_err"],
+            "status": "fail", "note": None, "url": None,
+        })
+    else:
+        node_sects, general_kv = _reg_scan_rpt_conf(ctx["rpt_content"])
+        registered_nodes = {n for n, _ in (http_entries + iax_entries)}
+        checks.extend(_reg_node_coverage_checks(node_sects, registered_nodes))
+        checks.extend(_reg_lookup_settings_checks(general_kv))
+        checks.extend(_reg_statpost_checks(node_sects, http_entries))
+        checks.extend(_reg_ami_checks(http_scan["passwords"]))
 
-    directives, files, truncated = _sec_sshd_directives()
-    if not files:
-        return _check_result(CHK_WARN, notes=["sshd_config present but unreadable"],
-                              installed=True)
-    if truncated:
-        return _check_result(
-            CHK_WARN,
-            notes=["config file(s) exceed the 64 KB read cap and were "
-                   "truncated -- directives past that point cannot be seen, "
-                   "so no verdict can be trusted: " + ", ".join(truncated)],
-            installed=True, files=files, truncated=truncated)
+    checks.extend(_reg_live_checks(http_entries, "HTTP"))
 
-    permit_root = directives.get("permitrootlogin", "prohibit-password")
-    password_au = directives.get("passwordauthentication", "yes")
-    empty_pw    = directives.get("permitemptypasswords", "no")
-    pubkey      = directives.get("pubkeyauthentication", "yes")
+    if not checks:
+        checks.append({
+            "title": "HTTP Registration", "value": "nothing to check",
+            "status": "info", "note": None, "url": None,
+        })
 
-    findings: list = []
-    status = CHK_PASS
+    return {"ok": True, "checks": checks, "status": _reg_overall_status(checks)}
 
-    if permit_root == "yes":
-        findings.append("PermitRootLogin yes -- direct root login over SSH")
-        status = _sec_worst([status, CHK_FAIL])
-    if empty_pw == "yes":
-        findings.append("PermitEmptyPasswords yes -- accounts with no password "
-                         "can log in")
-        status = _sec_worst([status, CHK_FAIL])
-    if password_au == "yes":
-        findings.append("PasswordAuthentication yes -- brute-forceable without "
-                         "key-only auth")
-        status = _sec_worst([status, CHK_WARN])
-    if pubkey == "no":
-        findings.append("PubkeyAuthentication no -- key auth disabled")
-        status = _sec_worst([status, CHK_WARN])
-    if not findings:
-        findings.append("root login and password auth are both restricted")
+def get_iax_reg_status(ctx: dict = None) -> dict:
+    ctx = ctx or _reg_load_context()
+    checks: list = []
 
-    return _check_result(
-        status, installed=True, files=files, findings=findings,
-        permit_root_login=permit_root, password_authentication=password_au,
-        permit_empty_passwords=empty_pw, pubkey_authentication=pubkey)
+    http_scan, iax_scan = ctx["http_scan"], ctx["iax_scan"]
+    http_entries, iax_entries = http_scan["entries"], iax_scan["entries"]
+    http_active, iax_active = bool(http_entries), bool(iax_entries)
 
-def _check_fail2ban_jails() -> dict:
-    if not _sec_have_binary("fail2ban-client"):
-        return _check_result(CHK_WARN, installed=False, jails=[],
-                              notes=["fail2ban is not installed -- recommended "
-                                     "but not required, so this is a warning "
-                                     "rather than a failure"])
+    if ctx["iax_err"]:
+        checks.append({
+            "title": "iax.conf", "value": ctx["iax_err"],
+            "status": "fail", "note": None, "url": None,
+        })
+    elif not iax_active:
+        checks.append({
+            "title": "IAX registration", "value": "not configured",
+            "status": "fail", "note": None, "url": None,
+        })
+    else:
+        checks.extend(_reg_node_password_checks(iax_entries, "IAX"))
 
-    out, ran = _sec_run(["fail2ban-client", "status"])
-    if not ran:
-        return _check_result(CHK_WARN, installed=True, jails=[],
-                              notes=["`fail2ban-client status` timed out or "
-                                     "failed -- is fail2ban.service running?"])
-    if not out:
-        return _check_result(CHK_WARN, installed=True, jails=[],
-                              notes=["fail2ban-client returned no status -- "
-                                     "the server is probably not running"])
+    if http_active or iax_active:
+        checks.extend(_reg_dual_check(http_active, iax_active))
 
-    m = re.search(r"Jail list:\s*(.*)", out)
-    jails = [j.strip() for j in (m.group(1) if m else "").split(",") if j.strip()]
+    checks.extend(_reg_syntax_checks(iax_scan, "IAX"))
+    checks.extend(_reg_placeholder_check(iax_entries, "IAX"))
 
-    if not jails:
-        return _check_result(CHK_WARN, installed=True, jails=[],
-                              notes=["fail2ban is running but has no active jails"])
+    if ctx["rpt_err"]:
+        checks.append({
+            "title": "rpt.conf", "value": ctx["rpt_err"],
+            "status": "fail", "note": None, "url": None,
+        })
+    else:
+        node_sects, general_kv = _reg_scan_rpt_conf(ctx["rpt_content"])
+        registered_nodes = {n for n, _ in (http_entries + iax_entries)}
+        checks.extend(_reg_node_coverage_checks(node_sects, registered_nodes))
+        checks.extend(_reg_lookup_settings_checks(general_kv))
 
-    has_ssh = any("ssh" in j.lower() for j in jails)
-    notes   = [f"active jails: {', '.join(jails)}"]
-    status  = CHK_PASS
-    if not has_ssh:
-        status = CHK_WARN
-        notes.append("no sshd jail among the active jails")
+    checks.extend(_reg_live_checks(iax_entries, "IAX"))
 
-    return _check_result(status, installed=True, jails=jails, has_ssh_jail=has_ssh,
-                          notes=notes)
+    if not checks:
+        checks.append({
+            "title": "IAX Registration", "value": "nothing to check",
+            "status": "info", "note": None, "url": None,
+        })
 
-def _check_asterisk_perms() -> dict:
-    import grp, pwd, stat as _stat
+    return {"ok": True, "checks": checks, "status": _reg_overall_status(checks)}
 
-    if not _SEC_ASTERISK_DIR.exists():
-        return _check_result(CHK_WARN, notes=[f"{_SEC_ASTERISK_DIR} does not exist"])
+def _route_reg_http_get(h: Handler) -> None:
+    h.send_json(get_http_reg_status())
 
-    try:
-        st   = _SEC_ASTERISK_DIR.stat()
-        mode = _stat.S_IMODE(st.st_mode)
-    except Exception as exc:
-        return _check_result(CHK_WARN, notes=[f"{_SEC_ASTERISK_DIR}: {exc}"])
+def _route_reg_iax_get(h: Handler) -> None:
+    h.send_json(get_iax_reg_status())
 
-    perm   = mode & 0o777
-    setgid = bool(mode & 0o2000)
+def _reg_age_text(sec: float) -> str:
+    sec = max(0, int(sec))
+    if sec < 60:
+        return f"{sec} s"
+    if sec < 3600:
+        return f"{sec // 60} min"
+    return f"{sec // 3600} h {sec % 3600 // 60:02d} min"
 
-    try:
-        owner = pwd.getpwuid(st.st_uid).pw_name
-    except Exception:
-        owner = str(st.st_uid)
-    try:
-        group = grp.getgrgid(st.st_gid).gr_name
-    except Exception:
-        group = str(st.st_gid)
+def _reg_http_configured() -> bool:
+    content, err = read_asterisk_file("rpt_http_registrations.conf")
+    return not err and bool(_scan_register_lines(content)["entries"])
 
-    notes  = [f"{_SEC_ASTERISK_DIR}: mode {oct(perm)}"
-              f"{' +setgid' if setgid else ''} owner {owner}:{group} "
-              f"(expected {oct(_SEC_ASTERISK_EXPECTED_MODE)} "
-              f"root:{_SEC_ASTERISK_EXPECTED_GROUP})"]
-    status = CHK_PASS
+def _reg_live_summary(rl: dict, prev: "dict | None") -> dict:
+    nodes = dict(rl.get("nodes") or {})
+    if not rl.get("ok"):
+        state = "down"
+    elif not nodes:
+        state = "wait" if _reg_http_configured() else "none"
+    elif "unregistered" in nodes.values():
+        state = "fail"
+    elif all(v == "registered" for v in nodes.values()):
+        state = "ok"
+    else:
+        state = "wait"
+    now = time.time()
+    since = prev["since"] if prev and prev.get("state") == state else now
+    return {"state": state, "since": since, "checked": now,
+            "nodes": nodes, "error": rl.get("error")}
 
-    if perm & 0o007:
-        status = _sec_worst([status, CHK_FAIL])
-        notes.append("directory is world-accessible -- any local user can read "
-                      "the secrets in iax.conf/manager.conf")
-    elif perm & ~_SEC_ASTERISK_EXPECTED_MODE:
-        status = _sec_worst([status, CHK_WARN])
-        notes.append(f"mode {oct(perm)} is looser than the expected "
-                      f"{oct(_SEC_ASTERISK_EXPECTED_MODE)}")
-    elif perm != _SEC_ASTERISK_EXPECTED_MODE:
-        notes.append(f"mode {oct(perm)} is stricter than the expected "
-                      f"{oct(_SEC_ASTERISK_EXPECTED_MODE)} -- fine, noted only")
-
-    if owner != "root":
-        status = _sec_worst([status, CHK_WARN])
-        notes.append(f"owner is {owner}, expected root")
-    if group != _SEC_ASTERISK_EXPECTED_GROUP and (perm & 0o070):
-        status = _sec_worst([status, CHK_WARN])
-        notes.append(f"group {group} has access but "
-                      f"{_SEC_ASTERISK_EXPECTED_GROUP} was expected")
-
-    files: list = []
-    for fname in _SEC_ASTERISK_SECRET_FILES:
-        fp = _SEC_ASTERISK_DIR / fname
-        if not fp.exists():
-            continue
-        try:
-            fmode = _stat.S_IMODE(fp.stat().st_mode) & 0o777
-        except Exception as exc:
-            log.debug("security: stat %s: %s", fp, exc)
-            continue
-        world = bool(fmode & 0o004)
-        files.append({"file": fname, "mode": oct(fmode), "world_readable": world})
-        if world:
-            status = _sec_worst([status, CHK_FAIL])
-            notes.append(f"{fname} is world-readable (mode {oct(fmode)}) -- it "
-                          f"contains live IAX/AMI secrets")
-
-    return _check_result(status, notes=notes, mode=oct(perm), setgid=setgid,
-                          owner=owner, group=group,
-                          expected_mode=oct(_SEC_ASTERISK_EXPECTED_MODE),
-                          files=files)
-
-def _detail_passthrough(raw: dict) -> dict:
-    return dict(raw)
-
-def _detail_iax2_secret_strength(raw: dict) -> dict:
-    return {
-        "evaluated":               raw.get("evaluated"),
-        "reasons":                 raw.get("reasons"),
-        "secret_matches_callsign": raw.get("secret_matches_callsign"),
-        "secret_matches_node":     raw.get("secret_matches_node"),
-        "secret_is_known_weak":    raw.get("secret_is_known_weak"),
-        "secret_length":           raw.get("secret_length"),
-    }
-
-def _detail_ami_default_credentials(raw: dict) -> dict:
-    return {
-        "evaluated":               raw.get("evaluated"),
-        "reasons":                 raw.get("reasons"),
-        "username_is_default":     raw.get("username_is_default"),
-        "secret_matches_callsign": raw.get("secret_matches_callsign"),
-        "secret_is_known_weak":    raw.get("secret_is_known_weak"),
-    }
-
-def _detail_brandmeister_hotspot_password(raw: dict) -> dict:
-    return {
-        "evaluated":                 raw.get("evaluated"),
-        "reasons":                   raw.get("reasons"),
-        "password_matches_callsign": raw.get("password_matches_callsign"),
-        "password_is_known_default": raw.get("password_is_known_default"),
-        "password_length":           raw.get("password_length"),
-    }
-
-SECURITY_CHECKS = [
-    {
-        "id":       "usrp_port_exposure",
-        "layer":    "usrp2m17",
-        "label":    "USRP bridge port exposure",
-        "severity": "high",
-        "source":   "USRP2M17.ini [USRP NETWORK] DstPort/LocalPort, Analog_Bridge.ini "
-                    "[USRP] rxPort/txPort, and rpt.conf rxchannel= lines, all "
-                    "cross-referenced against a passive `ss -tlnpu` snapshot. Ports "
-                    "are read from your config -- nothing here is hardcoded.",
-        "meaning":  ("Whether the UDP ports that carry audio between Asterisk, "
-                     "Analog_Bridge and usrp2m17 are reachable from outside this "
-                     "host.\n\n"
-                     "PASS -- every bind is on loopback, or on a VPN interface's own "
-                     "address while that interface is up; or the port is configured "
-                     "but nothing is listening on it.\n"
-                     "WARN -- a bind sits on a VPN address whose interface is "
-                     "currently down, or on an address that cannot be attributed to "
-                     "any interface. Warn rather than fail: an unattributable address "
-                     "is missing information, not proven exposure.\n"
-                     "FAIL -- a bind is on 0.0.0.0 (every interface, including the "
-                     "one facing your router) or on a LAN address.\n\n"
-                     "The USRP link is normally entirely local: Asterisk and the "
-                     "bridge run on the same Pi and talk over 127.0.0.1. The stock "
-                     "pairing is 32001 (ASL listening) and 34001 (bridge listening); "
-                     "this node's actual pair is whatever the files above say."),
-        "risk":     ("USRP is a bare UDP transport. There is no authentication, no "
-                     "session setup, no shared secret and no encryption -- a packet "
-                     "that arrives on the port is accepted as audio and keying from "
-                     "the peer, because the design assumes the peer is a process on "
-                     "the same machine.\n\n"
-                     "So anyone who can reach an exposed USRP port can key your "
-                     "transmitter and put audio on the air under your callsign and "
-                     "licence, inject that audio into every node currently linked to "
-                     "yours, and listen to everything the node hears. There is "
-                     "nothing to brute-force and nothing in the logs to rate-limit: "
-                     "the first packet works. This is why the check treats 0.0.0.0 as "
-                     "a failure even on a home LAN behind NAT -- a single "
-                     "port-forward, UPnP rule or compromised device on that LAN is "
-                     "the whole distance between 'local only' and 'anyone'."),
-        "remediation": ("Bind both ends to 127.0.0.1. In USRP2M17.ini the USRP "
-                         "address belongs on loopback; in rpt.conf the rxchannel line "
-                         "should read USRP/127.0.0.1:<local>:<dst>.\n\n"
-                         "If you genuinely bridge between two hosts, do it inside "
-                         "WireGuard or Tailscale and bind to that interface's "
-                         "address rather than 0.0.0.0 -- then this check passes while "
-                         "the tunnel is up.\n\n"
-                         "Add a firewall rule for the UDP port regardless: binding "
-                         "and firewalling are independent layers, and the bind is the "
-                         "one a config edit can silently undo."),
-        "references": [
-            {"label": "M17 Project wiki -- usrp2m17 bridge (USRP port pairing)",
-             "url":   "https://wiki.m17.link/usrp2m17_bridge"},
-            {"label": "AllStarLink manual -- what's new in ASL3",
-             "url":   "https://allstarlink.github.io/install/whats-new/"},
-            {"label": "ss(8) -- the listening-socket snapshot this check reads",
-             "url":   "https://manpages.debian.org/trixie/iproute2/ss.8.en.html"},
-        ],
-        "check_fn":  _check_usrp_port_exposure,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "m17_port_exposure",
-        "layer":    "usrp2m17",
-        "label":    "M17 gateway port exposure",
-        "severity": "high",
-        "source":   "USRP2M17.ini [M17 NETWORK] LocalPort/DstPort/Address, "
-                    "cross-referenced against a passive `ss -tlnpu` snapshot.",
-        "meaning":  ("The same exposure logic as the USRP check, applied to the "
-                     "M17-side UDP port the bridge uses to reach reflectors. UDP "
-                     "17000 is the standardised default in the M17 specification "
-                     "(\"recommended but not required\"), so a node may legitimately "
-                     "use another.\n\n"
-                     "PASS -- loopback, or a VPN address with the interface up, or "
-                     "nothing listening.\n"
-                     "WARN -- VPN address with the interface down, or an "
-                     "unattributable address.\n"
-                     "FAIL -- 0.0.0.0 or a LAN address.\n\n"
-                     "The panel also notes when USRP2M17.ini still carries the "
-                     "0.0.0.0 placeholder address, which means the bridge is not "
-                     "pointed at a reflector at all."),
-        "risk":     ("The M17 reflector protocol has no authentication whatsoever. A "
-                     "client announces itself with a CONN packet carrying a 6-byte "
-                     "callsign and a module letter; the reflector replies ACKN. There "
-                     "is no password, no key exchange, and no encryption in the "
-                     "default configuration -- the callsign in the packet is simply "
-                     "believed.\n\n"
-                     "Connecting OUT to a reflector needs no inbound exposure at all. "
-                     "If the port is nonetheless open to the world, anyone who finds "
-                     "it can send voice frames straight into your bridge, which "
-                     "relays them to your node and onto the air, stamped with "
-                     "whatever callsign the sender chose to put in the packet."),
-        "remediation": ("Bind the M17 local port to 127.0.0.1 or a VPN address. "
-                         "Outbound reflector connections keep working -- the bridge "
-                         "initiates them, and the reply arrives on the same flow.\n\n"
-                         "If something genuinely must reach the port from outside, "
-                         "firewall it to the specific reflector addresses you use, "
-                         "rather than leaving it open to the internet."),
-        "references": [
-            {"label": "M17 specification -- IP networking, CONN/ACKN packets and port 17000",
-             "url":   "https://m17-protocol-specification.readthedocs.io/en/latest/ip_encapsulation.html"},
-            {"label": "M17 Project wiki -- usrp2m17 bridge configuration",
-             "url":   "https://wiki.m17.link/usrp2m17_bridge"},
-            {"label": "ss(8) -- the listening-socket snapshot this check reads",
-             "url":   "https://manpages.debian.org/trixie/iproute2/ss.8.en.html"},
-        ],
-        "check_fn":  _check_m17_port_exposure,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "ami_port_exposure",
-        "layer":    "asl",
-        "label":    "Asterisk Manager Interface (AMI) port exposure",
-        "severity": "high",
-        "source":   "manager.conf [general] enabled=/bindaddr=/port=, cross-referenced "
-                    "against a passive `ss -tlnpu` snapshot. Asterisk's shipped sample "
-                    "has enabled=yes, port=5038 and bindaddr=0.0.0.0, so an untouched "
-                    "manager.conf is an exposed one.",
-        "meaning":  ("Where the Asterisk Manager Interface is listening.\n\n"
-                     "PASS -- AMI is disabled, or bound to loopback, or bound to a "
-                     "VPN address whose interface is up.\n"
-                     "WARN -- the VPN interface is down, or the address cannot be "
-                     "attributed to an interface.\n"
-                     "FAIL -- bound to 0.0.0.0 or a LAN address, regardless of VPN "
-                     "state.\n\n"
-                     "The configured bindaddr is judged even when nothing is "
-                     "listening, so a stopped Asterisk cannot hide a bad setting.\n\n"
-                     "KNOWN v1 LIMITATION: this reads the bind address only. It does "
-                     "NOT evaluate manager.conf's permit=/deny= ACL lines, so a node "
-                     "bound to a private address with a wide-open "
-                     "permit=0.0.0.0/0.0.0.0 passes here. The panel reports whether "
-                     "ACL lines exist at all (acl_lines_present) and states "
-                     "acl_checked=false so the gap is visible rather than implied. "
-                     "Evaluating those ACL lines is a tracked v1.1 candidate."),
-        "risk":     ("AMI is manager-level control of Asterisk over a plaintext TCP "
-                     "socket. Credentials and traffic cross the wire in cleartext "
-                     "unless you have configured MD5 challenge auth or TLS.\n\n"
-                     "Treat an exposed AMI as host compromise, not information "
-                     "disclosure. CVE-2024-42365 (CVSS 7.4) showed that an AMI "
-                     "account holding only write=originate -- long assumed to be a "
-                     "low-privilege setting -- could chain the FILE()/CURL() dialplan "
-                     "functions to write into /etc/asterisk, reload, and execute "
-                     "arbitrary commands. It affects Asterisk up to and including "
-                     "20.9.1, which is the version family ASL3 is built on, and it "
-                     "works regardless of the live_dangerously setting. Separately, "
-                     "an account with the `command` class can run any Asterisk CLI "
-                     "command by design.\n\n"
-                     "AMI has no built-in lockout or rate limiting either, so an "
-                     "exposed port is also an unlimited password-guessing oracle."),
-        "remediation": ("Set bindaddr=127.0.0.1 in manager.conf [general] -- or "
-                         "enabled=no if nothing on this node uses AMI. Allmon3 and "
-                         "similar tools run locally and are happy on loopback.\n\n"
-                         "Patch Asterisk to 20.9.2 or later for CVE-2024-42365.\n\n"
-                         "Regardless of bind address, write an explicit ACL: "
-                         "deny=0.0.0.0/0.0.0.0 first, then permit only the addresses "
-                         "that need it. Give each consumer its own account with the "
-                         "narrowest read=/write= classes that work, and keep "
-                         "`command` and `originate` off monitoring accounts."),
-        "references": [
-            {"label": "CVE-2024-42365 -- AMI write=originate is sufficient for code execution",
-             "url":   "https://github.com/asterisk/asterisk/security/advisories/GHSA-c4cg-9275-6w44"},
-            {"label": "Asterisk docs -- privilege escalation with dialplan functions (live_dangerously)",
-             "url":   "https://docs.asterisk.org/Configuration/Dialplan/Privilege-Escalations-with-Dialplan-Functions/"},
-            {"label": "manager.conf reference -- plaintext protocol, permit/deny, permission classes",
-             "url":   "https://www.voip-info.org/asterisk-config-managerconf/"},
-            {"label": "ss(8) -- the listening-socket snapshot this check reads",
-             "url":   "https://manpages.debian.org/trixie/iproute2/ss.8.en.html"},
-        ],
-        "check_fn":  _check_ami_port_exposure,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "ami_default_credentials",
-        "layer":    "asl",
-        "label":    "AMI default/weak credentials",
-        "severity": "high",
-        "source":   "manager.conf user sections -- the stanza name (the AMI username) "
-                    "and its secret=.",
-        "meaning":  ("Grades every AMI account on this node.\n\n"
-                     "FAIL -- a secret that is empty, a known-weak or vendor-default "
-                     "string, a single repeated character, or equal to this node's "
-                     "callsign, node number or DMR ID.\n"
-                     "WARN -- a predictable username (admin, manager, asterisk, "
-                     "allmon, monitor...) with an otherwise sound secret, or a unique "
-                     "secret shorter than eight characters.\n"
-                     "PASS -- a non-obvious username with a secret that matches none "
-                     "of the above.\n\n"
-                     "A predictable username on its own is only a warning: it halves "
-                     "the guessing work but is worth little against a strong "
-                     "secret.\n\n"
-                     "The secret itself never leaves the backend. The check converts "
-                     "it to booleans before it is placed in any result, and the "
-                     "registry's detail_fn whitelists named fields on top of that -- "
-                     "the redaction is proven at import time by a poison probe, not "
-                     "promised by a comment."),
-        "risk":     ("Your callsign, node number and DMR ID are public directory data "
-                     "-- they are in the AllStarLink node list, on QRZ and on the "
-                     "BrandMeister dashboard. A secret equal to any of them is not a "
-                     "secret; it is a lookup.\n\n"
-                     "What a guessed AMI password buys an attacker is severe: full "
-                     "manager control of Asterisk, and on any Asterisk up to 20.9.1 "
-                     "the CVE-2024-42365 path from a mere write=originate account to "
-                     "arbitrary command execution on the Pi. Asterisk applies no "
-                     "lockout or delay to failed AMI logins, so guessing is limited "
-                     "only by bandwidth."),
-        "remediation": ("Generate a real secret -- `openssl rand -hex 24` -- and give "
-                         "the account a name that is not in every wordlist. One "
-                         "account per consuming application, each with the narrowest "
-                         "read=/write= classes it actually needs.\n\n"
-                         "manager.conf holds that secret in cleartext, so keep it at "
-                         "mode 640 owned root:asterisk (the /etc/asterisk permissions "
-                         "check on this page covers that), and prefer loopback-only "
-                         "AMI over any credential strength."),
-        "references": [
-            {"label": "CVE-2024-42365 -- what a low-privilege AMI account is worth to an attacker",
-             "url":   "https://github.com/asterisk/asterisk/security/advisories/GHSA-c4cg-9275-6w44"},
-            {"label": "manager.conf reference -- cleartext auth, permission classes",
-             "url":   "https://www.voip-info.org/asterisk-config-managerconf/"},
-        ],
-        "check_fn":  _check_ami_default_credentials,
-        "detail_fn": _detail_ami_default_credentials,
-        "sensitive": True,
-    },
-    {
-        "id":       "iax2_secret_strength",
-        "layer":    "asl",
-        "label":    "IAX2 secret strength",
-        "severity": "medium",
-        "source":   "iax.conf user/peer secret= entries and any register=> lines; "
-                    "falls back to rpt_http_registrations.conf to tell a modern "
-                    "HTTP-registered node from an unconfigured one.",
-        "meaning":  ("Grades the IAX2 secrets this node presents or accepts on UDP "
-                     "4569.\n\n"
-                     "FAIL -- a secret that is empty, known-weak, a single repeated "
-                     "character, or equal to the callsign, node number or DMR ID.\n"
-                     "WARN -- a unique secret shorter than eight characters, or no "
-                     "IAX2 secret at all on a node that also has no HTTP "
-                     "registration configured.\n"
-                     "PASS -- everything graded looks unguessable, or the node "
-                     "registers over HTTP and defines no local IAX client stanza.\n\n"
-                     "Two deliberate exemptions, both to avoid crying wolf on a "
-                     "correct ASL3 config. The documented [allstar-public] stanza "
-                     "ships with secret = allstar and is skipped -- the ASL manual "
-                     "notes that connection is authenticated further down the chain "
-                     "by token validation. And ASL3 deprecated iax.conf register= in "
-                     "favour of rpt_http_registrations.conf, so a node with neither a "
-                     "register= line nor a client stanza is modern, not broken.\n\n"
-                     "Only booleans and the shortest length are reported; no secret "
-                     "value leaves the backend.\n\n"
-                     "NOT CHECKED (v1.1 candidate): requirecalltoken. Asterisk's "
-                     "own default is yes, but the stock configuration is NOT clean "
-                     "here: ASL3's shipped iax.conf sets requirecalltoken = no "
-                     "inside the [iaxrpt](!) template, which IAXRpt and DVSwitch "
-                     "Mobile phone-mode clients inherit. That is deliberate -- the "
-                     "AllStarLink manual notes most common ASL client applications "
-                     "do not support call tokens -- so it is not something to fix. "
-                     "It does mean those stanzas rely on the secret alone, which is "
-                     "what this check grades."),
-        "risk":     ("IAX2 is how AllStar nodes link. A guessed secret lets someone "
-                     "connect to your node as a trusted peer and transmit through "
-                     "your repeater under your licence -- and the guess is easy when "
-                     "the secret is the callsign or node number, because both are "
-                     "published in the AllStarLink node list.\n\n"
-                     "Call tokens (requirecalltoken) address a different problem: "
-                     "they stop an attacker with a spoofed source address from "
-                     "exhausting your finite pool of IAX2 call numbers, which would "
-                     "deny service to legitimate links. They do nothing about a weak "
-                     "secret, which is what this check grades.\n\n"
-                     "Where your node actually stands on them: Asterisk defaults to "
-                     "yes, but ASL3 ships requirecalltoken = no in the [iaxrpt](!) "
-                     "template for client compatibility. Stanzas inheriting it have "
-                     "no call-token protection, so the secret is the only thing in "
-                     "front of them."),
-        "remediation": ("Use a long random secret -- `openssl rand -hex 24` -- for "
-                         "every stanza this check flags, and rotate any that were "
-                         "flagged: a value derived from your callsign should be "
-                         "treated as already known.\n\n"
-                         "Leave requirecalltoken alone. Switching it on for "
-                         "[iaxrpt] would break the phone-mode clients it was "
-                         "switched off for, and it was never what protects your "
-                         "secret. Remember too that 4569/UDP has to be open for "
-                         "IAX2 to work at all, so closing the port is not a "
-                         "mitigation either. The secret is the control that matters "
-                         "here, and on the [iaxrpt] stanzas it is the only one."),
-        "references": [
-            {"label": "Asterisk docs -- IAX2 security and call token validation",
-             "url":   "https://docs.asterisk.org/Configuration/Channel-Drivers/Inter-Asterisk-eXchange-protocol-version-2-IAX2/IAX2-Security/"},
-            {"label": "iax.conf sample -- requirecalltoken defaults to yes",
-             "url":   "https://github.com/asterisk/asterisk/blob/master/configs/samples/iax.conf.sample"},
-            {"label": "AllStarLink manual -- iax.conf, [allstar-public] and HTTP registration",
-             "url":   "https://allstarlink.github.io/config/iax_conf/"},
-        ],
-        "check_fn":  _check_iax2_secret_strength,
-        "detail_fn": _detail_iax2_secret_strength,
-        "sensitive": True,
-    },
-    {
-        "id":       "brandmeister_hotspot_password",
-        "layer":    "dvswitch",
-        "label":    "BrandMeister hotspot password",
-        "severity": "medium",
-        "source":   "MMDVM_Bridge.ini [DMR Network] Enable=/Password=.",
-        "meaning":  ("Grades the DMR network password this node presents to its "
-                     "master server.\n\n"
-                     "FAIL -- empty, a known default, or equal to the callsign or DMR "
-                     "ID. The single most common finding here is passw0rd, which is "
-                     "the literal value DVSwitch ships in the MMDVM_Bridge.ini sample "
-                     "([DMR Network] Address=hblink.dvswitch.org, Port=62031, "
-                     "Local=62032, Password=passw0rd) -- so a node that was never "
-                     "edited fails on the stock file.\n"
-                     "WARN -- MMDVM_Bridge is installed but its INI is missing or "
-                     "unreadable.\n"
-                     "PASS -- a unique-looking password, or [DMR Network] disabled, "
-                     "or MMDVM_Bridge not installed at all. There is nothing to "
-                     "protect in the last two cases, so this check stays quiet rather "
-                     "than warning forever on a node that does no DMR.\n\n"
-                     "Only booleans and length are reported."),
-        "risk":     ("On BrandMeister the hotspot security password is what binds "
-                     "your DMR ID to your device on the master server. Anyone who "
-                     "knows it can connect their own hotspot as you: traffic they "
-                     "originate appears on the network, and on the public "
-                     "BrandMeister dashboard, as your DMR ID and callsign. You would "
-                     "be answering for it.\n\n"
-                     "BrandMeister strongly recommends a personalised password "
-                     "precisely because shared and default values made this "
-                     "trivial, and some masters now enforce it -- but many still "
-                     "accept the shipped one, which is why this check exists. Were "
-                     "it universally mandatory, a node still set to passw0rd simply "
-                     "would not connect, and you would learn that from the failed "
-                     "link rather than from here. Connecting successfully is "
-                     "therefore not evidence that this is set. A password left at "
-                     "the shipped passw0rd is equivalent to no password at all."),
-        "remediation": ("Set a personalised password in BrandMeister SelfCare -- log "
-                         "in on the dashboard, click your callsign, open SelfCare, "
-                         "then the Radio ID tab, and use the Hotspot Security "
-                         "section at the bottom. Mirror the same value into "
-                         "MMDVM_Bridge.ini [DMR Network] Password.\n\n"
-                         "Mind BrandMeister's constraints: 20 characters or fewer, "
-                         "and no special characters. `openssl rand -hex 10` gives "
-                         "exactly 20 hex characters and satisfies both.\n\n"
-                         "If this node does no DMR, set Enable=0 in [DMR Network] "
-                         "rather than leaving a default password pointed at a live "
-                         "master."),
-        "references": [
-            {"label": "BrandMeister docs -- Hotspot Security password (SelfCare, 20 chars, no specials)",
-             "url":   "https://help.brandmeister.network/dashboard/hotspot-security/"},
-            {"label": "DVSwitch MMDVM_Bridge.ini sample -- ships Password = passw0rd",
-             "url":   "https://github.com/DVSwitch/MMDVM_Bridge/blob/master/MMDVM_Bridge.ini"},
-        ],
-        "check_fn":  _check_brandmeister_hotspot_password,
-        "detail_fn": _detail_brandmeister_hotspot_password,
-        "sensitive": True,
-    },
-    {
-        "id":       "chan_sip_disabled",
-        "layer":    "asl",
-        "label":    "Legacy chan_sip module disabled",
-        "severity": "low",
-        "source":   "modules.conf load/noload state, plus `asterisk -rx 'module show "
-                    "like chan_sip'` and -- only when it turns out to be loaded -- "
-                    "`asterisk -rx 'sip show peers'`.",
-        "meaning":  ("Whether the obsolete chan_sip channel driver is loaded.\n\n"
-                     "PASS -- not loaded in the running Asterisk.\n"
-                     "WARN -- loaded with no configured peers, or the Asterisk CLI "
-                     "was unreachable and modules.conf does not noload it.\n"
-                     "FAIL -- loaded with configured peers.\n\n"
-                     "Version context matters here: chan_sip was deprecated in "
-                     "Asterisk 17 and removed outright in Asterisk 21. ASL3 runs on "
-                     "Asterisk 20, which is the last family that still has it -- so "
-                     "on this node it is genuinely possible to be carrying an "
-                     "unmaintained SIP stack, which is exactly why the check exists. "
-                     "It is rated low severity because a default ASL3 node does not "
-                     "load it."),
-        "risk":     ("A loaded chan_sip binds UDP 5060 and answers anything that asks "
-                     "-- and 5060 is among the most relentlessly scanned ports on the "
-                     "internet. Scanners enumerate extensions, then brute-force them, "
-                     "and the payoff they are looking for is toll fraud: calls placed "
-                     "through your box to premium-rate numbers, billed to whatever "
-                     "trunk it can reach.\n\n"
-                     "The module is also no longer maintained. Security fixes land in "
-                     "chan_pjsip; chan_sip is frozen and then gone in the next major "
-                     "version. Running it on a node that does not need SIP at all is "
-                     "attack surface bought for nothing."),
-        "remediation": ("If nothing on this node uses SIP, put `noload => chan_sip.so` "
-                         "in /etc/asterisk/modules.conf and restart Asterisk.\n\n"
-                         "If you do want a SIP phone on the node, use chan_pjsip -- "
-                         "that is what the ASL3 manual documents, and Asterisk ships "
-                         "contrib/scripts/sip_to_pjsip/sip_to_pjsip.py to convert an "
-                         "existing sip.conf. Doing this now also means Asterisk 21+ "
-                         "will not break the node when it removes chan_sip entirely."),
-        "references": [
-            {"label": "Asterisk -- chan_sip removal in Asterisk 21 (deprecated in 17)",
-             "url":   "https://www.asterisk.org/asterisk-21-module-removal-chan_sip/"},
-            {"label": "AllStarLink manual -- setting up a SIP phone with chan_pjsip",
-             "url":   "https://allstarlink.github.io/adv-topics/sip-phone/"},
-        ],
-        "check_fn":  _check_chan_sip_disabled,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "ssh_hardening",
-        "layer":    "cross-cutting",
-        "label":    "SSH hardening",
-        "severity": "medium",
-        "source":   "/etc/ssh/sshd_config with Include directives expanded IN PLACE, "
-                    "so /etc/ssh/sshd_config.d/*.conf takes the precedence sshd "
-                    "actually gives it. Parsed rather than queried with `sshd -T`, "
-                    "which needs a valid host key and fails on exactly the "
-                    "half-configured box worth checking.",
-        "meaning":  ("Grades the four directives that decide how hard this node is to "
-                     "log into.\n\n"
-                     "FAIL -- PermitRootLogin yes, or PermitEmptyPasswords yes.\n"
-                     "WARN -- PasswordAuthentication yes, or PubkeyAuthentication "
-                     "no.\n"
-                     "PASS -- root login and password auth are both restricted, or "
-                     "there is no sshd on this node at all.\n\n"
-                     "Where a value is not stated anywhere, OpenSSH's own defaults "
-                     "are assumed: PermitRootLogin prohibit-password, "
-                     "PasswordAuthentication yes, PubkeyAuthentication yes, "
-                     "PermitEmptyPasswords no.\n\n"
-                     "Precedence is the subtle part. sshd_config(5) says \"for each "
-                     "keyword, the first obtained value will be used\", and Debian "
-                     "and Raspberry Pi OS put `Include /etc/ssh/sshd_config.d/*.conf` "
-                     "at the TOP of the file -- so a drop-in overrides the main file, "
-                     "not the other way round. This check follows that ordering, "
-                     "which means it reports what sshd is really using rather than "
-                     "the first line you happen to find with grep."),
-        "risk":     ("A repeater node is a small Linux box with a public IP or a "
-                     "forwarded port, and SSH is the front door. Password auth plus "
-                     "root login is the combination automated scanners are built for: "
-                     "they find the port in minutes and then guess continuously, "
-                     "forever, at no cost.\n\n"
-                     "There is a sysmon-specific twist. This tool and the dashboard "
-                     "authenticate against the box's own root password -- that is the "
-                     "whole credential store. So a weak or guessable root password is "
-                     "not only an SSH exposure; it is also the login to the web "
-                     "interface that can restart services, rewrite systemd units and "
-                     "edit Asterisk configs. The two share a fate."),
-        "remediation": ("Put your public key in ~/.ssh/authorized_keys and confirm it "
-                         "works before changing anything else. Then create "
-                         "/etc/ssh/sshd_config.d/99-hardening.conf with "
-                         "PermitRootLogin prohibit-password and "
-                         "PasswordAuthentication no, and restart sshd.\n\n"
-                         "Verify with `sshd -T | grep -Ei "
-                         "'permitrootlogin|passwordauth'` -- that prints what the "
-                         "daemon resolved, which is the number that counts.\n\n"
-                         "Keep a second way in (console or an existing session) until "
-                         "you have proven the new config works."),
-        "references": [
-            {"label": "sshd_config(5) -- first obtained value wins, Include, and defaults",
-             "url":   "https://man.openbsd.org/sshd_config"},
-            {"label": "sshd_config(5), Debian build -- the Include note that decides precedence here",
-             "url":   "https://manpages.debian.org/trixie/openssh-server/sshd_config.5.en.html"},
-        ],
-        "check_fn":  _check_ssh_hardening,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "fail2ban_jails",
-        "layer":    "cross-cutting",
-        "label":    "fail2ban jail coverage",
-        "severity": "medium",
-        "source":   "`fail2ban-client status` -- the ACTIVE jail list from the running "
-                    "server, not merely the presence of a jail.local file.",
-        "meaning":  ("PASS -- fail2ban is running with at least one active jail, and "
-                     "one of them covers sshd.\n"
-                     "WARN -- fail2ban is not installed, is installed but not "
-                     "running, has no active jails, or has jails but none for "
-                     "sshd.\n\n"
-                     "Absence is a warning rather than a failure on purpose: "
-                     "fail2ban is a good idea, not a requirement, and a node that "
-                     "allows no password logins at all has far less need of it.\n\n"
-                     "The check deliberately asks the daemon instead of reading "
-                     "config. A jail defined in jail.local but never started -- "
-                     "because of a typo, a missing log path or a failed reload -- "
-                     "protects nothing, and reading the file would have called that "
-                     "a pass."),
-        "risk":     ("Without fail2ban, a scanner that finds your SSH port gets "
-                     "unlimited attempts. With it, the same scanner gets a handful "
-                     "before the source address is dropped at the firewall. On "
-                     "Debian the sshd jail is the one enabled out of the box, which "
-                     "covers the common case.\n\n"
-                     "Be clear about what it cannot do, though. fail2ban works by "
-                     "reading logs for authentication failures, so it only protects "
-                     "services that authenticate and log. USRP and M17 do neither -- "
-                     "there is no failed login to notice, because there is no login. "
-                     "For those, binding to loopback and firewalling are the whole "
-                     "defence, and fail2ban is no substitute for them."),
-        "remediation": ("`apt install fail2ban`, then confirm with `fail2ban-client "
-                         "status` that the sshd jail is actually in the list -- "
-                         "installing the package is not the same as running the "
-                         "jail.\n\n"
-                         "fail2ban ships filters for many services; if this node "
-                         "exposes SIP or IAX2 to the internet, an Asterisk jail "
-                         "pointed at /var/log/asterisk/security.log is worth adding "
-                         "on top."),
-        "references": [
-            {"label": "fail2ban project -- filters, jails and fail2ban-client",
-             "url":   "https://github.com/fail2ban/fail2ban"},
-            {"label": "jail.conf(5) -- jail definitions and enabled state",
-             "url":   "https://manpages.debian.org/trixie/fail2ban/jail.conf.5.en.html"},
-            {"label": "fail2ban-client(1) -- the command this check reads jail status from",
-             "url":   "https://manpages.debian.org/trixie/fail2ban/fail2ban-client.1.en.html"},
-        ],
-        "check_fn":  _check_fail2ban_jails,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "monit_auth",
-        "layer":    "cross-cutting",
-        "label":    "Monit authentication configured",
-        "severity": "medium",
-        "source":   "the monitrc file mode plus its `allow` lines "
-                    "(/etc/monit/monitrc, /etc/monitrc, /etc/monit.conf).",
-        "meaning":  ("Whether Monit's web interface has real access control.\n\n"
-                     "PASS -- at least one credential-bearing allow line "
-                     "(`allow user:password` or `allow @group`), or a host ACL that "
-                     "is not wide open, with the file mode no wider than 0700. Also "
-                     "passes when monit is not installed.\n"
-                     "WARN -- no allow line at all; or the only access control is a "
-                     "wide-open host ACL such as `allow 0.0.0.0/0.0.0.0` with no "
-                     "credentials; or the file is readable by group or other; or it "
-                     "cannot be read.\n\n"
-                     "Two details this check gets right that a naive version gets "
-                     "wrong. Monit's own requirement is that the control file have "
-                     "permissions \"no more than 0700\" -- it refuses to start "
-                     "otherwise -- so 0700 is correct and demanding exactly 0600 "
-                     "would warn about a conforming file. And `allow` means two "
-                     "different things: a credential, or a host ACL. Counting any "
-                     "allow line as authentication would pass a monitrc whose only "
-                     "directive is `allow 0.0.0.0/0.0.0.0`.\n\n"
-                     "KNOWN v1 LIMITATION: this reads auth configuration only. "
-                     "Whether port 2812 is bound to localhost or firewalled is NOT "
-                     "checked -- that is a tracked v1.1 candidate. The label says "
-                     "\"auth configured\" and never \"secured\" for exactly that "
-                     "reason -- a PASS here does not mean the port is safe."),
-        "risk":     ("Monit's web interface does more than display status: it can "
-                     "start, stop and restart the services it monitors. An unguarded "
-                     "one on a reachable address is a remote control for the node.\n\n"
-                     "Basic-auth credentials are sent base64-encoded, which is "
-                     "encoding and not encryption, so they are readable by anyone on "
-                     "the path unless SSL is configured. And because the monitrc "
-                     "holds those credentials in cleartext, its file mode is part of "
-                     "the control, not a detail -- which is why monit enforces the "
-                     "permission itself."),
-        "remediation": ("Bind the interface to loopback with `use address 127.0.0.1` "
-                         "inside the `set httpd` block, and keep an `allow "
-                         "localhost` alongside a real `allow user:password`.\n\n"
-                         "`chmod 600 /etc/monit/monitrc`. If the interface must be "
-                         "reachable from elsewhere, add SSL and restrict the host "
-                         "ACL to specific addresses -- and firewall 2812 as well, "
-                         "since that is the part this check cannot see."),
-        "references": [
-            {"label": "Monit documentation -- control file permissions, allow forms, httpd security",
-             "url":   "https://www.mmonit.com/monit/documentation/monit.html"},
-            {"label": "monit(1) -- control file must be no more than 0700, and the allow forms",
-             "url":   "https://manpages.debian.org/trixie/monit/monit.1.en.html"},
-        ],
-        "check_fn":  _check_monit_auth,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "dashboard_web_auth",
-        "layer":    "cross-cutting",
-        "label":    "Dashboard companion app requires auth",
-        "severity": "high",
-        "source":   "the installed asl_dvs_dashboard source, located via `systemctl "
-                    "show -p ExecStart` and scanned for the session-auth markers "
-                    "(_SESSION_COOKIE_NAME, _require_auth, /api/login), plus the "
-                    "presence of the shared session store at /run/asl_dvs.",
-        "meaning":  ("Whether the dashboard on port 8989 enforces the same session "
-                     "auth sysmon does.\n\n"
-                     "PASS -- all auth markers present, or the dashboard is not "
-                     "installed on this node.\n"
-                     "WARN -- a partial implementation, or the service is installed "
-                     "but its source file could not be located to confirm.\n"
-                     "FAIL -- the installed build carries no session-auth markers at "
-                     "all.\n\n"
-                     "This check reads the dashboard's source. It never connects to "
-                     "port 8989 -- no check on this page opens a socket, which is "
-                     "what keeps running the tab from writing entries into the very "
-                     "logs an operator is trying to read."),
-        "risk":     ("sysmon and the dashboard deliberately share one session table "
-                     "at /run/asl_dvs/auth_session.json, so that logging into either "
-                     "authenticates both. That convenience runs in reverse too: an "
-                     "unauthenticated dashboard is an unauthenticated path to the "
-                     "same node control sysmon carefully gates.\n\n"
-                     "This is not hypothetical. Before v8.1.0 the dashboard served "
-                     "its API to anyone who could reach the port, and sysmon itself "
-                     "had no authentication at all until v6.6.0 -- where "
-                     "/api/unit_file plus /api/svc was a two-request path from "
-                     "unauthenticated to root. Both were fixed the same way. This "
-                     "check exists so a downgrade or a half-finished upgrade of the "
-                     "companion app cannot quietly reopen that door."),
-        "remediation": ("Run asl_dvs_dashboard v8.1.0 or later -- the build that "
-                         "added session auth and the shared session table -- and "
-                         "restart it after upgrading.\n\n"
-                         "There is no separate credential to set: both apps "
-                         "authenticate against the box's root password, so the "
-                         "strength of that password is the strength of both web "
-                         "interfaces. See also the SSH hardening check on this page, "
-                         "which grades the same secret from the other direction."),
-        "references": [
-            {"label": "Project doc: Security_Audit_asl_dvs_dashboard_v8.0.6.md (findings behind the v8.1.0 fix)",
-             "url":   ""},
-            {"label": "Project doc: Security_Audit_sysmon_v6.5.32.md (findings 1 and 2, fixed in sysmon v6.6.0)",
-             "url":   ""},
-        ],
-        "check_fn":  _check_dashboard_web_auth,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "asterisk_perms",
-        "layer":    "asl",
-        "label":    "/etc/asterisk permissions",
-        "severity": "low",
-        "source":   "stat() on /etc/asterisk and on iax.conf, manager.conf and "
-                    "rpt.conf inside it.",
-        "meaning":  ("Whether the directory holding this node's cleartext secrets is "
-                     "readable by accounts that should not have them. Expected: mode "
-                     "0750, owner root:asterisk.\n\n"
-                     "FAIL -- the directory is world-accessible, or a secret-bearing "
-                     "config file is world-readable.\n"
-                     "WARN -- the mode is LOOSER than expected (group-writable, say), "
-                     "the owner is not root, or a different group has access.\n"
-                     "PASS -- as expected, or stricter.\n\n"
-                     "Two things this check is careful about. A mode tighter than "
-                     "0750, such as 0700, is better than the expectation and is "
-                     "noted rather than warned about. And Debian's asterisk "
-                     "packaging ships /etc/asterisk setgid (02750); the setgid bit is "
-                     "reported separately instead of being mistaken for a wrong "
-                     "permission, which would warn on a stock, correct install."),
-        "risk":     ("iax.conf and manager.conf hold live secrets in cleartext -- "
-                     "Asterisk has no other way to use them. If those files are "
-                     "readable beyond root and the asterisk group, then every local "
-                     "account, and every service running as a non-root user, can "
-                     "read the node's IAX2 secrets and AMI passwords.\n\n"
-                     "That turns a small compromise into a large one. A bug in some "
-                     "unrelated daemon running as `nobody` becomes IAX2 link access "
-                     "and AMI credentials -- and, on an Asterisk older than 20.9.2, "
-                     "AMI credentials are a route to running commands as root via "
-                     "CVE-2024-42365. This is rated low severity only because it "
-                     "needs a foothold on the box first; given one, it is the step "
-                     "that makes the foothold matter."),
-        "remediation": ("`chown root:asterisk /etc/asterisk` and `chmod 750 "
-                         "/etc/asterisk`, then `chmod 640` the config files inside "
-                         "it. Keeping the setgid bit (2750) is fine.\n\n"
-                         "If you edit these files as a normal user or copy them "
-                         "around, re-check afterwards -- a restored backup or an "
-                         "editor writing a new file is the usual way a 644 appears "
-                         "where a 640 used to be."),
-        "references": [
-            {"label": "inode(7) -- permission bits, and the setgid bit Debian ships on /etc/asterisk",
-             "url":   "https://manpages.debian.org/trixie/manpages/inode.7.en.html"},
-        ],
-        "check_fn":  _check_asterisk_perms,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "service_nonroot",
-        "layer":    "cross-cutting",
-        "label":    "Services run as non-root where possible",
-        "severity": "medium",
-        "source":   "`systemctl show -p User -p Group` -- one batched call, not one "
-                    "per unit -- for every installed unit in the target list: a fixed "
-                    "floor (Asterisk, fail2ban, the DVSwitch stack, usrp2m17, the "
-                    "dashboard) plus everything pinned in the Services config, so a "
-                    "bridge added to this node gets graded without editing the check.",
-        "meaning":  ("WARN -- a unit that does not need root is running as root.\n"
-                     "PASS -- it drops privileges, or it is one of the documented "
-                     "exemptions.\n\n"
-                     "Four exemptions pass with a note rather than warning. Asterisk "
-                     "needs root on ASL3: app_rpt wants realtime scheduling and direct "
-                     "DAHDI/USB access, and that is how upstream ships it. fail2ban "
-                     "needs root because its entire job is rewriting firewall rules. "
-                     "sshd must be root to authenticate and then setuid to the user "
-                     "logging in. Cockpit's privileged side is the point of Cockpit.\n\n"
-                     "sysmon, instmon and 44helper are excluded from the check "
-                     "altogether -- they are root by design, per the v6.6.0 auth "
-                     "migration, and a tool grading itself is noise. Units that are "
-                     "not installed are skipped rather than counted, so an ASL-only "
-                     "node is not warned about DVSwitch services it does not have.\n\n"
-                     "The target list is the fixed floor plus whatever is pinned in "
-                     "the Services config: pin a new bridge and it is graded on the "
-                     "next run; un-pin one on the floor and it is still graded, "
-                     "because hiding a row is a display choice, not a security "
-                     "decision.\n\n"
-                     "The Overview tab's Owner column carries the same verdict per "
-                     "row, computed from the same shared constant, and an amber owner "
-                     "there links straight back to this check."),
-        "risk":     ("The units this check actually cares about -- Analog_Bridge, "
-                     "MMDVM_Bridge, usrp2m17, the reflector bridges -- are C and C++ "
-                     "programs whose day job is parsing UDP frames that arrive from "
-                     "the network. That is the classic place for a memory-safety "
-                     "bug.\n\n"
-                     "Whether such a bug is a bad afternoon or a rebuild depends "
-                     "entirely on what the process was running as. As a dedicated "
-                     "user, it is contained. As root, it is the whole Pi: the "
-                     "Asterisk secrets, the SSH keys, persistence. None of these "
-                     "bridges need root -- they open high UDP ports and read their "
-                     "own config -- so running them as root buys nothing and risks "
-                     "everything."),
-        "remediation": ("Add User= and Group= to the unit's [Service] section (use "
-                         "`systemctl edit <unit>` so the change survives package "
-                         "updates), make sure that user can read the config and "
-                         "write its logs, then `systemctl daemon-reload` and restart "
-                         "it.\n\n"
-                         "While you are in there, systemd's sandboxing is nearly free "
-                         "on these services: NoNewPrivileges=yes, PrivateTmp=yes, "
-                         "ProtectSystem=strict with a narrow ReadWritePaths=, and "
-                         "ProtectHome=yes. They limit what a compromised bridge can "
-                         "touch even when it is running as the right user."),
-        "references": [
-            {"label": "AllStarLink manual -- what's new in ASL3 (Asterisk 20+)",
-             "url":   "https://allstarlink.github.io/install/whats-new/"},
-            {"label": "systemd.exec(5) -- User= and Group=, and what an unset User= means",
-             "url":   "https://manpages.debian.org/trixie/systemd/systemd.exec.5.en.html"},
-        ],
-        "check_fn":  _check_service_nonroot,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-    {
-        "id":       "unit_file_perms",
-        "layer":    "cross-cutting",
-        "label":    "Service unit files and binaries not writable",
-        "severity": "high",
-        "source":   "stat() on each target unit's FragmentPath, its ExecStart binary, "
-                    "and its drop-in directories and *.conf files under "
-                    "/etc, /run, /usr/lib and /lib systemd/system. Paths come from one "
-                    "batched `systemctl show`; the stats are pure stdlib, no "
-                    "subprocess.",
-        "meaning":  ("Whether anyone other than root can change what these services "
-                     "execute.\n\n"
-                     "FAIL -- an artifact is world-writable. Any local account can "
-                     "rewrite it and own the next restart.\n"
-                     "WARN -- an artifact is group-writable by a non-root group, is "
-                     "owned by a non-root user, could not be read, or systemd reported "
-                     "no FragmentPath for the unit.\n"
-                     "PASS -- everything present is root-owned with no foreign write "
-                     "bit.\n\n"
-                     "root:root group-writable is deliberately not flagged: it is "
-                     "untidy, but nobody who is not already root can write it.\n\n"
-                     "Drop-ins are inspected, not just the unit file. `systemctl edit` "
-                     "writes <unit>.d/override.conf, and a writable override replaces "
-                     "ExecStart exactly as effectively as a writable unit file -- "
-                     "checking only FragmentPath would pass a node that is wide open. "
-                     "The drop-in directory itself counts too: a writable directory is "
-                     "the same finding one step earlier, since nothing stops a local "
-                     "user creating a new .conf in it.\n\n"
-                     "The Overview tab's Perms column shows the same verdict per row "
-                     "and links here."),
-        "risk":     ("This is the shortest path to root on the whole tab, and unlike "
-                     "most of it, the attacker needs no credentials at all -- only a "
-                     "local account, or any process running as a non-root user that "
-                     "can be made to write a file.\n\n"
-                     "The chain is two steps: edit the unit file, drop-in or binary to "
-                     "point at something of your choosing, then wait. You do not even "
-                     "need to trigger the restart yourself -- a reboot, a package "
-                     "upgrade, a watchdog, or an operator clicking Restart in this very "
-                     "interface will do it, and the payload runs as whatever the unit "
-                     "runs as, which on most of these is root.\n\n"
-                     "It matters specifically on this node because instmon and 44helper "
-                     "both WRITE unit files as part of installing the stack. A helper "
-                     "that creates a unit with a careless mode leaves a permanent hole "
-                     "behind it, and nothing else in the suite would notice."),
-        "remediation": ("`chmod 644` and `chown root:root` every unit file, drop-in and "
-                         "drop-in directory this check names; `chmod 755 root:root` the "
-                         "ExecStart binaries.\n\n"
-                         "The usual causes are a unit file copied from a home directory "
-                         "with its ownership intact, a `chmod -R` aimed at something "
-                         "else, or a build that installed a binary under a non-root "
-                         "account. Fix the mode, then check whether whatever produced "
-                         "it will do so again on the next run.\n\n"
-                         "After changing a unit file or drop-in, `systemctl "
-                         "daemon-reload`."),
-        "references": [
-            {"label": "systemd.unit(5) -- drop-in directories and unit file load path",
-             "url":   "https://www.freedesktop.org/software/systemd/man/latest/systemd.unit.html"},
-            {"label": "Project doc: 44Helper_Root_Auth_Migration.md (this suite writes unit files)",
-             "url":   ""},
-            {"label": "systemd.unit(5) -- unit file lookup order and drop-in directories",
-             "url":   "https://manpages.debian.org/trixie/systemd/systemd.unit.5.en.html"},
-            {"label": "systemctl(1) -- `systemctl edit`, which writes the overrides this check stats",
-             "url":   "https://manpages.debian.org/trixie/systemd/systemctl.1.en.html"},
-        ],
-        "check_fn":  _check_unit_file_perms,
-        "detail_fn": _detail_passthrough,
-        "sensitive": False,
-    },
-]
-
-_EXPECTED_SECURITY_CHECK_COUNT = 14
-
-def _validate_security_registry(checks: "list[dict]") -> None:
-    if len(checks) != _EXPECTED_SECURITY_CHECK_COUNT:
-        raise AssertionError(
-            f"SECURITY_CHECKS: expected {_EXPECTED_SECURITY_CHECK_COUNT} entries, "
-            f"found {len(checks)} -- update _EXPECTED_SECURITY_CHECK_COUNT if this "
-            f"is an intentional change")
-
-    poison = "SYSMON_SECURITY_POISON_PROBE_DO_NOT_LEAK"
-    poisoned_raw = {k: poison for k in
-                    ("secret", "password", "raw_secret", "raw_password", "value")}
-
-    seen_ids = set()
-    for entry in checks:
-        cid = entry.get("id")
-        if not cid or cid in seen_ids:
-            raise AssertionError(f"SECURITY_CHECKS: missing or duplicate id {cid!r}")
-        seen_ids.add(cid)
-
-        if entry.get("layer") not in _SECURITY_LAYERS:
-            raise AssertionError(f"SECURITY_CHECKS[{cid}]: bad layer {entry.get('layer')!r}")
-        if entry.get("severity") not in _SECURITY_SEVERITIES:
-            raise AssertionError(f"SECURITY_CHECKS[{cid}]: bad severity {entry.get('severity')!r}")
-        if not callable(entry.get("check_fn")):
-            raise AssertionError(f"SECURITY_CHECKS[{cid}]: check_fn is not callable")
-
-        for field, floor in (("source", 40), ("meaning", 120),
-                             ("risk", 120), ("remediation", 60)):
-            val = entry.get(field)
-            if not isinstance(val, str) or len(val.strip()) < floor:
-                raise AssertionError(
-                    f"SECURITY_CHECKS[{cid}]: {field} must be a string of at least "
-                    f"{floor} characters (got {len(val or '') if isinstance(val, str) else type(val).__name__})")
-        refs = entry.get("references")
-        if not isinstance(refs, list):
-            raise AssertionError(f"SECURITY_CHECKS[{cid}]: references must be a list")
-        for ref in refs:
-            if not isinstance(ref, dict) or not ref.get("label"):
-                raise AssertionError(
-                    f"SECURITY_CHECKS[{cid}]: each reference needs a label")
-            url = ref.get("url", "")
-            if url and not url.startswith("https://"):
-                raise AssertionError(
-                    f"SECURITY_CHECKS[{cid}]: reference url must be https:// or empty "
-                    f"(got {url!r})")
-
-        if entry.get("sensitive"):
-            detail_fn = entry.get("detail_fn")
-            if not callable(detail_fn):
-                raise AssertionError(
-                    f"SECURITY_CHECKS[{cid}]: sensitive=True requires a detail_fn "
-                    f"(registry redaction contract)")
-            redacted = detail_fn(poisoned_raw)
-            if poison in json.dumps(redacted, default=str):
-                raise AssertionError(
-                    f"SECURITY_CHECKS[{cid}]: detail_fn let a raw value through "
-                    f"unredacted -- fix before this ships")
-
-_validate_security_registry(SECURITY_CHECKS)
+def _reg_summary_for_page() -> "dict | None":
+    sm = get_state_snapshot().get("reg_summary")
+    if not sm:
+        return None
+    now = time.time()
+    out = dict(sm)
+    out["age_s"] = int(now - sm["since"])
+    out["checked_age_s"] = int(now - sm["checked"])
+    out["since_text"] = time.strftime("%H:%M", time.localtime(sm["since"]))
+    return out
 
 def _route_overview(h: Handler) -> None:
     qt_results  = get_state_snapshot().get("quick_tests", {})
@@ -19702,6 +18003,204 @@ def _dvs_active_units() -> "list[str]":
             active.append(unit)
     return active
 
+_HEALTH_UNITS = ("nodecontrol", "asl_dvs_dashboard", "sysmon", "wifimon", "instmon", "44helper",
+                 "asterisk", "analog_bridge", "mmdvm_bridge", "md380-emu", "usrp2m17", "allmon3")
+_HEALTH_CACHE_SECS = 30.0
+_health_lock = threading.Lock()
+_health_cache: dict = {"at": None, "data": None}
+_HC_KILLED_RE = re.compile(r"Killed process (\d+) \(([^)]+)\)")
+_HC_DISK_USAGE_RE = re.compile(r"take up ([\d.]+)\s*([KMGT]?)B?", re.I)
+_HC_UNIT_MULT = {"": 1 / (1024 * 1024), "K": 1 / 1024, "M": 1.0, "G": 1024.0, "T": 1024.0 * 1024}
+
+def _hc(cid: str, title: str, status: str, headline: str, rows=None, note: str = "") -> dict:
+    return {"id": cid, "title": title, "status": status, "headline": headline,
+            "rows": rows or [], "note": note}
+
+def _hc_cmd(cmd: list, timeout: int = 6) -> "tuple[str, str]":
+    if not shutil.which(cmd[0]):
+        return "", f"{cmd[0]} not found"
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "", f"{cmd[0]} timed out"
+    except OSError as exc:
+        return "", str(exc)
+    err = (r.stderr.strip().splitlines() or [""])[0]
+    return r.stdout, ("" if r.returncode == 0 else (err or f"{cmd[0]} exited {r.returncode}"))
+
+def _hc_meminfo() -> dict:
+    out = {}
+    try:
+        for ln in Path("/proc/meminfo").read_text().splitlines():
+            k, _, v = ln.partition(":")
+            parts = v.split()
+            if parts and parts[0].isdigit():
+                out[k.strip()] = int(parts[0]) // 1024
+    except OSError:
+        pass
+    return out
+
+def _hc_clock() -> dict:
+    out, prob = _hc_cmd(["timedatectl", "show", "-p", "NTPSynchronized", "-p", "NTP", "-p", "Timezone"])
+    if prob:
+        return _hc("clock", "Clock", "unknown", f"Can't read the clock state ({prob})")
+    kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+    synced, ntp = kv.get("NTPSynchronized") == "yes", kv.get("NTP") == "yes"
+    rows = [["Now", datetime.now().strftime("%Y-%m-%d %H:%M:%S")], ["Time zone", kv.get("Timezone", "?")],
+            ["Time sync", "on" if ntp else "off"], ["Synced", "yes" if synced else "no"]]
+    if synced:
+        return _hc("clock", "Clock", "pass", "Clock is in sync", rows)
+    note = ("The Pi Zero 2 W has no clock battery, so after a power cut its time is wrong until it syncs. "
+            "A wrong clock breaks HTTPS (GitHub updates), AllStarLink registration and some digital-mode logins. "
+            + ("Turn sync on: sudo timedatectl set-ntp true" if not ntp
+               else "Sync is on but hasn't worked: check the internet and that UDP port 123 isn't blocked."))
+    return _hc("clock", "Clock", "warn", "Clock is NOT in sync" if ntp else "Time sync is turned off", rows, note)
+
+def _hc_oom() -> dict:
+    kills = None
+    try:
+        for ln in Path("/proc/vmstat").read_text().splitlines():
+            if ln.startswith("oom_kill "):
+                kills = int(ln.split()[1])
+    except (OSError, ValueError):
+        pass
+    if kills is None:
+        return _hc("oom", "Out-of-memory kills", "unknown", "The kernel doesn't report OOM kills (/proc/vmstat)")
+    rows = [["Since boot", str(kills)]]
+    if kills == 0:
+        return _hc("oom", "Out-of-memory kills", "pass", "None since boot", rows)
+    out, _prob = _hc_cmd(["journalctl", "-k", "-b", "--no-pager", "-o", "short-iso", "-g", "Killed process", "-n", "5"], 8)
+    for ln in out.splitlines():
+        m = _HC_KILLED_RE.search(ln)
+        if m:
+            rows.append([ln.split(" ", 1)[0][:19], f"{m.group(2)} (pid {m.group(1)})"])
+    return _hc("oom", "Out-of-memory kills", "fail",
+               f"The kernel killed {kills} process{'es' if kills != 1 else ''} for lack of memory since boot", rows,
+               "Memory ran out. Something was stopped to free it, and may have restarted since. "
+               "Check Memory per service below for the biggest users.")
+
+def _hc_memory() -> dict:
+    mi = _hc_meminfo()
+    total, avail = mi.get("MemTotal"), mi.get("MemAvailable")
+    if not total or avail is None:
+        return _hc("memory", "Memory", "unknown", "Can't read /proc/meminfo")
+    st, sf = mi.get("SwapTotal", 0), mi.get("SwapFree", 0)
+    used_swap = st - sf
+    zram = False
+    try:
+        zram = any(ln.startswith("/dev/zram") for ln in Path("/proc/swaps").read_text().splitlines())
+    except OSError:
+        pass
+    rows = [["Total", f"{total} MB"], ["Available", f"{avail} MB ({avail * 100 // total}%)"],
+            ["Swap", f"{used_swap} of {st} MB used" + (" (zram)" if zram else "") if st else "none"]]
+    status, notes = "pass", []
+    if avail < 32:
+        status = "fail"
+        notes.append("Less than 32 MB is free: the kernel may start killing processes.")
+    elif avail < 64:
+        status = "warn"
+        notes.append("Less than 64 MB is free.")
+    if st and used_swap * 100 >= st * 75:
+        status = "fail" if status == "fail" else "warn"
+        notes.append("Swap is over 75% used: the Pi will be slow, and an SD card wears faster with swap on it.")
+    head = f"{avail} MB of {total} MB available"
+    return _hc("memory", "Memory", status, head, rows, " ".join(notes))
+
+def _hc_dir_mb(path: str, budget: float = 3.0) -> "float | None":
+    total, deadline = 0, time.monotonic() + budget
+    for root, _dirs, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.lstat(os.path.join(root, name)).st_size
+            except OSError:
+                pass
+        if time.monotonic() > deadline:
+            return None
+    return total / (1024 * 1024)
+
+def _hc_disk() -> dict:
+    rows, status, notes = [], "pass", []
+    try:
+        vs = os.statvfs("/")
+        size = vs.f_blocks * vs.f_frsize
+        free = vs.f_bavail * vs.f_frsize
+        pct = free * 100 / size if size else 0
+        rows.append(["Root free", f"{free // (1024 * 1024)} MB of {size // (1024 * 1024)} MB ({pct:.0f}%)"])
+        if pct < 5:
+            status = "fail"
+            notes.append("The root file system is almost full: logs and updates will start failing.")
+        elif pct < 10:
+            status = "warn"
+            notes.append("Less than 10% of the root file system is free.")
+    except OSError as exc:
+        rows.append(["Root free", f"unknown ({exc})"])
+        status = "unknown"
+    out, prob = _hc_cmd(["journalctl", "--disk-usage"])
+    m = _HC_DISK_USAGE_RE.search(out or "")
+    if m:
+        jmb = float(m.group(1)) * _HC_UNIT_MULT.get(m.group(2).upper(), 1.0)
+        rows.append(["Journal", f"{jmb:.0f} MB"])
+        if jmb > 200:
+            status = "fail" if status == "fail" else "warn"
+            notes.append("The journal is over 200 MB. Cap it with SystemMaxUse= in /etc/systemd/journald.conf "
+                         "(for example 50M), then: sudo systemctl restart systemd-journald")
+    else:
+        rows.append(["Journal", f"unknown ({prob or 'no size in the output'})"])
+    vlog = _hc_dir_mb("/var/log")
+    rows.append(["/var/log", f"{vlog:.0f} MB" if vlog is not None else "too many files to count quickly"])
+    if vlog is not None and vlog > 300:
+        status = "fail" if status == "fail" else "warn"
+        notes.append("/var/log is over 300 MB.")
+    head = rows[0][1] if rows else "unknown"
+    return _hc("disk", "Disk and logs", status, f"Root: {head}", rows, " ".join(notes))
+
+def _hc_services() -> dict:
+    rows, warn = [], []
+    for unit in _HEALTH_UNITS:
+        out, prob = _hc_cmd(["systemctl", "show", f"{unit}.service", "-p", "LoadState", "-p", "ActiveState",
+                             "-p", "MemoryCurrent", "-p", "NRestarts"], 5)
+        if prob:
+            continue
+        kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
+        if kv.get("LoadState") != "loaded":
+            continue
+        mem = kv.get("MemoryCurrent", "")
+        mem_txt = f"{int(mem) // (1024 * 1024)} MB" if mem.isdigit() else "—"
+        try:
+            restarts = int(kv.get("NRestarts", "0") or 0)
+        except ValueError:
+            restarts = 0
+        if restarts >= 3:
+            warn.append(unit)
+        rows.append([unit, f"{kv.get('ActiveState', '?')} · {mem_txt}" + (f" · restarted {restarts}x" if restarts else "")])
+    if not rows:
+        return _hc("services", "Memory per service", "unknown", "systemctl gave no service data")
+    if warn:
+        return _hc("services", "Memory per service", "warn", f"Restarted 3 or more times: {', '.join(warn)}", rows,
+                   "systemd has restarted these since they were last started by hand or at boot. Check their logs on the Journal tab.")
+    return _hc("services", "Memory per service", "pass", f"{len(rows)} services", rows)
+
+_HEALTH_CHECKS = (_hc_clock, _hc_oom, _hc_memory, _hc_disk, _hc_services)
+
+def get_node_health(max_age: float = _HEALTH_CACHE_SECS) -> list:
+    with _health_lock:
+        at = _health_cache["at"]
+        if at is not None and time.monotonic() - at < max_age and _health_cache["data"] is not None:
+            return _health_cache["data"]
+    data = []
+    for fn in _HEALTH_CHECKS:
+        try:
+            data.append(fn())
+        except Exception as exc:
+            log.debug("health: %s failed: %s", fn.__name__, exc)
+            data.append(_hc(fn.__name__[4:], fn.__name__[4:].title(), "unknown", f"Check failed: {exc}"))
+    with _health_lock:
+        _health_cache["at"], _health_cache["data"] = time.monotonic(), data
+    return data
+
+def _route_health(h: Handler) -> None:
+    h.send_json({"ok": True, "checks": get_node_health()})
+
 def _route_hardware_get(h: Handler) -> None:
     ambe  = get_ambe_devices()
     audio = get_audio_devices()
@@ -21560,127 +20059,6 @@ def _route_sdcard_test_post(h: Handler, data: dict) -> None:
     else:
         h.send_json({"ok": False, "message": f"Unknown action: {action!r}"}, 400)
 
-_SECURITY_LAYER_ORDER  = ["dvswitch", "asl", "usrp2m17", "cross-cutting"]
-
-_SECURITY_LAYER_LABELS = {
-    "dvswitch":      "DVSwitch",
-    "asl":           "AllStarLink",
-    "usrp2m17":      "usrp2m17",
-    "cross-cutting": "Cross-cutting",
-}
-
-_SECURITY_CACHE_TTL_SEC = 60
-
-_SECURITY_RUN_BUDGET_SEC = 12
-
-_SECURITY_LOCK   = threading.Lock()
-
-_SECURITY_CACHE: dict  = {"payload": None, "ts": 0.0}
-
-def _run_security_check(entry: dict) -> dict:
-    cid = entry["id"]
-    try:
-        result = entry["check_fn"]()
-        status = result.get("status", CHK_ERROR)
-        raw    = result.get("raw", {})
-    except Exception as exc:
-        log.warning("security check %s: check_fn failed: %s", cid, exc)
-        status, raw = CHK_ERROR, {"error": str(exc)[:200]}
-
-    try:
-        detail_fn = entry.get("detail_fn") or _detail_passthrough
-        detail = detail_fn(raw)
-    except Exception as exc:
-        log.warning("security check %s: detail_fn failed: %s", cid, exc)
-        detail = {}
-
-    return {
-        "id":          cid,
-        "layer":       entry["layer"],
-        "label":       entry["label"],
-        "severity":    entry["severity"],
-        "status":      status,
-        "sensitive":   entry["sensitive"],
-        "detail":      detail,
-        "source":      entry["source"],
-        "meaning":     entry["meaning"],
-        "risk":        entry.get("risk", ""),
-        "remediation": entry["remediation"],
-        "references":  entry.get("references", []),
-    }
-
-def _security_summary(checks: "list[dict]") -> dict:
-    counts = {CHK_PASS: 0, CHK_WARN: 0, CHK_FAIL: 0}
-    other  = 0
-    for c in checks:
-        if c["status"] in counts:
-            counts[c["status"]] += 1
-        else:
-            other += 1
-    return {
-        "pass":  counts[CHK_PASS],
-        "warn":  counts[CHK_WARN],
-        "fail":  counts[CHK_FAIL],
-        "other": other,
-        "total": len(checks),
-        "worst": _sec_worst([c["status"] for c in checks]),
-    }
-
-def _security_layer_summary(checks: "list[dict]") -> list:
-    out = []
-    for layer in _SECURITY_LAYER_ORDER:
-        rows = [c for c in checks if c["layer"] == layer]
-        if not rows:
-            continue
-        out.append({
-            "id":     layer,
-            "label":  _SECURITY_LAYER_LABELS.get(layer, layer),
-            "status": _sec_worst([r["status"] for r in rows]),
-            "counts": _security_summary(rows),
-        })
-    return out
-
-def _security_build_payload() -> dict:
-    _SECURITY_RUNCTX.clear()
-    _SECURITY_RUNCTX["_deadline"] = time.monotonic() + _SECURITY_RUN_BUDGET_SEC
-    try:
-        checks = [_run_security_check(entry) for entry in SECURITY_CHECKS]
-    finally:
-        _SECURITY_RUNCTX.clear()
-    return {
-        "ok":                 True,
-        "summary":            _security_summary(checks),
-        "layers":             _security_layer_summary(checks),
-        "last_run_timestamp": time.time(),
-        "checks":             checks,
-        "cached":             False,
-        "cache_ttl_sec":      _SECURITY_CACHE_TTL_SEC,
-    }
-
-def _route_security_checks(h: Handler) -> None:
-    qs      = parse_qs(urlparse(h.path).query)
-    refresh = qs.get("refresh", ["0"])[0].strip().lower() in ("1", "true", "yes")
-
-    with _SECURITY_LOCK:
-        now    = time.time()
-        cached = _SECURITY_CACHE.get("payload")
-        age    = now - float(_SECURITY_CACHE.get("ts") or 0)
-
-        if cached and not refresh and age < _SECURITY_CACHE_TTL_SEC:
-            payload = dict(cached)
-            payload["cached"]        = True
-            payload["cache_age_sec"] = int(age)
-            h.send_json(payload)
-            return
-
-        payload = _security_build_payload()
-        _SECURITY_CACHE["payload"] = payload
-        _SECURITY_CACHE["ts"]      = now
-
-    out = dict(payload)
-    out["cache_age_sec"] = 0
-    h.send_json(out)
-
 def serialize_pinned_services(pinned: list) -> str:
     lines = []
     for entry in pinned:
@@ -21754,8 +20132,8 @@ def unpin_service(unit: str) -> bool:
     return ok
 
 _ALL_TABS = ("overview", "services", "ports", "journal",
-             "asldvs", "phone", "tune", "hardware", "dvsm", "stfu", "m17", "sdcard",
-             "security", "edit")
+             "asldvs", "reg", "phone", "tune", "hardware", "dvsm", "stfu", "m17", "sdcard",
+             "edit")
 
 _LOCKED_TABS = ("overview", "edit")
 
@@ -21767,6 +20145,8 @@ def _sanitize_enabled_tabs(raw) -> list:
     else:
         items = []
     wanted = {str(t).strip().lower() for t in items}
+    if "security" in wanted:
+        wanted.add("reg")
     wanted.update(_LOCKED_TABS)
     return [t for t in _ALL_TABS if t in wanted]
 
@@ -23221,6 +21601,8 @@ _GET_ROUTES = {
     "/api/whoami":             lambda h: h.send_json({"ok": True}),
     "/api/dashboard-status":   lambda h: h.send_json(action_dashboard_status()),
     "/api/status":             _route_status,
+    "/api/reg/http":           _route_reg_http_get,
+    "/api/reg/iax":            _route_reg_iax_get,
     "/api/config":             _route_config_get,
     "/api/log":                _route_log,
     "/api/overview":           _route_overview,
@@ -23251,6 +21633,8 @@ _GET_ROUTES = {
     "/api/abinfo":             _route_abinfo,
     "/api/hardware":           _route_hardware_get,
     "/api/hardware/diag":      _route_hardware_diag,
+    "/api/health":             _route_health,
+    "/healthz":                lambda h: h.send_ping(),
     "/api/phone":              _route_phone_get,
     "/api/dvsm":               _route_dvsm,
     "/api/stfu":               _route_stfu_get,
@@ -23258,7 +21642,6 @@ _GET_ROUTES = {
     "/api/dstar-gw":           _route_dstar_gw_get,
     "/api/sdcard":             _route_sdcard_get,
     "/api/sdcard/test":        _route_sdcard_test_get,
-    "/api/security/checks":    _route_security_checks,
     "/api/net/job":            _route_net_job_get,
 }
 
@@ -23565,44 +21948,10 @@ def uninstall_service() -> None:
 
     print(f"\nUninstall complete. {CONFIG_FILE} was not touched.")
 
-def run_selftest() -> int:
-    print(f"sysmon --selftest  (v{VERSION})")
-    print(f"registry: {len(SECURITY_CHECKS)} checks, import-time validation passed\n")
-
-    counts = {CHK_PASS: 0, CHK_WARN: 0, CHK_FAIL: 0, CHK_NOT_IMPLEMENTED: 0, CHK_ERROR: 0}
-    crashed = []
-    for chk in SECURITY_CHECKS:
-        cid = chk["id"]
-        try:
-            result = chk["check_fn"]()
-            status = result.get("status", CHK_ERROR)
-        except Exception as exc:
-            status = CHK_ERROR
-            crashed.append((cid, exc))
-        counts[status] = counts.get(status, 0) + 1
-        print(f"  [{status.upper():^15}] {cid}")
-
-    print(f"\n{sum(counts.values())} checks run: "
-          + ", ".join(f"{v} {k}" for k, v in counts.items() if v))
-
-    if crashed:
-        print(f"\n{len(crashed)} check(s) RAISED rather than returning a result "
-              f"-- this is a selftest failure, not a security finding:")
-        for cid, exc in crashed:
-            print(f"  {cid}: {type(exc).__name__}: {exc}")
-        return 1
-
-    print("\nAll checks executed without raising. (WARN/FAIL above are "
-          "findings, not selftest failures.)")
-    return 0
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="ASL-DVS SYSMON")
     parser.add_argument("--install", action="store_true", help="Install sysmon as a systemd service")
     parser.add_argument("--uninstall", action="store_true", help="Remove sysmon systemd service")
-    parser.add_argument("--selftest", action="store_true",
-                         help="Run registry validation + all security checks against this box, "
-                              "then exit (no HTTP server started)")
     parser.add_argument("--usrp-pairs", action="store_true",
                         help="Print the USRP pairing of rpt.conf, Analog_Bridge.ini and USRP2M17.ini as JSON, then exit")
     args = parser.parse_args()
@@ -23616,8 +21965,6 @@ def main() -> None:
     if args.uninstall:
         uninstall_service()
         return
-    if args.selftest:
-        sys.exit(run_selftest())
 
     if os.geteuid() != 0:
         print(
@@ -23637,6 +21984,16 @@ def main() -> None:
         threading.Thread(target=server.shutdown, daemon=True).start()
 
     signal.signal(signal.SIGTERM, _sigterm)
+
+    global _http_ok_at
+    probe_host = server.server_address[0]
+    if probe_host in ("0.0.0.0", ""):
+        probe_host = "127.0.0.1"
+    _http_ok_at = time.monotonic()
+    threading.Thread(target=_health_probe_loop, args=(probe_host, server.server_address[1]),
+                     name="health-probe", daemon=True).start()
+    threading.Thread(target=_sd_heartbeat_loop, name="sd-heartbeat", daemon=True).start()
+    _sd_notify("READY=1")
 
     ip = _lan_ip()
     cs = _cfg.get("identity", "callsign", fallback="")

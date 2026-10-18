@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.47.0"
-DATE_STR ="2026-10-12"
+VERSION ="2.51.0"
+DATE_STR ="2026-10-14"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -1913,6 +1913,61 @@ def compare_before_write (dest_path ,data_bytes ):
     return True ,"written"
 
 
+LOCKS_PATH = os.path.join(CONFIG_DIR, "instmon_locks.json")
+_locks_mutex = threading.Lock()
+
+def _locks_read():
+    try:
+        with open(LOCKS_PATH) as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out = {}
+    for cat, names in data.items():
+        if cat in LIB_SUBDIRS and isinstance(names, list):
+            out[cat] = {n for n in names if isinstance(n, str)}
+    return out
+
+def lib_locked(category, name):
+    return bool(category) and bool(name) and os.path.basename(name) in _locks_read().get(category, set())
+
+def lib_locked_path(path):
+    d, n = os.path.split(os.path.realpath(path))
+    for cat, cdir in LIB_SUBDIRS.items():
+        if os.path.realpath(cdir) == d:
+            return lib_locked(cat, n)
+    return False
+
+def lib_lock_set(category, name, locked, confirm=False):
+    if category not in LIB_SUBDIRS:
+        return 400, {"error": f"Unknown category '{category}'"}
+    target = safe_join(LIB_SUBDIRS[category], name or "")
+    if target is None or not os.path.isfile(target):
+        return 404, {"error": f"Library file not found: {name}"}
+    name = os.path.basename(target)
+    if not locked and not confirm:
+        return 400, {"error": f"Unlocking {name} needs confirmation."}
+    with _locks_mutex:
+        locks = _locks_read()
+        names = locks.setdefault(category, set())
+        if locked:
+            names.add(name)
+        else:
+            names.discard(name)
+        ensure_dirs()
+        payload = {c: sorted(v) for c, v in sorted(locks.items()) if v}
+        compare_before_write(LOCKS_PATH, json.dumps(payload, indent=2).encode("utf-8"))
+    if locked:
+        log_event(f"Locked {name} in the {category} library: it can't be deleted or overwritten", "ok")
+        return 200, {"message": f"{name} is locked: it can't be deleted or overwritten until you unlock it.", "level": "ok"}
+    log_event(f"Unlocked {name} in the {category} library", "warn")
+    return 200, {"message": f"{name} is unlocked: it can be deleted or overwritten again.", "level": "warn"}
+
+def _locked_msg(name):
+    return f"{name} is locked in the library -- uncheck Lock on its row first (it asks to confirm)."
+
 def _stage_library_file(category, filename, filedata, force=False, source="upload"):
     if category not in LIB_SUBDIRS:
         return 400, {"error": f"Unknown category '{category}'"}
@@ -1938,6 +1993,9 @@ def _stage_library_file(category, filename, filedata, force=False, source="uploa
     dest = safe_join(LIB_SUBDIRS[category], filename)
     if dest is None:
         return 400, {"error": "Invalid filename"}
+    if os.path.isfile(dest) and lib_locked(category, filename) and file_sha256(dest) != hashlib.sha256(filedata).hexdigest():
+        log_event(f"Refused to overwrite locked {filename} in the {category} library", "warn")
+        return 409, {"error": _locked_msg(filename)}
     wrote, reason = compare_before_write(dest, filedata)
     verb = "Imported from USB:" if source == "usb" else "Uploaded"
     log_event(f"{verb} {filename} to {category} library ({reason})", "ok")
@@ -3032,7 +3090,11 @@ _gh_state ={
 "event_seq":0 ,
 "event_msg":"",
 "event_level":"info",
+"gen":0 ,
+"started_at":None ,
 }
+
+GH_CHECK_LIMIT_SEC =int (os .environ .get ("INSTMON_GH_CHECK_LIMIT_SEC","240"))
 
 _gh_version_cache ={}
 _GH_VERSION_CACHE_MAX =200 
@@ -3064,7 +3126,88 @@ def _gh_local_blob_id (path ):
         return None 
 
 def _gh_source_label ():
-    return f"{GITHUB_REPO } ({GITHUB_BRANCH })"
+    if channel_get ()=="stable":
+        return f"{GITHUB_REPO } (stable channel)"
+    return f"{GITHUB_REPO } ({GITHUB_BRANCH }, testing channel)"
+
+_CHANNEL_PREF_PATH =os .path .join (CONFIG_DIR ,"instmon_channel.json")
+_CHANNELS =("stable","testing")
+GITHUB_STABLE_URL =GITHUB_RAW_BASE +"/channels/stable.json"
+
+def channel_get ():
+    try :
+        with open (_CHANNEL_PREF_PATH )as fh :
+            val =json .load (fh ).get ("channel")
+    except (OSError ,ValueError ,AttributeError ):
+        return "stable"
+    return val if val in _CHANNELS else "stable"
+
+def channel_set (choice ,confirm =False ):
+    if choice not in _CHANNELS :
+        return False ,f"Unknown channel: {choice !r}","err"
+    if choice =="testing"and not confirm :
+        return False ,"Switching to Testing needs confirmation.","warn"
+    ensure_dirs ()
+    compare_before_write (_CHANNEL_PREF_PATH ,json .dumps ({"channel":choice },indent =2 ).encode ("utf-8"))
+    with _gh_lock :
+        was_checking =_gh_state ["phase"]=="checking"
+        _gh_state ["gen"]+=1 
+        _gh_state .update (phase ="idle",error =None ,entries =[],skipped =0 ,checked_at =None ,started_at =None )
+    _gh_last_cands [:]=[]
+    if was_checking :
+        log_event ("The running GitHub check was stopped -- the channel changed","warn")
+    full_update_preview ()
+    if choice =="stable":
+        log_event ("Update channel set to Stable (default)","ok")
+        return True ,"Channel: Stable. Updates come from the stable list. Press Check GitHub.","ok"
+    log_event ("Update channel set to Testing (main branch)","warn")
+    return True ,"Channel: Testing. Updates come straight from main, before they are proven. Press Check GitHub.","warn"
+
+def channel_status ():
+    return {"channel":channel_get ()}
+
+def _gh_entry_url (entry ):
+    return entry .get ("url")or _gh_file_url (entry ["name"])
+
+def _gh_stable_cands ():
+    try :
+        raw =_gh_fetch_impl (GITHUB_STABLE_URL ,GITHUB_LIST_MAX_BYTES )
+    except GhRejected as exc :
+        if "404"in str (exc ):
+            raise GhRejected ("this repo has no stable list (channels/stable.json) yet -- switch to Testing to update")
+        raise 
+    try :
+        data =json .loads (raw .decode ("utf-8"))
+    except (UnicodeDecodeError ,json .JSONDecodeError )as exc :
+        raise GhRejected (f"the stable list could not be read ({exc })")
+    tools =data .get ("tools")if isinstance (data ,dict )else None 
+    if not isinstance (tools ,dict ):
+        raise GhRejected ("the stable list has no tools section")
+    out =[]
+    skipped =0 
+    for stem ,t in sorted (tools .items ()):
+        if not isinstance (t ,dict ):
+            continue 
+        name ,blob ,commit =t .get ("file"),t .get ("blob"),t .get ("commit")
+        category ,glob =_gh_kind_for_name (name )if isinstance (name ,str )else (None ,None )
+        reason =None 
+        if category is None or category not in GH_CATEGORIES :
+            continue 
+        if not _GH_NAME_RE .match (name ):
+            reason ="file name has characters instmon refuses"
+        elif os .path .splitext (name )[1 ].lower ()not in ALLOWED_EXT .get (category ,()):
+            reason =f"not allowed in the {category } library"
+        elif not isinstance (blob ,str )or not _GH_SHA1_RE .match (blob ):
+            reason ="no file id"
+        elif not isinstance (commit ,str )or not _GH_SHA1_RE .match (commit ):
+            reason ="no commit id"
+        if reason :
+            skipped +=1 
+            log_event (f"Stable list: skipped {name }: {reason }","warn")
+            continue 
+        out .append ({"name":name ,"category":category ,"glob":glob ,"blob":blob ,"size":None ,
+        "url":f"https://raw.githubusercontent.com/{GITHUB_REPO }/{commit }/{urllib .parse .quote (name )}"})
+    return out ,skipped 
 
 def _gh_fetch_https (url ,max_bytes ):
     if not url .lower ().startswith ("https://"):
@@ -3453,7 +3596,7 @@ def _gh_version_of (cand ,local ):
         if cached is None :
             raise GhRejected ("no version line found in the file")
         return cached 
-    data =_gh_fetch_impl (_gh_file_url (cand ["name"]),GITHUB_FILE_MAX_BYTES )
+    data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES )
     if _git_blob_id (data )!=cand ["blob"]:
         raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
     try :
@@ -3467,6 +3610,11 @@ def _gh_version_of (cand ,local ):
     if not ver :
         raise GhRejected ("no version line found in the file")
     return ver 
+
+def _gh_version_known (cand ,local ):
+    if cand ["blob"]in _gh_version_cache :
+        return True 
+    return any (ver and _gh_local_blob_id (full )==cand ["blob"]for _n ,ver ,_key ,full in local )
 
 def _gh_other_build (entry ):
     wanted =_build_wanted_variant ()
@@ -3507,12 +3655,27 @@ def _gh_compare (entry ):
     return entry 
 
 def _gh_collect ():
-    raw =_gh_fetch_impl (GITHUB_API_LIST_URL ,GITHUB_LIST_MAX_BYTES )
-    cands ,skipped =_gh_parse_listing (raw )
-    _gh_last_cands[:] = [dict(c) for c in cands]
+    entries ,skipped ,cands =_gh_collect_full ()
+    _gh_last_cands [:]=cands 
+    return entries ,skipped 
+
+def _gh_collect_full (gen =None ):
+    def progress (msg ):
+        if gen is not None and _gh_state ["gen"]==gen :
+            log_event (msg ,"info")
+    if channel_get ()=="stable":
+        cands ,skipped =_gh_stable_cands ()
+        progress (f"GitHub: the stable list has {len (cands )} file(s)")
+    else :
+        raw =_gh_fetch_impl (GITHUB_API_LIST_URL ,GITHUB_LIST_MAX_BYTES )
+        cands ,skipped =_gh_parse_listing (raw )
+        progress (f"GitHub: main lists {len (cands )} file(s)")
+    listed =[dict (c )for c in cands ]
     newest ={}
-    for cand in cands :
+    for n ,cand in enumerate (cands ,1 ):
         local =_gh_local_files (cand ["category"],cand ["glob"])
+        if gen is not None and not _gh_version_known (cand ,local ):
+            progress (f"GitHub: reading {cand ['name']} ({n } of {len (cands )})")
         try :
             ver =_gh_version_of (cand ,local )
         except GhRejected as exc :
@@ -3526,18 +3689,24 @@ def _gh_collect ():
         if kind not in newest or _version_sort_key (ver )>_version_sort_key (newest [kind ]["version"]):
             newest [kind ]=cand 
     entries =[_gh_compare (e )for e in sorted (newest .values (),key =lambda e :(e ["category"],e ["name"]))]
-    return entries ,skipped 
+    return entries ,skipped ,listed 
 
 def _gh_is_network_error(exc):
     text = str(exc)
     return "reach GitHub" in text or "hourly limit" in text or "did not answer" in text
 
-def _gh_check_bg ():
+def _gh_check_current (gen ):
+    return _gh_state ["gen"]==gen and _gh_state ["phase"]=="checking"
+
+def _gh_check_bg (gen =None ):
+    started =time .monotonic ()
     try :
-        entries ,skipped =_gh_collect ()
+        entries ,skipped ,listed =_gh_collect_full (gen )
     except Exception as exc :
         msg =str (exc )if isinstance (exc ,GhRejected )else f"unexpected error: {exc }"
         with _gh_lock :
+            if gen is not None and not _gh_check_current (gen ):
+                return 
             _gh_state ["phase"]="error"
             _gh_state ["error"]=msg 
             _gh_state ["entries"]=[]
@@ -3545,11 +3714,19 @@ def _gh_check_bg ():
         _gh_event (f"GitHub check failed: {msg }","err")
         return 
     with _gh_lock :
-        _gh_state ["phase"]="done"
-        _gh_state ["error"]=None 
-        _gh_state ["entries"]=entries 
-        _gh_state ["skipped"]=skipped 
-        _gh_state ["checked_at"]=datetime .now ().strftime ("%Y-%m-%d %H:%M")
+        if gen is not None and not _gh_check_current (gen ):
+            stale =True 
+        else :
+            stale =False 
+            _gh_last_cands [:]=listed 
+            _gh_state ["phase"]="done"
+            _gh_state ["error"]=None 
+            _gh_state ["entries"]=entries 
+            _gh_state ["skipped"]=skipped 
+            _gh_state ["checked_at"]=datetime .now ().strftime ("%Y-%m-%d %H:%M")
+    if stale :
+        log_event ("An earlier GitHub check finished late -- its result was not used","info")
+        return 
     counts =collections .Counter (e ["status"]for e in entries )
     ups =counts ["update"]+counts ["missing"]
     level ="ok"
@@ -3564,9 +3741,20 @@ def _gh_check_bg ():
     if skipped :
         parts .append (f"{skipped } file(s) skipped (see log)")
         level ="warn"
-    _gh_event ("GitHub check: "+", ".join (parts )+".",level )
+    _gh_event ("GitHub check: "+", ".join (parts )+f". ({time .monotonic ()-started :.0f}s)",level )
     _docs_refresh_remote()
     full_update_preview()
+
+def _gh_check_timeout (gen ):
+    with _gh_lock :
+        if not _gh_check_current (gen ):
+            return 
+        _gh_state ["gen"]+=1 
+        msg =(f"GitHub did not finish answering within {GH_CHECK_LIMIT_SEC //60 } min -- "
+        "check this node's internet connection, then press Check GitHub again")
+        _gh_state .update (phase ="error",error =msg ,entries =[],started_at =None ,
+        checked_at =datetime .now ().strftime ("%Y-%m-%d %H:%M"))
+    _gh_event (f"GitHub check failed: {msg }","err")
 
 def gh_start_check ():
     with _gh_lock :
@@ -3574,10 +3762,16 @@ def gh_start_check ():
             return False ,"A GitHub check is already running."
         if _gh_state ["busy"]:
             return False ,"A GitHub download is running -- wait for it to finish."
+        _gh_state ["gen"]+=1 
+        gen =_gh_state ["gen"]
         _gh_state ["phase"]="checking"
         _gh_state ["error"]=None 
+        _gh_state ["started_at"]=time .monotonic ()
     log_event (f"GitHub check started ({_gh_source_label ()})","info")
-    threading .Thread (target =_gh_check_bg ,daemon =True ).start ()
+    timer =threading .Timer (GH_CHECK_LIMIT_SEC ,_gh_check_timeout ,args =(gen ,))
+    timer .daemon =True 
+    timer .start ()
+    threading .Thread (target =_gh_check_bg ,args =(gen ,),daemon =True ).start ()
     return True ,"Checking GitHub -- results appear in each library group."
 
 def _gh_verify_content (entry ,data ):
@@ -3631,19 +3825,22 @@ def _gh_apply (entry ):
         raise GhRejected (f"{name } does not belong in the {category } library")
     if not _GH_NAME_RE .match (name ):
         raise GhRejected ("invalid file name")
-    data =_gh_fetch_impl (_gh_file_url (name ),GITHUB_FILE_MAX_BYTES )
+    data =_gh_fetch_impl (_gh_entry_url (entry ),GITHUB_FILE_MAX_BYTES )
     _gh_verify_content (entry ,data )
 
     current =_gh_compare (dict (entry ))
     if current ["status"]=="up_to_date":
         return f"{name } is already in the {category } library -- nothing to do.","info"
-    if current ["status"]not in _GH_UPDATABLE :
+    older_ok =entry .get ("allow_older")and channel_get ()=="stable"and current ["status"]=="newer_local"
+    if current ["status"]not in _GH_UPDATABLE and not older_ok :
         raise GhRejected (current ["message"])
 
     ensure_dirs ()
     dest =safe_join (LIB_SUBDIRS [category ],name )
     if dest is None :
         raise GhRejected ("invalid file name")
+    if os .path .isfile (dest )and lib_locked (category ,name )and _gh_local_blob_id (dest )!=entry ["blob"]:
+        raise GhRejected (_locked_msg (name ))
     wrote ,reason =compare_before_write (dest ,data )
     with _file_meta_cache_lock :
         _file_meta_cache .clear ()
@@ -3666,7 +3863,7 @@ def _gh_update_bg (entry ):
         _gh_state ["entries"]=[refreshed if e ["name"]==name else e for e in _gh_state ["entries"]]
     _gh_event (msg ,level )
 
-def gh_start_update (name ):
+def gh_start_update (name ,allow_older =False ):
     if not isinstance (name ,str )or not name :
         return 400 ,"No file name given.","err"
     with _gh_lock :
@@ -3677,11 +3874,12 @@ def gh_start_update (name ):
             return 404 ,f"{name } is not in the last GitHub check -- press Check GitHub first.","warn"
         if name in _gh_state ["busy"]:
             return 409 ,f"{name } is already downloading.","warn"
-        if entry .get ("status")not in _GH_UPDATABLE :
+        older_ok =allow_older and channel_get ()=="stable"and entry .get ("status")=="newer_local"
+        if entry .get ("status")not in _GH_UPDATABLE and not older_ok :
             label =_GH_LABELS .get (entry .get ("status"),("?",""))[0 ]
             return 400 ,f"{name }: {label } -- nothing to update.","warn"
         _gh_state ["busy"].add (name )
-        entry =dict (entry )
+        entry =dict (entry ,allow_older =bool (older_ok ))
     log_event (f"GitHub update started: {name }","info")
     threading .Thread (target =_gh_update_bg ,args =(entry ,),daemon =True ).start ()
     return 200 ,f"Downloading {name } -- it is checked before it is saved.","info"
@@ -3694,6 +3892,7 @@ def _gh_group_html (category ):
         busy =set (_gh_state ["busy"])
     if not entries :
         return ""
+    stable =channel_get ()=="stable"
     rows =[]
     for e in entries :
         label ,cls =_GH_LABELS .get (e .get ("status"),("?",""))
@@ -3703,12 +3902,16 @@ def _gh_group_html (category ):
         elif e .get ("status")in _GH_UPDATABLE :
             action =(f'<button data-action="gh_update" data-category="{esc (category )}" '
             f'data-name="{name }">Update</button>')
+        elif stable and e .get ("status")=="newer_local":
+            label ,cls ="Ahead of stable",""
+            action =(f'<button data-action="gh_update" data-older="1" data-category="{esc (category )}" '
+            f'data-name="{name }" title="Put this older stable file in the library; nothing installs until you press Install">Get stable</button>')
         else :
             action ="<span></span>"
         rows .append (
         f'<div class="gh-row" title="{esc (e .get ("message",""))}">'
         f'<span class="gh-tag {cls }">{esc (label )}</span>'
-        f'<span>GitHub v{esc (e ["version"])}</span>'
+        f'<span>{"Stable"if stable else "GitHub"} v{esc (e ["version"])}</span>'
         f'<span class="small muted">{name }</span>'
         +('<span class="gh-tag" title="Not the build this Pi Zero 2 W is set to use">other build</span>'
         if _gh_other_build (e )else "<span></span>")+
@@ -3726,7 +3929,7 @@ def _gh_summary_html ():
     if phase =="idle":
         return f'<span class="muted">Not checked yet. Source: {src }</span>'
     if phase =="checking":
-        return f'<span class="muted">Checking {src }&hellip;</span>'
+        return f'<span class="muted">Checking {src }&hellip; (progress is in the log below)</span>'
     if phase =="error":
         return f'<span style="color:var(--red)">Last check ({esc (when or "")}) failed: {esc (err or "")}</span>'
     ups =sum (1 for e in entries if e .get ("status")in _GH_UPDATABLE )
@@ -3992,6 +4195,8 @@ def _fu_plan(cands):
         if best is None:
             if problems:
                 row.update(status="error", note=f"couldn't read {problems[0]}")
+            elif channel_get() == "stable":
+                row.update(status="not_on_github", note=f"no stable build of {stem} yet")
             else:
                 row.update(status="not_on_github", note=f"no {stem} build on GitHub")
             continue
@@ -4009,7 +4214,9 @@ def _fu_plan(cands):
         elif _version_sort_key(best["version"]) == _version_sort_key(inst_ver):
             row.update(status="current", note=f"same version (v{inst_ver})")
         else:
-            row.update(status="newer_installed", note=f"installed v{inst_ver} is newer than GitHub")
+            row.update(status="newer_installed",
+                       note=(f"installed v{inst_ver} is ahead of stable v{best['version']} -- left alone"
+                             if channel_get() == "stable" else f"installed v{inst_ver} is newer than GitHub"))
         if problems and row["status"] != "update":
             row.update(status="error", note=f"couldn't read {problems[0]}")
     return rows
@@ -4022,7 +4229,7 @@ def _fu_publish_plan(rows, scripts):
             plan_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
 
 def _fu_stage(entry):
-    data = _gh_fetch_impl(_gh_file_url(entry["name"]), GITHUB_FILE_MAX_BYTES)
+    data = _gh_fetch_impl(_gh_entry_url(entry), GITHUB_FILE_MAX_BYTES)
     _gh_verify_content(entry, data)
     ensure_dirs()
     dest = safe_join(LIB_SUBDIRS[entry["category"]], entry["name"])
@@ -4064,6 +4271,67 @@ def _fu_wait_healthy(comp):
         return False, f"running but not answering on port {comp['port']}"
     return False, state
 
+FU_STABLE_SEC = int(os.environ.get("INSTMON_FU_STABLE_SEC", "60"))
+FU_STABLE_POLL_SEC = 3.0
+
+def _unit_nrestarts(unit):
+    try:
+        r = subprocess.run(["systemctl", "show", "-p", "NRestarts", "--value", unit],
+                           capture_output=True, text=True, timeout=10)
+        return int((r.stdout or "").strip())
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+
+def _http_alive(port):
+    for scheme in ("http", "https"):
+        if scheme == "http":
+            conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        else:
+            conn = http.client.HTTPSConnection("127.0.0.1", port, timeout=5,
+                                               context=ssl._create_unverified_context())
+        try:
+            conn.request("GET", "/healthz")
+            conn.getresponse().read(4096)
+            return True
+        except (http.client.BadStatusLine, http.client.RemoteDisconnected, ssl.SSLError, ConnectionResetError):
+            continue
+        except (OSError, http.client.HTTPException):
+            return False
+        finally:
+            conn.close()
+    return False
+
+def _watch_steady(comp, secs=None):
+    secs = FU_STABLE_SEC if secs is None else secs
+    unit = unit_of(comp)
+    base = _unit_nrestarts(unit)
+    deadline = time.monotonic() + secs
+    http_fails = 0
+    while time.monotonic() < deadline:
+        time.sleep(min(FU_STABLE_POLL_SEC, max(0.0, deadline - time.monotonic())))
+        state = systemctl_is_active(unit)
+        if state != "active":
+            return False, f"stopped running within {secs}s ({state})"
+        n = _unit_nrestarts(unit)
+        if base is not None and n is not None and n > base:
+            return False, f"restarted {n - base} time(s) within {secs}s"
+        if comp.get("port"):
+            if port_open(comp["port"]) and _http_alive(comp["port"]):
+                http_fails = 0
+            else:
+                http_fails += 1
+                if http_fails >= 3:
+                    return False, f"stopped answering on port {comp['port']}"
+    return True, f"steady for {secs}s"
+
+def _post_install_watch(comp):
+    ok, why = _watch_steady(comp)
+    if ok:
+        log_event(f"{comp['name']}: {why} after the install", "ok")
+    else:
+        log_event(f"{comp['name']}: {why} after the install -- check it; the previous version "
+                  f"is in its library if you want to go back", "err")
+
 def _fu_update_one(comp, row, new_path):
     name = comp["name"]
     target = resolve_installed_target(comp)
@@ -4087,6 +4355,9 @@ def _fu_update_one(comp, row, new_path):
     prepare_install(comp, new_path)
     rc = _fu_run_cli(new_path, "--install")
     ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
+    if ok and comp["category"] != "instmon" and FU_STABLE_SEC > 0:
+        _fu_set(current=f"{name}: watching v{new_ver} for {FU_STABLE_SEC}s")
+        ok, state = _watch_steady(comp)
     if ok:
         if row.get("status") == "switch":
             log_event(f"Full Update: {name} switched: {row['note']}", "ok")
@@ -4360,7 +4631,8 @@ def full_update_dismiss():
 
 def _fu_status_payload():
     snap = full_update_snapshot()
-    return {"quiet": quiet_status(), "full_update": snap, "build": build_choice_status()}
+    return {"quiet": quiet_status(), "full_update": snap, "build": build_choice_status(),
+            "channel": channel_status()}
 
 def run_script_bg (script_path ,script_name ,env_overrides =None ):
 
@@ -4410,6 +4682,8 @@ def run_self_install_bg (script_path ,script_name ,comp ):
         if proc .returncode ==0 :
             log_event (f"Install finished OK: {script_name } ({comp ['name']})","ok")
             quiet_forget (comp ["service"])
+            if comp ["category"]!="instmon"and FU_STABLE_SEC >0 :
+                threading .Thread (target =_post_install_watch ,args =(comp ,),daemon =True ).start ()
         else :
             log_event (f"Install exited {proc .returncode }: {script_name } ({comp ['name']})","err")
     except subprocess .TimeoutExpired :
@@ -4552,9 +4826,16 @@ def render_components_html (components ,library =None ):
 
 def render_library_group_html (title ,category ,entries ,action_label ,nested =False ):
     rows =[]
+    locked_names =_locks_read ().get (category ,set ())
     for e in entries :
 
         name =esc (e ["name"])
+        is_locked =e ["name"]in locked_names 
+        lock_html =(f'<label class="lib-lock small" title="Locked: this file can\'t be deleted or overwritten. Uncheck to unlock (asks first).">'
+        f'<input type="checkbox" class="lib-lock-cb" data-category="{category }" data-name="{name }"{" checked"if is_locked else ""}> Lock</label>')
+        del_btn =(f'<button class="b-del" data-action="delete" data-category="{category }" data-name="{name }" disabled title="Locked -- uncheck Lock to delete">Delete</button>'
+        if is_locked else 
+        f'<button class="b-del" data-action="delete" data-category="{category }" data-name="{name }">Delete</button>')
 
         if e ["installed"]is True :
             badge ,bcls ="INSTALLED","b-inst"
@@ -4603,7 +4884,8 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
         {run_btn }
         <button data-action="edit" data-category="{category }" data-name="{name }">Edit</button>
         <button data-action="download" data-category="{category }" data-name="{name }">Download</button>  <!-- [PHASE 3] -->
-        <button class="b-del" data-action="delete" data-category="{category }" data-name="{name }">Delete</button>
+        {del_btn }
+        {lock_html }
       </div>
       <div class="librow-bot small muted">
         <span>Source: library</span>
@@ -4906,6 +5188,8 @@ _CSS_LIBRARY = """.libgrp{margin-bottom:.9rem}
 .librow:hover{background:var(--surface2)}
 .librow-top{display:flex;flex-wrap:wrap;gap:.4rem .9rem;align-items:center}
 .librow-actions{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center}
+.lib-lock{display:inline-flex;gap:.3rem;align-items:center;cursor:pointer;margin-left:.2rem}
+.lib-lock input{margin:0}
 .librow-bot{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center}
 .ver{font-family:var(--mono);color:var(--yel);font-weight:700;min-width:5.5rem;text-shadow:0 0 6px rgba(255,208,64,.35)}
 input[type=file]{color:var(--muted);font-size:.78rem;max-width:100%}
@@ -5199,12 +5483,19 @@ function logLine(entry) {
   lastLogId = entry.id;
 }
 
+let _pollLogBusy = false;
 async function pollLog() {
+  if (_pollLogBusy) return;
+  _pollLogBusy = true;
   try {
     const r = await fetch(`/api/log?since=${lastLogId}`);
     const data = await r.json();
-    for (const entry of data.entries) logLine(entry);
+    for (const entry of data.entries) {
+      if (typeof entry.id === 'number' && entry.id <= lastLogId) continue;
+      logLine(entry);
+    }
   } catch (e) { /* server restarting or unreachable, ignore this tick */ }
+  finally { _pollLogBusy = false; }
 }
 
 """
@@ -5255,6 +5546,28 @@ const _FU_STATUS = {
 };
 
 // v2.38.0 Pi Zero 2 W build choice (shown only on a Pi Zero 2 W).
+function renderChannelChoice(ch) {
+  const el = document.getElementById('channel-choice');
+  if (!el || !ch) return;
+  const sel = ch.channel === 'testing' ? 'testing' : 'stable';
+  if (el.dataset.choice === sel) return;
+  el.dataset.choice = sel;
+  el.innerHTML = `<b>Update channel:</b>
+    <label><input type="radio" name="channel-choice" value="stable" ${sel === 'stable' ? 'checked' : ''}> Stable (default)</label>
+    <label><input type="radio" name="channel-choice" value="testing" ${sel === 'testing' ? 'checked' : ''}> Testing (opt-in)</label>
+    <span class="small muted">Stable gets each tool's build after four newer releases and 3 days on testing, or 14 days as the newest. Testing gets every build as soon as it is merged.</span>`;
+  el.querySelectorAll('input[name="channel-choice"]').forEach(r => r.addEventListener('change', async () => {
+    const choice = r.value;
+    const msg = choice === 'testing'
+      ? 'Switch to the TESTING channel? You get every build as soon as it is merged, before it has been proven on other nodes. Nothing changes until you check and update.'
+      : 'Go back to the STABLE channel (default)? Tools newer than stable stay as they are; use Get stable on a row to go back to the stable build.';
+    if (!confirm(msg)) { delete el.dataset.choice; renderChannelChoice(ch); return; }
+    delete el.dataset.choice;
+    await postAction({action: 'gh_channel', channel: choice, confirm: true});
+    await refreshStatus();
+  }));
+}
+
 function renderBuildChoice(build) {
   const el = document.getElementById('build-choice');
   if (!el) return;
@@ -5351,6 +5664,7 @@ async function refreshStatus() {
     }
     renderQuietFullUpdate(data.quiet, data.full_update);
     renderBuildChoice(data.build);
+    renderChannelChoice(data.channel);
     applyLibraryCollapseState();
     wireButtons();
   } catch (e) { /* ignore this tick */ }
@@ -6472,6 +6786,17 @@ _JS_ACTIONS = """function wireButtons() {
     });
   });
   restoreUploadSelections();
+  document.querySelectorAll('input.lib-lock-cb').forEach(cb => {
+    if (cb._wired) return;
+    cb._wired = true;
+    cb.addEventListener('change', async () => {
+      const on = cb.checked;
+      if (!on && !confirm(`Unlock ${cb.dataset.name}? It can then be deleted or overwritten.`)) { cb.checked = true; return; }
+      cb.disabled = true;
+      await postAction({action: 'lib_lock', category: cb.dataset.category, name: cb.dataset.name, locked: on, confirm: !on});
+      await refreshStatus();
+    });
+  });
   document.querySelectorAll('button[data-action]').forEach(btn => {
     if (btn._wired) return;
     btn._wired = true;
@@ -6586,8 +6911,13 @@ _JS_ACTIONS = """function wireButtons() {
                        'GitHub is checked again first. The web tools are paused, each component is uninstalled and the new version installed; one that fails is put back and skipped. Then the manuals that are new or changed on GitHub are downloaded. instmon goes last -- this page reconnects after it restarts.')) { btn.disabled = false; return; }
           await postAction({action: 'full_update', confirm: true});
         } else if (action === 'gh_update') {
+          if (btn.dataset.older === '1') {
+            if (!confirm(`Get the stable build ${btn.dataset.name}? It is OLDER than the newest file in the ${btn.dataset.category} library. It goes into the library, checked first; nothing installs until you press Install on it.`)) { btn.disabled = false; return; }
+            await postAction({action: 'gh_update', name: btn.dataset.name, confirm: true, allow_older: true});
+          } else {
           if (!confirm(`Download ${btn.dataset.name} from GitHub into the ${btn.dataset.category} library? It is checked before it is saved, and nothing runs or installs until you press its button.`)) { btn.disabled = false; return; }
           await postAction({action: 'gh_update', name: btn.dataset.name, confirm: true});
+          }
         } else if (action === 'run_script') {
           if (btn.dataset.uninstaller === '1') {
             if (!confirm(`Run ${btn.dataset.name}? This removes the ASL-DVS stack from this node.`)) { btn.disabled = false; return; }
@@ -7349,6 +7679,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     Full Update: pauses the web tools, downloads and checks every newer file first, then uninstalls the old and
     installs the new one component at a time (instmon last). A component that fails is put back, skipped and
     listed at the end. New install scripts only go to the Scripts library -- they are never run for you.</div>
+  <div id="channel-choice" class="row small" style="margin-top:.35rem"></div>
   <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
   <div id="fu-progress"></div>
   <div id="fu-plan"></div>
@@ -7667,6 +7998,7 @@ _ACTION_HANDLERS ={
 "stop":lambda self ,body :self ._action_stop (body ),
 "install_config":lambda self ,body :self ._action_install_config (body ),
 "delete":lambda self ,body :self ._action_delete (body ),
+"lib_lock":lambda self ,body :self ._action_lib_lock (body ),
 "run_script":lambda self ,body :self ._action_run_script (body ),
 "save_alternate":lambda self ,body :self ._action_save_alternate (),
 "comms_restart":lambda self ,body :self ._action_comms_restart (body ),
@@ -7679,6 +8011,7 @@ _ACTION_HANDLERS ={
 "full_update":lambda self ,body :self ._action_full_update (body ),
 "fu_dismiss":lambda self ,body :self ._action_fu_dismiss (body ),
 "build_pref":lambda self ,body :self ._action_build_pref (body ),
+"gh_channel":lambda self ,body :self ._action_gh_channel (body ),
 }
 
 _ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss",)
@@ -7725,6 +8058,7 @@ _POST_ROUTES ={
 
 class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     server_version =f"instmon/{VERSION }"
+    timeout =60 
 
     def send_response (self ,code ,message =None ):
         super ().send_response (code ,message )
@@ -8647,6 +8981,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if target is None :
             self ._error_json (404 ,f"File '{filename }' not found in library")
             return 
+        if lib_locked_path (target ):
+            log_event (f"Refused to save an edit to locked {filename }","warn")
+            self ._error_json (409 ,_locked_msg (os .path .basename (target )))
+            return 
 
         ext =os .path .splitext (filename )[1 ].lower ()
         if ext in (".py",".sh"):
@@ -9053,9 +9391,24 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if target is None or not os .path .isfile (target ):
             self ._error_json (404 ,f"Library file not found: {name }")
             return 
+        if lib_locked (category ,name ):
+            log_event (f"Refused to delete locked {name } from the {category } library","warn")
+            self ._error_json (409 ,_locked_msg (name ))
+            return 
         os .remove (target )
         log_event (f"Deleted {name } from {category } library","warn")
         self ._send_json (200 ,{"deleted":name ,"message":f"Deleted {name } from the library.","level":"warn"})
+
+    def _action_lib_lock (self ,body ):
+        locked =body .get ("locked")
+        if not isinstance (locked ,bool ):
+            self ._error_json (400 ,"Say locked: true or false")
+            return 
+        code ,payload =lib_lock_set (body .get ("category"),body .get ("name"),locked ,body .get ("confirm")is True )
+        if code !=200 :
+            self ._error_json (code ,payload ["error"])
+            return 
+        self ._send_json (200 ,payload )
 
     def _action_run_script (self ,body ):
         if not body .get ("confirm"):
@@ -9101,7 +9454,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not body .get ("confirm"):
             self ._error_json (400 ,"A GitHub update requires confirm:true in the request body")
             return 
-        code ,msg ,level =gh_start_update (body .get ("name"))
+        code ,msg ,level =gh_start_update (body .get ("name"),body .get ("allow_older")is True )
         self ._send_json (code ,{"message":msg ,"level":level })
 
     def _action_quiet(self, body):
@@ -9122,6 +9475,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     def _action_fu_dismiss(self, body):
         full_update_dismiss()
         self._send_json(200, {"message": "", "level": "info"})
+
+    def _action_gh_channel(self, body):
+        ok, msg, level = channel_set(body.get("channel"), body.get("confirm") is True)
+        self._send_json(200 if ok else 400, {"message": msg, "level": level})
 
     def _action_build_pref(self, body):
         ok, msg, level = build_pref_set(body.get("choice"))

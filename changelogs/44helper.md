@@ -1,8 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_203_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_205_20261018.py`. Newest entries first.
 
-## 0.0.203 (2026-10-18) — testing
+## 0.0.205 (2026-10-18) — testing
+
+Built on 0.0.204.
 
 **Boot order.** Reported: after a reboot the WireGuard tunnel didn't come back, and the
 DVSwitch services couldn't reach the internet and didn't start, until the
@@ -36,6 +38,92 @@ Tested: the wait script run with stub commands (ready after the handshake; gives
 after the limit and exits 0); `systemd-analyze verify` on the new unit and on a oneshot
 unit with the retry settings; apply, status, the Health finding and Remove with mocks;
 the card in headless Chromium; the 0.0.201 and 0.0.202 suites.
+
+## 0.0.204 (2026-10-14) — testing
+
+Fix: "Reconfigure half-installed packages" (and the other `dpkg --configure`
+steps) failed whenever a package update had a config file you changed.
+
+- **The fault:** a node reported this from Update -> Step 2 alternative
+  "Reconfigure half-installed packages":
+  - `dpkg --configure -a` stopped at "Configuration file
+    '/etc/asterisk/rpt.conf' ... Modified ... What would you like to do?"
+    (and the same for `/etc/firewalld/zones/allstarlink.xml`);
+  - it then failed with "end of file on stdin at conffile prompt";
+  - `asl3-appliance`, `asl3-asterisk-config`, `asl3-asterisk` and
+    `asl3-appliance-pi` were left half-configured.
+
+  The job runs with no keyboard, so dpkg's question could never be answered.
+  The `apt` steps already passed `--force-confdef --force-confold`. The raw
+  `dpkg --configure` commands did not, and `DEBIAN_FRONTEND=noninteractive`
+  does not stop dpkg's config-file questions.
+- **The fix:** every `dpkg --configure` that 44helper runs now passes
+  `--force-confdef --force-confold`:
+  - Step 2 "Fix missing/broken packages";
+  - its alternative "Reconfigure half-installed packages";
+  - the repair sequence: steps 1/4 and 4/4, the ordinary-package,
+    kernel/firmware and `--pending` passes.
+  - dpkg then gives the default answer: **your config file is kept**, and the
+    package's new version is saved next to it as `<file>.dpkg-dist` so you can
+    compare. Nothing else about the steps changes.
+- **The help text** after a stopped package job now shows the same safe
+  command.
+- **On a node that already hit this:** run the step again, or by hand:
+  `sudo dpkg --force-confdef --force-confold --configure -a`.
+- **Install and command time limits are unchanged.**
+- Tested:
+  - The real failure reproduced with dpkg in a test container: a package with
+    an edited config file, upgraded with no keyboard.
+    - The old command fails exactly as reported ("end of file on stdin at
+      conffile prompt", package left unpacked).
+    - The new command finishes it (installed, v2), keeps the edited file and
+      writes `rpt.conf.dpkg-dist`.
+  - The step commands as loaded from the module: both Step 2 commands and
+    the repair sequence carry the options.
+  - `ci/check_repo.py`
+
+## 0.0.203 (2026-10-14) — testing
+
+Web connections get an idle limit, and 44helper gets a systemd watchdog
+(reliability plan, Stage 3b). 44helper serves both builds.
+
+- **Install and command time limits are not changed.** The per-step limits
+  (`_effective_timeout`, the 900 s and longer step limits, and steps with no
+  limit) are exactly as before. Installs keep running as their own systemd
+  units, so they never depend on a web connection or on 44helper staying up.
+- **Web connections:** a 30-second idle limit per connection. Before, there
+  was none, so a client that connected and went silent held a thread until
+  44helper restarted. The limit counts silence, not total time.
+  - The browser terminal is exempt: the limit is lifted as soon as the
+    terminal connection opens, so an idle terminal stays open (its own idle
+    rule still applies).
+  - The live event stream keeps the limit only for writes, so a browser that
+    vanished frees its stream slot.
+- **Watchdog:** the unit is now `Type=notify` with `WatchdogSec=60`.
+  - A `health-probe` thread asks 44helper's own new `/healthz` (no login, same
+    reply as `/api/ping`) every 15 s.
+  - A `sd-heartbeat` thread tells systemd "alive" while that answered in the
+    last 45 s.
+  - **It also says "alive" whenever anything is running:** a job, or any
+    child process (an install step, a command, a terminal, a journal
+    follower). So a long install never gets 44helper restarted, however long
+    it takes. Only an idle 44helper whose web server stops answering is
+    restarted.
+- Code tidy: three strings marked `f"..."` with nothing to fill in are now
+  plain strings (same text). pyflakes is clean again, so the `checks` workflow
+  passes on 44helper files.
+- Tested (7):
+  - the unit lines
+  - the handler limit, and that it is lifted after the terminal's 101 reply
+  - a child process counts as running, and a zombie doesn't
+  - a running job counts
+  - against a real notify socket: "alive" while healthy; none when stale and
+    idle; "alive" again while a job runs although stale; none after the job
+    ends; "alive" again once healthy
+  - against a real server: `/healthz` answers without login, and the probe
+    records it
+  - idle clients are dropped and their threads freed
+  - `ci/check_repo.py`
 
 ## 0.0.202 (2026-10-14) — testing
 

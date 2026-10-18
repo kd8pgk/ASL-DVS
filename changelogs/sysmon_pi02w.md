@@ -1,6 +1,136 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_68_20261013.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_71_20261017.py`. Newest entries first.
+
+## 6.13.71-pi02w (2026-10-17)
+
+The Reg tab is back, and a new **ASL** field in the header shows on every
+tab whether the node is registered. The Security tab is gone. The full build
+is not changed.
+
+- **Why:** on a slow cellular hotspot (a Franklin T10, for example) ASL3 can
+  take minutes to come up and register. Before, nothing on the page said
+  whether the node was connected yet.
+- **ASL field in the header**, next to Pwr. It shows the live state from
+  `rpt show registrations`, and how long it has been in that state:
+  - `REG` (green): every listed node is registered.
+  - `WAIT 2m` (amber): a request is out, or HTTP registration is set up but
+    Asterisk lists no node yet.
+  - `NOT REG 5m` (red): a node is unregistered, rejected or timed out.
+  - `ASL DOWN 3m` (red): the Asterisk CLI isn't answering, so ASL3 isn't
+    running yet.
+  - `—`: no HTTP registration is set up (IAX-only, or a private node).
+  - Hover for each node's state, the time the state began, and when it was
+    last checked. Click it to open the Reg tab.
+- **Faster checks while not registered.** The background poll checks
+  `rpt show registrations` every 10 s until the node registers, then every
+  30 s as before.
+- **Reg tab restored** from the full build (removed in 6.13.67-pi02w):
+  - the HTTP Registration and IAX Registration cards, with every config
+    check, and routes `/api/reg/http` and `/api/reg/iax`
+  - the "Live registration" rows add how long the node has been in a state
+    other than registered, for example "not registered (for 5 min)"
+  - new: the tab refreshes itself every 15 s while it is open and the page is
+    visible
+  - the tab and its Edit-page checkbox are back. A saved Visible Tabs list
+    from an older version (one that still names Security) gets Reg turned on.
+    After you save the Edit page once, your own choice is kept.
+- **Security tab removed:** the tab, its Edit-page checkbox, the 14 checks,
+  route `/api/security/checks`, and `--selftest` (which ran only those
+  checks). On Overview, the owner and unit-mode cells no longer link to it;
+  their hover text is unchanged. Result: 24,008 -> 22,022 lines.
+- Tested:
+  - unit tests with mocks: the header state for each case (registered,
+    request sent, unregistered, CLI down, nothing listed with and without
+    HTTP registration set up), "since" kept while the state holds and reset
+    when it changes, and the 10 s / 30 s poll rule
+  - the page in headless Chromium: the header field in each state, the Reg
+    tab cards and its timer, no Security tab, no script errors, no
+    horizontal scroll at 390 px
+  - `ci/check_repo.py`
+
+## 6.13.70-pi02w (2026-10-14)
+
+A Node Health card for the things that most often take a Pi Zero 2 W down
+without anyone noticing, and a systemd watchdog that checks the right things
+(reliability plan, Stage 6). The full build is not changed.
+
+- **Node Health card** at the top of the Hardware tab. Each check shows OK,
+  WARN, PROBLEM or ? (couldn't check), with a details line, and is part of
+  "Copy hardware report". New `/api/health` (login needed), cached for 30 s.
+  - **Clock:** `timedatectl` sync state.
+    - WARN when not in sync. The note explains that the Pi Zero 2 W has no
+      clock battery, and what a wrong clock breaks (HTTPS updates, ASL
+      registration).
+    - The note gives the fix: turn sync on, or check UDP 123.
+  - **Out-of-memory kills:** the kernel's `oom_kill` count since boot.
+    PROBLEM when it isn't 0, listing the last 5 killed processes from the
+    kernel log.
+  - **Memory:** available memory, and swap (zram is noted).
+    - WARN below 64 MB available; PROBLEM below 32 MB.
+    - WARN when swap is more than 75% used.
+  - **Disk and logs:** free space on `/`, the journal size, and `/var/log`.
+    - Root: WARN below 10% free, PROBLEM below 5%.
+    - Journal: WARN over 200 MB, with the SystemMaxUse fix in the note.
+    - `/var/log`: WARN over 300 MB. The count gives up after 3 s on huge
+      trees.
+  - **Memory per service:** state, memory and restart count for the suite's
+    services, Asterisk and the bridges. Only the ones installed are listed.
+    WARN when systemd restarted one 3 or more times.
+- **systemd watchdog, done right.** Before, the background poll sent both
+  "ready" (before the web server was listening) and "alive" (at the end of
+  each poll pass). A hung web server went unnoticed, and one slow pass of more
+  than 30 s got SysMon killed. Now:
+  - "ready" is sent once the web server is listening;
+  - a `sd-heartbeat` thread sends "alive" (every 10 s, `WatchdogSec=30`
+    unchanged) only while:
+    - the background poll started a pass in the last 180 s, and
+    - SysMon's own new `/healthz` (no login, same reply as `/api/ping`)
+      answered in the last 25 s. A `health-probe` thread asks every 10 s on
+      the bound address.
+  - The log says which one failed.
+- Tested:
+  - Unit tests with mocks (9):
+    - Clock: synced / not synced / sync off / tool missing
+    - OOM: none / two kills with names from the kernel log / counter
+      missing
+    - Memory: thresholds, zram, no swap
+    - Disk: thresholds, journal size in G, `/var/log` over the limit, a
+      `/var/log` count that gave up, and a real 2 MB directory
+    - Services: memory, "[not set]" memory, the restart warning, units not
+      installed skipped
+    - the 30 s cache, and a check that raises shows "?"
+    - the heartbeat rules
+    - against a real server and a real notify socket: `/healthz` answers
+      without login while `/api/health` needs it; "alive" messages stop
+      while the server refuses connections and resume after
+  - The Hardware tab in headless Chromium, with the checks running for real
+    in a test container: the card comes first, the header reads "OK · 2
+    couldn't be checked" (no systemd there), "Copy hardware report" includes
+    it, no horizontal scroll at 390 px, no script errors.
+  - `ci/check_repo.py`
+
+## 6.13.69-pi02w (2026-10-14)
+
+Connection limits that refuse instead of queue (reliability plan,
+Stage 3c). The full build is not changed.
+
+- Before, SysMon allowed 24 connections at once, but extra connections queued:
+  each one still got its own thread, which then waited. A burst, or a
+  stuck client, could pile up threads on the 512 MB Pi.
+- Now, past the limit, a new connection is refused at once, with no thread:
+  - at most 24 open connections in all (as before)
+  - new: at most 12 from one address. A browser uses about 6, so one
+    misbehaving client can't take every slot.
+  - The page polls, so a refused request is simply retried on the next poll.
+  - Refusals are logged at most once a minute.
+- The 20-second idle limit per connection is unchanged.
+- Tested against a real server on a free port:
+  - the 13th connection from one address is refused, and no thread is added
+  - the 25th connection overall is refused
+  - slots come back when connections close, and when idle ones time out
+  - 60 requests in a row leave no slot or per-address count behind
+  - `ci/check_repo.py`
 
 ## 6.13.68-pi02w (2026-10-13)
 

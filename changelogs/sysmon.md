@@ -1,6 +1,43 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_85_20261014.py`. Newest entries first.
+Current file: `sysmon_v6_13_86_20261014.py`. Newest entries first.
+
+## 6.13.86 (2026-10-14)
+
+The full-build port of Pi Zero 2 W SysMons 6.13.69-pi02w and 6.13.70-pi02w
+(reliability plan, Stages 3 and 6). The code is the same as the fork's.
+
+- **Connection limits that refuse instead of queue.** Past 24 open
+  connections, or 12 from one address, a new connection is refused at once,
+  with no thread. Before, each extra connection got a thread that waited on a
+  semaphore. Refusals are logged at most once a minute.
+- **Node Health card** at the top of the Hardware tab (`/api/health`, login
+  needed, cached 30 s), included in "Copy hardware report":
+  - **Clock sync.** The Troubleshoot tab's Clock check stays; this one keeps
+    both builds alike.
+  - **Out-of-memory kills** since boot, with the last victims.
+  - **Memory:** available and swap.
+  - **Disk and logs:** root free space, journal size, `/var/log` size.
+  - **Memory per service:** state, memory and restart count for the suite,
+    Asterisk and the bridges.
+  - Thresholds as in 6.13.70-pi02w. They fit the larger Pis too: the memory
+    limits are absolute (64 MB / 32 MB), so they warn only when memory is
+    really short.
+- **A systemd watchdog that checks the web server.** "ready" is sent once the
+  web server listens. "alive" is sent only while the background poll ran in
+  the last 180 s and SysMon's own new `/healthz` (no login) answered in the
+  last 25 s. Before, the poll sent both, so a hung web server went unnoticed,
+  and one poll pass slower than 30 s got SysMon killed.
+- Ported with the fork's own diff. Nine of ten parts applied as they were;
+  the route table had different neighbours (the Reg routes), so those two
+  lines were placed by hand.
+- Tested: the fork's tests run against this file:
+  - connection limits (4)
+  - health checks and heartbeat (9), with a real server and a real notify
+    socket
+  - the Hardware tab in headless Chromium: the card first, no script errors,
+    no horizontal scroll at 390 px
+  - `ci/check_repo.py`
 
 ## 6.13.85 (2026-10-14)
 

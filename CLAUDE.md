@@ -39,11 +39,18 @@
   (`<tool>_vX_Y_Z_YYYYMMDD.py`), update `VERSION` / `APP_VERSION` /
   `SCRIPT_VERSION`, and update the README file list. A pi02w version ends in
   `-pi02w`.
-- **Versions have three parts**, `X.Y.Z` (for example `5.31.0`,
-  `9.3.72-pi02w`). No four-part numbers in new builds. A tool still on four
-  parts moves to the next three-part number above it (`9.3.71.18-pi02w` ->
-  `9.3.72-pi02w`), so instmon still sorts the new file as newer. A tool on two
-  parts adds `.0` (`5.30` -> `5.31.0`). No letter suffix (such as `x`).
+- **Versions are `X.Y.Z` or `X.Y.Z.N`.** `Z` is a release: any change in
+  behaviour (for example `5.31.0`, `9.3.74-pi02w`). `N` is a cosmetic fix
+  only: text, wording, colors or layout, with no change in what the code does
+  (`9.3.74.1-pi02w`). Page JavaScript logic is behaviour, so it is a release.
+  A release drops `N` (`9.3.74.2` -> `9.3.75`). Cosmetic builds never go to
+  stable. A tool still on an old four-part number from before this rule
+  (`9.3.71.18-pi02w`) moves to the next release (`9.3.72-pi02w`). A tool on
+  two parts adds `.0` (`5.30` -> `5.31.0`). No letter suffix (such as `x`).
+- **Tools stay compatible across versions.** Each tool goes to stable on its
+  own schedule, so a node can run any mix of stable and testing versions. A
+  tool that uses something only a newer version of another tool provides
+  works without it when it is missing.
 - **The shared launcher** (`/usr/local/bin/asl_dvs_launch.py`) is written by
   several files. Its text must stay identical in all of them.
 - **Manuals** (the user manual, the dialplan guide and the install manuals in
@@ -52,10 +59,22 @@
 
 ## Workflow
 
-- After a build is pushed, open the pull request and merge it without asking.
+- After a build is pushed, open the pull request and merge it, without
+  asking, once the `checks` workflow passes on it. A failing check is fixed
+  in the same pull request.
+- **Release channels.** `main` is the testing channel (opt-in on nodes).
+  Stable is the default: `channels/stable.json`, written only by the
+  `promote-stable` workflow from the rules in `channels/rules.json`. Per tool,
+  a release becomes stable once four newer releases of that tool are on `main`
+  and it has been there 3 days, or once it has been the newest release for 14
+  days. Cosmetic builds don't count. `channels/overrides.json` (changed only
+  through a pull request) can hold a release back or hotfix it to stable at
+  once. Never edit `channels/stable.json` by hand.
 
 ## Before pushing
 
+- `python3 ci/check_repo.py --base origin/main` runs the same checks as the
+  `checks` workflow (needs `pyflakes` and `node`).
 - `python3 -m py_compile` and `pyflakes` on changed Python files.
 - `node --check` on page JavaScript after a page change. The page HTML is a
   raw string, so the source text is what is served.

@@ -26,18 +26,23 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.31.0"
+APP_VERSION = "5.34.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
 CHECK_INTERVAL            = 5
 PING_TIMEOUT              = 2
 NO_CONN_SHUTDOWN_SECS     = 180
+NETWORK_LOSS_ACTION       = "reboot"
+NET_REBOOT_LIMIT          = 3
+NET_REBOOT_WINDOW_SECS    = 6 * 3600
 LOW_VOLTAGE_THRESHOLD     = 0.90
 LOW_VOLTAGE_SHUTDOWN_SECS = 30
 RECONNECT_INTERVAL_SECS   = 15
@@ -76,6 +81,10 @@ VOLTAGE_WATCHDOG_ON   = True
 
 KEEP_POWERSAVE_OFF    = False
 
+HW_WATCHDOG_ON        = True
+HW_WATCHDOG_SECS      = 15
+LOOP_STALL_SECS       = 180
+
 DEVMODE_CHECK_SECS    = 10
 
 CONFIG_DIR  = "/etc/wifimon"
@@ -95,6 +104,11 @@ HEALTH_FILE         = os.path.join(SHUTDOWN_STATE_DIR, "health.json")
 ROAM_MODPROBE       = "/etc/modprobe.d/wifimon-brcmfmac.conf"
 REPORT_DIR          = "/var/log/wifimon"
 RUN_MARKER          = "/var/lib/wifimon/running.json"
+NET_REBOOT_FILE     = "/var/lib/wifimon/net_reboots.json"
+ALERTS_FILE         = os.path.join(CONFIG_DIR, "alerts.json")
+ALERTS_QUEUE_FILE   = "/var/lib/wifimon/alerts_queue.json"
+ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
+HW_WD_CONF_FILE     = "/etc/systemd/system.conf.d/90-asl_dvs-hwwatchdog.conf"
 
 _DEFAULT_CONFIG = {
     "network_1": {
@@ -250,10 +264,12 @@ Description=WiFi and Voltage Watchdog + Dashboard (port {HTTP_PORT})
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH}
 Restart=always
 RestartSec=3s
+WatchdogSec=60
 StandardOutput=journal
 StandardError=journal
 
@@ -318,6 +334,46 @@ def _handle_sigterm(signum: int, frame: object) -> None:
 
 signal.signal(signal.SIGTERM, _handle_sigterm)
 signal.signal(signal.SIGINT,  _handle_sigterm)
+
+def _sd_notify(state: str) -> bool:
+    addr = os.environ.get("NOTIFY_SOCKET")
+    if not addr:
+        return False
+    if addr[0] == "@":
+        addr = "\0" + addr[1:]
+    try:
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            sock.connect(addr)
+            sock.sendall(state.encode())
+        finally:
+            sock.close()
+        return True
+    except OSError as e:
+        log.warning("Couldn't notify systemd (%s): %s", state, e)
+        return False
+
+_loop_beat = time.monotonic()
+
+def _sd_watchdog_loop() -> None:
+    try:
+        usec = int(os.environ.get("WATCHDOG_USEC") or 0)
+    except ValueError:
+        usec = 0
+    if usec <= 0:
+        return
+    every = max(1.0, min(15.0, usec / 1e6 / 4))
+    stalled = False
+    while not _shutdown_event.wait(every):
+        age = time.monotonic() - _loop_beat
+        if age < LOOP_STALL_SECS:
+            if stalled:
+                log.info("Watchdog loop is running again")
+                stalled = False
+            _sd_notify("WATCHDOG=1")
+        elif not stalled:
+            stalled = True
+            log.error("Watchdog loop hasn't run for %d s — letting systemd restart wifimon", int(age))
 
 def _write_launcher() -> None:
     tmp = _LAUNCHER_PATH + ".tmp"
@@ -466,6 +522,7 @@ def install_service() -> None:
     with open(SYSTEMD_SERVICE_PATH, "w") as f:
         f.write(SYSTEMD_SERVICE_CONTENT)
     print(f"  [+] Created service file at {SYSTEMD_SERVICE_PATH}")
+    _apply_hw_watchdog(_saved_hw_watchdog(), verbose=True)
 
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "wifimon.service"], check=True)
@@ -490,6 +547,8 @@ def install_service() -> None:
     if fresh:
         print("  The watchdogs are off: wifimon only watches until you turn them on")
         print("  on its page (it asks when you log in).")
+        print("  The hardware watchdog (reboot if the Pi freezes) is on; turn it off")
+        print("  under Change settings on the Watchdog card.")
     if _root_password_status() != "set":
         print("  [!] root has no usable password, so dashboard login will fail.")
         print("      Set one with:  sudo passwd root")
@@ -515,6 +574,9 @@ def uninstall_service() -> None:
         print(f"  [-] Removed {SYSTEMD_SERVICE_PATH}")
 
     subprocess.run(["systemctl", "daemon-reload"], stderr=subprocess.DEVNULL)
+
+    if _hw_wd_ours():
+        _apply_hw_watchdog(False, verbose=True)
 
     target = None
     if os.path.lexists(INSTALL_BIN_PATH):
@@ -753,6 +815,7 @@ _wd: Dict[str, object] = {
     "last_reconnect_ok": None,
     "networks_configured": 0,
     "loop_errors": 0,
+    "net_reboot_held": False,
 }
 
 def _wd_update(**changes: object) -> None:
@@ -1055,13 +1118,14 @@ def _clear_shutdown_state() -> None:
     except OSError as e:
         log.debug("_clear_shutdown_state: %s", e)
 
-def _write_shutdown_state(reason: str, trigger: str) -> None:
+def _write_shutdown_state(reason: str, trigger: str, action: str = "poweroff") -> None:
     try:
         os.makedirs(SHUTDOWN_STATE_DIR, exist_ok=True)
         payload = {
             "active":  True,
             "reason":  reason,
             "trigger": trigger,
+            "action":  action,
             "since":   time.time(),
         }
         tmp_path = SHUTDOWN_STATE_FILE + ".tmp"
@@ -1074,17 +1138,353 @@ def _write_shutdown_state(reason: str, trigger: str) -> None:
     except OSError as e:
         log.warning("_write_shutdown_state: failed to write state file: %s", e)
 
-def do_shutdown(reason: str, trigger: str) -> None:
-    log.critical("Shutting down: %s", reason)
-    _write_shutdown_state(reason, trigger)
+def do_shutdown(reason: str, trigger: str, action: str = "poweroff") -> None:
+    reboot = action == "reboot"
+    log.critical("%s: %s", "Rebooting" if reboot else "Shutting down", reason)
+    try:
+        alert("shutdown", "Rebooting" if reboot else "Powering off", reason,
+              send_now=(trigger == "low_voltage"))
+    except Exception as e:
+        log.warning("Couldn't record the shutdown alert: %s", e)
+    _write_shutdown_state(reason, trigger, action)
     _shutdown_report(reason, trigger)
     try:
         subprocess.run(["sync"], timeout=5)
-        subprocess.run(["systemctl", "poweroff"], timeout=10)
+        subprocess.run(["systemctl", "reboot" if reboot else "poweroff"], timeout=10)
     except Exception:
         pass
     time.sleep(15)
-    subprocess.run(["poweroff", "-f"])
+    subprocess.run(["reboot" if reboot else "poweroff", "-f"])
+
+ALERT_EVENTS = (
+    ("shutdown", "wifimon shuts down or reboots the node"),
+    ("unclean", "The node or wifimon stopped without a clean shutdown"),
+    ("restarts", "A service keeps restarting (3 times in 10 minutes)"),
+    ("oom", "The kernel killed a process for lack of memory"),
+    ("asl_reg", "AllStarLink registration lost for 5 minutes, and back"),
+)
+ALERT_UNITS = ("nodecontrol", "asl_dvs_dashboard", "sysmon", "instmon", "44helper", "asterisk",
+               "analog_bridge", "mmdvm_bridge", "usrp2m17")
+ALERT_REPEAT_SECS = 1800
+ALERT_QUEUE_MAX = 50
+ALERT_QUEUE_TTL = 24 * 3600
+ALERT_RESTART_WINDOW = 600
+ALERT_RESTART_COUNT = 3
+ASL_REG_LOST_SECS = 300
+_alerts_lock = threading.Lock()
+_alerts_sent_at: Dict[str, float] = {}
+_alerts_last: Dict[str, object] = {"at": None, "ok": None, "error": ""}
+
+def _alerts_defaults() -> Dict[str, object]:
+    return {"enabled": False, "kind": "ntfy", "url": "", "token": "",
+            "events": {k: True for k, _d in ALERT_EVENTS}}
+
+def _alerts_cfg() -> Dict[str, object]:
+    cfg = _alerts_defaults()
+    try:
+        data = json.loads(_read_text(ALERTS_FILE) or "{}")
+    except ValueError:
+        data = {}
+    if isinstance(data, dict):
+        if isinstance(data.get("enabled"), bool):
+            cfg["enabled"] = data["enabled"]
+        if data.get("kind") in ("ntfy", "webhook"):
+            cfg["kind"] = data["kind"]
+        for k in ("url", "token"):
+            if isinstance(data.get(k), str):
+                cfg[k] = data[k]
+        ev = data.get("events")
+        if isinstance(ev, dict):
+            for k, _d in ALERT_EVENTS:
+                if isinstance(ev.get(k), bool):
+                    cfg["events"][k] = ev[k]
+    return cfg
+
+def _alerts_queue_load() -> List[Dict[str, object]]:
+    try:
+        data = json.loads(_read_text(ALERTS_QUEUE_FILE) or "[]")
+    except ValueError:
+        return []
+    now = time.time()
+    return [q for q in data if isinstance(q, dict) and now - float(q.get("at") or 0) < ALERT_QUEUE_TTL][-ALERT_QUEUE_MAX:] \
+        if isinstance(data, list) else []
+
+def _alerts_queue_save(queue: List[Dict[str, object]]) -> None:
+    try:
+        _durable_write(ALERTS_QUEUE_FILE, json.dumps(queue[-ALERT_QUEUE_MAX:]).encode("utf-8"), dir_mode=0o755)
+    except OSError as e:
+        log.warning("Couldn't save the alert queue: %s", e)
+
+def _alerts_public() -> Dict[str, object]:
+    cfg = _alerts_cfg()
+    with _alerts_lock:
+        last = dict(_alerts_last)
+        queued = len(_alerts_queue_load())
+    return {"enabled": cfg["enabled"], "kind": cfg["kind"], "url": cfg["url"], "token_set": bool(cfg["token"]),
+            "events": cfg["events"], "event_list": [[k, d] for k, d in ALERT_EVENTS],
+            "queued": queued, "last": last}
+
+def _alerts_validate(raw: object) -> Tuple[Optional[Dict[str, object]], str]:
+    if not isinstance(raw, dict):
+        return None, "No alert settings given."
+    cfg = _alerts_cfg()
+    if "enabled" in raw:
+        if not isinstance(raw["enabled"], bool):
+            return None, "Say whether alerts are on or off."
+        cfg["enabled"] = raw["enabled"]
+    if "kind" in raw:
+        if raw["kind"] not in ("ntfy", "webhook"):
+            return None, "Pick ntfy or webhook."
+        cfg["kind"] = raw["kind"]
+    if "url" in raw:
+        url = raw["url"].strip() if isinstance(raw["url"], str) else None
+        if url is None or len(url) > 500 or (url and not re.match(r"^https?://[^\s/?#]+[^\s]*$", url)):
+            return None, "The address must start with https:// (or http:// on your own network) and have no spaces."
+        cfg["url"] = url
+    if raw.get("clear_token") is True:
+        cfg["token"] = ""
+    elif isinstance(raw.get("token"), str) and raw["token"]:
+        if len(raw["token"]) > 500 or _LOG_CTRL_RE.search(raw["token"]):
+            return None, "That token has characters wifimon can't send."
+        cfg["token"] = raw["token"]
+    if "events" in raw:
+        ev = raw["events"]
+        if not isinstance(ev, dict) or not all(isinstance(v, bool) for v in ev.values()):
+            return None, "Bad event list."
+        for k, _d in ALERT_EVENTS:
+            if k in ev:
+                cfg["events"][k] = ev[k]
+    if cfg["enabled"] and not cfg["url"]:
+        return None, "Enter the address to send alerts to, or leave alerts off."
+    return cfg, ""
+
+def _alerts_save(cfg: Dict[str, object]) -> None:
+    _durable_write(ALERTS_FILE, json.dumps(cfg, sort_keys=True).encode("utf-8"))
+
+def _alert_header(text: str) -> str:
+    return text.encode("latin-1", "replace").decode("latin-1")[:200]
+
+def _alert_send_now(cfg: Dict[str, object], item: Dict[str, object], timeout: float) -> Tuple[bool, str]:
+    url = str(cfg.get("url") or "")
+    if not url:
+        return False, "no address set"
+    headers = {"User-Agent": f"wifimon/{APP_VERSION}"}
+    if cfg.get("token"):
+        headers["Authorization"] = f"Bearer {cfg['token']}"
+    when = time.strftime("%Y-%m-%d %H:%M", time.localtime(float(item.get("at") or time.time())))
+    if cfg.get("kind") == "webhook":
+        headers["Content-Type"] = "application/json"
+        body = json.dumps(dict(item, sent_at=time.time())).encode("utf-8")
+    else:
+        headers["Title"] = _alert_header(f"{item.get('host')}: {item.get('title')}")
+        headers["Priority"] = "high" if item.get("level") == "bad" else "default"
+        headers["Tags"] = "warning" if item.get("level") == "bad" else "white_check_mark"
+        body = f"{item.get('message')}\n({when})".encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = resp.status
+    except urllib.error.HTTPError as e:
+        return False, f"the server answered HTTP {e.code}"
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        return False, _log_safe(getattr(e, "reason", e))
+    if 200 <= code < 300:
+        return True, ""
+    return False, f"the server answered HTTP {code}"
+
+def _alerts_note(ok: bool, error: str) -> None:
+    with _alerts_lock:
+        _alerts_last.update(at=time.time(), ok=ok, error=error)
+
+def alert(event: str, title: str, message: str, level: str = "bad", key: Optional[str] = None,
+          send_now: bool = False, force: bool = False) -> Tuple[bool, str]:
+    cfg = _alerts_cfg()
+    if not force and (not cfg["enabled"] or not cfg["events"].get(event, True) or not cfg["url"]):
+        return False, "alerts are off"
+    key = key or event
+    now = time.time()
+    with _alerts_lock:
+        if not force and now - _alerts_sent_at.get(key, 0.0) < ALERT_REPEAT_SECS:
+            return False, "sent recently"
+        _alerts_sent_at[key] = now
+    item = {"event": event, "title": title, "message": message, "level": level,
+            "host": socket.gethostname(), "at": now}
+    if send_now:
+        ok, err = _alert_send_now(cfg, item, 5.0)
+        _alerts_note(ok, err)
+        if ok:
+            log.info("Alert sent: %s", title)
+            return True, ""
+        if force:
+            return False, err
+    with _alerts_lock:
+        queue = _alerts_queue_load()
+        queue.append(item)
+        _alerts_queue_save(queue)
+    log.info("Alert queued: %s", title)
+    return True, "queued"
+
+def _alerts_flush() -> int:
+    cfg = _alerts_cfg()
+    with _alerts_lock:
+        queue = _alerts_queue_load()
+    if not queue or not cfg["url"]:
+        return 0
+    sent = 0
+    for item in list(queue):
+        ok, err = _alert_send_now(cfg, item, 10.0)
+        _alerts_note(ok, err)
+        if not ok:
+            log.info("Alert not sent yet (%s); %d waiting", err, len(queue) - sent)
+            break
+        sent += 1
+    if sent:
+        with _alerts_lock:
+            rest = _alerts_queue_load()[sent:]
+            _alerts_queue_save(rest)
+        log.info("Sent %d queued alert(s)", sent)
+    return sent
+
+def _vmstat_oom_kills() -> Optional[int]:
+    for ln in (_read_text("/proc/vmstat") or "").splitlines():
+        if ln.startswith("oom_kill "):
+            try:
+                return int(ln.split()[1])
+            except ValueError:
+                return None
+    return None
+
+def _unit_restart_counts() -> Dict[str, int]:
+    if not shutil.which("systemctl"):
+        return {}
+    try:
+        r = subprocess.run(["systemctl", "show", "-p", "Id", "-p", "LoadState", "-p", "NRestarts"]
+                           + [u + ".service" for u in ALERT_UNITS],
+                           capture_output=True, text=True, timeout=15)
+    except (subprocess.SubprocessError, OSError):
+        return {}
+    out: Dict[str, int] = {}
+    for block in r.stdout.split("\n\n"):
+        kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        if kv.get("LoadState") == "loaded" and kv.get("NRestarts", "").isdigit():
+            out[kv.get("Id", "?").replace(".service", "")] = int(kv["NRestarts"])
+    return out
+
+class _AlertWatch:
+    def __init__(self) -> None:
+        self.restarts = _unit_restart_counts()
+        self.restart_hits: Dict[str, List[float]] = {}
+        self.oom = _vmstat_oom_kills()
+        self.reg_alerted = False
+
+    def tick(self, now: float) -> None:
+        counts = _unit_restart_counts()
+        for unit, n in counts.items():
+            prev = self.restarts.get(unit)
+            if prev is not None and n > prev:
+                hits = [t for t in self.restart_hits.get(unit, []) if now - t < ALERT_RESTART_WINDOW]
+                hits += [now] * min(n - prev, ALERT_RESTART_COUNT)
+                self.restart_hits[unit] = hits
+                if len(hits) >= ALERT_RESTART_COUNT:
+                    alert("restarts", f"{unit} keeps restarting",
+                          f"systemd restarted {unit} {len(hits)} times in the last {ALERT_RESTART_WINDOW // 60} minutes "
+                          f"({n} since it was started). Check its log.", key=f"restarts:{unit}")
+            self.restarts[unit] = n
+        kills = _vmstat_oom_kills()
+        if kills is not None and self.oom is not None and kills > self.oom:
+            victims = ""
+            if shutil.which("journalctl"):
+                try:
+                    r = subprocess.run(["journalctl", "-k", "-b", "--no-pager", "-o", "cat", "-g", "Killed process",
+                                        "-n", str(min(5, kills - self.oom))], capture_output=True, text=True, timeout=8)
+                    victims = "; ".join(m.group(1) for m in re.finditer(r"Killed process \d+ \(([^)]+)\)", r.stdout))
+                except (subprocess.SubprocessError, OSError):
+                    pass
+            alert("oom", "Out of memory",
+                  f"The kernel killed {kills - self.oom} process(es) for lack of memory"
+                  + (f": {victims}." if victims else ".") + " Check SysMon's Node Health card.")
+        if kills is not None:
+            self.oom = kills
+        try:
+            reg = json.loads(_read_text(ASL_REG_STATUS_FILE) or "null")
+        except ValueError:
+            reg = None
+        if isinstance(reg, dict):
+            wall = time.time()
+            fresh = wall - float(reg.get("checked_at") or 0) <= float(reg.get("next_check_secs") or 900) * 2 + 120
+            state, node = reg.get("state"), reg.get("node") or "?"
+            if fresh and state == "unregistered" and wall - float(reg.get("since") or wall) >= ASL_REG_LOST_SECS \
+                    and not self.reg_alerted:
+                self.reg_alerted = True
+                alert("asl_reg", f"Node {node} is not registered",
+                      f"AllStarLink registration for node {node} has been lost for "
+                      f"{int((wall - float(reg.get('since') or wall)) // 60)} minutes.", key="asl_reg")
+            elif fresh and state == "registered" and self.reg_alerted:
+                self.reg_alerted = False
+                alert("asl_reg", f"Node {node} is registered again",
+                      f"AllStarLink registration for node {node} is back.", level="ok", key="asl_reg_ok")
+
+def _alerts_loop() -> None:
+    watch = _AlertWatch()
+    last_check = time.monotonic()
+    while not _shutdown_event.wait(30):
+        try:
+            with _state_lock:
+                online = bool(_wd.get("connected"))
+            if online:
+                _alerts_flush()
+            if time.monotonic() - last_check >= 60:
+                last_check = time.monotonic()
+                watch.tick(time.monotonic())
+        except Exception:
+            log.exception("Alert check failed -- continuing")
+
+def _net_reboots_load() -> List[float]:
+    try:
+        data = json.loads(_read_text(NET_REBOOT_FILE) or "[]")
+    except ValueError:
+        return []
+    if not isinstance(data, list):
+        return []
+    stamps = sorted(float(t) for t in data if isinstance(t, (int, float)) and not isinstance(t, bool))
+    if not stamps:
+        return []
+    now = max(time.time(), stamps[-1])
+    return [t for t in stamps if now - t < NET_REBOOT_WINDOW_SECS]
+
+def _net_reboots_record(when: Optional[float] = None) -> List[float]:
+    stamps = _net_reboots_load() + [time.time() if when is None else when]
+    try:
+        os.makedirs(os.path.dirname(NET_REBOOT_FILE), exist_ok=True)
+        tmp = NET_REBOOT_FILE + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(stamps, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, NET_REBOOT_FILE)
+    except OSError as e:
+        log.warning("Couldn't record the reboot in %s: %s", NET_REBOOT_FILE, e)
+    return stamps
+
+def _net_reboots_public() -> Dict[str, object]:
+    stamps = _net_reboots_load()
+    return {"count": len(stamps), "limit": NET_REBOOT_LIMIT, "window_secs": NET_REBOOT_WINDOW_SECS,
+            "reset_at": (stamps[0] + NET_REBOOT_WINDOW_SECS) if stamps else None}
+
+def _net_loss_act(down_secs: int) -> bool:
+    if NETWORK_LOSS_ACTION != "reboot":
+        _recorder_final("no_conn")
+        do_shutdown(f"No network connection for {down_secs}s", trigger="no_conn")
+        return True
+    done = _net_reboots_load()
+    if len(done) >= NET_REBOOT_LIMIT:
+        return False
+    stamps = _net_reboots_record()
+    _recorder_final("no_conn")
+    do_shutdown(f"No network connection for {down_secs}s — rebooting "
+                f"(reboot {len(stamps)} of {NET_REBOOT_LIMIT} allowed in {NET_REBOOT_WINDOW_SECS // 3600} h)",
+                trigger="no_conn", action="reboot")
+    return True
 
 _health_lock = threading.Lock()
 _health: Dict[str, object] = {"date": None, "blips": 0, "drops": 0, "chip_stalls": None,
@@ -1392,9 +1792,12 @@ def _watchdog_loop() -> None:
     head_start_noted = False
     nm_busy_since: Optional[float] = None
     nm_step_in_noted = False
+    net_reboot_held = False
 
+    global _loop_beat
     while not _shutdown_event.is_set():
         loop_start = time.monotonic()
+        _loop_beat = loop_start
 
         try:
             if _networks_changed.is_set():
@@ -1440,6 +1843,9 @@ def _watchdog_loop() -> None:
 
             connected = is_connected()
             _wd_update(connected=connected, last_check_at=time.time())
+            if net_reboot_held and (connected or down_since is None or NETWORK_LOSS_ACTION != "reboot"):
+                net_reboot_held = False
+                _wd_update(net_reboot_held=False)
             if connected:
                 if misses and down_since is None:
                     log.info("Brief blip: %d missed check(s), back without a drop", misses)
@@ -1494,10 +1900,14 @@ def _watchdog_loop() -> None:
                         _health_incr("drops")
                         _wd_update(down_since_mono=down_since, last_drop_at=time.time())
                     if (loop_start - down_since) >= NO_CONN_SHUTDOWN_SECS:
-                        _recorder_final("no_conn")
-                        do_shutdown(f"No network connection for {NO_CONN_SHUTDOWN_SECS}s",
-                                    trigger="no_conn")
-                        break
+                        if _net_loss_act(NO_CONN_SHUTDOWN_SECS):
+                            break
+                        if not net_reboot_held:
+                            net_reboot_held = True
+                            _wd_update(net_reboot_held=True)
+                            log.warning("No network for %ds, but wifimon already rebooted %d times in %d h — "
+                                        "staying up and still trying to reconnect", NO_CONN_SHUTDOWN_SECS,
+                                        NET_REBOOT_LIMIT, NET_REBOOT_WINDOW_SECS // 3600)
 
                     stuck = link_up and (loop_start - down_since) >= STUCK_LINK_SECS
                     waiting = False
@@ -2003,9 +2413,13 @@ def _build_status() -> Dict[str, object]:
             return None
         return max(0.0, total - (now_m - float(since)))
 
+    net_held = bool(wd.get("net_reboot_held")) and NETWORK_LOSS_ACTION == "reboot"
     watchdog = {
         "connected": wd["connected"],
-        "no_conn_remaining": remaining(wd["down_since_mono"], NO_CONN_SHUTDOWN_SECS),
+        "no_conn_remaining": None if net_held else remaining(wd["down_since_mono"], NO_CONN_SHUTDOWN_SECS),
+        "net_action": NETWORK_LOSS_ACTION,
+        "net_reboots": _net_reboots_public(),
+        "net_reboot_held": net_held,
         "no_conn_total": NO_CONN_SHUTDOWN_SECS,
         "lowv_remaining": remaining(wd["lowv_since_mono"], LOW_VOLTAGE_SHUTDOWN_SECS),
         "lowv_total": LOW_VOLTAGE_SHUTDOWN_SECS,
@@ -2030,6 +2444,7 @@ def _build_status() -> Dict[str, object]:
         "loop_errors": wd["loop_errors"],
         "interface": INTERFACE,
         "recording": _recording_public(),
+        "hw": _hw_wd_status(),
     }
     net = {
         "internet": wd["internet"],
@@ -2074,6 +2489,7 @@ def _build_status() -> Dict[str, object]:
         "reports_stamp": _reports_stamp(),
         "hotspot": _hotspot_public(),
         "last_report": _last_report_banner(),
+        "alerts": _alerts_public(),
     }
 
 _KEEP_MIN_SECS = 5
@@ -2942,6 +3358,7 @@ def _check_new_network(body: Dict[str, object]) -> Tuple[Optional[Dict[str, obje
 
 _SETTINGS_SPEC: Dict[str, Tuple[str, type, Optional[float], Optional[float]]] = {
     "no_conn_shutdown_secs":     ("NO_CONN_SHUTDOWN_SECS", int, 60, 86400),
+    "network_loss_action":       ("NETWORK_LOSS_ACTION", str, None, None),
     "low_voltage_shutdown_secs": ("LOW_VOLTAGE_SHUTDOWN_SECS", int, 10, 3600),
     "low_voltage_threshold":     ("LOW_VOLTAGE_THRESHOLD", float, 0.70, 1.00),
     "reconnect_interval_secs":   ("RECONNECT_INTERVAL_SECS", int, 5, 600),
@@ -2949,8 +3366,10 @@ _SETTINGS_SPEC: Dict[str, Tuple[str, type, Optional[float], Optional[float]]] = 
     "ping_target":               ("PING_TARGET", str, None, None),
     "detect_login_pages":        ("DETECT_LOGIN_PAGES", bool, None, None),
     "keep_powersave_off":        ("KEEP_POWERSAVE_OFF", bool, None, None),
+    "hw_watchdog":               ("HW_WATCHDOG_ON", bool, None, None),
 }
 _SETTING_DEFAULTS: Dict[str, object] = {k: globals()[g] for k, (g, _t, _a, _b) in _SETTINGS_SPEC.items()}
+_NET_LOSS_ACTIONS = ("reboot", "poweroff")
 _HOST_RE = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?$")
 _timers_reset = threading.Event()
 
@@ -2973,6 +3392,11 @@ def _validate_settings(raw: object) -> Tuple[Optional[Dict[str, object]], str]:
         if kind is bool:
             if not isinstance(value, bool):
                 return None, f"{key} must be on or off."
+            out[key] = value
+            continue
+        if key == "network_loss_action":
+            if value not in _NET_LOSS_ACTIONS:
+                return None, "When the network is lost: pick Reboot or Power off."
             out[key] = value
             continue
         if kind is str:
@@ -2998,13 +3422,15 @@ def _apply_settings(values: Dict[str, object], persist: bool = True) -> Optional
     for key, value in values.items():
         globals()[_SETTINGS_SPEC[key][0]] = value
     if any(before[k] != v for k, v in values.items()
-           if k not in ("detect_login_pages", "keep_powersave_off")):
+           if k not in ("detect_login_pages", "keep_powersave_off", "hw_watchdog", "network_loss_action")):
         _timers_reset.set()
     notes: List[str] = []
     if "detect_login_pages" in values:
         notes.append(_apply_login_page_detection(bool(values["detect_login_pages"])) or "")
     if "keep_powersave_off" in values:
         notes.append(_apply_keep_powersave_off(bool(values["keep_powersave_off"])) or "")
+    if "hw_watchdog" in values and persist:
+        notes.append(_apply_hw_watchdog(bool(values["hw_watchdog"])) or "")
     if persist:
         _save_state({"settings": _settings_current()})
     return " ".join(n for n in notes if n) or None
@@ -3036,6 +3462,15 @@ def _load_watchdogs() -> None:
     if not (WIFI_WATCHDOG_ON and VOLTAGE_WATCHDOG_ON):
         log.info("Watchdogs: WiFi %s, voltage %s", "on" if WIFI_WATCHDOG_ON else "OFF",
                  "on" if VOLTAGE_WATCHDOG_ON else "OFF")
+
+def _saved_hw_watchdog() -> bool:
+    try:
+        data = json.loads(_read_text(STATE_FILE) or "{}")
+    except ValueError:
+        return bool(HW_WATCHDOG_ON)
+    saved = (data.get("settings") or {}) if isinstance(data, dict) else {}
+    value = saved.get("hw_watchdog") if isinstance(saved, dict) else None
+    return value if isinstance(value, bool) else bool(HW_WATCHDOG_ON)
 
 def _load_saved_settings() -> None:
     try:
@@ -3498,6 +3933,10 @@ def _marker_check_and_set() -> None:
                 log.warning("%s -- report saved: %s/%s", reason, REPORT_DIR, name)
             except OSError as e:
                 log.warning("%s (couldn't save a report: %s)", reason, e)
+            try:
+                alert("unclean", "Unclean stop", reason + ".")
+            except Exception as e:
+                log.warning("Couldn't record the unclean-stop alert: %s", e)
     marker = {"started_at": _started_wall, "boot_id": _boot_id(), "pid": os.getpid(),
               "version": APP_VERSION}
     try:
@@ -3775,6 +4214,123 @@ def _apply_keep_powersave_off(enabled: bool) -> Optional[str]:
             log.info("Power save turned off in %d saved network(s)", fixed)
     if enabled:
         _ps_check.set()
+    return note
+
+_HW_WD_TAG = "# Written by wifimon"
+_HW_WD_SPAN_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(us|ms|s|min|h)\b")
+_HW_WD_UNIT = {"us": 1e-6, "ms": 1e-3, "s": 1.0, "min": 60.0, "h": 3600.0}
+_hw_wd_lock = threading.Lock()
+_hw_wd_cache: Dict[str, object] = {"at": None, "data": None}
+
+def _hw_wd_body() -> str:
+    return (f"{_HW_WD_TAG}: reboot the Pi if it freezes (Change settings on wifimon's page)\n"
+            "[Manager]\n"
+            f"RuntimeWatchdogSec={HW_WATCHDOG_SECS}s\n"
+            "RebootWatchdogSec=2min\n")
+
+def _hw_wd_device() -> Optional[str]:
+    for dev in ("/dev/watchdog0", "/dev/watchdog"):
+        if os.path.exists(dev):
+            return dev
+    return None
+
+def _hw_wd_conflict() -> Optional[str]:
+    if not shutil.which("systemctl"):
+        return None
+    try:
+        r = subprocess.run(["systemctl", "is-active", "watchdog.service"],
+                           capture_output=True, text=True, timeout=10)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return "watchdog.service" if r.stdout.strip() == "active" else None
+
+def _hw_wd_parse_span(text: str) -> Optional[float]:
+    text = (text or "").strip()
+    if text in ("", "0", "infinity", "off"):
+        return 0.0
+    parts = _HW_WD_SPAN_RE.findall(text)
+    if not parts:
+        return None
+    return sum(float(n) * _HW_WD_UNIT[u] for n, u in parts)
+
+def _hw_wd_runtime() -> Optional[float]:
+    if not shutil.which("systemctl"):
+        return None
+    try:
+        r = subprocess.run(["systemctl", "show", "-p", "RuntimeWatchdogUSec", "--value"],
+                           capture_output=True, text=True, timeout=10)
+    except (subprocess.SubprocessError, OSError):
+        return None
+    if r.returncode != 0:
+        return None
+    return _hw_wd_parse_span(r.stdout)
+
+def _hw_wd_ours() -> bool:
+    return (_read_text(HW_WD_CONF_FILE) or "").startswith(_HW_WD_TAG)
+
+def _hw_wd_reexec() -> Optional[str]:
+    try:
+        r = subprocess.run(["systemctl", "daemon-reexec"], capture_output=True, text=True, timeout=60)
+    except (subprocess.SubprocessError, OSError) as e:
+        return f"systemd will pick this up after the next reboot ({_log_safe(e)})."
+    if r.returncode != 0:
+        return "systemd will pick this up after the next reboot (" + _log_safe((r.stderr or r.stdout).strip()[:200]) + ")."
+    return None
+
+def _hw_wd_status(max_age: float = 60.0) -> Dict[str, object]:
+    with _hw_wd_lock:
+        at = _hw_wd_cache["at"]
+        if at is not None and time.monotonic() - float(at) < max_age and _hw_wd_cache["data"]:
+            return dict(_hw_wd_cache["data"])
+    data = {"on": bool(HW_WATCHDOG_ON), "secs": HW_WATCHDOG_SECS, "device": _hw_wd_device(),
+            "conflict": _hw_wd_conflict(), "runtime_secs": _hw_wd_runtime(), "file": _hw_wd_ours()}
+    with _hw_wd_lock:
+        _hw_wd_cache["at"], _hw_wd_cache["data"] = time.monotonic(), data
+    return dict(data)
+
+def _apply_hw_watchdog(enabled: bool, verbose: bool = False) -> Optional[str]:
+    def say(msg: str) -> None:
+        if verbose:
+            print(msg)
+    note: Optional[str] = None
+    changed = False
+    try:
+        if enabled:
+            dev = _hw_wd_device()
+            conflict = _hw_wd_conflict()
+            if dev is None:
+                note = "This Pi has no hardware watchdog (/dev/watchdog), so there is nothing to turn on."
+                say("  [i] No hardware watchdog found (/dev/watchdog); skipped")
+            elif conflict:
+                note = f"{conflict} already runs the hardware watchdog, so wifimon leaves it alone."
+                say(f"  [i] {conflict} runs the hardware watchdog; wifimon leaves it alone")
+            elif _read_text(HW_WD_CONF_FILE) != _hw_wd_body():
+                os.makedirs(os.path.dirname(HW_WD_CONF_FILE), exist_ok=True)
+                tmp = HW_WD_CONF_FILE + ".tmp"
+                fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+                with os.fdopen(fd, "w") as f:
+                    f.write(_hw_wd_body())
+                    f.flush()
+                    os.fsync(f.fileno())
+                os.replace(tmp, HW_WD_CONF_FILE)
+                changed = True
+                log.info("Hardware watchdog on: the Pi reboots if it freezes for %d s", HW_WATCHDOG_SECS)
+                say(f"  [+] Hardware watchdog on ({HW_WD_CONF_FILE}, {HW_WATCHDOG_SECS} s)")
+        elif _hw_wd_ours():
+            os.remove(HW_WD_CONF_FILE)
+            changed = True
+            log.info("Hardware watchdog off (removed %s)", HW_WD_CONF_FILE)
+            say(f"  [-] Hardware watchdog off (removed {HW_WD_CONF_FILE})")
+    except OSError as e:
+        log.warning("Couldn't update %s: %s", HW_WD_CONF_FILE, e)
+        note = f"Couldn't change the hardware watchdog setting: {e}"
+    if changed:
+        problem = _hw_wd_reexec()
+        if problem:
+            log.warning("Hardware watchdog: %s", problem)
+            note = "Hardware watchdog: " + problem
+    with _hw_wd_lock:
+        _hw_wd_cache["at"] = None
     return note
 
 def _keep_powersave_check() -> None:
@@ -4616,6 +5172,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_settings_reset(body)
         elif path == "/api/watchdogs":
             self._handle_watchdogs(body)
+        elif path == "/api/alerts":
+            self._handle_alerts(body)
+        elif path == "/api/alerts/test":
+            self._handle_alerts_test(body)
         else:
             self._json(404, {"error": "Not found."})
 
@@ -5542,6 +6102,39 @@ class _Handler(BaseHTTPRequestHandler):
             "on" if now["wifi"] else "off", "on" if now["voltage"] else "off")
         self._json(200, {"ok": True, "message": msg, "watchdogs": now})
 
+    def _handle_alerts(self, body: Dict[str, object]) -> None:
+        if body.get("confirm") is not True:
+            self._json(400, {"error": "This change needs confirmation."})
+            return
+        cfg, err = _alerts_validate(body.get("values"))
+        if cfg is None:
+            self._json(400, {"error": err})
+            return
+        try:
+            _alerts_save(cfg)
+        except OSError as e:
+            self._json(500, {"error": f"Couldn't save the alert settings: {e}"})
+            return
+        log.info("Dashboard: alerts %s by %s (%s)", "on" if cfg["enabled"] else "off",
+                 self.client_address[0], cfg["kind"])
+        self._json(200, {"ok": True, "message": "Alert settings saved." + ("" if cfg["enabled"] else " Alerts are off."),
+                         "alerts": _alerts_public()})
+
+    def _handle_alerts_test(self, body: Dict[str, object]) -> None:
+        if body.get("confirm") is not True:
+            self._json(400, {"error": "This needs confirmation."})
+            return
+        if not _alerts_cfg()["url"]:
+            self._json(400, {"error": "Save an address first."})
+            return
+        ok, err = alert("test", "Test alert", "This is a test alert from wifimon. Alerts reach you.",
+                        level="ok", send_now=True, force=True)
+        log.info("Dashboard: test alert by %s: %s", self.client_address[0], "sent" if ok else err)
+        if ok:
+            self._json(200, {"ok": True, "message": "Test alert sent."})
+        else:
+            self._json(502, {"error": f"The test alert didn't go through: {err}"})
+
     def _handle_settings_reset(self, body: Dict[str, object]) -> None:
         if body.get("confirm") is not True:
             self._json(400, {"error": "This change needs confirmation."})
@@ -6018,7 +6611,9 @@ a.btnlink:hover{border-color:var(--cyan)}
       <div class="actions"><button type="button" id="btn-settings">Change settings</button></div>
       <form class="form" id="set-form" hidden autocomplete="off" style="margin-top:12px">
         <h3>Watchdog settings</h3>
-        <div class="row"><label for="s-noconn">Shut down after no connection for (seconds)</label>
+        <div class="row"><label for="s-netact">When the network is lost</label>
+          <select id="s-netact" data-key="network_loss_action" data-hint="Default Reboot. Reboot: at most 3 times in 6 hours; after that the node stays up and keeps trying to reconnect. Power off: the node stays off until someone powers it back on (for battery or hotspot nodes)."><option value="reboot">Reboot</option><option value="poweroff">Power off</option></select><span class="hint"></span></div>
+        <div class="row"><label for="s-noconn">Reboot or power off after no connection for (seconds)</label>
           <input type="number" id="s-noconn" data-key="no_conn_shutdown_secs" step="1"><span class="hint"></span></div>
         <div class="row"><label for="s-lowvs">Shut down after low voltage for (seconds)</label>
           <input type="number" id="s-lowvs" data-key="low_voltage_shutdown_secs" step="1"><span class="hint"></span></div>
@@ -6034,12 +6629,36 @@ a.btnlink:hover{border-color:var(--cyan)}
           <span class="hint"></span></div>
         <div class="row"><label class="check"><input type="checkbox" id="s-kps" data-key="keep_powersave_off" data-hint="Default off. When on, power save is off for every saved network and any added later, and wifimon turns it off again if a reconnect switches it back on. Turning this off leaves networks as they are; use each network's Options to change one back."> Keep WiFi power save off (all networks)</label>
           <span class="hint"></span></div>
+        <div class="row"><label class="check"><input type="checkbox" id="s-hwwd" data-key="hw_watchdog" data-hint="Default on. The Pi's watchdog chip reboots the node if Linux freezes for 15 seconds; systemd keeps it fed while the system runs. Off removes wifimon's setting. Not used when watchdog.service already runs the chip."> Reboot the Pi if it freezes (hardware watchdog)</label>
+          <span class="hint"></span></div>
         <p class="err" id="s-err" role="alert"></p>
         <div class="actions">
           <button type="button" id="s-save">Save settings</button>
           <button type="button" id="s-reset">Reset to defaults</button>
           <button type="button" id="s-cancel">Cancel</button>
         </div>
+      </form>
+    </section>
+
+    <section class="card" id="card-alerts" aria-labelledby="al-h">
+      <h2 id="al-h">Alerts</h2>
+      <p id="al-state" style="margin:0 0 8px">…</p>
+      <div class="actions"><button type="button" id="btn-alerts">Set up alerts</button><button type="button" id="al-test">Send test</button></div>
+      <form class="form" id="al-form" hidden autocomplete="off" style="margin-top:12px">
+        <h3>Alert settings</h3>
+        <div class="row"><label class="check"><input type="checkbox" id="al-on"> Send alerts</label></div>
+        <div class="row"><label for="al-kind">Send with</label>
+          <select id="al-kind"><option value="ntfy">ntfy (phone app)</option><option value="webhook">Webhook (JSON)</option></select>
+          <span class="hint">ntfy: install the ntfy app, subscribe to a topic name only you know, and put https://ntfy.sh/that-topic below. Webhook: wifimon POSTs JSON (host, event, title, message, level, at).</span></div>
+        <div class="row"><label for="al-url">Address</label>
+          <input type="text" id="al-url" spellcheck="false" placeholder="https://ntfy.sh/your-secret-topic"><span class="hint"></span></div>
+        <div class="row"><label for="al-token">Access token (optional)</label>
+          <input type="password" id="al-token" autocomplete="new-password" placeholder="leave blank to keep the current one">
+          <label class="check"><input type="checkbox" id="al-clear"> Remove the saved token</label>
+          <span class="hint">Sent as "Authorization: Bearer …". Stored on the node, readable by root only, never shown again.</span></div>
+        <div class="row" id="al-events"></div>
+        <p class="err" id="al-err" role="alert"></p>
+        <div class="actions"><button type="button" id="al-save">Save</button><button type="button" id="al-cancel">Cancel</button></div>
       </form>
     </section>
 
@@ -6524,6 +7143,7 @@ a.btnlink:hover{border-color:var(--cyan)}
       conn: wd.no_conn_remaining, connTotal: wd.no_conn_total,
       connIdle: wd.wifi_on === false ? "Watchdog off"
         : !wd.networks_configured ? "No saved networks"
+        : wd.net_reboot_held ? "Reboot limit reached, still trying"
         : wd.connected === true ? "Connected" : "Checking…",
       connIdleCls: wd.wifi_active && wd.connected === true ? "" : "idle",
       lowv: wd.lowv_remaining, lowvTotal: wd.lowv_total,
@@ -6533,13 +7153,18 @@ a.btnlink:hover{border-color:var(--cyan)}
     };
     drawTimers();
     const rules = [];
-    if (wd.wifi_active) rules.push(dur(wd.no_conn_total) + " with no connection");
-    if (wd.voltage_on !== false) rules.push(dur(wd.lowv_total) + " of low voltage (below "
-      + wd.low_v_threshold + " V core)");
+    const nr = wd.net_reboots || {};
+    if (wd.wifi_active) rules.push(wd.net_action === "poweroff"
+      ? "Shuts the node down after " + dur(wd.no_conn_total) + " with no connection."
+      : "Reboots the node after " + dur(wd.no_conn_total) + " with no connection (at most "
+        + (nr.limit || 3) + " times in " + Math.round((nr.window_secs || 21600) / 3600)
+        + " hours; after that it stays up and keeps trying).");
+    if (wd.voltage_on !== false) rules.push("Shuts the node down after " + dur(wd.lowv_total)
+      + " of low voltage (below " + wd.low_v_threshold + " V core).");
     $("w-rules").textContent = rules.length
-      ? "Shuts the node down after " + rules.join(", or ") + "."
-        + (wd.wifi_on === false ? " The WiFi watchdog is off: no reconnects, no shutdown on a lost connection."
-          : !wd.wifi_active ? " The WiFi watchdog is waiting for a saved network: no reconnects, no shutdown on a lost connection until one is added." : "")
+      ? rules.join(" ")
+        + (wd.wifi_on === false ? " The WiFi watchdog is off: no reconnects, nothing happens on a lost connection."
+          : !wd.wifi_active ? " The WiFi watchdog is waiting for a saved network: no reconnects, nothing happens on a lost connection until one is added." : "")
         + (wd.voltage_on === false ? " The voltage watchdog is off: no shutdown on low voltage." : "")
       : wd.wifi_on !== false && !wd.wifi_active
         ? "The WiFi watchdog is waiting for a saved network, and the voltage watchdog is off: wifimon only watches until a network is added."
@@ -6550,11 +7175,80 @@ a.btnlink:hover{border-color:var(--cyan)}
       ["Under-voltage since boot", yesno(p.undervoltage_seen)],
       ["CPU throttled now", yesno(p.throttled_now)],
       ["Trying to reconnect", yesno(wd.reconnecting)],
+      ["Reboots for a lost network", netRebootText(wd)],
+      ["Hardware watchdog", hwText(wd.hw)],
       ["Shutdown report", wd.recording
         ? "Recording details (" + wd.recording.count + " snapshots since " + stamp(wd.recording.started_at) + ")"
         : "Not needed right now"],
     ]);
   }
+
+  function netRebootText(wd) {
+    const nr = wd.net_reboots;
+    if (!nr) return "—";
+    let t = nr.count + " of " + nr.limit + " in the last " + Math.round(nr.window_secs / 3600) + " hours";
+    if (nr.count && nr.reset_at) t += " (one frees up " + stamp(nr.reset_at) + ")";
+    if (wd.net_action === "poweroff") t += "; set to Power off";
+    return t;
+  }
+
+  function hwText(hw) {
+    if (!hw) return "—";
+    if (hw.conflict) return "Run by " + hw.conflict;
+    if (!hw.device) return "Not found on this Pi";
+    const secs = hw.runtime_secs;
+    if (secs === null || secs === undefined) return hw.on ? "On (systemd state unknown)" : "Off";
+    if (secs > 0) return "On: reboots if the Pi freezes for " + Math.round(secs) + " s"
+      + (hw.on && hw.file ? "" : " (set outside wifimon)");
+    return hw.on ? "Turning on (after the next reboot at the latest)" : "Off";
+  }
+
+  function renderAlerts(d) {
+    const a = d.alerts;
+    if (!a) return;
+    let t = a.enabled ? "On: " + (a.kind === "webhook" ? "webhook" : "ntfy") + " to " + a.url : "Off. Nothing is sent.";
+    if (a.queued) t += " · " + a.queued + " waiting to send";
+    if (a.last && a.last.at) t += " · last try " + stamp(a.last.at) + (a.last.ok ? " sent" : " failed (" + a.last.error + ")");
+    $("al-state").textContent = t;
+    $("al-test").disabled = !a.url;
+  }
+  function fillAlerts() {
+    const a = (lastData && lastData.alerts) || {};
+    $("al-on").checked = !!a.enabled;
+    $("al-kind").value = a.kind || "ntfy";
+    $("al-url").value = a.url || "";
+    $("al-token").value = "";
+    $("al-clear").checked = false;
+    $("al-token").placeholder = a.token_set ? "a token is saved -- leave blank to keep it" : "none";
+    const box = $("al-events");
+    box.textContent = "";
+    for (const [k, label] of (a.event_list || [])) {
+      const l = document.createElement("label");
+      l.className = "check";
+      const c = document.createElement("input");
+      c.type = "checkbox"; c.dataset.ev = k; c.checked = (a.events || {})[k] !== false;
+      l.append(c, " " + label);
+      box.append(l, document.createElement("br"));
+    }
+    $("al-err").textContent = "";
+  }
+  $("btn-alerts").addEventListener("click", () => { fillAlerts(); $("al-form").hidden = false; $("al-url").focus(); });
+  $("al-cancel").addEventListener("click", () => { $("al-form").hidden = true; $("al-token").value = ""; });
+  $("al-form").addEventListener("submit", (ev) => ev.preventDefault());
+  $("al-save").addEventListener("click", async () => {
+    const events = {};
+    $("al-events").querySelectorAll("input[data-ev]").forEach(c => { events[c.dataset.ev] = c.checked; });
+    const values = { enabled: $("al-on").checked, kind: $("al-kind").value, url: $("al-url").value.trim(), events: events };
+    if ($("al-clear").checked) values.clear_token = true;
+    else if ($("al-token").value) values.token = $("al-token").value;
+    const r = await post("/api/alerts", { confirm: true, values: values });
+    if (r && r.status === 200) { $("al-form").hidden = true; $("al-token").value = ""; }
+    else if (r) $("al-err").textContent = r.data.error || "";
+  });
+  $("al-test").addEventListener("click", () => {
+    if (!confirm("Send a test alert now?")) return;
+    post("/api/alerts/test", { confirm: true });
+  });
 
   function renderService(d) {
     const sv = d.service || {}, w = d.wifi || {};
@@ -6591,7 +7285,8 @@ a.btnlink:hover{border-color:var(--cyan)}
     renderPortal(d);
     const s = d.shutdown, b = $("banner");
     if (s && s.active) {
-      b.textContent = "This node is shutting down: " + (s.reason || "watchdog triggered");
+      b.textContent = (s.action === "reboot" ? "This node is rebooting: " : "This node is shutting down: ")
+        + (s.reason || "watchdog triggered");
       b.hidden = false;
     } else {
       b.hidden = true;
@@ -7110,7 +7805,7 @@ a.btnlink:hover{border-color:var(--cyan)}
   $("btn-track-all").addEventListener("click", () => post("/api/network/track", { all: true }));
 
   // ── Watchdog settings (v5.3) ─────────────────────────────────────────
-  const setInputs = () => [...$("set-form").querySelectorAll("input[data-key]")];
+  const setInputs = () => [...$("set-form").querySelectorAll("input[data-key], select[data-key]")];
   function fillSettings(values) {
     const st = ((lastData && lastData.watchdog) || {}).settings || {};
     for (const inp of setInputs()) {
@@ -7119,6 +7814,11 @@ a.btnlink:hover{border-color:var(--cyan)}
       if (inp.type === "checkbox") {
         inp.checked = !!values[k];
         hint.textContent = inp.dataset.hint || "Default off.";
+        continue;
+      }
+      if (inp.tagName === "SELECT") {
+        inp.value = values[k];
+        hint.textContent = inp.dataset.hint || "";
         continue;
       }
       inp.value = values[k];
@@ -7142,6 +7842,7 @@ a.btnlink:hover{border-color:var(--cyan)}
     for (const inp of setInputs()) {
       const k = inp.dataset.key;
       if (inp.type === "checkbox") values[k] = inp.checked;
+      else if (inp.tagName === "SELECT") values[k] = inp.value;
       else if (k === "ping_target") values[k] = inp.value.trim();
       else {
         if (inp.value === "" || isNaN(Number(inp.value))) { $("s-err").textContent = "Fill in every number."; return; }
@@ -7457,6 +8158,7 @@ a.btnlink:hover{border-color:var(--cyan)}
     renderWatchdog(d);
     renderWatchdogSwitches(d);
     renderService(d);
+    renderAlerts(d);
     handleControl(d);
   }
 
@@ -7586,6 +8288,7 @@ def run() -> None:
     _load_watchdogs()
     _apply_login_page_detection(DETECT_LOGIN_PAGES)
     _apply_keep_powersave_off(KEEP_POWERSAVE_OFF)
+    _apply_hw_watchdog(HW_WATCHDOG_ON)
     _health_load()
     _recover_pending_change()
     _hotspot_recover()
@@ -7597,6 +8300,9 @@ def run() -> None:
 
     watchdog = threading.Thread(target=_watchdog_loop, name="watchdog", daemon=True)
     watchdog.start()
+    threading.Thread(target=_sd_watchdog_loop, name="sd-watchdog", daemon=True).start()
+    threading.Thread(target=_alerts_loop, name="alerts", daemon=True).start()
+    _sd_notify("READY=1")
     threading.Thread(target=_collector_loop, name="status", daemon=True).start()
     threading.Thread(target=_nm_sync_loop, name="nm-sync", daemon=True).start()
     threading.Thread(target=_kmsg_loop, name="kmsg", daemon=True).start()

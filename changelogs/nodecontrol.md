@@ -1,6 +1,97 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_80_20261013.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_83_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.83 (2026-10-14)
+
+The full-build port of Pi Zero 2 W Dashboards 9.3.74-pi02w and 9.3.75-pi02w
+(reliability plan, Stages 2 and 7). The code is the same as the fork's. The
+only difference is the full build's 1-second poll.
+
+- **A systemd watchdog that checks the right things.** Before, the link-poll
+  loop said "alive" at the top of each poll. A hung web server went
+  unnoticed. A frozen Asterisk holding the poll on AMI could get the
+  Dashboard restarted. With no ASL and no DVSwitch nothing said "alive" at
+  all, so systemd restarted the Dashboard every 30 s. Now a `sd-heartbeat`
+  thread says "alive" (every 10 s, `WatchdogSec=30` unchanged) only while:
+  - the poll loop started a pass in the last 120 s (or isn't running), and
+  - the Dashboard answered its own `GET /healthz` within 25 s (the
+    `health-probe` thread asks every 10 s on 127.0.0.1).
+- **`/healthz`** (new, no login): the same `{"ok":true}` as `/api/ping`.
+  instmon 2.50.0 uses it after an update.
+- **The poll no longer queues behind a stuck AMI command.** Its read waits at
+  most 3 s for the AMI lock, then skips that poll and leaves the page state
+  alone. Page commands still wait for the lock. The `asterisk -rx` fallback
+  still runs outside the lock.
+- The link-mode table is replaced in one step, and `USRP2M17.ini` is forced
+  to disk before it replaces the old file.
+- **Registration status for alerts:** after every AllStarLink registration
+  check, the Dashboard writes `/run/asl_dvs/asl_reg.json` (node, state,
+  since, checked_at, next_check_secs). wifimon 5.34.0 reads it for its
+  "registration lost" alert. Nothing changes on the page.
+- Tested: the same unit tests as the fork, run against this file (12):
+  - the AMI lock wait, the fallback outside the lock, the lock released on
+    errors
+  - the poll loop keeps going while AMI is held
+  - the heartbeat rules, with a real server and a real notify socket
+  - `/healthz` public, `/api/status` not
+  - the link-mode swap, the M17 file write and fsync
+  - the registration file contents, mode 644, and an unwritable path
+  - `ci/check_repo.py`
+
+## 9.3.82 (2026-10-14)
+
+The ASL tab's Tune button shows whether the node is registered with
+AllStarLink, from the Pi Zero 2 W build (9.3.73-pi02w).
+
+- New background check `asl-reg` asks Asterisk `rpt show registrations` (over
+  AMI) and looks for the node set in Edit. It uses SysMon's rule:
+  - a line naming the node with "unregist", "rejected", "failed", "timeout"
+    or "timed out" → unregistered
+  - a line naming the node with "regist" → registered
+  - the node missing from the list → unregistered
+  - Asterisk not answering → unknown
+- `/api/status` carries the result as `asl_reg` (read from a cache).
+- The Tune button next to the node number box:
+  - registered or unknown: its normal teal look
+  - unregistered: red border, red text with a line through "Tune", and the
+    tooltip "Node N is not registered with AllStarLink". It can still be
+    clicked.
+- How often it checks:
+  - every 30 s while the node is not registered (or the state is unknown);
+    the Pi02w build uses 60 s
+  - every 15 min once registered
+  - again 5 s after a network change (an interface going down or up, or a
+    Wi-Fi reconnect, read from `/sys/class/net/*/operstate` and
+    `carrier_changes`), then every 30 s until registered
+  - at once when the node number in Edit changes
+- Tested:
+  - Unit test with a mocked AMI: Registered, Rejected, node missing, no
+    registrations, and AMI down give registered / unregistered / unregistered
+    / unregistered / unknown. With a mocked clock: checks at 0, 30 and 60 s
+    while unregistered, then backs off to 15 min, and a network change at
+    600 s brings a check at 606 s.
+  - The page in headless Chromium: registered teal `rgb(0,255,229)` with no
+    line through; unregistered red `rgb(255,61,90)` with a line through and
+    the tooltip; unknown teal. No script errors. `node --check` on the page
+    script.
+
+## 9.3.81 (2026-10-14)
+
+The Phone tab carries a notice that sending music over a radio node breaks FCC
+rules, from the Pi Zero 2 W build (9.3.72-pi02w).
+
+- A boxed amber notice under the Phone tab's Hang Up / Keypad / Patch / Report
+  bar:
+  - music on an amateur station is prohibited by 47 CFR §97.113(a)(4), and
+    that includes a phone system's hold music or a recording played into a call
+  - §97.113(e) also bars retransmitting broadcast stations
+  - hang up if a call goes to hold music
+  - radioless nodes and phone systems with no RF link should be fine
+- `BUILD_DATE` is 2026-10-14.
+- Tested:
+  - The page in headless Chromium: the notice shows on the Phone tab in amber
+    `rgb(255,208,64)`, no script errors. `node --check` on the page script.
 
 ## 9.3.80 (2026-10-13)
 
