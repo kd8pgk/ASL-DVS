@@ -1,6 +1,17 @@
 # instmon changelog
 
-Current file: `instmon_v2_51_0_20261014.py`. Newest entries first.
+Current file: `instmon_v2_52_0_20261018.py`. Newest entries first.
+
+## 2.52.0 (2026-10-18)
+
+- **Scheduled backups wait 15 minutes after boot.** A scheduled disk-image backup
+  that was overdue started about a minute after boot, stopping the radio services
+  while the network, the tunnel and 44helper's boot order were still bringing them
+  up. Now the scheduler holds it until the node has been up 15 minutes; the card
+  shows "Scheduled backup not started: the node booted N min ago …" once, and the
+  backup runs on the next check after that. Manual backups are not affected.
+- Tested (mocks): held 2 minutes after boot with the reason saved and logged once;
+  not held 33 minutes after boot.
 
 ## 2.51.0 (2026-10-14)
 
