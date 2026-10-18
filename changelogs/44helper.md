@@ -1,6 +1,32 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_205_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_206_20261018.py`. Newest entries first.
+
+## 0.0.206 (2026-10-18) — testing
+
+**Routing loop after a reboot.** Reported: after a reboot the Overview showed a
+routing loop, then no handshake, and the DVSwitch bridges weren't running.
+
+- **Cause:** the endpoint pin's PreUp line copies the Pi's normal default route
+  (`ip -4 route show table main default`) to keep the tunnel server off wg0. At boot
+  wg-quick can start before that route exists. The line then had nothing to copy, its
+  `|| true` hid the failure, and the tunnel came up with its server routed into wg0:
+  a loop, no handshake, so netcheck and the bridges failed too. 0.0.205's retry didn't
+  help, because the start counted as a success.
+- **Fix:** PreUp now waits up to 30 s for the default route before pinning. If there's
+  still none (or a host-name Endpoint doesn't resolve), it fails, so wg-quick's start
+  fails and 0.0.205's `Restart=on-failure` tries again 20 s later instead of leaving
+  a looping tunnel up.
+- **Older pins are updated:** an existing wg0.conf with the old pin lines is flagged
+  on the Health card and step 4b (**Fix the tunnel-server route** rewrites them).
+  They're also updated by **Set the boot order**, step 6, Restart tunnel and any
+  other 44helper write of wg0.conf.
+
+Tested: both pin forms run the way wg-quick runs them (`set -e -o pipefail`, then
+`(eval ...)`) with stub commands: the route appearing after a few seconds pins it; no
+route after 30 s fails the start; the host-name form records the address. Also:
+outdated-pin detection, the 4b repair and Set the boot order rewriting it, the
+half-tunnel remove script with the new pin, and the earlier suites.
 
 ## 0.0.205 (2026-10-18) — testing
 
