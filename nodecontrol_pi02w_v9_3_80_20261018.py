@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.79-pi02w"
+VERSION      = "9.3.80-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -6486,6 +6486,54 @@ def _asl_reg_public() -> str:
     with _asl_reg_lock:
         return _asl_reg_info["state"]
 
+_SVC_CHECK_SEC = 15.0
+_svc_lock      = threading.Lock()
+_svc_state     = {"ab": "unknown", "stfu": "unknown"}
+
+def _svc_unit_state(units: tuple) -> str:
+    out, rc = run(["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", "--", *units], timeout=4)
+    if rc != 0:
+        return "unknown"
+    state = "none"
+    for block in out.split("\n\n"):
+        f = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        if f.get("LoadState") != "loaded":
+            continue
+        if f.get("ActiveState") in ("active", "activating", "reloading"):
+            return "active"
+        state = "inactive"
+    return state
+
+def _svc_check() -> dict:
+    ab   = _svc_unit_state(_BOOT_AB_UNITS)
+    stfu = _svc_unit_state(("stfu.service",))
+    if stfu == "none" and Path("/opt/STFU/STFU").is_file():
+        out, _ = run(["pgrep", "-x", "STFU"], timeout=3)
+        stfu = "active" if out.strip() else "inactive"
+    return {"ab": ab, "stfu": stfu}
+
+def _svc_public() -> dict:
+    with _svc_lock:
+        return dict(_svc_state)
+
+def _svc_loop() -> None:
+    global _status_etag
+    while True:
+        try:
+            new = _svc_check()
+        except Exception as e:
+            log.warning("svc: check error: %s", e)
+            new = {"ab": "unknown", "stfu": "unknown"}
+        with _svc_lock:
+            changed = new != _svc_state
+            if changed:
+                _svc_state.update(new)
+        if changed:
+            log.info("svc: Analog_Bridge %s, STFU %s", new["ab"], new["stfu"])
+            with _lock:
+                _status_etag = ""
+        time.sleep(_SVC_CHECK_SEC)
+
 def _net_signature() -> tuple:
     sig = []
     try:
@@ -7702,6 +7750,7 @@ def build_status() -> dict:
         "page":              st["page"],
         "status":            st["status"],
         "asl_reg":           _asl_reg_public(),
+        "svc":               _svc_public(),
         "current_fav":       st["linked_node"] if (st["page"] == "ASL" and not st["current_fav"] and st["linked_node"]) else st["current_fav"],
         "has_asl":           st["has_asl"],
         "has_dvs":           st["has_dvs"],
@@ -8239,6 +8288,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn:active { transform: scale(.95); }
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
+#dmr-connect-btn.svc-down, #stfu-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 #asl-connect-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
@@ -9205,7 +9255,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               placeholder="TG number…" maxlength="12"
               oninput="dmrSaveSync()"
               onkeydown="if(event.key==='Enter')doQuickTune('DMR')">
-            <button class="btn btn-blue" onclick="doQuickTune('DMR')">Tune</button>
+            <button id="dmr-connect-btn" class="btn btn-blue" onclick="doQuickTune('DMR')">Connect</button>
             <button id="lh-btn-DMR" class="btn-last lh-off" onclick="openDmrLast()">LH</button>
             <button id="dmr-save-btn" class="btn btn-muted" onclick="dmrQuickSave()" disabled
               aria-label="Save this talkgroup to favorites" title="Save to favorites">Save</button>
@@ -9218,22 +9268,18 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         </div>
         <!-- STFU -->
         <div id="pg-STFU" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-STFU" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="TG or ID#…" maxlength="12"
-              onkeydown="if(event.key==='Enter')doQuickTune('STFU')">
-            <button class="btn btn-green" onclick="doQuickTune('STFU')">Tune</button>
-            <button id="lh-btn-STFU" class="btn-last lh-off" onclick="openModeLast('STFU')">LH</button>
-          </div>
           <div id="stfu-card" class="tgc-card tgc-stfu">
             <input id="stfu-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: number or name" aria-label="Search STFU talkgroups"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('STFU')" disabled>
+              placeholder="TG, ID or name" aria-label="Search STFU talkgroups"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('STFU')"
+              onkeydown="if(event.key==='Enter')lcConnect('STFU')">
             <select id="stfu-ref-select" class="tgc-select" aria-label="STFU talkgroup"
               onchange="lcButtons('STFU')" disabled>
               <option value="">Select talkgroup…</option>
             </select>
             <button id="stfu-connect-btn" class="btn btn-green" onclick="lcConnect('STFU')" disabled>Connect</button>
+            <button id="lh-btn-STFU" class="btn-last lh-off" onclick="openModeLast('STFU')"
+              aria-label="Open the STFU Last Heard page set on the Edit tab">LH</button>
             <button id="stfu-save-btn" class="btn btn-muted" onclick="lcSave('STFU')" disabled
               aria-label="Save this talkgroup to favorites" title="Save to favorites">Save</button>
             <div id="stfu-card-msg" class="tgc-card-msg" role="status" hidden></div>
@@ -10649,14 +10695,18 @@ function openFcsLast(){
      keep(k,r)    extra filter besides the search words (e.g. country)
      clear(k)     reset that extra filter when it hides the tuned entry
      rebuilt(k,d) run when a changed list has been indexed (extra menus)
-     emptied(k)   run when the list comes back missing or empty */
+     emptied(k)   run when the list comes back missing or empty
+     typed        v9.3.80: a bare 1-8 digit number in the search box can
+                  Connect (doQuickTune) and Save with no row picked; the
+                  search box stays usable when the list is missing; Save
+                  falls back to the last number tuned (STFU) */
 const LC_TTL_MS=300000;
 const LC_CFG={};
 const _lc={};
 function lcDef(k,cfg){
   LC_CFG[k]=cfg;
   _lc[k]={loaded:false,loading:false,saving:false,at:0,tried:0,rows:[],by:{},
-          total:0,base:'',sig:'',tuned:'',applied:null,timer:0};
+          total:0,base:'',sig:'',tuned:'',applied:null,timer:0,last:''};
 }
 function lcEl(k,s){return byId(k.toLowerCase()+'-'+s);}
 function lcMsg(k,text,kind){
@@ -10689,7 +10739,9 @@ async function lcLoad(k){
   }finally{s.loading=false}
 }
 function lcSetDisabled(k,off){
-  ['filter','ref-select'].concat(LC_CFG[k].ctl||[]).forEach(n=>{const el=lcEl(k,n);if(el)el.disabled=off;});
+  ['filter','ref-select'].concat(LC_CFG[k].ctl||[]).forEach(n=>{
+    if(n==='filter'&&LC_CFG[k].typed)return;
+    const el=lcEl(k,n);if(el)el.disabled=off;});
 }
 function lcBuild(k,d){
   const s=_lc[k],c=LC_CFG[k],rsel=lcEl(k,'ref-select');
@@ -10699,7 +10751,7 @@ function lcBuild(k,d){
     if(c.emptied)c.emptied(k);
     rsel.innerHTML='<option value="">'+c.none+'</option>';
     lcSetDisabled(k,true);
-    lcMsg(k,c.empty(d),'warn');
+    lcMsg(k,c.empty(d)+(c.typed?' You can still type a number.':''),'warn');
     lcButtons(k);
     return;
   }
@@ -10723,6 +10775,7 @@ function lcDated(d){
   return dated?' List dated '+dated+'.':'';
 }
 function lcFilterSoon(k){
+  lcButtons(k);
   const s=_lc[k];
   clearTimeout(s.timer);
   s.timer=setTimeout(()=>lcFill(k,true),150);
@@ -10750,13 +10803,18 @@ function lcSelected(k){
   const rsel=lcEl(k,'ref-select');
   return rsel&&rsel.value&&_lc[k]?_lc[k].by[rsel.value]||null:null;
 }
+function lcTyped(k){
+  if(!LC_CFG[k].typed)return '';
+  const v=String((lcEl(k,'filter')||{}).value||'').trim();
+  return /^\d{1,8}$/.test(v)?v:'';
+}
 function lcButtons(k){
   const r=lcSelected(k),c=LC_CFG[k];
-  const ok=c.ready?c.ready(k,r):!!r;
+  const ok=(c.ready?c.ready(k,r):!!r)||!!lcTyped(k);
   const btn=lcEl(k,'connect-btn');
   if(btn)btn.disabled=!ok;
   const sv=lcEl(k,'save-btn');
-  if(sv)sv.disabled=!ok||_lc[k].saving;
+  if(sv)sv.disabled=!(ok||(c.typed&&_lc[k].last))||_lc[k].saving;
   const url=r?c.lh(r):'';
   _updateLhBtn('lh-btn-'+k+'REF',url);
   const lh=byId('lh-btn-'+k+'REF');
@@ -10783,14 +10841,17 @@ function lcCardSync(k,d){
 }
 function lcConnect(k){
   const r=lcSelected(k);
-  if(r)LC_CFG[k].connect(k,r);
+  if(r){LC_CFG[k].connect(k,r);return;}
+  const t=lcTyped(k);
+  if(t)doQuickTune(k,t);
 }
 async function lcSave(k){
   // Save the picked entry into the next free favorite slot for this tab,
   // then re-draw the grids from the server so the new row shows up below.
   const s=_lc[k];
   if(!s||s.saving)return;
-  const r=lcSelected(k);
+  let r=lcSelected(k);
+  if(!r&&LC_CFG[k].typed){const t=lcTyped(k)||s.last;if(t)r=[t];}
   if(!r)return;
   const payload=LC_CFG[k].save(k,r);
   if(!payload)return;
@@ -10862,6 +10923,7 @@ function lcTgCard(k,named){
 lcTgCard('P25',false);
 lcTgCard('NXDN',false);
 lcTgCard('STFU',true);
+LC_CFG.STFU.typed=true;
 
 /* ── M17 browse card (v8.6.2 — Stage 2 of the M17 tab rework) ───────────────
    Reflector / Module menus + Connect + LH, fed by /api/m17-hosts (parsed from
@@ -11472,10 +11534,10 @@ async function dmrQuickSave(){
     }
   }finally{_dmrSaving=false;dmrSaveSync();}
 }
-async function doQuickTune(mode){
+async function doQuickTune(mode,typed){
   if(busy)return;
   const inp=byId('qt-'+mode);
-  const tg=inp?inp.value.trim():'';
+  const tg=typed!==undefined?String(typed).trim():(inp?inp.value.trim():'');
   if(!tg){
     // DMR with empty field: retune the currently-selected network
     if(mode==='DMR'){
@@ -11500,6 +11562,12 @@ async function doQuickTune(mode){
       if(mode==='DMR'&&/^\d{1,8}$/.test(tg))_dmrQtLast={net:dmrSaveNet(),tg};   // v8.9.6
       if(inp)inp.value='';
       if(mode==='DMR')dmrSaveSync();
+      if(LC_CFG[mode]&&LC_CFG[mode].typed){
+        _lc[mode].last=tg;
+        const f=lcEl(mode,'filter');
+        if(f&&f.value.trim()===tg){f.value='';lcFill(mode,false);}
+        lcButtons(mode);
+      }
       setIndicator(tg,mode,false,tg);
       _pendingTune={tg,mode,name:tg,at:Date.now()};
       pollAbInfo();
@@ -11870,9 +11938,22 @@ function applyAslReg(d){
   b.classList.toggle('asl-unreg',bad);
   b.title=bad?('Node '+(d.asl_node||'')+' is not registered with AllStarLink'):'';
 }
+function applySvcWarn(d){
+  const s=(d&&d.svc)||{};
+  const ab=s.ab==='inactive'?['Analog_Bridge']:[];
+  const set=(id,bad)=>{
+    const b=byId(id);
+    if(!b)return;
+    b.classList.toggle('svc-down',bad.length>0);
+    b.title=bad.length?bad.join(' and ')+(bad.length>1?' are':' is')+' not running':'';
+  };
+  set('dmr-connect-btn',ab);
+  set('stfu-connect-btn',(s.stfu==='inactive'?['STFU']:[]).concat(ab));
+}
 function applyServerState(d){
   byId('hdr-node').textContent=d.asl_node;
   applyAslReg(d);
+  applySvcWarn(d);
   const csEl=byId('hdr-callsign');
   const csSep=byId('hdr-callsign-sep');
   if(d.callsign){csEl.textContent=d.callsign;csEl.style.display='inline';csSep.style.display='inline';}
@@ -14533,6 +14614,8 @@ def startup() -> None:
         threading.Thread(target=_link_poll_loop, daemon=True).start()
         if has_asl:
             threading.Thread(target=_asl_reg_loop, name="asl-reg", daemon=True).start()
+    if has_dvs:
+        threading.Thread(target=_svc_loop, name="svc-check", daemon=True).start()
 
     if has_asl:
         has_echo = _detect_echo()

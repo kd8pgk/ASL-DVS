@@ -1,6 +1,31 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_79_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_80_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.80-pi02w (2026-10-18)
+
+STFU tab gets the ASL tab's layout; DMR and STFU warn when their services are down.
+The full build is not changed.
+
+- **STFU: Tune row removed.** The talkgroup box and its Tune and LH buttons above the
+  search row are gone.
+- **STFU: Connect takes Tune's jobs.** A bare number (1–8 digits, talkgroup or ID) in
+  the search box tunes with Connect or Enter when no talkgroup is picked from the
+  menu, through the same quick tune Tune used, so numbers not in the list work. A
+  talkgroup picked from the menu still wins. The search box stays usable when the
+  talkgroup list is missing or empty, for typed numbers.
+- **STFU: Save.** Saves the picked talkgroup, or else the typed number, or else the
+  last number tuned. The server still only saves talkgroups in the BrandMeister list.
+- **STFU: LH moved into the search row,** between Connect and Save. It opens the Edit
+  tab's STFU Last Heard address and is greyed out while that address is blank.
+- **DMR: Tune is renamed Connect.** The DMR row is otherwise unchanged.
+- **Service warnings.** Every 15 s the Dashboard checks Analog_Bridge
+  (`analog_bridge.service` or `Analog_Bridge.service`) and `stfu.service` (or, with
+  no unit, the `/opt/STFU/STFU` process), and the status reply carries the result
+  (`svc`). DMR Connect shows red with a strike-through when Analog_Bridge isn't
+  running; STFU Connect does when STFU or Analog_Bridge isn't. The hover note names
+  what is down. A service that isn't installed, or an unknown state, shows no
+  warning. The check runs only when DVSwitch is found.
 
 ## 9.3.79-pi02w (2026-10-18)
 
