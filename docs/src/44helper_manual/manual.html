@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.207</b><br>Edition 2026-10-18</div>
+    <div class="ed"><b>44helper 0.0.208</b><br>Edition 2026-10-18</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_207_20261018.py</td><td>0.0.207</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_208_20261018.py</td><td>0.0.208</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
@@ -126,7 +126,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.207 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.208 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -661,17 +661,24 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     Health card offers it when something is missing. It takes effect at the next boot; nothing running is restarted.</p>
   <table>
     <tr><th>Piece</th><th>What it does</th></tr>
-    <tr><td><code>44helper-netready.service</code></td><td>A oneshot that runs <code>/usr/local/sbin/44helper-netready</code> after <code>network-online.target</code> and the tunnel. It waits up to 180 seconds until there is a default route, the tunnel has a handshake (only when <code>wg-quick@wg0</code> is enabled) and names resolve, then finishes either way. Its journal line says which was missing: <code>journalctl -b -u 44helper-netready</code>.</td></tr>
-    <tr><td>DVSwitch drop-ins <code>44helper-boot.conf</code></td><td>netcheck and each DVSwitch service that is installed (bridges, md380-emu, STFU, the gateways, ircDDBGateway, webproxy) start after it (<code>After=</code>/<code>Wants=</code>). All but netcheck also restart 15 seconds after a failure.</td></tr>
-    <tr><td>Tunnel drop-in for <code>wg-quick@wg0</code></td><td><code>Restart=on-failure</code> every 20 seconds, with no limit, so a start that fails at boot (DNS or the network not ready, or the pin finding no route) is tried again.</td></tr>
+    <tr><td><code>44helper-netready.service</code></td><td>A oneshot that runs <code>/usr/local/sbin/44helper-netready</code> after <code>network-online.target</code> and the tunnel. It waits up to 180 seconds until there is a default route, the tunnel has a handshake (only when <code>wg-quick@wg0</code> is enabled) and names resolve, then finishes either way, so the services still start. Its journal line says which was missing: <code>journalctl -b -u 44helper-netready</code>.</td></tr>
+    <tr><td>Late follow-up <code>44helper-netready-late</code></td><td>From 0.0.208. When netready gives up after 180 seconds, it starts this follow-up, which keeps watching for up to 20 more minutes. Once the route, the handshake and DNS are all there, it restarts the enabled DVSwitch services once, in order, so gateways that started without a network reconnect.</td></tr>
+    <tr><td>Boot log <code>/var/lib/44helper/boot.log</code></td><td>From 0.0.208. One line per boot from netready (ready, or what was missing and after how long), and one from the late follow-up. It keeps the last 20 lines, so the result survives a reboot even when System Optimization keeps the journal in memory only. The 6b card shows this boot's line, and the Health card warns when this boot wasn't ready in time.</td></tr>
+    <tr><td>DVSwitch drop-ins <code>44helper-boot.conf</code></td><td>netcheck and each DVSwitch service that is installed (bridges, md380-emu, STFU, the gateways, ircDDBGateway, webproxy) start after it (<code>After=</code>/<code>Wants=</code>). From 0.0.208 this includes the capitalised names <code>Analog_Bridge</code>, <code>MMDVM_Bridge</code> and <code>STFU</code>. All but netcheck also restart 15 seconds after a failure; from 0.0.208 netcheck is retried 30 seconds after a failure, up to 10 times in 15 minutes.</td></tr>
+    <tr><td>Tunnel drop-in for <code>wg-quick@wg0</code></td><td><code>Restart=on-failure</code> every 20 seconds, with no limit, so a start that fails at boot (DNS or the network not ready, or the pin finding no route) is tried again. From 0.0.208 it first runs <code>/usr/local/sbin/44helper-timewait</code>: in the first 10 minutes after boot, when NTP is on, it waits up to 90 seconds for the clock to sync, then starts the tunnel either way. The Pi has no clock battery, and after a power cut its clock can start behind; the tunnel server drops handshakes with an older time than the last one it saw. Before wg0 is up, the time sync goes over the LAN, so a full tunnel can't block it.</td></tr>
     <tr><td>Enabled at boot</td><td><code>wg-quick@wg0</code>, and the network's wait-online unit (<code>NetworkManager-wait-online</code> or <code>systemd-networkd-wait-online</code>), if they weren't.</td></tr>
   </table>
-  <p><b>Remove</b> deletes the unit, the script and the drop-ins; the tunnel stays enabled at boot. The DVSwitch
+  <p>From 0.0.208 <b>Set the boot order</b> also applies the netcheck fixes (7.5), and the card counts as done only
+    when no bridge still requires netcheck: a dependency that failed isn't covered by the bridges' restarts. Step 6's
+    routing-loop check also uses WireGuard's firewall mark (<code>ip route get … mark</code>), so a healthy full tunnel
+    isn't reported as a loop.</p>
+  <p><b>Remove</b> deletes the unit, the scripts and the drop-ins; the tunnel stays enabled at boot. The DVSwitch
     install step <b>Start DVSwitch after the network is ready</b> sets the DVSwitch part, and DVSwitch purge step 1
     removes it (Chapter 10).</p>
   <div class="call note"><span class="t">NOTE</span>wifimon 5.35.0 adds a <b>tunnel watchdog</b> as a safety net for
     what the boot order can't cover: five minutes after boot, and every minute after that, it restarts a tunnel that has
-    no handshake and then the DVSwitch services. See the user manual's wifimon chapter.</div>
+    no handshake and then the DVSwitch services. Use wifimon 5.36.0 or later: 5.35.0 saw every full tunnel as a routing
+    loop and restarted the services about 8 minutes after each boot. See the user manual's wifimon chapter.</div>
 </section>
 
 <section class="chapter" id="ch8">
@@ -1082,9 +1089,10 @@ sudo wg show wg0</pre>
   <h2><span class="n">14.5</span>The tunnel or DVSwitch doesn't come back after a reboot</h2>
   <ol class="steps">
     <li>Health card: if it offers <b>Set the boot order</b>, or step 4b shows the amber older-pin banner, press it, then reboot (7.3, 7.7).</li>
-    <li>See what happened at this boot: <code>journalctl -b -u wg-quick@wg0 -u 44helper-netready -u netcheck --no-pager | head -80</code>. The netready line says whether the network, the tunnel handshake or DNS was late.</li>
+    <li>See what happened at this boot: the 6b card's <b>This boot</b> line, or <code>cat /var/lib/44helper/boot.log</code> for the last 20 boots (from 0.0.208). For the detail: <code>journalctl -b -u wg-quick@wg0 -u 44helper-netready -u 44helper-netready-late -u netcheck --no-pager | head -80</code>. The netready line says whether the network, the tunnel handshake or DNS was late.</li>
+    <li>The tunnel starts but gets no handshake for the first minutes after a power cut: the clock was behind. From 0.0.208 the tunnel waits for the clock (7.7); check <code>timedatectl</code> shows <code>NTP service: active</code>.</li>
     <li>A routing loop after boot (Overview, red): <b>Fix the tunnel-server route</b>; with 0.0.206 or later the pin waits for the route, so it shouldn't come back.</li>
-    <li>wifimon's tunnel watchdog (5.35.0) restarts a tunnel with no handshake after five minutes and then the DVSwitch services; its card on the wifimon page shows what it did.</li>
+    <li>wifimon's tunnel watchdog (5.35.0; use 5.36.0 or later) restarts a tunnel with no handshake after five minutes and then the DVSwitch services; its card on the wifimon page shows what it did.</li>
   </ol>
   <h2><span class="n">14.6</span>The Pi runs out of memory</h2>
   <p>Check swap is on: <code>swapon --show</code>. If an older 44helper turned it off, use <b>Swap — restore</b>
