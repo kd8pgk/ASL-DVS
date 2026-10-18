@@ -1,6 +1,25 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_1_0_20261018.py`. Newest entries first.
+Current file: `nodelisten_v0_2_0_20261018.py`. Newest entries first.
+
+## 0.2.0 (2026-10-18)
+
+Background listening, aimed at Android Chrome. Page changes only; the server and
+stream are unchanged.
+
+- **Plays through a media element.** The Web Audio output now goes to a hidden
+  `<audio>` element (`MediaStreamAudioDestinationNode` -> `srcObject`) instead of
+  straight to the speakers. The browser then treats the page as playing media, which
+  is what lets Android keep it going in the background and with the screen off. If
+  the element can't play, it falls back to the 0.1.0 path.
+- **Phone media controls.** Media Session metadata ("Node <number>", "Node Listen",
+  the Pi's address) and play / pause / stop handlers, so the notification and lock
+  screen show it and can stop or restart it. The playing / paused state follows the
+  Listen button.
+- **Keep the screen on while listening** (checkbox, remembered in the browser). It
+  uses the Screen Wake Lock API, which browsers only allow over HTTPS or on
+  localhost, so on a plain `http://<pi>:8993` page the checkbox stays hidden.
+- A line under the Listen card says playback can carry on in the background.
 
 ## 0.1.0 (2026-10-18)
 

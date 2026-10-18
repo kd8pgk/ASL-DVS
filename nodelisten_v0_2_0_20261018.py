@@ -21,7 +21,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.1.0"
+VERSION = "0.2.0"
 DATE_STR = "2026-10-18"
 APP_NAME = "Node Listen"
 
@@ -980,6 +980,7 @@ code{background:#0f1419;border:1px solid var(--line);border-radius:4px;padding:1
 _JS = r"""const $ = (id) => document.getElementById(id);
 let authed = false, publicListen = false, lastLogId = 0;
 let ctx = null, gainNode = null, ctrl = null, playing = false, nextT = 0;
+let mediaDest = null, wakeLock = null, nodeLabel = '';
 let pend = new Float32Array(1600), pendN = 0, peakLocal = 0, retryTimer = null;
 const UL = new Float32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -1048,6 +1049,7 @@ async function pollStatus() {
   try { d = await api('/api/status'); } catch (e) { return; }
   if (!d || d.ok === false) return;
   $('st-node').textContent = d.node || '(not set)';
+  if ((d.node || '') !== nodeLabel) { nodeLabel = d.node || ''; setMediaInfo(); }
   $('st-listeners').textContent = d.listeners + ' / ' + d.max_listeners;
   const feed = $('st-feed');
   feed.className = 'dot ' + (d.receiving ? 'on' : (d.packets ? 'warn' : 'err'));
@@ -1097,10 +1099,23 @@ async function startListen() {
     ctx = new AC();
     gainNode = ctx.createGain();
     gainNode.gain.value = $('vol').value / 100;
-    gainNode.connect(ctx.destination);
+    const player = $('player');
+    if (ctx.createMediaStreamDestination && player && 'srcObject' in player) {
+      mediaDest = ctx.createMediaStreamDestination();
+      gainNode.connect(mediaDest);
+      player.srcObject = mediaDest.stream;
+    } else {
+      gainNode.connect(ctx.destination);
+    }
   }
   await ctx.resume();
+  if (mediaDest) {
+    try { await $('player').play(); }
+    catch (e) { mediaDest = null; gainNode.disconnect(); gainNode.connect(ctx.destination); }
+  }
   playing = true;
+  setMediaState();
+  wakeLockApply();
   nextT = 0; pendN = 0;
   $('listen-btn').textContent = 'Stop';
   $('listen-btn').classList.remove('primary');
@@ -1135,7 +1150,10 @@ function stopListen() {
   playing = false;
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (ctrl) { ctrl.abort(); ctrl = null; }
+  if (mediaDest) $('player').pause();
   if (ctx) ctx.suspend();
+  setMediaState();
+  wakeLockApply();
   $('listen-btn').textContent = 'Listen';
   $('listen-btn').classList.add('primary');
   $('listen-msg').className = 'msg';
@@ -1143,6 +1161,42 @@ function stopListen() {
 }
 
 function toggleListen() { if (playing) stopListen(); else startListen(); }
+
+function setMediaInfo() {
+  if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: nodeLabel ? 'Node ' + nodeLabel : 'ASL node',
+    artist: 'Node Listen',
+    album: location.hostname,
+  });
+}
+
+function setMediaState() {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+}
+
+function setupMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  setMediaInfo();
+  const on = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {} };
+  on('play', () => { if (!playing) startListen(); });
+  on('pause', () => { if (playing) stopListen(); });
+  on('stop', () => { if (playing) stopListen(); });
+}
+
+async function wakeLockApply() {
+  const want = playing && $('keep-awake').checked && document.visibilityState === 'visible';
+  if (want && !wakeLock && 'wakeLock' in navigator) {
+    try {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    } catch (e) { wakeLock = null; }
+  } else if (!want && wakeLock) {
+    try { await wakeLock.release(); } catch (e) {}
+    wakeLock = null;
+  }
+}
 
 async function loadNode() {
   const d = await api('/api/node');
@@ -1227,6 +1281,16 @@ document.addEventListener('DOMContentLoaded', () => {
   $('logout').addEventListener('click', logout);
   $('listen-btn').addEventListener('click', toggleListen);
   $('vol').addEventListener('input', () => { if (gainNode) gainNode.gain.value = $('vol').value / 100; });
+  if ('wakeLock' in navigator) {
+    $('awake-row').classList.remove('hidden');
+    try { $('keep-awake').checked = localStorage.getItem('nlKeepAwake') === '1'; } catch (e) {}
+  }
+  $('keep-awake').addEventListener('change', () => {
+    try { localStorage.setItem('nlKeepAwake', $('keep-awake').checked ? '1' : '0'); } catch (e) {}
+    wakeLockApply();
+  });
+  document.addEventListener('visibilitychange', wakeLockApply);
+  setupMediaSession();
   $('nd-enable').addEventListener('click', nodeEnable);
   $('nd-disable').addEventListener('click', nodeDisable);
   $('nd-restart').addEventListener('click', astRestart);
@@ -1264,6 +1328,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="row"><button id="listen-btn" class="primary big">Listen</button>
 <label>Volume <input type="range" id="vol" min="0" max="200" value="100"></label></div>
 <div class="row"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted">-inf</span></div>
+<div class="row hidden" id="awake-row"><label><input type="checkbox" id="keep-awake"> Keep the screen on while listening</label></div>
+<audio id="player" playsinline class="hidden"></audio>
 <div id="listen-msg" class="msg"></div>
 <table>
 <tr><th>Node</th><td id="st-node">-</td></tr>
@@ -1271,6 +1337,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <tr><th>Audio</th><td><span id="st-active" class="dot"></span>lit while the node is passing audio</td></tr>
 <tr><th>Listeners</th><td id="st-listeners">-</td></tr>
 </table>
+<p class="muted">Sound plays through the browser's media player, so it can carry on with the tab in the background; the phone's media controls show Node Listen and can stop it.</p>
 </section>
 
 <section class="card hidden" id="node-card">
