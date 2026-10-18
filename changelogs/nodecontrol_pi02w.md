@@ -1,6 +1,26 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_83_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_84_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.84-pi02w (2026-10-18)
+
+M17 tab loses its top row; its LH opens the reflector's IP address; its Connect warns
+when USRP2M17 or Analog_Bridge is down. The full build is not changed.
+
+- **M17: top row removed.** The reflector IP box, its module menu and Connect above
+  the Reflector / Module menus are gone. Reflectors come from the menus only (an
+  unlisted reflector can no longer be typed in); saved favorites still connect from
+  the grid. The card's module menu already offers All Modules.
+- **LH opens the reflector's IP address.** `/api/m17-hosts` rows carry a new `ip`
+  field (the IPv4 address from M17Hosts.json, or the IPv6 address when there is no
+  IPv4). The card's LH opens `http://<ip>/` with no port (IPv6 in brackets), never
+  the DNS name. It is greyed out with no reflector picked or when the reflector
+  publishes no IP. Connect still uses the same address as before, and saved
+  favorites keep the Last Heard link they were saved with.
+- **Connect warning.** The 15 s service check also covers `usrp2m17.service`
+  (status `svc.m17`). M17 Connect shows red with a strike-through when USRP2M17 or
+  Analog_Bridge isn't running, with a hover note naming what is down.
+- The page code for the old row (`m17QuickConnect`, `initModuleSelects`) is removed.
 
 ## 9.3.83-pi02w (2026-10-18)
 

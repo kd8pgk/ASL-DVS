@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.83-pi02w"
+VERSION      = "9.3.84-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -4991,7 +4991,9 @@ def _parse_m17_hosts(text: str) -> dict:
             stats["no_m17"] += 1
             continue
 
-        row = {"id": rid, "label": label, "addr": addr, "lh_url": url}
+        ip  = _m17_text(e.get("ipv4"), _M17_ADDR_MAX) or \
+              _m17_text(e.get("ipv6"), _M17_ADDR_MAX)
+        row = {"id": rid, "label": label, "addr": addr, "lh_url": url, "ip": ip}
         if mods:
             row["modules"] = mods
         out.append(row)
@@ -6488,7 +6490,7 @@ def _asl_reg_public() -> str:
 
 _SVC_CHECK_SEC = 15.0
 _svc_lock      = threading.Lock()
-_SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn", "ircddb")
+_SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn", "ircddb", "m17")
 _svc_state     = {k: "unknown" for k in _SVC_KEYS}
 
 def _svc_unit_states(groups: dict) -> dict:
@@ -6520,6 +6522,7 @@ def _svc_check() -> dict:
         "p25":  ("p25gateway.service",),
         "nxdn": ("nxdngateway.service",),
         "ircddb": ("ircddbgatewayd.service",),
+        "m17":  (M17_SERVICE + ".service",),
     })
     if res["stfu"] == "none" and Path("/opt/STFU/STFU").is_file():
         out, _ = run(["pgrep", "-x", "STFU"], timeout=3)
@@ -8233,7 +8236,7 @@ body.radio-keyed .ref-row.active-dstar,body.radio-keyed .ref-row.active-xlx,body
   flex-shrink: 0;
 }
 .ref-mod-sel:focus { border-color: var(--amber); }
-#m17-grid .ref-mod-sel, #qt-M17-mod { width: 7.6rem; }
+#m17-grid .ref-mod-sel { width: 7.6rem; }
 .ref-mod-sel option { background: var(--surface2); }
 .btn-conn  { color: var(--teal); border-color: var(--teal-dim); }
 .btn-conn-pink { color: var(--pink); border-color: var(--pink-dim); }
@@ -8304,7 +8307,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn-teal   { color: var(--teal);   border-color: #004840; }
 #dmr-connect-btn.svc-down, #stfu-connect-btn.svc-down, #ysf-connect-btn.svc-down,
 #p25-connect-btn.svc-down, #nxdn-connect-btn.svc-down, #fcs-connect-btn.svc-down,
-#dstar-connect-btn.svc-down, #xlx-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
+#dstar-connect-btn.svc-down, #xlx-connect-btn.svc-down, #m17-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 #asl-connect-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
@@ -9466,13 +9469,6 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-M17" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-M17-ip" class="quick-inp" type="text" placeholder="Reflector IP…" maxlength="45"
-              style="max-width:160px"
-              onkeydown="if(event.key==='Enter')m17QuickConnect()">
-            <select id="qt-M17-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn" onclick="m17QuickConnect()">Connect</button>
-          </div>
           <div id="m17-card" class="m17-card">
             <select id="m17-ref-select" class="m17-select" aria-label="M17 reflector"
               onchange="m17FillModules(false)" disabled>
@@ -9484,7 +9480,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             </select>
             <button id="m17-connect-btn" class="btn btn-conn" onclick="m17CardConnect()" disabled>Connect</button>
             <button id="lh-btn-M17" class="btn-last lh-off" onclick="openM17Last()"
-              title="Last Heard" aria-label="Last Heard" aria-disabled="true">LH</button>
+              title="Last Heard (reflector IP)" aria-label="Open this reflector's IP address" aria-disabled="true">LH</button>
             <button id="m17-save-btn" class="btn btn-muted" onclick="m17CardSave()" disabled
               aria-label="Save this reflector to favorites" title="Save to favorites">Save</button>
             <div id="m17-card-msg" class="m17-card-msg" role="status" hidden></div>
@@ -10289,17 +10285,6 @@ function buildModuleOptions(selected,includeAll){
   }
   return h;
 }
-function initModuleSelects(){
-  // M17's quick-bar dropdown includes the @ALL wildcard and defaults to it
-  // (join every module on the reflector) rather than defaulting to 'A' like
-  // DSTAR/XLX above — matches the saved-row default in action_save_m17().
-  const m17el=byId('qt-M17-mod');
-  if(m17el&&!m17el.dataset.init){
-    m17el.innerHTML=buildModuleOptions('@ALL',true);
-    m17el.value='@ALL';
-    m17el.dataset.init='1';
-  }
-}
 function getReflectorMod(gridId,i){
   const sel=document.querySelector('#'+gridId+' .ref-mod-sel[data-idx="'+i+'"]');
   return sel?sel.value:'A';
@@ -11033,7 +11018,7 @@ function m17CardButtons(){
   btn.disabled=!(r&&msel.value);
   const sv=byId('m17-save-btn');
   if(sv)sv.disabled=!(r&&msel.value)||_m17c.saving;
-  const url=r?(r.lh_url||''):'';
+  const url=r?lcHostUrl(r.ip):'';   // v9.3.84: the reflector's IP, no port
   _updateLhBtn('lh-btn-M17',url);
   if(lh)lh.setAttribute('aria-disabled',url?'false':'true');
 }
@@ -11089,7 +11074,7 @@ async function m17CardSave(){
 function openM17Last(){
   const rsel=byId('m17-ref-select');
   const r=rsel?_m17c.byId[rsel.value]:null;
-  openLast(r?r.lh_url||'':'');
+  openLast(r?lcHostUrl(r.ip):'');
 }
 
 /* ── XLX / D-STAR reflector cards (v8.9.1, v8.9.3; engine v9.0.3) ───────────
@@ -11412,19 +11397,6 @@ async function doM17Disconnect(){
     },
     30000
   );
-}
-async function m17QuickConnect(){
-  // Custom rather than reflectorQuickConnect(): that helper uppercases and
-  // treats the field as a reflector callsign/base. M17's quick-bar field is
-  // a plain IP/hostname with no separate name/base field, so ip doubles as
-  // both the display name and the ini-identity base for ad-hoc lookups
-  // (saved rows in Edit have proper name/base pairs — see m17SyncFromDOM).
-  const ipEl=byId('qt-M17-ip');
-  const modEl=byId('qt-M17-mod');
-  const ip=ipEl?ipEl.value.trim():'';
-  const mod=((modEl&&modEl.value)||'@ALL').toUpperCase();
-  if(!ip){toast('Enter a reflector IP first','err');return;}
-  await m17Connect(ip,ip,ip,mod);
 }
 async function tuneTG(mode,tg,name){
   if(busy)return;
@@ -11926,6 +11898,7 @@ function applySvcWarn(d){
   const irc=(s.ircddb==='inactive'?['ircDDBGateway']:[]).concat(ab);
   set('dstar-connect-btn',irc);
   set('xlx-connect-btn',irc);
+  set('m17-connect-btn',(s.m17==='inactive'?['USRP2M17']:[]).concat(ab));
   set('p25-connect-btn',(s.p25==='inactive'?['P25Gateway']:[]).concat(ab));
   set('nxdn-connect-btn',(s.nxdn==='inactive'?['NXDNGateway']:[]).concat(ab));
 }
@@ -12048,7 +12021,6 @@ function applyGridState(d,changed){
     fcsCardSync(d);   // v8.4.2: follow the tuned FCS room in the browse card
     Object.keys(LC_CFG).forEach(k=>lcCardSync(k,d));   // v9.0.2 browse-card engine: P25 / NXDN / STFU / XLX / D-STAR / YSF
     m17CardSync(d);   // v8.6.2: follow the connected M17 reflector in the browse card
-    initModuleSelects();
   }
 }
 async function refresh(){
@@ -12176,7 +12148,6 @@ async function loadTgData(){
     renderXlxGrid(_lastXlxRefs,curTg&&curTg.mode==='XLX'?curTg.tg:null);
     renderM17Grid(_lastM17Refs,curTg&&curTg.mode==='M17'?curTg.tg:null);
     renderASLGrid(_lastAslNodes,_lastLinkedNode);  // A5 writer 7/7 — boot draw; see applyGridState comment
-    initModuleSelects();
     _refreshLhBtns();
   }catch(e){
     console.error('loadTgData() error:',e);
@@ -13429,7 +13400,7 @@ let _appStarted=false;
 function _startApp(){
   if(_appStarted)return;
   _appStarted=true;
-  refresh().then(()=>{loadTgData();schedulePoll();pollKeyed();initModuleSelects();pollAbInfo();});
+  refresh().then(()=>{loadTgData();schedulePoll();pollKeyed();pollAbInfo();});
   setInterval(pollAbInfo,10_000);
   setInterval(()=>{
     if(!_uptimeAt)return;
