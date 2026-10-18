@@ -27,14 +27,14 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_77_20261018.py</td><td>9.3.77-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_72_20261018.py</td><td>6.13.72-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_213_20261018.py</td><td>0.0.213</td></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_54_0_20261018.py</td><td>2.54.0</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_85_20261018.py</td><td>9.3.85-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_73_20261018.py</td><td>6.13.73-pi02w</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_215_20261018.py</td><td>0.0.215</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_57_0_20261018.py</td><td>2.57.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
-      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85</td></tr>
-      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
+      <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_86_20261014.py</td><td>6.13.86</td></tr>
+      <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_84_20261018.py</td><td>9.3.84</td></tr>
     </table>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
@@ -181,7 +181,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.77-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.85-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span>
         <span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span>
@@ -194,7 +194,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.72-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.73-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:rgb(0,255,229)">Overview</span>
         <span class="tab" style="border-color:rgb(0,255,229)">Services</span>
@@ -224,7 +224,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">v0.0.212</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">v0.0.215</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -240,7 +240,7 @@ sudo systemctl status sysmon</pre>
   <div class="grid2">
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--blu)">INSTALL MONITOR</span><span class="meta">v2.54.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--blu)">INSTALL MONITOR</span><span class="meta">v2.57.0</span></div>
         <div class="sect">Quick Links</div><div class="sect">GitHub Updates</div>
         <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="btn c">Quiet System</span></div>
         <div class="sect">Components</div><div class="sect">Scripts &amp; Configuration Library</div>
@@ -432,7 +432,8 @@ sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper</pre>
     <tr><th>Button</th><th>What it does</th></tr>
     <tr><td>Check GitHub</td><td>Lists the newest copy of each tool on GitHub, and marks the ones newer than yours.</td></tr>
     <tr><td>Update</td><td>Downloads and checks one file into instmon's library. Nothing is installed until you press Install on it.</td></tr>
-    <tr><td>Full Update</td><td>Updates every installed tool in one go, one tool at a time, with automatic roll-back if a new version fails.</td></tr>
+    <tr><td>Full Update</td><td>Updates every installed tool in one go, one tool at a time, with automatic roll-back if a new version fails. The progress line counts down each wait ("waiting for v… to start and answer: 42s left"), and the install output shows in the log as it happens (2.55.0, 2.56.0).</td></tr>
+    <tr><td>Stop Full Update</td><td>Shows while Full Update runs (2.57.0). Stops the tool being installed and puts back the version it had, skips the tools not reached yet and instmon, restarts the paused web tools, and the banner says "stopped by you". Putting the old version back is never stopped halfway. Hidden while instmon installs itself.</td></tr>
     <tr><td>Quiet System</td><td>Pauses SysMon, the Dashboard and 44helper during a big upload or install. The radio side keeps running, and everything comes back by itself after 30 minutes. <b>Restore</b> brings it back sooner.</td></tr>
   </table>
   <div class="call tip"><span class="t">TIP</span>Before a Full Update, take a restore point in 44helper's Config
@@ -476,7 +477,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
       <li>Downloads and checks every new file before anything changes.</li>
       <li>Downloads the manuals that are new or changed on GitHub (from 2.45.0), except ones you deleted (from 2.46.0). A failure here is listed as skipped and the tools still update.</li>
       <li>Pauses the web tools.</li>
-      <li>For each tool in turn, saves a copy of the installed file in the library, runs the old <code>--uninstall</code>, and runs the new <code>--install</code>. If the new one fails, it puts the old one back and moves on.</li>
+      <li>For each tool in turn, saves a copy of the installed file in the library, runs the old <code>--uninstall</code>, and runs the new <code>--install</code>. If the new one fails, it puts the old one back and moves on. From 2.57.0 each install step runs as its own systemd unit (<code>instmon-fu-job</code>, up to 10 minutes), so restarting instmon doesn't cut it off halfway. If instmon restarts in the middle of an update, on startup it waits for that step, keeps the tool if it is installed and answering, and otherwise puts the old version back from the library.</li>
       <li>Updates instmon last. A timer reinstalls the old instmon if the new one isn't answering after 90 seconds.</li>
       <li>Ends with a summary, including any manuals that were downloaded. New install scripts go only to the Scripts library and are never run for you.</li>
     </ol>
@@ -524,7 +525,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
   <h2><span class="n">3.2</span>The page at a glance</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.72-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.73-pi02w</span></div>
       <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
       <div class="cards">
         <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
@@ -1047,6 +1048,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p><b>Copy hardware report</b> at the top copies the whole tab as text, ready for a help request.</p>
   <table>
     <tr><th>Card</th><th>What it shows and does</th></tr>
+    <tr><td>Node Health</td><td>First on the tab (6.13.70-pi02w, full build 6.13.86). The things that most often take a node down without anyone noticing, each marked OK, WARN, PROBLEM or ? (couldn't check), with a line of detail and the fix. Included in Copy hardware report. See below.</td></tr>
     <tr><td>AMBE Device</td><td>A ThumbDV or similar AMBE vocoder dongle, if present. You can <b>ping</b> the chip (it answers with its product ID), set the serial port speed (from a fixed list), add or remove a fixed <code>/dev</code> name for it with a udev rule, and <b>reset</b> it. Reset stops the DVSwitch services, resets the chip, then starts Analog_Bridge, MMDVM_Bridge and md380-emu first and the rest 3 seconds later.</td></tr>
     <tr><td>Audio Device</td><td>The sound interface the node uses.</td></tr>
     <tr><td>Power &amp; Thermal</td><td>Supply health from the firmware: under-voltage, throttling and temperature limits, now and since boot.</td></tr>
@@ -1055,6 +1057,17 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>asl-find-sound</td><td>ASL's own sound-device finder, for SimpleUSB setup.</td></tr>
     <tr><td>ALSA Cards</td><td>Linux sound cards, <b>Playback</b> or <b>Capture</b> side.</td></tr>
   </table>
+  <h3>Node Health</h3>
+  <table>
+    <tr><th>Check</th><th>WARN or PROBLEM when</th></tr>
+    <tr><td>Clock</td><td>WARN when the clock isn't synced. A Pi has no clock battery, and a wrong clock breaks HTTPS updates and AllStar registration. The note says how to turn sync on, or to check UDP 123.</td></tr>
+    <tr><td>Out-of-memory kills</td><td>PROBLEM when the kernel has killed any process for lack of memory since boot, with the last five it killed.</td></tr>
+    <tr><td>Memory</td><td>WARN below 64 MB available, PROBLEM below 32 MB. WARN when swap (zram is noted) is more than 75% used.</td></tr>
+    <tr><td>Disk and logs</td><td>Root: WARN below 10% free, PROBLEM below 5%. Journal: WARN over 200 MB, with the <code>SystemMaxUse</code> fix. <code>/var/log</code>: WARN over 300 MB.</td></tr>
+    <tr><td>Memory per service</td><td>State, memory and restart count for the suite, Asterisk and the bridges (only the ones installed). WARN when systemd restarted one 3 or more times.</td></tr>
+  </table>
+  <p>The card reads <code>/api/health</code> (login needed), which is worked out at most every 30 seconds.</p>
+
   <h3>Video &amp; GPU Memory</h3>
   <p>A Pi Zero 2 W used as a node never drives a screen, but the video driver and GPU still hold memory.</p>
   <ul>
@@ -1238,8 +1251,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li><b>Dual registration</b> warns when both HTTP and IAX are active. Pick one and comment out the other; HTTP is
       ASL3's default.</li>
     <li><b>Re-check</b> reads it all again. Live state also refreshes in the background every 30 seconds.</li>
-    <li><b>Registered as</b> (6.13.72-pi02w): for each registered node, the address and port the AllStarLink server
-      sees it at (the Perceived column of <code>rpt show registrations</code>), and whether that is through the 44Net
+    <li><b>Registered as</b> (6.13.72-pi02w, corrected in 6.13.73-pi02w): for each registered node, the address and
+      port the AllStarLink server sees it at (the Perceived column of <code>rpt show registrations</code>, not the
+      server's own address in the Host column, which 6.13.72 showed by mistake), and whether that is through the 44Net
       tunnel, your public internet address or a private address. The tooltip of the <b>ASL</b> field in the header
       shows it too. On a split tunnel your public address is normal; on a full or half tunnel it should be the 44
       address.</li>
@@ -1372,7 +1386,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.213 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.215 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -1503,8 +1517,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.7</span>Firewall and port control</h2>
   <p>44helper uses <b>firewalld</b>. From 0.0.196 there is no Firewall tab: its cards are a <b>Firewall and port
     control</b> section at the end of the <b>Full Tunnel</b> and <b>Split Tunnel</b> tabs. The section exists once and
-    follows you to whichever of the two you open, keeping what you typed. The half tunnel card is on the Full Tunnel
-    tab, and the router's port-forward table on the Router Install tab (Chapter 8). The guardrail at the top of the
+    follows you to whichever of the two you open, keeping what you typed. The half tunnel card is on both the Full Tunnel and
+    Split Tunnel tabs (from 0.0.214), and the router's port-forward table on the Router Install tab (Chapter 8). The guardrail at the top of the
     section warns when <code>wg0</code> is attached to the ASL3 image's own <code>allstarlink</code> zone instead of
     44helper's <code>44NetConnect</code> zone.</p>
   <table>
@@ -1513,7 +1527,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Quick port control (any zone)</td><td>Pick any zone (the active and default zones are marked) and <b>Show zone config</b>. Presets fill in IAX2, EchoLink, VOTER/RTCM or your DVSwitch Mobile port. Then:
       <b>Add (runtime test)</b> opens it until the next reload, a safe way to try it; <b>Make permanent</b> keeps that one port; <b>Remove</b> closes it everywhere; <b>Commit all runtime changes</b> keeps every test at once; <b>Reload firewalld</b>. An advanced section adds services and moves interfaces between zones.</td></tr>
     <tr><td>Panic mode</td><td>If firewalld's panic mode (all traffic dropped) is on, a button turns it off.</td></tr>
-    <tr><td>Half tunnel (ASL + EchoLink only) <span class="badge test">TESTING</span></td><td>On the Full Tunnel tab, above Full tunnel with exceptions. Sends only ASL and EchoLink through a full 44Net tunnel; everything else stays on the normal link. See below.</td></tr>
+    <tr><td>Half tunnel (ASL + EchoLink only) <span class="badge test">TESTING</span></td><td>On the Full Tunnel tab, above Full tunnel with exceptions, and on the Split Tunnel tab (0.0.214). Sends only ASL and EchoLink through the 44Net tunnel; everything else stays on the normal link. See below.</td></tr>
   </table>
   <p>As you type a port, a guardrail line checks it: a loopback-only port is <b>blocked</b> in every zone, and a
     dashboard, AMI or Cockpit port is allowed but flagged red.</p>
@@ -1523,10 +1537,12 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p>With a full tunnel's <code>AllowedIPs = 0.0.0.0/0</code>, anyone on the internet can reach your 44 address, but
     everything the Pi sends goes through 44Net too. The half tunnel keeps the first part and drops the second: only
     Asterisk (AllStar links, registration, EchoLink) uses the tunnel. DVSwitch, usrp2m17, DNS and everything else
-    keep the normal route. The card works in numbered buttons:</p>
+    keep the normal route. From 0.0.214 the card is on the Split Tunnel tab too, so a split tunnel node can register
+    and link on its 44 address, and other nodes reach it there without a router port forward. The card works in
+    numbered buttons:</p>
   <table>
     <tr><th>Button</th><th>What it does</th></tr>
-    <tr><td>0. Check first</td><td>Read-only. Finds the 44 address, the tunnel server, the IAX port, EchoLink, the normal route, the LAN and wg0's zone, and blocks on anything that would break (for example <code>SaveConfig = true</code>, a <code>Table =</code> line, or the full tunnel with exceptions in use). Backs up wg0.conf to the instmon library.</td></tr>
+    <tr><td>0. Check first</td><td>Read-only. Finds the 44 address, the tunnel server, the IAX port, EchoLink, the normal route, the LAN and wg0's zone, and blocks on anything that would break (for example <code>SaveConfig = true</code>, a <code>Table =</code> line of your own, or the full tunnel with exceptions in use). 44helper's own split-tunnel routing lines (Table 4445) are fine: the test copy and the permanent config leave them out, and Remove permanent puts them back (0.0.214). From 0.0.215 every <code>firewall-cmd</code> call gets 60 seconds to answer, so a slow Pi Zero 2 W no longer reads a running firewalld as "isn't running"; if it still doesn't answer, Check first says so. Backs up wg0.conf to the instmon library.</td></tr>
     <tr><td>1. Arm auto-undo</td><td>A 15-minute timer that takes every test change back out by itself, even if the page or SSH drops. Nothing else can run until it is armed.</td></tr>
     <tr><td>2–6</td><td>The temporary test, one piece per button: restart the tunnel in half mode from a copy in <code>/run</code>, add the tunnel route table, send ASL and EchoLink into it, open the tunnel ports, loosen the return-path check. <b>Run 2–6 in order</b> does them all and puts everything back at the first failure.</td></tr>
     <tr><td>7. Run checks</td><td>14 checks in four groups: the tunnel, the normal route (internet, DNS, LAN pages), the half-tunnel pieces, and the services. A red line on the normal route shows a banner recommending Undo now.</td></tr>
@@ -1534,6 +1550,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>10. Make permanent</td><td>Unlocks once steps 2–6 are done and the checks (under 15 minutes old) are all green or grey. Saves the setup in wg0.conf, firewalld and a sysctl file, writes <code>remove_half_tunnel.sh</code> to your home folder and <code>/root</code>, restarts the tunnel and checks again. If a check fails, it takes it all back out and restarts the test.</td></tr>
     <tr><td>11. Remove permanent</td><td>Same as running <code>~/remove_half_tunnel.sh</code>, which works without 44helper.</td></tr>
   </table>
+  <p>How the routing works from 0.0.214: WireGuard marks its own packets (<code>FwMark 0x4444</code>) and a rule at
+    priority 1099 sends them on the normal route, while the 44Net ranges go into the tunnel by rule (priorities 1107
+    and 1108) instead of sitting in the main table. The tunnel server is then always reached on whichever adapter is
+    up, so a WiFi change no longer loops the tunnel. Check 7 tests 44Net through wg0 and the marked packets on the
+    normal route. A half tunnel made permanent by an earlier version keeps its old lines until you remove it and make
+    it again. The Overview warns when, with the half tunnel on, AllStar still registers from an address outside the
+    tunnel, and points to the Half tunnel card when it is off.</p>
   <div class="call care"><span class="t">CAREFUL</span>With the half tunnel on, other nodes and EchoLink reach you at
     your 44 address only. A router port forward to the node's IAX or EchoLink port stops working, because the replies
     go out the tunnel. Everything open in wg0's firewall zone is reachable from the whole internet.</div>
@@ -2245,53 +2268,83 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">12.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.77-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.85-pi02w</span></div>
       <div class="row" style="padding-top:.5em;justify-content:space-between"><span><span class="btn">Allmon3</span> <span class="btn">DVSwitch</span> <span class="btn">Cockpit</span></span>
         <span style="font-family:var(--mono);color:var(--grn);font-size:8pt">● TG 3100 ●</span>
         <span><span class="btn">InstMon</span> <span class="btn">WiFiMon</span> <span class="btn">SysMon</span></span></div>
       <div class="tabs" style="padding-top:0"><span class="tab">ASL</span><span class="tab">Echo</span><span class="tab on" style="background:var(--blu)">DMR</span><span class="tab">STFU</span><span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span><span class="tab">XLX</span><span class="tab">M17</span><span class="tab">Phone</span><span class="tab">EDIT</span></div>
-      <div class="row"><span class="btn">BrandMeister ▾</span><span class="txt" style="border:1px solid var(--line);padding:.3em .6em">TG number…</span><span class="btn c">Tune</span><span class="btn">LH</span><span class="btn">Save</span></div>
+      <div class="row"><span class="btn">BrandMeister ▾</span><span class="txt" style="border:1px solid var(--line);padding:.3em .6em">TG number…</span><span class="btn c">Connect</span><span class="btn">LH</span><span class="btn">Save</span></div>
       <div class="cards">
         <div class="card"><b>Worldwide</b>91</div><div class="card" style="border-color:var(--grn)"><b style="color:var(--grn)">USA</b>3100</div>
         <div class="card"><b>Ohio</b>3139</div><div class="card"><b>Parrot</b>9990</div>
       </div>
       <div class="row" style="padding-bottom:.6em"><span class="btn" style="color:var(--red);border-color:var(--red)">Disconnect</span><span class="btn">Disconnect All</span></div>
     </div>
-    <figcaption><b>Figure 12.1 · Illustration.</b> The DMR tab. Every mode tab has the same shape: a quick bar, an
-      optional search card, a grid of favorites, and Disconnect buttons.</figcaption>
+    <figcaption><b>Figure 12.1 · Illustration.</b> The DMR tab: the network menu, a talkgroup box, Connect, LH and
+      Save in one row, then the favorites and the Disconnect buttons. DMR is the only tab with a talkgroup box above
+      its favorites; every other mode tab has one search row instead (Figure 12.2).</figcaption>
+  </figure>
+  <figure>
+    <div class="mock">
+      <div class="tabs" style="padding-top:.4em"><span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span><span class="tab">…</span></div>
+      <div class="row"><span class="txt" style="border:1px solid var(--line);padding:.3em .6em">2001</span><span class="txt" style="border:1px solid var(--line);padding:.3em .6em">2001 · W1AW · Newington CT ▾</span><span class="btn c">Connect</span><span class="btn">LH</span><span class="btn">Save</span></div>
+      <div class="row"><span class="txt" style="font-size:8pt">Showing 1 of 61,204 matches.</span></div>
+      <div class="sect">Favorites</div>
+      <div class="cards"><div class="card"><b>Hub</b>2560</div><div class="card"><b>Club</b>41234</div></div>
+      <div class="row" style="padding-bottom:.6em"><span class="btn" style="color:var(--red);border-color:var(--red)">Disconnect</span></div>
+    </div>
+    <figcaption><b>Figure 12.2 · Illustration.</b> The ASL tab. One search row: a search box, the list of matches,
+      Connect, LH and Save. Typing a node number and pressing Connect (or Enter) works even when the node isn't in the
+      list.</figcaption>
   </figure>
   <table>
     <tr><th>Part</th><th>What it does</th></tr>
     <tr><td>Header</td><td>Callsign, node number, uptime, Log Out, version.</td></tr>
     <tr><td>Quick links</td><td>Allmon3, the DVSwitch page, Cockpit, instmon, wifimon and SysMon. SysMon is greyed out while it isn't running.</td></tr>
     <tr><td>Indicator</td><td>What you are connected to now (talkgroup, node or reflector). The dots light while traffic passes.</td></tr>
-    <tr><td>Quick bar</td><td>Type a number or reflector and press <b>Tune</b> (or Enter). <b>LH</b> opens that network's Last Heard page; <b>Save</b> adds it to your favorites.</td></tr>
-    <tr><td>Search card</td><td>On most tabs: search the full list (AllStar nodes, EchoLink stations, reflectors, talkgroups), pick one, then <b>Connect</b>, <b>LH</b> or <b>Save</b>.</td></tr>
+    <tr><td>Search row</td><td>Every mode tab except DMR and Phone. Search the full list (AllStar nodes, EchoLink stations, reflectors, talkgroups) and pick one, then <b>Connect</b>, <b>LH</b> or <b>Save</b>. On most tabs you can also type what you want straight into the search box and press <b>Connect</b> or Enter, even when it isn't in the list (section 12.2). FCS and M17 have menus only.</td></tr>
+    <tr><td>DMR row</td><td>The DMR tab keeps its own row: network menu, talkgroup box, <b>Connect</b>, <b>LH</b> and <b>Save</b>.</td></tr>
+    <tr><td>Connect</td><td>Turns red with a line through it when a service the tab needs isn't running; hover over it to see which (section 12.3). On the ASL tab it does the same when the node isn't registered with AllStarLink.</td></tr>
     <tr><td>Favorites grid</td><td>One tap to connect. The one in use is highlighted in green, and its name turns gold while the radio is keyed.</td></tr>
     <tr><td>Disconnect / Disconnect All</td><td>Drop this tab's connection, or every connection on the node.</td></tr>
     <tr><td>System</td><td><b>Reboot</b> and <b>Shutdown</b> for the Pi, at the bottom of the page (both ask first).</td></tr>
   </table>
   <div class="call note"><span class="t">NOTE</span><b>Changing tab changes mode.</b> When you open a mode tab,
     the Dashboard drops the current links and talkgroup, switches DVSwitch to that mode, starts its gateway if
-    needed, and brings up the bridge node it uses. Leaving the Phone tab hangs up any call; leaving M17 disconnects
-    the reflector. So the tab you are on is the mode you are on.</div>
+    needed, and brings up the bridge node it uses. Leaving the Phone tab hangs up any call. Leaving M17 does
+    exactly what M17's Disconnect does, before anything else (9.3.85-pi02w, full build 9.3.84). So the tab you are on
+    is the mode you are on. Opening <b>EDIT</b> doesn't change the mode: whatever you are connected to stays up.</div>
 
   <h2><span class="n">12.2</span>The tabs</h2>
+  <p>From Dashboard 9.3.78-pi02w to 9.3.85-pi02w (full build 9.3.84) the mode tabs lost the extra row they had
+    above the search row. Everything that row did is now done from the search row, and no button says Tune any more.
+    When nothing is picked in the list, <b>Connect</b> (or Enter in the search box) uses what you typed, as long as
+    it looks like the kind of thing in the "Type" column. Anything else is just a search.</p>
   <table>
-    <tr><th>Tab</th><th>Connect to</th><th>Notes</th></tr>
-    <tr><td>ASL</td><td>AllStarLink nodes</td><td>Type a node number, or search by node, callsign or place. Disconnect drops the current link.</td></tr>
-    <tr><td>Echo</td><td>EchoLink stations</td><td>Node number or callsign search.</td></tr>
-    <tr><td>DMR</td><td>Talkgroups on a DMR network</td><td>Pick the network (BrandMeister, TGIF, DMR+…) in the drop-down first; each network has its own favorites.</td></tr>
-    <tr><td>STFU</td><td>BrandMeister talkgroups or private IDs, directly</td><td>Uses the STFU terminal (Chapter 4), not MMDVM_Bridge's DMR.</td></tr>
-    <tr><td>YSF</td><td>System Fusion reflectors</td><td>Filter by country and name, or type <code>IP:port</code>.</td></tr>
-    <tr><td>FCS</td><td>FCS rooms</td><td>Pick a server, then a room, or type <code>FCS00335</code> or just <code>335</code>.</td></tr>
-    <tr><td>P-25 / NXDN</td><td>Talkgroups</td><td>Search by number or address.</td></tr>
-    <tr><td>D-STAR</td><td>REF, XRF and DCS reflectors, or a gateway callsign</td><td>Pick the module letter beside the reflector. Linking to a gateway callsign is <span class="badge test">TESTING</span> (below).</td></tr>
-    <tr><td>XLX</td><td>XLX reflectors</td><td>Reflector plus module.</td></tr>
-    <tr><td>M17</td><td>M17 reflectors</td><td>Reflector plus module (or All Modules), or type the reflector IP.</td></tr>
-    <tr><td>Phone <span class="badge work">WORKING</span></td><td>Telephone calls</td><td>Below. Hams Over IP is <span class="badge test">TESTING</span>.</td></tr>
-    <tr><td>EDIT</td><td>Settings and favorites</td><td>Below.</td></tr>
+    <tr><th>Tab</th><th>Connect to</th><th>Type in the search box</th><th>LH opens</th><th>Save</th></tr>
+    <tr><td>ASL</td><td>AllStarLink nodes</td><td>A node number, 1 to 7 digits (even one not in the list). Search by node, callsign or place.</td><td>The ASL Last Heard address on the Edit tab</td><td>The picked node, else the typed number, else the last number connected</td></tr>
+    <tr><td>Echo</td><td>EchoLink stations</td><td>A node number, 1 to 7 digits. Search by number or callsign.</td><td>The Echo Last Heard address on the Edit tab</td><td>As ASL</td></tr>
+    <tr><td>DMR</td><td>Talkgroups on a DMR network</td><td colspan="3">Its own row (Figure 12.1). Pick the network in the drop-down first; each network has its own favorites. An empty box with Connect re-tunes the network.</td></tr>
+    <tr><td>STFU</td><td>BrandMeister talkgroups or private IDs, directly</td><td>A talkgroup or ID, 1 to 8 digits. Search by number or name. Uses the STFU terminal (Chapter 4), not MMDVM_Bridge's DMR.</td><td>The STFU Last Heard address on the Edit tab</td><td>As ASL; only talkgroups in the BrandMeister list can be saved</td></tr>
+    <tr><td>YSF</td><td>System Fusion reflectors</td><td>An address with a port: <code>host:port</code>, <code>IP:port</code> or <code>[IPv6]:port</code>. Filter by country, name or number.</td><td>The picked reflector's address</td><td>The picked reflector only</td></tr>
+    <tr><td>FCS</td><td>FCS rooms</td><td>Nothing: pick a server, then a room.</td><td>The picked server's page, else the FCS Last Heard address on the Edit tab</td><td>The picked room</td></tr>
+    <tr><td>P-25 / NXDN</td><td>Talkgroups</td><td>A talkgroup number, 1 to 8 digits. Search by number or address.</td><td>The picked talkgroup's address</td><td>As ASL; only talkgroups in the host list</td></tr>
+    <tr><td>D-STAR</td><td>REF, XRF and DCS reflectors, or a gateway callsign</td><td><code>REF001</code>, <code>XRF012</code>, <code>DCS001</code> or a gateway callsign such as <code>W1ABC</code>, optionally with a module after a space (<code>W1ABC B</code>). Plain searches such as "001" never link.</td><td>The picked reflector's address</td><td>The picked reflector, else the typed reflector or callsign, with its module</td></tr>
+    <tr><td>XLX</td><td>XLX reflectors</td><td><code>XLX334</code>, optionally with a module (<code>XLX334 C</code>). Search by number, name or address.</td><td>The picked reflector's address</td><td>The picked reflector only</td></tr>
+    <tr><td>M17</td><td>M17 reflectors</td><td>Nothing: pick a reflector, then a module (or All Modules).</td><td>The reflector's IP address, <code>http://&lt;ip&gt;/</code>, never its DNS name</td><td>The picked reflector and module</td></tr>
+    <tr><td>Phone <span class="badge work">WORKING</span></td><td>Telephone calls</td><td colspan="3">Section 12.4. Hams Over IP is <span class="badge test">TESTING</span>.</td></tr>
+    <tr><td>EDIT</td><td>Settings and favorites</td><td colspan="3">Section 12.5.</td></tr>
   </table>
+  <ul>
+    <li><b>Module letters.</b> D-STAR and XLX have a module menu beside the reflector list. It is used for typed
+      reflectors too. A module typed after a space wins over the menu, even for a reflector you picked.</li>
+    <li><b>The search box still works without a list.</b> When the node list, talkgroup list or reflector list is
+      missing, the message under the row says so, and you can still type a number, address, reflector or callsign.</li>
+    <li><b>LH</b> is greyed out when there is nothing to open: no Edit-tab address set, nothing picked, or (M17) a
+      reflector that publishes no IP address. LH opens an address without a port, which reaches most dashboards.</li>
+    <li>FCS and M17 rooms or reflectors that aren't in their lists can no longer be typed in. Saved favorites still
+      connect from the grid.</li>
+  </ul>
   <div class="call care"><span class="t">CAREFUL</span>A red <b>PERMANENT LINK ACTIVE</b> bar means your node
     has a permanent link to another node. Anything you connect on a digital mode is then bridged onto that link too.
     Press <b>Disconnect</b> in the bar unless you mean to bridge.</div>
@@ -2303,11 +2356,11 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     hotspot by its callsign) is still being tested. Reflectors (REF, XRF, DCS) are not affected.</div>
   <p>Besides reflectors, the D-STAR tab can link your node straight to another D-STAR gateway, such as a repeater:</p>
   <ol class="steps">
-    <li>Type the gateway's callsign in the D-STAR box, for example <code>W1ABC</code>. It is 3 to 6 letters and
+    <li>Type the gateway's callsign in the D-STAR search box, for example <code>W1ABC</code>. It is 3 to 6 letters and
       digits with at least one digit. A name made of REF, XRF or DCS plus 3 digits is always taken as a reflector.</li>
-    <li>Pick the module letter of the far repeater you want, usually <b>A</b>, <b>B</b> or <b>C</b>. You can also type
-      it after the callsign, as in <code>W1ABC B</code>.</li>
-    <li>Press Tune. The pop-up says <i>D-STAR link sent to gateway W1ABC&nbsp;&nbsp;B</i>. That means the link
+    <li>Pick the module letter of the far repeater you want in the module menu, usually <b>A</b>, <b>B</b> or <b>C</b>.
+      You can also type it after the callsign, as in <code>W1ABC B</code>.</li>
+    <li>Press Connect (or Enter). <b>Save</b> adds the callsign and module to your favorites. The pop-up says <i>D-STAR link sent to gateway W1ABC&nbsp;&nbsp;B</i>. That means the link
       request went out, not that the far end accepted it, so listen or check the far gateway's dashboard.</li>
     <li><b>Disconnect</b> unlinks it.</li>
   </ol>
@@ -2325,7 +2378,29 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     link and unlink your gateway. Keep it on the Pi: <code>gatewayAddress</code> blank or the Pi's own address, and
     never forward the port on your router.</div>
 
-  <h2><span class="n">12.3</span>Phone tab <span class="badge work">WORKING</span></h2>
+  <h2><span class="n">12.3</span>Connect warnings</h2>
+  <p>Every 15 seconds the Dashboard checks the services the mode tabs need (9.3.80-pi02w to 9.3.84-pi02w, full
+    build 9.3.84). When one isn't running, that tab's <b>Connect</b> turns red with a line through it, even while it is
+    greyed out. Hover over it to see what is down, for example "YSFGateway and Analog_Bridge are not running". You can
+    still press it.</p>
+  <table>
+    <tr><th>Tab</th><th>Connect turns red when this isn't running</th></tr>
+    <tr><td>ASL</td><td>The node isn't registered with AllStarLink (this used to show on the Tune button).</td></tr>
+    <tr><td>DMR</td><td>Analog_Bridge</td></tr>
+    <tr><td>STFU</td><td>STFU (<code>stfu.service</code>, or the STFU program when there is no service) or Analog_Bridge</td></tr>
+    <tr><td>YSF, FCS</td><td>YSFGateway or Analog_Bridge</td></tr>
+    <tr><td>P-25</td><td>P25Gateway or Analog_Bridge</td></tr>
+    <tr><td>NXDN</td><td>NXDNGateway or Analog_Bridge</td></tr>
+    <tr><td>D-STAR, XLX</td><td>ircDDBGateway or Analog_Bridge</td></tr>
+    <tr><td>M17</td><td>USRP2M17 or Analog_Bridge</td></tr>
+  </table>
+  <ul>
+    <li>A gateway that is restarting counts as running. The Dashboard restarts a gateway when you leave its tab.</li>
+    <li>A service that isn't installed shows no warning, and neither does one the check couldn't read.</li>
+    <li>SysMon's Overview and Services tabs (Chapter 3) show the same services, with Start and Restart.</li>
+  </ul>
+
+  <h2><span class="n">12.4</span>Phone tab <span class="badge work">WORKING</span></h2>
   <p>Once the phone system is set up and activated on the EDIT page, the Phone tab places and answers calls through
     Asterisk.</p>
   <div class="call work"><span class="t">WORKING</span>The phone system works and has been used on a live node.</div>
@@ -2381,7 +2456,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     the call once it's answered); there is about half a second of delay; nonstop far-end talk gets a 2-second gap
     every 10 seconds; and a very quiet caller might not trigger the voice keying.</div>
 
-  <h2><span class="n">12.4</span>EDIT page</h2>
+  <h2><span class="n">12.5</span>EDIT page</h2>
   <table>
     <tr><th>Section</th><th>Holds</th></tr>
     <tr><td>Configuration</td><td>Callsign; main node number; Digital Voice Bridge node (1999); M17 Bridge node (1917); the phone nodes (information only); web port (8989); CPUWeight.</td></tr>
@@ -2395,16 +2470,28 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     reload Asterisk. Take a 44helper save point first (Chapter 11). Every detail is in
     <code>docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf</code>.</div>
 
-  <h2><span class="n">12.5</span>Common tasks</h2>
+  <h2><span class="n">12.6</span>Common tasks</h2>
   <h3>Join a DMR talkgroup and save it</h3>
   <ol class="steps">
-    <li>DMR tab: pick the network, type the talkgroup number and press Tune.</li>
+    <li>DMR tab: pick the network, type the talkgroup number and press Connect.</li>
     <li>Check the indicator shows it, then press Save.</li>
   </ol>
   <h3>Link to an AllStar hub by name</h3>
   <ol class="steps">
     <li>ASL tab: type part of the hub's callsign or town in the search box.</li>
     <li>Pick it in the list and press Connect. Use Disconnect when you're done.</li>
+  </ol>
+  <h3>Link to an AllStar node by number</h3>
+  <ol class="steps">
+    <li>ASL tab: type the node number in the search box.</li>
+    <li>If the node is in the list it is picked for you. Either way, press Connect (or Enter). Save keeps it, even
+      after the box clears.</li>
+  </ol>
+  <h3>A Connect button is red</h3>
+  <ol class="steps">
+    <li>Hover over it (or long-press on a phone) to see which service is down.</li>
+    <li>Start or restart that service in SysMon's Services tab, or check its log in the Journal tab (Chapter 3).
+      The button goes back to normal within 15 seconds.</li>
   </ol>
   <h3>Make a test phone call</h3>
   <ol class="steps">
@@ -2419,8 +2506,16 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li><b>Settings:</b> <code>/etc/asl_dvs/asl_dvs.conf</code> (identity, favorites, visible tabs, DMR networks). Phone: <code>/etc/asl_dvs/phone.json</code> and the <code>dvs_phone_*.conf</code> files it writes.</li>
       <li><b>Polling:</b> <code>/api/status</code> every 5 s when idle and every 1 s while a tune is in progress, with an ETag, so unchanged state costs almost nothing. On the Pi Zero 2 W build the AllStar and EchoLink lists are searched on disk rather than held in memory.</li>
       <li><b>Tuning:</b> through DVSwitch's <code>dvswitch.sh</code> (mode and tune commands) and Asterisk's AMI on 127.0.0.1:5038 (link and unlink). A tune counts as done when Analog_Bridge's <code>/tmp/ABInfo_*.json</code> confirms it.</li>
-      <li><b>Changing tab:</b> drops the links except the needed bridge node, sends a talkgroup disconnect, switches the DVSwitch mode, starts or stops the mode's gateway service (YSF, P25, NXDN, ircDDBGateway), and links the bridge node (1999, or 1917 for M17).</li>
-      <li><b>M17:</b> writes <code>/opt/USRP2M17/USRP2M17.ini</code> in full on every connect and disconnect, and restarts <code>usrp2m17</code>. From 9.3.71.11 (full build 9.3.74) it listens on UDP 17010 (it was 32010, which clashed with P25).</li>
+      <li><b>Service check:</b> a background thread runs one <code>systemctl show</code> every 15 s for
+        <code>analog_bridge</code> / <code>Analog_Bridge</code>, <code>stfu</code>, <code>ysfgateway</code>,
+        <code>p25gateway</code>, <code>nxdngateway</code>, <code>ircddbgatewayd</code> and <code>usrp2m17</code>, only
+        when DVSwitch is found. The result is the <code>svc</code> field of <code>/api/status</code>; a change clears the
+        ETag so the page sees it on the next poll.</li>
+      <li><b>Typed entries:</b> a typed node number or talkgroup goes through the same quick tune the old Tune button
+        used; a typed D-STAR or XLX reflector through the same link call as the list.</li>
+      <li><b>Changing tab:</b> leaving M17 first runs M17's Disconnect (drop the M17 bridge node's link, write the
+        placeholder <code>USRP2M17.ini</code>, restart <code>usrp2m17</code>). Then it drops the links except the needed bridge node, sends a talkgroup disconnect, switches the DVSwitch mode, starts or stops the mode's gateway service (YSF, P25, NXDN, ircDDBGateway), and links the bridge node (1999, or 1917 for M17).</li>
+      <li><b>M17:</b> writes <code>/opt/USRP2M17/USRP2M17.ini</code> in full on every connect and disconnect, and restarts <code>usrp2m17</code>. The reflector list (<code>/api/m17-hosts</code>, from <code>M17Hosts.json</code>) carries each reflector's IPv4 address, or IPv6 when there is none, for LH. From 9.3.71.11 (full build 9.3.74) it listens on UDP 17010 (it was 32010, which clashed with P25).</li>
       <li><b>Phone calls</b> are placed with AMI <code>Originate</code> into <code>rpt(&lt;node&gt;,Pv)</code>. Radio <code>*61</code> requests arrive through <code>/run/asl_dvs_tones/req</code> and are dialed within about 2 seconds.</li>
       <li><b>The dead key in AllStar's source</b> (<code>apps/app_rpt.c</code>, AllStarLink app_rpt, master
         <code>d392975</code>): in the per-link keying loop, <code>mycalltx = myrpt-&gt;callmode</code> keys every
@@ -2465,7 +2560,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     2.4). In short:</p>
   <ul>
     <li><b>Check GitHub</b> compares every tool with this repository and marks the newer ones.</li>
-    <li><b>Full Update</b> updates them all, one at a time, putting the old copy back if a new one fails, with instmon itself last.</li>
+    <li><b>Full Update</b> updates them all, one at a time, putting the old copy back if a new one fails, with instmon itself last. <b>Stop Full Update</b> (2.57.0) stops it cleanly.</li>
     <li><b>Quiet System</b> pauses SysMon, the Dashboard, 44helper and the Watchdog timer for up to 30 minutes, or until you press <b>Restore</b>.</li>
   </ul>
   <p>Each tool's library group also has its own GitHub row, so you can fetch one new version without updating the rest.</p>
