@@ -27,12 +27,12 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_54_0_20261018.py</td><td>2.54.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
       <tr><td>SysMon</td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_36_0_20261018.py</td><td>5.36.0</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_208_20261018.py</td><td>0.0.208</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_213_20261018.py</td><td>0.0.213</td></tr>
     </table>
   </div>
   <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
@@ -122,19 +122,19 @@ sudo systemctl status sysmon</pre>
 <pre><span class="c"># files from the main branch on GitHub</span>
 cd ~
 B=https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main
-wget $B/instmon_v2_47_0_20261013.py
+wget $B/instmon_v2_54_0_20261018.py
 wget $B/install_all_v7_1_20261012.sh
 wget $B/nodecontrol_v9_3_80_20261013.py
 wget $B/sysmon_v6_13_85_20261014.py
-wget $B/wifimon_v5_36_0_20261018.py
+wget $B/wifimon_v5_38_0_20261018.py
 <span class="c"># optional</span>
-wget $B/44helper_v0_0_208_20261018.py</pre>
+wget $B/44helper_v0_0_213_20261018.py</pre>
   <div class="call tip"><span class="t">TIP</span>Newer files may be on GitHub by the time you read this. Check the
     repo's file list and use the newest SysMon and Dashboard files without <code>_pi02w_</code> in the name.</div>
   <p>instmon goes first. Once it is running, it can install and update everything else from the browser, and it
     updates itself.</p>
   <div class="box" style="border-left:3px solid var(--yel)"><h4 style="color:var(--yel)">Step 1 · instmon</h4>
-<pre>sudo python3 instmon_v2_47_0_20261013.py --install</pre>
+<pre>sudo python3 instmon_v2_54_0_20261018.py --install</pre>
     <p>Then open <code>http://&lt;pi-address&gt;:8990</code> and log in as root.</p></div>
   <h2>What --install does</h2>
   <ul>
@@ -321,7 +321,7 @@ ss -tlnp | grep 9999</pre>
   <h1 class="ch">Quick reference</h1>
   <table>
     <tr><th>Task</th><th>Command</th></tr>
-    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_47_0_20261013.py --install</td></tr>
+    <tr><td>Install instmon</td><td class="mono">sudo python3 instmon_v2_54_0_20261018.py --install</td></tr>
     <tr><td>Install the rest</td><td class="mono">sudo bash install_all_v7_1_20261012.sh</td></tr>
     <tr><td>Set the login password</td><td class="mono">sudo passwd root</td></tr>
     <tr><td>Add WiFi networks</td><td class="mono">sudo python3 /usr/local/bin/wifimon.py --setup-wifi</td></tr>

@@ -1,6 +1,18 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_212_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_213_20261018.py`. Newest entries first.
+
+## 0.0.213 (2026-10-18) — testing
+
+- **Split tunnel routing gets its own table.** 0.0.212 put the split tunnel's 44Net
+  routes in table 4444 with mark 0x4444 and rule priority 10044, but table 4444 is the
+  half tunnel's table, and the half tunnel's undo flushes it and its checks expect it
+  empty. The split tunnel now uses table 4445, mark 0x4445 and priority 10045. A
+  wg0.conf written by 0.0.212 counts as the older form (card 4b, Set the boot order and
+  every write rewrite it), and the new PostUp line removes the 0.0.212 rule
+  (priority 10044) if it is still loaded.
+- Tested: the 0.0.212 suites with the new numbers, and a 0.0.212 block rewritten to
+  4445 with the old rule removed.
 
 ## 0.0.212 (2026-10-18) — testing
 

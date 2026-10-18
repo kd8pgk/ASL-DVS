@@ -39,8 +39,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_86_20261014.py` | `sysmon_pi02w_v6_13_72_20261018.py` | `instmon_v2_53_0_20261018.py` |
-| `VERSION` | `6.13.86` | `6.13.72-pi02w` | `2.53.0` |
+| File name | `sysmon_v6_13_86_20261014.py` | `sysmon_pi02w_v6_13_72_20261018.py` | `instmon_v2_54_0_20261018.py` |
+| `VERSION` | `6.13.86` | `6.13.72-pi02w` | `2.54.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -68,10 +68,10 @@ Phone dialplan guide (PDF, 31 pages): dialplan nuts and bolts, stock ASL3 next t
 Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2M17 bridge-node files, port map, services and firewall for a clean build, with no identity data (placeholders only):
 [`docs/ASL-DVS_Idealized_Node_Configuration.pdf`](docs/ASL-DVS_Idealized_Node_Configuration.pdf)
 
-User manual (PDF, 98 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
+User manual (PDF, 103 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
 [`docs/ASL-DVS_User_Manual.pdf`](docs/ASL-DVS_User_Manual.pdf)
 
-44helper manual (PDF, 42 pages): every 44helper tab and card in detail: the tunnel modes (split, half, full with exceptions, full) side by side, the half-tunnel and exceptions cards with all their checks, every installer step, Update, System Optimization, Config, troubleshooting and a file and routing reference. The source is in `docs/src/44helper_manual/`:
+44helper manual (PDF, 51 pages): every 44helper tab and card in detail: the tunnel modes (split, half, full with exceptions, full) side by side, the half-tunnel and exceptions cards with all their checks, every installer step, Update, System Optimization, Config, troubleshooting and a file and routing reference. The source is in `docs/src/44helper_manual/`:
 [`docs/ASL-DVS_44helper_Manual.pdf`](docs/ASL-DVS_44helper_Manual.pdf)
 
 To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (needs Playwright with Chromium; set `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH` if they aren't found by default).
@@ -79,7 +79,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_53_0_20261018.py --install
+   sudo python3 instmon_v2_54_0_20261018.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -247,9 +247,9 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_77_20261018.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_86_20261014.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_72_20261018.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_53_0_20261018.py` | common |
+| `instmon_v2_54_0_20261018.py` | common |
 | `wifimon_v5_38_0_20261018.py` | common |
-| `44helper_v0_0_212_20261018.py` | common |
+| `44helper_v0_0_213_20261018.py` | common |
 | `install_all_v7_1_20261012.sh` | common |
 | `uninstall_all_v1_5.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |

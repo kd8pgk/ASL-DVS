@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.53.0"
+VERSION ="2.54.0"
 DATE_STR ="2026-10-18"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4455,9 +4455,13 @@ def _fu_update_one(comp, row, new_path):
     log_event(f"Full Update: {name}: installing {os.path.basename(new_path)}", "info")
     prepare_install(comp, new_path)
     rc = _fu_run_cli(new_path, "--install")
+    if rc == 0:
+        log_event(f"Full Update: {name}: waiting up to {FU_START_TIMEOUT_SEC}s for v{new_ver} to start and answer", "info")
     ok, state = _fu_wait_healthy(comp) if rc == 0 else (False, f"--install exited {rc}")
     if ok and comp["category"] != "instmon" and FU_STABLE_SEC > 0:
         _fu_set(current=f"{name}: watching v{new_ver} for {FU_STABLE_SEC}s")
+        log_event(f"Full Update: {name}: v{new_ver} is up; watching it for {FU_STABLE_SEC}s to make sure it stays up "
+                  "(the log is quiet meanwhile)", "info")
         ok, state = _watch_steady(comp)
     if ok:
         if row.get("status") == "switch":
@@ -6623,7 +6627,8 @@ function echoToLog(message, level) {
   const cls = level === 'ok' ? 'log-ok' : level === 'err' ? 'log-err' : level === 'warn' ? 'log-warn' : '';
   const span = document.createElement('div');
   if (cls) span.className = cls;
-  const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
+  const d = new Date(), p2 = n => String(n).padStart(2, '0');
+  const ts = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}`;
   span.textContent = `[${ts}] ${message}`;
   el.appendChild(span);
   while (el.childNodes.length > MAX_CLIENT_LOG_LINES) {

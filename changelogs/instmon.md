@@ -1,6 +1,19 @@
 # instmon changelog
 
-Current file: `instmon_v2_53_0_20261018.py`. Newest entries first.
+Current file: `instmon_v2_54_0_20261018.py`. Newest entries first.
+
+## 2.54.0 (2026-10-18)
+
+- **Full Update says what it is waiting for.** After installing each tool it waits up to
+  60 s for it to start and answer, then watches it for 60 s to make sure it stays up,
+  and the log was silent for those two minutes, so it looked frozen (magicbox: after
+  SysMon's install, with the Pi Zero 2 W busy enough that `lsblk` timed out). It now
+  logs "waiting up to 60s for v… to start and answer" and "v… is up; watching it for
+  60s". Restarting instmon in that window stops the update; Quiet System is put back
+  at start, and running Full Update again finishes it.
+- **The page's own log lines use local time.** Lines the page adds itself (such as
+  "Full Update started -- progress shows …") were stamped in UTC, so they sat hours
+  away from the server's lines. They now use the browser's local time.
 
 ## 2.53.0 (2026-10-18)
 
