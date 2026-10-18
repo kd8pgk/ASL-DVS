@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-14</div>
+    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-18</div>
   </div>
   <div class="body">
     <h1>User Manual<br><span>The Node Controller Suite</span></h1>
@@ -27,11 +27,11 @@
     <div class="kicker" style="margin-top:1.2em">Files covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_71_18_20261013.py</td><td>9.3.71.18-pi02w</td></tr>
-      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_68_20261013.py</td><td>6.13.68-pi02w</td></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_208_20261018.py</td><td>0.0.208</td></tr>
-      <tr><td>instmon</td><td class="mono">instmon_v2_47_0_20261013.py</td><td>2.47.0</td></tr>
-      <tr><td>wifimon</td><td class="mono">wifimon_v5_36_0_20261018.py</td><td>5.36.0</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_77_20261018.py</td><td>9.3.77-pi02w</td></tr>
+      <tr><td>SysMon</td><td class="mono">sysmon_pi02w_v6_13_72_20261018.py</td><td>6.13.72-pi02w</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_212_20261018.py</td><td>0.0.212</td></tr>
+      <tr><td>instmon</td><td class="mono">instmon_v2_53_0_20261018.py</td><td>2.53.0</td></tr>
+      <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_80_20261013.py</td><td>9.3.80</td></tr>
@@ -181,7 +181,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.71.18-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · &lt;NODE&gt; · v9.3.77-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--cyan)">ASL</span><span class="tab">Echo</span><span class="tab">DMR</span><span class="tab">STFU</span>
         <span class="tab">YSF</span><span class="tab">FCS</span><span class="tab">P-25</span><span class="tab">NXDN</span><span class="tab">D-STAR</span>
@@ -194,7 +194,7 @@ sudo systemctl status sysmon</pre>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.67.17-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">SYSMON</span><span class="meta">v6.13.72-pi02w</span></div>
       <div class="tabs">
         <span class="tab on" style="background:rgb(0,255,229)">Overview</span>
         <span class="tab" style="border-color:rgb(0,255,229)">Services</span>
@@ -202,7 +202,7 @@ sudo systemctl status sysmon</pre>
         <span class="tab off">Firewall</span>
         <span class="tab" style="border-color:rgb(212,102,255)">Journal</span>
         <span class="tab" style="border-color:rgb(255,61,90)">ASL-DVS</span>
-        <span class="tab off">Reg</span>
+        <span class="tab" style="border-color:rgb(120,180,255)">Reg</span>
         <span class="tab" style="border-color:rgb(0,255,176)">Phone</span>
         <span class="tab" style="border-color:rgb(255,68,204)">Tune</span>
         <span class="tab" style="border-color:rgb(0,200,120)">Hardware</span>
@@ -212,24 +212,25 @@ sudo systemctl status sysmon</pre>
         <span class="tab" style="border-color:rgb(124,255,60)">M17</span>
         <span class="tab off">Zello</span>
         <span class="tab" style="border-color:rgb(180,140,255)">SD Card</span>
-        <span class="tab" style="border-color:rgb(255,90,120)">Security</span>
+        <span class="tab off">Security</span>
         <span class="tab off">Console</span>
         <span class="tab" style="border-color:rgb(255,208,64)">Edit</span>
       </div>
     </div>
     <figcaption><b>Figure 1.3 · Illustration.</b> SysMon (port 9999). The 14 solid tabs are in the Pi Zero 2 W build.
-      The 5 faded tabs (Firewall, Reg, Net, Zello, Console) are <span class="badge full">FULL</span> build only.</figcaption>
+      The 5 faded tabs (Firewall, Net, Zello, Security, Console) are <span class="badge full">FULL</span> build only. From
+      6.13.71-pi02w the Pi Zero 2 W build has the Reg tab again and no Security tab.</figcaption>
   </figure>
 
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">v0.0.187x</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">v0.0.212</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
         <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
         <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
-        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
+        <span class="tab">Boot</span><span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
       </div>
     </div>
     <figcaption><b>Figure 1.4 · Illustration.</b> 44helper (port 9997). The first row is 44Net remote access. The
@@ -239,7 +240,7 @@ sudo systemctl status sysmon</pre>
   <div class="grid2">
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--blu)">INSTALL MONITOR</span><span class="meta">v2.47.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--blu)">INSTALL MONITOR</span><span class="meta">v2.53.0</span></div>
         <div class="sect">Quick Links</div><div class="sect">GitHub Updates</div>
         <div class="row"><span class="btn">Check GitHub</span><span class="btn c">Full Update</span><span class="btn c">Quiet System</span></div>
         <div class="sect">Components</div><div class="sect">Scripts &amp; Configuration Library</div>
@@ -249,7 +250,7 @@ sudo systemctl status sysmon</pre>
     </figure>
     <figure style="margin:0">
       <div class="mock">
-        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.36.0</span></div>
+        <div class="bar"><span class="ttl" style="color:var(--grn)">WIFIMON</span><span class="meta">v5.38.0</span></div>
         <div class="sect">Status</div><div class="sect">Saved networks</div><div class="sect">Nearby networks</div>
         <div class="sect">Radio &amp; device</div><div class="sect">Watchdog</div><div class="sect">Service</div>
         <div class="sect" style="padding-bottom:.6em">Activity log</div>
@@ -523,7 +524,7 @@ sudo bash uninstall_all_v1_5.sh</pre>
   <h2><span class="n">3.2</span>The page at a glance</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.67.17-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--yel)">N0CALL · Node &lt;NODE&gt;</span><span class="meta">UP 3:12:44 · v6.13.72-pi02w</span></div>
       <div class="row" style="padding-top:.5em"><span class="btn">Allmon3</span><span class="btn">DVSwitch</span><span class="btn">Cockpit</span><span class="btn">USRP2M17</span><span class="btn">WifiMon</span><span class="btn c">Node Control</span></div>
       <div class="cards">
         <div class="card"><b>Host</b><span class="v" style="color:var(--cyan)">node-pi</span></div>
@@ -1088,6 +1089,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     tab (Chapter 10). To keep a spare, take an image with instmon's Disk Image section (Chapter 13).</div>
 
   <h2><span class="n">5.4</span>Security tab</h2>
+  <div class="call full"><span class="t">FULL BUILD</span>The Pi Zero 2 W build removed this tab in 6.13.71-pi02w; it is
+    now on the full build only.</div>
   <p>14 passive checks of the node's security. The bar at the top counts Pass, Warn and Fail, with <b>Re-run checks</b>
     and <b>Copy</b>. The checks are grouped in four cards:</p>
   <table>
@@ -1189,7 +1192,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h1 class="ch">Full-build tabs</h1>
   <p class="ch-lede">The full SysMon build, for a Pi 3, 4 or 5, adds five tabs the Pi Zero 2 W build leaves out to
     save memory: Firewall, Reg, Net, Zello and Console. Everything in Chapters 3 to 5 also applies to the full
-    build, which has the same tabs.</p>
+    build, which has the same tabs. From 6.13.71-pi02w the Pi Zero 2 W build has the Reg tab again (6.2).</p>
   <div class="call full"><span class="t">FULL BUILD</span>This chapter covers <code>sysmon_v6_13_83_20261013.py</code>
     (version <code>6.13.83</code>). On a Pi Zero 2 W you can install the full build with instmon's <b>Full build
     (override)</b> choice, but it uses about twice the memory.</div>
@@ -1235,7 +1238,15 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li><b>Dual registration</b> warns when both HTTP and IAX are active. Pick one and comment out the other; HTTP is
       ASL3's default.</li>
     <li><b>Re-check</b> reads it all again. Live state also refreshes in the background every 30 seconds.</li>
+    <li><b>Registered as</b> (6.13.72-pi02w): for each registered node, the address and port the AllStarLink server
+      sees it at (the Perceived column of <code>rpt show registrations</code>), and whether that is through the 44Net
+      tunnel, your public internet address or a private address. The tooltip of the <b>ASL</b> field in the header
+      shows it too. On a split tunnel your public address is normal; on a full or half tunnel it should be the 44
+      address.</li>
   </ul>
+  <div class="call note"><span class="t">PI ZERO 2 W</span>The Reg tab is back in the Pi Zero 2 W build from
+    6.13.71-pi02w, with an <b>ASL</b> field in the header (REG, WAIT, NOT REG or ASL DOWN, with how long) on every tab.
+    The full build doesn't have "Registered as" yet.</div>
 
   <h2><span class="n">6.3</span>Net tab</h2>
   <table>
@@ -1361,13 +1372,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">7.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.208 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.212 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
         <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
         <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
-        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
+        <span class="tab">Boot</span><span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
       </div>
     </div>
     <figcaption><b>Figure 7.1 · Illustration.</b> 44helper's header and tabs. Row one is 44Net remote access; row two
@@ -1375,7 +1386,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </figure>
   <table>
     <tr><th>Tab group</th><th>Tabs</th><th>Chapter</th></tr>
-    <tr><td>Status</td><td>Overview, Services, Ports, Actions Log (the firewall cards are on the tunnel tabs)</td><td>7</td></tr>
+    <tr><td>Status</td><td>Overview, Boot, Services, Ports, Actions Log (the firewall cards are on the tunnel tabs)</td><td>7</td></tr>
     <tr><td>Remote access</td><td>Router Install, Full Tunnel, Split Tunnel, Nodes, Cloudflare</td><td>8</td></tr>
     <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand</td><td>9</td></tr>
     <tr><td>Maintenance</td><td>Update, System Optimization</td><td>10</td></tr>
@@ -1447,6 +1458,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>Card</th><th>Shows</th></tr>
     <tr><td>Installed software</td><td>ASL3, DVSwitch, USRP2M17, SVXLink and Ampersand. Each is <b>installed</b> (with version and running services), <b>broken</b> (half-installed packages, or a package present without its program files), <b>leftovers</b> (removed but with settings, folders or unit files left behind), or <b>absent</b>. Click a name to go to its tab.</td></tr>
     <tr><td>Tunnel / wg0</td><td>Whether the WireGuard interface <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
+    <tr><td>AllStar registration</td><td>From 0.0.212. Each node from <code>rpt show registrations</code>, and the address and port the AllStarLink server sees it at: through the 44Net tunnel, your public internet address, or a private address (check NAT). On a split tunnel your public address is normal.</td></tr>
     <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up (Pi-hosted or router).</td></tr>
     <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
     <tr><td>Self-check findings</td><td>Red if 44helper's own page, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. Amber if <code>wg0.conf</code> (which holds your private key) is not mode 600. From 0.0.197, red when the tunnel server routes back into wg0. From 0.0.198 four more checks: the <b>tunnel handshake</b> (red when it is over 3 minutes old with a keepalive set, or there has never been one; amber when old with no keepalive), <b>services that didn't start</b> (red when netcheck failed and DVSwitch services never started, or any service failed; amber for an enabled DVSwitch service that isn't running), a <b>DNS line that can't work</b> (red when it needs systemd-resolved and resolved doesn't answer), and an <b>Address wider than /32</b> (amber).</td></tr>
@@ -1455,12 +1467,26 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     and the tunnel checks run at most every 30 seconds. From 0.0.199 a finding with a fix shows <b>Fix on the tunnel
     tab →</b>, which opens the installed tunnel's tab at its row of the Health and fixes card (8.2).</p>
 
-  <h2><span class="n">7.4</span>Services tab</h2>
+  <h2><span class="n">7.4</span>Boot tab <span class="badge test">TESTING</span></h2>
+  <p>From 0.0.209, between Config and Services: what happened when the node last started, in one place. Read-only,
+    except <b>Save a copy now</b>. It is on the full build too.</p>
+  <table>
+    <tr><th>Part</th><th>Shows</th></tr>
+    <tr><td>This boot</td><td>Boot time and uptime, this boot's line from the boot log, where the journal is kept, the clock, the Pi's power limits, the boot order, the tunnel (from 0.0.212 "policy routing (table 4444)" on a split tunnel), wifimon's tunnel watchdog and shutdown report, and every tool's version. Below it, <b>findings</b>: netready late, failed or restarted units, services that never started, the clock not synchronised, under-voltage, an unclean stop, a routing loop, the boot order incomplete, slow ASL3 updates, Asterisk bound to the tunnel address, an ordering cycle.</td></tr>
+    <tr><td>Timeline</td><td>The seconds after boot that the time sync, the tunnel, netready, netcheck, the DVSwitch services, Asterisk and the Node Controller tools started and became active, with a <b>Last started</b> column. Red: failed; amber: restarted.</td></tr>
+    <tr><td>Logs</td><td>The boot log, this and the previous boot's journal, <code>systemd-analyze</code>, kernel lines, the tunnel's routes, wifimon, the Dashboard and instmon. Each is read when you press <b>View</b> or <b>Copy</b>.</td></tr>
+    <tr><td>Saved copies</td><td>The report is saved to <code>/var/lib/44helper/boots/</code> 6 and 25 minutes after each boot, the newest 5 kept, so the previous boot is there even when the journal is in memory only.</td></tr>
+  </table>
+  <p><b>Copy boot report</b> and <b>Download .txt</b> give one text report to paste into a help request; private keys,
+    passwords and tokens are removed. Over SSH: <code>sudo python3 /usr/local/bin/44helper.py --boot-report</code> (add
+    <code>--json</code> for JSON); for scripts, <code>/api/boot/report?format=json</code> while logged in.</p>
+
+  <h2><span class="n">7.5</span>Services tab</h2>
   <p>A grouped list of what is running: System (firewalld, systemd-resolved), 44Net Tunnel, AllStarLink / DVSwitch
     (Asterisk, the bridges, gateway command ports), M17, SVXLink, Ampersand, Cloudflare Tunnel, and <b>Dashboards
     (should stay private)</b>. Each line is a service or a listening port. Masked services are marked.</p>
 
-  <h2><span class="n">7.5</span>Ports tab</h2>
+  <h2><span class="n">7.6</span>Ports tab</h2>
   <p>A reference table of every port the node's software uses, checked against what is actually reachable through
     your remote-access setup. The line above the table says where it looked: the Pi's 44NetConnect zone, the
     router's forward table, or "none (no tunnel configured yet)". <b>Running</b> means the port is listening on the
@@ -1474,7 +1500,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td style="color:var(--muted)">not-listening</td><td>Nothing is running on it, which is normal for software you don't use.</td></tr>
   </table>
 
-  <h2><span class="n">7.6</span>Firewall and port control</h2>
+  <h2><span class="n">7.7</span>Firewall and port control</h2>
   <p>44helper uses <b>firewalld</b>. From 0.0.196 there is no Firewall tab: its cards are a <b>Firewall and port
     control</b> section at the end of the <b>Full Tunnel</b> and <b>Split Tunnel</b> tabs. The section exists once and
     follows you to whichever of the two you open, keeping what you typed. The half tunnel card is on the Full Tunnel
@@ -1512,13 +1538,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     your 44 address only. A router port forward to the node's IAX or EchoLink port stops working, because the replies
     go out the tunnel. Everything open in wg0's firewall zone is reachable from the whole internet.</div>
 
-  <h2><span class="n">7.7</span>Actions Log tab</h2>
+  <h2><span class="n">7.8</span>Actions Log tab</h2>
   <ul>
     <li><b>Session log</b>: every command 44helper ran, with OK or FAIL, since it last started. <b>Refresh</b> reads it again.</li>
     <li><b>Known-good router notes</b>: saved notes about router setups that worked. Click one to read it.</li>
   </ul>
 
-  <h2><span class="n">7.8</span>Common tasks</h2>
+  <h2><span class="n">7.9</span>Common tasks</h2>
   <h3>Check the node is safe before going on 44Net</h3>
   <ol class="steps">
     <li>Overview: the Self-check findings card should show no red lines.</li>
@@ -1607,13 +1633,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <ol class="steps">
     <li><b>Firewall prereq</b>: installs and starts firewalld.<br><b>1a. systemd-resolved prereq</b>: installs WireGuard and systemd-resolved, without which the tunnel can fail to start. From 0.0.200 it is green only when resolved is running and answers; if it doesn't answer, the step restarts it once. If it is still red, reboot.</li>
     <li><b>Create the 44NetConnect zone.</b></li>
-    <li><b>Add inbound services and ports</b>: tick what other stations may reach. AllStarLink IAX2 and EchoLink/SvxLink are ticked by default; VOTER/RTCM is optional. Asterisk AMI can be added but is flagged red. Full Tunnel also has fields for your DVSwitch Mobile port and a custom port. Split Tunnel offers only IAX2 and EchoLink, because nothing else needs to be reachable.</li>
-    <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Check and write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card.
-      <br>From 0.0.200 a panel shows what the check changes before anything is written: it removes <code>SaveConfig = true</code>, and a <code>DNS =</code> line while systemd-resolved isn't answering; it offers to change a wider Address to <b>/32</b> and to add <b>PersistentKeepalive = 25</b> (both ticked); and when AllowedIPs doesn't fit the tab you choose to <b>rewrite it</b> or <b>stop</b> and use the other tab. Press <b>Write wg0.conf</b> to go ahead. Convert uses the same check.
-      <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value. From 0.0.193 the options that go through systemd-resolved are refused while resolved isn't answering. From 0.0.201 a DNS server outside the tunnel's AllowedIPs is refused: on a split tunnel use "only 44Net names" with a 44Net server such as 44.0.0.1, or Off.
-      <br><b>4b (Split)</b>: <b>Repair AllowedIPs</b> fixes a config pasted unedited. From 0.0.197 it also offers <b>Fix the tunnel-server route</b> when the tunnel server is itself a 44Net address (see the note below). <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
+    <li><b>Add inbound services and ports</b>: tick what other stations may reach. AllStarLink IAX2 and EchoLink/SvxLink are ticked by default; VOTER/RTCM is optional. Asterisk AMI can be added but is flagged red. Full Tunnel also has fields for your DVSwitch Mobile port and a custom port. From 0.0.212 Split Tunnel offers IAX2 and VOTER/RTCM but not EchoLink, because only 44Net hosts can reach a split tunnel. If firewalld has no <code>iax2</code> service, the step opens the IAX port instead (from iax.conf, default 4569/udp); the step counts as done only when IAX is open.</li>
+    <li><b>Paste WireGuard config</b>: copy the whole <code>[Interface]</code>/<code>[Peer]</code> block from your tunnel on connect.44net.cloud, paste it, and press <b>Check and write wg0.conf (chmod 600)</b>. It refuses a config with no real private key. Leave <b>Also back up a copy to the instmon library</b> ticked, so you can recover the tunnel after re-flashing the card. From 0.0.212, once wg0.conf exists, <b>Replace the config</b> (new key or tunnel server) runs the same check, keeps your DNS and MTU settings and saves the old file as <code>wg0.conf.pre-replace</code>.
+      <br>From 0.0.200 a panel shows what the check changes before anything is written: it removes <code>SaveConfig = true</code>, and a <code>DNS =</code> line while systemd-resolved isn't answering; it offers to change a wider Address to <b>/32</b> and to add <b>PersistentKeepalive = 25</b> (both ticked); and when AllowedIPs doesn't fit the tab you choose to <b>rewrite it</b> or <b>stop</b> and use the other tab. Press <b>Write wg0.conf</b> to go ahead. Convert uses the same check. From 0.0.212 the Split tab wants exactly <code>44.0.0.0/9, 44.128.0.0/10</code> (<code>::/0</code>, <code>0.0.0.0/1</code> pairs and <code>44.0.0.0/8</code> get the rewrite offer too), and a pasted <code>DNS =</code> server outside AllowedIPs is dropped with a note.
+      <br><b>4a. DNS &amp; MTU</b>: optional DNS handling (off, all DNS through the tunnel, only 44Net names, or a <code>DNS =</code> line) and an MTU value. From 0.0.193 the options that go through systemd-resolved are refused while resolved isn't answering. From 0.0.201 a DNS server outside the tunnel's AllowedIPs is refused: on a split tunnel use "only 44Net names" with a 44Net server such as 44.0.0.1, or Off. From 0.0.212 the cards own their settings: setting DNS removes raw <code>DNS =</code> lines and setting MTU removes raw <code>MTU =</code> lines.
+      <br><b>4b (Split): Split tunnel routing</b> (0.0.212). The split tunnel uses <b>policy routing</b>: <code>Table = 4444</code>, <code>FwMark = 0x4444</code> and one routing rule (priority 10044) in wg0.conf. WireGuard marks its own packets, so they always take the normal route on whichever adapter is up, and the tunnel server can't loop into wg0 when WiFi changes adapter. The card shows <b>Set</b>, <b>Restart needed</b> (in the file, not running yet, with a restart button) or <b>Older routing</b> with <b>Switch to policy routing</b>, which writes the file, restarts the tunnel, waits for a handshake and checks the rule. <b>Repair AllowedIPs</b> still fixes a config pasted unedited. <b>4b (Full)</b>: optional outbound rules for your digital-voice reflector ports.</li>
     <li><b>Attach wg0 to the zone.</b></li>
-    <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: checks your public address through connect.44net.cloud/myip and Asterisk's AllStar registrations. From 0.0.193 the start waits up to 90 seconds. If it fails, the output shows the tunnel's state and the last lines of its log. Before starting, it checks that systemd-resolved answers whenever wg0.conf's DNS setting needs it; if resolved doesn't, it restarts it once, and refuses to start if that doesn't help. From 0.0.200, after the start it waits for a handshake, keeps the tunnel server on the normal route, applies the netcheck fixes when DVSwitch is installed, and starts any stopped DVSwitch services, listing each result. From 0.0.205 it also sets the <b>boot order</b> (below).</li>
+    <li><b>Enable + start the tunnel</b>, then <b>Verify</b>: from 0.0.212 it checks the handshake's age, wg0's address, that 44Net goes through wg0, that the tunnel server doesn't loop, that names resolve, each AllStar registration with the address it is registered as, and your public address. From 0.0.212 step 6 restarts a tunnel that is already running, so a changed wg0.conf is used. From 0.0.193 the start waits up to 90 seconds. If it fails, the output shows the tunnel's state and the last lines of its log. Before starting, it checks that systemd-resolved answers whenever wg0.conf's DNS setting needs it; if resolved doesn't, it restarts it once, and refuses to start if that doesn't help. From 0.0.200, after the start it waits for a handshake, keeps the tunnel server on the normal route, applies the netcheck fixes when DVSwitch is installed, and starts any stopped DVSwitch services, listing each result. From 0.0.205 it also sets the <b>boot order</b> (below).</li>
   </ol>
   <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the
     network. If you are connected over SSH or Cockpit from outside your home network, that session may drop. Do
@@ -1623,7 +1649,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     a split tunnel routes WireGuard's own packets back into wg0: <code>ip -4 route get &lt;endpoint&gt;</code> says
     <code>dev wg0</code>. From 0.0.197 44helper keeps the server on the normal route with two marked lines in wg0.conf
     (an <i>endpoint pin</i>), adds them before step 6 starts the tunnel, flags the loop red on the Overview, and fixes a
-    running tunnel from step 4b.</div>
+    running tunnel from step 4b. From 0.0.212 a split tunnel uses policy routing instead (step 4b above), which can't
+    loop whatever the network does; the pin and the NetworkManager hook that moved it (0.0.210) remain only for
+    configs not converted yet.</div>
   <div class="call note"><span class="t">NOTE</span>A tunnel start that fails after exactly 25 seconds on
     <code>resolvconf -a wg0</code> is systemd-resolved not answering on D-Bus. Restart it
     (<code>sudo systemctl restart systemd-resolved</code>), or reboot, or take the <code>DNS =</code> line out of
@@ -1636,16 +1664,19 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <ul>
     <li><b>6b. Boot order</b>, under step 6 (from 0.0.205): makes the tunnel come back by itself after a reboot, and the DVSwitch services wait for it.
       <ul>
-        <li>The tunnel is enabled at boot, and if a start fails (network or DNS not ready yet) systemd tries again every 20 seconds. From 0.0.208 it first waits up to 90 seconds for the clock to sync, because the Pi's clock can start behind after a power cut and the tunnel server then ignores its handshakes.</li>
+        <li>The tunnel is enabled at boot, and if a start fails (network or DNS not ready yet) systemd tries again every 20 seconds. From 0.0.208 it first waits up to 90 seconds for the clock to sync, because the Pi's clock can start behind after a power cut and the tunnel server then ignores its handshakes. From 0.0.212 this wait is only for a full tunnel; a split tunnel starts at once.</li>
         <li><code>44helper-netready</code> waits up to 3 minutes at boot until there is a network route, the tunnel has a handshake and names resolve. netcheck, the bridges (including <code>Analog_Bridge</code> and <code>MMDVM_Bridge</code> from 0.0.208), md380-emu, STFU, the gateways, ircDDBGateway and webproxy start after it, and all but netcheck restart 15 seconds after a failure. netcheck is retried after 30 seconds (from 0.0.208).</li>
-        <li>From 0.0.208, if the network still isn't ready after 3 minutes, a follow-up watches for 20 more minutes and restarts the DVSwitch services once it is.</li>
+        <li>From 0.0.208, if the network still isn't ready after 3 minutes, a follow-up watches for 20 more minutes. Once the network is ready it restarts netcheck and then only the enabled services that aren't running, Asterisk included (0.0.211). From 0.0.211 netready keeps real time, so the 3 minutes are 3 minutes even when DNS is down.</li>
+        <li>From 0.0.211 netcheck is made non-fatal with one drop-in (<code>netcheck.service.d/44helper-nonfatal.conf</code>): it still runs its check, but a failed check no longer stops what requires it. This replaces copying the bridges' unit files, and it is why "netcheck still required by …" now clears. The ASL3 node-database updates also wait for netready.</li>
+        <li>From 0.0.211, when Asterisk's <code>bindaddr</code> is a 44 address, a sysctl (<code>ip_nonlocal_bind</code>) lets it bind at boot before wg0 has the address. On a split tunnel the Health card says to use <code>bindaddr=0.0.0.0</code> instead.</li>
+        <li>From 0.0.212 an older split tunnel is switched to policy routing (restart the tunnel afterwards).</li>
         <li>From 0.0.208 each boot's result is kept in <code>/var/lib/44helper/boot.log</code> (the last 20 boots), and the card shows this boot's line. Set the boot order also applies the netcheck fixes.</li>
         <li>The network's wait-online unit is enabled, so "network online" means the network is really up.</li>
       </ul>
       Step 6 sets it; the card shows what is in place, with <b>Set the boot order</b> and <b>Remove</b>. It takes effect at the next boot; nothing running is restarted. <code>journalctl -b -u 44helper-netready</code> shows whether the network, the tunnel or DNS was late.</li>
-    <li><b>Tunnel-server route at boot</b> (0.0.206, 0.0.207): the route line that keeps a 44Net tunnel server off wg0 now waits up to 30 seconds for the normal route at boot, and otherwise fails the start so it is retried, instead of leaving the tunnel in a routing loop. A wg0.conf with the older line shows an amber banner on step 4b with <b>Update the tunnel-server route</b>; <b>Set the boot order</b> updates it too.</li>
-    <li><b>Health and fixes</b>, at the top of both tabs (from 0.0.199): the Overview's tunnel checks, each with a fix button: start the DVSwitch services that didn't start, apply the netcheck fixes, change the Address to /32, add a keepalive, fix the tunnel-server route, restart systemd-resolved or set DNS to Off, and (from 0.0.205) set the boot order. <b>Restart tunnel</b> is a separate button; use it from the LAN. Every fix asks first. From 0.0.200 the install prevents these problems, so the card is a safety net for later changes.</li>
-    <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel. From 0.0.200 step 6 applies its fixes by itself, except the probe target. From 0.0.201 a bridge is freed from netcheck by a copy of its unit under <code>/etc/systemd/system</code> (a systemd drop-in can't remove a dependency, so the earlier fix didn't work); Revert deletes the copies.</li>
+    <li><b>Tunnel-server route at boot</b> (0.0.206–0.0.210, older split tunnels only): the route line that keeps a 44Net tunnel server off wg0 waits up to 30 seconds for the normal route at boot, and otherwise fails the start so it is retried. From 0.0.210 a NetworkManager hook moves that route when the network changes; from 0.0.212 it is needed only while a pin is left.</li>
+    <li><b>Health and fixes</b>, at the top of both tabs (from 0.0.199): the Overview's tunnel checks, each with a fix button: start the DVSwitch services that didn't start, apply the netcheck fixes, change the Address to /32, add a keepalive, fix the tunnel-server route, restart systemd-resolved or set DNS to Off, and (from 0.0.205) set the boot order. From 0.0.211 it also warns when Asterisk is bound to the tunnel address, and fixes a DNS undo line without <code>|| true</code> (which could stop the tunnel's shutdown and leave wg0 up). <b>Restart tunnel</b> is a separate button; use it from the LAN. Every fix asks first. From 0.0.200 the install prevents these problems, so the card is a safety net for later changes.</li>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, below step 6: a read-only scan for when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. It is most likely on a Full Tunnel. From 0.0.200 step 6 applies its fixes by itself, except the probe target. From 0.0.201 a bridge is freed from netcheck by a copy of its unit under <code>/etc/systemd/system</code> (a systemd drop-in can't remove a dependency, so the earlier fix didn't work); Revert deletes the copies. From 0.0.211 the boot order uses the netcheck non-fatal drop-in instead.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
     <li><b>Purge</b>: undoes the tunnel and the zone.</li>
     <li><b>Full tunnel with exceptions</b> <span class="badge test">TESTING</span> (Full Tunnel tab, under the steps, from 0.0.194): keeps the full tunnel but sends two things around it. <b>Step 2</b> keeps replies from the LAN address on the LAN link, so a dashboard or SSH connection through your router still answers. <b>Step 3</b> is an optional bypass list of host names, addresses or UDP ports. It has the same Check first, 15-minute auto-undo, 12 checks, Make permanent (as marked PostUp lines in wg0.conf, with <code>remove_full_exceptions.sh</code>) and Remove permanent as the half tunnel. Only one of the two can be in use.</li>
@@ -1914,7 +1945,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </ol>
   <p><b>Turn off</b> restarts exactly what was paused, in reverse order. 44helper, wifimon, SSH, Cockpit,
     networking and the firewall are never touched. The card previews the exact commands before you press anything.
-    A banner across the top of every 44helper page reminds you while quiet mode is on.</p>
+    A banner across the top of every 44helper page reminds you while quiet mode is on. From 0.0.212, if the node
+    reboots while quiet mode is on, it is cleared when 44helper starts: the reboot already started everything.</p>
   <div class="call care"><span class="t">CAREFUL</span>The node is <b>off the air</b> while quiet mode is on, and
     it stays on until you turn it off. Unlike instmon's Quiet System, it has no 30-minute auto-restore. You can't
     turn it on while a package job is running. If something fails to come back, the card shows the likely cause
@@ -2213,7 +2245,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">12.1</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.71.18-pi02w</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--cyan)">NODE CONTROL</span><span class="meta">N0CALL · Node &lt;NODE&gt; · UP 3:12:44 · Log Out · v9.3.77-pi02w</span></div>
       <div class="row" style="padding-top:.5em;justify-content:space-between"><span><span class="btn">Allmon3</span> <span class="btn">DVSwitch</span> <span class="btn">Cockpit</span></span>
         <span style="font-family:var(--mono);color:var(--grn);font-size:8pt">● TG 3100 ●</span>
         <span><span class="btn">InstMon</span> <span class="btn">WiFiMon</span> <span class="btn">SysMon</span></span></div>
@@ -2402,6 +2434,15 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
         3567–3581). <code>simplexphonedelay</code> (25 × 20 ms) delays the audio, and <code>voxtimeout</code> /
         <code>voxrecover</code> (10000 / 2000 ms) force the break. These are the values the Dashboard writes for each
         phone node.</li>
+      <li><b>At boot</b> (9.3.77-pi02w): the Dashboard disconnects all links once, so a fresh boot starts clean. It
+        waits until Asterisk has been up 30 seconds and, when 44helper's boot order is in place, until
+        <code>44helper-netready</code> has finished, so links made before WiFi and the tunnel were up are dropped too
+        (at most 7.5 minutes; if Asterisk never starts, it is skipped and the log says so). A marker
+        (<code>/run/asl_dvs/boot_disconnect_done</code>) stops a Dashboard restart from doing it again. The startup tune's
+        5-minute wait for Analog_Bridge counts from when <code>analog_bridge.service</code> started (at most 10 minutes
+        after boot). Analog_Bridge's report and the "not registered since" time survive NTP stepping the clock
+        forward, so wifimon no longer alerts at once on a fresh "unregistered". The Phone setup refresh retries every
+        15 seconds for up to 5 minutes until Asterisk answers.</li>
       <li><b>Service:</b> <code>nodecontrol</code> (<code>asl_dvs_dashboard</code> before 9.3.76 / 9.3.71.15-pi02w), with <code>Restart=always</code> and <code>WatchdogSec=30</code>, so it is restarted if it stops answering. That is why the separate Watchdog script isn't needed.</li>
       <li>The login is shared with SysMon (Chapter 3).</li>
     </ul>
@@ -2512,6 +2553,12 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <div class="call note"><span class="t">NOTE</span>Without Freeze, an image of a running Pi is "crash-consistent",
     like pulling the power: ext4 tidies up on the first boot. That is normally fine. For the cleanest image, tick
     Pause node services and Freeze filesystem.</div>
+  <div class="call note"><span class="t">NOTE</span><b>After a power loss during a job.</b> If a disk image (with Pause
+    node services) or Quiet System was cut off by a power loss, instmon starts the paused services again when it
+    starts. From 2.53.0 it leaves services that are already running or queued alone, starts the rest without waiting,
+    and checks them for up to 5 minutes before it reports any that really didn't come back. Before, services held at
+    boot behind 44helper's network wait were reported "did NOT come back … A reboot is recommended" while they were
+    still starting. A service systemd refuses to start (missing or masked) is still reported at once.</div>
 
   <h2><span class="n">13.7</span>System &amp; Comms, Execution Log</h2>
   <ul>
@@ -2588,14 +2635,22 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
 
   <h2><span class="n">14.4</span>Radio &amp; device</h2>
   <ul>
-    <li><b>WiFi radio</b> on or off, and the list of WiFi devices, for example a USB WiFi adapter beside the built-in one.</li>
+    <li><b>WiFi radio</b> on or off, and the list of WiFi devices, for example a USB WiFi adapter beside the built-in one.
+      Each adapter has <b>Auto</b> (NetworkManager decides), <b>Keep on</b> or <b>Keep off</b>, and <b>Use this device</b>
+      moves the watchdog to it.</li>
+    <li><b>Keep off</b> (5.38.0): the adapter is listed in <code>/etc/NetworkManager/conf.d/90-wifimon-keepoff.conf</code>
+      (by its permanent MAC address, or its name if it has none), so NetworkManager never uses it, from the start of
+      every boot, and "network online" waits for the adapter you use. It applies at once, and Auto or Keep on removes
+      it. If a Keep-off adapter is the only WiFi adapter left, wifimon lets NetworkManager use it until the next boot.
+      Uninstall removes the file. Before (5.37.0 and older) the adapter could come up at boot and be dropped seconds
+      later, taking the tunnel's route with it.</li>
     <li><b>Emergency hotspot</b>: the node makes its own WiFi, so a phone can reach this page and add a hotel network. Set a name and password (<b>New</b> makes one), and when it turns off by itself (15, 30, 60 or 120 minutes). While it is on, choose which network to join afterwards, or press <b>Stop hotspot</b>. The node leaves its current WiFi while the hotspot runs.</li>
   </ul>
 
   <h2><span class="n">14.5</span>Watchdog</h2>
   <table>
     <tr><th>Watchdog</th><th>Does</th><th>Default</th></tr>
-    <tr><td>WiFi watchdog</td><td>Reconnects to the reconnect list. If there is no connection for the set time, it shuts the node down cleanly. It waits, with no timer, while no networks are saved. From 5.36.0 it doesn't shut down or reboot in the first 10 minutes after boot, so a router that is slower to start after a power cut than the Pi isn't mistaken for a lost network.</td><td>shut down after 180 s offline; retry every 15 s</td></tr>
+    <tr><td>WiFi watchdog</td><td>Reconnects to the reconnect list. If there is no connection for the set time, it shuts the node down cleanly. It waits, with no timer, while no networks are saved. From 5.36.0 it doesn't shut down or reboot in the first 10 minutes after boot, so a router that is slower to start after a power cut than the Pi isn't mistaken for a lost network. From 5.38.0, in those 10 minutes, an idle adapter is connected straight away instead of after 30 seconds, and until the first connection the log says "No network yet after boot -- waiting" instead of counting a "Network lost".</td><td>shut down after 180 s offline; retry every 15 s</td></tr>
     <tr><td>Voltage watchdog</td><td>Shuts the node down cleanly after a sustained low-voltage spell.</td><td>below 0.90 V core for 30 s</td></tr>
   </table>
   <p>Two bars count up while a problem lasts: <b>No connection</b> and <b>Low voltage</b>. After you change networks,
@@ -2626,8 +2681,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>When</th><th>What it does</th></tr>
     <tr><td>Every minute</td><td>Checks the tunnel, but only when <code>/etc/wireguard/wg0.conf</code> exists and the tunnel is enabled at boot, the Pi has been up more than the wait after boot (5 minutes, so 44helper's boot order goes first), there is a normal network route, and no 44helper half-tunnel or exceptions test is running. A tunnel you stopped is left alone; one systemd is still starting is waited for.</td></tr>
     <tr><td>Counts as bad</td><td>The tunnel failed or wg0 is missing; it has never had a handshake; its last handshake is over 3 minutes old while a keepalive is set; or the tunnel server is routed into wg0 (a routing loop). Without a keepalive a quiet tunnel only handshakes when traffic goes through it, so from 5.36.0 the watchdog first sends one ping into the tunnel (to 44.0.0.1) and checks again 6 seconds later; only a tunnel that still has no fresh handshake counts as bad.</td></tr>
-    <tr><td>After 3 bad checks in a row</td><td>A routing loop: re-adds the tunnel server's route on the normal link (a live route; wg0.conf is never edited) and waits a minute. Otherwise, or if that didn't help: restarts the tunnel and waits a minute for a handshake.</td></tr>
-    <tr><td>Handshake back</td><td>Restarts netcheck, the bridges, md380-emu, STFU, the gateways, ircDDBGateway and webproxy (the enabled ones), in that order, so services that started without the tunnel reconnect.</td></tr>
+    <tr><td>A routing loop</td><td>From 5.37.0 fixed at the first check, also during the wait after boot: re-adds the tunnel server's route on the normal link (a live route; wg0.conf is never edited). During the boot wait nothing is restarted.</td></tr>
+    <tr><td>After 3 bad checks in a row</td><td>Restarts the tunnel and waits for a handshake. From 5.38.0 a restart may take up to 240 seconds (the clock wait alone can take 90), so it isn't counted as failed too early.</td></tr>
+    <tr><td>Handshake back</td><td>Restarts netcheck, the bridges, md380-emu, STFU, the gateways, ircDDBGateway and webproxy (the enabled ones), in that order, so services that started without the tunnel reconnect. From 5.38.0, while 44helper's late follow-up (<code>44helper-netready-late</code>) is running, it leaves that restart to 44helper.</td></tr>
     <tr><td>Still down</td><td>Tries again after 10 minutes, 30 minutes, then hourly; at most 6 times per boot, then shows "Gave up for this boot". It never reboots.</td></tr>
   </table>
   <ul>
@@ -2687,7 +2743,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <h2>How wifimon works</h2>
     <ul>
       <li><b>Files:</b> program <code>/usr/local/bin/wifimon.py</code>, service <code>wifimon</code>, port 8991. Settings and the reconnect list are in <code>/etc/wifimon/wifimon.conf</code>. NetworkManager's own profiles are in <code>/etc/NetworkManager/system-connections</code>. Shutdown state, which SysMon and the Dashboard read, is in <code>/run/wifimon/shutdown_state.json</code>. Reports are in <code>/var/log/wifimon</code>; the newest 10 are kept, each up to 256 KB.</li>
-      <li><b>WiFi:</b> everything goes through NetworkManager (<code>nmcli</code>). wifimon gives NetworkManager a 30-second head start to reconnect by itself, counts 3 failed checks as "lost", and treats a link with no traffic for 60 s as stuck. It reorders NetworkManager's join order to match the reconnect list.</li>
+      <li><b>WiFi:</b> everything goes through NetworkManager (<code>nmcli</code>). wifimon gives NetworkManager a 30-second head start to reconnect by itself (none in the first 10 minutes after boot, from 5.38.0; at start it waits up to 10 s for the saved adapter to appear), counts 3 failed checks as "lost", and treats a link with no traffic for 60 s as stuck. It reorders NetworkManager's join order to match the reconnect list.</li>
       <li><b>Undo:</b> a risky change is recorded as pending, with a 60-second deadline (120 for options). The page checks in from the new connection to keep it; otherwise the change is undone. A 180-second grace period follows each change.</li>
       <li><b>Voltage:</b> sampled through the Pi firmware. Snapshots are taken every 10 s, or every 5 s while voltage is low; the last 20 go into a shutdown report.</li>
       <li><b>Login:</b> its own, with the root password, checked through PAM. Sessions last 12 hours. The page polls status every 5 seconds.</li>
@@ -2721,6 +2777,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Installs or updates fail</td><td>44helper Update tab, Package recovery (Chapter 10)</td></tr>
     <tr><td>The Pi went off by itself</td><td>wifimon Shutdown reports (Chapter 14)</td></tr>
     <tr><td>Remote access is broken</td><td>44helper Overview and Ports (Chapters 7 and 8)</td></tr>
+    <tr><td>Something didn't come back after a reboot</td><td>44helper Boot tab: findings and timeline (Chapter 7)</td></tr>
   </table>
 
   <h2><span class="n">15.2</span>A page doesn't load</h2>
@@ -2821,7 +2878,8 @@ ss -tlnp | grep 9999</pre></li>
     <tr><td>Overview / Services / Ports lists</td><td>SysMon (Chapter 3)</td></tr>
     <tr><td>A service's journal</td><td>SysMon Journal pop-up, with a filter</td></tr>
     <tr><td>Hardware report</td><td>SysMon Hardware</td></tr>
-    <tr><td>Security results</td><td>SysMon Security</td></tr>
+    <tr><td>Security results</td><td>SysMon Security (full build)</td></tr>
+    <tr><td>Boot report (secrets removed)</td><td>44helper Boot tab: Copy boot report or Download .txt</td></tr>
     <tr><td>All Asterisk or DVSwitch config files</td><td>SysMon Edit, ASL AllConf / DVS AllConf: <b>remove passwords first</b></td></tr>
     <tr><td>Phone report</td><td>Dashboard Phone tab</td></tr>
     <tr><td>Execution log</td><td>instmon</td></tr>
@@ -2921,6 +2979,8 @@ free -m; zramctl</pre>
     <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch</td><td>44helper / you</td></tr>
     <tr><td class="mono">/etc/wifimon/wifimon.conf</td><td>wifimon settings and reconnect list</td><td>wifimon</td></tr>
     <tr><td class="mono">/var/log/wifimon/</td><td>shutdown reports</td><td>wifimon</td></tr>
+    <tr><td class="mono">/etc/NetworkManager/conf.d/90-wifimon-keepoff.conf</td><td>WiFi adapters set to Keep off (5.38.0)</td><td>wifimon</td></tr>
+    <tr><td class="mono">/var/lib/44helper/boot.log · boots/</td><td>one line per boot; saved boot reports, newest 5 (0.0.209)</td><td>44helper</td></tr>
     <tr><td class="mono">/run/asl_dvs/auth_session.json</td><td>shared Dashboard and SysMon logins</td><td>Dashboard, SysMon</td></tr>
     <tr><td class="mono">/run/44helper/sessions.json</td><td>44helper logins</td><td>44helper</td></tr>
     <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>44Net tunnel (mode 600)</td><td>44helper</td></tr>

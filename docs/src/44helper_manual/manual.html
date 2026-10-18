@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.208</b><br>Edition 2026-10-18</div>
+    <div class="ed"><b>44helper 0.0.212</b><br>Edition 2026-10-18</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_208_20261018.py</td><td>0.0.208</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_212_20261018.py</td><td>0.0.212</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
@@ -44,7 +44,7 @@
     <li><span class="no">1</span>What 44helper is, installing it, logging in</li>
     <li><span class="no">2</span>The page, step cards and the safety checks</li>
     <li class="pt">Part II · Status tabs and firewall</li>
-    <li><span class="no">3</span>Overview, Services and Ports</li>
+    <li><span class="no">3</span>Overview, Boot, Services and Ports</li>
     <li><span class="no">4</span>Firewall and port control, and Actions Log</li>
     <li><span class="no">5</span>The half tunnel card</li>
     <li class="pt">Part III · 44Net and remote access</li>
@@ -96,7 +96,7 @@
   <h2><span class="n">1.1</span>What it does</h2>
   <table>
     <tr><th>Area</th><th>Tabs</th><th>Chapter</th></tr>
-    <tr><td>Status</td><td>Overview, Services, Ports, Actions Log; the firewall cards sit on the tunnel tabs</td><td>3–5</td></tr>
+    <tr><td>Status</td><td>Overview, Boot, Services, Ports, Actions Log; the firewall cards sit on the tunnel tabs</td><td>3–5</td></tr>
     <tr><td>Remote access</td><td>Router Install, Full Tunnel, Split Tunnel, Nodes, Cloudflare</td><td>6–9</td></tr>
     <tr><td>Installers</td><td>ASL3, DVSwitch, SVXLink, M17, Ampersand</td><td>10–11</td></tr>
     <tr><td>Maintenance</td><td>Update, System Optimization</td><td>12</td></tr>
@@ -126,13 +126,13 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.208 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.212 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
         <span class="tab">ASL3</span><span class="tab">DVSwitch</span><span class="tab">SVXLink</span><span class="tab">M17</span><span class="tab">Ampersand</span>
         <span class="tab">Cloudflare</span><span class="tab">Update</span><span class="tab">System Optimization</span><span class="tab">Config</span>
-        <span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
+        <span class="tab">Boot</span><span class="tab">Services</span><span class="tab">Ports</span><span class="tab">Actions Log</span>
       </div>
     </div>
     <figcaption><b>Figure 1.1 · Illustration.</b> The header shows the callsign, node and version. Row one is 44Net
@@ -207,21 +207,22 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
 <section class="part">
   <div class="pn">PART II</div>
   <h1>Status tabs and firewall</h1>
-  <p>Four tabs that read the node and change little: Overview, Services, Ports and Actions Log. Then the firewall
+  <p>Five tabs that read the node and change little: Overview, Boot, Services, Ports and Actions Log. Then the firewall
     cards, which from 0.0.196 sit at the end of the Full and Split Tunnel tabs instead of a Firewall tab of their own,
     and the half tunnel card on the Full Tunnel tab.</p>
-  <ol start="3"><li>Overview, Services and Ports</li><li>Firewall and port control, and Actions Log</li><li>The half tunnel card</li></ol>
+  <ol start="3"><li>Overview, Boot, Services and Ports</li><li>Firewall and port control, and Actions Log</li><li>The half tunnel card</li></ol>
 </section>
 
 <section class="chapter" id="ch3">
   <div class="kicker">Chapter 3 · Status</div>
-  <h1 class="ch">Overview, Services and Ports</h1>
+  <h1 class="ch">Overview, Boot, Services and Ports</h1>
   <h2><span class="n">3.1</span>Overview tab</h2>
   <p>The banner at the top sums up the worst finding. The cards below it:</p>
   <table>
     <tr><th>Card</th><th>Shows</th></tr>
     <tr><td>Installed software</td><td>ASL3, DVSwitch, USRP2M17, SVXLink and Ampersand. Each is <b>installed</b> (version and running services), <b>broken</b> (half-installed packages, or a package without its program files), <b>leftovers</b> (removed, but settings, folders or unit files remain) or <b>absent</b>. Click a name to open its tab.</td></tr>
     <tr><td>Tunnel / wg0</td><td>Whether <code>wg0</code> is up, its address and peer, and the last handshake.</td></tr>
+    <tr><td>AllStar registration</td><td>From 0.0.212. Each node from <code>rpt show registrations</code>, green when registered and red when not, with the server it registers with and the address and port the AllStarLink server sees it at (the Perceived column): <b>Registered as 44.x.x.x:4569 · through the 44Net tunnel</b>, <b>your public internet address (not the tunnel)</b>, or <b>a private address (check NAT)</b>. On a split tunnel your public address is normal; on a full or half tunnel it should be the 44 address.</td></tr>
     <tr><td>Configured tunnels</td><td>The 44Net tunnels 44helper has set up: on the Pi (full or split) or on a router.</td></tr>
     <tr><td>44NetConnect firewall zone</td><td>The services and ports open to the 44Net side.</td></tr>
     <tr><td>Self-check findings</td><td><b>Red</b> if 44helper, SysMon, the Dashboard, Cockpit or Asterisk AMI is open in the 44NetConnect zone. <b>Amber</b> if <code>wg0.conf</code>, which holds your private key, is not mode 600. From 0.0.197: <b>red</b> when the tunnel server routes back into wg0 (a routing loop, section 7.3), <b>amber</b> when it is inside AllowedIPs and the endpoint pin is missing. From 0.0.198 four more checks, each from a problem seen on a real node:
@@ -237,7 +238,68 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <b>Fix on the tunnel tab →</b>: it opens the Full or Split tab, whichever is installed, and highlights that row of the
     Health and fixes card (section 7.6).</p>
 
-  <h2><span class="n">3.2</span>Services tab</h2>
+  <h2><span class="n">3.2</span>Boot tab <span class="badge test">TESTING</span></h2>
+  <p>From 0.0.209, between Config and Services: what happened when the node last started, in one place, to read, copy,
+    or hand to someone helping you (or an agent). 44helper serves both builds, so the tab is on the full build too. It
+    is read-only, except <b>Save a copy now</b>.</p>
+  <h3>This boot</h3>
+  <p>The summary: boot time and uptime, this boot's line from <code>/var/lib/44helper/boot.log</code> (7.7), where the
+    journal is kept (disk, or memory only) and how many boots it holds, the clock (NTP on, synchronised), the Pi's
+    power and temperature limits (<code>vcgencmd get_throttled</code>), the boot order, the <b>Tunnel</b> line, wifimon's
+    newest shutdown report and tunnel watchdog state, and every tool's version. The Tunnel line says
+    <b>policy routing (table 4444)</b> on a split tunnel set up the 0.0.212 way (7.3), whether the tunnel server is on
+    the normal route or routed into wg0, and warns while the older routing is still in use.</p>
+  <p>Below it, a <b>findings</b> list names what went wrong:</p>
+  <table>
+    <tr><th>Finding</th><th>From</th></tr>
+    <tr><td>netready not ready in time; the late follow-up ran</td><td>0.0.209</td></tr>
+    <tr><td>Failed units; units systemd restarted; enabled services that never started (a unit they require failed)</td><td>0.0.209, 0.0.211</td></tr>
+    <tr><td>Clock not synchronised; <code>systemd-time-wait-sync</code> holding the clock target</td><td>0.0.209, 0.0.211</td></tr>
+    <tr><td>Under-voltage; an unclean stop before this boot</td><td>0.0.209</td></tr>
+    <tr><td>The tunnel watchdog (wifimon) acted or gave up</td><td>0.0.209</td></tr>
+    <tr><td>The boot order incomplete, and the Health card's warnings</td><td>0.0.209</td></tr>
+    <tr><td>A routing loop (tunnel server routed into wg0); the older tunnel-server route line</td><td>0.0.210</td></tr>
+    <tr><td>ASL3 updates (<code>asl3-update-astdb</code>, <code>asl3-update-nodelist</code>) that took minutes</td><td>0.0.211</td></tr>
+    <tr><td>Asterisk bound to the tunnel address, and up before the tunnel</td><td>0.0.211</td></tr>
+    <tr><td>An "ordering cycle" logged by systemd at this boot</td><td>0.0.212</td></tr>
+  </table>
+  <h3>Timeline</h3>
+  <p>Read from <code>systemctl show</code>, so it works with a journal kept in memory. For each unit, the seconds after
+    boot that it started and became active, with its result, restarts and enabled state, and a <b>Last started</b>
+    column (the latest start, so a unit restarted later shows that time). Rows: time sync and
+    <code>time-wait-sync</code>, wait-online, the tunnel, netready and its late follow-up, netcheck, the DVSwitch services,
+    Asterisk, the ASL3 update units, the Node Controller tools and <code>multi-user.target</code>. <b>Red</b>: failed.
+    <b>Amber</b>: restarted by systemd, or the late follow-up ran.</p>
+  <h3>Logs</h3>
+  <p>Each log is read only when you press its <b>View</b> or <b>Copy</b> button:</p>
+  <ul>
+    <li>the boot log; this boot's journal for the tunnel, netready, netcheck and DVSwitch (<code>-o short-monotonic</code>); the previous boot's, when the journal keeps it;</li>
+    <li><code>systemd-analyze</code> (time, the critical chain of the tunnel and netready, blame); the clock; kernel lines for WiFi (including USB WiFi drivers), link, power and storage, with repeated lines shown once with a count; power limits;</li>
+    <li>the tunnel now: <code>wg show</code>, the routing rules and routes, and the route to the tunnel server with WireGuard's fwmark;</li>
+    <li>wifimon: watchdog status, lost-network reboots, its tunnel and shutdown lines, the newest shutdown report;</li>
+    <li>the Dashboard's boot tune and disconnect lines; instmon's held backups.</li>
+  </ul>
+  <h3>Saved copies of earlier boots</h3>
+  <p>The journal is often kept in memory only (System Optimization, 12.3), so the previous boot is gone after a
+    reboot. 44helper saves the boot report to <code>/var/lib/44helper/boots/</code> <b>6 minutes</b> after each boot and
+    updates it at <b>25 minutes</b> (after the late follow-up), one file per boot, the <b>newest 5</b> kept, at most 64 KB
+    each, mode 0600. Each one has View, Copy and Download. <b>Save a copy now</b> updates this boot's file.</p>
+  <h3>Copy boot report and Download .txt</h3>
+  <p>One plain-text report: a header with the host, the boot and the versions, then the findings, the timeline and every
+    log, times in seconds after boot, at most 60 KB. <b>Secrets are removed</b>: PrivateKey and PresharedKey lines,
+    <code>password=</code> and <code>token:</code> style values, <code>--token</code> arguments and long token strings.
+    It is meant for pasting into a help request.</p>
+  <h3>For agents and scripts</h3>
+<pre><span class="c"># logged in to the page (the login cookie)</span>
+GET /api/boot/report?format=json   <span class="c"># keys: summary, findings, timeline, sections, snapshots</span>
+GET /api/boot/report?format=text   <span class="c"># the text report</span>
+<span class="c"># over SSH</span>
+sudo python3 /usr/local/bin/44helper.py --boot-report [--json]</pre>
+  <p>Also <code>/api/boot/status</code>, <code>/api/boot/section?id=…</code> and <code>/api/boot/snapshot?name=…</code>. The
+    tab works without the other tools' newer versions: a missing boot log, tunnel watchdog status, Dashboard or instmon
+    shows "not there" instead of failing.</p>
+
+  <h2><span class="n">3.3</span>Services tab</h2>
   <p>Grouped lines, one per service or listening port. Masked services are marked.</p>
   <table>
     <tr><th>Group</th><th>Services</th></tr>
@@ -251,7 +313,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <tr><td>Dashboards (should stay private)</td><td>the Dashboard (<code>nodecontrol</code>, or <code>asl_dvs_dashboard</code> on older installs) and <code>dvs_dashboard</code></td></tr>
   </table>
 
-  <h2><span class="n">3.3</span>Ports tab</h2>
+  <h2><span class="n">3.4</span>Ports tab</h2>
   <p>A reference table of every port the node's software uses, checked against what is reachable through your
     remote-access setup. The line above it says where it looked: the Pi's 44NetConnect zone, the router's forward
     table, or "none (no tunnel configured yet)". <b>Running</b> means something listens on the port (for Cloudflare's
@@ -518,10 +580,10 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <tr><td>1</td><td>Firewall prereq</td><td>Installs and starts firewalld.</td></tr>
     <tr><td>1a</td><td>systemd-resolved prereq</td><td>Installs WireGuard and systemd-resolved, without which the tunnel can fail to start. From 0.0.200 the step is green only when resolved is running <b>and</b> answers (<code>resolvectl status</code> within 5 seconds); the card shows Running and Answers separately. Running the step restarts resolved once if it isn't answering. If it still doesn't answer, the step stays red: reboot, and if that doesn't help, set DNS to Off at 4a.</td></tr>
     <tr><td>2</td><td>Create the 44NetConnect zone</td><td><code>/etc/firewalld/zones/44NetConnect.xml</code>.</td></tr>
-    <tr><td>3</td><td>Inbound services and ports</td><td>Tick what other stations may reach: <b>AllStarLink IAX2</b> and <b>EchoLink / SvxLink</b> (on by default), <b>VOTER/RTCM</b> (optional). Asterisk AMI can be added but is flagged red. The Full tab also has your DVSwitch Mobile port and a custom port; the Split tab offers only IAX2 and EchoLink.</td></tr>
-    <tr><td>4</td><td>Paste WireGuard config</td><td>Paste the whole <code>[Interface]</code>/<code>[Peer]</code> block and press <b>Check and write wg0.conf (chmod 600)</b>. A config with no real private key is refused. A panel shows what the check will change (below); nothing is written until you press <b>Write wg0.conf</b>. Leave <b>Also back up a copy to the instmon library</b> ticked so you can recover the tunnel after re-flashing the card. <b>Load from instmon library</b> puts a saved copy back (it shows your private key).</td></tr>
+    <tr><td>3</td><td>Inbound services and ports</td><td>Tick what other stations may reach: <b>AllStarLink IAX2</b> and <b>EchoLink / SvxLink</b> (on by default), <b>VOTER/RTCM</b> (optional). Asterisk AMI can be added but is flagged red. The Full tab also has your DVSwitch Mobile port and a custom port. From 0.0.212 the Split tab offers IAX2 and VOTER/RTCM but not EchoLink: only 44Net hosts can reach a split tunnel. If firewalld has no <code>iax2</code> (or <code>echolink</code>) service, the step opens the ports instead: the IAX port from <code>iax.conf</code> <code>bindport</code>, default <code>4569/udp</code>. The step counts as done only when IAX is open.</td></tr>
+    <tr><td>4</td><td>Paste WireGuard config</td><td>Paste the whole <code>[Interface]</code>/<code>[Peer]</code> block and press <b>Check and write wg0.conf (chmod 600)</b>. A config with no real private key is refused. A panel shows what the check will change (below); nothing is written until you press <b>Write wg0.conf</b>. Leave <b>Also back up a copy to the instmon library</b> ticked so you can recover the tunnel after re-flashing the card. <b>Load from instmon library</b> puts a saved copy back (it shows your private key). From 0.0.212, once wg0.conf exists the step shows <b>Replace the config</b> instead (a new key or tunnel server): the same check before writing, the DNS and MTU settings carried over, and the old file saved as <code>/etc/wireguard/wg0.conf.pre-replace</code>.</td></tr>
     <tr><td>4a</td><td>DNS &amp; MTU</td><td>7.2.</td></tr>
-    <tr><td>4b</td><td>Split: Repair AllowedIPs · Full: reflector ports</td><td>7.3.</td></tr>
+    <tr><td>4b</td><td>Split: Split tunnel routing · Full: reflector ports</td><td>7.3.</td></tr>
     <tr><td>5</td><td>Attach wg0 to the zone</td><td>Moves wg0 into 44NetConnect.</td></tr>
     <tr><td>6</td><td>Enable + start the tunnel</td><td>7.4.</td></tr>
   </table>
@@ -529,11 +591,12 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <table>
     <tr><th>In the pasted config</th><th>What happens</th></tr>
     <tr><td><code>SaveConfig = true</code></td><td>Removed, always. wg-quick would rewrite the file every time the tunnel stops and drop 44helper's marked lines.</td></tr>
-    <tr><td>A <code>DNS =</code> line</td><td>Removed while systemd-resolved isn't answering, or when there is no <code>resolvconf</code>, so DNS is Off and the start can't fail on it. Set DNS on card 4a once step 1a is green. Kept when resolved answers.</td></tr>
+    <tr><td>A <code>DNS =</code> line</td><td>Removed while systemd-resolved isn't answering, or when there is no <code>resolvconf</code>, so DNS is Off and the start can't fail on it. Set DNS on card 4a once step 1a is green. Kept when resolved answers. From 0.0.212 a DNS server outside AllowedIPs is dropped from the line, with a note: lookups sent to it over wg0 would be dropped. A 44Net server such as 44.0.0.1 is kept.</td></tr>
     <tr><td>One 44Net address wider than /32</td><td><b>Change Address to /32</b>, ticked by default. Untick it only if ARDC gave you a subnet; check the portal.</td></tr>
     <tr><td>No <code>PersistentKeepalive</code></td><td><b>Add PersistentKeepalive = 25</b>, ticked by default. Without it a quiet tunnel goes idle and stations on 44Net can't reach the node.</td></tr>
-    <tr><td>AllowedIPs that don't fit the tab</td><td>Two choices: <b>Rewrite it</b> to this tab's shape (selected), or <b>Stop</b> and paste it on the other tab. Without a choice nothing is written.</td></tr>
-    <tr><td>Tunnel server inside AllowedIPs</td><td>The endpoint pin is added (7.3).</td></tr>
+    <tr><td>AllowedIPs that don't fit the tab</td><td>Two choices: <b>Rewrite it</b> to this tab's shape (selected), or <b>Stop</b> and paste it on the other tab. Without a choice nothing is written. From 0.0.212 the Split tab wants exactly <code>44.0.0.0/9, 44.128.0.0/10</code>: <code>0.0.0.0/0</code>, <code>::/0</code>, a pair of <code>0.0.0.0/1</code> halves and <code>44.0.0.0/8</code> (which takes in addresses that aren't amateur radio's) all get the same rewrite offer.</td></tr>
+    <tr><td>A split tunnel</td><td>From 0.0.212 the policy-routing block is added (7.3), and an older tunnel-server route line is removed. The panel shows it.</td></tr>
+    <tr><td>Tunnel server inside AllowedIPs, no policy routing</td><td>The endpoint pin is added (7.3). This is now only for configs that can't take the policy-routing block.</td></tr>
   </table>
   <ul>
     <li>Convert's write step runs the same check, and so does a config loaded from the library (it fills the paste box).</li>
@@ -554,35 +617,59 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     <li>From 0.0.201 a DNS server outside the tunnel's AllowedIPs is refused, because lookups sent to it over wg0 are dropped. On a split tunnel use "only 44Net names" with a 44Net server such as 44.0.0.1, or Off.</li>
     <li>From 0.0.193 the resolvectl options, and the <code>DNS =</code> line when <code>resolvconf</code> is systemd-resolved's, are refused while systemd-resolved isn't answering.</li>
     <li><b>MTU:</b> a number from 1280 to 1500 (blank or <code>off</code> removes it), between <code># 44helper-mtu-begin</code> / <code>-end</code>. WireGuard's own default is 1420.</li>
+    <li><b>The cards own their settings</b> (0.0.212). Setting DNS removes any raw <code>DNS =</code> line, and setting MTU removes any raw <code>MTU =</code> line, so the value on the card is the one in force.</li>
+    <li>From 0.0.211 the <code>PreDown = resolvectl revert %i</code> line ends in <code>|| true</code>. Without it, when systemd-resolved didn't answer, wg-quick stopped at that line and left wg0 up, so every later start failed. Older lines are fixed on the next write, by the Health card, Restart tunnel or Set the boot order.</li>
     <li>Restart the tunnel for either to take effect: <code>sudo systemctl restart wg-quick@wg0</code>.</li>
   </ul>
   <div class="call tip"><span class="t">TIP</span>With a full tunnel the Pi's normal DNS lookups already go through the
     tunnel, so Off is usually fine. A <code>DNS =</code> line is the most fragile option: it depends on
     <code>resolvconf</code>, and on these Pis that means systemd-resolved over D-Bus.</div>
-  <h2><span class="n">7.3</span>Step 4b</h2>
-  <p><b>Split: Fix the tunnel-server route</b> (0.0.197). Some 44Net Connect servers are themselves 44.x addresses.
-    With a split tunnel, wg-quick sends all of 44.0.0.0/9 into wg0, the server included, so WireGuard's own packets
-    loop back into the tunnel: no handshake, almost nothing received, and the 44Net Connect dashboard says
-    <b>idle</b>. <code>ip -4 route get &lt;endpoint&gt;</code> shows <code>dev wg0</code>. 44helper now writes an
-    <i>endpoint pin</i> into wg0.conf whenever it is needed, two lines between <code># 44helper-endpoint-pin-begin</code>
-    / <code>-end</code>:</p>
+  <h2><span class="n">7.3</span>Step 4b: Split tunnel routing</h2>
+  <p><b>The problem.</b> Some 44Net Connect servers are themselves 44.x addresses. With a split tunnel, wg-quick sends
+    all of 44.0.0.0/9 into wg0, the server included, so WireGuard's own packets loop back into the tunnel: no
+    handshake, almost nothing received, and the 44Net Connect dashboard says <b>idle</b>.
+    <code>ip -4 route get &lt;endpoint&gt;</code> shows <code>dev wg0</code>. Up to 0.0.211 44helper fixed this with a
+    route copied when the tunnel starts (the endpoint pin, below). That route belongs to one adapter: when WiFi moved to
+    another adapter, or Ethernet came and went, the kernel dropped it and the tunnel looped again.</p>
+  <p><b>Policy routing</b> (0.0.212). A split tunnel (every AllowedIPs inside 44/8, IPv4 only, no <code>Table</code> or
+    <code>FwMark</code> of its own) gets a routing block in wg0.conf, between <code># 44helper-routing-begin</code> /
+    <code>-end</code>:</p>
+<pre>Table = 4444
+FwMark = 0x4444
+PostUp = ip -4 rule del not fwmark 0x4444 table 4444 priority 10044 2>/dev/null || true; ip -4 rule add not fwmark 0x4444 table 4444 priority 10044
+PostDown = ip -4 rule del not fwmark 0x4444 table 4444 priority 10044 || true</pre>
+  <p>The 44Net routes go into table 4444, and one rule (priority 10044) sends everything <i>without</i> the mark to that
+    table. WireGuard marks its own packets, so they skip table 4444 and take the normal route, on whichever adapter is
+    up. The tunnel server can't loop back into wg0, whatever the network does. The tunnel-server route line is then
+    removed, and no NetworkManager hook is needed. A full tunnel is unchanged. Every 44helper write of wg0.conf applies
+    the block, and the paste check (7.1) shows it.</p>
+  <table>
+    <tr><th>Card 4b shows</th><th>Means</th><th>Button</th></tr>
+    <tr><td class="ok">Set</td><td>Policy routing is in wg0.conf and in the running tunnel.</td><td>—</td></tr>
+    <tr><td class="warn">Restart needed</td><td>The block is in wg0.conf, but the running tunnel still uses the old routing.</td><td><b>Restart the tunnel with the new routing</b> (from the LAN)</td></tr>
+    <tr><td class="warn">Older routing</td><td>The split tunnel still uses the tunnel-server route line; an amber banner says so, and whether it loops right now.</td><td><b>Switch to policy routing</b>: writes the block, restarts the tunnel (a LAN session stays up), waits for a handshake and checks the rule is there.</td></tr>
+  </table>
+  <p><b>Set the boot order</b> (7.7) also converts an older split tunnel ("split tunnel routing (older form)" in what is
+    missing) and then says to restart the tunnel. The Boot tab's Tunnel line (3.2) says <b>policy routing (table
+    4444)</b>, and warns while the older form is in use.</p>
+  <div class="call note"><span class="t">NOTE</span>Table 4444 is also the half tunnel's table (Chapter 5). The two are
+    never on at once: the half tunnel needs a config with no <code>Table =</code> line, and while it is in use the split
+    card is switched off.</div>
+  <h3>The older form: endpoint pin (0.0.197–0.0.211)</h3>
+  <p>Kept only for split tunnels not converted yet, and for configs that can't take the block (their own
+    <code>Table</code>, or IPv6). Two lines between <code># 44helper-endpoint-pin-begin</code> / <code>-end</code>:</p>
 <pre>PreUp = (wait up to 30 s for the normal default route); ip -4 route replace &lt;server&gt;/32 &lt;that route&gt;
 PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
-  <p>From 0.0.206 the PreUp line waits up to 30 seconds for the Pi's normal default route. Before, it copied the route
-    straight away and gave up silently if there wasn't one yet, which happens when the tunnel starts early at boot:
-    the tunnel then came up in a routing loop with no handshake. Now, if there is still no route after 30 seconds, the
-    line fails, so the tunnel start fails and the boot order's retry (7.7) starts it again 20 seconds later. A
-    host-name endpoint is looked up at that point and the address is saved in <code>/run/44helper-endpoint-wg0</code>,
-    so PostDown removes exactly that route.</p>
-  <p>Every 44helper write of wg0.conf adds, keeps, updates or removes it, and step 6 adds it before starting. It is left out for a full tunnel (wg-quick handles that) and for
-    <code>Table = off</code>. On step 4b a red banner and <b>Fix the tunnel-server route</b> repair an existing config and
-    add the route straight away, so the handshake returns without a restart. From 0.0.207, a pin in the older form
-    (before 0.0.206) gets an <b>amber</b> banner instead: the tunnel works now, but that line can fail at boot.
-    <b>Update the tunnel-server route</b> rewrites the two lines; nothing restarts. <b>Set the boot order</b> (7.7)
-    updates it too.</p>
-  <p><b>Split: Repair AllowedIPs</b> fixes a config pasted unedited. Under a split tunnel a full config sends every DNS
-    lookup into the tunnel, the classic cause of "AllStar works but DVSwitch and M17 don't". Restart the tunnel after.
-    It is switched off while the half tunnel or the full tunnel with exceptions is in use.</p>
+  <ul>
+    <li>From 0.0.206 the PreUp line waits up to 30 seconds for the normal default route; if there is none, the start fails and the boot order's retry (7.7) tries again 20 seconds later. A host-name endpoint is looked up then and saved in <code>/run/44helper-endpoint-wg0</code>.</li>
+    <li>Card 4b's red banner and <b>Fix the tunnel-server route</b> add it and the route at once; an amber banner and <b>Update the tunnel-server route</b> rewrite a pin from before 0.0.206.</li>
+    <li>0.0.210 added a NetworkManager hook, <code>/etc/NetworkManager/dispatcher.d/90-44helper-endpoint</code>, that moves the pinned route to the current default route when an interface comes up or goes down, DHCP renews or connectivity changes (<code>journalctl -t 44helper-endpoint</code>). From 0.0.212 the boot order needs it only while a pin is left.</li>
+    <li>From 0.0.211 a write while DNS is down no longer removes the pin of a host-name endpoint.</li>
+  </ul>
+  <p><b>Split: Repair AllowedIPs</b> is on the same card when the config still has the full-tunnel AllowedIPs. Under a
+    split tunnel a full config sends every DNS lookup into the tunnel, the classic cause of "AllStar works but DVSwitch
+    and M17 don't". It rewrites AllowedIPs to <code>44.0.0.0/9, 44.128.0.0/10</code>; restart the tunnel after. It is
+    switched off while the half tunnel or the full tunnel with exceptions is in use.</p>
   <p><b>Full: reflector ports</b> adds firewalld direct rules on the OUTPUT chain, scoped to <code>-o wg0</code>: outbound
     allows for the digital-voice reflectors the node dials out to, never an inbound opening. They only matter if
     outbound traffic is restricted.</p>
@@ -597,7 +684,8 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
   </table>
   <h2><span class="n">7.4</span>Step 6: Enable + start the tunnel</h2>
   <p>Runs <code>systemctl enable wg-quick@wg0</code> and <code>systemctl start wg-quick@wg0</code> (or the ARDC fallback unit
-    <code>44net-tunnel.service</code> where the wg-quick template is missing). From 0.0.193:</p>
+    <code>44net-tunnel.service</code> where the wg-quick template is missing). From 0.0.212, if the tunnel is already
+    running, step 6 <b>restarts</b> it, so a changed wg0.conf is used. From 0.0.193:</p>
   <ul>
     <li><b>DNS check first.</b> When wg0.conf's DNS setting goes through systemd-resolved (a <code>DNS =</code> line with systemd's <code>resolvconf</code>, or a resolvectl PostUp), it asks resolved for its status, with a 5-second limit. If there is no answer it restarts systemd-resolved once; if there is still none, the tunnel is not started, and the message says to reboot or remove the DNS setting. A <code>DNS =</code> line with no <code>resolvconf</code> at all is refused the same way.</li>
     <li><b>Waits up to 90 seconds</b> for the start (it runs as a background job, so the page doesn't hang).</li>
@@ -612,15 +700,19 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <li>Starts any enabled DVSwitch services that are stopped.</li>
   </ol>
   <p>Each result is a line in the step's output. Convert's enable step does the same.</p>
-  <p><b>Verify</b> then checks your public address through <code>connect.44net.cloud/myip</code> (it answers JSON; read correctly from 0.0.201) and Asterisk's AllStar
-    registrations. On a split tunnel myip shows your home internet address, because connect.44net.cloud isn't a 44Net
-    address; the handshake is what shows the tunnel works there.</p>
+  <p><b>Verify the tunnel and the AllStar registration</b>, under step 6, checks the tunnel itself from 0.0.212:</p>
+  <ul>
+    <li>the handshake's age, wg0's address, and that 44Net is routed through wg0;</li>
+    <li>that the tunnel server doesn't loop into wg0, and that names resolve;</li>
+    <li>each AllStar registration with the address it is registered as (as on the Overview card, 3.1);</li>
+    <li>your public address through <code>connect.44net.cloud/myip</code>. On a split tunnel myip shows your home internet address, because connect.44net.cloud isn't a 44Net address; the handshake is what shows the tunnel works there.</li>
+  </ul>
   <div class="call care"><span class="t">CAREFUL</span>Starting the tunnel can change how the Pi answers the network. If
     you are connected over SSH or Cockpit from outside your home network, that session may drop. Do step 6 from home,
     or at a keyboard and screen.</div>
   <h2><span class="n">7.5</span>The other buttons</h2>
   <ul>
-    <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one: <b>fix netcheck's unit</b> (a drop-in: oneshot, after the network is online), <b>Loosen</b> a bridge, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel. From 0.0.200 step 6 and the DVSwitch installer apply these by themselves, except the probe target, which needs your input.<br><b>Loosen</b> (from 0.0.201): a drop-in can't remove a dependency (systemd.unit(5): "dependencies can only be added in drop-ins"), so the earlier fix left netcheck in <code>Requires=</code>. 44helper now writes a copy of the bridge's unit to <code>/etc/systemd/system/&lt;unit&gt;</code>, first line <code># 44helper netcheck override</code>, with netcheck moved to <code>Wants=</code> and the ordering kept. It counts as done only when <code>systemctl show</code> no longer lists netcheck in Requires. A unit already overridden in <code>/etc</code> by something else is refused. <b>Revert</b> deletes the copies, restores the original script (the first backup is kept), and disables the wait-online unit if 44helper enabled it.</li>
+    <li><b>Troubleshooting: bridge startup (netcheck)</b>, under step 6: when Analog_Bridge, MMDVM_Bridge or STFU won't start after the tunnel comes up. A read-only scan names each problem (netcheck's unit type, missing ordering after the network, bridges hard-tied to netcheck, the wait-online unit, its probe target), and buttons fix each one: <b>fix netcheck's unit</b> (a drop-in: oneshot, after the network is online), <b>Loosen</b> a bridge, change the probe target and timeout, enable the wait-online unit, <b>Revert</b> all of it, and <b>Restart</b> netcheck and the bridges. Most likely needed on a full tunnel. From 0.0.200 step 6 and the DVSwitch installer apply these by themselves, except the probe target, which needs your input.<br><b>Loosen</b> (from 0.0.201): a drop-in can't remove a dependency (systemd.unit(5): "dependencies can only be added in drop-ins"), so the earlier fix left netcheck in <code>Requires=</code>. 44helper now writes a copy of the bridge's unit to <code>/etc/systemd/system/&lt;unit&gt;</code>, first line <code># 44helper netcheck override</code>, with netcheck moved to <code>Wants=</code> and the ordering kept. It counts as done only when <code>systemctl show</code> no longer lists netcheck in Requires. A unit already overridden in <code>/etc</code> by something else is refused. <b>Revert</b> deletes the copies, restores the original script (the first backup is kept), and disables the wait-online unit if 44helper enabled it.<br>From 0.0.211 the boot order doesn't rely on Loosen: it makes netcheck itself non-fatal with one drop-in (7.7), which also covers stfu and the packaged gateways that require netcheck in their own unit files. Loosen is still there for a single bridge; Revert also removes the non-fatal drop-in.</li>
     <li><b>Firewall and port control</b>, at the end of the tab: the 44NetConnect zone and Quick port control (Chapter 4). On the Full Tunnel tab, the half tunnel card (Chapter 5) and Full tunnel with exceptions (Chapter 8) come before it.</li>
     <li><b>Convert to Split / Full Tunnel</b>: switches an installed tunnel to the other kind, with a preview first.</li>
     <li><b>Purge</b>: three steps: stop and disable the tunnel (and the fallback unit), remove <code>/etc/wireguard/wg0.conf</code>, and delete the 44NetConnect zone, which also drops wg0's attachment and every service and port in it. wg0.conf is copied to the instmon library first. From 0.0.201 step 2 is refused while the tunnel is up (wg-quick needs the file to stop it), and while the half tunnel or exceptions is permanent (use Remove permanent first).</li>
@@ -641,9 +733,10 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <tr><td>Enabled DVSwitch services not running, or netcheck failed</td><td><b>Start them</b>: starts each one and shows the last log lines of any that fail. <b>Apply netcheck fixes</b>: the netcheck card's fixes that apply and aren't in place yet.</td></tr>
     <tr><td>Address wider than /32</td><td><b>Change to /32</b>, when wg0.conf has exactly one 44Net address. Doesn't restart the tunnel. Check the portal first.</td></tr>
     <tr><td>Old handshake, no keepalive</td><td><b>Add keepalive (25 s)</b>: adds <code>PersistentKeepalive = 25</code> under <code>[Peer]</code> and applies it to the running tunnel, so no restart is needed.</td></tr>
-    <tr><td>Tunnel server routes into wg0, or wg0.conf has the older pin</td><td><b>Fix the tunnel-server route</b> (7.3).</td></tr>
+    <tr><td>Tunnel server routes into wg0, or wg0.conf has the older pin</td><td><b>Fix the tunnel-server route</b>, or on a split tunnel <b>Switch to policy routing</b> (7.3).</td></tr>
+    <tr><td>Asterisk bound to the tunnel address (0.0.211)</td><td><b>Set the boot order</b> (7.7), until the boot order lets Asterisk bind early. <code>bindaddr</code> in <code>/etc/asterisk/iax.conf</code> [general] (following <code>#include</code> and <code>#tryinclude</code>, as <code>ip</code> or <code>ip:port</code>) is wg0's address or another 44 address. On a split tunnel use <code>bindaddr=0.0.0.0</code>: IAX to nodes outside 44Net would leave through the router with a 44 source address. At boot Asterisk starts before wg0 has the address, so the bind fails until Asterisk restarts; the boot order adds a sysctl that lets it bind early.</td></tr>
     <tr><td>Boot order not set (red when the tunnel isn't enabled at boot)</td><td><b>Set the boot order</b> (7.7).</td></tr>
-    <tr><td>DNS revert in a PostDown line (0.0.201)</td><td><b>Move to PreDown</b> (7.2). No restart needed.</td></tr>
+    <tr><td>DNS revert in a PostDown line (0.0.201), or a PreDown line without <code>|| true</code> (0.0.211)</td><td><b>Move to PreDown</b> (7.2), which also adds <code>|| true</code>. No restart needed.</td></tr>
     <tr><td>DNS setting with systemd-resolved silent</td><td><b>Restart systemd-resolved</b>, then checks it answers. <b>Set DNS to Off</b>: removes 44helper's DNS lines and any <code>DNS =</code> line.</td></tr>
   </table>
   <ul>
@@ -658,27 +751,39 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     Without this, they could start before the network, the tunnel or DNS were up: netcheck failed, the gateways
     couldn't reach their servers, and a tunnel start that failed at boot was never tried again. Step 6 sets it; the
     <b>6b. Boot order</b> card under step 6 shows what is in place, with <b>Set the boot order</b> and <b>Remove</b>; the
-    Health card offers it when something is missing. It takes effect at the next boot; nothing running is restarted.</p>
+    Health card offers it when something is missing. It takes effect at the next boot; nothing running is restarted.
+    The Boot tab (3.2) shows how the last boot went.</p>
   <table>
     <tr><th>Piece</th><th>What it does</th></tr>
-    <tr><td><code>44helper-netready.service</code></td><td>A oneshot that runs <code>/usr/local/sbin/44helper-netready</code> after <code>network-online.target</code> and the tunnel. It waits up to 180 seconds until there is a default route, the tunnel has a handshake (only when <code>wg-quick@wg0</code> is enabled) and names resolve, then finishes either way, so the services still start. Its journal line says which was missing: <code>journalctl -b -u 44helper-netready</code>.</td></tr>
-    <tr><td>Late follow-up <code>44helper-netready-late</code></td><td>From 0.0.208. When netready gives up after 180 seconds, it starts this follow-up, which keeps watching for up to 20 more minutes. Once the route, the handshake and DNS are all there, it restarts the enabled DVSwitch services once, in order, so gateways that started without a network reconnect.</td></tr>
+    <tr><td><code>44helper-netready.service</code></td><td>A oneshot that runs <code>/usr/local/sbin/44helper-netready</code> after <code>network-online.target</code> and the tunnel. It waits up to 180 seconds until there is a default route (one through wg doesn't count), the tunnel has a handshake (only when <code>wg-quick@wg0</code> is enabled and wg0.conf has an <code>Endpoint</code>) and names resolve, then finishes either way, so the services still start. From 0.0.211 it keeps real time: it works to a deadline and each lookup has a 3-second limit. Before, its timer counted sleeps; with DNS down each pass took about 13 seconds, systemd killed it at 210 seconds, and no boot-log line or late follow-up followed. Its journal line says which was missing: <code>journalctl -b -u 44helper-netready</code>.</td></tr>
+    <tr><td>Late follow-up <code>44helper-netready-late</code></td><td>From 0.0.208. When netready gives up after 180 seconds, it starts this follow-up (with <code>systemd-run --collect</code>, never twice), which keeps watching for up to 20 more minutes. Once the route, the handshake and DNS are all there, from 0.0.211 it restarts netcheck (which restarts what requires it) and then only the enabled services that aren't running, Asterisk included, each after a <code>reset-failed</code> so a start limit can't block it.</td></tr>
     <tr><td>Boot log <code>/var/lib/44helper/boot.log</code></td><td>From 0.0.208. One line per boot from netready (ready, or what was missing and after how long), and one from the late follow-up. It keeps the last 20 lines, so the result survives a reboot even when System Optimization keeps the journal in memory only. The 6b card shows this boot's line, and the Health card warns when this boot wasn't ready in time.</td></tr>
-    <tr><td>DVSwitch drop-ins <code>44helper-boot.conf</code></td><td>netcheck and each DVSwitch service that is installed (bridges, md380-emu, STFU, the gateways, ircDDBGateway, webproxy) start after it (<code>After=</code>/<code>Wants=</code>). From 0.0.208 this includes the capitalised names <code>Analog_Bridge</code>, <code>MMDVM_Bridge</code> and <code>STFU</code>. All but netcheck also restart 15 seconds after a failure; from 0.0.208 netcheck is retried 30 seconds after a failure, up to 10 times in 15 minutes.</td></tr>
-    <tr><td>Tunnel drop-in for <code>wg-quick@wg0</code></td><td><code>Restart=on-failure</code> every 20 seconds, with no limit, so a start that fails at boot (DNS or the network not ready, or the pin finding no route) is tried again. From 0.0.208 it first runs <code>/usr/local/sbin/44helper-timewait</code>: in the first 10 minutes after boot, when NTP is on, it waits up to 90 seconds for the clock to sync, then starts the tunnel either way. The Pi has no clock battery, and after a power cut its clock can start behind; the tunnel server drops handshakes with an older time than the last one it saw. Before wg0 is up, the time sync goes over the LAN, so a full tunnel can't block it.</td></tr>
+    <tr><td>DVSwitch drop-ins <code>44helper-boot.conf</code></td><td>netcheck and each DVSwitch service that is installed (bridges, md380-emu, STFU, the gateways, ircDDBGateway, webproxy) start after it (<code>After=</code>/<code>Wants=</code>). From 0.0.208 this includes the capitalised names <code>Analog_Bridge</code>, <code>MMDVM_Bridge</code> and <code>STFU</code>. All but netcheck also restart 15 seconds after a failure; netcheck is retried 30 seconds after a failure, up to 10 times in 15 minutes.</td></tr>
+    <tr><td>netcheck non-fatal drop-in <code>netcheck.service.d/44helper-nonfatal.conf</code></td><td>From 0.0.211. Repeats netcheck's <code>ExecStart</code> with a <code>-</code> prefix: netcheck still runs its check, but a failed check no longer fails the unit, so nothing that requires it is stopped. netready does the waiting. 44helper checks it with <code>systemctl show -p ExecStart</code> (<code>ignore_errors=yes</code>).</td></tr>
+    <tr><td>ASL3 update units</td><td>From 0.0.211 <code>asl3-update-astdb</code> and <code>asl3-update-nodelist</code> get the same ordering drop-in, so they wait for netready. On one node astdb had retried for 15 minutes and held the boot open.</td></tr>
+    <tr><td>Tunnel drop-in for <code>wg-quick@wg0</code></td><td><code>Restart=on-failure</code> every 20 seconds, with no limit, so a start that fails at boot (DNS or the network not ready, or the pin finding no route) is tried again. From 0.0.208 it first runs <code>/usr/local/sbin/44helper-timewait</code>: in the first 10 minutes after boot, when NTP is on, it waits up to 90 seconds for the clock to sync, then starts the tunnel either way. The Pi has no clock battery, and after a power cut its clock can start behind; the tunnel server drops handshakes with an older time than the last one it saw. From 0.0.212 the wait is <b>only for a full tunnel</b> (wg0.conf routes <code>0.0.0.0/0</code>): on a split tunnel the time sync goes over the LAN and the handshake works as soon as the clock is right, so the script exits at once (17 seconds saved on one node).</td></tr>
+    <tr><td>Asterisk early bind <code>/etc/sysctl.d/90-44helper-nonlocal-bind.conf</code></td><td>From 0.0.211, only when <code>bindaddr</code> in iax.conf is wg0's address or another 44 address (7.6): <code>net.ipv4.ip_nonlocal_bind = 1</code>, so Asterisk can bind to that address at boot before wg0 has it.</td></tr>
+    <tr><td>Split tunnel routing</td><td>From 0.0.212 an older split tunnel is converted to policy routing (7.3); restart the tunnel afterwards.</td></tr>
+    <tr><td>NetworkManager hook <code>90-44helper-endpoint</code></td><td>From 0.0.210, with NetworkManager only. Moves a pinned tunnel-server route when the network changes (7.3). From 0.0.212 needed only while wg0.conf still has a pin.</td></tr>
     <tr><td>Enabled at boot</td><td><code>wg-quick@wg0</code>, and the network's wait-online unit (<code>NetworkManager-wait-online</code> or <code>systemd-networkd-wait-online</code>), if they weren't.</td></tr>
   </table>
-  <p>From 0.0.208 <b>Set the boot order</b> also applies the netcheck fixes (7.5), and the card counts as done only
-    when no bridge still requires netcheck: a dependency that failed isn't covered by the bridges' restarts. Step 6's
-    routing-loop check also uses WireGuard's firewall mark (<code>ip route get … mark</code>), so a healthy full tunnel
-    isn't reported as a loop.</p>
-  <p><b>Remove</b> deletes the unit, the scripts and the drop-ins; the tunnel stays enabled at boot. The DVSwitch
+  <p><b>Why "netcheck still required by …" didn't clear before 0.0.211.</b> The status checked all 13 DVSwitch units,
+    but the fix only knew the three bridges: stfu's unit file is DVSwitch's own in <code>/etc/systemd/system</code>, so
+    44helper wouldn't copy over it, and the packaged gateways (ysfgateway and the others) require netcheck in their own
+    unit files. Instead of copying unit files, Set the boot order (and Apply netcheck fixes) now writes the one non-fatal
+    drop-in on netcheck itself. The card counts as done when no unit is held back by netcheck any more.</p>
+  <p>Set the boot order also applies the other netcheck fixes (7.5), and puts the tunnel server's route back on the
+    normal link if it loops right now. Step 6's routing-loop check uses WireGuard's firewall mark
+    (<code>ip route get … mark</code>), so a healthy full tunnel isn't reported as a loop.</p>
+  <p><b>Remove</b> deletes the unit, the scripts, the drop-ins (the non-fatal one included), the sysctl file and the
+    NetworkManager hook; the tunnel stays enabled at boot, and the policy-routing block stays in wg0.conf. The DVSwitch
     install step <b>Start DVSwitch after the network is ready</b> sets the DVSwitch part, and DVSwitch purge step 1
     removes it (Chapter 10).</p>
-  <div class="call note"><span class="t">NOTE</span>wifimon 5.35.0 adds a <b>tunnel watchdog</b> as a safety net for
-    what the boot order can't cover: five minutes after boot, and every minute after that, it restarts a tunnel that has
-    no handshake and then the DVSwitch services. Use wifimon 5.36.0 or later: 5.35.0 saw every full tunnel as a routing
-    loop and restarted the services about 8 minutes after each boot. See the user manual's wifimon chapter.</div>
+  <div class="call note"><span class="t">NOTE</span>wifimon's <b>tunnel watchdog</b> (5.35.0) is a safety net for what
+    the boot order can't cover: five minutes after boot, and every minute after that, it restarts a tunnel that has no
+    handshake and then the DVSwitch services. From 5.37.0 it fixes a routing loop at the first check (also during the
+    wait after boot); from 5.38.0 it leaves the DVSwitch restart to the late follow-up while that is running, and allows
+    a tunnel restart up to 240 seconds. Use wifimon 5.38.0 or later. See the user manual's wifimon chapter.</div>
 </section>
 
 <section class="chapter" id="ch8">
@@ -942,8 +1047,10 @@ PostDown = ip -4 route del &lt;server&gt;/32 || true</pre>
     <li>the radio services (Asterisk, the bridges, md380-emu, SvxLink, ircDDBGateway, STFU).</li>
   </ol>
   <p><b>Turn off</b> restarts exactly what was paused, in reverse. 44helper, wifimon, SSH, Cockpit, networking and the
-    firewall are never touched. The card shows the commands first. A left-on quiet mode is restored when 44helper
-    starts.</p>
+    firewall are never touched. The card shows the commands first. If 44helper restarts while quiet mode is on, it is
+    restored in the background. From 0.0.212 the quiet-mode state records the boot it was turned on in: quiet mode left
+    on before a <b>reboot</b> is cleared when 44helper starts, because the reboot already started everything, instead of
+    restarting services that are still waiting for the network.</p>
   <div class="call care"><span class="t">CAREFUL</span>The node is <b>off the air</b> while quiet mode is on, and it stays
     on until you turn it off: no 30-minute auto-restore, unlike instmon's Quiet System. It can't be turned on while a
     package job holds apt's locks. If something doesn't come back, the card shows the likely cause and offers
@@ -1071,8 +1178,8 @@ sudo wg show wg0</pre>
     <tr><td><code>nft -f</code> / <code>iptables-restore</code></td><td>wg-quick's full-tunnel firewall step failed: <code>nftables</code> or <code>iptables</code> is missing.</td></tr>
   </table>
   <p>Up but no handshake, or the dashboard says <b>idle</b>: first run <code>ip -4 route get &lt;endpoint&gt;</code>. If it says
-    <code>dev wg0</code>, the tunnel server is routed into its own tunnel: Split tab step 4b, <b>Fix the tunnel-server
-    route</b> (section 7.3). Otherwise check the key and the Endpoint on connect.44net.cloud, and that UDP out to the
+    <code>dev wg0</code>, the tunnel server is routed into its own tunnel: Split tab step 4b, <b>Switch to policy routing</b>
+    (section 7.3). Otherwise check the key and the Endpoint on connect.44net.cloud, and that UDP out to the
     Endpoint isn't blocked. Your <code>Address</code> should be what the portal shows (a single 44Net Connect address is a /32).</p>
   <h2><span class="n">14.3</span>I lost access after a tunnel change</h2>
   <ul>
@@ -1088,13 +1195,23 @@ sudo wg show wg0</pre>
   </ol>
   <h2><span class="n">14.5</span>The tunnel or DVSwitch doesn't come back after a reboot</h2>
   <ol class="steps">
-    <li>Health card: if it offers <b>Set the boot order</b>, or step 4b shows the amber older-pin banner, press it, then reboot (7.3, 7.7).</li>
-    <li>See what happened at this boot: the 6b card's <b>This boot</b> line, or <code>cat /var/lib/44helper/boot.log</code> for the last 20 boots (from 0.0.208). For the detail: <code>journalctl -b -u wg-quick@wg0 -u 44helper-netready -u 44helper-netready-late -u netcheck --no-pager | head -80</code>. The netready line says whether the network, the tunnel handshake or DNS was late.</li>
-    <li>The tunnel starts but gets no handshake for the first minutes after a power cut: the clock was behind. From 0.0.208 the tunnel waits for the clock (7.7); check <code>timedatectl</code> shows <code>NTP service: active</code>.</li>
-    <li>A routing loop after boot (Overview, red): <b>Fix the tunnel-server route</b>; with 0.0.206 or later the pin waits for the route, so it shouldn't come back.</li>
-    <li>wifimon's tunnel watchdog (5.35.0; use 5.36.0 or later) restarts a tunnel with no handshake after five minutes and then the DVSwitch services; its card on the wifimon page shows what it did.</li>
+    <li>Open the <b>Boot</b> tab (3.2) and read the findings. To ask for help, press <b>Copy boot report</b> (secrets are removed) or run <code>sudo python3 /usr/local/bin/44helper.py --boot-report</code>. The saved copies keep the last 5 boots even when the journal is in memory only.</li>
+    <li>Health card: if it offers <b>Set the boot order</b>, press it, then reboot (7.7).</li>
+    <li>Split tunnel with a routing loop, or card 4b showing <b>Older routing</b>: <b>Switch to policy routing</b> (7.3). The tunnel server then stays on the normal route whichever adapter is up, so WiFi changing adapter can't loop it.</li>
+    <li>WiFi adapter set to <b>Keep off</b> in wifimon: use wifimon 5.38.0 or later. Earlier versions let NetworkManager bring the adapter up at boot and then took it down, which took the tunnel's route with it. From 5.38.0 NetworkManager never uses a Keep-off adapter.</li>
+    <li>For the detail: <code>cat /var/lib/44helper/boot.log</code> (last 20 boots), or <code>journalctl -b -u wg-quick@wg0 -u 44helper-netready -u 44helper-netready-late -u netcheck --no-pager | head -80</code>. The netready line says whether the network, the tunnel handshake or DNS was late.</li>
+    <li>A full tunnel gets no handshake for the first minutes after a power cut: the clock was behind. The tunnel waits for the clock (7.7); check <code>timedatectl</code> shows <code>NTP service: active</code>.</li>
+    <li>"netcheck still required by …" on the 6b card with 0.0.210 or older: update 44helper and Set the boot order again (7.7).</li>
+    <li>wifimon's tunnel watchdog restarts a tunnel with no handshake after five minutes and then the DVSwitch services; its card on the wifimon page shows what it did.</li>
   </ol>
-  <h2><span class="n">14.6</span>The Pi runs out of memory</h2>
+  <h2><span class="n">14.6</span>AllStar is registered at the wrong address</h2>
+  <p>The Overview's <b>AllStar registration</b> card (3.1) and Verify (7.4) show the address the AllStarLink server sees.
+    On a split tunnel that is your public internet address; on a full or half tunnel it should be the 44 address.</p>
+  <ul>
+    <li><b>A private address:</b> the server sees you behind NAT it can't reach; check the router.</li>
+    <li><b>Asterisk bound to the 44 address</b> (Health card, 7.6): with <code>bindaddr</code> set to wg0's address in <code>/etc/asterisk/iax.conf</code>, IAX fails at boot until Asterisk restarts, and on a split tunnel IAX to nodes outside 44Net leaves through your router with a 44 source address. On a split tunnel set <code>bindaddr=0.0.0.0</code> and restart Asterisk. If you keep the 44 address, Set the boot order so the bind works at boot.</li>
+  </ul>
+  <h2><span class="n">14.7</span>The Pi runs out of memory</h2>
   <p>Check swap is on: <code>swapon --show</code>. If an older 44helper turned it off, use <b>Swap — restore</b>
     (Chapter 12) or <code>sudo systemctl enable --now dphys-swapfile</code>.</p>
 </section>
@@ -1108,16 +1225,25 @@ sudo wg show wg0</pre>
     <tr><td class="mono">/usr/local/bin/44helper.py</td><td>the program (a link into <code>/usr/local/lib/asl_dvs/44helper/</code>); <code>/opt/44helper/asl_dvs_m17_44helper.py</code> is a second link for older tools</td></tr>
     <tr><td class="mono">/etc/44helper/44helper.conf</td><td>settings: server, identity, tunnels, router access, nodes</td></tr>
     <tr><td class="mono">/etc/44helper/44helper_guard_keep.json</td><td>services you chose to keep masked</td></tr>
-    <tr><td class="mono">/etc/44helper/44helper_quiet_state.json</td><td>what quiet mode paused</td></tr>
+    <tr><td class="mono">/etc/44helper/44helper_quiet_state.json</td><td>what quiet mode paused, and from 0.0.212 the boot it was turned on in</td></tr>
     <tr><td class="mono">/etc/44helper/terminal.enable</td><td>terminal switch</td></tr>
     <tr><td class="mono">/run/44helper/sessions.json</td><td>logins (cleared at reboot)</td></tr>
-    <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>the tunnel config (mode 600); marker blocks <code>44helper-dns</code>, <code>-mtu</code>, <code>-endpoint-pin</code>, <code>-half</code>, <code>-fullx</code></td></tr>
+    <tr><td class="mono">/etc/wireguard/wg0.conf</td><td>the tunnel config (mode 600); marker blocks <code>44helper-dns</code>, <code>-mtu</code>, <code>-routing</code> (split policy routing, 0.0.212), <code>-half</code>, <code>-fullx</code>, and <code>-endpoint-pin</code> (older split tunnels only)</td></tr>
+    <tr><td class="mono">/etc/wireguard/wg0.conf.pre-replace</td><td>the config before the last <b>Replace the config</b> (0.0.212)</td></tr>
     <tr><td class="mono">/etc/firewalld/zones/44NetConnect.xml</td><td>the 44Net zone</td></tr>
     <tr><td class="mono">/etc/asl_dvs/instmon_library/config/</td><td>wg0.conf backups: <code>wg0.conf</code>, <code>wg0.conf.pre-halftunnel</code>, <code>wg0.conf.pre-fullx</code></td></tr>
     <tr><td class="mono">/etc/asl_dvs/instmon_library/config_restore/</td><td>the Config tab's Restore point, save points and automatic copies</td></tr>
     <tr><td class="mono">/run/44helper-half/ · /run/44helper-fullx/</td><td>test state, undo scripts and logs (cleared at reboot)</td></tr>
     <tr><td class="mono">/etc/44helper/halftunnel.json · fullx.json</td><td>what Make permanent saved</td></tr>
     <tr><td class="mono">/etc/sysctl.d/90-44helper-halftunnel.conf</td><td>loose return-path check on wg0</td></tr>
+    <tr><td class="mono">/etc/sysctl.d/90-44helper-nonlocal-bind.conf</td><td><code>net.ipv4.ip_nonlocal_bind = 1</code>, only when Asterisk binds to a 44 address (boot order, 0.0.211)</td></tr>
+    <tr><td class="mono">/usr/local/sbin/44helper-netready · 44helper-timewait</td><td>the boot order's network wait and clock wait (7.7)</td></tr>
+    <tr><td class="mono">/etc/systemd/system/&lt;unit&gt;.d/44helper-boot.conf</td><td>boot-order drop-ins: the tunnel, netcheck, the DVSwitch services and (0.0.211) the ASL3 update units</td></tr>
+    <tr><td class="mono">/etc/systemd/system/netcheck.service.d/44helper-nonfatal.conf</td><td>netcheck's check made non-fatal (0.0.211); replaces the copied bridge unit files for the boot order</td></tr>
+    <tr><td class="mono">/etc/NetworkManager/dispatcher.d/90-44helper-endpoint</td><td>moves a pinned tunnel-server route when the network changes (0.0.210); legacy, needed only while wg0.conf has a pin</td></tr>
+    <tr><td class="mono">/run/44helper-endpoint-wg0</td><td>the pinned tunnel server's address (older split tunnels only)</td></tr>
+    <tr><td class="mono">/var/lib/44helper/boot.log</td><td>one line per boot from netready and the late follow-up, last 20 lines</td></tr>
+    <tr><td class="mono">/var/lib/44helper/boots/</td><td>saved boot reports (0.0.209): one per boot, newest 5, 64 KB each, mode 0600</td></tr>
     <tr><td class="mono">/etc/profile.d/44helper-halftunnel.sh · 44helper-fullx.sh</td><td>login reminders</td></tr>
     <tr><td class="mono">~/remove_half_tunnel.sh · ~/remove_full_exceptions.sh</td><td>removal scripts (also in <code>/root</code>), with 0600 wg0.conf copies</td></tr>
   </table>
@@ -1128,11 +1254,14 @@ sudo wg show wg0</pre>
     <tr><td class="mono">wg-quick@wg0 · 44net-tunnel.service</td><td>the tunnel, or the ARDC fallback unit</td></tr>
     <tr><td class="mono">44helper-halfundo.timer · 44helper-fullxundo.timer</td><td>the 15-minute auto-undo (transient, made by <code>systemd-run</code>)</td></tr>
     <tr><td class="mono">44helper-job-*</td><td>package and install jobs, run as their own systemd units</td></tr>
+    <tr><td class="mono">44helper-netready.service</td><td>the boot order's wait for the network, tunnel and DNS (7.7)</td></tr>
+    <tr><td class="mono">44helper-netready-late</td><td>the late follow-up (transient, made by <code>systemd-run --collect</code>)</td></tr>
   </table>
   <h2>Routing</h2>
   <table>
     <tr><th>Priority / table</th><th>Owner</th></tr>
     <tr><td>1100–1105, table 4444</td><td>half tunnel</td></tr>
+    <tr><td>10044 (<code>not fwmark 0x4444</code>), table 4444</td><td>split tunnel policy routing (0.0.212); WireGuard marks its own packets with <code>FwMark = 0x4444</code></td></tr>
     <tr><td>1150, 1160, 1161</td><td>full tunnel with exceptions</td></tr>
     <tr><td>32764, 32765, table 51820</td><td>wg-quick's own full-tunnel rules</td></tr>
   </table>
@@ -1140,7 +1269,9 @@ sudo wg show wg0</pre>
   <p>Every route needs the login cookie; every POST also needs an <code>X-Requested-With</code> header. Each tab has
     <code>/api/&lt;tab&gt;/script</code> (its step list) and <code>/api/&lt;tab&gt;/action</code>; jobs are polled at
     <code>/api/action_status?job_key=…</code>. The tunnel cards use <code>/api/firewall/half_status</code>,
-    <code>/api/fullx/status</code> and <code>/api/firewall/action</code>.</p>
+    <code>/api/fullx/status</code> and <code>/api/firewall/action</code>. The Boot tab uses <code>/api/boot/status</code>,
+    <code>/api/boot/report?format=json|text</code>, <code>/api/boot/section?id=…</code> and
+    <code>/api/boot/snapshot?name=…</code> (3.2).</p>
 </section>
 
 </body>
