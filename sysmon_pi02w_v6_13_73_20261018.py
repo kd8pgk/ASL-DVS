@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.72-pi02w"
+VERSION      = "6.13.73-pi02w"
 BUILD_DATE   = "20261017"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -660,6 +660,7 @@ _REGISTER_RE = re.compile(
 _REG_LIVE_NODE_RE  = re.compile(r'\b(\d{4,6})\b')
 _REG_LIVE_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
 _REG_LIVE_ADDR_RE = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5})\b')
+_REG_LIVE_COLS_RE = re.compile(r'^(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$')
 
 def get_live_registrations() -> dict:
 
@@ -678,9 +679,14 @@ def get_live_registrations() -> dict:
         if not m:
             continue
         node = m.group(1)
-        pm = _REG_LIVE_ADDR_RE.search(line)
-        if pm:
-            perceived[node] = pm.group(1)
+        cols = _REG_LIVE_COLS_RE.match(line.strip())
+        if cols and _REG_LIVE_ADDR_RE.fullmatch(cols.group(3)):
+            perceived[node] = cols.group(3)
+        else:
+            addrs = _REG_LIVE_ADDR_RE.findall(line)
+            first = (line.split() or [""])[0]
+            if len(addrs) >= 2 or (addrs and addrs[0] != first):
+                perceived[node] = addrs[-1]
         low  = line.lower()
         if any(w in low for w in _REG_LIVE_BAD_WORDS):
             nodes[node] = "unregistered"

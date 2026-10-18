@@ -1,6 +1,16 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_72_20261018.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_73_20261018.py`. Newest entries first.
+
+## 6.13.73-pi02w (2026-10-18)
+
+- **Reg tab: "Registered as" shows the node's own address.** `rpt show registrations`
+  lists the registration server first (Host, such as `52.20.63.146:443`) and the
+  address the server sees for the node after it (Perceived). 6.13.72 took the first
+  address on the line, so it showed the server's address and called it "your public
+  internet address" (magicbox). It now reads the Perceived column, and, when the
+  columns can't be read, the last address on the line that isn't the server's. A line
+  whose only address is the server's shows no "Registered as" row.
 
 ## 6.13.72-pi02w (2026-10-18)
 The Reg tab shows the address the node is registered as. The full build is not
