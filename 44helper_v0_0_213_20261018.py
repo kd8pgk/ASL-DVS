@@ -43,8 +43,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.212"
-APP_STAGE = "v0.0.212: split tunnel on policy routing, replace config, registration address; history in changelogs/44helper.md"
+APP_VERSION = "0.0.213"
+APP_STAGE = "v0.0.213: split tunnel routing table 4445 (half tunnel keeps 4444); history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -6107,14 +6107,15 @@ _WG_GW_WAIT = ("for T in $(seq 30); do R=" + _WG_GW_EXPR + " || true; [ -n \"$R\
 
 _WG_RT_BEGIN = "# 44helper-routing-begin"
 _WG_RT_END = "# 44helper-routing-end"
-_WG_RT_TABLE = "4444"
-_WG_RT_MARK = "0x4444"
-_WG_RT_PRIO = "10044"
+_WG_RT_TABLE = "4445"
+_WG_RT_MARK = "0x4445"
+_WG_RT_PRIO = "10045"
 
 def _wg_rt_lines() -> list[str]:
     rule = f"not fwmark {_WG_RT_MARK} table {_WG_RT_TABLE} priority {_WG_RT_PRIO}"
     return [_WG_RT_BEGIN, f"Table = {_WG_RT_TABLE}", f"FwMark = {_WG_RT_MARK}",
-            f"PostUp = ip -4 rule del {rule} 2>/dev/null || true; ip -4 rule add {rule}",
+            f"PostUp = ip -4 rule del priority 10044 2>/dev/null || true; ip -4 rule del {rule} 2>/dev/null || true; "
+            f"ip -4 rule add {rule}",
             f"PostDown = ip -4 rule del {rule} || true",
             _WG_RT_END]
 
@@ -6155,7 +6156,7 @@ def _wg_apply_split_routing(text: str) -> tuple[str, str]:
         new = _wg_insert_in_interface(base, want)
         if new is None:
             return text, ""
-        return new, ("Split tunnel routing: the 44Net routes now live in their own table (4444) and WireGuard's own "
+        return new, ("Split tunnel routing: the 44Net routes now live in their own table (4445, not the half tunnel's 4444) and WireGuard's own "
                      "packets are marked, so they always take the normal route, on whichever adapter is up. The "
                      "tunnel-server route line and the NetworkManager hook aren't needed any more. Takes effect when "
                      "the tunnel restarts.")
@@ -18020,14 +18021,14 @@ function _piAllowedIpsCardHtml(kind, aip) {
   } else if (aip.half_mode && aip.half_mode !== 'off') {
     html += '<div class="step-body">The half tunnel is ' + asl3EscapeAttr(aip.half_mode) + ' on this node (Full Tunnel tab). It keeps <code>AllowedIPs = 0.0.0.0/0</code> on purpose so nodes outside 44Net can reach you, so this repair is switched off.</div>';
   } else if (shape === 'split' && aip.routing === 'policy') {
-    html += '<div class="step-body">The 44Net routes are in their own table (' + '4444' + ') and WireGuard marks its own packets, so the tunnel server is always reached on the normal route, through whichever adapter is up. No tunnel-server route line or NetworkManager hook is needed.</div>';
+    html += '<div class="step-body">The 44Net routes are in their own table (' + '4445' + ') and WireGuard marks its own packets, so the tunnel server is always reached on the normal route, through whichever adapter is up. No tunnel-server route line or NetworkManager hook is needed.</div>';
     if (!aip.routing_live) {
       html += '<div class="ov-banner lvl-warn">wg0.conf has the new routing, but the running tunnel still uses the old one. Restart the tunnel (from the LAN) to use it.</div>';
       html += '<div class="step-actions"><button class="btn-run" onclick="piSplitRouting()">Restart the tunnel with the new routing</button></div>';
     }
   } else if (shape === 'split' && aip.routing === 'outdated') {
     html += '<div class="ov-banner lvl-warn">This split tunnel keeps the tunnel server on the normal route with a route copied when the tunnel starts' + (aip.endpoint_loop_live ? ', and right now it routes back into wg0 (routing loop)' : '') + '. If WiFi or Ethernet changes after that, the route can disappear and the tunnel loops.</div>';
-    html += '<div class="step-body">Switch to policy routing: three lines in wg0.conf (Table 4444, FwMark 0x4444 and a routing rule) replace the tunnel-server route line. WireGuard&#39;s own packets then always use the normal route, on any adapter. The tunnel is restarted to use it (a LAN session stays up).</div>';
+    html += '<div class="step-body">Switch to policy routing: three lines in wg0.conf (Table 4445, FwMark 0x4445 and a routing rule) replace the tunnel-server route line. WireGuard&#39;s own packets then always use the normal route, on any adapter. The tunnel is restarted to use it (a LAN session stays up).</div>';
     html += '<div class="step-actions"><button class="btn-run" onclick="piSplitRouting()">Switch to policy routing</button></div>';
   } else if (aip.endpoint_pin_outdated && !aip.endpoint_loop_live) {
     html += '<div class="ov-banner lvl-warn">wg0.conf has an older tunnel-server route line (endpoint pin) for <code>' + asl3EscapeAttr(aip.endpoint_host || '') + '</code>. The tunnel works now, but that line gives up if the tunnel starts before the normal network route exists, which can happen at boot; the tunnel then comes up in a routing loop with no handshake.</div>';
@@ -25283,7 +25284,7 @@ def _bt_tunnel_line(t: dict) -> str:
     if not t["up"]:
         return "wg0 is not up"
     if not t["pin_needed"]:
-        rt = {"policy": ", policy routing (table 4444)" + ("" if t.get("routing_live") else ", not active until the tunnel restarts")}
+        rt = {"policy": ", policy routing (table 4445)" + ("" if t.get("routing_live") else ", not active until the tunnel restarts")}
         return "up" + (f", server {t['endpoint']}" if t["endpoint"] else "") + rt.get(t.get("routing", ""), "")
     return (f"up, server {t['endpoint']} " + ("routed into wg0 (routing loop)" if t["loop"] else "on the normal route")
             + (", older route line in wg0.conf" if t["pin_outdated"] else ""))

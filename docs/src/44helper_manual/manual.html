@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>44helper 0.0.212</b><br>Edition 2026-10-18</div>
+    <div class="ed"><b>44helper 0.0.213</b><br>Edition 2026-10-18</div>
   </div>
   <div class="body">
     <h1>44helper Manual<br><span>Every tab in detail</span></h1>
@@ -27,7 +27,7 @@
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>44helper</td><td class="mono">44helper_v0_0_212_20261018.py</td><td>0.0.212</td></tr>
+      <tr><td>44helper</td><td class="mono">44helper_v0_0_213_20261018.py</td><td>0.0.213</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_85_20261014.py</td><td>6.13.85 (Half tunnel checks)</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">44helper is a common tool: the same file runs on the Pi Zero 2 W and on
@@ -126,7 +126,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
   <h2><span class="n">1.4</span>The header</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.212 · Log out all devices · Log out</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--vio)">44 HELPER</span><span class="meta">N0CALL · Node &lt;NODE&gt; · v0.0.213 · Log out all devices · Log out</span></div>
       <div class="tabs">
         <span class="tab on" style="background:var(--vio)">Overview</span><span class="tab">Router Install</span><span class="tab">Full Tunnel</span>
         <span class="tab">Split Tunnel</span><span class="tab">Nodes</span><span class="brk"></span>
@@ -247,7 +247,7 @@ sudo python3 /usr/local/bin/44helper.py --uninstall</pre>
     journal is kept (disk, or memory only) and how many boots it holds, the clock (NTP on, synchronised), the Pi's
     power and temperature limits (<code>vcgencmd get_throttled</code>), the boot order, the <b>Tunnel</b> line, wifimon's
     newest shutdown report and tunnel watchdog state, and every tool's version. The Tunnel line says
-    <b>policy routing (table 4444)</b> on a split tunnel set up the 0.0.212 way (7.3), whether the tunnel server is on
+    <b>policy routing (table 4445)</b> on a split tunnel set up the 0.0.212 way (7.3), whether the tunnel server is on
     the normal route or routed into wg0, and warns while the older routing is still in use.</p>
   <p>Below it, a <b>findings</b> list names what went wrong:</p>
   <table>
@@ -634,12 +634,12 @@ sudo python3 /usr/local/bin/44helper.py --boot-report [--json]</pre>
   <p><b>Policy routing</b> (0.0.212). A split tunnel (every AllowedIPs inside 44/8, IPv4 only, no <code>Table</code> or
     <code>FwMark</code> of its own) gets a routing block in wg0.conf, between <code># 44helper-routing-begin</code> /
     <code>-end</code>:</p>
-<pre>Table = 4444
-FwMark = 0x4444
-PostUp = ip -4 rule del not fwmark 0x4444 table 4444 priority 10044 2>/dev/null || true; ip -4 rule add not fwmark 0x4444 table 4444 priority 10044
-PostDown = ip -4 rule del not fwmark 0x4444 table 4444 priority 10044 || true</pre>
-  <p>The 44Net routes go into table 4444, and one rule (priority 10044) sends everything <i>without</i> the mark to that
-    table. WireGuard marks its own packets, so they skip table 4444 and take the normal route, on whichever adapter is
+<pre>Table = 4445
+FwMark = 0x4445
+PostUp = ip -4 rule del priority 10044 2>/dev/null || true; ip -4 rule del not fwmark 0x4445 table 4445 priority 10045 2>/dev/null || true; ip -4 rule add not fwmark 0x4445 table 4445 priority 10045
+PostDown = ip -4 rule del not fwmark 0x4445 table 4445 priority 10045 || true</pre>
+  <p>The 44Net routes go into table 4445, and one rule (priority 10045) sends everything <i>without</i> the mark to that
+    table. WireGuard marks its own packets, so they skip table 4445 and take the normal route, on whichever adapter is
     up. The tunnel server can't loop back into wg0, whatever the network does. The tunnel-server route line is then
     removed, and no NetworkManager hook is needed. A full tunnel is unchanged. Every 44helper write of wg0.conf applies
     the block, and the paste check (7.1) shows it.</p>
@@ -651,10 +651,8 @@ PostDown = ip -4 rule del not fwmark 0x4444 table 4444 priority 10044 || true</p
   </table>
   <p><b>Set the boot order</b> (7.7) also converts an older split tunnel ("split tunnel routing (older form)" in what is
     missing) and then says to restart the tunnel. The Boot tab's Tunnel line (3.2) says <b>policy routing (table
-    4444)</b>, and warns while the older form is in use.</p>
-  <div class="call note"><span class="t">NOTE</span>Table 4444 is also the half tunnel's table (Chapter 5). The two are
-    never on at once: the half tunnel needs a config with no <code>Table =</code> line, and while it is in use the split
-    card is switched off.</div>
+    4445)</b>, and warns while the older form is in use.</p>
+  <div class="call note"><span class="t">NOTE</span>0.0.212 used table 4444, mark 0x4444 and priority 10044, which is also the half tunnel&#39;s table (Chapter 5). From 0.0.213 the split tunnel uses its own table 4445 (mark 0x4445, priority 10045); a file written by 0.0.212 counts as the older form and is rewritten, and the new PostUp line removes the old rule.</div>
   <h3>The older form: endpoint pin (0.0.197–0.0.211)</h3>
   <p>Kept only for split tunnels not converted yet, and for configs that can't take the block (their own
     <code>Table</code>, or IPv6). Two lines between <code># 44helper-endpoint-pin-begin</code> / <code>-end</code>:</p>
@@ -1261,7 +1259,7 @@ sudo wg show wg0</pre>
   <table>
     <tr><th>Priority / table</th><th>Owner</th></tr>
     <tr><td>1100–1105, table 4444</td><td>half tunnel</td></tr>
-    <tr><td>10044 (<code>not fwmark 0x4444</code>), table 4444</td><td>split tunnel policy routing (0.0.212); WireGuard marks its own packets with <code>FwMark = 0x4444</code></td></tr>
+    <tr><td>10045 (<code>not fwmark 0x4445</code>), table 4445</td><td>split tunnel policy routing (0.0.212 used 4444/10044; 0.0.213 and later 4445/10045); WireGuard marks its own packets with <code>FwMark = 0x4445</code></td></tr>
     <tr><td>1150, 1160, 1161</td><td>full tunnel with exceptions</td></tr>
     <tr><td>32764, 32765, table 51820</td><td>wg-quick's own full-tunnel rules</td></tr>
   </table>
