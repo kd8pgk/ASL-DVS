@@ -1,6 +1,32 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_35_0_20261018.py`. Newest entries first.
+Current file: `wifimon_v5_36_0_20261018.py`. Newest entries first.
+
+## 5.36.0 (2026-10-18)
+
+Fixes from a boot audit. wifimon serves both builds.
+
+- **Fix: false routing loop on every full tunnel.** The tunnel watchdog's loop check
+  ran `ip -4 route get <server>` without WireGuard's firewall mark. With a full
+  tunnel, wg-quick's rules send every unmarked lookup to wg0, so a healthy tunnel
+  looked like a loop. About 8 minutes after each boot the watchdog would add a
+  stray route, send a false "Tunnel has no handshake" alert and restart all the
+  DVSwitch services. The check now adds `mark <fwmark>` (from
+  `wg show wg0 fwmark`) when the tunnel has one, which is how WireGuard's own
+  packets are routed.
+- **No keepalive: probe before acting.** A tunnel without `PersistentKeepalive` only
+  handshakes when something sends traffic, so an idle split tunnel could show "no
+  handshake yet" or an old handshake while working fine. The watchdog now sends one
+  ping into the tunnel (to 44.0.0.1), waits 6 s and checks again; only if there's
+  still no fresh handshake does it count as bad. With a keepalive set, nothing
+  changes.
+- **Lost-network shutdown/reboot waits 10 minutes after boot.** After a power cut the
+  router can take longer to start than the Pi, and the WiFi watchdog could shut down
+  or reboot the Pi while the router was still booting. Now it doesn't act until the
+  Pi has been up 600 s (logged once).
+- Tested: the 5.35.0 suite plus full tunnel healthy (no loop, lookup uses the mark),
+  no keepalive with a probe that brings a handshake (no restart) and one that
+  doesn't (restart), an old handshake without keepalive, and the boot grace.
 
 ## 5.35.0 (2026-10-18)
 

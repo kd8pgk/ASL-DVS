@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.35.0"
+APP_VERSION = "5.36.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -1450,6 +1450,8 @@ TG_EVERY = 60
 TG_WAIT_HS = 60
 TG_BACKOFF = (0, 600, 1800, 3600)
 TG_MAX_TRIES = 6
+TG_PROBE = "44.0.0.1"
+TG_PROBE_WAIT = 6
 TG_DV_UNITS = ("netcheck.service", "analog_bridge.service", "Analog_Bridge.service", "mmdvm_bridge.service",
                "MMDVM_Bridge.service", "md380-emu.service", "stfu.service", "STFU.service", "ysfgateway.service",
                "ysfparrot.service", "p25gateway.service", "nxdngateway.service", "ircddbgatewayd.service",
@@ -1569,10 +1571,16 @@ def _tg_endpoint_ip() -> str:
     m = re.search(r"\s(\d+\.\d+\.\d+\.\d+):\d+", out) if rc == 0 else None
     return m.group(1) if m else ""
 
+def _tg_fwmark() -> str:
+    rc, out = _tg_run(["wg", "show", TG_IFACE, "fwmark"])
+    mark = out.strip() if rc == 0 else ""
+    return mark if mark and mark != "off" and re.match(r"^(0x[0-9a-fA-F]+|\d+)$", mark) else ""
+
 def _tg_loop(ip: str) -> bool:
     if not ip:
         return False
-    rc, out = _tg_run(["ip", "-4", "route", "get", ip])
+    mark = _tg_fwmark()
+    rc, out = _tg_run(["ip", "-4", "route", "get", ip] + (["mark", mark] if mark else []))
     toks = out.split()
     return rc == 0 and "dev" in toks[:-1] and toks[toks.index("dev") + 1] == TG_IFACE
 
@@ -1618,9 +1626,19 @@ class _TunnelGuard:
         info: Dict[str, object] = {"hs_age": age}
         if loop:
             return "the tunnel server routes back into wg0 (routing loop)", dict(info, loop=True)
-        if age == -1:
+        stale = age == -1 or (age is not None and age >= TG_HS_MAX)
+        if stale and not _tg_keepalive():
+            _tg_run(["ping", "-c", "1", "-W", "3", "-I", TG_IFACE, TG_PROBE], timeout=6)
+            _shutdown_event.wait(TG_PROBE_WAIT)
+            age = _tg_hs_age()
+            info["hs_age"] = age
+            stale = age == -1 or (age is not None and age >= TG_HS_MAX)
+            if stale:
+                return ("no handshake, even after sending a packet into the tunnel" if age == -1 else
+                        f"last handshake {age} s ago, even after sending a packet into the tunnel"), info
+        elif age == -1:
             return "no handshake yet", info
-        if age is not None and age >= TG_HS_MAX and _tg_keepalive():
+        elif stale:
             return f"last handshake {age} s ago", info
         return None, dict(info, state="healthy", detail="handshake " + ("ok" if age is None else f"{age} s ago"))
 
@@ -1755,6 +1773,20 @@ def _net_reboots_public() -> Dict[str, object]:
     stamps = _net_reboots_load()
     return {"count": len(stamps), "limit": NET_REBOOT_LIMIT, "window_secs": NET_REBOOT_WINDOW_SECS,
             "reset_at": (stamps[0] + NET_REBOOT_WINDOW_SECS) if stamps else None}
+
+NET_LOSS_BOOT_GRACE = 600
+_net_grace_logged = False
+
+def _net_loss_boot_grace_over() -> bool:
+    global _net_grace_logged
+    up = _tg_uptime()
+    if up >= NET_LOSS_BOOT_GRACE:
+        return True
+    if not _net_grace_logged:
+        _net_grace_logged = True
+        log.warning("No network, but the Pi booted %d s ago: no shutdown or reboot until %d s after boot "
+                    "(the router may still be starting)", int(up), NET_LOSS_BOOT_GRACE)
+    return False
 
 def _net_loss_act(down_secs: int) -> bool:
     if NETWORK_LOSS_ACTION != "reboot":
@@ -2184,7 +2216,7 @@ def _watchdog_loop() -> None:
                         log.warning("Network lost — starting shutdown timer")
                         _health_incr("drops")
                         _wd_update(down_since_mono=down_since, last_drop_at=time.time())
-                    if (loop_start - down_since) >= NO_CONN_SHUTDOWN_SECS:
+                    if (loop_start - down_since) >= NO_CONN_SHUTDOWN_SECS and _net_loss_boot_grace_over():
                         if _net_loss_act(NO_CONN_SHUTDOWN_SECS):
                             break
                         if not net_reboot_held:
