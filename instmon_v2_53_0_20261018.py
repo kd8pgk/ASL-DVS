@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.52.0"
-DATE_STR ="2026-10-14"
+VERSION ="2.53.0"
+DATE_STR ="2026-10-18"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -2637,14 +2637,100 @@ def _quiesce_startup_sweep():
         except Exception as exc:
             log_event(f"STARTUP RECOVERY: orphan check failed: {exc}", "err")
 
-    ok, results = _unquiesce_services()
-    if ok:
+    pending = _quiesce_startup_queue(state.get("job_id"), stopped, state.get("started_at"))
+    if pending:
+        threading.Thread(target=_quiesce_startup_watch, args=(pending,),
+                         name="quiesce-recover", daemon=True).start()
+
+QUIESCE_RECOVER_WAIT_SEC = int(os.environ.get("INSTMON_QUIESCE_RECOVER_WAIT_SEC", "300"))
+QUIESCE_RECOVER_POLL_SEC = 10
+
+def _systemd_queued_jobs():
+    try:
+        r = subprocess.run(["systemctl", "list-jobs", "--no-legend", "--plain"],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return set()
+    units = set()
+    for line in (r.stdout or "").splitlines():
+        parts = line.split()
+        if len(parts) >= 3 and parts[0].isdigit():
+            units.add(parts[1])
+    return units
+
+def _quiesce_unit_names(unit):
+    return {unit} if "." in unit else {unit, unit + ".service"}
+
+def _quiesce_startup_queue(job_id, stopped, started_at=None):
+    with _quiesce_lock:
+        queued = _systemd_queued_jobs()
+        pending, failed = [], []
+        for tier, label, unit in list(reversed(stopped)):
+            if systemctl_is_active(unit) == "active":
+                log_event(f"STARTUP RECOVERY: {label} ({unit}) is already running", "info")
+                continue
+            if queued & _quiesce_unit_names(unit):
+                log_event(f"STARTUP RECOVERY: {label} ({unit}) already has a start job queued -- "
+                          "leaving it to systemd", "info")
+                pending.append((tier, label, unit))
+                continue
+            try:
+                r = subprocess.run(["systemctl", "start", "--no-block", unit],
+                                   capture_output=True, text=True, timeout=15)
+                start_ok = r.returncode == 0
+                detail = ((r.stderr or "").strip().splitlines() or [""])[0]
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+                start_ok, detail = False, f"error: {exc}"
+            if start_ok:
+                log_event(f"STARTUP RECOVERY: start queued for {label} ({unit})", "info")
+                pending.append((tier, label, unit))
+            else:
+                log_event(f"STARTUP RECOVERY: {label} ({unit}) could not be started: "
+                          f"{detail or 'systemctl start failed'}", "err")
+                failed.append((tier, label, unit))
+        if failed:
+            _quiesce_state_write(job_id, list(reversed(failed)), started_at=started_at)
+        else:
+            _quiesce_state_clear()
+    if failed:
+        log_event(
+            "STARTUP RECOVERY INCOMPLETE -- these services did NOT come back: "
+            + ", ".join(f"{l} ({u})" for _t, l, u in failed)
+            + ". The node may be off the air. A reboot is recommended.",
+            "err",
+        )
+    if not pending:
+        if not failed:
+            log_event("STARTUP RECOVERY: all services are running. Node is back on the air.", "ok")
+        return []
+    log_event(f"STARTUP RECOVERY: waiting up to {QUIESCE_RECOVER_WAIT_SEC // 60} min for "
+              f"{len(pending)} service(s) to start (at boot some wait for the network).", "info")
+    return pending
+
+def _quiesce_startup_watch(pending):
+    end = time.monotonic() + QUIESCE_RECOVER_WAIT_SEC
+    while True:
+        states = {unit: systemctl_is_active(unit) for _t, _l, unit in pending}
+        if all(st == "active" for st in states.values()) or time.monotonic() >= end:
+            break
+        time.sleep(QUIESCE_RECOVER_POLL_SEC)
+    queued = _systemd_queued_jobs()
+    results = []
+    for _t, label, unit in pending:
+        st = states.get(unit, "unknown")
+        ok = st in ("active", "activating", "reloading")
+        if not ok and queued & _quiesce_unit_names(unit):
+            st += ", start job still queued"
+        results.append((label, unit, ok, st))
+        if not ok:
+            log_event(f"STARTUP RECOVERY: {label} ({unit}) is not running (now {st})", "err")
+    if all(ok for _l, _u, ok, _s in results):
         log_event(f"STARTUP RECOVERY: {_quiesce_format_results(results)} Node is back on the air.", "ok")
         return
     failed = [f"{l} ({u})" for l, u, k, _s in results if not k]
     log_event(
-        "STARTUP RECOVERY INCOMPLETE -- these services did NOT come back: "
-        + (", ".join(failed) if failed else "(none reported)")
+        f"STARTUP RECOVERY INCOMPLETE -- these services did NOT come back within "
+        f"{QUIESCE_RECOVER_WAIT_SEC // 60} min: " + ", ".join(failed)
         + ". The node may be off the air. A reboot is recommended.",
         "err",
     )
