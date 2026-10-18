@@ -1,6 +1,31 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_80_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_81_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.81-pi02w (2026-10-18)
+
+YSF, P25 and NXDN tabs lose their Tune row; their Connect buttons warn when their
+gateway or Analog_Bridge is down; every Tune button is now Connect. The full build is
+not changed.
+
+- **YSF, P25, NXDN: Tune row removed.** The text box and Tune button above the search
+  row are gone.
+- **Connect takes Tune's job.** When nothing is picked from the menu, Connect (or Enter
+  in the search box) tunes what is typed there, through the same quick tune Tune used:
+  a talkgroup number (1–8 digits) on P25 and NXDN, a `host:port` or `IP:port` address
+  on YSF (other YSF text stays a search). Something picked from the menu still wins.
+  The search box stays usable when the list is missing or empty.
+- **Save.** P25 and NXDN Save the picked talkgroup, or else the typed number, or else
+  the last number tuned (the server still only saves talkgroups in the host list).
+  YSF Save is unchanged (a picked reflector only).
+- **Gateway warnings.** The 15 s service check also covers `ysfgateway.service`,
+  `p25gateway.service` and `nxdngateway.service`, in the same single `systemctl` call,
+  and the status reply's `svc` carries `ysf`, `p25` and `nxdn`. YSF, P25 and NXDN
+  Connect show red with a strike-through when their gateway or Analog_Bridge isn't
+  running, with a hover note naming what is down. A restarting gateway counts as
+  running; a gateway that isn't installed, or an unknown state, shows no warning.
+- **Tune renamed Connect** on the FCS, D-STAR and XLX quick rows. No button on the
+  Dashboard says Tune any more.
 
 ## 9.3.80-pi02w (2026-10-18)
 
