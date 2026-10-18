@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.77-pi02w"
+VERSION      = "9.3.78-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -8239,7 +8239,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn:active { transform: scale(.95); }
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
-#asl-tune-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; }
+#asl-connect-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
 .btn-blue   { color: var(--blue);   border-color: var(--blue-dim); }
@@ -9153,27 +9153,18 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
       </div>
       <div class="tab-panel">
         <div id="pg-ASL" class="hidden">
-          <div class="quick-bar">
-            <input id="cbn-input" class="quick-inp" type="text" inputmode="numeric"
-              pattern="[0-9]*" placeholder="Node number…" maxlength="12"
-              oninput="ndcQtSync('ASL')"
-              onkeydown="if(event.key==='Enter')doConnectByNumber()">
-            <button id="asl-tune-btn" class="btn btn-teal" onclick="doConnectByNumber()">Tune</button>
-            <button id="lh-btn-ASL" class="btn-last lh-off" onclick="openModeLast('ASL')">LH</button>
-            <button id="asl-qt-save-btn" class="btn btn-muted" onclick="ndcQtSave('ASL')" disabled
-              aria-label="Save this node to favorites" title="Save to favorites">Save</button>
-          </div>
           <div id="asl-card" class="tgc-card tgc-asl">
             <input id="asl-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: node, callsign or place" aria-label="Search AllStar nodes"
-              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ASL')" disabled>
+              placeholder="Node #, call or place" aria-label="Search AllStar nodes"
+              autocomplete="off" spellcheck="false" oninput="ndcSearchSoon('ASL')"
+              onkeydown="if(event.key==='Enter')ndcConnect('ASL')">
             <select id="asl-ref-select" class="tgc-select" aria-label="AllStar node"
               onchange="ndcButtons('ASL')" disabled>
               <option value="">Type to search…</option>
             </select>
             <button id="asl-connect-btn" class="btn btn-teal" onclick="ndcConnect('ASL')" disabled>Connect</button>
-            <button id="lh-btn-ASLNODE" class="btn-last lh-off" onclick="ndcLast('ASL')"
-              aria-label="Open this node's page on the AllStar stats site" aria-disabled="true">LH</button>
+            <button id="lh-btn-ASL" class="btn-last lh-off" onclick="openModeLast('ASL')"
+              aria-label="Open the AllStar Last Heard page set on the Edit tab">LH</button>
             <button id="asl-save-btn" class="btn btn-muted" onclick="ndcSave('ASL')" disabled
               aria-label="Save this node to favorites" title="Save to favorites">Save</button>
             <div id="asl-card-msg" class="tgc-card-msg" role="status" hidden></div>
@@ -11542,23 +11533,24 @@ async function aslConnect(node,name){
    favorite row makes.  Save (card or quick bar) goes to the tab's
    save-*-favorite action.  One "saving" flag per tab is shared by the card
    and quick-bar Save buttons so the two can't run at once.
-   ASL: /var/lib/asterisk/astdb.txt, LH opens the node's AllStar stats page.
+   ASL: /var/lib/asterisk/astdb.txt.  v9.3.78: no quick bar; the card takes
+   its jobs (typed: a bare node number in the search box connects/saves even
+   when it is not listed; Save falls back to the last number connected).  LH
+   is lh-btn-ASL, the Edit tab's ASL Last Heard URL (openModeLast).
    ECHO: chan_echolink's "echolink dbdump" (stations logged in right now),
    LH opens EchoLink's logins page (it has no page per node). */
 const NDC_TTL_MS=300000;
 const NDC={
   ASL:{card:'asl-card',msg:'asl-card-msg',filter:'asl-filter',sel:'asl-ref-select',
-    connectBtn:'asl-connect-btn',saveBtn:'asl-save-btn',lhBtn:'lh-btn-ASLNODE',
-    qtInput:'cbn-input',qtBtn:'asl-qt-save-btn',
+    connectBtn:'asl-connect-btn',saveBtn:'asl-save-btn',typed:true,
     api:'/api/asl-directory',saveAction:'save-asl-favorite',favApi:'/api/asl-nodes',
     favsLoaded:n=>{_lastAslNodes=n;renderASLGrid(_lastAslNodes,_lastLinkedNode);},
     connect:(node,name)=>aslConnect(node,name),
-    lhUrl:r=>'https://stats.allstarlink.org/stats/'+encodeURIComponent(r[0]),
     optText:m=>[m[0],m[1],m[3]||m[2]||''].filter(Boolean).join(' · '),
     noListOpt:'No node list',selectOpt:'Select node…',
     listErr:'Could not check the AllStar node list. Reopen this tab to try again.',
-    emptyMsg:'The AllStar node list is empty. Run: sudo asl3-update-astdb',
-    missingMsg:'AllStar node list not found. Turn on asl3-update-astdb.',
+    emptyMsg:'The AllStar node list is empty. Run: sudo asl3-update-astdb. You can still type a node number.',
+    missingMsg:'AllStar node list not found. Turn on asl3-update-astdb. You can still type a node number.',
     missingRetryMs:0,
     foundMsg:(d,total)=>total.toLocaleString()+' nodes listed'+
       (d.mtime?', dated '+new Date(d.mtime*1000).toLocaleDateString():''),
@@ -11598,11 +11590,17 @@ function ndcSelected(k){
   const v=sel?sel.value:'';
   return v&&_ndc[k].rows[v]?_ndc[k].rows[v]:null;
 }
+function ndcTyped(k){
+  if(!NDC[k].typed)return '';
+  const inp=byId(NDC[k].filter);
+  const v=inp?inp.value.trim():'';
+  return /^\d{1,7}$/.test(v)?v:'';
+}
 function ndcButtons(k){
-  const c=NDC[k],r=ndcSelected(k);
+  const c=NDC[k],r=ndcSelected(k),t=ndcTyped(k);
   const cb=byId(c.connectBtn),sv=byId(c.saveBtn),lh=byId(c.lhBtn);
-  if(cb)cb.disabled=!r;
-  if(sv)sv.disabled=!r||_ndc[k].saving;
+  if(cb)cb.disabled=!r&&!t;
+  if(sv)sv.disabled=(!r&&!t&&!(c.typed&&_ndc[k].qtLast))||_ndc[k].saving;
   if(lh){lh.classList.toggle('lh-off',!r);lh.setAttribute('aria-disabled',r?'false':'true');}
 }
 async function ndcCardEnter(k){
@@ -11626,7 +11624,7 @@ function ndcFound(k,d){
   const inp=byId(c.filter),sel=byId(c.sel);
   st.found=!!(d.found&&d.total);
   st.total=d.total||0;
-  if(inp)inp.disabled=!st.found;
+  if(inp)inp.disabled=!st.found&&!c.typed;
   if(!st.found){
     st.rows={};
     if(sel){sel.innerHTML='<option value="">'+c.noListOpt+'</option>';sel.disabled=true;}
@@ -11640,6 +11638,7 @@ function ndcFound(k,d){
   return true;
 }
 function ndcSearchSoon(k){
+  ndcButtons(k);
   clearTimeout(_ndc[k].timer);
   _ndc[k].timer=setTimeout(()=>ndcSearch(k),300);
 }
@@ -11687,7 +11686,7 @@ async function ndcSearch(k){
 }
 function ndcConnect(k){
   const r=ndcSelected(k);
-  if(!r)return;
+  if(!r){const t=ndcTyped(k);if(t)doConnectByNumber(t);return;}
   NDC[k].connect(r[0],[r[0],r[1]].filter(Boolean).join(' '));
 }
 function ndcLast(k){
@@ -11709,9 +11708,10 @@ async function ndcSaveNode(k,node){
 }
 async function ndcSave(k){
   const r=ndcSelected(k),st=_ndc[k];
-  if(!r||st.saving)return;
+  const node=r?r[0]:(ndcTyped(k)||(NDC[k].typed?st.qtLast:''));
+  if(!node||st.saving)return;
   st.saving=true;ndcButtons(k);ndcQtSync(k);
-  try{await ndcSaveNode(k,r[0]);}finally{st.saving=false;ndcButtons(k);ndcQtSync(k);}
+  try{await ndcSaveNode(k,node);}finally{st.saving=false;ndcButtons(k);ndcQtSync(k);}
 }
 function ndcQtPick(k){
   const inp=byId(NDC[k].qtInput);
@@ -11731,16 +11731,15 @@ async function ndcQtSave(k){
   st.saving=true;ndcQtSync(k);ndcButtons(k);
   try{await ndcSaveNode(k,node);}finally{st.saving=false;ndcQtSync(k);ndcButtons(k);}
 }
-async function doConnectByNumber(){
-  const inp=byId('cbn-input');
-  const node=inp?inp.value.trim():'';
+async function doConnectByNumber(node){
+  const inp=byId('asl-filter');
   if(!node){toast('Enter a node number first','err');return}
   if(busy)return;
   dimGrid('ASL');
   try{await apiAction(
     {action:'connect-by-number',node},
     `Connecting node ${node}…`,
-    d=>{if(/^\d{1,7}$/.test(node))_ndc.ASL.qtLast=node;if(inp)inp.value='';ndcQtSync('ASL');curTg={mode:'ASL',tg:node};setIndicator(node,'ASL',false);renderASLGrid(_lastAslNodes,node);showReady(`ASL READY — ${node}`);},  // v8.9.7 Save memory; A5 writer 5/7 (optimistic render) — see applyGridState comment
+    d=>{_ndc.ASL.qtLast=node;if(inp&&inp.value.trim()===node){inp.value='';ndcSearch('ASL');}else ndcButtons('ASL');curTg={mode:'ASL',tg:node};setIndicator(node,'ASL',false);renderASLGrid(_lastAslNodes,node);showReady(`ASL READY — ${node}`);},  // v8.9.7 Save memory; A5 writer 5/7 (optimistic render) — see applyGridState comment
     30000
   );}finally{undimGrid('ASL');}
 }
@@ -11902,7 +11901,7 @@ function applyTabState(d){
   }
 }
 function applyAslReg(d){
-  const b=byId('asl-tune-btn');
+  const b=byId('asl-connect-btn');
   if(!b)return;
   const bad=d.asl_reg==='unregistered';
   b.classList.toggle('asl-unreg',bad);
