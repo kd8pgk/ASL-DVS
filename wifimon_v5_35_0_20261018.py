@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.34.0"
+APP_VERSION = "5.35.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -1162,6 +1162,7 @@ ALERT_EVENTS = (
     ("restarts", "A service keeps restarting (3 times in 10 minutes)"),
     ("oom", "The kernel killed a process for lack of memory"),
     ("asl_reg", "AllStarLink registration lost for 5 minutes, and back"),
+    ("tunnel", "The 44Net tunnel has no handshake, and what the tunnel watchdog did"),
 )
 ALERT_UNITS = ("nodecontrol", "asl_dvs_dashboard", "sysmon", "instmon", "44helper", "asterisk",
                "analog_bridge", "mmdvm_bridge", "usrp2m17")
@@ -1438,6 +1439,290 @@ def _alerts_loop() -> None:
                 watch.tick(time.monotonic())
         except Exception:
             log.exception("Alert check failed -- continuing")
+
+TG_FILE = os.path.join(CONFIG_DIR, "tunnel_guard.json")
+TG_STATUS_FILE = "/run/asl_dvs/tunnel_guard.json"
+TG_WG_CONF = "/etc/wireguard/wg0.conf"
+TG_UNIT = "wg-quick@wg0.service"
+TG_IFACE = "wg0"
+TG_HS_MAX = 180
+TG_EVERY = 60
+TG_WAIT_HS = 60
+TG_BACKOFF = (0, 600, 1800, 3600)
+TG_MAX_TRIES = 6
+TG_DV_UNITS = ("netcheck.service", "analog_bridge.service", "Analog_Bridge.service", "mmdvm_bridge.service",
+               "MMDVM_Bridge.service", "md380-emu.service", "stfu.service", "STFU.service", "ysfgateway.service",
+               "ysfparrot.service", "p25gateway.service", "nxdngateway.service", "ircddbgatewayd.service",
+               "webproxy.service")
+TG_TEST_STATES = ("/run/44helper-half/state.json", "/run/44helper-fullx/state.json")
+_tg_lock = threading.Lock()
+_tg_state: Dict[str, object] = {"state": "starting", "detail": "", "hs_age": None, "bad": 0, "tries": 0,
+                                "next_at": None, "last_action": "", "last_result": "", "last_at": None,
+                                "checked_at": None}
+
+def _tg_defaults() -> Dict[str, object]:
+    return {"enabled": True, "bad_checks": 3, "restart_dv": True, "boot_delay": 300}
+
+def _tg_cfg() -> Dict[str, object]:
+    cfg = _tg_defaults()
+    try:
+        data = json.loads(_read_text(TG_FILE) or "{}")
+    except ValueError:
+        data = {}
+    if isinstance(data, dict):
+        for k in ("enabled", "restart_dv"):
+            if isinstance(data.get(k), bool):
+                cfg[k] = data[k]
+        if isinstance(data.get("bad_checks"), int) and 2 <= data["bad_checks"] <= 10:
+            cfg["bad_checks"] = data["bad_checks"]
+        if isinstance(data.get("boot_delay"), int) and 60 <= data["boot_delay"] <= 1800:
+            cfg["boot_delay"] = data["boot_delay"]
+    return cfg
+
+def _tg_validate(raw: object) -> Tuple[Optional[Dict[str, object]], str]:
+    if not isinstance(raw, dict):
+        return None, "No tunnel watchdog settings given."
+    cfg = _tg_cfg()
+    for k in ("enabled", "restart_dv"):
+        if k in raw:
+            if not isinstance(raw[k], bool):
+                return None, "Bad on/off value."
+            cfg[k] = raw[k]
+    if "bad_checks" in raw:
+        v = raw["bad_checks"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 2 <= v <= 10:
+            return None, "Failed checks before acting: 2 to 10."
+        cfg["bad_checks"] = v
+    if "boot_delay" in raw:
+        v = raw["boot_delay"]
+        if not isinstance(v, int) or isinstance(v, bool) or not 60 <= v <= 1800:
+            return None, "Wait after boot: 60 to 1800 seconds."
+        cfg["boot_delay"] = v
+    return cfg, ""
+
+def _tg_public() -> Dict[str, object]:
+    with _tg_lock:
+        st = dict(_tg_state)
+    return dict(st, settings=_tg_cfg())
+
+def _tg_set(**changes: object) -> None:
+    with _tg_lock:
+        _tg_state.update(changes)
+        _tg_state["checked_at"] = time.time()
+        data = dict(_tg_state)
+    try:
+        _durable_write(TG_STATUS_FILE, json.dumps(data).encode("utf-8"), dir_mode=0o755)
+        os.chmod(TG_STATUS_FILE, 0o644)
+    except OSError:
+        pass
+
+def _tg_run(argv: List[str], timeout: float = 10) -> Tuple[int, str]:
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except (subprocess.SubprocessError, OSError) as e:
+        return -1, str(e)
+    return r.returncode, ((r.stdout or "") + (r.stderr or "")).strip()
+
+def _tg_uptime() -> float:
+    try:
+        return float((_read_text("/proc/uptime") or "0").split()[0])
+    except (ValueError, IndexError):
+        return 0.0
+
+def _tg_unit_prop(unit: str, prop: str) -> str:
+    rc, out = _tg_run(["systemctl", "show", unit, "--property=" + prop, "--value"])
+    return out.strip() if rc == 0 else ""
+
+def _tg_test_running() -> bool:
+    for path in TG_TEST_STATES:
+        try:
+            st = json.loads(_read_text(path) or "{}")
+        except ValueError:
+            continue
+        if isinstance(st, dict) and (st.get("armed_at") or st.get("steps")):
+            return True
+    return False
+
+def _tg_lan_route() -> str:
+    rc, out = _tg_run(["ip", "-4", "route", "show", "table", "main", "default"])
+    for line in out.splitlines() if rc == 0 else []:
+        m = re.search(r"((?:via [0-9.]+ )?dev (\S+))", line)
+        if m and not m.group(2).startswith("wg"):
+            return m.group(1)
+    return ""
+
+def _tg_hs_age() -> Optional[int]:
+    rc, out = _tg_run(["wg", "show", TG_IFACE, "latest-handshakes"])
+    if rc != 0:
+        return None
+    stamps = [int(t) for t in re.findall(r"\s(\d+)\s*$", out, re.M)]
+    if not stamps or max(stamps) == 0:
+        return -1
+    return max(0, int(time.time()) - max(stamps))
+
+def _tg_keepalive() -> bool:
+    rc, out = _tg_run(["wg", "show", TG_IFACE, "persistent-keepalive"])
+    return rc == 0 and any(t.isdigit() and int(t) > 0 for t in out.split())
+
+def _tg_endpoint_ip() -> str:
+    rc, out = _tg_run(["wg", "show", TG_IFACE, "endpoints"])
+    m = re.search(r"\s(\d+\.\d+\.\d+\.\d+):\d+", out) if rc == 0 else None
+    return m.group(1) if m else ""
+
+def _tg_loop(ip: str) -> bool:
+    if not ip:
+        return False
+    rc, out = _tg_run(["ip", "-4", "route", "get", ip])
+    toks = out.split()
+    return rc == 0 and "dev" in toks[:-1] and toks[toks.index("dev") + 1] == TG_IFACE
+
+def _tg_wait_hs(limit: int) -> bool:
+    end = time.monotonic() + limit
+    while True:
+        age = _tg_hs_age()
+        if age is not None and 0 <= age < TG_HS_MAX:
+            return True
+        if time.monotonic() >= end or _shutdown_event.wait(5):
+            return False
+
+def _tg_restart_dv() -> str:
+    done, bad = [], []
+    for unit in TG_DV_UNITS:
+        if _tg_unit_prop(unit, "LoadState") != "loaded" or _tg_unit_prop(unit, "UnitFileState") not in ("enabled", "static"):
+            continue
+        rc, out = _tg_run(["systemctl", "restart", unit], timeout=90)
+        (done if rc == 0 else bad).append(unit.replace(".service", ""))
+    msg = ("restarted " + ", ".join(done)) if done else "no DVSwitch services to restart"
+    return msg + (("; failed: " + ", ".join(bad)) if bad else "")
+
+class _TunnelGuard:
+    def __init__(self) -> None:
+        self.bad = 0
+        self.tries = 0
+        self.next_at = 0.0
+        self.acted = False
+
+    def _check(self) -> Tuple[Optional[str], Dict[str, object]]:
+        active = _tg_unit_prop(TG_UNIT, "ActiveState")
+        if active in ("activating", "deactivating", "reloading"):
+            return None, {"state": "waiting", "detail": f"the tunnel is {active}"}
+        if active == "failed":
+            return "the tunnel unit failed to start", {"hs_age": None}
+        if active != "active":
+            return None, {"state": "idle", "detail": "the tunnel is stopped; left alone (start it on 44helper's tunnel tab)",
+                          "hs_age": None}
+        if not os.path.exists(f"/sys/class/net/{TG_IFACE}"):
+            return "the tunnel unit is up but wg0 is missing", {"hs_age": None}
+        age = _tg_hs_age()
+        loop = _tg_loop(_tg_endpoint_ip())
+        info: Dict[str, object] = {"hs_age": age}
+        if loop:
+            return "the tunnel server routes back into wg0 (routing loop)", dict(info, loop=True)
+        if age == -1:
+            return "no handshake yet", info
+        if age is not None and age >= TG_HS_MAX and _tg_keepalive():
+            return f"last handshake {age} s ago", info
+        return None, dict(info, state="healthy", detail="handshake " + ("ok" if age is None else f"{age} s ago"))
+
+    def tick(self) -> None:
+        cfg = _tg_cfg()
+        if not cfg["enabled"]:
+            self.bad = 0
+            _tg_set(state="off", detail="the tunnel watchdog is off", bad=0)
+            return
+        if not os.path.exists(TG_WG_CONF) or _tg_unit_prop(TG_UNIT, "UnitFileState") not in ("enabled", "enabled-runtime"):
+            self.bad = 0
+            _tg_set(state="idle", detail="no tunnel set to start at boot (wg0.conf and wg-quick@wg0 enabled)", bad=0)
+            return
+        up = _tg_uptime()
+        if up < cfg["boot_delay"]:
+            _tg_set(state="waiting", detail=f"giving the boot order {int(cfg['boot_delay'] - up)} s more")
+            return
+        if _tg_test_running():
+            self.bad = 0
+            _tg_set(state="paused", detail="a 44helper half-tunnel or exceptions test is running", bad=0)
+            return
+        if not _tg_lan_route():
+            self.bad = 0
+            _tg_set(state="waiting", detail="no normal network route; that isn't a tunnel problem", bad=0)
+            return
+        problem, info = self._check()
+        if problem is None:
+            if info.get("state") == "healthy":
+                if self.acted:
+                    alert("tunnel", "Tunnel is back", "The 44Net tunnel has a handshake again.", level="ok", key="tunnel_back")
+                    log.info("Tunnel watchdog: tunnel is back")
+                self.bad, self.tries, self.next_at, self.acted = 0, 0, 0.0, False
+            else:
+                self.bad = 0
+            _tg_set(bad=self.bad, tries=self.tries, next_at=None, **{k: v for k, v in info.items() if k != "loop"})
+            return
+        self.bad += 1
+        if self.bad < cfg["bad_checks"]:
+            _tg_set(state="watching", detail=f"{problem} ({self.bad} of {cfg['bad_checks']} checks)", bad=self.bad,
+                    hs_age=info.get("hs_age"))
+            return
+        if self.tries >= TG_MAX_TRIES:
+            _tg_set(state="gave up", detail=f"{problem}; tried {self.tries} times this boot. Check the tunnel on 44helper.",
+                    bad=self.bad, hs_age=info.get("hs_age"))
+            return
+        now = time.time()
+        if now < self.next_at:
+            _tg_set(state="backing off", detail=f"{problem}; next try at {time.strftime('%H:%M', time.localtime(self.next_at))}",
+                    bad=self.bad, next_at=self.next_at, hs_age=info.get("hs_age"))
+            return
+        self._act(problem, info, cfg)
+
+    def _act(self, problem: str, info: Dict[str, object], cfg: Dict[str, object]) -> None:
+        self.acted = True
+        steps: List[str] = []
+        _tg_set(state="acting", detail=problem)
+        log.warning("Tunnel watchdog: %s -- acting (try %d)", problem, self.tries + 1)
+        if self.tries == 0:
+            alert("tunnel", "Tunnel has no handshake",
+                  f"{problem}. The tunnel watchdog is restarting it (a remote SSH or Cockpit session over a full "
+                  "tunnel may drop).", key="tunnel_down")
+        ok = False
+        if info.get("loop"):
+            ip, route = _tg_endpoint_ip(), _tg_lan_route()
+            if ip and route:
+                rc, out = _tg_run(["ip", "-4", "route", "replace", f"{ip}/32"] + route.split())
+                steps.append(f"route {ip}/32 {route}: " + ("added" if rc == 0 else f"failed ({out})"))
+                ok = rc == 0 and _tg_wait_hs(TG_WAIT_HS)
+        if not ok:
+            rc, out = _tg_run(["systemctl", "restart", TG_UNIT], timeout=90)
+            steps.append("tunnel restart: " + ("ok" if rc == 0 else f"failed ({out.splitlines()[-1] if out else rc})"))
+            ok = rc == 0 and _tg_wait_hs(TG_WAIT_HS)
+        if ok:
+            steps.append("handshake back")
+            if cfg["restart_dv"]:
+                steps.append(_tg_restart_dv())
+            self.bad, self.tries, self.next_at = 0, 0, 0.0
+            result = "; ".join(steps)
+            log.info("Tunnel watchdog: recovered: %s", result)
+            alert("tunnel", "Tunnel is back", f"The tunnel watchdog fixed it: {result}.", level="ok", key="tunnel_back")
+            self.acted = False
+            _tg_set(state="healthy", detail="recovered", bad=0, tries=0, next_at=None, last_action=problem,
+                    last_result=result, last_at=time.time(), hs_age=_tg_hs_age())
+            return
+        self.tries += 1
+        self.next_at = time.time() + TG_BACKOFF[min(self.tries, len(TG_BACKOFF) - 1)]
+        result = "; ".join(steps + ["still no handshake"])
+        log.warning("Tunnel watchdog: not fixed (try %d): %s", self.tries, result)
+        if self.tries >= TG_MAX_TRIES:
+            alert("tunnel", "Tunnel watchdog gave up",
+                  f"No handshake after {self.tries} tries this boot ({result}). Check the tunnel on 44helper's tunnel tab.",
+                  key="tunnel_gaveup")
+        _tg_set(state="backing off" if self.tries < TG_MAX_TRIES else "gave up", detail=problem, bad=self.bad,
+                tries=self.tries, next_at=self.next_at, last_action=problem, last_result=result, last_at=time.time())
+
+def _tunnel_guard_loop() -> None:
+    guard = _TunnelGuard()
+    while not _shutdown_event.wait(TG_EVERY):
+        try:
+            guard.tick()
+        except Exception:
+            log.exception("Tunnel watchdog check failed -- continuing")
 
 def _net_reboots_load() -> List[float]:
     try:
@@ -2490,6 +2775,7 @@ def _build_status() -> Dict[str, object]:
         "hotspot": _hotspot_public(),
         "last_report": _last_report_banner(),
         "alerts": _alerts_public(),
+        "tunnel_guard": _tg_public(),
     }
 
 _KEEP_MIN_SECS = 5
@@ -5176,6 +5462,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_alerts(body)
         elif path == "/api/alerts/test":
             self._handle_alerts_test(body)
+        elif path == "/api/tunnel_guard":
+            self._handle_tunnel_guard(body)
         else:
             self._json(404, {"error": "Not found."})
 
@@ -6120,6 +6408,25 @@ class _Handler(BaseHTTPRequestHandler):
         self._json(200, {"ok": True, "message": "Alert settings saved." + ("" if cfg["enabled"] else " Alerts are off."),
                          "alerts": _alerts_public()})
 
+    def _handle_tunnel_guard(self, body: Dict[str, object]) -> None:
+        if body.get("confirm") is not True:
+            self._json(400, {"error": "This change needs confirmation."})
+            return
+        cfg, err = _tg_validate(body.get("values"))
+        if cfg is None:
+            self._json(400, {"error": err})
+            return
+        try:
+            _durable_write(TG_FILE, json.dumps(cfg, sort_keys=True).encode("utf-8"))
+        except OSError as e:
+            self._json(500, {"error": f"Couldn't save the tunnel watchdog settings: {e}"})
+            return
+        log.info("Dashboard: tunnel watchdog %s by %s (%d checks, DVSwitch restart %s, wait %d s)",
+                 "on" if cfg["enabled"] else "off", self.client_address[0], cfg["bad_checks"],
+                 "on" if cfg["restart_dv"] else "off", cfg["boot_delay"])
+        self._json(200, {"ok": True, "message": "Tunnel watchdog " + ("on." if cfg["enabled"] else "off."),
+                         "tunnel_guard": _tg_public()})
+
     def _handle_alerts_test(self, body: Dict[str, object]) -> None:
         if body.get("confirm") is not True:
             self._json(400, {"error": "This needs confirmation."})
@@ -6659,6 +6966,26 @@ a.btnlink:hover{border-color:var(--cyan)}
         <div class="row" id="al-events"></div>
         <p class="err" id="al-err" role="alert"></p>
         <div class="actions"><button type="button" id="al-save">Save</button><button type="button" id="al-cancel">Cancel</button></div>
+      </form>
+    </section>
+
+    <section class="card" id="card-tunnel" aria-labelledby="tg-h">
+      <h2 id="tg-h">Tunnel watchdog</h2>
+      <p id="tg-state" style="margin:0 0 8px">…</p>
+      <dl class="kv" id="tg-kv"></dl>
+      <div class="actions"><button type="button" id="btn-tg">Settings</button></div>
+      <form class="form" id="tg-form" hidden autocomplete="off" style="margin-top:12px">
+        <h3>Tunnel watchdog settings</h3>
+        <div class="row"><label class="check"><input type="checkbox" id="tg-on"> Watch the 44Net tunnel</label>
+          <span class="hint">Every minute, checks that the tunnel set up by 44helper (wg0) has a handshake. After the failed checks below it re-adds the tunnel server's route if it loops into wg0, restarts the tunnel, and once the handshake is back restarts the DVSwitch services. Backs off (10 min, 30 min, then hourly), at most 6 tries per boot. It never reboots and never edits wg0.conf. A tunnel you stopped is left alone.</span></div>
+        <div class="row"><label for="tg-bad">Failed checks before acting</label>
+          <input type="number" id="tg-bad" min="2" max="10" step="1"><span class="hint">2 to 10, one a minute. Default 3.</span></div>
+        <div class="row"><label for="tg-delay">Wait after boot (seconds)</label>
+          <input type="number" id="tg-delay" min="60" max="1800" step="30"><span class="hint">Gives the boot order and the tunnel's own retry time first. Default 300.</span></div>
+        <div class="row"><label class="check"><input type="checkbox" id="tg-dv"> Restart the DVSwitch services after the tunnel is back</label>
+          <span class="hint">netcheck, the bridges, md380-emu, STFU, the gateways, ircDDBGateway and webproxy (the enabled ones), so services that started without the tunnel reconnect.</span></div>
+        <p class="err" id="tg-err" role="alert"></p>
+        <div class="actions"><button type="button" id="tg-save">Save</button><button type="button" id="tg-cancel">Cancel</button></div>
       </form>
     </section>
 
@@ -7248,6 +7575,45 @@ a.btnlink:hover{border-color:var(--cyan)}
   $("al-test").addEventListener("click", () => {
     if (!confirm("Send a test alert now?")) return;
     post("/api/alerts/test", { confirm: true });
+  });
+
+  function renderTunnelGuard(d) {
+    const g = d.tunnel_guard;
+    if (!g) return;
+    const names = { healthy: "Healthy", watching: "Watching", acting: "Acting", "backing off": "Backing off",
+                    "gave up": "Gave up for this boot", waiting: "Waiting", paused: "Paused", idle: "Idle",
+                    off: "Off", starting: "Starting" };
+    $("tg-state").textContent = (names[g.state] || g.state) + (g.detail ? ": " + g.detail : "");
+    const kv = $("tg-kv");
+    kv.textContent = "";
+    const rows = [["Last handshake", g.hs_age === null || g.hs_age === undefined ? "unknown" : (g.hs_age < 0 ? "never" : g.hs_age + " s ago")],
+                  ["Tries this boot", String(g.tries || 0) + " of 6"]];
+    if (g.next_at) rows.push(["Next try", stamp(g.next_at)]);
+    if (g.last_at) rows.push(["Last action", stamp(g.last_at) + ": " + (g.last_action || "") + " -> " + (g.last_result || "")]);
+    for (const [k, v] of rows) {
+      const dt = document.createElement("dt"); dt.textContent = k;
+      const dd = document.createElement("dd"); dd.textContent = v;
+      kv.append(dt, dd);
+    }
+  }
+  function fillTunnelGuard() {
+    const s = ((lastData && lastData.tunnel_guard) || {}).settings || {};
+    $("tg-on").checked = s.enabled !== false;
+    $("tg-bad").value = s.bad_checks || 3;
+    $("tg-delay").value = s.boot_delay || 300;
+    $("tg-dv").checked = s.restart_dv !== false;
+    $("tg-err").textContent = "";
+  }
+  $("btn-tg").addEventListener("click", () => { fillTunnelGuard(); $("tg-form").hidden = false; });
+  $("tg-cancel").addEventListener("click", () => { $("tg-form").hidden = true; });
+  $("tg-form").addEventListener("submit", (ev) => ev.preventDefault());
+  $("tg-save").addEventListener("click", async () => {
+    const values = { enabled: $("tg-on").checked, restart_dv: $("tg-dv").checked,
+                     bad_checks: parseInt($("tg-bad").value, 10), boot_delay: parseInt($("tg-delay").value, 10) };
+    if (!values.enabled && !confirm("Turn the tunnel watchdog off? A tunnel that loses its handshake will then stay down until you fix it.")) return;
+    const r = await post("/api/tunnel_guard", { confirm: true, values: values });
+    if (r && r.status === 200) $("tg-form").hidden = true;
+    else if (r) $("tg-err").textContent = (r.data && r.data.error) || "";
   });
 
   function renderService(d) {
@@ -8159,6 +8525,7 @@ a.btnlink:hover{border-color:var(--cyan)}
     renderWatchdogSwitches(d);
     renderService(d);
     renderAlerts(d);
+    renderTunnelGuard(d);
     handleControl(d);
   }
 
@@ -8302,6 +8669,7 @@ def run() -> None:
     watchdog.start()
     threading.Thread(target=_sd_watchdog_loop, name="sd-watchdog", daemon=True).start()
     threading.Thread(target=_alerts_loop, name="alerts", daemon=True).start()
+    threading.Thread(target=_tunnel_guard_loop, name="tunnel-guard", daemon=True).start()
     _sd_notify("READY=1")
     threading.Thread(target=_collector_loop, name="status", daemon=True).start()
     threading.Thread(target=_nm_sync_loop, name="nm-sync", daemon=True).start()

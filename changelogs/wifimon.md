@@ -1,6 +1,57 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_34_0_20261014.py`. Newest entries first.
+Current file: `wifimon_v5_35_0_20261018.py`. Newest entries first.
+
+## 5.35.0 (2026-10-18)
+
+**Tunnel watchdog.** A node's 44Net tunnel (set up by 44helper) could come up after a
+reboot with no handshake (for example a routing loop), and the DVSwitch services
+then had no connection, until someone fixed it by hand. wifimon now watches the
+tunnel and fixes it. wifimon serves both builds.
+
+- **On by default.** A new **Tunnel watchdog** card shows the state, the last
+  handshake, tries this boot, the next try and the last action. **Settings**: on/off,
+  failed checks before acting (2–10, default 3), wait after boot (60–1800 s,
+  default 300), and restarting the DVSwitch services after a fix (default on).
+  Saved in `/etc/wifimon/tunnel_guard.json`; the state is also written to
+  `/run/asl_dvs/tunnel_guard.json` for other tools.
+- **Checks every minute**, only when `/etc/wireguard/wg0.conf` exists and
+  `wg-quick@wg0` is enabled, the Pi has been up longer than the wait after boot,
+  there's a normal (non-wg) default route, and no 44helper half-tunnel or
+  exceptions test is running. A tunnel you stopped is left alone; one that systemd
+  is still starting or retrying is waited for.
+- **Counts as bad:** the unit failed; wg0 missing; no handshake ever; a handshake
+  older than 3 minutes when a keepalive is set (without one a quiet tunnel can just
+  be idle); or the tunnel server routed into wg0.
+- **After the failed checks:**
+  1. A routing loop: re-adds the tunnel server's /32 on the normal route (a live
+     route only; wg0.conf is never edited) and waits a minute for a handshake.
+  2. Otherwise, or if that didn't help: `systemctl restart wg-quick@wg0` (90 s
+     limit) and waits a minute for a handshake.
+  3. Handshake back: restarts netcheck, the bridges, md380-emu, STFU, the gateways,
+     ircDDBGateway and webproxy that are enabled, in that order, so services that
+     started without the tunnel reconnect.
+  4. Still down: tries again after 10 min, 30 min, then hourly; at most 6 tries per
+     boot. It never reboots.
+- **Alerts:** a new "tunnel" event (in the Alerts card): "Tunnel has no handshake"
+  (with a note that a remote session over a full tunnel may drop), "Tunnel is back",
+  and "Tunnel watchdog gave up".
+- Tested:
+  - Unit tests (22) against a simulated system:
+    - healthy: no action; no handshake: 2 checks watching, then a tunnel restart
+      and the enabled DVSwitch services in order;
+    - an old handshake without keepalive: no action; a loop: route fixed with no
+      tunnel restart;
+    - a restart that doesn't help: back-off, and it gives up after 6;
+    - no action when stopped by hand, while systemd retries, during the wait after
+      boot, without a network route, when not enabled, during a 44helper test, or
+      when off;
+    - a failed unit restarted after 2 checks with DVSwitch restart off;
+    - the settings validation, defaults and alerts.
+  - The settings handler: confirmation required, bad values refused, file mode 600.
+  - The card in headless Chromium at 390 px: state and details, the settings form
+    filled from the defaults, a bad value refused, a good one saved; no script
+    errors, no horizontal scroll.
 
 ## 5.34.0 (2026-10-14)
 
