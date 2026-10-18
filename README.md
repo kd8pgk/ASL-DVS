@@ -116,7 +116,7 @@ and Full Update, which updates it only where it is installed. It also installs
 on its own:
 
 ```
-sudo python3 nodelisten_v0_1_0_20261018.py --install
+sudo python3 nodelisten_v0_2_0_20261018.py --install
 ```
 
 Then open `http://<pi-address>:8993`, log in with the root password, pick
@@ -281,7 +281,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_58_0_20261018.py` | common |
 | `wifimon_v5_38_0_20261018.py` | common |
 | `44helper_v0_0_215_20261018.py` | common |
-| `nodelisten_v0_1_0_20261018.py` | common |
+| `nodelisten_v0_2_0_20261018.py` | common |
 | `install_all_v7_2_0_20261018.sh` | common |
 | `uninstall_all_v1_5.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
