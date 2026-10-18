@@ -1,6 +1,37 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_83_20261014.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_84_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.84 (2026-10-18)
+
+The full-build port of Pi Zero 2 W Dashboards 9.3.78-pi02w to 9.3.85-pi02w: the
+tab layout clean-up, the Connect-button service warnings and the M17 changes. The
+page is the same as the fork's apart from the full build's existing differences
+(3-second idle poll, 500 ms keyed poll, one Phone help line).
+
+- **Top rows removed.** ASL, Echo, STFU, YSF, P25, NXDN, FCS, D-STAR, XLX and M17
+  keep only their search row. When nothing is picked from the menu, Connect (or
+  Enter in the search box) takes what the old row took: a node number (ASL, Echo), a
+  talkgroup or ID number (STFU, P25, NXDN), a `host:port` address (YSF), a reflector
+  or gateway callsign with an optional module (D-STAR, XLX). FCS and M17 have no
+  search box and use their menus only. The search box stays usable when its list is
+  missing.
+- **Save** falls back to the typed number and then the last one connected on ASL,
+  Echo, STFU, P25 and NXDN, and takes a typed reflector or callsign on D-STAR.
+- **LH.** ASL, Echo and STFU open the Edit tab's Last Heard address. FCS opens the
+  picked server's page, else the Edit tab's FCS address. M17 opens the reflector's IP
+  address (`http://<ip>/`, no port; `/api/m17-hosts` rows carry a new `ip` field).
+- **DMR** keeps its row; its Tune button is now Connect, like the FCS, D-STAR and XLX
+  buttons. No button says Tune any more.
+- **Connect warnings.** A 15 s background check (only when DVSwitch is found) of
+  Analog_Bridge, STFU, YSFGateway, P25Gateway, NXDNGateway, ircDDBGateway and
+  USRP2M17 in one `systemctl show` call goes out in the status reply (`svc`). Each
+  tab's Connect shows red with a strike-through, and a hover note, when its service
+  or Analog_Bridge isn't running. Not installed or unknown shows no warning. The
+  ASL "not registered" warning moves from Tune to Connect.
+- **Leaving the M17 tab runs M17's Disconnect first** (bridge-node link, placeholder
+  ini, USRP2M17 restart), before anything else in the switch. Edit doesn't change the
+  server's page, so M17 stays connected on Edit.
 
 ## 9.3.83 (2026-10-14)
 
