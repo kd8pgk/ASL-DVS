@@ -1,6 +1,26 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_77_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_78_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.78-pi02w (2026-10-18)
+
+ASL tab: the Tune row is gone. The search row does its jobs. The full build is not
+changed.
+
+- **Tune row removed.** The node-number box and its Tune, LH and Save buttons above
+  the search row are gone.
+- **Connect takes Tune's jobs.** A bare node number (1–7 digits) in the search box
+  connects that node with Connect or Enter when no node is picked from the menu, even
+  a node that isn't in the AllStar node list. A node picked from the menu still wins.
+  The search box stays usable when the node list is missing or empty, for typed
+  numbers.
+- **"Not registered" warning moved to Connect.** When the node isn't registered with
+  AllStarLink, Connect shows in red with a strike-through (and the hover note), even
+  when it is greyed out.
+- **Save.** Saves the picked node, or else the typed number, or else the last node
+  connected by number.
+- **LH opens the Edit tab's ASL Last Heard address.** It no longer opens the picked
+  node's AllStar stats page. It is greyed out while that address is blank.
 
 ## 9.3.77-pi02w (2026-10-18)
 
