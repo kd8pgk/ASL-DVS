@@ -43,8 +43,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.210"
-APP_STAGE = "v0.0.210: tunnel-server route follows network changes; Boot tab loop finding; history in changelogs/44helper.md"
+APP_VERSION = "0.0.211"
+APP_STAGE = "v0.0.211: boot audit phase 1 (netcheck never fails, netready deadline, DNS PreDown, Asterisk bind, ASL3 updates); history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -1127,9 +1127,9 @@ def _ov_dns_finding(text: str | None) -> dict | None:
         return None
     if _wg_legacy_fix(text)[1]:
         return {"id": "dns_predown", "fix": ["dns_predown"], "level": "warn",
-                "msg": ("wg0.conf undoes the tunnel DNS in a PostDown line, which runs after wg0 is gone and fails. "
-                        "wg-quick then stops the shutdown there, so the unit ends up failed and later cleanup lines "
-                        "(like the tunnel-server route) don't run. Move it to PreDown.")}
+                "msg": ("wg0.conf's line that undoes the tunnel DNS can stop the tunnel's shutdown: in a PostDown line it runs "
+                        "after wg0 is gone and fails, and a PreDown line without '|| true' fails when systemd-resolved doesn't "
+                        "answer. wg-quick then stops there, wg0 stays up and the next start fails. Fix the line.")}
     need = _wg_conf_dns_need(text)
     if not need:
         return None
@@ -1193,6 +1193,80 @@ def _ov_boot_finding(text: str | None) -> dict | None:
                     + "; ".join(st["missing"]) + "). Set the boot order so DVSwitch waits for the network, the tunnel "
                     "and DNS, and the tunnel retries if its first start fails.")}
 
+_AST_IAX_CONF = "/etc/asterisk/iax.conf"
+_BOOT_NONLOCAL_PATH = "/etc/sysctl.d/90-44helper-nonlocal-bind.conf"
+_BOOT_NONLOCAL_TEXT = "net.ipv4.ip_nonlocal_bind = 1\n"
+
+def _ast_iax_bindaddrs() -> list[str]:
+    out: list[str] = []
+    seen: set = set()
+
+    def read(path: str, section: str, depth: int) -> str:
+        if depth > 3 or path in seen:
+            return section
+        seen.add(path)
+        try:
+            with open(path, "r", errors="replace") as f:
+                lines = f.read().splitlines()
+        except OSError:
+            return section
+        for raw in lines:
+            st = raw.split(";", 1)[0].strip()
+            m = re.match(r'^#(?:try)?include\s+"?([^"]+?)"?$', st)
+            if m:
+                inc = m.group(1).strip()
+                section = read(inc if inc.startswith("/") else os.path.join("/etc/asterisk", inc), section, depth + 1)
+                continue
+            if st.startswith("["):
+                section = st[1:].split("]", 1)[0].strip().lower()
+                continue
+            if section == "general":
+                m = re.match(r"^bindaddr\s*=>?\s*\[?([0-9A-Fa-f.:]+?)\]?(?::\d+)?$", st, re.I)
+                if m:
+                    out.append(m.group(1))
+        return section
+
+    read(_AST_IAX_CONF, "", 0)
+    return out
+
+def _wg0_conf_addresses(text: str | None) -> list[str]:
+    out = []
+    for m in re.finditer(r"(?im)^\s*Address\s*=\s*(.+)$", text or ""):
+        for part in m.group(1).split(","):
+            out.append(part.strip().split("/", 1)[0])
+    return out
+
+def _ast_tunnel_binds(text: str | None) -> list[str]:
+    addrs = _wg0_conf_addresses(text)
+    out = []
+    for a in _ast_iax_bindaddrs():
+        try:
+            ip = ipaddress.ip_address(a)
+        except ValueError:
+            continue
+        if ip.is_unspecified or ip.is_loopback:
+            continue
+        if a in addrs or (ip.version == 4 and ip in ipaddress.ip_network("44.0.0.0/8")):
+            out.append(a)
+    return out
+
+def _ov_ast_bind_finding(text: str | None) -> dict | None:
+    if not text:
+        return None
+    binds = _ast_tunnel_binds(text)
+    if not binds:
+        return None
+    full = "0.0.0.0/0" in re.sub(r"\s", "", text)
+    ready = _boot_file_is(_BOOT_NONLOCAL_PATH, _BOOT_NONLOCAL_TEXT)
+    msg = f"Asterisk's iax.conf binds IAX to the tunnel address {', '.join(binds)}. "
+    if not full:
+        msg += ("On a split tunnel use bindaddr=0.0.0.0: IAX to nodes outside 44Net then leaves through your router with a "
+                "44 source address and can fail, while 0.0.0.0 already uses the 44 address for 44Net nodes. ")
+    msg += ("At boot Asterisk starts before wg0 has that address, so the bind fails until Asterisk restarts"
+            + ("; Set the boot order lets it bind before the tunnel is up (net.ipv4.ip_nonlocal_bind)." if not ready else
+               "; the boot order already lets it bind early (net.ipv4.ip_nonlocal_bind)."))
+    return {"id": "ast_bind", "fix": [] if ready else ["boot_order"], "level": "warn", "msg": msg}
+
 def _ov_health_compute() -> list[dict]:
     try:
         with open(WG0_CONF_PATH, "r") as f:
@@ -1201,7 +1275,7 @@ def _ov_health_compute() -> list[dict]:
         text = None
     out: list[dict] = []
     for fn in (lambda: _ov_handshake_finding(text), lambda: _ov_dns_finding(text), lambda: _ov_address_finding(text),
-               lambda: _ov_boot_finding(text)):
+               lambda: _ov_boot_finding(text), lambda: _ov_ast_bind_finding(text)):
         try:
             r = fn()
         except Exception as exc:
@@ -1299,14 +1373,15 @@ def action_health_netcheck_fixes() -> dict:
         ok = ok and good
         out.append(("ok    " if good else "FAIL  ") + "netcheck: runs once, after the network is online"
                    + ("" if good else ": " + r.get("output", "").strip().splitlines()[-1] if r.get("output", "").strip() else ""))
-    for unit, b in fx["bridge_fixes"].items():
-        if b["applicable"] and not b["applied"]:
-            r = action_netcheck_fix_bridge(unit)
-            did = True
-            good = bool(r.get("success") and r.get("verified"))
-            ok = ok and good
-            out.append(("ok    " if good else "FAIL  ") + f"{unit.replace('.service', '')}: "
-                       + ("no longer stopped by a failed netcheck" if good else r.get("output", "").strip().replace("\n", " ")))
+    req = _boot_netcheck_required_by(_boot_dv_units())
+    if req:
+        r = action_netcheck_nonfatal()
+        did = True
+        good = bool(r.get("success") and r.get("verified"))
+        ok = ok and good
+        out.append(("ok    " if good else "FAIL  ") + "a failed netcheck no longer stops "
+                   + ", ".join(u.replace(".service", "") for u in req)
+                   + ("" if good else ": " + r.get("output", "").strip().replace("\n", " ")))
     if fx["waitonline_fix"]["applicable"]:
         r = action_netcheck_enable_waitonline()
         did = True
@@ -1569,7 +1644,7 @@ def action_health_dns_predown() -> dict:
     if text is None:
         return {"success": False, "verified": False, "output": "No wg0.conf."}
     if not _wg_legacy_fix(text)[1]:
-        return _hl_done({"success": True, "verified": True, "output": "Already a PreDown line; nothing to change."})
+        return _hl_done({"success": True, "verified": True, "output": "Already a PreDown line with '|| true'; nothing to change."})
     try:
         out = _wg_write_conf(text)
     except OSError as e:
@@ -6008,6 +6083,8 @@ def _wg_endpoint_pin_lines(info: dict) -> list[str]:
 
 def _wg_apply_endpoint_pin(text: str) -> tuple[str, str]:
     info = _wg_endpoint_info(text)
+    if info["pinned"] and info["host"] and not info["literal"] and not info["ip"]:
+        return text, ""
     current = _wg_extract_block(text, _WG_EPPIN_BEGIN, _WG_EPPIN_END) if info["pinned"] else None
     if info["needed"]:
         want = _wg_endpoint_pin_lines(info)
@@ -6240,7 +6317,8 @@ def _wg_write_conf(new_text: str, backup_to_library: bool = True):
         out.append("SaveConfig = true removed: wg-quick would rewrite wg0.conf on every stop and drop 44helper's settings.")
     new_text, lg = _wg_legacy_fix(new_text)
     if lg:
-        out.append("DNS revert moved from PostDown to PreDown: after wg0 is gone it failed and stopped the tunnel's other cleanup.")
+        out.append("DNS undo line is now 'PreDown = resolvectl revert %i || true': in PostDown, or without '|| true', it could "
+                   "stop the tunnel's shutdown and leave wg0 up.")
     new_text, pin_note = _wg_apply_endpoint_pin(new_text)
     if pin_note:
         out.append(pin_note)
@@ -6283,8 +6361,9 @@ def _wg_legacy_fix(text: str) -> tuple[str, bool]:
             inside = True
         elif st == _WG_DNS_END:
             inside = False
-        elif inside and re.match(r"^\s*postdown\s*=\s*resolvectl revert %i\s*$", raw.rstrip("\r\n"), re.I):
-            lines[i] = raw.replace("PostDown", "PreDown", 1).replace("postdown", "PreDown", 1)
+        elif inside and re.match(r"^\s*(postdown|predown)\s*=\s*resolvectl revert %i\s*$", raw.rstrip("\r\n"), re.I):
+            nl = "\r\n" if raw.endswith("\r\n") else ("\n" if raw.endswith("\n") else "")
+            lines[i] = "PreDown = resolvectl revert %i || true" + nl
             changed = True
     return ("".join(lines), True) if changed else (text, False)
 
@@ -6336,12 +6415,12 @@ def action_wg_set_dns(dns_mode: str, dns_servers: str = "") -> dict:
         elif dns_mode == "resolvectl_full":
             block = [_WG_DNS_BEGIN,
                      "PostUp = resolvectl dns %i " + " ".join(servers) + "; resolvectl domain %i ~.",
-                     "PreDown = resolvectl revert %i",
+                     "PreDown = resolvectl revert %i || true",
                      _WG_DNS_END]
         else:
             block = [_WG_DNS_BEGIN,
                      "PostUp = resolvectl dns %i " + " ".join(servers) + "; resolvectl domain %i " + _WG_SPLIT_DNS_DOMAINS,
-                     "PreDown = resolvectl revert %i",
+                     "PreDown = resolvectl revert %i || true",
                      _WG_DNS_END]
         inserted = _wg_insert_in_interface(new_text, block)
         if inserted is None:
@@ -6837,44 +6916,54 @@ note() {
   { tail -n 19 "$LOG" 2>/dev/null; echo "$(date '+%%Y-%%m-%%d %%H:%%M:%%S') boot $BOOT $MODE: $1"; } > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
 }
 WANT_WG=0
-if [ -f %(wgconf)s ] && systemctl is-enabled --quiet wg-quick@wg0 2>/dev/null; then WANT_WG=1; fi
-T=0
+if [ -f %(wgconf)s ] && systemctl is-enabled --quiet wg-quick@wg0 2>/dev/null \\
+   && grep -qiE '^[[:space:]]*Endpoint[[:space:]]*=' %(wgconf)s 2>/dev/null; then WANT_WG=1; fi
+START=$SECONDS
+END=$((SECONDS + LIMIT))
 while :; do
+  T=$((SECONDS - START))
   NET=0; TUN=1; DNS=0
-  ip -4 route show default | grep -q . && NET=1
+  ip -4 route show default | grep -v ' dev wg' | grep -q . && NET=1
   if [ "$WANT_WG" = 1 ]; then
     TUN=0
     HS=$(wg show wg0 latest-handshakes 2>/dev/null | awk '{print $2}' | sort -n | tail -n1)
     [ -n "$HS" ] && [ "$HS" -gt 0 ] 2>/dev/null && TUN=1
   fi
   for N in deb.debian.org dvswitch.org; do
-    if timeout 5 getent ahosts "$N" >/dev/null 2>&1; then DNS=1; break; fi
+    if timeout 3 getent ahosts "$N" >/dev/null 2>&1; then DNS=1; break; fi
   done
   if [ "$NET" = 1 ] && [ "$TUN" = 1 ] && [ "$DNS" = 1 ]; then
     if [ "$MODE" = late ]; then
+      DONE=""
       for U in %(units)s; do
-        systemctl is-enabled --quiet "$U" 2>/dev/null && systemctl restart "$U"
+        systemctl is-enabled --quiet "$U" 2>/dev/null || continue
+        if [ "$U" = netcheck.service ] || ! systemctl is-active --quiet "$U"; then
+          systemctl reset-failed "$U" >/dev/null 2>&1
+          systemctl restart "$U" && DONE="$DONE ${U%%.service}"
+        fi
       done
-      note "ready ${T}s later; restarted the enabled DVSwitch services"
+      note "ready ${T}s later; started again:${DONE:- nothing needed it}"
     else
       note "ready after ${T}s: network up, tunnel handshake done (or no tunnel), names resolve"
     fi
     exit 0
   fi
-  if [ "$T" -ge "$LIMIT" ]; then
+  if [ "$SECONDS" -ge "$END" ]; then
     if [ "$MODE" = late ]; then
       note "still not ready after ${LIMIT}s more (network=$NET tunnel=$TUN dns=$DNS)"
       exit 0
     fi
-    note "not ready after ${LIMIT}s (network=$NET tunnel=$TUN dns=$DNS); starting the services anyway, watching %(late_min)d more minutes"
-    systemd-run --no-block --quiet --unit=44helper-netready-late "$0" late >/dev/null 2>&1 || true
+    note "not ready after ${T}s (network=$NET tunnel=$TUN dns=$DNS); starting the services anyway, watching %(late_min)d more minutes"
+    if ! systemctl is-active --quiet 44helper-netready-late; then
+      systemctl reset-failed 44helper-netready-late >/dev/null 2>&1
+      systemd-run --no-block --quiet --collect --unit=44helper-netready-late "$0" late >/dev/null 2>&1 || true
+    fi
     exit 0
   fi
   sleep 3
-  T=$((T + 3))
 done
 """ % {"limit": _BOOT_LIMIT, "late": _BOOT_LATE_LIMIT, "late_min": _BOOT_LATE_LIMIT // 60, "log": _BOOT_LOG,
-       "wgconf": WG0_CONF_PATH, "units": " ".join(("netcheck.service",) + _OV_DVS_UNITS)}
+       "wgconf": WG0_CONF_PATH, "units": " ".join(("netcheck.service",) + _OV_DVS_UNITS + ("asterisk.service",))}
 _BOOT_TIME_SCRIPT = """#!/bin/bash
 UP=$(cut -d. -f1 /proc/uptime)
 [ "${UP:-0}" -gt 600 ] && exit 0
@@ -6892,6 +6981,7 @@ exit 0
 _BOOT_NM_DIR = "/etc/NetworkManager/dispatcher.d"
 _BOOT_NM_HOOK_PATH = _BOOT_NM_DIR + "/90-44helper-endpoint"
 _BOOT_NM_HOOK = """#!/bin/bash
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 IFACE="$1"
 ACTION="$2"
 case "$ACTION" in up|down|dhcp4-change|connectivity-change|reapply) ;; *) exit 0 ;; esac
@@ -6925,6 +7015,7 @@ _BOOT_DV_DROPIN = f"""[Unit]
 After={_BOOT_UNIT}
 Wants={_BOOT_UNIT}
 """
+_BOOT_ASL_UNITS = ("asl3-update-astdb.service", "asl3-update-nodelist.service")
 _BOOT_DV_RESTART = """[Service]
 Restart=on-failure
 RestartSec=15
@@ -6956,6 +7047,9 @@ def _boot_dv_units() -> list[str]:
              if _systemctl_show(u, ["LoadState"]).get("LoadState", "") == "loaded"]
     return units
 
+def _boot_asl_units() -> list[str]:
+    return [u for u in _BOOT_ASL_UNITS if _systemctl_show(u, ["LoadState"]).get("LoadState", "") == "loaded"]
+
 def _boot_dv_dropin_text(unit: str) -> str:
     return _BOOT_DV_DROPIN + (_BOOT_NETCHECK_RESTART if unit == _NETCHECK_UNIT else "\n" + _BOOT_DV_RESTART)
 
@@ -6975,7 +7069,7 @@ def _boot_last() -> tuple[str, bool]:
     return lines[-1], bool(boot) and f" boot {boot} " in lines[-1]
 
 def _boot_netcheck_required_by(units: list[str]) -> list[str]:
-    if _NETCHECK_UNIT not in units:
+    if _NETCHECK_UNIT not in units or _netcheck_nonfatal_ok():
         return []
     return [u for u in units if u != _NETCHECK_UNIT
             and _NETCHECK_UNIT in _systemctl_show(u, ["Requires"]).get("Requires", "").split()]
@@ -6999,7 +7093,7 @@ def status_boot_order() -> dict:
         missing.append("wait for the clock")
     req = _boot_netcheck_required_by(units)
     if req:
-        missing.append("netcheck still required by " + ", ".join(u.replace(".service", "") for u in req))
+        missing.append("a failed netcheck can stop " + ", ".join(u.replace(".service", "") for u in req))
     if conf and not _boot_file_is(_boot_dropin_path(_BOOT_WG_UNIT), _BOOT_WG_DROPIN):
         missing.append("tunnel retry")
     if conf and wg_enabled not in ("enabled", "enabled-runtime"):
@@ -7011,6 +7105,11 @@ def status_boot_order() -> dict:
     late = [u for u in units if not _boot_file_is(_boot_dropin_path(u), _boot_dv_dropin_text(u))]
     if late:
         missing.append("DVSwitch ordering (" + ", ".join(u.replace(".service", "") for u in late) + ")")
+    asl = [u for u in _boot_asl_units() if not _boot_file_is(_boot_dropin_path(u), _BOOT_DV_DROPIN)]
+    if asl:
+        missing.append("ASL3 updates after the network (" + ", ".join(u.replace(".service", "") for u in asl) + ")")
+    if conf and _ast_tunnel_binds(_hl_read_conf()) and not _boot_file_is(_BOOT_NONLOCAL_PATH, _BOOT_NONLOCAL_TEXT):
+        missing.append("Asterisk binding to the tunnel address at boot")
     wait_ok = backend["manager"] == "unknown" or backend["wait_enabled"] in ("enabled", "enabled-runtime", "static")
     if not wait_ok:
         missing.append(backend["wait_unit"] + " enabled")
@@ -7066,6 +7165,20 @@ def action_boot_order_apply() -> dict:
         units = _boot_dv_units()
         for u in units:
             _boot_write(_boot_dropin_path(u), _boot_dv_dropin_text(u), 0o644)
+        asl = _boot_asl_units()
+        for u in asl:
+            _boot_write(_boot_dropin_path(u), _BOOT_DV_DROPIN, 0o644)
+        if asl:
+            out.append("ok    ASL3 updates wait for the network: " + ", ".join(u.replace(".service", "") for u in asl)
+                       + " (they retried for minutes when started before it)")
+        binds = _ast_tunnel_binds(_hl_read_conf()) if os.path.exists(WG0_CONF_PATH) else []
+        if binds:
+            _boot_write(_BOOT_NONLOCAL_PATH, _BOOT_NONLOCAL_TEXT, 0o644)
+            r = _run_argv(["sysctl", "-q", "-p", _BOOT_NONLOCAL_PATH])
+            ok = ok and r["success"]
+            out.append(("ok    " if r["success"] else "FAIL  ") + f"Asterisk binds IAX to {', '.join(binds)}: "
+                       "net.ipv4.ip_nonlocal_bind = 1, so the bind works at boot before the tunnel has that address"
+                       + ("" if r["success"] else ": " + r["output"]))
         if units:
             out.append("ok    starts after the network is ready: " + ", ".join(u.replace(".service", "") for u in units))
             out.append("      (the others restart 15 s after a failure; netcheck is retried every 30 s, up to 10 times)")
@@ -7123,7 +7236,11 @@ def action_boot_order_revert() -> dict:
     if err:
         return err
     removed = []
-    for path in [_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH, _BOOT_NM_HOOK_PATH] + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS]:
+    if os.path.exists(_BOOT_NONLOCAL_PATH):
+        _run_argv(["sysctl", "-q", "-w", "net.ipv4.ip_nonlocal_bind=0"])
+    for path in ([_BOOT_UNIT_PATH, _BOOT_SCRIPT_PATH, _BOOT_TIME_SCRIPT_PATH, _BOOT_NM_HOOK_PATH, _BOOT_NONLOCAL_PATH,
+                  _netcheck_nonfatal_path()]
+                 + [_boot_dropin_path(u) for u in (_BOOT_WG_UNIT, _NETCHECK_UNIT) + _OV_DVS_UNITS + _BOOT_ASL_UNITS]):
         if os.path.exists(path):
             try:
                 os.remove(path)
@@ -7584,17 +7701,18 @@ def _netcheck_fixes_summary(netcheck: dict, bridges: list, backend: dict) -> dic
     nc_applicable = netcheck["exists"] and (
         netcheck["type"] == "notify" or not netcheck["ordered_after_network_online"])
     bridge_fixes = {}
+    nonfatal = netcheck["exists"] and _netcheck_nonfatal_ok()
     for b in bridges:
         bridge_fixes[b["unit"]] = {
-            "applicable": b["exists"] and b["requires_netcheck"],
-            "applied": b["exists"] and not b["requires_netcheck"] and b["our_override"],
+            "applicable": b["exists"] and b["requires_netcheck"] and not nonfatal,
+            "applied": b["exists"] and ((not b["requires_netcheck"] and b["our_override"]) or nonfatal),
         }
     script = netcheck.get("script", {})
     backup_exists = os.path.isfile(_netcheck_script_library_path())
     wait_enabled = backend.get("wait_enabled", "")
     any_applied = (netcheck["our_dropin"]
                    or any(b["our_dropin"] or b["our_override"] for b in bridges)
-                   or backup_exists)
+                   or backup_exists or os.path.isfile(_netcheck_nonfatal_path()))
     return {
         "unit_fix": {"applicable": nc_applicable, "applied": netcheck["our_dropin"]},
         "bridge_fixes": bridge_fixes,
@@ -7605,6 +7723,68 @@ def _netcheck_fixes_summary(netcheck: dict, bridges: list, backend: dict) -> dic
                            "unit": backend.get("wait_unit", ""), "enabled": wait_enabled},
         "any_applied": any_applied,
     }
+
+_NETCHECK_NONFATAL_NAME = "44helper-nonfatal.conf"
+
+def _netcheck_nonfatal_path() -> str:
+    return os.path.join(_netcheck_dropin_dir(_NETCHECK_UNIT), _NETCHECK_NONFATAL_NAME)
+
+def _netcheck_exec_starts() -> list[str]:
+    frag = _systemctl_show(_NETCHECK_UNIT, ["FragmentPath"]).get("FragmentPath", "")
+    try:
+        with open(frag, "r", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+    out: list[str] = []
+    section = ""
+    for raw in text.replace("\\\n", " ").splitlines():
+        st = raw.strip()
+        if st.startswith("["):
+            section = st.lower()
+            continue
+        if section == "[service]":
+            m = re.match(r"^ExecStart\s*=\s*(.*)$", st)
+            if m:
+                v = m.group(1).strip()
+                out = out + [v] if v else []
+    return out
+
+def _netcheck_nonfatal_text() -> str:
+    execs = _netcheck_exec_starts()
+    if not execs:
+        return ""
+    lines = ["[Service]", "ExecStart="]
+    for v in execs:
+        m = re.match(r"^([@\-:+!]*)(.*)$", v)
+        pre, rest = m.group(1), m.group(2)
+        lines.append("ExecStart=" + ("" if "-" in pre else "-") + pre + rest)
+    return "\n".join(lines) + "\n"
+
+def _netcheck_nonfatal_ok() -> bool:
+    want = _netcheck_nonfatal_text()
+    return bool(want) and _boot_file_is(_netcheck_nonfatal_path(), want)
+
+def action_netcheck_nonfatal() -> dict:
+    err = _require_root()
+    if err:
+        return err
+    text = _netcheck_nonfatal_text()
+    if not text:
+        return {"success": False, "verified": False,
+                "output": "Couldn't read netcheck's ExecStart line from its unit file, so nothing was changed."}
+    path = _netcheck_nonfatal_path()
+    try:
+        _boot_write(path, text, 0o644)
+    except OSError as e:
+        return {"success": False, "verified": False, "output": f"Write failed: {e}"}
+    rl = _daemon_reload()
+    shown = _systemctl_show(_NETCHECK_UNIT, ["ExecStart"]).get("ExecStart", "")
+    ok = rl["success"] and "ignore_errors=yes" in shown and "ignore_errors=no" not in shown
+    return {"success": ok, "verified": ok,
+            "output": (f"Wrote {path}: netcheck still runs its check, but a failed check no longer fails the unit, so the "
+                       "services that require it are never stopped by it. 44helper-netready does the waiting for the network."
+                       + ("" if ok else "\nsystemctl show doesn't confirm it yet: " + (shown[:200] or rl["output"])))}
 
 def action_netcheck_fix_unit() -> dict:
     err = _require_root()
@@ -7812,6 +7992,13 @@ def action_netcheck_revert() -> dict:
                 removed.append(_netcheck_override_path(unit))
             except OSError as e:
                 return {"success": False, "verified": False, "output": f"Failed removing {_netcheck_override_path(unit)}: {e}"}
+    nf = _netcheck_nonfatal_path()
+    if os.path.isfile(nf):
+        try:
+            os.remove(nf)
+            removed.append(nf)
+        except OSError as e:
+            return {"success": False, "verified": False, "output": f"Failed removing {nf}: {e}"}
     for unit in [_NETCHECK_UNIT] + _NETCHECK_BRIDGE_UNITS:
         p = _netcheck_dropin_path(unit)
         if os.path.isfile(p):
@@ -19005,7 +19192,7 @@ function bootRefresh() {
       ? f.map(function(x) { return '<div class="bt-find">' + _ovDot(_btLvl(x.level)) + _ovEsc(x.msg) + '</div>'; }).join('')
       : '<div class="bt-find">' + _ovDot('ok') + 'Nothing found for this boot.</div>';
 
-    var t = '<table class="cfg-table"><tr><th></th><th>Unit</th><th>State</th><th>Started</th><th>Active at</th>' +
+    var t = '<table class="cfg-table"><tr><th></th><th>Unit</th><th>State</th><th>Last started</th><th>Active at</th>' +
             '<th>Restarts</th><th>At boot</th></tr>';
     (d.timeline || []).forEach(function(r) {
       t += '<tr><td>' + _ovDot(_btLvl(r.level)) + '</td><td>' + _ovEsc(r.unit) + '</td><td>' +
@@ -24254,11 +24441,12 @@ _BT_TOOLS = (
 )
 _BT_VER_RE = re.compile(r"^\s*(?:APP_VERSION|SCRIPT_VERSION|VERSION)\s*=\s*[\"']([^\"']+)[\"']", re.M)
 _BT_LATE_UNIT = "44helper-netready-late.service"
-_BT_BASE_UNITS = ("systemd-timesyncd.service", "time-sync.target", "NetworkManager-wait-online.service",
-                  "systemd-networkd-wait-online.service", "network-online.target", _BOOT_WG_UNIT, _BOOT_UNIT,
-                  _BT_LATE_UNIT, _NETCHECK_UNIT)
+_BT_BASE_UNITS = ("systemd-timesyncd.service", "systemd-time-wait-sync.service", "time-sync.target",
+                  "NetworkManager-wait-online.service", "systemd-networkd-wait-online.service", "network-online.target",
+                  _BOOT_WG_UNIT, _BOOT_UNIT, _BT_LATE_UNIT, _NETCHECK_UNIT) + _BOOT_ASL_UNITS + ("multi-user.target",)
 _BT_PROPS = ("Id", "LoadState", "ActiveState", "SubState", "Result", "NRestarts",
-             "ActiveEnterTimestampMonotonic", "InactiveExitTimestampMonotonic", "UnitFileState")
+             "ActiveEnterTimestampMonotonic", "InactiveExitTimestampMonotonic", "InactiveEnterTimestampMonotonic",
+             "UnitFileState")
 _BT_SECRET_RES = (
     (re.compile(r"(?im)^(\s*(?:PrivateKey|PresharedKey)\s*=\s*).+$"), r"\1(hidden)"),
     (re.compile(r"(?i)\b(password|passwd|passphrase|token|secret|api[_-]?key|psk)(\s*[=:]\s*)([^\s,;]+)"), r"\1\2(hidden)"),
@@ -24399,19 +24587,23 @@ def _bt_timeline() -> list[dict]:
             restarts = int(b.get("NRestarts") or 0)
         except ValueError:
             restarts = 0
+        started = _bt_mono_secs(b.get("InactiveExitTimestampMonotonic", ""))
+        never = (b.get("UnitFileState", "") == "enabled" and unit.endswith(".service") and active == "inactive"
+                 and started is None and _bt_mono_secs(b.get("ActiveEnterTimestampMonotonic", "")) is None)
         if active == "failed" or (result and result != "success"):
             level = "danger"
-        elif restarts > 0 or unit == _BT_LATE_UNIT:
+        elif restarts > 0 or unit == _BT_LATE_UNIT or never:
             level = "warn"
         elif active == "active":
             level = "ok"
         else:
             level = "info"
         rows.append({"unit": unit, "active": active, "sub": b.get("SubState", ""), "result": result,
-                     "restarts": restarts, "started_s": _bt_mono_secs(b.get("InactiveExitTimestampMonotonic", "")),
+                     "restarts": restarts, "started_s": started, "never_started": never,
+                     "finished_s": _bt_mono_secs(b.get("InactiveEnterTimestampMonotonic", "")),
                      "active_s": _bt_mono_secs(b.get("ActiveEnterTimestampMonotonic", "")),
                      "enabled": b.get("UnitFileState", ""), "level": level})
-    rows.sort(key=lambda r: (r["active_s"] is None and r["started_s"] is None,
+    rows.sort(key=lambda r: (r["active_s"] is None and r["started_s"] is None and not r["never_started"],
                              r["started_s"] if r["started_s"] is not None else (r["active_s"] or 0)))
     return rows
 
@@ -24554,11 +24746,34 @@ def _bt_findings(ctx: dict) -> list[dict]:
             out.append({"level": "warn", "msg": "At this boot: " + ln.split(": ", 1)[-1]})
     if not s["boot_log_this_boot"] and s["wg_conf"] and s["uptime_s"] > _BOOT_LIMIT + 60:
         out.append({"level": "info", "msg": "44helper-netready left no line for this boot (the boot order may not be set)."})
+    by_unit = {r["unit"]: r for r in ctx["timeline"]}
     for r in ctx["timeline"]:
         if r["level"] == "danger":
             out.append({"level": "danger", "msg": f"{r['unit']} is {r['active']} (result: {r['result'] or 'none'})."})
         elif r["restarts"] > 0:
             out.append({"level": "warn", "msg": f"{r['unit']} was restarted {r['restarts']} time(s) by systemd this boot."})
+        elif r.get("never_started"):
+            out.append({"level": "warn", "msg": f"{r['unit']} is enabled but never started this boot (a unit it requires "
+                                                "may have failed, for example netcheck)."})
+    tws = by_unit.get("systemd-time-wait-sync.service")
+    if tws and tws["enabled"] == "enabled" and (tws["active_s"] or 0) - (tws["started_s"] or 0) > 30:
+        out.append({"level": "info", "msg": f"systemd-time-wait-sync is enabled and held time-sync.target for "
+                                            f"{int((tws['active_s'] or 0) - (tws['started_s'] or 0))} s until the clock synced; "
+                                            "timers such as asl3-update-astdb and apt wait for it. None of the Node Controller "
+                                            "tools need it."})
+    for u in _BOOT_ASL_UNITS:
+        r = by_unit.get(u)
+        if r and r["started_s"] is not None and r["finished_s"] is not None and r["finished_s"] - r["started_s"] > 120:
+            out.append({"level": "warn", "msg": f"{u} took {int((r['finished_s'] - r['started_s']) // 60)} min at boot; it "
+                                                "retries when started before the network. Set the boot order makes it wait."})
+    try:
+        f = _ov_ast_bind_finding(_hl_read_conf())
+    except Exception:
+        f = None
+    if f:
+        ast, wgq = by_unit.get("asterisk.service"), by_unit.get(_BOOT_WG_UNIT)
+        early = bool(ast and wgq and ast["active_s"] and wgq["active_s"] and ast["active_s"] < wgq["active_s"])
+        out.append({"level": "warn", "msg": f["msg"] + (" At this boot Asterisk was up before the tunnel." if early else "")})
     if s["clock"]["ntp"] == "yes" and s["clock"]["synced"] != "yes":
         out.append({"level": "warn", "msg": "The clock isn't synchronised. A clock that is behind can stop the tunnel's handshake."})
     volts = [flag for flag in s["power"]["flags"] if "voltage" in flag]
@@ -24576,7 +24791,7 @@ def _bt_findings(ctx: dict) -> list[dict]:
         out.append({"level": "warn", "msg": "Boot order not complete: " + "; ".join(s["boot_order"]["missing"]) + "."})
     try:
         for f in _ov_health_compute():
-            if f.get("level") in ("warn", "danger") and f.get("id") not in ("boot_order", "boot_late"):
+            if f.get("level") in ("warn", "danger") and f.get("id") not in ("boot_order", "boot_late", "ast_bind"):
                 out.append({"level": f["level"], "msg": "Health: " + str(f.get("msg", ""))})
     except Exception:
         pass
@@ -24754,7 +24969,7 @@ def _bt_report_text(ctx: dict, findings: list[dict], sections: list[dict]) -> st
     if tg is not None:
         head.append(f"Tunnel watchdog: {tg.get('state', '?')} {tg.get('detail') or ''}".rstrip())
     head += ["", "== Findings =="] + ([f"{lvl.get(f['level'], 'INFO')}  {f['msg']}" for f in findings] or ["none"])
-    head += ["", "== Timeline (started / active at, seconds after boot) =="]
+    head += ["", "== Timeline (last started / active at, seconds after boot) =="]
     for r in ctx["timeline"]:
         st = "-" if r["started_s"] is None else f"{r['started_s']:.1f}"
         ac = "-" if r["active_s"] is None else f"{r['active_s']:.1f}"
