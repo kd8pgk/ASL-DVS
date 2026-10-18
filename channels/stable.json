@@ -20,13 +20,13 @@
    "version": "9.3.79"
   },
   "nodecontrol_pi02w": {
-   "blob": "fabbdbdd4b3838821a3989bdb23e114b44927d37",
-   "commit": "f3d2dffad58677e44643c3d9954dd3968aaf449e",
-   "file": "nodecontrol_pi02w_v9_3_71_18_20261013.py",
-   "landed": "2026-10-13T12:00:24Z",
-   "promoted": "2026-10-16T12:00:24Z",
+   "blob": "40dd6737cb9c8f9ad3d40400db50b421eb10cda6",
+   "commit": "4888470950b705fb5670938b3320f2380982ad62",
+   "file": "nodecontrol_pi02w_v9_3_72_20261014.py",
+   "landed": "2026-10-14T15:50:16Z",
+   "promoted": "2026-10-18T06:53:49Z",
    "reason": "count",
-   "version": "9.3.71.18-pi02w"
+   "version": "9.3.72-pi02w"
   },
   "sysmon": {
    "blob": "ca734f60fbdf4007008f688b209ad0506a6a10bd",
