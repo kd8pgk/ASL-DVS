@@ -40,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.76-pi02w"
-BUILD_DATE   = "2026-10-14"
+VERSION      = "9.3.77-pi02w"
+BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -94,6 +94,7 @@ _DSTAR_BASE_LEN = 6
 ASL_DVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
 
 _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
+_BOOT_DISCONNECT_MARKER_PATH = "/run/asl_dvs/boot_disconnect_done"
 
 _INSTALL_DIR      = "/usr/local/lib/asl_dvs/nodecontrol"
 _OLD_INSTALL_DIRS = ("/usr/local/lib/asl_dvs/dashboard", "/usr/local/lib/asl_dvs")
@@ -2866,13 +2867,29 @@ def _phone_then_prepare(tones: str) -> bool:
     log.warning("phone: couldn't hand the saved tones to Asterisk — sending them after answer")
     return False
 
+_PHONE_REFRESH_DELAY = 20
+_PHONE_REFRESH_RETRY = 15
+_PHONE_REFRESH_WAIT  = 300
+
+def _phone_refresh_ready() -> "dict | None":
+    doc = _phone_load()
+    if not doc.get("activated") or not doc.get("networks") or _ph_read(_ph_path(_PH_OWNED["ext"])) is None:
+        return None
+    return doc
+
 def _phone_refresh_on_start() -> None:
-    time.sleep(20)
+    end = time.monotonic() + _PHONE_REFRESH_WAIT
+    time.sleep(_PHONE_REFRESH_DELAY)
     try:
-        doc = _phone_load()
-        ext = _ph_path(_PH_OWNED["ext"])
-        if not doc.get("activated") or not doc.get("networks") or _ph_read(ext) is None \
-                or not _svc_is_active("asterisk"):
+        if _phone_refresh_ready() is None:
+            return
+        while not _svc_is_active("asterisk"):
+            if time.monotonic() >= end:
+                log.info("phone: Asterisk isn't running after %d s — start-up refresh skipped", _PHONE_REFRESH_WAIT)
+                return
+            time.sleep(_PHONE_REFRESH_RETRY)
+        doc = _phone_refresh_ready()
+        if doc is None:
             return
         if not _phone_setup_stale(doc):
             return
@@ -6419,15 +6436,17 @@ _ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
 _ASL_REG_FAST_SEC  = 60.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
-_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.time()}
+_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.monotonic()}
 ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
 
-def _asl_reg_write_status(node: str, state: str, since: float) -> None:
+def _asl_reg_write_status(node: str, state: str, since_mono: float) -> None:
     try:
         os.makedirs(os.path.dirname(ASL_REG_STATUS_FILE), exist_ok=True)
         tmp = ASL_REG_STATUS_FILE + ".tmp"
+        now = time.time()
+        since = now - max(0.0, time.monotonic() - since_mono)
         with open(tmp, "w") as f:
-            json.dump({"node": node, "state": state, "since": since, "checked_at": time.time(),
+            json.dump({"node": node, "state": state, "since": since, "checked_at": now,
                        "next_check_secs": _ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC}, f)
         os.chmod(tmp, 0o644)
         os.replace(tmp, ASL_REG_STATUS_FILE)
@@ -6455,7 +6474,7 @@ def _asl_reg_check() -> str:
     with _asl_reg_lock:
         prev = _asl_reg_info["state"]
         if state != prev:
-            _asl_reg_info["since"] = time.time()
+            _asl_reg_info["since"] = time.monotonic()
         _asl_reg_info.update(state=state, node=node, at=time.monotonic())
         since = _asl_reg_info["since"]
     if state != prev:
@@ -14241,29 +14260,120 @@ def _is_fresh_boot() -> bool:
     except Exception:
         return True
 
-def _mark_boot_done() -> None:
+def _write_boot_marker(path: str, what: str) -> None:
     boot_id = _boot_id()
     if not boot_id:
         return
     try:
-        marker = Path(_BOOT_MARKER_PATH)
+        marker = Path(path)
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(boot_id)
     except Exception as exc:
-        log.warning("startup: could not write the boot marker: %s", exc)
+        log.warning("startup: could not write the %s: %s", what, exc)
+
+def _mark_boot_done() -> None:
+    _write_boot_marker(_BOOT_MARKER_PATH, "boot marker")
+
+def _boot_disconnect_done() -> bool:
+    boot_id = _boot_id()
+    if not boot_id:
+        return False
+    try:
+        marker = Path(_BOOT_DISCONNECT_MARKER_PATH)
+        return marker.is_file() and marker.read_text().strip() == boot_id
+    except Exception:
+        return False
+
+def _mark_boot_disconnect_done() -> None:
+    _write_boot_marker(_BOOT_DISCONNECT_MARKER_PATH, "boot disconnect marker")
+
+_boot_work_lock = threading.Lock()
+_boot_work_left: set = set()
+
+def _boot_work_done(name: str) -> None:
+    with _boot_work_lock:
+        _boot_work_left.discard(name)
+        left = bool(_boot_work_left)
+    if not left:
+        _mark_boot_done()
 
 _BOOT_AB_WAIT = 300
+_BOOT_AB_CAP = 600
+_BOOT_AB_UNITS = ("analog_bridge.service", "Analog_Bridge.service")
+_BOOT_ABINFO_SLACK = 5
 _BOOT_ASTERISK_SETTLE = 30
-_BOOT_ASTERISK_WAIT = 120
+_BOOT_ASTERISK_WAIT = 450
+_BOOT_NETREADY_UNIT = "44helper-netready.service"
+_dash_started = time.monotonic()
+
+def _unit_props(unit: str, *props: str) -> dict:
+    cmd = ["systemctl", "show", unit]
+    for p in props:
+        cmd += ["-p", p]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return {}
+    return dict(ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
+
+def _unit_active_since_mono(props: dict) -> "float | None":
+    if props.get("ActiveState") != "active":
+        return None
+    try:
+        since = int(props.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
+    except ValueError:
+        return None
+    return since if since > 0 else None
+
+def _unit_up_secs(unit: str) -> "float | None":
+    since = _unit_active_since_mono(_unit_props(unit, "ActiveState", "ActiveEnterTimestampMonotonic"))
+    return time.monotonic() - since if since is not None else None
+
+def _ab_unit() -> "str | None":
+    for unit in _BOOT_AB_UNITS:
+        if _unit_props(unit, "LoadState").get("LoadState") == "loaded":
+            return unit
+    return None
+
+def _unit_active_since_wall(unit: str) -> "list[float]":
+    props = _unit_props(unit, "ActiveState", "ActiveEnterTimestampMonotonic")
+    since = _unit_active_since_mono(props)
+    if since is None:
+        return []
+    out = [time.time() - (time.monotonic() - since)]
+    try:
+        val = ""
+        for extra in (["--timestamp=unix"], []):
+            r = subprocess.run(["systemctl", "show", unit, "-p", "ActiveEnterTimestamp"] + extra,
+                               capture_output=True, text=True, timeout=5)
+            val = (r.stdout or "").strip().partition("=")[2].strip()
+            if r.returncode == 0 and val:
+                break
+        if val.startswith("@"):
+            out.append(float(val[1:]))
+        elif val:
+            d = subprocess.run(["date", "-d", val, "+%s"], capture_output=True, text=True, timeout=5)
+            if d.returncode == 0 and d.stdout.strip():
+                out.append(float(d.stdout.strip()))
+    except Exception:
+        pass
+    return out
 
 def _abinfo_this_boot() -> "dict | None":
+    unit = _ab_unit()
+    if unit:
+        starts = _unit_active_since_wall(unit)
+        if not starts:
+            return None
+        floor = min(starts) - _BOOT_ABINFO_SLACK
+    else:
+        try:
+            up = float(Path("/proc/uptime").read_text().split()[0])
+        except Exception:
+            up = 0.0
+        floor = time.time() - up
     try:
-        up = float(Path("/proc/uptime").read_text().split()[0])
-    except Exception:
-        up = 0.0
-    booted = time.time() - up
-    try:
-        files = [f for f in _glob.glob("/tmp/ABInfo_*.json") if _is_root_owned(f) and os.path.getmtime(f) >= booted]
+        files = [f for f in _glob.glob("/tmp/ABInfo_*.json") if _is_root_owned(f) and os.path.getmtime(f) >= floor]
     except Exception:
         files = []
     return _read_abinfo() if files else None
@@ -14308,50 +14418,82 @@ def _dvs_apply_live(fresh_boot: bool, live_ab: "dict | None") -> None:
     else:
         _dvs_startup_init()
 
+def _ab_wait_over(unit: "str | None", end: float) -> bool:
+    now = time.monotonic()
+    if unit is None:
+        return now >= end
+    if now >= _BOOT_AB_CAP:
+        return True
+    up = _unit_up_secs(unit)
+    return up is not None and up >= _BOOT_AB_WAIT
+
 def _dvs_boot_init() -> None:
     try:
         end = time.monotonic() + _BOOT_AB_WAIT
+        unit = _ab_unit()
         live_ab = _abinfo_this_boot()
         if live_ab is None:
-            log.info("startup: fresh boot — waiting up to %d s for Analog_Bridge before the startup tune", _BOOT_AB_WAIT)
-        while live_ab is None and time.monotonic() < end:
+            if unit:
+                log.info("startup: fresh boot — waiting for Analog_Bridge (%s, up to %d s after it starts) "
+                         "before the startup tune", unit, _BOOT_AB_WAIT)
+            else:
+                log.info("startup: fresh boot — waiting up to %d s for Analog_Bridge before the startup tune", _BOOT_AB_WAIT)
+        while live_ab is None and not _ab_wait_over(unit, end):
             time.sleep(5)
             live_ab = _abinfo_this_boot()
         if live_ab is None:
-            log.warning("startup: Analog_Bridge didn't report in %d s — sending the startup tune anyway", _BOOT_AB_WAIT)
+            log.warning("startup: Analog_Bridge didn't report — sending the startup tune anyway")
         _dvs_apply_live(True, live_ab)
     except Exception as exc:
         log.warning("startup: boot DVSwitch init failed: %s", exc)
     finally:
-        _mark_boot_done()
+        _boot_work_done("dvs")
 
 def _asterisk_up_secs() -> "float | None":
-    try:
-        r = subprocess.run(["systemctl", "show", "asterisk", "-p", "ActiveState", "-p", "ActiveEnterTimestampMonotonic"],
-                           capture_output=True, text=True, timeout=5)
-    except Exception:
-        return None
-    props = dict(ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
-    if props.get("ActiveState") != "active":
-        return None
-    try:
-        since = int(props.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
-    except ValueError:
-        return None
-    return time.monotonic() - since if since > 0 else None
+    return _unit_up_secs("asterisk")
+
+def _netready_pending() -> bool:
+    props = _unit_props(_BOOT_NETREADY_UNIT, "LoadState", "ActiveState", "Job")
+    if props.get("LoadState") != "loaded":
+        return False
+    state = props.get("ActiveState", "")
+    if state in ("active", "failed"):
+        return False
+    return state in ("activating", "reloading") or props.get("Job", "").strip() not in ("", "0")
 
 def _asl_boot_disconnect() -> None:
     try:
-        end = time.monotonic() + _BOOT_ASTERISK_WAIT
-        while time.monotonic() < end:
+        end = _dash_started + _BOOT_ASTERISK_WAIT
+        waited_net = False
+        up = None
+        while True:
             up = _asterisk_up_secs()
-            if up is not None and up >= _BOOT_ASTERISK_SETTLE:
+            net_wait = _netready_pending()
+            waited_net = waited_net or net_wait
+            if up is not None and up >= _BOOT_ASTERISK_SETTLE and not net_wait:
+                break
+            if time.monotonic() >= end:
                 break
             time.sleep(3)
-        log.info("startup: fresh boot — disconnect-all once Asterisk has settled")
-        _disconnect_all()
+        if up is None:
+            log.warning("startup: fresh boot — Asterisk isn't running after %d s; skipping the boot disconnect-all",
+                        _BOOT_ASTERISK_WAIT)
+            return
+        if _netready_pending():
+            log.warning("startup: fresh boot — the network still isn't ready after %d s; disconnect-all anyway",
+                        _BOOT_ASTERISK_WAIT)
+        elif waited_net:
+            log.info("startup: fresh boot — disconnect-all once Asterisk has settled and the network is ready")
+        else:
+            log.info("startup: fresh boot — disconnect-all once Asterisk has settled")
+        try:
+            _disconnect_all()
+        finally:
+            _mark_boot_disconnect_done()
     except Exception as exc:
         log.warning("startup: boot disconnect-all failed: %s", exc)
+    finally:
+        _boot_work_done("asl")
 
 def _harden_existing_conf_perms() -> None:
     try:
@@ -14397,6 +14539,16 @@ def startup() -> None:
     fresh_boot = _is_fresh_boot()
     if not fresh_boot:
         log.info("startup: process restart within same boot — preserving live links")
+    boot_disconnect = fresh_boot and has_asl and not _boot_disconnect_done()
+    if fresh_boot and has_asl and not boot_disconnect:
+        log.info("startup: the boot disconnect-all already ran this boot — not repeating it")
+    with _boot_work_lock:
+        _boot_work_left.clear()
+        if fresh_boot and has_dvs:
+            _boot_work_left.add("dvs")
+        if boot_disconnect:
+            _boot_work_left.add("asl")
+        boot_work = bool(_boot_work_left)
 
     if has_dvs:
         has_stfu = _detect_stfu()
@@ -14408,7 +14560,7 @@ def startup() -> None:
             threading.Thread(target=_dvs_boot_init, name="dvs-boot-init", daemon=True).start()
         else:
             _dvs_apply_live(False, _read_abinfo())
-    if not (has_dvs and fresh_boot):
+    if not boot_work:
         _mark_boot_done()
 
     if has_asl or has_dvs:
@@ -14423,9 +14575,9 @@ def startup() -> None:
     if has_asl:
         has_echo = _detect_echo()
         set_state(has_echo=has_echo)
-        if fresh_boot:
+        if boot_disconnect:
             threading.Thread(target=_asl_boot_disconnect, name="asl-boot-disconnect", daemon=True).start()
-        else:
+        elif not fresh_boot:
             log.info("startup: process restart within same boot — skipping ASL disconnect-all")
         _write_event_script()
         threading.Thread(target=_phone_refresh_on_start, name="phone-refresh", daemon=True).start()
