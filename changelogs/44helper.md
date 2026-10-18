@@ -1,6 +1,66 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_211_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_212_20261018.py`. Newest entries first.
+
+## 0.0.212 (2026-10-18) — testing
+
+Phase 2 of the boot audit (the split tunnel rebuilt on policy routing) and part of
+phase 3, plus the AllStar registration address.
+
+- **Split tunnel on policy routing.** A split tunnel (every AllowedIPs inside 44/8,
+  IPv4 only, no Table/FwMark of its own) now gets a routing block in wg0.conf:
+  `Table = 4444`, `FwMark = 0x4444`, `PostUp` rule `not fwmark 0x4444 table 4444
+  priority 10044` (removed in `PostDown`, `|| true`). The 44Net routes live in table
+  4444; WireGuard's own packets carry the mark, skip that table and use the normal
+  route, on whichever adapter is up, so the tunnel server can't loop back into wg0
+  when WiFi changes adapter. The tunnel-server route line (endpoint pin) is then
+  removed, and the NetworkManager hook is only needed while a pin is left. A full
+  tunnel is unchanged. Every write of wg0.conf applies it; the paste check shows it.
+- **Card 4b is now "Split tunnel routing"**: Set (policy routing in place), "Restart
+  needed" (in the file but not running yet, with a restart button), or "Older
+  routing" with **Switch to policy routing**, which writes the file, restarts the
+  tunnel (a LAN session stays up), waits for a handshake and checks the rule. Set the
+  boot order also converts it ("split tunnel routing (older form)" in what is
+  missing) and says to restart the tunnel. The Boot tab's Tunnel line says "policy
+  routing (table 4444)" and warns while the older form is in use.
+- **Clock wait only for a full tunnel.** `44helper-timewait` exits at once unless
+  wg0.conf routes everything (`0.0.0.0/0`): on a split tunnel NTP goes over the LAN
+  and WireGuard handshakes as soon as the clock is right (magicbox: 17 s saved).
+- **Split AllowedIPs must be exactly 44.0.0.0/9, 44.128.0.0/10.** The paste check
+  flagged only `0.0.0.0/0`; `::/0`, `0.0.0.0/1` pairs and `44.0.0.0/8` (which takes in
+  non-amateur addresses) now get the same rewrite offer.
+- **Replace the config.** Step 4 shows **Replace the config** once wg0.conf exists
+  (new key or tunnel server): the same check before writing, the DNS and MTU
+  settings carried over, the old file saved as `wg0.conf.pre-replace`.
+- **DNS and MTU cards own their settings.** Setting DNS removes raw `DNS =` lines and
+  setting MTU removes raw `MTU =` lines, so the card's value is the one in force. A
+  pasted `DNS =` server outside AllowedIPs is dropped with a note (lookups over wg0
+  to it would be dropped).
+- **Firewall:** if firewalld has no `iax2` (or `echolink`) service, the step opens the
+  ports instead (the IAX port from iax.conf `bindport`, default 4569/udp), and step 3
+  counts as done only when IAX is open. EchoLink isn't offered on the split tab: only
+  44Net hosts can reach a split tunnel.
+- **Verify** on the tunnel tabs checks the tunnel itself: handshake age, wg0's
+  address, 44Net routed through wg0, the tunnel server not looping, names resolving,
+  and each AllStar registration with the address it is registered as, plus the
+  public address.
+- **Step 6 restarts** a tunnel that is already running, so a changed wg0.conf is
+  used.
+- **AllStar registration on the Overview.** A new card shows each node from
+  `rpt show registrations` with its state and the address and port the AllStarLink
+  server sees it at (the Perceived column), and whether that is through the 44Net
+  tunnel, your public address or a private one.
+- **Quiet mode:** the state records the boot id; quiet mode left on before a reboot is
+  cleared at start (the reboot already started everything) instead of restarting
+  services that are still waiting for the network.
+- **Boot tab:** finding for an "ordering cycle" logged at this boot.
+- Tested: the routing block on magicbox's conf (added, pin removed, DNS line fixed,
+  idempotent, not for full tunnels, own Table, IPv6, or no longer split), the hook
+  lines under `set -e` with a failing `ip rule del`, the strict split shapes, the
+  clock wait exiting on a split tunnel, DNS outside the tunnel dropped and a 44 DNS
+  kept, the firewalld fallback to ports, replace keeping DNS/MTU, quiet state from an
+  earlier boot, the 0.0.211 suites, and the page in headless Chromium (card 4b in its
+  three states, the switch button, the Overview registration card, Verify, Replace).
 
 ## 0.0.211 (2026-10-18) — testing
 
