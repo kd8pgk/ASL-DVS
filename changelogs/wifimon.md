@@ -1,6 +1,41 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_37_0_20261018.py`. Newest entries first.
+Current file: `wifimon_v5_38_0_20261018.py`. Newest entries first.
+
+## 5.38.0 (2026-10-18)
+
+Phase 1 of the boot audit. wifimon serves both builds.
+
+- **Keep off through NetworkManager.** 5.37.0's boot unit raced NetworkManager: it
+  started at the same moment NetworkManager began connecting, so it mostly undid a
+  connection instead of preventing it (magicbox: NetworkManager joined KD8PGK004 on wlan0
+  at 33 s, "network online" was reached on it, and wifimon dropped it at 36 s). Now a
+  Keep-off adapter is listed in `/etc/NetworkManager/conf.d/90-wifimon-keepoff.conf`
+  (`[keyfile] unmanaged-devices+=mac:<permanent MAC>`, or `interface-name:` for an adapter
+  without one), so NetworkManager never uses it, from the start of every boot, and
+  "network online" waits for the adapter you use. The setting applies at once
+  (`nmcli general reload conf`, `device set … managed no`) and is removed when the
+  adapter goes back to Auto or Keep on. The 5.37.0 unit is removed. If a Keep-off adapter
+  is the only WiFi adapter left, wifimon lets NetworkManager use it until the next boot.
+  Uninstall removes the file.
+- **The adapter you use connects at once.** wifimon waited 30 s for NetworkManager to
+  rejoin by itself even at boot; NetworkManager didn't, so wlan1 came up only at 66-72 s.
+  In the first 10 minutes after boot, when the watched adapter is idle (disconnected, not
+  connecting), wifimon now reconnects straight away. After a runtime Keep-off disconnect
+  it asks NetworkManager to connect the watched adapter at once. At start it waits up to
+  10 s for the saved adapter to appear before falling back to another.
+- **No false "Network lost" at boot.** Until the first connection after boot it logs
+  "No network yet after boot -- waiting" and doesn't count a drop (the shutdown/reboot
+  grace is unchanged).
+- **Tunnel watchdog:** while 44helper's late follow-up (`44helper-netready-late`) is
+  running it leaves the DVSwitch restart to it (no double restart); a tunnel restart may
+  take up to 240 s (the clock wait alone can take 90 s), so it isn't counted as failed
+  too early.
+- Tested: the watchdog suite and new checks (45): Keep off writes, reads back, reloads
+  and unmanages; same mode again does nothing; Auto removes it and manages the adapter;
+  `if:` keys; the 5.37.0 unit removed; the only adapter is managed again; a kept-off
+  adapter is left alone; runtime disconnect then immediate connect; the boot head start
+  skip; no double DV restart during the late follow-up.
 
 ## 5.37.0 (2026-10-18)
 

@@ -1,6 +1,57 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_210_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_211_20261018.py`. Newest entries first.
+
+## 0.0.211 (2026-10-18) — testing
+
+Phase 1 of the boot audit (magicbox's boot reports plus a code audit of the boot order,
+the split card and the other tools).
+
+- **"netcheck still required by …" now clears.** The status checked all 13 DVSwitch
+  units, but the fix only knew the three bridges, and stfu's unit file is in
+  `/etc/systemd/system` from DVSwitch, so 44helper refused to copy over it. The packaged
+  gateways (ysfgateway and the others) require netcheck in their own unit files. Instead of
+  copying unit files, Set the boot order (and Apply netcheck fixes) now writes one drop-in
+  on netcheck itself, `netcheck.service.d/44helper-nonfatal.conf`, which repeats
+  netcheck's ExecStart with a `-` prefix: netcheck still runs its check, but a failed
+  check no longer fails the unit, so nothing that requires it is stopped. Checked with
+  `systemctl show -p ExecStart` (ignore_errors=yes). netready does the waiting. Revert
+  (6b Remove or the netcheck card) removes it.
+- **DNS undo line can't block the tunnel's stop.** `PreDown = resolvectl revert %i` had
+  no `|| true`; when systemd-resolved didn't answer, wg-quick stopped there and left wg0
+  up, so every later start failed. New lines carry `|| true`, and existing files are
+  fixed on the next write, by the Health card's fix, Restart tunnel or Set the boot order.
+- **netready keeps real time.** Its timer counted sleeps, not seconds; with DNS down each
+  pass took about 13 s, so systemd killed it at 210 s, no boot-log line was written and
+  the late follow-up never started. It now uses a deadline and `timeout 3` lookups, waits
+  for a handshake only when wg0.conf has an `Endpoint`, and ignores a default route
+  through wg.
+- **Late follow-up:** restarts netcheck (which restarts what requires it) and then only
+  the enabled services that are not running, with `reset-failed` first so a start limit
+  doesn't block it; Asterisk is in the list; started with `--collect` and not twice.
+- **Asterisk bound to the tunnel address.** If `bindaddr` in `/etc/asterisk/iax.conf`
+  [general] (following `#include`/`#tryinclude`, `ip` or `ip:port`) is wg0's address or
+  any 44 address, the Health card warns: on a split tunnel use `bindaddr=0.0.0.0` (IAX to
+  nodes outside 44Net would leave through the router with a 44 source address). Set the
+  boot order then adds `/etc/sysctl.d/90-44helper-nonlocal-bind.conf`
+  (`net.ipv4.ip_nonlocal_bind = 1`) so the bind works at boot before wg0 has the address.
+  Remove takes it out again.
+- **ASL3 updates wait for the network.** `asl3-update-astdb` and `asl3-update-nodelist`
+  get the netready ordering drop-in; on magicbox astdb had retried for 15 minutes and held
+  the boot open.
+- **Hostname endpoints:** a write while DNS is down no longer removes the tunnel-server
+  route block (it couldn't resolve the name, so it thought the block wasn't needed).
+- NetworkManager hook sets its own PATH.
+- **Boot tab:** time-wait-sync, the ASL3 update units and multi-user.target in the
+  timeline; "Last started" column; findings for enabled services that never started
+  (a required unit failed), systemd-time-wait-sync holding the clock target, ASL3
+  updates that took minutes, and Asterisk bound to the tunnel address (and up before the
+  tunnel).
+- Tested: netready with stub commands (ready, deadline and late start with `--collect`,
+  late already running, late restarts only what is stopped, no Endpoint), the netcheck
+  drop-in text (continuation lines, prefixes), bindaddr parsing (include, ip:port,
+  comments, other sections), the DNS line fixes, set/status/remove with mocks (13
+  checks) and the Boot tab back end (55 checks).
 
 ## 0.0.210 (2026-10-18) — testing
 
