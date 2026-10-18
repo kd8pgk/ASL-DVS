@@ -1,6 +1,15 @@
 # instmon changelog
 
-Current file: `instmon_v2_54_0_20261018.py`. Newest entries first.
+Current file: `instmon_v2_55_0_20261018.py`. Newest entries first.
+
+## 2.55.0 (2026-10-18)
+
+- **Full Update counts down its waits.** While it waits for a tool it just installed
+  (up to 60 s to start and answer, then 60 s to make sure it stays up), the progress
+  line on the Full Update card now ends with "waiting for v… to start and answer: 42s
+  left" or "waiting for v… to stay up: 17s left", counting down each second. The
+  countdown ends as soon as the tool answers. The rollback wait has a countdown too,
+  and now logs its own "waiting up to 60s" line.
 
 ## 2.54.0 (2026-10-18)
 
