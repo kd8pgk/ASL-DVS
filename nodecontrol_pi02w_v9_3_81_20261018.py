@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.80-pi02w"
+VERSION      = "9.3.81-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -6488,29 +6488,42 @@ def _asl_reg_public() -> str:
 
 _SVC_CHECK_SEC = 15.0
 _svc_lock      = threading.Lock()
-_svc_state     = {"ab": "unknown", "stfu": "unknown"}
+_SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn")
+_svc_state     = {k: "unknown" for k in _SVC_KEYS}
 
-def _svc_unit_state(units: tuple) -> str:
+def _svc_unit_states(groups: dict) -> dict:
+    units = [u for us in groups.values() for u in us]
     out, rc = run(["systemctl", "show", "-p", "LoadState", "-p", "ActiveState", "--", *units], timeout=4)
-    if rc != 0:
-        return "unknown"
-    state = "none"
-    for block in out.split("\n\n"):
-        f = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
-        if f.get("LoadState") != "loaded":
-            continue
-        if f.get("ActiveState") in ("active", "activating", "reloading"):
-            return "active"
-        state = "inactive"
-    return state
+    blocks = out.split("\n\n") if rc == 0 else []
+    if len(blocks) != len(units):
+        return {k: "unknown" for k in groups}
+    res, i = {}, 0
+    for k, us in groups.items():
+        state = "none"
+        for _u in us:
+            f = dict(ln.split("=", 1) for ln in blocks[i].splitlines() if "=" in ln)
+            i += 1
+            if f.get("LoadState") != "loaded":
+                continue
+            if f.get("ActiveState") in ("active", "activating", "reloading"):
+                state = "active"
+            elif state != "active":
+                state = "inactive"
+        res[k] = state
+    return res
 
 def _svc_check() -> dict:
-    ab   = _svc_unit_state(_BOOT_AB_UNITS)
-    stfu = _svc_unit_state(("stfu.service",))
-    if stfu == "none" and Path("/opt/STFU/STFU").is_file():
+    res = _svc_unit_states({
+        "ab":   _BOOT_AB_UNITS,
+        "stfu": ("stfu.service",),
+        "ysf":  ("ysfgateway.service",),
+        "p25":  ("p25gateway.service",),
+        "nxdn": ("nxdngateway.service",),
+    })
+    if res["stfu"] == "none" and Path("/opt/STFU/STFU").is_file():
         out, _ = run(["pgrep", "-x", "STFU"], timeout=3)
-        stfu = "active" if out.strip() else "inactive"
-    return {"ab": ab, "stfu": stfu}
+        res["stfu"] = "active" if out.strip() else "inactive"
+    return res
 
 def _svc_public() -> dict:
     with _svc_lock:
@@ -6523,13 +6536,13 @@ def _svc_loop() -> None:
             new = _svc_check()
         except Exception as e:
             log.warning("svc: check error: %s", e)
-            new = {"ab": "unknown", "stfu": "unknown"}
+            new = {k: "unknown" for k in _SVC_KEYS}
         with _svc_lock:
             changed = new != _svc_state
             if changed:
                 _svc_state.update(new)
         if changed:
-            log.info("svc: Analog_Bridge %s, STFU %s", new["ab"], new["stfu"])
+            log.info("svc: %s", ", ".join(f"{k} {v}" for k, v in new.items()))
             with _lock:
                 _status_etag = ""
         time.sleep(_SVC_CHECK_SEC)
@@ -8288,7 +8301,8 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 .btn:active { transform: scale(.95); }
 .btn-red    { color: var(--red);    border-color: #6b0e20; }
 .btn-teal   { color: var(--teal);   border-color: #004840; }
-#dmr-connect-btn.svc-down, #stfu-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
+#dmr-connect-btn.svc-down, #stfu-connect-btn.svc-down, #ysf-connect-btn.svc-down,
+#p25-connect-btn.svc-down, #nxdn-connect-btn.svc-down { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 #asl-connect-btn.asl-unreg { color: var(--red); border-color: var(--red); background: rgba(255,61,90,.12); text-decoration: line-through; opacity: 1; }
 .btn-amber  { color: var(--amber);  border-color: #6b4800; }
 .btn-muted  { color: #ffffff;       border-color: var(--border2); }
@@ -9292,19 +9306,15 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-YSF" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-YSF" class="quick-inp" type="text" placeholder="IP:port or reflector…" maxlength="40"
-              onkeydown="if(event.key==='Enter')doQuickTune('YSF')">
-            <button class="btn btn-purple" onclick="doQuickTune('YSF')">Tune</button>
-          </div>
           <div id="ysf-card" class="ysf-card">
             <select id="ysf-cc-select" class="ysf-select" aria-label="Filter by country"
               onchange="lcFill('YSF',true)" disabled>
               <option value="*">All countries</option>
             </select>
             <input id="ysf-filter" class="ysf-input" type="search" maxlength="40"
-              placeholder="Filter: name or number" aria-label="Filter reflectors by text"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('YSF')" disabled>
+              placeholder="Name, # or IP:port" aria-label="Filter reflectors by text"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('YSF')"
+              onkeydown="if(event.key==='Enter')lcConnect('YSF')">
             <select id="ysf-ref-select" class="ysf-select" aria-label="YSF reflector"
               onchange="lcButtons('YSF')" disabled>
               <option value="">Select reflector…</option>
@@ -9328,7 +9338,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             <input id="qt-FCS" class="quick-inp" type="text" inputmode="numeric"
               placeholder="Room (e.g. FCS00335 or 335)" maxlength="20"
               onkeydown="if(event.key==='Enter')doQuickTune('FCS')">
-            <button class="btn btn-conn-fcs" onclick="doQuickTune('FCS')">Tune</button>
+            <button class="btn btn-conn-fcs" onclick="doQuickTune('FCS')">Connect</button>
             <button id="lh-btn-FCSNET" class="btn-last lh-off" onclick="openModeLast('FCS')"
               title="FCS network Last Heard" aria-label="Open FCS network Last Heard">LH</button>
           </div>
@@ -9356,16 +9366,11 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-P25" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-P25" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="TG number…" maxlength="12"
-              onkeydown="if(event.key==='Enter')doQuickTune('P25')">
-            <button class="btn btn-orange" onclick="doQuickTune('P25')">Tune</button>
-          </div>
           <div id="p25-card" class="tgc-card tgc-p25">
             <input id="p25-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: number or address" aria-label="Search P25 talkgroups"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('P25')" disabled>
+              placeholder="TG # or host" aria-label="Search P25 talkgroups"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('P25')"
+              onkeydown="if(event.key==='Enter')lcConnect('P25')">
             <select id="p25-ref-select" class="tgc-select" aria-label="P25 talkgroup"
               onchange="lcButtons('P25')" disabled>
               <option value="">Select talkgroup…</option>
@@ -9385,16 +9390,11 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
           </div>
         </div>
         <div id="pg-NXDN" class="hidden">
-          <div class="quick-bar">
-            <input id="qt-NXDN" class="quick-inp" type="text" inputmode="numeric"
-              placeholder="TG number…" maxlength="12"
-              onkeydown="if(event.key==='Enter')doQuickTune('NXDN')">
-            <button class="btn btn-lime" onclick="doQuickTune('NXDN')">Tune</button>
-          </div>
           <div id="nxdn-card" class="tgc-card tgc-nxdn">
             <input id="nxdn-filter" class="tgc-input" type="search" maxlength="40"
-              placeholder="Search: number or address" aria-label="Search NXDN talkgroups"
-              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('NXDN')" disabled>
+              placeholder="TG # or host" aria-label="Search NXDN talkgroups"
+              autocomplete="off" spellcheck="false" oninput="lcFilterSoon('NXDN')"
+              onkeydown="if(event.key==='Enter')lcConnect('NXDN')">
             <select id="nxdn-ref-select" class="tgc-select" aria-label="NXDN talkgroup"
               onchange="lcButtons('NXDN')" disabled>
               <option value="">Select talkgroup…</option>
@@ -9419,7 +9419,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               style="max-width:150px" title="Reflector (REF001, XRF012, DCS001) or gateway callsign (W1ABC)"
               onkeydown="if(event.key==='Enter')dstarQuickConnect()">
             <select id="qt-DSTAR-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn-pink" onclick="dstarQuickConnect()">Tune</button>
+            <button class="btn btn-conn-pink" onclick="dstarQuickConnect()">Connect</button>
             <button class="btn btn-muted" onclick="dstarQuickSave()" title="Save to favorites">Save</button>
           </div>
           <div id="dstar-card" class="rfc-card rfc-dstar">
@@ -9455,7 +9455,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               style="max-width:130px"
               onkeydown="if(event.key==='Enter')xlxQuickConnect()">
             <select id="qt-XLX-mod" class="ref-mod-sel" title="Module"></select>
-            <button class="btn btn-conn" onclick="xlxQuickConnect()">Tune</button>
+            <button class="btn btn-conn" onclick="xlxQuickConnect()">Connect</button>
           </div>
           <div id="xlx-card" class="rfc-card rfc-xlx">
             <input id="xlx-filter" class="rfc-input" type="search" maxlength="40"
@@ -10696,10 +10696,11 @@ function openFcsLast(){
      clear(k)     reset that extra filter when it hides the tuned entry
      rebuilt(k,d) run when a changed list has been indexed (extra menus)
      emptied(k)   run when the list comes back missing or empty
-     typed        v9.3.80: a bare 1-8 digit number in the search box can
-                  Connect (doQuickTune) and Save with no row picked; the
-                  search box stays usable when the list is missing; Save
-                  falls back to the last number tuned (STFU) */
+     typed        v9.3.80/81: a RegExp; search text it matches Connects
+                  (doQuickTune) with no row picked; the search box stays
+                  usable when the list is missing (STFU, P25, NXDN, YSF)
+     typedSave    Save also takes the typed text, then the last one tuned
+     typedHint    added to the missing-list warning */
 const LC_TTL_MS=300000;
 const LC_CFG={};
 const _lc={};
@@ -10751,7 +10752,7 @@ function lcBuild(k,d){
     if(c.emptied)c.emptied(k);
     rsel.innerHTML='<option value="">'+c.none+'</option>';
     lcSetDisabled(k,true);
-    lcMsg(k,c.empty(d)+(c.typed?' You can still type a number.':''),'warn');
+    lcMsg(k,c.empty(d)+(c.typed?' '+c.typedHint:''),'warn');
     lcButtons(k);
     return;
   }
@@ -10804,17 +10805,18 @@ function lcSelected(k){
   return rsel&&rsel.value&&_lc[k]?_lc[k].by[rsel.value]||null:null;
 }
 function lcTyped(k){
-  if(!LC_CFG[k].typed)return '';
+  const re=LC_CFG[k].typed;
+  if(!re)return '';
   const v=String((lcEl(k,'filter')||{}).value||'').trim();
-  return /^\d{1,8}$/.test(v)?v:'';
+  return re.test(v)?v:'';
 }
 function lcButtons(k){
   const r=lcSelected(k),c=LC_CFG[k];
-  const ok=(c.ready?c.ready(k,r):!!r)||!!lcTyped(k);
+  const pick=c.ready?c.ready(k,r):!!r,t=lcTyped(k);
   const btn=lcEl(k,'connect-btn');
-  if(btn)btn.disabled=!ok;
+  if(btn)btn.disabled=!(pick||t);
   const sv=lcEl(k,'save-btn');
-  if(sv)sv.disabled=!(ok||(c.typed&&_lc[k].last))||_lc[k].saving;
+  if(sv)sv.disabled=!(pick||(c.typedSave&&(t||_lc[k].last)))||_lc[k].saving;
   const url=r?c.lh(r):'';
   _updateLhBtn('lh-btn-'+k+'REF',url);
   const lh=byId('lh-btn-'+k+'REF');
@@ -10851,7 +10853,7 @@ async function lcSave(k){
   const s=_lc[k];
   if(!s||s.saving)return;
   let r=lcSelected(k);
-  if(!r&&LC_CFG[k].typed){const t=lcTyped(k)||s.last;if(t)r=[t];}
+  if(!r&&LC_CFG[k].typedSave){const t=lcTyped(k)||s.last;if(t)r=[t];}
   if(!r)return;
   const payload=LC_CFG[k].save(k,r);
   if(!payload)return;
@@ -10923,7 +10925,8 @@ function lcTgCard(k,named){
 lcTgCard('P25',false);
 lcTgCard('NXDN',false);
 lcTgCard('STFU',true);
-LC_CFG.STFU.typed=true;
+['P25','NXDN','STFU'].forEach(k=>Object.assign(LC_CFG[k],
+  {typed:/^\d{1,8}$/,typedSave:true,typedHint:'You can still type a number.'}));
 
 /* ── M17 browse card (v8.6.2 — Stage 2 of the M17 tab rework) ───────────────
    Reflector / Module menus + Connect + LH, fed by /api/m17-hosts (parsed from
@@ -11260,6 +11263,7 @@ lcDef('YSF',{
   },
   save:(k,r)=>({action:'save-ysf-favorite',ref:ysfTuneValue(r)}),
 });
+Object.assign(LC_CFG.YSF,{typed:/^(?:\[[0-9A-Fa-f:]+\]|[A-Za-z0-9.-]+):\d{1,5}$/,typedHint:'You can still type an IP:port address.'});
 
 /* endAction(refreshDelay) — uniform action teardown: hide the working
    overlay, release the busy latch, schedule a refresh (v7.744; was
@@ -11949,6 +11953,9 @@ function applySvcWarn(d){
   };
   set('dmr-connect-btn',ab);
   set('stfu-connect-btn',(s.stfu==='inactive'?['STFU']:[]).concat(ab));
+  set('ysf-connect-btn',(s.ysf==='inactive'?['YSFGateway']:[]).concat(ab));
+  set('p25-connect-btn',(s.p25==='inactive'?['P25Gateway']:[]).concat(ab));
+  set('nxdn-connect-btn',(s.nxdn==='inactive'?['NXDNGateway']:[]).concat(ab));
 }
 function applyServerState(d){
   byId('hdr-node').textContent=d.asl_node;
