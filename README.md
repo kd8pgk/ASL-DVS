@@ -15,6 +15,7 @@ By KD8PGK, written with Claude (Anthropic).
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals and any other PDF to upload, open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Powers off on sustained low voltage; reboots (or powers off) on a lost network. Hardware watchdog, and alerts by ntfy or webhook. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
+| Node Listen | `nodelisten_v*.py` | 8993 | Listen to an ASL node's audio in the browser. Asterisk sends the node's audio through one `outstreamcmd` line in rpt.conf, which the Node card adds or removes. |
 
 Scripts:
 
@@ -103,6 +104,32 @@ sudo python3 <file>.py --uninstall
 Watchdog, and it removes an installed copy. The Dashboard's own service
 already restarts it with `Restart=always` and `WatchdogSec=30`. The Watchdog
 script and its changelog are no longer in the repo.
+
+## Node Listen
+
+Node Listen plays a node's audio in a web browser, about half a second behind
+the node. It is not in the installer yet. Install it on its own, or stage it
+in instmon's library and press Install there:
+
+```
+sudo python3 nodelisten_v0_1_0_20261018.py --install
+```
+
+Then open `http://<pi-address>:8993`, log in with the root password, pick
+the node on the Node card, press **Send its audio here**, then **Restart
+Asterisk**. That adds one line to the node's stanza in
+`/etc/asterisk/rpt.conf` (a backup goes to `/etc/asl_dvs/nodelisten_backups/`):
+
+```
+outstreamcmd = /usr/bin/python3,/usr/local/bin/nodelisten.py,--feed,6200
+```
+
+Asterisk runs that command and writes the node's audio (8 kHz, 16-bit) to it;
+the command passes it to Node Listen on `127.0.0.1:6200/udp`. A node takes
+one `outstreamcmd`, so a node that already feeds Broadcastify is refused.
+Each listener uses about 64 kbit/s; the default limit is 3. **Listen without
+logging in** (Settings) lets anyone who can reach the page listen, but never
+change anything. `--uninstall` removes the rpt.conf line too.
 
 ## Updating from GitHub (instmon)
 
@@ -250,6 +277,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_57_0_20261018.py` | common |
 | `wifimon_v5_38_0_20261018.py` | common |
 | `44helper_v0_0_215_20261018.py` | common |
+| `nodelisten_v0_1_0_20261018.py` | common |
 | `install_all_v7_1_20261012.sh` | common |
 | `uninstall_all_v1_5.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
