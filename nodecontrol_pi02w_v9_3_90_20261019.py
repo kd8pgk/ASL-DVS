@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.89-pi02w"
+VERSION      = "9.3.90-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -9306,7 +9306,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
       </div>
       <div class="tg-wrap">
         <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
-        <a id="lnk-listen" class="ql ql-listen hidden" href="#" target="_blank" rel="noopener" title="Listen to this node in the browser (Node Listen)" aria-label="Listen to this node">&#128266; Listen</a>
+        <a id="lnk-listen" class="ql ql-listen ql-off" href="#" aria-disabled="true" title="Node Listen is not running">Listen</a>
       </div>
       <div class="ql-group ql-right">
         <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
@@ -13643,6 +13643,15 @@ async function _probeSysMon() {
     }
   } catch (_) {}
 }
+function _openNamedTab(url, name) {
+  let w = null;
+  try { w = window.open('', name); } catch (_) {}
+  if (!w) { window.open(url, name); return; }
+  let blank = false;
+  try { blank = w.location.href === 'about:blank'; } catch (_) {}
+  if (blank) w.location.href = url;
+  try { w.focus(); } catch (_) {}
+}
 async function _probeNodeListen() {
   const a = document.getElementById('lnk-listen');
   if (!a) return;
@@ -13652,12 +13661,24 @@ async function _probeNodeListen() {
     const d = await r.json();
     if (d.running) {
       a.href = `http://${window.location.hostname}:${d.port}/`;
-      a.classList.remove('hidden');
+      a.classList.remove('ql-off');
+      a.removeAttribute('aria-disabled');
+      a.title = 'Listen to this node in the browser (Node Listen)';
     } else {
-      a.classList.add('hidden');
+      a.href = '#';
+      a.classList.add('ql-off');
+      a.setAttribute('aria-disabled', 'true');
+      a.title = 'Node Listen is not running';
     }
   } catch (_) {}
 }
+document.getElementById('lnk-listen').addEventListener('click', (ev) => {
+  const a = ev.currentTarget;
+  ev.preventDefault();
+  if (a.classList.contains('ql-off')) return;
+  _openNamedTab(a.href, 'asl_dvs_listen');
+});
+try { window.name = 'asl_dvs_dash'; } catch (_) {}
 // Boot gate: the session cookie is HttpOnly, so this page can't just check
 // for it — it asks the server via /api/whoami instead. That request
 // carries whatever session cookie the browser already holds for this

@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -2037,6 +2037,16 @@ function render() {
   showTab(authed ? want : 'listen');
 }
 
+function openNamedTab(url, name) {
+  let w = null;
+  try { w = window.open('', name); } catch (e) {}
+  if (!w) { window.open(url, name); return; }
+  let blank = false;
+  try { blank = w.location.href === 'about:blank'; } catch (e) {}
+  if (blank) w.location.href = url;
+  try { w.focus(); } catch (e) {}
+}
+
 async function whoami() {
   const d = await api('/api/whoami');
   authed = !!d.authed;
@@ -2763,6 +2773,8 @@ document.addEventListener('DOMContentLoaded', () => {
   loadMicUi();
   ['mic-agc', 'mic-ns', 'mic-ec', 'mic-hp', 'mic-gain'].forEach((id) => $(id).addEventListener('input', saveMic));
   $('mic-test').addEventListener('click', micTest);
+  try { window.name = 'asl_dvs_listen'; } catch (e) {}
+  $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, 'asl_dvs_dash'); });
   $('tune-reset').addEventListener('click', tuneReset);
   setupMediaSession();
   pttUi('off', '');
@@ -2788,7 +2800,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
 <header><h1>Node Listen</h1><span class="ver">v__VERSION__</span><span class="sp"></span>
-<a id="dash-link" class="pill" href="#" target="_blank" rel="noopener" aria-label="Open Node Controller">Node Controller &#8599;</a>
+<a id="dash-link" class="pill" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="logout" class="pill hidden" type="button">Log out</button></header>
 <main>
 <section class="card" id="login-card">

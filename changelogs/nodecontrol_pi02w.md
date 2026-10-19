@@ -1,6 +1,17 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_89_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_90_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.90-pi02w (2026-10-19)
+
+- **Listen** keeps its green look but drops the speaker icon. Like SysMon's
+  button it is greyed out (instead of hidden) when Node Listen isn't running.
+- **Listen opens one tab and reuses it.** The first press opens Node Listen in
+  a new tab; later presses switch to that tab without reloading it, so audio
+  that is playing keeps playing. Once the tab is closed, the next press opens
+  a new one. This also works after the Dashboard page is reloaded.
+- The Dashboard names its own tab, so Node Listen's **Node Controller** button
+  (0.4.2 or later) can switch back to it instead of opening another.
 
 ## 9.3.89-pi02w (2026-10-19)
 
