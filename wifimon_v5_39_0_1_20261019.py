@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.39.0"
+APP_VERSION = "5.39.0.1"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -6728,11 +6728,23 @@ button.danger{border-color:var(--bad);background:#3a1c26;color:#ffffff}
 button:focus-visible,input:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
 .good{color:var(--good)} .warn{color:var(--warn)} .bad{color:var(--bad)}
 
-.login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;padding:16px}
-.login-box{width:100%;max-width:340px;background:var(--panel);border:1px solid var(--line);
-  border-top:3px solid var(--amber);border-radius:10px;padding:24px;display:grid;gap:10px}
-.login-box h1{margin:0;color:var(--amber);font-size:22px}
-.login-box p{margin:0}
+#login{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;
+  padding:16px;background:rgba(5,8,14,.88);backdrop-filter:blur(3px)}
+#login-form{background:#161e2e;border:1px solid #3a5278;border-radius:8px;padding:1.4rem 1.6rem;
+  min-width:260px;max-width:90vw;box-shadow:0 8px 40px rgba(0,0,0,.8);text-align:center;
+  display:flex;flex-direction:column;gap:.6rem;font-family:Arial,Helvetica,sans-serif}
+#login-form h1{margin:0 0 .4rem;font-family:Arial,Helvetica,sans-serif;font-size:1.05rem;font-weight:700;
+  color:#ffd040;letter-spacing:.06em;text-shadow:0 0 8px rgba(255,208,64,.5)}
+#login-pw{font-family:Arial,Helvetica,sans-serif;font-size:.9rem;background:#0a1020;color:#ffffff;
+  border:1px solid #3a5278;border-radius:4px;padding:.45rem .6rem;outline:none}
+#login-pw:focus{border-color:#ffd040}
+#login-btn{font-family:Arial,Helvetica,sans-serif;font-size:.8rem;font-weight:700;letter-spacing:.04em;
+  text-transform:uppercase;background:transparent;color:#ffd040;border:1px solid #6b4800;
+  border-radius:4px;padding:.32rem .85rem;cursor:pointer;transition:all .14s}
+#login-btn:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
+#login-btn:focus-visible{outline:none;box-shadow:0 0 10px currentColor}
+#login-btn:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
+#login-err{margin:.2rem 0 0;min-height:1.1rem;font-size:.78rem;color:#ff3d5a}
 label{font-weight:600}
 input[type=password]{font:inherit;padding:9px 10px;border-radius:6px;border:1px solid var(--line);
   background:var(--panel2);color:var(--text)}
@@ -6882,14 +6894,12 @@ a.btnlink:hover{border-color:var(--cyan)}
 </head>
 <body>
 
-<div id="login" class="login" hidden>
-  <form id="login-form" class="login-box">
-    <h1>wifimon</h1>
-    <p class="muted">WiFi watchdog. Log in with this node's root password.</p>
-    <label for="login-pw">Root password</label>
-    <input id="login-pw" type="password" autocomplete="current-password">
-    <button type="submit" id="login-btn">Log in</button>
-    <p id="login-err" class="err" role="alert"></p>
+<div id="login" hidden>
+  <form id="login-form">
+    <h1>wifimon Login</h1>
+    <input id="login-pw" type="password" autocomplete="current-password" placeholder="Root password" aria-label="Root password">
+    <button type="submit" id="login-btn">Log In</button>
+    <p id="login-err" role="alert"></p>
   </form>
 </div>
 
@@ -7155,7 +7165,7 @@ a.btnlink:hover{border-color:var(--cyan)}
       <dl class="kv" id="v-kv"></dl>
       <div class="actions">
         <button type="button" class="danger" id="btn-restart">Restart service</button>
-        <button type="button" id="btn-logout">Log out</button>
+        <button type="button" id="btn-logout">Log Out</button>
       </div>
     </section>
 
