@@ -1,6 +1,26 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_0_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_1_20261019.py`. Newest entries first.
+
+## 0.4.1 (2026-10-19)
+
+- **Cleaner TX audio.** The page now resamples the mic to 8 kHz with a filtered
+  (windowed-sinc) resampler, so sounds above 3.4 kHz no longer fold back as
+  hiss and whine; it was a plain average before.
+- **TX buffer** on the Tune card: 60, 120 (default), 200 or 300 ms of mic audio
+  are held before the node is fed (was a fixed 60 ms). If the phone's audio
+  stalls and the buffer runs dry, Node Listen sends silence and waits for the
+  buffer to refill instead of feeding the node a few ms at a time. The card shows
+  **TX gaps** (live while talking, else the last transmission), and the log
+  counts them at unkey. Raise the buffer if gaps show up.
+- **This device's microphone** (Tune card, kept in each browser): **Automatic
+  gain**, **Noise suppression**, **Echo cancellation** (now off by default; the
+  listen audio is muted while you talk), **Voice filter** (cuts rumble below
+  about 250 Hz) and **Mic gain** (-12 to +24 dB, applied in the page; browsers
+  can't set the phone's own mic volume). With automatic gain on the browser
+  undoes most of the mic gain, so turn it off for a fixed level.
+- **Test mic**: records 4 s, plays back what the node would get, and rates the
+  peak (too hot, good, quiet). Nothing is sent to the node.
 
 ## 0.4.0 (2026-10-19)
 

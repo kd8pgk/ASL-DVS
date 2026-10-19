@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.0"
+VERSION = "0.4.1"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -168,6 +168,7 @@ DEFAULT_CONFIG = {
     "tx_gain_db": 0,
     "rx_gain_db": 0,
     "jitter_ms": 250,
+    "tx_buffer_ms": 120,
 }
 
 
@@ -212,6 +213,13 @@ def _norm_gain(value):
     return v
 
 
+def _norm_txbuf(value):
+    v = int(str(value).strip())
+    if not 40 <= v <= 400:
+        raise ValueError("tx_buffer_ms must be 40-400")
+    return v
+
+
 def _norm_jitter(value):
     v = int(str(value).strip())
     if not 100 <= v <= 1500:
@@ -232,6 +240,7 @@ _NORMALIZERS = {
     "tx_gain_db": _norm_gain,
     "rx_gain_db": _norm_gain,
     "jitter_ms": _norm_jitter,
+    "tx_buffer_ms": _norm_txbuf,
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -1010,7 +1019,7 @@ def build_status(full):
         tx = tx_state()
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
-                                            "peak_db", "last_peak_db")}
+                                            "peak_db", "last_peak_db", "gaps", "last_gaps")}
     else:
         st.pop("listener_list", None)
         st.pop("udp_error", None)
@@ -1034,7 +1043,6 @@ SYSMON_PORT = 9999
 TX_BUSY_GRACE_SEC = 1.0
 _TX_NODES_LINE_RE = re.compile(r"^\s*" + TX_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + TX_NODE + r",NONE\s*$")
 TX_QUEUE_MAX = 50
-TX_PREBUFFER = 3
 TX_DEADMAN_SEC = 1.0
 USRP_HEADER = struct.Struct(">4s7i")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
@@ -1548,6 +1556,9 @@ class Talker:
         self.last_unkey = 0.0
         self.peak = -120.0
         self.last_peak = None
+        self.gaps = 0
+        self.last_gaps = None
+        self.primed_once = False
 
     def _socket(self):
         if self.sock is None:
@@ -1567,7 +1578,8 @@ class Talker:
             return {"keyed": self.keyed, "who": self.who if self.keyed else "",
                     "secs": round(time.monotonic() - self.start, 1) if self.keyed else 0,
                     "tot": _cfg_get("tot_sec"), "peak_db": round(self.peak, 1) if self.keyed else None,
-                    "last_peak_db": self.last_peak}
+                    "last_peak_db": self.last_peak, "gaps": self.gaps if self.keyed else None,
+                    "last_gaps": self.last_gaps}
 
     def key(self, owner, who):
         st = tx_state()
@@ -1591,6 +1603,8 @@ class Talker:
             self.q.clear()
             self.buf = bytearray()
             self.peak = -120.0
+            self.gaps = 0
+            self.primed_once = False
         log_event(f"TX: {who} keyed node {TX_NODE}", "ok")
         return True, ""
 
@@ -1631,9 +1645,12 @@ class Talker:
             self.q.clear()
             self.last_unkey = time.monotonic()
             self.last_peak = round(self.peak, 1)
+            self.last_gaps = self.gaps
+            gaps = self.gaps
         for _ in range(3):
             self._packet(b"\x00" * FRAME_BYTES, False)
-        log_event(f"TX: {who} unkeyed after {secs:.1f} s ({why})", "warn" if why in ("timeout", "deadman") else "ok")
+        log_event(f"TX: {who} unkeyed after {secs:.1f} s ({why})" + (f", {gaps} audio gap(s)" if gaps else ""),
+                  "warn" if why in ("timeout", "deadman") or gaps else "ok")
         if owner is not None:
             owner.send_json({"ev": "unkeyed", "why": why, "secs": round(secs, 1)})
 
@@ -1659,11 +1676,20 @@ class Talker:
         with self.lock:
             if not self.keyed:
                 return
+            target = max(2, tune_value("tx_buffer_ms") // 20)
             if now - self.start > _cfg_get("tot_sec"):
                 why = "timeout"
             elif not self.sending:
-                if len(self.q) >= TX_PREBUFFER or (self.releasing and self.q) or now - self.start > 0.15:
+                if (len(self.q) >= target or (self.releasing and self.q)
+                        or (not self.primed_once and now - self.start > target * FRAME_SEC + 0.3)):
                     self.sending = True
+                    self.primed_once = True
+                elif self.primed_once:
+                    frame = b"\x00" * FRAME_BYTES
+                if self.releasing and not self.q:
+                    why = "release"
+                elif now - self.last_rx > TX_DEADMAN_SEC:
+                    why = "deadman"
             if why is None and self.sending:
                 if self.q:
                     frame = self.q.popleft()
@@ -1672,9 +1698,9 @@ class Talker:
                 elif now - self.last_rx > TX_DEADMAN_SEC:
                     why = "deadman"
                 else:
+                    self.gaps += 1
+                    self.sending = False
                     frame = b"\x00" * FRAME_BYTES
-            elif why is None and self.releasing and not self.q:
-                why = "release"
         if why:
             self._unkey(why)
         elif frame is not None:
@@ -1933,7 +1959,29 @@ let favs = [], favEdit = [], dashFavs = [], favMax = 10;
 let ws = null, wsReady = false, wsRetry = null, talking = false, keyed = false, keyedAt = 0, totSec = 120;
 let micPending = false, jitterSec = 0.25, sysmonPort = null, dashNode = '';
 let capCtx = null, micStream = null, capSrc = null, capNode = null, capSink = null, workletReady = false, preKey = [], talkTimer = null;
-let rs = {ratio: 6, buf: new Float32Array(0), pos: 0, out: new Int16Array(160), n: 0};
+let rs = null, frameSink = null, testing = false, testBuf = [];
+const MIC_DEFAULTS = {agc: true, ns: true, ec: false, gain: 0, hp: true};
+let mic = Object.assign({}, MIC_DEFAULTS);
+try { Object.assign(mic, JSON.parse(localStorage.getItem('nlMic') || '{}')); } catch (e) {}
+
+function makeResampler(inRate) {
+  const ratio = inRate / 8000, half = Math.ceil(8 * ratio), taps = 2 * half + 1, phases = 32;
+  const fc = 3400 / inRate, kern = [];
+  for (let p = 0; p <= phases; p++) {
+    const k = new Float32Array(taps), off = p / phases;
+    let sum = 0;
+    for (let i = 0; i < taps; i++) {
+      const t = i - half - off;
+      const sinc = t === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * t) / (Math.PI * t);
+      const w = Math.abs(t) > half ? 0 : 0.42 + 0.5 * Math.cos(Math.PI * t / half) + 0.08 * Math.cos(2 * Math.PI * t / half);
+      k[i] = sinc * w; sum += k[i];
+    }
+    for (let i = 0; i < taps; i++) k[i] /= sum;
+    kern.push(k);
+  }
+  return {ratio: ratio, half: half, taps: taps, phases: phases, kern: kern,
+    buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hpX: 0, hpY: 0, peak: 0};
+}
 const WORKLET_SRC = "class NlTap extends AudioWorkletProcessor{process(inputs){const c=inputs[0]&&inputs[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('nl-tap',NlTap);";
 const UL = new Float32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -2054,6 +2102,8 @@ async function pollStatus() {
   $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
     : (tx.last_peak_db != null ? fmtDb(tx.last_peak_db) + ' (last transmission)' : 'no transmission yet');
   $('tune-rxpk').textContent = fmtDb(d.peak_db);
+  const gaps = tx.keyed ? tx.gaps : tx.last_gaps;
+  $('tune-gaps').textContent = gaps == null ? '-' : (gaps ? gaps + ' (raise the TX buffer if this keeps happening)' : 'none');
   $('ptt-info').textContent = tx.ready ? ('Node ' + tx.node + (tx.linked === false ? ' (not linked yet)' : '') + ' · time-out ' + fmtSecs(totSec))
     : 'Set up node ' + (tx.node || '1921') + ' on the Setup tab to transmit.';
   const tb = $('s-links');
@@ -2274,34 +2324,46 @@ function sendFrame(buf) {
 }
 
 function feedMic(f32) {
-  const ratio = rs.ratio;
-  const merged = new Float32Array(rs.buf.length + f32.length);
-  merged.set(rs.buf, 0); merged.set(f32, rs.buf.length);
-  let pos = rs.pos;
-  while (pos + ratio <= merged.length) {
-    const a = Math.floor(pos), b = Math.max(a + 1, Math.floor(pos + ratio));
-    let s = 0;
-    for (let i = a; i < b; i++) s += merged[i];
-    let v = s / (b - a);
+  const r = rs;
+  if (!r) return;
+  const g = Math.pow(10, (Number(mic.gain) || 0) / 20);
+  const merged = new Float32Array(r.buf.length + f32.length);
+  merged.set(r.buf, 0);
+  for (let i = 0; i < f32.length; i++) merged[r.buf.length + i] = f32[i] * g;
+  let pos = r.pos;
+  const hpA = 0.83, hpK = (1 + hpA) / (2 * hpA);
+  while (pos + r.half + 1 < merged.length) {
+    const base = Math.floor(pos);
+    let ph = Math.round((pos - base) * r.phases);
+    const k = r.kern[ph];
+    const start = base - r.half;
+    let acc = 0;
+    for (let i = 0; i < r.taps; i++) acc += merged[start + i] * k[i];
+    let v = acc;
+    if (mic.hp) { const y = hpA * (r.hpY + v - r.hpX); r.hpX = v; r.hpY = y; v = y * hpK; }
+    const a = v < 0 ? -v : v;
+    if (a > r.peak) r.peak = a;
     v = v > 1 ? 1 : v < -1 ? -1 : v;
-    rs.out[rs.n++] = Math.round(v * 32767);
-    if (rs.n === 160) { sendFrame(rs.out.slice(0).buffer); rs.n = 0; }
-    pos += ratio;
+    r.out[r.n++] = Math.round(v * 32767);
+    if (r.n === 160) { if (frameSink) frameSink(r.out.slice(0).buffer); r.n = 0; }
+    pos += r.ratio;
   }
-  const used = Math.floor(pos);
-  rs.buf = merged.slice(used);
-  rs.pos = pos - used;
+  const keepFrom = Math.max(0, Math.floor(pos) - r.half);
+  r.buf = merged.slice(keepFrom);
+  r.pos = pos - keepFrom;
 }
 
-async function startMic() {
+async function startMic(sink) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser blocks the microphone here (use the https:// page).');
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!capCtx) capCtx = new AC();
   await capCtx.resume();
-  const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1}});
-  if (!talking) { stream.getTracks().forEach((t) => t.stop()); return; }
+  const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: !!mic.ec, noiseSuppression: !!mic.ns,
+    autoGainControl: !!mic.agc, channelCount: 1}});
+  if (!talking && !testing) { stream.getTracks().forEach((t) => t.stop()); return; }
   micStream = stream;
-  rs = {ratio: capCtx.sampleRate / 8000, buf: new Float32Array(0), pos: 0, out: new Int16Array(160), n: 0};
+  frameSink = sink;
+  rs = makeResampler(capCtx.sampleRate);
   capSrc = capCtx.createMediaStreamSource(stream);
   capSink = capCtx.createGain();
   capSink.gain.value = 0;
@@ -2322,12 +2384,57 @@ async function startMic() {
   capNode.connect(capSink);
 }
 
+function saveMic() {
+  mic = {agc: $('mic-agc').checked, ns: $('mic-ns').checked, ec: $('mic-ec').checked,
+    hp: $('mic-hp').checked, gain: Number($('mic-gain').value)};
+  try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
+  $('mic-gain-v').textContent = (mic.gain > 0 ? '+' : '') + mic.gain + ' dB';
+}
+
+function loadMicUi() {
+  $('mic-agc').checked = !!mic.agc; $('mic-ns').checked = !!mic.ns; $('mic-ec').checked = !!mic.ec;
+  $('mic-hp').checked = !!mic.hp; $('mic-gain').value = mic.gain;
+  $('mic-gain-v').textContent = (mic.gain > 0 ? '+' : '') + mic.gain + ' dB';
+}
+
+async function micTest() {
+  if (testing || talking) return;
+  testing = true; testBuf = [];
+  $('mic-test').disabled = true;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const pc = new AC();
+  try { pc.resume(); } catch (e) {}
+  $('mic-test-msg').className = 'msg'; $('mic-test-msg').textContent = 'Recording 4 s: talk as you would on the air...';
+  try {
+    await startMic((buf) => testBuf.push(new Int16Array(buf)));
+  } catch (e) {
+    testing = false; $('mic-test').disabled = false; pc.close();
+    $('mic-test-msg').className = 'msg err'; $('mic-test-msg').textContent = 'Microphone: ' + (e.message || e.name);
+    return;
+  }
+  await new Promise((res) => setTimeout(res, 4000));
+  const peak = rs ? rs.peak : 0;
+  stopMic(); testing = false;
+  const n = testBuf.reduce((a, b) => a + b.length, 0);
+  if (!n) { pc.close(); $('mic-test').disabled = false; $('mic-test-msg').textContent = 'Nothing was recorded.'; return; }
+  const ab = pc.createBuffer(1, n, 8000), ch = ab.getChannelData(0);
+  let o = 0;
+  testBuf.forEach((f) => { for (let i = 0; i < f.length; i++) ch[o++] = f[i] / 32768; });
+  const src = pc.createBufferSource(); src.buffer = ab; src.connect(pc.destination); src.start();
+  const db = peak > 0 ? 20 * Math.log10(peak) : -120;
+  $('mic-test-msg').className = 'msg ' + (db > -1 ? 'warn' : db < -20 ? 'warn' : 'ok');
+  $('mic-test-msg').textContent = 'Playing back what the node would get. Peak ' + fmtDb(db) +
+    (db > -1 ? ': too hot, lower the mic gain.' : db < -20 ? ': quiet, raise the mic gain.' : ': good.');
+  src.onended = () => { pc.close(); $('mic-test').disabled = false; };
+}
+
 function stopMic() {
   try { if (capSrc) capSrc.disconnect(); } catch (e) {}
   try { if (capNode) capNode.disconnect(); } catch (e) {}
   try { if (capSink) capSink.disconnect(); } catch (e) {}
   if (micStream) micStream.getTracks().forEach((t) => t.stop());
   capSrc = capNode = capSink = micStream = null;
+  frameSink = null;
 }
 
 function endTalk() {
@@ -2342,7 +2449,7 @@ function endTalk() {
 
 async function pttDown(ev) {
   if (ev) ev.preventDefault();
-  if (talking) return;
+  if (talking || testing) return;
   if (!wsReady) { openTalk(); return; }
   talking = true; keyed = false; preKey = [];
   if (gainNode) gainNode.gain.value = 0;
@@ -2353,7 +2460,7 @@ async function pttDown(ev) {
   }, 250);
   wakeLockApply();
   micPending = true;
-  try { await startMic(); }
+  try { await startMic(sendFrame); }
   catch (e) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: 'unkey'}));
     keyed = false; endTalk();
@@ -2557,6 +2664,7 @@ async function loadConfig() {
   $('tune-tx').value = d.config.tx_gain_db;
   $('tune-rx').value = d.config.rx_gain_db;
   $('tune-jit').value = String(d.config.jitter_ms);
+  $('tune-txbuf').value = String(d.config.tx_buffer_ms);
   tuneUi();
   $('tune-sysmon').classList.toggle('hidden', !sysmonPort);
   if (sysmonPort) $('tune-sysmon-link').href = 'http://' + location.hostname + ':' + sysmonPort + '/';
@@ -2564,7 +2672,7 @@ async function loadConfig() {
 
 function tuneUi() {
   const on = $('tune-on').checked;
-  ['tune-tx', 'tune-rx', 'tune-jit'].forEach((id) => { $(id).disabled = !on; });
+  ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
   const sgn = (v) => (v > 0 ? '+' : '') + v + ' dB';
   $('tune-tx-v').textContent = sgn(Number($('tune-tx').value));
   $('tune-rx-v').textContent = sgn(Number($('tune-rx').value));
@@ -2573,13 +2681,13 @@ function tuneUi() {
 
 async function saveTune() {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
-    rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value};
+    rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value};
   const d = await api('/api/config', {method: 'POST', body: body});
   setMsg('tune-msg', d);
 }
 
 function tuneReset() {
-  $('tune-tx').value = 0; $('tune-rx').value = 0; $('tune-jit').value = '250'; tuneUi();
+  $('tune-tx').value = 0; $('tune-rx').value = 0; $('tune-jit').value = '250'; $('tune-txbuf').value = '120'; tuneUi();
 }
 
 async function saveConfig() {
@@ -2652,6 +2760,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('cfg-save').addEventListener('click', saveConfig);
   ['tune-on', 'tune-tx', 'tune-rx'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-save').addEventListener('click', saveTune);
+  loadMicUi();
+  ['mic-agc', 'mic-ns', 'mic-ec', 'mic-hp', 'mic-gain'].forEach((id) => $(id).addEventListener('input', saveMic));
+  $('mic-test').addEventListener('click', micTest);
   $('tune-reset').addEventListener('click', tuneReset);
   setupMediaSession();
   pttUi('off', '');
@@ -2812,12 +2923,28 @@ not the node, the radio or DVSwitch.</p>
 <div class="row"><label for="tune-jit" style="min-width:130px">Listen buffer</label>
 <select id="tune-jit"><option value="150">0.15 s (Wi-Fi, fastest)</option><option value="250">0.25 s (default)</option>
 <option value="500">0.5 s</option><option value="1000">1 s (weak signal)</option></select></div>
+<div class="row"><label for="tune-txbuf" style="min-width:130px">TX buffer</label>
+<select id="tune-txbuf"><option value="60">60 ms</option><option value="120">120 ms (default)</option>
+<option value="200">200 ms</option><option value="300">300 ms (busy Wi-Fi)</option></select></div>
 <table>
 <tr><th>TX peak</th><td id="tune-txpk" class="mono">-</td></tr>
 <tr><th>RX level</th><td id="tune-rxpk" class="mono">-</td></tr>
+<tr><th>TX gaps</th><td id="tune-gaps" class="mono">-</td></tr>
 </table>
 <p class="muted small">Aim for TX peaks around -6 to -3 dBFS on normal speech, without reaching 0.</p>
 </div>
+<h2 style="margin-top:14px">This device's microphone</h2>
+<p class="muted small">Saved in this browser only; each phone keeps its own. Browsers can't change the phone's own
+mic volume, so the gain here is applied in the page.</p>
+<div class="row"><label><input type="checkbox" id="mic-agc"> Automatic gain (the browser levels the mic)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-ns"> Noise suppression</label></div>
+<div class="row"><label><input type="checkbox" id="mic-ec"> Echo cancellation (rarely needed: listen audio is muted while you talk)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-hp"> Voice filter (cuts rumble below about 250 Hz)</label></div>
+<div class="row"><label for="mic-gain" style="min-width:130px">Mic gain</label>
+<input type="range" id="mic-gain" min="-12" max="24" step="1" style="flex:1"><span id="mic-gain-v" class="mono small">0 dB</span></div>
+<p class="muted small">With automatic gain on, the browser undoes most of the mic gain; turn it off for a fixed level.</p>
+<div class="row"><button id="mic-test" class="btn" type="button">Test mic (4 s, plays back)</button></div>
+<div id="mic-test-msg" class="msg"></div>
 <p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
 use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
 <div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
