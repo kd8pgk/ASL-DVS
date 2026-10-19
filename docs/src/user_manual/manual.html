@@ -13,7 +13,7 @@
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-18</div>
+    <div class="ed"><b>Pi Zero 2 W edition</b><br>Edition 2026-10-19</div>
   </div>
   <div class="body">
     <h1>User Manual<br><span>The Node Controller Suite</span></h1>
@@ -32,6 +32,7 @@
       <tr><td>44helper</td><td class="mono">44helper_v0_0_215_20261018.py</td><td>0.0.215</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_57_0_20261018.py</td><td>2.57.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
+      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_11_1_20261019.py</td><td>0.4.11.1 (section 12.6 only)</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_86_20261014.py</td><td>6.13.86</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_84_20261018.py</td><td>9.3.84</td></tr>
@@ -2470,7 +2471,70 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     reload Asterisk. Take a 44helper save point first (Chapter 11). Every detail is in
     <code>docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf</code>.</div>
 
-  <h2><span class="n">12.6</span>Common tasks</h2>
+  <h2><span class="n">12.6</span>M17 favorites in Node Listen <span class="badge test">TESTING</span></h2>
+  <div class="call test"><span class="t">TESTING</span>M17 favorites in Node Listen are new and still being tested on
+    live nodes. M17 on the Dashboard's own M17 tab is not affected.</div>
+  <p>Node Listen (port <code>8993</code>) plays the node's audio in a browser and connects favorites from its
+    <b>Connect</b> tab. Besides AllStar and EchoLink nodes, a Node Listen favorite can be an M17 reflector. Node
+    Listen has no M17 tab: M17 is only in its favorites. The tuning itself is done by the Dashboard, which Node Listen
+    calls <b>Node Controller</b>.</p>
+  <table>
+    <tr><th>Needs</th><th>Version</th></tr>
+    <tr><td>Node Listen</td><td>0.4.10 or later</td></tr>
+    <tr><td>Dashboard</td><td>9.3.92-pi02w or later (full build 9.3.88), running, with the M17 bridge (USRP2M17) installed (Chapter 9)</td></tr>
+    <tr><td>The Dashboard page following the change</td><td>9.3.93-pi02w or later (full build 9.3.89)</td></tr>
+  </table>
+
+  <h3>Adding an M17 favorite</h3>
+  <ol class="steps">
+    <li>Node Listen, <b>Setup</b> tab, <b>Favorites</b> card: press <b>Add row</b>.</li>
+    <li>Set the first menu to <b>M17</b>. The number box then asks for a reflector and module.</li>
+    <li>Type the reflector and module, for example <code>M17-USA A</code>, and a name if you want one.</li>
+    <li>Press <b>Save favorites</b>. A mistake (a module that isn't a letter, the same reflector and module twice)
+      shows in red under the card and nothing is saved.</li>
+  </ol>
+  <p>Or pick one of the Dashboard's M17 favorites in the <b>From the Dashboard…</b> menu on the same card and press
+    <b>Add</b>, then <b>Save favorites</b>. Node Listen holds 10 favorites of any kind.</p>
+  <table>
+    <tr><th>You type</th><th>Saved as</th></tr>
+    <tr><td><code>M17-USA C</code></td><td>Reflector M17-USA, module C</td></tr>
+    <tr><td><code>M17-USA @ALL</code>, <code>M17-USA ALL</code> or just <code>M17-USA</code></td><td>Reflector M17-USA, every module (the Dashboard's All Modules)</td></tr>
+    <tr><td><code>m17-usa c</code></td><td>The same as <code>M17-USA C</code>: case doesn't matter</td></tr>
+  </table>
+
+  <h3>Connecting and disconnecting</h3>
+  <ol class="steps">
+    <li>Node Listen, <b>Connect</b> tab: pick the M17 favorite and press <b>Connect</b>. When <b>Connect from</b>
+      is shown, it must be the Dashboard's node.</li>
+    <li>Node Listen asks the Dashboard to connect it, the same as Connect on the Dashboard's M17 tab: the Dashboard
+      changes to M17 mode, writes the reflector and module into <code>USRP2M17.ini</code>, restarts
+      <code>usrp2m17</code> and links the M17 bridge node (1917) to your node. This takes a few seconds.</li>
+    <li>The message under the button says <i>M17 connected: … (through Node Controller)</i>. <b>Linked now</b> shows
+      the favorite, and the Dashboard page moves to its M17 tab with the reflector highlighted.</li>
+    <li><b>Disconnect</b> on the Connect tab drops the M17 reflector when it is one of your favorites, the same as
+      Disconnect on the Dashboard's M17 tab. Linked AllStar and EchoLink favorites are dropped too.</li>
+  </ol>
+  <div class="call care"><span class="t">CAREFUL</span>Connecting an M17 favorite changes the node's mode, just like
+    opening the Dashboard's M17 tab: other links and the current talkgroup are dropped. Node Listen's own transmit
+    node (1921) stays linked, so push-to-talk keeps working.</div>
+  <div class="call note"><span class="t">NOTE</span>For AllStar and EchoLink favorites, Node Listen (0.4.11 on)
+    watches for up to 15 seconds and says whether the link came up. For M17 it reports the Dashboard's answer: the
+    bridge is tuned and linked, but whether the reflector itself answers is not checked. Listen, or press LH on the
+    Dashboard's M17 tab.</div>
+
+  <h3>When it doesn't connect</h3>
+  <table>
+    <tr><th>Message</th><th>What to do</th></tr>
+    <tr><td>M17 links Node Controller's node &lt;node&gt;: connect from that node.</td><td>Pick the Dashboard's node in <b>Connect from</b>. M17 always goes through the Dashboard's node.</td></tr>
+    <tr><td>M17 goes through Node Controller, which is not running.</td><td>Start the Dashboard (<code>nodecontrol</code>) in SysMon's Services tab (Chapter 3) or instmon (Chapter 13).</td></tr>
+    <tr><td>M17 goes through Node Controller; set its node first.</td><td>Set the main node number on the Dashboard's EDIT page (section 12.5).</td></tr>
+    <tr><td>… update Node Controller.</td><td>The Dashboard is older than 9.3.92-pi02w (full build 9.3.88). Update it in instmon.</td></tr>
+    <tr><td>&lt;reflector&gt; is not in the M17 reflector list or the M17 favorites</td><td>Check the spelling. If it is right, the reflector list may be old: <b>Update Now</b> on SysMon's M17 tab (section 4.5).</td></tr>
+    <tr><td>&lt;reflector&gt; does not publish module B (it has A, C)</td><td>Use one of the modules listed, or <code>@ALL</code>.</td></tr>
+    <tr><td>USRP2M17 bridge not detected on this host</td><td>Install M17 from 44helper (section 9.5).</td></tr>
+  </table>
+
+  <h2><span class="n">12.7</span>Common tasks</h2>
   <h3>Join a DMR talkgroup and save it</h3>
   <ol class="steps">
     <li>DMR tab: pick the network, type the talkgroup number and press Connect.</li>
@@ -2493,6 +2557,12 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li>Start or restart that service in SysMon's Services tab, or check its log in the Journal tab (Chapter 3).
       The button goes back to normal within 15 seconds.</li>
   </ol>
+  <h3>Connect an M17 reflector from your phone <span class="badge test">TESTING</span></h3>
+  <ol class="steps">
+    <li>Node Listen, Setup tab, Favorites: Add row, pick <b>M17</b>, type <code>M17-USA C</code>, Save favorites.</li>
+    <li>Connect tab: pick it and press Connect. Listen on the Listen tab; the Dashboard shows its M17 tab.</li>
+    <li>Press Disconnect on the Connect tab when you're done.</li>
+  </ol>
   <h3>Make a test phone call</h3>
   <ol class="steps">
     <li>Phone tab: pick the network and wait for the sign-in dot.</li>
@@ -2504,7 +2574,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <h2>How the Dashboard drives the node</h2>
     <ul>
       <li><b>Settings:</b> <code>/etc/asl_dvs/asl_dvs.conf</code> (identity, favorites, visible tabs, DMR networks). Phone: <code>/etc/asl_dvs/phone.json</code> and the <code>dvs_phone_*.conf</code> files it writes.</li>
-      <li><b>Polling:</b> <code>/api/status</code> every 5 s when idle and every 1 s while a tune is in progress, with an ETag, so unchanged state costs almost nothing. On the Pi Zero 2 W build the AllStar and EchoLink lists are searched on disk rather than held in memory.</li>
+      <li><b>Polling:</b> <code>/api/status</code> every 5 s when idle and every 1 s while a tune is in progress, with an ETag, so unchanged state costs almost nothing. From 9.3.93-pi02w (full build 9.3.89) any change to the Dashboard's state clears the ETag, so a change made from Node Listen reaches the page on its next poll. On the Pi Zero 2 W build the AllStar and EchoLink lists are searched on disk rather than held in memory.</li>
       <li><b>Tuning:</b> through DVSwitch's <code>dvswitch.sh</code> (mode and tune commands) and Asterisk's AMI on 127.0.0.1:5038 (link and unlink). A tune counts as done when Analog_Bridge's <code>/tmp/ABInfo_*.json</code> confirms it.</li>
       <li><b>Service check:</b> a background thread runs one <code>systemctl show</code> every 15 s for
         <code>analog_bridge</code> / <code>Analog_Bridge</code>, <code>stfu</code>, <code>ysfgateway</code>,
@@ -2539,6 +2609,16 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
         forward, so wifimon no longer alerts at once on a fresh "unregistered". The Phone setup refresh retries every
         15 seconds for up to 5 minutes until Asterisk answers.</li>
       <li><b>Service:</b> <code>nodecontrol</code> (<code>asl_dvs_dashboard</code> before 9.3.76 / 9.3.71.15-pi02w), with <code>Restart=always</code> and <code>WatchdogSec=30</code>, so it is restarted if it stops answering. That is why the separate Watchdog script isn't needed.</li>
+      <li><b>Node Listen's M17 favorites</b> (section 12.6) go through the Dashboard's local API: a
+        <code>POST /api/local/action</code> to <code>127.0.0.1</code> on the Dashboard's port, carrying the key in
+        <code>/etc/asl_dvs/local_api.key</code>. <code>m17-connect</code> (reflector, module, name) looks the reflector
+        up in <code>M17Hosts.json</code>, then in the <code>[M17]</code> favorites in <code>asl_dvs.conf</code>, checks
+        the module against the ones it publishes, and runs the same M17 connect as the M17 tab.
+        <code>m17-status</code> answers <code>REFLECTOR|MODULE</code> while the M17 tab is connected (Node Listen asks
+        at most every 5 s, and only when it has M17 favorites); <code>m17-disconnect</code> runs M17's Disconnect.
+        Node Listen keeps its favorites in <code>/etc/asl_dvs/nodelisten_favorites.json</code>, an M17 one as
+        <code>{"mode": "M17", "num": "M17-USA", "module": "C", "label": "…"}</code>. Node Listen versions before 0.4.10
+        skip those entries.</li>
       <li>The login is shared with SysMon (Chapter 3).</li>
     </ul>
   </div>
