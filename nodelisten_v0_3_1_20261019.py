@@ -4,6 +4,7 @@ import argparse
 import array
 import base64
 import configparser
+import glob
 import hashlib
 import hmac
 import http.client
@@ -26,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.0"
+VERSION = "0.3.1"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -976,13 +977,54 @@ TX_NODE = "1921"
 TX_USRP_SEND = 32018
 TX_USRP_LISTEN = 34018
 TX_NOTE = "; nodelisten: transmit node for the Node Listen page (remove it from that page)"
-TX_NODES_LINE = f"{TX_NODE} = radio@127.0.0.1/{TX_NODE},NONE"
+IAX_CONF = os.environ.get("NODELISTEN_IAX_CONF", "/etc/asterisk/iax.conf")
+TX_BUSY_GRACE_SEC = 2.0
+_TX_NODES_LINE_RE = re.compile(r"^\s*" + TX_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + TX_NODE + r",NONE\s*$")
 TX_QUEUE_MAX = 50
 TX_PREBUFFER = 3
 TX_DEADMAN_SEC = 1.0
 USRP_HEADER = struct.Struct(">4s7i")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 _CALL_TRIM = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def iax_bindport():
+    base = os.path.dirname(IAX_CONF)
+
+    def scan(path, depth, sec):
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError:
+            return None
+        found = None
+        for raw in text.splitlines():
+            ln = raw.split(";", 1)[0].strip()
+            m = re.match(r'^#(?:try)?include\s+"?([^"\s]+)"?', ln)
+            if m and depth < 2:
+                pat = m.group(1) if m.group(1).startswith("/") else os.path.join(base, m.group(1))
+                for inc in sorted(glob.glob(pat)):
+                    r = scan(inc, depth + 1, sec)
+                    if r:
+                        found = r
+                continue
+            m = re.match(r"^\[([^\]]+)\]", ln)
+            if m:
+                sec = m.group(1).strip().lower()
+                continue
+            if sec == "general":
+                m = re.match(r"^bindport\s*=>?\s*(\d{1,5})\b", ln, re.I)
+                if m:
+                    found = m.group(1)
+        return found
+
+    return scan(IAX_CONF, 0, "") or "4569"
+
+
+def tx_nodes_line():
+    port = iax_bindport()
+    host = "127.0.0.1" if port == "4569" else f"127.0.0.1:{port}"
+    return f"{TX_NODE} = radio@{host}/{TX_NODE},NONE"
 
 
 def ast_cli(command, timeout=8):
@@ -1343,6 +1385,7 @@ class Talker:
         self.seq = 0
         self.sock = None
         self.beat = time.monotonic()
+        self.last_unkey = 0.0
 
     def _socket(self):
         if self.sock is None:
@@ -1367,7 +1410,10 @@ class Talker:
         st = tx_state()
         if not st["ready"]:
             return False, "not-ready"
-        if _cfg_get("busy_lockout") and HUB.snapshot()["audio_active"]:
+        if st["linked"] is False:
+            return False, "not-linked"
+        if (_cfg_get("busy_lockout") and HUB.snapshot()["audio_active"]
+                and time.monotonic() - self.last_unkey > TX_BUSY_GRACE_SEC):
             with self.lock:
                 mine = self.keyed and self.owner is owner
             if not mine:
@@ -1416,6 +1462,7 @@ class Talker:
             self.keyed = self.sending = self.releasing = False
             self.owner = None
             self.q.clear()
+            self.last_unkey = time.monotonic()
         for _ in range(3):
             self._packet(b"\x00" * FRAME_BYTES, False)
         log_event(f"TX: {who} unkeyed after {secs:.1f} s ({why})", "warn" if why in ("timeout", "deadman") else "ok")
@@ -1514,8 +1561,10 @@ def tx_state():
         out["ours"] = h > 0 and lines[h - 1].strip() == TX_NOTE
         body = "\n".join(lines[h:end]).replace(" ", "")
         out["rx_ok"] = f"rxchannel={out['rxchannel']}" in body
-    out["nodes_line"] = any(ln.strip().replace(" ", "") == TX_NODES_LINE.replace(" ", "") for ln in lines)
-    out["ready"] = out["defined"] and out.get("rx_ok", False) and bool(out["main"])
+    want = tx_nodes_line().replace(" ", "")
+    out["nodes_line"] = any(ln.strip().replace(" ", "") == want for ln in lines)
+    out["nodes_line_other"] = not out["nodes_line"] and any(_TX_NODES_LINE_RE.match(ln) for ln in lines)
+    out["ready"] = out["defined"] and out.get("rx_ok", False) and bool(out["main"]) and out["nodes_line"]
     if out["ready"]:
         ok, links = rpt_links(out["main"])
         out["linked"] = any(l["node"] == TX_NODE for l in links) if ok else None
@@ -1533,7 +1582,23 @@ def tx_enable():
         s, _ = _tx_stanza(lines, stanzas)
         if s is not None:
             if s["header"] > 0 and lines[s["header"] - 1].strip() == TX_NOTE:
-                return {"ok": True, "changed": False, "message": f"Node {TX_NODE} is already set up."}
+                want = tx_nodes_line()
+                if any(ln.strip().replace(" ", "") == want.replace(" ", "") for ln in lines):
+                    return {"ok": True, "changed": False, "message": f"Node {TX_NODE} is already set up."}
+                new = [ln for ln in lines if not _TX_NODES_LINE_RE.match(ln)]
+                _, st2 = parse_rpt("\n".join(new))
+                nst = next((x for x in st2 if x["name"].lower() == "nodes"), None)
+                if nst is not None:
+                    new.insert(nst["header"] + 1, want)
+                else:
+                    new += ["[nodes]", want, ""]
+                try:
+                    backup = _write_rpt(new)
+                except OSError as exc:
+                    return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+                log_event(f"rpt.conf: fixed the [nodes] line for node {TX_NODE}: {want} (backup {backup})", "ok")
+                return {"ok": True, "changed": True, "backup": backup,
+                        "message": f"Fixed the [nodes] line for node {TX_NODE} ({want}). Restart Asterisk. Backup: {backup}"}
             return {"ok": False, "error": f"rpt.conf already has a [{TX_NODE}] node that Node Listen didn't add. Remove it or pick another node."}
         main_st = next((x for x in stanzas if x["name"] == main), None)
         if main_st is None:
@@ -1546,13 +1611,14 @@ def tx_enable():
         while new and new[-1].strip() == "":
             new.pop()
         new += block + [""]
+        nodes_line = tx_nodes_line()
+        new = [ln for ln in new if not _TX_NODES_LINE_RE.match(ln)]
         _, stanzas2 = parse_rpt("\n".join(new))
         nodes_st = next((x for x in stanzas2 if x["name"].lower() == "nodes"), None)
-        if not any(ln.strip().replace(" ", "") == TX_NODES_LINE.replace(" ", "") for ln in new):
-            if nodes_st is not None:
-                new.insert(nodes_st["header"] + 1, TX_NODES_LINE)
-            else:
-                new += ["[nodes]", TX_NODES_LINE, ""]
+        if nodes_st is not None:
+            new.insert(nodes_st["header"] + 1, nodes_line)
+        else:
+            new += ["[nodes]", nodes_line, ""]
         try:
             backup = _write_rpt(new)
         except OSError as exc:
@@ -1584,7 +1650,7 @@ def tx_disable():
         if s is not None and s["header"] > 0 and lines[s["header"] - 1].strip() == TX_NOTE:
             drop.update(range(s["header"] - 1, end))
         for i, ln in enumerate(lines):
-            if ln.strip().replace(" ", "") == TX_NODES_LINE.replace(" ", ""):
+            if _TX_NODES_LINE_RE.match(ln):
                 drop.add(i)
         if not drop:
             return {"ok": True, "changed": False, "message": f"Node Listen has no node {TX_NODE} in rpt.conf."}
@@ -1697,6 +1763,7 @@ let mediaDest = null, wakeLock = null, nodeLabel = '';
 let pend = new Float32Array(1600), pendN = 0, peakLocal = 0, retryTimer = null;
 let favs = [], favEdit = [], dashFavs = [], favMax = 10;
 let ws = null, wsReady = false, wsRetry = null, talking = false, keyed = false, keyedAt = 0, totSec = 120;
+let micPending = false;
 let capCtx = null, micStream = null, capSrc = null, capNode = null, capSink = null, workletReady = false, preKey = [], talkTimer = null;
 let rs = {ratio: 6, buf: new Float32Array(0), pos: 0, out: new Int16Array(160), n: 0};
 const WORKLET_SRC = "class NlTap extends AudioWorkletProcessor{process(inputs){const c=inputs[0]&&inputs[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('nl-tap',NlTap);";
@@ -2006,7 +2073,8 @@ function openTalk() {
     } else if (m.ev === 'denied') {
       const why = {busy: 'The node is busy (someone is talking). Try again when it is quiet.',
         'in-use': 'Someone else is transmitting from Node Listen.',
-        'not-ready': 'Node 1921 is not set up yet (Setup tab).'}[m.why] || ('Refused: ' + m.why);
+        'not-ready': 'Node 1921 is not set up yet (Setup tab).',
+        'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Listen relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
       endTalk(); pttUi('ready', why); $('ptt-msg').className = 'msg warn';
     } else if (m.ev === 'unkeyed') {
       const was = talking;
@@ -2110,12 +2178,14 @@ async function pttDown(ev) {
     if (keyed) $('ptt-time').textContent = fmtSecs((performance.now() - keyedAt) / 1000) + ' / ' + fmtSecs(totSec);
   }, 250);
   wakeLockApply();
+  micPending = true;
   try { await startMic(); }
   catch (e) {
     if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: 'unkey'}));
     keyed = false; endTalk();
     pttUi('ready', 'Microphone: ' + (e.message || e.name)); $('ptt-msg').className = 'msg err';
   }
+  micPending = false;
 }
 
 function pttUp(ev) {
@@ -2222,11 +2292,12 @@ async function loadTx() {
   if (d.error) s = d.error;
   else if (!d.defined) s = 'Not set up.';
   else if (!d.ours) s = 'rpt.conf has a [' + d.node + '] node that Node Listen did not add.';
+  else if (!d.nodes_line) s = 'Its [nodes] line is missing or has the wrong IAX port: press Add node 1921 to fix it.';
   else if (!d.rx_ok) s = 'Set up, but its rxchannel is not ' + d.rxchannel + '.';
   else if (d.linked === null) s = 'Set up. Asterisk does not know it yet: restart Asterisk.';
   else s = d.linked ? 'Set up and linked to node ' + d.main + '.' : 'Set up; linking to node ' + d.main + ' (checked every 20 s).';
   $('tx-state').textContent = s;
-  $('tx-add').disabled = d.defined;
+  $('tx-add').disabled = d.defined && d.nodes_line;
   $('tx-remove').disabled = !(d.defined && d.ours) && !d.nodes_line;
 }
 
@@ -2346,7 +2417,7 @@ document.addEventListener('DOMContentLoaded', () => {
   p.addEventListener('contextmenu', (e) => e.preventDefault());
   p.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) pttDown(e); });
   p.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') pttUp(e); });
-  window.addEventListener('blur', () => pttUp());
+  window.addEventListener('blur', () => { if (!micPending) pttUp(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') pttUp(); else { openTalk(); pollStatus(); }
     wakeLockApply();
