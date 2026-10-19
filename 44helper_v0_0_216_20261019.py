@@ -43,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.215"
+APP_VERSION = "0.0.216"
 APP_STAGE = "v0.0.215: firewall-cmd gets 60 s to answer; the Overview reads the firewall zone from a cache; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -1766,16 +1766,6 @@ def _self_check_worst_level(findings: list[dict]) -> str:
     if not findings:
         return "ok"
     return max(findings, key=lambda f: order.get(f["level"], 0))["level"]
-
-PI_INSTALL_STEPS = [
-    "firewalld_prereq",
-    "resolved_prereq",
-    "create_zone",
-    "service_ports",
-    "paste_config",
-    "attach_interface",
-    "enable_tunnel",
-]
 
 PI_INSTALL_SERVICES = {
     "iax2": {"label": "AllStarLink IAX2", "default_on": True, "tabs": ("full", "split")},
@@ -4645,9 +4635,6 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
         _qm_job_finish(job_key, job_ok, rc)
         log(f"{'OK' if job_ok else 'FAIL'} (system-job, exit {rc}): {cmd}")
 
-def _quiet_apt_worker(job_key: str, cmd: str) -> None:
-    _unit_job_worker(job_key, cmd, quiet=True, low_priority=True)
-
 def _start_unit_job(job_key: str, cmd: str, quiet: bool = False, low_priority: bool = False) -> dict:
     unit = _job_unit_name(job_key)
     with _JOBS_LOCK:
@@ -5566,35 +5553,27 @@ def action_sysopt_rsyslog_disable(payload: dict) -> dict:
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
             "output": "disabled" if outcome["success"] else "one or more steps failed"}
 
-def action_sysopt_rsyslog_revert(payload: dict) -> dict:
+def _sysopt_unit_revert(item: str, unit: str, name: str, never: str, done: str = "reverted") -> dict:
     err = _require_root()
     if err:
         return err
-    entry = _sysopt_state_get_item("rsyslog")
+    entry = _sysopt_state_get_item(item)
     if entry is None:
-        return {"success": False, "output": "nothing to revert -- rsyslog was never changed via this tab"}
+        return {"success": False, "output": f"nothing to revert -- {name} was never {never} via this tab"}
     prior = entry["prior_state"]
-    outcome = _set_unit_state("rsyslog.service", want_enabled=prior["was_enabled"], want_active=prior["was_active"])
+    outcome = _set_unit_state(unit, want_enabled=prior["was_enabled"], want_active=prior["was_active"])
     if outcome["success"]:
-        _sysopt_state_clear_item("rsyslog")
-        log("System Optimization: rsyslog reverted")
+        _sysopt_state_clear_item(item)
+        log(f"System Optimization: {name} reverted")
     return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
-            "output": "reverted" if outcome["success"] else "one or more steps failed"}
+            "output": done if outcome["success"] else "one or more steps failed"}
+
+def action_sysopt_rsyslog_revert(payload: dict) -> dict:
+    return _sysopt_unit_revert("rsyslog", "rsyslog.service", "rsyslog", "changed")
 
 def action_sysopt_swap_revert(payload: dict) -> dict:
-    err = _require_root()
-    if err:
-        return err
-    entry = _sysopt_state_get_item("dphys_swap")
-    if entry is None:
-        return {"success": False, "output": "nothing to revert -- dphys-swapfile was never disabled via this tab"}
-    prior = entry["prior_state"]
-    outcome = _set_unit_state("dphys-swapfile.service", want_enabled=prior["was_enabled"], want_active=prior["was_active"])
-    if outcome["success"]:
-        _sysopt_state_clear_item("dphys_swap")
-        log("System Optimization: dphys-swapfile reverted")
-    return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
-            "output": "reverted (swap restored)" if outcome["success"] else "one or more steps failed"}
+    return _sysopt_unit_revert("dphys_swap", "dphys-swapfile.service", "dphys-swapfile", "disabled",
+                               "reverted (swap restored)")
 
 def _run_pkg_unit_cp(verb: str, pkg: str) -> subprocess.CompletedProcess:
     action = {("install", "dphys-swapfile"): "dphys_swap_reinstall",
@@ -5603,23 +5582,26 @@ def _run_pkg_unit_cp(verb: str, pkg: str) -> subprocess.CompletedProcess:
     rc = res["returncode"] if res["returncode"] is not None else (0 if res["success"] else 1)
     return subprocess.CompletedProcess([verb, pkg], rc, res["output"], "")
 
-def action_sysopt_swap_reinstall(payload: dict) -> dict:
+def _sysopt_pkg_reinstall(item: str, pkg: str) -> dict:
     err = _require_root()
     if err:
         return err
-    entry = _sysopt_state_get_item("dphys_swap_uninstall")
+    entry = _sysopt_state_get_item(item)
     if entry is None:
-        return {"success": False, "output": "nothing to reinstall -- dphys-swapfile was not removed via this tab"}
+        return {"success": False, "output": f"nothing to reinstall -- {pkg} was not removed via this tab"}
     try:
-        r = _run_pkg_unit_cp("install", "dphys-swapfile")
+        r = _run_pkg_unit_cp("install", pkg)
         ok = r.returncode == 0
         output = ((r.stdout or "") + (r.stderr or "")).strip()
     except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
         ok, output = False, str(exc)
     if ok:
-        _sysopt_state_clear_item("dphys_swap_uninstall")
-        log("System Optimization: dphys-swapfile reinstalled")
-    return {"success": ok, "output": output, "commands": ["apt-get install -y dphys-swapfile"]}
+        _sysopt_state_clear_item(item)
+        log(f"System Optimization: {pkg} reinstalled")
+    return {"success": ok, "output": output, "commands": [f"apt-get install -y {pkg}"]}
+
+def action_sysopt_swap_reinstall(payload: dict) -> dict:
+    return _sysopt_pkg_reinstall("dphys_swap_uninstall", "dphys-swapfile")
 
 def action_sysopt_mandb_timer_disable(payload: dict) -> dict:
     err = _require_root()
@@ -5637,19 +5619,7 @@ def action_sysopt_mandb_timer_disable(payload: dict) -> dict:
             "output": "disabled" if outcome["success"] else "one or more steps failed"}
 
 def action_sysopt_mandb_timer_revert(payload: dict) -> dict:
-    err = _require_root()
-    if err:
-        return err
-    entry = _sysopt_state_get_item("mandb_timer")
-    if entry is None:
-        return {"success": False, "output": "nothing to revert -- man-db.timer was never changed via this tab"}
-    prior = entry["prior_state"]
-    outcome = _set_unit_state("man-db.timer", want_enabled=prior["was_enabled"], want_active=prior["was_active"])
-    if outcome["success"]:
-        _sysopt_state_clear_item("mandb_timer")
-        log("System Optimization: man-db.timer reverted")
-    return {**outcome, "commands": [s["cmd"] for s in outcome["steps"]],
-            "output": "reverted" if outcome["success"] else "one or more steps failed"}
+    return _sysopt_unit_revert("mandb_timer", "man-db.timer", "man-db.timer", "changed")
 
 def action_sysopt_mandb_remove(payload: dict) -> dict:
     err = _require_root()
@@ -5673,22 +5643,7 @@ def action_sysopt_mandb_remove(payload: dict) -> dict:
     return result
 
 def action_sysopt_mandb_reinstall(payload: dict) -> dict:
-    err = _require_root()
-    if err:
-        return err
-    entry = _sysopt_state_get_item("mandb_remove")
-    if entry is None:
-        return {"success": False, "output": "nothing to reinstall -- man-db was not removed via this tab"}
-    try:
-        r = _run_pkg_unit_cp("install", "man-db")
-        ok = r.returncode == 0
-        output = ((r.stdout or "") + (r.stderr or "")).strip()
-    except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-        ok, output = False, str(exc)
-    if ok:
-        _sysopt_state_clear_item("mandb_remove")
-        log("System Optimization: man-db reinstalled")
-    return {"success": ok, "output": output, "commands": ["apt-get install -y man-db"]}
+    return _sysopt_pkg_reinstall("mandb_remove", "man-db")
 
 _SYSTEM_OPT_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "fstab_noatime_apply": action_sysopt_fstab_noatime_apply,
@@ -6763,7 +6718,7 @@ def action_split_routing() -> dict:
     except OSError as e:
         return {"success": False, "verified": False, "output": f"Write failed: {e}"}
     unit = "wg-quick@wg0"
-    if _sc_is_active(unit):
+    if _systemctl_is_active(unit):
         r = _run_argv(["systemctl", "restart", unit], timeout=_WG_START_WAIT)
         out.append(("ok    " if r["success"] else "FAIL  ") + "tunnel restarted" + ("" if r["success"] else ": " + r["output"]))
         end = time.monotonic() + 30
@@ -6779,7 +6734,7 @@ def action_split_routing() -> dict:
     else:
         out.append("The tunnel isn't running; the new routing is used when it starts.")
     live = _wg_routing_live()
-    if _sc_is_active(unit):
+    if _systemctl_is_active(unit):
         out.append(("ok    " if live else "FAIL  ") + f"routing rule for table {_WG_RT_TABLE} " + ("in place" if live else "missing"))
     ok = not any(ln.startswith("FAIL") for ln in out)
     return {"success": ok, "verified": ok, "output": "\n".join(out)}
@@ -7077,7 +7032,7 @@ def action_enable_tunnel() -> dict:
     t0 = int(time.time())
     if _wg_quick_template_available():
         unit = "wg-quick@wg0"
-        verb = "restart" if _sc_is_active(unit) else "start"
+        verb = "restart" if _systemctl_is_active(unit) else "start"
         results = [
             _run_argv(["systemctl", "enable", unit]),
             _run_argv(["systemctl", verb, unit], timeout=_WG_START_WAIT),
@@ -7761,14 +7716,6 @@ def _systemctl_show(unit: str, props: list[str]) -> dict:
             out[k] = v
     return out
 
-def _sc_is_active(unit: str) -> bool:
-    try:
-        r = subprocess.run(["systemctl", "is-active", unit],
-                           capture_output=True, text=True, timeout=5)
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return False
-    return r.stdout.strip() == "active"
-
 def _sc_is_enabled(unit: str) -> str:
     try:
         r = subprocess.run(["systemctl", "is-enabled", unit],
@@ -7806,10 +7753,10 @@ def _netcheck_script_info(exec_start: str) -> dict:
     return info
 
 def _network_backend() -> dict:
-    if _sc_is_active("NetworkManager.service"):
+    if _systemctl_is_active("NetworkManager.service"):
         unit = "NetworkManager-wait-online.service"
         return {"manager": "NetworkManager", "wait_unit": unit, "wait_enabled": _sc_is_enabled(unit)}
-    if _sc_is_active("systemd-networkd.service"):
+    if _systemctl_is_active("systemd-networkd.service"):
         unit = "systemd-networkd-wait-online.service"
         return {"manager": "systemd-networkd", "wait_unit": unit, "wait_enabled": _sc_is_enabled(unit)}
     return {"manager": "unknown", "wait_unit": "", "wait_enabled": "unknown"}
@@ -8538,11 +8485,6 @@ def save_router_config(cfg: configparser.ConfigParser, access_method: str, host:
     log(f"Router config saved: access_method={access_method}, host={host}, user={user}")
     return {"success": True, "output": "Router config saved."}
 
-ROUTER_INSTALL_STEPS = [
-    "allocation_type", "capture_config", "apply_wg_config", "set_lan_ip",
-    "bring_up_tunnel", "pi_address", "firewall_zone", "verify",
-]
-
 _pending_router_wg: dict | None = None
 _pending_router_wg_lock = threading.Lock()
 
@@ -9022,10 +8964,6 @@ def read_known_good_router_note(filename: str) -> str | None:
             return f.read()
     except OSError:
         return None
-
-MODEL_B_FORWARD_SERVICES = {
-    "iax2": {"label": "AllStarLink IAX2", "port": "4569", "proto": "udp", "default_on": True},
-}
 
 def status_port_forwards(cfg: configparser.ConfigParser) -> dict:
     raw = cfg.get("tunnels", "tunnel.router.forwards", fallback="")
@@ -10565,7 +10503,7 @@ _HALF_STEP_FNS: dict[int, Callable[[dict, list[str]], bool]] = {
     2: _half_step2, 3: _half_step3, 4: _half_step4, 5: _half_step5, 6: _half_step6,
 }
 
-def _half_done(st: dict, n: int) -> bool:
+def _step_done(st: dict, n: int) -> bool:
     e = (st.get("steps") or {}).get(str(n))
     return isinstance(e, dict) and not e.get("pending")
 
@@ -10578,10 +10516,10 @@ def _half_step_guard(st: dict | None, n: int) -> str:
         return "Arm the auto-undo first (button 1)."
     if not _half_timer_active():
         return "The auto-undo timer isn't running. Arm it again (button 1) before changing anything."
-    if _half_done(st, n):
+    if _step_done(st, n):
         return f"Step {n} is already done."
     for m in range(2, n):
-        if not _half_done(st, m):
+        if not _step_done(st, m):
             return f"Do step {m} first."
     return ""
 
@@ -10598,7 +10536,7 @@ def _half_run_step(n: int) -> dict:
         ok = False
     if ok:
         st["steps"][str(n)].pop("pending", None)
-        if all(_half_done(st, m) for m in _HALF_STEP_FNS):
+        if all(_step_done(st, m) for m in _HALF_STEP_FNS):
             st["steps_done_at"] = time.time()
         _half_commit(st)
         out.append(f"Step {n} done.")
@@ -10709,7 +10647,7 @@ def action_half_run_all() -> dict:
         if not st or not st.get("armed_at") or not _half_timer_active():
             return {"success": False, "verified": False, "output": "Refused: arm the auto-undo first (button 1)."}
         for n in sorted(_HALF_STEP_FNS):
-            if _half_done(_half_state() or {}, n):
+            if _step_done(_half_state() or {}, n):
                 out.append(f"Step {n} already done.")
                 continue
             r = _half_run_step(n)
@@ -10729,10 +10667,10 @@ def _half_status_test(status: dict, st: dict) -> None:
     status["expires_at"] = st.get("expires_at")
     status["kept"] = bool(st.get("kept_at"))
     status["steps"] = {str(n): {"title": _HALF_STEP_TITLES[n],
-                                "done": _half_done(st, n),
+                                "done": _step_done(st, n),
                                 "pending": bool((steps.get(str(n)) or {}).get("pending"))}
                        for n in sorted(_HALF_STEP_FNS)}
-    status["all_steps_done"] = all(_half_done(st, n) for n in _HALF_STEP_FNS)
+    status["all_steps_done"] = all(_step_done(st, n) for n in _HALF_STEP_FNS)
 
 _HALF_STATUS_HOOKS.append(_half_status_test)
 
@@ -11020,7 +10958,7 @@ def action_half_run_checks(client_ip: str = "") -> dict:
 def _half_gate(st: dict) -> tuple[bool, str]:
     if _half_mode() != "testing":
         return False, "Only during a test."
-    if not all(_half_done(st, n) for n in _HALF_STEP_FNS):
+    if not all(_step_done(st, n) for n in _HALF_STEP_FNS):
         return False, "Run steps 2 to 6 first."
     lc = st.get("last_checks") or {}
     if not lc:
@@ -11698,10 +11636,6 @@ def _fx_write_undo() -> None:
 def _fx_save(st: dict) -> None:
     _half_write_json(_FX_STATE_PATH, st)
 
-def _fx_done(st: dict, n: int) -> bool:
-    e = (st.get("steps") or {}).get(str(n))
-    return isinstance(e, dict) and not e.get("pending")
-
 def _fx_rule_cmds(v: dict, bypass: dict) -> dict[int, list[list[str]]]:
     cmds: dict[int, list[list[str]]] = {2: [], 3: []}
     if v.get("lan_ip"):
@@ -11755,7 +11689,7 @@ def _fx_guard(st: dict | None, n: int) -> str:
         return "Arm the auto-undo first (button 1)."
     if not _fx_timer_active():
         return "The auto-undo timer isn't running. Arm it again (button 1) before changing anything."
-    if n == 3 and not _fx_done(st, 2):
+    if n == 3 and not _step_done(st, 2):
         return "Do step 2 first."
     return ""
 
@@ -11778,7 +11712,7 @@ def _fx_run_step(n: int, raw_list=None) -> dict:
         ok = False
     if ok:
         st["steps"][str(n)].pop("pending", None)
-        if all(_fx_done(st, m) for m in _FX_STEP_TITLES):
+        if all(_step_done(st, m) for m in _FX_STEP_TITLES):
             st["steps_done_at"] = time.time()
         _fx_save(st)
         out.append(f"Step {n} done.")
@@ -12078,7 +12012,7 @@ def action_fx_run_checks(client_ip: str = "") -> dict:
 def _fx_gate(st: dict) -> tuple[bool, str]:
     if _fx_mode() != "testing":
         return False, "Only during a test."
-    if not all(_fx_done(st, n) for n in _FX_STEP_TITLES):
+    if not all(_step_done(st, n) for n in _FX_STEP_TITLES):
         return False, "Run steps 2 and 3 first (step 3 can have an empty list)."
     lc = st.get("last_checks") or {}
     if not lc:
@@ -12328,7 +12262,7 @@ def build_fx_status() -> dict:
                   "fresh": bool(chk.get("at")) and time.time() - chk.get("at", 0) < _HALF_CHECKFIRST_MAX_AGE},
         "armed": bool(st.get("armed_at")), "timer_active": _fx_timer_active(), "undo_running": _fx_undo_running(),
         "expires_at": st.get("expires_at"), "kept": bool(st.get("kept_at")),
-        "steps": {str(n): {"title": _FX_STEP_TITLES[n], "done": _fx_done(st, n),
+        "steps": {str(n): {"title": _FX_STEP_TITLES[n], "done": _step_done(st, n),
                            "pending": bool((steps.get(str(n)) or {}).get("pending"))} for n in sorted(_FX_STEP_TITLES)},
         "bypass_text": " ".join(list(bp.get("hosts", [])) + list(bp.get("ports", []))),
         "dmr_master": v.get("dmr_master", ""),
@@ -15426,23 +15360,6 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     new.insert(last + 1, f"{key}{style or ' = '}{value}")
     return new, None, True
 
-def _cfgr_remove_key(lines: list[str], section: str, key: str) -> list[str]:
-    mask = _cfgr_managed_mask(lines)
-    span = _cfgr_section_span(lines, mask, section)
-    if span is None:
-        return list(lines)
-    for i in range(span[0] + 1, span[1]):
-        kv = None if mask[i] else _cfgr_kv(lines[i])
-        if kv and kv[0].lower() == key.lower():
-            return lines[:i] + lines[i + 1:]
-    return list(lines)
-
-def _cfgr_remove_module(lines: list[str], name: str) -> list[str]:
-    mask = _cfgr_managed_mask(lines)
-    rx = _cfgr_module_re(name)
-    idx = [i for i, ln in enumerate(lines) if not mask[i] and rx.match(ln)]
-    return lines[:idx[-1]] + lines[idx[-1] + 1:] if idx else list(lines)
-
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
 _CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "gateways_apply", "gateways_revert", "id_set_callsign"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
@@ -17816,7 +17733,7 @@ _JS_PI_INSTALL = """
 // action results are dual-rendered into both tabs via _piWriteOutputBoth()
 // and refreshPiInstall('full')/refreshPiInstall('split') so both tabs
 // always agree with the one underlying truth.
-// Model B port-forward presets (mirrors MODEL_B_FORWARD_SERVICES server-side, sec 6.2 step 9)
+// Model B port-forward presets
 var MODEL_B_SERVICES = {
   iax2: {label: 'AllStarLink IAX2', port: '4569', proto: 'udp'}
 };

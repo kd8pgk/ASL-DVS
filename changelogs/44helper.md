@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_215_20261018.py`. Newest entries first.
+Current file: `44helper_v0_0_216_20261019.py`. Newest entries first.
+
+## 0.0.216 (2026-10-19)
+
+- **Code cleanup, no change in behaviour.** System Optimization's revert and
+  reinstall buttons (rsyslog, swap, man-db) share two handlers instead of five
+  copies of the same code. The "is this service running" check and the
+  half-tunnel / exceptions step check each have one copy instead of two.
+  Unused leftovers (old install-step lists, a Model B port list, two Config
+  helpers and a quiet apt worker that nothing called) are removed.
 
 ## 0.0.215 (2026-10-18) — testing
 

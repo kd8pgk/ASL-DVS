@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.38.0"
+APP_VERSION = "5.39.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -4951,10 +4951,6 @@ def _nmcli_free_run(cmd: List[str], timeout: float = 30) -> Tuple[bool, str]:
         return False, _log_safe(e)
     return r.returncode == 0, _log_safe(((r.stderr or r.stdout) or "").strip()[:300])
 
-def _country_now() -> Optional[str]:
-    m = re.search(r"^country\s+([A-Z0-9]{2}):", _run_text(["iw", "reg", "get"]), re.M)
-    return m.group(1) if m else None
-
 def _write_if_changed(path: str, body: str, mode: int = 0o644) -> None:
     if _read_text(path) == body:
         return
@@ -4969,16 +4965,16 @@ def _country_apply(code: str) -> Tuple[bool, str, Optional[str]]:
     if shutil.which("raspi-config"):
         ok, msg = _nmcli_free_run(["raspi-config", "nonint", "do_wifi_country", code], timeout=60)
         if not ok:
-            return False, msg or "raspi-config failed", _country_now()
+            return False, msg or "raspi-config failed", _reg_country()
     else:
         ok, msg = _nmcli_free_run(["iw", "reg", "set", code])
         if not ok:
-            return False, msg or "iw reg set failed", _country_now()
+            return False, msg or "iw reg set failed", _reg_country()
         try:
             _write_if_changed(COUNTRY_MODPROBE, "# Written by wifimon (WiFi country code). Used at boot.\n"
                                                 f"options cfg80211 ieee80211_regdom={code}\n")
         except OSError as e:
-            return False, f"set for now, but couldn't save it for the next boot: {e}", _country_now()
+            return False, f"set for now, but couldn't save it for the next boot: {e}", _reg_country()
     if _wifi_backend() == "wpa_cli":
         for conf in WPA_CONFS:
             txt = _read_text(conf)
@@ -4993,7 +4989,7 @@ def _country_apply(code: str) -> Tuple[bool, str, Optional[str]]:
             except OSError as e:
                 log.warning("Couldn't update %s: %s", conf, e)
     time.sleep(1)
-    return True, "", _country_now()
+    return True, "", _reg_country()
 
 HOTSPOT_FILE = os.path.join(SHUTDOWN_STATE_DIR, "hotspot.json")
 COUNTRY_MODPROBE = "/etc/modprobe.d/wifimon-country.conf"
@@ -6235,7 +6231,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not shutil.which("iw") and not shutil.which("raspi-config"):
             self._json(409, {"error": "Setting the country needs iw or raspi-config."})
             return
-        before = _country_now() or "00"
+        before = _reg_country() or "00"
         if before == code:
             self._json(200, {"ok": True, "message": f"The country code is already {code}."})
             return

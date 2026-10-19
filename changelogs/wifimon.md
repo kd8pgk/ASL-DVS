@@ -1,6 +1,11 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_38_0_20261018.py`. Newest entries first.
+Current file: `wifimon_v5_39_0_20261019.py`. Newest entries first.
+
+## 5.39.0 (2026-10-19)
+
+- **Code cleanup, no change in behaviour.** The WiFi country is read by one
+  helper instead of two identical copies.
 
 ## 5.38.0 (2026-10-18)
 

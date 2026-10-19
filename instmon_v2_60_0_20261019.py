@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.59.0"
-DATE_STR ="2026-10-18"
+VERSION ="2.60.0"
+DATE_STR ="2026-10-19"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -9654,7 +9654,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "level":"info",
         })
 
-    def _action_start (self ,body ):
+    def _service_action (self ,body ,verb ,refuse ,fail_verb ,done ,levels ):
 
         service =body .get ("service","")
         comp =next ((c for c in COMPONENTS if c ["service"]==service ),None )
@@ -9662,47 +9662,28 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (400 ,f"Unknown service '{service }'")
             return 
         if comp ["category"]=="instmon":
-            self ._error_json (400 ,"instmon cannot start/restart itself from its own panel.")
+            self ._error_json (400 ,refuse )
             return 
         try :
-            subprocess .run (["systemctl","restart",unit_of (comp )],capture_output =True ,text =True ,timeout =10 )
+            subprocess .run (["systemctl",verb ,unit_of (comp )],capture_output =True ,text =True ,timeout =10 )
         except (FileNotFoundError ,subprocess .TimeoutExpired )as exc :
-            self ._error_json (500 ,f"Could not start {comp ['name']}: {exc }")
+            self ._error_json (500 ,f"Could not {fail_verb } {comp ['name']}: {exc }")
             return 
         time .sleep (0.5 )
         state =systemctl_is_active (unit_of (comp ))
-        log_event (f"Started {comp ['name']} (now {state })","info"if state =="active"else "warn")
+        log_event (f"{done .capitalize ()} {comp ['name']} (now {state })",levels [0 ]if state =="active"else levels [1 ])
         self ._send_json (200 ,{
         "service":service ,
         "state":state ,
-        "message":f"{comp ['name']} started (now {state }).",
+        "message":f"{comp ['name']} {done } (now {state }).",
         "level":"info",
         })
+
+    def _action_start (self ,body ):
+        self ._service_action (body ,"restart","instmon cannot start/restart itself from its own panel.","start","started",("info","warn"))
 
     def _action_stop (self ,body ):
-
-        service =body .get ("service","")
-        comp =next ((c for c in COMPONENTS if c ["service"]==service ),None )
-        if comp is None :
-            self ._error_json (400 ,f"Unknown service '{service }'")
-            return 
-        if comp ["category"]=="instmon":
-            self ._error_json (400 ,"instmon cannot stop itself.")
-            return 
-        try :
-            subprocess .run (["systemctl","stop",unit_of (comp )],capture_output =True ,text =True ,timeout =10 )
-        except (FileNotFoundError ,subprocess .TimeoutExpired )as exc :
-            self ._error_json (500 ,f"Could not stop {comp ['name']}: {exc }")
-            return 
-        time .sleep (0.5 )
-        state =systemctl_is_active (unit_of (comp ))
-        log_event (f"Stopped {comp ['name']} (now {state })","warn"if state =="active"else "info")
-        self ._send_json (200 ,{
-        "service":service ,
-        "state":state ,
-        "message":f"{comp ['name']} stopped (now {state }).",
-        "level":"info",
-        })
+        self ._service_action (body ,"stop","instmon cannot stop itself.","stop","stopped",("warn","info"))
 
     def _action_install_config (self ,body ):
         name =body .get ("name")
@@ -9934,38 +9915,29 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "level":level ,
         })
 
-    def _action_reboot (self ,body ):
-        log_event ("System reboot requested from instmon UI","warn")
+    def _schedule_power (self ,what ,unit ,verb ,message ):
+        log_event (f"System {what } requested from instmon UI","warn")
         try :
-            
             subprocess .run ([
             "systemd-run","--quiet","--collect",f"--on-active={REBOOT_SHUTDOWN_DELAY_SEC }",
-            "--unit=instmon-reboot","systemctl","reboot",
+            f"--unit={unit }","systemctl",verb ,
             ],check =True ,timeout =10 )
         except (FileNotFoundError ,subprocess .TimeoutExpired ,subprocess .CalledProcessError )as exc :
-            log_event (f"Reboot request failed: {exc }","err")
-            self ._error_json (500 ,f"Could not schedule reboot: {exc }")
+            log_event (f"{what .capitalize ()} request failed: {exc }","err")
+            self ._error_json (500 ,f"Could not schedule {what }: {exc }")
             return 
         self ._send_json (200 ,{
-        "message":f"Rebooting in ~{REBOOT_SHUTDOWN_DELAY_SEC }s. This page (and everything else on the node) will be unreachable until it comes back up.",
+        "message":message ,
         "level":"warn",
         })
 
+    def _action_reboot (self ,body ):
+        self ._schedule_power ("reboot","instmon-reboot","reboot",
+        f"Rebooting in ~{REBOOT_SHUTDOWN_DELAY_SEC }s. This page (and everything else on the node) will be unreachable until it comes back up.")
+
     def _action_shutdown (self ,body ):
-        log_event ("System shutdown requested from instmon UI","warn")
-        try :
-            subprocess .run ([
-            "systemd-run","--quiet","--collect",f"--on-active={REBOOT_SHUTDOWN_DELAY_SEC }",
-            "--unit=instmon-shutdown","systemctl","poweroff",
-            ],check =True ,timeout =10 )
-        except (FileNotFoundError ,subprocess .TimeoutExpired ,subprocess .CalledProcessError )as exc :
-            log_event (f"Shutdown request failed: {exc }","err")
-            self ._error_json (500 ,f"Could not schedule shutdown: {exc }")
-            return 
-        self ._send_json (200 ,{
-        "message":f"Shutting down in ~{REBOOT_SHUTDOWN_DELAY_SEC }s. You'll need physical/console access (or a smart PDU) to power it back on.",
-        "level":"warn",
-        })
+        self ._schedule_power ("shutdown","instmon-shutdown","poweroff",
+        f"Shutting down in ~{REBOOT_SHUTDOWN_DELAY_SEC }s. You'll need physical/console access (or a smart PDU) to power it back on.")
 
     def log_message (self ,format ,*args ):
         return 

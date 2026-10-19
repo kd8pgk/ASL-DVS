@@ -1,6 +1,12 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_90_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_91_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.91-pi02w (2026-10-19)
+
+- **Code cleanup, no change in behaviour.** The M17 and XLX host-list readers
+  share one text helper instead of two identical copies, and an unused
+  `__pycache__` helper is gone.
 
 ## 9.3.90-pi02w (2026-10-19)
 
