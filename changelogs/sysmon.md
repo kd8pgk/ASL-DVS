@@ -1,6 +1,13 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_87_20261019.py`. Newest entries first.
+Current file: `sysmon_v6_13_88_20261019.py`. Newest entries first.
+
+## 6.13.88 (2026-10-19)
+
+- **Code cleanup, no change in behaviour.** Reboot and Shut down share one
+  handler instead of two copies of the same code, and the troubleshooting checks run their
+  commands through the same helper as the rest of SysMon instead of its own
+  identical copy.
 
 ## 6.13.87 (2026-10-19)
 
