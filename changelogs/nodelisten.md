@@ -1,6 +1,13 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_11_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_11_1_20261019.py`. Newest entries first.
+
+## 0.4.11.1 (2026-10-19)
+
+- **The title bar and the tabs bar stay in place.** The title bar is fixed at
+  the top and the tabs bar at the bottom; only the page between them
+  scrolls. Before, the title bar could slide off on some phones. On a phone
+  with a notch, the title bar clears it. Layout only, no change in behaviour.
 
 ## 0.4.11 (2026-10-19)
 
