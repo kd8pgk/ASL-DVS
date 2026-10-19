@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.4"
+VERSION = "0.4.5"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -616,6 +616,10 @@ def tune_value(key):
     return _cfg_get(key)
 
 
+GAIN_KNEE = 29000
+GAIN_SPAN = 32767 - GAIN_KNEE
+
+
 def apply_gain(frame, gain_db):
     if not gain_db:
         return frame
@@ -623,8 +627,21 @@ def apply_gain(frame, gain_db):
     a = array.array("h")
     a.frombytes(frame)
     for i, x in enumerate(a):
-        v = int(x * g)
-        a[i] = 32767 if v > 32767 else (-32768 if v < -32768 else v)
+        v = x * g
+        if v > GAIN_KNEE:
+            v = GAIN_KNEE + GAIN_SPAN * math.tanh((v - GAIN_KNEE) / GAIN_SPAN)
+        elif v < -GAIN_KNEE:
+            v = -GAIN_KNEE - GAIN_SPAN * math.tanh((-v - GAIN_KNEE) / GAIN_SPAN)
+        a[i] = int(round(v))
+    return a.tobytes()
+
+
+def fade_out(frame):
+    a = array.array("h")
+    a.frombytes(frame)
+    n = len(a)
+    for i in range(n):
+        a[i] = int(round(a[i] * (n - 1 - i) / n))
     return a.tobytes()
 
 
@@ -1703,6 +1720,8 @@ class Talker:
             if why is None and self.sending:
                 if self.q:
                     frame = self.q.popleft()
+                    if self.releasing and not self.q:
+                        frame = fade_out(frame)
                 elif self.releasing:
                     why = "release"
                 elif now - self.last_rx > TX_DEADMAN_SEC:
@@ -3226,6 +3245,7 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""
     protocol_version = "HTTP/1.1"
     timeout = 60
+    disable_nagle_algorithm = True
 
     def log_message(self, fmt, *args):
         pass
