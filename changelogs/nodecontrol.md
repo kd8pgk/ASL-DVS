@@ -1,6 +1,11 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_86_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_87_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.87 (2026-10-19)
+
+- **Code cleanup, no change in behaviour.** The M17 and XLX host-list readers
+  share one text helper instead of two identical copies.
 
 ## 9.3.86 (2026-10-19)
 

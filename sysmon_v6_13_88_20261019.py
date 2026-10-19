@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.87"
+VERSION      = "6.13.88"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -13626,25 +13626,21 @@ def _route_log(h: Handler) -> None:
         "next_index": total,
     })
 
-def _route_reboot(h: Handler, data: dict) -> None:
+def _power_action(h: Handler, what: str, message: str, cmd: str) -> None:
     if os.geteuid() != 0:
         h.send_json({"ok": False, "message": "root required"}); return
-    _log("REBOOT requested", stderr=True)
-    h.send_json({"ok": True, "message": "Rebooting…"})
+    _log(f"{what} requested", stderr=True)
+    h.send_json({"ok": True, "message": message})
     threading.Thread(
-        target=lambda: (time.sleep(1), os.system("reboot")),
+        target=lambda: (time.sleep(1), os.system(cmd)),
         daemon=True,
     ).start()
 
+def _route_reboot(h: Handler, data: dict) -> None:
+    _power_action(h, "REBOOT", "Rebooting…", "reboot")
+
 def _route_shutdown(h: Handler, data: dict) -> None:
-    if os.geteuid() != 0:
-        h.send_json({"ok": False, "message": "root required"}); return
-    _log("SHUTDOWN requested", stderr=True)
-    h.send_json({"ok": True, "message": "Shutting down…"})
-    threading.Thread(
-        target=lambda: (time.sleep(1), os.system("shutdown -h now")),
-        daemon=True,
-    ).start()
+    _power_action(h, "SHUTDOWN", "Shutting down…", "shutdown -h now")
 
 def _route_abinfo(h: Handler) -> None:
     data = _read_abinfo()
@@ -27235,22 +27231,11 @@ def _ts(group: str, tid: str, label: str, kind: str = ""):
         return fn
     return deco
 
-def _ts_cmd(argv: list, timeout: int = 8) -> "tuple[str, str]":
-    if not shutil.which(argv[0]):
-        return "", f"{argv[0]} is not installed on this Pi"
-    try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return "", f"{argv[0]} took longer than {timeout} s"
-    except OSError as exc:
-        return "", f"{argv[0]} could not run: {exc}"
-    return (r.stdout or "") + (("\n" + r.stderr) if r.stderr and not r.stdout else ""), ""
-
 def _ts_missing(cmd: str, why: str) -> dict:
     return {"cmd": cmd, "raw": why, "summary": {"status": "info", "headline": "Can't check this here", "note": why}}
 
 def _ts_journal(unit: str, since: str, lines: int = 20000) -> "tuple[str, str]":
-    return _ts_cmd(["journalctl", "-u", unit, "--since", since, "-n", str(lines), "--no-pager", "-o", "short-iso"], 15)
+    return _cmd_or_problem(["journalctl", "-u", unit, "--since", since, "-n", str(lines), "--no-pager", "-o", "short-iso"], 15)
 
 def _ts_ast_log(since_min: int = 60) -> "tuple[str, str, str]":
     out, prob = _ts_journal("asterisk", f"{since_min} minutes ago")
@@ -27359,7 +27344,7 @@ def _ts_net_basics() -> dict:
     if shutil.which("ping"):
         inet = False
         for ip in ("8.8.8.8", "1.1.1.1"):
-            out, prob = _ts_cmd(["ping", "-n", "-c", "2", "-W", "2", ip], 8)
+            out, prob = _cmd_or_problem(["ping", "-n", "-c", "2", "-W", "2", ip], 8)
             m = re.search(r"(\d+)\s+(?:packets\s+)?received", out)
             got = int(m.group(1)) if m else 0
             raw.append(f"$ ping -c 2 {ip}: " + (f"{got} of 2 replies" if m else (prob or "no answer")))
@@ -29854,7 +29839,7 @@ def _ts_ab_ports() -> "tuple[dict, str]":
     return {}, ""
 
 def _ts_udp_listeners() -> "tuple[dict, str]":
-    out, prob = _ts_cmd(["ss", "-Hlunp"], 6)
+    out, prob = _cmd_or_problem(["ss", "-Hlunp"], 6)
     res = {}
     for ln in out.splitlines():
         m = re.search(r"\s(\S+):(\d+)\s+\S+\s*(?:users:\(\(\"([^\"]+)\")?", ln)
@@ -29968,7 +29953,7 @@ _TS_EXIT_WORDS = {0: "finished OK", 1: "general error", 2: "wrong options", 64: 
 _TS_NOT_HOSTS = re.compile(r"(?i)\.(sh|py|pl|conf|cfg|ini|service|target|log|pid|txt|so|bin|json|lock|d|tmp|out|err)$")
 
 def _ts_unit_props(unit: str, props: list) -> "tuple[dict, str]":
-    out, prob = _ts_cmd(["systemctl", "show", unit, "-p", ",".join(props)], 6)
+    out, prob = _cmd_or_problem(["systemctl", "show", unit, "-p", ",".join(props)], 6)
     d: dict = {}
     for ln in out.splitlines():
         k, sep, v = ln.partition("=")
@@ -30026,7 +30011,7 @@ def _ts_script_hosts(path: str) -> list:
 
 def _ts_nc_state(issue, nc, rows):
     act, sub, res = nc.get("ActiveState", "?"), nc.get("SubState", "?"), nc.get("Result", "?")
-    jout, jprob = _ts_cmd(["journalctl", "-u", _TS_NC_UNIT, "-b", "-n", "400", "--no-pager", "-o", "short-iso"], 10)
+    jout, jprob = _cmd_or_problem(["journalctl", "-u", _TS_NC_UNIT, "-b", "-n", "400", "--no-pager", "-o", "short-iso"], 10)
     jl = [] if jprob else [ln for ln in jout.splitlines() if ln.strip() and not ln.startswith("-- ")]
     tries = sum(1 for ln in jl if re.search(r"Starting netcheck", ln))
     fails = (sum(1 for ln in jl if "Failed with result" in ln)
@@ -30108,7 +30093,7 @@ def _ts_nc_network(issue, nc, raw, rows):
     if names:
         res_l, bad = [], 0
         for h in names[:3]:
-            out, _p = _ts_cmd(["getent", "ahostsv4", h], 6)
+            out, _p = _cmd_or_problem(["getent", "ahostsv4", h], 6)
             ok = any(ln.split() for ln in out.splitlines())
             bad += 0 if ok else 1
             res_l.append(f"{h} {'found' if ok else 'NOT found'}")
@@ -30133,9 +30118,9 @@ def _ts_nc_network(issue, nc, raw, rows):
         waiter, wst = "", ""
         for mgr, w in (("NetworkManager.service", "NetworkManager-wait-online.service"),
                        ("systemd-networkd.service", "systemd-networkd-wait-online.service")):
-            o, _p = _ts_cmd(["systemctl", "is-active", mgr], 4)
+            o, _p = _cmd_or_problem(["systemctl", "is-active", mgr], 4)
             if o.strip() == "active":
-                e, _p = _ts_cmd(["systemctl", "is-enabled", w], 4)
+                e, _p = _cmd_or_problem(["systemctl", "is-enabled", w], 4)
                 waiter, wst = w, e.strip() or "?"
                 break
         if not waiter:
@@ -30191,7 +30176,7 @@ def _ts_netcheck():
         if bp.get("LoadState", "not-found") == "not-found":
             continue
         needs = _TS_NC_UNIT in bp.get("Requires", "").split()
-        jout, _j = _ts_cmd(["journalctl", "-u", unit, "-b", "-n", "300", "--no-pager", "-o", "short-iso"], 10)
+        jout, _j = _cmd_or_problem(["journalctl", "-u", unit, "-b", "-n", "300", "--no-pager", "-o", "short-iso"], 10)
         depf = len(re.findall(r"Dependency failed for", jout))
         br_info.append((name, unit, bp, needs, depf))
         raw.append(f"{unit}: {bp.get('ActiveState', '?')}/{bp.get('SubState', '?')} result={bp.get('Result', '?')} "
@@ -31660,7 +31645,7 @@ def _ts_power():
         temp = int(Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()) / 1000.0
     except (OSError, ValueError):
         pass
-    out, prob = _ts_cmd(["vcgencmd", "get_throttled"], 5)
+    out, prob = _cmd_or_problem(["vcgencmd", "get_throttled"], 5)
     raw.append(f"$ vcgencmd get_throttled\n{out.strip() or prob}")
     worst = "pass"
     rank = {"pass": 0, "info": 1, "warn": 2, "fail": 3}
@@ -31675,7 +31660,7 @@ def _ts_power():
                 rows.append(["", txt])
                 if rank[st] > rank[worst]:
                     worst = st
-    v, _p = _ts_cmd(["vcgencmd", "measure_volts", "core"], 5)
+    v, _p = _cmd_or_problem(["vcgencmd", "measure_volts", "core"], 5)
     if v.strip():
         raw.append(f"$ vcgencmd measure_volts core\n{v.strip()}")
         rows.append(["Core voltage", v.strip().split("=", 1)[-1]])
@@ -31704,7 +31689,7 @@ def _ts_power():
 
 @_ts("Pi health", "ts_lastshut", "Last shutdown")
 def _ts_lastshut():
-    out, prob = _ts_cmd(["journalctl", "-b", "-1", "-n", "40", "--no-pager", "-o", "short-iso"], 15)
+    out, prob = _cmd_or_problem(["journalctl", "-b", "-1", "-n", "40", "--no-pager", "-o", "short-iso"], 15)
     if prob:
         return _ts_missing("journalctl -b -1", prob)
     if "Specify boot ID" in out or "No journal boot entry" in out or "-- No entries --" in out or not out.strip():
@@ -31716,7 +31701,7 @@ def _ts_lastshut():
                     "only -- change it to Storage=persistent. Keeping it adds some SD card writes"}}
     lines = [ln for ln in out.splitlines() if ln.strip() and not ln.startswith("--")]
     tail = "\n".join(lines)
-    uv, _p = _ts_cmd(["journalctl", "-b", "-1", "-k", "--no-pager", "-g", "(?i)under-?voltage"], 15)
+    uv, _p = _cmd_or_problem(["journalctl", "-b", "-1", "-k", "--no-pager", "-g", "(?i)under-?voltage"], 15)
     uv_n = len([x for x in uv.splitlines() if "voltage" in x.lower()])
     last = lines[-1] if lines else ""
     end = "\n".join(lines[-12:])
@@ -31761,7 +31746,7 @@ def _ts_mem():
     if l5 / cpus > 1.5:
         st = "warn"
         notes.append("CPU busy for minutes at a time -- can cause choppy audio")
-    top, _p = _ts_cmd(["ps", "-eo", "pcpu,pmem,comm", "--sort=-pcpu"], 5)
+    top, _p = _cmd_or_problem(["ps", "-eo", "pcpu,pmem,comm", "--sort=-pcpu"], 5)
     tops = [ln.split(None, 2) for ln in top.splitlines()[1:6] if len(ln.split()) >= 3]
     return {"cmd": "/proc/meminfo + /proc/loadavg + ps", "raw": top, "summary": {
         "status": st, "headline": "Memory and CPU look fine" if st == "pass" else "Something is running short",
@@ -31845,7 +31830,7 @@ def _ts_dns():
     nb = _ts_net_basics()
     rows, bad, raw = [nb["ping"], nb["dns"]], 0, list(nb["raw"])
     for what, h in hosts[:10]:
-        out, prob = _ts_cmd(["getent", "ahostsv4", h], 6)
+        out, prob = _cmd_or_problem(["getent", "ahostsv4", h], 6)
         ips = sorted({ln.split()[0] for ln in out.splitlines() if ln.split()})
         raw.append(f"{h}: {', '.join(ips) or prob or 'not found'}")
         if ips:
@@ -31882,7 +31867,7 @@ def _ts_dns():
 
 @_ts("Network", "ts_clock", "Clock check")
 def _ts_clock():
-    out, prob = _ts_cmd(["timedatectl", "show", "-p", "NTPSynchronized", "-p", "NTP", "-p", "Timezone"], 6)
+    out, prob = _cmd_or_problem(["timedatectl", "show", "-p", "NTPSynchronized", "-p", "NTP", "-p", "Timezone"], 6)
     if prob:
         return _ts_missing("timedatectl", prob)
     kv = dict(ln.split("=", 1) for ln in out.splitlines() if "=" in ln)
@@ -31898,7 +31883,7 @@ def _ts_clock():
 
 @_ts("Network", "ts_wifi", "WiFi signal")
 def _ts_wifi():
-    rt, prob = _ts_cmd(["ip", "route", "show", "default"], 5)
+    rt, prob = _cmd_or_problem(["ip", "route", "show", "default"], 5)
     m = re.search(r"\bdev\s+(\S+)", rt)
     dev = m.group(1) if m else ""
     if not dev:
@@ -31915,7 +31900,7 @@ def _ts_wifi():
     if not wireless:
         return {"cmd": f"ip route + /sys/class/net/{dev}", "raw": rt, "summary": {
             "status": "info", "headline": f"Wired ({dev}) -- no WiFi to check", "rows": [["Interface", dev]] + err_rows}}
-    out, prob = _ts_cmd(["iw", "dev", dev, "link"], 6)
+    out, prob = _cmd_or_problem(["iw", "dev", dev, "link"], 6)
     sig = re.search(r"signal:\s*(-?\d+)\s*dBm", out)
     rate = re.search(r"tx bitrate:\s*([\d.]+\s*\S+)", out)
     ssid = re.search(r"SSID:\s*(.+)", out)
@@ -32036,7 +32021,7 @@ def _ts_ht_ctx() -> dict:
             if ip.version == 4 and any(ip in ipaddress.ip_network(n) for n in _TS_HT_NETS):
                 addr44 = str(ip)
                 break
-    out, _p = _ts_cmd(["ip", "-4", "route", "show", "table", "main", "default"], 5)
+    out, _p = _cmd_or_problem(["ip", "-4", "route", "show", "table", "main", "default"], 5)
     line = out.splitlines()[0].strip() if out.strip() else ""
     toks = line.split()
     return {"mode": mode, "conf": txt is not None, "addr44": addr44,
@@ -32046,7 +32031,7 @@ def _ts_ht_rows(ctx: dict) -> list:
     return [["Half tunnel", _TS_HT_MODE_TXT[ctx["mode"]]], ["44Net address", ctx["addr44"] or "(none in wg0.conf)"]]
 
 def _ts_ht_route(args: list) -> "tuple[str, str, str]":
-    out, prob = _ts_cmd(["ip", "-4", "route", "get"] + args, 5)
+    out, prob = _cmd_or_problem(["ip", "-4", "route", "get"] + args, 5)
     first = out.splitlines()[0].strip() if out.strip() else ""
     if prob or "dev" not in first.split():
         return "", "", prob or first or "no route"
@@ -32058,13 +32043,13 @@ def _ts_ht_result(cmd: str, raw: str, status: str, headline: str, ctx: dict, row
                                                 "rows": _ts_ht_rows(ctx) + (rows or []), "note": note}}
 
 def _ts_ht_unit_loaded(unit: str) -> bool:
-    out, prob = _ts_cmd(["systemctl", "show", "-p", "LoadState", "--value", unit], 5)
+    out, prob = _cmd_or_problem(["systemctl", "show", "-p", "LoadState", "--value", unit], 5)
     return not prob and out.strip() == "loaded"
 
 @_ts("Half tunnel", "ts_ht_tunnel", "Tunnel is up")
 def _ts_ht_tunnel():
     ctx = _ts_ht_ctx()
-    out, prob = _ts_cmd(["wg", "show", "wg0", "latest-handshakes"], 5)
+    out, prob = _cmd_or_problem(["wg", "show", "wg0", "latest-handshakes"], 5)
     if prob and "not installed" in prob:
         return _ts_missing("wg show wg0", prob)
     stamps = []
@@ -32112,7 +32097,7 @@ def _ts_ht_dns():
     ctx = _ts_ht_ctx()
     rows, bad, raw = [], 0, []
     for h_ in ("allstarlink.org", "register.allstarlink.org"):
-        out, prob = _ts_cmd(["getent", "ahostsv4", h_], 6)
+        out, prob = _cmd_or_problem(["getent", "ahostsv4", h_], 6)
         ips = sorted({ln.split()[0] for ln in out.splitlines() if ln.split()})
         raw.append(f"{h_}: {', '.join(ips) or prob or 'not found'}")
         rows.append([h_, ", ".join(ips[:2]) or (prob or "not found")])
@@ -32130,7 +32115,7 @@ def _ts_ht_lan():
     except ValueError:
         own = DEFAULT_PORT
     tools = {DASHBOARD_PORT: "Dashboard", own: "sysmon", 8990: "instmon", 9997: "44helper"}
-    out, prob = _ts_cmd(["ss", "-ltnH"], 5)
+    out, prob = _cmd_or_problem(["ss", "-ltnH"], 5)
     if prob:
         return _ts_missing("ss -ltnH", prob)
     listening = set()
@@ -32140,7 +32125,7 @@ def _ts_ht_lan():
             listening.add(int(t[3].rsplit(":", 1)[-1]))
     lan_ip = ""
     if ctx["gw_dev"]:
-        a, _p = _ts_cmd(["ip", "-4", "-o", "addr", "show", "dev", ctx["gw_dev"]], 5)
+        a, _p = _cmd_or_problem(["ip", "-4", "-o", "addr", "show", "dev", ctx["gw_dev"]], 5)
         t = a.split()
         lan_ip = _ts_ht_tok(t, "inet").split("/")[0]
     rows, worst, raw = [], "pass", [f"LAN address {lan_ip or '?'} on {ctx['gw_dev'] or '?'}, gateway {ctx['gw_via'] or '?'}"]
@@ -32230,7 +32215,7 @@ def _ts_ht_reg():
                              note="Start ASL, then run this again")
     out, cmd = "", ""
     for c in ("rpt show registrations", "iax2 show registry"):
-        o, prob = _ts_cmd(["asterisk", "-rx", c], 8)
+        o, prob = _cmd_or_problem(["asterisk", "-rx", c], 8)
         if not prob and o.strip() and "no such command" not in o.lower():
             out, cmd = o, c
             break
@@ -32251,10 +32236,10 @@ def _ts_ht_el():
     ctx = _ts_ht_ctx()
     if not shutil.which("asterisk") or get_service_state("asterisk.service") != "active":
         return _ts_ht_result("echolink dbdump", "", "info", "Asterisk isn't running", ctx)
-    mods, _p = _ts_cmd(["asterisk", "-rx", "module show like chan_echolink"], 8)
+    mods, _p = _cmd_or_problem(["asterisk", "-rx", "module show like chan_echolink"], 8)
     if "chan_echolink.so" not in mods:
         return _ts_ht_result("module show like chan_echolink", mods, "info", "EchoLink isn't turned on", ctx)
-    out, prob = _ts_cmd(["asterisk", "-rx", "echolink dbdump"], 10)
+    out, prob = _cmd_or_problem(["asterisk", "-rx", "echolink dbdump"], 10)
     if prob or "no such command" in out.lower():
         return _ts_ht_result("echolink dbdump", out or prob, "info", "Can't read EchoLink's state on this ASL version", ctx)
     n = sum(1 for ln in out.splitlines() if re.search(r"\d{3,}", ln))
@@ -32352,7 +32337,7 @@ def _ts_nodelists():
     except OSError as exc:
         rows.append(["ASL node list", ("not found -- turn on asl3-update-astdb", "warn")])
         raw.append(f"{_TS_ASTDB}: {exc}")
-    out, prob = _ts_cmd(["asterisk", "-rx", "echolink dbdump"], timeout=10)
+    out, prob = _cmd_or_problem(["asterisk", "-rx", "echolink dbdump"], timeout=10)
     if prob:
         rows.append(["EchoLink list", (prob, "info")])
         raw.append(f"echolink dbdump: {prob}")
