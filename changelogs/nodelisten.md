@@ -1,6 +1,30 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_4_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_5_20261019.py`. Newest entries first.
+
+## 0.4.5 (2026-10-19)
+
+Transmit audio fixes from an external audit (server side only; the page and
+its default settings are unchanged).
+
+- **Soft limit instead of hard clip** on the TX and RX gains (Tune card). Up to
+  29000 (about -1 dBFS) the gain stays linear; above that a tanh curve rounds
+  peaks off towards full scale instead of squaring them off at ±32767. This
+  matters on TX: with the leveler on, the page sends peaks at -1 dBFS, so any TX
+  gain above +1 dB used to clip them. Samples are now rounded, not truncated.
+- **Fade-out on release**: when push-to-talk is let go, the last 20 ms frame of
+  audio is faded to zero before the radio unkeys, so the transmission ends
+  without a click. Time-out and deadman unkeys are unchanged.
+- **Nagle off** on all page connections (`TCP_NODELAY`), so small writes such
+  as listen-stream chunks go out at once instead of waiting on the browser's
+  ACK. Transmit audio flows from the browser, which already sends without
+  delay, so this mainly helps listening.
+- Not taken from the audit: a lower TX buffer default (it only delays the
+  start of a transmission, and the Tune card already offers 60 ms), a shorter
+  deadman (it never fires while push-to-talk is held, even during pauses, so
+  it would only add false unkeys), a server DC blocker (the page's voice filter
+  already removes DC, and the keyup flag, not the audio, keys the radio) and a
+  server-side leveler (the page's leveler is on by default).
 
 ## 0.4.4 (2026-10-19)
 
