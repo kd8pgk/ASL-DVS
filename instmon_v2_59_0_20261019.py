@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.58.0"
+VERSION ="2.59.0"
 DATE_STR ="2026-10-18"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -3732,11 +3732,17 @@ def _gh_version_known (cand ,local ):
         return True 
     return any (ver and _gh_local_blob_id (full )==cand ["blob"]for _n ,ver ,_key ,full in local )
 
-def _gh_other_build (entry ):
-    wanted =_build_wanted_variant ()
-    if wanted is None or entry .get ("category")not in ("sysmon","dashboard"):
+def _build_other (category ,version ,name =""):
+    if category not in ("sysmon","dashboard"):
         return False
-    return _gh_variant (entry .get ("version"))!=wanted
+    wanted =_build_wanted_variant ()or ""
+    variant =_gh_variant (version )
+    if not variant and "_"+BUILD_PI02W_SUFFIX +"_"in (name or "").lower ():
+        variant =BUILD_PI02W_SUFFIX
+    return variant !=wanted
+
+def _gh_other_build (entry ):
+    return _build_other (entry .get ("category"),entry .get ("version"),entry .get ("name",""))
 
 def _gh_compare (entry ):
     variant =_gh_variant (entry .get ("version"))
@@ -4004,7 +4010,7 @@ def _gh_group_html (category ):
     with _gh_lock :
         if _gh_state ["phase"]!="done":
             return ""
-        entries =[dict (e )for e in _gh_state ["entries"]if e ["category"]==category ]
+        entries =[dict (e )for e in _gh_state ["entries"]if e ["category"]==category and not _gh_other_build (e )]
         busy =set (_gh_state ["busy"])
     if not entries :
         return ""
@@ -4029,8 +4035,7 @@ def _gh_group_html (category ):
         f'<span class="gh-tag {cls }">{esc (label )}</span>'
         f'<span>{"Stable"if stable else "GitHub"} v{esc (e ["version"])}</span>'
         f'<span class="small muted">{name }</span>'
-        +('<span class="gh-tag" title="Not the build this Pi Zero 2 W is set to use">other build</span>'
-        if _gh_other_build (e )else "<span></span>")+
+        "<span></span>"
         f'{action }</div>')
     return '<div class="gh-rows">'+"".join (rows )+"</div>"
 
@@ -4039,7 +4044,7 @@ def _gh_summary_html ():
         phase =_gh_state ["phase"]
         err =_gh_state ["error"]
         when =_gh_state ["checked_at"]
-        entries =list (_gh_state ["entries"])
+        entries =[e for e in _gh_state ["entries"]if not _gh_other_build (e )]
         skipped =_gh_state ["skipped"]
     src =esc (_gh_source_label ())
     if phase =="idle":
@@ -5141,8 +5146,10 @@ def render_components_html (components ,library =None ):
             group =_LIBRARY_GROUPS_BY_CATEGORY .get (c ["category"])
             if group is not None :
                 title ,_cat ,action_label =group
+                lib_entries =[e for e in library .get (c ["category"],[])
+                if e .get ("installed")is True or not _build_other (c ["category"],e .get ("version"),e .get ("name",""))]
                 nested_lib_html =render_library_group_html (
-                title ,c ["category"],library .get (c ["category"],[]),action_label ,nested =True ,
+                title ,c ["category"],lib_entries ,action_label ,nested =True ,
                 )
 
         cards .append (f"""

@@ -1,6 +1,32 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_86_20261014.py`. Newest entries first.
+Current file: `sysmon_v6_13_87_20261019.py`. Newest entries first.
+
+## 6.13.87 (2026-10-19)
+
+The full-build port of 6.13.74-pi02w: a **Node Listen** card at the bottom of the
+ASL-DVS tab. The code is the same as the fork's. SysMon does all the checks itself;
+Node Listen is not changed and any version of it works.
+
+- **Service:** whether `nodelisten.service` is running, and the version from its
+  `/api/health` page (no login needed).
+- **Listen ports** (from `ss`), with the ports read from
+  `/etc/asl_dvs/nodelisten.conf` (Node Listen's defaults when it is missing): the web
+  port (8993/tcp), node audio in (6200/udp on 127.0.0.1), push-to-talk audio back
+  from node 1921 (34018/udp), and, when push-to-talk is on, Asterisk's 32018/udp. A
+  port held by another program shows as a port conflict.
+- **Connection checks:** the web page answers on 127.0.0.1 (and on HTTPS when HTTPS
+  is set); the main node's `outstreamcmd` hook points at Node Listen's UDP port; the
+  feeder process is running; node 1921's `rxchannel` and whether it is linked to the
+  main node (`rpt lstats`); internet access (`allow_wan`), with a warning when it is
+  on without HTTPS.
+- **Connected browsers:** each address connected to the web port, marked LAN,
+  internet or this Pi, with a **Disconnect** button (`ss -K`; their page tries again
+  in 3 s if they are still listening).
+- **Buttons:** Restart nodelisten, Unlink 1921 (Node Listen links it again within
+  20 s while it runs), Open Node Listen, Refresh and Copy. A node without Node
+  Listen shows "not installed".
+- The Self-check covers `/api/nodelisten` too.
 
 ## 6.13.86 (2026-10-14)
 

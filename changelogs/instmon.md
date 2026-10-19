@@ -1,6 +1,17 @@
 # instmon changelog
 
-Current file: `instmon_v2_58_0_20261018.py`. Newest entries first.
+Current file: `instmon_v2_59_0_20261019.py`. Newest entries first.
+
+## 2.59.0 (2026-10-19)
+
+- **Component cards show only the selected build.** The SysMon and Dashboard
+  cards list library files and GitHub rows for the build this node uses, and hide
+  the other build's files instead of tagging them "other build". On a Pi Zero 2 W
+  that follows the "Pi Zero 2 W build" choice (Pi02w fork or Full build); on any
+  other Pi it is the full build. The installed file always stays listed, even when
+  it is the other build (Full Update switches it). The GitHub summary counts only
+  the files shown. Hidden files stay in the library; nothing is deleted, and the
+  other tools' cards are unchanged.
 
 ## 2.58.0 (2026-10-18)
 

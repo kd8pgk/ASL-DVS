@@ -39,8 +39,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.85"
-BUILD_DATE   = "2026-10-14"
+VERSION      = "9.3.86"
+BUILD_DATE   = "2026-10-19"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -4159,15 +4159,17 @@ def _drop_links(keep: Optional[str] = None, what: str = "drop-links") -> Optiona
     if linked is None:
         log.warning("%s: link query failed — falling back to ilink 6", what)
         _ilink6_pair()
+        _nodelisten_tx_relink()
         _log_teardown_survivors_async(what + " (ilink 6 fallback)")
         return None
 
     perms      = _read_perm_links()
     bridge_set = _bridge_set()
+    listen_keep = _nodelisten_keep_set()
     dropped: List[str] = []
 
     for nd in linked:
-        if nd == keep:
+        if nd == keep or nd in listen_keep:
             continue
         if len(dropped) >= _LINK_DROP_MAX:
             log.warning("%s: hit drop cap of %d — leaving the rest to the poller",
@@ -4194,11 +4196,15 @@ _detection_cache: Dict[str, Tuple[Optional[bool], float]] = {
     "echo":   (None, 0.0),
     "sysmon": (None, 0.0),
     "m17":    (None, 0.0),
+    "nodelisten": (None, 0.0),
 }
 _STFU_CACHE_TTL   = 60.0
 _ECHO_CACHE_TTL   = 120.0
 _SYSMON_PORT      = 9999
 _SYSMON_CACHE_TTL = 15.0
+_NODELISTEN_CONF      = "/etc/asl_dvs/nodelisten.conf"
+_NODELISTEN_PORT      = 8993
+_NODELISTEN_CACHE_TTL = 15.0
 _M17_CACHE_TTL    = 60.0
 _detection_lock = threading.Lock()
 
@@ -4344,6 +4350,81 @@ def _detect_m17() -> bool:
 
 def action_sysmon_status() -> dict:
     return {"running": _detect_sysmon(), "port": _SYSMON_PORT}
+
+def _nodelisten_port() -> int:
+    try:
+        text = Path(_NODELISTEN_CONF).read_text(errors="replace")
+    except OSError:
+        return _NODELISTEN_PORT
+    m = re.search(r"^\s*port\s*=\s*(\d{4,5})\s*$", text, re.M)
+    if m and 1024 <= int(m.group(1)) <= 65535:
+        return int(m.group(1))
+    return _NODELISTEN_PORT
+
+_NODELISTEN_TX_NODE = "1921"
+_NODELISTEN_TX_MARK = "; nodelisten: transmit node"
+_nl_tx_cache = {"key": None, "owned": False}
+_nl_tx_drop_at = 0.0
+_NODELISTEN_TX_DROP_GAP = 30.0
+
+def _nodelisten_tx_owned() -> bool:
+    try:
+        st = os.stat(ASL_CONF)
+    except OSError:
+        return False
+    key = (st.st_mtime_ns, st.st_size)
+    if _nl_tx_cache["key"] != key:
+        owned = False
+        try:
+            lines = Path(ASL_CONF).read_text(errors="replace").splitlines()
+            for i, ln in enumerate(lines[:-1]):
+                if ln.strip().startswith(_NODELISTEN_TX_MARK) and \
+                        lines[i + 1].strip().startswith(f"[{_NODELISTEN_TX_NODE}]"):
+                    owned = True
+                    break
+        except OSError:
+            pass
+        _nl_tx_cache.update(key=key, owned=owned)
+    return _nl_tx_cache["owned"]
+
+def _nodelisten_skip_set() -> Set[str]:
+    return {_NODELISTEN_TX_NODE} if _nodelisten_tx_owned() else set()
+
+def _nodelisten_keep_set() -> Set[str]:
+    if not _nodelisten_tx_owned():
+        return set()
+    try:
+        return {_NODELISTEN_TX_NODE} if action_nodelisten_status()["running"] else set()
+    except Exception:
+        return set()
+
+def _nodelisten_tx_relink() -> None:
+    if _nodelisten_keep_set():
+        _asterisk(f"rpt cmd {_cfg.asl_node} ilink 3 {_NODELISTEN_TX_NODE}")
+        log.info("nodelisten: relinked transmit node %s after ilink 6", _NODELISTEN_TX_NODE)
+
+def _nodelisten_tx_check(adjacent: List[str]) -> None:
+    global _nl_tx_drop_at
+    if _NODELISTEN_TX_NODE not in adjacent or not _nodelisten_tx_owned() or _nodelisten_keep_set():
+        return
+    now = time.monotonic()
+    if now - _nl_tx_drop_at < _NODELISTEN_TX_DROP_GAP:
+        return
+    _nl_tx_drop_at = now
+    log.info("nodelisten: Node Listen is not running — unlinking its transmit node %s", _NODELISTEN_TX_NODE)
+    threading.Thread(target=_disconnect, args=(_NODELISTEN_TX_NODE,), daemon=True,
+                     name="nodelisten-tx-drop").start()
+
+def action_nodelisten_status() -> dict:
+    port = _nodelisten_port()
+    def _probe():
+        try:
+            s = _socket.create_connection(("127.0.0.1", port), timeout=1.0)
+            s.close()
+            return True
+        except OSError:
+            return False
+    return {"running": _cached_detect("nodelisten", _NODELISTEN_CACHE_TTL, _probe), "port": port}
 
 def _gw_path(val: str, base_dir: str) -> str:
     val = _strip_ctrl(val).strip().strip('"').strip("'")
@@ -5958,6 +6039,10 @@ def _log_teardown_survivors(what: str) -> None:
             return
         perms      = _read_perm_links()
         bridge_set = _bridge_set()
+        left = [nd for nd in left if nd not in _nodelisten_keep_set()]
+        if not left:
+            log.info("teardown check (%s): all links cleared (Node Listen's transmit node kept)", what)
+            return
         for nd in left:
             log.warning("teardown check (%s): node %s STILL LINKED%s%s", what, nd,
                         " [PERMANENT - listed in rpt.conf nodes=]" if nd in perms else "",
@@ -6086,6 +6171,11 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
     bridge_linked_nodes: Set[str] = set()
     modes: Dict[str, str] = {}
     adjacent = _parse_rpt_links(out, modes)
+    skip = _nodelisten_skip_set()
+    if skip:
+        _nodelisten_tx_check(adjacent)
+        adjacent = [tok for tok in adjacent if tok not in skip]
+        modes = {k: v for k, v in modes.items() if k not in skip}
     _link_modes = modes
     for tok in adjacent:
         if tok in bridge_set:
@@ -7817,6 +7907,21 @@ body.offline.perm-linked #perm-link-bar {
 }
 
 /* ── TG indicator ── */
+.tg-wrap {
+  grid-column: 2;
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 0;
+}
+.ql.ql-listen {
+  color: var(--green);
+  border-color: rgba(0,255,176,.45);
+  background: rgba(0,255,176,.08);
+  text-shadow: 0 0 8px rgba(0,255,176,.4);
+  flex: 0 0 auto;
+}
 #tg-indicator {
   grid-column: 2;
   justify-self: center;
@@ -8185,7 +8290,9 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
     padding-top: .15rem;
   }
   .ql-group { display: contents; }
+  .tg-wrap { grid-column: 1 / -1; grid-row: 1; max-width: 96%; }
   #tg-indicator { grid-column: 1 / -1; grid-row: 1; max-width: 92%; }
+  .ql.ql-listen { grid-row: auto; font-size: .66rem; padding: .3rem .5rem; letter-spacing: .04em; }
   .ql {
     grid-row: 2;
     font-size: clamp(.45rem, 2.1vw, .66rem);
@@ -9012,7 +9119,10 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         <a class="ql" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
         <a class="ql" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
       </div>
-      <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
+      <div class="tg-wrap">
+        <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
+        <a id="lnk-listen" class="ql ql-listen ql-off" href="#" aria-disabled="true" title="Node Listen is not running">Listen</a>
+      </div>
       <div class="ql-group ql-right">
         <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
         <a class="ql" data-ql-port="8991" href="#" target="_blank" rel="noopener">WiFiMon</a>
@@ -13224,6 +13334,7 @@ function _startApp(){
   },60_000);
   _initQuickLinks();
   _probeSysMon();
+  _probeNodeListen();
 }
 
 /* ── Root-password auth (v8.0.9) ──────────────────────────────────────────
@@ -13347,6 +13458,42 @@ async function _probeSysMon() {
     }
   } catch (_) {}
 }
+function _openNamedTab(url, name) {
+  let w = null;
+  try { w = window.open('', name); } catch (_) {}
+  if (!w) { window.open(url, name); return; }
+  let blank = false;
+  try { blank = w.location.href === 'about:blank'; } catch (_) {}
+  if (blank) w.location.href = url;
+  try { w.focus(); } catch (_) {}
+}
+async function _probeNodeListen() {
+  const a = document.getElementById('lnk-listen');
+  if (!a) return;
+  try {
+    const r = await fetch('/api/nodelisten-status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.running) {
+      a.href = `http://${window.location.hostname}:${d.port}/`;
+      a.classList.remove('ql-off');
+      a.removeAttribute('aria-disabled');
+      a.title = 'Listen to this node in the browser (Node Listen)';
+    } else {
+      a.href = '#';
+      a.classList.add('ql-off');
+      a.setAttribute('aria-disabled', 'true');
+      a.title = 'Node Listen is not running';
+    }
+  } catch (_) {}
+}
+document.getElementById('lnk-listen').addEventListener('click', (ev) => {
+  const a = ev.currentTarget;
+  ev.preventDefault();
+  if (a.classList.contains('ql-off')) return;
+  _openNamedTab(a.href, 'asl_dvs_listen');
+});
+try { window.name = 'asl_dvs_dash'; } catch (_) {}
 // Boot gate: the session cookie is HttpOnly, so this page can't just check
 // for it — it asks the server via /api/whoami instead. That request
 // carries whatever session cookie the browser already holds for this
@@ -13788,6 +13935,20 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             return
+        if path == "/api/local/action":
+            try:
+                self._do_local_action()
+            except _EarlyReturn:
+                pass
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception:
+                log.exception("Unhandled error in local action")
+                try:
+                    self.send_json({"ok": False, "message": "Internal server error"}, 500)
+                except Exception:
+                    pass
+            return
         if path != "/api/action":
             self.send_response(404); self.end_headers(); return
         if not self._require_auth():
@@ -13814,6 +13975,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": ok, "message": msg}, 200 if ok else 400, extra_headers=extra)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _do_local_action(self) -> None:
+        peer = self._client_ip()
+        sent = self.headers.get("X-ASL-DVS-Local-Key", "")
+        key = _local_api_key()
+        if peer not in _LOCAL_API_PEERS or not key or not sent \
+                or not hmac.compare_digest(sent.encode("utf-8", "replace"), key.encode("ascii")):
+            log.warning("local API: refused a request from %s", peer)
+            self.send_json({"ok": False, "message": "Forbidden"}, 403)
+            return
+        if not self._require_json_content_type():
+            return
+        try:
+            data = json.loads(self._read_body())
+        except (json.JSONDecodeError, ValueError) as e:
+            self.send_json({"ok": False, "message": f"Bad request: {e}"}, 400); return
+        if not isinstance(data, dict):
+            self.send_json({"ok": False, "message": "Request body must be a JSON object"}, 400); return
+        ok, msg = action_local(data)
+        self.send_json({"ok": ok, "message": msg}, 200 if ok else 400)
 
     def _dispatch_action(self, data: dict) -> Tuple[bool, str]:
         action = str(data.get("action", ""))
@@ -13900,6 +14081,69 @@ def _act_save_config(h, d):
         cfg_data["cpuweight_enabled"] = bool(d["cpuweight_enabled"])
     return action_save_config(cfg_data)
 
+_LOCAL_API_KEY_PATH = "/etc/asl_dvs/local_api.key"
+_LOCAL_API_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+def _local_api_key() -> str:
+    try:
+        key = Path(_LOCAL_API_KEY_PATH).read_text(encoding="ascii").strip()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(_LOCAL_API_KEY_PATH), exist_ok=True)
+        fd = os.open(_LOCAL_API_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key + "\n")
+        return key
+    except FileExistsError:
+        try:
+            return Path(_LOCAL_API_KEY_PATH).read_text(encoding="ascii").strip()
+        except OSError:
+            return ""
+    except OSError:
+        return ""
+
+@_link_locked
+def _local_drop(node: str) -> Tuple[bool, str]:
+    _drop_one_link(node)
+    return True, f"Link to node {node} disconnected"
+
+def action_local(data: dict) -> Tuple[bool, str]:
+    act = str(data.get("action", ""))
+    if act == "connect":
+        mode = str(data.get("mode", "ASL"))
+        node = str(data.get("node", "")).strip()
+        name = _clip_label(str(data.get("name", "")).strip() or f"Node {node}")
+        page = "ECHO" if mode.lower().startswith("echo") else "ASL"
+        if not node.isdigit():
+            return False, f"Invalid node number: {node}"
+        if get_state_fields("page")["page"] != page:
+            ok, msg = action_switch_tab(page)
+            if not ok:
+                return False, msg
+        log.info("local API: Node Listen asks to connect %s %s", page, node)
+        if page == "ECHO":
+            return action_echo_connect(node, name)
+        return action_asl_connect(node, name)
+    if act == "disconnect":
+        node = str(data.get("node", "")).strip()
+        if not node.isdigit():
+            return False, f"Invalid node number: {node}"
+        if node in _bridge_set() or node == _NODELISTEN_TX_NODE:
+            return False, f"Node {node} is managed by the dashboard"
+        st = get_state()
+        log.info("local API: Node Listen asks to disconnect %s", node)
+        if st.current_fav and st.current_fav == node:
+            return action_asl_disconnect_current()
+        if st.echo_fav and st.echo_fav.strip() and st.echo_fav != TG_BLANK_ADDR \
+                and _echolink_to_asl(st.echo_fav) == node:
+            return action_echo_disconnect()
+        return _local_drop(node)
+    return False, f"Unknown local action '{act}'"
+
 _POST_ACTIONS: dict = {
     "logout":            _act_logout,
     "switch-tab":        _act_page(lambda page, d: action_switch_tab(page)),
@@ -13979,6 +14223,7 @@ _GET_ROUTES: dict = {
     "/healthz":        lambda h: h.send_ping(),
     "/api/whoami":     lambda h: h.send_json({"ok": True}),
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
+    "/api/nodelisten-status": lambda h: h.send_json(action_nodelisten_status()),
     "/api/status":     lambda h: h.send_status(),
     "/api/keyed":      lambda h: h.send_json(action_get_keyed()),
     "/api/talkgroups":     lambda h: h.send_json(action_get_talkgroups()),
@@ -14375,6 +14620,8 @@ def main() -> None:
         print("ERROR: run as root  →  sudo python3 nodecontrol.py", file=sys.stderr)
         sys.exit(1)
     startup()
+    if not _local_api_key():
+        log.warning("local API: could not create %s", _LOCAL_API_KEY_PATH)
     Handler.allow_reuse_address = True
     server = _QuietThreadingHTTPServer(("0.0.0.0", _cfg.port), Handler)
 
