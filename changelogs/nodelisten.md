@@ -1,6 +1,31 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_3_0_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_3_1_20261019.py`. Newest entries first.
+
+## 0.3.1 (2026-10-19)
+
+Fixes from an audit of 0.3.0.
+
+- **`[nodes]` line follows the IAX port.** 0.3.0 always wrote
+  `1921 = radio@127.0.0.1/1921,NONE`, so on a node whose `bindport` in
+  `/etc/asterisk/iax.conf` isn't 4569 (44helper's Nodes tab recommends
+  4560-4580 for several nodes on one network) node 1921 could never link. Node
+  Listen now reads `bindport` from `[general]` (following `#include` /
+  `#tryinclude`, two levels deep) and writes `radio@127.0.0.1:<port>/1921`
+  when it isn't 4569, the same rule as the Dashboard's Phone nodes. The
+  transmit card says when the line is missing or has the wrong port, and **Add
+  node 1921** fixes it (with a backup). Remove takes out the line whatever its
+  port.
+- **PTT is refused while 1921 isn't linked** ("not linked yet": Asterisk not
+  restarted since it was added, or the link keeper hasn't relinked it), instead
+  of appearing to transmit into nothing.
+- **No false "busy" right after your own transmission.** The node's audio comes
+  back on the listen feed about half a second late, so pressing PTT again
+  straight after letting go was refused as busy. The busy lockout now ignores
+  the 2 s after Node Listen's own unkey.
+- **First press with the microphone prompt.** The browser's permission prompt
+  takes focus, which released PTT at once on the very first press. Losing focus
+  no longer releases PTT while the microphone is being opened.
 
 ## 0.3.0 (2026-10-19)
 
