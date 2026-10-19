@@ -1,6 +1,16 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_92_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_93_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.93-pi02w (2026-10-19)
+
+- **The Dashboard follows changes made from Node Listen.** When Node Listen
+  connects a favorite or an M17 reflector, the Dashboard page now switches to
+  that mode's tab and shows the favorite on its next refresh. Before, the
+  page kept being told nothing had changed ("not modified") until some other
+  event happened, so it went on showing the old mode. Any change to the
+  dashboard's state now refreshes the page; a refresh with nothing changed
+  costs the same as before.
 
 ## 9.3.92-pi02w (2026-10-19)
 

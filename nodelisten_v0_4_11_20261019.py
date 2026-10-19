@@ -28,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.10"
+VERSION = "0.4.11"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -1147,6 +1147,7 @@ _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 _CALL_TRIM = re.compile(r"[\x00-\x1f\x7f]")
 _M17_REF_RE = re.compile(r"[A-Z0-9][A-Z0-9-]{0,15}")
 M17_STATUS_TTL = 5.0
+LINK_WAIT_SEC = 15
 
 
 def iax_bindport():
@@ -1492,6 +1493,36 @@ def m17_connect(f, node):
     return {"ok": True, "message": f"{r['message'] or 'Connected'} (through Node Controller)"}
 
 
+def wait_link(node, target, wait=LINK_WAIT_SEC):
+    deadline = time.monotonic() + wait
+    while True:
+        ok, links = rpt_links(node, max_age=0)
+        hit = next((l for l in links if l["node"] == target), None)
+        if hit is not None and hit["state"].upper() in ("", "ESTABLISHED"):
+            return "up"
+        if time.monotonic() >= deadline:
+            return "unknown" if not ok else "connecting" if hit else "down"
+        time.sleep(1)
+
+
+def _link_outcome(f, node, via):
+    name = fav_name(f)
+    state = wait_link(node, fav_target(f))
+    if state == "up":
+        log_event(f"Node {node} linked to {name}{via}", "ok")
+        return {"ok": True, "message": f"Node {node} is connected to {name}{via}."}
+    if state == "unknown":
+        return {"ok": True, "warn": True,
+                "message": f"Connect sent to {name}{via}, but Asterisk did not list the links (rpt lstats), so it could not be checked."}
+    if state == "connecting":
+        log_event(f"Node {node}: {name} has not answered after {LINK_WAIT_SEC} s; still trying", "warn")
+        return {"ok": False, "warn": True,
+                "error": f"{name} has not answered after {LINK_WAIT_SEC} s; node {node} is still trying. It may be offline or busy."}
+    log_event(f"Node {node} could not connect to {name}", "warn")
+    return {"ok": False, "error": f"Node {node} did not connect to {name}: no link after {LINK_WAIT_SEC} s. "
+                                  "Check the number; the node may be offline or refusing connections."}
+
+
 def fav_connect(index, from_node=None):
     favs = fav_load()
     try:
@@ -1507,15 +1538,15 @@ def fav_connect(index, from_node=None):
         r = dash_call({"action": "connect", "mode": f["mode"], "node": f["num"], "name": f["label"]})
         if r is not None:
             _lstats_invalidate()
-            if r["ok"]:
-                log_event(f"Connect {f['mode']} {f['num']} through Node Controller", "ok")
-                return {"ok": True, "message": f"{r['message'] or 'Connected'} (through Node Controller)"}
-            return {"ok": False, "error": f"Node Controller: {r['error']}"}
+            if not r["ok"]:
+                return {"ok": False, "error": f"Node Controller: {r['error']}"}
+            log_event(f"Connect {fav_name(f)} through Node Controller", "ok")
+            return _link_outcome(f, node, " (through Node Controller)")
     ok, out = ilink(node, 3, fav_target(f))
     if not ok:
         return {"ok": False, "error": f"Asterisk refused: {out.strip()[:200] or 'no answer'}"}
-    log_event(f"Connect {f['mode']} {f['num']} from node {node}", "ok")
-    return {"ok": True, "message": f"Connecting node {node} to {f['mode']} {f['num']}..."}
+    log_event(f"Connect {fav_name(f)} from node {node}", "ok")
+    return _link_outcome(f, node, "")
 
 
 def fav_disconnect(from_node=None):
@@ -2308,7 +2339,7 @@ function note(id, cls, text) {
   el.textContent = text;
 }
 
-function setMsg(id, d) { note(id, d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Done.') : (d.error || 'Failed.')); }
+function setMsg(id, d) { note(id, d.warn ? 'warn' : d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Done.') : (d.error || 'Failed.')); }
 function fmtGain(v) { return (v > 0 ? '+' : '') + v + ' dB'; }
 
 function addOption(sel, value, text) {
@@ -2905,9 +2936,12 @@ function showSelected() {
 async function favConnect() {
   const i = $('c-fav').value;
   if (i === '') return;
-  note('c-msg', '', 'Connecting...');
-  setMsg('c-msg', await post('/api/connect', {index: Number(i), from: $('c-from').value}));
-  setTimeout(pollStatus, 1500);
+  const f = favs[Number(i)];
+  $('c-connect').disabled = true;
+  note('c-msg', '', f && f.mode === 'M17' ? 'Connecting...' : 'Connecting... (checking the link for up to 15 s)');
+  try { setMsg('c-msg', await post('/api/connect', {index: Number(i), from: $('c-from').value})); }
+  finally { $('c-connect').disabled = false; }
+  pollStatus();
 }
 
 async function favDisconnect() {
