@@ -1,6 +1,32 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_73_20261018.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_74_20261019.py`. Newest entries first.
+
+## 6.13.74-pi02w (2026-10-19)
+
+The ASL-DVS tab gets a **Node Listen** card at the bottom, with Node Listen's
+listen ports and connection checks. SysMon does all the checks itself; Node Listen
+is not changed and any version of it works. The full build is not changed.
+
+- **Service:** whether `nodelisten.service` is running, and the version from its
+  `/api/health` page (no login needed).
+- **Listen ports** (from `ss`), with the ports read from
+  `/etc/asl_dvs/nodelisten.conf` (Node Listen's defaults when it is missing): the web
+  port (8993/tcp), node audio in (6200/udp on 127.0.0.1), push-to-talk audio back
+  from node 1921 (34018/udp), and, when push-to-talk is on, Asterisk's 32018/udp. A
+  port held by another program shows as a port conflict.
+- **Connection checks:** the web page answers on 127.0.0.1 (and whether it is on
+  HTTPS when HTTPS is set); the main node's `outstreamcmd` hook in rpt.conf points at
+  Node Listen's UDP port; the feeder process is running; node 1921's `rxchannel` and
+  whether 1921 is linked to the main node (`rpt lstats`); and internet access
+  (`allow_wan`), with a warning when it is on without HTTPS.
+- **Connected browsers:** each address connected to the web port, marked LAN,
+  internet or this Pi (local or a tunnel), with a **Disconnect** button. It closes
+  that address's connections with `ss -K`; the person's page tries again in 3 s if
+  they are still listening. A kernel that can't close sockets is reported.
+- **Buttons:** Restart nodelisten, Unlink 1921 (shown when push-to-talk is on; Node
+  Listen links it again within 20 s while it runs), Open Node Listen, Refresh and
+  Copy. A node without Node Listen shows "not installed" and no checks.
 
 ## 6.13.73-pi02w (2026-10-18)
 
