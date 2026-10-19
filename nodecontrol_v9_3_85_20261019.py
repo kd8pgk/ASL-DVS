@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.84"
+VERSION      = "9.3.85"
 BUILD_DATE   = "2026-10-14"
 
 ASL_NODE        = "652702"
@@ -1301,19 +1301,19 @@ def _iax_bindport() -> str:
         return _iax_port_cache[1]
     base = Path("/etc/asterisk")
     port = "4569"
-    def scan(path: Path, depth: int) -> Optional[str]:
+    def scan(path: Path, depth: int, sec: str = "") -> Optional[str]:
         try:
             txt = path.read_text(errors="replace")
         except OSError:
             return None
-        sec, found = "", None
+        found = None
         for raw in txt.splitlines():
             ln = raw.split(";", 1)[0].strip()
             m = re.match(r'^#(?:try)?include\s+"?([^"\s]+)"?', ln)
             if m and depth < 2:
                 for inc in sorted(_glob.glob(str(base / m.group(1)) if not m.group(1).startswith("/") else m.group(1))):
-                    r = scan(Path(inc), depth + 1)
-                    if r and sec in ("", "general"):
+                    r = scan(Path(inc), depth + 1, sec)
+                    if r:
                         found = r
                 continue
             m = re.match(r"^\[([^\]]+)\]", ln)
