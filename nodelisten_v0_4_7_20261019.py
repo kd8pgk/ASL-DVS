@@ -8,6 +8,7 @@ import glob
 import hashlib
 import hmac
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -27,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.6"
+VERSION = "0.4.7"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -171,6 +172,7 @@ DEFAULT_CONFIG = {
     "rx_gain_db": 0,
     "jitter_ms": 250,
     "tx_buffer_ms": 120,
+    "allow_wan": False,
 }
 
 
@@ -224,6 +226,7 @@ _NORMALIZERS = {
     "rx_gain_db": _norm_gain,
     "jitter_ms": _norm_jitter,
     "tx_buffer_ms": _norm_txbuf,
+    "allow_wan": _parse_bool,
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -460,20 +463,45 @@ _auth_failures_lock = threading.Lock()
 AUTH_MAX_FAILURES = 5
 AUTH_LOCKOUT_BASE_SEC = 5
 AUTH_LOCKOUT_MAX_SEC = 300
+AUTH_FORGET_SEC = 3600
+AUTH_TRACK_MAX = 1000
+WAN_FAIL_MAX = 20
+WAN_FAIL_WINDOW_SEC = 600
+_wan_failures = deque()
 
 
-def _auth_lockout_remaining(client_ip):
+def _prune_auth(now):
+    for ip in [k for k, r in _auth_failures.items() if now - r["last"] > AUTH_FORGET_SEC and r["locked_until"] <= now]:
+        del _auth_failures[ip]
+    while len(_auth_failures) > AUTH_TRACK_MAX:
+        del _auth_failures[min(_auth_failures, key=lambda k: _auth_failures[k]["last"])]
+    while _wan_failures and now - _wan_failures[0] > WAN_FAIL_WINDOW_SEC:
+        _wan_failures.popleft()
+
+
+def _auth_lockout_remaining(client_ip, wan=False):
+    now = time.time()
     with _auth_failures_lock:
+        _prune_auth(now)
         rec = _auth_failures.get(client_ip)
-        if not rec:
-            return 0
-        return max(0, rec["locked_until"] - time.time())
+        wait = max(0, rec["locked_until"] - now) if rec else 0
+        if wan and len(_wan_failures) >= WAN_FAIL_MAX:
+            wait = max(wait, _wan_failures[0] + WAN_FAIL_WINDOW_SEC - now)
+        return wait
 
 
-def _record_auth_failure(client_ip):
+def _record_auth_failure(client_ip, wan=False):
+    now = time.time()
     with _auth_failures_lock:
+        if wan:
+            _wan_failures.append(now)
+            if len(_wan_failures) == WAN_FAIL_MAX:
+                log_event(f"Auth: {WAN_FAIL_MAX} failed internet logins in {WAN_FAIL_WINDOW_SEC // 60} min; "
+                          "internet logins wait until that window ends", "warn")
         rec = _auth_failures.setdefault(client_ip, {"fails": 0, "locked_until": 0})
         rec["fails"] += 1
+        rec["last"] = now
+        _prune_auth(now)
         if rec["fails"] >= AUTH_MAX_FAILURES:
             backoff = min(AUTH_LOCKOUT_BASE_SEC * (2 ** (rec["fails"] - AUTH_MAX_FAILURES)),
                           AUTH_LOCKOUT_MAX_SEC)
@@ -484,6 +512,25 @@ def _record_auth_failure(client_ip):
 def _record_auth_success(client_ip):
     with _auth_failures_lock:
         _auth_failures.pop(client_ip, None)
+
+
+_TAILNET = ipaddress.ip_network("100.64.0.0/10")
+_PROXY_HEADERS = ("Forwarded", "X-Forwarded-For", "X-Real-IP", "CF-Connecting-IP", "Tailscale-Funnel-Request")
+
+
+def _parse_ip(text):
+    try:
+        ip = ipaddress.ip_address(str(text).strip().strip("[]"))
+    except ValueError:
+        return None
+    return ip.ipv4_mapped or ip if ip.version == 6 else ip
+
+
+def _is_lan(text):
+    ip = _parse_ip(text)
+    if ip is None:
+        return False
+    return ip.is_private or ip.is_loopback or ip.is_link_local or (ip.version == 4 and ip in _TAILNET)
 
 
 def _sd_notify(message):
@@ -3251,8 +3298,37 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass
 
-    def _ip(self):
+    def _peer(self):
         return self.client_address[0] if self.client_address else "?"
+
+    def _proxied(self):
+        peer = _parse_ip(self._peer())
+        return bool(peer is not None and peer.is_loopback and self.headers is not None
+                    and any(h in self.headers for h in _PROXY_HEADERS))
+
+    def _ip(self):
+        if self._proxied():
+            fwd = (self.headers.get("CF-Connecting-IP") or self.headers.get("X-Real-IP")
+                   or self.headers.get("X-Forwarded-For", "").split(",")[-1]).strip()
+            ip = _parse_ip(fwd)
+            return str(ip) if ip is not None else "proxied"
+        ip = _parse_ip(self._peer())
+        return str(ip) if ip is not None else self._peer()
+
+    def _wan(self):
+        return self._proxied() or not _is_lan(self._peer())
+
+    def _secure(self):
+        if self.server.ssl_ctx is not None:
+            return True
+        return self._proxied() and self.headers.get("X-Forwarded-Proto", "").strip().lower() == "https"
+
+    def _wan_refused(self):
+        if _cfg_get("allow_wan") or not self._wan():
+            return False
+        self.close_connection = True
+        self._json(403, {"ok": False, "error": "Node Listen is not open to the internet (allow_wan is off)."})
+        return True
 
     def _token(self):
         raw = self.headers.get("Cookie", "")
@@ -3300,9 +3376,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def _cookie(self, token, max_age):
         c = _session_cookie_header(token, max_age)
-        return c + "; Secure" if self.server.ssl_ctx is not None else c
+        return c + "; Secure" if self._secure() else c
 
     def do_GET(self):
+        if self._wan_refused():
+            return
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
@@ -3454,6 +3532,8 @@ class Handler(BaseHTTPRequestHandler):
             ws.closed = True
 
     def do_POST(self):
+        if self._wan_refused():
+            return
         path = urllib.parse.urlsplit(self.path).path
         if self.headers.get("X-Requested-With") != "XMLHttpRequest":
             self.close_connection = True
@@ -3466,18 +3546,23 @@ class Handler(BaseHTTPRequestHandler):
             return
         ip = self._ip()
         if path == "/api/login":
-            wait = _auth_lockout_remaining(ip)
+            wan = self._wan()
+            if wan and not self._secure():
+                self._json(403, {"ok": False, "error": "Log in from the internet only on the https:// page."})
+                return
+            wait = _auth_lockout_remaining(ip, wan)
             if wait > 0:
                 self._json(429, {"ok": False, "error": f"Too many attempts. Try again in {int(wait) + 1} s."})
                 return
+            where = " (internet)" if wan else ""
             if _verify_root_password(str(body.get("password", ""))):
                 _record_auth_success(ip)
                 token = _issue_session()
-                log_event(f"Login from {ip}", "ok")
+                log_event(f"Login from {ip}{where}", "warn" if wan else "ok")
                 self._json(200, {"ok": True}, {"Set-Cookie": self._cookie(token, _SESSION_TTL_SEC)})
             else:
-                _record_auth_failure(ip)
-                log_event(f"Failed login from {ip}", "warn")
+                _record_auth_failure(ip, wan)
+                log_event(f"Failed login from {ip}{where}", "warn")
                 self._json(401, {"ok": False, "error": "Wrong password."})
             return
         if path == "/api/logout":
