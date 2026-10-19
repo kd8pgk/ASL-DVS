@@ -1,6 +1,66 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_2_0_20261018.py`. Newest entries first.
+Current file: `nodelisten_v0_3_0_20261019.py`. Newest entries first.
+
+## 0.3.0 (2026-10-19)
+
+Node Listen becomes a phone page for the LAN: listen, push-to-talk and a short
+favorites list, with no app to install.
+
+- **Four tabs** (bottom bar): **Status** (node, receive and transmit lights,
+  feed, links from `rpt lstats`), **Connect**, **Listen** (with push-to-talk)
+  and **Setup** (the receive hook, the transmit node, favorites, settings, log).
+  The header links to the Node Controller Dashboard (its port from
+  `/etc/asl_dvs/asl_dvs.conf`, default 8989). Logged out, only Listen shows,
+  and only with **Listen without logging in** on.
+- **HTTPS, on by default.** Browsers only allow the microphone on a secure page.
+  Node Listen makes a self-signed certificate on first start
+  (`/etc/asl_dvs/nodelisten_tls/`, names and LAN addresses in it) and serves
+  HTTPS on the same port; a plain `http://` request is sent a 301 to
+  `https://`, so old links (the Dashboard's Listen button) still work. The
+  browser shows a warning to accept. The session cookie gets `Secure`. An
+  **HTTPS** setting turns it off (push-to-talk then can't work); changing it
+  restarts the service.
+- **Push-to-talk** to private node **1921**: hold the big button (or Space /
+  Enter on it). The page records the microphone with echo cancelling, cuts it
+  to 8 kHz 16-bit in the browser (AudioWorklet, ScriptProcessor fallback) and
+  sends 20 ms frames over a WebSocket (`/api/talk`, login and same-origin
+  required). Node Listen sends them as USRP to `127.0.0.1:32018` with keyup set,
+  three keyup=0 frames on release, and drains what Asterisk sends back on
+  34018. Listen audio is muted while you talk.
+  - Unkeys on release, at the **time-out** (`tot_sec`, 30-600 s, default 120),
+    1 s after frames stop (**dead-man**), or when the page closes, loses
+    focus or is hidden.
+  - **Busy lockout** (on by default): PTT is refused while the node is passing
+    audio. One talker at a time.
+  - Every keyup and unkey is logged with the address and length.
+- **Transmit node card** (Setup): **Add node 1921** appends a `[1921]` stanza
+  (the main node's template, `rxchannel = USRP/127.0.0.1:34018:32018`,
+  `duplex = 0`, no hang time, no telemetry, no courtesy tone) and
+  `1921 = radio@127.0.0.1/1921,NONE` under `[nodes]`, after backing rpt.conf
+  up. It refuses if rpt.conf already has a `[1921]` it didn't add. **Remove**
+  takes both out. A **link keeper** checks `rpt lstats` every 20 s and issues
+  `rpt cmd <main> ilink 3 1921` when 1921 isn't linked.
+- **Favorites, up to 10** (Setup): network (ASL or EchoLink), number and name,
+  saved to `/etc/asl_dvs/nodelisten_favorites.json`. A list offers the
+  Dashboard's ASL and EchoLink favorites (bridge nodes left out). Node 1921 and
+  duplicates are refused. The **Connect** tab has them in a drop-down;
+  Connect runs `rpt cmd <main> ilink 3 <node>` (EchoLink as `3` + six digits),
+  Disconnect runs `ilink 1` for each linked favorite only, so the transmit node,
+  bridges and links made elsewhere stay.
+- The main node is the one picked for the receive hook, else the Dashboard's
+  `asl_node`.
+- The systemd watchdog also needs the transmit pacer alive, and its health
+  check speaks HTTPS when HTTPS is on.
+- Node 1921 is linked only while Node Listen runs: on stop (systemd's SIGTERM)
+  Node Listen unlinks it (`ilink 1 1921`), and **Remove** unlinks it before
+  taking it out of rpt.conf. The Dashboard (pi02w 9.3.87) leaves it alone while
+  Node Listen runs and unlinks it if Node Listen isn't running.
+- After you let go of PTT the listen audio stays muted for 1 s, so the delayed
+  tail of your own transmission doesn't play back.
+- `--uninstall` removes node 1921 as well as the `outstreamcmd` line.
+- Setup-page messages with long paths wrap instead of widening the page on a
+  phone.
 
 ## 0.2.0 (2026-10-18)
 

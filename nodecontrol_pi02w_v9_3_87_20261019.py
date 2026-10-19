@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.86-pi02w"
+VERSION      = "9.3.87-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -4235,15 +4235,17 @@ def _drop_links(keep: Optional[str] = None, what: str = "drop-links") -> Optiona
     if linked is None:
         log.warning("%s: link query failed — falling back to ilink 6", what)
         _ilink6_pair()
+        _nodelisten_tx_relink()
         _log_teardown_survivors_async(what + " (ilink 6 fallback)")
         return None
 
     perms      = _read_perm_links()
     bridge_set = _bridge_set()
+    listen_keep = _nodelisten_keep_set()
     dropped: List[str] = []
 
     for nd in linked:
-        if nd == keep:
+        if nd == keep or nd in listen_keep:
             continue
         if len(dropped) >= _LINK_DROP_MAX:
             log.warning("%s: hit drop cap of %d — leaving the rest to the poller",
@@ -4434,6 +4436,60 @@ def _nodelisten_port() -> int:
     if m and 1024 <= int(m.group(1)) <= 65535:
         return int(m.group(1))
     return _NODELISTEN_PORT
+
+_NODELISTEN_TX_NODE = "1921"
+_NODELISTEN_TX_MARK = "; nodelisten: transmit node"
+_nl_tx_cache = {"key": None, "owned": False}
+_nl_tx_drop_at = 0.0
+_NODELISTEN_TX_DROP_GAP = 30.0
+
+def _nodelisten_tx_owned() -> bool:
+    try:
+        st = os.stat(ASL_CONF)
+    except OSError:
+        return False
+    key = (st.st_mtime_ns, st.st_size)
+    if _nl_tx_cache["key"] != key:
+        owned = False
+        try:
+            lines = Path(ASL_CONF).read_text(errors="replace").splitlines()
+            for i, ln in enumerate(lines[:-1]):
+                if ln.strip().startswith(_NODELISTEN_TX_MARK) and \
+                        lines[i + 1].strip().startswith(f"[{_NODELISTEN_TX_NODE}]"):
+                    owned = True
+                    break
+        except OSError:
+            pass
+        _nl_tx_cache.update(key=key, owned=owned)
+    return _nl_tx_cache["owned"]
+
+def _nodelisten_skip_set() -> Set[str]:
+    return {_NODELISTEN_TX_NODE} if _nodelisten_tx_owned() else set()
+
+def _nodelisten_keep_set() -> Set[str]:
+    if not _nodelisten_tx_owned():
+        return set()
+    try:
+        return {_NODELISTEN_TX_NODE} if action_nodelisten_status()["running"] else set()
+    except Exception:
+        return set()
+
+def _nodelisten_tx_relink() -> None:
+    if _nodelisten_keep_set():
+        _asterisk(f"rpt cmd {_cfg.asl_node} ilink 3 {_NODELISTEN_TX_NODE}")
+        log.info("nodelisten: relinked transmit node %s after ilink 6", _NODELISTEN_TX_NODE)
+
+def _nodelisten_tx_check(adjacent: List[str]) -> None:
+    global _nl_tx_drop_at
+    if _NODELISTEN_TX_NODE not in adjacent or not _nodelisten_tx_owned() or _nodelisten_keep_set():
+        return
+    now = time.monotonic()
+    if now - _nl_tx_drop_at < _NODELISTEN_TX_DROP_GAP:
+        return
+    _nl_tx_drop_at = now
+    log.info("nodelisten: Node Listen is not running — unlinking its transmit node %s", _NODELISTEN_TX_NODE)
+    threading.Thread(target=_disconnect, args=(_NODELISTEN_TX_NODE,), daemon=True,
+                     name="nodelisten-tx-drop").start()
 
 def action_nodelisten_status() -> dict:
     port = _nodelisten_port()
@@ -6167,6 +6223,10 @@ def _log_teardown_survivors(what: str) -> None:
             return
         perms      = _read_perm_links()
         bridge_set = _bridge_set()
+        left = [nd for nd in left if nd not in _nodelisten_keep_set()]
+        if not left:
+            log.info("teardown check (%s): all links cleared (Node Listen's transmit node kept)", what)
+            return
         for nd in left:
             log.warning("teardown check (%s): node %s STILL LINKED%s%s", what, nd,
                         " [PERMANENT - listed in rpt.conf nodes=]" if nd in perms else "",
@@ -6295,6 +6355,11 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
     bridge_linked_nodes: Set[str] = set()
     modes: Dict[str, str] = {}
     adjacent = _parse_rpt_links(out, modes)
+    skip = _nodelisten_skip_set()
+    if skip:
+        _nodelisten_tx_check(adjacent)
+        adjacent = [tok for tok in adjacent if tok not in skip]
+        modes = {k: v for k, v in modes.items() if k not in skip}
     _link_modes = modes
     for tok in adjacent:
         if tok in bridge_set:

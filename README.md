@@ -107,8 +107,9 @@ script and its changelog are no longer in the repo.
 
 ## Node Listen
 
-Node Listen plays a node's audio in a web browser, about half a second behind
-the node. It is optional. The installer (7.2.0 and later) asks before it
+Node Listen is a phone-friendly page for one node on your home network: it
+plays the node's audio about half a second behind, transmits with
+push-to-talk, and connects to up to 10 favorites. It is optional. The installer (7.2.0 and later) asks before it
 installs it on a node that doesn't have it (non-interactive: set
 `INSTALL_NODELISTEN=1`), and always updates it once it is installed. instmon
 (2.58.0 and later) lists it with the other tools: its library, GitHub Updates
@@ -116,12 +117,13 @@ and Full Update, which updates it only where it is installed. It also installs
 on its own:
 
 ```
-sudo python3 nodelisten_v0_2_0_20261018.py --install
+sudo python3 nodelisten_v0_3_0_20261019.py --install
 ```
 
-Then open `http://<pi-address>:8993`, log in with the root password, pick
-the node on the Node card, press **Send its audio here**, then **Restart
-Asterisk**. That adds one line to the node's stanza in
+Then open `http://<pi-address>:8993` (it moves you to `https://`; the
+certificate is made on the Pi, so accept the browser's warning), log in with
+the root password, and on the **Setup** tab pick the node, press **Send its
+audio here**, then **Restart Asterisk**. That adds one line to the node's stanza in
 `/etc/asterisk/rpt.conf` (a backup goes to `/etc/asl_dvs/nodelisten_backups/`):
 
 ```
@@ -133,7 +135,22 @@ the command passes it to Node Listen on `127.0.0.1:6200/udp`. A node takes
 one `outstreamcmd`, so a node that already feeds Broadcastify is refused.
 Each listener uses about 64 kbit/s; the default limit is 3. **Listen without
 logging in** (Settings) lets anyone who can reach the page listen, but never
-change anything. `--uninstall` removes the rpt.conf line too.
+change anything.
+
+**Push-to-talk** (0.3.0 and later) sends the phone's microphone to private
+node 1921 (`rxchannel = USRP/127.0.0.1:34018:32018`), which Node Listen keeps
+linked to the main node. **Add node 1921** on the Setup tab writes its stanza
+and `[nodes]` line (with a backup); restart Asterisk once. A transmission
+stops at the time-out (120 s by default), 1 s after audio stops arriving, or
+when you let go, and PTT is refused while the node is busy unless you turn
+that off. Browsers only allow the microphone on an `https://` page, which is
+why HTTPS is on by default.
+
+**Favorites:** the Connect tab offers only the (up to) 10 favorites set on the
+Setup tab, where the Dashboard's ASL and EchoLink favorites can be picked from
+a list. Connect and Disconnect use `rpt cmd <node> ilink 3` / `ilink 1`;
+Disconnect drops linked favorites only. `--uninstall` removes the
+`outstreamcmd` line and node 1921 too.
 
 ## Updating from GitHub (instmon)
 
@@ -275,13 +292,13 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | File | Build |
 |---|---|
 | `nodecontrol_v9_3_84_20261018.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_86_20261018.py` | Dashboard, Pi Zero 2 W (current) |
+| `nodecontrol_pi02w_v9_3_87_20261019.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_86_20261014.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_73_20261018.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_58_0_20261018.py` | common |
 | `wifimon_v5_38_0_20261018.py` | common |
 | `44helper_v0_0_215_20261018.py` | common |
-| `nodelisten_v0_2_0_20261018.py` | common |
+| `nodelisten_v0_3_0_20261019.py` | common |
 | `install_all_v7_2_0_20261018.sh` | common |
 | `uninstall_all_v1_6_0_20261018.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |

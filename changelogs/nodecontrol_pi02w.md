@@ -1,6 +1,26 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_86_20261018.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_87_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.87-pi02w (2026-10-19)
+
+Node Listen's transmit node (1921) is kept out of the Dashboard's link handling.
+Pi02w only; the full build is unchanged.
+
+- **Which node:** Node Listen's (nodelisten 0.3.0 and later) transmit node is
+  1921, and the Dashboard treats it as Node Listen's only when rpt.conf has the
+  `; nodelisten: transmit node` line right above `[1921]` (read when rpt.conf
+  changes). A node 1921 of your own is handled as before.
+- **Never "the connected node":** the status poll drops it from the link list,
+  so it isn't shown as the connected node, a foreign or permanent link, or an
+  extra link for the multi-link clean-up.
+- **Kept while Node Listen runs** (`/api/nodelisten-status`, the port check
+  behind the Listen button): Disconnect, tab switches and every other teardown
+  that drops links one by one skip it; the `ilink 6` fallback (link query
+  failed) relinks it straight after; the teardown check no longer warns about it.
+- **Dropped when Node Listen isn't running:** if it is linked and Node Listen
+  doesn't answer, the poll unlinks it (`ilink 1 1921`), at most once every 30 s.
+  Node Listen also unlinks it itself when it stops.
 
 ## 9.3.86-pi02w (2026-10-18)
 
