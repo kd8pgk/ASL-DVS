@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.90-pi02w"
+VERSION      = "9.3.91-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -4966,7 +4966,7 @@ def _m17_empty(found: bool = False) -> dict:
                       "duplicates": 0, "malformed": 0, "bad_modules": 0,
                       "other_mode": 0, "no_m17": 0}}
 
-def _m17_text(val, limit: int) -> str:
+def _clean_text(val, limit: int) -> str:
     if not isinstance(val, str):
         return ""
     out = _strip_ctrl(val).strip()
@@ -5013,7 +5013,7 @@ def _parse_m17_hosts(text: str) -> dict:
         return _m17_empty()
 
     meta = doc.get("_refcheck_metadata")
-    updated = _m17_text(meta.get("generated"), 64) if isinstance(meta, dict) else ""
+    updated = _clean_text(meta.get("generated"), 64) if isinstance(meta, dict) else ""
 
     stats = {"reflectors": len(raw), "other_ports": 0, "ipv6_only": 0,
              "duplicates": 0, "malformed": 0, "bad_modules": 0,
@@ -5024,7 +5024,7 @@ def _parse_m17_hosts(text: str) -> dict:
         if not isinstance(e, dict):
             stats["malformed"] += 1
             continue
-        rid = _m17_text(e.get("designator"), _M17_ID_MAX)
+        rid = _clean_text(e.get("designator"), _M17_ID_MAX)
         if not rid:
             stats["malformed"] += 1
             continue
@@ -5039,10 +5039,10 @@ def _parse_m17_hosts(text: str) -> dict:
                 stats["malformed"] += 1
                 continue
 
-        addr = _m17_text(e.get("dns"), _M17_ADDR_MAX) or \
-               _m17_text(e.get("ipv4"), _M17_ADDR_MAX)
+        addr = _clean_text(e.get("dns"), _M17_ADDR_MAX) or \
+               _clean_text(e.get("ipv4"), _M17_ADDR_MAX)
         if not addr:
-            if _m17_text(e.get("ipv6"), _M17_ADDR_MAX):
+            if _clean_text(e.get("ipv6"), _M17_ADDR_MAX):
                 stats["ipv6_only"] += 1
             else:
                 stats["malformed"] += 1
@@ -5054,10 +5054,10 @@ def _parse_m17_hosts(text: str) -> dict:
             continue
         seen.add(key)
 
-        label = (_m17_text(e.get("name"), 64)
-                 or _m17_text(e.get("sponsor"), 64)
+        label = (_clean_text(e.get("name"), 64)
+                 or _clean_text(e.get("sponsor"), 64)
                  or rid)
-        url = _m17_text(e.get("url"), _M17_URL_MAX)
+        url = _clean_text(e.get("url"), _M17_URL_MAX)
         if not url.startswith(("http://", "https://")):
             url = ""
 
@@ -5072,8 +5072,8 @@ def _parse_m17_hosts(text: str) -> dict:
             stats["no_m17"] += 1
             continue
 
-        ip  = _m17_text(e.get("ipv4"), _M17_ADDR_MAX) or \
-              _m17_text(e.get("ipv6"), _M17_ADDR_MAX)
+        ip  = _clean_text(e.get("ipv4"), _M17_ADDR_MAX) or \
+              _clean_text(e.get("ipv6"), _M17_ADDR_MAX)
         row = {"id": rid, "label": label, "addr": addr, "lh_url": url, "ip": ip}
         if mods:
             row["modules"] = mods
@@ -5115,12 +5115,6 @@ def _xlx_empty(found: bool = False) -> dict:
             "mtime": 0,
             "stats": {"reflectors": 0, "malformed": 0, "duplicates": 0,
                       "bad_addr": 0}}
-
-def _xlx_text(val, limit: int) -> str:
-    if not isinstance(val, str):
-        return ""
-    out = _strip_ctrl(val).strip()
-    return out[:limit] if out else ""
 
 def _xlx_id(code: str) -> str:
     if not isinstance(code, str):
@@ -5167,7 +5161,7 @@ def _parse_xlx_hosts(text: str) -> dict:
             stats["duplicates"] += 1
             continue
 
-        addr = _xlx_text(parts[1], _XLX_ADDR_MAX)
+        addr = _clean_text(parts[1], _XLX_ADDR_MAX)
         if addr and ("|" in addr or " " in addr):
             stats["bad_addr"] += 1
             addr = ""
@@ -14898,10 +14892,6 @@ def _write_launcher() -> None:
     os.chmod(tmp, 0o755)
     os.replace(tmp, _LAUNCHER_PATH)
     print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
-
-def _pyc_for(src: str) -> list:
-    name = os.path.splitext(os.path.basename(src))[0]
-    return _glob_pyc(os.path.dirname(src), name)
 
 def _glob_pyc(dir_path: str, name: str = "*") -> list:
     import glob as _g

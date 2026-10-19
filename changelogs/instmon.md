@@ -1,6 +1,12 @@
 # instmon changelog
 
-Current file: `instmon_v2_59_0_20261019.py`. Newest entries first.
+Current file: `instmon_v2_60_0_20261019.py`. Newest entries first.
+
+## 2.60.0 (2026-10-19)
+
+- **Code cleanup, no change in behaviour.** Start and Stop on a component card
+  share one handler, and so do Reboot and Shut down. Messages, log lines and
+  the commands run are the same as before.
 
 ## 2.59.0 (2026-10-19)
 

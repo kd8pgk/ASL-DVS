@@ -1,6 +1,11 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_74_20261019.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_75_20261019.py`. Newest entries first.
+
+## 6.13.75-pi02w (2026-10-19)
+
+- **Code cleanup, no change in behaviour.** Reboot and Shut down share one
+  handler instead of two copies of the same code.
 
 ## 6.13.74-pi02w (2026-10-19)
 

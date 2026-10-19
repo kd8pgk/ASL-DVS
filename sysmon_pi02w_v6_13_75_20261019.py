@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.74-pi02w"
+VERSION      = "6.13.75-pi02w"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -11466,25 +11466,21 @@ def _route_log(h: Handler) -> None:
         "next_index": total,
     })
 
-def _route_reboot(h: Handler, data: dict) -> None:
+def _power_action(h: Handler, what: str, message: str, cmd: str) -> None:
     if os.geteuid() != 0:
         h.send_json({"ok": False, "message": "root required"}); return
-    _log("REBOOT requested", stderr=True)
-    h.send_json({"ok": True, "message": "Rebooting…"})
+    _log(f"{what} requested", stderr=True)
+    h.send_json({"ok": True, "message": message})
     threading.Thread(
-        target=lambda: (time.sleep(1), os.system("reboot")),
+        target=lambda: (time.sleep(1), os.system(cmd)),
         daemon=True,
     ).start()
 
+def _route_reboot(h: Handler, data: dict) -> None:
+    _power_action(h, "REBOOT", "Rebooting…", "reboot")
+
 def _route_shutdown(h: Handler, data: dict) -> None:
-    if os.geteuid() != 0:
-        h.send_json({"ok": False, "message": "root required"}); return
-    _log("SHUTDOWN requested", stderr=True)
-    h.send_json({"ok": True, "message": "Shutting down…"})
-    threading.Thread(
-        target=lambda: (time.sleep(1), os.system("shutdown -h now")),
-        daemon=True,
-    ).start()
+    _power_action(h, "SHUTDOWN", "Shutting down…", "shutdown -h now")
 
 def _route_abinfo(h: Handler) -> None:
     data = _read_abinfo()
