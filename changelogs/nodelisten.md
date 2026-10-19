@@ -52,6 +52,12 @@ favorites list, with no app to install.
   `asl_node`.
 - The systemd watchdog also needs the transmit pacer alive, and its health
   check speaks HTTPS when HTTPS is on.
+- Node 1921 is linked only while Node Listen runs: on stop (systemd's SIGTERM)
+  Node Listen unlinks it (`ilink 1 1921`), and **Remove** unlinks it before
+  taking it out of rpt.conf. The Dashboard (pi02w 9.3.87) leaves it alone while
+  Node Listen runs and unlinks it if Node Listen isn't running.
+- After you let go of PTT the listen audio stays muted for 1 s, so the delayed
+  tail of your own transmission doesn't play back.
 - `--uninstall` removes node 1921 as well as the `outstreamcmd` line.
 - Setup-page messages with long paths wrap instead of widening the page on a
   phone.

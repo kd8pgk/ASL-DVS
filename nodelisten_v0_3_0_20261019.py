@@ -13,6 +13,7 @@ import os
 import re
 import secrets
 import shutil
+import signal
 import socket
 import ssl
 import struct
@@ -1561,7 +1562,19 @@ def tx_enable():
             "message": f"Added node {TX_NODE}. Restart Asterisk, then Node Listen links it to node {main}. Backup: {backup}"}
 
 
+def tx_unlink(why):
+    main = main_node()
+    if not main:
+        return
+    ok, links = rpt_links(main, max_age=0)
+    if ok and any(l["node"] == TX_NODE for l in links):
+        ast_cli(f"rpt cmd {main} ilink 1 {TX_NODE}")
+        _lstats_invalidate()
+        log_event(f"Unlinked node {TX_NODE} from node {main} ({why})", "ok")
+
+
 def tx_disable():
+    tx_unlink("transmit node removed")
     with _rpt_lock:
         with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
             text = fh.read()
@@ -2081,7 +2094,7 @@ function endTalk() {
   stopMic();
   if (talkTimer) { clearInterval(talkTimer); talkTimer = null; }
   $('ptt-time').textContent = '';
-  setTimeout(() => { if (gainNode && !talking) gainNode.gain.value = listenVolume(); }, 300);
+  setTimeout(() => { if (gainNode && !talking) gainNode.gain.value = listenVolume(); }, 1000);
   wakeLockApply();
 }
 
@@ -2886,12 +2899,24 @@ def run_server():
     log_event(f"{APP_NAME} v{VERSION} on {scheme} port {port}, node audio on 127.0.0.1:{_cfg_get('udp_port')}/udp, "
               f"transmit to node {TX_NODE} on 127.0.0.1:{TX_USRP_SEND}/udp", "ok")
     _sd_notify("READY=1")
+
+    def _on_term(signum, frame):
+        threading.Thread(target=httpd.shutdown, name="shutdown", daemon=True).start()
+
+    signal.signal(signal.SIGTERM, _on_term)
     try:
         httpd.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
         _sd_notify("STOPPING=1")
+        if TALKER.owner is not None:
+            TALKER.drop(TALKER.owner)
+        try:
+            if tx_state()["ready"]:
+                tx_unlink("Node Listen stopped")
+        except Exception as exc:
+            log_event(f"Could not unlink node {TX_NODE} on stop: {exc}", "warn")
         httpd.server_close()
     return 0
 
