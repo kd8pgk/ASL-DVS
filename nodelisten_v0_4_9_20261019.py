@@ -28,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.8"
+VERSION = "0.4.9"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -258,6 +258,13 @@ def load_config():
     return cfg
 
 
+def _remove_quiet(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
 def _atomic_write(path, data, mode=0o644, like=None):
     d = os.path.dirname(path) or "."
     os.makedirs(d, exist_ok=True)
@@ -277,10 +284,7 @@ def _atomic_write(path, data, mode=0o644, like=None):
             os.chmod(tmp, mode)
         os.replace(tmp, path)
     except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        _remove_quiet(tmp)
         raise
     try:
         fd = os.open(d, os.O_RDONLY)
@@ -302,7 +306,8 @@ def save_config(cfg):
 
 def config_update(body):
     with _config_lock:
-        cfg = dict(_config)
+        old = dict(_config)
+    cfg = dict(old)
     errors = []
     for key, norm in _NORMALIZERS.items():
         if key in body:
@@ -314,15 +319,13 @@ def config_update(body):
         errors.append("port and udp_port must differ")
     if errors:
         return {"ok": False, "error": "; ".join(errors)}
-    with _config_lock:
-        old = dict(_config)
     try:
         save_config(cfg)
     except OSError as exc:
         return {"ok": False, "error": f"could not save {CONFIG_PATH}: {exc}"}
     with _config_lock:
         _config.update(cfg)
-    restart = cfg["port"] != old["port"] or cfg["udp_port"] != old["udp_port"] or cfg["https"] != old["https"]
+    restart = any(cfg[k] != old[k] for k in ("port", "udp_port", "https"))
     msg = "Saved."
     if cfg["udp_port"] != old["udp_port"]:
         try:
@@ -440,12 +443,13 @@ def _issue_session():
 def _check_session(token):
     if not token:
         return False
+    now = time.time()
     with _sessions_lock:
         exp = _sessions.get(token)
-        if exp is None or exp <= time.time():
+        if exp is None or exp <= now:
             _sessions.pop(token, None)
             return False
-        _sessions[token] = time.time() + _SESSION_TTL_SEC
+        _sessions[token] = now + _SESSION_TTL_SEC
         return True
 
 
@@ -768,6 +772,9 @@ class Hub:
             self.cond.notify_all()
         log_event(f"Listener from {lst.ip} left after {int(time.time() - lst.since)}s")
 
+    def audio_active(self):
+        return time.monotonic() - self.last_active < ACTIVE_HOLD_SEC
+
     def wait_chunk(self, lst, timeout=5.0):
         with self.cond:
             if not lst.q and not lst.closed:
@@ -839,7 +846,7 @@ class Hub:
             "dropped": self.dropped,
             "level_db": round(self.level_db, 1),
             "peak_db": round(self.peak_db, 1),
-            "audio_active": now - self.last_active < ACTIVE_HOLD_SEC,
+            "audio_active": self.audio_active(),
             "listeners": n,
             "listener_list": listeners,
             "max_listeners": _cfg_get("max_listeners"),
@@ -898,9 +905,20 @@ _STANZA_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?")
 _OUTSTREAM_RE = re.compile(r"^\s*outstreamcmd\s*=>?\s*(.*?)\s*$", re.I)
 
 
-def hook_line(port=None):
-    p = _cfg_get("udp_port") if port is None else port
-    return f"outstreamcmd = {FEED_PYTHON},{INSTALL_BIN_PATH},--feed,{p}"
+def hook_line():
+    return f"outstreamcmd = {FEED_PYTHON},{INSTALL_BIN_PATH},--feed,{_cfg_get('udp_port')}"
+
+
+def _squash(text):
+    return text.replace(" ", "")
+
+
+def _is_node_name(name):
+    return re.fullmatch(r"\d+", name) is not None
+
+
+def _find_stanza(stanzas, name):
+    return next((s for s in stanzas if s["name"] == name), None)
 
 
 def _strip_comment(value):
@@ -934,26 +952,28 @@ def read_rpt():
 
 
 def _is_ours(value):
-    return bool(value) and FEED_MARK in value.replace(" ", "")
+    return bool(value) and FEED_MARK in _squash(value)
 
 
 def rpt_state():
     _, stanzas = read_rpt()
     by_name = {s["name"]: s for s in stanzas}
     nodes = []
+    port_end = f",{_cfg_get('udp_port')}"
     for s in stanzas:
-        if not re.fullmatch(r"\d+", s["name"]):
+        if not _is_node_name(s["name"]):
             continue
         inherited = None
         for t in s["templates"]:
             ts = by_name.get(t)
             if ts and ts["outstream"]:
                 inherited = {"template": t, "value": ts["outstream"]}
+        ours = _is_ours(s["outstream"])
         nodes.append({
             "node": s["name"],
             "outstream": s["outstream"],
-            "ours": _is_ours(s["outstream"]),
-            "ours_port_ok": _is_ours(s["outstream"]) and s["outstream"].replace(" ", "").endswith(f",{_cfg_get('udp_port')}"),
+            "ours": ours,
+            "ours_port_ok": ours and _squash(s["outstream"]).endswith(port_end),
             "inherited": inherited,
         })
     return {"path": RPT_CONF, "nodes": nodes, "hook_line": hook_line()}
@@ -965,10 +985,7 @@ def _backup_rpt():
     shutil.copy2(RPT_CONF, dest)
     olds = sorted(f for f in os.listdir(BACKUP_DIR) if f.startswith("rpt.conf."))
     for f in olds[:-BACKUP_KEEP]:
-        try:
-            os.remove(os.path.join(BACKUP_DIR, f))
-        except OSError:
-            pass
+        _remove_quiet(os.path.join(BACKUP_DIR, f))
     return dest
 
 
@@ -994,6 +1011,10 @@ def _write_failed(exc):
     return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
 
 
+def _changed(backup, message):
+    return {"ok": True, "changed": True, "backup": backup, "message": f"{message} Backup: {backup}"}
+
+
 _rpt_lock = threading.Lock()
 
 
@@ -1003,20 +1024,19 @@ def hook_enable(node):
         return {"ok": False, "error": "Pick a node."}
     with _rpt_lock:
         lines, stanzas = read_rpt()
-        target = next((s for s in stanzas if s["name"] == node), None)
+        target = _find_stanza(stanzas, node)
         if target is None:
             return {"ok": False, "error": f"Node {node} is not in {RPT_CONF}."}
         if target["outstream"] and not _is_ours(target["outstream"]):
             return {"ok": False, "error": f"Node {node} already has outstreamcmd = {target['outstream']} "
                                            "(a Broadcastify feed?). A node takes one outstreamcmd; remove that line first."}
         want = hook_line()
-        if (_is_ours(target["outstream"]) and target["outstream"].replace(" ", "") == want.split("=", 1)[1].replace(" ", "")
+        if (_is_ours(target["outstream"]) and _squash(target["outstream"]) == _squash(want.split("=", 1)[1])
                 and sum(1 for s in stanzas if _is_ours(s["outstream"])) == 1):
             return {"ok": True, "changed": False, "message": f"Node {node} already sends its audio here."}
         lines, _ = _remove_ours(lines, stanzas)
         lines, stanzas = parse_rpt("\n".join(lines))
-        target = next(s for s in stanzas if s["name"] == node)
-        at = target["header"] + 1
+        at = _find_stanza(stanzas, node)["header"] + 1
         lines[at:at] = [HOOK_NOTE, want]
         try:
             backup = _write_rpt(lines)
@@ -1030,8 +1050,7 @@ def hook_enable(node):
     except OSError:
         pass
     log_event(f"rpt.conf: node {node} now sends its audio to Node Listen (backup {backup})", "ok")
-    return {"ok": True, "changed": True, "backup": backup,
-            "message": f"Added to node {node}. Restart Asterisk for it to take effect. Backup: {backup}"}
+    return _changed(backup, f"Added to node {node}. Restart Asterisk for it to take effect.")
 
 
 def hook_disable():
@@ -1045,8 +1064,7 @@ def hook_disable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: Node Listen line removed (backup {backup})", "ok")
-    return {"ok": True, "changed": True, "backup": backup,
-            "message": f"Removed. Restart Asterisk for it to take effect. Backup: {backup}"}
+    return _changed(backup, "Removed. Restart Asterisk for it to take effect.")
 
 
 def restart_asterisk():
@@ -1095,7 +1113,7 @@ def build_status(full):
         st["node"] = node
         ok, links = rpt_links(node)
         st["links"], st["links_ok"] = links, ok
-        tx = tx_state()
+        tx = tx_state(node)
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
                                             "peak_db", "last_peak_db", "gaps", "last_gaps")}
@@ -1176,6 +1194,12 @@ def ast_cli(command, timeout=8):
     return r.returncode == 0, out
 
 
+def ilink(node, op, peer):
+    r = ast_cli(f"rpt cmd {node} ilink {op} {peer}")
+    _lstats_invalidate()
+    return r
+
+
 _lstats_cache = {"t": 0.0, "node": "", "ok": False, "links": []}
 _lstats_lock = threading.Lock()
 
@@ -1193,7 +1217,7 @@ def rpt_links(node, max_age=2.0):
         for line in out.splitlines():
             parts = line.split()
             if len(parts) >= 4 and parts[0].isdigit():
-                links.append({"node": parts[0], "dir": parts[3] if len(parts) > 3 else "",
+                links.append({"node": parts[0], "dir": parts[3],
                               "time": parts[4] if len(parts) > 4 else "",
                               "state": parts[5] if len(parts) > 5 else ""})
     with _lstats_lock:
@@ -1321,14 +1345,18 @@ def port_open_cached(port, ttl=15.0):
     return val
 
 
-def local_key():
+def _read_local_key():
     try:
         with open(LOCAL_KEY_PATH, "r", encoding="ascii") as fh:
-            key = fh.read().strip()
-        if len(key) >= 32:
-            return key
-    except OSError:
-        pass
+            return fh.read().strip()
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def local_key():
+    key = _read_local_key()
+    if len(key) >= 32:
+        return key
     key = secrets.token_hex(32)
     try:
         os.makedirs(os.path.dirname(LOCAL_KEY_PATH), exist_ok=True)
@@ -1337,11 +1365,7 @@ def local_key():
             fh.write(key + "\n")
         return key
     except FileExistsError:
-        try:
-            with open(LOCAL_KEY_PATH, "r", encoding="ascii") as fh:
-                return fh.read().strip()
-        except OSError:
-            return ""
+        return _read_local_key()
     except OSError:
         return ""
 
@@ -1364,14 +1388,15 @@ def dash_call(body, timeout=25):
         return None
     if resp.status in (404, 405):
         return None
+    answered = f"Node Controller answered HTTP {resp.status}"
     try:
         d = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
-        return {"ok": False, "error": f"Node Controller answered HTTP {resp.status}"}
+        d = None
     if not isinstance(d, dict):
-        return {"ok": False, "error": f"Node Controller answered HTTP {resp.status}"}
+        return {"ok": False, "error": answered}
     msg = str(d.get("message", ""))
-    return {"ok": bool(d.get("ok")), "message": msg, "error": msg or f"Node Controller answered HTTP {resp.status}"}
+    return {"ok": bool(d.get("ok")), "message": msg, "error": msg or answered}
 
 
 def local_nodes():
@@ -1381,7 +1406,7 @@ def local_nodes():
         return []
     bridges = dashboard_conf()["bridges"]
     return [x["name"] for x in stanzas
-            if re.fullmatch(r"\d+", x["name"]) and x["name"] != TX_NODE and x["name"] not in bridges]
+            if _is_node_name(x["name"]) and x["name"] != TX_NODE and x["name"] not in bridges]
 
 
 def _from_node(from_node):
@@ -1411,8 +1436,7 @@ def fav_connect(index, from_node=None):
                 log_event(f"Connect {f['mode']} {f['num']} through Node Controller", "ok")
                 return {"ok": True, "message": f"{r['message'] or 'Connected'} (through Node Controller)"}
             return {"ok": False, "error": f"Node Controller: {r['error']}"}
-    ok, out = ast_cli(f"rpt cmd {node} ilink 3 {fav_target(f)}")
-    _lstats_invalidate()
+    ok, out = ilink(node, 3, fav_target(f))
     if not ok:
         return {"ok": False, "error": f"Asterisk refused: {out.strip()[:200] or 'no answer'}"}
     log_event(f"Connect {f['mode']} {f['num']} from node {node}", "ok")
@@ -1433,7 +1457,7 @@ def fav_disconnect(from_node=None):
         r = dash_call({"action": "disconnect", "node": peer}) if via else None
         if r is None:
             via = False
-            ast_cli(f"rpt cmd {node} ilink 1 {peer}")
+            ilink(node, 1, peer)
     _lstats_invalidate()
     log_event(f"Disconnect {', '.join(hit)} from node {node}" + (" through Node Controller" if via else ""), "ok")
     return {"ok": True, "message": f"Disconnected {', '.join(hit)}."}
@@ -1489,10 +1513,7 @@ def ensure_tls_cert():
     if r.returncode != 0 or not (os.path.exists(key_tmp) and os.path.exists(cert_tmp)):
         log_event(f"openssl failed: {r.stderr.strip()[:300]}", "err")
         for p in (key_tmp, cert_tmp):
-            try:
-                os.remove(p)
-            except OSError:
-                pass
+            _remove_quiet(p)
         return False
     os.chmod(key_tmp, 0o600)
     os.chmod(cert_tmp, 0o644)
@@ -1665,7 +1686,7 @@ class Talker:
             return False, "not-ready"
         if st["linked"] is False:
             return False, "not-linked"
-        if (_cfg_get("busy_lockout") and HUB.snapshot()["audio_active"]
+        if (_cfg_get("busy_lockout") and HUB.audio_active()
                 and time.monotonic() - self.last_unkey > TX_BUSY_GRACE_SEC):
             with self.lock:
                 mine = self.keyed and self.owner is owner
@@ -1814,8 +1835,8 @@ def _tx_ours(lines, s):
 
 
 def _has_line(lines, want):
-    want = want.replace(" ", "")
-    return any(ln.strip().replace(" ", "") == want for ln in lines)
+    want = _squash(want)
+    return any(_squash(ln.strip()) == want for ln in lines)
 
 
 def _put_nodes_line(lines, nodes_line):
@@ -1829,8 +1850,8 @@ def _put_nodes_line(lines, nodes_line):
     return new
 
 
-def tx_state():
-    out = {"node": TX_NODE, "main": main_node(), "defined": False, "ours": False, "nodes_line": False,
+def tx_state(main=None):
+    out = {"node": TX_NODE, "main": main_node() if main is None else main, "defined": False, "ours": False, "nodes_line": False,
            "ready": False, "linked": None, "rxchannel": f"USRP/127.0.0.1:{TX_USRP_LISTEN}:{TX_USRP_SEND}"}
     try:
         lines, stanzas = read_rpt()
@@ -1841,7 +1862,7 @@ def tx_state():
     if s is not None:
         out["defined"] = True
         out["ours"] = _tx_ours(lines, s)
-        body = "\n".join(lines[s["header"]:end]).replace(" ", "")
+        body = _squash("\n".join(lines[s["header"]:end]))
         out["rx_ok"] = f"rxchannel={out['rxchannel']}" in body
     out["nodes_line"] = _has_line(lines, tx_nodes_line())
     out["nodes_line_other"] = not out["nodes_line"] and any(_TX_NODES_LINE_RE.match(ln) for ln in lines)
@@ -1869,10 +1890,9 @@ def tx_enable():
                 except OSError as exc:
                     return _write_failed(exc)
                 log_event(f"rpt.conf: fixed the [nodes] line for node {TX_NODE}: {want} (backup {backup})", "ok")
-                return {"ok": True, "changed": True, "backup": backup,
-                        "message": f"Fixed the [nodes] line for node {TX_NODE} ({want}). Restart Asterisk. Backup: {backup}"}
+                return _changed(backup, f"Fixed the [nodes] line for node {TX_NODE} ({want}). Restart Asterisk.")
             return {"ok": False, "error": f"rpt.conf already has a [{TX_NODE}] node that Node Listen didn't add. Remove it or pick another node."}
-        main_st = next((x for x in stanzas if x["name"] == main), None)
+        main_st = _find_stanza(stanzas, main)
         if main_st is None:
             return {"ok": False, "error": f"Node {main} is not in {RPT_CONF}."}
         tpl = f"({','.join(main_st['templates'])})" if main_st["templates"] else ""
@@ -1888,8 +1908,7 @@ def tx_enable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: added transmit node {TX_NODE} for node {main} (backup {backup})", "ok")
-    return {"ok": True, "changed": True, "backup": backup,
-            "message": f"Added node {TX_NODE}. Restart Asterisk, then Node Listen links it to node {main}. Backup: {backup}"}
+    return _changed(backup, f"Added node {TX_NODE}. Restart Asterisk, then Node Listen links it to node {main}.")
 
 
 def tx_unlink(why):
@@ -1898,8 +1917,7 @@ def tx_unlink(why):
         return
     ok, links = rpt_links(main, max_age=0)
     if ok and any(l["node"] == TX_NODE for l in links):
-        ast_cli(f"rpt cmd {main} ilink 1 {TX_NODE}")
-        _lstats_invalidate()
+        ilink(main, 1, TX_NODE)
         log_event(f"Unlinked node {TX_NODE} from node {main} ({why})", "ok")
 
 
@@ -1924,8 +1942,7 @@ def tx_disable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: removed transmit node {TX_NODE} (backup {backup})", "ok")
-    return {"ok": True, "changed": True, "backup": backup,
-            "message": f"Removed node {TX_NODE}. Restart Asterisk for it to take effect. Backup: {backup}"}
+    return _changed(backup, f"Removed node {TX_NODE}. Restart Asterisk for it to take effect.")
 
 
 def link_keeper_loop():
@@ -1941,8 +1958,7 @@ def link_keeper_loop():
                     log_event(f"Node {TX_NODE} is linked to node {st['main']} again", "ok")
                 last = True
                 continue
-            ok, out = ast_cli(f"rpt cmd {st['main']} ilink 3 {TX_NODE}")
-            _lstats_invalidate()
+            ok, out = ilink(st["main"], 3, TX_NODE)
             if last is not False:
                 log_event(f"Node {TX_NODE} was not linked to node {st['main']}; linking it"
                           + ("" if ok else f" failed: {out.strip()[:120]}"), "warn")
@@ -2153,21 +2169,25 @@ function upsample(u, x) {
   return Float32Array.from(out);
 }
 
-function playBuffer(ac, x8k) {
+function smoothFor(ac) { return play.smooth && ac.sampleRate !== 8000; }
+
+function makeBuffer(ac, x8k, u) {
   let data = x8k, rate = 8000;
-  if (play.smooth && ac.sampleRate !== 8000) { data = upsample(makeUpsampler(ac.sampleRate), x8k); rate = ac.sampleRate; }
-  const ab = ac.createBuffer(1, Math.max(1, data.length), rate);
+  if (smoothFor(ac)) { data = upsample(u || makeUpsampler(ac.sampleRate), x8k); rate = ac.sampleRate; }
+  if (!data.length) return null;
+  const ab = ac.createBuffer(1, data.length, rate);
   ab.copyToChannel(data, 0);
   return ab;
 }
 
 function playBack(ac, x8k) {
   const src = ac.createBufferSource();
-  src.buffer = playBuffer(ac, x8k); src.connect(ac.destination); src.start();
+  src.buffer = makeBuffer(ac, x8k) || ac.createBuffer(1, 1, 8000); src.connect(ac.destination); src.start();
   return src;
 }
 
-function newAudioCtx() { return new (window.AudioContext || window.webkitAudioContext)(); }
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+function newAudioCtx() { return new AudioCtx(); }
 function peakDb(a) { return a > 0 ? 20 * Math.log10(a) : -120; }
 
 const WORKLET_SRC = "class NlTap extends AudioWorkletProcessor{process(inputs){const c=inputs[0]&&inputs[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('nl-tap',NlTap);";
@@ -2352,18 +2372,10 @@ async function pollStatus() {
 
 function flush() {
   if (!pendN || !ctx) return;
-  let buf;
-  if (play.smooth && ctx.sampleRate !== 8000) {
-    if (!ups) ups = makeUpsampler(ctx.sampleRate);
-    const y = upsample(ups, pend.subarray(0, pendN));
-    if (!y.length) { pendN = 0; return; }
-    buf = ctx.createBuffer(1, y.length, ctx.sampleRate);
-    buf.copyToChannel(y, 0);
-  } else {
-    buf = ctx.createBuffer(1, pendN, 8000);
-    buf.copyToChannel(pend.subarray(0, pendN), 0);
-  }
+  if (smoothFor(ctx) && !ups) ups = makeUpsampler(ctx.sampleRate);
+  const buf = makeBuffer(ctx, pend.subarray(0, pendN), ups);
   pendN = 0;
+  if (!buf) return;
   const now = ctx.currentTime;
   if (nextT < now + 0.05 || nextT > now + jitterSec + 1.25) nextT = now + jitterSec;
   const src = ctx.createBufferSource();
@@ -2399,10 +2411,9 @@ function listenVolume() { return talking ? 0 : $('vol').value / 100; }
 
 async function startListen() {
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC) { $('listen-msg').textContent = 'This browser cannot play live audio.'; return; }
+  if (!AudioCtx) { $('listen-msg').textContent = 'This browser cannot play live audio.'; return; }
   if (!ctx) {
-    ctx = new AC();
+    ctx = newAudioCtx();
     gainNode = ctx.createGain();
     gainNode.gain.value = listenVolume();
     const player = $('player');
@@ -2502,16 +2513,13 @@ async function wakeLockApply() {
   }
 }
 
-function pttUi(state, text) {
+function pttUi(state, text, cls) {
   const b = $('ptt');
   b.classList.toggle('talking', state === 'talking' || state === 'keying');
   b.classList.toggle('ready', state === 'ready');
   b.disabled = state === 'off';
   $('ptt-label').textContent = state === 'talking' ? 'TALKING' : state === 'keying' ? 'Keying...' : 'Hold to talk';
-  if (text !== undefined) {
-    $('ptt-msg').className = 'msg ' + (state === 'error' ? 'err' : state === 'warn' ? 'warn' : '');
-    $('ptt-msg').textContent = text;
-  }
+  if (text !== undefined) note('ptt-msg', cls, text);
 }
 
 function openTalk(force) {
@@ -2539,14 +2547,12 @@ function openTalk(force) {
         'in-use': 'Someone else is transmitting from Node Listen.',
         'not-ready': 'Node 1921 is not set up yet (Setup tab).',
         'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Listen relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
-      endTalk(); pttUi('ready', why); $('ptt-msg').className = 'msg warn';
+      endTalk(); pttUi('ready', why, 'warn');
     } else if (m.ev === 'unkeyed') {
-      const was = talking;
       keyed = false; endTalk();
       const why = {timeout: 'Time-out: transmission stopped after ' + fmtSecs(m.secs) + '. Release and press again.',
         deadman: 'Audio stopped reaching the node, so it unkeyed.'}[m.why];
-      pttUi('ready', why || (was ? '' : ''));
-      if (why) $('ptt-msg').className = 'msg warn';
+      pttUi('ready', why || '', why ? 'warn' : '');
       if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
     }
   };
@@ -2574,8 +2580,7 @@ function feedMic(f32) {
   const hpA = 0.83, hpK = (1 + hpA) / (2 * hpA);
   while (pos + r.half + 1 < merged.length) {
     const base = Math.floor(pos);
-    let ph = Math.round((pos - base) * r.phases);
-    const k = r.kern[ph];
+    const k = r.kern[Math.round((pos - base) * r.phases)];
     const start = base - r.half;
     let acc = 0;
     for (let i = 0; i < r.taps; i++) acc += merged[start + i] * k[i];
@@ -2765,7 +2770,7 @@ async function pttDown(ev) {
   catch (e) {
     sendOp('unkey');
     keyed = false; endTalk();
-    pttUi('ready', 'Microphone: ' + (e.message || e.name)); $('ptt-msg').className = 'msg err';
+    pttUi('ready', 'Microphone: ' + (e.message || e.name), 'err');
   }
   micPending = false;
 }
@@ -2890,10 +2895,12 @@ async function txDisable() {
   setMsg('tx-msg', await post('/api/tx/disable', {})); loadTx();
 }
 
+function favCopy(f) { return {mode: f.mode, num: f.num, label: f.label}; }
+
 async function loadFavEditor() {
   const d = await api('/api/favorites');
   if (!d.ok) return;
-  favEdit = (d.favs || []).map((f) => ({mode: f.mode, num: f.num, label: f.label}));
+  favEdit = (d.favs || []).map(favCopy);
   favMax = d.max || 10;
   drawFavEditor();
   const dd = await api('/api/dash-favorites');
@@ -2930,21 +2937,22 @@ function feAdd() { if (favEdit.length < favMax) { favEdit.push({mode: 'ASL', num
 function feAddDash() {
   const i = $('fe-dash').value;
   if (i === '' || favEdit.length >= favMax) return;
-  const f = dashFavs[Number(i)];
-  favEdit.push({mode: f.mode, num: f.num, label: f.label});
+  favEdit.push(favCopy(dashFavs[Number(i)]));
   drawFavEditor();
 }
 async function feSave() {
   const d = await post('/api/favorites', {favs: favEdit});
   setMsg('fe-msg', d);
-  if (d.ok) { favEdit = d.favs.map((f) => ({mode: f.mode, num: f.num, label: f.label})); drawFavEditor(); loadFavs(); }
+  if (d.ok) { favEdit = d.favs.map(favCopy); drawFavEditor(); loadFavs(); }
 }
+
+const CFG_NUM = ['port', 'udp_port', 'max_listeners', 'tot_sec'], CFG_BOOL = ['public_listen', 'https', 'busy_lockout'];
 
 async function loadConfig() {
   const d = await api('/api/config');
   if (!d.ok) return;
-  ['port', 'udp_port', 'max_listeners', 'tot_sec'].forEach((k) => { $('cfg-' + k).value = d.config[k]; });
-  ['public_listen', 'https', 'busy_lockout'].forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
+  CFG_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
+  CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
   $('tune-on').checked = !!d.config.tune_enabled;
   $('tune-tx').value = d.config.tx_gain_db;
   $('tune-rx').value = d.config.rx_gain_db;
@@ -2974,11 +2982,9 @@ function tuneReset() {
 }
 
 async function saveConfig() {
-  const body = {
-    port: $('cfg-port').value, udp_port: $('cfg-udp_port').value, max_listeners: $('cfg-max_listeners').value,
-    tot_sec: $('cfg-tot_sec').value, public_listen: $('cfg-public_listen').checked,
-    https: $('cfg-https').checked, busy_lockout: $('cfg-busy_lockout').checked,
-  };
+  const body = {};
+  CFG_NUM.forEach((k) => { body[k] = $('cfg-' + k).value; });
+  CFG_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   const d = await post('/api/config', body);
   setMsg('cfg-msg', d);
   if (d.ok) { publicListen = body.public_listen; loadNode(); }
@@ -3303,11 +3309,6 @@ def render_page():
     return _page
 
 
-def _restart_self():
-    ok = _schedule_restart()
-    return {"ok": ok, "message": "Restarting." if ok else "", "error": "" if ok else "Not running under systemd."}
-
-
 _POST_ACTIONS = {
     "/api/config": (config_update, ()),
     "/api/node/enable": (lambda b: hook_enable(b.get("node", "")), (ValueError, OSError)),
@@ -3318,7 +3319,6 @@ _POST_ACTIONS = {
     "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("from")), ()),
     "/api/disconnect": (lambda b: fav_disconnect(b.get("from")), ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
-    "/api/restart": (lambda b: _restart_self(), ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
@@ -3377,16 +3377,18 @@ class Handler(BaseHTTPRequestHandler):
     def _authed(self):
         return _check_session(self._token())
 
-    def _send(self, code, body, ctype, headers=None):
+    def _head(self, code, ctype, headers):
         self.send_response(code)
         self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
-        for k, v in (headers or {}).items():
+        for k, v in headers.items():
             self.send_header(k, v)
         self.end_headers()
+
+    def _send(self, code, body, ctype, headers=None):
+        self._head(code, ctype, dict(headers or {}, **{"Content-Length": str(len(body))}))
         if self.command != "HEAD":
             self.wfile.write(body)
 
@@ -3435,12 +3437,9 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "authed": authed, "public_listen": _cfg_get("public_listen"),
                                  "backend": _root_backend_available(), "dash_port": dport,
                                  "dash_running": port_open_cached(dport),
-                                 "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None,
-                                 "https": self.server.ssl_ctx is not None})
+                                 "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None})
             elif path == "/api/status":
-                d = build_status(authed)
-                d["ok"] = True
-                self._json(200, d)
+                self._json(200, dict(build_status(authed), ok=True))
             elif path == "/api/listen":
                 self._stream((query.get("fmt") or [""])[0] == "s16")
             elif path == "/api/talk":
@@ -3454,9 +3453,7 @@ class Handler(BaseHTTPRequestHandler):
                 d.update(ok=True, config_node=_cfg_get("node") or main_node())
                 self._json(200, d)
             elif path == "/api/tx":
-                d = tx_state()
-                d["ok"] = True
-                self._json(200, d)
+                self._json(200, dict(tx_state(), ok=True))
             elif path == "/api/favorites":
                 dash = dashboard_conf()
                 self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(), "from_nodes": local_nodes(),
@@ -3488,13 +3485,9 @@ class Handler(BaseHTTPRequestHandler):
             self._json(503, {"ok": False, "error": f"All {_cfg_get('max_listeners')} listener slots are in use."})
             return
         try:
-            self.send_response(200)
-            self.send_header("Content-Type", "application/octet-stream")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Audio-Format", "s16le; rate=8000; channels=1" if pcm else "mulaw; rate=8000; channels=1")
-            self.send_header("Connection", "close")
-            self.end_headers()
+            self._head(200, "application/octet-stream", {
+                "X-Audio-Format": "s16le; rate=8000; channels=1" if pcm else "mulaw; rate=8000; channels=1",
+                "Connection": "close"})
             self.close_connection = True
             self.connection.settimeout(15)
             while True:
@@ -3539,8 +3532,6 @@ class Handler(BaseHTTPRequestHandler):
 
         threading.Thread(target=pinger, name="ws-ping", daemon=True).start()
         try:
-            st = tx_state()
-            ws.send_json({"ev": "hello", "ready": st["ready"], "node": TX_NODE, "tot": _cfg_get("tot_sec")})
             while True:
                 op, data = ws.recv()
                 if op == 8:
@@ -3712,11 +3703,7 @@ def run_server():
 
 
 def _write_launcher():
-    tmp = _LAUNCHER_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(_LAUNCHER_CODE)
-    os.chmod(tmp, 0o755)
-    os.replace(tmp, _LAUNCHER_PATH)
+    _atomic_write(_LAUNCHER_PATH, _LAUNCHER_CODE, 0o755)
     print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
 
 
@@ -3730,8 +3717,10 @@ def _remove_launcher_if_unused():
     for n in names:
         p = os.path.join(_SYSTEMD_UNIT_DIR, n)
         try:
-            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
-                return
+            if os.path.isfile(p):
+                with open(p, errors="replace") as fh:
+                    if _LAUNCHER_PATH in fh.read():
+                        return
         except OSError:
             continue
     try:
@@ -3759,10 +3748,7 @@ def _restore_after_update():
             rec = json.load(fh)
     except (OSError, ValueError):
         return
-    try:
-        os.remove(RESTORE_PATH)
-    except OSError:
-        pass
+    _remove_quiet(RESTORE_PATH)
     if not isinstance(rec, dict):
         return
     try:
@@ -3820,13 +3806,11 @@ def install_service():
             print(f"  [-] Removed the previous version {old}")
     _write_launcher()
     if not os.path.exists(CONFIG_PATH):
-        load_config()
         save_config(dict(DEFAULT_CONFIG))
         print(f"  [+] Wrote {CONFIG_PATH}")
     load_config()
     _restore_after_update()
-    with open(SYSTEMD_SERVICE_PATH, "w") as f:
-        f.write(SYSTEMD_SERVICE_CONTENT)
+    _atomic_write(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
     _systemctl("daemon-reload")
     _systemctl("enable", SERVICE_NAME)
@@ -3834,7 +3818,6 @@ def install_service():
     if r.returncode != 0:
         print(f"  [!] systemctl restart failed: {(r.stderr or r.stdout).strip()}")
         sys.exit(1)
-    load_config()
     print(f"  [+] {SERVICE_NAME} enabled and started")
     print(f"Open http://<pi-address>:{_cfg_get('port')} , log in, and pick the node on the Node card.")
 

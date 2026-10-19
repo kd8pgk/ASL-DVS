@@ -1,6 +1,34 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_8_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_9_20261019.py`. Newest entries first.
+
+## 0.4.9 (2026-10-19)
+
+Review cleanup: duplicate code folded together, dead code removed, a few
+best-practice fixes. The page, rpt.conf edits and audio work as before.
+
+- **Removed dead code.** The `/api/restart` route had no caller (SysMon
+  restarts Node Listen with systemctl); it is gone. The talk channel no
+  longer sends a "hello" message on connect, which the page never read and
+  which cost an rpt.conf read and an Asterisk call each time. `/api/whoami`
+  drops its unused `https` field.
+- **Server helpers.** One helper runs `rpt cmd ... ilink` and clears the link
+  cache (four places did both by hand); one builds the "changed, backup ..."
+  answer of the rpt.conf edits (five places); small helpers find a stanza,
+  check a node name, compare lines without spaces and remove a file quietly.
+  The busy check for push-to-talk reads the audio activity directly instead
+  of building the whole status. The status poll reads the main node once
+  instead of twice. The local key and Node Controller answers are read by one
+  code path each.
+- **Settings save** takes the old and new settings from one snapshot.
+- **Installer.** The service unit and the shared launcher are written
+  atomically (temp file, then rename); the launcher text is unchanged. Two
+  config reloads that did nothing are gone. The launcher check closes the
+  unit files it reads.
+- **Page.** Live playback and test playback build their audio buffers with
+  one function; push-to-talk messages take their color from one call instead
+  of patching it after (and two states that were never used are gone); the
+  Settings fields and favorite copies are listed once.
 
 ## 0.4.8 (2026-10-19)
 
