@@ -1,6 +1,17 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_1_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_2_20261019.py`. Newest entries first.
+
+## 0.4.2 (2026-10-19)
+
+- **Node Controller** (header) drops the arrow icon and goes back to the
+  Dashboard's tab instead of opening a new one each time: it switches to the
+  open Dashboard tab without reloading it, or opens the Dashboard once in a new
+  tab when there isn't one. A Dashboard older than 9.3.90-pi02w doesn't name
+  its tab, so the first press opens one new Dashboard tab and later presses
+  reuse it.
+- The page names its own tab, so the Dashboard's **Listen** button (9.3.90-pi02w
+  or later) finds it even when Node Listen was opened from a bookmark.
 
 ## 0.4.1 (2026-10-19)
 
