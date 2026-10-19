@@ -1,6 +1,32 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_3_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_4_20261019.py`. Newest entries first.
+
+## 0.4.4 (2026-10-19)
+
+More audio options, all per device (kept in each browser) on the Tune card.
+
+- **Leveler** (on by default): a compressor and peak limiter in the page keep
+  the mic at an even level and never clip (peaks stop at -1 dBFS); it replaces
+  the hard clip. **Automatic gain** is now off by default; a phone that saved
+  mic settings with 0.4.1 to 0.4.3 has it turned off once, since it fights the
+  leveler. Test mic says when the leveler is limiting hard.
+- **Noise gate**: Off (default), Light or Strong. Between words the mic drops
+  by 15 dB (Light, below -45 dBFS) or 30 dB (Strong, below -35 dBFS), with a
+  250 ms hold so word endings aren't cut.
+- **Radio voice** (off by default): cuts below 300 Hz and lifts 2.5 kHz by
+  4 dB. Leave it off if the radio already adds pre-emphasis.
+- **Test through the node**: after a confirmation, keys node 1921 for 4 s,
+  records what the node sends out (its audio feed) and plays it back with the
+  peak level. It goes out over the air and to linked nodes, and it obeys the
+  busy lockout.
+- **This device's playback**: **16-bit audio** (on by default) streams the
+  node's audio as 16-bit samples instead of µ-law (128 kbit/s instead of 64)
+  for cleaner quiet audio and noise tails; `/api/listen?fmt=s16`, with the
+  format in the `X-Audio-Format` header, so an older Node Listen just keeps
+  sending µ-law. **Smooth playback** (on by default) upsamples the 8 kHz audio
+  to the phone's rate with a filter instead of the browser's basic resampler;
+  Test mic playback uses it too.
 
 ## 0.4.3 (2026-10-19)
 

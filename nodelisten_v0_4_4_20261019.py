@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.3"
+VERSION = "0.4.4"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -590,6 +590,7 @@ def _ulaw_byte(s):
 
 ULAW_TABLE = bytes(_ulaw_byte(i - 65536 if i >= 32768 else i) for i in range(65536))
 ULAW_SILENCE = bytes([ULAW_TABLE[0]]) * FRAME_SAMPLES
+PCM_SILENCE = b"\x00" * FRAME_BYTES
 
 
 def ulaw_encode(frame):
@@ -637,13 +638,14 @@ def peak_db(frame):
 
 
 class _Listener:
-    __slots__ = ("q", "closed", "ip", "since")
+    __slots__ = ("q", "closed", "ip", "since", "pcm")
 
-    def __init__(self, ip):
+    def __init__(self, ip, pcm=False):
         self.q = deque(maxlen=LISTENER_QUEUE_MAX)
         self.closed = False
         self.ip = ip
         self.since = time.time()
+        self.pcm = pcm
 
 
 class Hub:
@@ -678,13 +680,13 @@ class Hub:
                 self.frames.popleft()
                 self.dropped += 1
 
-    def add_listener(self, ip):
+    def add_listener(self, ip, pcm=False):
         with self.lock:
             if len(self.listeners) >= _cfg_get("max_listeners"):
                 return None
-            lst = _Listener(ip)
+            lst = _Listener(ip, pcm)
             self.listeners.add(lst)
-        log_event(f"Listener connected from {ip}")
+        log_event(f"Listener connected from {ip}" + (" (16-bit)" if pcm else ""))
         return lst
 
     def remove_listener(self, lst):
@@ -722,10 +724,16 @@ class Hub:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
         if have_listeners:
-            enc = ulaw_encode(apply_gain(frame, tune_value("rx_gain_db"))) if frame is not None else ULAW_SILENCE
+            pcm = apply_gain(frame, tune_value("rx_gain_db")) if frame is not None else PCM_SILENCE
+            enc = None
             with self.cond:
                 for lst in self.listeners:
-                    lst.q.append(enc)
+                    if lst.pcm:
+                        lst.q.append(pcm)
+                    else:
+                        if enc is None:
+                            enc = ulaw_encode(pcm) if frame is not None else ULAW_SILENCE
+                        lst.q.append(enc)
                 self.cond.notify_all()
         self.pump_beat = now
 
@@ -1962,9 +1970,17 @@ let ws = null, wsReady = false, wsRetry = null, talking = false, keyed = false, 
 let micPending = false, jitterSec = 0.25, sysmonPort = null, dashNode = '';
 let capCtx = null, micStream = null, capSrc = null, capNode = null, capSink = null, workletReady = false, preKey = [], talkTimer = null;
 let rs = null, frameSink = null, testing = false, testBuf = [];
-const MIC_DEFAULTS = {agc: true, ns: true, ec: false, gain: 0, hp: true};
+const MIC_DEFAULTS = {agc: false, ns: true, ec: false, gain: 0, hp: true, lev: true, gate: 0, eq: false};
 let mic = Object.assign({}, MIC_DEFAULTS);
-try { Object.assign(mic, JSON.parse(localStorage.getItem('nlMic') || '{}')); } catch (e) {}
+try {
+  const st = JSON.parse(localStorage.getItem('nlMic') || '{}');
+  if (st && st.agc !== undefined && st.lev === undefined) st.agc = false;
+  Object.assign(mic, st);
+} catch (e) {}
+const PLAY_DEFAULTS = {s16: true, smooth: true};
+let play = Object.assign({}, PLAY_DEFAULTS);
+try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); } catch (e) {}
+let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false;
 
 function makeResampler(inRate) {
   const ratio = inRate / 8000, half = Math.ceil(8 * ratio), taps = 2 * half + 1, phases = 32;
@@ -1982,8 +1998,100 @@ function makeResampler(inRate) {
     kern.push(k);
   }
   return {ratio: ratio, half: half, taps: taps, phases: phases, kern: kern,
-    buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hpX: 0, hpY: 0, peak: 0};
+    buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hpX: 0, hpY: 0, peak: 0, dyn: makeDyn()};
 }
+function biquad(type, f0, q, gainDb) {
+  const w = 2 * Math.PI * f0 / 8000, cs = Math.cos(w), al = Math.sin(w) / (2 * q), A = Math.pow(10, gainDb / 40);
+  let b0, b1, b2, a0, a1, a2;
+  if (type === 'hp') { b0 = (1 + cs) / 2; b1 = -(1 + cs); b2 = b0; a0 = 1 + al; a1 = -2 * cs; a2 = 1 - al; }
+  else { b0 = 1 + al * A; b1 = -2 * cs; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cs; a2 = 1 - al / A; }
+  return {b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0, x1: 0, x2: 0, y1: 0, y2: 0};
+}
+
+function bq(f, x) {
+  const y = f.b0 * x + f.b1 * f.x1 + f.b2 * f.x2 - f.a1 * f.y1 - f.a2 * f.y2;
+  f.x2 = f.x1; f.x1 = x; f.y2 = f.y1; f.y1 = y;
+  return y;
+}
+
+function makeDyn() {
+  return {hp: biquad('hp', 300, 0.707, 0), pk: biquad('pk', 2500, 1.0, 4), env: 0, gg: 1, hold: 0, open: false,
+    rms: 0, cg: 1, lg: 1};
+}
+
+const GATE = [null, {open: -45, floor: 0.18}, {open: -35, floor: 0.03}];
+
+function dynProcess(d, v) {
+  if (mic.eq) v = bq(d.pk, bq(d.hp, v));
+  const a = v < 0 ? -v : v;
+  const gs = GATE[Number(mic.gate) || 0];
+  if (gs) {
+    d.env = a > d.env ? d.env + (a - d.env) * 0.7 : d.env * 0.9975;
+    const db = d.env > 1e-6 ? 20 * Math.log10(d.env) : -120;
+    if (db > gs.open) { d.open = true; d.hold = 2000; }
+    else if (db < gs.open - 6) { if (d.hold > 0) d.hold--; else d.open = false; }
+    const want = d.open ? 1 : gs.floor;
+    d.gg += (want - d.gg) * (want > d.gg ? 0.06 : 0.0016);
+    v *= d.gg;
+  }
+  if (mic.lev) {
+    d.rms += (v * v - d.rms) * 0.004;
+    const lvl = d.rms > 1e-10 ? 10 * Math.log10(d.rms) : -100;
+    const over = lvl + 24;
+    const want = Math.pow(10, ((over > 0 ? -over * (2 / 3) : 0) + 9) / 20);
+    d.cg += (want - d.cg) * (want < d.cg ? 0.0125 : 0.000625);
+    v *= d.cg;
+    const b = v < 0 ? -v : v, ceil = 0.89;
+    if (b * d.lg > ceil) d.lg = ceil / b;
+    else d.lg += (1 - d.lg) * 0.0025;
+    v *= d.lg;
+  }
+  return v;
+}
+
+function makeUpsampler(outRate) {
+  const half = 16, taps = 2 * half, phases = 64, fc = 3700 / 8000, kern = [];
+  for (let p = 0; p <= phases; p++) {
+    const k = new Float32Array(taps), off = p / phases;
+    let sum = 0;
+    for (let i = 0; i < taps; i++) {
+      const t = off + half - 1 - i;
+      const sinc = t === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * t) / (Math.PI * t);
+      const w = Math.abs(t) >= half ? 0 : 0.42 + 0.5 * Math.cos(Math.PI * t / half) + 0.08 * Math.cos(2 * Math.PI * t / half);
+      k[i] = sinc * w; sum += k[i];
+    }
+    for (let i = 0; i < taps; i++) k[i] /= sum;
+    kern.push(k);
+  }
+  return {step: 8000 / outRate, half: half, taps: taps, phases: phases, kern: kern, buf: new Float32Array(taps), pos: half - 1};
+}
+
+function upsample(u, x) {
+  const merged = new Float32Array(u.buf.length + x.length);
+  merged.set(u.buf, 0); merged.set(x, u.buf.length);
+  const out = [];
+  let pos = u.pos;
+  while (Math.floor(pos) + u.half < merged.length) {
+    const base = Math.floor(pos), k = u.kern[Math.round((pos - base) * u.phases)], start = base - u.half + 1;
+    let acc = 0;
+    for (let i = 0; i < u.taps; i++) acc += merged[start + i] * k[i];
+    out.push(acc);
+    pos += u.step;
+  }
+  const keep = Math.max(0, Math.floor(pos) - u.half + 1);
+  u.buf = merged.slice(keep);
+  u.pos = pos - keep;
+  return Float32Array.from(out);
+}
+
+function playBuffer(ac, x8k) {
+  let data = x8k, rate = 8000;
+  if (play.smooth && ac.sampleRate !== 8000) { data = upsample(makeUpsampler(ac.sampleRate), x8k); rate = ac.sampleRate; }
+  const ab = ac.createBuffer(1, Math.max(1, data.length), rate);
+  ab.copyToChannel(data, 0);
+  return ab;
+}
+
 const WORKLET_SRC = "class NlTap extends AudioWorkletProcessor{process(inputs){const c=inputs[0]&&inputs[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('nl-tap',NlTap);";
 const UL = new Float32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -2140,8 +2248,17 @@ async function pollStatus() {
 
 function flush() {
   if (!pendN || !ctx) return;
-  const buf = ctx.createBuffer(1, pendN, 8000);
-  buf.copyToChannel(pend.subarray(0, pendN), 0);
+  let buf;
+  if (play.smooth && ctx.sampleRate !== 8000) {
+    if (!ups) ups = makeUpsampler(ctx.sampleRate);
+    const y = upsample(ups, pend.subarray(0, pendN));
+    if (!y.length) { pendN = 0; return; }
+    buf = ctx.createBuffer(1, y.length, ctx.sampleRate);
+    buf.copyToChannel(y, 0);
+  } else {
+    buf = ctx.createBuffer(1, pendN, 8000);
+    buf.copyToChannel(pend.subarray(0, pendN), 0);
+  }
   pendN = 0;
   const now = ctx.currentTime;
   if (nextT < now + 0.05 || nextT > now + jitterSec + 1.25) nextT = now + jitterSec;
@@ -2155,14 +2272,30 @@ function flush() {
   peakLocal = 0;
 }
 
+function pushSample(v) {
+  pend[pendN++] = v;
+  if (otaRec) otaRec.push(v);
+  const a = v < 0 ? -v : v;
+  if (a > peakLocal) peakLocal = a;
+  if (pendN >= 800) flush();
+}
+
 function push(bytes) {
-  for (let i = 0; i < bytes.length; i++) {
-    const v = UL[bytes[i]];
-    pend[pendN++] = v;
-    const a = v < 0 ? -v : v;
-    if (a > peakLocal) peakLocal = a;
-    if (pendN >= 800) flush();
+  if (!streamPcm) {
+    for (let i = 0; i < bytes.length; i++) pushSample(UL[bytes[i]]);
+    return;
   }
+  let i = 0;
+  if (oddByte >= 0 && bytes.length) {
+    const w = oddByte | (bytes[0] << 8);
+    pushSample((w > 32767 ? w - 65536 : w) / 32768);
+    oddByte = -1; i = 1;
+  }
+  for (; i + 1 < bytes.length; i += 2) {
+    const w = bytes[i] | (bytes[i + 1] << 8);
+    pushSample((w > 32767 ? w - 65536 : w) / 32768);
+  }
+  if (i < bytes.length) oddByte = bytes[i];
 }
 
 function listenVolume() { return talking ? 0 : $('vol').value / 100; }
@@ -2192,21 +2325,23 @@ async function startListen() {
   playing = true;
   setMediaState();
   wakeLockApply();
-  nextT = 0; pendN = 0;
+  nextT = 0; pendN = 0; oddByte = -1; ups = null;
   $('listen-btn').textContent = 'Stop';
   $('listen-btn').classList.remove('primary');
   $('listen-msg').className = 'msg';
   $('listen-msg').textContent = 'Connecting...';
   ctrl = new AbortController();
   try {
-    const r = await fetch('/api/listen', {signal: ctrl.signal, cache: 'no-store'});
+    const r = await fetch('/api/listen' + (play.s16 ? '?fmt=s16' : ''), {signal: ctrl.signal, cache: 'no-store'});
     if (!r.ok) {
       let e = 'HTTP ' + r.status;
       try { const d = await r.json(); e = d.error || e; } catch (x) {}
       throw new Error(e);
     }
+    streamPcm = /^s16le/.test(r.headers.get('X-Audio-Format') || '');
+    oddByte = -1;
     $('listen-msg').className = 'msg ok';
-    $('listen-msg').textContent = 'Listening.';
+    $('listen-msg').textContent = 'Listening.' + (streamPcm ? ' (16-bit)' : '');
     const rd = r.body.getReader();
     for (;;) {
       const {value, done} = await rd.read();
@@ -2286,8 +2421,8 @@ function pttUi(state, text) {
   }
 }
 
-function openTalk() {
-  if (!authed || tab !== 'listen' || document.visibilityState === 'hidden') return;
+function openTalk(force) {
+  if (!authed || (tab !== 'listen' && force !== true) || document.visibilityState === 'hidden') return;
   if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
   if (wsRetry) { clearTimeout(wsRetry); wsRetry = null; }
   if (!window.isSecureContext) {
@@ -2352,7 +2487,8 @@ function feedMic(f32) {
     let acc = 0;
     for (let i = 0; i < r.taps; i++) acc += merged[start + i] * k[i];
     let v = acc;
-    if (mic.hp) { const y = hpA * (r.hpY + v - r.hpX); r.hpX = v; r.hpY = y; v = y * hpK; }
+    if (mic.hp && !mic.eq) { const y = hpA * (r.hpY + v - r.hpX); r.hpX = v; r.hpY = y; v = y * hpK; }
+    v = dynProcess(r.dyn, v);
     const a = v < 0 ? -v : v;
     if (a > r.peak) r.peak = a;
     v = v > 1 ? 1 : v < -1 ? -1 : v;
@@ -2398,7 +2534,8 @@ async function startMic(sink) {
 
 function saveMic() {
   mic = {agc: $('mic-agc').checked, ns: $('mic-ns').checked, ec: $('mic-ec').checked,
-    hp: $('mic-hp').checked, gain: Number($('mic-gain').value)};
+    hp: $('mic-hp').checked, gain: Number($('mic-gain').value), lev: $('mic-lev').checked,
+    gate: Number($('mic-gate').value), eq: $('mic-eq').checked};
   try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
   $('mic-gain-v').textContent = (mic.gain > 0 ? '+' : '') + mic.gain + ' dB';
 }
@@ -2407,6 +2544,66 @@ function loadMicUi() {
   $('mic-agc').checked = !!mic.agc; $('mic-ns').checked = !!mic.ns; $('mic-ec').checked = !!mic.ec;
   $('mic-hp').checked = !!mic.hp; $('mic-gain').value = mic.gain;
   $('mic-gain-v').textContent = (mic.gain > 0 ? '+' : '') + mic.gain + ' dB';
+  $('mic-lev').checked = !!mic.lev; $('mic-gate').value = String(Number(mic.gate) || 0); $('mic-eq').checked = !!mic.eq;
+  $('play-s16').checked = !!play.s16; $('play-smooth').checked = !!play.smooth;
+}
+
+function savePlay() {
+  const was = play.s16;
+  play = {s16: $('play-s16').checked, smooth: $('play-smooth').checked};
+  try { localStorage.setItem('nlPlay', JSON.stringify(play)); } catch (e) {}
+  ups = null;
+  if (playing && was !== play.s16) { stopListen(); startListen(); }
+}
+
+const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
+
+async function nodeTest() {
+  const out = $('node-test-msg');
+  if (testing || talking || nodeTesting) return;
+  const tx = (lastStatus && lastStatus.tx) || {};
+  if (!tx.ready) { out.className = 'msg warn'; out.textContent = 'Set up node 1921 first (Transmit card).'; return; }
+  if (!window.confirm('This transmits for 4 s through the node: it goes out over the air and to every linked node. Go ahead?')) return;
+  nodeTesting = true; $('node-test').disabled = true;
+  const pc = new (window.AudioContext || window.webkitAudioContext)();
+  try { pc.resume(); } catch (e) {}
+  const wasPlaying = playing;
+  try {
+    out.className = 'msg'; out.textContent = 'Connecting...';
+    if (!playing) startListen();
+    if (!wsReady) openTalk(true);
+    for (let i = 0; i < 40 && !(wsReady && playing && /^Listening/.test($('listen-msg').textContent)); i++) await sleep(100);
+    if (!wsReady) throw new Error('the talk channel did not open');
+    if (!/^Listening/.test($('listen-msg').textContent)) throw new Error('the listen stream did not start');
+    otaRec = [];
+    out.textContent = 'Transmitting 4 s: talk as you would on the air...';
+    await pttDown();
+    for (let i = 0; i < 30 && talking && !keyed; i++) await sleep(100);
+    if (!keyed) { const m = $('ptt-msg').textContent; if (talking) pttUp(); throw new Error(m || 'the node did not key'); }
+    await sleep(4000);
+    pttUp();
+    out.textContent = 'Collecting what the node sent...';
+    await sleep(1500);
+    const rec = Float32Array.from(otaRec || []);
+    otaRec = null;
+    if (!wasPlaying) stopListen();
+    let pk = 0;
+    for (let i = 0; i < rec.length; i++) { const a = rec[i] < 0 ? -rec[i] : rec[i]; if (a > pk) pk = a; }
+    if (!rec.length || pk < 0.003) throw new Error('nothing came back from the node (is its audio feed set up?)');
+    const src = pc.createBufferSource(); src.buffer = playBuffer(pc, rec); src.connect(pc.destination); src.start();
+    const db = 20 * Math.log10(pk);
+    out.className = 'msg ' + (db > -1 || db < -20 ? 'warn' : 'ok');
+    out.textContent = 'Playing back what the node sent out. Peak ' + fmtDb(db) +
+      (db > -1 ? ': too hot.' : db < -20 ? ': quiet.' : ': good.');
+    src.onended = () => { pc.close(); };
+  } catch (e) {
+    otaRec = null;
+    if (!wasPlaying && playing) stopListen();
+    out.className = 'msg err'; out.textContent = 'Node test: ' + (e.message || e);
+    pc.close();
+  } finally {
+    nodeTesting = false; $('node-test').disabled = false;
+  }
 }
 
 async function micTest() {
@@ -2429,14 +2626,16 @@ async function micTest() {
   stopMic(); testing = false;
   const n = testBuf.reduce((a, b) => a + b.length, 0);
   if (!n) { pc.close(); $('mic-test').disabled = false; $('mic-test-msg').textContent = 'Nothing was recorded.'; return; }
-  const ab = pc.createBuffer(1, n, 8000), ch = ab.getChannelData(0);
+  const ch = new Float32Array(n);
   let o = 0;
   testBuf.forEach((f) => { for (let i = 0; i < f.length; i++) ch[o++] = f[i] / 32768; });
-  const src = pc.createBufferSource(); src.buffer = ab; src.connect(pc.destination); src.start();
+  const src = pc.createBufferSource(); src.buffer = playBuffer(pc, ch); src.connect(pc.destination); src.start();
   const db = peak > 0 ? 20 * Math.log10(peak) : -120;
-  $('mic-test-msg').className = 'msg ' + (db > -1 ? 'warn' : db < -20 ? 'warn' : 'ok');
+  const hot = mic.lev ? -2 : -1;
+  $('mic-test-msg').className = 'msg ' + (db > hot ? 'warn' : db < -20 ? 'warn' : 'ok');
   $('mic-test-msg').textContent = 'Playing back what the node would get. Peak ' + fmtDb(db) +
-    (db > -1 ? ': too hot, lower the mic gain.' : db < -20 ? ': quiet, raise the mic gain.' : ': good.');
+    (db > hot ? (mic.lev ? ': the leveler is limiting hard, lower the mic gain a little.' : ': too hot, lower the mic gain.')
+      : db < -20 ? ': quiet, raise the mic gain.' : ': good.');
   src.onended = () => { pc.close(); $('mic-test').disabled = false; };
 }
 
@@ -2773,8 +2972,11 @@ document.addEventListener('DOMContentLoaded', () => {
   ['tune-on', 'tune-tx', 'tune-rx'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-save').addEventListener('click', saveTune);
   loadMicUi();
-  ['mic-agc', 'mic-ns', 'mic-ec', 'mic-hp', 'mic-gain'].forEach((id) => $(id).addEventListener('input', saveMic));
+  ['mic-agc', 'mic-ns', 'mic-ec', 'mic-hp', 'mic-gain', 'mic-lev', 'mic-eq'].forEach((id) => $(id).addEventListener('input', saveMic));
+  $('mic-gate').addEventListener('change', saveMic);
+  ['play-s16', 'play-smooth'].forEach((id) => $(id).addEventListener('change', savePlay));
   $('mic-test').addEventListener('click', micTest);
+  $('node-test').addEventListener('click', nodeTest);
   try { window.name = 'asl_dvs_listen'; } catch (e) {}
   $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, 'asl_dvs_dash'); });
   $('tune-reset').addEventListener('click', tuneReset);
@@ -2950,15 +3152,25 @@ not the node, the radio or DVSwitch.</p>
 <h2 style="margin-top:14px">This device's microphone</h2>
 <p class="muted small">Saved in this browser only; each phone keeps its own. Browsers can't change the phone's own
 mic volume, so the gain here is applied in the page.</p>
-<div class="row"><label><input type="checkbox" id="mic-agc"> Automatic gain (the browser levels the mic)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-lev"> Leveler (keeps an even level and never clips)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-agc"> Automatic gain (the browser levels the mic; leave off with the leveler)</label></div>
 <div class="row"><label><input type="checkbox" id="mic-ns"> Noise suppression</label></div>
 <div class="row"><label><input type="checkbox" id="mic-ec"> Echo cancellation (rarely needed: listen audio is muted while you talk)</label></div>
 <div class="row"><label><input type="checkbox" id="mic-hp"> Voice filter (cuts rumble below about 250 Hz)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-eq"> Radio voice (cuts below 300 Hz, lifts 2.5 kHz; leave off if the radio adds pre-emphasis)</label></div>
+<div class="row"><label for="mic-gate" style="min-width:130px">Noise gate</label>
+<select id="mic-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong</option></select></div>
 <div class="row"><label for="mic-gain" style="min-width:130px">Mic gain</label>
 <input type="range" id="mic-gain" min="-12" max="24" step="1" style="flex:1"><span id="mic-gain-v" class="mono small">0 dB</span></div>
 <p class="muted small">With automatic gain on, the browser undoes most of the mic gain; turn it off for a fixed level.</p>
 <div class="row"><button id="mic-test" class="btn" type="button">Test mic (4 s, plays back)</button></div>
 <div id="mic-test-msg" class="msg"></div>
+<div class="row"><button id="node-test" class="btn" type="button">Test through the node (transmits 4 s)</button></div>
+<p class="muted small">Keys node 1921, records what the node sends out and plays it back. It goes out over the air and to linked nodes.</p>
+<div id="node-test-msg" class="msg"></div>
+<h2 style="margin-top:14px">This device's playback</h2>
+<div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
+<div class="row"><label><input type="checkbox" id="play-smooth"> Smooth playback (filtered upsampling, no sizzle)</label></div>
 <p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
 use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
 <div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
@@ -3095,7 +3307,7 @@ class Handler(BaseHTTPRequestHandler):
                 d["ok"] = True
                 self._json(200, d)
             elif path == "/api/listen":
-                self._stream()
+                self._stream((query.get("fmt") or [""])[0] == "s16")
             elif path == "/api/talk":
                 self._talk()
             elif path == "/api/node":
@@ -3133,8 +3345,8 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _stream(self):
-        lst = HUB.add_listener(self._ip())
+    def _stream(self, pcm=False):
+        lst = HUB.add_listener(self._ip(), pcm)
         if lst is None:
             self.close_connection = True
             self._json(503, {"ok": False, "error": f"All {_cfg_get('max_listeners')} listener slots are in use."})
@@ -3144,7 +3356,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Audio-Format", "mulaw; rate=8000; channels=1")
+            self.send_header("X-Audio-Format", "s16le; rate=8000; channels=1" if pcm else "mulaw; rate=8000; channels=1")
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
