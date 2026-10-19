@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.5"
+VERSION = "0.4.6"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -180,18 +180,20 @@ def _parse_bool(value):
     return str(value).strip().lower() in ("1", "true", "yes", "on")
 
 
-def _norm_port(value):
-    v = int(str(value).strip())
-    if not 1024 <= v <= 65535:
-        raise ValueError("port must be 1024-65535")
-    return v
+def _norm_int(lo, hi, error):
+    def norm(value):
+        v = int(str(value).strip())
+        if not lo <= v <= hi:
+            raise ValueError(error)
+        return v
+    return norm
 
 
-def _norm_listeners(value):
-    v = int(str(value).strip())
-    if not 1 <= v <= 10:
-        raise ValueError("max_listeners must be 1-10")
-    return v
+_norm_port = _norm_int(1024, 65535, "port must be 1024-65535")
+_norm_listeners = _norm_int(1, 10, "max_listeners must be 1-10")
+_norm_tot = _norm_int(30, 600, "tot_sec must be 30-600")
+_norm_txbuf = _norm_int(40, 400, "tx_buffer_ms must be 40-400")
+_norm_jitter = _norm_int(100, 1500, "jitter_ms must be 100-1500")
 
 
 def _norm_node(value):
@@ -201,31 +203,10 @@ def _norm_node(value):
     return v
 
 
-def _norm_tot(value):
-    v = int(str(value).strip())
-    if not 30 <= v <= 600:
-        raise ValueError("tot_sec must be 30-600")
-    return v
-
-
 def _norm_gain(value):
     v = int(round(float(str(value).strip())))
     if not -12 <= v <= 12:
         raise ValueError("gains must be -12 to +12 dB")
-    return v
-
-
-def _norm_txbuf(value):
-    v = int(str(value).strip())
-    if not 40 <= v <= 400:
-        raise ValueError("tx_buffer_ms must be 40-400")
-    return v
-
-
-def _norm_jitter(value):
-    v = int(str(value).strip())
-    if not 100 <= v <= 1500:
-        raise ValueError("jitter_ms must be 100-1500")
     return v
 
 
@@ -593,15 +574,18 @@ ULAW_SILENCE = bytes([ULAW_TABLE[0]]) * FRAME_SAMPLES
 PCM_SILENCE = b"\x00" * FRAME_BYTES
 
 
-def ulaw_encode(frame):
-    a = array.array("H")
+def _samples(frame, code="h"):
+    a = array.array(code)
     a.frombytes(frame)
-    return bytes(map(ULAW_TABLE.__getitem__, a))
+    return a
+
+
+def ulaw_encode(frame):
+    return bytes(map(ULAW_TABLE.__getitem__, _samples(frame, "H")))
 
 
 def frame_db(frame):
-    a = array.array("h")
-    a.frombytes(frame)
+    a = _samples(frame)
     if not a:
         return -120.0
     ms = sum(x * x for x in a) / len(a)
@@ -624,8 +608,7 @@ def apply_gain(frame, gain_db):
     if not gain_db:
         return frame
     g = 10.0 ** (gain_db / 20.0)
-    a = array.array("h")
-    a.frombytes(frame)
+    a = _samples(frame)
     for i, x in enumerate(a):
         v = x * g
         if v > GAIN_KNEE:
@@ -637,8 +620,7 @@ def apply_gain(frame, gain_db):
 
 
 def fade_out(frame):
-    a = array.array("h")
-    a.frombytes(frame)
+    a = _samples(frame)
     n = len(a)
     for i in range(n):
         a[i] = int(round(a[i] * (n - 1 - i) / n))
@@ -646,12 +628,38 @@ def fade_out(frame):
 
 
 def peak_db(frame):
-    a = array.array("h")
-    a.frombytes(frame)
+    a = _samples(frame)
     if not a:
         return -120.0
     pk = max(max(a), -min(a))
     return -120.0 if pk <= 0 else max(-120.0, 20.0 * math.log10(pk / 32768.0))
+
+
+def paced_loop(step, what):
+    nxt = time.monotonic()
+    while True:
+        nxt += FRAME_SEC
+        delay = nxt - time.monotonic()
+        if delay > 0:
+            time.sleep(delay)
+        elif delay < -0.5:
+            nxt = time.monotonic()
+        try:
+            step()
+        except Exception as exc:
+            log_event(f"{what} error: {exc}", "err")
+
+
+def udp_socket(port=None):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    if port is not None:
+        try:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            sock.close()
+            raise
+    return sock
 
 
 class _Listener:
@@ -755,25 +763,21 @@ class Hub:
         self.pump_beat = now
 
     def pump_loop(self):
-        nxt = time.monotonic()
-        last_rate = nxt
-        last_packets = 0
-        while True:
-            nxt += FRAME_SEC
-            delay = nxt - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
-            elif delay < -0.5:
-                nxt = time.monotonic()
+        rate = {"t": time.monotonic(), "packets": 0}
+
+        def count_rate():
+            t = time.monotonic()
+            if t - rate["t"] >= 1.0:
+                self.rate_window.append(self.packets - rate["packets"])
+                rate.update(t=t, packets=self.packets)
+
+        def step():
             try:
                 self.tick()
-            except Exception as exc:
-                log_event(f"Audio pump error: {exc}", "err")
-            t = time.monotonic()
-            if t - last_rate >= 1.0:
-                self.rate_window.append(self.packets - last_packets)
-                last_packets = self.packets
-                last_rate = t
+            finally:
+                count_rate()
+
+        paced_loop(step, "Audio pump")
 
     def snapshot(self):
         now = time.monotonic()
@@ -803,9 +807,7 @@ HUB = Hub()
 def udp_loop(port):
     while True:
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("127.0.0.1", port))
+            sock = udp_socket(port)
         except OSError as exc:
             HUB.udp_error = f"cannot listen on 127.0.0.1:{port}: {exc}"
             log_event(HUB.udp_error + "; retrying in 10s", "err")
@@ -826,7 +828,7 @@ def udp_loop(port):
 
 
 def run_feed(port):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock = udp_socket()
     dest = ("127.0.0.1", port)
     fd = sys.stdin.fileno()
     while True:
@@ -879,14 +881,17 @@ def parse_rpt(text):
     return lines, stanzas
 
 
+def read_rpt():
+    with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
+        return parse_rpt(fh.read())
+
+
 def _is_ours(value):
     return bool(value) and FEED_MARK in value.replace(" ", "")
 
 
 def rpt_state():
-    with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-        text = fh.read()
-    _, stanzas = parse_rpt(text)
+    _, stanzas = read_rpt()
     by_name = {s["name"]: s for s in stanzas}
     nodes = []
     for s in stanzas:
@@ -938,6 +943,10 @@ def _write_rpt(lines):
     return backup
 
 
+def _write_failed(exc):
+    return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+
+
 _rpt_lock = threading.Lock()
 
 
@@ -946,9 +955,7 @@ def hook_enable(node):
     if not node:
         return {"ok": False, "error": "Pick a node."}
     with _rpt_lock:
-        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-        lines, stanzas = parse_rpt(text)
+        lines, stanzas = read_rpt()
         target = next((s for s in stanzas if s["name"] == node), None)
         if target is None:
             return {"ok": False, "error": f"Node {node} is not in {RPT_CONF}."}
@@ -967,7 +974,7 @@ def hook_enable(node):
         try:
             backup = _write_rpt(lines)
         except OSError as exc:
-            return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+            return _write_failed(exc)
     with _config_lock:
         _config["node"] = node
         cfg = dict(_config)
@@ -982,16 +989,14 @@ def hook_enable(node):
 
 def hook_disable():
     with _rpt_lock:
-        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-        lines, stanzas = parse_rpt(text)
+        lines, stanzas = read_rpt()
         lines, changed = _remove_ours(lines, stanzas)
         if not changed:
             return {"ok": True, "changed": False, "message": "No node sends its audio here."}
         try:
             backup = _write_rpt(lines)
         except OSError as exc:
-            return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+            return _write_failed(exc)
     log_event(f"rpt.conf: Node Listen line removed (backup {backup})", "ok")
     return {"ok": True, "changed": True, "backup": backup,
             "message": f"Removed. Restart Asterisk for it to take effect. Backup: {backup}"}
@@ -1324,8 +1329,7 @@ def dash_call(body, timeout=25):
 
 def local_nodes():
     try:
-        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            _, stanzas = parse_rpt(fh.read())
+        _, stanzas = read_rpt()
     except OSError:
         return []
     bridges = dashboard_conf()["bridges"]
@@ -1589,7 +1593,7 @@ class Talker:
 
     def _socket(self):
         if self.sock is None:
-            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock = udp_socket()
         return self.sock
 
     def _packet(self, payload, keyup):
@@ -1675,26 +1679,18 @@ class Talker:
             self.last_gaps = self.gaps
             gaps = self.gaps
         for _ in range(3):
-            self._packet(b"\x00" * FRAME_BYTES, False)
+            self._packet(PCM_SILENCE, False)
         log_event(f"TX: {who} unkeyed after {secs:.1f} s ({why})" + (f", {gaps} audio gap(s)" if gaps else ""),
                   "warn" if why in ("timeout", "deadman") or gaps else "ok")
         if owner is not None:
             owner.send_json({"ev": "unkeyed", "why": why, "secs": round(secs, 1)})
 
     def pacer_loop(self):
-        nxt = time.monotonic()
-        while True:
-            nxt += FRAME_SEC
-            delay = nxt - time.monotonic()
-            if delay > 0:
-                time.sleep(delay)
-            elif delay < -0.5:
-                nxt = time.monotonic()
+        def step():
             self.beat = time.monotonic()
-            try:
-                self._tick()
-            except Exception as exc:
-                log_event(f"TX pacer error: {exc}", "err")
+            self._tick()
+
+        paced_loop(step, "TX pacer")
 
     def _tick(self):
         now = time.monotonic()
@@ -1712,7 +1708,7 @@ class Talker:
                     self.sending = True
                     self.primed_once = True
                 elif self.primed_once:
-                    frame = b"\x00" * FRAME_BYTES
+                    frame = PCM_SILENCE
                 if self.releasing and not self.q:
                     why = "release"
                 elif now - self.last_rx > TX_DEADMAN_SEC:
@@ -1729,7 +1725,7 @@ class Talker:
                 else:
                     self.gaps += 1
                     self.sending = False
-                    frame = b"\x00" * FRAME_BYTES
+                    frame = PCM_SILENCE
         if why:
             self._unkey(why)
         elif frame is not None:
@@ -1742,9 +1738,7 @@ TALKER = Talker()
 def usrp_drain_loop():
     while True:
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            s.bind(("127.0.0.1", TX_USRP_LISTEN))
+            s = udp_socket(TX_USRP_LISTEN)
         except OSError as exc:
             log_event(f"Can't listen on 127.0.0.1:{TX_USRP_LISTEN} for node {TX_NODE}: {exc}", "warn")
             time.sleep(60)
@@ -1767,25 +1761,42 @@ def _tx_stanza(lines, stanzas):
     return None, None
 
 
+def _tx_ours(lines, s):
+    h = s["header"]
+    return h > 0 and lines[h - 1].strip() == TX_NOTE
+
+
+def _has_line(lines, want):
+    want = want.replace(" ", "")
+    return any(ln.strip().replace(" ", "") == want for ln in lines)
+
+
+def _put_nodes_line(lines, nodes_line):
+    new = [ln for ln in lines if not _TX_NODES_LINE_RE.match(ln)]
+    _, stanzas = parse_rpt("\n".join(new))
+    nodes_st = next((x for x in stanzas if x["name"].lower() == "nodes"), None)
+    if nodes_st is not None:
+        new.insert(nodes_st["header"] + 1, nodes_line)
+    else:
+        new += ["[nodes]", nodes_line, ""]
+    return new
+
+
 def tx_state():
     out = {"node": TX_NODE, "main": main_node(), "defined": False, "ours": False, "nodes_line": False,
            "ready": False, "linked": None, "rxchannel": f"USRP/127.0.0.1:{TX_USRP_LISTEN}:{TX_USRP_SEND}"}
     try:
-        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+        lines, stanzas = read_rpt()
     except OSError as exc:
         out["error"] = f"Could not read {RPT_CONF}: {exc}"
         return out
-    lines, stanzas = parse_rpt(text)
     s, end = _tx_stanza(lines, stanzas)
     if s is not None:
         out["defined"] = True
-        h = s["header"]
-        out["ours"] = h > 0 and lines[h - 1].strip() == TX_NOTE
-        body = "\n".join(lines[h:end]).replace(" ", "")
+        out["ours"] = _tx_ours(lines, s)
+        body = "\n".join(lines[s["header"]:end]).replace(" ", "")
         out["rx_ok"] = f"rxchannel={out['rxchannel']}" in body
-    want = tx_nodes_line().replace(" ", "")
-    out["nodes_line"] = any(ln.strip().replace(" ", "") == want for ln in lines)
+    out["nodes_line"] = _has_line(lines, tx_nodes_line())
     out["nodes_line_other"] = not out["nodes_line"] and any(_TX_NODES_LINE_RE.match(ln) for ln in lines)
     out["ready"] = out["defined"] and out.get("rx_ok", False) and bool(out["main"]) and out["nodes_line"]
     if out["ready"]:
@@ -1799,26 +1810,17 @@ def tx_enable():
     if not main:
         return {"ok": False, "error": "Set the node first (Send its audio here, or the Dashboard's node number)."}
     with _rpt_lock:
-        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-        lines, stanzas = parse_rpt(text)
+        lines, stanzas = read_rpt()
         s, _ = _tx_stanza(lines, stanzas)
         if s is not None:
-            if s["header"] > 0 and lines[s["header"] - 1].strip() == TX_NOTE:
+            if _tx_ours(lines, s):
                 want = tx_nodes_line()
-                if any(ln.strip().replace(" ", "") == want.replace(" ", "") for ln in lines):
+                if _has_line(lines, want):
                     return {"ok": True, "changed": False, "message": f"Node {TX_NODE} is already set up."}
-                new = [ln for ln in lines if not _TX_NODES_LINE_RE.match(ln)]
-                _, st2 = parse_rpt("\n".join(new))
-                nst = next((x for x in st2 if x["name"].lower() == "nodes"), None)
-                if nst is not None:
-                    new.insert(nst["header"] + 1, want)
-                else:
-                    new += ["[nodes]", want, ""]
                 try:
-                    backup = _write_rpt(new)
+                    backup = _write_rpt(_put_nodes_line(lines, want))
                 except OSError as exc:
-                    return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+                    return _write_failed(exc)
                 log_event(f"rpt.conf: fixed the [nodes] line for node {TX_NODE}: {want} (backup {backup})", "ok")
                 return {"ok": True, "changed": True, "backup": backup,
                         "message": f"Fixed the [nodes] line for node {TX_NODE} ({want}). Restart Asterisk. Backup: {backup}"}
@@ -1834,18 +1836,10 @@ def tx_enable():
         while new and new[-1].strip() == "":
             new.pop()
         new += block + [""]
-        nodes_line = tx_nodes_line()
-        new = [ln for ln in new if not _TX_NODES_LINE_RE.match(ln)]
-        _, stanzas2 = parse_rpt("\n".join(new))
-        nodes_st = next((x for x in stanzas2 if x["name"].lower() == "nodes"), None)
-        if nodes_st is not None:
-            new.insert(nodes_st["header"] + 1, nodes_line)
-        else:
-            new += ["[nodes]", nodes_line, ""]
         try:
-            backup = _write_rpt(new)
+            backup = _write_rpt(_put_nodes_line(new, tx_nodes_line()))
         except OSError as exc:
-            return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+            return _write_failed(exc)
     log_event(f"rpt.conf: added transmit node {TX_NODE} for node {main} (backup {backup})", "ok")
     return {"ok": True, "changed": True, "backup": backup,
             "message": f"Added node {TX_NODE}. Restart Asterisk, then Node Listen links it to node {main}. Backup: {backup}"}
@@ -1865,12 +1859,10 @@ def tx_unlink(why):
 def tx_disable():
     tx_unlink("transmit node removed")
     with _rpt_lock:
-        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
-        lines, stanzas = parse_rpt(text)
+        lines, stanzas = read_rpt()
         s, end = _tx_stanza(lines, stanzas)
         drop = set()
-        if s is not None and s["header"] > 0 and lines[s["header"] - 1].strip() == TX_NOTE:
+        if s is not None and _tx_ours(lines, s):
             drop.update(range(s["header"] - 1, end))
         for i, ln in enumerate(lines):
             if _TX_NODES_LINE_RE.match(ln):
@@ -1883,7 +1875,7 @@ def tx_disable():
         try:
             backup = _write_rpt(new)
         except OSError as exc:
-            return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+            return _write_failed(exc)
     log_event(f"rpt.conf: removed transmit node {TX_NODE} (backup {backup})", "ok")
     return {"ok": True, "changed": True, "backup": backup,
             "message": f"Removed node {TX_NODE}. Restart Asterisk for it to take effect. Backup: {backup}"}
@@ -1920,9 +1912,8 @@ header{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:
 header h1{font-size:18px;margin:0;white-space:nowrap}
 header .ver{color:var(--muted);font-size:12px}
 header .sp{flex:1}
-.pill{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line2);border-radius:999px;color:var(--text);text-decoration:none;font-size:13px;background:transparent;cursor:pointer;font:inherit;font-size:13px}
+.pill{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line2);border-radius:999px;color:var(--text);text-decoration:none;background:transparent;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
 .pill:hover{border-color:var(--accent)}
-.pill{white-space:nowrap}
 main{max-width:640px;margin:0 auto;padding:14px 16px 96px;overflow-wrap:anywhere}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:14px}
 .card h2{font-size:15px;margin:0 0 10px}
@@ -2001,21 +1992,26 @@ let play = Object.assign({}, PLAY_DEFAULTS);
 try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); } catch (e) {}
 let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false;
 
-function makeResampler(inRate) {
-  const ratio = inRate / 8000, half = Math.ceil(8 * ratio), taps = 2 * half + 1, phases = 32;
-  const fc = 3400 / inRate, kern = [];
+function sincKernels(phases, taps, half, fc, tAt, edgeIn) {
+  const kern = [];
   for (let p = 0; p <= phases; p++) {
     const k = new Float32Array(taps), off = p / phases;
     let sum = 0;
     for (let i = 0; i < taps; i++) {
-      const t = i - half - off;
+      const t = tAt(i, off), at = Math.abs(t);
       const sinc = t === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * t) / (Math.PI * t);
-      const w = Math.abs(t) > half ? 0 : 0.42 + 0.5 * Math.cos(Math.PI * t / half) + 0.08 * Math.cos(2 * Math.PI * t / half);
+      const w = (edgeIn ? at > half : at >= half) ? 0 : 0.42 + 0.5 * Math.cos(Math.PI * t / half) + 0.08 * Math.cos(2 * Math.PI * t / half);
       k[i] = sinc * w; sum += k[i];
     }
     for (let i = 0; i < taps; i++) k[i] /= sum;
     kern.push(k);
   }
+  return kern;
+}
+
+function makeResampler(inRate) {
+  const ratio = inRate / 8000, half = Math.ceil(8 * ratio), taps = 2 * half + 1, phases = 32;
+  const kern = sincKernels(phases, taps, half, 3400 / inRate, (i, off) => i - half - off, true);
   return {ratio: ratio, half: half, taps: taps, phases: phases, kern: kern,
     buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hpX: 0, hpY: 0, peak: 0, dyn: makeDyn()};
 }
@@ -2069,19 +2065,8 @@ function dynProcess(d, v) {
 }
 
 function makeUpsampler(outRate) {
-  const half = 16, taps = 2 * half, phases = 64, fc = 3700 / 8000, kern = [];
-  for (let p = 0; p <= phases; p++) {
-    const k = new Float32Array(taps), off = p / phases;
-    let sum = 0;
-    for (let i = 0; i < taps; i++) {
-      const t = off + half - 1 - i;
-      const sinc = t === 0 ? 2 * fc : Math.sin(2 * Math.PI * fc * t) / (Math.PI * t);
-      const w = Math.abs(t) >= half ? 0 : 0.42 + 0.5 * Math.cos(Math.PI * t / half) + 0.08 * Math.cos(2 * Math.PI * t / half);
-      k[i] = sinc * w; sum += k[i];
-    }
-    for (let i = 0; i < taps; i++) k[i] /= sum;
-    kern.push(k);
-  }
+  const half = 16, taps = 2 * half, phases = 64;
+  const kern = sincKernels(phases, taps, half, 3700 / 8000, (i, off) => off + half - 1 - i, false);
   return {step: 8000 / outRate, half: half, taps: taps, phases: phases, kern: kern, buf: new Float32Array(taps), pos: half - 1};
 }
 
@@ -2111,6 +2096,15 @@ function playBuffer(ac, x8k) {
   return ab;
 }
 
+function playBack(ac, x8k) {
+  const src = ac.createBufferSource();
+  src.buffer = playBuffer(ac, x8k); src.connect(ac.destination); src.start();
+  return src;
+}
+
+function newAudioCtx() { return new (window.AudioContext || window.webkitAudioContext)(); }
+function peakDb(a) { return a > 0 ? 20 * Math.log10(a) : -120; }
+
 const WORKLET_SRC = "class NlTap extends AudioWorkletProcessor{process(inputs){const c=inputs[0]&&inputs[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('nl-tap',NlTap);";
 const UL = new Float32Array(256);
 for (let i = 0; i < 256; i++) {
@@ -2134,16 +2128,30 @@ async function api(url, opts) {
   return d;
 }
 
-function setMsg(id, d) {
+const post = (url, body) => api(url, {method: 'POST', body: body});
+const TABS = ['status', 'connect', 'listen', 'setup'];
+
+function note(id, cls, text) {
   const el = $(id);
-  el.className = 'msg ' + (d.ok ? 'ok' : 'err');
-  el.textContent = d.ok ? (d.message || 'Done.') : (d.error || 'Failed.');
+  el.className = cls ? 'msg ' + cls : 'msg';
+  el.textContent = text;
 }
+
+function setMsg(id, d) { note(id, d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Done.') : (d.error || 'Failed.')); }
+function fmtGain(v) { return (v > 0 ? '+' : '') + v + ' dB'; }
+
+function addOption(sel, value, text) {
+  const o = document.createElement('option');
+  o.value = value; o.textContent = text;
+  sel.appendChild(o);
+}
+
+function sendOp(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op})); }
 
 function showTab(name) {
   if (!authed && name !== 'listen') name = 'listen';
   tab = name;
-  ['status', 'connect', 'listen', 'setup'].forEach((t) => {
+  TABS.forEach((t) => {
     $('tab-' + t).classList.toggle('hidden', t !== name || !(authed || (t === 'listen' && publicListen)));
     const b = $('nav-' + t);
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
@@ -2160,7 +2168,7 @@ function render() {
   $('nav').classList.toggle('hidden', !authed);
   $('logout').classList.toggle('hidden', !authed);
   $('ptt-card').classList.toggle('hidden', !authed);
-  if (!anyView) { ['status', 'connect', 'listen', 'setup'].forEach((t) => $('tab-' + t).classList.add('hidden')); return; }
+  if (!anyView) { TABS.forEach((t) => $('tab-' + t).classList.add('hidden')); return; }
   let want = 'listen';
   try { want = localStorage.getItem('nlTab') || 'listen'; } catch (e) {}
   showTab(authed ? want : 'listen');
@@ -2190,16 +2198,16 @@ async function whoami() {
 
 async function login(ev) {
   ev.preventDefault();
-  const d = await api('/api/login', {method: 'POST', body: {password: $('pw').value}});
+  const d = await post('/api/login', {password: $('pw').value});
   $('pw').value = '';
   if (d.ok) { authed = true; $('login-msg').textContent = ''; render(); }
-  else { $('login-msg').className = 'msg err'; $('login-msg').textContent = d.error || 'Login failed.'; }
+  else note('login-msg', 'err', d.error || 'Login failed.');
 }
 
 async function logout() {
   pttUp();
   if (ws) { try { ws.close(); } catch (e) {} }
-  await api('/api/logout', {method: 'POST'});
+  await post('/api/logout');
   authed = false;
   stopListen();
   render();
@@ -2286,8 +2294,7 @@ function flush() {
   src.connect(gainNode);
   src.start(nextT);
   nextT += buf.duration;
-  const db = peakLocal > 0 ? 20 * Math.log10(peakLocal) : -120;
-  $('meter-bar').style.width = dbPct(db) + '%';
+  $('meter-bar').style.width = dbPct(peakDb(peakLocal)) + '%';
   peakLocal = 0;
 }
 
@@ -2304,16 +2311,10 @@ function push(bytes) {
     for (let i = 0; i < bytes.length; i++) pushSample(UL[bytes[i]]);
     return;
   }
+  const s16 = (lo, hi) => { const w = lo | (hi << 8); pushSample((w > 32767 ? w - 65536 : w) / 32768); };
   let i = 0;
-  if (oddByte >= 0 && bytes.length) {
-    const w = oddByte | (bytes[0] << 8);
-    pushSample((w > 32767 ? w - 65536 : w) / 32768);
-    oddByte = -1; i = 1;
-  }
-  for (; i + 1 < bytes.length; i += 2) {
-    const w = bytes[i] | (bytes[i + 1] << 8);
-    pushSample((w > 32767 ? w - 65536 : w) / 32768);
-  }
+  if (oddByte >= 0 && bytes.length) { s16(oddByte, bytes[0]); oddByte = -1; i = 1; }
+  for (; i + 1 < bytes.length; i += 2) s16(bytes[i], bytes[i + 1]);
   if (i < bytes.length) oddByte = bytes[i];
 }
 
@@ -2347,8 +2348,7 @@ async function startListen() {
   nextT = 0; pendN = 0; oddByte = -1; ups = null;
   $('listen-btn').textContent = 'Stop';
   $('listen-btn').classList.remove('primary');
-  $('listen-msg').className = 'msg';
-  $('listen-msg').textContent = 'Connecting...';
+  note('listen-msg', '', 'Connecting...');
   ctrl = new AbortController();
   try {
     const r = await fetch('/api/listen' + (play.s16 ? '?fmt=s16' : ''), {signal: ctrl.signal, cache: 'no-store'});
@@ -2359,8 +2359,7 @@ async function startListen() {
     }
     streamPcm = /^s16le/.test(r.headers.get('X-Audio-Format') || '');
     oddByte = -1;
-    $('listen-msg').className = 'msg ok';
-    $('listen-msg').textContent = 'Listening.' + (streamPcm ? ' (16-bit)' : '');
+    note('listen-msg', 'ok', 'Listening.' + (streamPcm ? ' (16-bit)' : ''));
     const rd = r.body.getReader();
     for (;;) {
       const {value, done} = await rd.read();
@@ -2370,8 +2369,7 @@ async function startListen() {
     if (playing) throw new Error('stream ended');
   } catch (e) {
     if (!playing) return;
-    $('listen-msg').className = 'msg warn';
-    $('listen-msg').textContent = 'Disconnected (' + e.message + '). Retrying in 3 s...';
+    note('listen-msg', 'warn', 'Disconnected (' + e.message + '). Retrying in 3 s...');
     retryTimer = setTimeout(() => { if (playing) startListen(); }, 3000);
   }
 }
@@ -2386,8 +2384,7 @@ function stopListen() {
   wakeLockApply();
   $('listen-btn').textContent = 'Listen';
   $('listen-btn').classList.add('primary');
-  $('listen-msg').className = 'msg';
-  $('listen-msg').textContent = '';
+  note('listen-msg', '', '');
 }
 
 function toggleListen() { if (playing) stopListen(); else startListen(); }
@@ -2522,8 +2519,7 @@ function feedMic(f32) {
 
 async function startMic(sink) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser blocks the microphone here (use the https:// page).');
-  const AC = window.AudioContext || window.webkitAudioContext;
-  if (!capCtx) capCtx = new AC();
+  if (!capCtx) capCtx = newAudioCtx();
   await capCtx.resume();
   const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: !!mic.ec, noiseSuppression: !!mic.ns,
     autoGainControl: !!mic.agc, channelCount: 1}});
@@ -2551,19 +2547,20 @@ async function startMic(sink) {
   capNode.connect(capSink);
 }
 
+const MIC_CHECKS = ['agc', 'ns', 'ec', 'hp', 'lev', 'eq'];
+
 function saveMic() {
-  mic = {agc: $('mic-agc').checked, ns: $('mic-ns').checked, ec: $('mic-ec').checked,
-    hp: $('mic-hp').checked, gain: Number($('mic-gain').value), lev: $('mic-lev').checked,
-    gate: Number($('mic-gate').value), eq: $('mic-eq').checked};
+  mic = {gain: Number($('mic-gain').value), gate: Number($('mic-gate').value)};
+  MIC_CHECKS.forEach((k) => { mic[k] = $('mic-' + k).checked; });
   try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
-  $('mic-gain-v').textContent = (mic.gain > 0 ? '+' : '') + mic.gain + ' dB';
+  $('mic-gain-v').textContent = fmtGain(mic.gain);
 }
 
 function loadMicUi() {
-  $('mic-agc').checked = !!mic.agc; $('mic-ns').checked = !!mic.ns; $('mic-ec').checked = !!mic.ec;
-  $('mic-hp').checked = !!mic.hp; $('mic-gain').value = mic.gain;
-  $('mic-gain-v').textContent = (mic.gain > 0 ? '+' : '') + mic.gain + ' dB';
-  $('mic-lev').checked = !!mic.lev; $('mic-gate').value = String(Number(mic.gate) || 0); $('mic-eq').checked = !!mic.eq;
+  MIC_CHECKS.forEach((k) => { $('mic-' + k).checked = !!mic[k]; });
+  $('mic-gain').value = mic.gain;
+  $('mic-gain-v').textContent = fmtGain(mic.gain);
+  $('mic-gate').value = String(Number(mic.gate) || 0);
   $('play-s16').checked = !!play.s16; $('play-smooth').checked = !!play.smooth;
 }
 
@@ -2578,30 +2575,30 @@ function savePlay() {
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
 
 async function nodeTest() {
-  const out = $('node-test-msg');
+  const out = 'node-test-msg';
   if (testing || talking || nodeTesting) return;
   const tx = (lastStatus && lastStatus.tx) || {};
-  if (!tx.ready) { out.className = 'msg warn'; out.textContent = 'Set up node 1921 first (Transmit card).'; return; }
+  if (!tx.ready) { note(out, 'warn', 'Set up node 1921 first (Transmit card).'); return; }
   if (!window.confirm('This transmits for 4 s through the node: it goes out over the air and to every linked node. Go ahead?')) return;
   nodeTesting = true; $('node-test').disabled = true;
-  const pc = new (window.AudioContext || window.webkitAudioContext)();
+  const pc = newAudioCtx();
   try { pc.resume(); } catch (e) {}
   const wasPlaying = playing;
   try {
-    out.className = 'msg'; out.textContent = 'Connecting...';
+    note(out, '', 'Connecting...');
     if (!playing) startListen();
     if (!wsReady) openTalk(true);
     for (let i = 0; i < 40 && !(wsReady && playing && /^Listening/.test($('listen-msg').textContent)); i++) await sleep(100);
     if (!wsReady) throw new Error('the talk channel did not open');
     if (!/^Listening/.test($('listen-msg').textContent)) throw new Error('the listen stream did not start');
     otaRec = [];
-    out.textContent = 'Transmitting 4 s: talk as you would on the air...';
+    note(out, '', 'Transmitting 4 s: talk as you would on the air...');
     await pttDown();
     for (let i = 0; i < 30 && talking && !keyed; i++) await sleep(100);
     if (!keyed) { const m = $('ptt-msg').textContent; if (talking) pttUp(); throw new Error(m || 'the node did not key'); }
     await sleep(4000);
     pttUp();
-    out.textContent = 'Collecting what the node sent...';
+    note(out, '', 'Collecting what the node sent...');
     await sleep(1500);
     const rec = Float32Array.from(otaRec || []);
     otaRec = null;
@@ -2609,16 +2606,15 @@ async function nodeTest() {
     let pk = 0;
     for (let i = 0; i < rec.length; i++) { const a = rec[i] < 0 ? -rec[i] : rec[i]; if (a > pk) pk = a; }
     if (!rec.length || pk < 0.003) throw new Error('nothing came back from the node (is its audio feed set up?)');
-    const src = pc.createBufferSource(); src.buffer = playBuffer(pc, rec); src.connect(pc.destination); src.start();
-    const db = 20 * Math.log10(pk);
-    out.className = 'msg ' + (db > -1 || db < -20 ? 'warn' : 'ok');
-    out.textContent = 'Playing back what the node sent out. Peak ' + fmtDb(db) +
-      (db > -1 ? ': too hot.' : db < -20 ? ': quiet.' : ': good.');
+    const src = playBack(pc, rec);
+    const db = peakDb(pk);
+    note(out, db > -1 || db < -20 ? 'warn' : 'ok', 'Playing back what the node sent out. Peak ' + fmtDb(db) +
+      (db > -1 ? ': too hot.' : db < -20 ? ': quiet.' : ': good.'));
     src.onended = () => { pc.close(); };
   } catch (e) {
     otaRec = null;
     if (!wasPlaying && playing) stopListen();
-    out.className = 'msg err'; out.textContent = 'Node test: ' + (e.message || e);
+    note(out, 'err', 'Node test: ' + (e.message || e));
     pc.close();
   } finally {
     nodeTesting = false; $('node-test').disabled = false;
@@ -2629,32 +2625,30 @@ async function micTest() {
   if (testing || talking) return;
   testing = true; testBuf = [];
   $('mic-test').disabled = true;
-  const AC = window.AudioContext || window.webkitAudioContext;
-  const pc = new AC();
+  const pc = newAudioCtx();
   try { pc.resume(); } catch (e) {}
-  $('mic-test-msg').className = 'msg'; $('mic-test-msg').textContent = 'Recording 4 s: talk as you would on the air...';
+  note('mic-test-msg', '', 'Recording 4 s: talk as you would on the air...');
   try {
     await startMic((buf) => testBuf.push(new Int16Array(buf)));
   } catch (e) {
     testing = false; $('mic-test').disabled = false; pc.close();
-    $('mic-test-msg').className = 'msg err'; $('mic-test-msg').textContent = 'Microphone: ' + (e.message || e.name);
+    note('mic-test-msg', 'err', 'Microphone: ' + (e.message || e.name));
     return;
   }
-  await new Promise((res) => setTimeout(res, 4000));
+  await sleep(4000);
   const peak = rs ? rs.peak : 0;
   stopMic(); testing = false;
   const n = testBuf.reduce((a, b) => a + b.length, 0);
-  if (!n) { pc.close(); $('mic-test').disabled = false; $('mic-test-msg').textContent = 'Nothing was recorded.'; return; }
+  if (!n) { pc.close(); $('mic-test').disabled = false; note('mic-test-msg', '', 'Nothing was recorded.'); return; }
   const ch = new Float32Array(n);
   let o = 0;
   testBuf.forEach((f) => { for (let i = 0; i < f.length; i++) ch[o++] = f[i] / 32768; });
-  const src = pc.createBufferSource(); src.buffer = playBuffer(pc, ch); src.connect(pc.destination); src.start();
-  const db = peak > 0 ? 20 * Math.log10(peak) : -120;
+  const src = playBack(pc, ch);
+  const db = peakDb(peak);
   const hot = mic.lev ? -2 : -1;
-  $('mic-test-msg').className = 'msg ' + (db > hot ? 'warn' : db < -20 ? 'warn' : 'ok');
-  $('mic-test-msg').textContent = 'Playing back what the node would get. Peak ' + fmtDb(db) +
+  note('mic-test-msg', db > hot || db < -20 ? 'warn' : 'ok', 'Playing back what the node would get. Peak ' + fmtDb(db) +
     (db > hot ? (mic.lev ? ': the leveler is limiting hard, lower the mic gain a little.' : ': too hot, lower the mic gain.')
-      : db < -20 ? ': quiet, raise the mic gain.' : ': good.');
+      : db < -20 ? ': quiet, raise the mic gain.' : ': good.'));
   src.onended = () => { pc.close(); $('mic-test').disabled = false; };
 }
 
@@ -2692,7 +2686,7 @@ async function pttDown(ev) {
   micPending = true;
   try { await startMic(sendFrame); }
   catch (e) {
-    if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: 'unkey'}));
+    sendOp('unkey');
     keyed = false; endTalk();
     pttUi('ready', 'Microphone: ' + (e.message || e.name)); $('ptt-msg').className = 'msg err';
   }
@@ -2702,7 +2696,7 @@ async function pttDown(ev) {
 function pttUp(ev) {
   if (ev) ev.preventDefault();
   if (!talking) return;
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: 'unkey'}));
+  sendOp('unkey');
   keyed = false;
   endTalk();
   pttUi(wsReady ? 'ready' : 'off');
@@ -2718,22 +2712,12 @@ async function loadFavs() {
   fsel.innerHTML = '';
   const nodes = (d.from_nodes || []).slice();
   if (d.main && nodes.indexOf(d.main) < 0) nodes.unshift(d.main);
-  nodes.forEach((n) => {
-    const o = document.createElement('option');
-    o.value = n;
-    o.textContent = n + (n === d.main ? ' (main node)' : '') + (n === dashNode ? ' · through Node Controller' : '');
-    fsel.appendChild(o);
-  });
+  nodes.forEach((n) => addOption(fsel, n, n + (n === d.main ? ' (main node)' : '') + (n === dashNode ? ' · through Node Controller' : '')));
   fsel.value = (fkeep && nodes.indexOf(fkeep) >= 0) ? fkeep : (d.main || nodes[0] || '');
   $('c-from-row').classList.toggle('hidden', nodes.length < 2 && !dashNode);
   const sel = $('c-fav'), keep = sel.value;
   sel.innerHTML = '';
-  favs.forEach((f, i) => {
-    const o = document.createElement('option');
-    o.value = String(i);
-    o.textContent = f.mode + ' ' + f.num + '  ·  ' + f.label;
-    sel.appendChild(o);
-  });
+  favs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + f.num + '  ·  ' + f.label));
   if (keep && Number(keep) < favs.length) sel.value = keep;
   $('c-empty').classList.toggle('hidden', favs.length > 0);
   $('c-pick').classList.toggle('hidden', favs.length === 0);
@@ -2750,19 +2734,19 @@ function showSelected() {
 async function favConnect() {
   const i = $('c-fav').value;
   if (i === '') return;
-  $('c-msg').className = 'msg'; $('c-msg').textContent = 'Connecting...';
-  setMsg('c-msg', await api('/api/connect', {method: 'POST', body: {index: Number(i), from: $('c-from').value}}));
+  note('c-msg', '', 'Connecting...');
+  setMsg('c-msg', await post('/api/connect', {index: Number(i), from: $('c-from').value}));
   setTimeout(pollStatus, 1500);
 }
 
 async function favDisconnect() {
-  setMsg('c-msg', await api('/api/disconnect', {method: 'POST', body: {from: $('c-from').value}}));
+  setMsg('c-msg', await post('/api/disconnect', {from: $('c-from').value}));
   setTimeout(pollStatus, 1000);
 }
 
 async function loadNode() {
   const d = await api('/api/node');
-  if (!d.ok) { $('nd-msg').className = 'msg err'; $('nd-msg').textContent = d.error || 'Could not read rpt.conf.'; return; }
+  if (!d.ok) { note('nd-msg', 'err', d.error || 'Could not read rpt.conf.'); return; }
   $('nd-path').textContent = d.path;
   $('nd-line').textContent = d.hook_line;
   const sel = $('nd-select'), keep = sel.value;
@@ -2771,9 +2755,7 @@ async function loadNode() {
   tb.innerHTML = '';
   d.nodes.forEach((n) => {
     if (n.node === '1921') return;
-    const o = document.createElement('option');
-    o.value = o.textContent = n.node;
-    sel.appendChild(o);
+    addOption(sel, n.node, n.node);
     const tr = document.createElement('tr');
     const a = document.createElement('td'); a.textContent = n.node;
     const b = document.createElement('td');
@@ -2790,19 +2772,19 @@ async function loadNode() {
 async function nodeEnable() {
   const n = $('nd-select').value;
   if (!n) return;
-  setMsg('nd-msg', await api('/api/node/enable', {method: 'POST', body: {node: n}}));
+  setMsg('nd-msg', await post('/api/node/enable', {node: n}));
   loadNode(); loadTx();
 }
 
 async function nodeDisable() {
-  setMsg('nd-msg', await api('/api/node/disable', {method: 'POST', body: {}}));
+  setMsg('nd-msg', await post('/api/node/disable', {}));
   loadNode();
 }
 
 async function astRestart(msgId) {
   if (!confirm('Restart Asterisk now? Every link on this node drops and reconnects.')) return;
-  $(msgId).className = 'msg'; $(msgId).textContent = 'Restarting Asterisk...';
-  setMsg(msgId, await api('/api/asterisk/restart', {method: 'POST', body: {}}));
+  note(msgId, '', 'Restarting Asterisk...');
+  setMsg(msgId, await post('/api/asterisk/restart', {}));
   setTimeout(loadTx, 4000);
 }
 
@@ -2825,10 +2807,10 @@ async function loadTx() {
   $('tx-remove').disabled = !(d.defined && d.ours) && !d.nodes_line;
 }
 
-async function txEnable() { setMsg('tx-msg', await api('/api/tx/enable', {method: 'POST', body: {}})); loadTx(); }
+async function txEnable() { setMsg('tx-msg', await post('/api/tx/enable', {})); loadTx(); }
 async function txDisable() {
   if (!confirm('Remove node 1921 from rpt.conf? Push-to-talk stops working until it is added again.')) return;
-  setMsg('tx-msg', await api('/api/tx/disable', {method: 'POST', body: {}})); loadTx();
+  setMsg('tx-msg', await post('/api/tx/disable', {})); loadTx();
 }
 
 async function loadFavEditor() {
@@ -2841,12 +2823,8 @@ async function loadFavEditor() {
   dashFavs = dd.ok ? dd.favs : [];
   const sel = $('fe-dash');
   sel.innerHTML = '';
-  const o0 = document.createElement('option'); o0.value = ''; o0.textContent = dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites found';
-  sel.appendChild(o0);
-  dashFavs.forEach((f, i) => {
-    const o = document.createElement('option'); o.value = String(i);
-    o.textContent = f.mode + ' ' + f.num + ' · ' + f.label; sel.appendChild(o);
-  });
+  addOption(sel, '', dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites found');
+  dashFavs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + f.num + ' · ' + f.label));
 }
 
 function drawFavEditor() {
@@ -2855,7 +2833,7 @@ function drawFavEditor() {
   favEdit.forEach((f, i) => {
     const row = document.createElement('div'); row.className = 'fav-row';
     const m = document.createElement('select'); m.setAttribute('aria-label', 'Network ' + (i + 1));
-    ['ASL', 'EchoLink'].forEach((v) => { const o = document.createElement('option'); o.value = o.textContent = v; m.appendChild(o); });
+    ['ASL', 'EchoLink'].forEach((v) => addOption(m, v, v));
     m.value = f.mode; m.onchange = () => { f.mode = m.value; };
     const n = document.createElement('input'); n.inputMode = 'numeric'; n.value = f.num; n.placeholder = 'Number';
     n.setAttribute('aria-label', 'Node number ' + (i + 1)); n.oninput = () => { f.num = n.value.trim(); };
@@ -2880,7 +2858,7 @@ function feAddDash() {
   drawFavEditor();
 }
 async function feSave() {
-  const d = await api('/api/favorites', {method: 'POST', body: {favs: favEdit}});
+  const d = await post('/api/favorites', {favs: favEdit});
   setMsg('fe-msg', d);
   if (d.ok) { favEdit = d.favs.map((f) => ({mode: f.mode, num: f.num, label: f.label})); drawFavEditor(); loadFavs(); }
 }
@@ -2903,17 +2881,15 @@ async function loadConfig() {
 function tuneUi() {
   const on = $('tune-on').checked;
   ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
-  const sgn = (v) => (v > 0 ? '+' : '') + v + ' dB';
-  $('tune-tx-v').textContent = sgn(Number($('tune-tx').value));
-  $('tune-rx-v').textContent = sgn(Number($('tune-rx').value));
+  $('tune-tx-v').textContent = fmtGain(Number($('tune-tx').value));
+  $('tune-rx-v').textContent = fmtGain(Number($('tune-rx').value));
   $('tune-body').classList.toggle('muted', !on);
 }
 
 async function saveTune() {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
     rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value};
-  const d = await api('/api/config', {method: 'POST', body: body});
-  setMsg('tune-msg', d);
+  setMsg('tune-msg', await post('/api/config', body));
 }
 
 function tuneReset() {
@@ -2926,7 +2902,7 @@ async function saveConfig() {
     tot_sec: $('cfg-tot_sec').value, public_listen: $('cfg-public_listen').checked,
     https: $('cfg-https').checked, busy_lockout: $('cfg-busy_lockout').checked,
   };
-  const d = await api('/api/config', {method: 'POST', body: body});
+  const d = await post('/api/config', body);
   setMsg('cfg-msg', d);
   if (d.ok) { publicListen = body.public_listen; loadNode(); }
 }
@@ -2950,7 +2926,7 @@ async function pollLog() {
 document.addEventListener('DOMContentLoaded', () => {
   $('login-form').addEventListener('submit', login);
   $('logout').addEventListener('click', logout);
-  ['status', 'connect', 'listen', 'setup'].forEach((t) => $('nav-' + t).addEventListener('click', () => showTab(t)));
+  TABS.forEach((t) => $('nav-' + t).addEventListener('click', () => showTab(t)));
   $('listen-btn').addEventListener('click', toggleListen);
   $('vol').addEventListener('input', () => { if (gainNode) gainNode.gain.value = listenVolume(); });
   if ('wakeLock' in navigator) {
@@ -2991,7 +2967,7 @@ document.addEventListener('DOMContentLoaded', () => {
   ['tune-on', 'tune-tx', 'tune-rx'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-save').addEventListener('click', saveTune);
   loadMicUi();
-  ['mic-agc', 'mic-ns', 'mic-ec', 'mic-hp', 'mic-gain', 'mic-lev', 'mic-eq'].forEach((id) => $(id).addEventListener('input', saveMic));
+  MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
   $('mic-gate').addEventListener('change', saveMic);
   ['play-s16', 'play-smooth'].forEach((id) => $(id).addEventListener('change', savePlay));
   $('mic-test').addEventListener('click', micTest);
@@ -3229,13 +3205,38 @@ use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.
 """
 
 
+_page = None
+
+
 def render_page():
-    return (_HTML_TEMPLATE.replace("__CSS__", _CSS).replace("__JS__", _JS)
-            .replace("__ICON_STATUS__", _ICON_STATUS).replace("__ICON_CONNECT__", _ICON_CONNECT)
-            .replace("__ICON_LISTEN__", _ICON_LISTEN).replace("__ICON_SETUP__", _ICON_SETUP)
-            .replace("__VERSION__", VERSION)).encode("utf-8")
+    global _page
+    if _page is None:
+        html = _HTML_TEMPLATE
+        for key, val in (("__CSS__", _CSS), ("__JS__", _JS), ("__ICON_STATUS__", _ICON_STATUS),
+                         ("__ICON_CONNECT__", _ICON_CONNECT), ("__ICON_LISTEN__", _ICON_LISTEN),
+                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION)):
+            html = html.replace(key, val)
+        _page = html.encode("utf-8")
+    return _page
 
 
+def _restart_self():
+    ok = _schedule_restart()
+    return {"ok": ok, "message": "Restarting." if ok else "", "error": "" if ok else "Not running under systemd."}
+
+
+_POST_ACTIONS = {
+    "/api/config": (config_update, ()),
+    "/api/node/enable": (lambda b: hook_enable(b.get("node", "")), (ValueError, OSError)),
+    "/api/node/disable": (lambda b: hook_disable(), (OSError,)),
+    "/api/tx/enable": (lambda b: tx_enable(), (OSError,)),
+    "/api/tx/disable": (lambda b: tx_disable(), (OSError,)),
+    "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
+    "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("from")), ()),
+    "/api/disconnect": (lambda b: fav_disconnect(b.get("from")), ()),
+    "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
+    "/api/restart": (lambda b: _restart_self(), ()),
+}
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
 
@@ -3343,8 +3344,9 @@ class Handler(BaseHTTPRequestHandler):
                 d["ok"] = True
                 self._json(200, d)
             elif path == "/api/favorites":
+                dash = dashboard_conf()
                 self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(), "from_nodes": local_nodes(),
-                                 "dash_node": dashboard_conf()["asl_node"] if port_open_cached(dashboard_conf()["port"]) else "",
+                                 "dash_node": dash["asl_node"] if port_open_cached(dash["port"]) else "",
                                  "favs": [dict(f, target=fav_target(f)) for f in fav_load()]})
             elif path == "/api/dash-favorites":
                 self._json(200, {"ok": True, "favs": dashboard_conf()["favs"]})
@@ -3485,43 +3487,17 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             self._json(401, {"ok": False, "error": "Log in first."})
             return
+        action = _POST_ACTIONS.get(path)
         try:
-            if path == "/api/config":
-                self._json(200, config_update(body))
-            elif path == "/api/node/enable":
-                try:
-                    self._json(200, hook_enable(body.get("node", "")))
-                except (ValueError, OSError) as exc:
-                    self._json(200, {"ok": False, "error": str(exc)})
-            elif path == "/api/node/disable":
-                try:
-                    self._json(200, hook_disable())
-                except OSError as exc:
-                    self._json(200, {"ok": False, "error": str(exc)})
-            elif path == "/api/tx/enable":
-                try:
-                    self._json(200, tx_enable())
-                except OSError as exc:
-                    self._json(200, {"ok": False, "error": str(exc)})
-            elif path == "/api/tx/disable":
-                try:
-                    self._json(200, tx_disable())
-                except OSError as exc:
-                    self._json(200, {"ok": False, "error": str(exc)})
-            elif path == "/api/favorites":
-                self._json(200, fav_save(body.get("favs")))
-            elif path == "/api/connect":
-                self._json(200, fav_connect(body.get("index"), body.get("from")))
-            elif path == "/api/disconnect":
-                self._json(200, fav_disconnect(body.get("from")))
-            elif path == "/api/asterisk/restart":
-                self._json(200, restart_asterisk())
-            elif path == "/api/restart":
-                ok = _schedule_restart()
-                self._json(200, {"ok": ok, "message": "Restarting." if ok else "",
-                                 "error": "" if ok else "Not running under systemd."})
-            else:
+            if action is None:
                 self._json(404, {"ok": False, "error": "Not found."})
+                return
+            run, errors = action
+            try:
+                result = run(body)
+            except errors as exc:
+                result = {"ok": False, "error": str(exc)}
+            self._json(200, result)
         except (BrokenPipeError, ConnectionResetError):
             pass
 
@@ -3650,8 +3626,7 @@ def _systemctl(*args):
 
 def _hook_node_now():
     try:
-        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            _, stanzas = parse_rpt(fh.read())
+        _, stanzas = read_rpt()
     except OSError:
         return ""
     return next((s["name"] for s in stanzas if _is_ours(s["outstream"])), "")
