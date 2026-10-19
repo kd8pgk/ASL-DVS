@@ -28,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.11"
+VERSION = "0.4.11.1"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -2087,14 +2087,15 @@ def link_keeper_loop():
 _CSS = r""":root{--bg:#0e141b;--card:#161f29;--card2:#121a23;--line:#243140;--line2:#2a3846;--text:#e6edf3;--muted:#9fb0bf;
 --soft:#c9d4de;--accent:#22c3a6;--accent-ink:#06231e;--accent-dim:#123a35;--amber:#f4c04e;--amber-bg:#3a2a07;--red:#ff8a8f;--red-line:#f2545b}
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
-header{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line);background:#111922;position:sticky;top:0;z-index:5}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif}
+body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
+header{flex:none;display:flex;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top)) 16px 12px;border-bottom:1px solid var(--line);background:#111922;z-index:5}
 header h1{font-size:18px;margin:0;white-space:nowrap}
 header .ver{color:var(--muted);font-size:12px}
 header .sp{flex:1}
 .pill{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line2);border-radius:999px;color:var(--text);text-decoration:none;background:transparent;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
 .pill:hover{border-color:var(--accent)}
-main{max-width:640px;margin:0 auto;padding:14px 16px 96px;overflow-wrap:anywhere}
+main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px max(16px,calc((100% - 608px) / 2)) 24px;overflow-wrap:anywhere}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:14px}
 .card h2{font-size:15px;margin:0 0 10px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
@@ -2147,7 +2148,7 @@ background:transparent;color:#ffd040;border:1px solid #6b4800;border-radius:4px;
 #login-card button:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
 #login-card #login-cancel{color:#22d4ff;border-color:#083a58;margin-top:.6rem}
 #login-msg{min-height:1.1rem;font-size:.78rem;color:#ff3d5a;margin-top:.2rem}
-nav.tabs{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:#111922;border-top:1px solid var(--line);padding:4px 6px calc(8px + env(safe-area-inset-bottom));z-index:5}
+nav.tabs{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:#111922;border-top:1px solid var(--line);padding:4px 6px calc(8px + env(safe-area-inset-bottom));z-index:5}
 nav.tabs button{background:transparent;border:0;min-height:52px;color:var(--muted);font-size:13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
 nav.tabs button[aria-current=page]{color:var(--accent);font-weight:700}
 nav.tabs svg{width:22px;height:22px}
@@ -2163,7 +2164,7 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 .fav-row{display:grid;grid-template-columns:110px 124px minmax(0,1fr) 44px;gap:6px;margin:6px 0}
 .fav-row input,.fav-row select{min-width:0;width:100%}
 .fav-row button{min-height:40px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--red);cursor:pointer}
-@media (max-width:420px){header{gap:6px;padding:10px 12px}header .ver{display:none}.pill{padding:0 10px}}
+@media (max-width:420px){header{gap:6px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px}header .ver{display:none}.pill{padding:0 10px}}
 @media (max-width:480px){.fav-row{grid-template-columns:92px 108px minmax(0,1fr) 40px}#ptt{width:160px;height:160px}}
 """
 
