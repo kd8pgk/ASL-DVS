@@ -1,6 +1,20 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_2_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_3_20261019.py`. Newest entries first.
+
+## 0.4.3 (2026-10-19)
+
+- **An update keeps node 1921 and the audio feed.** InstMon's Full Update runs
+  the installed version's `--uninstall` and then the new file's `--install`.
+  The uninstall removes the transmit node 1921 and the `outstreamcmd` line from
+  rpt.conf, and the install used to leave them out, so Setup asked to add node
+  1921 again. Now `--uninstall` notes what it removed in
+  `/etc/asl_dvs/nodelisten_restore.json` (mode 0600), and an `--install` within
+  30 minutes puts those lines back and deletes the note; an older note is
+  ignored and deleted. A plain uninstall still leaves rpt.conf clean.
+- The note is written by 0.4.3 and later, so updating from 0.4.2 or older
+  still drops node 1921 that one time; press **Add node 1921** on Setup after
+  that update, or install 0.4.3 from InstMon's Library card instead.
 
 ## 0.4.2 (2026-10-19)
 
