@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.1"
+VERSION = "0.4.0"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -164,6 +164,10 @@ DEFAULT_CONFIG = {
     "https": True,
     "tot_sec": 120,
     "busy_lockout": True,
+    "tune_enabled": False,
+    "tx_gain_db": 0,
+    "rx_gain_db": 0,
+    "jitter_ms": 250,
 }
 
 
@@ -201,6 +205,20 @@ def _norm_tot(value):
     return v
 
 
+def _norm_gain(value):
+    v = int(round(float(str(value).strip())))
+    if not -12 <= v <= 12:
+        raise ValueError("gains must be -12 to +12 dB")
+    return v
+
+
+def _norm_jitter(value):
+    v = int(str(value).strip())
+    if not 100 <= v <= 1500:
+        raise ValueError("jitter_ms must be 100-1500")
+    return v
+
+
 _NORMALIZERS = {
     "port": _norm_port,
     "udp_port": _norm_port,
@@ -210,6 +228,10 @@ _NORMALIZERS = {
     "https": _parse_bool,
     "tot_sec": _norm_tot,
     "busy_lockout": _parse_bool,
+    "tune_enabled": _parse_bool,
+    "tx_gain_db": _norm_gain,
+    "rx_gain_db": _norm_gain,
+    "jitter_ms": _norm_jitter,
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -576,6 +598,33 @@ def frame_db(frame):
     return max(-120.0, 10.0 * math.log10(ms / (32768.0 * 32768.0)))
 
 
+def tune_value(key):
+    if not _cfg_get("tune_enabled"):
+        return DEFAULT_CONFIG[key]
+    return _cfg_get(key)
+
+
+def apply_gain(frame, gain_db):
+    if not gain_db:
+        return frame
+    g = 10.0 ** (gain_db / 20.0)
+    a = array.array("h")
+    a.frombytes(frame)
+    for i, x in enumerate(a):
+        v = int(x * g)
+        a[i] = 32767 if v > 32767 else (-32768 if v < -32768 else v)
+    return a.tobytes()
+
+
+def peak_db(frame):
+    a = array.array("h")
+    a.frombytes(frame)
+    if not a:
+        return -120.0
+    pk = max(max(a), -min(a))
+    return -120.0 if pk <= 0 else max(-120.0, 20.0 * math.log10(pk / 32768.0))
+
+
 class _Listener:
     __slots__ = ("q", "closed", "ip", "since")
 
@@ -662,7 +711,7 @@ class Hub:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
         if have_listeners:
-            enc = ulaw_encode(frame) if frame is not None else ULAW_SILENCE
+            enc = ulaw_encode(apply_gain(frame, tune_value("rx_gain_db"))) if frame is not None else ULAW_SILENCE
             with self.cond:
                 for lst in self.listeners:
                     lst.q.append(enc)
@@ -950,7 +999,8 @@ def feeder_pids():
 
 def build_status(full):
     st = HUB.snapshot()
-    st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME)})
+    st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME),
+               "jitter_ms": tune_value("jitter_ms")})
     if full:
         st["feeder_pids"] = feeder_pids()
         node = main_node()
@@ -959,7 +1009,8 @@ def build_status(full):
         st["links"], st["links_ok"] = links, ok
         tx = tx_state()
         tx.update(TALKER.state())
-        st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot")}
+        st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
+                                            "peak_db", "last_peak_db")}
     else:
         st.pop("listener_list", None)
         st.pop("udp_error", None)
@@ -978,7 +1029,9 @@ TX_USRP_SEND = 32018
 TX_USRP_LISTEN = 34018
 TX_NOTE = "; nodelisten: transmit node for the Node Listen page (remove it from that page)"
 IAX_CONF = os.environ.get("NODELISTEN_IAX_CONF", "/etc/asterisk/iax.conf")
-TX_BUSY_GRACE_SEC = 2.0
+LOCAL_KEY_PATH = os.environ.get("NODELISTEN_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
+SYSMON_PORT = 9999
+TX_BUSY_GRACE_SEC = 1.0
 _TX_NODES_LINE_RE = re.compile(r"^\s*" + TX_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + TX_NODE + r",NONE\s*$")
 TX_QUEUE_MAX = 50
 TX_PREBUFFER = 3
@@ -1160,36 +1213,143 @@ def fav_save(items):
     return {"ok": True, "message": f"Saved {len(clean)} favorite(s).", "favs": clean}
 
 
-def fav_connect(index):
+def port_open(port, timeout=0.5):
+    try:
+        with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+            return True
+    except (OSError, ValueError):
+        return False
+
+
+_probe_cache = {}
+
+
+def port_open_cached(port, ttl=15.0):
+    now = time.monotonic()
+    hit = _probe_cache.get(port)
+    if hit and now - hit[0] < ttl:
+        return hit[1]
+    val = port_open(port)
+    _probe_cache[port] = (now, val)
+    return val
+
+
+def local_key():
+    try:
+        with open(LOCAL_KEY_PATH, "r", encoding="ascii") as fh:
+            key = fh.read().strip()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(LOCAL_KEY_PATH), exist_ok=True)
+        fd = os.open(LOCAL_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as fh:
+            fh.write(key + "\n")
+        return key
+    except FileExistsError:
+        try:
+            with open(LOCAL_KEY_PATH, "r", encoding="ascii") as fh:
+                return fh.read().strip()
+        except OSError:
+            return ""
+    except OSError:
+        return ""
+
+
+def dash_call(body, timeout=25):
+    port = dashboard_conf()["port"]
+    key = local_key()
+    if not key or not port_open(port):
+        return None
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+        try:
+            conn.request("POST", "/api/local/action", json.dumps(body),
+                         {"Content-Type": "application/json", "X-ASL-DVS-Local-Key": key})
+            resp = conn.getresponse()
+            raw = resp.read()
+        finally:
+            conn.close()
+    except (OSError, http.client.HTTPException):
+        return None
+    if resp.status in (404, 405):
+        return None
+    try:
+        d = json.loads(raw.decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return {"ok": False, "error": f"Node Controller answered HTTP {resp.status}"}
+    if not isinstance(d, dict):
+        return {"ok": False, "error": f"Node Controller answered HTTP {resp.status}"}
+    msg = str(d.get("message", ""))
+    return {"ok": bool(d.get("ok")), "message": msg, "error": msg or f"Node Controller answered HTTP {resp.status}"}
+
+
+def local_nodes():
+    try:
+        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
+            _, stanzas = parse_rpt(fh.read())
+    except OSError:
+        return []
+    bridges = dashboard_conf()["bridges"]
+    return [x["name"] for x in stanzas
+            if re.fullmatch(r"\d+", x["name"]) and x["name"] != TX_NODE and x["name"] not in bridges]
+
+
+def _from_node(from_node):
+    main = main_node()
+    n = str(from_node or "").strip() or main
+    if not n:
+        return None, "Set the node on the Setup tab first."
+    if n != main and n not in local_nodes():
+        return None, f"Node {n} is not a local node in rpt.conf."
+    return n, ""
+
+
+def fav_connect(index, from_node=None):
     favs = fav_load()
     try:
         f = favs[int(index)]
     except (ValueError, TypeError, IndexError):
         return {"ok": False, "error": "Pick a favorite."}
-    node = main_node()
+    node, err = _from_node(from_node)
     if not node:
-        return {"ok": False, "error": "Set the node on the Setup tab first."}
+        return {"ok": False, "error": err}
+    if node == dashboard_conf()["asl_node"]:
+        r = dash_call({"action": "connect", "mode": f["mode"], "node": f["num"], "name": f["label"]})
+        if r is not None:
+            _lstats_invalidate()
+            if r["ok"]:
+                log_event(f"Connect {f['mode']} {f['num']} through Node Controller", "ok")
+                return {"ok": True, "message": f"{r['message'] or 'Connected'} (through Node Controller)"}
+            return {"ok": False, "error": f"Node Controller: {r['error']}"}
     ok, out = ast_cli(f"rpt cmd {node} ilink 3 {fav_target(f)}")
     _lstats_invalidate()
     if not ok:
         return {"ok": False, "error": f"Asterisk refused: {out.strip()[:200] or 'no answer'}"}
-    log_event(f"Connect {f['mode']} {f['num']} from the phone page", "ok")
-    return {"ok": True, "message": f"Connecting to {f['mode']} {f['num']}..."}
+    log_event(f"Connect {f['mode']} {f['num']} from node {node}", "ok")
+    return {"ok": True, "message": f"Connecting node {node} to {f['mode']} {f['num']}..."}
 
 
-def fav_disconnect():
-    node = main_node()
+def fav_disconnect(from_node=None):
+    node, err = _from_node(from_node)
     if not node:
-        return {"ok": False, "error": "Set the node on the Setup tab first."}
+        return {"ok": False, "error": err}
     targets = {fav_target(f): f for f in fav_load()}
     _, links = rpt_links(node, max_age=0)
     hit = [l["node"] for l in links if l["node"] in targets]
     if not hit:
         return {"ok": True, "message": "No favorite is linked."}
+    via = node == dashboard_conf()["asl_node"]
     for peer in hit:
-        ast_cli(f"rpt cmd {node} ilink 1 {peer}")
+        r = dash_call({"action": "disconnect", "node": peer}) if via else None
+        if r is None:
+            via = False
+            ast_cli(f"rpt cmd {node} ilink 1 {peer}")
     _lstats_invalidate()
-    log_event(f"Disconnect {', '.join(hit)} from the phone page", "ok")
+    log_event(f"Disconnect {', '.join(hit)} from node {node}" + (" through Node Controller" if via else ""), "ok")
     return {"ok": True, "message": f"Disconnected {', '.join(hit)}."}
 
 
@@ -1386,6 +1546,8 @@ class Talker:
         self.sock = None
         self.beat = time.monotonic()
         self.last_unkey = 0.0
+        self.peak = -120.0
+        self.last_peak = None
 
     def _socket(self):
         if self.sock is None:
@@ -1404,7 +1566,8 @@ class Talker:
         with self.lock:
             return {"keyed": self.keyed, "who": self.who if self.keyed else "",
                     "secs": round(time.monotonic() - self.start, 1) if self.keyed else 0,
-                    "tot": _cfg_get("tot_sec")}
+                    "tot": _cfg_get("tot_sec"), "peak_db": round(self.peak, 1) if self.keyed else None,
+                    "last_peak_db": self.last_peak}
 
     def key(self, owner, who):
         st = tx_state()
@@ -1427,6 +1590,7 @@ class Talker:
             self.start = self.last_rx = now
             self.q.clear()
             self.buf = bytearray()
+            self.peak = -120.0
         log_event(f"TX: {who} keyed node {TX_NODE}", "ok")
         return True, ""
 
@@ -1436,9 +1600,12 @@ class Talker:
                 return
             self.last_rx = time.monotonic()
             self.buf += data
+            gain = tune_value("tx_gain_db")
             while len(self.buf) >= FRAME_BYTES:
-                self.q.append(bytes(self.buf[:FRAME_BYTES]))
+                fr = apply_gain(bytes(self.buf[:FRAME_BYTES]), gain)
                 del self.buf[:FRAME_BYTES]
+                self.peak = max(self.peak, peak_db(fr))
+                self.q.append(fr)
             while len(self.q) > TX_QUEUE_MAX:
                 self.q.popleft()
 
@@ -1463,6 +1630,7 @@ class Talker:
             self.owner = None
             self.q.clear()
             self.last_unkey = time.monotonic()
+            self.last_peak = round(self.peak, 1)
         for _ in range(3):
             self._packet(b"\x00" * FRAME_BYTES, False)
         log_event(f"TX: {who} unkeyed after {secs:.1f} s ({why})", "warn" if why in ("timeout", "deadman") else "ok")
@@ -1763,7 +1931,7 @@ let mediaDest = null, wakeLock = null, nodeLabel = '';
 let pend = new Float32Array(1600), pendN = 0, peakLocal = 0, retryTimer = null;
 let favs = [], favEdit = [], dashFavs = [], favMax = 10;
 let ws = null, wsReady = false, wsRetry = null, talking = false, keyed = false, keyedAt = 0, totSec = 120;
-let micPending = false;
+let micPending = false, jitterSec = 0.25, sysmonPort = null, dashNode = '';
 let capCtx = null, micStream = null, capSrc = null, capNode = null, capSink = null, workletReady = false, preKey = [], talkTimer = null;
 let rs = {ratio: 6, buf: new Float32Array(0), pos: 0, out: new Int16Array(160), n: 0};
 const WORKLET_SRC = "class NlTap extends AudioWorkletProcessor{process(inputs){const c=inputs[0]&&inputs[0][0];if(c)this.port.postMessage(c.slice(0));return true}}registerProcessor('nl-tap',NlTap);";
@@ -1827,6 +1995,8 @@ async function whoami() {
   publicListen = !!d.public_listen;
   if (d.dash_port) dashPort = d.dash_port;
   $('dash-link').href = location.protocol.replace('https', 'http') + '//' + location.hostname + ':' + dashPort + '/';
+  $('dash-link').classList.toggle('hidden', !d.dash_running);
+  sysmonPort = d.sysmon_port || null;
   if (!d.backend) $('login-msg').textContent = 'No root password is set on this Pi, so login cannot work.';
   render();
 }
@@ -1848,7 +2018,7 @@ async function logout() {
   render();
 }
 
-function fmtDb(db) { return db <= -119 ? '-inf' : db.toFixed(0) + ' dBFS'; }
+function fmtDb(db) { return db <= -119 ? '-inf' : ((Math.round(db) || 0) + ' dBFS'); }
 function dbPct(db) { return Math.max(0, Math.min(100, (db + 60) / 60 * 100)); }
 function fmtSecs(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
@@ -1874,12 +2044,16 @@ async function pollStatus() {
   ['st-feed-t', 's-feed-t'].forEach((id) => { $(id).textContent = feedTxt; });
   ['st-active', 's-rx'].forEach((id) => { $(id).className = 'dot ' + (d.audio_active ? 'rx' : ''); });
   $('st-level').textContent = fmtDb(d.peak_db);
+  if (d.jitter_ms) jitterSec = d.jitter_ms / 1000;
   if (!playing) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (!authed) return;
   const tx = d.tx || {};
   $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
   $('s-tx-t').textContent = tx.keyed ? ('transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs)) : (tx.ready ? 'idle' : 'transmit node not set up');
   totSec = tx.tot || totSec;
+  $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
+    : (tx.last_peak_db != null ? fmtDb(tx.last_peak_db) + ' (last transmission)' : 'no transmission yet');
+  $('tune-rxpk').textContent = fmtDb(d.peak_db);
   $('ptt-info').textContent = tx.ready ? ('Node ' + tx.node + (tx.linked === false ? ' (not linked yet)' : '') + ' · time-out ' + fmtSecs(totSec))
     : 'Set up node ' + (tx.node || '1921') + ' on the Setup tab to transmit.';
   const tb = $('s-links');
@@ -1908,7 +2082,7 @@ function flush() {
   buf.copyToChannel(pend.subarray(0, pendN), 0);
   pendN = 0;
   const now = ctx.currentTime;
-  if (nextT < now + 0.05 || nextT > now + 1.5) nextT = now + 0.25;
+  if (nextT < now + 0.05 || nextT > now + jitterSec + 1.25) nextT = now + jitterSec;
   const src = ctx.createBufferSource();
   src.buffer = buf;
   src.connect(gainNode);
@@ -2202,6 +2376,19 @@ async function loadFavs() {
   if (!d.ok) return;
   favs = d.favs || [];
   favMax = d.max || 10;
+  dashNode = d.dash_node || '';
+  const fsel = $('c-from'), fkeep = fsel.value;
+  fsel.innerHTML = '';
+  const nodes = (d.from_nodes || []).slice();
+  if (d.main && nodes.indexOf(d.main) < 0) nodes.unshift(d.main);
+  nodes.forEach((n) => {
+    const o = document.createElement('option');
+    o.value = n;
+    o.textContent = n + (n === d.main ? ' (main node)' : '') + (n === dashNode ? ' · through Node Controller' : '');
+    fsel.appendChild(o);
+  });
+  fsel.value = (fkeep && nodes.indexOf(fkeep) >= 0) ? fkeep : (d.main || nodes[0] || '');
+  $('c-from-row').classList.toggle('hidden', nodes.length < 2 && !dashNode);
   const sel = $('c-fav'), keep = sel.value;
   sel.innerHTML = '';
   favs.forEach((f, i) => {
@@ -2227,12 +2414,12 @@ async function favConnect() {
   const i = $('c-fav').value;
   if (i === '') return;
   $('c-msg').className = 'msg'; $('c-msg').textContent = 'Connecting...';
-  setMsg('c-msg', await api('/api/connect', {method: 'POST', body: {index: Number(i)}}));
+  setMsg('c-msg', await api('/api/connect', {method: 'POST', body: {index: Number(i), from: $('c-from').value}}));
   setTimeout(pollStatus, 1500);
 }
 
 async function favDisconnect() {
-  setMsg('c-msg', await api('/api/disconnect', {method: 'POST', body: {}}));
+  setMsg('c-msg', await api('/api/disconnect', {method: 'POST', body: {from: $('c-from').value}}));
   setTimeout(pollStatus, 1000);
 }
 
@@ -2366,6 +2553,33 @@ async function loadConfig() {
   if (!d.ok) return;
   ['port', 'udp_port', 'max_listeners', 'tot_sec'].forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   ['public_listen', 'https', 'busy_lockout'].forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
+  $('tune-on').checked = !!d.config.tune_enabled;
+  $('tune-tx').value = d.config.tx_gain_db;
+  $('tune-rx').value = d.config.rx_gain_db;
+  $('tune-jit').value = String(d.config.jitter_ms);
+  tuneUi();
+  $('tune-sysmon').classList.toggle('hidden', !sysmonPort);
+  if (sysmonPort) $('tune-sysmon-link').href = 'http://' + location.hostname + ':' + sysmonPort + '/';
+}
+
+function tuneUi() {
+  const on = $('tune-on').checked;
+  ['tune-tx', 'tune-rx', 'tune-jit'].forEach((id) => { $(id).disabled = !on; });
+  const sgn = (v) => (v > 0 ? '+' : '') + v + ' dB';
+  $('tune-tx-v').textContent = sgn(Number($('tune-tx').value));
+  $('tune-rx-v').textContent = sgn(Number($('tune-rx').value));
+  $('tune-body').classList.toggle('muted', !on);
+}
+
+async function saveTune() {
+  const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
+    rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value};
+  const d = await api('/api/config', {method: 'POST', body: body});
+  setMsg('tune-msg', d);
+}
+
+function tuneReset() {
+  $('tune-tx').value = 0; $('tune-rx').value = 0; $('tune-jit').value = '250'; tuneUi();
 }
 
 async function saveConfig() {
@@ -2436,6 +2650,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('fe-dash-add').addEventListener('click', feAddDash);
   $('fe-save').addEventListener('click', feSave);
   $('cfg-save').addEventListener('click', saveConfig);
+  ['tune-on', 'tune-tx', 'tune-rx'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  $('tune-save').addEventListener('click', saveTune);
+  $('tune-reset').addEventListener('click', tuneReset);
   setupMediaSession();
   pttUi('off', '');
   whoami().then(() => { if (authed) loadFavs(); });
@@ -2493,6 +2710,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="card">
 <h2>Connect</h2>
 <div id="c-empty" class="muted">No favorites yet. Add up to 10 on the Setup tab.</div>
+<div id="c-from-row" class="row hidden"><label for="c-from">Connect from</label>
+<select id="c-from" style="flex:1;min-height:44px"></select></div>
 <div id="c-pick">
 <label for="c-fav">Favorite</label>
 <select id="c-fav" style="width:100%;min-height:52px;margin-top:6px;font-size:16px"></select>
@@ -2578,6 +2797,32 @@ Node Listen adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <select id="fe-dash" aria-label="Dashboard favorites"></select><button id="fe-dash-add" class="btn" type="button">Add</button></div>
 <div class="row"><button id="fe-save" class="btn primary" type="button">Save favorites</button></div>
 <div id="fe-msg" class="msg"></div>
+</div>
+
+<div class="card">
+<h2>Tune: audio levels</h2>
+<div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
+<p class="muted small">Off: Node Listen passes audio through unchanged. These change only this page's path,
+not the node, the radio or DVSwitch.</p>
+<div id="tune-body">
+<div class="row"><label for="tune-tx" style="min-width:130px">Mic to node (TX)</label>
+<input type="range" id="tune-tx" min="-12" max="12" step="1" style="flex:1"><span id="tune-tx-v" class="mono small">0 dB</span></div>
+<div class="row"><label for="tune-rx" style="min-width:130px">Node to phone (RX)</label>
+<input type="range" id="tune-rx" min="-12" max="12" step="1" style="flex:1"><span id="tune-rx-v" class="mono small">0 dB</span></div>
+<div class="row"><label for="tune-jit" style="min-width:130px">Listen buffer</label>
+<select id="tune-jit"><option value="150">0.15 s (Wi-Fi, fastest)</option><option value="250">0.25 s (default)</option>
+<option value="500">0.5 s</option><option value="1000">1 s (weak signal)</option></select></div>
+<table>
+<tr><th>TX peak</th><td id="tune-txpk" class="mono">-</td></tr>
+<tr><th>RX level</th><td id="tune-rxpk" class="mono">-</td></tr>
+</table>
+<p class="muted small">Aim for TX peaks around -6 to -3 dBFS on normal speech, without reaching 0.</p>
+</div>
+<p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
+use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
+<div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
+<button id="tune-reset" class="btn" type="button">Reset to 0 dB</button></div>
+<div id="tune-msg" class="msg"></div>
 </div>
 
 <div class="card">
@@ -2698,8 +2943,11 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/health":
                 self._json(200, {"ok": True, "version": VERSION})
             elif path == "/api/whoami":
+                dport = dashboard_conf()["port"]
                 self._json(200, {"ok": True, "authed": authed, "public_listen": _cfg_get("public_listen"),
-                                 "backend": _root_backend_available(), "dash_port": dashboard_conf()["port"],
+                                 "backend": _root_backend_available(), "dash_port": dport,
+                                 "dash_running": port_open_cached(dport),
+                                 "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None,
                                  "https": self.server.ssl_ctx is not None})
             elif path == "/api/status":
                 d = build_status(authed)
@@ -2722,7 +2970,8 @@ class Handler(BaseHTTPRequestHandler):
                 d["ok"] = True
                 self._json(200, d)
             elif path == "/api/favorites":
-                self._json(200, {"ok": True, "max": FAV_MAX,
+                self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(), "from_nodes": local_nodes(),
+                                 "dash_node": dashboard_conf()["asl_node"] if port_open_cached(dashboard_conf()["port"]) else "",
                                  "favs": [dict(f, target=fav_target(f)) for f in fav_load()]})
             elif path == "/api/dash-favorites":
                 self._json(200, {"ok": True, "favs": dashboard_conf()["favs"]})
@@ -2889,9 +3138,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/favorites":
                 self._json(200, fav_save(body.get("favs")))
             elif path == "/api/connect":
-                self._json(200, fav_connect(body.get("index")))
+                self._json(200, fav_connect(body.get("index"), body.get("from")))
             elif path == "/api/disconnect":
-                self._json(200, fav_disconnect())
+                self._json(200, fav_disconnect(body.get("from")))
             elif path == "/api/asterisk/restart":
                 self._json(200, restart_asterisk())
             elif path == "/api/restart":

@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.88-pi02w"
+VERSION      = "9.3.89-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -14099,6 +14099,20 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             return
+        if path == "/api/local/action":
+            try:
+                self._do_local_action()
+            except _EarlyReturn:
+                pass
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception:
+                log.exception("Unhandled error in local action")
+                try:
+                    self.send_json({"ok": False, "message": "Internal server error"}, 500)
+                except Exception:
+                    pass
+            return
         if path != "/api/action":
             self.send_response(404); self.end_headers(); return
         if not self._require_auth():
@@ -14125,6 +14139,26 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json({"ok": ok, "message": msg}, 200 if ok else 400, extra_headers=extra)
         except (BrokenPipeError, ConnectionResetError):
             pass
+
+    def _do_local_action(self) -> None:
+        peer = self._client_ip()
+        sent = self.headers.get("X-ASL-DVS-Local-Key", "")
+        key = _local_api_key()
+        if peer not in _LOCAL_API_PEERS or not key or not sent \
+                or not hmac.compare_digest(sent.encode("utf-8", "replace"), key.encode("ascii")):
+            log.warning("local API: refused a request from %s", peer)
+            self.send_json({"ok": False, "message": "Forbidden"}, 403)
+            return
+        if not self._require_json_content_type():
+            return
+        try:
+            data = json.loads(self._read_body())
+        except (json.JSONDecodeError, ValueError) as e:
+            self.send_json({"ok": False, "message": f"Bad request: {e}"}, 400); return
+        if not isinstance(data, dict):
+            self.send_json({"ok": False, "message": "Request body must be a JSON object"}, 400); return
+        ok, msg = action_local(data)
+        self.send_json({"ok": ok, "message": msg}, 200 if ok else 400)
 
     def _dispatch_action(self, data: dict) -> Tuple[bool, str]:
         action = str(data.get("action", ""))
@@ -14210,6 +14244,69 @@ def _act_save_config(h, d):
     if "cpuweight_enabled" in d:
         cfg_data["cpuweight_enabled"] = bool(d["cpuweight_enabled"])
     return action_save_config(cfg_data)
+
+_LOCAL_API_KEY_PATH = "/etc/asl_dvs/local_api.key"
+_LOCAL_API_PEERS = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
+
+def _local_api_key() -> str:
+    try:
+        key = Path(_LOCAL_API_KEY_PATH).read_text(encoding="ascii").strip()
+        if len(key) >= 32:
+            return key
+    except OSError:
+        pass
+    key = secrets.token_hex(32)
+    try:
+        os.makedirs(os.path.dirname(_LOCAL_API_KEY_PATH), exist_ok=True)
+        fd = os.open(_LOCAL_API_KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(key + "\n")
+        return key
+    except FileExistsError:
+        try:
+            return Path(_LOCAL_API_KEY_PATH).read_text(encoding="ascii").strip()
+        except OSError:
+            return ""
+    except OSError:
+        return ""
+
+@_link_locked
+def _local_drop(node: str) -> Tuple[bool, str]:
+    _drop_one_link(node)
+    return True, f"Link to node {node} disconnected"
+
+def action_local(data: dict) -> Tuple[bool, str]:
+    act = str(data.get("action", ""))
+    if act == "connect":
+        mode = str(data.get("mode", "ASL"))
+        node = str(data.get("node", "")).strip()
+        name = _clip_label(str(data.get("name", "")).strip() or f"Node {node}")
+        page = "ECHO" if mode.lower().startswith("echo") else "ASL"
+        if not node.isdigit():
+            return False, f"Invalid node number: {node}"
+        if get_state_fields("page")["page"] != page:
+            ok, msg = action_switch_tab(page)
+            if not ok:
+                return False, msg
+        log.info("local API: Node Listen asks to connect %s %s", page, node)
+        if page == "ECHO":
+            return action_echo_connect(node, name)
+        return action_asl_connect(node, name)
+    if act == "disconnect":
+        node = str(data.get("node", "")).strip()
+        if not node.isdigit():
+            return False, f"Invalid node number: {node}"
+        if node in _bridge_set() or node == _NODELISTEN_TX_NODE:
+            return False, f"Node {node} is managed by the dashboard"
+        st = get_state()
+        log.info("local API: Node Listen asks to disconnect %s", node)
+        if st.current_fav and st.current_fav == node:
+            return action_asl_disconnect_current()
+        if st.echo_fav and st.echo_fav.strip() and st.echo_fav != TG_BLANK_ADDR \
+                and _echolink_to_asl(st.echo_fav) == node:
+            return action_echo_disconnect()
+        return _local_drop(node)
+    return False, f"Unknown local action '{act}'"
 
 _POST_ACTIONS: dict = {
     "logout":            _act_logout,
@@ -14954,6 +15051,8 @@ def main() -> None:
         print("ERROR: run as root  →  sudo python3 nodecontrol.py", file=sys.stderr)
         sys.exit(1)
     startup()
+    if not _local_api_key():
+        log.warning("local API: could not create %s", _LOCAL_API_KEY_PATH)
     Handler.allow_reuse_address = True
     server = _QuietThreadingHTTPServer(("0.0.0.0", _cfg.port), Handler)
 
