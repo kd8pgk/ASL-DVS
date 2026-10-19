@@ -1,6 +1,30 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_85_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_86_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.86 (2026-10-19)
+
+Node Listen support, ported from the Pi02w build (9.3.86, 9.3.87, 9.3.89 and
+9.3.90-pi02w). Behaviour is the same as there.
+
+- **Listen button** next to the connection indicator in the quick-link row (on a
+  phone, beside the indicator). It opens Node Listen in its own tab and reuses that
+  tab on later presses, so playing audio keeps playing. It is greyed out when Node
+  Listen isn't running. The page asks the new `GET /api/nodelisten-status` at start;
+  the server reads the port from `/etc/asl_dvs/nodelisten.conf` (default 8993) and
+  checks it answers on 127.0.0.1, cached 15 s. The Dashboard names its own tab, so
+  Node Listen's Node Controller button can switch back to it.
+- **Node Listen's transmit node (1921)** is kept out of the Dashboard's link
+  handling when rpt.conf has the `; nodelisten: transmit node` line right above
+  `[1921]`: never shown as the connected node or an extra link; kept by Disconnect,
+  tab switches and teardowns while Node Listen runs (relinked after the `ilink 6`
+  fallback); unlinked by the poll, at most once every 30 s, when Node Listen isn't
+  running. A node 1921 of your own is handled as before.
+- **Local API for Node Listen:** `POST /api/local/action`, accepted only from
+  127.0.0.1 / ::1 with the `X-ASL-DVS-Local-Key` header matching
+  `/etc/asl_dvs/local_api.key` (made at start if missing, mode 0600). `connect`
+  (ASL or EchoLink; switches tab first when needed, then the tab's own Connect) and
+  `disconnect` (bridge nodes and 1921 refused). Refused requests are logged.
 
 ## 9.3.85 (2026-10-19)
 
