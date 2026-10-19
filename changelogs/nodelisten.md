@@ -1,6 +1,24 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_5_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_6_20261019.py`. Newest entries first.
+
+## 0.4.6 (2026-10-19)
+
+Refactor with no change in what Node Listen or its page does: the same
+rpt.conf edits, API answers, transmit packets and page behaviour.
+
+- **Server**: one range check builds the integer settings checks (same
+  messages); one helper reads and parses rpt.conf (seven places did it by
+  hand); the [nodes] line for node 1921 is put in by one function, which
+  Add node 1921 used to spell out twice; the audio pump and the transmit pacer
+  share one 20 ms loop; the UDP sockets share one bind (a socket that fails to
+  bind is now closed); the POST routes are one table instead of four
+  copy-pasted error blocks; the page is built once and kept.
+- **Page**: one windowed-sinc builder makes the filters for both the mic
+  resampler and the playback upsampler (bit-for-bit the same coefficients);
+  small helpers for messages, POST calls, gain labels, list options, playback
+  and the audio context replace repeated code. Mic settings are saved with
+  the same values (the keys are in a different order).
 
 ## 0.4.5 (2026-10-19)
 
