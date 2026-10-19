@@ -27,7 +27,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.2"
+VERSION = "0.4.3"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -42,6 +42,8 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "nodelisten.conf")
 CONFIG_SECTION = "nodelisten"
 BACKUP_DIR = os.path.join(CONFIG_DIR, "nodelisten_backups")
 BACKUP_KEEP = 10
+RESTORE_PATH = os.path.join(CONFIG_DIR, "nodelisten_restore.json")
+RESTORE_MAX_AGE_SEC = 1800
 RPT_CONF = os.environ.get("NODELISTEN_RPT_CONF", "/etc/asterisk/rpt.conf")
 FEED_PYTHON = "/usr/bin/python3"
 FEED_MARK = "nodelisten.py,--feed,"
@@ -3414,6 +3416,53 @@ def _systemctl(*args):
     return subprocess.run(["systemctl", *args], capture_output=True, text=True)
 
 
+def _hook_node_now():
+    try:
+        with open(RPT_CONF, "r", encoding="utf-8", errors="replace") as fh:
+            _, stanzas = parse_rpt(fh.read())
+    except OSError:
+        return ""
+    return next((s["name"] for s in stanzas if _is_ours(s["outstream"])), "")
+
+
+def _restore_after_update():
+    try:
+        with open(RESTORE_PATH, "r", encoding="utf-8") as fh:
+            rec = json.load(fh)
+    except (OSError, ValueError):
+        return
+    try:
+        os.remove(RESTORE_PATH)
+    except OSError:
+        pass
+    if not isinstance(rec, dict):
+        return
+    try:
+        age = time.time() - float(rec.get("time", 0))
+    except (TypeError, ValueError):
+        return
+    if not 0 <= age <= RESTORE_MAX_AGE_SEC:
+        print(f"  [i] Ignored {RESTORE_PATH}: older than {RESTORE_MAX_AGE_SEC // 60} minutes")
+        return
+    print(f"  [i] The uninstall {int(age)} s ago changed rpt.conf (an update); putting its Node Listen lines back")
+    put_back = False
+    try:
+        node = _norm_node(rec.get("hook_node") or "")
+        if node:
+            r = hook_enable(node)
+            print(f"  [+] Put back the audio feed from node {node}" if r.get("ok") else f"  [!] Audio feed from node {node}: {r.get('error')}")
+            put_back = put_back or bool(r.get("changed"))
+        if rec.get("tx") is True:
+            r = tx_enable()
+            print(f"  [+] Put back transmit node {TX_NODE}" if r.get("ok") else f"  [!] Transmit node {TX_NODE}: {r.get('error')}")
+            put_back = put_back or bool(r.get("changed"))
+    except OSError as exc:
+        print(f"  [!] Could not put the rpt.conf lines back: {exc}")
+        return
+    if put_back:
+        print("      Asterisk needs no restart, unless it was restarted while Node Listen was out.")
+
+
 def install_service():
     if os.geteuid() != 0:
         print("Error: installing needs root. Run with sudo.")
@@ -3446,6 +3495,8 @@ def install_service():
         load_config()
         save_config(dict(DEFAULT_CONFIG))
         print(f"  [+] Wrote {CONFIG_PATH}")
+    load_config()
+    _restore_after_update()
     with open(SYSTEMD_SERVICE_PATH, "w") as f:
         f.write(SYSTEMD_SERVICE_CONTENT)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
@@ -3467,6 +3518,7 @@ def uninstall_service():
     print(f"Removing {APP_NAME}...")
     load_config()
     try:
+        hook_node = _hook_node_now()
         r = hook_disable()
         if r.get("changed"):
             print(f"  [-] Removed the outstreamcmd line from {RPT_CONF} (backup {r.get('backup')})")
@@ -3475,6 +3527,13 @@ def uninstall_service():
             print(f"  [-] Removed transmit node {TX_NODE} from {RPT_CONF} (backup {r2.get('backup')})")
         if r.get("changed") or r2.get("changed"):
             print("      Restart Asterisk to apply: systemctl restart asterisk")
+            rec = {"time": time.time(), "version": VERSION,
+                   "hook_node": hook_node if r.get("changed") else "", "tx": bool(r2.get("changed"))}
+            try:
+                _atomic_write(RESTORE_PATH, json.dumps(rec) + "\n", mode=0o600)
+                print(f"      An install within {RESTORE_MAX_AGE_SEC // 60} minutes (an update) puts these back.")
+            except OSError as exc:
+                print(f"  [!] Could not write {RESTORE_PATH}: {exc}")
     except OSError as exc:
         print(f"  [!] Could not check {RPT_CONF}: {exc}")
     _systemctl("disable", "--now", SERVICE_NAME)
