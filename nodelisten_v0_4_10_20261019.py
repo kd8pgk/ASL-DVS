@@ -28,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.9"
+VERSION = "0.4.10"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -1113,6 +1113,7 @@ def build_status(full):
         st["node"] = node
         ok, links = rpt_links(node)
         st["links"], st["links_ok"] = links, ok
+        st["m17"] = m17_current() if _has_m17(fav_load()) else ""
         tx = tx_state(node)
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
@@ -1144,6 +1145,8 @@ TX_DEADMAN_SEC = 1.0
 USRP_HEADER = struct.Struct(">4s7i")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
 _CALL_TRIM = re.compile(r"[\x00-\x1f\x7f]")
+_M17_REF_RE = re.compile(r"[A-Z0-9][A-Z0-9-]{0,15}")
+M17_STATUS_TTL = 5.0
 
 
 def iax_bindport():
@@ -1254,6 +1257,14 @@ def dashboard_conf():
                 out["port"] = int(v)
             elif k in ("bridge_node", "bridge_nodes"):
                 out["bridges"].update(x.strip() for x in v.split(",") if x.strip())
+        elif section == "M17" and line.count("|") >= 3 and len(out["favs"]) < 200:
+            name, base, module, ip = [x.strip() for x in line.split("|")[:4]]
+            if name.lower() != "blank" and ip and ip != "000000":
+                try:
+                    out["favs"].append(_norm_fav({"mode": "M17", "num": base, "module": module,
+                                                  "label": _CALL_TRIM.sub(" ", name)[:40]}))
+                except ValueError:
+                    pass
         elif section in ("ASL", "ECHO") and "|" in line and not line.lower().startswith("network_url"):
             name, _, num = line.rpartition("|")
             num = num.strip()
@@ -1269,9 +1280,24 @@ def main_node():
     return n or dashboard_conf()["asl_node"]
 
 
+def _norm_m17_fav(f):
+    ref, _, mod = str(f.get("num", "")).strip().upper().partition(" ")
+    mod = mod.strip() or str(f.get("module", "")).strip().upper() or "@ALL"
+    if mod == "ALL":
+        mod = "@ALL"
+    if not _M17_REF_RE.fullmatch(ref):
+        raise ValueError("M17 reflector must look like M17-USA (letters, digits and dashes, up to 16)")
+    if mod != "@ALL" and not re.fullmatch(r"[A-Z]", mod):
+        raise ValueError(f"M17 module for {ref} must be a letter A-Z or @ALL")
+    label = _CALL_TRIM.sub(" ", str(f.get("label", ""))).strip()[:40]
+    return {"mode": "M17", "num": ref, "module": mod, "label": label or f"M17 {ref} {mod}"}
+
+
 def _norm_fav(f):
     if not isinstance(f, dict):
         raise ValueError("bad favorite")
+    if str(f.get("mode", "")).strip().upper() == "M17":
+        return _norm_m17_fav(f)
     mode = "EchoLink" if str(f.get("mode", "")).lower().startswith("echo") else "ASL"
     num = str(f.get("num", "")).strip()
     if not num.isdigit() or int(num) <= 0 or len(num) > (6 if mode == "EchoLink" else 7):
@@ -1283,7 +1309,13 @@ def _norm_fav(f):
 
 
 def fav_target(f):
+    if f["mode"] == "M17":
+        return f"{f['num']}|{f['module']}"
     return f["num"] if f["mode"] == "ASL" else "3" + f["num"].zfill(6)
+
+
+def fav_name(f):
+    return f"{f['mode']} {f['num']}" + (f" {f['module']}" if f["mode"] == "M17" else "")
 
 
 def fav_load():
@@ -1314,7 +1346,7 @@ def fav_save(items):
     for f in clean:
         key = fav_target(f)
         if key in seen:
-            return {"ok": False, "error": f"{f['mode']} {f['num']} is listed twice."}
+            return {"ok": False, "error": f"{fav_name(f)} is listed twice."}
         seen.add(key)
     try:
         _atomic_write(FAV_PATH, json.dumps(clean, indent=1) + "\n", 0o644)
@@ -1419,6 +1451,47 @@ def _from_node(from_node):
     return n, ""
 
 
+_m17_status = {"t": -M17_STATUS_TTL, "v": ""}
+
+
+def m17_current(max_age=M17_STATUS_TTL):
+    now = time.monotonic()
+    if now - _m17_status["t"] < max_age:
+        return _m17_status["v"]
+    r = dash_call({"action": "m17-status"}, timeout=3)
+    v = r["message"].strip().upper() if r and r["ok"] else ""
+    _m17_status.update(t=now, v=v)
+    return v
+
+
+def _has_m17(favs):
+    return any(f["mode"] == "M17" for f in favs)
+
+
+def _m17_error(r):
+    if r is None:
+        return "M17 goes through Node Controller, which is not running."
+    err = r["error"]
+    if err.startswith("Unknown local action"):
+        err = "this version can't connect M17 for Node Listen; update Node Controller."
+    return f"Node Controller: {err}"
+
+
+def m17_connect(f, node):
+    dash_node = dashboard_conf()["asl_node"]
+    if not dash_node:
+        return {"ok": False, "error": "M17 goes through Node Controller; set its node first."}
+    if node != dash_node:
+        return {"ok": False, "error": f"M17 links Node Controller's node {dash_node}: connect from that node."}
+    r = dash_call({"action": "m17-connect", "reflector": f["num"], "module": f["module"], "name": f["label"]}, timeout=40)
+    _lstats_invalidate()
+    _m17_status["t"] = -M17_STATUS_TTL
+    if r is None or not r["ok"]:
+        return {"ok": False, "error": _m17_error(r)}
+    log_event(f"Connect {fav_name(f)} through Node Controller", "ok")
+    return {"ok": True, "message": f"{r['message'] or 'Connected'} (through Node Controller)"}
+
+
 def fav_connect(index, from_node=None):
     favs = fav_load()
     try:
@@ -1428,6 +1501,8 @@ def fav_connect(index, from_node=None):
     node, err = _from_node(from_node)
     if not node:
         return {"ok": False, "error": err}
+    if f["mode"] == "M17":
+        return m17_connect(f, node)
     if node == dashboard_conf()["asl_node"]:
         r = dash_call({"action": "connect", "mode": f["mode"], "node": f["num"], "name": f["label"]})
         if r is not None:
@@ -1447,11 +1522,22 @@ def fav_disconnect(from_node=None):
     node, err = _from_node(from_node)
     if not node:
         return {"ok": False, "error": err}
-    targets = {fav_target(f): f for f in fav_load()}
+    favs = fav_load()
+    targets = {fav_target(f): f for f in favs}
     _, links = rpt_links(node, max_age=0)
     hit = [l["node"] for l in links if l["node"] in targets]
+    m17 = m17_current(0) if _has_m17(favs) else ""
+    done = []
+    if m17 in targets:
+        r = dash_call({"action": "m17-disconnect"})
+        _m17_status["t"] = -M17_STATUS_TTL
+        if r is None or not r["ok"]:
+            return {"ok": False, "error": _m17_error(r)}
+        _lstats_invalidate()
+        done.append(fav_name(targets[m17]))
+        log_event(f"Disconnect {done[0]} through Node Controller", "ok")
     if not hit:
-        return {"ok": True, "message": "No favorite is linked."}
+        return {"ok": True, "message": f"Disconnected {done[0]}." if done else "No favorite is linked."}
     via = node == dashboard_conf()["asl_node"]
     for peer in hit:
         r = dash_call({"action": "disconnect", "node": peer}) if via else None
@@ -1460,7 +1546,7 @@ def fav_disconnect(from_node=None):
             ilink(node, 1, peer)
     _lstats_invalidate()
     log_event(f"Disconnect {', '.join(hit)} from node {node}" + (" through Node Controller" if via else ""), "ok")
-    return {"ok": True, "message": f"Disconnected {', '.join(hit)}."}
+    return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
 
 
 def _lan_ips():
@@ -2043,11 +2129,11 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 #ptt-time{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;color:var(--soft)}
 .sel-card{display:flex;flex-direction:column;gap:6px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px}
 .tag{display:inline-block;padding:2px 8px;border:1px solid var(--accent);border-radius:7px;color:#7fd8c6;font-size:12px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace}
-.fav-row{display:grid;grid-template-columns:110px 96px minmax(0,1fr) 44px;gap:6px;margin:6px 0}
+.fav-row{display:grid;grid-template-columns:110px 124px minmax(0,1fr) 44px;gap:6px;margin:6px 0}
 .fav-row input,.fav-row select{min-width:0;width:100%}
 .fav-row button{min-height:40px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--red);cursor:pointer}
 @media (max-width:420px){header{gap:6px;padding:10px 12px}header .ver{display:none}.pill{padding:0 10px}}
-@media (max-width:480px){.fav-row{grid-template-columns:96px 84px minmax(0,1fr) 40px}#ptt{width:160px;height:160px}}
+@media (max-width:480px){.fav-row{grid-template-columns:92px 108px minmax(0,1fr) 40px}#ptt{width:160px;height:160px}}
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
@@ -2314,9 +2400,12 @@ function fmtDb(db) { return db <= -119 ? '-inf' : ((Math.round(db) || 0) + ' dBF
 function dbPct(db) { return Math.max(0, Math.min(100, (db + 60) / 60 * 100)); }
 function fmtSecs(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
+function favNum(f) { return f.mode === 'M17' ? f.num + (f.module ? ' ' + f.module : '') : f.num; }
+
 function linkedFavs(d) {
   const links = (d && d.links) || [];
   const set = new Set(links.map((l) => l.node));
+  if (d && d.m17) set.add(d.m17);
   return favs.filter((f) => set.has(f.target));
 }
 
@@ -2364,7 +2453,7 @@ async function pollStatus() {
   $('s-nolinks').classList.toggle('hidden', links.length > 0);
   $('s-links-err').classList.toggle('hidden', d.links_ok !== false);
   const lf = linkedFavs(d);
-  $('c-linked').textContent = lf.length ? lf.map((f) => f.mode + ' ' + f.num).join(', ') : 'No favorite linked';
+  $('c-linked').textContent = lf.length ? lf.map((f) => f.mode + ' ' + favNum(f)).join(', ') : 'No favorite linked';
   $('c-disc').disabled = !lf.length;
   $('nd-feeder').textContent = d.feeder_pids && d.feeder_pids.length ? 'running (pid ' + d.feeder_pids.join(', ') + ')' : 'not running';
   if (d.udp_port) $('nd-udp').textContent = d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)';
@@ -2799,7 +2888,7 @@ async function loadFavs() {
   $('c-from-row').classList.toggle('hidden', nodes.length < 2 && !dashNode);
   const sel = $('c-fav'), keep = sel.value;
   sel.innerHTML = '';
-  favs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + f.num + '  ·  ' + f.label));
+  favs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + favNum(f) + '  ·  ' + f.label));
   if (keep && Number(keep) < favs.length) sel.value = keep;
   $('c-empty').classList.toggle('hidden', favs.length > 0);
   $('c-pick').classList.toggle('hidden', favs.length === 0);
@@ -2809,7 +2898,7 @@ async function loadFavs() {
 function showSelected() {
   const f = favs[Number($('c-fav').value)];
   $('c-mode').textContent = f ? f.mode : '';
-  $('c-num').textContent = f ? f.num : '';
+  $('c-num').textContent = f ? favNum(f) : '';
   $('c-label').textContent = f ? f.label : '';
 }
 
@@ -2895,7 +2984,7 @@ async function txDisable() {
   setMsg('tx-msg', await post('/api/tx/disable', {})); loadTx();
 }
 
-function favCopy(f) { return {mode: f.mode, num: f.num, label: f.label}; }
+function favCopy(f) { return {mode: f.mode, num: f.num, module: f.module, label: f.label}; }
 
 async function loadFavEditor() {
   const d = await api('/api/favorites');
@@ -2908,7 +2997,7 @@ async function loadFavEditor() {
   const sel = $('fe-dash');
   sel.innerHTML = '';
   addOption(sel, '', dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites found');
-  dashFavs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + f.num + ' · ' + f.label));
+  dashFavs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + favNum(f) + ' · ' + f.label));
 }
 
 function drawFavEditor() {
@@ -2917,10 +3006,16 @@ function drawFavEditor() {
   favEdit.forEach((f, i) => {
     const row = document.createElement('div'); row.className = 'fav-row';
     const m = document.createElement('select'); m.setAttribute('aria-label', 'Network ' + (i + 1));
-    ['ASL', 'EchoLink'].forEach((v) => addOption(m, v, v));
-    m.value = f.mode; m.onchange = () => { f.mode = m.value; };
-    const n = document.createElement('input'); n.inputMode = 'numeric'; n.value = f.num; n.placeholder = 'Number';
-    n.setAttribute('aria-label', 'Node number ' + (i + 1)); n.oninput = () => { f.num = n.value.trim(); };
+    ['ASL', 'EchoLink', 'M17'].forEach((v) => addOption(m, v, v));
+    const n = document.createElement('input'); n.value = favNum(f);
+    const numUi = () => {
+      const m17 = f.mode === 'M17';
+      n.inputMode = m17 ? 'text' : 'numeric'; n.placeholder = m17 ? 'M17-USA A' : 'Number';
+      n.setAttribute('aria-label', (m17 ? 'Reflector and module ' : 'Node number ') + (i + 1));
+    };
+    m.value = f.mode; m.onchange = () => { f.mode = m.value; numUi(); };
+    numUi();
+    n.oninput = () => { f.num = n.value.trim(); f.module = ''; };
     const l = document.createElement('input'); l.value = f.label; l.maxLength = 40; l.placeholder = 'Name';
     l.setAttribute('aria-label', 'Name ' + (i + 1)); l.oninput = () => { f.label = l.value; };
     const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Remove favorite ' + (i + 1));
@@ -3202,7 +3297,9 @@ Node Listen adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 
 <div class="card">
 <h2>Favorites <span class="muted small" id="fe-count"></span></h2>
-<p class="muted small">The Connect tab offers only these. EchoLink numbers are the station's own number.</p>
+<p class="muted small">The Connect tab offers only these. EchoLink numbers are the station's own number.
+M17: the reflector and module, for example <code>M17-USA A</code> (or <code>@ALL</code> for every module); Node Controller
+tunes the M17 bridge and links it to its node.</p>
 <div id="fe-rows"></div>
 <div class="row"><button id="fe-add" class="btn" type="button">Add row</button>
 <select id="fe-dash" aria-label="Dashboard favorites"></select><button id="fe-dash-add" class="btn" type="button">Add</button></div>

@@ -1,6 +1,23 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_9_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_10_20261019.py`. Newest entries first.
+
+## 0.4.10 (2026-10-19)
+
+- **M17 favorites.** A favorite can now be an M17 reflector: pick **M17** in
+  the Favorites editor and type the reflector and module, for example
+  `M17-USA A`, or `M17-USA @ALL` (just `M17-USA` means @ALL) for every module.
+  M17 is added to the favorites only; Node Listen has no M17 tab.
+- **Connect** on an M17 favorite asks Node Controller to tune the M17 bridge
+  to that reflector and module and link the M17 bridge node to its node, the
+  same as Connect on Node Controller's M17 tab. It goes from Node
+  Controller's node only. **Disconnect** drops the M17 reflector when it is
+  one of the favorites, and "Linked now" shows it.
+- Needs Node Controller 9.3.92-pi02w or later. With an older Node Controller,
+  or none running, an M17 favorite says so and nothing else changes; ASL and
+  EchoLink favorites work as before. Older Node Listen versions skip M17
+  favorites in the favorites file.
+- **From the Dashboard** also offers the Dashboard's M17 favorites.
 
 ## 0.4.9 (2026-10-19)
 

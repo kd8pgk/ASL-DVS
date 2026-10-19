@@ -1,6 +1,16 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_91_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_92_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.92-pi02w (2026-10-19)
+
+- **M17 for Node Listen.** The local API that Node Listen uses (0.4.10 or
+  later) can now connect an M17 reflector: it tunes the M17 bridge
+  (USRP2M17) to the reflector and module and links the M17 bridge node, just
+  like Connect on the M17 tab. The reflector is looked up in the M17
+  reflector list, or in the M17 favorites when the list doesn't have it.
+  Node Listen can also ask which M17 reflector is connected and disconnect
+  it. Nothing changes on the Dashboard page.
 
 ## 9.3.91-pi02w (2026-10-19)
 
