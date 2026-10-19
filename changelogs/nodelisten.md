@@ -1,6 +1,34 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_3_1_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_0_20261019.py`. Newest entries first.
+
+## 0.4.0 (2026-10-19)
+
+- **Tune card** (Setup), opt in with **Adjust audio levels here**: **Mic to node
+  (TX)** and **Node to phone (RX)** gains, -12 to +12 dB, and the **Listen
+  buffer** (0.15, 0.25, 0.5 or 1 s). Off, audio passes through unchanged and the
+  buffer is 0.25 s. Gains apply at once, with clipping; the card shows the TX
+  peak (live while talking, else the last transmission) and the RX level. When
+  SysMon answers on port 9999 the card points to it for the node's own levels
+  (radio, DVSwitch and USRP gains).
+- **Connect from** (Connect tab): pick the local node that makes the link, from
+  rpt.conf's numbered nodes (not 1921, not the Dashboard's bridge nodes); the
+  main node is the default. Shown when there is a choice.
+- **Connects go through Node Controller when it runs.** When the connecting node
+  is the Dashboard's node and the Dashboard (pi02w 9.3.89 or later) answers, Node
+  Listen sends the connect or disconnect to the Dashboard's local API
+  (`POST /api/local/action` on 127.0.0.1, with the key in
+  `/etc/asl_dvs/local_api.key`, made by whichever starts first, mode 0600). The
+  Dashboard switches to its ASL or Echo tab (dropping any digital bridge, so the
+  phone can't bridge DMR to AllStar), connects as if you had pressed Connect, and
+  counts the link as its own, so its permanent-link "Bridging risk" banner and
+  extra-link clean-up leave it alone. A refusal from the Dashboard is shown as
+  is. Without the Dashboard, or with an older one, Node Listen connects directly
+  as before.
+- The header's **Node Controller** link is hidden when the Dashboard isn't
+  running.
+- The busy lockout's grace after Node Listen's own unkey is 1 s (was 2 s), so
+  quick re-presses can't key over someone who answers straight away.
 
 ## 0.3.1 (2026-10-19)
 

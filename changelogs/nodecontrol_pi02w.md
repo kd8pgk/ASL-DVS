@@ -1,6 +1,27 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_88_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_89_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.89-pi02w (2026-10-19)
+
+A local API for Node Listen, so its phone page connects through the Dashboard.
+Pi02w only; the full build is unchanged.
+
+- **`POST /api/local/action`**, accepted only from 127.0.0.1 / ::1 and only with
+  the `X-ASL-DVS-Local-Key` header matching `/etc/asl_dvs/local_api.key` (a
+  64-hex-digit key, mode 0600, made at start if missing; Node Listen makes it
+  too if it starts first). No login cookie is involved; refused requests are
+  logged.
+  - `{"action": "connect", "mode": "ASL" | "EchoLink", "node", "name"}`:
+    switches to the ASL or Echo tab when another tab is open (the normal tab
+    switch, which takes down a digital mode's bridge), then runs the same
+    connect as the tab's Connect button, so the link is the Dashboard's own.
+  - `{"action": "disconnect", "node"}`: the ASL or Echo tab's Disconnect when it
+    is the current link, else drops just that link. Bridge nodes and Node
+    Listen's 1921 are refused.
+- This keeps the permanent-link "Bridging risk" banner, the extra-link clean-up
+  and the bridge watchdog right when the phone page connects, and stops a phone
+  connect from linking AllStar while a digital bridge is still linked.
 
 ## 9.3.88-pi02w (2026-10-19)
 
