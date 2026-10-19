@@ -1,6 +1,19 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_87_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_88_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.88-pi02w (2026-10-19)
+
+The IAX port is read from included files too. Pi02w only; the full build has the
+same code and is unchanged.
+
+- **`bindport` in an included file.** The Phone tab writes its nodes' `[nodes]`
+  lines as `radio@127.0.0.1:<bindport>/<node>` when iax.conf's `bindport` isn't
+  4569. A `bindport` set in a file pulled in with `#include` / `#tryinclude`
+  under `[general]` was missed unless that file had its own `[general]` line, so
+  the Dashboard used 4569 and the Phone nodes couldn't link. An included file now
+  carries on in the section it was included from, as Asterisk reads it. Found
+  while auditing Node Listen 0.3.1, which uses the same rule.
 
 ## 9.3.87-pi02w (2026-10-19)
 

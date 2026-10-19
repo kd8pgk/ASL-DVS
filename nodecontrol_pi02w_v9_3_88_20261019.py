@@ -8,6 +8,7 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
+import io
 import hashlib
 import hmac
 import ipaddress
@@ -39,8 +40,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.84"
-BUILD_DATE   = "2026-10-14"
+VERSION      = "9.3.88-pi02w"
+BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -93,6 +94,7 @@ _DSTAR_BASE_LEN = 6
 ASL_DVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
 
 _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
+_BOOT_DISCONNECT_MARKER_PATH = "/run/asl_dvs/boot_disconnect_done"
 
 _INSTALL_DIR      = "/usr/local/lib/asl_dvs/nodecontrol"
 _OLD_INSTALL_DIRS = ("/usr/local/lib/asl_dvs/dashboard", "/usr/local/lib/asl_dvs")
@@ -102,6 +104,64 @@ _SERVICE_NAME     = "nodecontrol.service"
 _SERVICE_PATH     = "/etc/systemd/system/nodecontrol.service"
 _LEGACY_SERVICE_NAME = "asl_dvs_dashboard.service"
 _LEGACY_SERVICE_PATH = "/etc/systemd/system/asl_dvs_dashboard.service"
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+import os
+import runpy
+import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
+if name.isidentifier():
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
+'''
 _SERVICE_CONTENT  = f"""[Unit]
 Description=ASL-DVS Node Control Dashboard
 After=network.target
@@ -109,7 +169,7 @@ After=network.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -1301,19 +1361,19 @@ def _iax_bindport() -> str:
         return _iax_port_cache[1]
     base = Path("/etc/asterisk")
     port = "4569"
-    def scan(path: Path, depth: int) -> Optional[str]:
+    def scan(path: Path, depth: int, sec: str = "") -> Optional[str]:
         try:
             txt = path.read_text(errors="replace")
         except OSError:
             return None
-        sec, found = "", None
+        found = None
         for raw in txt.splitlines():
             ln = raw.split(";", 1)[0].strip()
             m = re.match(r'^#(?:try)?include\s+"?([^"\s]+)"?', ln)
             if m and depth < 2:
                 for inc in sorted(_glob.glob(str(base / m.group(1)) if not m.group(1).startswith("/") else m.group(1))):
-                    r = scan(Path(inc), depth + 1)
-                    if r and sec in ("", "general"):
+                    r = scan(Path(inc), depth + 1, sec)
+                    if r:
                         found = r
                 continue
             m = re.match(r"^\[([^\]]+)\]", ln)
@@ -2807,13 +2867,29 @@ def _phone_then_prepare(tones: str) -> bool:
     log.warning("phone: couldn't hand the saved tones to Asterisk — sending them after answer")
     return False
 
+_PHONE_REFRESH_DELAY = 20
+_PHONE_REFRESH_RETRY = 15
+_PHONE_REFRESH_WAIT  = 300
+
+def _phone_refresh_ready() -> "dict | None":
+    doc = _phone_load()
+    if not doc.get("activated") or not doc.get("networks") or _ph_read(_ph_path(_PH_OWNED["ext"])) is None:
+        return None
+    return doc
+
 def _phone_refresh_on_start() -> None:
-    time.sleep(20)
+    end = time.monotonic() + _PHONE_REFRESH_WAIT
+    time.sleep(_PHONE_REFRESH_DELAY)
     try:
-        doc = _phone_load()
-        ext = _ph_path(_PH_OWNED["ext"])
-        if not doc.get("activated") or not doc.get("networks") or _ph_read(ext) is None \
-                or not _svc_is_active("asterisk"):
+        if _phone_refresh_ready() is None:
+            return
+        while not _svc_is_active("asterisk"):
+            if time.monotonic() >= end:
+                log.info("phone: Asterisk isn't running after %d s — start-up refresh skipped", _PHONE_REFRESH_WAIT)
+                return
+            time.sleep(_PHONE_REFRESH_RETRY)
+        doc = _phone_refresh_ready()
+        if doc is None:
             return
         if not _phone_setup_stale(doc):
             return
@@ -4159,15 +4235,17 @@ def _drop_links(keep: Optional[str] = None, what: str = "drop-links") -> Optiona
     if linked is None:
         log.warning("%s: link query failed — falling back to ilink 6", what)
         _ilink6_pair()
+        _nodelisten_tx_relink()
         _log_teardown_survivors_async(what + " (ilink 6 fallback)")
         return None
 
     perms      = _read_perm_links()
     bridge_set = _bridge_set()
+    listen_keep = _nodelisten_keep_set()
     dropped: List[str] = []
 
     for nd in linked:
-        if nd == keep:
+        if nd == keep or nd in listen_keep:
             continue
         if len(dropped) >= _LINK_DROP_MAX:
             log.warning("%s: hit drop cap of %d — leaving the rest to the poller",
@@ -4194,11 +4272,15 @@ _detection_cache: Dict[str, Tuple[Optional[bool], float]] = {
     "echo":   (None, 0.0),
     "sysmon": (None, 0.0),
     "m17":    (None, 0.0),
+    "nodelisten": (None, 0.0),
 }
 _STFU_CACHE_TTL   = 60.0
 _ECHO_CACHE_TTL   = 120.0
 _SYSMON_PORT      = 9999
 _SYSMON_CACHE_TTL = 15.0
+_NODELISTEN_CONF      = "/etc/asl_dvs/nodelisten.conf"
+_NODELISTEN_PORT      = 8993
+_NODELISTEN_CACHE_TTL = 15.0
 _M17_CACHE_TTL    = 60.0
 _detection_lock = threading.Lock()
 
@@ -4344,6 +4426,81 @@ def _detect_m17() -> bool:
 
 def action_sysmon_status() -> dict:
     return {"running": _detect_sysmon(), "port": _SYSMON_PORT}
+
+def _nodelisten_port() -> int:
+    try:
+        text = Path(_NODELISTEN_CONF).read_text(errors="replace")
+    except OSError:
+        return _NODELISTEN_PORT
+    m = re.search(r"^\s*port\s*=\s*(\d{4,5})\s*$", text, re.M)
+    if m and 1024 <= int(m.group(1)) <= 65535:
+        return int(m.group(1))
+    return _NODELISTEN_PORT
+
+_NODELISTEN_TX_NODE = "1921"
+_NODELISTEN_TX_MARK = "; nodelisten: transmit node"
+_nl_tx_cache = {"key": None, "owned": False}
+_nl_tx_drop_at = 0.0
+_NODELISTEN_TX_DROP_GAP = 30.0
+
+def _nodelisten_tx_owned() -> bool:
+    try:
+        st = os.stat(ASL_CONF)
+    except OSError:
+        return False
+    key = (st.st_mtime_ns, st.st_size)
+    if _nl_tx_cache["key"] != key:
+        owned = False
+        try:
+            lines = Path(ASL_CONF).read_text(errors="replace").splitlines()
+            for i, ln in enumerate(lines[:-1]):
+                if ln.strip().startswith(_NODELISTEN_TX_MARK) and \
+                        lines[i + 1].strip().startswith(f"[{_NODELISTEN_TX_NODE}]"):
+                    owned = True
+                    break
+        except OSError:
+            pass
+        _nl_tx_cache.update(key=key, owned=owned)
+    return _nl_tx_cache["owned"]
+
+def _nodelisten_skip_set() -> Set[str]:
+    return {_NODELISTEN_TX_NODE} if _nodelisten_tx_owned() else set()
+
+def _nodelisten_keep_set() -> Set[str]:
+    if not _nodelisten_tx_owned():
+        return set()
+    try:
+        return {_NODELISTEN_TX_NODE} if action_nodelisten_status()["running"] else set()
+    except Exception:
+        return set()
+
+def _nodelisten_tx_relink() -> None:
+    if _nodelisten_keep_set():
+        _asterisk(f"rpt cmd {_cfg.asl_node} ilink 3 {_NODELISTEN_TX_NODE}")
+        log.info("nodelisten: relinked transmit node %s after ilink 6", _NODELISTEN_TX_NODE)
+
+def _nodelisten_tx_check(adjacent: List[str]) -> None:
+    global _nl_tx_drop_at
+    if _NODELISTEN_TX_NODE not in adjacent or not _nodelisten_tx_owned() or _nodelisten_keep_set():
+        return
+    now = time.monotonic()
+    if now - _nl_tx_drop_at < _NODELISTEN_TX_DROP_GAP:
+        return
+    _nl_tx_drop_at = now
+    log.info("nodelisten: Node Listen is not running — unlinking its transmit node %s", _NODELISTEN_TX_NODE)
+    threading.Thread(target=_disconnect, args=(_NODELISTEN_TX_NODE,), daemon=True,
+                     name="nodelisten-tx-drop").start()
+
+def action_nodelisten_status() -> dict:
+    port = _nodelisten_port()
+    def _probe():
+        try:
+            s = _socket.create_connection(("127.0.0.1", port), timeout=1.0)
+            s.close()
+            return True
+        except OSError:
+            return False
+    return {"running": _cached_detect("nodelisten", _NODELISTEN_CACHE_TTL, _probe), "port": port}
 
 def _gw_path(val: str, base_dir: str) -> str:
     val = _strip_ctrl(val).strip().strip('"').strip("'")
@@ -5584,75 +5741,154 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
-_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-def _parse_astdb(f) -> dict:
-    rows, by_node = [], {}
-    for raw in f:
-        line = raw.strip()
-        if not line or line.startswith(("#", ";")):
-            continue
-        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
-        node = parts[0]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node in by_node:
-            continue
-        call = parts[1] if len(parts) > 1 else ""
-        desc = parts[2] if len(parts) > 2 else ""
-        loc  = parts[3] if len(parts) > 3 else ""
-        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-        rows.append(row)
-        by_node[node] = row
-    return {"rows": rows, "by_node": by_node}
+_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
 
-def _build_astdb(prev):
-    try:
-        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
-    except OSError:
-        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
-    if prev and prev.get("found") and prev["mtime"] == mtime:
-        return prev, False
-    try:
-        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
-            part = _parse_astdb(f)
-    except OSError as e:
-        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
-        part = {"rows": [], "by_node": {}}
-    return {"found": True, "mtime": mtime, **part}, False
+class _LineDB:
 
-_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
-                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
-                                                 "node menu will be empty (turn on "
-                                                 "asl3-update-astdb)", _ASTDB_PATH))
+    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
+        self._path_fn     = path_fn
+        self._node_of     = node_of
+        self._parse       = parse
+        self._missing_msg = missing_msg
+        self._warned      = False
+        self._lock        = threading.Lock()
+        self._index_key   = None
+        self._index       = (0, True, frozenset())
 
-def _load_astdb() -> dict:
-    return _astdb_cache.get()
+    @property
+    def path(self) -> str:
+        return self._path_fn()
 
-def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
+    def stat(self) -> "tuple[bool, int, int]":
+        try:
+            st = os.stat(self.path)
+        except OSError:
+            if self._missing_msg and not self._warned:
+                self._warned = True
+                log.warning(self._missing_msg, self.path)
+            return False, 0, 0
+        self._warned = False
+        return True, int(st.st_mtime), st.st_size
+
+    def index(self) -> "tuple[int, bool, frozenset]":
+        found, mtime, size = self.stat()
+        if not found:
+            return 0, True, frozenset()
+        key = (mtime, size)
+        with self._lock:
+            if self._index_key == key:
+                return self._index
+        seen: "set[str]" = set()
+        repeats = False
+        ctrl: "set[int]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                for i, raw in enumerate(f):
+                    if _CTRL_IN_RE.search(raw.strip()):
+                        ctrl.add(i)
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if node in seen:
+                        repeats = True
+                    else:
+                        seen.add(node)
+        except OSError:
+            return 0, True, frozenset()
+        result = (len(seen), repeats, frozenset(ctrl))
+        with self._lock:
+            self._index_key, self._index = key, result
+        return result
+
+    def total(self) -> int:
+        return self.index()[0]
+
+    def rows(self, raw_ok=None, node_ok=None):
+        _total, repeats, ctrl = self.index()
+        seen: "set[str]" = set()
+        try:
+            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                st = os.fstat(f.fileno())
+                with self._lock:
+                    same = self._index_key == (int(st.st_mtime), st.st_size)
+                if not same:
+                    repeats, raw_ok, ctrl = True, None, frozenset()
+                for i, raw in enumerate(f):
+                    quick = raw_ok is not None and i not in ctrl
+                    if not repeats and quick and not raw_ok(raw):
+                        continue
+                    node = self._node_of(raw)
+                    if node is None:
+                        continue
+                    if repeats:
+                        if node in seen:
+                            continue
+                        seen.add(node)
+                        if quick and not raw_ok(raw):
+                            continue
+                    if node_ok is not None and not node_ok(node):
+                        continue
+                    yield self._parse(raw, node)
+        except OSError as e:
+            log.warning("Could not read %s: %s", self.path, e)
+
+    def find(self, node: str):
+        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
+                             node_ok=lambda n: n == node):
+            return row
+        return None
+
+def _astdb_node_of(raw: str):
+    line = raw.strip()
+    if not line or line.startswith(("#", ";")):
+        return None
+    node = _strip_ctrl(line.split("|", 1)[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    return str(int(node))
+
+def _astdb_parse(raw: str, node: str):
+    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
+    call = parts[1] if len(parts) > 1 else ""
+    desc = parts[2] if len(parts) > 2 else ""
+    loc  = parts[3] if len(parts) > 3 else ""
+    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+
+_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
+                 "AllStar node list not found at %s — the ASL node menu will be empty "
+                 "(turn on asl3-update-astdb)")
+
+def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
-           "total": len(db["rows"]), "min": min_q,
+    found, mtime, _size = db.stat()
+    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
+           "total": db.total() if found else 0, "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not db["found"] or len(q) < min_q:
+    if not found or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
+        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
+        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
+        def raw_ok(raw):
+            low = raw.lower()
+            return all(w in low for w in words)
+        node_ok = None
     count, matches = 0, []
-    for r in db["rows"]:
+    for r in db.rows(raw_ok, node_ok):
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -5675,11 +5911,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _load_astdb()["by_node"].get(node)
+    row = _astdb.find(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -5702,44 +5938,72 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-def _parse_echodb(text: str) -> dict:
-    rows, by_node = [], {}
-    for raw in text.splitlines():
-        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
-        if len(parts) < 2:
-            continue
-        node, call = parts[0], parts[1]
-        if not node.isdigit() or len(node) > 7:
-            continue
-        node = str(int(node))
-        if node == "0" or node in by_node:
-            continue
-        call = call[:24]
-        row = (node, call, f"{node} {call}".lower())
-        rows.append(row)
-        by_node[node] = row
-    rows.sort(key=lambda r: int(r[0]))
-    return {"rows": rows, "by_node": by_node}
+_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
 
-def _build_echodb(prev):
-    out, ok = ami_command(_ECHODB_CMD, timeout=8)
-    if ok and "no such command" not in out.lower():
-        part = _parse_echodb(out)
-        return {"found": True, "mtime": int(time.time()), **part}, False
-    if prev and prev.get("found"):
-        return prev, False
-    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+_echodb_refresh_lock = threading.Lock()
+_echodb_next_try     = 0.0
+_echodb_warned       = False
 
-_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
-                           lambda _r: log.warning("EchoLink station list not available "
-                                                  "(%s failed -- is chan_echolink loaded?)",
-                                                  _ECHODB_CMD))
+def _echodb_node_of(raw: str):
+    parts = raw.split("|", 2)
+    if len(parts) < 2:
+        return None
+    node = _strip_ctrl(parts[0].strip())
+    if not node.isdigit() or len(node) > 7:
+        return None
+    node = str(int(node))
+    return None if node == "0" else node
 
-def _load_echodb() -> dict:
-    return _echodb_cache.get()
+def _echodb_parse(raw: str, node: str):
+    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
+    return (node, call, f"{node} {call}".lower())
+
+def _echodb_write(text: str) -> None:
+    seen: "set[str]" = set()
+    rows = []
+    for raw in io.StringIO(text):
+        node = _echodb_node_of(raw)
+        if node is None or node in seen:
+            continue
+        seen.add(node)
+        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
+    rows.sort()
+    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
+    tmp = _ECHODB_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        for _n, node, call in rows:
+            f.write(f"{node}|{call}\n")
+    os.replace(tmp, _ECHODB_FILE)
+
+def _echodb_refresh() -> None:
+    global _echodb_next_try, _echodb_warned
+    with _echodb_refresh_lock:
+        now = time.time()
+        try:
+            age = now - os.stat(_ECHODB_FILE).st_mtime
+        except OSError:
+            age = None
+        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
+            return
+        out, ok = ami_command(_ECHODB_CMD, timeout=8)
+        if ok and "no such command" not in out.lower():
+            try:
+                _echodb_write(out)
+                _echodb_warned = False
+                return
+            except OSError as e:
+                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
+        _echodb_next_try = now + _ECHODB_TTL
+        if age is None and not _echodb_warned:
+            _echodb_warned = True
+            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
+                        _ECHODB_CMD)
+
+_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
 
 def action_echo_directory(path: str) -> dict:
-    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    _echodb_refresh()
+    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -5751,7 +6015,8 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    row = _load_echodb()["by_node"].get(node)
+    _echodb_refresh()
+    row = _echodb.find(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
@@ -5958,6 +6223,10 @@ def _log_teardown_survivors(what: str) -> None:
             return
         perms      = _read_perm_links()
         bridge_set = _bridge_set()
+        left = [nd for nd in left if nd not in _nodelisten_keep_set()]
+        if not left:
+            log.info("teardown check (%s): all links cleared (Node Listen's transmit node kept)", what)
+            return
         for nd in left:
             log.warning("teardown check (%s): node %s STILL LINKED%s%s", what, nd,
                         " [PERMANENT - listed in rpt.conf nodes=]" if nd in perms else "",
@@ -6086,6 +6355,11 @@ def _poll_asl_state() -> "Tuple[bool, Optional[str], bool, FrozenSet[str]]":
     bridge_linked_nodes: Set[str] = set()
     modes: Dict[str, str] = {}
     adjacent = _parse_rpt_links(out, modes)
+    skip = _nodelisten_skip_set()
+    if skip:
+        _nodelisten_tx_check(adjacent)
+        adjacent = [tok for tok in adjacent if tok not in skip]
+        modes = {k: v for k, v in modes.items() if k not in skip}
     _link_modes = modes
     for tok in adjacent:
         if tok in bridge_set:
@@ -6131,11 +6405,11 @@ def _dvs_settle() -> None:
 _bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
 _bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 3
+_BRIDGE_DOWN_THRESHOLD     = 2
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 3
+_BRIDGE_UP_THRESHOLD    = 2
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6251,18 +6525,20 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
         _link_exit()
 
 _ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
-_ASL_REG_FAST_SEC  = 30.0
+_ASL_REG_FAST_SEC  = 60.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
-_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.time()}
+_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.monotonic()}
 ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
 
-def _asl_reg_write_status(node: str, state: str, since: float) -> None:
+def _asl_reg_write_status(node: str, state: str, since_mono: float) -> None:
     try:
         os.makedirs(os.path.dirname(ASL_REG_STATUS_FILE), exist_ok=True)
         tmp = ASL_REG_STATUS_FILE + ".tmp"
+        now = time.time()
+        since = now - max(0.0, time.monotonic() - since_mono)
         with open(tmp, "w") as f:
-            json.dump({"node": node, "state": state, "since": since, "checked_at": time.time(),
+            json.dump({"node": node, "state": state, "since": since, "checked_at": now,
                        "next_check_secs": _ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC}, f)
         os.chmod(tmp, 0o644)
         os.replace(tmp, ASL_REG_STATUS_FILE)
@@ -6290,7 +6566,7 @@ def _asl_reg_check() -> str:
     with _asl_reg_lock:
         prev = _asl_reg_info["state"]
         if state != prev:
-            _asl_reg_info["since"] = time.time()
+            _asl_reg_info["since"] = time.monotonic()
         _asl_reg_info.update(state=state, node=node, at=time.monotonic())
         since = _asl_reg_info["since"]
     if state != prev:
@@ -6302,7 +6578,6 @@ def _asl_reg_public() -> str:
     with _asl_reg_lock:
         return _asl_reg_info["state"]
 
-_SVC_AB_UNITS  = ("analog_bridge.service", "Analog_Bridge.service")
 _SVC_CHECK_SEC = 15.0
 _svc_lock      = threading.Lock()
 _SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn", "ircddb", "m17")
@@ -6331,7 +6606,7 @@ def _svc_unit_states(groups: dict) -> dict:
 
 def _svc_check() -> dict:
     res = _svc_unit_states({
-        "ab":   _SVC_AB_UNITS,
+        "ab":   _BOOT_AB_UNITS,
         "stfu": ("stfu.service",),
         "ysf":  ("ysfgateway.service",),
         "p25":  ("p25gateway.service",),
@@ -6462,7 +6737,7 @@ def _sd_heartbeat_loop() -> None:
 
 def _link_poll_loop() -> None:
     global _poll_beat
-    INTERVAL     = 1.0
+    INTERVAL     = 2.0
     fails        = 0
     last_detect  = time.monotonic()
     busy_noted   = False
@@ -7817,6 +8092,21 @@ body.offline.perm-linked #perm-link-bar {
 }
 
 /* ── TG indicator ── */
+.tg-wrap {
+  grid-column: 2;
+  justify-self: center;
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 0;
+}
+.ql.ql-listen {
+  color: var(--green);
+  border-color: rgba(0,255,176,.45);
+  background: rgba(0,255,176,.08);
+  text-shadow: 0 0 8px rgba(0,255,176,.4);
+  flex: 0 0 auto;
+}
 #tg-indicator {
   grid-column: 2;
   justify-self: center;
@@ -8185,7 +8475,9 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
     padding-top: .15rem;
   }
   .ql-group { display: contents; }
+  .tg-wrap { grid-column: 1 / -1; grid-row: 1; max-width: 96%; }
   #tg-indicator { grid-column: 1 / -1; grid-row: 1; max-width: 92%; }
+  .ql.ql-listen { grid-row: auto; font-size: .66rem; padding: .3rem .5rem; letter-spacing: .04em; }
   .ql {
     grid-row: 2;
     font-size: clamp(.45rem, 2.1vw, .66rem);
@@ -9012,7 +9304,10 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
         <a class="ql" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
         <a class="ql" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
       </div>
-      <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
+      <div class="tg-wrap">
+        <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
+        <a id="lnk-listen" class="ql ql-listen hidden" href="#" target="_blank" rel="noopener" title="Listen to this node in the browser (Node Listen)" aria-label="Listen to this node">&#128266; Listen</a>
+      </div>
       <div class="ql-group ql-right">
         <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
         <a class="ql" data-ql-port="8991" href="#" target="_blank" rel="noopener">WiFiMon</a>
@@ -9426,7 +9721,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
-                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call.</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
               </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
@@ -13108,7 +13403,7 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:5000);  // Pi02w: idle was 3000
 }
 let _keyedTimer=null;
 async function pollKeyed(){
@@ -13179,7 +13474,7 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedTimer=setTimeout(pollKeyed,500);
+  _keyedTimer=setTimeout(pollKeyed,1000);  // Pi02w: was 500 (the server updates every 2 s)
 }
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 async function pollAbInfo(){
@@ -13224,6 +13519,7 @@ function _startApp(){
   },60_000);
   _initQuickLinks();
   _probeSysMon();
+  _probeNodeListen();
 }
 
 /* ── Root-password auth (v8.0.9) ──────────────────────────────────────────
@@ -13344,6 +13640,21 @@ async function _probeSysMon() {
         try{sessionStorage.setItem('sysmonReturn',JSON.stringify({page:curPage}));}catch(_){}
         try{navigator.sendBeacon('/api/action', new Blob([JSON.stringify({action:'cpuweight-away'})], {type:'application/json'}));}catch(_){}
       }, {once:true});
+    }
+  } catch (_) {}
+}
+async function _probeNodeListen() {
+  const a = document.getElementById('lnk-listen');
+  if (!a) return;
+  try {
+    const r = await fetch('/api/nodelisten-status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.running) {
+      a.href = `http://${window.location.hostname}:${d.port}/`;
+      a.classList.remove('hidden');
+    } else {
+      a.classList.add('hidden');
     }
   } catch (_) {}
 }
@@ -13979,6 +14290,7 @@ _GET_ROUTES: dict = {
     "/healthz":        lambda h: h.send_ping(),
     "/api/whoami":     lambda h: h.send_json({"ok": True}),
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
+    "/api/nodelisten-status": lambda h: h.send_json(action_nodelisten_status()),
     "/api/status":     lambda h: h.send_status(),
     "/api/keyed":      lambda h: h.send_json(action_get_keyed()),
     "/api/talkgroups":     lambda h: h.send_json(action_get_talkgroups()),
@@ -14051,20 +14363,257 @@ def _dvs_startup_init() -> None:
         _dvs("tune", TG_DISCONNECT)
         set_state(current_dvs_mode="DMR")
 
-def _is_fresh_boot() -> bool:
+def _boot_id() -> str:
     try:
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except Exception:
+        return ""
+
+def _is_fresh_boot() -> bool:
+    boot_id = _boot_id()
+    if not boot_id:
         return True
     try:
         marker = Path(_BOOT_MARKER_PATH)
         prev = marker.read_text().strip() if marker.is_file() else None
-        fresh = prev != boot_id
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(boot_id)
-        return fresh
+        return prev != boot_id
     except Exception:
         return True
+
+def _write_boot_marker(path: str, what: str) -> None:
+    boot_id = _boot_id()
+    if not boot_id:
+        return
+    try:
+        marker = Path(path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(boot_id)
+    except Exception as exc:
+        log.warning("startup: could not write the %s: %s", what, exc)
+
+def _mark_boot_done() -> None:
+    _write_boot_marker(_BOOT_MARKER_PATH, "boot marker")
+
+def _boot_disconnect_done() -> bool:
+    boot_id = _boot_id()
+    if not boot_id:
+        return False
+    try:
+        marker = Path(_BOOT_DISCONNECT_MARKER_PATH)
+        return marker.is_file() and marker.read_text().strip() == boot_id
+    except Exception:
+        return False
+
+def _mark_boot_disconnect_done() -> None:
+    _write_boot_marker(_BOOT_DISCONNECT_MARKER_PATH, "boot disconnect marker")
+
+_boot_work_lock = threading.Lock()
+_boot_work_left: set = set()
+
+def _boot_work_done(name: str) -> None:
+    with _boot_work_lock:
+        _boot_work_left.discard(name)
+        left = bool(_boot_work_left)
+    if not left:
+        _mark_boot_done()
+
+_BOOT_AB_WAIT = 300
+_BOOT_AB_CAP = 600
+_BOOT_AB_UNITS = ("analog_bridge.service", "Analog_Bridge.service")
+_BOOT_ABINFO_SLACK = 5
+_BOOT_ASTERISK_SETTLE = 30
+_BOOT_ASTERISK_WAIT = 450
+_BOOT_NETREADY_UNIT = "44helper-netready.service"
+_dash_started = time.monotonic()
+
+def _unit_props(unit: str, *props: str) -> dict:
+    cmd = ["systemctl", "show", unit]
+    for p in props:
+        cmd += ["-p", p]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return {}
+    return dict(ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
+
+def _unit_active_since_mono(props: dict) -> "float | None":
+    if props.get("ActiveState") != "active":
+        return None
+    try:
+        since = int(props.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
+    except ValueError:
+        return None
+    return since if since > 0 else None
+
+def _unit_up_secs(unit: str) -> "float | None":
+    since = _unit_active_since_mono(_unit_props(unit, "ActiveState", "ActiveEnterTimestampMonotonic"))
+    return time.monotonic() - since if since is not None else None
+
+def _ab_unit() -> "str | None":
+    for unit in _BOOT_AB_UNITS:
+        if _unit_props(unit, "LoadState").get("LoadState") == "loaded":
+            return unit
+    return None
+
+def _unit_active_since_wall(unit: str) -> "list[float]":
+    props = _unit_props(unit, "ActiveState", "ActiveEnterTimestampMonotonic")
+    since = _unit_active_since_mono(props)
+    if since is None:
+        return []
+    out = [time.time() - (time.monotonic() - since)]
+    try:
+        val = ""
+        for extra in (["--timestamp=unix"], []):
+            r = subprocess.run(["systemctl", "show", unit, "-p", "ActiveEnterTimestamp"] + extra,
+                               capture_output=True, text=True, timeout=5)
+            val = (r.stdout or "").strip().partition("=")[2].strip()
+            if r.returncode == 0 and val:
+                break
+        if val.startswith("@"):
+            out.append(float(val[1:]))
+        elif val:
+            d = subprocess.run(["date", "-d", val, "+%s"], capture_output=True, text=True, timeout=5)
+            if d.returncode == 0 and d.stdout.strip():
+                out.append(float(d.stdout.strip()))
+    except Exception:
+        pass
+    return out
+
+def _abinfo_this_boot() -> "dict | None":
+    unit = _ab_unit()
+    if unit:
+        starts = _unit_active_since_wall(unit)
+        if not starts:
+            return None
+        floor = min(starts) - _BOOT_ABINFO_SLACK
+    else:
+        try:
+            up = float(Path("/proc/uptime").read_text().split()[0])
+        except Exception:
+            up = 0.0
+        floor = time.time() - up
+    try:
+        files = [f for f in _glob.glob("/tmp/ABInfo_*.json") if _is_root_owned(f) and os.path.getmtime(f) >= floor]
+    except Exception:
+        files = []
+    return _read_abinfo() if files else None
+
+def _dvs_apply_live(fresh_boot: bool, live_ab: "dict | None") -> None:
+    if live_ab:
+        ab_mode    = live_ab.get("tlv", {}).get("ambe_mode", "")
+        ab_last_tg = live_ab.get("last_tune", "")
+        ab_gw      = str(live_ab.get("digital", {}).get("gw", "0")).strip()
+        ab_active  = bool(ab_gw and ab_gw != "0")
+        if ab_mode in DIGITAL_MODES:
+            if ab_active or not fresh_boot:
+                reason = (f"active call gw={ab_gw}" if ab_active
+                          else "idle, process restart same boot")
+                log.info(
+                    "startup: AB live in %s (%s) — preserving connection",
+                    ab_mode, reason,
+                )
+                set_state(
+                    current_dvs_mode = ab_mode,
+                    current_fav      = ab_last_tg or None,
+                    current_fav_node  = None,
+                )
+            else:
+                log.info(
+                    "startup: AB live in %s (idle, fresh boot) — re-establishing server connection",
+                    ab_mode,
+                )
+                if ab_mode == "DMR":
+                    _dvs_startup_init()
+                else:
+                    _dvs("tune", TG_DISCONNECT)
+                    _dvs_settle()
+                    _dvs("mode", ab_mode)
+                    set_state(
+                        current_dvs_mode = ab_mode,
+                        current_fav      = None,
+                        current_fav_node = None,
+                    )
+        else:
+            _dvs_startup_init()
+    else:
+        _dvs_startup_init()
+
+def _ab_wait_over(unit: "str | None", end: float) -> bool:
+    now = time.monotonic()
+    if unit is None:
+        return now >= end
+    if now >= _BOOT_AB_CAP:
+        return True
+    up = _unit_up_secs(unit)
+    return up is not None and up >= _BOOT_AB_WAIT
+
+def _dvs_boot_init() -> None:
+    try:
+        end = time.monotonic() + _BOOT_AB_WAIT
+        unit = _ab_unit()
+        live_ab = _abinfo_this_boot()
+        if live_ab is None:
+            if unit:
+                log.info("startup: fresh boot — waiting for Analog_Bridge (%s, up to %d s after it starts) "
+                         "before the startup tune", unit, _BOOT_AB_WAIT)
+            else:
+                log.info("startup: fresh boot — waiting up to %d s for Analog_Bridge before the startup tune", _BOOT_AB_WAIT)
+        while live_ab is None and not _ab_wait_over(unit, end):
+            time.sleep(5)
+            live_ab = _abinfo_this_boot()
+        if live_ab is None:
+            log.warning("startup: Analog_Bridge didn't report — sending the startup tune anyway")
+        _dvs_apply_live(True, live_ab)
+    except Exception as exc:
+        log.warning("startup: boot DVSwitch init failed: %s", exc)
+    finally:
+        _boot_work_done("dvs")
+
+def _asterisk_up_secs() -> "float | None":
+    return _unit_up_secs("asterisk")
+
+def _netready_pending() -> bool:
+    props = _unit_props(_BOOT_NETREADY_UNIT, "LoadState", "ActiveState", "Job")
+    if props.get("LoadState") != "loaded":
+        return False
+    state = props.get("ActiveState", "")
+    if state in ("active", "failed"):
+        return False
+    return state in ("activating", "reloading") or props.get("Job", "").strip() not in ("", "0")
+
+def _asl_boot_disconnect() -> None:
+    try:
+        end = _dash_started + _BOOT_ASTERISK_WAIT
+        waited_net = False
+        up = None
+        while True:
+            up = _asterisk_up_secs()
+            net_wait = _netready_pending()
+            waited_net = waited_net or net_wait
+            if up is not None and up >= _BOOT_ASTERISK_SETTLE and not net_wait:
+                break
+            if time.monotonic() >= end:
+                break
+            time.sleep(3)
+        if up is None:
+            log.warning("startup: fresh boot — Asterisk isn't running after %d s; skipping the boot disconnect-all",
+                        _BOOT_ASTERISK_WAIT)
+            return
+        if _netready_pending():
+            log.warning("startup: fresh boot — the network still isn't ready after %d s; disconnect-all anyway",
+                        _BOOT_ASTERISK_WAIT)
+        elif waited_net:
+            log.info("startup: fresh boot — disconnect-all once Asterisk has settled and the network is ready")
+        else:
+            log.info("startup: fresh boot — disconnect-all once Asterisk has settled")
+        try:
+            _disconnect_all()
+        finally:
+            _mark_boot_disconnect_done()
+    except Exception as exc:
+        log.warning("startup: boot disconnect-all failed: %s", exc)
+    finally:
+        _boot_work_done("asl")
 
 def _harden_existing_conf_perms() -> None:
     try:
@@ -14110,6 +14659,16 @@ def startup() -> None:
     fresh_boot = _is_fresh_boot()
     if not fresh_boot:
         log.info("startup: process restart within same boot — preserving live links")
+    boot_disconnect = fresh_boot and has_asl and not _boot_disconnect_done()
+    if fresh_boot and has_asl and not boot_disconnect:
+        log.info("startup: the boot disconnect-all already ran this boot — not repeating it")
+    with _boot_work_lock:
+        _boot_work_left.clear()
+        if fresh_boot and has_dvs:
+            _boot_work_left.add("dvs")
+        if boot_disconnect:
+            _boot_work_left.add("asl")
+        boot_work = bool(_boot_work_left)
 
     if has_dvs:
         has_stfu = _detect_stfu()
@@ -14117,45 +14676,12 @@ def startup() -> None:
         if has_stfu:
             set_state(stfu_server=detect_stfu_server())
 
-        live_ab = _read_abinfo()
-        if live_ab:
-            ab_mode    = live_ab.get("tlv", {}).get("ambe_mode", "")
-            ab_last_tg = live_ab.get("last_tune", "")
-            ab_gw      = str(live_ab.get("digital", {}).get("gw", "0")).strip()
-            ab_active  = bool(ab_gw and ab_gw != "0")
-            if ab_mode in DIGITAL_MODES:
-                if ab_active or not fresh_boot:
-                    reason = (f"active call gw={ab_gw}" if ab_active
-                              else "idle, process restart same boot")
-                    log.info(
-                        "startup: AB live in %s (%s) — preserving connection",
-                        ab_mode, reason,
-                    )
-                    set_state(
-                        current_dvs_mode = ab_mode,
-                        current_fav      = ab_last_tg or None,
-                        current_fav_node  = None,
-                    )
-                else:
-                    log.info(
-                        "startup: AB live in %s (idle, fresh boot) — re-establishing server connection",
-                        ab_mode,
-                    )
-                    if ab_mode == "DMR":
-                        _dvs_startup_init()
-                    else:
-                        _dvs("tune", TG_DISCONNECT)
-                        _dvs_settle()
-                        _dvs("mode", ab_mode)
-                        set_state(
-                            current_dvs_mode = ab_mode,
-                            current_fav      = None,
-                            current_fav_node = None,
-                        )
-            else:
-                _dvs_startup_init()
+        if fresh_boot:
+            threading.Thread(target=_dvs_boot_init, name="dvs-boot-init", daemon=True).start()
         else:
-            _dvs_startup_init()
+            _dvs_apply_live(False, _read_abinfo())
+    if not boot_work:
+        _mark_boot_done()
 
     if has_asl or has_dvs:
         try:
@@ -14171,10 +14697,9 @@ def startup() -> None:
     if has_asl:
         has_echo = _detect_echo()
         set_state(has_echo=has_echo)
-        if fresh_boot:
-            _disconnect_all()
-            time.sleep(0.5)
-        else:
+        if boot_disconnect:
+            threading.Thread(target=_asl_boot_disconnect, name="asl-boot-disconnect", daemon=True).start()
+        elif not fresh_boot:
             log.info("startup: process restart within same boot — skipping ASL disconnect-all")
         _write_event_script()
         threading.Thread(target=_phone_refresh_on_start, name="phone-refresh", daemon=True).start()
@@ -14248,6 +14773,52 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
             return
         super().handle_error(request, client_address)
 
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _pyc_for(src: str) -> list:
+    name = os.path.splitext(os.path.basename(src))[0]
+    return _glob_pyc(os.path.dirname(src), name)
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
+
 def _nc_remove_pyc(dir_path: str, prefix: str) -> None:
     pycache = os.path.join(dir_path, "__pycache__")
     if not os.path.isdir(pycache):
@@ -14314,6 +14885,8 @@ def install_service() -> None:
         print(f"  [-] Removed the old folder {_OLD_INSTALL_DIRS[0]}")
     except OSError:
         pass
+    _write_launcher()
+    _prune_pyc(_INSTALL_DIR)
 
     if os.path.exists(_LEGACY_SERVICE_PATH):
         subprocess.run(["systemctl", "disable", "--now", _LEGACY_SERVICE_NAME], stderr=subprocess.DEVNULL)
@@ -14367,6 +14940,12 @@ def uninstall_service() -> None:
             os.rmdir(d)
         except OSError:
             pass
+    _remove_launcher_if_unused()
+
+    echodb_dir = os.path.dirname(_ECHODB_FILE)
+    if os.path.isdir(echodb_dir):
+        shutil.rmtree(echodb_dir, ignore_errors=True)
+        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
 
     print(f"\nUninstall complete. {ASL_DVS_CONF} was not touched.")
 
