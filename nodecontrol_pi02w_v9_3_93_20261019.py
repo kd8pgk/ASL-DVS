@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.92-pi02w"
+VERSION      = "9.3.93-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -318,12 +318,14 @@ def get_state_fields(*names: str) -> dict:
         return {n: getattr(_state, n) for n in names}
 
 def set_state(**kw) -> None:
+    global _status_etag
     with _lock:
         for k, v in kw.items():
-            if hasattr(_state, k):
-                setattr(_state, k, v)
-            else:
+            if not hasattr(_state, k):
                 raise AttributeError(f"AppState has no field '{k}'")
+            if getattr(_state, k) != v:
+                setattr(_state, k, v)
+                _status_etag = ""
 
 def _snap(attr: str) -> list:
     with _lock:

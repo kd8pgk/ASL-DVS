@@ -1,6 +1,21 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_10_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_11_20261019.py`. Newest entries first.
+
+## 0.4.11 (2026-10-19)
+
+- **Connect says whether the link came up.** After Connect on an ASL or
+  EchoLink favorite, Node Listen watches the node's links (`rpt lstats`) for
+  up to 15 seconds and reports one of:
+  - connected ("Node 12345 is connected to ASL 2000."),
+  - still trying, in amber, when the link is there but not established yet
+    (the node may be offline or busy),
+  - failed, in red, when no link appeared (wrong number, or the node is
+    offline or refusing connections).
+  This works the same whether the connect went through Node Controller or
+  straight to Asterisk. The Connect button is greyed out while it checks, and
+  the result goes to the log. M17 favorites report what Node Controller
+  answers, as before.
 
 ## 0.4.10 (2026-10-19)
 
