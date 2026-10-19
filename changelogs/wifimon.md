@@ -1,6 +1,13 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_39_0_20261019.py`. Newest entries first.
+Current file: `wifimon_v5_39_0_1_20261019.py`. Newest entries first.
+
+## 5.39.0.1 (2026-10-19)
+
+- **The login screen matches instmon's.** A centered card over a dark,
+  blurred background, an amber "wifimon Login" title, a "Root password"
+  field and a LOG IN button, with errors in red under it. The Service card's
+  button now reads "Log Out". Cosmetic only: the login itself works as before.
 
 ## 5.39.0 (2026-10-19)
 

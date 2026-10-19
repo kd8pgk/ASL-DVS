@@ -1,6 +1,17 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_7_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_8_20261019.py`. Newest entries first.
+
+## 0.4.8 (2026-10-19)
+
+- **The login screen matches instmon's.** Login is now a centered card over a
+  dark, blurred background instead of a card at the top of the page: an amber
+  "Node Listen Login" title, a "Root password" field and a LOG IN button
+  (greyed out while it checks), with errors in red under it. The header
+  button reads "Log Out".
+- **Public listening keeps working without logging in.** With public
+  listening on, the login card stays closed and the player is shown; a
+  **Log In** button in the header opens the card, and **Cancel** closes it.
 
 ## 0.4.7 (2026-10-19)
 

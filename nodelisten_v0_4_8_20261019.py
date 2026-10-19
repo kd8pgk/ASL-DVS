@@ -28,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.7"
+VERSION = "0.4.8"
 DATE_STR = "2026-10-19"
 APP_NAME = "Node Listen"
 
@@ -1997,6 +1997,23 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #log{max-height:260px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px}
 #log .err{color:var(--red)}#log .warn{color:var(--amber)}#log .ok{color:var(--accent)}
 .hidden{display:none !important}
+#login-screen{display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;
+padding:16px;background:rgba(5,8,14,.88);backdrop-filter:blur(3px)}
+#login-screen.open{display:flex}
+#login-card{background:#161e2e;border:1px solid #3a5278;border-radius:8px;padding:1.4rem 1.6rem;min-width:260px;max-width:90vw;
+box-shadow:0 8px 40px rgba(0,0,0,.8);text-align:center;font-family:Arial,Helvetica,sans-serif}
+#login-card h2{margin:0 0 1rem;font-family:Arial,Helvetica,sans-serif;font-size:1.05rem;font-weight:700;color:#ffd040;
+letter-spacing:.06em;text-shadow:0 0 8px rgba(255,208,64,.5)}
+#login-form{display:flex;flex-direction:column;gap:.6rem}
+#pw{font-family:Arial,Helvetica,sans-serif;font-size:.9rem;min-height:0;background:#0a1020;color:#ffffff;border:1px solid #3a5278;
+border-radius:4px;padding:.45rem .6rem;outline:none}
+#pw:focus{border-color:#ffd040}
+#login-card button{font-family:Arial,Helvetica,sans-serif;font-size:.8rem;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+background:transparent;color:#ffd040;border:1px solid #6b4800;border-radius:4px;padding:.32rem .85rem;cursor:pointer;transition:all .14s}
+#login-card button:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
+#login-card button:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
+#login-card #login-cancel{color:#22d4ff;border-color:#083a58;margin-top:.6rem}
+#login-msg{min-height:1.1rem;font-size:.78rem;color:#ff3d5a;margin-top:.2rem}
 nav.tabs{position:fixed;left:0;right:0;bottom:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:#111922;border-top:1px solid var(--line);padding:4px 6px calc(8px + env(safe-area-inset-bottom));z-index:5}
 nav.tabs button{background:transparent;border:0;min-height:52px;color:var(--muted);font-size:13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
 nav.tabs button[aria-current=page]{color:var(--accent);font-weight:700}
@@ -2018,6 +2035,7 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
+let loginWanted = false;
 let authed = false, publicListen = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
 let ctx = null, gainNode = null, ctrl = null, playing = false, nextT = 0;
 let mediaDest = null, wakeLock = null, nodeLabel = '';
@@ -2211,7 +2229,12 @@ function showTab(name) {
 
 function render() {
   const anyView = authed || publicListen;
-  $('login-card').classList.toggle('hidden', authed);
+  const showLogin = !authed && (!publicListen || loginWanted);
+  const wasOpen = $('login-screen').classList.contains('open');
+  $('login-screen').classList.toggle('open', showLogin);
+  $('login-open').classList.toggle('hidden', authed || !publicListen);
+  $('login-cancel').classList.toggle('hidden', !publicListen);
+  if (showLogin && !wasOpen) $('pw').focus();
   $('nav').classList.toggle('hidden', !authed);
   $('logout').classList.toggle('hidden', !authed);
   $('ptt-card').classList.toggle('hidden', !authed);
@@ -2245,11 +2268,18 @@ async function whoami() {
 
 async function login(ev) {
   ev.preventDefault();
+  $('login-btn').disabled = true;
+  $('login-msg').textContent = '';
   const d = await post('/api/login', {password: $('pw').value});
+  $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; $('login-msg').textContent = ''; render(); }
-  else note('login-msg', 'err', d.error || 'Login failed.');
+  if (d.ok) { authed = true; loginWanted = false; render(); }
+  else $('login-msg').textContent = d.error || 'Login failed.';
 }
+
+function openLogin() { loginWanted = true; render(); }
+
+function cancelLogin() { loginWanted = false; $('login-msg').textContent = ''; render(); }
 
 async function logout() {
   pttUp();
@@ -2973,6 +3003,8 @@ async function pollLog() {
 document.addEventListener('DOMContentLoaded', () => {
   $('login-form').addEventListener('submit', login);
   $('logout').addEventListener('click', logout);
+  $('login-open').addEventListener('click', openLogin);
+  $('login-cancel').addEventListener('click', cancelLogin);
   TABS.forEach((t) => $('nav-' + t).addEventListener('click', () => showTab(t)));
   $('listen-btn').addEventListener('click', toggleListen);
   $('vol').addEventListener('input', () => { if (gainNode) gainNode.gain.value = listenVolume(); });
@@ -3047,16 +3079,20 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <body>
 <header><h1>Node Listen</h1><span class="ver">v__VERSION__</span><span class="sp"></span>
 <a id="dash-link" class="pill" href="#" aria-label="Open Node Controller">Node Controller</a>
-<button id="logout" class="pill hidden" type="button">Log out</button></header>
-<main>
-<section class="card" id="login-card">
-<h2>Log in</h2>
-<form id="login-form" class="row">
-<input type="password" id="pw" placeholder="Pi root password" autocomplete="current-password" aria-label="Pi root password">
-<button type="submit" class="btn primary">Log in</button>
+<button id="login-open" class="pill hidden" type="button">Log In</button>
+<button id="logout" class="pill hidden" type="button">Log Out</button></header>
+<div id="login-screen">
+<div id="login-card">
+<h2>Node Listen Login</h2>
+<form id="login-form">
+<input type="password" id="pw" placeholder="Root password" autocomplete="current-password" aria-label="Root password" required>
+<button id="login-btn" type="submit">Log In</button>
 </form>
-<div id="login-msg" class="msg"></div>
-</section>
+<div id="login-msg"></div>
+<button id="login-cancel" class="hidden" type="button">Cancel</button>
+</div>
+</div>
+<main>
 
 <section id="tab-status" class="hidden">
 <div class="card">
