@@ -38,8 +38,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.73-pi02w"
-BUILD_DATE   = "20261017"
+VERSION      = "6.13.74-pi02w"
+BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -2914,6 +2914,33 @@ body.tab-edit #zone-content{
       </div>
     </div>
 
+    <div class="s3-card" id="nodelisten-card">
+      <div class="s3-card-hdr" style="padding-left:.6rem">
+        <div style="display:flex;align-items:center;gap:.55rem">
+          <div class="dvsm-accent" style="background:var(--teal)"></div>
+          <div>
+            <div class="dvsm-card-title" style="color:var(--teal)">Node Listen</div>
+            <div class="dvsm-card-sub" id="nodelisten-sub">listen ports · connections · push-to-talk node 1921</div>
+          </div>
+        </div>
+        <span class="dpbadge" id="nodelisten-badge">—</span>
+      </div>
+      <div id="nodelisten-body">
+        <div class="stub-panel" style="min-height:80px">Loading…</div>
+      </div>
+      <div id="nodelisten-clients"></div>
+      <div id="nodelisten-actions" style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:.4rem;flex-wrap:wrap">
+        <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
+          onclick="nodeListenRestart()">↺ Restart nodelisten</button>
+        <button class="btn btn-sm" id="nodelisten-unlink" style="color:var(--amber);border-color:var(--amber-dim)"
+          onclick="nodeListenUnlink()">⨯ Unlink 1921</button>
+        <a class="btn btn-sm" id="nodelisten-open" style="color:var(--teal);border-color:var(--teal-dim);text-decoration:none"
+          href="#" target="_blank" rel="noopener">↗ Open Node Listen</a>
+        <button class="btn btn-blue btn-sm" onclick="loadNodeListen()">↻ Refresh</button>
+        <button class="btn btn-muted btn-sm" onclick="nodeListenCopy(this)" title="Copy this card as text">⎘ Copy</button>
+      </div>
+    </div>
+
   </div>
 
   <div id="panel-reg" class="tab-panel">
@@ -5585,7 +5612,7 @@ async function ufReloadDaemon() {
   ufSetStatus(d.message || (d.ok ? "Daemon reloaded" : "Failed"), d.ok);
 }
 
-window.loadTab_asldvs = function() { loadAstFiles(); loadAllmon3Files(); loadDvsFiles(); loadDstarGw(); };
+window.loadTab_asldvs = function() { loadAstFiles(); loadAllmon3Files(); loadDvsFiles(); loadDstarGw(); loadNodeListen(); };
 
 // v6.13.66: D-Star -- ircDDBGateway card (read-only checks on /etc/ircddbgateway
 // for the dashboard's gateway linking).  Edit opens the DVSwitch file editor.
@@ -5615,6 +5642,75 @@ function dstarGwCopy(btn) {
     lines.push(`[${String(c.status || "").toUpperCase()}] ${c.enables}: ${c.key}`);
     if (c.fix) lines.push(`    -> ${c.fix}`);
   });
+  dvsmCopy(btn, lines.join("\n"));
+}
+
+let _nodeListen = null;
+async function loadNodeListen() {
+  const d = await api("/api/nodelisten");
+  if (!d) return;
+  _nodeListen = d;
+  const acts = document.getElementById("nodelisten-actions");
+  const cl = document.getElementById("nodelisten-clients");
+  if (!d.installed) {
+    _dvsmSetBadge("nodelisten-badge", "info", "NOT INSTALLED");
+    document.getElementById("nodelisten-body").innerHTML =
+      `<div class="stub-panel" style="min-height:40px">Node Listen is not installed on this node.</div>`;
+    if (cl) cl.innerHTML = "";
+    if (acts) acts.style.display = "none";
+    return;
+  }
+  if (acts) acts.style.display = "flex";
+  _dvsmSetBadge("nodelisten-badge", d.status, d.badge);
+  _renderCompatTable("nodelisten-body", d.checks || []);
+  const sub = document.getElementById("nodelisten-sub");
+  if (sub) sub.textContent = `port ${d.port}` + (d.version ? ` · v${d.version}` : "") +
+    (d.main ? ` · node ${d.main}` : "") + " · listen ports · connections";
+  const open = document.getElementById("nodelisten-open");
+  if (open) open.href = `${d.scheme || "https"}://${location.hostname}:${d.port}/`;
+  const ul = document.getElementById("nodelisten-unlink");
+  if (ul) ul.style.display = d.tx ? "" : "none";
+  if (!cl) return;
+  const rows = (d.clients || []).map(c => {
+    const where = c.local ? "this Pi (local or tunnel)" : c.lan ? "LAN" : "internet";
+    return `<tr><td class="dvsm-ct-key">${_esc(c.ip)}</td>` +
+      `<td class="dvsm-ct-enables">${_esc(where)} · ${c.conns} connection${c.conns === 1 ? "" : "s"}</td>` +
+      `<td class="dvsm-ct-badge"><button class="btn btn-sm" style="color:var(--red);border-color:var(--red-dim)" ` +
+      `data-ip="${_esc(c.ip)}" onclick="nodeListenDisconnect(this.dataset.ip)">Disconnect</button></td></tr>`;
+  }).join("");
+  cl.innerHTML = `<span class="dvsm-sec-lbl">Connected browsers (${(d.clients || []).length})</span>` +
+    (rows ? `<table class="dvsm-compat-tbl">${rows}</table>`
+          : `<div class="stub-panel" style="min-height:30px">No one is connected.</div>`);
+}
+async function nodeListenRestart() {
+  if (!await confirm("Restart nodelisten? Everyone listening is dropped and their pages reconnect.")) return;
+  const d = await api("/api/nodelisten", "POST", {action: "restart"});
+  if (!d || !d.ok) { toast(d?.message || "Restart failed", "err"); return; }
+  toast("nodelisten restarted", "ok");
+  setTimeout(loadNodeListen, 2500);
+}
+async function nodeListenDisconnect(ip) {
+  if (!await confirm(`Disconnect ${ip} from Node Listen? Their page tries again in 3 s if they are still listening.`)) return;
+  const d = await api("/api/nodelisten", "POST", {action: "disconnect", ip});
+  if (!d || !d.ok) { toast(d?.message || "Disconnect failed", "err"); loadNodeListen(); return; }
+  toast(d.message || "Disconnected", "ok");
+  setTimeout(loadNodeListen, 800);
+}
+async function nodeListenUnlink() {
+  if (!await confirm("Unlink node 1921 (push-to-talk) from the node? Node Listen links it again within 20 s while it runs.")) return;
+  const d = await api("/api/nodelisten", "POST", {action: "unlink"});
+  if (!d || !d.ok) { toast(d?.message || "Unlink failed", "err"); return; }
+  toast(d.message || "Unlinked", "ok");
+  setTimeout(loadNodeListen, 1500);
+}
+function nodeListenCopy(btn) {
+  if (!_nodeListen) return;
+  const lines = [`Node Listen (port ${_nodeListen.port || "-"}): ${_nodeListen.badge}`];
+  (_nodeListen.checks || []).forEach(c => {
+    lines.push(`[${String(c.status || "").toUpperCase()}] ${c.enables}: ${c.key}`);
+    if (c.fix) lines.push(`    -> ${c.fix}`);
+  });
+  (_nodeListen.clients || []).forEach(c => lines.push(`Connected: ${c.ip} (${c.lan ? "LAN" : "internet"}, ${c.conns})`));
   dvsmCopy(btn, lines.join("\n"));
 }
 
@@ -19698,6 +19794,343 @@ def _route_dstar_gw_post(h: Handler, data: dict) -> None:
         return
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
+_NL_BIN       = Path("/usr/local/bin/nodelisten.py")
+_NL_CONF      = Path("/etc/asl_dvs/nodelisten.conf")
+_NL_DASH_CONF = Path("/etc/asl_dvs/asl_dvs.conf")
+_NL_SERVICE   = "nodelisten.service"
+_NL_TX_NODE   = "1921"
+_NL_TX_SEND   = 32018
+_NL_TX_LISTEN = 34018
+_NL_DEFAULTS  = {"port": 8993, "udp_port": 6200, "node": "", "https": True, "allow_wan": False,
+                 "public_listen": False, "max_listeners": 3}
+_NL_TAILNET   = ipaddress.ip_network("100.64.0.0/10")
+_NL_IP_RE     = re.compile(r"^[0-9A-Fa-f:.]{2,45}$")
+
+def _nl_bool(v: str) -> bool:
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+def _nl_read_conf() -> "tuple[dict, str]":
+    cfg = dict(_NL_DEFAULTS)
+    if not _NL_CONF.exists():
+        return cfg, "missing"
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(str(_NL_CONF))
+    except (configparser.Error, OSError) as exc:
+        return cfg, f"can't read it: {exc}"
+    if cp.has_section("nodelisten"):
+        sec = cp["nodelisten"]
+        for k in ("port", "udp_port", "max_listeners"):
+            v = sec.get(k, "").strip()
+            if v.isdigit():
+                cfg[k] = int(v)
+        for k in ("https", "allow_wan", "public_listen"):
+            if k in sec:
+                cfg[k] = _nl_bool(sec.get(k))
+        n = sec.get("node", "").strip()
+        if n.isdigit():
+            cfg["node"] = n
+    return cfg, ""
+
+def _nl_main_node(cfg: dict) -> str:
+    if cfg.get("node"):
+        return cfg["node"]
+    try:
+        section = ""
+        for raw in _NL_DASH_CONF.read_text(errors="replace").splitlines():
+            line = raw.strip()
+            if line.startswith("[") and line.endswith("]"):
+                section = line[1:-1].strip().upper()
+                continue
+            if section == "CONFIG":
+                m = re.match(r"^asl_node\s*=\s*(\d+)\s*$", line)
+                if m:
+                    return m.group(1)
+    except OSError:
+        pass
+    return ""
+
+def _nl_is_lan(text: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(str(text).strip().strip("[]"))
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_private or ip.is_loopback or ip.is_link_local or (ip.version == 4 and ip in _NL_TAILNET)
+
+def _nl_clean_ip(text: str) -> str:
+    ip = str(text).strip().strip("[]")
+    if ip.lower().startswith("::ffff:") and "." in ip:
+        ip = ip[7:]
+    return ip
+
+def _nl_feeder_pids() -> list:
+    pids = []
+    for d in glob.glob("/proc/[0-9]*/cmdline"):
+        try:
+            with open(d, "rb") as fh:
+                if b"nodelisten.py\0--feed\0" in fh.read():
+                    pids.append(int(d.split("/")[2]))
+        except (OSError, ValueError):
+            continue
+    return pids
+
+def _nl_health(port: int) -> "tuple[bool, str, str]":
+    import http.client as _http
+    import ssl as _ssl
+    first_err = ""
+    for scheme in ("https", "http"):
+        try:
+            if scheme == "https":
+                ctx = _ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = _ssl.CERT_NONE
+                conn = _http.HTTPSConnection("127.0.0.1", port, timeout=4, context=ctx)
+            else:
+                conn = _http.HTTPConnection("127.0.0.1", port, timeout=4)
+            conn.request("GET", "/api/health")
+            resp = conn.getresponse()
+            body = resp.read(4096)
+            conn.close()
+            if resp.status != 200:
+                if not first_err:
+                    first_err = f"{scheme.upper()} {resp.status}"
+                continue
+            try:
+                ver = str(json.loads(body.decode("utf-8", "replace")).get("version", ""))[:20]
+            except (ValueError, AttributeError):
+                ver = ""
+            return True, scheme, ver
+        except Exception as e:
+            if not first_err:
+                first_err = str(e)[:80] or type(e).__name__
+    return False, "", first_err
+
+def _nl_web_clients(port: int) -> "tuple[list, str]":
+    out, prob = _cmd_or_problem(["ss", "-Htn", "state", "established", f"( sport = :{port} )"], 6)
+    if prob:
+        return [], prob
+    by_ip: dict = {}
+    for ln in out.splitlines():
+        parts = ln.split()
+        if len(parts) < 4:
+            continue
+        ip = _nl_clean_ip(parts[-1].rsplit(":", 1)[0])
+        if not _NL_IP_RE.match(ip):
+            continue
+        by_ip[ip] = by_ip.get(ip, 0) + 1
+    clients = [{"ip": ip, "conns": n, "lan": _nl_is_lan(ip), "local": ip in ("127.0.0.1", "::1")}
+               for ip, n in sorted(by_ip.items())]
+    return clients, ""
+
+def _nl_lstats(node: str) -> "tuple[bool, list]":
+    if not node:
+        return False, []
+    out, err = _run_with_stderr(["asterisk", "-rx", f"rpt lstats {node}"], timeout=6)
+    if not out and err:
+        return False, []
+    return True, [ln.split()[0] for ln in out.splitlines() if ln.split() and ln.split()[0].isdigit()]
+
+def _nodelisten_checks() -> dict:
+    installed = _NL_BIN.exists() or get_service_installed(_NL_SERVICE)
+    if not installed:
+        return {"ok": True, "installed": False, "status": "info", "badge": "NOT INSTALLED", "checks": [],
+                "clients": []}
+    cfg, cprob = _nl_read_conf()
+    svc = get_service_state(_NL_SERVICE)
+    rows: list = []
+
+    def row(key, enables, status, fix=None):
+        rows.append({"key": key, "enables": enables, "status": status, "fix": fix})
+
+    row(f"{_NL_SERVICE}: {svc}", "Node Listen service running",
+        "pass" if svc == "active" else "fail",
+        None if svc == "active" else "Press Restart nodelisten below")
+    if cprob == "missing":
+        row(str(_NL_CONF), "Settings file", "info", "Not written yet -- Node Listen uses its defaults")
+    elif cprob:
+        row(str(_NL_CONF), "Settings file", "warn", f"{cprob} -- Node Listen uses its defaults")
+
+    port, uport = cfg["port"], cfg["udp_port"]
+    entries = _parse_ss_entries(_ss_tlnpu_fetch())
+
+    def holders(proto, p):
+        return [e for e in entries if e["proto"] == proto and e["port"] == str(p)]
+
+    def who(e):
+        cmd = _pid_cmdline(e["pid"])
+        if "nodelisten" in cmd:
+            return "nodelisten"
+        return e["process"] or "?"
+
+    def port_row(proto, p, enables, want, want_addr=None, needed=True, fix=None):
+        hs = holders(proto, p)
+        label = f"{proto.upper()} {p}"
+        if not entries:
+            row(label, enables, "info", "Can't check: ss gave no output")
+            return False
+        if not hs:
+            row(f"{label}: not listening", enables, "fail" if needed else "info",
+                (fix or "Restart nodelisten") if needed else None)
+            return False
+        names = sorted({who(e) for e in hs})
+        addrs = sorted({e["addr"] for e in hs})
+        if want not in names:
+            row(f"{label}: held by {', '.join(names)}", enables, "fail",
+                f"Port conflict -- stop {', '.join(names)} or change this port in Node Listen")
+            return False
+        if want_addr and not any(a in want_addr for a in addrs):
+            row(f"{label}: {want} on {', '.join(addrs)}", enables, "warn",
+                f"Expected on {want_addr[0]}")
+            return True
+        row(f"{label}: {want} on {', '.join(addrs)}", enables, "pass")
+        return True
+
+    web_up = port_row("tcp", port, "Web page and API", "nodelisten", ("0.0.0.0", "*", "[::]"))
+    port_row("udp", uport, "Node audio in (from the Asterisk feed)", "nodelisten", ("127.0.0.1",))
+    port_row("udp", _NL_TX_LISTEN, f"Push-to-talk audio back from node {_NL_TX_NODE}", "nodelisten",
+             ("127.0.0.1",))
+
+    scheme, version = "", ""
+    if svc == "active" or web_up:
+        ok, scheme, info = _nl_health(port)
+        if ok:
+            version = info
+            row(f"{scheme}://127.0.0.1:{port}/api/health: OK" + (f" (v{info})" if info else ""),
+                "Web page answers", "pass")
+            if cfg["https"] and scheme != "https":
+                row("HTTPS on, page served on plain HTTP", "HTTPS (needed for push-to-talk)", "warn",
+                    "Node Listen couldn't load its certificate -- see its log")
+            elif not cfg["https"]:
+                row("HTTPS off", "HTTPS (needed for push-to-talk)", "info",
+                    "Listening works; push-to-talk needs HTTPS on")
+        else:
+            row(f"127.0.0.1:{port}/api/health: no answer", "Web page answers", "fail",
+                f"{info} -- restart nodelisten")
+
+    main = _nl_main_node(cfg)
+    rpt_text, rerr = read_path_file(_RPT_CONF)
+    tx_on = False
+    if rerr:
+        row(str(_RPT_CONF), "Node audio hook", "warn", f"Can't read it: {rerr}")
+    elif not main:
+        row("node: (not set)", "Node Listen's node", "warn",
+            "Set the node on the Node Listen page (Send its audio here)")
+    else:
+        nodes = _rpt_scan_full(rpt_text)["nodes"]
+        outs = nodes.get(main, {}).get("outstreamcmd", "").replace(" ", "")
+        if "nodelisten.py,--feed," in outs:
+            hp = outs.rsplit(",", 1)[-1]
+            if hp == str(uport):
+                row(f"[{main}] outstreamcmd -> nodelisten UDP {hp}", "Node audio hook in rpt.conf", "pass")
+            else:
+                row(f"[{main}] outstreamcmd -> UDP {hp}", "Node audio hook in rpt.conf", "fail",
+                    f"Hook sends to UDP {hp} but Node Listen listens on {uport} -- "
+                    f"turn Send its audio here off and on in Node Listen")
+        elif outs:
+            row(f"[{main}] outstreamcmd is another program's", "Node audio hook in rpt.conf", "warn",
+                "Node Listen gets no audio while another outstreamcmd is set")
+        else:
+            row(f"[{main}] no outstreamcmd", "Node audio hook in rpt.conf", "warn",
+                "Turn on Send its audio here on the Node Listen page")
+        if "nodelisten.py,--feed," in outs:
+            fp = _nl_feeder_pids()
+            ast = get_service_state("asterisk.service")
+            row(f"Feeder: {len(fp)} running" if fp else "Feeder: not running", "Audio feed from Asterisk",
+                "pass" if fp else ("warn" if ast == "active" else "info"),
+                None if fp else ("Asterisk starts it after a restart of Asterisk" if ast == "active"
+                                 else "Asterisk is not running"))
+        tx_on = _NL_TX_NODE in nodes
+        if tx_on:
+            rx = nodes[_NL_TX_NODE].get("rxchannel", "").replace(" ", "")
+            want_rx = f"USRP/127.0.0.1:{_NL_TX_LISTEN}:{_NL_TX_SEND}"
+            row(f"[{_NL_TX_NODE}] rxchannel = {rx or '(none)'}", "Transmit node (push-to-talk)",
+                "pass" if rx == want_rx else "warn", None if rx == want_rx else f"Expected {want_rx}")
+            port_row("udp", _NL_TX_SEND, f"Push-to-talk audio to node {_NL_TX_NODE}", "asterisk",
+                     None, True, "Asterisk opens it when node 1921 loads -- restart Asterisk")
+            lok, links = _nl_lstats(main)
+            if lok:
+                up = _NL_TX_NODE in links
+                row(f"Node {_NL_TX_NODE} " + ("linked to" if up else "not linked to") + f" {main}",
+                    "Push-to-talk link", "pass" if up else "warn",
+                    None if up else "Node Listen links it again within 20 s while it runs")
+            else:
+                row(f"rpt lstats {main}", "Push-to-talk link", "info", "Can't check: Asterisk did not answer")
+        else:
+            row(f"No [{_NL_TX_NODE}] stanza", "Transmit node (push-to-talk)", "info",
+                "Push-to-talk is off (turn it on in Node Listen)")
+
+    clients, clprob = _nl_web_clients(port)
+    if clprob:
+        row("Connected browsers", "Who is connected", "info", f"Can't check: {clprob}")
+    wan = [c for c in clients if not c["lan"]]
+    if cfg["allow_wan"]:
+        row("allow_wan = on", "Internet access", "pass" if cfg["https"] else "warn",
+            None if cfg["https"] else "Internet logins need HTTPS -- turn HTTPS on")
+    else:
+        row("allow_wan = off", "Internet access", "pass" if not wan else "warn",
+            None if not wan else "Internet clients are connected but get 403")
+
+    statuses = [r["status"] for r in rows]
+    status = "fail" if "fail" in statuses else "warn" if "warn" in statuses else "pass"
+    return {"ok": True, "installed": True, "status": status,
+            "badge": {"pass": "OK", "warn": "WARN", "fail": "DOWN" if svc != "active" else "FAIL"}[status],
+            "service": svc, "port": port, "scheme": scheme, "version": version, "main": main,
+            "tx": tx_on, "checks": rows, "clients": clients}
+
+def _route_nodelisten_get(h: Handler) -> None:
+    h.send_json(_nodelisten_checks())
+
+def _route_nodelisten_post(h: Handler, data: dict) -> None:
+    if os.geteuid() != 0:
+        h.send_json({"ok": False, "message": "root required"}); return
+    action = str(data.get("action", "")).strip().lower()
+    if action == "restart":
+        try:
+            r = subprocess.run(["systemctl", "restart", _NL_SERVICE],
+                               capture_output=True, text=True, timeout=30)
+        except Exception as exc:
+            h.send_json({"ok": False, "message": str(exc)}); return
+        if r.returncode != 0:
+            h.send_json({"ok": False, "message": (r.stderr or r.stdout or "restart failed").strip()}); return
+        h.send_json({"ok": True, "message": "nodelisten restarted"})
+        return
+    if action == "disconnect":
+        ip = _nl_clean_ip(data.get("ip", ""))
+        try:
+            ipaddress.ip_address(ip)
+        except ValueError:
+            h.send_json({"ok": False, "message": "bad address"}, 400); return
+        port = _nl_read_conf()[0]["port"]
+        before, _ = _nl_web_clients(port)
+        if not any(c["ip"] == ip for c in before):
+            h.send_json({"ok": False, "message": f"{ip} is not connected"}); return
+        dst = f"[{ip}]" if ":" in ip else ip
+        out, prob = _cmd_or_problem(["ss", "-K", "-Htn", "state", "established",
+                                     f"( sport = :{port} )", "dst", dst], 6)
+        if prob:
+            h.send_json({"ok": False, "message": prob}); return
+        after, _ = _nl_web_clients(port)
+        if any(c["ip"] == ip for c in after):
+            h.send_json({"ok": False, "message": f"{ip} is still connected (this kernel may not "
+                                                 f"allow closing sockets: ss -K)"}); return
+        h.send_json({"ok": True, "message": f"Disconnected {ip}"})
+        return
+    if action == "unlink":
+        main = _nl_main_node(_nl_read_conf()[0])
+        if not main:
+            h.send_json({"ok": False, "message": "Node Listen's node is not set"}); return
+        lok, links = _nl_lstats(main)
+        if lok and _NL_TX_NODE not in links:
+            h.send_json({"ok": True, "message": f"Node {_NL_TX_NODE} is not linked"}); return
+        out, err = _run_with_stderr(["asterisk", "-rx", f"rpt cmd {main} ilink 1 {_NL_TX_NODE}"], timeout=8)
+        if err and not out:
+            h.send_json({"ok": False, "message": err[:200]}); return
+        h.send_json({"ok": True, "message": f"Node {_NL_TX_NODE} unlinked from {main}"})
+        return
+    h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
+
 _SD_MANFID = {
     0x01: "Panasonic", 0x02: "Toshiba", 0x03: "SanDisk", 0x08: "Silicon Power",
     0x18: "Infineon",  0x1b: "Samsung", 0x1c: "Transcend", 0x1d: "ADATA",
@@ -21674,6 +22107,7 @@ _GET_ROUTES = {
     "/api/stfu":               _route_stfu_get,
     "/api/m17":                _route_m17_get,
     "/api/dstar-gw":           _route_dstar_gw_get,
+    "/api/nodelisten":         _route_nodelisten_get,
     "/api/sdcard":             _route_sdcard_get,
     "/api/sdcard/test":        _route_sdcard_test_get,
     "/api/net/job":            _route_net_job_get,
@@ -21698,6 +22132,7 @@ _POST_ROUTES = {
     "/api/stfu":            _route_stfu_post,
     "/api/m17":             _route_m17_post,
     "/api/dstar-gw":        _route_dstar_gw_post,
+    "/api/nodelisten":      _route_nodelisten_post,
     "/api/sdcard/test":     _route_sdcard_test_post,
     "/api/phone/modules":   _route_phone_modules_post,
     "/api/phone/routertest": _route_phone_routertest_post,
