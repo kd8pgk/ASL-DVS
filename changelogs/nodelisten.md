@@ -1,6 +1,38 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_6_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_7_20261019.py`. Newest entries first.
+
+## 0.4.7 (2026-10-19)
+
+First step to using Node Listen from the internet (WAN), with minimal
+security. Only Node Listen is meant to be reachable from outside; Node
+Controller and SysMon stay on the LAN.
+
+- **Internet access is off by default.** A new setting, `allow_wan` in
+  `/etc/asl_dvs/nodelisten.conf` (no page checkbox yet), decides whether
+  clients from the internet are served at all. Off (the default), they get
+  403 for every page and API. **A node that already reaches Node Listen
+  through a router port forward loses that access until `allow_wan = true`
+  is set** (then `systemctl restart nodelisten`).
+- **LAN** is private, loopback and link-local addresses, plus 100.64.0.0/10
+  (Tailscale). Tailscale works with `allow_wan` off, which suits a node behind
+  CGNAT, where a port forward can't work.
+- **A tunnel counts as internet.** A request from the Pi itself that carries
+  a proxy header (Forwarded, X-Forwarded-For, X-Real-IP, CF-Connecting-IP,
+  Tailscale-Funnel-Request) is treated as coming from the internet, so a
+  Cloudflare Tunnel or Tailscale Funnel can't slip past these rules; the
+  forwarded address is used for logs and lockouts.
+- **No password over plain HTTP from the internet.** An internet login on
+  plain HTTP gets 403 before the password is checked (behind a tunnel,
+  `X-Forwarded-Proto: https` counts as HTTPS). The session cookie is marked
+  Secure in that case too.
+- **Shared lockout for internet logins.** On top of the per-address lockout
+  (5 tries), after 20 failed internet logins in 10 minutes from any
+  addresses, every internet login waits until that window ends. LAN logins
+  are never held. The failed-login table forgets entries after an hour and
+  holds at most 1000.
+- **Internet logins are logged as warnings**, with the address and
+  "(internet)".
 
 ## 0.4.6 (2026-10-19)
 
