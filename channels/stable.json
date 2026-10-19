@@ -20,13 +20,13 @@
    "version": "2.51.0"
   },
   "nodecontrol": {
-   "blob": "7b5a6a1ed93d43bf36c6744278506acacbc302e9",
-   "commit": "33df66146425d7d881ce0985fac0ae530a7be42f",
-   "file": "nodecontrol_v9_3_82_20261014.py",
-   "landed": "2026-10-14T16:02:36Z",
-   "promoted": "2026-10-19T15:15:24Z",
+   "blob": "ffc952a77dc56fdff8b08072d51168fc428c9a0b",
+   "commit": "d8ba0e7893949992aab96fd5374ce5e0b4a42599",
+   "file": "nodecontrol_v9_3_83_20261014.py",
+   "landed": "2026-10-14T21:41:22Z",
+   "promoted": "2026-10-19T17:11:56Z",
    "reason": "count",
-   "version": "9.3.82"
+   "version": "9.3.83"
   },
   "nodecontrol_pi02w": {
    "blob": "1cb1d1ab1477683db70589b983caf97dfef44caf",
@@ -38,13 +38,13 @@
    "version": "9.3.75-pi02w"
   },
   "sysmon": {
-   "blob": "b0e616e67472bc48ddca3d99e80ba3fa744e8763",
-   "commit": "e9e7912d9fd51e1908a06aa8ed22fc133ad35cd4",
-   "file": "sysmon_v6_13_83_20261013.py",
-   "landed": "2026-10-13T12:48:45Z",
-   "promoted": "2026-10-19T15:15:24Z",
+   "blob": "b5779da88142f12b28ce06895f14fe506406f54e",
+   "commit": "e38215d42369f7de9b223039920ab0b6cb829517",
+   "file": "sysmon_v6_13_84_20261013.py",
+   "landed": "2026-10-13T22:45:24Z",
+   "promoted": "2026-10-19T17:11:56Z",
    "reason": "count",
-   "version": "6.13.83"
+   "version": "6.13.84"
   },
   "sysmon_pi02w": {
    "blob": "e345bd147a6248bee89d26d5153f231e1e2be258",
