@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.87"
+VERSION      = "9.3.88"
 BUILD_DATE   = "2026-10-19"
 
 ASL_NODE        = "652702"
@@ -14136,7 +14136,44 @@ def action_local(data: dict) -> Tuple[bool, str]:
                 and _echolink_to_asl(st.echo_fav) == node:
             return action_echo_disconnect()
         return _local_drop(node)
+    if act == "m17-connect":
+        return _local_m17_connect(data)
+    if act == "m17-disconnect":
+        st = get_state()
+        if st.page != "M17" or not st.current_fav:
+            return True, "No M17 reflector is connected."
+        log.info("local API: Node Listen asks to disconnect M17 %s", st.current_fav)
+        return action_m17_disconnect()
+    if act == "m17-status":
+        st = get_state()
+        return True, str(st.current_fav) if st.page == "M17" and st.current_fav else ""
     return False, f"Unknown local action '{act}'"
+
+def _local_m17_connect(data: dict) -> Tuple[bool, str]:
+    base = str(data.get("reflector", "")).strip()
+    module = str(data.get("module", "")).strip().upper() or "@ALL"
+    name = _clip_label(str(data.get("name", "")).strip())
+    if not base or len(base) > _M17_ID_MAX or _has_ctrl_chars(base):
+        return False, "M17 reflector is required (e.g. M17-USA)"
+    if module != "@ALL" and not (len(module) == 1 and module.isalpha()):
+        return False, f"Invalid module: '{module}' (must be A-Z or @ALL)"
+    key = base.upper()
+    hosts = _load_m17_hosts()
+    ref = next((r for r in hosts.get("reflectors") or [] if r["id"].upper() == key), None)
+    if ref is not None:
+        pub = ref.get("modules") or []
+        if module != "@ALL" and pub and module not in pub:
+            return False, f"{ref['id']} does not publish module {module} (it has {', '.join(pub)})"
+        base, addr, label = ref["id"], str(ref.get("addr") or "").strip(), ref.get("label") or ref["id"]
+    else:
+        row = next((r for r in get_state().m17_reflectors if str(r[1]).strip().upper() == key), None)
+        if row is None:
+            return False, f"{base} is not in the M17 reflector list or the M17 favorites"
+        base, addr, label = str(row[1]).strip(), str(row[3]).strip(), row[0]
+    if not addr or "|" in addr:
+        return False, f"{base} has no usable address"
+    log.info("local API: Node Listen asks to connect M17 %s %s", base, module)
+    return action_m17_connect(name or _clip_label(str(label)), base, addr, module)
 
 _POST_ACTIONS: dict = {
     "logout":            _act_logout,
