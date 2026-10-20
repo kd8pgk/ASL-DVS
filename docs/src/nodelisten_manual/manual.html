@@ -1,0 +1,789 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Listen Manual</title>
+<link rel="stylesheet" href="manual.css">
+<style>
+.shot{display:block;margin:0 auto;border:1px solid var(--line);border-radius:6px}
+.shots{display:grid;grid-template-columns:repeat(3,1fr);gap:.6em;margin:.6em 0}
+.shots figure{margin:0}
+.shots img{width:100%;border:1px solid var(--line);border-radius:4px;display:block}
+.shots figcaption{font-size:7.4pt;margin-top:.25em}
+svg.flow{width:100%;height:auto;display:block;margin:.4em 0}
+.k{font-family:var(--mono);color:var(--cyan)}
+.sc{display:inline-block;font-size:6.4pt;font-weight:800;letter-spacing:.1em;padding:.05em .4em;border-radius:3px;vertical-align:1px}
+.sc.n{background:var(--yel);color:#0b1018}.sc.b{background:var(--blu);color:#0b1018}
+td .sc{margin-left:.3em}
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
+    </div>
+    <div class="ed"><b>Node Listen 0.4.17</b><br>Edition 2026-10-20</div>
+  </div>
+  <div class="body">
+    <h1>Node Listen Manual<br><span>Receive and transmit audio, setting by setting</span></h1>
+    <p class="lede">Node Listen puts one node in your phone's browser: listen with about half a second of delay, talk
+      with push-to-talk, and connect favorites. This manual follows the audio both ways, from the radio to your ear and
+      from your mic to the air, and explains every setting along the way: where it acts, what it does, when to change
+      it, and how to measure the result with the built-in meters, tests and Audio check.</p>
+    <div class="chips">
+      <span class="chip c1">RECEIVE</span><span class="chip c2">TRANSMIT</span><span class="chip c3">SETTINGS</span>
+      <span class="chip c4">LEVELS</span><span class="chip c5">TROUBLESHOOTING</span>
+    </div>
+    <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
+    <table>
+      <tr><th>Tool</th><th>File</th><th>Version</th></tr>
+      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_17_20261020.py</td><td>0.4.17</td></tr>
+      <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_93 / nodecontrol_v9_3_89</td><td>9.3.93-pi02w · 9.3.89 (full), for M17 favorites and the page following Node Listen</td></tr>
+    </table>
+    <p style="font-size:8pt;color:var(--muted)">Node Listen is a common tool: the same file runs on the Pi Zero 2 W and the
+      full build. The rest of the suite is covered in the user manual, <code>docs/ASL-DVS_User_Manual.pdf</code>.</p>
+  </div>
+  <div class="foot">KD8PGK · written with Claude (Anthropic) · CC BY-NC 4.0 · github.com/kd8pgk/ASL-DVS</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Contents</div>
+  <h1 class="ch">In this manual</h1>
+  <ul class="toc">
+    <li class="pt">Part I · Getting going</li>
+    <li><span class="no">1</span>What Node Listen is</li>
+    <li><span class="no">2</span>Install and first setup</li>
+    <li><span class="no">3</span>The page</li>
+    <li class="pt">Part II · The audio, end to end</li>
+    <li><span class="no">4</span>Receive (RX) audio</li>
+    <li><span class="no">5</span>Transmit (TX) audio</li>
+    <li><span class="no">6</span>Settings reference</li>
+    <li><span class="no">7</span>Getting levels right</li>
+    <li><span class="no">8</span>Reading the spectrum and the meters</li>
+    <li class="pt">Part III · Everything else</li>
+    <li><span class="no">9</span>Connect and favorites</li>
+    <li><span class="no">10</span>Troubleshooting by symptom</li>
+    <li><span class="no">11</span>From the internet, and security</li>
+    <li><span class="no">12</span>Reference: files, ports, settings keys, API, history</li>
+  </ul>
+  <h2>How to read it</h2>
+  <p>If you only want to listen, chapters 2 and 3 are enough. If you transmit, read chapters 5 and 7 before your first
+    contact: most audio complaints come from levels that were never set. Chapter 6 is the reference to come back to.
+    Each setting is marked with where it is kept:</p>
+  <table>
+    <tr><th>Mark</th><th>Meaning</th></tr>
+    <tr><td><span class="sc n">NODE</span></td><td>Kept on the Pi in <code>/etc/asl_dvs/nodelisten.conf</code>. Changes it for everyone who uses Node Listen on this node. Needs you to be logged in.</td></tr>
+    <tr><td><span class="sc b">BROWSER</span></td><td>Kept in this browser only. Each phone, tablet or computer has its own, and changing it on one leaves the others alone. No login needed.</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>Levels are given in <b>dBFS</b>: decibels below digital full scale.
+    0 dBFS is the loudest a sample can be; −6 dBFS is half that; −20 dBFS is a tenth. Speech is measured as an average
+    (what you hear as loudness) and as a peak (the loudest instant, which is what clips).</div>
+</section>
+
+<section class="part">
+  <div class="pn">PART I</div>
+  <h1>Getting going</h1>
+  <p>What Node Listen does, how to set it up on a node, and a tour of the page.</p>
+  <ol><li>What Node Listen is</li><li>Install and first setup</li><li>The page</li></ol>
+</section>
+
+<section class="chapter" id="ch1">
+  <div class="kicker">Chapter 1</div>
+  <h1 class="ch">What Node Listen is</h1>
+  <p class="ch-lede">A web page served by the Pi on port 8993 that lets a phone, tablet or computer listen to one node,
+    transmit through it, and connect a short list of favorites. There is no app to install.</p>
+  <div class="grid2">
+    <div class="box"><h4 style="color:var(--grn)">Receive</h4><p>The node's audio, about half a second behind, cleaned up on
+      the Pi (CTCSS and hum cut, levels evened out, squelch tails muted) and played in the browser with a live spectrum.</p></div>
+    <div class="box"><h4 style="color:var(--red)">Transmit</h4><p>Push-to-talk from the phone's microphone, processed in the page
+      (filter, leveler, noise gate) and sent to a private node, 1921, that Node Listen keeps linked to your node.</p></div>
+    <div class="box"><h4 style="color:var(--cyan)">Connect</h4><p>Up to 10 favorites: AllStar nodes, EchoLink stations and M17
+      reflectors. Node Listen reports whether each link actually came up.</p></div>
+    <div class="box"><h4 style="color:var(--yel)">Measure</h4><p>Live meters, a mic test, a test through the node, and an Audio
+      check that watches a few minutes of real use and says what to change.</p></div>
+  </div>
+  <h2><span class="n">1.1</span>What it needs</h2>
+  <table>
+    <tr><th>Item</th><th>Why</th></tr>
+    <tr><td>An ASL3 node (Asterisk with app_rpt)</td><td>Node Listen takes the node's audio from Asterisk and transmits through it.</td></tr>
+    <tr><td>Python 3.11 or later</td><td>As on Debian 12 and 13. Node Listen uses only the standard library.</td></tr>
+    <tr><td>A modern browser</td><td>Chrome, Firefox, Safari or Edge from the last few years. The microphone needs the <code>https://</code> page.</td></tr>
+    <tr><td>Optional: the Dashboard (Node Controller)</td><td>Needed for M17 favorites; when it runs, connects from its node go through it so it shows them.</td></tr>
+  </table>
+  <h2><span class="n">1.2</span>How it fits on the node</h2>
+  <p>Node Listen adds two things to <code>/etc/asterisk/rpt.conf</code>, each with a backup first: one
+    <code>outstreamcmd</code> line in your node's stanza, which sends the node's audio to Node Listen, and a private
+    node <b>1921</b>, which carries your transmissions in. Everything else stays as it was: the radio, the other links
+    and DVSwitch hear and send exactly what they did before.</p>
+</section>
+
+<section class="chapter" id="ch2">
+  <div class="kicker">Chapter 2</div>
+  <h1 class="ch">Install and first setup</h1>
+  <p class="ch-lede">Ten minutes from nothing to a first test transmission.</p>
+  <h2><span class="n">2.1</span>Install</h2>
+  <ol class="steps">
+    <li>The installer (7.2.0 and later) asks whether to add Node Listen; instmon (2.58.0 and later) lists it with the
+      other tools and updates it. By hand: <code>sudo python3 nodelisten_v….py --install</code>.</li>
+    <li>Open <code>http://&lt;pi-address&gt;:8993</code>. Node Listen moves you to <code>https://</code>. The certificate
+      is made on the Pi, so the browser warns once: accept it.</li>
+    <li>Log in with the Pi's root password.</li>
+  </ol>
+  <h2><span class="n">2.2</span>Receive: send the node's audio here</h2>
+  <ol class="steps">
+    <li>Setup tab, open the <b>Receive</b> card. The table lists each node in <code>rpt.conf</code> and its
+      <code>outstreamcmd</code>, if any.</li>
+    <li>Pick your node and press <b>Send its audio here</b>. That node becomes Node Listen's main node.</li>
+    <li>Press <b>Restart Asterisk</b> (it asks first; every link drops and reconnects).</li>
+    <li>Listen tab: within a few seconds the status line shows a green <b>feed</b> light, and audio plays when the
+      node passes any.</li>
+  </ol>
+  <div class="call care"><span class="t">CAREFUL</span>A node takes one <code>outstreamcmd</code>. If yours already has
+    one (a Broadcastify feed, for example), Node Listen refuses rather than replace it.</div>
+  <h2><span class="n">2.3</span>Transmit: add node 1921</h2>
+  <ol class="steps">
+    <li>Setup tab, open the <b>Transmit</b> card and press <b>Add node 1921</b>. Node Listen adds a <code>[1921]</code>
+      stanza (your node's template, a USRP channel, no hang time, telemetry or courtesy tone) and a <code>[nodes]</code>
+      line, after a backup.</li>
+    <li>Press <b>Restart Asterisk</b>. Within 20 seconds the card's summary reads <i>Set up and linked</i>: Node Listen
+      links 1921 to your node and relinks it whenever it drops.</li>
+  </ol>
+  <h2><span class="n">2.4</span>First test transmission</h2>
+  <ol class="steps">
+    <li>Setup tab, <b>Microphone</b> card: press <b>Test mic</b>, talk for 4 seconds, and read the report (section 8.2).
+      Adjust <b>Mic gain</b> until it says <i>Good</i>.</li>
+    <li>Press <b>Test through the node</b>. It transmits for 4 seconds, over the air and to every link, and plays back what
+      the node sent out.</li>
+    <li>Listen tab: hold the push-to-talk button and make a short call.</li>
+  </ol>
+</section>
+
+<section class="chapter" id="ch3">
+  <div class="kicker">Chapter 3</div>
+  <h1 class="ch">The page</h1>
+  <p class="ch-lede">Three tabs along the bottom: Connect, Listen and Setup. The title bar and the tabs bar stay put;
+    only the middle scrolls, and the Listen tab is sized to fit the screen without scrolling.</p>
+  <div class="grid2" style="grid-template-columns:1fr 1fr;align-items:start">
+    <figure><img class="shot" src="img/listen.jpg" style="width:2.6in" alt="The Listen tab">
+      <figcaption><b>Figure 3.1 · Screenshot (test signal).</b> The Listen tab.</figcaption></figure>
+    <figure><img class="shot" src="img/setup.jpg" style="width:2.6in" alt="The Setup tab">
+      <figcaption><b>Figure 3.2 · Screenshot.</b> The Setup tab: each card closed, with its summary.</figcaption></figure>
+  </div>
+  <h2><span class="n">3.1</span>Title bar and login</h2>
+  <table>
+    <tr><th>Part</th><th>What it does</th></tr>
+    <tr><td>Version</td><td>Hidden on narrow phones.</td></tr>
+    <tr><td>Node Controller</td><td>Opens the Dashboard, or switches to its tab if it is already open. Shown only while the Dashboard runs.</td></tr>
+    <tr><td>Log In / Log Out</td><td>The root password. Five wrong tries from one address lock that address out for 5 seconds, doubling up to 5 minutes. A login lasts 12 hours from the last use.</td></tr>
+  </table>
+  <p>With <b>Listen without logging in</b> on (Settings card), anyone who can reach the page gets the Listen tab
+    without the password but can't transmit or change anything.</p>
+  <h2><span class="n">3.2</span>Listen tab, top to bottom</h2>
+  <table>
+    <tr><th>Part</th><th>What it does</th></tr>
+    <tr><td>Listen / Stop and volume</td><td>Starts and stops the audio; the slider beside it is the volume, 0 to 200 %. Listening starts by itself when the page opens (section 6.7).</td></tr>
+    <tr><td>Status line</td><td>Node number · <b>feed</b> light (green while audio arrives from Asterisk; "no feed 12 s" otherwise) · <b>RX</b> light (the node is passing audio) · <b>TX</b> light (someone transmits from Node Listen) · listeners now / limit · <span class="k">CHECK 2:13</span> while an Audio check runs. Hover over a light for details.</td></tr>
+    <tr><td>Spectrum</td><td>0 to 4 kHz, waterfall or bars; tap to switch (chapter 8).</td></tr>
+    <tr><td>Level bar</td><td>The node's level, or your mic level (red <b>TX</b>) while you hold push-to-talk.</td></tr>
+    <tr><td>Message line</td><td><i>Listening.</i>, <i>Tap anywhere to start listening</i>, or why the stream stopped.</td></tr>
+    <tr><td>Push-to-talk</td><td>Hold to talk (chapter 5). Red <b>TALKING</b> with the time; amber <b>Busy: who 0:12</b> when someone else transmits.</td></tr>
+  </table>
+  <h2><span class="n">3.3</span>Setup tab</h2>
+  <p>Cards from one-time setup at the top to everyday use at the bottom: <b>Receive</b>, <b>Transmit</b>,
+    <b>Settings</b>, <b>Favorites</b>, <b>Audio check</b>, <b>Audio levels</b>, <b>Microphone</b>, <b>Playback</b>,
+    <b>Log</b>. Tap a title to open or close it; every card starts closed, showing a one-line summary such as
+    <i>Node 41234 sends audio here</i> or <i>300 Hz cut · auto level · gate light</i>. Chapter 6 goes through them all.</p>
+  <h2><span class="n">3.4</span>Connect tab</h2>
+  <p>The node's links at the top, with the linked favorites and <b>Disconnect</b>; below, the favorite to connect
+    (chapter 9).</p>
+</section>
+
+<section class="part">
+  <div class="pn">PART II</div>
+  <h1>The audio, end to end</h1>
+  <p>Where the sound goes, what changes it at each step, which setting acts where, and how to set and check levels.</p>
+  <ol start="4"><li>Receive (RX) audio</li><li>Transmit (TX) audio</li><li>Settings reference</li><li>Getting levels right</li><li>Reading the spectrum and the meters</li></ol>
+</section>
+
+<section class="chapter" id="ch4">
+  <div class="kicker">Chapter 4 · RX</div>
+  <h1 class="ch">Receive (RX) audio</h1>
+  <p class="ch-lede">From the radio to your ear: everything the node hears, cleaned up once on the Pi for every listener,
+    then buffered, played and drawn by each phone.</p>
+  <figure>
+  <svg class="flow" viewBox="0 0 1000 470" xmlns="http://www.w3.org/2000/svg" font-family="Inter, DejaVu Sans, sans-serif">
+    <defs><marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7f8ca3"/></marker></defs>
+    <text x="10" y="22" fill="#7f8ca3" font-size="13" font-weight="700" letter-spacing="3">ON THE NODE</text>
+    <g font-size="14" fill="#eef3fa">
+      <rect x="10" y="35" width="170" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="95" y="62" text-anchor="middle">Radio and links</text><text x="95" y="82" text-anchor="middle" fill="#7f8ca3" font-size="12">RF, AllStar, EchoLink…</text>
+      <rect x="215" y="35" width="170" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="300" y="62" text-anchor="middle">Asterisk node</text><text x="300" y="82" text-anchor="middle" fill="#7f8ca3" font-size="12">app_rpt mixes it all</text>
+      <rect x="420" y="35" width="170" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="505" y="62" text-anchor="middle">outstreamcmd</text><text x="505" y="82" text-anchor="middle" fill="#7f8ca3" font-size="12">8 kHz, 16-bit</text>
+      <rect x="625" y="35" width="170" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="710" y="62" text-anchor="middle">UDP 127.0.0.1:6200</text><text x="710" y="82" text-anchor="middle" fill="#7f8ca3" font-size="12">to Node Listen</text>
+      <rect x="830" y="35" width="160" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="910" y="62" text-anchor="middle">20 ms frames</text><text x="910" y="82" text-anchor="middle" fill="#7f8ca3" font-size="12">pump, up to 0.5 s queue</text>
+    </g>
+    <g stroke="#7f8ca3" stroke-width="2" marker-end="url(#a)"><line x1="180" y1="66" x2="213" y2="66"/><line x1="385" y1="66" x2="418" y2="66"/><line x1="590" y1="66" x2="623" y2="66"/><line x1="795" y1="66" x2="828" y2="66"/></g>
+    <text x="140" y="140" fill="#ffd040" font-size="13" font-weight="700" letter-spacing="3">RX CLEANUP ON THE PI · ONCE FOR EVERY LISTENER · NODE SETTINGS</text>
+    <g font-size="14" fill="#eef3fa">
+      <rect x="10" y="155" width="225" height="62" rx="8" fill="#2a2410" stroke="#ffd040"/><text x="122" y="182" text-anchor="middle">Cut below 300 Hz</text><text x="122" y="202" text-anchor="middle" fill="#c9d3e0" font-size="12">4th-order high-pass</text>
+      <rect x="265" y="155" width="225" height="62" rx="8" fill="#2a2410" stroke="#ffd040"/><text x="377" y="182" text-anchor="middle">Automatic level + RX gain</text><text x="377" y="202" text-anchor="middle" fill="#c9d3e0" font-size="12">−6…+18 dB, then ±12 dB</text>
+      <rect x="520" y="155" width="225" height="62" rx="8" fill="#2a2410" stroke="#ffd040"/><text x="632" y="182" text-anchor="middle">Soft limiter</text><text x="632" y="202" text-anchor="middle" fill="#c9d3e0" font-size="12">rounds peaks above −1 dBFS</text>
+      <rect x="775" y="155" width="215" height="62" rx="8" fill="#2a2410" stroke="#ffd040"/><text x="882" y="182" text-anchor="middle">Squelch-tail gate</text><text x="882" y="202" text-anchor="middle" fill="#c9d3e0" font-size="12">80 ms look-ahead</text>
+    </g>
+    <g stroke="#7f8ca3" stroke-width="2" marker-end="url(#a)"><line x1="910" y1="97" x2="910" y2="112"/><line x1="910" y1="112" x2="122" y2="112"/><line x1="122" y1="112" x2="122" y2="153"/><line x1="235" y1="186" x2="263" y2="186"/><line x1="490" y1="186" x2="518" y2="186"/><line x1="745" y1="186" x2="773" y2="186"/></g>
+    <text x="140" y="262" fill="#7f8ca3" font-size="13" font-weight="700" letter-spacing="3">TO EACH LISTENER</text>
+    <g font-size="14" fill="#eef3fa">
+      <rect x="10" y="275" width="225" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="122" y="302" text-anchor="middle">μ-law or 16-bit</text><text x="122" y="322" text-anchor="middle" fill="#7f8ca3" font-size="12">64 or 128 kbit/s</text>
+      <rect x="265" y="275" width="225" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="377" y="302" text-anchor="middle">Network</text><text x="377" y="322" text-anchor="middle" fill="#7f8ca3" font-size="12">Wi-Fi, mobile data, VPN</text>
+    </g>
+    <g stroke="#7f8ca3" stroke-width="2" marker-end="url(#a)"><line x1="882" y1="217" x2="882" y2="232"/><line x1="882" y1="232" x2="122" y2="232"/><line x1="122" y1="232" x2="122" y2="273"/><line x1="235" y1="306" x2="263" y2="306"/><line x1="490" y1="306" x2="518" y2="306"/></g>
+    <text x="520" y="262" fill="#22d4ff" font-size="13" font-weight="700" letter-spacing="3">IN THE BROWSER · BROWSER SETTINGS</text>
+    <g font-size="14" fill="#eef3fa">
+      <rect x="520" y="275" width="225" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="632" y="302" text-anchor="middle">Listen buffer</text><text x="632" y="322" text-anchor="middle" fill="#c9d3e0" font-size="12">0.25 s by default (node)</text>
+      <rect x="775" y="275" width="215" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="882" y="302" text-anchor="middle">Smooth playback</text><text x="882" y="322" text-anchor="middle" fill="#c9d3e0" font-size="12">filtered upsampling</text>
+      <rect x="520" y="385" width="225" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="632" y="412" text-anchor="middle">Volume</text><text x="632" y="432" text-anchor="middle" fill="#c9d3e0" font-size="12">0 to 200 %, muted on TX</text>
+      <rect x="775" y="385" width="215" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="882" y="420" text-anchor="middle">Speaker</text>
+      <rect x="265" y="385" width="225" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="377" y="412" text-anchor="middle">Spectrum, meters,</text><text x="377" y="432" text-anchor="middle" fill="#c9d3e0" font-size="12">Audio check (taps)</text>
+    </g>
+    <g stroke="#7f8ca3" stroke-width="2" marker-end="url(#a)"><line x1="745" y1="306" x2="773" y2="306"/><line x1="882" y1="337" x2="882" y2="362"/><line x1="882" y1="362" x2="632" y2="362"/><line x1="632" y1="362" x2="632" y2="383"/><line x1="745" y1="416" x2="773" y2="416"/></g>
+    <g stroke="#7f8ca3" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#a)"><line x1="632" y1="362" x2="377" y2="362"/><line x1="377" y1="362" x2="377" y2="383"/></g>
+  </svg>
+  <figcaption><b>Figure 4.1 · The receive path.</b> Amber steps run on the Pi once for everyone, blue steps on each
+    listener's own device. The dashed branch is measuring only: the spectrum, the level bar and the Audio check see the
+    audio before your volume.</figcaption>
+  </figure>
+
+  <h2><span class="n">4.1</span>From the node to Node Listen</h2>
+  <p>app_rpt mixes everything your node hears (the radio, every link, telemetry) and writes it, 8,000 samples a second
+    at 16 bits, to the <code>outstreamcmd</code> program, a small part of Node Listen that passes it on to
+    <code>127.0.0.1:6200</code>. The audio pump cuts it into 20 ms frames (160 samples) and sends one to every
+    listener every 20 ms. If audio arrives in bursts, up to 0.5 s waits in a queue; beyond that the oldest is dropped
+    and counted.</p>
+  <p>The status line's <b>feed</b> light is green while frames arrive. The <b>RX</b> light and the busy lockout use the
+    node's own level before any cleanup: a frame louder than −50 dBFS counts as audio, held for 0.6 s.</p>
+
+  <h2><span class="n">4.2</span>RX cleanup on the Pi</h2>
+  <p>Three steps, done once for every listener, change only what Node Listen's listeners hear. They are on by
+    default; chapter 6 has each setting in detail. Nothing is done while nobody listens, and near-silent frames
+    (under −65 dBFS) skip the work.</p>
+  <table>
+    <tr><th>Step</th><th>What it does to the sound</th></tr>
+    <tr><td>Cut below 300 Hz</td><td>Removes hum and the lower CTCSS (PL) tones: 100 Hz drops by about 38 dB, 150 Hz by 24 dB, 250 Hz by 7 dB. Voice above 300 Hz is untouched.</td></tr>
+    <tr><td>Automatic level</td><td>Aims speech at about −20 dBFS: brings quiet stations up by as much as 18 dB and loud ones down by as much as 6 dB. It turns down within a frame or two, comes up at 3 dB a second (faster for the first half second of a new transmission), and holds still between transmissions. RX gain (Audio levels) is added on top.</td></tr>
+    <tr><td>Soft limiter</td><td>Up to about −1 dBFS nothing changes; above that, peaks are rounded off smoothly instead of clipped.</td></tr>
+    <tr><td>Squelch-tail gate</td><td>Mutes the burst of hiss after a station unkeys, and long silences. It tells hiss from voice by how alike neighbouring samples are: voice scores high, hiss low. To mute a tail from its first frame, it holds the audio back 80 ms.</td></tr>
+  </table>
+
+  <h2><span class="n">4.3</span>To your phone and out of the speaker</h2>
+  <ul>
+    <li><b>Format:</b> 16-bit (128 kbit/s) by default, or μ-law (64 kbit/s) with <b>16-bit audio</b> off. μ-law is the
+      phone-line format: half the data, a little more hiss on quiet audio.</li>
+    <li><b>Listen buffer:</b> the page plays each 100 ms of audio a fixed time after it arrives, 0.25 s by default, so
+      a late packet doesn't make a gap. When audio arrives later than the buffer can cover, playback restarts
+      (a <i>dropout</i>), and the Audio check counts it.</li>
+    <li><b>Smooth playback:</b> the page upsamples 8 kHz to the phone's own rate (44.1 or 48 kHz) with a proper filter,
+      which removes the faint sizzle some phones add.</li>
+    <li><b>Volume</b> and then the speaker. The spectrum and meters see the audio before the volume.</li>
+  </ul>
+  <h2><span class="n">4.4</span>Where the half second goes</h2>
+  <table>
+    <tr><th>Stage</th><th>Delay</th></tr>
+    <tr><td>Asterisk to Node Listen</td><td>a few tens of ms</td></tr>
+    <tr><td>Squelch-tail gate look-ahead</td><td>80 ms (only with the gate on)</td></tr>
+    <tr><td>Page chunks</td><td>up to 100 ms</td></tr>
+    <tr><td>Listen buffer</td><td>250 ms by default (150 ms to 1 s)</td></tr>
+    <tr><td>Network</td><td>a few ms on Wi-Fi at home; more on mobile data</td></tr>
+  </table>
+  <p>The total is about half a second at home. This is why the node's own audio comes back late when you test
+    through it, and why Node Listen ignores the busy lockout for 1 s after your own transmission.</p>
+</section>
+
+<section class="chapter" id="ch5">
+  <div class="kicker">Chapter 5 · TX</div>
+  <h1 class="ch">Transmit (TX) audio</h1>
+  <p class="ch-lede">From your mic to the air: shaped in the page, sent in 20 ms pieces, smoothed on the Pi and fed to
+    node 1921, which is linked to your node.</p>
+  <figure>
+  <svg class="flow" viewBox="0 0 1000 400" xmlns="http://www.w3.org/2000/svg" font-family="Inter, DejaVu Sans, sans-serif">
+    <defs><marker id="b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7f8ca3"/></marker></defs>
+    <text x="10" y="22" fill="#22d4ff" font-size="13" font-weight="700" letter-spacing="3">IN THE BROWSER · BROWSER SETTINGS (MICROPHONE CARD)</text>
+    <g font-size="14" fill="#eef3fa">
+      <rect x="10" y="35" width="150" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="85" y="72" text-anchor="middle">Microphone</text>
+      <rect x="190" y="35" width="190" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="285" y="58" text-anchor="middle">Browser processing</text><text x="285" y="78" text-anchor="middle" fill="#c9d3e0" font-size="11.5">auto gain · noise supp. · echo</text>
+      <rect x="410" y="35" width="150" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="485" y="62" text-anchor="middle">Mic gain</text><text x="485" y="82" text-anchor="middle" fill="#c9d3e0" font-size="12">−12…+24 dB</text>
+      <rect x="590" y="35" width="190" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="685" y="62" text-anchor="middle">Resample to 8 kHz</text><text x="685" y="82" text-anchor="middle" fill="#c9d3e0" font-size="12">filtered at 3.4 kHz</text>
+      <rect x="810" y="35" width="180" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="900" y="58" text-anchor="middle">Voice filter or</text><text x="900" y="78" text-anchor="middle">Radio voice</text>
+      <rect x="590" y="150" width="190" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="685" y="185" text-anchor="middle">Noise gate</text>
+      <rect x="350" y="150" width="210" height="62" rx="8" fill="#0f2430" stroke="#22d4ff"/><text x="455" y="177" text-anchor="middle">Leveler</text><text x="455" y="197" text-anchor="middle" fill="#c9d3e0" font-size="12">compressor + −1 dBFS limit</text>
+      <rect x="130" y="150" width="190" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="225" y="177" text-anchor="middle">20 ms frames</text><text x="225" y="197" text-anchor="middle" fill="#7f8ca3" font-size="12">WebSocket /api/talk</text>
+    </g>
+    <g stroke="#7f8ca3" stroke-width="2" marker-end="url(#b)"><line x1="160" y1="66" x2="188" y2="66"/><line x1="380" y1="66" x2="408" y2="66"/><line x1="560" y1="66" x2="588" y2="66"/><line x1="780" y1="66" x2="808" y2="66"/><line x1="900" y1="97" x2="900" y2="181"/><line x1="900" y1="181" x2="782" y2="181"/><line x1="590" y1="181" x2="562" y2="181"/><line x1="350" y1="181" x2="322" y2="181"/></g>
+    <g stroke="#7f8ca3" stroke-width="2" stroke-dasharray="5 4" marker-end="url(#b)"><line x1="455" y1="212" x2="455" y2="240"/></g>
+    <text x="400" y="258" fill="#c9d3e0" font-size="12">meters, mic test, TX bar, Audio check</text>
+    <text x="125" y="285" fill="#ffd040" font-size="13" font-weight="700" letter-spacing="3">ON THE PI · NODE SETTINGS (AUDIO LEVELS, SETTINGS)</text>
+    <g font-size="14" fill="#eef3fa">
+      <rect x="10" y="300" width="190" height="62" rx="8" fill="#2a2410" stroke="#ffd040"/><text x="105" y="327" text-anchor="middle">TX buffer</text><text x="105" y="347" text-anchor="middle" fill="#c9d3e0" font-size="12">120 ms by default</text>
+      <rect x="230" y="300" width="210" height="62" rx="8" fill="#2a2410" stroke="#ffd040"/><text x="335" y="327" text-anchor="middle">TX gain + soft limit</text><text x="335" y="347" text-anchor="middle" fill="#c9d3e0" font-size="12">±12 dB</text>
+      <rect x="470" y="300" width="160" height="62" rx="8" fill="#2a2410" stroke="#ffd040"/><text x="550" y="327" text-anchor="middle">Safety</text><text x="550" y="347" text-anchor="middle" fill="#c9d3e0" font-size="11.5">time-out, 1 s cut-off</text>
+      <rect x="660" y="300" width="150" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="735" y="327" text-anchor="middle">Node 1921</text><text x="735" y="347" text-anchor="middle" fill="#7f8ca3" font-size="12">USRP 32018</text>
+      <rect x="840" y="300" width="150" height="62" rx="8" fill="#172234" stroke="#24324a"/><text x="915" y="327" text-anchor="middle">Your node</text><text x="915" y="347" text-anchor="middle" fill="#7f8ca3" font-size="12">radio and links</text>
+    </g>
+    <g stroke="#7f8ca3" stroke-width="2" marker-end="url(#b)"><line x1="225" y1="212" x2="225" y2="228"/><line x1="225" y1="228" x2="105" y2="228"/><line x1="105" y1="228" x2="105" y2="298"/><line x1="200" y1="331" x2="228" y2="331"/><line x1="440" y1="331" x2="468" y2="331"/><line x1="630" y1="331" x2="658" y2="331"/><line x1="810" y1="331" x2="838" y2="331"/></g>
+  </svg>
+  <figcaption><b>Figure 5.1 · The transmit path.</b> Blue steps run in your browser with your device's settings,
+    amber steps on the Pi with the node's settings. The meters measure right after the leveler, so they show what
+    the Pi will get.</figcaption>
+  </figure>
+  <h2><span class="n">5.1</span>In the browser</h2>
+  <ol class="steps">
+    <li><b>Browser processing.</b> The phone's own <b>Automatic gain</b>, <b>Noise suppression</b> and
+      <b>Echo cancellation</b>, each switchable. They run before Node Listen sees the sound.</li>
+    <li><b>Mic gain</b>, −12 to +24 dB: a plain volume control on the mic.</li>
+    <li><b>Resample to 8 kHz</b> with a filter that cuts at 3.4 kHz, so sounds above it don't fold back as hiss or whine.</li>
+    <li><b>Voice filter</b> (cuts rumble below about 250 Hz) or <b>Radio voice</b> (cuts below 300 Hz and lifts 2.5 kHz
+      by 4 dB, a crisper, more "radio" sound). With Radio voice on, the voice filter is skipped.</li>
+    <li><b>Noise gate</b> (Off, Light, Strong): turns the mic down between words.</li>
+    <li><b>Leveler</b>: a gentle compressor that keeps your level even, followed by a limiter that never lets a peak
+      past −1 dBFS.</li>
+    <li>Every 20 ms (160 samples) a frame goes to the Pi over the WebSocket <code>/api/talk</code>.</li>
+  </ol>
+  <h2><span class="n">5.2</span>On the Pi and on the air</h2>
+  <ol class="steps">
+    <li><b>TX buffer.</b> The Pi waits until it has this much of your audio (120 ms by default) before it starts
+      sending, so short hiccups on the phone's connection don't make gaps. If it runs dry anyway, it sends silence,
+      refills, and counts a <i>gap</i>.</li>
+    <li><b>TX gain</b> (−12 to +12 dB, with a soft limit at about −1 dBFS), only with <b>Adjust audio levels here</b> on.</li>
+    <li>The frames go as USRP packets to node 1921 (<code>127.0.0.1:32018</code>), keyed. On release the last frame is
+      faded out and three unkey packets follow.</li>
+    <li>Node 1921 is linked to your node, so your audio goes out on the radio and to every link, like a local user's.</li>
+  </ol>
+  <h2><span class="n">5.3</span>The safety rules</h2>
+  <table>
+    <tr><th>Rule</th><th>What happens</th></tr>
+    <tr><td>Busy lockout</td><td>With <b>Don't transmit while the node is busy</b> on, a press is refused while the node passes audio (the RX light), except within 1 s of your own unkey.</td></tr>
+    <tr><td>One at a time</td><td>A second person's press is refused while someone transmits from Node Listen.</td></tr>
+    <tr><td>Time-out</td><td>The transmission stops at <b>TX time-out</b> (120 s by default). Let go and press again.</td></tr>
+    <tr><td>Audio stopped</td><td>If no audio reaches the Pi for 1 s (a dropped connection), it unkeys.</td></tr>
+    <tr><td>Page hidden</td><td>Switching apps, locking the phone or leaving the page releases push-to-talk.</td></tr>
+  </table>
+</section>
+
+<section class="chapter" id="ch6">
+  <div class="kicker">Chapter 6</div>
+  <h1 class="ch">Settings reference</h1>
+  <p class="ch-lede">Every setting, card by card, in the order of the Setup tab. <span class="sc n">NODE</span> settings
+    need you to be logged in and apply to everyone; <span class="sc b">BROWSER</span> settings are this device's own.</p>
+
+  <h2><span class="n">6.1</span>Receive card</h2>
+  <table>
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td>Node table</td><td>Each node in <code>rpt.conf</code> and its <code>outstreamcmd</code>: <i>Sends audio here</i>, <i>to another UDP port (press Send again)</i>, another program's line, one inherited from a template, or <i>Not sending</i>.</td></tr>
+    <tr><td>Send its audio here</td><td>Adds Node Listen's line to the picked node (taking it off any other node), backs up <code>rpt.conf</code>, and makes that node the main node. Takes effect after Restart Asterisk.</td></tr>
+    <tr><td>Remove</td><td>Takes the line out again (with a backup).</td></tr>
+    <tr><td>Restart Asterisk · Refresh</td><td>Restart asks first; every link drops and reconnects. Refresh rereads <code>rpt.conf</code>.</td></tr>
+    <tr><td>Line added · Feeder · UDP input</td><td>The exact line; whether Asterisk is running the feeder program now; whether Node Listen is listening on the UDP port.</td></tr>
+  </table>
+
+  <h2><span class="n">6.2</span>Transmit card</h2>
+  <table>
+    <tr><th>Control</th><th>What it does</th></tr>
+    <tr><td>State</td><td><i>Not set up</i>, <i>Set up and linked</i>, <i>Set up; linking</i>, <i>Asterisk does not know it yet: restart Asterisk</i>, or what is wrong.</td></tr>
+    <tr><td>Add node 1921</td><td>Adds the <code>[1921]</code> stanza and its <code>[nodes]</code> line (with your IAX port if it isn't 4569); also repairs a wrong <code>[nodes]</code> line. Refuses if <code>rpt.conf</code> has a <code>[1921]</code> it didn't add.</td></tr>
+    <tr><td>Remove</td><td>Takes both out (asks first). Push-to-talk stops working.</td></tr>
+  </table>
+
+  <h2><span class="n">6.3</span>Settings card <span class="sc n">NODE</span></h2>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Range</th><th>What it does, and when to change it</th></tr>
+    <tr><td>Web port</td><td>8993</td><td>1024–65535</td><td>The page's port. Change only if something else uses 8993. Restarts Node Listen.</td></tr>
+    <tr><td>UDP port</td><td>6200</td><td>1024–65535</td><td>Where the node's audio arrives. Changing it rewrites the <code>outstreamcmd</code> line too; restart Asterisk.</td></tr>
+    <tr><td>Max listeners</td><td>3</td><td>1–10</td><td>How many people can listen at once. Each takes 64 or 128 kbit/s of upload on your internet line when they're away from home.</td></tr>
+    <tr><td>TX time-out (s)</td><td>120</td><td>30–600</td><td>The longest one transmission can last.</td></tr>
+    <tr><td>HTTPS</td><td>on</td><td>on / off</td><td>Needed for the microphone. Off only for a listen-only node. Restarts Node Listen.</td></tr>
+    <tr><td>Don't transmit while the node is busy</td><td>on</td><td>on / off</td><td>The busy lockout (section 5.3). Turn it off only if a constant noise on the node keeps it busy.</td></tr>
+    <tr><td>Listen without logging in</td><td>off</td><td>on / off</td><td>Anyone who can reach the page may listen (not transmit).</td></tr>
+  </table>
+
+  <h2><span class="n">6.4</span>Audio check card <span class="sc b">BROWSER</span></h2>
+  <p>Length (2, 5, 10 or 15 minutes; 5 by default), <b>Start check</b>, <b>Stop</b>, then the report with
+    <b>Apply</b>/<b>Undo</b>, <b>Compare with last check</b> and <b>Copy report</b>. Section 7.4 explains it.</p>
+
+  <h2><span class="n">6.5</span>Audio levels card <span class="sc n">NODE</span></h2>
+  <h3>Adjust audio levels here</h3>
+  <p>Off by default. Off, the four settings below are not used: no TX or RX gain, a 0.25 s listen buffer and a 120 ms TX
+    buffer. On, they take effect. The RX cleanup further down works either way.</p>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Range</th><th>What it does, and when to change it</th></tr>
+    <tr><td>Mic to node (TX)</td><td>0 dB</td><td>−12 to +12 dB</td><td>Gain on every transmission from Node Listen, on the Pi, for everyone. Use it when all phones come out too quiet or too loud on the air (the node test shows it). For one phone, use its Mic gain instead.</td></tr>
+    <tr><td>Node to phone (RX)</td><td>0 dB</td><td>−12 to +12 dB</td><td>Gain on what every listener hears, after Automatic level. Use it when audio is quiet even with Automatic level on, or when you turn Automatic level off.</td></tr>
+    <tr><td>Listen buffer</td><td>0.25 s</td><td>0.15, 0.25, 0.5, 1 s</td><td>How far behind real time the page plays. Larger rides over a weak connection without dropouts; smaller is closer to live. 0.15 s on good Wi-Fi, 0.5–1 s on mobile data.</td></tr>
+    <tr><td>TX buffer</td><td>120 ms</td><td>60, 120, 200, 300 ms</td><td>How much of your audio the Pi collects before sending. Raise it if transmissions have gaps (TX gaps, the Audio check); lower it for a slightly quicker start.</td></tr>
+  </table>
+  <p>Below them: <b>TX peak</b> (the loudest point of the current or last transmission, after TX gain), <b>RX level</b>
+    (the node's level, before cleanup) and <b>TX gaps</b>. Aim for TX peaks of −6 to −3 dBFS on normal speech.</p>
+  <h3>RX cleanup</h3>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
+    <tr><td>Cut below 300 Hz</td><td>on</td><td>Removes hum and CTCSS tones from what listeners hear (section 4.2). Off only to hear the tones themselves, for example to check which one a station sends. It costs the most of the three on the Pi.</td></tr>
+    <tr><td>Automatic level</td><td>on</td><td>Evens out quiet and loud stations. Off to hear stations at their real levels, or for an exact node test.</td></tr>
+    <tr><td>Squelch-tail gate</td><td>Light</td><td><b>Light</b> mutes the hiss after a station unkeys and long silences. <b>Strong</b> also mutes shorter and quieter hiss: use it on a node with noisy links, and turn it back if the start of speech is ever clipped. <b>Off</b> passes everything, with no 80 ms delay.</td></tr>
+  </table>
+  <p><b>Processing load</b>: how much of one CPU core the cleanup took over the last 5 seconds. On a Pi Zero 2 W it
+    should stay at about 10 % or less while audio passes. <b>Save</b> keeps everything on the card; <b>Reset to
+    0 dB</b> puts the gains and buffers back (Save to keep it).</p>
+
+  <h2><span class="n">6.6</span>Microphone card <span class="sc b">BROWSER</span></h2>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
+    <tr><td>Leveler</td><td>on</td><td>A compressor and limiter in the page: quiet speech comes up (by up to 9 dB), loud speech is held back, and nothing passes −1 dBFS. Leave on; turn off only if you level the audio somewhere else.</td></tr>
+    <tr><td>Automatic gain</td><td>off</td><td>The browser's own leveling. It fights the leveler and undoes Mic gain, so leave it off when the leveler is on.</td></tr>
+    <tr><td>Noise suppression</td><td>on</td><td>The browser removes steady background noise (fans, traffic). Turn off if your voice sounds watery.</td></tr>
+    <tr><td>Echo cancellation</td><td>off</td><td>Rarely needed: listen audio is muted while you talk. Turn on only with a speaker right next to the mic.</td></tr>
+    <tr><td>Voice filter</td><td>on</td><td>Cuts rumble below about 250 Hz (handling noise, wind, desk thumps).</td></tr>
+    <tr><td>Radio voice</td><td>off</td><td>Cuts below 300 Hz and lifts 2.5 kHz for a crisper sound that cuts through on FM. Leave off if your audio already sounds bright, or if the radio adds pre-emphasis.</td></tr>
+    <tr><td>Noise gate</td><td>Off</td><td><b>Light</b> opens above −45 dBFS and turns the mic down 15 dB between words; <b>Strong</b> opens above −35 dBFS and turns it down 30 dB. Use Light in a noisy room. If the starts of words are clipped, go back a step (the Audio check measures it).</td></tr>
+    <tr><td>Mic gain</td><td>0 dB</td><td>−12 to +24 dB. The main control for your level: set it with the mic test (section 7.2).</td></tr>
+  </table>
+  <p><b>Test mic</b> and <b>Test through the node</b> are on this card; chapter 8 shows their meters and reports.</p>
+
+  <h2><span class="n">6.7</span>Playback card <span class="sc b">BROWSER</span></h2>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
+    <tr><td>Show the spectrum</td><td>on</td><td>The waterfall on the Listen tab. Off saves battery on an old phone.</td></tr>
+    <tr><td>Start listening when the page opens</td><td>on</td><td>Plays as soon as the page loads or you log in. Most browsers need one tap first; the page asks for it.</td></tr>
+    <tr><td>Keep the screen on</td><td>off</td><td>Shown where the browser supports it: keeps the screen awake while you listen or talk.</td></tr>
+    <tr><td>16-bit audio</td><td>on</td><td>Cleaner on quiet audio, 128 kbit/s instead of 64. Turn off on a slow or metered connection.</td></tr>
+    <tr><td>Smooth playback</td><td>on</td><td>Filtered upsampling, no sizzle. Turn off only on a very slow device.</td></tr>
+  </table>
+  <h2><span class="n">6.8</span>Log card</h2>
+  <p>What Node Listen has done: listeners, logins, transmissions (with length, gaps and why they ended), connects and
+    every <code>rpt.conf</code> edit. Fetched only while the card is open.</p>
+</section>
+
+<section class="chapter" id="ch7">
+  <div class="kicker">Chapter 7</div>
+  <h1 class="ch">Getting levels right</h1>
+  <p class="ch-lede">A short procedure for each direction, in the order that avoids fighting yourself. Do it once when
+    you set the node up and again when you change phones, mics or radios.</p>
+  <h2><span class="n">7.1</span>Who hears which gain</h2>
+  <table>
+    <tr><th>Gain</th><th>Where</th><th>Who it changes</th></tr>
+    <tr><td>Radio RX / TX levels, DVSwitch gains</td><td>SysMon, Tune tab; DVSwitch</td><td>Everyone: the air, every link, Node Listen.</td></tr>
+    <tr><td>Automatic level, RX gain, Cut below 300 Hz, gate</td><td>Node Listen, Audio levels <span class="sc n">NODE</span></td><td>Node Listen's listeners only.</td></tr>
+    <tr><td>TX gain</td><td>Node Listen, Audio levels <span class="sc n">NODE</span></td><td>Transmissions from every Node Listen user.</td></tr>
+    <tr><td>Mic gain, leveler, filters, gate</td><td>Node Listen, Microphone <span class="sc b">BROWSER</span></td><td>Transmissions from this device only.</td></tr>
+    <tr><td>Volume</td><td>Listen tab <span class="sc b">BROWSER</span></td><td>What you hear on this device only.</td></tr>
+  </table>
+  <div class="call tip"><span class="t">TIP</span>Fix things where they start. If the node's own audio is wrong on the air
+    and on links, fix it in SysMon (radio) first; Node Listen's settings only paper over it for Node Listen's users.</div>
+  <h2><span class="n">7.2</span>Transmit, step by step</h2>
+  <ol class="steps">
+    <li><b>Start clean.</b> Microphone card: Leveler on, Automatic gain off, Noise suppression on, Voice filter on, Noise gate Off, Mic gain 0 dB.</li>
+    <li><b>Test mic.</b> Hold the phone where you will hold it on the air and talk normally for 4 seconds. Targets: speech <b>−24 to −12 dBFS</b>, peaks <b>−8 to −1 dBFS</b>, limiter working under 20 % of the time. Change Mic gain by the amount the report suggests and test again until it says <i>Good</i>.</li>
+    <li><b>Noise.</b> If the report says <i>Noisy</i>, move to a quieter spot or closer to the mic first; then try Noise gate Light.</li>
+    <li><b>Test through the node.</b> For an exact comparison, turn Automatic level off for a minute (Audio levels). <i>Came back</i> should be within about 6 dB of <i>Sent</i>. If every phone comes back quieter or louder by the same amount, use TX gain; if the radio side is off, use SysMon's Tune tab. Turn Automatic level back on.</li>
+    <li><b>On the air.</b> Run an Audio check during a real contact or net (section 7.4) and apply what it suggests.</li>
+  </ol>
+  <h2><span class="n">7.3</span>Receive, step by step</h2>
+  <ol class="steps">
+    <li><b>The node first.</b> With the radio's own levels right (SysMon, Tune), the RX level on the Audio levels card should peak around −10 to −3 dBFS on a strong local station.</li>
+    <li><b>Look at the spectrum.</b> A steady line or band below 300 Hz is a CTCSS tone or hum; with Cut below 300 Hz on it should be faint or gone. Thin bright lines right after transmissions are squelch tails: the gate should remove them.</li>
+    <li><b>Leave Automatic level on.</b> If speech is still quiet (the Audio check says so), raise RX gain by the amount it suggests.</li>
+    <li><b>Dropouts.</b> If audio breaks up on your connection, raise the Listen buffer a step.</li>
+  </ol>
+  <h2><span class="n">7.4</span>The Audio check</h2>
+  <p>The quick tests show four seconds; the Audio check shows a few minutes of real use, with several stations and
+    several of your own transmissions.</p>
+  <ol class="steps">
+    <li>Setup tab, <b>Audio check</b> card: choose a length and press <b>Start check</b>.</li>
+    <li>Go to the Listen tab and use the node as usual: listen, talk, listen. The status line shows <span class="k">CHECK 2:13</span>; tap it to come back.</li>
+    <li>When it ends (or you press Stop), open the card. Each row is green, amber or red against its target, and
+      <b>What to change</b> lists suggestions with amounts.</li>
+    <li>Press <b>Apply</b> on a suggestion to make the change (<b>Undo</b> puts it back), run another check, and press
+      <b>Compare with last check</b> to see the difference.</li>
+  </ol>
+  <figure><img class="shot" src="img/check.jpg" style="width:2.3in" alt="Audio check report">
+    <figcaption><b>Figure 7.1 · Screenshot (example data).</b> An Audio check report: stations 15 dB apart, hum below
+      300 Hz, dropouts and squelch tails, each with a suggestion below.</figcaption></figure>
+  <table>
+    <tr><th>Row</th><th>Target</th><th>Typical fix</th></tr>
+    <tr><td>RX speech level</td><td>−24 to −14 dBFS</td><td>Automatic level; RX gain</td></tr>
+    <tr><td>RX peak</td><td>below −1 dBFS</td><td>Lower RX gain, or Automatic level</td></tr>
+    <tr><td>Stations, quietest to loudest</td><td>under 8 dB</td><td>Automatic level</td></tr>
+    <tr><td>Below 300 Hz</td><td>under −25 dB</td><td>Cut below 300 Hz</td></tr>
+    <tr><td>Dropouts</td><td>none</td><td>Larger Listen buffer; better connection</td></tr>
+    <tr><td>Squelch tails heard</td><td>none</td><td>Gate Light, then Strong</td></tr>
+    <tr><td>Pi load</td><td>under 25 %</td><td>Cut below 300 Hz off</td></tr>
+    <tr><td>TX speech level · peak</td><td>−24 to −12 · −8 to −1 dBFS</td><td>Mic gain</td></tr>
+    <tr><td>Voice above background</td><td>over 20 dB</td><td>Noise suppression; Noise gate Light</td></tr>
+    <tr><td>Limiter working</td><td>under 20 %</td><td>Lower Mic gain</td></tr>
+    <tr><td>Gate closed while talking</td><td>under 10 %</td><td>Noise gate a step lower</td></tr>
+    <tr><td>Transmissions with gaps</td><td>none</td><td>Larger TX buffer; Wi-Fi</td></tr>
+    <tr><td>Peak at the Pi</td><td>below −1 dBFS</td><td>Lower TX gain</td></tr>
+  </table>
+  <div class="call note"><span class="t">NOTE</span>The check keeps only numbers, never audio, and only in this browser.
+    It carries on if you switch tabs or reload; time with the page closed or the phone asleep is shown as paused.</div>
+  <h2><span class="n">7.5</span>Common mistakes</h2>
+  <ul>
+    <li><b>Two automatic gains.</b> The browser's Automatic gain and the leveler fight; leave the browser's off.</li>
+    <li><b>Mic gain into the limiter.</b> More mic gain past the point where the limiter works most of the time adds
+      distortion, not loudness. If the report says the limiter works more than 30 % of the time, turn it down.</li>
+    <li><b>Fixing the radio in Node Listen.</b> RX gain and Automatic level only change Node Listen's listeners; a bad
+      radio level still goes to every link.</li>
+    <li><b>Radio voice on a bright radio.</b> If the radio adds pre-emphasis, Radio voice makes it shrill.</li>
+    <li><b>Judging levels through the speaker.</b> Phone volume and speakers vary; trust the meters.</li>
+  </ul>
+</section>
+
+<section class="chapter" id="ch8">
+  <div class="kicker">Chapter 8</div>
+  <h1 class="ch">Reading the spectrum and the meters</h1>
+  <p class="ch-lede">The waterfall shows what the node passes, the meters show levels, and the test reports say what to
+    change.</p>
+  <h2><span class="n">8.1</span>The waterfall</h2>
+  <p>Frequency runs across, 0 to 4 kHz (marks at 300 Hz, 1, 2 and 3 kHz); time runs down, newest at the top, about 25
+    lines a second. Colour is loudness: dark is quiet, teal is moderate, amber and red are loud. The strip below 300 Hz
+    is shaded. Tap it to switch to bars, which show the same moment as a bar chart. The examples below were made with a
+    synthetic voice on a test node, with each problem added in turn.</p>
+  <div class="shots">
+    <figure><img src="img/wf_speech.jpg" alt=""><figcaption><b>Good speech.</b> Bands of harmonics between 300 Hz and 3.5 kHz, nothing below 300 Hz, clean gaps.</figcaption></figure>
+    <figure><img src="img/wf_ctcss.jpg" alt=""><figcaption><b>CTCSS tone</b> (100 Hz), cleanup off: a steady bright line in the shaded strip while the station talks.</figcaption></figure>
+    <figure><img src="img/wf_ctcss_cut.jpg" alt=""><figcaption><b>The same with Cut below 300 Hz:</b> the line is gone.</figcaption></figure>
+    <figure><img src="img/wf_hum.jpg" alt=""><figcaption><b>Hum</b> (60, 120, 180 Hz): a band in the shaded strip that carries on between transmissions.</figcaption></figure>
+    <figure><img src="img/wf_tail.jpg" alt=""><figcaption><b>Squelch tails</b>, gate off: a thin bright line across the whole width right after each transmission.</figcaption></figure>
+    <figure><img src="img/wf_tail_gate.jpg" alt=""><figcaption><b>The same with the gate on Light:</b> the tails are gone, the speech is kept.</figcaption></figure>
+    <figure><img src="img/wf_clip.jpg" alt=""><figcaption><b>Clipping</b> (overdriven audio): energy smeared across the band and extra lines that aren't in the voice.</figcaption></figure>
+  </div>
+  <h2><span class="n">8.2</span>The live meter and the mic test report</h2>
+  <div class="grid2" style="align-items:start">
+    <div>
+      <figure><img class="shot" src="img/vu.jpg" style="width:100%" alt="Live meter"><figcaption><b>Figure 8.1 · Screenshot.</b> The live meter during a test.</figcaption></figure>
+      <p>The bar runs from −60 to 0 dBFS. The teal fill is the average, the amber mark the peak, and the thin white mark
+        the highest peak of the last second. The green zone (−6 to −3 dBFS) is where peaks belong; above −1 dBFS is red.
+        The thin bar underneath shows how far the leveler's limiter is turning you down; the text says <i>limiting 4.2 dB</i>
+        or <i>gate closed</i>.</p>
+    </div>
+    <figure><img class="shot" src="img/rep_mic.jpg" style="width:100%" alt="Mic test report"><figcaption><b>Figure 8.2 · Screenshot (fake test mic).</b> The mic test report: the level over 4 seconds (with a playhead during playback), the numbers, and what to change.</figcaption></figure>
+  </div>
+  <table>
+    <tr><th>Number</th><th>Meaning</th></tr>
+    <tr><td>Peak</td><td>The loudest instant. Should be −8 to −1 dBFS.</td></tr>
+    <tr><td>Speech</td><td>The average while you talk. Should be −24 to −12 dBFS.</td></tr>
+    <tr><td>Background</td><td>The quietest tenth of the recording: the room. <i>silent</i> means digital silence.</td></tr>
+    <tr><td>Voice above background</td><td>Speech minus background. Over 20 dB is clean; under 15 dB sounds noisy.</td></tr>
+    <tr><td>Limiter working</td><td>How much of your speech the limiter was turning down. Over 30 %: too much mic gain.</td></tr>
+    <tr><td>Gate closed while talking</td><td>Shown with the noise gate on. Over 10 %: the gate is eating words.</td></tr>
+  </table>
+  <h2><span class="n">8.3</span>The node test report</h2>
+  <div class="grid2" style="align-items:start">
+    <figure><img class="shot" src="img/rep_node.jpg" style="width:100%" alt="Node test report"><figcaption><b>Figure 8.3 · Screenshot (test node).</b> What was sent and what came back, lined up in time.</figcaption></figure>
+    <div>
+      <p>The test transmits for 4 seconds through the node and records what the node sends back out. The two strips are
+        lined up so the same words sit above each other; <b>Round trip</b> is how long that took (about half a second
+        at home). <b>Difference</b> compares the speech levels: within about 6 dB is fine.</p>
+      <p>With Automatic level on, what comes back has been evened out, so the report says so and doesn't judge the
+        difference; turn Automatic level off for a minute to compare exactly.</p>
+      <p>A <i>came-back peak</i> near 0 dBFS means something on the node's side is clipping: TX gain, or the radio and
+        DVSwitch levels in SysMon.</p>
+    </div>
+  </div>
+  <h2><span class="n">8.4</span>The level bar while you talk</h2>
+  <p>While you hold push-to-talk, the level bar under the spectrum shows your mic level in red, labelled <b>TX</b>; when
+    you let go it goes back to the node's level. Peaks should reach the green zone of the live meter, about −6 to
+    −3 dBFS, on normal speech.</p>
+</section>
+
+<section class="part">
+  <div class="pn">PART III</div>
+  <h1>Everything else</h1>
+  <p>Links and favorites, fixing problems, reaching Node Listen from outside, and the reference tables.</p>
+  <ol start="9"><li>Connect and favorites</li><li>Troubleshooting by symptom</li><li>From the internet, and security</li><li>Reference</li></ol>
+</section>
+
+<section class="chapter" id="ch9">
+  <div class="kicker">Chapter 9</div>
+  <h1 class="ch">Connect and favorites</h1>
+  <h2><span class="n">9.1</span>Favorites</h2>
+  <p>Setup tab, <b>Favorites</b> card: up to 10. <b>Add row</b>, pick the network (ASL, EchoLink or M17), type the
+    number and a name, and <b>Save favorites</b>. <b>From the Dashboard…</b> copies one of the Dashboard's favorites.</p>
+  <table>
+    <tr><th>Network</th><th>Type</th></tr>
+    <tr><td>ASL</td><td>The node number, up to 7 digits.</td></tr>
+    <tr><td>EchoLink</td><td>The station's own number, up to 6 digits.</td></tr>
+    <tr><td>M17 <span class="badge test">TESTING</span></td><td>The reflector and module: <code>M17-USA C</code>, or <code>M17-USA @ALL</code> (just <code>M17-USA</code> means every module).</td></tr>
+  </table>
+  <h2><span class="n">9.2</span>Connecting</h2>
+  <p>Connect tab: pick a favorite and press <b>Connect</b>. Links are always made from Node Listen's main node. For ASL
+    and EchoLink, Node Listen watches the node's links for up to 15 seconds and says how it went:</p>
+  <table>
+    <tr><th>Result</th><th>Meaning</th></tr>
+    <tr><td style="color:var(--grn)">Node 41234 is connected to ASL 2000.</td><td>The link is up.</td></tr>
+    <tr><td style="color:var(--yel)">ASL 2000 has not answered after 15 s; node 41234 is still trying.</td><td>The far node may be offline or busy.</td></tr>
+    <tr><td style="color:var(--red)">Node 41234 did not connect to ASL 2000: no link after 15 s.</td><td>Check the number; the far node may be refusing connections.</td></tr>
+  </table>
+  <p>When the main node is also the Dashboard's node and the Dashboard runs, Node Listen asks the Dashboard to connect,
+    so the Dashboard switches to that mode and shows it. M17 favorites always go this way: the Dashboard tunes the M17
+    bridge and links node 1917 (Dashboard 9.3.92-pi02w or 9.3.88 full and later).</p>
+  <h2><span class="n">9.3</span>Links and Disconnect</h2>
+  <p>The Links card at the top of the Connect tab lists the node's links, one per line, with the favorite's name. Node
+    1921 is marked (TX). <b>Disconnect</b> drops linked favorites only; other links stay.</p>
+</section>
+
+<section class="chapter" id="ch10">
+  <div class="kicker">Chapter 10</div>
+  <h1 class="ch">Troubleshooting by symptom</h1>
+  <p class="ch-lede">Each from the quickest check to the bigger fix. The Log card and SysMon's Node Listen card (its
+    ASL-DVS tab) show what Node Listen and the node are doing.</p>
+  <h3>No audio at all</h3>
+  <ol class="steps">
+    <li>Status line: <i>no feed yet</i> means Asterisk isn't sending. Receive card: is the line on your node? Send its audio here, then Restart Asterisk.</li>
+    <li>Feed green but silent: is the RX light on? Is Listen showing <i>Listening.</i>? Check the volume and the phone's own volume.</li>
+    <li><i>Tap anywhere to start listening</i>: the browser is holding sound until you tap.</li>
+    <li><i>All 3 listener slots are in use</i>: raise Max listeners or wait.</li>
+  </ol>
+  <h3>Audio breaks up or stutters</h3>
+  <ol class="steps"><li>Raise the Listen buffer a step (0.5 s on mobile data).</li><li>Turn 16-bit audio off to halve the data.</li><li>Move closer to the Wi-Fi access point. The Audio check counts dropouts.</li></ol>
+  <h3>Some stations are much quieter than others</h3>
+  <p>Turn Automatic level on (Audio levels). If one station is quiet everywhere, it is that station.</p>
+  <h3>Low hum or a tone under every transmission</h3>
+  <p>Turn on Cut below 300 Hz. If the waterfall shows hum between transmissions too, it is on the node: check the radio
+    interface's grounding.</p>
+  <h3>A burst of hiss after every transmission</h3>
+  <p>Set the Squelch-tail gate to Light, then Strong. The real fix is the radio's squelch or COS on the node sending it.</p>
+  <h3>My transmissions are too quiet, too loud or distorted</h3>
+  <p>Run the mic test and follow it (section 7.2). Distorted with a lot of limiting: lower Mic gain. Fine in the test but
+    bad on the air: the node test, then TX gain or SysMon's radio levels.</p>
+  <h3>Gaps or choppy audio in my transmissions</h3>
+  <p>Raise the TX buffer to 200 ms; use Wi-Fi rather than mobile data. The Log shows gaps per transmission.</p>
+  <h3>Push-to-talk is refused</h3>
+  <table>
+    <tr><th>Message</th><th>Fix</th></tr>
+    <tr><td>The node is busy</td><td>Wait for quiet, or turn off the busy lockout if a constant noise keeps the node busy.</td></tr>
+    <tr><td>Someone else is transmitting</td><td>Wait; the button shows Busy with who and how long.</td></tr>
+    <tr><td>Node 1921 is not set up / not linked yet</td><td>Transmit card: Add node 1921, Restart Asterisk, wait 20 s.</td></tr>
+    <tr><td>Push-to-talk needs the https:// page</td><td>Turn HTTPS on and open the <code>https://</code> address.</td></tr>
+    <tr><td>Microphone: Permission denied</td><td>Allow the microphone for the page in the browser's site settings.</td></tr>
+  </table>
+  <h3>Transmission stops by itself</h3>
+  <p><i>Time-out</i>: raise TX time-out. <i>Audio stopped reaching the node</i>: the phone's connection dropped; use
+    Wi-Fi or raise the TX buffer.</p>
+  <h3>Phone-specific</h3>
+  <ul>
+    <li><b>iPhone:</b> sound needs one tap after the page opens; the lock screen keeps playing while the page is the
+      active audio. Push-to-talk stops when the screen locks.</li>
+    <li><b>Android:</b> battery savers may stop audio in the background; allow the browser to run in the background.</li>
+    <li><b>Bluetooth headsets</b> switch to a low-quality call mode when the microphone opens; expect duller listen
+      audio while you test or talk.</li>
+  </ul>
+</section>
+
+<section class="chapter" id="ch11">
+  <div class="kicker">Chapter 11 <span class="badge test">TESTING</span></div>
+  <h1 class="ch">From the internet, and security</h1>
+  <p class="ch-lede">Node Listen is meant for your home network. Internet access is off unless you turn it on.</p>
+  <ul>
+    <li><b><code>allow_wan</code></b> in <code>/etc/asl_dvs/nodelisten.conf</code> (no checkbox; then
+      <code>sudo systemctl restart nodelisten</code>). Off, clients from the internet get <i>not open to the internet</i>
+      for every page. Home addresses, link-local and Tailscale (100.64.0.0/10) always count as home.</li>
+    <li>A Cloudflare Tunnel or Tailscale Funnel counts as the internet, whatever address it arrives from.</li>
+    <li>From the internet the password is only accepted on the <code>https://</code> page.</li>
+    <li>On top of the per-address lockout, 20 failed internet logins in 10 minutes make every internet login wait until
+      that window ends. Home logins are never held.</li>
+  </ul>
+  <div class="call care"><span class="t">CAREFUL</span>The login is the Pi's root password. Before opening Node Listen
+    to the internet, make sure it is long and used nowhere else, and keep the Dashboard and SysMon on the home network.</div>
+</section>
+
+<section class="chapter" id="ch12">
+  <div class="kicker">Chapter 12</div>
+  <h1 class="ch">Reference</h1>
+  <h2><span class="n">12.1</span>Files</h2>
+  <table>
+    <tr><th>Path</th><th>What</th></tr>
+    <tr><td class="mono">/usr/local/lib/asl_dvs/nodelisten/</td><td>The program (linked from <code>/usr/local/bin/nodelisten.py</code>)</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/nodelisten.conf</td><td>Node settings (12.4)</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/nodelisten_favorites.json</td><td>Favorites</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/nodelisten_tls/</td><td>The HTTPS certificate and key, made on first start</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/nodelisten_backups/</td><td><code>rpt.conf</code> before each edit, newest 10</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/local_api.key</td><td>Key for calling the Dashboard</td></tr>
+  </table>
+  <h2><span class="n">12.2</span>Ports and service</h2>
+  <table>
+    <tr><th>Port</th><th>What</th></tr>
+    <tr><td class="port">8993/tcp</td><td>The page (HTTPS; a plain-HTTP request is redirected)</td></tr>
+    <tr><td class="port">6200/udp</td><td>Node audio in, 127.0.0.1 only</td></tr>
+    <tr><td class="port">32018 / 34018 udp</td><td>USRP to and from node 1921, 127.0.0.1 only</td></tr>
+  </table>
+  <p>Service <code>nodelisten</code>, through the shared launcher, with <code>Restart=always</code> and
+    <code>WatchdogSec=60</code>: it stops pinging the watchdog when the page or the audio pump stops answering, and
+    systemd restarts it. <code>--uninstall</code> removes the <code>outstreamcmd</code> line and node 1921 and keeps the
+    settings; an install within 30 minutes (an update) puts them back.</p>
+  <h2><span class="n">12.3</span>Lines Node Listen writes in rpt.conf</h2>
+  <pre>; nodelisten: sends this node's audio to the Node Listen page (remove it from that page)
+outstreamcmd = /usr/bin/python3,/usr/local/bin/nodelisten.py,--feed,6200
+
+; nodelisten: transmit node for the Node Listen page (remove it from that page)
+[1921](&lt;your node's template&gt;)
+rxchannel = USRP/127.0.0.1:34018:32018
+duplex = 0
+hangtime = 0
+althangtime = 0
+holdofftelem = 1
+telemdefault = 0
+nounkeyct = 1
+
+[nodes]
+1921 = radio@127.0.0.1/1921,NONE</pre>
+  <h2><span class="n">12.4</span>Settings keys (nodelisten.conf)</h2>
+  <table>
+    <tr><th>Key</th><th>Default</th><th>Range</th><th>Page</th></tr>
+    <tr><td class="mono">port</td><td>8993</td><td>1024–65535</td><td>Settings: Web port</td></tr>
+    <tr><td class="mono">udp_port</td><td>6200</td><td>1024–65535</td><td>Settings: UDP port</td></tr>
+    <tr><td class="mono">node</td><td>(empty)</td><td>node number</td><td>Receive: Send its audio here</td></tr>
+    <tr><td class="mono">max_listeners</td><td>3</td><td>1–10</td><td>Settings</td></tr>
+    <tr><td class="mono">public_listen</td><td>false</td><td>bool</td><td>Settings: Listen without logging in</td></tr>
+    <tr><td class="mono">https</td><td>true</td><td>bool</td><td>Settings: HTTPS</td></tr>
+    <tr><td class="mono">tot_sec</td><td>120</td><td>30–600</td><td>Settings: TX time-out</td></tr>
+    <tr><td class="mono">busy_lockout</td><td>true</td><td>bool</td><td>Settings</td></tr>
+    <tr><td class="mono">tune_enabled</td><td>false</td><td>bool</td><td>Audio levels: Adjust audio levels here</td></tr>
+    <tr><td class="mono">tx_gain_db / rx_gain_db</td><td>0</td><td>−12–12</td><td>Audio levels</td></tr>
+    <tr><td class="mono">jitter_ms</td><td>250</td><td>100–1500</td><td>Audio levels: Listen buffer</td></tr>
+    <tr><td class="mono">tx_buffer_ms</td><td>120</td><td>40–400</td><td>Audio levels: TX buffer</td></tr>
+    <tr><td class="mono">rx_hpf / rx_agc</td><td>true</td><td>bool</td><td>Audio levels: RX cleanup</td></tr>
+    <tr><td class="mono">rx_gate</td><td>1</td><td>0 off, 1 light, 2 strong</td><td>Audio levels: Squelch-tail gate</td></tr>
+    <tr><td class="mono">allow_wan</td><td>false</td><td>bool</td><td>none (chapter 11)</td></tr>
+  </table>
+  <h2><span class="n">12.5</span>API</h2>
+  <table>
+    <tr><th>Request</th><th>What</th></tr>
+    <tr><td class="mono">GET /api/health</td><td>Version; no login. Used by the watchdog and SysMon.</td></tr>
+    <tr><td class="mono">GET /api/whoami</td><td>Logged in?, public listening, Dashboard and SysMon ports; no login.</td></tr>
+    <tr><td class="mono">GET /api/status</td><td>Feed, levels, listeners, links, transmit state, Pi load (login, or public listening)</td></tr>
+    <tr><td class="mono">GET /api/listen[?fmt=s16]</td><td>The audio stream (login, or public listening)</td></tr>
+    <tr><td class="mono">GET /api/talk</td><td>WebSocket for push-to-talk (login, same origin)</td></tr>
+    <tr><td class="mono">GET /api/node · /api/tx · /api/favorites · /api/dash-favorites · /api/config · /api/log</td><td>Setup data (login)</td></tr>
+    <tr><td class="mono">POST /api/login · /api/logout</td><td>Session</td></tr>
+    <tr><td class="mono">POST /api/config · /api/node/enable · /api/node/disable · /api/tx/enable · /api/tx/disable · /api/favorites · /api/connect · /api/disconnect · /api/asterisk/restart</td><td>Changes (login; header <code>X-Requested-With: XMLHttpRequest</code>)</td></tr>
+  </table>
+  <h2><span class="n">12.6</span>Version history (highlights)</h2>
+  <table>
+    <tr><th>Version</th><th>What arrived</th></tr>
+    <tr><td>0.1.0–0.2.0</td><td>Listening in the browser through one <code>outstreamcmd</code> line</td></tr>
+    <tr><td>0.3.0</td><td>Phone page with tabs, HTTPS, push-to-talk on node 1921, favorites</td></tr>
+    <tr><td>0.4.0–0.4.5</td><td>Tune card (gains, buffers), filtered resampling, Leveler, noise gate, Radio voice, soft limits</td></tr>
+    <tr><td>0.4.7</td><td>Internet access rules (<code>allow_wan</code>)</td></tr>
+    <tr><td>0.4.10</td><td>M17 favorites through the Dashboard</td></tr>
+    <tr><td>0.4.11</td><td>Connect reports whether the link came up</td></tr>
+    <tr><td>0.4.12–0.4.13</td><td>Listening starts on open; Setup cards open and close; always the main node</td></tr>
+    <tr><td>0.4.14</td><td>One-screen Listen tab with the waterfall; Status tab removed</td></tr>
+    <tr><td>0.4.15</td><td>RX cleanup: Cut below 300 Hz, Automatic level, Squelch-tail gate</td></tr>
+    <tr><td>0.4.16</td><td>Live meter and reports for the mic and node tests; TX on the level bar</td></tr>
+    <tr><td>0.4.17</td><td>Audio check; the squelch-tail gate tells hiss from voice more reliably</td></tr>
+  </table>
+  <p>The full list is in <code>changelogs/nodelisten.md</code>.</p>
+</section>
+
+</body>
+</html>
