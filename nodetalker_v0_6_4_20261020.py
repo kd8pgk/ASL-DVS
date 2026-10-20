@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.3"
+VERSION = "0.6.4"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -186,6 +186,7 @@ DEFAULT_CONFIG = {
     "rx_gate": 1,
     "ptt_mode": "hold",
     "ptt_guard_sec": 60,
+    "ptt_rx_gap": False,
 }
 
 
@@ -259,6 +260,7 @@ _NORMALIZERS = {
     "allow_wan": _parse_bool,
     "ptt_mode": _norm_ptt_mode,
     "ptt_guard_sec": _norm_ptt_guard,
+    "ptt_rx_gap": _parse_bool,
     "rx_hpf": _parse_bool,
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
@@ -962,7 +964,6 @@ class Hub:
         self.frames = deque()
         self.listeners = set()
         self.packets = 0
-        self.bytes_in = 0
         self.dropped = 0
         self.last_rx = 0.0
         self.level_db = -120.0
@@ -976,7 +977,6 @@ class Hub:
         now = time.monotonic()
         with self.lock:
             self.packets += 1
-            self.bytes_in += len(data)
             self.last_rx = now
             self.inbuf += data
             while len(self.inbuf) >= FRAME_BYTES:
@@ -3591,6 +3591,7 @@ main.fit{padding-top:10px;padding-bottom:12px}
 .spec-lo{position:absolute;left:0;top:0;bottom:0;width:7.5%;background:rgba(244,192,78,.10);border-right:1px dashed rgba(244,192,78,.45);pointer-events:none}
 .spec-t{position:absolute;bottom:2px;transform:translateX(-50%);font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted);pointer-events:none}
 .spec.small .spec-box,.spec.off .spec-box{display:none}
+.gap-cd{position:absolute;top:0;right:0;width:25%;height:50%;display:flex;align-items:center;justify-content:center;font:700 40px ui-monospace,Menlo,Consolas,monospace;color:#fff;opacity:.25;pointer-events:none;line-height:1}
 .spec-meter{display:flex;align-items:center;gap:8px}
 .spec-meter.tx #st-level{color:var(--red);font-weight:700}
 .spec-meter.tx .meter i{background:linear-gradient(90deg,#f2545b,#f2545b 85%,#ffb3b6)}
@@ -3688,10 +3689,12 @@ let hs = {out: '', mic: '', btn: 'listen'};
 try { Object.assign(hs, JSON.parse(localStorage.getItem('nlHeadset') || '{}')); } catch (e) {}
 let hsTx = false, outLost = 0, devCount = -1, lastDevChange = 0;
 const PTT_GUARDS = [30, 60, 90, 120, 180], TAP_IGNORE_MS = 500, GUARD_WARN_SEC = 10;
-let ptt = {mode: 'hold', guard: 60}, pttSrc = '', tapAt = 0, guardWarned = false, guardStop = '';
+const RX_GAP_MS = 4000, RX_QUIET_MS = 300, RX_ACTIVE_DB = -50, OWN_TX_IGNORE_MS = 2500, RX_LOCAL_TRUST_MS = 2000, RX_HOLD_MS = 600;
+let ptt = {mode: 'hold', guard: 60, gap: false}, pttSrc = '', tapAt = 0, guardWarned = false, guardStop = '';
+let rxSeenAt = -1e9, rxLocalAt = -1e9, rxStatusOn = false, gapShown = '';
 try {
   const s = JSON.parse(localStorage.getItem('nlPtt') || 'null');
-  if (s && (s.mode === 'hold' || s.mode === 'tap') && PTT_GUARDS.includes(Number(s.guard))) { ptt = {mode: s.mode, guard: Number(s.guard)}; pttSrc = 'phone'; }
+  if (s && (s.mode === 'hold' || s.mode === 'tap') && PTT_GUARDS.includes(Number(s.guard))) { ptt = {mode: s.mode, guard: Number(s.guard), gap: s.gap === true}; pttSrc = 'phone'; }
 } catch (e) {}
 try { if (localStorage.getItem('nlSpec') === 'bars') specMode = 'bars'; } catch (e) {}
 
@@ -4018,6 +4021,7 @@ async function pollStatus() {
   $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
   $('s-tx-w').title = tx.keyed ? 'Transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs) : (tx.ready ? 'Nobody is transmitting' : 'Transmit node not set up');
   busyText = tx.keyed && !talking && !keyed && performance.now() - ownUnkeyAt > 2500 ? 'Busy: ' + tx.who + ' ' + fmtSecs(tx.secs) : '';
+  rxStatus(!!d.audio_active || !!busyText);
   pttLabel();
   totSec = tx.tot || totSec;
   $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
@@ -4064,6 +4068,7 @@ function flush() {
   src.start(nextT);
   nextT += buf.duration;
   if (!talking) $('meter-bar').style.width = dbPct(peakDb(peakLocal)) + '%';
+  if (peakDb(peakLocal) > RX_ACTIVE_DB) rxSeen();
   peakLocal = 0;
 }
 
@@ -4903,7 +4908,7 @@ function pttLabel() {
   const idle = pttState !== 'talking' && pttState !== 'keying';
   const tap = ptt.mode === 'tap';
   $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : tap ? 'TALKING · tap to stop' : 'TALKING')
-    : pttState === 'keying' ? 'Keying...' : (busyText || (tap ? 'Tap to talk' : 'Hold to talk'));
+    : pttState === 'keying' ? 'Keying...' : (busyText || (gapLeft() > 0 ? 'Wait...' : tap ? 'Tap to talk' : 'Hold to talk'));
   $('ptt').setAttribute('aria-label', tap ? 'Push to talk: tap to transmit, tap again to stop' : 'Push to talk: hold to transmit');
   $('ptt').classList.toggle('busy', idle && !!busyText);
 }
@@ -5214,6 +5219,12 @@ function endTalk() {
 async function pttDown(ev) {
   if (ev) ev.preventDefault();
   if (talking || testing) return;
+  const wait = gapLeft();
+  if (wait > 0) {
+    note('ptt-msg', 'warn', 'Waiting after receive: talk in ' + Math.ceil(wait / 1000) + ' s.');
+    if (navigator.vibrate) navigator.vibrate(15);
+    return;
+  }
   if (!wsReady) { openTalk(); return; }
   talking = true; keyed = false; preKey = []; guardWarned = false; guardStop = '';
   if (gainNode) gainNode.gain.value = 0;
@@ -5238,6 +5249,44 @@ function pttUp(ev) {
   keyed = false;
   endTalk();
   pttUi(wsReady ? 'ready' : 'off');
+}
+
+function ownRecent(now) { return talking || keyed || now - ownUnkeyAt < OWN_TX_IGNORE_MS; }
+
+function rxSeen() {
+  const now = performance.now();
+  if (ownRecent(now)) return;
+  rxSeenAt = rxLocalAt = now;
+}
+
+function rxStatus(on) {
+  const now = performance.now();
+  if (on && !ownRecent(now)) { rxStatusOn = true; return; }
+  if (!rxStatusOn) return;
+  rxStatusOn = false;
+  if (now - rxLocalAt > RX_LOCAL_TRUST_MS && !ownRecent(now)) rxSeenAt = Math.max(rxSeenAt, now - RX_HOLD_MS);
+}
+
+function rxRef() {
+  const now = performance.now();
+  return rxStatusOn && now - rxLocalAt > RX_LOCAL_TRUST_MS ? now : rxSeenAt;
+}
+
+function gapLeft() { return ptt.gap ? Math.max(0, RX_GAP_MS - (performance.now() - rxRef())) : 0; }
+
+function gapTick() {
+  const left = gapLeft();
+  const since = performance.now() - rxRef();
+  const txt = left > 0 && since >= RX_QUIET_MS ? String(Math.min(3, Math.floor(left / 1000))) : '';
+  if (txt === gapShown) return;
+  gapShown = txt;
+  const el = $('gap-cd'), box = $('spec-box');
+  const showBox = !!txt && box.offsetParent !== null && box.clientHeight > 0;
+  if (showBox) el.style.fontSize = Math.max(14, Math.round(Math.min(box.clientHeight * 0.5 * 0.8, box.clientWidth * 0.25 / 0.6 * 0.8))) + 'px';
+  el.textContent = showBox ? txt : '';
+  el.classList.toggle('hidden', !showBox);
+  if (!talking) $('ptt-time').textContent = txt && !showBox ? txt : '';
+  pttLabel();
 }
 
 function guardOn() { return ptt.mode === 'tap' || hsTx; }
@@ -5303,6 +5352,7 @@ function pttSetUi() {
   $('ptt-hold').checked = ptt.mode === 'hold';
   $('ptt-tap').checked = ptt.mode === 'tap';
   $('ptt-guard').value = String(ptt.guard);
+  $('ptt-gap').checked = !!ptt.gap;
   const g = Number($('ptt-guard').value);
   $('ptt-guard-note').textContent = g > totSec ? 'The node\'s TX time-out is ' + fmtSecs(totSec) + ', so it stops then.' : '';
   $('ptt-src').textContent = pttSrc === 'phone' ? 'Saved on this phone; a copy is kept on the Pi.'
@@ -5316,7 +5366,7 @@ async function pttFromPi(force) {
   if (!d.ok) return d;
   const c = d.config || {};
   if ((c.ptt_mode === 'hold' || c.ptt_mode === 'tap') && PTT_GUARDS.includes(Number(c.ptt_guard_sec))) {
-    ptt = {mode: c.ptt_mode, guard: Number(c.ptt_guard_sec)};
+    ptt = {mode: c.ptt_mode, guard: Number(c.ptt_guard_sec), gap: c.ptt_rx_gap === true};
     pttSrc = 'pi';
   }
   if (force) {
@@ -5328,10 +5378,10 @@ async function pttFromPi(force) {
 
 async function pttSave() {
   if (talking) pttUp();
-  ptt = {mode: $('ptt-tap').checked ? 'tap' : 'hold', guard: Number($('ptt-guard').value) || 60};
+  ptt = {mode: $('ptt-tap').checked ? 'tap' : 'hold', guard: Number($('ptt-guard').value) || 60, gap: $('ptt-gap').checked};
   let local = true;
   try { localStorage.setItem('nlPtt', JSON.stringify(ptt)); pttSrc = 'phone'; } catch (e) { local = false; }
-  const d = await post('/api/config', {ptt_mode: ptt.mode, ptt_guard_sec: ptt.guard});
+  const d = await post('/api/config', {ptt_mode: ptt.mode, ptt_guard_sec: ptt.guard, ptt_rx_gap: ptt.gap});
   pttSetUi();
   if (!d.ok) { setMsg('ptt-set-msg', {ok: local, warn: true, message: 'Saved on this phone, but the copy on the Pi failed: ' + (d.error || '?'), error: d.error}); return; }
   setMsg('ptt-set-msg', local ? {ok: true, message: 'Saved on this phone, with a copy on the Pi.'}
@@ -5667,7 +5717,7 @@ async function loadConfig() {
   CFG_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
   sum('cfg', (d.config.https ? 'HTTPS' : 'HTTP') + ' · ' + d.config.max_listeners + ' listeners' + (d.config.public_listen ? ' · public' : '')
-    + (ptt.mode === 'tap' ? ' · tap to talk ' + ptt.guard + ' s' : ''));
+    + (ptt.mode === 'tap' ? ' · tap to talk ' + ptt.guard + ' s' : '') + (ptt.gap ? ' · 4 s wait' : ''));
   pttSetUi();
   $('tune-on').checked = !!d.config.tune_enabled;
   $('tune-tx').value = d.config.tx_gain_db;
@@ -5814,6 +5864,7 @@ document.addEventListener('DOMContentLoaded', () => {
   pttUi('off', '');
   whoami().then(() => { if (authed) loadFavs(); });
   setInterval(pollStatus, 1500);
+  setInterval(gapTick, 100);
   setInterval(pollLog, 3000);
 });
 """
@@ -5890,6 +5941,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <span id="st-listeners" title="Listeners">-</span><span id="chk-badge" class="chk hidden" title="An audio check is running (Setup tab)"></span></div>
 <div class="spec" id="spec-wrap">
 <div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum: tap to switch between waterfall and bars"></canvas>
+<span id="gap-cd" class="gap-cd hidden" aria-hidden="true"></span>
 <span class="spec-lo" aria-hidden="true"></span><span class="spec-t" style="left:7.5%">300</span><span class="spec-t" style="left:25%">1k</span>
 <span class="spec-t" style="left:50%">2k</span><span class="spec-t" style="left:75%">3k</span></div>
 <div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
@@ -5958,6 +6010,9 @@ Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <label><input type="radio" name="ptt-mode" id="ptt-tap" value="tap"> Tap to talk, tap to stop</label></div>
 <div class="row"><label>Guard timer <select id="ptt-guard"><option value="30">30 s</option><option value="60">60 s</option>
 <option value="90">90 s</option><option value="120">120 s</option><option value="180">180 s</option></select></label></div>
+<div class="row"><label><input type="checkbox" id="ptt-gap"> Wait 4 s after receive before talking</label></div>
+<p class="muted small">With the wait on, push-to-talk is locked while the node receives and for 4 s after, counting
+3 to 0 in the corner of the waterfall, so other stations get a chance to answer first.</p>
 <p class="muted small">The guard timer stops a tap-to-talk (or headset) transmission: two short beeps 10 s before, then it
 unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></span></p>
 <p class="muted small" id="ptt-src"></p>
