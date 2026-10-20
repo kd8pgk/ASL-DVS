@@ -25,6 +25,14 @@ Current file: `nodelisten_v0_4_17_20261020.py`. Newest entries first.
   (node settings need you to be logged in), and **Undo**.
 - **Compare with last check** adds the previous check's numbers next to this
   one's; **Copy report** copies it all as text for asking for help.
+- **Fix: the squelch-tail gate could mute speech.** Since 0.4.15 it told hiss
+  from voice by how often the audio crosses zero, and a voice rich in
+  harmonics crosses zero often too, so loud speech could be muted as a tail.
+  It now uses how alike neighbouring samples are (energy-weighted): voice
+  scores high, hiss and de-emphasised FM squelch noise score low. Tested with
+  speech at three levels and white and de-emphasised tails on Light and
+  Strong: all speech kept, all tail frames muted. The Audio check counts
+  squelch tails the same way.
 
 ## 0.4.16 (2026-10-20)
 

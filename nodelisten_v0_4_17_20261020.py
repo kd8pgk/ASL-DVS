@@ -703,18 +703,19 @@ def _hp_section(q, fc=300.0, fs=8000.0):
 HP_SECTIONS = (_hp_section(0.5412), _hp_section(1.3066))
 
 
-def _sumsq(ys):
+def _dot(a, b):
     if hasattr(math, "sumprod"):
-        return math.sumprod(ys, ys)
-    return math.fsum(map(operator.mul, ys, ys))
+        return math.sumprod(a, b)
+    return math.fsum(map(operator.mul, a, b))
 AGC_TARGET_DB = -20.0
 AGC_MIN_DB = -6.0
 AGC_MAX_DB = 18.0
 AGC_ACTIVE_DB = -45.0
 GATE_DELAY = 4
 RX_QUIET_DB = -65.0
-GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "zcr": 0.42, "noise_db": -24.0, "frames": 4},
-              2: {"close_db": -48.0, "hold": 12, "zcr": 0.35, "noise_db": -30.0, "frames": 3}}
+GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "r1": 0.3, "noise_db": -24.0, "frames": 4},
+              2: {"close_db": -48.0, "hold": 12, "r1": 0.45, "noise_db": -30.0, "frames": 3}}
+SPEECH_R1 = 0.55
 
 
 class RxClean:
@@ -753,11 +754,10 @@ class RxClean:
                 ys.append(y)
             self.z = (x1, x2, w1, w2, p1, p2, y1, y2)
         n = len(ys)
-        ss = _sumsq(ys)
-        neg = [y < 0 for y in ys]
-        zc = sum(map(operator.ne, neg, neg[1:]))
+        ss = _dot(ys, ys)
+        r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
         db = 10.0 * math.log10(ss / n / 1073741824.0) if ss > 0 else -120.0
-        return ys, db, zc / max(1, n - 1)
+        return ys, db, r1
 
     def _agc(self, db, speechy):
         if not speechy:
@@ -777,14 +777,14 @@ class RxClean:
         if self.fast > 0:
             self.fast -= 1
 
-    def _gate(self, db, zcr, mode):
+    def _gate(self, db, r1, mode):
         r = GATE_RULES[mode]
-        if db > r["noise_db"] and zcr > r["zcr"]:
+        if db > r["noise_db"] and r1 < r["r1"]:
             self.noisy += 1
             self.calm = 0
         else:
             self.noisy = 0
-            self.calm = self.calm + 1 if zcr < 0.3 and db > r["close_db"] + 3 else 0
+            self.calm = self.calm + 1 if r1 > SPEECH_R1 and db > r["close_db"] + 3 else 0
             if self.tail and self.calm >= 3:
                 self.tail = False
         hit = self.noisy >= r["frames"] and self.open
@@ -829,10 +829,10 @@ class RxClean:
                 self.delay.clear()
                 self._account(t0)
                 return PCM_SILENCE
-            self._gate(-120.0, 0.0, gate)
+            self._gate(-120.0, 1.0, gate)
             return self._out(PCM_SILENCE, False, t0)
-        ys, db, zcr = self._filter(_samples(frame), hpf)
-        speechy = db > AGC_ACTIVE_DB and zcr < 0.35
+        ys, db, r1 = self._filter(_samples(frame), hpf)
+        speechy = db > AGC_ACTIVE_DB and r1 > 0.3
         if agc:
             self._agc(db, speechy)
         elif self.gain_db:
@@ -861,7 +861,7 @@ class RxClean:
                 self.delay.clear()
             self._account(t0)
             return pcm
-        keep, hit = self._gate(db, zcr, gate)
+        keep, hit = self._gate(db, r1, gate)
         if hit:
             for i in range(len(self.delay)):
                 self.delay[i] = (self.delay[i][0], False)
@@ -2941,7 +2941,7 @@ function lagOf(tx, rx) {
   return best;
 }
 
-let rfss = 0, rfpk = 0, rfzc = 0, rfn = 0, rfprev = 0;
+let rfss = 0, rfpk = 0, rfx1 = 0, rfn = 0, rfprev = 0;
 
 function accNew() { return {n: 0, act: 0, pw: 0, pk: -120, hist: new Array(121).fill(0), lim: 0, limSum: 0, gate: 0, clip: 0}; }
 
@@ -2989,7 +2989,7 @@ function chkSave() {
 function chkRx(st) {
   rxLastDb = st.db;
   accAdd(chk.rx, st);
-  if (st.db > -24 && st.zcr > 0.42) {
+  if (st.db > -24 && st.r1 < 0.3) {
     if (++chk.noisy === 3) chk.tails++;
   } else chk.noisy = 0;
 }
@@ -3283,11 +3283,11 @@ function chkInit() {
 
 function pushSample(v) {
   rfss += v * v; if ((v < 0 ? -v : v) > rfpk) rfpk = v < 0 ? -v : v;
-  if ((v < 0) !== (rfprev < 0)) rfzc++;
+  rfx1 += v * rfprev;
   rfprev = v;
   if (++rfn === 160) {
-    if (chk && chk.running) chkRx({db: rfss > 0 ? 10 * Math.log10(rfss / 160) : -120, pk: peakDb(rfpk), zcr: rfzc / 159});
-    rfss = 0; rfpk = 0; rfzc = 0; rfn = 0;
+    if (chk && chk.running) chkRx({db: rfss > 0 ? 10 * Math.log10(rfss / 160) : -120, pk: peakDb(rfpk), r1: rfss > 0 ? rfx1 / rfss : 1});
+    rfss = 0; rfpk = 0; rfx1 = 0; rfn = 0;
   }
   pend[pendN++] = v;
   if (otaRec) otaRec.push(v);
