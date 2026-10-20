@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.15"
+VERSION = "0.4.16"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -2377,6 +2377,28 @@ main.fit{padding-top:10px;padding-bottom:12px}
 .spec-t{position:absolute;bottom:2px;transform:translateX(-50%);font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted);pointer-events:none}
 .spec.small .spec-box,.spec.off .spec-box{display:none}
 .spec-meter{display:flex;align-items:center;gap:8px}
+.spec-meter.tx #st-level{color:var(--red);font-weight:700}
+.spec-meter.tx .meter i{background:linear-gradient(90deg,#f2545b,#f2545b 85%,#ffb3b6)}
+.vu{margin:8px 0}
+.vu-bar{position:relative;height:16px;border-radius:5px;overflow:hidden;
+background:linear-gradient(90deg,#1b2530 0 90%,#14382f 90% 95%,#1b2530 95% 98.3%,#3a1518 98.3%)}
+.vu-avg{position:absolute;left:0;top:0;bottom:0;width:0;background:var(--accent);opacity:.85}
+.vu-pk{position:absolute;top:0;bottom:0;width:3px;left:0;background:var(--amber)}
+.vu-hold{position:absolute;top:-2px;bottom:-2px;width:2px;left:0;background:var(--text)}
+.vu-gr{position:relative;height:5px;margin-top:3px;border-radius:3px;background:#1b2530;overflow:hidden}
+.vu-gr i{position:absolute;right:0;top:0;bottom:0;width:0;background:var(--amber)}
+.vu-txt{display:flex;justify-content:space-between;gap:8px;font:12px ui-monospace,Menlo,Consolas,monospace;color:var(--soft);margin-top:3px}
+.vu-scale{display:flex;justify-content:space-between;font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted)}
+.rep{margin:8px 0 4px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--card2)}
+.rep h3{font-size:13px;margin:0 0 6px;color:var(--soft)}
+.rep-strip{position:relative;height:56px;margin:2px 0 6px}
+.rep-strip canvas{width:100%;height:100%;display:block;border-radius:6px;background:#0a1016}
+.rep-strip .rep-lbl{position:absolute;left:6px;top:3px;font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted)}
+.rep-head{position:absolute;top:0;bottom:0;width:2px;left:0;background:var(--text);display:none}
+.rep-n{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:4px 10px;font-size:13px;margin:4px 0}
+.rep-n b{font-family:ui-monospace,Menlo,Consolas,monospace}
+.rep-v{font-size:14px;font-weight:600;margin-top:6px}
+.rep-v.ok{color:var(--accent)}.rep-v.warn{color:var(--amber)}.rep-v.err{color:var(--red)}
 .spec-meter .meter{height:6px;min-width:0}
 #ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
 #ptt{width:100%;height:80px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:19px;font-weight:700;cursor:pointer;padding:0 20px;
@@ -2445,7 +2467,8 @@ function makeResampler(inRate) {
   const ratio = inRate / 8000, half = Math.ceil(8 * ratio), taps = 2 * half + 1, phases = 32;
   const kern = sincKernels(phases, taps, half, 3400 / inRate, (i, off) => i - half - off, true);
   return {ratio: ratio, half: half, taps: taps, phases: phases, kern: kern,
-    buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hpX: 0, hpY: 0, peak: 0, dyn: makeDyn()};
+    buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hpX: 0, hpY: 0, peak: 0, dyn: makeDyn(),
+    fss: 0, fpk: 0, flg: 1, fgg: 1};
 }
 function biquad(type, f0, q, gainDb) {
   const w = 2 * Math.PI * f0 / 8000, cs = Math.cos(w), al = Math.sin(w) / (2 * q), A = Math.pow(10, gainDb / 40);
@@ -2725,9 +2748,9 @@ async function pollStatus() {
   $('st-feed-t').textContent = d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
   $('st-feed-w').title = 'Feed from Asterisk: ' + feedTxt;
   $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
-  $('st-level').textContent = fmtDb(d.peak_db);
+  if (!talking) $('st-level').textContent = fmtDb(d.peak_db);
   if (d.jitter_ms) jitterSec = d.jitter_ms / 1000;
-  if (!playing) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
+  if (!playing && !talking) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (!authed) return;
   const tx = d.tx || {};
   $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
@@ -2776,8 +2799,131 @@ function flush() {
   src.connect(busNode);
   src.start(nextT);
   nextT += buf.duration;
-  $('meter-bar').style.width = dbPct(peakDb(peakLocal)) + '%';
+  if (!talking) $('meter-bar').style.width = dbPct(peakDb(peakLocal)) + '%';
   peakLocal = 0;
+}
+
+const VU_MIN = -60;
+let micTaps = [], vuMic = null, vuHold = {db: -120, t: 0};
+
+function micFrame(st) {
+  vuMic = st;
+  micTaps.forEach((f) => f(st));
+  if (talking) txMeter(st);
+}
+
+function vuPct(db) { return Math.max(0, Math.min(100, (db - VU_MIN) / -VU_MIN * 100)); }
+
+function vuDraw(el, st) {
+  const now = performance.now();
+  if (st.pk > vuHold.db || now - vuHold.t > 1000) vuHold = {db: st.pk, t: now};
+  el.querySelector('.vu-avg').style.width = vuPct(st.db) + '%';
+  el.querySelector('.vu-pk').style.left = 'calc(' + vuPct(st.pk) + '% - 3px)';
+  el.querySelector('.vu-hold').style.left = 'calc(' + vuPct(vuHold.db) + '% - 2px)';
+  el.querySelector('.vu-gr i').style.width = Math.min(100, st.lim / 12 * 100) + '%';
+  el.querySelector('.vu-num').textContent = 'peak ' + fmtDb(vuHold.db) + ' · avg ' + fmtDb(st.db);
+  el.querySelector('.vu-lim').textContent = st.gate ? 'gate closed' : st.lim >= 0.5 ? 'limiting ' + st.lim.toFixed(1) + ' dB' : 'not limiting';
+}
+
+function vuRun(el, until) {
+  el.classList.remove('hidden');
+  const loop = () => {
+    if (vuMic) vuDraw(el, vuMic);
+    if (until()) requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+
+function txMeter(st) {
+  $('spec-meter').classList.add('tx');
+  $('meter-bar').style.width = dbPct(st.pk) + '%';
+  $('st-level').textContent = 'TX ' + fmtDb(st.pk);
+}
+
+function rxMeterBack() {
+  $('spec-meter').classList.remove('tx');
+  $('st-level').textContent = '-';
+}
+
+function framesOf(f32) {
+  const out = [];
+  for (let i = 0; i + 160 <= f32.length; i += 160) {
+    let ss = 0, pk = 0;
+    for (let j = i; j < i + 160; j++) { const v = f32[j], a = v < 0 ? -v : v; ss += v * v; if (a > pk) pk = a; }
+    out.push({db: ss > 0 ? 10 * Math.log10(ss / 160) : -120, pk: peakDb(pk), lim: 0, gate: false});
+  }
+  return out;
+}
+
+function analyze(fr) {
+  const act = fr.filter((f) => f.db > -45);
+  const pw = (a) => a.length ? 10 * Math.log10(a.reduce((s, f) => s + Math.pow(10, f.db / 10), 0) / a.length) : -120;
+  const sorted = fr.map((f) => f.db).sort((x, y) => x - y);
+  const low = sorted.slice(0, Math.max(1, Math.floor(sorted.length / 10)));
+  const noise = low.length ? 10 * Math.log10(low.reduce((s, d) => s + Math.pow(10, d / 10), 0) / low.length) : -120;
+  const speech = pw(act);
+  return {frames: fr.length, active: act.length, peak: fr.reduce((m, f) => Math.max(m, f.pk), -120), speech: speech,
+    noise: noise, snr: act.length ? Math.min(60, speech - noise) : 0, limPct: act.length ? 100 * act.filter((f) => f.lim >= 0.5).length / act.length : 0,
+    limAvg: act.length ? act.reduce((s2, f) => s2 + f.lim, 0) / act.length : 0,
+    gatePct: act.length ? 100 * act.filter((f) => f.gate).length / act.length : 0};
+}
+
+function clampStep(x) { return Math.max(1, Math.min(12, Math.round(x))); }
+
+function micVerdict(a) {
+  if (a.active < 10) return {cls: 'err', text: 'Hardly anything was heard: check the microphone is allowed and not muted, and talk close to it.'};
+  const room = 24 - (Number(mic.gain) || 0);
+  if (a.peak > -1 || a.limPct > 30) {
+    const d = clampStep(Math.max(a.peak + 4, a.limPct > 30 ? a.limAvg + 3 : 0));
+    return {cls: 'warn', text: 'Too hot' + (a.limPct > 30 ? ' (the limiter worked ' + Math.round(a.limPct) + ' % of the time)' : '') + ': lower Mic gain by about ' + d + ' dB.', delta: -d};
+  }
+  if (a.speech < -30 || a.peak < -15) {
+    const d = clampStep(Math.min(-18 - a.speech, -4 - a.peak));
+    return {cls: 'warn', text: 'Quiet: raise Mic gain by about ' + Math.min(d, room) + ' dB' + (room < d ? ' (that is the most it goes; talk closer to the mic)' : '') + '.', delta: Math.min(d, room)};
+  }
+  if (a.snr < 15) return {cls: 'warn', text: 'Noisy: the background is only ' + Math.round(a.snr) + ' dB below your voice. Turn on Noise suppression or set Noise gate to Light, or move closer to the mic.'};
+  return {cls: 'ok', text: 'Good: speech ' + fmtDb(a.speech) + ', peaks ' + fmtDb(a.peak) + '.'};
+}
+
+function repNumbers(el, rows) {
+  el.innerHTML = '';
+  rows.forEach(([k, v]) => { const d = document.createElement('div'); d.textContent = k + ' '; const b = document.createElement('b'); b.textContent = v; d.appendChild(b); el.appendChild(d); });
+}
+
+function stripDraw(cv, fr, len) {
+  const r = window.devicePixelRatio || 1, w = Math.round(cv.clientWidth * r), h = Math.round(cv.clientHeight * r);
+  cv.width = w; cv.height = h;
+  const g = cv.getContext('2d'), y = (db) => h - vuPct(db) / 100 * h, n = Math.max(len || fr.length, 1);
+  g.fillStyle = '#0a1016'; g.fillRect(0, 0, w, h);
+  g.fillStyle = 'rgba(34,195,166,.16)'; g.fillRect(0, y(-3), w, y(-6) - y(-3));
+  g.fillStyle = 'rgba(242,84,91,.18)'; g.fillRect(0, 0, w, y(-1));
+  g.fillStyle = 'rgba(34,195,166,.75)';
+  fr.forEach((f, i) => { const x = i / n * w; g.fillRect(x, y(f.db), Math.max(1, w / n), h - y(f.db)); });
+  g.strokeStyle = '#f4c04e'; g.lineWidth = Math.max(1, r); g.beginPath();
+  fr.forEach((f, i) => { const x = i / n * w; if (i) g.lineTo(x, y(f.pk)); else g.moveTo(x, y(f.pk)); });
+  g.stroke();
+}
+
+function playhead(strip, src, ac, secs) {
+  const head = strip.querySelector('.rep-head'), t0 = ac.currentTime;
+  head.style.display = 'block';
+  const loop = () => {
+    const p = Math.min(1, (ac.currentTime - t0) / secs);
+    head.style.left = (p * 100) + '%';
+    if (p < 1 && ac.state !== 'closed') requestAnimationFrame(loop); else head.style.display = 'none';
+  };
+  requestAnimationFrame(loop);
+}
+
+function lagOf(tx, rx) {
+  const e = (f) => Math.max(0, f.db + 60);
+  let best = 0, bestS = -1;
+  for (let L = 0; L < Math.min(150, rx.length); L++) {
+    let s = 0;
+    for (let i = 0; i < tx.length && i + L < rx.length; i++) s += e(tx[i]) * e(rx[i + L]);
+    if (s > bestS) { bestS = s; best = L; }
+  }
+  return best;
 }
 
 function pushSample(v) {
@@ -3111,9 +3257,18 @@ function feedMic(f32) {
     v = dynProcess(r.dyn, v);
     const a = v < 0 ? -v : v;
     if (a > r.peak) r.peak = a;
+    if (a > r.fpk) r.fpk = a;
+    r.fss += v * v;
+    if (r.dyn.lg < r.flg) r.flg = r.dyn.lg;
+    if (r.dyn.gg < r.fgg) r.fgg = r.dyn.gg;
     v = v > 1 ? 1 : v < -1 ? -1 : v;
     r.out[r.n++] = Math.round(v * 32767);
-    if (r.n === 160) { if (frameSink) frameSink(r.out.slice(0).buffer); r.n = 0; }
+    if (r.n === 160) {
+      if (frameSink) frameSink(r.out.slice(0).buffer);
+      micFrame({db: r.fss > 0 ? 10 * Math.log10(r.fss / 160) : -120, pk: peakDb(r.fpk),
+        lim: -20 * Math.log10(r.flg), gate: !!GATE[Number(mic.gate) || 0] && r.fgg < 0.5});
+      r.n = 0; r.fss = 0; r.fpk = 0; r.flg = 1; r.fgg = 1;
+    }
     pos += r.ratio;
   }
   const keepFrom = Math.max(0, Math.floor(pos) - r.half);
@@ -3199,12 +3354,20 @@ async function nodeTest() {
     if (!wsReady) throw new Error('the talk channel did not open');
     if (!/^Listening/.test($('listen-msg').textContent)) throw new Error('the listen stream did not start');
     otaRec = [];
+    const rxT0 = performance.now();
+    let txT0 = 0;
+    const txF = [], tap = (st) => { if (!txT0) txT0 = performance.now(); txF.push(st); };
+    micTaps.push(tap);
+    vuHold = {db: -120, t: 0};
     note(out, '', 'Transmitting 4 s: talk as you would on the air...');
     await pttDown();
+    vuRun($('vu-mic'), () => nodeTesting && talking);
     for (let i = 0; i < 30 && talking && !keyed; i++) await sleep(100);
     if (!keyed) { const m = $('ptt-msg').textContent; if (talking) pttUp(); throw new Error(m || 'the node did not key'); }
     await sleep(4000);
     pttUp();
+    micTaps = micTaps.filter((f) => f !== tap);
+    $('vu-mic').classList.add('hidden');
     note(out, '', 'Collecting what the node sent...');
     await sleep(1500);
     const rec = Float32Array.from(otaRec || []);
@@ -3214,12 +3377,31 @@ async function nodeTest() {
     for (let i = 0; i < rec.length; i++) { const a = rec[i] < 0 ? -rec[i] : rec[i]; if (a > pk) pk = a; }
     if (!rec.length || pk < 0.003) throw new Error('nothing came back from the node (is its audio feed set up?)');
     const src = playBack(pc, rec);
-    const db = peakDb(pk);
-    note(out, db > -1 || db < -20 ? 'warn' : 'ok', 'Playing back what the node sent out. Peak ' + fmtDb(db) +
-      (db > -1 ? ': too hot.' : db < -20 ? ': quiet.' : ': good.'));
+    const rxF = framesOf(rec), txA = analyze(txF), rxA = analyze(rxF);
+    const off = Math.round((txT0 - rxT0) / 20), lag = lagOf(txF, rxF.slice(Math.max(0, off)));
+    const delay = lag * 0.02, diff = rxA.speech - txA.speech, agcOn = $('rx-agc').checked;
+    $('rep-node').classList.remove('hidden');
+    const len = Math.max(txF.length, rxF.length);
+    stripDraw($('rep-node-tx'), txF, len);
+    stripDraw($('rep-node-rx'), rxF.slice(Math.max(0, off)), len);
+    repNumbers($('rep-node-n'), [['Sent', fmtDb(txA.speech)], ['Came back', fmtDb(rxA.speech)],
+      ['Difference', (diff >= 0 ? '+' : '') + diff.toFixed(1) + ' dB'], ['Round trip', '~' + delay.toFixed(1) + ' s'],
+      ['Came-back peak', fmtDb(rxA.peak)]]);
+    let v;
+    if (rxA.peak > -1) v = {cls: 'warn', text: 'What came back is clipping: lower TX gain (Audio levels) or the radio and DVSwitch levels (SysMon, Tune).'};
+    else if (!agcOn && diff < -6) v = {cls: 'warn', text: 'It came back ' + Math.round(-diff) + ' dB quieter than you sent it: raise TX gain (Audio levels) by about ' + clampStep(-diff - 2) + ' dB, or check the node\'s levels in SysMon, Tune.'};
+    else if (!agcOn && diff > 6) v = {cls: 'warn', text: 'It came back ' + Math.round(diff) + ' dB louder than you sent it: lower TX gain (Audio levels) by about ' + clampStep(diff - 2) + ' dB.'};
+    else v = {cls: 'ok', text: 'Good: it came back ' + (agcOn ? 'clean' : 'within ' + Math.round(Math.abs(diff)) + ' dB of what you sent') + ', about ' + delay.toFixed(1) + ' s later.'};
+    if (agcOn) v.text += ' (Automatic level is on, so what comes back is evened out; turn it off in Audio levels for an exact level comparison.)';
+    $('rep-node-v').className = 'rep-v ' + v.cls;
+    $('rep-node-v').textContent = v.text;
+    note(out, '', 'Playing back what the node sent out.');
+    playhead($('rep-node-rx').parentNode, src, pc, rec.length / 8000);
     src.onended = () => { pc.close(); };
   } catch (e) {
     otaRec = null;
+    micTaps = [];
+    $('vu-mic').classList.add('hidden');
     if (!wasPlaying && playing) stopListen();
     note(out, 'err', 'Node test: ' + (e.message || e));
     pc.close();
@@ -3231,31 +3413,42 @@ async function nodeTest() {
 async function micTest() {
   if (testing || talking) return;
   testing = true; testBuf = [];
+  const fr = [], tap = (st) => fr.push(st);
   $('mic-test').disabled = true;
+  $('rep-mic').classList.add('hidden');
   const pc = newAudioCtx();
   try { pc.resume(); } catch (e) {}
   note('mic-test-msg', '', 'Recording 4 s: talk as you would on the air...');
+  micTaps.push(tap);
+  vuHold = {db: -120, t: 0};
+  const done = () => { micTaps = micTaps.filter((f) => f !== tap); $('vu-mic').classList.add('hidden'); };
   try {
     await startMic((buf) => testBuf.push(new Int16Array(buf)));
   } catch (e) {
-    testing = false; $('mic-test').disabled = false; pc.close();
+    testing = false; done(); $('mic-test').disabled = false; pc.close();
     note('mic-test-msg', 'err', 'Microphone: ' + (e.message || e.name));
     return;
   }
+  vuRun($('vu-mic'), () => testing);
   await sleep(4000);
-  const peak = rs ? rs.peak : 0;
-  stopMic(); testing = false;
-  const n = testBuf.reduce((a, b) => a + b.length, 0);
+  stopMic(); testing = false; done();
+  const n = testBuf.reduce((x, y) => x + y.length, 0);
   if (!n) { pc.close(); $('mic-test').disabled = false; note('mic-test-msg', '', 'Nothing was recorded.'); return; }
   const ch = new Float32Array(n);
   let o = 0;
   testBuf.forEach((f) => { for (let i = 0; i < f.length; i++) ch[o++] = f[i] / 32768; });
   const src = playBack(pc, ch);
-  const db = peakDb(peak);
-  const hot = mic.lev ? -2 : -1;
-  note('mic-test-msg', db > hot || db < -20 ? 'warn' : 'ok', 'Playing back what the node would get. Peak ' + fmtDb(db) +
-    (db > hot ? (mic.lev ? ': the leveler is limiting hard, lower the mic gain a little.' : ': too hot, lower the mic gain.')
-      : db < -20 ? ': quiet, raise the mic gain.' : ': good.'));
+  const an = analyze(fr), v = micVerdict(an);
+  $('rep-mic').classList.remove('hidden');
+  stripDraw($('rep-mic-c'), fr, 200);
+  const rows = [['Peak', fmtDb(an.peak)], ['Speech', fmtDb(an.speech)], ['Background', an.noise < -90 ? 'silent' : fmtDb(an.noise)],
+    ['Voice above background', an.snr >= 60 ? 'over 60 dB' : Math.round(an.snr) + ' dB'], ['Limiter working', Math.round(an.limPct) + ' %']];
+  if (GATE[Number(mic.gate) || 0]) rows.push(['Gate closed while talking', Math.round(an.gatePct) + ' %']);
+  repNumbers($('rep-mic-n'), rows);
+  $('rep-mic-v').className = 'rep-v ' + v.cls;
+  $('rep-mic-v').textContent = v.text;
+  note('mic-test-msg', '', 'Playing back what the node would get.');
+  playhead($('rep-mic-c').parentNode, src, pc, n / 8000);
   src.onended = () => { pc.close(); $('mic-test').disabled = false; };
 }
 
@@ -3271,6 +3464,7 @@ function stopMic() {
 function endTalk() {
   if (talking) ownUnkeyAt = performance.now();
   talking = false;
+  rxMeterBack();
   preKey = [];
   stopMic();
   if (talkTimer) { clearInterval(talkTimer); talkTimer = null; }
@@ -3691,7 +3885,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum: tap to switch between waterfall and bars"></canvas>
 <span class="spec-lo" aria-hidden="true"></span><span class="spec-t" style="left:7.5%">300</span><span class="spec-t" style="left:25%">1k</span>
 <span class="spec-t" style="left:50%">2k</span><span class="spec-t" style="left:75%">3k</span></div>
-<div class="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
+<div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
 </div>
 <audio id="player" playsinline class="hidden"></audio>
 <div id="listen-msg" class="msg"></div>
@@ -3826,10 +4020,29 @@ mic volume, so the gain here is applied in the page.</p>
 <input type="range" id="mic-gain" min="-12" max="24" step="1" style="flex:1"><span id="mic-gain-v" class="mono small">0 dB</span></div>
 <p class="muted small">With automatic gain on, the browser undoes most of the mic gain; turn it off for a fixed level.</p>
 <div class="row"><button id="mic-test" class="btn" type="button">Test mic (4 s, plays back)</button></div>
+<div class="vu hidden" id="vu-mic" aria-live="off">
+<div class="vu-bar"><i class="vu-avg"></i><i class="vu-pk"></i><i class="vu-hold"></i></div>
+<div class="vu-scale"><span>-60</span><span>-40</span><span>-20</span><span>-6 · -3</span><span>0 dBFS</span></div>
+<div class="vu-gr" title="How much the leveler or limiter is turning you down"><i></i></div>
+<div class="vu-txt"><span class="vu-num">-</span><span class="vu-lim">-</span></div>
+</div>
 <div id="mic-test-msg" class="msg"></div>
+<div class="rep hidden" id="rep-mic">
+<h3>Mic test report</h3>
+<div class="rep-strip"><canvas id="rep-mic-c"></canvas><span class="rep-lbl">your level, 4 s</span><i class="rep-head"></i></div>
+<div class="rep-n" id="rep-mic-n"></div>
+<div class="rep-v" id="rep-mic-v"></div>
+</div>
 <div class="row"><button id="node-test" class="btn" type="button">Test through the node (transmits 4 s)</button></div>
 <p class="muted small">Keys node 1921, records what the node sends out and plays it back. It goes out over the air and to linked nodes.</p>
 <div id="node-test-msg" class="msg"></div>
+<div class="rep hidden" id="rep-node">
+<h3>Node test report</h3>
+<div class="rep-strip"><canvas id="rep-node-tx"></canvas><span class="rep-lbl">sent (TX)</span></div>
+<div class="rep-strip"><canvas id="rep-node-rx"></canvas><span class="rep-lbl">came back from the node (RX)</span><i class="rep-head"></i></div>
+<div class="rep-n" id="rep-node-n"></div>
+<div class="rep-v" id="rep-node-v"></div>
+</div>
 </div>
 </div>
 

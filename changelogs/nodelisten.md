@@ -1,6 +1,30 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_15_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_4_16_20261020.py`. Newest entries first.
+
+## 0.4.16 (2026-10-20)
+
+- **Live meter for the audio tests** (Setup tab, Microphone card). While
+  **Test mic** or **Test through the node** runs, a bar shows your level from
+  -60 to 0 dBFS: the average, the peak, and a peak hold for 1 second. The
+  target zone (-6 to -3 dBFS) is green and above -1 dBFS is red. A thin bar
+  under it shows how much the leveler or limiter is turning you down, and the
+  text says "limiting 4.2 dB" or "gate closed".
+- **Mic test report** after the test: a 4 s level strip (with a playhead
+  during playback), the peak, the speech level, the background level, how far
+  your voice is above the background, how often the limiter worked (and the
+  noise gate, when it is on), and one line saying what to change, with an
+  amount: "Too hot: lower Mic gain by about 7 dB", "Quiet: raise Mic gain by
+  about 12 dB", "Noisy: ...", or "Good".
+- **Node test report**: what you sent and what came back from the node, as
+  two strips lined up in time, with both levels, the difference, the round
+  trip (about 0.5 s), the peak that came back, and what to change (TX gain,
+  or the node's levels in SysMon). With Automatic level on, the report says
+  the levels coming back are evened out.
+- **TX on the Listen tab's level bar**: while you hold push-to-talk, the bar
+  under the spectrum shows your mic level, labelled TX in red; it goes back to
+  the node's level when you let go. The Listen tab still fits one screen.
+- All of this is worked out by the phone; nothing changes on the Pi.
 
 ## 0.4.15 (2026-10-20)
 
