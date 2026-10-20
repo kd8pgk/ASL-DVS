@@ -131,7 +131,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_6_0_20261020.py --install
+  sudo python3 nodetalker_v0_6_1_20261020.py --install
   ```
 
 Then:
@@ -187,8 +187,13 @@ favorites set on the Setup tab.
 How each kind of favorite connects:
 
 - **ASL and EchoLink:** Connect and Disconnect use `rpt cmd <node> ilink 3` /
-  `ilink 1`. Disconnect drops linked favorites only. Links are always made
-  from the main node.
+  `ilink 1` (`ilink 11` for a permanent link). Links are always made from the
+  main node.
+  - **One link at a time,** as in Node Controller (0.6.1 and later):
+    connecting a favorite drops the other links first.
+  - **Private nodes (1999 and below) are left alone:** node 1921, a private
+    hub, a phone node. The bridge nodes have their own rules (below).
+  - **Disconnect** drops linked favorites only.
 - **With Node Controller on the node:** ASL, EchoLink, DVSwitch and M17 all go
   through it, by a local call with the key in `/etc/asl_dvs/local_api.key`.
   - DVSwitch needs pi02w 9.3.94 or later; ASL and M17 need 9.3.89 or later.
@@ -206,7 +211,10 @@ How each kind of favorite connects:
   - **An M17 favorite** writes `USRP2M17.ini` (address from
     `M17Hosts.json`), restarts `usrp2m17` and links the M17 bridge node.
   - **One digital favorite is on the air at a time.** Tuning one drops
-    linked ASL/EchoLink favorites.
+    every link except its bridge node and the private nodes.
+  - **A guard** (every 5 s, the same rules as Node Controller) drops a bridge
+    node that doesn't belong to what is tuned, links the tuned bridge again
+    if it drops, and drops extra links to favorites.
   - **Bridge nodes and callsign:** the bridge nodes are found in `rpt.conf`
     (from the Analog_Bridge and USRP2M17 ports), and the M17 callsign in
     `USRP2M17.ini`. The **Digital** card on the Setup tab can set them, edit
@@ -423,7 +431,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_64_0_20261020.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodetalker_v0_6_0_20261020.py` | common |
+| `nodetalker_v0_6_1_20261020.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_7_0_20261020.sh` | common |
