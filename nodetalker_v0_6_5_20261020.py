@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.4"
+VERSION = "0.6.5"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -1325,6 +1325,47 @@ def restart_asterisk():
     return {"ok": True, "message": "Asterisk restarted. Audio should arrive within a few seconds of the node hearing anything."}
 
 
+def page_answers(path, port=80, timeout=0.5):
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout)
+    try:
+        conn.request("HEAD", path)
+        return conn.getresponse().status < 400
+    except (OSError, http.client.HTTPException):
+        return False
+    finally:
+        conn.close()
+
+
+_links_cache = {"t": -1e9, "v": {}}
+
+
+def quick_links():
+    now = time.monotonic()
+    if now - _links_cache["t"] < LINK_TTL_SEC:
+        return _links_cache["v"]
+    v = {name: page_answers(path) for name, path in WEB_PAGES}
+    v["cockpit"] = port_open(COCKPIT_PORT)
+    _links_cache.update(t=now, v=v)
+    return v
+
+
+def system_power(what):
+    cmd, message = POWER_CMDS[what]
+    if os.geteuid() != 0:
+        return {"ok": False, "error": f"root required for {what}"}
+    log_event(f"System {what} requested from Node Talker", "warn")
+
+    def go():
+        time.sleep(1)
+        try:
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as exc:
+            log_event(f"System {what} failed: {exc}", "err")
+
+    threading.Thread(target=go, daemon=True).start()
+    return {"ok": True, "message": message}
+
+
 _feeder_cache = {"t": 0.0, "pids": []}
 
 
@@ -1418,6 +1459,11 @@ TX_NOTE = "; nodelisten: transmit node for the Node Listen page (remove it from 
 IAX_CONF = os.environ.get("NODETALKER_IAX_CONF", "/etc/asterisk/iax.conf")
 LOCAL_KEY_PATH = os.environ.get("NODETALKER_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
 SYSMON_PORT = 9999
+INSTMON_PORT = 8990
+COCKPIT_PORT = 9090
+WEB_PAGES = (("allmon3", "/allmon3/"), ("dvswitch", "/dvswitch/"))
+LINK_TTL_SEC = 30.0
+POWER_CMDS = {"reboot": (["reboot"], "Rebooting…"), "shutdown": (["shutdown", "-h", "now"], "Shutting down…")}
 TX_BUSY_GRACE_SEC = 1.0
 _TX_NODES_LINE_RE = re.compile(r"^\s*" + TX_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + TX_NODE + r",NONE\s*$")
 TX_QUEUE_MAX = 50
@@ -3501,6 +3547,10 @@ header .ver{color:var(--muted);font-size:12px}
 header .sp{flex:1}
 .pill{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line2);border-radius:999px;color:var(--text);text-decoration:none;background:transparent;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
 .pill:hover{border-color:var(--accent)}
+.ql-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px}
+.ql{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;text-decoration:none;white-space:nowrap;color:var(--amber);border:1px solid rgba(244,192,78,.45);background:rgba(255,61,90,.15);text-shadow:0 0 8px rgba(255,208,64,.4);border-radius:4px;padding:8px 12px;cursor:pointer;transition:all .14s}
+.ql:hover{filter:brightness(1.5);box-shadow:0 0 10px currentColor}
+.ql:active{transform:scale(.95)}
 main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px max(16px,calc((100% - 608px) / 2)) 24px;overflow-wrap:anywhere}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:14px}
 .card h2{font-size:15px;margin:0 0 10px}
@@ -3941,14 +3991,52 @@ async function whoami() {
   const d = await api('/api/whoami');
   authed = !!d.authed;
   publicListen = !!d.public_listen;
-  if (d.dash_port) dashPort = d.dash_port;
-  $('dash-link').href = location.protocol.replace('https', 'http') + '//' + location.hostname + ':' + dashPort + '/';
-  $('dash-link').classList.toggle('hidden', !d.dash_running);
+  hostLinks(d);
   sysmonPort = d.sysmon_port || null;
   if (!d.backend) $('login-msg').textContent = 'No root password is set on this Pi, so login cannot work.';
   render();
   autoListen();
   if (authed) pttFromPi(false);
+}
+
+function hostLinks(d) {
+  if (d.dash_port) dashPort = d.dash_port;
+  const a = $('dash-link'), base = 'http://' + location.hostname;
+  const nc = !!d.dash_running, im = !nc && !!d.instmon_port;
+  a.href = base + ':' + (nc ? dashPort : im ? d.instmon_port : dashPort) + '/';
+  a.textContent = im ? 'InstMon' : 'Node Controller';
+  a.setAttribute('aria-label', im ? 'Open InstMon' : 'Open Node Controller');
+  a.dataset.win = im ? 'asl_dvs_instmon' : 'asl_dvs_dash';
+  a.classList.toggle('hidden', !nc && !im);
+  const L = d.links || {};
+  let any = false;
+  document.querySelectorAll('.ql[data-ql]').forEach((q) => {
+    q.href = q.dataset.qlPath ? base + q.dataset.qlPath : base + ':' + q.dataset.qlPort + '/';
+    const on = !!L[q.dataset.ql];
+    q.classList.toggle('hidden', !on);
+    any = any || on;
+  });
+  $('ql-row').classList.toggle('hidden', !any);
+}
+
+async function pollHostLinks() {
+  if (document.visibilityState !== 'visible') return;
+  const d = await api('/api/whoami');
+  if (d.ok) hostLinks(d);
+}
+
+async function doReboot() {
+  if (!confirm('Reboot the system?')) return;
+  const d = await post('/api/system/reboot', {});
+  if (!d.ok) { note('sys-msg', 'err', d.error || 'Reboot failed'); return; }
+  note('sys-msg', 'warn', d.message || 'Rebooting…');
+}
+
+async function doShutdown() {
+  if (!confirm('Shut down the system?')) return;
+  const d = await post('/api/system/shutdown', {});
+  if (!d.ok) { note('sys-msg', 'err', d.error || 'Shutdown failed'); return; }
+  note('sys-msg', 'warn', d.message || 'Shutting down…');
 }
 
 async function login(ev) {
@@ -3958,7 +4046,7 @@ async function login(ev) {
   const d = await post('/api/login', {password: $('pw').value});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); pttFromPi(false); }
+  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); pttFromPi(false); pollHostLinks(); }
   else $('login-msg').textContent = d.error || 'Login failed.';
 }
 
@@ -5850,7 +5938,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('mic-test').addEventListener('click', micTest);
   $('node-test').addEventListener('click', nodeTest);
   try { window.name = 'asl_dvs_listen'; } catch (e) {}
-  $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, 'asl_dvs_dash'); });
+  $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, $('dash-link').dataset.win || 'asl_dvs_dash'); });
+  $('sys-reboot').addEventListener('click', doReboot);
+  $('sys-shutdown').addEventListener('click', doShutdown);
+  setInterval(pollHostLinks, 30000);
   $('tune-reset').addEventListener('click', tuneReset);
   FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => foldSet(k, !foldOpen(k))));
   setupMediaSession();
@@ -5884,7 +5975,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </head>
 <body>
 <header><h1>Node Talker</h1><span class="ver">v__VERSION__</span><span class="sp"></span>
-<a id="dash-link" class="pill" href="#" aria-label="Open Node Controller">Node Controller</a>
+<a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="login-open" class="pill hidden" type="button">Log In</button>
 <button id="logout" class="pill hidden" type="button">Log Out</button></header>
 <div id="login-screen">
@@ -5956,6 +6047,17 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </section>
 
 <section id="tab-setup" class="hidden">
+<div class="card" id="cd-sys">
+<h2>System</h2>
+<div class="row"><button id="sys-reboot" class="btn danger" type="button">Reboot</button>
+<button id="sys-shutdown" class="btn" type="button">Shutdown</button></div>
+<div id="sys-msg" class="msg"></div>
+<div id="ql-row" class="ql-row hidden">
+<a class="ql hidden" data-ql="allmon3" data-ql-path="/allmon3" href="#" target="_blank" rel="noopener">Allmon3</a>
+<a class="ql hidden" data-ql="dvswitch" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
+<a class="ql hidden" data-ql="cockpit" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
+</div>
+</div>
 <div class="card fold" id="cd-rx">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-rx"><span class="fold-t">Receive</span><span class="fold-sum" id="sum-rx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-rx">
@@ -6259,6 +6361,8 @@ _POST_ACTIONS = {
     "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
     "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
+    "/api/system/reboot": (lambda b: system_power("reboot"), ()),
+    "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),
     "/api/digital": (digital_save, ()),
     "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
@@ -6378,9 +6482,12 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "version": VERSION})
             elif path == "/api/whoami":
                 dport = dashboard_conf()["port"]
+                dash = port_open_cached(dport, ttl=5.0)
                 self._json(200, {"ok": True, "authed": authed, "public_listen": _cfg_get("public_listen"),
                                  "backend": _root_backend_available(), "dash_port": dport,
-                                 "dash_running": port_open_cached(dport),
+                                 "dash_running": dash,
+                                 "instmon_port": INSTMON_PORT if not dash and port_open_cached(INSTMON_PORT, ttl=5.0) else None,
+                                 "links": quick_links() if authed else {},
                                  "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None})
             elif path == "/api/status":
                 self._json(200, dict(build_status(authed), ok=True))
