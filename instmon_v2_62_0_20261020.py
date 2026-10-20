@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.61.0"
-DATE_STR ="2026-10-19"
+VERSION ="2.62.0"
+DATE_STR ="2026-10-20"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -594,6 +594,96 @@ def _diskimg_ddrescue_command(src, dst, mapfile_path, unit_name):
               "and will NOT survive an instmon restart", "warn")
     return ddrescue_cmd, False
 
+_RPICLONE_COMMIT = "e640eff1caa29e70bb3beaea21afb36ad6311313"
+_RPICLONE_FILES = (
+    ("rpi-clone", "5594dca9129c95154c1f2e28c496feb7f4e49e5a5c356534b1341871970e74ca"),
+    ("rpi-clone-setup", "bd6adaa1584f4ac58b8520dccca51d49abb1b548cc8c39986b73f460acc5369c"),
+)
+_RPICLONE_SCRIPT_NAME = "rpi-clone install"
+_RPICLONE_MOUNTS = ("/mnt/clone", "/mnt/clone-src")
+_RPICLONE_HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+
+def _rpiclone_status():
+    path = shutil.which("rpi-clone")
+    if not path:
+        return {"installed": False, "version": None, "path": None}
+    version = None
+    try:
+        with open(path, "r", errors="replace") as f:
+            for line in f:
+                m = re.match(r"version=([\w.]+)", line)
+                if m:
+                    version = m.group(1)
+                    break
+    except OSError:
+        pass
+    return {"installed": True, "version": version, "path": path}
+
+def _rpiclone_install_script():
+    base = f"https://raw.githubusercontent.com/geerlingguy/rpi-clone/{_RPICLONE_COMMIT}"
+    lines = [
+        "#!/bin/bash",
+        "set -euo pipefail",
+        "export DEBIAN_FRONTEND=noninteractive",
+        f'echo "=== rpi-clone install (headless, pinned to {_RPICLONE_COMMIT[:12]}) ==="',
+        'need=""',
+        "for pair in rsync:rsync parted:parted fdisk:fdisk sfdisk:fdisk findmnt:util-linux column:bsdextrautils fsck.vfat:dosfstools; do",
+        '  cmd="${pair%%:*}"; pkg="${pair#*:}"',
+        '  if ! command -v "$cmd" >/dev/null 2>&1; then echo "missing $cmd (package $pkg)"; need="$need $pkg"; fi',
+        "done",
+        'if [ -n "$need" ]; then',
+        '  echo "--- apt-get update ---"',
+        "  apt-get update -q",
+        '  echo "--- apt-get install$need ---"',
+        "  apt-get install -y --no-install-recommends -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold $need",
+        "else",
+        '  echo "All packages rpi-clone needs are already installed."',
+        "fi",
+        'tmp="$(mktemp -d)"',
+        "trap 'rm -rf \"$tmp\"' EXIT",
+        'fetch() { if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 3 -o "$1" "$2"; else wget -q -O "$1" "$2"; fi; }',
+    ]
+    for name, digest in _RPICLONE_FILES:
+        lines += [
+            f'echo "--- downloading {name} ---"',
+            f'fetch "$tmp/{name}" "{base}/{name}"',
+            f'echo "{digest}  $tmp/{name}" | sha256sum -c -',
+        ]
+    lines += [
+        "install -m 755 -o root -g root " + " ".join(f'"$tmp/{n}"' for n, _d in _RPICLONE_FILES) + " /usr/local/sbin/",
+        'echo "Installed: $(grep -m1 \'^version=\' /usr/local/sbin/rpi-clone) in /usr/local/sbin"',
+        'echo "=== rpi-clone install done -- File sync (rpi-clone) is now on the Clone card ==="',
+    ]
+    return "\n".join(lines) + "\n"
+
+def _rpiclone_args(force=False, hostname=None):
+    args = ["-U"]
+    if force:
+        args.append("-f")
+    if hostname:
+        args += ["-s", hostname]
+    return args
+
+def _diskimg_rpiclone_command(dst, unit_name, extra_args):
+    cmd = ["rpi-clone", os.path.basename(dst)] + list(extra_args or ["-U"])
+    if shutil.which("systemd-run"):
+        return (
+            ["systemd-run", "--quiet", "--pipe", "--collect", f"--unit={unit_name}"] + cmd,
+            True,
+        )
+    log_event("systemd-run not found -- disk-image job will run undetached "
+              "and will NOT survive an instmon restart", "warn")
+    return cmd, False
+
+def _rpiclone_cleanup_mounts():
+    for mp in _RPICLONE_MOUNTS:
+        try:
+            if subprocess.run(["findmnt", mp], capture_output=True, timeout=10).returncode == 0:
+                subprocess.run(["umount", "-R", mp], capture_output=True, timeout=30)
+                log_event(f"rpi-clone: unmounted leftover {mp}", "info")
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
+            log_event(f"rpi-clone: could not unmount {mp}: {exc}", "warn")
+
 def _diskimg_freeze(action):
     flag = "f" if action == "freeze" else "u"
     try:
@@ -696,8 +786,17 @@ def _diskimg_build_command_preview_base(kind, params):
                 return None, f"'{dest_device}' is not a currently attached USB drive."
             best_effort = bool(params.get("best_effort"))
             direct_io = bool(params.get("direct_io"))
-            backend = params.get("backend") if params.get("backend") in ("dd", "ddrescue") else "dd"
+            backend = params.get("backend") if params.get("backend") in ("dd", "ddrescue", "rpiclone") else "dd"
             throttle_rate_mb = params.get("throttle_rate_mb")
+            if backend == "rpiclone":
+                host = (params.get("rpi_hostname") or "").strip()
+                if host and not _RPICLONE_HOST_RE.fullmatch(host):
+                    return None, "Hostname for the clone: letters, digits and dashes only, up to 63 characters."
+                cmd, _detached = _diskimg_rpiclone_command(
+                    match["path"], "instmon-diskimg-<job>", _rpiclone_args(bool(params.get("rpi_force")), host or None),
+                )
+                note = None if _rpiclone_status()["installed"] else "rpi-clone is not installed -- press Install rpi-clone first."
+                return _diskimg_command_display(cmd), note
             if backend == "ddrescue":
                 cmd, _detached = _diskimg_ddrescue_command(
                     src_path, match["path"], "<job-id>.ddrescue.map", "instmon-diskimg-<job>",
@@ -846,6 +945,7 @@ def _diskimg_reader_thread_body(job_id):
         progress_format = job.get("progress_format", "dd")
     buf = b""
     last_nonprogress_line = ""
+    rpiclone_aborted = False
     stream = proc.stdout
     read_some = getattr(stream, "read1", None) or (lambda n: stream.read(n))
     try:
@@ -861,7 +961,11 @@ def _diskimg_reader_thread_body(job_id):
                     piece = _ANSI_ESCAPE_RE.sub(b"", piece)
                 if not piece.strip():
                     continue
-                if progress_format == "pv":
+                if progress_format == "rpiclone":
+                    parsed = None
+                    if b"Aborting" in piece:
+                        rpiclone_aborted = True
+                elif progress_format == "pv":
                     m = _PV_PROGRESS_RE.search(piece)
                     parsed = _diskimg_parse_meter_bytes(m.group(1), m.group(2)) if m else None
                 elif progress_format == "ddrescue":
@@ -896,6 +1000,10 @@ def _diskimg_reader_thread_body(job_id):
             job["finished"] = time.time()
             job["state"] = "cancelled"
             job["message"] = "Cancelled -- the destination is left partial and unusable."
+        elif progress_format == "rpiclone" and returncode == 0 and rpiclone_aborted:
+            job["finished"] = time.time()
+            job["state"] = "failed"
+            job["message"] = "rpi-clone stopped without cloning (it printed \"Aborting!\") -- see the console above for why."
         elif returncode != 0:
             job["finished"] = time.time()
             job["state"] = "failed"
@@ -923,6 +1031,9 @@ def _diskimg_reader_thread_body(job_id):
             pass
         except OSError as exc:
             log_event(f"Disk-image {job_id}: could not remove ddrescue mapfile {mapfile_path}: {exc}", "warn")
+
+    if progress_format == "rpiclone":
+        _rpiclone_cleanup_mounts()
 
     if not copy_ok:
         if kind == "backup":
@@ -1028,7 +1139,7 @@ def _diskimg_start_job(
     fs_type=None, quiesce_requested=False,
     best_effort_requested=False, direct_io_requested=False,
     verify_algo="sha256", backend="dd", throttle_rate_mb=None,
-    freeze_requested=False, quick_requested=False,
+    freeze_requested=False, quick_requested=False, rpiclone_args=None,
 ):
     global _diskimg_job
 
@@ -1037,17 +1148,20 @@ def _diskimg_start_job(
     quiesce_console = []
     frozen_ok = False
 
-    backend = backend if backend in ("dd", "ddrescue") and kind in ("backup", "clone") else "dd"
-    best_effort_requested = bool(best_effort_requested) and kind in ("backup", "clone") and backend != "ddrescue"
-    direct_io_requested = bool(direct_io_requested) and kind == "clone" and backend != "ddrescue"
+    backend = backend if (backend in ("dd", "ddrescue") and kind in ("backup", "clone")) or (backend == "rpiclone" and kind == "clone") else "dd"
+    if backend == "rpiclone":
+        verify_requested = False
+        freeze_requested = False
+    best_effort_requested = bool(best_effort_requested) and kind in ("backup", "clone") and backend == "dd"
+    direct_io_requested = bool(direct_io_requested) and kind == "clone" and backend == "dd"
     freeze_requested = bool(freeze_requested) and quiesce_requested and kind in ("backup", "clone")
     quick_requested = bool(quick_requested) and kind == "format"
     verify_algo = verify_algo if verify_algo in _VERIFY_HASHERS else "sha256"
     throttle_requested = (
         bool(throttle_rate_mb) and kind in ("backup", "clone", "restore")
-        and backend != "ddrescue" and not (encrypt_passphrase or decrypt_passphrase)
+        and backend == "dd" and not (encrypt_passphrase or decrypt_passphrase)
     )
-    progress_format = "ddrescue" if backend == "ddrescue" else "dd"
+    progress_format = backend if backend in ("ddrescue", "rpiclone") else "dd"
 
     job_id = secrets.token_hex(8)
     unit_name = f"instmon-diskimg-{job_id}"
@@ -1124,6 +1238,8 @@ def _diskimg_start_job(
             cmd, detached = _diskimg_pipeline_command("encrypt", src_path, dst_path, best_effort=best_effort_requested), False
         elif decrypt_passphrase:
             cmd, detached = _diskimg_pipeline_command("decrypt", src_path, dst_path), False
+        elif backend == "rpiclone":
+            cmd, detached = _diskimg_rpiclone_command(dst_path, unit_name, rpiclone_args)
         elif backend == "ddrescue":
             mapfile_path = _diskimg_ddrescue_mapfile_path(job_id)
             cmd, detached = _diskimg_ddrescue_command(src_path, dst_path, mapfile_path, unit_name)
@@ -1146,7 +1262,7 @@ def _diskimg_start_job(
         popen_error = None
         proc = None
         try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+            proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, start_new_session=True)
         except OSError as exc:
             popen_error = f"Could not start {cmd[0]}: {exc}"
             if quiesce_requested and _diskimg_job is not None and _diskimg_job["id"] == job_id:
@@ -6208,6 +6324,7 @@ function renderDrives(el, data) {
   }
   el.innerHTML = html;
   ['backup', 'clone', 'restore'].forEach(k => renderDiskimgDriveStrip(k, drives));
+  renderRpicloneStatus(data.rpiclone);
   const depsEl = document.getElementById('diskimg-deps');
   if (depsEl) renderDiskimgDeps(depsEl, data.deps);
   populateDiskimgDestSelect('diskimg-backup-dest', drives);
@@ -6233,6 +6350,42 @@ function diskimgMountBtn(d) {
   return mounted
     ? ` <button class="b-danger" data-action="diskimg_unmount" data-dest="${escHtml(d.path)}"${dis}>Unmount</button>`
     : ` <button data-action="diskimg_mount" data-dest="${escHtml(d.path)}"${dis}>Mount</button>`;
+}
+
+function renderRpicloneStatus(rc) {
+  const st = document.getElementById('diskimg-rpiclone-status');
+  const btn = document.getElementById('diskimg-rpiclone-install-btn');
+  const sel = document.getElementById('diskimg-clone-backend');
+  const opt = sel ? sel.querySelector('option[value="rpiclone"]') : null;
+  const installed = !!(rc && rc.installed);
+  if (st) st.textContent = installed ? `rpi-clone ${rc.version || ''} installed` : 'rpi-clone: not installed';
+  if (btn) btn.textContent = installed ? 'Reinstall rpi-clone' : 'Install rpi-clone';
+  if (opt) {
+    opt.disabled = !installed;
+    opt.textContent = installed ? 'File sync (rpi-clone)' : 'File sync (rpi-clone) -- not installed';
+  }
+  if (sel && !installed && sel.value === 'rpiclone') { sel.value = 'dd'; applyCloneBackend(); scheduleDiskimgPreview('clone'); }
+}
+
+function applyCloneBackend() {
+  const sel = document.getElementById('diskimg-clone-backend');
+  const rpi = !!sel && sel.value === 'rpiclone';
+  ['diskimg-clone-verify', 'diskimg-clone-verify-algo', 'diskimg-clone-best-effort', 'diskimg-clone-direct-io', 'diskimg-clone-throttle'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = rpi;
+    if (rpi) { if (el.type === 'checkbox') el.checked = false; else if (id === 'diskimg-clone-throttle') el.value = ''; }
+  });
+  const q = document.getElementById('diskimg-clone-quiesce');
+  const fr = document.getElementById('diskimg-clone-freeze');
+  if (fr) {
+    fr.disabled = rpi || !(q && q.checked);
+    if (fr.disabled) fr.checked = false;
+  }
+  ['diskimg-clone-rpi-force', 'diskimg-clone-rpi-host'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = !rpi;
+  });
 }
 
 function renderDiskimgDriveStrip(key, drives) {
@@ -6538,6 +6691,7 @@ function renderDiskimgJobInto(elId, job) {
     const badges = [];
     if (job.frozen) badges.push('frozen');
     if (job.backend === 'ddrescue') badges.push('ddrescue');
+    if (job.backend === 'rpiclone') badges.push('rpi-clone file sync');
     if (job.best_effort_requested) badges.push('best effort');
     if (job.direct_io_requested) badges.push('direct I/O');
     if (job.throttle_rate_mb) badges.push(`throttled ${job.throttle_rate_mb}MB/s`);
@@ -6778,6 +6932,8 @@ async function updateDiskimgPreview(kind) {
     body.best_effort = (document.getElementById('diskimg-clone-best-effort') || {}).checked || false;
     body.direct_io = (document.getElementById('diskimg-clone-direct-io') || {}).checked || false;
     body.backend = (document.getElementById('diskimg-clone-backend') || {}).value || 'dd';
+    body.rpi_force = (document.getElementById('diskimg-clone-rpi-force') || {}).checked || false;
+    body.rpi_hostname = ((document.getElementById('diskimg-clone-rpi-host') || {}).value || '').trim();
     const cThrottle = (document.getElementById('diskimg-clone-throttle') || {}).value || '';
     body.throttle_rate_mb = cThrottle ? Number(cThrottle) : null;
   } else if (kind === 'format') {
@@ -7408,6 +7564,9 @@ _JS_ACTIONS = """function wireButtons() {
             if (!confirm(`Run ${btn.dataset.name}? This executes the script with instmon's own privileges.`)) { btn.disabled = false; return; }
             await postAction({action: 'run_script', name: btn.dataset.name, confirm: true});
           }
+        } else if (action === 'rpiclone_install') {
+          if (!confirm('Install rpi-clone? This installs any missing packages it needs (rsync, parted, fdisk, dosfstools ...) with apt, then downloads a fixed, checksum-checked rpi-clone from GitHub into /usr/local/sbin. No prompts -- output goes to the Execution Log.')) { btn.disabled = false; return; }
+          await postAction({action: 'rpiclone_install', confirm: true});
         } else if (action === 'edit') {
           await openEditor(btn.dataset.category, btn.dataset.name);
         } else if (action === 'download') {  // [PHASE 3]
@@ -7556,14 +7715,23 @@ _JS_ACTIONS = """function wireButtons() {
           const throttleEl = document.getElementById('diskimg-clone-throttle');
           const throttleRateMb = throttleEl && throttleEl.value ? Number(throttleEl.value) : null;
           if (backend === 'ddrescue' && throttleRateMb) { alert('The resilient (ddrescue) backend cannot be combined with a bandwidth throttle -- turn one off first.'); btn.disabled = false; return; }
+          const rpiForceEl = document.getElementById('diskimg-clone-rpi-force');
+          const rpiForce = backend === 'rpiclone' && !!rpiForceEl && rpiForceEl.checked;
+          const rpiHostEl = document.getElementById('diskimg-clone-rpi-host');
+          const rpiHost = backend === 'rpiclone' && rpiHostEl ? rpiHostEl.value.trim() : '';
+          if (backend === 'rpiclone') {
+            if (!confirm(`Clone this Pi onto ${dest} with rpi-clone? A first clone onto ${dest}${rpiForce ? ' -- and Force re-initialize, which is ticked --' : ' (or Force re-initialize)'} ERASES everything on it; a later clone onto the same card only syncs the changes.`)) { btn.disabled = false; return; }
+            if (cQuiesce && !confirm(offAirWarning())) { btn.disabled = false; return; }
+          } else {
           if (!confirm(`Clone this Pi's whole boot disk directly onto ${dest}? This ERASES everything currently on ${dest} and cannot be undone.`)) { btn.disabled = false; return; }
           if (cQuiesce && !confirm(offAirWarning())) { btn.disabled = false; return; }
           if (bestEffort && !confirm('Continue past read errors is ticked -- an unreadable source sector will be padded with nulls and the clone will still report success. Continue?')) { btn.disabled = false; return; }
           if (!confirm(`Really sure? ${dest} will become a byte-for-byte copy of this Pi's boot disk.`)) { btn.disabled = false; return; }
+          }
           await postDiskimg('/api/diskimg/clone/start', {
             confirm: true, dest_device: dest, verify: verify, verify_algo: verifyAlgo, quiesce: cQuiesce,
             freeze: freeze, best_effort: bestEffort, direct_io: directIo, backend: backend,
-            throttle_rate_mb: throttleRateMb,
+            throttle_rate_mb: throttleRateMb, rpi_force: rpiForce, rpi_hostname: rpiHost,
           });
         } else if (action === 'diskimg_restore_start') {
           const imgSel = document.getElementById('diskimg-restore-image');
@@ -7745,10 +7913,14 @@ document.getElementById('diskimg-refresh-btn').addEventListener('click', async f
     const el = document.getElementById(id);
     if (el) el.addEventListener(evt, () => scheduleDiskimgPreview('backup'));
   });
-['diskimg-clone-dest', 'diskimg-clone-quiesce', 'diskimg-clone-best-effort', 'diskimg-clone-direct-io', 'diskimg-clone-backend', 'diskimg-clone-throttle'].forEach(id => {
+['diskimg-clone-dest', 'diskimg-clone-quiesce', 'diskimg-clone-best-effort', 'diskimg-clone-direct-io', 'diskimg-clone-backend', 'diskimg-clone-throttle', 'diskimg-clone-rpi-force'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => scheduleDiskimgPreview('clone'));
 });
+(function() {
+  const el = document.getElementById('diskimg-clone-rpi-host');
+  if (el) el.addEventListener('input', () => scheduleDiskimgPreview('clone'));
+})();
 (function() {
   const el = document.getElementById('diskimg-format-dest');
   if (el) el.addEventListener('change', () => {
@@ -7808,6 +7980,11 @@ function _wireFreezeDependsOnQuiesce(prefix) {
 }
 _wireFreezeDependsOnQuiesce('backup');
 _wireFreezeDependsOnQuiesce('clone');
+['diskimg-clone-backend', 'diskimg-clone-quiesce'].forEach(id => {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener('change', applyCloneBackend);
+});
+applyCloneBackend();
 
 function _startApp() {
   applyLibraryCollapseState();
@@ -8368,6 +8545,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <select id="diskimg-clone-backend" title="Copy backend">
       <option value="dd" selected>Standard (dd)</option>
       <option value="ddrescue">Resilient (ddrescue)</option>
+      <option value="rpiclone" disabled>File sync (rpi-clone) -- not installed</option>
     </select>
     <select id="diskimg-clone-throttle" title="Bandwidth throttle">
       <option value="" selected>No throttle</option>
@@ -8376,8 +8554,15 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="20">20 MB/s</option>
     </select>
   </div>
+  <div class="row" style="margin-top:.3rem">
+    <span class="small muted" id="diskimg-rpiclone-status">rpi-clone: checking&hellip;</span>
+    <button data-action="rpiclone_install" id="diskimg-rpiclone-install-btn">Install rpi-clone</button>
+    <label class="small muted" style="white-space:nowrap" title="rpi-clone -f: repartition the destination and copy everything, even if it already holds a matching clone."><input type="checkbox" id="diskimg-clone-rpi-force" disabled> Force re-initialize</label>
+    <input type="text" id="diskimg-clone-rpi-host" placeholder="hostname for the clone (optional)" style="max-width:14rem" maxlength="63" disabled>
+  </div>
   <textarea id="diskimg-clone-cmd" class="diskimg-cmd placeholder" readonly rows="1" spellcheck="false">Pick a destination drive to preview the command</textarea>
   <div class="diskimg-quiesce-note">Pausing services reduces in-flight writes; it is not a filesystem snapshot. The image stays crash-consistent &mdash; ext4 replays its journal on the first boot of a restored card. sysmon keeps running so the node stays observable.</div>
+  <div class="small muted">File sync (rpi-clone): copies files instead of every block, so the destination only needs room for the space actually used, and cloning again onto the same card only copies what changed. The first clone onto a card (or Force re-initialize) partitions it and erases it. The clone gets its own partition IDs, and a new hostname if you enter one. No percentage is shown -- watch the console. Install rpi-clone downloads a fixed, checksum-checked version from GitHub and installs the packages it needs, with no prompts; its output goes to the Execution Log. Verify, Freeze, Continue past read errors, Direct I/O and the throttle don't apply to it.</div>
   <div class="small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default. Direct I/O: bypasses the page cache on the write side; offered here since Clone's destination is always a raw block device. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Continue past read errors, Direct I/O, or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed -- runs as a shell pipeline that does not currently survive an instmon restart.</div>
   <div id="diskimg-job-clone" style="margin-top:.5rem"></div>
   <div id="diskimg-console-clone" class="diskimg-console placeholder">(no job running)</div>
@@ -8477,6 +8662,7 @@ _ACTION_HANDLERS ={
 "delete":lambda self ,body :self ._action_delete (body ),
 "lib_lock":lambda self ,body :self ._action_lib_lock (body ),
 "run_script":lambda self ,body :self ._action_run_script (body ),
+"rpiclone_install":lambda self ,body :self ._action_rpiclone_install (body ),
 "save_alternate":lambda self ,body :self ._action_save_alternate (),
 "comms_restart":lambda self ,body :self ._action_comms_restart (body ),
 "reboot":lambda self ,body :self ._action_reboot (body ),
@@ -8644,6 +8830,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             "drives": _list_usb_drives(),
             "boot_disk_detected": bool(boot_disk),
             "deps": _diskimg_check_dependencies(),
+            "rpiclone": _rpiclone_status(),
         })
 
     def _route_diskimg_job(self):
@@ -9160,9 +9347,24 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         best_effort = bool(body.get("best_effort"))
         direct_io = bool(body.get("direct_io"))
         backend = body.get("backend") or "dd"
-        if backend not in ("dd", "ddrescue"):
-            self._error_json(400, "Unknown 'backend' -- must be 'dd' or 'ddrescue'")
+        if backend not in ("dd", "ddrescue", "rpiclone"):
+            self._error_json(400, "Unknown 'backend' -- must be 'dd', 'ddrescue' or 'rpiclone'")
             return
+        rpiclone_args = None
+        if backend == "rpiclone":
+            if not _rpiclone_status()["installed"]:
+                self._error_json(400, "rpi-clone is not installed -- press Install rpi-clone on the Clone card first.")
+                return
+            if body.get("freeze"):
+                self._error_json(400, "Freeze filesystem can't be used with File sync (rpi-clone) -- it would hang rpi-clone. Untick it.")
+                return
+            rpi_host = (body.get("rpi_hostname") or "").strip()
+            if rpi_host and not _RPICLONE_HOST_RE.fullmatch(rpi_host):
+                self._error_json(400, "Hostname for the clone: letters, digits and dashes only, up to 63 characters.")
+                return
+            rpiclone_args = _rpiclone_args(bool(body.get("rpi_force")), rpi_host or None)
+            verify = best_effort = direct_io = False
+            body["throttle_rate_mb"] = None
         throttle_rate_mb = body.get("throttle_rate_mb")
         if throttle_rate_mb is not None:
             try:
@@ -9212,7 +9414,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not src_size:
             self._error_json(500, "Could not determine the boot disk's size")
             return
-        if match["size"] < src_size:
+        if backend != "rpiclone" and match["size"] < src_size:
             self._error_json(
                 400,
                 f"{match['path']} ({fmt_bytes(match['size'])}) is smaller than the boot disk "
@@ -9223,11 +9425,13 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         quiesce = bool(body.get("quiesce"))
         subprocess.run(["sync"], capture_output=True, timeout=30)
         ok, result = _diskimg_start_job(
-            "clone", src_path, match["path"], src_path, match["path"], src_size,
+            "clone", src_path, match["path"], src_path, match["path"],
+            0 if backend == "rpiclone" else src_size,
             verify_requested=verify, quiesce_requested=quiesce,
             best_effort_requested=best_effort, direct_io_requested=direct_io,
             backend=backend, throttle_rate_mb=throttle_rate_mb,
             freeze_requested=freeze, verify_algo=verify_algo,
+            rpiclone_args=rpiclone_args,
         )
         if not ok:
             self._error_json(409, result)
@@ -9241,6 +9445,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 + (" Using the resilient (ddrescue) backend." if backend == "ddrescue" else "")
                 + (" Continuing past read errors (best effort)." if (best_effort and backend != "ddrescue") else "")
                 + (" Using direct I/O." if (direct_io and backend != "ddrescue") else "")
+                + (" Using File sync (rpi-clone): no percentage is shown, watch the console." if backend == "rpiclone" else "")
                 + (f" Throttled to {throttle_rate_mb:g} MB/s." if throttle_rate_mb else "")
             ),
             "level": "ok",
@@ -9935,6 +10140,36 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (code ,payload ["error"])
             return 
         self ._send_json (200 ,payload )
+
+    def _action_rpiclone_install(self, body):
+        if not body.get("confirm"):
+            self._error_json(400, "Installing rpi-clone requires confirm:true in the request body")
+            return
+        if _diskimg_job_running():
+            self._error_json(409, "A disk-image job is running -- wait for it to finish before installing rpi-clone.")
+            return
+        name = _RPICLONE_SCRIPT_NAME
+        with _running_scripts_lock:
+            if name in _running_scripts:
+                self._send_json(409, {"error": f"{name} is already running",
+                                      "message": f"{name} is already running -- watch the log below.", "level": "warn"})
+                return
+            _running_scripts.add(name)
+        path = os.path.join(CONFIG_DIR, "instmon_rpiclone_install.sh")
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(path, "w") as f:
+                f.write(_rpiclone_install_script())
+            os.chmod(path, 0o700)
+        except OSError as exc:
+            with _running_scripts_lock:
+                _running_scripts.discard(name)
+            self._error_json(500, f"Could not write the rpi-clone install script: {exc}")
+            return
+        threading.Thread(target=run_script_bg, args=(path, name), daemon=True).start()
+        self._send_json(200, {"started": name,
+                              "message": "Installing rpi-clone -- watch the Execution Log for its output.",
+                              "level": "info"})
 
     def _action_run_script (self ,body ):
         if not body .get ("confirm"):
