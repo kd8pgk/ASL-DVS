@@ -3689,9 +3689,9 @@ let hs = {out: '', mic: '', btn: 'listen'};
 try { Object.assign(hs, JSON.parse(localStorage.getItem('nlHeadset') || '{}')); } catch (e) {}
 let hsTx = false, outLost = 0, devCount = -1, lastDevChange = 0;
 const PTT_GUARDS = [30, 60, 90, 120, 180], TAP_IGNORE_MS = 500, GUARD_WARN_SEC = 10;
-const RX_GAP_MS = 4000, RX_QUIET_MS = 300, RX_ACTIVE_DB = -50, OWN_TX_IGNORE_MS = 2500;
+const RX_GAP_MS = 4000, RX_QUIET_MS = 300, RX_ACTIVE_DB = -50, OWN_TX_IGNORE_MS = 2500, RX_LOCAL_TRUST_MS = 2000, RX_HOLD_MS = 600;
 let ptt = {mode: 'hold', guard: 60, gap: false}, pttSrc = '', tapAt = 0, guardWarned = false, guardStop = '';
-let rxSeenAt = -1e9, gapShown = '';
+let rxSeenAt = -1e9, rxLocalAt = -1e9, rxStatusOn = false, gapShown = '';
 try {
   const s = JSON.parse(localStorage.getItem('nlPtt') || 'null');
   if (s && (s.mode === 'hold' || s.mode === 'tap') && PTT_GUARDS.includes(Number(s.guard))) { ptt = {mode: s.mode, guard: Number(s.guard), gap: s.gap === true}; pttSrc = 'phone'; }
@@ -4012,7 +4012,6 @@ async function pollStatus() {
   $('st-feed-t').textContent = d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
   $('st-feed-w').title = 'Feed from Asterisk: ' + feedTxt;
   $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
-  if (d.audio_active && !playing) rxSeen();
   if (!talking) $('st-level').textContent = fmtDb(d.peak_db);
   if (d.jitter_ms) jitterSec = d.jitter_ms / 1000;
   if (!playing && !talking) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
@@ -4022,7 +4021,7 @@ async function pollStatus() {
   $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
   $('s-tx-w').title = tx.keyed ? 'Transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs) : (tx.ready ? 'Nobody is transmitting' : 'Transmit node not set up');
   busyText = tx.keyed && !talking && !keyed && performance.now() - ownUnkeyAt > 2500 ? 'Busy: ' + tx.who + ' ' + fmtSecs(tx.secs) : '';
-  if (busyText) rxSeen();
+  rxStatus(!!d.audio_active || !!busyText);
   pttLabel();
   totSec = tx.tot || totSec;
   $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
@@ -5252,23 +5251,38 @@ function pttUp(ev) {
   pttUi(wsReady ? 'ready' : 'off');
 }
 
+function ownRecent(now) { return talking || keyed || now - ownUnkeyAt < OWN_TX_IGNORE_MS; }
+
 function rxSeen() {
   const now = performance.now();
-  if (talking || keyed || now - ownUnkeyAt < OWN_TX_IGNORE_MS) return;
-  rxSeenAt = now;
+  if (ownRecent(now)) return;
+  rxSeenAt = rxLocalAt = now;
 }
 
-function gapLeft() { return ptt.gap ? Math.max(0, RX_GAP_MS - (performance.now() - rxSeenAt)) : 0; }
+function rxStatus(on) {
+  const now = performance.now();
+  if (on && !ownRecent(now)) { rxStatusOn = true; return; }
+  if (!rxStatusOn) return;
+  rxStatusOn = false;
+  if (now - rxLocalAt > RX_LOCAL_TRUST_MS && !ownRecent(now)) rxSeenAt = Math.max(rxSeenAt, now - RX_HOLD_MS);
+}
+
+function rxRef() {
+  const now = performance.now();
+  return rxStatusOn && now - rxLocalAt > RX_LOCAL_TRUST_MS ? now : rxSeenAt;
+}
+
+function gapLeft() { return ptt.gap ? Math.max(0, RX_GAP_MS - (performance.now() - rxRef())) : 0; }
 
 function gapTick() {
   const left = gapLeft();
-  const since = performance.now() - rxSeenAt;
+  const since = performance.now() - rxRef();
   const txt = left > 0 && since >= RX_QUIET_MS ? String(Math.min(3, Math.floor(left / 1000))) : '';
   if (txt === gapShown) return;
   gapShown = txt;
   const el = $('gap-cd'), box = $('spec-box');
   const showBox = !!txt && box.offsetParent !== null && box.clientHeight > 0;
-  if (showBox) el.style.fontSize = Math.max(14, Math.round(box.clientHeight * 0.42)) + 'px';
+  if (showBox) el.style.fontSize = Math.max(14, Math.round(Math.min(box.clientHeight * 0.5 * 0.8, box.clientWidth * 0.25 / 0.6 * 0.8))) + 'px';
   el.textContent = showBox ? txt : '';
   el.classList.toggle('hidden', !showBox);
   if (!talking) $('ptt-time').textContent = txt && !showBox ? txt : '';

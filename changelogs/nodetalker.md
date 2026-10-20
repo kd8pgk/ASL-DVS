@@ -13,9 +13,10 @@ Current file: `nodetalker_v0_6_4_20261020.py`. Before 0.6.0 the tool was Node Li
     in white at 25 % opacity (75 % see-through).
   - The button reads *Wait...*. Pressing it, tapping it or using the headset
     button says how long is left.
-  - **What counts as receive:** while listening, the audio as it arrives
-    (above −50 dBFS); otherwise the node's RX light. Someone else
-    transmitting from Node Talker counts too.
+  - **What counts as receive:** the node's RX light (the node's audio
+    before any cleanup, the same signal the Pi's own busy lockout uses), plus,
+    while listening, the audio as it arrives (above −50 dBFS), which times the
+    end exactly. Someone else transmitting from Node Talker counts too.
   - Your own transmission and the 2.5 s after it don't start the wait.
   - With the spectrum hidden, the count shows beside the Talk button.
   - Saved per phone, with the rest of the push-to-talk settings, and backed
