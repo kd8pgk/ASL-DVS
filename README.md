@@ -41,8 +41,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_75_20261019.py` | `instmon_v2_62_0_20261020.py` |
-| `VERSION` | `6.13.88` | `6.13.75-pi02w` | `2.60.0` |
+| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_75_20261019.py` | `instmon_v2_63_0_20261020.py` |
+| `VERSION` | `6.13.88` | `6.13.75-pi02w` | `2.63.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
@@ -84,7 +84,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_62_0_20261020.py --install
+   sudo python3 instmon_v2_63_0_20261020.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -115,7 +115,7 @@ script and its changelog are no longer in the repo.
 
 Node Listen is a phone-friendly page for one node on your home network: it
 plays the node's audio about half a second behind, transmits with
-push-to-talk, and connects to up to 10 favorites. It is optional. The installer (7.2.0 and later) asks before it
+push-to-talk, and connects or tunes up to 15 favorites. It is optional. The installer (7.2.0 and later) asks before it
 installs it on a node that doesn't have it (non-interactive: set
 `INSTALL_NODELISTEN=1`), and always updates it once it is installed. instmon
 (2.58.0 and later) lists it with the other tools: its library, GitHub Updates
@@ -123,7 +123,7 @@ and Full Update, which updates it only where it is installed. It also installs
 on its own:
 
 ```
-sudo python3 nodelisten_v0_4_20_20261020.py --install
+sudo python3 nodelisten_v0_5_0_20261020.py --install
 ```
 
 Then open `http://<pi-address>:8993` (it moves you to `https://`; the
@@ -152,18 +152,39 @@ when you let go, and PTT is refused while the node is busy unless you turn
 that off. Browsers only allow the microphone on an `https://` page, which is
 why HTTPS is on by default.
 
-**Favorites:** the Connect tab offers only the (up to) 10 favorites set on the
-Setup tab, where the Dashboard's ASL and EchoLink favorites can be picked from
-a list. Connect and Disconnect use `rpt cmd <node> ilink 3` / `ilink 1`;
-Disconnect drops linked favorites only. Links are always made from the main node
-(0.4.13 and later). When Node Controller (pi02w 9.3.89 or
-later) runs and the main node connects, Node Listen asks the Dashboard to do it
-(a local call with the key in `/etc/asl_dvs/local_api.key`), so the Dashboard
-switches to its ASL or Echo tab, drops any digital bridge and counts the link
-as its own; without the Dashboard it connects directly. An opt-in **Tune** card
-sets the mic and listen gains (-12 to +12 dB) and the listen buffer.
-`--uninstall` removes the
-`outstreamcmd` line and node 1921 too.
+**Favorites** (0.5.0 and later): the Connect tab offers only the (up to) 15
+favorites set on the Setup tab: ASL, EchoLink, DMR, STFU, YSF, P25, NXDN, D-STAR
+and M17. They are kept in `/etc/asl_dvs/nodelisten_favorites.conf` (mode 0600)
+in Node Controller's `asl_dvs.conf` format (`[ASL]`, `[ECHO]`, `[DMR_SERVERS]`,
+`[DMR_<NETWORK>]`, `[STFU]`, `[YSF]`, `[P25]`, `[NXDN]`, `[DSTAR]`, `[M17]`), with
+up to 10 DMR networks (`name|password|address:port|url`) whose tune info each
+DMR favorite uses. The Dashboard's favorites and DMR networks can be copied in.
+`nodelisten_favorites.json` keeps a copy of the ASL, EchoLink and M17 favorites
+(up to 10) for older versions.
+
+- **ASL and EchoLink:** Connect and Disconnect use `rpt cmd <node> ilink 3` /
+  `ilink 1`; Disconnect drops linked favorites only. Links are always made from
+  the main node. When Node Controller (pi02w 9.3.89 or later) runs and the main
+  node connects, Node Listen asks the Dashboard to do it (a local call with the
+  key in `/etc/asl_dvs/local_api.key`).
+- **Solo (no Node Controller running):** Node Listen tunes DVSwitch and M17
+  itself, as Node Controller does. A DVSwitch favorite starts the mode's
+  gateway service if needed, runs `dvswitch.sh tune disconnect`, `mode <MODE>`,
+  for DMR `tune <password>@<address:port>` (skipped when that network is
+  already joined), then `tune <tg>`, and links the digital bridge node. An M17
+  favorite writes `USRP2M17.ini` (address from `M17Hosts.json`), restarts
+  `usrp2m17` and links the M17 bridge node. One digital favorite is on the air
+  at a time; tuning one drops linked ASL/EchoLink favorites. The bridge nodes
+  are found in `rpt.conf` (from the Analog_Bridge and USRP2M17 ports), and the
+  M17 callsign in `USRP2M17.ini`; the **Digital** card on the Setup tab can set
+  them, edit the DMR networks and download or upload the favorites file.
+- **With Node Controller running:** ASL, EchoLink and M17 go through it, and
+  DVSwitch favorites are tuned on its page.
+
+instmon (2.63.0 and later) keeps `nodelisten*.conf` in its Config library and
+installs each one under its own name. An opt-in **Tune** card sets the mic and
+listen gains (-12 to +12 dB) and the listen buffer. `--uninstall` removes the
+`outstreamcmd` line and node 1921 too, and keeps the settings and favorites.
 
 ## Node Listen for AMP
 
@@ -336,10 +357,10 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_93_20261019.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_88_20261019.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_75_20261019.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_62_0_20261020.py` | common |
+| `instmon_v2_63_0_20261020.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodelisten_v0_4_20_20261020.py` | common |
+| `nodelisten_v0_5_0_20261020.py` | common |
 | `amp_nodelisten_v0_2_1_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_3_1_20261020.sh` | common |
 | `uninstall_all_v1_6_0_20261018.sh` | common |

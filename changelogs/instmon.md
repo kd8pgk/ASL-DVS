@@ -1,6 +1,27 @@
 # instmon changelog
 
-Current file: `instmon_v2_62_0_20261020.py`. Newest entries first.
+Current file: `instmon_v2_63_0_20261020.py`. Newest entries first.
+
+## 2.63.0 (2026-10-20)
+
+- **Node Listen config files in the Config library.**
+  - `nodelisten*.conf` files can be uploaded, found by the home-folder scan
+    and kept in the library.
+  - **Install Config** puts each file under its own name:
+    - `nodelisten_favorites*.conf` becomes
+      `/etc/asl_dvs/nodelisten_favorites.conf`;
+    - any other `nodelisten*.conf` becomes `/etc/asl_dvs/nodelisten.conf`
+      (refused without a `[nodelisten]` section);
+    - everything else is still installed as `asl_dvs.conf`.
+  - Installing a Node Listen file restarts Node Listen, not the Dashboard,
+    with the same check and rollback.
+  - The "installed" mark compares each library file with the live file it
+    would replace.
+- **Save the active configs into the library.** The Config group gets a
+  **Save <file>** button for each live config that exists (`asl_dvs.conf`,
+  `nodelisten.conf`, `nodelisten_favorites.conf`). Each saves a dated copy
+  (for example `nodelisten_favorites_20261020_101010.conf`), which installs
+  back to the same file.
 
 ## 2.62.0 (2026-10-20)
 

@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.20"
+VERSION = "0.5.0"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -1321,7 +1321,10 @@ def build_status(full):
         st["node"] = node
         ok, links = rpt_links(node)
         st["links"], st["links_ok"] = links, ok
-        st["m17"] = m17_current() if _has_m17(fav_load()) else ""
+        nc = nc_running(cached=True)
+        st["control"] = "nc" if nc else "solo"
+        st["m17"] = m17_current() if nc and _has_m17(fav_load()) else ""
+        st["tuned"] = solo_status(node)
         tx = tx_state(node)
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
@@ -1336,7 +1339,35 @@ def build_status(full):
 AST_BIN = os.environ.get("NODELISTEN_ASTERISK", "asterisk")
 DASH_CONF = os.environ.get("NODELISTEN_DASH_CONF", "/etc/asl_dvs/asl_dvs.conf")
 FAV_PATH = os.path.join(CONFIG_DIR, "nodelisten_favorites.json")
-FAV_MAX = 10
+FAV_CONF_PATH = os.path.join(CONFIG_DIR, "nodelisten_favorites.conf")
+TUNED_PATH = os.path.join(CONFIG_DIR, "nodelisten_tuned.json")
+FAV_MAX = 15
+FAV_JSON_MAX = 10
+DMR_NET_MAX = 10
+DVS_MODES = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
+FAV_MODES = ("ASL", "EchoLink") + DVS_MODES + ("M17",)
+DVS_SEARCH_PATHS = tuple(p for p in (os.environ.get("NODELISTEN_DVSWITCH", ""), "/opt/MMDVM_Bridge/dvswitch.sh",
+                                     "/usr/local/sbin/dvswitch.sh", "/var/lib/dvswitch/dvswitch.sh") if p)
+DVS_TIMEOUT = {"mode": 40, "tune": 40}
+DVS_OTHER_TIMEOUT = 10
+DVS_SETTLE_SEC = 0.4
+DVS_DISCONNECT = "disconnect"
+DSTAR_UNLINK = "       U"
+DSTAR_BASE_LEN = 6
+GATEWAY_SERVICES = {"YSF": "ysfgateway.service", "P25": "p25gateway.service", "NXDN": "nxdngateway.service",
+                    "DSTAR": "ircddbgatewayd.service", "STFU": "stfu.service"}
+GATEWAY_WAIT_SEC = 5.0
+AB_INI = os.environ.get("NODELISTEN_AB_INI", "/opt/Analog_Bridge/Analog_Bridge.ini")
+M17_INI = os.environ.get("NODELISTEN_M17_INI", "/opt/USRP2M17/USRP2M17.ini")
+M17_HOSTS = os.environ.get("NODELISTEN_M17_HOSTS", "/var/lib/mmdvm/M17Hosts.json")
+M17_SERVICE = "usrp2m17"
+M17_NET_PORTS = (17010, 17000)
+M17_USRP_PORTS = (32008, 34008)
+M17_GAIN_DB = 3
+DEFAULT_BRIDGES = ("1999", "1917")
+BLANK_NAME, BLANK_ADDR = "blank", "000000"
+_DMR_ADDR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:\d{1,5}$")
+_CALLSIGN_RE = re.compile(r"^[A-Z0-9][A-Z0-9/-]{2,9}$")
 TLS_DIR = os.path.join(CONFIG_DIR, "nodelisten_tls")
 TLS_CERT = os.path.join(TLS_DIR, "cert.pem")
 TLS_KEY = os.path.join(TLS_DIR, "key.pem")
@@ -1443,51 +1474,65 @@ def _lstats_invalidate():
         _lstats_cache["t"] = 0.0
 
 
-def dashboard_conf():
-    out = {"asl_node": "", "port": 8989, "bridges": set(), "favs": []}
+MODE_LABEL = {"DSTAR": "D-STAR"}
+
+
+def _file_key(path):
     try:
-        with open(DASH_CONF, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+        st = os.stat(path)
     except OSError:
-        return out
-    section = ""
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or line.startswith(";"):
-            continue
-        if line.startswith("[") and line.endswith("]"):
-            section = line[1:-1].strip().upper()
-            continue
-        if section == "CONFIG" and "=" in line:
-            k, _, v = line.partition("=")
-            k, v = k.strip(), v.strip()
-            if k == "asl_node" and v.isdigit():
-                out["asl_node"] = v
-            elif k == "port" and v.isdigit():
-                out["port"] = int(v)
-            elif k in ("bridge_node", "bridge_nodes"):
-                out["bridges"].update(x.strip() for x in v.split(",") if x.strip())
-        elif section == "M17" and line.count("|") >= 3 and len(out["favs"]) < 200:
-            name, base, module, ip = [x.strip() for x in line.split("|")[:4]]
-            if name.lower() != "blank" and ip and ip != "000000":
-                try:
-                    out["favs"].append(_norm_fav({"mode": "M17", "num": base, "module": module,
-                                                  "label": _CALL_TRIM.sub(" ", name)[:40]}))
-                except ValueError:
-                    pass
-        elif section in ("ASL", "ECHO") and "|" in line and not line.lower().startswith("network_url"):
-            name, _, num = line.rpartition("|")
-            num = num.strip()
-            if num.isdigit() and len(num) <= 7 and int(num) > 0 and len(out["favs"]) < 200:
-                out["favs"].append({"mode": "ASL" if section == "ASL" else "EchoLink",
-                                    "num": str(int(num)), "label": _CALL_TRIM.sub(" ", name.strip())[:40]})
-    out["favs"] = [f for f in out["favs"] if not (f["mode"] == "ASL" and f["num"] in out["bridges"])]
-    return out
+        return None
+    return (st.st_mtime_ns, st.st_size)
 
 
-def main_node():
-    n = _cfg_get("node")
-    return n or dashboard_conf()["asl_node"]
+def _label(value, fallback):
+    s = _CALL_TRIM.sub(" ", str(value or "")).replace("|", "/").strip()[:40]
+    return s or fallback
+
+
+def _server_key(name):
+    return name.upper().replace(" ", "_").replace("+", "PLUS")
+
+
+def _mode_of(value):
+    m = str(value or "").strip().upper().replace("-", "")
+    if m.startswith("ECHO"):
+        return "EchoLink"
+    if m in ("ASL", "M17") or m in DVS_MODES:
+        return m
+    raise ValueError(f"Unknown mode {str(value)[:20]!r}")
+
+
+def _mode_safe(f):
+    try:
+        return _mode_of(f.get("mode", "ASL") or "ASL")
+    except (ValueError, AttributeError):
+        return None
+
+
+def _clean_tg(value, mode):
+    tg = str(value or "").strip()
+    if not tg:
+        raise ValueError(f"{MODE_LABEL.get(mode, mode)}: the talkgroup or address is empty")
+    if len(tg) > 64 or _CALL_TRIM.search(tg) or "|" in tg:
+        raise ValueError(f"{MODE_LABEL.get(mode, mode)} {tg[:20]}: up to 64 characters, with no | or control characters")
+    return tg
+
+
+def dstar_tune_str(value):
+    tg = str(value or "").strip().upper()
+    if " " in tg:
+        base, _, mod = tg.rpartition(" ")
+        if len(mod) == 1 and mod.isalpha():
+            tg = base.strip().ljust(DSTAR_BASE_LEN) + mod + "L"
+    elif len(tg) >= 2 and tg[-1] != "L":
+        tg += "L"
+    elif 5 <= len(tg) < 8:
+        tg = tg[:-2].strip().ljust(DSTAR_BASE_LEN) + tg[-2] + "L"
+    m = re.fullmatch(r"([A-Z0-9]{3,6}) *([A-Z])L", tg)
+    if not m:
+        raise ValueError(f"D-STAR {str(value).strip()[:20]}: a reflector or gateway and its module, for example REF001 C")
+    return m.group(1).ljust(DSTAR_BASE_LEN) + m.group(2) + "L"
 
 
 def _norm_m17_fav(f):
@@ -1499,36 +1544,230 @@ def _norm_m17_fav(f):
         raise ValueError("M17 reflector must look like M17-USA (letters, digits and dashes, up to 16)")
     if mod != "@ALL" and not re.fullmatch(r"[A-Z]", mod):
         raise ValueError(f"M17 module for {ref} must be a letter A-Z or @ALL")
-    label = _CALL_TRIM.sub(" ", str(f.get("label", ""))).strip()[:40]
-    return {"mode": "M17", "num": ref, "module": mod, "label": label or f"M17 {ref} {mod}"}
+    out = {"mode": "M17", "num": ref, "module": mod, "label": _label(f.get("label"), f"M17 {ref} {mod}")}
+    ip = str(f.get("ip", "") or "").strip()
+    if ip and ip != BLANK_ADDR and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.:-]{0,252}", ip):
+        out["ip"] = ip
+    return out
 
 
-def _norm_fav(f):
+def _norm_fav(f, nets=None):
     if not isinstance(f, dict):
         raise ValueError("bad favorite")
-    if str(f.get("mode", "")).strip().upper() == "M17":
+    mode = _mode_of(f.get("mode", "ASL") or "ASL")
+    if mode == "M17":
         return _norm_m17_fav(f)
-    mode = "EchoLink" if str(f.get("mode", "")).lower().startswith("echo") else "ASL"
+    if mode in DVS_MODES:
+        tg = _clean_tg(f.get("num"), mode)
+        if mode == "DSTAR":
+            tg = dstar_tune_str(tg)
+        out = {"mode": mode, "num": tg}
+        if mode == "DMR":
+            net = str(f.get("net", "") or "").strip()
+            if not net:
+                raise ValueError(f"DMR {tg}: pick its network")
+            if nets is not None:
+                hit = next((n for n in nets if n["name"].lower() == net.lower()), None)
+                if hit is None:
+                    raise ValueError(f"DMR {tg}: network {net} is not in the DMR network list")
+                net = hit["name"]
+            out["net"] = net
+        out["label"] = _label(f.get("label"), fav_name(out))
+        return out
     num = str(f.get("num", "")).strip()
     if not num.isdigit() or int(num) <= 0 or len(num) > (6 if mode == "EchoLink" else 7):
         raise ValueError(f"{mode} number must be digits ({'up to 6' if mode == 'EchoLink' else 'up to 7'})")
     if mode == "ASL" and num == TX_NODE:
         raise ValueError(f"Node {TX_NODE} is the transmit node, not a favorite")
-    label = _CALL_TRIM.sub(" ", str(f.get("label", ""))).strip()[:40]
-    return {"mode": mode, "num": str(int(num)), "label": label or f"{mode} {int(num)}"}
+    return {"mode": mode, "num": str(int(num)), "label": _label(f.get("label"), f"{mode} {int(num)}")}
+
+
+def _norm_net(n):
+    if not isinstance(n, dict):
+        raise ValueError("bad DMR network")
+    name = _CALL_TRIM.sub(" ", str(n.get("name", "") or "")).strip()
+    if not name or len(name) > 24 or any(c in name for c in "|[]#;="):
+        raise ValueError("A DMR network needs a name: up to 24 characters, with no | [ ] # ; =")
+    addr = str(n.get("address", "") or "").strip()
+    if not _DMR_ADDR_RE.fullmatch(addr) or not 0 < int(addr.rsplit(":", 1)[1]) < 65536:
+        raise ValueError(f"{name}: the address must be host:port, for example tgif.network:62031")
+    pw = str(n.get("password", "") or "").strip()
+    if not pw:
+        raise ValueError(f"{name}: the network needs its password")
+    if len(pw) > 64 or _CALL_TRIM.search(pw) or "|" in pw:
+        raise ValueError(f"{name}: the password must be up to 64 characters, with no |")
+    url = str(n.get("url", "") or "").strip()
+    if url and (not url.startswith(("http://", "https://")) or len(url) > 200 or "|" in url or _CALL_TRIM.search(url)):
+        raise ValueError(f"{name}: the network link must start with http:// or https://")
+    return {"name": name, "password": pw, "address": addr, "url": url}
+
+
+def nets_public(nets):
+    return [{"name": n["name"], "address": n["address"], "url": n["url"], "has_password": bool(n["password"])} for n in nets]
 
 
 def fav_target(f):
     if f["mode"] == "M17":
         return f"{f['num']}|{f['module']}"
+    if f["mode"] in DVS_MODES:
+        return f"{f['mode']}|{f.get('net', '')}|{f['num']}"
     return f["num"] if f["mode"] == "ASL" else "3" + f["num"].zfill(6)
 
 
 def fav_name(f):
+    if f["mode"] == "DMR":
+        return f"DMR {f.get('net', '')} {f['num']}"
+    if f["mode"] == "DSTAR":
+        return "D-STAR " + " ".join(f["num"].split())
     return f"{f['mode']} {f['num']}" + (f" {f['module']}" if f["mode"] == "M17" else "")
 
 
-def fav_load():
+def _fav_section(f):
+    if f["mode"] == "DMR":
+        return "DMR_" + _server_key(f["net"])
+    return {"ASL": "ASL", "EchoLink": "ECHO"}.get(f["mode"], f["mode"])
+
+
+def _fav_line(f):
+    if f["mode"] == "M17":
+        return f"{f['label']}|{f['num']}|{f['module']}|{f.get('ip', '')}"
+    return f"{f['label']}|{f['num']}"
+
+
+def parse_fav_conf(text, fav_limit=FAV_MAX, net_limit=DMR_NET_MAX):
+    nets, cfg, bad, rows = [], {}, [], []
+    section = ""
+    for no, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith("#") or line.startswith(";"):
+            continue
+        if line.startswith("[") and "]" in line:
+            section = line[1:line.index("]")].strip().upper()
+            continue
+        if section == "CONFIG":
+            if "=" in line:
+                k, _, v = line.partition("=")
+                cfg[k.strip().lower()] = v.strip()
+            continue
+        if "|" not in line:
+            continue
+        parts = [p.strip() for p in line.split("|")]
+        if section == "DMR_SERVERS":
+            if len(parts) < 3:
+                continue
+            try:
+                n = _norm_net({"name": parts[0], "password": parts[1], "address": parts[2],
+                               "url": parts[3] if len(parts) > 3 else ""})
+            except ValueError as exc:
+                bad.append(f"line {no}: {exc}")
+                continue
+            if any(x["name"].lower() == n["name"].lower() for x in nets):
+                bad.append(f"line {no}: network {n['name']} is listed twice")
+            elif len(nets) < net_limit:
+                nets.append(n)
+            continue
+        name, val = parts[0], parts[1]
+        if not name or name.lower() == BLANK_NAME or val in ("", BLANK_ADDR):
+            continue
+        if section.startswith("DMR_"):
+            f = {"mode": "DMR", "num": val, "label": name, "key": section[4:]}
+        elif section in ("ASL", "ECHO"):
+            f = {"mode": "ASL" if section == "ASL" else "EchoLink", "num": val, "label": name}
+        elif section in DVS_MODES and section != "DMR":
+            f = {"mode": section, "num": val, "label": name}
+        elif section == "M17":
+            if len(parts) >= 4:
+                f = {"mode": "M17", "num": parts[1], "module": parts[2] or "@ALL", "ip": parts[3], "label": name}
+            else:
+                f = {"mode": "M17", "num": name, "module": "@ALL", "ip": val, "label": name}
+        else:
+            continue
+        rows.append((no, f))
+    keys = {_server_key(n["name"]): n["name"] for n in nets}
+    favs, seen, more = [], set(), 0
+    for no, f in rows:
+        if "key" in f:
+            key = f.pop("key")
+            if key not in keys:
+                bad.append(f"line {no}: [DMR_{key}] has no network in [DMR_SERVERS]")
+                continue
+            f["net"] = keys[key]
+        try:
+            f = _norm_fav(f, nets)
+        except ValueError as exc:
+            bad.append(f"line {no}: {exc}")
+            continue
+        t = fav_target(f)
+        if t in seen:
+            continue
+        seen.add(t)
+        if len(favs) < fav_limit:
+            favs.append(f)
+        else:
+            more += 1
+    return {"favs": favs, "nets": nets, "cfg": cfg, "bad": bad, "more": more}
+
+
+def render_fav_conf(favs, nets, cfg):
+    out = ["# nodelisten_favorites.conf: Node Listen favorites in Node Controller's asl_dvs.conf format.",
+           "# The Connect tab lists the favorites in the order they appear here.", "",
+           "[CONFIG]"]
+    for k in ("callsign", "bridge_nodes"):
+        out.append(f"{k}={cfg.get(k, '')}")
+    out += ["", "[DMR_SERVERS]", "# name|password|address:port|network_url"]
+    for n in nets:
+        out.append(f"{n['name']}|{n['password']}|{n['address']}|{n['url']}")
+    section = None
+    for f in favs:
+        sec = _fav_section(f)
+        if sec != section:
+            out += ["", f"[{sec}]"]
+            section = sec
+        out.append(_fav_line(f))
+    return "\n".join(out) + "\n"
+
+
+_dash_cache = {"key": None, "v": None}
+
+
+def dashboard_conf():
+    key = _file_key(DASH_CONF)
+    if key is not None and key == _dash_cache["key"]:
+        return _dash_cache["v"]
+    out = {"asl_node": "", "port": 8989, "bridges": set(), "bridge_list": [], "callsign": "", "favs": [], "nets": []}
+    try:
+        with open(DASH_CONF, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return out
+    d = parse_fav_conf(text, fav_limit=200, net_limit=50)
+    cfg = d["cfg"]
+    if cfg.get("asl_node", "").isdigit():
+        out["asl_node"] = cfg["asl_node"]
+    if cfg.get("port", "").isdigit():
+        out["port"] = int(cfg["port"])
+    listed = cfg.get("bridge_nodes") or cfg.get("bridge_node") or ""
+    out["bridge_list"] = [x.strip() for x in listed.split(",")]
+    for k in ("bridge_node", "bridge_nodes"):
+        out["bridges"].update(x.strip() for x in cfg.get(k, "").split(",") if x.strip())
+    call = cfg.get("callsign", "").strip().upper()
+    out["callsign"] = call if _CALLSIGN_RE.fullmatch(call) else ""
+    out["favs"] = [f for f in d["favs"] if not (f["mode"] == "ASL" and f["num"] in out["bridges"])]
+    out["nets"] = d["nets"]
+    _dash_cache.update(key=key, v=out)
+    return out
+
+
+def main_node():
+    n = _cfg_get("node")
+    return n or dashboard_conf()["asl_node"]
+
+
+_fav_lock = threading.RLock()
+_fav_cache = {"key": None, "data": None}
+
+
+def _json_favs():
     try:
         with open(FAV_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -1536,11 +1775,81 @@ def fav_load():
         return []
     out = []
     for f in data if isinstance(data, list) else []:
+        if not isinstance(f, dict) or _mode_safe(f) not in ("ASL", "EchoLink", "M17"):
+            continue
         try:
             out.append(_norm_fav(f))
         except ValueError:
             continue
-    return out[:FAV_MAX]
+    return out[:FAV_JSON_MAX]
+
+
+def _write_fav_doc(favs, nets, cfg):
+    with _fav_lock:
+        _atomic_write(FAV_CONF_PATH, render_fav_conf(favs, nets, cfg), 0o600)
+        _fav_cache["key"] = None
+        mirror = []
+        for f in favs:
+            if f["mode"] in ("ASL", "EchoLink", "M17") and len(mirror) < FAV_JSON_MAX:
+                mirror.append({k: f[k] for k in ("mode", "num", "module", "label") if k in f})
+        try:
+            _atomic_write(FAV_PATH, json.dumps(mirror, indent=1) + "\n", 0o644)
+        except OSError as exc:
+            log_event(f"Could not write {FAV_PATH} (the copy for older versions): {exc}", "warn")
+
+
+def fav_doc():
+    with _fav_lock:
+        key = _file_key(FAV_CONF_PATH)
+        if key is None:
+            old = _json_favs()
+            if old or os.path.exists(FAV_PATH):
+                try:
+                    _write_fav_doc(old, [], {})
+                    log_event(f"Favorites moved to {FAV_CONF_PATH} ({len(old)})", "ok")
+                except OSError as exc:
+                    return {"favs": old, "nets": [], "cfg": {}, "bad": [], "more": 0, "error": str(exc)}
+            key = _file_key(FAV_CONF_PATH)
+            if key is None:
+                return {"favs": [], "nets": [], "cfg": {}, "bad": [], "more": 0}
+        if key == _fav_cache["key"]:
+            return _fav_cache["data"]
+        try:
+            with open(FAV_CONF_PATH, "r", encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError as exc:
+            return {"favs": _json_favs(), "nets": [], "cfg": {}, "bad": [], "more": 0, "error": str(exc)}
+        data = parse_fav_conf(text)
+        for b in data["bad"][:5]:
+            log_event(f"Favorites file: skipped {b}", "warn")
+        if data["more"]:
+            log_event(f"Favorites file: {data['more']} favorite(s) past the first {FAV_MAX} skipped", "warn")
+        _fav_cache.update(key=key, data=data)
+        return data
+
+
+def fav_load():
+    return fav_doc()["favs"]
+
+
+def nets_load():
+    return fav_doc()["nets"]
+
+
+def favcfg():
+    return fav_doc()["cfg"]
+
+
+def _check_favs(clean):
+    bridges = {v for k, v in bridge_nodes().items() if k in ("digital", "m17") and v}
+    seen = set()
+    for f in clean:
+        if f["mode"] == "ASL" and f["num"] in bridges:
+            raise ValueError(f"Node {f['num']} is a bridge node, not a favorite")
+        key = fav_target(f)
+        if key in seen:
+            raise ValueError(f"{fav_name(f)} is listed twice.")
+        seen.add(key)
 
 
 def fav_save(items):
@@ -1548,22 +1857,267 @@ def fav_save(items):
         return {"ok": False, "error": "favorites must be a list"}
     if len(items) > FAV_MAX:
         return {"ok": False, "error": f"At most {FAV_MAX} favorites."}
+    with _fav_lock:
+        doc = fav_doc()
+        nets, added = list(doc["nets"]), []
+        for f in items:
+            if not isinstance(f, dict) or _mode_safe(f) != "DMR":
+                continue
+            net = str(f.get("net", "") or "").strip().lower()
+            if not net or any(n["name"].lower() == net for n in nets):
+                continue
+            hit = next((n for n in dashboard_conf()["nets"] if n["name"].lower() == net), None)
+            if hit is not None and len(nets) < DMR_NET_MAX:
+                nets.append(hit)
+                added.append(hit["name"])
+        try:
+            clean = [_norm_fav(f, nets) for f in items]
+            _check_favs(clean)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        try:
+            _write_fav_doc(clean, nets, doc["cfg"])
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not save: {exc}"}
+    log_event(f"Favorites saved ({len(clean)})" + (f"; DMR network {', '.join(added)} copied from Node Controller" if added else ""), "ok")
+    msg = f"Saved {len(clean)} favorite(s)."
+    if added:
+        msg += f" Copied DMR network {', '.join(added)} from Node Controller."
+    return {"ok": True, "message": msg, "favs": clean}
+
+
+def nets_save(rows):
+    if not isinstance(rows, list):
+        return {"ok": False, "error": "networks must be a list"}
+    if len(rows) > DMR_NET_MAX:
+        return {"ok": False, "error": f"At most {DMR_NET_MAX} DMR networks."}
+    with _fav_lock:
+        doc = fav_doc()
+        old = {n["name"]: n for n in doc["nets"]}
+        clean, renames = [], {}
+        try:
+            for r in rows:
+                if not isinstance(r, dict):
+                    raise ValueError("bad DMR network")
+                orig = str(r.get("orig", "") or "")
+                pw = str(r.get("password", "") or "")
+                if not pw.strip() and orig in old:
+                    pw = old[orig]["password"]
+                n = _norm_net(dict(r, password=pw))
+                if orig in old and orig != n["name"]:
+                    renames[orig] = n["name"]
+                clean.append(n)
+            names, keys = set(), set()
+            for n in clean:
+                if n["name"].lower() in names or _server_key(n["name"]) in keys:
+                    raise ValueError(f"Network {n['name']} is listed twice.")
+                names.add(n["name"].lower())
+                keys.add(_server_key(n["name"]))
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        favs = [dict(f, net=renames.get(f["net"], f["net"])) if f["mode"] == "DMR" else f for f in doc["favs"]]
+        used = next((f for f in favs if f["mode"] == "DMR" and f["net"] not in {n["name"] for n in clean}), None)
+        if used is not None:
+            return {"ok": False, "error": f"Favorite {used['label']} uses network {used['net']}: remove that favorite first."}
+        try:
+            _write_fav_doc(favs, clean, doc["cfg"])
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not save: {exc}"}
+    _dvs_now["dmr"] = ""
+    log_event(f"DMR networks saved ({len(clean)})", "ok")
+    return {"ok": True, "message": f"Saved {len(clean)} DMR network(s).", "nets": nets_public(clean)}
+
+
+def nets_import():
+    dash = dashboard_conf()["nets"]
+    if not dash:
+        return {"ok": False, "error": f"No DMR networks found in {DASH_CONF}."}
+    with _fav_lock:
+        doc = fav_doc()
+        nets = list(doc["nets"])
+        have = {n["name"].lower() for n in nets} | {_server_key(n["name"]) for n in nets}
+        added = []
+        for n in dash:
+            if n["name"].lower() in have or _server_key(n["name"]) in have or len(nets) >= DMR_NET_MAX:
+                continue
+            nets.append(n)
+            added.append(n["name"])
+            have.update((n["name"].lower(), _server_key(n["name"])))
+        if not added:
+            return {"ok": True, "message": "Every Node Controller DMR network is already in the list (or the list is full).",
+                    "nets": nets_public(nets)}
+        try:
+            _write_fav_doc(doc["favs"], nets, doc["cfg"])
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not save: {exc}"}
+    log_event(f"DMR networks copied from Node Controller: {', '.join(added)}", "ok")
+    return {"ok": True, "message": f"Copied {len(added)} DMR network(s) from Node Controller: {', '.join(added)}.",
+            "nets": nets_public(nets)}
+
+
+def _norm_bridge(value, what):
+    v = str(value or "").strip()
+    if not v:
+        return ""
+    if not v.isdigit() or len(v) > 7 or int(v) <= 0:
+        raise ValueError(f"{what} must be a node number")
+    if v == TX_NODE:
+        raise ValueError(f"Node {TX_NODE} is the transmit node, not a bridge node")
+    if v == main_node():
+        raise ValueError(f"Node {v} is the main node, not a bridge node")
+    return str(int(v))
+
+
+def _norm_callsign(value):
+    c = str(value or "").strip().upper()
+    if c and not _CALLSIGN_RE.fullmatch(c):
+        raise ValueError("The callsign must be 3 to 10 letters, digits, / or -")
+    return c
+
+
+def digital_save(body):
     try:
-        clean = [_norm_fav(f) for f in items]
+        d = _norm_bridge(body.get("digital_bridge"), "The digital bridge node")
+        m = _norm_bridge(body.get("m17_bridge"), "The M17 bridge node")
+        call = _norm_callsign(body.get("callsign"))
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
-    seen = set()
-    for f in clean:
-        key = fav_target(f)
-        if key in seen:
-            return {"ok": False, "error": f"{fav_name(f)} is listed twice."}
-        seen.add(key)
+    if d and d == m:
+        return {"ok": False, "error": "The digital and M17 bridge nodes must differ."}
+    with _fav_lock:
+        doc = fav_doc()
+        cfg = dict(doc["cfg"], callsign=call, bridge_nodes=f"{d},{m}" if d or m else "")
+        try:
+            _write_fav_doc(doc["favs"], doc["nets"], cfg)
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not save: {exc}"}
+    _bridge_cache["t"] = -60.0
+    log_event("Digital settings saved", "ok")
+    return {"ok": True, "message": "Saved."}
+
+
+def fav_file_text():
+    doc = fav_doc()
+    return render_fav_conf(doc["favs"], doc["nets"], doc["cfg"])
+
+
+def fav_file_put(text):
+    if not isinstance(text, str) or not text.strip():
+        return {"ok": False, "error": "The file is empty."}
+    if len(text) > 48 * 1024:
+        return {"ok": False, "error": "The file is too big for a favorites file."}
+    d = parse_fav_conf(text)
+    if d["bad"]:
+        return {"ok": False, "error": "Not loaded: " + "; ".join(d["bad"][:3]) + (" ..." if len(d["bad"]) > 3 else "")}
+    if d["more"]:
+        return {"ok": False, "error": f"Not loaded: the file has more than {FAV_MAX} favorites."}
     try:
-        _atomic_write(FAV_PATH, json.dumps(clean, indent=1) + "\n", 0o644)
+        call = _norm_callsign(d["cfg"].get("callsign"))
+        b = (d["cfg"].get("bridge_nodes", "").split(",") + ["", ""])[:2]
+        dg, m = _norm_bridge(b[0], "The digital bridge node"), _norm_bridge(b[1], "The M17 bridge node")
+        _check_favs(d["favs"])
+    except ValueError as exc:
+        return {"ok": False, "error": f"Not loaded: {exc}"}
+    cfg = {"callsign": call, "bridge_nodes": f"{dg},{m}" if dg or m else ""}
+    try:
+        _write_fav_doc(d["favs"], d["nets"], cfg)
     except OSError as exc:
         return {"ok": False, "error": f"Could not save: {exc}"}
-    log_event(f"Favorites saved ({len(clean)})", "ok")
-    return {"ok": True, "message": f"Saved {len(clean)} favorite(s).", "favs": clean}
+    _bridge_cache["t"] = -60.0
+    _dvs_now["dmr"] = ""
+    log_event(f"Favorites file loaded ({len(d['favs'])} favorites, {len(d['nets'])} DMR networks)", "ok")
+    return {"ok": True, "message": f"Loaded {len(d['favs'])} favorite(s) and {len(d['nets'])} DMR network(s)."}
+
+
+def _ini_read(path):
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return None
+    out, sec = {}, ""
+    for raw in text.splitlines():
+        line = raw.split(";", 1)[0].strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and "]" in line:
+            sec = line[1:line.index("]")].strip().lower()
+            continue
+        if "=" in line:
+            k, _, v = line.partition("=")
+            out.setdefault(sec, {})[k.strip().lower()] = v.strip()
+    return out
+
+
+def _ports_of(d, sec, a, b):
+    try:
+        return frozenset((int(d[sec][a]), int(d[sec][b])))
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+_USRP_RX_RE = re.compile(r"^\s*rxchannel\s*=>?\s*USRP/[^:\s]+:(\d+):(\d+)", re.I)
+
+
+def _usrp_nodes():
+    try:
+        lines, stanzas = read_rpt()
+    except OSError:
+        return {}
+    out = {}
+    for i, s in enumerate(stanzas):
+        if not _is_node_name(s["name"]) or s["name"] == TX_NODE:
+            continue
+        end = stanzas[i + 1]["header"] if i + 1 < len(stanzas) else len(lines)
+        for ln in lines[s["header"] + 1:end]:
+            m = _USRP_RX_RE.match(ln.split(";", 1)[0])
+            if m:
+                out.setdefault(frozenset((int(m.group(1)), int(m.group(2)))), s["name"])
+    return out
+
+
+_bridge_cache = {"t": -60.0, "v": None}
+
+
+def bridge_nodes(max_age=30.0):
+    if _bridge_cache["v"] is not None and time.monotonic() - _bridge_cache["t"] < max_age:
+        return _bridge_cache["v"]
+    setv = ([x.strip() for x in str(favcfg().get("bridge_nodes", "")).split(",")] + ["", ""])[:2]
+    usrp = _usrp_nodes()
+    ab = _ini_read(AB_INI) or {}
+    m17 = _ini_read(M17_INI) or {}
+    dash = dashboard_conf()["bridge_list"]
+    ports = (_ports_of(ab, "usrp", "txport", "rxport") or frozenset((32001, 34001)),
+             _ports_of(m17, "usrp network", "dstport", "localport") or frozenset(M17_USRP_PORTS))
+    out = {}
+    for i, kind in enumerate(("digital", "m17")):
+        if setv[i].isdigit():
+            node, src = setv[i], "set here"
+        elif ports[i] in usrp:
+            node, src = usrp[ports[i]], "rpt.conf"
+        elif len(dash) > i and dash[i].isdigit():
+            node, src = dash[i], "Node Controller"
+        elif DEFAULT_BRIDGES[i] in usrp.values():
+            node, src = DEFAULT_BRIDGES[i], "default"
+        else:
+            node, src = "", ""
+        out[kind], out[kind + "_src"] = node, src
+    _bridge_cache.update(t=time.monotonic(), v=out)
+    return out
+
+
+def callsign_now():
+    call = str(favcfg().get("callsign", "")).strip().upper()
+    if _CALLSIGN_RE.fullmatch(call):
+        return call, "set here"
+    ini = (_ini_read(M17_INI) or {}).get("m17 network", {})
+    call = str(ini.get("callsign", "")).strip().upper()
+    if _CALLSIGN_RE.fullmatch(call):
+        return call, "USRP2M17.ini"
+    call = dashboard_conf()["callsign"]
+    if call:
+        return call, "Node Controller"
+    return "", ""
 
 
 def port_open(port, timeout=0.5):
@@ -1672,7 +2226,348 @@ def _m17_error(r):
     return f"Node Controller: {err}"
 
 
+def nc_running(cached=False):
+    port = dashboard_conf()["port"]
+    return port_open_cached(port, ttl=5.0) if cached else port_open(port)
+
+
+def dvs_path():
+    return next((p for p in DVS_SEARCH_PATHS if os.path.isfile(p)), "")
+
+
+_dvs_now = {"mode": "", "dmr": ""}
+
+
+def dvs(sub, arg=None):
+    path = dvs_path()
+    if not path:
+        return False, "dvswitch.sh was not found"
+    if sub == "mode":
+        _dvs_now["dmr"] = ""
+    cmd = ["bash", path, sub] + ([str(arg)] if arg is not None else [])
+    tmo = DVS_TIMEOUT.get(sub, DVS_OTHER_TIMEOUT)
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=tmo)
+    except subprocess.TimeoutExpired:
+        return False, f"dvswitch.sh {sub} took longer than {tmo} s; it may still finish"
+    except OSError as exc:
+        return False, str(exc)
+    return r.returncode == 0, ((r.stdout or "") + (r.stderr or "")).strip()
+
+
+def _svc_active(svc):
+    return _systemctl("is-active", "--quiet", svc, timeout=10).returncode == 0
+
+
+def _gateway_up(mode):
+    svc = GATEWAY_SERVICES.get(mode)
+    if not svc or _svc_active(svc):
+        return True, ""
+    r = _systemctl("start", svc, timeout=30)
+    deadline = time.monotonic() + GATEWAY_WAIT_SEC
+    while True:
+        if _svc_active(svc):
+            log_event(f"Started {svc} for {MODE_LABEL.get(mode, mode)}", "ok")
+            return True, ""
+        if time.monotonic() >= deadline:
+            return False, f"{svc} did not start: {(r.stderr or r.stdout or 'not active').strip()[:160]}"
+        time.sleep(0.25)
+
+
+def service_states(units):
+    r = _systemctl("show", "-p", "Id,LoadState,ActiveState", *units, timeout=15)
+    out = {u: "unknown" for u in units}
+    for block in (r.stdout or "").split("\n\n"):
+        kv = dict(ln.split("=", 1) for ln in block.splitlines() if "=" in ln)
+        unit = kv.get("Id", "")
+        if unit in out:
+            out[unit] = "missing" if kv.get("LoadState") == "not-found" else kv.get("ActiveState", "unknown")
+    return out
+
+
+def _linked(node, peer, max_age=0):
+    _, links = rpt_links(node, max_age=max_age)
+    return any(l["node"] == peer for l in links)
+
+
+_tune_lock = threading.Lock()
+_solo = {"mode": "", "target": "", "name": "", "bridge": ""}
+
+
+def _solo_set(**kw):
+    _solo.update(mode="", target="", name="", bridge="")
+    _solo.update({k: str(v) for k, v in kw.items() if k in _solo})
+    try:
+        _atomic_write(TUNED_PATH, json.dumps(_solo) + "\n", 0o644)
+    except OSError as exc:
+        log_event(f"Could not write {TUNED_PATH}: {exc}", "warn")
+
+
+def _solo_load():
+    try:
+        with open(TUNED_PATH, "r", encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if isinstance(d, dict):
+        _solo.update({k: str(d.get(k, "") or "")[:80] for k in _solo})
+
+
+def _m17_ini_text(callsign, name, addr, module):
+    return (
+        "[M17 Network]\n"
+        f"Callsign={callsign}\n"
+        f"Address={addr}\n"
+        f"Name={name} {module}\n"
+        f"LocalPort={M17_NET_PORTS[0]}\n"
+        f"DstPort={M17_NET_PORTS[1]}\n"
+        f"GainAdjustdB={M17_GAIN_DB}\n"
+        "Daemon=1\n"
+        "Debug=0\n"
+        "\n"
+        "[USRP Network]\n"
+        "Address=127.0.0.1\n"
+        f"DstPort={M17_USRP_PORTS[0]}\n"
+        f"LocalPort={M17_USRP_PORTS[1]}\n"
+        f"GainAdjustdB={M17_GAIN_DB}\n"
+        "Debug=0\n"
+        "\n"
+        "[Log]\n"
+        "DisplayLevel=0\n"
+        "FileLevel=0\n"
+        "FilePath=/var/log/usrp\n"
+        "FileRoot=USRP2M17\n"
+    )
+
+
+def _m17_park():
+    try:
+        _atomic_write(M17_INI, _m17_ini_text(callsign_now()[0], "DISCONNECTED", "0.0.0.0", "A"), 0o644)
+    except OSError as exc:
+        log_event(f"Could not write {M17_INI}: {exc}", "warn")
+        return
+    _systemctl("restart", M17_SERVICE, timeout=30)
+
+
+def _m17_present():
+    return os.path.isfile(M17_INI) or os.path.isfile("/opt/USRP2M17/USRP2M17")
+
+
+def m17_lookup(ref, module):
+    try:
+        with open(M17_HOSTS, "r", encoding="utf-8", errors="replace") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError):
+        return "", ""
+    for e in (doc.get("reflectors") if isinstance(doc, dict) else None) or []:
+        if not isinstance(e, dict) or str(e.get("designator", "")).strip().upper() != ref:
+            continue
+        if e.get("port") not in (None, "") and str(e.get("port")) != "17000":
+            continue
+        addr = str(e.get("dns") or "").strip() or str(e.get("ipv4") or "").strip()
+        mods = e.get("modules")
+        pub = {str(x).strip().upper()[:1] for x in mods} if isinstance(mods, list) else \
+            set(re.sub(r"[^A-Z]", "", mods.upper())) if isinstance(mods, str) else set()
+        if pub and module != "@ALL" and module not in pub:
+            return "", f"{ref} does not publish module {module} (it has {', '.join(sorted(pub))})"
+        return addr, ""
+    return "", ""
+
+
+def _drop_fav_links(node):
+    targets = {fav_target(f) for f in fav_load() if f["mode"] in ("ASL", "EchoLink")}
+    _, links = rpt_links(node, max_age=0)
+    dropped = [l["node"] for l in links if l["node"] in targets]
+    for peer in dropped:
+        ilink(node, 1, peer)
+    return dropped
+
+
+def _leave(node, next_kind):
+    mode, bridge = _solo["mode"], _solo["bridge"]
+    if mode in DVS_MODES:
+        if mode == "DSTAR":
+            dvs("tune", DSTAR_UNLINK)
+        if next_kind != "dvs":
+            dvs("tune", DVS_DISCONNECT)
+            if bridge:
+                ilink(node, 1, bridge)
+    elif mode == "M17" and next_kind != "m17":
+        _m17_park()
+        if bridge:
+            ilink(node, 1, bridge)
+    if mode:
+        _solo_set()
+
+
+def _busy():
+    return {"ok": False, "error": "Another connect or disconnect is still running; try again in a moment."}
+
+
+def solo_release(node):
+    if not _solo["mode"]:
+        return
+    with _tune_lock:
+        _leave(node, "asl")
+
+
+def _hide(text, secret):
+    return (text or "").replace(secret, "***") if secret else (text or "")
+
+
+def solo_dvs(f, node):
+    label = MODE_LABEL.get(f["mode"], f["mode"])
+    if nc_running():
+        return {"ok": False, "error": f"Node Controller is running, so it does the DVSwitch tuning: tune {fav_name(f)} on its {label} tab."}
+    if not dvs_path():
+        return {"ok": False, "error": f"dvswitch.sh was not found, so {label} can't be tuned here."}
+    b = bridge_nodes(0)
+    bridge = b["digital"]
+    if not bridge:
+        return {"ok": False, "error": "No digital bridge node was found: set it on the Setup tab (Digital card)."}
+    net = None
+    if f["mode"] == "DMR":
+        net = next((n for n in nets_load() if n["name"] == f.get("net")), None)
+        if net is None:
+            return {"ok": False, "error": f"DMR network {f.get('net')} is not in the network list (Setup tab, Digital card)."}
+    if not _tune_lock.acquire(timeout=1.0):
+        return _busy()
+    try:
+        _leave(node, "dvs")
+        dropped = _drop_fav_links(node)
+        if b["m17"] and b["m17"] != bridge and _linked(node, b["m17"]):
+            ilink(node, 1, b["m17"])
+        ok, why = _gateway_up(f["mode"])
+        if not ok:
+            return {"ok": False, "error": why}
+        if not _linked(node, bridge):
+            ok, out = ilink(node, 3, bridge)
+            if not ok:
+                return {"ok": False, "error": f"Asterisk refused to link bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
+        dvs("tune", DVS_DISCONNECT)
+        time.sleep(DVS_SETTLE_SEC)
+        if _dvs_now["mode"] != f["mode"]:
+            ok, out = dvs("mode", f["mode"])
+            _dvs_now["mode"] = f["mode"] if ok else ""
+            if not ok:
+                log_event(f"dvswitch.sh mode {f['mode']} failed: {out[:160]}", "warn")
+            time.sleep(DVS_SETTLE_SEC)
+        if net is not None:
+            tune = f"{net['password']}@{net['address']}"
+            if _dvs_now["dmr"] != tune:
+                ok, out = dvs("tune", tune)
+                if not ok:
+                    return {"ok": False, "error": f"Could not join DMR network {net['name']}: {_hide(out, net['password'])[:160]}"}
+                _dvs_now["dmr"] = tune
+                log_event(f"Joined DMR network {net['name']} ({net['address']})", "ok")
+                time.sleep(1.0)
+        ok, out = dvs("tune", f["num"])
+        if not ok:
+            return {"ok": False, "error": f"Tune to {fav_name(f)} failed: {out[:160] or 'no answer from dvswitch.sh'}"}
+        _solo_set(mode=f["mode"], target=fav_target(f), name=fav_name(f), bridge=bridge)
+    finally:
+        _tune_lock.release()
+    log_event(f"Tuned {fav_name(f)}; bridge node {bridge} linked to node {node}"
+              + (f" (dropped {', '.join(dropped)})" if dropped else ""), "ok")
+    return {"ok": True, "message": f"Tuned {fav_name(f)}. Bridge node {bridge} is linked to node {node}."}
+
+
+def solo_m17(f, node):
+    if not _m17_present():
+        return {"ok": False, "error": "USRP2M17 was not found, so M17 can't be tuned here."}
+    b = bridge_nodes(0)
+    bridge = b["m17"]
+    if not bridge:
+        return {"ok": False, "error": "No M17 bridge node was found: set it on the Setup tab (Digital card)."}
+    call = callsign_now()[0]
+    if not call:
+        return {"ok": False, "error": "M17 needs your callsign: set it on the Setup tab (Digital card)."}
+    addr, err = m17_lookup(f["num"], f["module"])
+    if err:
+        return {"ok": False, "error": err}
+    addr = addr or f.get("ip", "")
+    if not addr:
+        return {"ok": False, "error": f"{f['num']} is not in {M17_HOSTS} and its favorite has no address."}
+    if not _tune_lock.acquire(timeout=1.0):
+        return _busy()
+    try:
+        _leave(node, "m17")
+        dropped = _drop_fav_links(node)
+        if dvs_path():
+            dvs("tune", DVS_DISCONNECT)
+        if b["digital"] and b["digital"] != bridge and _linked(node, b["digital"]):
+            ilink(node, 1, b["digital"])
+        try:
+            _atomic_write(M17_INI, _m17_ini_text(call, f["num"], addr, f["module"]), 0o644)
+        except OSError as exc:
+            return {"ok": False, "error": f"Could not write {M17_INI}: {exc}"}
+        r = _systemctl("restart", M17_SERVICE, timeout=30)
+        if r.returncode != 0:
+            return {"ok": False, "error": f"{M17_SERVICE} did not restart: {(r.stderr or r.stdout).strip()[:160]}"}
+        if not _linked(node, bridge):
+            ok, out = ilink(node, 3, bridge)
+            if not ok:
+                return {"ok": False, "error": f"Asterisk refused to link bridge node {bridge}: {out.strip()[:160] or 'no answer'}"}
+        _solo_set(mode="M17", target=fav_target(f), name=fav_name(f), bridge=bridge)
+    finally:
+        _tune_lock.release()
+    log_event(f"Tuned {fav_name(f)} ({addr}); bridge node {bridge} linked to node {node}"
+              + (f" (dropped {', '.join(dropped)})" if dropped else ""), "ok")
+    return {"ok": True, "message": f"Tuned {fav_name(f)}. Bridge node {bridge} is linked to node {node}."}
+
+
+def solo_disconnect(node):
+    if not _tune_lock.acquire(timeout=1.0):
+        return _busy()
+    try:
+        name = _solo["name"]
+        _leave(node, "off")
+    finally:
+        _tune_lock.release()
+    log_event(f"Disconnected {name}", "ok")
+    return name
+
+
+_handover_noted = {"v": False}
+
+
+def solo_status(node):
+    if not _solo["target"]:
+        return ""
+    if nc_running(cached=True):
+        if not _handover_noted["v"]:
+            _handover_noted["v"] = True
+            log_event(f"Node Controller is running; it now does the tuning ({_solo['name']} was tuned here)", "info")
+        _solo_set()
+        return ""
+    _handover_noted["v"] = False
+    ok, links = rpt_links(node)
+    if ok and not any(l["node"] == _solo["bridge"] for l in links):
+        return ""
+    return _solo["target"]
+
+
+def digital_info():
+    b = bridge_nodes(0)
+    call, call_src = callsign_now()
+    cfg = favcfg()
+    setv = ([x.strip() for x in str(cfg.get("bridge_nodes", "")).split(",")] + ["", ""])[:2]
+    m17_unit = M17_SERVICE + ".service"
+    states = service_states(sorted(set(GATEWAY_SERVICES.values())) + [m17_unit])
+    services = {MODE_LABEL.get(m, m): states.get(s, "unknown") for m, s in GATEWAY_SERVICES.items()}
+    services["USRP2M17"] = states.get(m17_unit, "unknown")
+    return {"ok": True, "control": "nc" if nc_running() else "solo", "dvswitch": dvs_path(),
+            "analog_bridge": os.path.isfile(AB_INI), "m17": _m17_present(), "m17_hosts": os.path.isfile(M17_HOSTS),
+            "services": services, "bridges": b,
+            "set": {"digital_bridge": setv[0], "m17_bridge": setv[1], "callsign": str(cfg.get("callsign", ""))},
+            "callsign": call, "callsign_src": call_src, "nets": nets_public(nets_load()), "net_max": DMR_NET_MAX,
+            "dash_nets": len(dashboard_conf()["nets"]), "tuned": _solo["name"] if _solo["target"] else "",
+            "file": FAV_CONF_PATH}
+
+
 def m17_connect(f, node):
+    if not nc_running():
+        return solo_m17(f, node)
     dash_node = dashboard_conf()["asl_node"]
     if not dash_node:
         return {"ok": False, "error": "M17 goes through Node Controller; set its node first."}
@@ -1727,6 +2622,8 @@ def fav_connect(index):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
+    if f["mode"] in DVS_MODES:
+        return solo_dvs(f, node)
     if f["mode"] == "M17":
         return m17_connect(f, node)
     if node == dashboard_conf()["asl_node"]:
@@ -1737,6 +2634,7 @@ def fav_connect(index):
                 return {"ok": False, "error": f"Node Controller: {r['error']}"}
             log_event(f"Connect {fav_name(f)} through Node Controller", "ok")
             return _link_outcome(f, node, " (through Node Controller)")
+    solo_release(node)
     ok, out = ilink(node, 3, fav_target(f))
     if not ok:
         return {"ok": False, "error": f"Asterisk refused: {out.strip()[:200] or 'no answer'}"}
@@ -1757,8 +2655,14 @@ def fav_disconnect(index=None):
     targets = {fav_target(f): f for f in favs}
     _, links = rpt_links(node, max_age=0)
     hit = [l["node"] for l in links if l["node"] in targets]
-    m17 = m17_current(0) if _has_m17(favs) else ""
     done = []
+    if _solo["target"] and _solo["target"] in targets and not nc_running():
+        name = solo_disconnect(node)
+        if isinstance(name, dict):
+            return name
+        done.append(name)
+        _lstats_invalidate()
+    m17 = m17_current(0) if _has_m17(favs) and not done else ""
     if m17 in targets:
         r = dash_call({"action": "m17-disconnect"})
         _m17_status["t"] = -M17_STATUS_TTL
@@ -2452,6 +3356,12 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 .fav-row button{min-height:40px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--red);cursor:pointer}
 @media (max-width:420px){header{gap:6px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px}header .ver{display:none}.pill{padding:0 10px}}
 @media (max-width:480px){.fav-row{grid-template-columns:92px 108px minmax(0,1fr) 40px}}
+.fav-row .fav-net{grid-column:2/-1}
+.net-row{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.3fr) minmax(0,.9fr) 44px;gap:6px;margin:6px 0}
+.net-row input{min-width:0;width:100%}
+.net-row .net-url{grid-column:1/-1}
+.net-row button{min-height:40px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--red);cursor:pointer}
+@media (max-width:480px){.net-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 40px}.net-row .net-pw{grid-column:1/3}}
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
@@ -2460,7 +3370,12 @@ let authed = false, publicListen = false, dashPort = 8989, tab = 'listen', lastL
 let ctx = null, gainNode = null, ctrl = null, playing = false, nextT = 0;
 let mediaDest = null, wakeLock = null, nodeLabel = '';
 let pend = new Float32Array(1600), pendN = 0, peakLocal = 0, retryTimer = null;
-let favs = [], favEdit = [], dashFavs = [], favMax = 10;
+let favs = [], favEdit = [], dashFavs = [], favMax = 15, favNets = [], favModes = ['ASL', 'EchoLink', 'M17'];
+let nets = [], netMax = 10;
+const FAV_HINT = {ASL: ['Node', 'Node number', 'numeric'], EchoLink: ['Number', 'EchoLink number', 'numeric'],
+  DMR: ['TG', 'DMR talkgroup', 'numeric'], STFU: ['TG', 'STFU talkgroup', 'numeric'], YSF: ['Reflector', 'YSF reflector', 'text'],
+  P25: ['TG', 'P25 talkgroup', 'numeric'], NXDN: ['TG', 'NXDN talkgroup', 'numeric'],
+  DSTAR: ['REF001 C', 'D-STAR reflector and module', 'text'], M17: ['M17-USA A', 'Reflector and module', 'text']};
 let ws = null, wsReady = false, wsRetry = null, talking = false, keyed = false, keyedAt = 0, totSec = 120;
 let micPending = false, jitterSec = 0.25, sysmonPort = null;
 let capCtx = null, micStream = null, capSrc = null, capNode = null, capSink = null, workletReady = false, preKey = [], talkTimer = null;
@@ -2645,7 +3560,7 @@ function addOption(sel, value, text) {
 
 function sendOp(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op})); }
 
-const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'chk', 'lvl', 'mic', 'hs', 'play', 'log'];
+const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'dig', 'chk', 'lvl', 'mic', 'hs', 'play', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -2656,6 +3571,7 @@ function foldSet(k, open) {
   b.querySelector('.fold-i').textContent = open ? '▾' : '▸';
   if (!open) return;
   if (k === 'fav') loadDashFavs();
+  if (k === 'dig') loadDigital();
   if (k === 'log') pollLog();
   if (k === 'hs') hsDevices();
 }
@@ -2689,7 +3605,7 @@ function showTab(name) {
   });
   try { localStorage.setItem('nlTab', name); } catch (e) {}
   if (name === 'connect') loadFavs();
-  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); micSummary(); playSummary(); if (chkShown && !chk) chkShow(chkShown); }
+  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); if (chkShown && !chk) chkShow(chkShown); }
   if (name === 'listen') openTalk();
   document.querySelector('main').classList.toggle('fit', name === 'listen');
   specKick();
@@ -2763,13 +3679,21 @@ function fmtDb(db) { return db <= -119 ? '-inf' : ((Math.round(db) || 0) + ' dBF
 function dbPct(db) { return Math.max(0, Math.min(100, (db + 60) / 60 * 100)); }
 function fmtSecs(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
-function favNum(f) { return f.mode === 'M17' ? f.num + (f.module ? ' ' + f.module : '') : f.num; }
+function favNum(f) {
+  if (f.mode === 'M17') return f.num + (f.module ? ' ' + f.module : '');
+  if (f.mode === 'DMR') return (f.net ? f.net + ' ' : '') + f.num;
+  if (f.mode === 'DSTAR') return f.num.trim().replace(/ +/, ' ');
+  return f.num;
+}
+function modeName(m) { return m === 'DSTAR' ? 'D-STAR' : m; }
+const DVS = ['DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR'];
 
 let linkedTargets = new Set();
 function linkedFavs(d) {
   const links = (d && d.links) || [];
   const set = new Set(links.map((l) => l.node));
   if (d && d.m17) set.add(d.m17);
+  if (d && d.tuned) set.add(d.tuned);
   return favs.filter((f) => set.has(f.target));
 }
 
@@ -4023,7 +4947,9 @@ async function loadFavs() {
   favMax = d.max || 10;
   const sel = $('c-fav'), keep = sel.value;
   sel.innerHTML = '';
-  favs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + favNum(f) + '  ·  ' + f.label));
+  favNets = d.nets || [];
+  favModes = d.modes || favModes;
+  favs.forEach((f, i) => addOption(sel, String(i), modeName(f.mode) + ' ' + favNum(f) + '  ·  ' + f.label));
   if (keep && Number(keep) < favs.length) sel.value = keep;
   $('c-empty').classList.toggle('hidden', favs.length > 0);
   $('c-pick').classList.toggle('hidden', favs.length === 0);
@@ -4032,7 +4958,7 @@ async function loadFavs() {
 
 function showSelected() {
   const f = favs[Number($('c-fav').value)];
-  $('c-mode').textContent = f ? f.mode : '';
+  $('c-mode').textContent = f ? modeName(f.mode) : '';
   $('c-num').textContent = f ? favNum(f) : '';
   $('c-label').textContent = f ? f.label : '';
   connectLabel();
@@ -4056,7 +4982,7 @@ async function favConnect() {
   const f = favs[Number(i)];
   const off = selectedLinked();
   $('c-connect').disabled = true;
-  note('c-msg', '', off ? 'Disconnecting...' : f && f.mode === 'M17' ? 'Connecting...' : 'Connecting... (checking the link for up to 15 s)');
+  note('c-msg', '', off ? 'Disconnecting...' : f && (f.mode === 'M17' || DVS.includes(f.mode)) ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
   try { setMsg('c-msg', await post(off ? '/api/disconnect' : '/api/connect', {index: Number(i)})); }
   finally { $('c-connect').disabled = false; }
   if (off) setTimeout(pollStatus, 1000); else pollStatus();
@@ -4134,13 +5060,15 @@ async function txDisable() {
   setMsg('tx-msg', await post('/api/tx/disable', {})); loadTx();
 }
 
-function favCopy(f) { return {mode: f.mode, num: f.num, module: f.module, label: f.label}; }
+function favCopy(f) { return {mode: f.mode, num: f.num, module: f.module, net: f.net, ip: f.ip, label: f.label}; }
 
 async function loadFavEditor() {
   const d = await api('/api/favorites');
   if (!d.ok) return;
   favEdit = (d.favs || []).map(favCopy);
-  favMax = d.max || 10;
+  favMax = d.max || 15;
+  favNets = d.nets || [];
+  favModes = d.modes || favModes;
   drawFavEditor();
   if (foldOpen('fav')) loadDashFavs();
 }
@@ -4151,7 +5079,7 @@ async function loadDashFavs() {
   const sel = $('fe-dash');
   sel.innerHTML = '';
   addOption(sel, '', dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites found');
-  dashFavs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + favNum(f) + ' · ' + f.label));
+  dashFavs.forEach((f, i) => addOption(sel, String(i), modeName(f.mode) + ' ' + favNum(f) + ' · ' + f.label));
 }
 
 function drawFavEditor() {
@@ -4160,21 +5088,28 @@ function drawFavEditor() {
   favEdit.forEach((f, i) => {
     const row = document.createElement('div'); row.className = 'fav-row';
     const m = document.createElement('select'); m.setAttribute('aria-label', 'Network ' + (i + 1));
-    ['ASL', 'EchoLink', 'M17'].forEach((v) => addOption(m, v, v));
-    const n = document.createElement('input'); n.value = favNum(f);
+    favModes.forEach((v) => addOption(m, v, modeName(v)));
+    const n = document.createElement('input'); n.value = f.mode === 'DMR' ? f.num : favNum(f);
+    const net = document.createElement('select'); net.className = 'fav-net'; net.setAttribute('aria-label', 'DMR network ' + (i + 1));
+    addOption(net, '', favNets.length ? 'DMR network...' : 'Add a DMR network on the Digital card first');
+    favNets.forEach((v) => addOption(net, v, v));
+    if (f.net && !favNets.includes(f.net)) addOption(net, f.net, f.net + ' (not in the list)');
+    net.value = f.net || '';
+    net.onchange = () => { f.net = net.value; };
     const numUi = () => {
-      const m17 = f.mode === 'M17';
-      n.inputMode = m17 ? 'text' : 'numeric'; n.placeholder = m17 ? 'M17-USA A' : 'Number';
-      n.setAttribute('aria-label', (m17 ? 'Reflector and module ' : 'Node number ') + (i + 1));
+      const k = FAV_HINT[f.mode] || FAV_HINT.ASL;
+      n.inputMode = k[2]; n.placeholder = k[0];
+      n.setAttribute('aria-label', k[1] + ' ' + (i + 1));
+      net.classList.toggle('hidden', f.mode !== 'DMR');
     };
     m.value = f.mode; m.onchange = () => { f.mode = m.value; numUi(); };
     numUi();
-    n.oninput = () => { f.num = n.value.trim(); f.module = ''; };
+    n.oninput = () => { f.num = n.value.trim(); f.module = ''; f.ip = ''; };
     const l = document.createElement('input'); l.value = f.label; l.maxLength = 40; l.placeholder = 'Name';
     l.setAttribute('aria-label', 'Name ' + (i + 1)); l.oninput = () => { f.label = l.value; };
     const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Remove favorite ' + (i + 1));
     x.onclick = () => { favEdit.splice(i, 1); drawFavEditor(); };
-    row.appendChild(m); row.appendChild(n); row.appendChild(l); row.appendChild(x);
+    row.appendChild(m); row.appendChild(n); row.appendChild(l); row.appendChild(x); row.appendChild(net);
     box.appendChild(row);
   });
   $('fe-count').textContent = favEdit.length + ' / ' + favMax;
@@ -4193,6 +5128,89 @@ async function feSave() {
   const d = await post('/api/favorites', {favs: favEdit});
   setMsg('fe-msg', d);
   if (d.ok) { favEdit = d.favs.map(favCopy); drawFavEditor(); loadFavs(); }
+}
+
+
+const SVC_TXT = {active: 'running', inactive: 'stopped', failed: 'failed', missing: 'not installed', unknown: '?'};
+
+async function loadDigital() {
+  const d = await api('/api/digital');
+  if (!d.ok) return;
+  const nc = d.control === 'nc';
+  $('dg-control').textContent = nc ? 'Node Controller is running: it does the tuning' : 'Solo: Node Listen tunes DVSwitch and M17 itself';
+  const found = [];
+  found.push(d.dvswitch ? 'dvswitch.sh' : 'no dvswitch.sh');
+  if (d.analog_bridge) found.push('Analog_Bridge');
+  found.push(d.m17 ? 'USRP2M17' : 'no USRP2M17');
+  if (d.m17_hosts) found.push('M17Hosts.json');
+  $('dg-found').textContent = found.join(' · ');
+  $('dg-svc').textContent = Object.keys(d.services || {}).map((k) => k + ' ' + (SVC_TXT[d.services[k]] || d.services[k])).join(' · ') || '-';
+  $('dg-tuned').textContent = d.tuned || 'nothing';
+  const b = d.bridges || {};
+  $('dg-dbridge').value = d.set.digital_bridge; $('dg-dbridge').placeholder = b.digital || 'none';
+  $('dg-mbridge').value = d.set.m17_bridge; $('dg-mbridge').placeholder = b.m17 || 'none';
+  $('dg-call').value = d.set.callsign; $('dg-call').placeholder = d.callsign || 'none';
+  const src = (v, s) => v ? v + (s && s !== 'set here' ? ' (from ' + s + ')' : '') : 'none found';
+  $('dg-auto').textContent = 'In use: digital bridge ' + src(b.digital, b.digital_src) + ', M17 bridge ' + src(b.m17, b.m17_src)
+    + ', callsign ' + src(d.callsign, d.callsign_src) + '. Leave a box empty to find it on its own.';
+  $('dg-file').textContent = d.file || 'nodelisten_favorites.conf';
+  $('nw-import').disabled = !d.dash_nets;
+  sum('dig', [nc ? 'Node Controller' : 'Solo', d.tuned || '', (d.nets || []).length ? (d.nets.length + ' DMR network' + (d.nets.length > 1 ? 's' : '')) : ''].filter((x) => x).join(' · '));
+  nets = (d.nets || []).map((n) => ({orig: n.name, name: n.name, address: n.address, url: n.url, password: '', has: n.has_password}));
+  netMax = d.net_max || 10;
+  drawNets();
+}
+
+function drawNets() {
+  const box = $('nw-rows');
+  box.innerHTML = '';
+  nets.forEach((n, i) => {
+    const row = document.createElement('div'); row.className = 'net-row';
+    const mk = (key, ph, aria, cls, type) => {
+      const el = document.createElement('input'); el.value = n[key] || ''; el.placeholder = ph;
+      el.setAttribute('aria-label', aria + ' ' + (i + 1)); if (cls) el.className = cls; if (type) el.type = type;
+      el.autocomplete = 'off'; el.oninput = () => { n[key] = el.value; }; return el;
+    };
+    const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Remove network ' + (i + 1));
+    x.onclick = () => { nets.splice(i, 1); drawNets(); };
+    row.appendChild(mk('name', 'Name', 'Network name', '', ''));
+    row.appendChild(mk('address', 'host:port', 'Network address', '', ''));
+    row.appendChild(mk('password', n.has ? '(saved)' : 'Password', 'Network password', 'net-pw', 'password'));
+    row.appendChild(x);
+    row.appendChild(mk('url', 'Dashboard link (optional)', 'Network link', 'net-url', ''));
+    box.appendChild(row);
+  });
+  $('nw-add').disabled = nets.length >= netMax;
+}
+
+function nwAdd() { if (nets.length < netMax) { nets.push({orig: '', name: '', address: '', url: '', password: '', has: false}); drawNets(); } }
+
+async function nwSave() {
+  const d = await post('/api/dmr-networks', {nets: nets.map((n) => ({orig: n.orig, name: n.name.trim(), address: n.address.trim(), url: (n.url || '').trim(), password: n.password}))});
+  setMsg('nw-msg', d);
+  if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
+}
+
+async function nwImport() {
+  const d = await post('/api/dmr-networks/import', {});
+  setMsg('nw-msg', d);
+  if (d.ok) { loadDigital(); loadFavEditor(); }
+}
+
+async function dgSave() {
+  const d = await post('/api/digital', {digital_bridge: $('dg-dbridge').value.trim(), m17_bridge: $('dg-mbridge').value.trim(), callsign: $('dg-call').value.trim()});
+  setMsg('dg-msg', d);
+  if (d.ok) loadDigital();
+}
+
+async function ffUpload() {
+  const file = $('ff-up').files[0];
+  $('ff-up').value = '';
+  if (!file) return;
+  if (file.size > 48 * 1024) { note('ff-msg', 'err', 'The file is too big for a favorites file.'); return; }
+  const d = await post('/api/favorites-file', {text: await file.text()});
+  setMsg('ff-msg', d);
+  if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
 }
 
 const CFG_NUM = ['port', 'udp_port', 'max_listeners', 'tot_sec'], CFG_BOOL = ['public_listen', 'https', 'busy_lockout'];
@@ -4309,6 +5327,11 @@ document.addEventListener('DOMContentLoaded', () => {
   $('fe-add').addEventListener('click', feAdd);
   $('fe-dash-add').addEventListener('click', feAddDash);
   $('fe-save').addEventListener('click', feSave);
+  $('nw-add').addEventListener('click', nwAdd);
+  $('nw-save').addEventListener('click', nwSave);
+  $('nw-import').addEventListener('click', nwImport);
+  $('dg-save').addEventListener('click', dgSave);
+  $('ff-up').addEventListener('change', ffUpload);
   $('cfg-save').addEventListener('click', saveConfig);
   ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-save').addEventListener('click', saveTune);
@@ -4381,7 +5404,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 <div class="card">
 <h2>Connect</h2>
-<div id="c-empty" class="muted">No favorites yet. Add up to 10 on the Setup tab.</div>
+<div id="c-empty" class="muted">No favorites yet. Add up to 15 on the Setup tab.</div>
 <div id="c-pick">
 <label for="c-fav">Favorite</label>
 <select id="c-fav" style="width:100%;min-height:52px;margin-top:6px;font-size:16px"></select>
@@ -4477,13 +5500,50 @@ Node Listen adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-fav"><span class="fold-t">Favorites</span><span class="fold-sum" id="fe-count"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-fav">
 <p class="muted small">The Connect tab offers only these. EchoLink numbers are the station's own number.
-M17: the reflector and module, for example <code>M17-USA A</code> (or <code>@ALL</code> for every module); Node Controller
-tunes the M17 bridge and links it to its node.</p>
+DMR: the talkgroup and its network (Digital card). STFU, YSF, P25 and NXDN: the talkgroup or reflector, as DVSwitch
+tunes it. D-STAR: the reflector and module, for example <code>REF001 C</code>. M17: the reflector and module, for example
+<code>M17-USA A</code> (or <code>@ALL</code> for every module). Connect sets the mode, tunes and links the bridge node;
+while Node Controller runs, it does that instead.</p>
 <div id="fe-rows"></div>
 <div class="row"><button id="fe-add" class="btn" type="button">Add row</button>
 <select id="fe-dash" aria-label="Dashboard favorites"></select><button id="fe-dash-add" class="btn" type="button">Add</button></div>
 <div class="row"><button id="fe-save" class="btn primary" type="button">Save favorites</button></div>
 <div id="fe-msg" class="msg"></div>
+</div>
+</div>
+
+<div class="card fold" id="cd-dig">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-dig"><span class="fold-t">Digital</span><span class="fold-sum" id="sum-dig"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-dig">
+<p class="muted small">Without Node Controller, Node Listen tunes DVSwitch and M17 itself: it sets the mode, tunes and
+links the bridge node to the main node. While Node Controller runs, ASL, EchoLink and M17 go through it, and DVSwitch
+favorites are tuned on its page.</p>
+<table>
+<tr><th>Control</th><td id="dg-control">-</td></tr>
+<tr><th>Found</th><td id="dg-found">-</td></tr>
+<tr><th>Services</th><td id="dg-svc">-</td></tr>
+<tr><th>Tuned here</th><td id="dg-tuned">-</td></tr>
+</table>
+<div class="row"><label>Digital bridge <input type="text" inputmode="numeric" id="dg-dbridge" maxlength="7" style="width:96px"></label>
+<label>M17 bridge <input type="text" inputmode="numeric" id="dg-mbridge" maxlength="7" style="width:96px"></label>
+<label>Callsign <input type="text" id="dg-call" maxlength="10" style="width:110px;text-transform:uppercase"></label></div>
+<p class="muted small" id="dg-auto"></p>
+<div class="row"><button id="dg-save" class="btn primary" type="button">Save</button></div>
+<div id="dg-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">DMR networks</h3>
+<p class="muted small">Each DMR favorite joins its network with <code>password@address:port</code> before it tunes the
+talkgroup, as Node Controller does. Leave a password empty to keep the saved one.</p>
+<div id="nw-rows"></div>
+<div class="row"><button id="nw-add" class="btn" type="button">Add network</button>
+<button id="nw-import" class="btn" type="button">Copy from Node Controller</button></div>
+<div class="row"><button id="nw-save" class="btn primary" type="button">Save networks</button></div>
+<div id="nw-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Favorites file</h3>
+<p class="muted small"><code id="dg-file">nodelisten_favorites.conf</code> holds the favorites, the DMR networks and these
+settings in Node Controller's format. It holds the DMR passwords too.</p>
+<div class="row"><a id="ff-down" class="btn" href="/api/favorites-file" download="nodelisten_favorites.conf" style="display:inline-flex;align-items:center;text-decoration:none">Download</a>
+<label class="btn" style="display:inline-flex;align-items:center">Upload<input type="file" id="ff-up" accept=".conf,text/plain" class="hidden"></label></div>
+<div id="ff-msg" class="msg"></div>
 </div>
 </div>
 
@@ -4673,6 +5733,10 @@ _POST_ACTIONS = {
     "/api/connect": (lambda b: fav_connect(b.get("index")), ()),
     "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
+    "/api/digital": (digital_save, ()),
+    "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
+    "/api/dmr-networks/import": (lambda b: nets_import(), ()),
+    "/api/favorites-file": (lambda b: fav_file_put(b.get("text")), ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
@@ -4812,7 +5876,13 @@ class Handler(BaseHTTPRequestHandler):
                 dash = dashboard_conf()
                 self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(),
                                  "dash_node": dash["asl_node"] if port_open_cached(dash["port"]) else "",
+                                 "modes": list(FAV_MODES), "nets": [n["name"] for n in nets_load()],
                                  "favs": [dict(f, target=fav_target(f)) for f in fav_load()]})
+            elif path == "/api/digital":
+                self._json(200, digital_info())
+            elif path == "/api/favorites-file":
+                self._send(200, fav_file_text().encode("utf-8"), "text/plain; charset=utf-8",
+                           {"Content-Disposition": 'attachment; filename="nodelisten_favorites.conf"'})
             elif path == "/api/dash-favorites":
                 self._json(200, {"ok": True, "favs": dashboard_conf()["favs"]})
             elif path == "/api/config":
@@ -5035,6 +6105,8 @@ def run_server():
         if httpd.ssl_ctx is None:
             _TLS_NOTE = ("HTTPS is on in Setup but could not start, so this page is not encrypted and the password "
                          "is sent in plain text. See the Node Listen log.")
+    _solo_load()
+    fav_doc()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=udp_loop, args=(_cfg_get("udp_port"),), name="udp", daemon=True).start()
     threading.Thread(target=TALKER.pacer_loop, name="tx-pacer", daemon=True).start()
@@ -5172,6 +6244,11 @@ def install_service():
         save_config(dict(DEFAULT_CONFIG))
         print(f"  [+] Wrote {CONFIG_PATH}")
     load_config()
+    fav_doc()
+    if not os.path.exists(FAV_CONF_PATH):
+        _write_fav_doc([], [], {})
+        print(f"  [+] Wrote {FAV_CONF_PATH}")
+    _print_digital()
     _restore_after_update()
     _atomic_write(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
@@ -5191,6 +6268,16 @@ def install_service():
             os.remove(old)
             print(f"  [-] Removed the previous version {old}")
     print(f"Open http://<pi-address>:{_cfg_get('port')} , log in, and pick the node on the Node card.")
+
+
+def _print_digital():
+    b = bridge_nodes(0)
+    found = [name for name, ok in (("dvswitch.sh", dvs_path()), ("Analog_Bridge", os.path.isfile(AB_INI)),
+                                   ("USRP2M17", _m17_present()), ("M17Hosts.json", os.path.isfile(M17_HOSTS))) if ok]
+    print(f"  [i] Digital: found {', '.join(found) or 'nothing'}; bridge nodes: digital {b['digital'] or 'none'}, "
+          f"M17 {b['m17'] or 'none'}")
+    if not dvs_path():
+        print("      DMR, STFU, YSF, P25, NXDN and D-STAR favorites need DVSwitch (dvswitch.sh).")
 
 
 def uninstall_service():
@@ -5228,7 +6315,7 @@ def uninstall_service():
         shutil.rmtree(INSTALL_DIR, ignore_errors=True)
         print(f"  [-] Removed {INSTALL_DIR}")
     _remove_launcher_if_unused()
-    print(f"  Settings kept in {CONFIG_PATH} and {BACKUP_DIR}")
+    print(f"  Settings kept in {CONFIG_PATH}, {FAV_CONF_PATH} and {BACKUP_DIR}")
 
 
 def main():
