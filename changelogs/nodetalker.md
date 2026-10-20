@@ -1,6 +1,46 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_0_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_1_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.1 (2026-10-20)
+
+Solo, Node Talker now connects, disconnects and guards links the way Node
+Controller does. With Node Controller running on Node Talker's node, Node
+Controller does all of this and Node Talker's guard stays off.
+
+- **One link at a time, everywhere.** Connecting an ASL or EchoLink favorite
+  drops every other link first, as Node Controller does. Before, it was
+  added next to the existing links.
+- **Tuning a digital favorite** drops every link except that mode's bridge
+  node. Before, only linked favorites and the other bridge were dropped.
+- **Private nodes (1999 and below) have their own rules.**
+  - The one-link rule doesn't drop them or count them.
+  - The digital bridge nodes are handled by the reaper and watchdog below.
+  - Node 1921 is kept by its own keeper.
+  - Any other private node (a private hub, a phone node) is left alone.
+  - This differs from Node Controller, which also drops a private node that
+    isn't one of its bridges.
+- **Permanent links** (the `nodes =` line in the node's `rpt.conf` stanza)
+  are dropped with `ilink 11`, as in Node Controller. This applies to
+  connect, tune and Disconnect.
+- **If Asterisk doesn't list the links,** connect and tune change nothing and
+  say so. Node Controller instead sends `ilink 6`, which would also drop the
+  private nodes.
+- **Guard,** every 5 s. It uses Node Controller's thresholds (2 polls, 8 s
+  cooldown) and starts once Node Talker has connected or tuned something
+  itself. It stops while Node Controller runs on the node, and starts again
+  only after the next connect or tune in Node Talker.
+  - **Reaper:** a bridge node that is linked but isn't the bridge of what
+    Node Talker tuned is dropped.
+  - **Watchdog:** the tuned favorite's bridge node is linked again if it
+    drops.
+  - **Multi-link cleanup:** when more than one public link is up and nothing
+    digital is tuned, extra links that are favorites are dropped, keeping the
+    one connected last. Other stations' links are left alone, as in Node
+    Controller.
+- An AllStar link added by DTMF or Allmon while a digital favorite is tuned
+  is left up, as in Node Controller.
+- Drops are 0.25 s apart, at most 16 per action, as in Node Controller.
 
 ## 0.6.0 (2026-10-20)
 

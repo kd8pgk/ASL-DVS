@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.0"
+VERSION = "0.6.1"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -2393,12 +2393,63 @@ def m17_lookup(ref, module):
     return "", ""
 
 
-def _drop_fav_links(node):
-    targets = {fav_target(f) for f in fav_load() if f["mode"] in ("ASL", "EchoLink")}
-    _, links = rpt_links(node, max_age=0)
-    dropped = [l["node"] for l in links if l["node"] in targets]
-    for peer in dropped:
-        ilink(node, 1, peer)
+PRIVATE_MAX = 1999
+LINK_DROP_PACING_SEC = 0.25
+LINK_DROP_MAX = 16
+GUARD_SEC = 5.0
+GUARD_POLLS = 2
+GUARD_COOLDOWN_SEC = 8.0
+NO_LINK_LIST = "Asterisk did not list the node's links (rpt lstats), so nothing was changed."
+
+
+def is_private(peer):
+    return str(peer).isdigit() and int(peer) <= PRIVATE_MAX
+
+
+def perm_links(node):
+    try:
+        lines, stanzas = read_rpt()
+    except OSError:
+        return frozenset()
+    for i, s in enumerate(stanzas):
+        if s["name"] != node:
+            continue
+        end = stanzas[i + 1]["header"] if i + 1 < len(stanzas) else len(lines)
+        for ln in lines[s["header"] + 1:end]:
+            k, sep, v = _strip_comment(ln).partition("=")
+            if sep and k.strip().lower() == "nodes":
+                return frozenset(x for x in re.split(r"[,\s>]+", v.strip()) if x.isdigit())
+    return frozenset()
+
+
+def drop_link(node, peer, perms=None):
+    perms = perm_links(node) if perms is None else perms
+    perm = peer in perms
+    ilink(node, 11 if perm else 1, peer)
+    return perm
+
+
+def teardown(node, keep=(), what="Connect"):
+    ok, links = rpt_links(node, max_age=0)
+    if not ok:
+        return None
+    b = bridge_nodes()
+    bridges = {b["digital"], b["m17"]} - {""}
+    keep = set(keep) | {TX_NODE}
+    perms = perm_links(node)
+    dropped = []
+    for l in links:
+        peer = l["node"]
+        if peer in keep or (peer not in bridges and is_private(peer)):
+            continue
+        if len(dropped) >= LINK_DROP_MAX:
+            log_event(f"{what}: more than {LINK_DROP_MAX} links; the rest are left to the guard", "warn")
+            break
+        perm = drop_link(node, peer, perms)
+        dropped.append(peer + (" (permanent)" if perm else ""))
+        time.sleep(LINK_DROP_PACING_SEC)
+    if dropped:
+        log_event(f"{what}: dropped {', '.join(dropped)}", "info")
     return dropped
 
 
@@ -2423,11 +2474,96 @@ def _busy():
     return {"ok": False, "error": "Another connect or disconnect is still running; try again in a moment."}
 
 
-def solo_release(node):
-    if not _solo["mode"]:
+_asl_keep = {"v": ""}
+_guard = {"armed": False, "up": {}, "down": 0, "multi": 0, "left_alone": frozenset(), "last": {}}
+
+
+def _guard_owner(node):
+    return bool(node) and not (nc_running(cached=True) and node == dashboard_conf()["asl_node"])
+
+
+def _guard_drop(node, peers, why):
+    if not _tune_lock.acquire(blocking=False):
         return
-    with _tune_lock:
-        _leave(node, "asl")
+    try:
+        perms = perm_links(node)
+        for peer in peers[:LINK_DROP_MAX]:
+            perm = drop_link(node, peer, perms)
+            log_event(f"Guard: dropped {peer}{' (permanent, ilink 11)' if perm else ''}: {why}", "warn")
+            time.sleep(LINK_DROP_PACING_SEC)
+    finally:
+        _tune_lock.release()
+
+
+def guard_tick():
+    g = _guard
+    node = main_node()
+    if not _guard_owner(node):
+        g.update(armed=False, up={}, down=0, multi=0, left_alone=frozenset())
+        return
+    if not g["armed"]:
+        return
+    ok, links = rpt_links(node, max_age=2.0)
+    if not ok:
+        return
+    peers = [l["node"] for l in links]
+    b = bridge_nodes()
+    bridges = {b["digital"], b["m17"]} - {""}
+    own = _solo["bridge"] if _solo["target"] else ""
+    now = time.monotonic()
+    for peer in list(g["up"]):
+        if peer == own or peer not in peers:
+            del g["up"][peer]
+    for peer in peers:
+        if peer not in bridges or peer == own:
+            continue
+        g["up"][peer] = g["up"].get(peer, 0) + 1
+        if g["up"][peer] >= GUARD_POLLS and now - g["last"].get(peer, -1e9) >= GUARD_COOLDOWN_SEC:
+            g["last"][peer], g["up"][peer] = now, 0
+            _guard_drop(node, [peer], f"bridge node linked, but {'it is not the bridge of ' + _solo['name'] if own else 'nothing digital is tuned'}")
+    if own and own not in peers:
+        g["down"] += 1
+        if g["down"] >= GUARD_POLLS and now - g["last"].get("watchdog", -1e9) >= GUARD_COOLDOWN_SEC \
+                and _tune_lock.acquire(blocking=False):
+            try:
+                g["last"]["watchdog"], g["down"] = now, 0
+                ok, out = ilink(node, 3, own)
+                log_event(f"Guard: bridge node {own} for {_solo['name']} was not linked; linking it again"
+                          + ("" if ok else f" failed: {out.strip()[:120]}"), "warn")
+            finally:
+                _tune_lock.release()
+    else:
+        g["down"] = 0
+    public = [p for p in peers if p != TX_NODE and p not in bridges and not is_private(p)]
+    if own or len(public) <= 1:
+        g["multi"] = 0
+        if len(public) <= 1:
+            g["left_alone"] = frozenset()
+        return
+    if frozenset(public) == g["left_alone"]:
+        g["multi"] = 0
+        return
+    g["multi"] += 1
+    if g["multi"] < GUARD_POLLS:
+        return
+    g["multi"] = 0
+    keep = _asl_keep["v"] if _asl_keep["v"] in public else public[0]
+    favs = {fav_target(f) for f in fav_load() if f["mode"] in ("ASL", "EchoLink")}
+    extra = [p for p in public if p != keep and p in favs]
+    if not extra:
+        g["left_alone"] = frozenset(public)
+        log_event(f"Guard: more than one link ({', '.join(public)}), but none of the extras is a favorite; left alone", "info")
+        return
+    _guard_drop(node, extra, f"more than one link, keeping {keep}")
+
+
+def guard_loop():
+    while True:
+        time.sleep(GUARD_SEC)
+        try:
+            guard_tick()
+        except Exception as exc:
+            log_event(f"Guard error: {exc}", "err")
 
 
 def _hide(text, secret):
@@ -2536,10 +2672,12 @@ def solo_dvs(f, node, net_action=None):
     if not _tune_lock.acquire(timeout=1.0):
         return _busy()
     try:
+        dropped = teardown(node, {bridge}, f"Tune {fav_name(f)}")
+        if dropped is None:
+            return {"ok": False, "error": NO_LINK_LIST}
+        _guard["armed"] = True
+        _asl_keep["v"] = ""
         _leave(node, "dvs")
-        dropped = _drop_fav_links(node)
-        if b["m17"] and b["m17"] != bridge and _linked(node, b["m17"]):
-            ilink(node, 1, b["m17"])
         ok, why = _gateway_up(f["mode"])
         if not ok:
             return {"ok": False, "error": why}
@@ -2594,12 +2732,14 @@ def solo_m17(f, node):
     if not _tune_lock.acquire(timeout=1.0):
         return _busy()
     try:
+        dropped = teardown(node, {bridge}, f"Tune {fav_name(f)}")
+        if dropped is None:
+            return {"ok": False, "error": NO_LINK_LIST}
+        _guard["armed"] = True
+        _asl_keep["v"] = ""
         _leave(node, "m17")
-        dropped = _drop_fav_links(node)
         if dvs_path():
             dvs("tune", DVS_DISCONNECT)
-        if b["digital"] and b["digital"] != bridge and _linked(node, b["digital"]):
-            ilink(node, 1, b["digital"])
         try:
             _atomic_write(M17_INI, _m17_ini_text(call, f["num"], addr, f["module"]), 0o644)
         except OSError as exc:
@@ -2737,8 +2877,19 @@ def fav_connect(index, net_action=None):
                 return {"ok": False, "error": f"Node Controller: {r['error']}"}
             log_event(f"Connect {fav_name(f)} through Node Controller", "ok")
             return _link_outcome(f, node, " (through Node Controller)")
-    solo_release(node)
-    ok, out = ilink(node, 3, fav_target(f))
+    if not _tune_lock.acquire(timeout=1.0):
+        return _busy()
+    try:
+        dropped = teardown(node, {fav_target(f)}, f"Connect {fav_name(f)}")
+        if dropped is None:
+            return {"ok": False, "error": NO_LINK_LIST}
+        _guard["armed"] = True
+        if _solo["mode"]:
+            _leave(node, "asl")
+        _asl_keep["v"] = fav_target(f)
+        ok, out = ilink(node, 3, fav_target(f))
+    finally:
+        _tune_lock.release()
     if not ok:
         return {"ok": False, "error": f"Asterisk refused: {out.strip()[:200] or 'no answer'}"}
     log_event(f"Connect {fav_name(f)} from node {node}", "ok")
@@ -2791,8 +2942,10 @@ def fav_disconnect(index=None):
         r = dash_call({"action": "disconnect", "node": peer}) if via else None
         if r is None:
             via = False
-            ilink(node, 1, peer)
+            drop_link(node, peer)
     _lstats_invalidate()
+    if _asl_keep["v"] in hit:
+        _asl_keep["v"] = ""
     log_event(f"Disconnect {', '.join(hit)} from node {node}" + (" through Node Controller" if via else ""), "ok")
     return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
 
@@ -6250,6 +6403,7 @@ def run_server():
     threading.Thread(target=TALKER.pacer_loop, name="tx-pacer", daemon=True).start()
     threading.Thread(target=usrp_drain_loop, name="tx-drain", daemon=True).start()
     threading.Thread(target=link_keeper_loop, name="link-keeper", daemon=True).start()
+    threading.Thread(target=guard_loop, name="link-guard", daemon=True).start()
     threading.Thread(target=_sd_watchdog_loop, args=(port, httpd.ssl_ctx is not None), name="watchdog", daemon=True).start()
     scheme = "https" if httpd.ssl_ctx is not None else "http"
     log_event(f"{APP_NAME} v{VERSION} on {scheme} port {port}, node audio on 127.0.0.1:{_cfg_get('udp_port')}/udp, "
