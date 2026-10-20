@@ -12,7 +12,7 @@ Current file: `nodetalker_v0_6_2_20261020.py`. Before 0.6.0 the tool was Node Li
   - Space or Enter toggle in tap mode, and are held in hold mode.
   - Losing focus or going to the background still unkeys, in both modes.
   - The button label and its screen-reader label follow the mode. While
-    talking in tap mode it reads **TALKING · tap to stop** with the time left.
+    talking in tap mode it reads **TALKING · tap to stop** with the seconds left counting down.
 - **Guard timer** for tap mode and the headset button's push-to-talk: 30, 60,
   90, 120 or 180 s, 60 s by default.
   - 10 s before the end: two quick short beeps (80 ms at 1 kHz, played only

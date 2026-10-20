@@ -5267,7 +5267,7 @@ function talkTick() {
   const secs = (performance.now() - keyedAt) / 1000;
   if (!guardOn()) { $('ptt-time').textContent = fmtSecs(secs) + ' / ' + fmtSecs(totSec); return; }
   const left = guardSec() - secs;
-  $('ptt-time').textContent = fmtSecs(Math.max(0, Math.ceil(left))) + ' left';
+  $('ptt-time').textContent = fmtSecs(Math.max(0, Math.ceil(left)));
   if (left <= GUARD_WARN_SEC && !guardWarned) {
     guardWarned = true;
     $('ptt').classList.add('guard-warn');
