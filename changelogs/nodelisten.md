@@ -1,6 +1,15 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_17_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_4_18_20261020.py`. Newest entries first.
+
+## 0.4.18 (2026-10-20)
+
+- **Connect turns into Disconnect.** On the Connect tab, the Connect card's
+  button reads **Disconnect** (in red) when the selected favorite is linked, and
+  pressing it drops that favorite only. Other links stay up. It goes back to
+  **Connect** once the link is gone.
+- **Links card:** the "Linked favorites" line, its small Disconnect button and
+  the note under them are gone. The links table stays.
 
 ## 0.4.17 (2026-10-20)
 
