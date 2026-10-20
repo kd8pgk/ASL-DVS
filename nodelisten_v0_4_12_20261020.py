@@ -28,8 +28,8 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.11.1"
-DATE_STR = "2026-10-19"
+VERSION = "0.4.12"
+DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodelisten.py"
@@ -2186,10 +2186,10 @@ try {
   if (st && st.agc !== undefined && st.lev === undefined) st.agc = false;
   Object.assign(mic, st);
 } catch (e) {}
-const PLAY_DEFAULTS = {s16: true, smooth: true};
+const PLAY_DEFAULTS = {s16: true, smooth: true, auto: true};
 let play = Object.assign({}, PLAY_DEFAULTS);
 try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); } catch (e) {}
-let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false;
+let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false, autoWait = null, starting = false;
 
 function sincKernels(phases, taps, half, fc, tAt, edgeIn) {
   const kern = [];
@@ -2402,6 +2402,7 @@ async function whoami() {
   sysmonPort = d.sysmon_port || null;
   if (!d.backend) $('login-msg').textContent = 'No root password is set on this Pi, so login cannot work.';
   render();
+  autoListen();
 }
 
 async function login(ev) {
@@ -2411,7 +2412,7 @@ async function login(ev) {
   const d = await post('/api/login', {password: $('pw').value});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; loginWanted = false; render(); }
+  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); }
   else $('login-msg').textContent = d.error || 'Login failed.';
 }
 
@@ -2530,27 +2531,58 @@ function push(bytes) {
 
 function listenVolume() { return talking ? 0 : $('vol').value / 100; }
 
+function makeCtx() {
+  if (ctx) return true;
+  if (!AudioCtx) { $('listen-msg').textContent = 'This browser cannot play live audio.'; return false; }
+  ctx = newAudioCtx();
+  gainNode = ctx.createGain();
+  gainNode.gain.value = listenVolume();
+  const player = $('player');
+  if (ctx.createMediaStreamDestination && player && 'srcObject' in player) {
+    mediaDest = ctx.createMediaStreamDestination();
+    gainNode.connect(mediaDest);
+    player.srcObject = mediaDest.stream;
+  } else {
+    gainNode.connect(ctx.destination);
+  }
+  return true;
+}
+
+function autoWaitEnd() {
+  if (!autoWait) return;
+  document.removeEventListener('pointerdown', autoWait, true);
+  document.removeEventListener('keydown', autoWait, true);
+  autoWait = null;
+}
+
+async function autoListen() {
+  if (playing || starting || autoWait || !play.auto || !(authed || publicListen) || !makeCtx()) return;
+  await Promise.race([ctx.resume().catch(() => {}), sleep(400)]);
+  if (playing || starting || autoWait) return;
+  if (ctx.state === 'running') { startListen(); return; }
+  note('listen-msg', 'warn', 'Tap anywhere to start listening (the browser holds sound until you do).');
+  autoWait = (e) => {
+    autoWaitEnd();
+    if (e.target && e.target.closest && e.target.closest('#listen-btn')) return;
+    if (!playing) startListen();
+  };
+  document.addEventListener('pointerdown', autoWait, true);
+  document.addEventListener('keydown', autoWait, true);
+}
+
 async function startListen() {
+  autoWaitEnd();
+  if (starting) return;
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
-  if (!AudioCtx) { $('listen-msg').textContent = 'This browser cannot play live audio.'; return; }
-  if (!ctx) {
-    ctx = newAudioCtx();
-    gainNode = ctx.createGain();
-    gainNode.gain.value = listenVolume();
-    const player = $('player');
-    if (ctx.createMediaStreamDestination && player && 'srcObject' in player) {
-      mediaDest = ctx.createMediaStreamDestination();
-      gainNode.connect(mediaDest);
-      player.srcObject = mediaDest.stream;
-    } else {
-      gainNode.connect(ctx.destination);
+  if (!makeCtx()) return;
+  starting = true;
+  try {
+    await ctx.resume();
+    if (mediaDest) {
+      try { await $('player').play(); }
+      catch (e) { mediaDest = null; gainNode.disconnect(); gainNode.connect(ctx.destination); }
     }
-  }
-  await ctx.resume();
-  if (mediaDest) {
-    try { await $('player').play(); }
-    catch (e) { mediaDest = null; gainNode.disconnect(); gainNode.connect(ctx.destination); }
-  }
+  } finally { starting = false; }
   playing = true;
   setMediaState();
   wakeLockApply();
@@ -2584,6 +2616,7 @@ async function startListen() {
 }
 
 function stopListen() {
+  autoWaitEnd();
   playing = false;
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (ctrl) { ctrl.abort(); ctrl = null; }
@@ -2764,12 +2797,12 @@ function loadMicUi() {
   $('mic-gain').value = mic.gain;
   $('mic-gain-v').textContent = fmtGain(mic.gain);
   $('mic-gate').value = String(Number(mic.gate) || 0);
-  $('play-s16').checked = !!play.s16; $('play-smooth').checked = !!play.smooth;
+  $('play-s16').checked = !!play.s16; $('play-smooth').checked = !!play.smooth; $('play-auto').checked = !!play.auto;
 }
 
 function savePlay() {
   const was = play.s16;
-  play = {s16: $('play-s16').checked, smooth: $('play-smooth').checked};
+  play = {s16: $('play-s16').checked, smooth: $('play-smooth').checked, auto: $('play-auto').checked};
   try { localStorage.setItem('nlPlay', JSON.stringify(play)); } catch (e) {}
   ups = null;
   if (playing && was !== play.s16) { stopListen(); startListen(); }
@@ -3184,7 +3217,7 @@ document.addEventListener('DOMContentLoaded', () => {
   loadMicUi();
   MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
   $('mic-gate').addEventListener('change', saveMic);
-  ['play-s16', 'play-smooth'].forEach((id) => $(id).addEventListener('change', savePlay));
+  ['play-s16', 'play-smooth', 'play-auto'].forEach((id) => $(id).addEventListener('change', savePlay));
   $('mic-test').addEventListener('click', micTest);
   $('node-test').addEventListener('click', nodeTest);
   try { window.name = 'asl_dvs_listen'; } catch (e) {}
@@ -3385,6 +3418,7 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small">Keys node 1921, records what the node sends out and plays it back. It goes out over the air and to linked nodes.</p>
 <div id="node-test-msg" class="msg"></div>
 <h2 style="margin-top:14px">This device's playback</h2>
+<div class="row"><label><input type="checkbox" id="play-auto"> Start listening when the page opens (the browser may want one tap first)</label></div>
 <div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
 <div class="row"><label><input type="checkbox" id="play-smooth"> Smooth playback (filtered upsampling, no sizzle)</label></div>
 <p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
