@@ -32,7 +32,7 @@
       <tr><td>44helper</td><td class="mono">44helper_v0_0_215_20261018.py</td><td>0.0.215</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_57_0_20261018.py</td><td>2.57.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
-      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_17_20261020.py</td><td>0.4.17</td></tr>
+      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_6_0_20261020.py</td><td>0.6.0</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_86_20261014.py</td><td>6.13.86</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_84_20261018.py</td><td>9.3.84</td></tr>
@@ -63,7 +63,7 @@
     <li><span class="no">12</span>The Dashboard</li>
     <li><span class="no">13</span>instmon</li>
     <li><span class="no">14</span>wifimon and wifi_menu.sh</li>
-    <li><span class="no">15</span>Node Listen</li>
+    <li><span class="no">15</span>Node Talker</li>
     <li class="pt">Part V · Reference</li>
     <li><span class="no">16</span>Troubleshooting and recovery</li>
     <li><span class="no">A</span>Appendices: ports, files, services, launcher, glossary</li>
@@ -160,7 +160,7 @@ sudo systemctl status sysmon</pre>
     <tr><td>wifimon</td><td class="port">8991</td><td>WiFi and power watchdog.</td><td>Change WiFi networks, check signal and supply voltage, set up the automatic safe shutdown.</td></tr>
   </table>
   <div class="call note"><span class="t">NOTE</span>44helper is optional. The other four make up the core suite.
-    A sixth, optional page, <b>Node Listen</b> (port 8993), plays the node's audio on your phone and adds push-to-talk
+    A sixth, optional page, <b>Node Talker</b> (port 8993), plays the node's audio on your phone and adds push-to-talk
     (Chapter 15).
     A sixth item, the Watchdog script, is no longer needed: the Dashboard's own service restarts it if it stops.</div>
 
@@ -177,7 +177,7 @@ sudo systemctl status sysmon</pre>
     <tr><td>Update Linux and ASL packages</td><td>44helper, Update tab</td></tr>
     <tr><td>Make the SD card last longer</td><td>SysMon, SD Card tab; 44helper, System Optimization</td></tr>
     <tr><td>Change WiFi network</td><td>wifimon</td></tr>
-    <tr><td>Listen to the node, or talk, from my phone</td><td>Node Listen (Chapter 15)</td></tr>
+    <tr><td>Listen to the node, or talk, from my phone</td><td>Node Talker (Chapter 15)</td></tr>
   </table>
 
   <h2><span class="n">1.3</span>A first look at each page</h2>
@@ -2255,12 +2255,12 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <div class="pn">PART IV</div>
   <h1>The other tools</h1>
   <p>The Dashboard is where you operate the node day to day; instmon installs and updates the suite; wifimon keeps
-    the Pi on the network and shuts it down safely when the power or WiFi fails; Node Listen puts the node's audio, push-to-talk and favorites on your phone.</p>
+    the Pi on the network and shuts it down safely when the power or WiFi fails; Node Talker puts the node's audio, push-to-talk and favorites on your phone.</p>
   <ol start="12">
     <li>The Dashboard</li>
     <li>instmon</li>
     <li>wifimon and wifi_menu.sh</li>
-    <li>Node Listen</li>
+    <li>Node Talker</li>
   </ol>
 </section>
 
@@ -2476,18 +2476,19 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     reload Asterisk. Take a 44helper save point first (Chapter 11). Every detail is in
     <code>docs/ASL-DVS_Pi02w_Phone_Dialplan_Guide.pdf</code>.</div>
 
-  <h2><span class="n">12.6</span>Node Listen and the Dashboard</h2>
-  <p>Node Listen (Chapter 15) plays the node's audio on your phone and connects favorites. It works with the
+  <h2><span class="n">12.6</span>Node Talker and the Dashboard</h2>
+  <p>Node Talker (Chapter 15) plays the node's audio on your phone and connects favorites. It works with the
     Dashboard in three ways:</p>
   <ul>
-    <li><b>Listen</b>, beside the Dashboard's connection indicator, opens Node Listen in its own tab and reuses that
-      tab later, so audio that is playing keeps playing. It is greyed out while Node Listen isn't running
-      (9.3.90-pi02w, full build 9.3.86). Node Listen's <b>Node Controller</b> button comes back.</li>
-    <li>When Node Listen connects a favorite from the Dashboard's node, it asks the Dashboard to do it, so the
-      Dashboard changes to that mode's tab and shows the favorite. That includes M17 reflectors (section 15.5), which
-      only the Dashboard can tune (9.3.92-pi02w, full build 9.3.88). The page follows such changes on its next poll
-      from 9.3.93-pi02w (full build 9.3.89).</li>
-    <li>Node 1921, Node Listen's push-to-talk node, is left linked when you change tab, and the Dashboard won't
+    <li><b>Listen</b>, beside the Dashboard's connection indicator, opens Node Talker in its own tab and reuses that
+      tab later, so audio that is playing keeps playing. It is greyed out while Node Talker isn't running
+      (9.3.90-pi02w, full build 9.3.86). Node Talker's <b>Node Controller</b> button comes back.</li>
+    <li>When Node Talker connects a favorite from the Dashboard's node, it asks the Dashboard to do it, so the
+      Dashboard changes to that mode's tab and shows the favorite: ASL, EchoLink and M17 (9.3.92-pi02w, full build
+      9.3.88) and the DVSwitch modes, DMR, STFU, YSF, P25, NXDN and D-STAR (9.3.94-pi02w; not yet in the full build).
+      A DMR network the Dashboard doesn't have can be added to it from Node Talker (section 15.5). The page follows
+      such changes on its next poll from 9.3.93-pi02w (full build 9.3.89).</li>
+    <li>Node 1921, Node Talker's push-to-talk node, is left linked when you change tab, and the Dashboard won't
       disconnect it from the local API.</li>
   </ul>
 
@@ -2525,7 +2526,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <h2>How the Dashboard drives the node</h2>
     <ul>
       <li><b>Settings:</b> <code>/etc/asl_dvs/asl_dvs.conf</code> (identity, favorites, visible tabs, DMR networks). Phone: <code>/etc/asl_dvs/phone.json</code> and the <code>dvs_phone_*.conf</code> files it writes.</li>
-      <li><b>Polling:</b> <code>/api/status</code> every 5 s when idle and every 1 s while a tune is in progress, with an ETag, so unchanged state costs almost nothing. From 9.3.93-pi02w (full build 9.3.89) any change to the Dashboard's state clears the ETag, so a change made from Node Listen reaches the page on its next poll. On the Pi Zero 2 W build the AllStar and EchoLink lists are searched on disk rather than held in memory.</li>
+      <li><b>Polling:</b> <code>/api/status</code> every 5 s when idle and every 1 s while a tune is in progress, with an ETag, so unchanged state costs almost nothing. From 9.3.93-pi02w (full build 9.3.89) any change to the Dashboard's state clears the ETag, so a change made from Node Talker reaches the page on its next poll. On the Pi Zero 2 W build the AllStar and EchoLink lists are searched on disk rather than held in memory.</li>
       <li><b>Tuning:</b> through DVSwitch's <code>dvswitch.sh</code> (mode and tune commands) and Asterisk's AMI on 127.0.0.1:5038 (link and unlink). A tune counts as done when Analog_Bridge's <code>/tmp/ABInfo_*.json</code> confirms it.</li>
       <li><b>Service check:</b> a background thread runs one <code>systemctl show</code> every 15 s for
         <code>analog_bridge</code> / <code>Analog_Bridge</code>, <code>stfu</code>, <code>ysfgateway</code>,
@@ -2560,16 +2561,20 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
         forward, so wifimon no longer alerts at once on a fresh "unregistered". The Phone setup refresh retries every
         15 seconds for up to 5 minutes until Asterisk answers.</li>
       <li><b>Service:</b> <code>nodecontrol</code> (<code>asl_dvs_dashboard</code> before 9.3.76 / 9.3.71.15-pi02w), with <code>Restart=always</code> and <code>WatchdogSec=30</code>, so it is restarted if it stops answering. That is why the separate Watchdog script isn't needed.</li>
-      <li><b>Node Listen's M17 favorites</b> (section 15.5) go through the Dashboard's local API: a
+      <li><b>Node Talker's favorites</b> (section 15.5) go through the Dashboard's local API: a
         <code>POST /api/local/action</code> to <code>127.0.0.1</code> on the Dashboard's port, carrying the key in
         <code>/etc/asl_dvs/local_api.key</code>. <code>m17-connect</code> (reflector, module, name) looks the reflector
         up in <code>M17Hosts.json</code>, then in the <code>[M17]</code> favorites in <code>asl_dvs.conf</code>, checks
         the module against the ones it publishes, and runs the same M17 connect as the M17 tab.
-        <code>m17-status</code> answers <code>REFLECTOR|MODULE</code> while the M17 tab is connected (Node Listen asks
+        <code>m17-status</code> answers <code>REFLECTOR|MODULE</code> while the M17 tab is connected (Node Talker asks
         at most every 5 s, and only when it has M17 favorites); <code>m17-disconnect</code> runs M17's Disconnect.
-        Node Listen keeps its favorites in <code>/etc/asl_dvs/nodelisten_favorites.json</code>, an M17 one as
-        <code>{"mode": "M17", "num": "M17-USA", "module": "C", "label": "…"}</code>. Node Listen versions before 0.4.10
-        skip those entries.</li>
+        From 9.3.94-pi02w, <code>dvs-tune</code> (mode, talkgroup, name, and for DMR the network) tunes DMR, STFU,
+        YSF, P25, NXDN and D-STAR through the same code as the tabs: a DMR network is matched to a DMR server by
+        address, then name, and answers <code>dmr-network-missing</code> when there is none (with <code>once</code>,
+        it joins it for this tune only). <code>dvs-status</code> says what is tuned, <code>dvs-disconnect</code>
+        tunes disconnect, and <code>dmr-server-add</code> adds a DMR network to <code>[DMR_SERVERS]</code>. DMR
+        passwords are never logged. Node Talker keeps its favorites in
+        <code>/etc/asl_dvs/nodetalker_favorites.conf</code>, in this same <code>asl_dvs.conf</code> format.</li>
       <li>The login is shared with SysMon (Chapter 3).</li>
     </ul>
   </div>
@@ -2879,29 +2884,30 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
 </section>
 
 <section class="chapter" id="ch15">
-  <div class="kicker">Chapter 15 · Node Listen</div>
-  <h1 class="ch">Node Listen</h1>
-  <p class="ch-lede">Node Listen puts one node in your phone's browser: it plays the node's audio about half a second
-    behind, transmits with push-to-talk, and connects up to 10 favorites. Open it at
+  <div class="kicker">Chapter 15 · Node Talker</div>
+  <h1 class="ch">Node Talker</h1>
+  <p class="ch-lede">Node Talker puts one node in your phone's browser: it plays the node's audio about half a second
+    behind, transmits with push-to-talk, and connects or tunes up to 15 favorites. Open it at
     <code>http://&lt;pi-address&gt;:8993</code>; it moves you to <code>https://</code>. It is optional, and the same
-    file runs on the Pi Zero 2 W and the full build. This chapter is a summary for Node Listen 0.4.17. The
-    <b>Node Listen Manual</b> (<code>docs/ASL-DVS_Node_Listen_Manual.pdf</code>) covers receive and transmit audio,
+    file runs on the Pi Zero 2 W and the full build. It was called Node Listen before 0.6.0. This chapter is a summary
+    for Node Talker 0.6.0. The <b>Node Talker Manual</b> (<code>docs/ASL-DVS_Node_Talker_Manual.pdf</code>) covers receive and transmit audio,
     every setting, the meters and the Audio check in detail.</p>
 
   <h2><span class="n">15.1</span>Before you start</h2>
   <ol class="steps">
-    <li><b>Install it.</b> The installer (7.2.0 and later) asks whether to add Node Listen, and instmon (2.58.0 and
-      later) lists it with the other tools (Chapter 13). By hand: <code>sudo python3 nodelisten_v….py --install</code>.</li>
+    <li><b>Install it.</b> The installer (7.2.0 and later) asks whether to add Node Talker, and instmon (2.58.0 and
+      later) lists it with the other tools (Chapter 13). By hand: <code>sudo python3 nodetalker_v….py --install</code>.
+      Over Node Listen, it moves the settings, favorites and certificate across and retires the old service.</li>
     <li><b>Open the page and accept the certificate.</b> HTTPS uses a certificate made on the Pi, so the browser warns
       once; accept it. Browsers only allow the microphone on an <code>https://</code> page.</li>
     <li><b>Log in</b> with the Pi's root password.</li>
     <li><b>Send the node's audio here.</b> Setup tab: open the <b>Receive</b> card, pick the node, press <b>Send its
-      audio here</b>, then <b>Restart Asterisk</b>. That node becomes Node Listen's main node.</li>
+      audio here</b>, then <b>Restart Asterisk</b>. That node becomes Node Talker's main node.</li>
     <li><b>For push-to-talk</b>, Setup tab: open the <b>Transmit</b> card, press <b>Add node 1921</b>, then <b>Restart Asterisk</b>.
-      Node Listen links node 1921 to your node within 20 seconds and keeps it linked.</li>
+      Node Talker links node 1921 to your node within 20 seconds and keeps it linked.</li>
   </ol>
   <div class="call care"><span class="t">CAREFUL</span>Both buttons edit <code>/etc/asterisk/rpt.conf</code> (a backup
-    goes to <code>/etc/asl_dvs/nodelisten_backups/</code>), and Restart Asterisk drops every link on the node for a
+    goes to <code>/etc/asl_dvs/nodetalker_backups/</code>), and Restart Asterisk drops every link on the node for a
     moment. A node takes one <code>outstreamcmd</code> line, so a node that already feeds Broadcastify is refused.</div>
 
   <h2><span class="n">15.2</span>The page</h2>
@@ -2912,7 +2918,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>Tab</th><th>What it holds</th></tr>
     <tr><td>Listen</td><td>Listen/Stop and the volume; the status line (node, <b>feed</b>, <b>RX</b>, <b>TX</b>, listeners); the waterfall (tap for bars) with the level bar under it, which shows your own level while you talk; the oblong push-to-talk button, which reads <i>Busy: …</i> while someone else transmits. Audio starts by itself when the browser allows it. The tab fits the screen without scrolling.</td></tr>
     <tr><td>Connect</td><td>The node's links, the favorites to connect, and Disconnect. Links are always made from the main node.</td></tr>
-    <tr><td>Setup</td><td>Cards that open and close: Receive, Transmit, Settings, Favorites, Audio check, Audio levels, Microphone, Playback, Log.</td></tr>
+    <tr><td>Setup</td><td>Cards that open and close: Receive, Transmit, Settings, Favorites, Digital, Audio check, Audio levels, Microphone, Playback, Log.</td></tr>
   </table>
 
   <h2><span class="n">15.3</span>Audio in brief</h2>
@@ -2924,8 +2930,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Microphone (browser)</td><td>Browser processing, <b>Mic gain</b>, Voice filter or Radio voice, Noise gate, Leveler. <b>Test mic</b> records 4 seconds and reports level, peak, background and limiter use with a bar meter; <b>Test through the node</b> sends it out and back.</td></tr>
     <tr><td>Playback (browser)</td><td>16-bit audio, Smooth playback, auto-listen, the spectrum, keep the screen on.</td></tr>
   </table>
-  <p>Set levels in this order: the node's own audio (SysMon, Tune tab) first, then Node Listen's receive settings,
-    then the microphone, and TX gain last. Chapter 7 of the Node Listen Manual walks through it.</p>
+  <p>Set levels in this order: the node's own audio (SysMon, Tune tab) first, then Node Talker's receive settings,
+    then the microphone, and TX gain last. Chapter 7 of the Node Talker Manual walks through it.</p>
 
   <h2><span class="n">15.4</span>Audio check</h2>
   <p>The <b>Audio check</b> card (0.4.17) runs while you use the node as usual for a few minutes: start it, go to the
@@ -2933,48 +2939,51 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     targets in green, amber or red, with suggestions. <b>Apply</b> makes a change (<b>Undo</b> puts it back), and
     <b>Compare with last check</b> shows the difference after the next run. It keeps only numbers, in this browser.</p>
 
-  <h2><span class="n">15.5</span>Favorites, and M17 reflectors <span class="badge test">TESTING</span></h2>
-  <p>The Connect tab offers only the favorites set on the Setup tab's <b>Favorites</b> card: up to 10, each an
-    AllStar node, an EchoLink station or an M17 reflector. Open the card, then <b>Add row</b> adds one; the menu picks the network, then
-    the number and a name; ✕ removes it; <b>Save favorites</b> keeps them. <b>From the Dashboard…</b> lists the
-    Dashboard's ASL, EchoLink and M17 favorites, and <b>Add</b> copies one. EchoLink numbers are the station's own
-    number (Node Listen adds the 3 and the padding).</p>
-  <div class="call test"><span class="t">TESTING</span>M17 favorites are new and still being tested on live nodes.
-    M17 on the Dashboard's own M17 tab is not affected.</div>
-  <p>Node Listen has no M17 tab: M17 is only in its favorites, and the tuning is done by the Dashboard, which Node
-    Listen calls <b>Node Controller</b>. It needs Node Listen 0.4.10 or later and Dashboard 9.3.92-pi02w or later
-    (full build 9.3.88), running, with the M17 bridge (USRP2M17) installed (Chapter 9). The Dashboard page follows
-    the change from 9.3.93-pi02w (full build 9.3.89).</p>
+  <h2><span class="n">15.5</span>Favorites: ASL, EchoLink, DVSwitch and M17</h2>
+  <p>The Connect tab offers only the favorites set on the Setup tab's <b>Favorites</b> card: up to 15. Open the card,
+    then <b>Add row</b> adds one; the menu picks the mode, then the number and a name; ✕ removes it; <b>Save
+    favorites</b> keeps them. <b>From the Dashboard…</b> lists the Dashboard's favorites, and <b>Add</b> copies one (a
+    DMR one brings its network). They are kept in <code>/etc/asl_dvs/nodetalker_favorites.conf</code>, in the
+    Dashboard's <code>asl_dvs.conf</code> format.</p>
   <table>
-    <tr><th>Set the menu to M17 and type</th><th>Saved as</th></tr>
-    <tr><td><code>M17-USA C</code></td><td>Reflector M17-USA, module C</td></tr>
-    <tr><td><code>M17-USA @ALL</code>, <code>M17-USA ALL</code> or just <code>M17-USA</code></td><td>Reflector M17-USA, every module (the Dashboard's All Modules)</td></tr>
-    <tr><td><code>m17-usa c</code></td><td>The same as <code>M17-USA C</code>: case doesn't matter</td></tr>
+    <tr><th>Mode</th><th>Type</th></tr>
+    <tr><td>ASL / EchoLink</td><td>The node number / the station's own number (Node Talker adds the 3 and the padding).</td></tr>
+    <tr><td>DMR</td><td>The talkgroup, and its network from the list on the <b>Digital</b> card.</td></tr>
+    <tr><td>STFU, YSF, P25, NXDN</td><td>The talkgroup or reflector, as DVSwitch tunes it.</td></tr>
+    <tr><td>D-STAR</td><td><code>REF001 C</code>: the reflector and module (kept as <code>REF001CL</code>, the Dashboard's tune string).</td></tr>
+    <tr><td>M17</td><td><code>M17-USA C</code>, or <code>M17-USA @ALL</code> / <code>M17-USA</code> for every module; case doesn't matter.</td></tr>
   </table>
-  <p>Connecting an M17 favorite does what Connect on the Dashboard's M17 tab does: the Dashboard changes to M17 mode,
-    writes the reflector and module into <code>USRP2M17.ini</code>, restarts <code>usrp2m17</code> and links the M17
-    bridge node (1917) to your node. It works only when Node Listen's main node is the Dashboard's node. The message says <i>M17 connected: …
-    (through Node Controller)</i>, <b>Linked favorites</b> shows it, and the Dashboard page moves to its M17 tab.
-    <b>Disconnect</b> drops the M17 reflector when it is one of your favorites.</p>
-  <div class="call care"><span class="t">CAREFUL</span>Connecting an M17 favorite changes the node's mode, just like
-    opening the Dashboard's M17 tab: other links and the current talkgroup are dropped. Node 1921 stays linked, so
-    push-to-talk keeps working. Whether the reflector itself answers is not checked: listen, or press LH on the
-    Dashboard's M17 tab.</div>
+  <p>The <b>Digital</b> card shows who tunes (Solo, or the Dashboard), what was found (<code>dvswitch.sh</code>,
+    Analog_Bridge, USRP2M17, <code>M17Hosts.json</code>) and the gateway services; it sets the digital and M17 bridge
+    nodes and the M17 callsign (found on their own when left empty), holds up to 10 <b>DMR networks</b> (name,
+    <code>address:port</code>, password, link; <b>Copy from Node Controller</b> adds the Dashboard's), and downloads or
+    uploads the favorites file. The page never shows a DMR password.</p>
+  <p><b>With the Dashboard on the node</b> (its node is Node Talker's main node), every favorite goes through it
+    (section 12.6), and the Dashboard changes to that mode's tab. A DMR favorite whose network the Dashboard doesn't
+    have asks on the Connect tab: <b>Add it to Node Controller and tune</b>, <b>Tune this once</b>, or <b>Cancel</b>.</p>
+  <p><b>Solo</b>, Node Talker tunes the way the Dashboard does: a DVSwitch favorite starts the mode's gateway if
+    needed, runs <code>dvswitch.sh tune disconnect</code> and <code>mode</code>, for DMR joins the network
+    (<code>tune password@address:port</code>, skipped when it is already joined), tunes the talkgroup and links the
+    digital bridge node (1999); an M17 favorite writes <code>USRP2M17.ini</code>, restarts <code>usrp2m17</code> and
+    links the M17 bridge node (1917).</p>
+  <div class="call care"><span class="t">CAREFUL</span>Tuning a digital favorite changes the node's mode, like opening
+    the Dashboard's tab for it: linked ASL and EchoLink favorites and the other bridge are dropped. Node 1921 stays
+    linked, so push-to-talk keeps working. Whether the far reflector or talkgroup answers is not checked: listen.</div>
   <table>
-    <tr><th>M17 message</th><th>What to do</th></tr>
-    <tr><td>M17 goes through Node Controller's node &lt;A&gt;, but Node Listen's node is &lt;B&gt;.</td><td>M17 always links the Dashboard's node, so Node Listen's main node must be the same one: Setup tab, Receive card, send node &lt;A&gt;'s audio here.</td></tr>
-    <tr><td>M17 goes through Node Controller, which is not running.</td><td>Start the Dashboard (<code>nodecontrol</code>) in SysMon's Services tab or instmon.</td></tr>
-    <tr><td>M17 goes through Node Controller; set its node first.</td><td>Set the main node number on the Dashboard's EDIT page (section 12.5).</td></tr>
-    <tr><td>… update Node Controller.</td><td>The Dashboard is older than 9.3.92-pi02w (full build 9.3.88). Update it in instmon.</td></tr>
-    <tr><td>&lt;reflector&gt; is not in the M17 reflector list or the M17 favorites</td><td>Check the spelling, or refresh the list: <b>Update Now</b> on SysMon's M17 tab (section 4.5).</td></tr>
+    <tr><th>Message</th><th>What to do</th></tr>
+    <tr><td>… goes through Node Controller's node &lt;A&gt;, but Node Talker's node is &lt;B&gt;.</td><td>With the Dashboard running, favorites go through its node: Setup tab, Receive card, send node &lt;A&gt;'s audio here.</td></tr>
+    <tr><td>… set its node first.</td><td>Set the main node number on the Dashboard's EDIT page (section 12.5).</td></tr>
+    <tr><td>… update Node Controller.</td><td>The Dashboard is too old for that mode (DVSwitch needs 9.3.94-pi02w). Update it in instmon, or stop it to tune solo.</td></tr>
+    <tr><td>No digital (or M17) bridge node was found</td><td>Set it on the Digital card.</td></tr>
+    <tr><td>M17 needs your callsign</td><td>Set it on the Digital card.</td></tr>
+    <tr><td>dvswitch.sh was not found / USRP2M17 was not found</td><td>Install DVSwitch or M17 (Chapter 9).</td></tr>
     <tr><td>&lt;reflector&gt; does not publish module B (it has A, C)</td><td>Use one of the modules listed, or <code>@ALL</code>.</td></tr>
-    <tr><td>USRP2M17 bridge not detected on this host</td><td>Install M17 from 44helper (section 9.5).</td></tr>
   </table>
 
   <h2><span class="n">15.6</span>From the internet <span class="badge test">TESTING</span></h2>
-  <p>Node Listen is meant for your home network. Clients from the internet get "not open to the internet" for every
-    page unless <code>allow_wan = true</code> is set in <code>/etc/asl_dvs/nodelisten.conf</code> (there is no
-    checkbox; then <code>sudo systemctl restart nodelisten</code>). Tailscale addresses (100.64.0.0/10) count as home.</p>
+  <p>Node Talker is meant for your home network. Clients from the internet get "not open to the internet" for every
+    page unless <code>allow_wan = true</code> is set in <code>/etc/asl_dvs/nodetalker.conf</code> (there is no
+    checkbox; then <code>sudo systemctl restart nodetalker</code>). Tailscale addresses (100.64.0.0/10) count as home.</p>
   <ul>
     <li>A Cloudflare Tunnel or Tailscale Funnel counts as the internet, whatever address it arrives from.</li>
     <li>From the internet the password is only taken on the <code>https://</code> page.</li>
@@ -3164,7 +3173,7 @@ free -m; zramctl</pre>
     <tr><td class="port">8991/tcp</td><td>wifimon</td><td>LAN or VPN only</td></tr>
     <tr><td class="port">9997/tcp</td><td>44helper</td><td>LAN only, never on 44Net</td></tr>
     <tr><td class="port">9999/tcp</td><td>SysMon</td><td>LAN or VPN only</td></tr>
-    <tr><td class="port">8993/tcp</td><td>Node Listen</td><td>LAN or VPN; the internet only with <code>allow_wan</code> (section 15.6)</td></tr>
+    <tr><td class="port">8993/tcp</td><td>Node Talker</td><td>LAN or VPN; the internet only with <code>allow_wan</code> (section 15.6)</td></tr>
   </table>
   <h2>The node</h2>
   <table>
@@ -3176,8 +3185,8 @@ free -m; zramctl</pre>
     <tr><td class="port">5038/tcp</td><td>Asterisk AMI</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">34001 / 32001</td><td>USRP: node 1999 ↔ Analog_Bridge</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">34008 / 32008</td><td>USRP: node 1917 ↔ USRP2M17</td><td>127.0.0.1 only</td></tr>
-    <tr><td class="port">34018 / 32018</td><td>USRP: node 1921 ↔ Node Listen (push-to-talk)</td><td>127.0.0.1 only</td></tr>
-    <tr><td class="port">6200/udp</td><td>Node audio to Node Listen (the <code>outstreamcmd</code> feed)</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">34018 / 32018</td><td>USRP: node 1921 ↔ Node Talker (push-to-talk)</td><td>127.0.0.1 only</td></tr>
+    <tr><td class="port">6200/udp</td><td>Node audio to Node Talker (the <code>outstreamcmd</code> feed)</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">34012 / 32012</td><td>USRP: node 1918 ↔ Zello bridge</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">31100 / 31103</td><td>Analog_Bridge ↔ MMDVM_Bridge (DMR; other modes use their own 3xx00 ranges)</td><td>127.0.0.1 only</td></tr>
     <tr><td class="port">17010 → 17000</td><td>USRP2M17 → M17 reflectors</td><td>outbound</td></tr>
@@ -3208,8 +3217,8 @@ free -m; zramctl</pre>
     <tr><td class="mono">/usr/local/lib/asl_dvs/44helper/</td><td>44helper program (0.0.180 and later; <code>/opt/44helper/</code> before, now a compatibility link)</td><td>44helper</td></tr>
     <tr><td class="mono">/etc/asl_dvs/asl_dvs.conf</td><td>Dashboard settings and favorites</td><td>Dashboard, installer</td></tr>
     <tr><td class="mono">/etc/asl_dvs/phone.json</td><td>phone networks</td><td>Dashboard</td></tr>
-    <tr><td class="mono">/etc/asl_dvs/nodelisten.conf · nodelisten_favorites.json · nodelisten_tls/ · nodelisten_backups/</td><td>Node Listen settings, favorites, certificate, rpt.conf backups</td><td>Node Listen</td></tr>
-    <tr><td class="mono">/etc/asl_dvs/local_api.key</td><td>key Node Listen uses to call the Dashboard</td><td>Dashboard, Node Listen</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/nodetalker.conf · nodetalker_favorites.conf · nodetalker_tls/ · nodetalker_backups/</td><td>Node Talker settings, favorites and DMR networks, certificate, rpt.conf backups (the <code>nodelisten…</code> names link to them)</td><td>Node Talker</td></tr>
+    <tr><td class="mono">/etc/asl_dvs/local_api.key</td><td>key Node Talker uses to call the Dashboard</td><td>Dashboard, Node Talker</td></tr>
     <tr><td class="mono">/etc/asl_dvs/launch_no_*</td><td>memory-saver off switches</td><td>you</td></tr>
     <tr><td class="mono">/etc/asl_dvs/instmon_library/</td><td>tool versions, scripts, configs; <code>config/wg0.conf</code>; <code>config_restore/</code></td><td>instmon, 44helper</td></tr>
     <tr><td class="mono">/etc/sysmon/sysmon.conf</td><td>SysMon settings, pinned list, radio presets</td><td>SysMon</td></tr>
@@ -3242,7 +3251,7 @@ free -m; zramctl</pre>
     <tr><td class="mono">instmon</td><td>instmon</td><td class="port">8990</td></tr>
     <tr><td class="mono">wifimon</td><td>wifimon</td><td class="port">8991</td></tr>
     <tr><td class="mono">44helper</td><td>44helper</td><td class="port">9997</td></tr>
-    <tr><td class="mono">nodelisten</td><td>Node Listen (Restart=always, WatchdogSec=60)</td><td class="port">8993</td></tr>
+    <tr><td class="mono">nodetalker</td><td>Node Talker (Restart=always, WatchdogSec=60; also answers to <code>nodelisten</code>)</td><td class="port">8993</td></tr>
     <tr><td class="mono">asterisk</td><td>ASL3 / app_rpt</td><td class="port">4569/udp</td></tr>
     <tr><td class="mono">allmon3</td><td>Allmon3</td><td></td></tr>
     <tr><td class="mono">analog_bridge · mmdvm_bridge · md380-emu</td><td>DVSwitch</td><td></td></tr>

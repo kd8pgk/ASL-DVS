@@ -15,12 +15,12 @@ By KD8PGK, written with Claude (Anthropic).
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals and any other PDF to upload, open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Powers off on sustained low voltage; reboots (or powers off) on a lost network. Hardware watchdog, and alerts by ntfy or webhook. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
-| Node Listen | `nodelisten_v*.py` | 8993 | Listen to an ASL node's audio in the browser. Asterisk sends the node's audio through one `outstreamcmd` line in rpt.conf, which the Node card adds or removes. |
-| Node Listen for AMP | `amp_nodelisten_v*.py` | 8993 | Node Listen for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. |
+| Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
+| Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
 
 Scripts:
 
-- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Listen when you ask for it. It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi.
+- `install_all_v*.sh`: installs or updates the Dashboard, SysMon, wifimon and 44helper, and Node Talker when you ask for it. It also installs instmon when it is missing, and downloads from GitHub any file it can't find on the Pi.
 - `uninstall_all_v*.sh`: removes every tool except instmon, and leaves configs in place.
 - `wifi_menu_v3_1_20261011.sh`: a text menu for WiFi status and switching networks (uses `nmcli`).
 
@@ -76,8 +76,8 @@ User manual (PDF, 110 pages): every tool, tab and button, with SysMon and 44help
 44helper manual (PDF, 51 pages): every 44helper tab and card in detail: the tunnel modes (split, half, full with exceptions, full) side by side, the half-tunnel and exceptions cards with all their checks, every installer step, Update, System Optimization, Config, troubleshooting and a file and routing reference. The source is in `docs/src/44helper_manual/`:
 [`docs/ASL-DVS_44helper_Manual.pdf`](docs/ASL-DVS_44helper_Manual.pdf)
 
-Node Listen manual (PDF, 29 pages): receive and transmit audio from end to end, every setting with its default and when to change it, getting levels right, the meters, the waterfall and the Audio check, troubleshooting by symptom and a file, port and API reference. The source is in `docs/src/nodelisten_manual/`:
-[`docs/ASL-DVS_Node_Listen_Manual.pdf`](docs/ASL-DVS_Node_Listen_Manual.pdf)
+Node Talker manual (PDF, 30 pages): receive and transmit audio from end to end, every setting with its default and when to change it, getting levels right, the meters, the waterfall and the Audio check, troubleshooting by symptom and a file, port and API reference. The source is in `docs/src/nodetalker_manual/`:
+[`docs/ASL-DVS_Node_Talker_Manual.pdf`](docs/ASL-DVS_Node_Talker_Manual.pdf)
 
 To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (needs Playwright with Chromium; set `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH` if they aren't found by default).
 
@@ -111,108 +111,171 @@ Watchdog, and it removes an installed copy. The Dashboard's own service
 already restarts it with `Restart=always` and `WatchdogSec=30`. The Watchdog
 script and its changelog are no longer in the repo.
 
-## Node Listen
+## Node Talker
 
-Node Listen is a phone-friendly page for one node on your home network: it
-plays the node's audio about half a second behind, transmits with
-push-to-talk, and connects or tunes up to 15 favorites. It is optional. The installer (7.2.0 and later) asks before it
-installs it on a node that doesn't have it (non-interactive: set
-`INSTALL_NODELISTEN=1`), and always updates it once it is installed. instmon
-(2.58.0 and later) lists it with the other tools: its library, GitHub Updates
-and Full Update, which updates it only where it is installed. It also installs
-on its own:
+Node Talker (called Node Listen before 0.6.0) is a phone-friendly page for one
+node on your home network. It:
 
-```
-sudo python3 nodetalker_v0_6_0_20261020.py --install
-```
+- plays the node's audio about half a second behind;
+- transmits with push-to-talk;
+- connects or tunes up to 15 favorites.
 
-Then open `http://<pi-address>:8993` (it moves you to `https://`; the
-certificate is made on the Pi, so accept the browser's warning), log in with
-the root password, and on the **Setup** tab pick the node, press **Send its
-audio here**, then **Restart Asterisk**. That adds one line to the node's stanza in
-`/etc/asterisk/rpt.conf` (a backup goes to `/etc/asl_dvs/nodelisten_backups/`):
+It is optional.
+
+- **The installer** (7.2.0 and later) asks before it installs it on a node
+  that doesn't have it (non-interactive: set `INSTALL_NODETALKER=1`), and
+  always updates it once it is installed.
+- **instmon** (2.58.0 and later) lists it with the other tools: its library,
+  GitHub Updates and Full Update, which updates it only where it is
+  installed.
+- **On its own:**
+
+  ```
+  sudo python3 nodetalker_v0_6_0_20261020.py --install
+  ```
+
+Then:
+
+1. Open `http://<pi-address>:8993`. It moves you to `https://`; the
+   certificate is made on the Pi, so accept the browser's warning.
+2. Log in with the root password.
+3. On the **Setup** tab, pick the node and press **Send its audio here**.
+4. Press **Restart Asterisk**.
+
+That adds one line to the node's stanza in `/etc/asterisk/rpt.conf`, with a
+backup in `/etc/asl_dvs/nodetalker_backups/`:
 
 ```
 outstreamcmd = /usr/bin/python3,/usr/local/bin/nodelisten.py,--feed,6200
 ```
 
-Asterisk runs that command and writes the node's audio (8 kHz, 16-bit) to it;
-the command passes it to Node Listen on `127.0.0.1:6200/udp`. A node takes
-one `outstreamcmd`, so a node that already feeds Broadcastify is refused.
-Each listener uses about 64 kbit/s; the default limit is 3. **Listen without
-logging in** (Settings) lets anyone who can reach the page listen, but never
-change anything.
+- **How the audio gets there:** Asterisk runs that command and writes the
+  node's audio (8 kHz, 16-bit) to it. The command passes it to Node Talker on
+  `127.0.0.1:6200/udp`.
+- **Why the line says `nodelisten.py`:** that path is a symlink to
+  `nodetalker.py`. The older tools recognize the line by that name.
+- **One `outstreamcmd` per node:** a node that already feeds Broadcastify is
+  refused.
+- **Listeners:** each uses about 64 kbit/s; the default limit is 3.
+- **Listen without logging in** (Settings) lets anyone who can reach the page
+  listen, but never change anything.
 
 **Push-to-talk** (0.3.0 and later) sends the phone's microphone to private
-node 1921 (`rxchannel = USRP/127.0.0.1:34018:32018`), which Node Listen keeps
-linked to the main node. **Add node 1921** on the Setup tab writes its stanza
-and `[nodes]` line (with a backup); restart Asterisk once. A transmission
-stops at the time-out (120 s by default), 1 s after audio stops arriving, or
-when you let go, and PTT is refused while the node is busy unless you turn
-that off. Browsers only allow the microphone on an `https://` page, which is
-why HTTPS is on by default.
+node 1921 (`rxchannel = USRP/127.0.0.1:34018:32018`). Node Talker keeps that
+node linked to the main node.
+
+- **Setup:** **Add node 1921** on the Setup tab writes its stanza and its
+  `[nodes]` line, with a backup. Restart Asterisk once.
+- **A transmission stops** at the time-out (120 s by default), 1 s after
+  audio stops arriving, or when you let go.
+- **While the node is busy,** PTT is refused unless you turn that off.
+- **HTTPS is on by default** because browsers only allow the microphone on an
+  `https://` page.
 
 **Favorites** (0.5.0 and later): the Connect tab offers only the (up to) 15
-favorites set on the Setup tab: ASL, EchoLink, DMR, STFU, YSF, P25, NXDN, D-STAR
-and M17. They are kept in `/etc/asl_dvs/nodelisten_favorites.conf` (mode 0600)
-in Node Controller's `asl_dvs.conf` format (`[ASL]`, `[ECHO]`, `[DMR_SERVERS]`,
-`[DMR_<NETWORK>]`, `[STFU]`, `[YSF]`, `[P25]`, `[NXDN]`, `[DSTAR]`, `[M17]`), with
-up to 10 DMR networks (`name|password|address:port|url`) whose tune info each
-DMR favorite uses. The Dashboard's favorites and DMR networks can be copied in.
-`nodelisten_favorites.json` keeps a copy of the ASL, EchoLink and M17 favorites
-(up to 10) for older versions.
+favorites set on the Setup tab.
+
+- **Modes:** ASL, EchoLink, DMR, STFU, YSF, P25, NXDN, D-STAR and M17.
+- **Where they're kept:** `/etc/asl_dvs/nodetalker_favorites.conf` (mode
+  0600), in Node Controller's `asl_dvs.conf` format (`[ASL]`, `[ECHO]`,
+  `[DMR_SERVERS]`, `[DMR_<NETWORK>]`, `[STFU]`, `[YSF]`, `[P25]`, `[NXDN]`,
+  `[DSTAR]`, `[M17]`).
+- **DMR networks:** up to 10 (`name|password|address:port|url`). Each DMR
+  favorite uses its network's tune info.
+- **Copying in:** the Dashboard's favorites and DMR networks can be copied in.
+
+How each kind of favorite connects:
 
 - **ASL and EchoLink:** Connect and Disconnect use `rpt cmd <node> ilink 3` /
-  `ilink 1`; Disconnect drops linked favorites only. Links are always made from
-  the main node. When Node Controller (pi02w 9.3.89 or later) runs and the main
-  node connects, Node Listen asks the Dashboard to do it (a local call with the
-  key in `/etc/asl_dvs/local_api.key`).
-- **Solo (no Node Controller running):** Node Listen tunes DVSwitch and M17
-  itself, as Node Controller does. A DVSwitch favorite starts the mode's
-  gateway service if needed, runs `dvswitch.sh tune disconnect`, `mode <MODE>`,
-  for DMR `tune <password>@<address:port>` (skipped when that network is
-  already joined), then `tune <tg>`, and links the digital bridge node. An M17
-  favorite writes `USRP2M17.ini` (address from `M17Hosts.json`), restarts
-  `usrp2m17` and links the M17 bridge node. One digital favorite is on the air
-  at a time; tuning one drops linked ASL/EchoLink favorites. The bridge nodes
-  are found in `rpt.conf` (from the Analog_Bridge and USRP2M17 ports), and the
-  M17 callsign in `USRP2M17.ini`; the **Digital** card on the Setup tab can set
-  them, edit the DMR networks and download or upload the favorites file.
-- **With Node Controller running:** ASL, EchoLink and M17 go through it, and
-  DVSwitch favorites are tuned on its page.
+  `ilink 1`. Disconnect drops linked favorites only. Links are always made
+  from the main node.
+- **With Node Controller on the node:** ASL, EchoLink, DVSwitch and M17 all go
+  through it, by a local call with the key in `/etc/asl_dvs/local_api.key`.
+  - DVSwitch needs pi02w 9.3.94 or later; ASL and M17 need 9.3.89 or later.
+  - When Node Controller has no DMR network for a DMR favorite, the Connect
+    tab asks to **Add it to Node Controller and tune**, or to **Tune this
+    once** (nothing saved).
+- **Solo (no Node Controller running):** Node Talker tunes DVSwitch and M17
+  itself, as Node Controller does.
+  - **A DVSwitch favorite:**
+    1. Starts the mode's gateway service if it isn't running.
+    2. Runs `dvswitch.sh tune disconnect`, then `mode <MODE>`.
+    3. For DMR, runs `tune <password>@<address:port>`, skipped when that
+       network is already joined.
+    4. Runs `tune <tg>` and links the digital bridge node.
+  - **An M17 favorite** writes `USRP2M17.ini` (address from
+    `M17Hosts.json`), restarts `usrp2m17` and links the M17 bridge node.
+  - **One digital favorite is on the air at a time.** Tuning one drops
+    linked ASL/EchoLink favorites.
+  - **Bridge nodes and callsign:** the bridge nodes are found in `rpt.conf`
+    (from the Analog_Bridge and USRP2M17 ports), and the M17 callsign in
+    `USRP2M17.ini`. The **Digital** card on the Setup tab can set them, edit
+    the DMR networks, and download or upload the favorites file.
 
-instmon (2.63.0 and later) keeps `nodelisten*.conf` in its Config library and
-installs each one under its own name. An opt-in **Tune** card sets the mic and
-listen gains (-12 to +12 dB) and the listen buffer. `--uninstall` removes the
-`outstreamcmd` line and node 1921 too, and keeps the settings and favorites.
+instmon (2.63.0 and later) keeps `nodetalker*.conf` (and the older
+`nodelisten*.conf`) in its Config library and installs each one under its
+own name. An opt-in **Tune** card sets the mic and listen gains (-12 to
++12 dB) and the listen buffer. `--uninstall` removes the `outstreamcmd` line
+and node 1921 too, and keeps the settings and favorites.
 
-## Node Listen for AMP
+**The rename from Node Listen** (0.6.0). The service is now
+`nodetalker.service`, the program is `/usr/local/bin/nodetalker.py`, and the
+files are `/etc/asl_dvs/nodetalker*`. Installing over Node Listen moves the
+settings, favorites and HTTPS certificate across. These keep working for
+older tools:
 
-`amp_nodelisten_v*.py` is a fork of Node Listen for a node that runs the
+- the old service name (`nodelisten.service` is an alias);
+- the old program path (a symlink);
+- the old settings and data paths (symlinks);
+- a `[nodelisten]` copy of the settings;
+- the `rpt.conf` lines (unchanged).
+
+To go back to Node Listen 0.5.0, use instmon or the installer, which remove
+Node Talker first, or run `sudo python3 /usr/local/bin/nodetalker.py
+--uninstall` before installing it by hand. A node still on instmon 2.63.0
+needs Full Update run twice: the first run updates instmon, the second
+switches Node Listen to Node Talker.
+
+## Node Talker for AMP
+
+`amp_nodetalker_v*.py` (Node Listen for AMP before 0.3.0) is a fork of Node
+Talker for a node that runs the
 [Ampersand](https://github.com/Ampersand-ASL/amp-server) AMP server
-(`amp-server`) instead of Asterisk. It is the same page (Listen, push-to-talk,
-favorites, the RX cleanup, the meters and the Audio check) with a different
-link to the node, and it stands alone: the installer, instmon and the other
-tools don't install or use it.
+(`amp-server`) instead of Asterisk.
+
+- It is the same page (Listen, push-to-talk, favorites, the RX cleanup, the
+  meters and the Audio check) with a different link to the node.
+- It stands alone: the installer, instmon and the other tools don't install
+  or use it.
 
 ```
 sudo python3 amp_nodetalker_v0_3_0_20261020.py --install
 ```
 
-Open `http://<pi-address>:8993` (it moves you to `https://`), log in with the
-root password, or, when root has none, the password of the user that runs
-`amp-server`. On the **Setup** tab, open **AMP link** and press **Set up for
-me**: it adds one line (`nodelisten <password>`) to AMP's login file (its
-`authFile`, by default `/etc/ampersand/auth.txt`, with a backup in
-`/etc/asl_dvs/amp_nodelisten_backups/`), and AMP reloads it within a second.
+1. Open `http://<pi-address>:8993`. It moves you to `https://`.
+2. Log in with the root password or, when root has none, the password of the
+   user that runs `amp-server`.
+3. On the **Setup** tab, open **AMP link** and press **Set up for me**.
 
-Node Listen then calls the AMP node over IAX2 as a private link (calling in as
-node 1921): it hears everything the node passes, and push-to-talk goes out to
-the radio and every link. It reads the node number, the IAX port and AMP's web
-port and password from the running `amp-server` and its `amp-server.json`;
-**Advanced** on the same card sets them by hand. Links, Connect and Disconnect
-use AMP's web API. Favorites are AllStar node numbers, or a direct address
-(`iax:user@host:port/node,password`) for a private node.
+That adds one line (`nodelisten <password>`) to AMP's login file and AMP
+reloads it within a second.
+
+- The login file is AMP's `authFile`, by default `/etc/ampersand/auth.txt`.
+  A backup goes in `/etc/asl_dvs/amp_nodetalker_backups/`.
+- The login user stays `nodelisten`, so a node set up before the rename keeps
+  working.
+
+Node Talker then calls the AMP node over IAX2 as a private link, calling in as
+node 1921:
+
+- It hears everything the node passes, and push-to-talk goes out to the radio
+  and every link.
+- It reads the node number, the IAX port and AMP's web port and password from
+  the running `amp-server` and its `amp-server.json`. **Advanced** on the
+  same card sets them by hand.
+- Links, Connect and Disconnect use AMP's web API.
+- Favorites are AllStar node numbers, or a direct address
+  (`iax:user@host:port/node,password`) for a private node.
 
 ## Updating from GitHub (instmon)
 
@@ -395,8 +458,8 @@ per tool and build:
 | [`instmon.md`](changelogs/instmon.md) | `instmon_v*.py` |
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
-| [`nodelisten.md`](changelogs/nodelisten.md) | `nodelisten_v*.py` |
-| [`amp_nodelisten.md`](changelogs/amp_nodelisten.md) | `amp_nodelisten_v*.py` |
+| [`nodetalker.md`](changelogs/nodetalker.md) | `nodetalker_v*.py` (was `nodelisten_v*.py`) |
+| [`amp_nodetalker.md`](changelogs/amp_nodetalker.md) | `amp_nodetalker_v*.py` (was `amp_nodelisten_v*.py`) |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
