@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.5"
+VERSION = "0.6.6"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -5491,7 +5491,7 @@ async function loadFavs() {
   sel.innerHTML = '';
   favNets = d.nets || [];
   favModes = d.modes || favModes;
-  favs.forEach((f, i) => addOption(sel, String(i), modeName(f.mode) + ' ' + favNum(f) + '  ·  ' + f.label));
+  favs.forEach((f, i) => addOption(sel, String(i), f.label || (modeName(f.mode) + ' ' + favNum(f))));
   if (keep && Number(keep) < favs.length) sel.value = keep;
   $('c-empty').classList.toggle('hidden', favs.length > 0);
   $('c-pick').classList.toggle('hidden', favs.length === 0);
