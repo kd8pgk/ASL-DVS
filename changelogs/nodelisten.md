@@ -1,6 +1,33 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_19_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_4_20_20261020.py`. Newest entries first.
+
+## 0.4.20 (2026-10-20)
+
+Fixes from an external-interface audit.
+
+- **Login could reject the right password** when several logins ran at once
+  and the `/etc/shadow` check was used (no `pam` module). `crypt(3)` uses one
+  shared buffer; the call now runs under a lock. In a test with 16 threads,
+  0.4.19 rejected about half of the correct passwords. A wrong password was
+  never accepted.
+- **HTTPS that can't start is no longer silent.** A certificate that won't load
+  is moved aside (`….bad`) and a new one is made, once. If HTTPS still can't
+  start, the page is served over plain HTTP as before (internet logins stay
+  blocked without HTTPS), and the login card now says in red that the page is
+  not encrypted and the password is sent in plain text.
+- **`systemctl` calls have a timeout** (120 s) and report a missing or stuck
+  `systemctl` instead of hanging or crashing the install.
+- **Install keeps the previous version until the restart works.** The old
+  `nodelisten_v….py` in `/usr/local/lib/asl_dvs/nodelisten` is removed only
+  after `systemctl restart` succeeds. The copy and the symlink use unique
+  temporary names. A failed `daemon-reload` or `enable` is now reported.
+- **HTTP-to-HTTPS redirect:** a request with a bad `Host` header is sent to the
+  Pi's LAN address, not to `127.0.0.1`.
+- **Transmit:** the USRP sequence number and the transmit socket are set under
+  a lock, so two threads can't send the same number or make two sockets.
+- The internet-login gate (20 failed internet logins in 10 minutes pauses
+  internet logins) stays. It now keeps only the last 20 failures.
 
 ## 0.4.19 (2026-10-20)
 
