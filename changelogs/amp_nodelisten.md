@@ -1,11 +1,43 @@
 # amp_nodelisten changelog
 
-Current file: `amp_nodelisten_v0_1_0_20261020.py`. Newest entries first.
+Current file: `amp_nodelisten_v0_2_0_20261020.py`. Newest entries first.
 
 Node Listen for AMP is a fork of Node Listen (`nodelisten_v*.py`, from 0.4.17)
 for a node that runs the Ampersand AMP server (`amp-server`) instead of
 Asterisk. It stands alone: the other tools in this repo don't use it, and it
 doesn't use them.
+
+## 0.2.0 (2026-10-20)
+
+- **From Node Listen 0.4.18 and 0.4.19.**
+- **Connect turns into Disconnect.** On the Connect tab, the Connect card's
+  button reads **Disconnect** (in red) when the selected favorite is linked,
+  and pressing it drops that favorite's call only. Other calls, and Node
+  Listen's own link, stay up. The Links card loses the "Linked favorites" line,
+  its small Disconnect button and the note under them.
+- **Headset / audio output** (new Setup card), for a wired, USB-C or
+  Bluetooth headset. Saved in this browser only.
+  - **Audio output:** a list of outputs where the browser can switch (Chrome
+    with `setSinkId`); elsewhere a note says to pick the headset in Android's
+    sound settings.
+  - **Microphone for push-to-talk:** Default (follows Android), or a chosen
+    mic. If the chosen mic is gone, the default is used.
+  - **Headset button:** Listen on / off (as before), **Push to talk**, or Off.
+    Push to talk: press once to talk, press again to stop. It uses the same
+    transmit as the Talk button, with the same time-out, and the button reads
+    `TALKING (headset)`. Android only passes the button to the page while Node
+    Listen is playing.
+  - Shows which output and microphone are in use. **Show device names** asks
+    for the microphone once when the browser hides the names.
+- **Headset unplugged or output lost.** When Android pauses playback on its own
+  (headset unplugged, Bluetooth dropped), Node Listen stops transmitting, stops
+  listening and says so, where before it kept showing "playing". When the
+  headset comes back within 30 minutes, listening starts again.
+- After a transmission, playback is resumed straight away if the phone paused
+  it, so the sound comes back to the headset.
+- **Audio check** report adds the audio output, the microphone, how many times
+  the headset was unplugged or the output was lost, and how many transmissions
+  came from the headset button.
 
 ## 0.1.0 (2026-10-20)
 

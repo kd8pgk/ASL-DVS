@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.18"
+VERSION = "0.4.19"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -2460,6 +2460,9 @@ let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = fa
 let listenAt = 0, rxLastDb = -120, chk = null, chkUndo = {}, chkCfg = null;
 let busNode = null, analyser = null, specBins = null, specRaf = 0, specLast = 0, busyText = '', pttState = 'off', ownUnkeyAt = -1e9;
 let specMode = 'waterfall';
+let hs = {out: '', mic: '', btn: 'listen'};
+try { Object.assign(hs, JSON.parse(localStorage.getItem('nlHeadset') || '{}')); } catch (e) {}
+let hsTx = false, outLost = 0, devCount = -1, lastDevChange = 0;
 try { if (localStorage.getItem('nlSpec') === 'bars') specMode = 'bars'; } catch (e) {}
 
 function sincKernels(phases, taps, half, fc, tAt, edgeIn) {
@@ -2623,7 +2626,7 @@ function addOption(sel, value, text) {
 
 function sendOp(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op})); }
 
-const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'chk', 'lvl', 'mic', 'play', 'log'];
+const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'chk', 'lvl', 'mic', 'hs', 'play', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -2635,6 +2638,7 @@ function foldSet(k, open) {
   if (!open) return;
   if (k === 'fav') loadDashFavs();
   if (k === 'log') pollLog();
+  if (k === 'hs') hsDevices();
 }
 
 function sum(k, text) { $('sum-' + k).textContent = text; }
@@ -2981,7 +2985,7 @@ function accSum(a) {
 function chkNew(mins) {
   return {running: true, v: 1, mins: mins, elapsed: 0, paused: 0, last: Date.now(), rx: accNew(), tx: accNew(),
     seg: null, rxTx: [], drops: 0, tails: 0, noisy: 0, hum: 0, humN: 0, load: 0, loadMax: 0, loadN: 0,
-    txN: 0, txSecs: 0, keyedAt: 0, deadman: 0, timeout: 0, denied: 0, pend: false, srv: []};
+    txN: 0, txSecs: 0, keyedAt: 0, deadman: 0, timeout: 0, denied: 0, pend: false, srv: [], outDrops: 0, hsPtt: 0};
 }
 
 function chkSave() {
@@ -3076,9 +3080,9 @@ function chkSummary(c) {
     rx: Object.assign(rx, {nTx: lv.length, spread: lv.length >= 2 ? lv[lv.length - 1] - lv[0] : null,
       quietest: lv.length ? lv[0] : null, loudest: lv.length ? lv[lv.length - 1] : null,
       hum: c.humN ? c.hum / c.humN : null, drops: c.drops, dropsMin: c.elapsed ? c.drops / (c.elapsed / 60000) : 0, tails: c.tails,
-      load: c.loadN ? c.load / c.loadN : null, loadMax: c.loadN ? c.loadMax : null}),
+      load: c.loadN ? c.load / c.loadN : null, loadMax: c.loadN ? c.loadMax : null, outDrops: c.outDrops || 0, out: canSink() ? hsLabel('hs-out') : 'phone default'}),
     tx: Object.assign(tx, {nTx: c.txN, txSecs: Math.round(c.txSecs), deadman: c.deadman, timeout: c.timeout, denied: c.denied,
-      gapTx: c.srv.filter((x) => x.gaps > 0).length, srvN: c.srv.length, srvPeak: c.srv.length ? Math.max(...c.srv.map((x) => x.pk)) : null})};
+      gapTx: c.srv.filter((x) => x.gaps > 0).length, srvN: c.srv.length, srvPeak: c.srv.length ? Math.max(...c.srv.map((x) => x.pk)) : null, hsPtt: c.hsPtt || 0, mic: hsLabel('hs-mic')})};
 }
 
 async function chkStop() {
@@ -3111,6 +3115,8 @@ function chkRows(r, p, side) {
     ['Dropouts', R.drops + (R.drops ? ' (' + R.dropsMin.toFixed(1) + '/min)' : ''), P && String(P.drops), 'none', st(R.dropsMin < 0.5, R.dropsMin < 2)],
     ['Squelch tails heard', String(R.tails), P && String(P.tails), 'none', st(R.tails === 0, R.tails < 3)],
     ['Pi load (avg / max)', R.load == null ? '-' : R.load.toFixed(1) + ' / ' + R.loadMax.toFixed(1) + ' %', P && (P.load == null ? '-' : P.load.toFixed(1) + ' %'), 'under 25 %', R.load == null ? '' : st(R.loadMax < 25, R.loadMax < 50)],
+    ['Headset unplugged / output lost', R.outDrops == null ? '-' : String(R.outDrops), P && (P.outDrops == null ? '-' : String(P.outDrops)), 'none', R.outDrops == null ? '' : st(R.outDrops === 0, R.outDrops < 2)],
+    ['Audio output', R.out || '-', P && (P.out || '-'), '', ''],
   ] : [
     ['Transmissions', R.nTx + (R.nTx ? ' (' + R.txSecs + ' s)' : ''), P && String(P.nTx), '', 'st-ok'],
     ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -12', R.actSecs < 0.4 ? '' : st(R.speech >= -24 && R.speech <= -12, R.speech >= -30 && R.speech <= -8)],
@@ -3120,6 +3126,8 @@ function chkRows(r, p, side) {
     ['Gate closed while talking', Math.round(R.gatePct) + ' %', P && Math.round(P.gatePct) + ' %', 'under 10 %', R.actSecs < 0.4 ? '' : st(R.gatePct < 10, R.gatePct < 20)],
     ['Transmissions with gaps', R.srvN ? R.gapTx + ' of ' + R.srvN : '-', P && (P.srvN ? P.gapTx + ' of ' + P.srvN : '-'), 'none', R.srvN ? st(R.gapTx === 0, R.gapTx / R.srvN < 0.25) : ''],
     ['Peak at the Pi (after TX gain)', db0(R.srvPeak), P && db0(P.srvPeak), 'below -1', R.srvPeak == null ? '' : st(R.srvPeak < -1, R.srvPeak < -0.2)],
+    ['Microphone', R.mic || '-', P && (P.mic || '-'), '', ''],
+    ['Headset-button transmissions', R.hsPtt == null ? '-' : String(R.hsPtt), P && (P.hsPtt == null ? '-' : String(P.hsPtt)), '', ''],
     ['Audio stopped / time-outs / refused', R.deadman + ' / ' + R.timeout + ' / ' + R.denied, P && (P.deadman + ' / ' + P.timeout + ' / ' + P.denied), '0 / 0 / 0', st(!R.deadman && !R.timeout && !R.denied, R.deadman < 2)],
   ];
   return rows;
@@ -3417,6 +3425,7 @@ function makeCtx() {
   } else {
     gainNode.connect(ctx.destination);
   }
+  hsApplyOut();
   return true;
 }
 
@@ -3524,9 +3533,117 @@ function setupMediaSession() {
   if (!('mediaSession' in navigator)) return;
   setMediaInfo();
   const on = (action, fn) => { try { navigator.mediaSession.setActionHandler(action, fn); } catch (e) {} };
-  on('play', () => { if (!playing) startListen(); });
-  on('pause', () => { if (playing) stopListen(); });
-  on('stop', () => { if (playing) stopListen(); });
+  on('play', () => hsAct('play'));
+  on('pause', () => hsAct('pause'));
+  on('stop', () => hsAct('stop'));
+}
+
+function hsAct(a) {
+  if (hs.btn === 'off') return;
+  if (hs.btn !== 'ptt') {
+    if (a === 'play') { if (!playing) startListen(); } else if (playing) stopListen();
+    return;
+  }
+  if (a === 'stop') { if (talking) pttUp(); return; }
+  setTimeout(() => {
+    if (!playing) { if (talking) pttUp(); return; }
+    if (Date.now() - lastDevChange < 1500 || (mediaDest && $('player').paused)) { hsLost(); return; }
+    if (talking) pttUp(); else hsPttDown();
+  }, 400);
+}
+
+async function hsPttDown() {
+  if (!authed || pttState === 'off') {
+    note('ptt-msg', 'warn', 'Headset button: push-to-talk is not ready (log in, and set up transmit on the Setup tab).');
+    return;
+  }
+  hsTx = true;
+  if (chk && chk.running) chk.hsPtt = (chk.hsPtt || 0) + 1;
+  await pttDown();
+  if (!talking) hsTx = false;
+  pttLabel();
+}
+
+function canSink() { const p = $('player'); return !!(p && typeof p.setSinkId === 'function'); }
+
+async function hsApplyOut() {
+  try {
+    if (mediaDest && canSink()) await $('player').setSinkId(hs.out || '');
+    else if (ctx && !mediaDest && typeof ctx.setSinkId === 'function') await ctx.setSinkId(hs.out || '');
+  } catch (e) {
+    note('hs-msg', 'warn', 'Could not switch to the chosen output (' + (e.message || e.name) + '); playing on the phone default.');
+  }
+}
+
+function hsFill(id, devs, keep, dflt) {
+  const sel = $(id);
+  sel.innerHTML = '';
+  addOption(sel, '', dflt);
+  devs.forEach((d, i) => {
+    if (d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications') addOption(sel, d.deviceId, d.label || (id === 'hs-out' ? 'Output ' : 'Microphone ') + (i + 1));
+  });
+  if (keep && !Array.from(sel.options).some((o) => o.value === keep)) addOption(sel, keep, 'Saved device (not connected now)');
+  sel.value = keep || '';
+}
+
+function hsLabel(id) {
+  const sel = $(id);
+  return sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].textContent : '';
+}
+
+async function hsDevices() {
+  const md = navigator.mediaDevices;
+  $('hs-out-row').classList.toggle('hidden', !canSink());
+  $('hs-out-note').classList.toggle('hidden', canSink());
+  if (!md || !md.enumerateDevices) { $('hs-now').textContent = 'This browser does not list audio devices.'; return []; }
+  let list = [];
+  try { list = await md.enumerateDevices(); } catch (e) { return []; }
+  hsFill('hs-out', list.filter((d) => d.kind === 'audiooutput'), hs.out, 'Phone default');
+  hsFill('hs-mic', list.filter((d) => d.kind === 'audioinput'), hs.mic, 'Default (follows Android)');
+  $('hs-names').classList.toggle('hidden', list.some((d) => d.label));
+  $('hs-now').textContent = 'In use: output ' + (canSink() ? hsLabel('hs-out') : 'phone default') + ' · microphone ' + hsLabel('hs-mic');
+  return list;
+}
+
+async function hsNames() {
+  try {
+    const st = await navigator.mediaDevices.getUserMedia({audio: true});
+    st.getTracks().forEach((t) => t.stop());
+  } catch (e) { note('hs-msg', 'warn', 'The browser did not allow the microphone, so it hides the device names.'); }
+  hsDevices();
+}
+
+function hsSummary() {
+  const b = {listen: 'Button: Listen', ptt: 'Button: push to talk', off: 'Button off'}[hs.btn] || 'Button: Listen';
+  sum('hs', b + (hs.out ? ' · output chosen' : '') + (hs.mic ? ' · mic chosen' : ''));
+}
+
+function hsSave() {
+  hs = {out: $('hs-out').value, mic: $('hs-mic').value, btn: $('hs-btn').value};
+  try { localStorage.setItem('nlHeadset', JSON.stringify(hs)); } catch (e) {}
+  note('hs-msg', '', '');
+  hsSummary();
+  hsApplyOut();
+  hsDevices();
+}
+
+function hsLost() {
+  if (talking) pttUp();
+  if (chk && chk.running) chk.outDrops = (chk.outDrops || 0) + 1;
+  outLost = Date.now();
+  stopListen();
+  note('listen-msg', 'warn', 'Headset unplugged or audio output changed. Tap Listen to play again (it restarts on its own when the headset comes back).');
+}
+
+async function hsDevChange() {
+  lastDevChange = Date.now();
+  const list = await hsDevices();
+  const n = list.length;
+  if (outLost && devCount >= 0 && n > devCount && Date.now() - outLost < 30 * 60000 && !playing) {
+    outLost = 0;
+    startListen();
+  }
+  devCount = n;
 }
 
 async function wakeLockApply() {
@@ -3544,7 +3661,7 @@ async function wakeLockApply() {
 
 function pttLabel() {
   const idle = pttState !== 'talking' && pttState !== 'keying';
-  $('ptt-label').textContent = pttState === 'talking' ? 'TALKING' : pttState === 'keying' ? 'Keying...' : (busyText || 'Hold to talk');
+  $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : 'TALKING') : pttState === 'keying' ? 'Keying...' : (busyText || 'Hold to talk');
   $('ptt').classList.toggle('busy', idle && !!busyText);
 }
 
@@ -3649,8 +3766,13 @@ async function startMic(sink) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser blocks the microphone here (use the https:// page).');
   if (!capCtx) capCtx = newAudioCtx();
   await capCtx.resume();
-  const stream = await navigator.mediaDevices.getUserMedia({audio: {echoCancellation: !!mic.ec, noiseSuppression: !!mic.ns,
-    autoGainControl: !!mic.agc, channelCount: 1}});
+  const base = {echoCancellation: !!mic.ec, noiseSuppression: !!mic.ns, autoGainControl: !!mic.agc, channelCount: 1};
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({audio: hs.mic ? Object.assign({deviceId: {exact: hs.mic}}, base) : base}); }
+  catch (e) {
+    if (!hs.mic || !/Overconstrained|NotFound/.test(e.name)) throw e;
+    stream = await navigator.mediaDevices.getUserMedia({audio: base});
+  }
   if (!talking && !testing) { stream.getTracks().forEach((t) => t.stop()); return; }
   micStream = stream;
   frameSink = sink;
@@ -3833,12 +3955,14 @@ function stopMic() {
 function endTalk() {
   if (talking) ownUnkeyAt = performance.now();
   talking = false;
+  hsTx = false;
   rxMeterBack();
   preKey = [];
   stopMic();
   if (talkTimer) { clearInterval(talkTimer); talkTimer = null; }
   $('ptt-time').textContent = '';
   setTimeout(() => { if (gainNode && !talking) gainNode.gain.value = listenVolume(); }, 1000);
+  if (playing && mediaDest && $('player').paused) $('player').play().catch(() => {});
   wakeLockApply();
 }
 
@@ -4183,6 +4307,13 @@ document.addEventListener('DOMContentLoaded', () => {
   $('tune-reset').addEventListener('click', tuneReset);
   FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => foldSet(k, !foldOpen(k))));
   setupMediaSession();
+  $('hs-btn').value = hs.btn;
+  ['hs-out', 'hs-mic', 'hs-btn'].forEach((id) => $(id).addEventListener('change', hsSave));
+  $('hs-names').addEventListener('click', hsNames);
+  $('player').addEventListener('pause', () => { if (playing && mediaDest && $('player').paused) hsLost(); });
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', hsDevChange);
+  hsSummary();
+  hsDevices().then((l) => { devCount = l.length; });
   pttUi('off', '');
   whoami().then(() => { if (authed) loadFavs(); });
   setInterval(pollStatus, 1500);
@@ -4439,6 +4570,29 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="rep-n" id="rep-node-n"></div>
 <div class="rep-v" id="rep-node-v"></div>
 </div>
+</div>
+</div>
+
+<div class="card fold" id="cd-hs">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-hs"><span class="fold-t">Headset / audio output</span><span class="fold-sum" id="sum-hs"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-hs">
+<p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
+<div id="hs-out-row"><label for="hs-out">Audio output</label>
+<select id="hs-out" style="width:100%;min-height:44px;margin-top:6px"></select></div>
+<p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Listen follows it.</p>
+<div style="margin-top:10px"><label for="hs-mic">Microphone for push-to-talk</label>
+<select id="hs-mic" style="width:100%;min-height:44px;margin-top:6px"></select></div>
+<p class="muted small">Default follows Android: the headset mic when a headset is plugged in. With Bluetooth, picking the phone's own mic can keep the headset in music quality while you talk, on some phones.</p>
+<div style="margin-top:10px"><label for="hs-btn">Headset button</label>
+<select id="hs-btn" style="width:100%;min-height:44px;margin-top:6px">
+<option value="listen">Listen on / off</option>
+<option value="ptt">Push to talk: press to talk, press again to stop</option>
+<option value="off">Off</option>
+</select></div>
+<p class="muted small">The button only reaches the page while Node Listen is playing. Push to talk uses the same transmit as the Talk button, with the same time-out; if the second press doesn't arrive, the time-out ends the transmission.</p>
+<div class="row"><button id="hs-names" class="btn hidden" type="button">Show device names</button></div>
+<div class="muted small" id="hs-now"></div>
+<div id="hs-msg" class="msg"></div>
 </div>
 </div>
 
