@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.17"
+VERSION = "0.4.18"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -1741,11 +1741,16 @@ def fav_connect(index):
     return _link_outcome(f, node, "")
 
 
-def fav_disconnect():
+def fav_disconnect(index=None):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
     favs = fav_load()
+    if index is not None:
+        try:
+            favs = [favs[int(index)]]
+        except (ValueError, TypeError, IndexError):
+            return {"ok": False, "error": "Pick a favorite."}
     targets = {fav_target(f): f for f in favs}
     _, links = rpt_links(node, max_age=0)
     hit = [l["node"] for l in links if l["node"] in targets]
@@ -1760,7 +1765,7 @@ def fav_disconnect():
         done.append(fav_name(targets[m17]))
         log_event(f"Disconnect {done[0]} through Node Controller", "ok")
     if not hit:
-        return {"ok": True, "message": f"Disconnected {done[0]}." if done else "No favorite is linked."}
+        return {"ok": True, "message": f"Disconnected {done[0]}." if done else ("That favorite is not linked." if index is not None else "No favorite is linked.")}
     via = node == dashboard_conf()["asl_node"]
     for peer in hit:
         r = dash_call({"action": "disconnect", "node": peer}) if via else None
@@ -2737,6 +2742,7 @@ function fmtSecs(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) 
 
 function favNum(f) { return f.mode === 'M17' ? f.num + (f.module ? ' ' + f.module : '') : f.num; }
 
+let linkedTargets = new Set();
 function linkedFavs(d) {
   const links = (d && d.links) || [];
   const set = new Set(links.map((l) => l.node));
@@ -2791,9 +2797,8 @@ async function pollStatus() {
   });
   $('s-nolinks').classList.toggle('hidden', links.length > 0);
   $('s-links-err').classList.toggle('hidden', d.links_ok !== false);
-  const lf = linkedFavs(d);
-  $('c-linked').textContent = lf.length ? lf.map((f) => f.mode + ' ' + favNum(f)).join(', ') : 'No favorite linked';
-  $('c-disc').disabled = !lf.length;
+  linkedTargets = new Set(linkedFavs(d).map((f) => f.target));
+  connectLabel();
   $('nd-feeder').textContent = d.feeder_pids && d.feeder_pids.length ? 'running (pid ' + d.feeder_pids.join(', ') + ')' : 'not running';
   if (d.udp_port) $('nd-udp').textContent = d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)';
 }
@@ -3887,22 +3892,31 @@ function showSelected() {
   $('c-mode').textContent = f ? f.mode : '';
   $('c-num').textContent = f ? favNum(f) : '';
   $('c-label').textContent = f ? f.label : '';
+  connectLabel();
+}
+
+function selectedLinked() {
+  const f = favs[Number($('c-fav').value)];
+  return !!f && linkedTargets.has(f.target);
+}
+
+function connectLabel() {
+  const b = $('c-connect'), on = selectedLinked();
+  b.textContent = on ? 'Disconnect' : 'Connect';
+  b.classList.toggle('primary', !on);
+  b.classList.toggle('danger', on);
 }
 
 async function favConnect() {
   const i = $('c-fav').value;
   if (i === '') return;
   const f = favs[Number(i)];
+  const off = selectedLinked();
   $('c-connect').disabled = true;
-  note('c-msg', '', f && f.mode === 'M17' ? 'Connecting...' : 'Connecting... (checking the link for up to 15 s)');
-  try { setMsg('c-msg', await post('/api/connect', {index: Number(i)})); }
+  note('c-msg', '', off ? 'Disconnecting...' : f && f.mode === 'M17' ? 'Connecting...' : 'Connecting... (checking the link for up to 15 s)');
+  try { setMsg('c-msg', await post(off ? '/api/disconnect' : '/api/connect', {index: Number(i)})); }
   finally { $('c-connect').disabled = false; }
-  pollStatus();
-}
-
-async function favDisconnect() {
-  setMsg('c-msg', await post('/api/disconnect', {}));
-  setTimeout(pollStatus, 1000);
+  if (off) setTimeout(pollStatus, 1000); else pollStatus();
 }
 
 async function loadNode() {
@@ -4142,7 +4156,6 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('c-fav').addEventListener('change', showSelected);
   $('c-connect').addEventListener('click', favConnect);
-  $('c-disc').addEventListener('click', favDisconnect);
   $('nd-enable').addEventListener('click', nodeEnable);
   $('nd-disable').addEventListener('click', nodeDisable);
   $('nd-restart').addEventListener('click', () => astRestart('nd-msg'));
@@ -4214,11 +4227,6 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
 <div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
 <div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
-<div class="row" style="justify-content:space-between;margin:10px 0 0">
-<div><div class="muted small">Linked favorites</div><div class="mono" id="c-linked" style="font-weight:700">-</div></div>
-<button id="c-disc" class="btn danger" type="button" disabled>Disconnect</button>
-</div>
-<div class="muted small" style="margin-top:6px">Disconnect drops linked favorites only; other links stay.</div>
 </div>
 <div class="card">
 <h2>Connect</h2>
@@ -4488,7 +4496,7 @@ _POST_ACTIONS = {
     "/api/tx/disable": (lambda b: tx_disable(), (OSError,)),
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
     "/api/connect": (lambda b: fav_connect(b.get("index")), ()),
-    "/api/disconnect": (lambda b: fav_disconnect(), ()),
+    "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
