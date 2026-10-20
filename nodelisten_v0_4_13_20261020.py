@@ -28,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.12"
+VERSION = "0.4.13"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -1432,24 +1432,9 @@ def dash_call(body, timeout=25):
     return {"ok": bool(d.get("ok")), "message": msg, "error": msg or answered}
 
 
-def local_nodes():
-    try:
-        _, stanzas = read_rpt()
-    except OSError:
-        return []
-    bridges = dashboard_conf()["bridges"]
-    return [x["name"] for x in stanzas
-            if _is_node_name(x["name"]) and x["name"] != TX_NODE and x["name"] not in bridges]
-
-
-def _from_node(from_node):
-    main = main_node()
-    n = str(from_node or "").strip() or main
-    if not n:
-        return None, "Set the node on the Setup tab first."
-    if n != main and n not in local_nodes():
-        return None, f"Node {n} is not a local node in rpt.conf."
-    return n, ""
+def _connect_node():
+    node = main_node()
+    return (node, "") if node else (None, "Set the node on the Setup tab first.")
 
 
 _m17_status = {"t": -M17_STATUS_TTL, "v": ""}
@@ -1483,7 +1468,8 @@ def m17_connect(f, node):
     if not dash_node:
         return {"ok": False, "error": "M17 goes through Node Controller; set its node first."}
     if node != dash_node:
-        return {"ok": False, "error": f"M17 links Node Controller's node {dash_node}: connect from that node."}
+        return {"ok": False, "error": f"M17 goes through Node Controller's node {dash_node}, but Node Listen's node is {node}. "
+                                      f"Send node {dash_node}'s audio here (Setup tab, Receive) to use M17."}
     r = dash_call({"action": "m17-connect", "reflector": f["num"], "module": f["module"], "name": f["label"]}, timeout=40)
     _lstats_invalidate()
     _m17_status["t"] = -M17_STATUS_TTL
@@ -1523,13 +1509,13 @@ def _link_outcome(f, node, via):
                                   "Check the number; the node may be offline or refusing connections."}
 
 
-def fav_connect(index, from_node=None):
+def fav_connect(index):
     favs = fav_load()
     try:
         f = favs[int(index)]
     except (ValueError, TypeError, IndexError):
         return {"ok": False, "error": "Pick a favorite."}
-    node, err = _from_node(from_node)
+    node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
     if f["mode"] == "M17":
@@ -1549,8 +1535,8 @@ def fav_connect(index, from_node=None):
     return _link_outcome(f, node, "")
 
 
-def fav_disconnect(from_node=None):
-    node, err = _from_node(from_node)
+def fav_disconnect():
+    node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
     favs = fav_load()
@@ -2098,6 +2084,13 @@ header .sp{flex:1}
 main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px max(16px,calc((100% - 608px) / 2)) 24px;overflow-wrap:anywhere}
 .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 16px;margin-bottom:14px}
 .card h2{font-size:15px;margin:0 0 10px}
+.card.fold{padding-top:4px;padding-bottom:4px}
+.card.fold h2{margin:0}
+.fold-btn{width:100%;min-height:44px;display:flex;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:var(--text);font:inherit;font-size:15px;font-weight:700;text-align:left;cursor:pointer}
+.fold-t{flex:none}
+.fold-sum{flex:1;min-width:0;color:var(--muted);font-size:13px;font-weight:400;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.fold-i{flex:none;width:14px;color:var(--muted);text-align:center}
+.fold-body{padding:6px 0 10px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
 button{font:inherit;color:var(--text)}
 .btn{min-height:44px;padding:0 16px;border-radius:10px;border:1px solid var(--line2);background:#1b2633;cursor:pointer;font-weight:600}
@@ -2126,7 +2119,14 @@ label{color:var(--soft)}
 .msg.ok{color:var(--accent)}.msg.err{color:var(--red)}.msg.warn{color:var(--amber)}
 table{width:100%;border-collapse:collapse;font-size:14px}
 td,th{text-align:left;padding:6px 6px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
-th{color:var(--muted);font-weight:600}
+table.links{font-size:clamp(10.5px,3.1vw,14px);font-variant-numeric:tabular-nums}
+table.links td,table.links th{padding:6px 3px;white-space:nowrap;overflow-wrap:normal}
+table.links td:nth-child(2){width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
+.listen-row{flex-wrap:nowrap}
+.listen-row .btn.big{min-width:112px;flex:none}
+.listen-row input[type=range]{flex:1;min-width:0}
+.vol-i{flex:none;width:22px;height:22px;color:var(--muted)}
+th{color:var(--muted);font-weight:600;white-space:nowrap;overflow-wrap:normal}
 code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12px;word-break:break-all}
 #log{max-height:260px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px}
 #log .err{color:var(--red)}#log .warn{color:var(--amber)}#log .ok{color:var(--accent)}
@@ -2176,7 +2176,7 @@ let mediaDest = null, wakeLock = null, nodeLabel = '';
 let pend = new Float32Array(1600), pendN = 0, peakLocal = 0, retryTimer = null;
 let favs = [], favEdit = [], dashFavs = [], favMax = 10;
 let ws = null, wsReady = false, wsRetry = null, talking = false, keyed = false, keyedAt = 0, totSec = 120;
-let micPending = false, jitterSec = 0.25, sysmonPort = null, dashNode = '';
+let micPending = false, jitterSec = 0.25, sysmonPort = null;
 let capCtx = null, micStream = null, capSrc = null, capNode = null, capSink = null, workletReady = false, preKey = [], talkTimer = null;
 let rs = null, frameSink = null, testing = false, testBuf = [];
 const MIC_DEFAULTS = {agc: false, ns: true, ec: false, gain: 0, hp: true, lev: true, gate: 0, eq: false};
@@ -2351,6 +2351,38 @@ function addOption(sel, value, text) {
 
 function sendOp(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op})); }
 
+const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'lvl', 'mic', 'play', 'log'];
+
+function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
+
+function foldSet(k, open) {
+  const b = $('cd-' + k).querySelector('.fold-btn');
+  $('cb-' + k).classList.toggle('hidden', !open);
+  b.setAttribute('aria-expanded', open ? 'true' : 'false');
+  b.querySelector('.fold-i').textContent = open ? '▾' : '▸';
+  if (!open) return;
+  if (k === 'fav') loadDashFavs();
+  if (k === 'log') pollLog();
+}
+
+function sum(k, text) { $('sum-' + k).textContent = text; }
+
+function micSummary() {
+  const on = [];
+  if (mic.lev) on.push('Leveler');
+  if (Number(mic.gate)) on.push('Gate');
+  sum('mic', on.concat(['gain ' + fmtGain(Number(mic.gain) || 0)]).join(' · '));
+}
+
+function playSummary() {
+  const on = [];
+  if (play.auto) on.push('Auto start');
+  if (!$('awake-row').classList.contains('hidden') && $('keep-awake').checked) on.push('Screen on');
+  if (play.s16) on.push('16-bit');
+  if (play.smooth) on.push('Smooth');
+  sum('play', on.join(' · ') || 'All off');
+}
+
 function showTab(name) {
   if (!authed && name !== 'listen') name = 'listen';
   tab = name;
@@ -2361,7 +2393,7 @@ function showTab(name) {
   });
   try { localStorage.setItem('nlTab', name); } catch (e) {}
   if (name === 'connect') loadFavs();
-  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); }
+  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); micSummary(); playSummary(); }
   if (name === 'listen') openTalk();
 }
 
@@ -2412,7 +2444,7 @@ async function login(ev) {
   const d = await post('/api/login', {password: $('pw').value});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); }
+  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); }
   else $('login-msg').textContent = d.error || 'Login failed.';
 }
 
@@ -2478,8 +2510,8 @@ async function pollStatus() {
   links.forEach((l) => {
     const tr = document.createElement('tr');
     const f = favs.find((x) => x.target === l.node);
-    [l.node + (l.node === tx.node ? ' (transmit)' : ''), f ? f.label : '', l.dir, l.time, l.state].forEach((v) => {
-      const td = document.createElement('td'); td.textContent = v || ''; tr.appendChild(td);
+    [l.node + (l.node === tx.node ? ' (TX)' : ''), f ? f.label : '', l.dir, l.time, l.state].forEach((v) => {
+      const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td);
     });
     tb.appendChild(tr);
   });
@@ -2790,6 +2822,7 @@ function saveMic() {
   MIC_CHECKS.forEach((k) => { mic[k] = $('mic-' + k).checked; });
   try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
   $('mic-gain-v').textContent = fmtGain(mic.gain);
+  micSummary();
 }
 
 function loadMicUi() {
@@ -2805,6 +2838,7 @@ function savePlay() {
   play = {s16: $('play-s16').checked, smooth: $('play-smooth').checked, auto: $('play-auto').checked};
   try { localStorage.setItem('nlPlay', JSON.stringify(play)); } catch (e) {}
   ups = null;
+  playSummary();
   if (playing && was !== play.s16) { stopListen(); startListen(); }
 }
 
@@ -2943,14 +2977,6 @@ async function loadFavs() {
   if (!d.ok) return;
   favs = d.favs || [];
   favMax = d.max || 10;
-  dashNode = d.dash_node || '';
-  const fsel = $('c-from'), fkeep = fsel.value;
-  fsel.innerHTML = '';
-  const nodes = (d.from_nodes || []).slice();
-  if (d.main && nodes.indexOf(d.main) < 0) nodes.unshift(d.main);
-  nodes.forEach((n) => addOption(fsel, n, n + (n === d.main ? ' (main node)' : '') + (n === dashNode ? ' · through Node Controller' : '')));
-  fsel.value = (fkeep && nodes.indexOf(fkeep) >= 0) ? fkeep : (d.main || nodes[0] || '');
-  $('c-from-row').classList.toggle('hidden', nodes.length < 2 && !dashNode);
   const sel = $('c-fav'), keep = sel.value;
   sel.innerHTML = '';
   favs.forEach((f, i) => addOption(sel, String(i), f.mode + ' ' + favNum(f) + '  ·  ' + f.label));
@@ -2973,19 +2999,19 @@ async function favConnect() {
   const f = favs[Number(i)];
   $('c-connect').disabled = true;
   note('c-msg', '', f && f.mode === 'M17' ? 'Connecting...' : 'Connecting... (checking the link for up to 15 s)');
-  try { setMsg('c-msg', await post('/api/connect', {index: Number(i), from: $('c-from').value})); }
+  try { setMsg('c-msg', await post('/api/connect', {index: Number(i)})); }
   finally { $('c-connect').disabled = false; }
   pollStatus();
 }
 
 async function favDisconnect() {
-  setMsg('c-msg', await post('/api/disconnect', {from: $('c-from').value}));
+  setMsg('c-msg', await post('/api/disconnect', {}));
   setTimeout(pollStatus, 1000);
 }
 
 async function loadNode() {
   const d = await api('/api/node');
-  if (!d.ok) { note('nd-msg', 'err', d.error || 'Could not read rpt.conf.'); return; }
+  if (!d.ok) { note('nd-msg', 'err', d.error || 'Could not read rpt.conf.'); sum('rx', 'Could not read rpt.conf'); return; }
   $('nd-path').textContent = d.path;
   $('nd-line').textContent = d.hook_line;
   const sel = $('nd-select'), keep = sel.value;
@@ -3006,6 +3032,7 @@ async function loadNode() {
   });
   const hooked = d.nodes.find((n) => n.ours);
   sel.value = keep || (hooked ? hooked.node : (d.config_node || (d.nodes[0] ? d.nodes[0].node : '')));
+  sum('rx', !hooked ? 'Not set up' : hooked.ours_port_ok ? 'Node ' + hooked.node + ' sends audio here' : 'Node ' + hooked.node + ': wrong UDP port');
 }
 
 async function nodeEnable() {
@@ -3029,7 +3056,7 @@ async function astRestart(msgId) {
 
 async function loadTx() {
   const d = await api('/api/tx');
-  if (!d.ok) { $('tx-state').textContent = d.error || 'Could not read rpt.conf.'; return; }
+  if (!d.ok) { $('tx-state').textContent = d.error || 'Could not read rpt.conf.'; sum('tx', 'Could not read rpt.conf'); return; }
   $('tx-node').textContent = d.node;
   $('tx-rxch').textContent = d.rxchannel;
   $('tx-main').textContent = d.main || '(not set)';
@@ -3042,6 +3069,8 @@ async function loadTx() {
   else if (d.linked === null) s = 'Set up. Asterisk does not know it yet: restart Asterisk.';
   else s = d.linked ? 'Set up and linked to node ' + d.main + '.' : 'Set up; linking to node ' + d.main + ' (checked every 20 s).';
   $('tx-state').textContent = s;
+  sum('tx', d.error ? 'Could not read rpt.conf' : !d.defined ? 'Not set up' : !(d.ours && d.nodes_line && d.rx_ok) ? 'Needs attention'
+    : d.linked === null ? 'Restart Asterisk' : d.linked ? 'Set up and linked' : 'Set up, linking');
   $('tx-add').disabled = d.defined && d.nodes_line;
   $('tx-remove').disabled = !(d.defined && d.ours) && !d.nodes_line;
 }
@@ -3060,6 +3089,10 @@ async function loadFavEditor() {
   favEdit = (d.favs || []).map(favCopy);
   favMax = d.max || 10;
   drawFavEditor();
+  if (foldOpen('fav')) loadDashFavs();
+}
+
+async function loadDashFavs() {
   const dd = await api('/api/dash-favorites');
   dashFavs = dd.ok ? dd.favs : [];
   const sel = $('fe-dash');
@@ -3116,6 +3149,7 @@ async function loadConfig() {
   if (!d.ok) return;
   CFG_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
+  sum('cfg', (d.config.https ? 'HTTPS' : 'HTTP') + ' · ' + d.config.max_listeners + ' listeners' + (d.config.public_listen ? ' · public' : ''));
   $('tune-on').checked = !!d.config.tune_enabled;
   $('tune-tx').value = d.config.tx_gain_db;
   $('tune-rx').value = d.config.rx_gain_db;
@@ -3128,6 +3162,7 @@ async function loadConfig() {
 
 function tuneUi() {
   const on = $('tune-on').checked;
+  sum('lvl', on ? 'TX ' + fmtGain(Number($('tune-tx').value)) + ' · RX ' + fmtGain(Number($('tune-rx').value)) : 'Off (audio unchanged)');
   ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
   $('tune-tx-v').textContent = fmtGain(Number($('tune-tx').value));
   $('tune-rx-v').textContent = fmtGain(Number($('tune-rx').value));
@@ -3154,7 +3189,7 @@ async function saveConfig() {
 }
 
 async function pollLog() {
-  if (!authed || tab !== 'setup') return;
+  if (!authed || tab !== 'setup' || !foldOpen('log')) return;
   const d = await api('/api/log?since=' + lastLogId);
   if (!d.ok) return;
   const box = $('log');
@@ -3183,6 +3218,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
   $('keep-awake').addEventListener('change', () => {
     try { localStorage.setItem('nlKeepAwake', $('keep-awake').checked ? '1' : '0'); } catch (e) {}
+    playSummary();
     wakeLockApply();
   });
   const p = $('ptt');
@@ -3223,6 +3259,7 @@ document.addEventListener('DOMContentLoaded', () => {
   try { window.name = 'asl_dvs_listen'; } catch (e) {}
   $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, 'asl_dvs_dash'); });
   $('tune-reset').addEventListener('click', tuneReset);
+  FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => foldSet(k, !foldOpen(k))));
   setupMediaSession();
   pttUi('off', '');
   whoami().then(() => { if (authed) loadFavs(); });
@@ -3274,7 +3311,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 <div class="card">
 <h2>Links</h2>
-<table><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
+<table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
 <div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
 <div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
 </div>
@@ -3284,8 +3321,6 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="card">
 <h2>Connect</h2>
 <div id="c-empty" class="muted">No favorites yet. Add up to 10 on the Setup tab.</div>
-<div id="c-from-row" class="row hidden"><label for="c-from">Connect from</label>
-<select id="c-from" style="flex:1;min-height:44px"></select></div>
 <div id="c-pick">
 <label for="c-fav">Favorite</label>
 <select id="c-fav" style="width:100%;min-height:52px;margin-top:6px;font-size:16px"></select>
@@ -3308,10 +3343,10 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <section id="tab-listen" class="hidden">
 <div class="card">
-<div class="row"><button id="listen-btn" class="btn primary big" type="button">Listen</button>
-<label>Volume <input type="range" id="vol" min="0" max="200" value="100"></label></div>
+<div class="row listen-row"><button id="listen-btn" class="btn primary big" type="button">Listen</button>
+<svg class="vol-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"></path><path d="M16 9a4 4 0 0 1 0 6"></path></svg>
+<input type="range" id="vol" min="0" max="200" value="100" aria-label="Volume"></div>
 <div class="row"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
-<div class="row hidden" id="awake-row"><label><input type="checkbox" id="keep-awake"> Keep the screen on while listening or talking</label></div>
 <audio id="player" playsinline class="hidden"></audio>
 <div id="listen-msg" class="msg"></div>
 <table>
@@ -3331,8 +3366,9 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </section>
 
 <section id="tab-setup" class="hidden">
-<div class="card">
-<h2>Receive: node audio to this page</h2>
+<div class="card fold" id="cd-rx">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-rx"><span class="fold-t">Receive</span><span class="fold-sum" id="sum-rx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-rx">
 <p class="muted small">Asterisk sends a node's audio here through one <code>outstreamcmd</code> line in <code id="nd-path">rpt.conf</code>.</p>
 <table><thead><tr><th>Node</th><th>outstreamcmd</th></tr></thead><tbody id="nd-rows"></tbody></table>
 <div class="row"><label>Node <select id="nd-select"></select></label>
@@ -3347,9 +3383,11 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <tr><th>UDP input</th><td id="nd-udp">-</td></tr>
 </table>
 </div>
+</div>
 
-<div class="card">
-<h2>Transmit: node <span id="tx-node">1921</span></h2>
+<div class="card fold" id="cd-tx">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-tx"><span class="fold-t">Transmit: node <span id="tx-node">1921</span></span><span class="fold-sum" id="sum-tx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-tx">
 <p class="muted small">Push-to-talk sends your voice to private node 1921, which stays linked to the main node.
 Node Listen adds its stanza and <code>[nodes]</code> line to rpt.conf (with a backup) and relinks it if it drops.</p>
 <table>
@@ -3362,9 +3400,27 @@ Node Listen adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <button id="tx-restart" class="btn danger" type="button">Restart Asterisk</button></div>
 <div id="tx-msg" class="msg"></div>
 </div>
+</div>
 
-<div class="card">
-<h2>Favorites <span class="muted small" id="fe-count"></span></h2>
+<div class="card fold" id="cd-cfg">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-cfg"><span class="fold-t">Settings</span><span class="fold-sum" id="sum-cfg"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-cfg">
+<div class="row"><label>Web port <input type="number" id="cfg-port" min="1024" max="65535"></label>
+<label>UDP port <input type="number" id="cfg-udp_port" min="1024" max="65535"></label>
+<label>Max listeners <input type="number" id="cfg-max_listeners" min="1" max="10"></label>
+<label>TX time-out (s) <input type="number" id="cfg-tot_sec" min="30" max="600"></label></div>
+<div class="row"><label><input type="checkbox" id="cfg-https"> HTTPS (needed for the microphone)</label></div>
+<div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
+<div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
+<p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Listen.</p>
+<div class="row"><button id="cfg-save" class="btn primary" type="button">Save</button></div>
+<div id="cfg-msg" class="msg"></div>
+</div>
+</div>
+
+<div class="card fold" id="cd-fav">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-fav"><span class="fold-t">Favorites</span><span class="fold-sum" id="fe-count"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-fav">
 <p class="muted small">The Connect tab offers only these. EchoLink numbers are the station's own number.
 M17: the reflector and module, for example <code>M17-USA A</code> (or <code>@ALL</code> for every module); Node Controller
 tunes the M17 bridge and links it to its node.</p>
@@ -3374,9 +3430,11 @@ tunes the M17 bridge and links it to its node.</p>
 <div class="row"><button id="fe-save" class="btn primary" type="button">Save favorites</button></div>
 <div id="fe-msg" class="msg"></div>
 </div>
+</div>
 
-<div class="card">
-<h2>Tune: audio levels</h2>
+<div class="card fold" id="cd-lvl">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-lvl"><span class="fold-t">Audio levels</span><span class="fold-sum" id="sum-lvl"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-lvl">
 <div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
 <p class="muted small">Off: Node Listen passes audio through unchanged. These change only this page's path,
 not the node, the radio or DVSwitch.</p>
@@ -3398,7 +3456,17 @@ not the node, the radio or DVSwitch.</p>
 </table>
 <p class="muted small">Aim for TX peaks around -6 to -3 dBFS on normal speech, without reaching 0.</p>
 </div>
-<h2 style="margin-top:14px">This device's microphone</h2>
+<p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
+use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
+<div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
+<button id="tune-reset" class="btn" type="button">Reset to 0 dB</button></div>
+<div id="tune-msg" class="msg"></div>
+</div>
+</div>
+
+<div class="card fold" id="cd-mic">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-mic"><span class="fold-t">Microphone</span><span class="fold-sum" id="sum-mic"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-mic">
 <p class="muted small">Saved in this browser only; each phone keeps its own. Browsers can't change the phone's own
 mic volume, so the gain here is applied in the page.</p>
 <div class="row"><label><input type="checkbox" id="mic-lev"> Leveler (keeps an even level and never clips)</label></div>
@@ -3417,35 +3485,27 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="row"><button id="node-test" class="btn" type="button">Test through the node (transmits 4 s)</button></div>
 <p class="muted small">Keys node 1921, records what the node sends out and plays it back. It goes out over the air and to linked nodes.</p>
 <div id="node-test-msg" class="msg"></div>
-<h2 style="margin-top:14px">This device's playback</h2>
+</div>
+</div>
+
+<div class="card fold" id="cd-play">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-play"><span class="fold-t">Playback</span><span class="fold-sum" id="sum-play"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-play">
+<p class="muted small">Saved in this browser only; each phone keeps its own.</p>
 <div class="row"><label><input type="checkbox" id="play-auto"> Start listening when the page opens (the browser may want one tap first)</label></div>
+<div class="row hidden" id="awake-row"><label><input type="checkbox" id="keep-awake"> Keep the screen on while listening or talking</label></div>
 <div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
 <div class="row"><label><input type="checkbox" id="play-smooth"> Smooth playback (filtered upsampling, no sizzle)</label></div>
-<p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
-use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
-<div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
-<button id="tune-reset" class="btn" type="button">Reset to 0 dB</button></div>
-<div id="tune-msg" class="msg"></div>
+</div>
 </div>
 
-<div class="card">
-<h2>Settings</h2>
-<div class="row"><label>Web port <input type="number" id="cfg-port" min="1024" max="65535"></label>
-<label>UDP port <input type="number" id="cfg-udp_port" min="1024" max="65535"></label>
-<label>Max listeners <input type="number" id="cfg-max_listeners" min="1" max="10"></label>
-<label>TX time-out (s) <input type="number" id="cfg-tot_sec" min="30" max="600"></label></div>
-<div class="row"><label><input type="checkbox" id="cfg-https"> HTTPS (needed for the microphone)</label></div>
-<div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
-<div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
-<p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Listen.</p>
-<div class="row"><button id="cfg-save" class="btn primary" type="button">Save</button></div>
-<div id="cfg-msg" class="msg"></div>
-</div>
-
-<div class="card">
-<h2>Log</h2>
+<div class="card fold" id="cd-log">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-log"><span class="fold-t">Log</span><span class="fold-sum" id="sum-log"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-log">
 <div id="log"></div>
 </div>
+</div>
+
 </section>
 </main>
 <nav class="tabs hidden" id="nav" aria-label="Main">
@@ -3482,8 +3542,8 @@ _POST_ACTIONS = {
     "/api/tx/enable": (lambda b: tx_enable(), (OSError,)),
     "/api/tx/disable": (lambda b: tx_disable(), (OSError,)),
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
-    "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("from")), ()),
-    "/api/disconnect": (lambda b: fav_disconnect(b.get("from")), ()),
+    "/api/connect": (lambda b: fav_connect(b.get("index")), ()),
+    "/api/disconnect": (lambda b: fav_disconnect(), ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
@@ -3622,7 +3682,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, dict(tx_state(), ok=True))
             elif path == "/api/favorites":
                 dash = dashboard_conf()
-                self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(), "from_nodes": local_nodes(),
+                self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(),
                                  "dash_node": dash["asl_node"] if port_open_cached(dash["port"]) else "",
                                  "favs": [dict(f, target=fav_target(f)) for f in fav_load()]})
             elif path == "/api/dash-favorites":

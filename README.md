@@ -117,7 +117,7 @@ and Full Update, which updates it only where it is installed. It also installs
 on its own:
 
 ```
-sudo python3 nodelisten_v0_4_12_20261020.py --install
+sudo python3 nodelisten_v0_4_13_20261020.py --install
 ```
 
 Then open `http://<pi-address>:8993` (it moves you to `https://`; the
@@ -149,8 +149,8 @@ why HTTPS is on by default.
 **Favorites:** the Connect tab offers only the (up to) 10 favorites set on the
 Setup tab, where the Dashboard's ASL and EchoLink favorites can be picked from
 a list. Connect and Disconnect use `rpt cmd <node> ilink 3` / `ilink 1`;
-Disconnect drops linked favorites only. **Connect from** picks which local node
-makes the link (default: the main node). When Node Controller (pi02w 9.3.89 or
+Disconnect drops linked favorites only. Links are always made from the main node
+(0.4.13 and later). When Node Controller (pi02w 9.3.89 or
 later) runs and the main node connects, Node Listen asks the Dashboard to do it
 (a local call with the key in `/etc/asl_dvs/local_api.key`), so the Dashboard
 switches to its ASL or Echo tab, drops any digital bridge and counts the link
@@ -305,7 +305,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_60_0_20261019.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodelisten_v0_4_12_20261020.py` | common |
+| `nodelisten_v0_4_13_20261020.py` | common |
 | `install_all_v7_2_0_20261018.sh` | common |
 | `uninstall_all_v1_6_0_20261018.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
