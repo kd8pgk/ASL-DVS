@@ -6,7 +6,7 @@
 }
 @page{
   size:Letter; margin:0.62in 0.65in 0.72in 0.65in; background:#0b1018;
-  @bottom-left{content:"NODE LISTEN MANUAL"; font:600 7.5pt "Inter",sans-serif; letter-spacing:.18em; color:#7f8ca3}
+  @bottom-left{content:"NODE TALKER MANUAL"; font:600 7.5pt "Inter",sans-serif; letter-spacing:.18em; color:#7f8ca3}
   @bottom-right{content:counter(page); font:700 8.5pt "Inter",sans-serif; color:#ffd040}
 }
 @page cover{margin:0; @bottom-left{content:none} @bottom-right{content:none}}

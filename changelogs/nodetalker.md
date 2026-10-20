@@ -1,6 +1,69 @@
-# nodelisten changelog
+# Node Talker changelog
 
-Current file: `nodelisten_v0_5_0_20261020.py`. Newest entries first.
+Current file: `nodetalker_v0_6_0_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.0 (2026-10-20)
+
+**Node Listen is now Node Talker**, and with Node Controller on the node,
+every mode goes through Node Controller.
+
+- **Through Node Controller.** When Node Controller runs (pi02w 9.3.94 or
+  later), DMR, STFU, YSF, P25, NXDN and D-STAR favorites are tuned by Node
+  Controller through its local API (`dvs-tune`), as ASL, EchoLink and M17
+  already were. The Connect button shows Disconnect for a favorite Node
+  Controller tuned (`dvs-status`); Disconnect sends `dvs-disconnect`.
+  - **A DMR network Node Controller doesn't have.** The Connect tab asks
+    either to **Add it to Node Controller and tune** (`dmr-server-add`, then
+    the tune) or to **Tune this once** (Node Controller joins it for this tune
+    only and saves nothing), or to Cancel.
+  - An older Node Controller without these actions gets "update Node
+    Controller". Node Talker never tunes DVSwitch behind a running Node
+    Controller.
+  - Without Node Controller, Node Talker tunes all three itself, as in 0.5.0.
+- **Renamed.** The service, the files and the paths are renamed too:
+
+  | | Was | Now |
+  |---|---|---|
+  | Service | `nodelisten.service` | `nodetalker.service` |
+  | Program | `/usr/local/bin/nodelisten.py`, `/usr/local/lib/asl_dvs/nodelisten/` | `/usr/local/bin/nodetalker.py`, `/usr/local/lib/asl_dvs/nodetalker/` |
+  | Settings | `nodelisten.conf` `[nodelisten]` | `nodetalker.conf` `[nodetalker]` |
+  | Data | `nodelisten_favorites.conf` and `.json`, `_tuned.json`, `_restore.json`, `_tls/`, `_backups/` | `nodetalker_…` |
+
+  The page title, header, login, lock-screen media info, the messages and the
+  logs say Node Talker.
+- **Kept working for older tools and versions:**
+  - `nodetalker.service` has `Alias=nodelisten.service`.
+  - `/usr/local/bin/nodelisten.py` stays as a symlink to `nodetalker.py`.
+    The service starts through it, so tools that look for `nodelisten` in
+    the process list (the full-build SysMon's port checks) still see it.
+    Where that path is some other program's file, it is left alone and the
+    service starts as `nodetalker.py`.
+  - A plain copy of Node Listen or Node Talker at that path (instmon makes
+    one before an install) is turned back into the symlink. If the new
+    service doesn't start, the copy is put back.
+  - Each old settings or data path is a symlink to the new one.
+  - The settings file holds the same settings under both `[nodetalker]` and
+    `[nodelisten]`.
+  - The full-build SysMon and Node Controller, and Node Listen itself, still
+    find the tool and read its port, node and favorites.
+  - **`rpt.conf` is not changed.** The audio line still runs
+    `/usr/local/bin/nodelisten.py,--feed,…`, and both comment markers
+    (`; nodelisten: …`) stay exactly as they are. The full-build SysMon,
+    Node Controller (both builds) and Node Listen 0.5.0 recognize them by
+    that text. Node Talker recognizes either program name.
+- **Install over Node Listen** moves the settings and data, including the
+  HTTPS certificate, so browsers keep trusting it.
+  - It stops Node Listen and keeps its unit until `nodetalker` has started.
+    If `nodetalker` doesn't start, Node Listen is put back and started again.
+  - After a Full Update (which runs Node Listen's own uninstall first), the
+    `rpt.conf` lines are put back from `nodelisten_restore.json`.
+  - A newer file that an older version wrote at an old path wins. An older
+    stray file is kept as `….pre-nodetalker`.
+- **Uninstall** removes `nodetalker.service`, its alias, both program links
+  and `/usr/local/lib/asl_dvs/nodetalker`. It keeps the settings and data.
+- **Going back to Node Listen 0.5.0:** run
+  `sudo python3 /usr/local/bin/nodetalker.py --uninstall` first. instmon
+  2.64.0 and the installer 7.4.0 do this on their own.
 
 ## 0.5.0 (2026-10-20)
 

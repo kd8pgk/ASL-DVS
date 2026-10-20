@@ -1,11 +1,33 @@
-# amp_nodelisten changelog
+# Node Talker for AMP changelog
 
-Current file: `amp_nodelisten_v0_2_1_20261020.py`. Newest entries first.
+Current file: `amp_nodetalker_v0_3_0_20261020.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
 
-Node Listen for AMP is a fork of Node Listen (`nodelisten_v*.py`, from 0.4.17)
-for a node that runs the Ampersand AMP server (`amp-server`) instead of
-Asterisk. It stands alone: the other tools in this repo don't use it, and it
-doesn't use them.
+## 0.3.0 (2026-10-20)
+
+**Node Listen for AMP is now Node Talker for AMP.** It does the same things as
+before. The service, files and paths are renamed:
+
+| | Was | Now |
+|---|---|---|
+| Service | `amp_nodelisten.service` | `amp_nodetalker.service` |
+| Program | `/usr/local/bin/amp_nodelisten.py` | `/usr/local/bin/amp_nodetalker.py` |
+| Settings | `amp_nodelisten.conf` `[amp_nodelisten]` | `amp_nodetalker.conf` `[amp_nodetalker]` |
+| Data | `amp_nodelisten_favorites.json`, `_tls/`, `_backups/` | `amp_nodetalker_…` |
+
+The page, messages and logs say Node Talker.
+
+- **Install over Node Listen for AMP** moves the settings and data,
+  including the AMP secret and the HTTPS certificate.
+  - It stops the old service and keeps its unit until `amp_nodetalker` has
+    started. If `amp_nodetalker` doesn't start, the old service is put back.
+- **Kept working for older versions:**
+  - `amp_nodetalker.service` has `Alias=amp_nodelisten.service`.
+  - `/usr/local/bin/amp_nodelisten.py` and the old settings and data paths
+    stay as symlinks.
+  - The settings file holds the same settings under both `[amp_nodetalker]`
+    and `[amp_nodelisten]`.
+- **AMP's login is unchanged.** The user stays `nodelisten`, so the line
+  already in AMP's login file (`nodelisten <password>`) keeps working.
 
 ## 0.2.1 (2026-10-20)
 

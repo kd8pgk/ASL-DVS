@@ -7,7 +7,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE || "playwright");
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const src = path.join(here, "manual.html");
-const out = process.argv[2] || path.join(here, "..", "..", "ASL-DVS_Node_Listen_Manual.pdf");
+const out = process.argv[2] || path.join(here, "..", "..", "ASL-DVS_Node_Talker_Manual.pdf");
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 const page = await browser.newPage();

@@ -1,6 +1,34 @@
 # instmon changelog
 
-Current file: `instmon_v2_63_0_20261020.py`. Newest entries first.
+Current file: `instmon_v2_64_0_20261020.py`. Newest entries first.
+
+## 2.64.0 (2026-10-20)
+
+- **Node Listen is now Node Talker.**
+  - The component is shown as Node Talker. It is found by `nodetalker.service`
+    or the older `nodelisten.service`, and by `/usr/local/bin/nodetalker.py`
+    or `/usr/local/bin/nodelisten.py`, so a node still on Node Listen 0.5.0
+    shows as installed and updates.
+  - GitHub Updates and Full Update treat `nodelisten_v….py` and
+    `nodetalker_v….py` as the same tool.
+  - The internal library group keeps its key (`nodelisten`), as the Dashboard
+    kept `dashboard` when it was renamed, so the library folder and its locks
+    stay as they are.
+- **Going back to Node Listen.** Installing a `nodelisten_v….py` (by hand,
+  **Get stable**, or a rollback) retires `nodetalker.service` and its files
+  first, so the two never run side by side on port 8993. Node Talker's own
+  file names both services, so updating to Node Talker retires nothing; its
+  install moves Node Listen over itself.
+- **Config library:**
+  - takes `nodetalker*.conf` as well as `nodelisten*.conf`;
+  - installs a settings file as `nodetalker.conf` and a favorites file as
+    `nodetalker_favorites.conf`, or as the `nodelisten…` file on a node that
+    still runs Node Listen;
+  - accepts a settings file with a `[nodetalker]` or a `[nodelisten]`
+    section.
+  - **Save** buttons list the Node Talker files, or the Node Listen files
+    where those are the live ones.
+- Texts say Node Talker: Quiet, the upload list and the config prompts.
 
 ## 2.63.0 (2026-10-20)
 

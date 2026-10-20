@@ -40,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.93-pi02w"
+VERSION      = "9.3.94-pi02w"
 BUILD_DATE   = "2026-10-18"
 
 ASL_NODE        = "652702"
@@ -4280,7 +4280,7 @@ _STFU_CACHE_TTL   = 60.0
 _ECHO_CACHE_TTL   = 120.0
 _SYSMON_PORT      = 9999
 _SYSMON_CACHE_TTL = 15.0
-_NODELISTEN_CONF      = "/etc/asl_dvs/nodelisten.conf"
+_NODELISTEN_CONFS     = ("/etc/asl_dvs/nodetalker.conf", "/etc/asl_dvs/nodelisten.conf")
 _NODELISTEN_PORT      = 8993
 _NODELISTEN_CACHE_TTL = 15.0
 _M17_CACHE_TTL    = 60.0
@@ -4430,9 +4430,13 @@ def action_sysmon_status() -> dict:
     return {"running": _detect_sysmon(), "port": _SYSMON_PORT}
 
 def _nodelisten_port() -> int:
-    try:
-        text = Path(_NODELISTEN_CONF).read_text(errors="replace")
-    except OSError:
+    for path in _NODELISTEN_CONFS:
+        try:
+            text = Path(path).read_text(errors="replace")
+            break
+        except OSError:
+            continue
+    else:
         return _NODELISTEN_PORT
     m = re.search(r"^\s*port\s*=\s*(\d{4,5})\s*$", text, re.M)
     if m and 1024 <= int(m.group(1)) <= 65535:
@@ -4440,7 +4444,7 @@ def _nodelisten_port() -> int:
     return _NODELISTEN_PORT
 
 _NODELISTEN_TX_NODE = "1921"
-_NODELISTEN_TX_MARK = "; nodelisten: transmit node"
+_NODELISTEN_TX_MARKS = ("; nodelisten: transmit node", "; nodetalker: transmit node")
 _nl_tx_cache = {"key": None, "owned": False}
 _nl_tx_drop_at = 0.0
 _NODELISTEN_TX_DROP_GAP = 30.0
@@ -4456,7 +4460,7 @@ def _nodelisten_tx_owned() -> bool:
         try:
             lines = Path(ASL_CONF).read_text(errors="replace").splitlines()
             for i, ln in enumerate(lines[:-1]):
-                if ln.strip().startswith(_NODELISTEN_TX_MARK) and \
+                if ln.strip().startswith(_NODELISTEN_TX_MARKS) and \
                         lines[i + 1].strip().startswith(f"[{_NODELISTEN_TX_NODE}]"):
                     owned = True
                     break
@@ -4489,7 +4493,7 @@ def _nodelisten_tx_check(adjacent: List[str]) -> None:
     if now - _nl_tx_drop_at < _NODELISTEN_TX_DROP_GAP:
         return
     _nl_tx_drop_at = now
-    log.info("nodelisten: Node Listen is not running — unlinking its transmit node %s", _NODELISTEN_TX_NODE)
+    log.info("nodelisten: Node Talker is not running — unlinking its transmit node %s", _NODELISTEN_TX_NODE)
     threading.Thread(target=_disconnect, args=(_NODELISTEN_TX_NODE,), daemon=True,
                      name="nodelisten-tx-drop").start()
 
@@ -6221,7 +6225,7 @@ def _log_teardown_survivors(what: str) -> None:
         bridge_set = _bridge_set()
         left = [nd for nd in left if nd not in _nodelisten_keep_set()]
         if not left:
-            log.info("teardown check (%s): all links cleared (Node Listen's transmit node kept)", what)
+            log.info("teardown check (%s): all links cleared (Node Talker's transmit node kept)", what)
             return
         for nd in left:
             log.warning("teardown check (%s): node %s STILL LINKED%s%s", what, nd,
@@ -9302,7 +9306,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
       </div>
       <div class="tg-wrap">
         <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
-        <a id="lnk-listen" class="ql ql-listen ql-off" href="#" aria-disabled="true" title="Node Listen is not running">Listen</a>
+        <a id="lnk-listen" class="ql ql-listen ql-off" href="#" aria-disabled="true" title="Node Talker is not running">Listen</a>
       </div>
       <div class="ql-group ql-right">
         <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
@@ -13659,12 +13663,12 @@ async function _probeNodeListen() {
       a.href = `http://${window.location.hostname}:${d.port}/`;
       a.classList.remove('ql-off');
       a.removeAttribute('aria-disabled');
-      a.title = 'Listen to this node in the browser (Node Listen)';
+      a.title = 'Listen to this node in the browser (Node Talker)';
     } else {
       a.href = '#';
       a.classList.add('ql-off');
       a.setAttribute('aria-disabled', 'true');
-      a.title = 'Node Listen is not running';
+      a.title = 'Node Talker is not running';
     }
   } catch (_) {}
 }
@@ -14305,7 +14309,7 @@ def action_local(data: dict) -> Tuple[bool, str]:
             ok, msg = action_switch_tab(page)
             if not ok:
                 return False, msg
-        log.info("local API: Node Listen asks to connect %s %s", page, node)
+        log.info("local API: Node Talker asks to connect %s %s", page, node)
         if page == "ECHO":
             return action_echo_connect(node, name)
         return action_asl_connect(node, name)
@@ -14316,7 +14320,7 @@ def action_local(data: dict) -> Tuple[bool, str]:
         if node in _bridge_set() or node == _NODELISTEN_TX_NODE:
             return False, f"Node {node} is managed by the dashboard"
         st = get_state()
-        log.info("local API: Node Listen asks to disconnect %s", node)
+        log.info("local API: Node Talker asks to disconnect %s", node)
         if st.current_fav and st.current_fav == node:
             return action_asl_disconnect_current()
         if st.echo_fav and st.echo_fav.strip() and st.echo_fav != TG_BLANK_ADDR \
@@ -14329,12 +14333,143 @@ def action_local(data: dict) -> Tuple[bool, str]:
         st = get_state()
         if st.page != "M17" or not st.current_fav:
             return True, "No M17 reflector is connected."
-        log.info("local API: Node Listen asks to disconnect M17 %s", st.current_fav)
+        log.info("local API: Node Talker asks to disconnect M17 %s", st.current_fav)
         return action_m17_disconnect()
     if act == "m17-status":
         st = get_state()
         return True, str(st.current_fav) if st.page == "M17" and st.current_fav else ""
+    if act == "dvs-tune":
+        return _local_dvs_tune(data)
+    if act == "dvs-disconnect":
+        return _local_dvs_disconnect()
+    if act == "dvs-status":
+        st = get_state()
+        srv = next((s for s in st.dmr_servers if s.get("name") == st.active_dmr_server), None)
+        on = st.page in _LOCAL_DVS_MODES and bool(st.current_fav)
+        return True, json.dumps({"page": st.page, "fav": str(st.current_fav or "") if on else "",
+                                 "server": st.active_dmr_server or "",
+                                 "address": str(srv.get("address", "")) if srv else ""})
+    if act == "dmr-server-add":
+        return _local_dmr_server_add(data)
     return False, f"Unknown local action '{act}'"
+
+_LOCAL_DVS_MODES = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
+_LOCAL_NET_MISSING = "dmr-network-missing"
+_DMR_SERVERS_MAX = 20
+
+def _local_net(data: dict) -> Tuple[Optional[dict], str]:
+    net = data.get("net")
+    if not isinstance(net, dict):
+        return None, "DMR needs its network"
+    name = _clip_label(str(net.get("name", "")).strip())
+    addr = str(net.get("address", "")).strip()
+    pw = str(net.get("password", "")).strip()
+    url = str(net.get("url", "")).strip()
+    host, sep, port = addr.rpartition(":")
+    if not name or "|" in name or "[" in name or "]" in name or _has_ctrl_chars(name):
+        return None, "DMR network name is missing or has | [ ]"
+    if not sep or not host or not port.isdigit() or not (1 <= int(port) <= 65535) \
+            or "|" in addr or _has_ctrl_chars(addr):
+        return None, f"DMR network {name}: address must be host:port"
+    if "|" in pw or _has_ctrl_chars(pw) or "|" in url or _has_ctrl_chars(url):
+        return None, f"DMR network {name}: illegal characters"
+    return {"name": name, "address": addr, "password": pw, "net_url": url}, ""
+
+def _local_dvs_tune(data: dict) -> Tuple[bool, str]:
+    mode = str(data.get("mode", "")).strip().upper()
+    tg = str(data.get("tg", "")).strip()
+    name = _clip_label(str(data.get("name", "")).strip() or f"{mode} {tg}")
+    if mode not in _LOCAL_DVS_MODES:
+        return False, f"Unknown mode '{mode}'"
+    if mode == "STFU" and not get_state().has_stfu:
+        return False, "STFU is not running on this node"
+    if mode == "DSTAR":
+        tg = tg.upper()
+        if len(tg) < 3 or not tg.endswith("L") or not tg[-2].isalpha():
+            return False, f"D-STAR tune string '{tg}' must end in a module letter and L"
+        log.info("local API: Node Talker asks to tune D-STAR %s", tg)
+        return action_dstar_connect(tg[:-2].strip(), tg[-2], name)
+    if mode == "DMR":
+        net, err = _local_net(data)
+        if net is None:
+            return False, err
+        servers = get_state().dmr_servers
+        srv = next((s for s in servers if str(s.get("address", "")).strip().lower() == net["address"].lower()), None) \
+            or next((s for s in servers if str(s.get("name", "")).strip().lower() == net["name"].lower()), None)
+        if srv is None and not data.get("once"):
+            return False, f"{_LOCAL_NET_MISSING}: Node Controller has no DMR network {net['name']} ({net['address']})"
+        if get_state().page != "DMR":
+            ok, msg = action_switch_tab("DMR")
+            if not ok:
+                return False, msg
+        if srv is not None:
+            log.info("local API: Node Talker asks to tune DMR %s on %s", tg, srv["name"])
+            ok, msg = action_switch_dmr_server(srv["name"])
+        else:
+            if not net["password"]:
+                return False, f"DMR network {net['name']} needs its password"
+            log.info("local API: Node Talker asks to tune DMR %s on %s (%s, this tune only)", tg, net["name"], net["address"])
+            ok, msg = _dmr_tune_once(net)
+        if not ok:
+            return False, msg
+        return action_tune("DMR", tg, name)
+    log.info("local API: Node Talker asks to tune %s %s", mode, tg)
+    return action_tune(mode, tg, name)
+
+@_link_locked
+def _dmr_tune_once(net: dict) -> Tuple[bool, str]:
+    global _dmr_switch_time, _dmr_last_net_tune, _status_etag
+    tune_str = f"{net['password']}@{net['address']}"
+    with _lock:
+        same = bool(_dmr_last_net_tune) and tune_str == _dmr_last_net_tune
+    if same:
+        return True, f"Already on {net['name']}"
+    _dvs("tune", TG_DISCONNECT)
+    time.sleep(0.5)
+    with _lock:
+        _dmr_switch_time = time.monotonic()
+    ok, out = _dvs("tune", tune_str)
+    if not ok:
+        _invalidate_dmr_net_tune()
+        if _dvs_timed_out(out):
+            return False, (f"{net['name']}: the network tune is taking longer than "
+                           f"{_DVS_TUNE_TIMEOUT_SEC}s — it may still be completing.")
+        return False, f"Could not join {net['name']}: {str(out).replace(net['password'], '***')}"
+    with _lock:
+        _dmr_last_net_tune = tune_str
+        _status_etag = ""
+    set_state(current_fav=None, current_fav_node=None, current_dvs_mode="DMR")
+    return True, f"Joined {net['name']} for this tune"
+
+def _local_dvs_disconnect() -> Tuple[bool, str]:
+    st = get_state()
+    if st.page not in _LOCAL_DVS_MODES or not st.current_fav:
+        return True, "Nothing is tuned."
+    log.info("local API: Node Talker asks to disconnect %s %s", st.page, st.current_fav)
+    if st.page == "DSTAR":
+        return action_dstar_disconnect()
+    return action_tune(st.page, TG_DISCONNECT, "")
+
+def _local_dmr_server_add(data: dict) -> Tuple[bool, str]:
+    net, err = _local_net(data)
+    if net is None:
+        return False, err
+    if not net["password"]:
+        return False, f"DMR network {net['name']} needs its password"
+    st = get_state()
+    servers = list(st.dmr_servers)
+    if any(str(s.get("name", "")).strip().lower() == net["name"].lower()
+           or _server_key(str(s.get("name", ""))) == _server_key(net["name"]) for s in servers):
+        return False, f"Node Controller already has a DMR network named {net['name']}"
+    if len(servers) >= _DMR_SERVERS_MAX:
+        return False, f"Node Controller already has {_DMR_SERVERS_MAX} DMR networks"
+    servers.append({"name": net["name"], "password": net["password"], "address": net["address"],
+                    "net_url": net["net_url"] or _dmr_server_default_url(net["name"])})
+    srv_tgs = {k: [{"name": n, "tg": tg} for _m, n, tg, *_r in rows] for k, rows in st.dmr_server_tgs.items()}
+    srv_tgs.setdefault(_server_key(net["name"]), [])
+    log.info("local API: Node Talker adds DMR network %s (%s)", net["name"], net["address"])
+    ok, msg = action_save_dmr_server_tgs(srv_tgs, servers)
+    return (True, f"Added DMR network {net['name']} to Node Controller") if ok else (False, msg)
 
 def _local_m17_connect(data: dict) -> Tuple[bool, str]:
     base = str(data.get("reflector", "")).strip()
@@ -14359,7 +14494,7 @@ def _local_m17_connect(data: dict) -> Tuple[bool, str]:
         base, addr, label = str(row[1]).strip(), str(row[3]).strip(), row[0]
     if not addr or "|" in addr:
         return False, f"{base} has no usable address"
-    log.info("local API: Node Listen asks to connect M17 %s %s", base, module)
+    log.info("local API: Node Talker asks to connect M17 %s %s", base, module)
     return action_m17_connect(name or _clip_label(str(label)), base, addr, module)
 
 _POST_ACTIONS: dict = {

@@ -1,6 +1,19 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_75_20261019.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_76_20261020.py`. Newest entries first.
+
+## 6.13.76-pi02w (2026-10-20)
+
+- **Node Listen is now Node Talker.** The Node Talker card finds the tool
+  under either name:
+  - the service `nodetalker.service` or `nodelisten.service`;
+  - the program `/usr/local/bin/nodetalker.py` or `nodelisten.py`;
+  - the settings `nodetalker.conf` or `nodelisten.conf`, with a
+    `[nodetalker]` or `[nodelisten]` section;
+  - an `rpt.conf` audio line with either program name;
+  - a feeder process with either name.
+- **Restart Node Talker** restarts whichever service is installed.
+- The card, its checks and messages say Node Talker.
 
 ## 6.13.75-pi02w (2026-10-19)
 

@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.63.0"
+VERSION ="2.64.0"
 DATE_STR ="2026-10-20"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -133,14 +133,32 @@ LIBRARY_DIR =os .environ .get ("INSTMON_LIBRARY_DIR","/etc/asl_dvs/instmon_libra
 CONFIG_DIR =os .environ .get ("INSTMON_CONFIG_DIR","/etc/asl_dvs")
 DOCS_DIR = os.path.join(LIBRARY_DIR, "docs")
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
-NODELISTEN_CONFIGS =(("nodelisten_favorites*.conf","nodelisten_favorites.conf"),("nodelisten*.conf","nodelisten.conf"))
-LIVE_CONFIGS =(CONFIG_NAME ,"nodelisten.conf","nodelisten_favorites.conf")
+NODELISTEN_CONFIGS =(("nodetalker_favorites*.conf","nodetalker_favorites.conf"),("nodelisten_favorites*.conf","nodetalker_favorites.conf"),
+("nodetalker*.conf","nodetalker.conf"),("nodelisten*.conf","nodetalker.conf"))
+LIVE_CONFIGS =(CONFIG_NAME ,"nodetalker.conf","nodetalker_favorites.conf")
+NL_LEGACY_NAMES ={"nodetalker.conf":"nodelisten.conf","nodetalker_favorites.conf":"nodelisten_favorites.conf"}
+
+def _nl_live_name (name ):
+    old =NL_LEGACY_NAMES .get (name )
+    if old and not os .path .exists (os .path .join (CONFIG_DIR ,name )):
+        p =os .path .join (CONFIG_DIR ,old )
+        if os .path .isfile (p )and not os .path .islink (p ):
+            return old 
+    return name 
+
+def live_configs ():
+    out =[]
+    for n in LIVE_CONFIGS :
+        n =_nl_live_name (n )
+        if n not in out and os .path .isfile (os .path .join (CONFIG_DIR ,n )):
+            out .append (n )
+    return out 
 
 def config_dest_name (name ):
     low =os .path .basename (name or "").lower ()
     for pattern ,live in NODELISTEN_CONFIGS :
         if fnmatch .fnmatch (low ,pattern ):
-            return live 
+            return _nl_live_name (live )
     return CONFIG_NAME 
 
 HOME_SCAN_DIR =os .environ .get ("INSTMON_HOME_SCAN_DIR",os .path .expanduser ("~"))
@@ -1906,10 +1924,13 @@ COMPONENTS =[
 "category":"44helper",
 },
 {
-"name":"Node Listen",
-"service":"nodelisten",
+"name":"Node Talker",
+"service":"nodetalker",
+"legacy_services":("nodelisten",),
 "port":8993 ,
-"install_link":"/usr/local/bin/nodelisten.py",
+"install_link":"/usr/local/bin/nodetalker.py",
+"legacy_links":("/usr/local/bin/nodelisten.py",),
+"unit_paths":{"nodetalker":("/usr/local/bin/nodetalker.py","/usr/local/lib/asl_dvs/nodetalker")},
 "category":"nodelisten",
 },
 {
@@ -1937,9 +1958,9 @@ HOME_SCAN_PATTERN_MAP =[
 ("sysmon",["sysmon*.py","asl_dvs_sysmon*.py","asl_dvs_m17_sysmon*.py","sysmon_svx*.py"]),
 ("wifimon",["wifimon*.py"]),
 ("44helper",["44helper*.py","asl_dvs_m17_44helper*.py"]),
-("nodelisten",["nodelisten*.py"]),
+("nodelisten",["nodetalker*.py","nodelisten*.py"]),
 ("instmon",["instmon*.py"]),
-("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodelisten*.conf"]),
+("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodetalker*.conf","nodelisten*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
 ]
 
@@ -1948,6 +1969,7 @@ _NAME_GLOB_ALIASES ={
 "asl_dvs_m17_44helper*.py":"44helper*.py",
 "install_asl_dvs*.sh":"install_all*.sh",
 "uninstall_asl_dvs*.sh":"uninstall_all*.sh",
+"nodelisten*.py":"nodetalker*.py",
 }
 
 COMMS_RESTART_SERVICES =[
@@ -3333,7 +3355,7 @@ def build_status ():
     "config":{
     "name":CONFIG_NAME ,
     "installed":os .path .isfile (os .path .join (CONFIG_DIR ,CONFIG_NAME )),
-    "live":[n for n in LIVE_CONFIGS if os .path .isfile (os .path .join (CONFIG_DIR ,n ))],
+    "live":live_configs (),
     },
     }
 
@@ -4393,7 +4415,7 @@ _FU_DEFAULT_STEM = {
     "sysmon": "sysmon",
     "wifimon": "wifimon",
     "44helper": "44helper",
-    "nodelisten": "nodelisten",
+    "nodelisten": "nodetalker",
     "watchdog": "asl_dvs_watchdog",
     "instmon": "instmon",
 }
@@ -4443,7 +4465,7 @@ def _fu_wait_begin(secs, what):
 def _fu_wait_end():
     _fu_set(wait_end=0.0, wait_what="")
 
-_FU_STEM_ALIASES = (("asl_dvs_dashboard", "nodecontrol"), ("asl_dvs_m17_44helper", "44helper"))
+_FU_STEM_ALIASES = (("asl_dvs_dashboard", "nodecontrol"), ("asl_dvs_m17_44helper", "44helper"), ("nodelisten", "nodetalker"))
 
 def _fu_stem_of_name(name):
     m = _FU_STEM_RE.match(name)
@@ -5428,7 +5450,7 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
     if not rows :
         rows .append ('<div class="small muted" style="padding:.4rem .2rem">-- empty --</div>')
     if category =="config":
-        live =[n for n in LIVE_CONFIGS if os .path .isfile (os .path .join (CONFIG_DIR ,n ))]
+        live =live_configs ()
         if live :
             rows .append ('<div class="librow libgrp-upload"><span class="small muted">Copy the active config into the library:</span>'
             +''.join (f'<button data-action="save_alternate" data-name="{esc (n )}">Save {esc (n )}</button>'for n in live )
@@ -5458,7 +5480,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("SysMon","sysmon","install"),
     ("wifimon","wifimon","install"),
     ("44helper","44helper","install"),
-    ("Node Listen","nodelisten","install"),
+    ("Node Talker","nodelisten","install"),
     ("Watchdog","watchdog","install"),
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
@@ -7521,13 +7543,13 @@ _JS_ACTIONS = """function wireButtons() {
           }
           btn.disabled = false;
         } else if (action === 'install_config') {
-          const nlCfg = /^nodelisten/i.test(btn.dataset.name || '');
-          if (!confirm(`Install ${btn.dataset.name} as the active ${nlCfg ? 'Node Listen ' : ''}config? This will restart ${nlCfg ? 'Node Listen' : 'the Dashboard'} if it's installed.`)) { btn.disabled = false; return; }
+          const nlCfg = /^node(listen|talker)/i.test(btn.dataset.name || '');
+          if (!confirm(`Install ${btn.dataset.name} as the active ${nlCfg ? 'Node Talker ' : ''}config? This will restart ${nlCfg ? 'Node Talker' : 'the Dashboard'} if it's installed.`)) { btn.disabled = false; return; }
           await postAction({action: 'install_config', name: btn.dataset.name});
         } else if (action === 'gh_check') {
           await postAction({action: 'gh_check'});
         } else if (action === 'quiet') {
-          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper, Node Listen and the watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
+          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper, Node Talker and the watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
           await postAction({action: 'quiet'});
         } else if (action === 'restore') {
           await postAction({action: 'restore'});
@@ -8351,7 +8373,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
     <button id="restore-btn" data-action="restore" disabled>Restore</button>
     <span class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
-    Node Listen and the watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
+    Node Talker and the watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
   </div>
 </div>
 
@@ -8375,7 +8397,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="sysmon">SysMon (.py)</option>
       <option value="wifimon">WiFiMon (.py)</option>
       <option value="44helper">44helper (.py)</option>
-      <option value="nodelisten">Node Listen (.py)</option>
+      <option value="nodelisten">Node Talker (.py)</option>
       <option value="watchdog">Watchdog (.sh)</option>
       <option value="instmon">InstMon (.py)</option>
     </select>
@@ -10088,8 +10110,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         dest_name =config_dest_name (name )
         dest =os .path .join (CONFIG_DIR ,dest_name )
         is_nl =dest_name !=CONFIG_NAME 
-        if dest_name =="nodelisten.conf"and b"[nodelisten]"not in data :
-            self ._error_json (400 ,f"{name } has no [nodelisten] section -- it is not a Node Listen settings file.")
+        if dest_name in ("nodetalker.conf","nodelisten.conf")and b"[nodetalker]"not in data and b"[nodelisten]"not in data :
+            self ._error_json (400 ,f"{name } has no [nodetalker] or [nodelisten] section -- it is not a Node Talker settings file.")
             return 
         with _running_installs_lock :
             if dest in _running_installs :
@@ -10107,7 +10129,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             comp =None 
             if _dash_comp and os .path .isfile (resolve_installed_target (_dash_comp )):
                 comp =_dash_comp 
-            tool ="Node Listen"if is_nl else "The Dashboard"
+            tool ="Node Talker"if is_nl else "The Dashboard"
             if comp is None :
                 try :
                     wrote ,reason =compare_before_write (dest ,data )
@@ -10277,7 +10299,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
     def _action_save_alternate (self ,body =None ):
         live_name =(body or {}).get ("name")or CONFIG_NAME 
-        if live_name not in LIVE_CONFIGS :
+        if live_name not in LIVE_CONFIGS and live_name not in NL_LEGACY_NAMES .values ():
             self ._error_json (400 ,f"Unknown config '{live_name }'")
             return 
         live_cfg =os .path .join (CONFIG_DIR ,live_name )

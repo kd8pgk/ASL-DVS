@@ -1,6 +1,39 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_93_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_94_20261020.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.94-pi02w (2026-10-20)
+
+Node Talker (the new name of Node Listen) can now tune every digital mode
+through Node Controller, so on a node that runs both, ASL, DVSwitch and M17
+all go through Node Controller.
+
+- **New local API actions** (localhost only, with the key in
+  `/etc/asl_dvs/local_api.key`, like `connect` and `m17-connect`):
+  - `dvs-tune {mode, tg, name, net, once}`: DMR, STFU, YSF, P25, NXDN and
+    D-STAR. It goes through the same code as the tabs, so the tab switch,
+    link drops, gateways and settle times are unchanged.
+    - DMR switches to the DMR tab, then joins the network: the DMR server
+      with the same address, or else the same name, through the normal
+      server switch.
+    - When Node Controller has no such network, the answer starts with
+      `dmr-network-missing`. With `once`, it joins `password@address:port`
+      for this tune only and saves nothing.
+    - D-STAR takes Node Controller's tune string (`REF001CL`).
+    - STFU is refused when STFU isn't running.
+  - `dvs-disconnect`: tunes `disconnect` on the open digital tab; D-STAR
+    unlinks first.
+  - `dvs-status`: the open tab, the tuned TG or reflector, and the active DMR
+    server and its address.
+  - `dmr-server-add {net}`: adds a DMR network to `[DMR_SERVERS]` through
+    the same save as the DMR server editor (with a backup). Refused for a
+    duplicate name, a missing password, or more than 20 networks.
+  - DMR passwords are never logged and are hidden in errors.
+- **Node Talker under either name.**
+  - The port is read from `nodetalker.conf`, then `nodelisten.conf`.
+  - The transmit node is recognised by either `rpt.conf` marker
+    (`; nodelisten: transmit node` or `; nodetalker: transmit node`).
+  - The Listen link and the log lines say Node Talker.
 
 ## 9.3.93-pi02w (2026-10-19)
 

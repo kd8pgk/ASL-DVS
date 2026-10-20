@@ -11,6 +11,8 @@
   "asl_dvs_dashboard_pi02w": "nodecontrol_pi02w",
   "asl_dvs_m17_44helper": "44helper",
   "install_asl_dvs": "install_all",
-  "uninstall_asl_dvs_all": "uninstall_all"
+  "uninstall_asl_dvs_all": "uninstall_all",
+  "nodelisten": "nodetalker",
+  "amp_nodelisten": "amp_nodetalker"
  }
 }

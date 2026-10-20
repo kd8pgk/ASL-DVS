@@ -1,6 +1,25 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_3_1_20261020.sh`. Newest entries first.
+Current file: `install_all_v7_4_0_20261020.sh`. Newest entries first.
+
+## 7.4.0 (2026-10-20)
+
+- **Node Listen is now Node Talker.**
+  - The installer finds either file (`nodetalker*.py` or `nodelisten*.py`),
+    downloads under the stable key `nodetalker`, and sees Node Talker as
+    installed whether it runs as `nodetalker` or as the older `nodelisten`
+    service.
+  - It reads the port from `nodetalker.conf`, or from `nodelisten.conf`
+    before the update.
+  - `INSTALL_NODETALKER=1` installs it non-interactively; `INSTALL_NODELISTEN`
+    still works.
+  - Over Node Listen, Node Talker's own `--install` moves the settings and
+    retires the old service.
+- **Going back to Node Listen.** When the file you pick is a `nodelisten*.py`
+  and Node Talker is installed, the installer runs Node Talker's
+  `--uninstall` first. This keeps the two from running side by side on port
+  8993. The settings and favorites stay.
+- Prompts, headers and the summary say Node Talker.
 
 ## 7.3.1 (2026-10-20)
 

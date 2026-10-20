@@ -29,26 +29,31 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 DATE_STR = "2026-10-20"
-APP_NAME = "Node Listen"
+APP_NAME = "Node Talker"
 
-INSTALL_BIN_PATH = "/usr/local/bin/nodelisten.py"
-INSTALL_DIR = "/usr/local/lib/asl_dvs/nodelisten"
-SERVICE_NAME = "nodelisten.service"
-SYSTEMD_SERVICE_PATH = "/etc/systemd/system/nodelisten.service"
+INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
+INSTALL_DIR = "/usr/local/lib/asl_dvs/nodetalker"
+SERVICE_NAME = "nodetalker.service"
+SYSTEMD_SERVICE_PATH = "/etc/systemd/system/nodetalker.service"
+LEGACY_BIN_PATH = "/usr/local/bin/nodelisten.py"
+LEGACY_INSTALL_DIR = "/usr/local/lib/asl_dvs/nodelisten"
+LEGACY_SERVICE = "nodelisten.service"
+LEGACY_SERVICE_PATH = "/etc/systemd/system/nodelisten.service"
 _SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 
-CONFIG_DIR = os.environ.get("NODELISTEN_CONFIG_DIR", "/etc/asl_dvs")
-CONFIG_PATH = os.path.join(CONFIG_DIR, "nodelisten.conf")
-CONFIG_SECTION = "nodelisten"
-BACKUP_DIR = os.path.join(CONFIG_DIR, "nodelisten_backups")
+CONFIG_DIR = os.environ.get("NODETALKER_CONFIG_DIR", "/etc/asl_dvs")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "nodetalker.conf")
+CONFIG_SECTION = "nodetalker"
+LEGACY_SECTION = "nodelisten"
+BACKUP_DIR = os.path.join(CONFIG_DIR, "nodetalker_backups")
 BACKUP_KEEP = 10
-RESTORE_PATH = os.path.join(CONFIG_DIR, "nodelisten_restore.json")
+RESTORE_PATH = os.path.join(CONFIG_DIR, "nodetalker_restore.json")
 RESTORE_MAX_AGE_SEC = 1800
-RPT_CONF = os.environ.get("NODELISTEN_RPT_CONF", "/etc/asterisk/rpt.conf")
+RPT_CONF = os.environ.get("NODETALKER_RPT_CONF", "/etc/asterisk/rpt.conf")
 FEED_PYTHON = "/usr/bin/python3"
-FEED_MARK = "nodelisten.py,--feed,"
+FEED_MARKS = ("nodelisten.py,--feed,", "nodetalker.py,--feed,")
 HOOK_NOTE = "; nodelisten: sends this node's audio to the Node Listen page (remove it from that page)"
 
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
@@ -109,14 +114,15 @@ else:
     spec.loader.exec_module(main)
 '''
 
-SYSTEMD_SERVICE_CONTENT = f"""[Unit]
-Description=Node Listen: ASL node audio in the browser
+def service_content(run_path):
+    return f"""[Unit]
+Description=Node Talker: ASL node audio in the browser
 After=network.target asterisk.service
 
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {run_path}
 Restart=always
 RestartSec=3s
 TimeoutStartSec=60
@@ -126,6 +132,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+Alias=nodelisten.service
 """
 
 MAX_JSON_BYTES = 64 * 1024
@@ -252,11 +259,12 @@ def load_config():
         cp.read(CONFIG_PATH)
     except configparser.Error as exc:
         log_event(f"Config: {CONFIG_PATH} could not be read ({exc}); using defaults", "warn")
-    if cp.has_section(CONFIG_SECTION):
+    sec = CONFIG_SECTION if cp.has_section(CONFIG_SECTION) else LEGACY_SECTION
+    if cp.has_section(sec):
         for key, norm in _NORMALIZERS.items():
-            if cp.has_option(CONFIG_SECTION, key):
+            if cp.has_option(sec, key):
                 try:
-                    cfg[key] = norm(cp.get(CONFIG_SECTION, key))
+                    cfg[key] = norm(cp.get(sec, key))
                 except ValueError as exc:
                     log_event(f"Config: bad {key} ({exc}); using {DEFAULT_CONFIG[key]}", "warn")
     with _config_lock:
@@ -304,10 +312,8 @@ def _atomic_write(path, data, mode=0o644, like=None):
 
 
 def save_config(cfg):
-    lines = [f"[{CONFIG_SECTION}]"]
-    for key in DEFAULT_CONFIG:
-        val = cfg[key]
-        lines.append(f"{key} = {'true' if val is True else 'false' if val is False else val}")
+    body = [f"{key} = {'true' if cfg[key] is True else 'false' if cfg[key] is False else cfg[key]}" for key in DEFAULT_CONFIG]
+    lines = [f"[{CONFIG_SECTION}]"] + body + ["", f"[{LEGACY_SECTION}]"] + body
     _atomic_write(CONFIG_PATH, "\n".join(lines) + "\n", 0o644)
 
 
@@ -344,9 +350,9 @@ def config_update(body):
         except OSError as exc:
             msg += f" rpt.conf not updated: {exc}"
     if restart:
-        msg += " Node Listen restarts to use the new setting."
+        msg += " Node Talker restarts to use the new setting."
         if not _schedule_restart():
-            msg += " (Restart it by hand: systemctl restart nodelisten)"
+            msg += " (Restart it by hand: systemctl restart nodetalker)"
     log_event(f"Config saved: {json.dumps({k: cfg[k] for k in DEFAULT_CONFIG})}", "ok")
     return {"ok": True, "message": msg.strip(), "restart": restart}
 
@@ -434,7 +440,7 @@ def _root_backend_available():
     return bool(stored) and stored[0] not in ("!", "*")
 
 
-_SESSION_COOKIE_NAME = "nodelisten_session"
+_SESSION_COOKIE_NAME = "nodetalker_session"
 _SESSION_TTL_SEC = 12 * 3600
 _sessions = {}
 _sessions_lock = threading.Lock()
@@ -610,7 +616,7 @@ def _schedule_restart():
         return False
     try:
         subprocess.Popen(["systemd-run", "--quiet", "--collect", "--on-active=2",
-                          "--unit=nodelisten-selfrestart", "systemctl", "restart", SERVICE_NAME],
+                          "--unit=nodetalker-selfrestart", "systemctl", "restart", SERVICE_NAME],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except OSError as exc:
@@ -1113,8 +1119,20 @@ _STANZA_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?")
 _OUTSTREAM_RE = re.compile(r"^\s*outstreamcmd\s*=>?\s*(.*?)\s*$", re.I)
 
 
+def legacy_bin_ours():
+    if os.path.islink(LEGACY_BIN_PATH) or not os.path.lexists(LEGACY_BIN_PATH):
+        return True
+    try:
+        with open(LEGACY_BIN_PATH, "rb") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return False
+    return b'APP_NAME = "Node Listen"' in head or b'APP_NAME = "Node Talker"' in head
+
+
 def hook_line():
-    return f"outstreamcmd = {FEED_PYTHON},{INSTALL_BIN_PATH},--feed,{_cfg_get('udp_port')}"
+    path = LEGACY_BIN_PATH if legacy_bin_ours() else INSTALL_BIN_PATH
+    return f"outstreamcmd = {FEED_PYTHON},{path},--feed,{_cfg_get('udp_port')}"
 
 
 def _squash(text):
@@ -1160,7 +1178,7 @@ def read_rpt():
 
 
 def _is_ours(value):
-    return bool(value) and FEED_MARK in _squash(value)
+    return bool(value) and any(m in _squash(value) for m in FEED_MARKS)
 
 
 def rpt_state():
@@ -1257,7 +1275,7 @@ def hook_enable(node):
         save_config(cfg)
     except OSError:
         pass
-    log_event(f"rpt.conf: node {node} now sends its audio to Node Listen (backup {backup})", "ok")
+    log_event(f"rpt.conf: node {node} now sends its audio to Node Talker (backup {backup})", "ok")
     return _changed(backup, f"Added to node {node}. Restart Asterisk for it to take effect.")
 
 
@@ -1271,7 +1289,7 @@ def hook_disable():
             backup = _write_rpt(lines)
         except OSError as exc:
             return _write_failed(exc)
-    log_event(f"rpt.conf: Node Listen line removed (backup {backup})", "ok")
+    log_event(f"rpt.conf: Node Talker line removed (backup {backup})", "ok")
     return _changed(backup, "Removed. Restart Asterisk for it to take effect.")
 
 
@@ -1282,7 +1300,7 @@ def restart_asterisk():
         return {"ok": False, "error": f"systemctl failed: {exc}"}
     if r.returncode != 0:
         return {"ok": False, "error": (r.stderr or r.stdout).strip() or f"exit {r.returncode}"}
-    log_event("Asterisk restarted from Node Listen", "ok")
+    log_event("Asterisk restarted from Node Talker", "ok")
     return {"ok": True, "message": "Asterisk restarted. Audio should arrive within a few seconds of the node hearing anything."}
 
 
@@ -1303,7 +1321,7 @@ def feeder_pids():
                     cmd = fh.read()
             except OSError:
                 continue
-            if b"nodelisten.py\0--feed\0" in cmd:
+            if b"nodelisten.py\0--feed\0" in cmd or b"nodetalker.py\0--feed\0" in cmd:
                 pids.append(int(name))
     except OSError:
         pass
@@ -1323,8 +1341,9 @@ def build_status(full):
         st["links"], st["links_ok"] = links, ok
         nc = nc_running(cached=True)
         st["control"] = "nc" if nc else "solo"
-        st["m17"] = m17_current() if nc and _has_m17(fav_load()) else ""
-        st["tuned"] = solo_status(node)
+        favs = fav_load()
+        st["m17"] = m17_current() if nc and _has_m17(favs) else ""
+        st["tuned"] = (nc_dvs_target(favs) if _has_dvs(favs) else "") if nc else solo_status(node)
         tx = tx_state(node)
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
@@ -1336,17 +1355,17 @@ def build_status(full):
     return st
 
 
-AST_BIN = os.environ.get("NODELISTEN_ASTERISK", "asterisk")
-DASH_CONF = os.environ.get("NODELISTEN_DASH_CONF", "/etc/asl_dvs/asl_dvs.conf")
-FAV_PATH = os.path.join(CONFIG_DIR, "nodelisten_favorites.json")
-FAV_CONF_PATH = os.path.join(CONFIG_DIR, "nodelisten_favorites.conf")
-TUNED_PATH = os.path.join(CONFIG_DIR, "nodelisten_tuned.json")
+AST_BIN = os.environ.get("NODETALKER_ASTERISK", "asterisk")
+DASH_CONF = os.environ.get("NODETALKER_DASH_CONF", "/etc/asl_dvs/asl_dvs.conf")
+FAV_PATH = os.path.join(CONFIG_DIR, "nodetalker_favorites.json")
+FAV_CONF_PATH = os.path.join(CONFIG_DIR, "nodetalker_favorites.conf")
+TUNED_PATH = os.path.join(CONFIG_DIR, "nodetalker_tuned.json")
 FAV_MAX = 15
 FAV_JSON_MAX = 10
 DMR_NET_MAX = 10
 DVS_MODES = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
 FAV_MODES = ("ASL", "EchoLink") + DVS_MODES + ("M17",)
-DVS_SEARCH_PATHS = tuple(p for p in (os.environ.get("NODELISTEN_DVSWITCH", ""), "/opt/MMDVM_Bridge/dvswitch.sh",
+DVS_SEARCH_PATHS = tuple(p for p in (os.environ.get("NODETALKER_DVSWITCH", ""), "/opt/MMDVM_Bridge/dvswitch.sh",
                                      "/usr/local/sbin/dvswitch.sh", "/var/lib/dvswitch/dvswitch.sh") if p)
 DVS_TIMEOUT = {"mode": 40, "tune": 40}
 DVS_OTHER_TIMEOUT = 10
@@ -1357,9 +1376,9 @@ DSTAR_BASE_LEN = 6
 GATEWAY_SERVICES = {"YSF": "ysfgateway.service", "P25": "p25gateway.service", "NXDN": "nxdngateway.service",
                     "DSTAR": "ircddbgatewayd.service", "STFU": "stfu.service"}
 GATEWAY_WAIT_SEC = 5.0
-AB_INI = os.environ.get("NODELISTEN_AB_INI", "/opt/Analog_Bridge/Analog_Bridge.ini")
-M17_INI = os.environ.get("NODELISTEN_M17_INI", "/opt/USRP2M17/USRP2M17.ini")
-M17_HOSTS = os.environ.get("NODELISTEN_M17_HOSTS", "/var/lib/mmdvm/M17Hosts.json")
+AB_INI = os.environ.get("NODETALKER_AB_INI", "/opt/Analog_Bridge/Analog_Bridge.ini")
+M17_INI = os.environ.get("NODETALKER_M17_INI", "/opt/USRP2M17/USRP2M17.ini")
+M17_HOSTS = os.environ.get("NODETALKER_M17_HOSTS", "/var/lib/mmdvm/M17Hosts.json")
 M17_SERVICE = "usrp2m17"
 M17_NET_PORTS = (17010, 17000)
 M17_USRP_PORTS = (32008, 34008)
@@ -1368,15 +1387,15 @@ DEFAULT_BRIDGES = ("1999", "1917")
 BLANK_NAME, BLANK_ADDR = "blank", "000000"
 _DMR_ADDR_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}:\d{1,5}$")
 _CALLSIGN_RE = re.compile(r"^[A-Z0-9][A-Z0-9/-]{2,9}$")
-TLS_DIR = os.path.join(CONFIG_DIR, "nodelisten_tls")
+TLS_DIR = os.path.join(CONFIG_DIR, "nodetalker_tls")
 TLS_CERT = os.path.join(TLS_DIR, "cert.pem")
 TLS_KEY = os.path.join(TLS_DIR, "key.pem")
 TX_NODE = "1921"
 TX_USRP_SEND = 32018
 TX_USRP_LISTEN = 34018
 TX_NOTE = "; nodelisten: transmit node for the Node Listen page (remove it from that page)"
-IAX_CONF = os.environ.get("NODELISTEN_IAX_CONF", "/etc/asterisk/iax.conf")
-LOCAL_KEY_PATH = os.environ.get("NODELISTEN_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
+IAX_CONF = os.environ.get("NODETALKER_IAX_CONF", "/etc/asterisk/iax.conf")
+LOCAL_KEY_PATH = os.environ.get("NODETALKER_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
 SYSMON_PORT = 9999
 TX_BUSY_GRACE_SEC = 1.0
 _TX_NODES_LINE_RE = re.compile(r"^\s*" + TX_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + TX_NODE + r",NONE\s*$")
@@ -1709,7 +1728,7 @@ def parse_fav_conf(text, fav_limit=FAV_MAX, net_limit=DMR_NET_MAX):
 
 
 def render_fav_conf(favs, nets, cfg):
-    out = ["# nodelisten_favorites.conf: Node Listen favorites in Node Controller's asl_dvs.conf format.",
+    out = ["# nodetalker_favorites.conf: Node Talker favorites in Node Controller's asl_dvs.conf format.",
            "# The Connect tab lists the favorites in the order they appear here.", "",
            "[CONFIG]"]
     for k in ("callsign", "bridge_nodes"):
@@ -2222,7 +2241,7 @@ def _m17_error(r):
         return "M17 goes through Node Controller, which is not running."
     err = r["error"]
     if err.startswith("Unknown local action"):
-        err = "this version can't connect M17 for Node Listen; update Node Controller."
+        err = "this version can't connect M17 for Node Talker; update Node Controller."
     return f"Node Controller: {err}"
 
 
@@ -2415,10 +2434,94 @@ def _hide(text, secret):
     return (text or "").replace(secret, "***") if secret else (text or "")
 
 
-def solo_dvs(f, node):
+NC_NET_MISSING = "dmr-network-missing"
+_nc_dvs_status = {"t": -M17_STATUS_TTL, "v": None}
+
+
+def _nc_old(r):
+    return r is not None and r["error"].startswith("Unknown local action")
+
+
+def nc_dvs(f, node, net_action=None):
+    dash_node = dashboard_conf()["asl_node"]
+    if not dash_node:
+        return {"ok": False, "error": "DVSwitch goes through Node Controller; set its node first."}
+    if node != dash_node:
+        return {"ok": False, "error": f"DVSwitch goes through Node Controller's node {dash_node}, but Node Talker's node is {node}. "
+                                      f"Send node {dash_node}'s audio here (Setup tab, Receive) to use it."}
+    body = {"action": "dvs-tune", "mode": f["mode"], "tg": f["num"], "name": f["label"]}
+    net = None
+    if f["mode"] == "DMR":
+        net = next((n for n in nets_load() if n["name"] == f.get("net")), None)
+        if net is None:
+            return {"ok": False, "error": f"DMR network {f.get('net')} is not in the network list (Setup tab, Digital card)."}
+        body["net"] = {"name": net["name"], "address": net["address"], "password": net["password"], "url": net["url"]}
+        if net_action == "once":
+            body["once"] = True
+        elif net_action == "add":
+            r = dash_call({"action": "dmr-server-add", "net": body["net"]}, timeout=30)
+            if r is None:
+                return {"ok": False, "error": "Node Controller is not answering."}
+            if not r["ok"]:
+                return {"ok": False, "error": "this version of Node Controller can't take networks from Node Talker; update it."
+                        if _nc_old(r) else f"Node Controller: {r['error']}"}
+            log_event(f"Added DMR network {net['name']} to Node Controller", "ok")
+    r = dash_call(body, timeout=100)
+    _nc_dvs_status["t"] = -M17_STATUS_TTL
+    _lstats_invalidate()
+    if r is None:
+        return {"ok": False, "error": "Node Controller is not answering."}
+    if not r["ok"]:
+        if _nc_old(r):
+            return {"ok": False, "error": "Node Controller is running, but this version can't tune DVSwitch for Node Talker: update Node Controller."}
+        if r["error"].startswith(NC_NET_MISSING) and net is not None:
+            return {"ok": False, "need_net": True, "warn": True, "net": net["name"],
+                    "error": f"Node Controller doesn't have DMR network {net['name']} ({net['address']})."}
+        return {"ok": False, "error": f"Node Controller: {r['error']}"}
+    log_event(f"Tuned {fav_name(f)} through Node Controller", "ok")
+    return {"ok": True, "message": f"{r['message'] or 'Tuned'} (through Node Controller)"}
+
+
+def nc_dvs_current(max_age=M17_STATUS_TTL):
+    now = time.monotonic()
+    if now - _nc_dvs_status["t"] < max_age:
+        return _nc_dvs_status["v"]
+    r = dash_call({"action": "dvs-status"}, timeout=3)
+    v = None
+    if r is not None and r["ok"]:
+        try:
+            v = json.loads(r["message"])
+        except ValueError:
+            v = None
+    _nc_dvs_status.update(t=now, v=v if isinstance(v, dict) else None)
+    return _nc_dvs_status["v"]
+
+
+def nc_dvs_target(favs, max_age=M17_STATUS_TTL):
+    d = nc_dvs_current(max_age)
+    if not d or not d.get("fav"):
+        return ""
+    nets = {n["name"]: n for n in nets_load()}
+    for f in favs:
+        if f["mode"] != d.get("page") or f["num"] != d["fav"]:
+            continue
+        if f["mode"] == "DMR":
+            n = nets.get(f.get("net"))
+            if not n or (n["name"].lower() != str(d.get("server", "")).lower()
+                         and n["address"].lower() != str(d.get("address", "")).lower()):
+                continue
+        return fav_target(f)
+    return ""
+
+
+def _has_dvs(favs):
+    return any(f["mode"] in DVS_MODES for f in favs)
+
+
+def solo_dvs(f, node, net_action=None):
     label = MODE_LABEL.get(f["mode"], f["mode"])
     if nc_running():
-        return {"ok": False, "error": f"Node Controller is running, so it does the DVSwitch tuning: tune {fav_name(f)} on its {label} tab."}
+        return nc_dvs(f, node, net_action)
     if not dvs_path():
         return {"ok": False, "error": f"dvswitch.sh was not found, so {label} can't be tuned here."}
     b = bridge_nodes(0)
@@ -2572,7 +2675,7 @@ def m17_connect(f, node):
     if not dash_node:
         return {"ok": False, "error": "M17 goes through Node Controller; set its node first."}
     if node != dash_node:
-        return {"ok": False, "error": f"M17 goes through Node Controller's node {dash_node}, but Node Listen's node is {node}. "
+        return {"ok": False, "error": f"M17 goes through Node Controller's node {dash_node}, but Node Talker's node is {node}. "
                                       f"Send node {dash_node}'s audio here (Setup tab, Receive) to use M17."}
     r = dash_call({"action": "m17-connect", "reflector": f["num"], "module": f["module"], "name": f["label"]}, timeout=40)
     _lstats_invalidate()
@@ -2613,7 +2716,7 @@ def _link_outcome(f, node, via):
                                   "Check the number; the node may be offline or refusing connections."}
 
 
-def fav_connect(index):
+def fav_connect(index, net_action=None):
     favs = fav_load()
     try:
         f = favs[int(index)]
@@ -2623,7 +2726,7 @@ def fav_connect(index):
     if not node:
         return {"ok": False, "error": err}
     if f["mode"] in DVS_MODES:
-        return solo_dvs(f, node)
+        return solo_dvs(f, node, net_action if net_action in ("add", "once") else None)
     if f["mode"] == "M17":
         return m17_connect(f, node)
     if node == dashboard_conf()["asl_node"]:
@@ -2662,6 +2765,16 @@ def fav_disconnect(index=None):
             return name
         done.append(name)
         _lstats_invalidate()
+    if not done and _has_dvs(favs) and nc_running():
+        tgt = nc_dvs_target(fav_load(), 0)
+        if tgt in targets:
+            r = dash_call({"action": "dvs-disconnect"}, timeout=60)
+            _nc_dvs_status["t"] = -M17_STATUS_TTL
+            if r is None or not r["ok"]:
+                return {"ok": False, "error": "Node Controller is not answering." if r is None else f"Node Controller: {r['error']}"}
+            _lstats_invalidate()
+            done.append(fav_name(targets[tgt]))
+            log_event(f"Disconnect {done[0]} through Node Controller", "ok")
     m17 = m17_current(0) if _has_m17(favs) and not done else ""
     if m17 in targets:
         r = dash_call({"action": "m17-disconnect"})
@@ -2711,7 +2824,7 @@ def ensure_tls_cert():
         return False
     host = socket.gethostname().split(".")[0]
     if not _HOSTNAME_RE.match(host):
-        host = "nodelisten"
+        host = "nodetalker"
     try:
         os.makedirs(TLS_DIR, mode=0o700, exist_ok=True)
         os.chmod(TLS_DIR, 0o700)
@@ -3127,7 +3240,7 @@ def tx_enable():
                     return _write_failed(exc)
                 log_event(f"rpt.conf: fixed the [nodes] line for node {TX_NODE}: {want} (backup {backup})", "ok")
                 return _changed(backup, f"Fixed the [nodes] line for node {TX_NODE} ({want}). Restart Asterisk.")
-            return {"ok": False, "error": f"rpt.conf already has a [{TX_NODE}] node that Node Listen didn't add. Remove it or pick another node."}
+            return {"ok": False, "error": f"rpt.conf already has a [{TX_NODE}] node that Node Talker didn't add. Remove it or pick another node."}
         main_st = _find_stanza(stanzas, main)
         if main_st is None:
             return {"ok": False, "error": f"Node {main} is not in {RPT_CONF}."}
@@ -3144,7 +3257,7 @@ def tx_enable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: added transmit node {TX_NODE} for node {main} (backup {backup})", "ok")
-    return _changed(backup, f"Added node {TX_NODE}. Restart Asterisk, then Node Listen links it to node {main}.")
+    return _changed(backup, f"Added node {TX_NODE}. Restart Asterisk, then Node Talker links it to node {main}.")
 
 
 def tx_unlink(why):
@@ -3169,7 +3282,7 @@ def tx_disable():
             if _TX_NODES_LINE_RE.match(ln):
                 drop.add(i)
         if not drop:
-            return {"ok": True, "changed": False, "message": f"Node Listen has no node {TX_NODE} in rpt.conf."}
+            return {"ok": True, "changed": False, "message": f"Node Talker has no node {TX_NODE} in rpt.conf."}
         new = [ln for i, ln in enumerate(lines) if i not in drop]
         while len(new) > 1 and new[-1].strip() == "" and new[-2].strip() == "":
             new.pop()
@@ -3533,7 +3646,7 @@ async function api(url, opts) {
     opts.headers['Content-Type'] = 'application/json';
   }
   let r;
-  try { r = await fetch(url, opts); } catch (e) { return {ok: false, error: 'Node Listen is not answering.'}; }
+  try { r = await fetch(url, opts); } catch (e) { return {ok: false, error: 'Node Talker is not answering.'}; }
   let d = {};
   try { d = await r.json(); } catch (e) { d = {ok: false, error: 'HTTP ' + r.status}; }
   if (r.status === 401 && url !== '/api/login' && authed) { authed = false; render(); }
@@ -4197,7 +4310,7 @@ async function chkShow(r) {
 function chkText() {
   const r = chkShown;
   if (!r) return '';
-  const lines = ['Node Listen ' + document.querySelector('header .ver').textContent + ' audio check, ' + new Date(r.at).toLocaleString() + ', ' + r.mins + ' min'];
+  const lines = ['Node Talker ' + document.querySelector('header .ver').textContent + ' audio check, ' + new Date(r.at).toLocaleString() + ', ' + r.mins + ' min'];
   ['rx', 'tx'].forEach((sd) => {
     lines.push(sd === 'rx' ? 'Receive:' : 'Transmit:');
     chkRows(r, null, sd).forEach(([k, v, , t]) => lines.push('  ' + k + ': ' + v + (t ? ' (target ' + t + ')' : '')));
@@ -4462,7 +4575,7 @@ function setMediaInfo() {
   if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: nodeLabel ? 'Node ' + nodeLabel : 'ASL node',
-    artist: 'Node Listen',
+    artist: 'Node Talker',
     album: location.hostname,
   });
 }
@@ -4641,9 +4754,9 @@ function openTalk(force) {
       if (navigator.vibrate) navigator.vibrate(30);
     } else if (m.ev === 'denied') {
       const why = {busy: 'The node is busy (someone is talking). Try again when it is quiet.',
-        'in-use': 'Someone else is transmitting from Node Listen.',
+        'in-use': 'Someone else is transmitting from Node Talker.',
         'not-ready': 'Node 1921 is not set up yet (Setup tab).',
-        'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Listen relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
+        'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Talker relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
       endTalk(); pttUi('ready', why, 'warn');
     } else if (m.ev === 'unkeyed') {
       keyed = false; endTalk();
@@ -4983,9 +5096,24 @@ async function favConnect() {
   const off = selectedLinked();
   $('c-connect').disabled = true;
   note('c-msg', '', off ? 'Disconnecting...' : f && (f.mode === 'M17' || DVS.includes(f.mode)) ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
-  try { setMsg('c-msg', await post(off ? '/api/disconnect' : '/api/connect', {index: Number(i)})); }
+  $('c-net').classList.add('hidden');
+  let d = {};
+  try { d = await post(off ? '/api/disconnect' : '/api/connect', {index: Number(i)}); setMsg('c-msg', d); }
   finally { $('c-connect').disabled = false; }
+  if (d.need_net) { netAsk = Number(i); $('c-net').classList.remove('hidden'); }
   if (off) setTimeout(pollStatus, 1000); else pollStatus();
+}
+
+let netAsk = null;
+async function netAnswer(action) {
+  $('c-net').classList.add('hidden');
+  const i = netAsk; netAsk = null;
+  if (action === '' || i === null) { note('c-msg', '', ''); return; }
+  $('c-connect').disabled = true;
+  note('c-msg', '', action === 'add' ? 'Adding the network to Node Controller and tuning...' : 'Tuning...');
+  try { setMsg('c-msg', await post('/api/connect', {index: i, net_action: action})); }
+  finally { $('c-connect').disabled = false; }
+  pollStatus();
 }
 
 async function loadNode() {
@@ -5042,7 +5170,7 @@ async function loadTx() {
   let s;
   if (d.error) s = d.error;
   else if (!d.defined) s = 'Not set up.';
-  else if (!d.ours) s = 'rpt.conf has a [' + d.node + '] node that Node Listen did not add.';
+  else if (!d.ours) s = 'rpt.conf has a [' + d.node + '] node that Node Talker did not add.';
   else if (!d.nodes_line) s = 'Its [nodes] line is missing or has the wrong IAX port: press Add node 1921 to fix it.';
   else if (!d.rx_ok) s = 'Set up, but its rxchannel is not ' + d.rxchannel + '.';
   else if (d.linked === null) s = 'Set up. Asterisk does not know it yet: restart Asterisk.';
@@ -5137,7 +5265,7 @@ async function loadDigital() {
   const d = await api('/api/digital');
   if (!d.ok) return;
   const nc = d.control === 'nc';
-  $('dg-control').textContent = nc ? 'Node Controller is running: it does the tuning' : 'Solo: Node Listen tunes DVSwitch and M17 itself';
+  $('dg-control').textContent = nc ? 'Node Controller is running: Node Talker tunes through it' : 'Solo: Node Talker tunes DVSwitch and M17 itself';
   const found = [];
   found.push(d.dvswitch ? 'dvswitch.sh' : 'no dvswitch.sh');
   if (d.analog_bridge) found.push('Analog_Bridge');
@@ -5153,7 +5281,7 @@ async function loadDigital() {
   const src = (v, s) => v ? v + (s && s !== 'set here' ? ' (from ' + s + ')' : '') : 'none found';
   $('dg-auto').textContent = 'In use: digital bridge ' + src(b.digital, b.digital_src) + ', M17 bridge ' + src(b.m17, b.m17_src)
     + ', callsign ' + src(d.callsign, d.callsign_src) + '. Leave a box empty to find it on its own.';
-  $('dg-file').textContent = d.file || 'nodelisten_favorites.conf';
+  $('dg-file').textContent = d.file || 'nodetalker_favorites.conf';
   $('nw-import').disabled = !d.dash_nets;
   sum('dig', [nc ? 'Node Controller' : 'Solo', d.tuned || '', (d.nets || []).length ? (d.nets.length + ' DMR network' + (d.nets.length > 1 ? 's' : '')) : ''].filter((x) => x).join(' · '));
   nets = (d.nets || []).map((n) => ({orig: n.name, name: n.name, address: n.address, url: n.url, password: '', has: n.has_password}));
@@ -5328,6 +5456,10 @@ document.addEventListener('DOMContentLoaded', () => {
   $('fe-dash-add').addEventListener('click', feAddDash);
   $('fe-save').addEventListener('click', feSave);
   $('nw-add').addEventListener('click', nwAdd);
+  $('c-net-add').addEventListener('click', () => netAnswer('add'));
+  $('c-net-once').addEventListener('click', () => netAnswer('once'));
+  $('c-net-no').addEventListener('click', () => netAnswer(''));
+  $('c-fav').addEventListener('change', () => { $('c-net').classList.add('hidden'); netAsk = null; });
   $('nw-save').addEventListener('click', nwSave);
   $('nw-import').addEventListener('click', nwImport);
   $('dg-save').addEventListener('click', dgSave);
@@ -5373,17 +5505,17 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#111922">
-<title>Node Listen</title>
+<title>Node Talker</title>
 <style>__CSS__</style>
 </head>
 <body>
-<header><h1>Node Listen</h1><span class="ver">v__VERSION__</span><span class="sp"></span>
+<header><h1>Node Talker</h1><span class="ver">v__VERSION__</span><span class="sp"></span>
 <a id="dash-link" class="pill" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="login-open" class="pill hidden" type="button">Log In</button>
 <button id="logout" class="pill hidden" type="button">Log Out</button></header>
 <div id="login-screen">
 <div id="login-card">
-<h2>Node Listen Login</h2>
+<h2>Node Talker Login</h2>
 <form id="login-form">
 <input type="password" id="pw" placeholder="Root password" autocomplete="current-password" aria-label="Root password" required>
 <button id="login-btn" type="submit">Log In</button>
@@ -5415,6 +5547,11 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 </div>
 <div id="c-msg" class="msg"></div>
+<div id="c-net" class="hidden">
+<div class="row"><button id="c-net-add" class="btn primary" type="button">Add it to Node Controller and tune</button>
+<button id="c-net-once" class="btn" type="button">Tune this once</button>
+<button id="c-net-no" class="btn" type="button">Cancel</button></div>
+</div>
 </div>
 </section>
 
@@ -5426,7 +5563,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="lstat"><span class="mono" id="st-node" title="Node">-</span>
 <span id="st-feed-w"><span id="st-feed" class="dot"></span><span id="st-feed-t">feed</span></span>
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span>
-<span id="s-tx-w" title="Lit while someone transmits from Node Listen"><span id="s-tx" class="dot"></span>TX</span>
+<span id="s-tx-w" title="Lit while someone transmits from Node Talker"><span id="s-tx" class="dot"></span>TX</span>
 <span id="st-listeners" title="Listeners">-</span><span id="chk-badge" class="chk hidden" title="An audio check is running (Setup tab)"></span></div>
 <div class="spec" id="spec-wrap">
 <div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum: tap to switch between waterfall and bars"></canvas>
@@ -5467,7 +5604,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-tx"><span class="fold-t">Transmit: node <span id="tx-node">1921</span></span><span class="fold-sum" id="sum-tx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-tx">
 <p class="muted small">Push-to-talk sends your voice to private node 1921, which stays linked to the main node.
-Node Listen adds its stanza and <code>[nodes]</code> line to rpt.conf (with a backup) and relinks it if it drops.</p>
+Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a backup) and relinks it if it drops.</p>
 <table>
 <tr><th>State</th><td id="tx-state">-</td></tr>
 <tr><th>Main node</th><td id="tx-main">-</td></tr>
@@ -5490,7 +5627,7 @@ Node Listen adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <div class="row"><label><input type="checkbox" id="cfg-https"> HTTPS (needed for the microphone)</label></div>
 <div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
 <div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
-<p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Listen.</p>
+<p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div class="row"><button id="cfg-save" class="btn primary" type="button">Save</button></div>
 <div id="cfg-msg" class="msg"></div>
 </div>
@@ -5515,9 +5652,9 @@ while Node Controller runs, it does that instead.</p>
 <div class="card fold" id="cd-dig">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-dig"><span class="fold-t">Digital</span><span class="fold-sum" id="sum-dig"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-dig">
-<p class="muted small">Without Node Controller, Node Listen tunes DVSwitch and M17 itself: it sets the mode, tunes and
-links the bridge node to the main node. While Node Controller runs, ASL, EchoLink and M17 go through it, and DVSwitch
-favorites are tuned on its page.</p>
+<p class="muted small">Without Node Controller, Node Talker tunes DVSwitch and M17 itself: it sets the mode, tunes and
+links the bridge node to the main node. While Node Controller runs, ASL, EchoLink, DVSwitch and M17 all go through it.
+A DMR network Node Controller doesn't have can be added to it, or used for one tune, from the Connect tab.</p>
 <table>
 <tr><th>Control</th><td id="dg-control">-</td></tr>
 <tr><th>Found</th><td id="dg-found">-</td></tr>
@@ -5539,9 +5676,9 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><button id="nw-save" class="btn primary" type="button">Save networks</button></div>
 <div id="nw-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">Favorites file</h3>
-<p class="muted small"><code id="dg-file">nodelisten_favorites.conf</code> holds the favorites, the DMR networks and these
+<p class="muted small"><code id="dg-file">nodetalker_favorites.conf</code> holds the favorites, the DMR networks and these
 settings in Node Controller's format. It holds the DMR passwords too.</p>
-<div class="row"><a id="ff-down" class="btn" href="/api/favorites-file" download="nodelisten_favorites.conf" style="display:inline-flex;align-items:center;text-decoration:none">Download</a>
+<div class="row"><a id="ff-down" class="btn" href="/api/favorites-file" download="nodetalker_favorites.conf" style="display:inline-flex;align-items:center;text-decoration:none">Download</a>
 <label class="btn" style="display:inline-flex;align-items:center">Upload<input type="file" id="ff-up" accept=".conf,text/plain" class="hidden"></label></div>
 <div id="ff-msg" class="msg"></div>
 </div>
@@ -5659,7 +5796,7 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
 <div id="hs-out-row"><label for="hs-out">Audio output</label>
 <select id="hs-out" style="width:100%;min-height:44px;margin-top:6px"></select></div>
-<p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Listen follows it.</p>
+<p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Talker follows it.</p>
 <div style="margin-top:10px"><label for="hs-mic">Microphone for push-to-talk</label>
 <select id="hs-mic" style="width:100%;min-height:44px;margin-top:6px"></select></div>
 <p class="muted small">Default follows Android: the headset mic when a headset is plugged in. With Bluetooth, picking the phone's own mic can keep the headset in music quality while you talk, on some phones.</p>
@@ -5669,7 +5806,7 @@ mic volume, so the gain here is applied in the page.</p>
 <option value="ptt">Push to talk: press to talk, press again to stop</option>
 <option value="off">Off</option>
 </select></div>
-<p class="muted small">The button only reaches the page while Node Listen is playing. Push to talk uses the same transmit as the Talk button, with the same time-out; if the second press doesn't arrive, the time-out ends the transmission.</p>
+<p class="muted small">The button only reaches the page while Node Talker is playing. Push to talk uses the same transmit as the Talk button, with the same time-out; if the second press doesn't arrive, the time-out ends the transmission.</p>
 <div class="row"><button id="hs-names" class="btn hidden" type="button">Show device names</button></div>
 <div class="muted small" id="hs-now"></div>
 <div id="hs-msg" class="msg"></div>
@@ -5730,7 +5867,7 @@ _POST_ACTIONS = {
     "/api/tx/enable": (lambda b: tx_enable(), (OSError,)),
     "/api/tx/disable": (lambda b: tx_disable(), (OSError,)),
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
-    "/api/connect": (lambda b: fav_connect(b.get("index")), ()),
+    "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
     "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
     "/api/digital": (digital_save, ()),
@@ -5743,7 +5880,7 @@ _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "nodelisten/" + VERSION
+    server_version = "nodetalker/" + VERSION
     sys_version = ""
     protocol_version = "HTTP/1.1"
     timeout = 60
@@ -5781,7 +5918,7 @@ class Handler(BaseHTTPRequestHandler):
         if _cfg_get("allow_wan") or not self._wan():
             return False
         self.close_connection = True
-        self._json(403, {"ok": False, "error": "Node Listen is not open to the internet (allow_wan is off)."})
+        self._json(403, {"ok": False, "error": "Node Talker is not open to the internet (allow_wan is off)."})
         return True
 
     def _token(self):
@@ -5882,7 +6019,7 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, digital_info())
             elif path == "/api/favorites-file":
                 self._send(200, fav_file_text().encode("utf-8"), "text/plain; charset=utf-8",
-                           {"Content-Disposition": 'attachment; filename="nodelisten_favorites.conf"'})
+                           {"Content-Disposition": 'attachment; filename="nodetalker_favorites.conf"'})
             elif path == "/api/dash-favorites":
                 self._json(200, {"ok": True, "favs": dashboard_conf()["favs"]})
             elif path == "/api/config":
@@ -6080,6 +6217,7 @@ class Server(ThreadingHTTPServer):
 
 def run_server():
     global _TLS_NOTE
+    migrate_legacy()
     load_config()
     port = _cfg_get("port")
     try:
@@ -6104,7 +6242,7 @@ def run_server():
             log_event("No HTTPS certificate; serving plain HTTP (push-to-talk needs HTTPS)", "err")
         if httpd.ssl_ctx is None:
             _TLS_NOTE = ("HTTPS is on in Setup but could not start, so this page is not encrypted and the password "
-                         "is sent in plain text. See the Node Listen log.")
+                         "is sent in plain text. See the Node Talker log.")
     _solo_load()
     fav_doc()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
@@ -6132,7 +6270,7 @@ def run_server():
             TALKER.drop(TALKER.owner)
         try:
             if tx_state()["ready"]:
-                tx_unlink("Node Listen stopped")
+                tx_unlink("Node Talker stopped")
         except Exception as exc:
             log_event(f"Could not unlink node {TX_NODE} on stop: {exc}", "warn")
         httpd.server_close()
@@ -6200,7 +6338,7 @@ def _restore_after_update():
     if not 0 <= age <= RESTORE_MAX_AGE_SEC:
         print(f"  [i] Ignored {RESTORE_PATH}: older than {RESTORE_MAX_AGE_SEC // 60} minutes")
         return
-    print(f"  [i] The uninstall {int(age)} s ago changed rpt.conf (an update); putting its Node Listen lines back")
+    print(f"  [i] The uninstall {int(age)} s ago changed rpt.conf (an update); putting its Node Talker lines back")
     put_back = False
     try:
         node = _norm_node(rec.get("hook_node") or "")
@@ -6216,7 +6354,56 @@ def _restore_after_update():
         print(f"  [!] Could not put the rpt.conf lines back: {exc}")
         return
     if put_back:
-        print("      Asterisk needs no restart, unless it was restarted while Node Listen was out.")
+        print("      Asterisk needs no restart, unless it was restarted while Node Talker was out.")
+
+
+LEGACY_DATA = (("nodelisten.conf", "nodetalker.conf"), ("nodelisten_favorites.conf", "nodetalker_favorites.conf"),
+               ("nodelisten_favorites.json", "nodetalker_favorites.json"), ("nodelisten_tuned.json", "nodetalker_tuned.json"),
+               ("nodelisten_restore.json", "nodetalker_restore.json"), ("nodelisten_tls", "nodetalker_tls"),
+               ("nodelisten_backups", "nodetalker_backups"))
+LEGACY_ASIDE = ".pre-nodetalker"
+
+
+def migrate_legacy(say=None):
+    for old_name, new_name in LEGACY_DATA:
+        old, new = os.path.join(CONFIG_DIR, old_name), os.path.join(CONFIG_DIR, new_name)
+        try:
+            if os.path.islink(old):
+                continue
+            if os.path.isdir(old):
+                if not os.path.lexists(new):
+                    os.rename(old, new)
+                    if say:
+                        say(f"  [+] Moved {old} -> {new}")
+                else:
+                    continue
+            elif os.path.isfile(old):
+                if os.path.lexists(new) and os.path.getmtime(old) <= os.path.getmtime(new):
+                    os.replace(old, old + LEGACY_ASIDE)
+                    if say:
+                        say(f"  [i] Kept {new}; the older {old} is now {old + LEGACY_ASIDE}")
+                else:
+                    os.replace(old, new)
+                    if say:
+                        say(f"  [+] Moved {old} -> {new}")
+            if not os.path.lexists(old) and os.path.lexists(new):
+                os.symlink(new_name, old)
+        except OSError as exc:
+            msg = f"Could not move {old} to {new}: {exc}"
+            if say:
+                say(f"  [!] {msg}")
+            else:
+                log_event(msg, "warn")
+
+
+def _replace_link(path, target):
+    tmp = f"{path}.{secrets.token_hex(4)}.tmp"
+    os.symlink(target, tmp)
+    os.replace(tmp, path)
+
+
+def _legacy_unit_real():
+    return os.path.isfile(LEGACY_SERVICE_PATH) and not os.path.islink(LEGACY_SERVICE_PATH)
 
 
 def install_service():
@@ -6235,22 +6422,40 @@ def install_service():
         os.replace(tmp, dest)
         print(f"  [+] Copied {os.path.basename(current)} -> {dest}")
     os.chmod(dest, 0o755)
-    tmp_link = f"{INSTALL_BIN_PATH}.{secrets.token_hex(4)}.tmp"
-    os.symlink(dest, tmp_link)
-    os.replace(tmp_link, INSTALL_BIN_PATH)
+    _replace_link(INSTALL_BIN_PATH, dest)
     print(f"  [+] Symlinked {INSTALL_BIN_PATH} -> {dest}")
     _write_launcher()
+    migrate_legacy(print)
     if not os.path.exists(CONFIG_PATH):
         save_config(dict(DEFAULT_CONFIG))
         print(f"  [+] Wrote {CONFIG_PATH}")
     load_config()
+    save_config(dict(_config))
     fav_doc()
     if not os.path.exists(FAV_CONF_PATH):
         _write_fav_doc([], [], {})
         print(f"  [+] Wrote {FAV_CONF_PATH}")
     _print_digital()
+    legacy = _legacy_unit_real()
+    aside = LEGACY_SERVICE_PATH + LEGACY_ASIDE
+    if legacy:
+        _systemctl("disable", "--now", LEGACY_SERVICE)
+        os.replace(LEGACY_SERVICE_PATH, aside)
+        print(f"  [-] Stopped Node Listen ({LEGACY_SERVICE}); its unit is kept as {aside} until {SERVICE_NAME} runs")
+    run_path, bin_undo = INSTALL_BIN_PATH, None
+    if legacy_bin_ours():
+        if os.path.islink(LEGACY_BIN_PATH):
+            bin_undo = ("link", os.readlink(LEGACY_BIN_PATH))
+        elif os.path.lexists(LEGACY_BIN_PATH):
+            os.replace(LEGACY_BIN_PATH, LEGACY_BIN_PATH + LEGACY_ASIDE)
+            bin_undo = ("file", LEGACY_BIN_PATH + LEGACY_ASIDE)
+        else:
+            bin_undo = ("none", "")
+        _replace_link(LEGACY_BIN_PATH, INSTALL_BIN_PATH)
+        run_path = LEGACY_BIN_PATH
+        print(f"  [+] Symlinked {LEGACY_BIN_PATH} -> {INSTALL_BIN_PATH} (rpt.conf and older tools use this name)")
     _restore_after_update()
-    _atomic_write(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, 0o644)
+    _atomic_write(SYSTEMD_SERVICE_PATH, service_content(run_path), 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
     for args in (("daemon-reload",), ("enable", SERVICE_NAME)):
         r = _systemctl(*args)
@@ -6259,9 +6464,32 @@ def install_service():
     r = _systemctl("restart", SERVICE_NAME)
     if r.returncode != 0:
         print(f"  [!] systemctl restart failed: {(r.stderr or r.stdout).strip()}")
-        print(f"      The previous version (if any) is still in {INSTALL_DIR}")
+        if bin_undo is not None:
+            kind, what = bin_undo
+            if kind == "link":
+                _replace_link(LEGACY_BIN_PATH, what)
+            elif kind == "file":
+                os.replace(what, LEGACY_BIN_PATH)
+            else:
+                _remove_quiet(LEGACY_BIN_PATH)
+        if legacy:
+            _systemctl("disable", SERVICE_NAME)
+            _remove_quiet(SYSTEMD_SERVICE_PATH)
+            os.replace(aside, LEGACY_SERVICE_PATH)
+            _systemctl("daemon-reload")
+            r2 = _systemctl("enable", "--now", LEGACY_SERVICE)
+            print(f"  [!] Put Node Listen back ({LEGACY_SERVICE}" + (" running)" if r2.returncode == 0 else ", but it did not start)"))
+        else:
+            print(f"      The previous version (if any) is still in {INSTALL_DIR}")
         sys.exit(1)
-    print(f"  [+] {SERVICE_NAME} enabled and started")
+    print(f"  [+] {SERVICE_NAME} enabled and started (also answers to {LEGACY_SERVICE})")
+    if bin_undo is not None and bin_undo[0] == "file":
+        _remove_quiet(bin_undo[1])
+    if legacy:
+        _remove_quiet(aside)
+    if os.path.isdir(LEGACY_INSTALL_DIR) and not os.path.islink(LEGACY_INSTALL_DIR):
+        shutil.rmtree(LEGACY_INSTALL_DIR, ignore_errors=True)
+        print(f"  [-] Removed Node Listen's {LEGACY_INSTALL_DIR}")
     for name in os.listdir(INSTALL_DIR):
         old = os.path.join(INSTALL_DIR, name)
         if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
@@ -6306,7 +6534,13 @@ def uninstall_service():
     except OSError as exc:
         print(f"  [!] Could not check {RPT_CONF}: {exc}")
     _systemctl("disable", "--now", SERVICE_NAME)
-    for p in (SYSTEMD_SERVICE_PATH, INSTALL_BIN_PATH):
+    legacy_ours = (os.path.islink(LEGACY_BIN_PATH) and os.path.realpath(LEGACY_BIN_PATH).startswith(
+        (os.path.realpath(INSTALL_DIR) + os.sep, os.path.realpath(INSTALL_BIN_PATH)))) or \
+        (os.path.isfile(LEGACY_BIN_PATH) and not os.path.islink(LEGACY_BIN_PATH) and legacy_bin_ours())
+    gone = [SYSTEMD_SERVICE_PATH, INSTALL_BIN_PATH] + ([LEGACY_BIN_PATH] if legacy_ours else [])
+    if os.path.islink(LEGACY_SERVICE_PATH) and os.path.basename(os.readlink(LEGACY_SERVICE_PATH)) == SERVICE_NAME:
+        gone.append(LEGACY_SERVICE_PATH)
+    for p in gone:
         if os.path.lexists(p):
             os.remove(p)
             print(f"  [-] Removed {p}")
