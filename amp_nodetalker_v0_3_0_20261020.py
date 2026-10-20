@@ -30,20 +30,25 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 DATE_STR = "2026-10-20"
-APP_NAME = "Node Listen for AMP"
+APP_NAME = "Node Talker for AMP"
 
-INSTALL_BIN_PATH = "/usr/local/bin/amp_nodelisten.py"
-INSTALL_DIR = "/usr/local/lib/asl_dvs/amp_nodelisten"
-SERVICE_NAME = "amp_nodelisten.service"
-SYSTEMD_SERVICE_PATH = "/etc/systemd/system/amp_nodelisten.service"
+INSTALL_BIN_PATH = "/usr/local/bin/amp_nodetalker.py"
+INSTALL_DIR = "/usr/local/lib/asl_dvs/amp_nodetalker"
+SERVICE_NAME = "amp_nodetalker.service"
+SYSTEMD_SERVICE_PATH = "/etc/systemd/system/amp_nodetalker.service"
+LEGACY_BIN_PATH = "/usr/local/bin/amp_nodelisten.py"
+LEGACY_INSTALL_DIR = "/usr/local/lib/asl_dvs/amp_nodelisten"
+LEGACY_SERVICE = "amp_nodelisten.service"
+LEGACY_SERVICE_PATH = "/etc/systemd/system/amp_nodelisten.service"
 _SYSTEMD_UNIT_DIR = "/etc/systemd/system"
 
-CONFIG_DIR = os.environ.get("NODELISTEN_CONFIG_DIR", "/etc/asl_dvs")
-CONFIG_PATH = os.path.join(CONFIG_DIR, "amp_nodelisten.conf")
-CONFIG_SECTION = "amp_nodelisten"
-BACKUP_DIR = os.path.join(CONFIG_DIR, "amp_nodelisten_backups")
+CONFIG_DIR = os.environ.get("NODETALKER_CONFIG_DIR", "/etc/asl_dvs")
+CONFIG_PATH = os.path.join(CONFIG_DIR, "amp_nodetalker.conf")
+CONFIG_SECTION = "amp_nodetalker"
+LEGACY_SECTION = "amp_nodelisten"
+BACKUP_DIR = os.path.join(CONFIG_DIR, "amp_nodetalker_backups")
 BACKUP_KEEP = 10
 
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
@@ -105,7 +110,7 @@ else:
 '''
 
 SYSTEMD_SERVICE_CONTENT = f"""[Unit]
-Description=Node Listen for AMP: AMP node audio in the browser
+Description=Node Talker for AMP: AMP node audio in the browser
 After=network.target amp-server.service
 
 [Service]
@@ -121,6 +126,7 @@ StandardError=journal
 
 [Install]
 WantedBy=multi-user.target
+Alias=amp_nodelisten.service
 """
 
 MAX_JSON_BYTES = 64 * 1024
@@ -307,11 +313,12 @@ def load_config():
         cp.read(CONFIG_PATH)
     except configparser.Error as exc:
         log_event(f"Config: {CONFIG_PATH} could not be read ({exc}); using defaults", "warn")
-    if cp.has_section(CONFIG_SECTION):
+    sec = CONFIG_SECTION if cp.has_section(CONFIG_SECTION) else LEGACY_SECTION
+    if cp.has_section(sec):
         for key, norm in _NORMALIZERS.items():
-            if cp.has_option(CONFIG_SECTION, key):
+            if cp.has_option(sec, key):
                 try:
-                    cfg[key] = norm(cp.get(CONFIG_SECTION, key))
+                    cfg[key] = norm(cp.get(sec, key))
                 except ValueError as exc:
                     log_event(f"Config: bad {key} ({exc}); using {DEFAULT_CONFIG[key]}", "warn")
     if not cfg["amp_secret"]:
@@ -365,10 +372,8 @@ def _atomic_write(path, data, mode=0o644, like=None):
 
 
 def save_config(cfg):
-    lines = [f"[{CONFIG_SECTION}]"]
-    for key in DEFAULT_CONFIG:
-        val = cfg[key]
-        lines.append(f"{key} = {'true' if val is True else 'false' if val is False else val}")
+    body = [f"{key} = {'true' if cfg[key] is True else 'false' if cfg[key] is False else cfg[key]}" for key in DEFAULT_CONFIG]
+    lines = [f"[{CONFIG_SECTION}]"] + body + ["", f"[{LEGACY_SECTION}]"] + body
     _atomic_write(CONFIG_PATH, "\n".join(lines) + "\n", 0o600)
 
 
@@ -407,11 +412,11 @@ def config_update(body):
     if any(cfg[k] != old[k] for k in _AMP_KEYS):
         _amp_info_cache["t"] = -AMP_INFO_TTL
         AMP_LINK.redial("settings changed")
-        msg += " Node Listen links to AMP again with the new setting."
+        msg += " Node Talker links to AMP again with the new setting."
     if restart:
-        msg += " Node Listen restarts to use the new setting."
+        msg += " Node Talker restarts to use the new setting."
         if not _schedule_restart():
-            msg += " (Restart it by hand: systemctl restart amp_nodelisten)"
+            msg += " (Restart it by hand: systemctl restart amp_nodetalker)"
     log_event(f"Config saved: {json.dumps(public_config(cfg))}", "ok")
     return {"ok": True, "message": msg.strip(), "restart": restart}
 
@@ -510,7 +515,7 @@ def _root_backend_available():
     return _usable_hash(auth_account())
 
 
-_SESSION_COOKIE_NAME = "amp_nodelisten_session"
+_SESSION_COOKIE_NAME = "amp_nodetalker_session"
 _SESSION_TTL_SEC = 12 * 3600
 _sessions = {}
 _sessions_lock = threading.Lock()
@@ -687,7 +692,7 @@ def _schedule_restart():
         return False
     try:
         subprocess.Popen(["systemd-run", "--quiet", "--collect", "--on-active=2",
-                          "--unit=amp-nodelisten-selfrestart", "systemctl", "restart", SERVICE_NAME],
+                          "--unit=amp-nodetalker-selfrestart", "systemctl", "restart", SERVICE_NAME],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         return True
     except OSError as exc:
@@ -1148,9 +1153,9 @@ def build_status(full):
     return st
 
 
-FAV_PATH = os.path.join(CONFIG_DIR, "amp_nodelisten_favorites.json")
+FAV_PATH = os.path.join(CONFIG_DIR, "amp_nodetalker_favorites.json")
 FAV_MAX = 10
-TLS_DIR = os.path.join(CONFIG_DIR, "amp_nodelisten_tls")
+TLS_DIR = os.path.join(CONFIG_DIR, "amp_nodetalker_tls")
 TLS_CERT = os.path.join(TLS_DIR, "cert.pem")
 TLS_KEY = os.path.join(TLS_DIR, "key.pem")
 TX_BUSY_GRACE_SEC = 1.0
@@ -1413,7 +1418,7 @@ def _norm_fav(f):
     else:
         num = str(int(num))
     if fav_target({"num": num}) in (_cfg_get("amp_caller"), main_node()):
-        raise ValueError(f"{fav_target({'num': num})} is this node or Node Listen itself, not a favorite")
+        raise ValueError(f"{fav_target({'num': num})} is this node or Node Talker itself, not a favorite")
     label = _CALL_TRIM.sub(" ", str(f.get("label", ""))).strip()[:40]
     return {"mode": "ASL", "num": num, "label": label or f"Node {fav_target({'num': num})}"}
 
@@ -1578,7 +1583,7 @@ def amp_setup():
     info = amp_info(max_age=0)
     if not info["config"] or info["config_error"]:
         return {"ok": False, "error": f"AMP's configuration file could not be read ({info['config'] or 'not found'}: "
-                                      f"{info['config_error'] or 'missing'}). Start AMP once, or set its path in amp_nodelisten.conf (amp_config)."}
+                                      f"{info['config_error'] or 'missing'}). Start AMP once, or set its path in amp_nodetalker.conf (amp_config)."}
     user, secret = _cfg_get("amp_user"), _cfg_get("amp_secret")
     path = info["auth_file"]
     with _amp_setup_lock:
@@ -1618,11 +1623,11 @@ def amp_setup():
             return {"ok": False, "error": f"Could not write {path}: {exc}"}
     log_event(f"AMP: added the {user} login to {path}" + (f" (backup {backup})" if backup else "") + "; AMP reloads it within a second", "ok")
     threading.Timer(2.0, AMP_LINK.redial, args=("set up",)).start()
-    msg = f"Added Node Listen's login to {path}."
+    msg = f"Added Node Talker's login to {path}."
     if backup:
         msg += f" Backup: {backup}."
     if not info["running"]:
-        msg += " AMP is not running: start it, and Node Listen links when it answers."
+        msg += " AMP is not running: start it, and Node Talker links when it answers."
     else:
         msg += " Linking in a few seconds."
     return {"ok": True, "message": msg}
@@ -1733,7 +1738,7 @@ class AmpCall:
         with self.lock:
             self._new()
 
-    def hangup(self, why="Node Listen stopped"):
+    def hangup(self, why="Node Talker stopped"):
         with self.lock:
             if self.state in ("up", "calling", "auth"):
                 self._full(IAX_T_IAX, IAX_HANGUP, _ie(IE_CAUSE, why) + _ie(IE_CAUSECODE, b"\x10"))
@@ -1851,7 +1856,7 @@ class AmpCall:
                 self.codec = struct.unpack(">I", f)[0] if f and len(f) == 4 else CODEC_SLIN
                 if self.codec not in (CODEC_SLIN, CODEC_ULAW):
                     self._full(IAX_T_IAX, IAX_HANGUP, _ie(IE_CAUSE, "codec") + _ie(IE_CAUSECODE, b"\x10"))
-                    self.state, self.error = "down", f"AMP picked a codec Node Listen can't use ({self.codec:#x})"
+                    self.state, self.error = "down", f"AMP picked a codec Node Talker can't use ({self.codec:#x})"
                     return
                 self.state = "up"
                 self.last_ping = time.monotonic()
@@ -1972,7 +1977,7 @@ class AmpLink:
                     log_event(f"AMP link down: {self.error}", "warn")
                     break
                 if call.state != "up" and now - call.started > AMP_CALL_WAIT_SEC:
-                    err = (f"AMP did not accept Node Listen's login (user {t['user']}): Setup tab, AMP link, Set up for me"
+                    err = (f"AMP did not accept Node Talker's login (user {t['user']}): Setup tab, AMP link, Set up for me"
                            if call.heard else f"No answer from AMP on {t['host']}:{t['iax_port']} (is amp-server running?)")
                     if self.logged != err:
                         self.logged = err
@@ -2058,7 +2063,7 @@ def ensure_tls_cert():
         return False
     host = socket.gethostname().split(".")[0]
     if not _HOSTNAME_RE.match(host):
-        host = "nodelisten"
+        host = "nodetalker"
     try:
         os.makedirs(TLS_DIR, mode=0o700, exist_ok=True)
         os.chmod(TLS_DIR, 0o700)
@@ -2688,7 +2693,7 @@ async function api(url, opts) {
     opts.headers['Content-Type'] = 'application/json';
   }
   let r;
-  try { r = await fetch(url, opts); } catch (e) { return {ok: false, error: 'Node Listen is not answering.'}; }
+  try { r = await fetch(url, opts); } catch (e) { return {ok: false, error: 'Node Talker is not answering.'}; }
   let d = {};
   try { d = await r.json(); } catch (e) { d = {ok: false, error: 'HTTP ' + r.status}; }
   if (r.status === 401 && url !== '/api/login' && authed) { authed = false; render(); }
@@ -3324,7 +3329,7 @@ async function chkShow(r) {
 function chkText() {
   const r = chkShown;
   if (!r) return '';
-  const lines = ['Node Listen ' + document.querySelector('header .ver').textContent + ' audio check, ' + new Date(r.at).toLocaleString() + ', ' + r.mins + ' min'];
+  const lines = ['Node Talker ' + document.querySelector('header .ver').textContent + ' audio check, ' + new Date(r.at).toLocaleString() + ', ' + r.mins + ' min'];
   ['rx', 'tx'].forEach((sd) => {
     lines.push(sd === 'rx' ? 'Receive:' : 'Transmit:');
     chkRows(r, null, sd).forEach(([k, v, , t]) => lines.push('  ' + k + ': ' + v + (t ? ' (target ' + t + ')' : '')));
@@ -3588,7 +3593,7 @@ function setMediaInfo() {
   if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: nodeLabel ? 'Node ' + nodeLabel : 'ASL node',
-    artist: 'Node Listen',
+    artist: 'Node Talker',
     album: location.hostname,
   });
 }
@@ -3767,8 +3772,8 @@ function openTalk(force) {
       if (navigator.vibrate) navigator.vibrate(30);
     } else if (m.ev === 'denied') {
       const why = {busy: 'The node is busy (someone is talking). Try again when it is quiet.',
-        'in-use': 'Someone else is transmitting from Node Listen.',
-        'not-ready': 'Node Listen is not linked to AMP (Setup tab, AMP link).'}[m.why] || ('Refused: ' + m.why);
+        'in-use': 'Someone else is transmitting from Node Talker.',
+        'not-ready': 'Node Talker is not linked to AMP (Setup tab, AMP link).'}[m.why] || ('Refused: ' + m.why);
       endTalk(); pttUi('ready', why, 'warn');
     } else if (m.ev === 'unkeyed') {
       keyed = false; endTalk();
@@ -4051,8 +4056,8 @@ async function loadAmp() {
   $('amp-node').textContent = (d.node || '(not set in AMP)') + (d.callsign ? ' · ' + d.callsign : '');
   $('amp-cfg').textContent = (d.config || 'not found') + (d.config_error ? ' (' + d.config_error + ')' : '');
   const a = d.auth || {};
-  $('amp-auth').textContent = a.path + ': ' + (a.error ? a.error : a.ours ? 'has Node Listen\'s login (' + d.login_user + ')'
-    : a.exists ? 'Node Listen\'s login is not in it yet' : 'does not exist yet');
+  $('amp-auth').textContent = a.path + ': ' + (a.error ? a.error : a.ours ? 'has Node Talker\'s login (' + d.login_user + ')'
+    : a.exists ? 'Node Talker\'s login is not in it yet' : 'does not exist yet');
   $('amp-ports').textContent = d.host + ' · IAX ' + d.iax_port + ' · web ' + d.http_port
     + (d.http_pwd_set ? (d.http_pwd_auto ? ' (password read from AMP)' : ' (password set here)') : '');
   $('amp-caller').textContent = d.caller + ' (user ' + d.login_user + ')';
@@ -4072,7 +4077,7 @@ async function loadAmp() {
 }
 
 async function ampSetup() {
-  if (!confirm('Add Node Listen\'s login to AMP\'s login file? A backup is kept, and AMP reloads it by itself.')) return;
+  if (!confirm('Add Node Talker\'s login to AMP\'s login file? A backup is kept, and AMP reloads it by itself.')) return;
   note('amp-msg', '', 'Setting up...');
   setMsg('amp-msg', await post('/api/amp/setup', {}));
   loadAmp();
@@ -4295,17 +4300,17 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#111922">
-<title>Node Listen</title>
+<title>Node Talker</title>
 <style>__CSS__</style>
 </head>
 <body>
-<header><h1>Node Listen</h1><span class="ver">AMP · v__VERSION__</span><span class="sp"></span>
+<header><h1>Node Talker</h1><span class="ver">AMP · v__VERSION__</span><span class="sp"></span>
 <a id="amp-web" class="pill hidden" href="#" aria-label="Open AMP's web page">AMP</a>
 <button id="login-open" class="pill hidden" type="button">Log In</button>
 <button id="logout" class="pill hidden" type="button">Log Out</button></header>
 <div id="login-screen">
 <div id="login-card">
-<h2>Node Listen Login</h2>
+<h2>Node Talker Login</h2>
 <form id="login-form">
 <input type="password" id="pw" placeholder="Password" autocomplete="current-password" aria-label="Password" required>
 <button id="login-btn" type="submit">Log In</button>
@@ -4348,7 +4353,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="lstat"><span class="mono" id="st-node" title="Node">-</span>
 <span id="st-feed-w"><span id="st-feed" class="dot"></span><span id="st-feed-t">link</span></span>
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span>
-<span id="s-tx-w" title="Lit while someone transmits from Node Listen"><span id="s-tx" class="dot"></span>TX</span>
+<span id="s-tx-w" title="Lit while someone transmits from Node Talker"><span id="s-tx" class="dot"></span>TX</span>
 <span id="st-listeners" title="Listeners">-</span><span id="chk-badge" class="chk hidden" title="An audio check is running (Setup tab)"></span></div>
 <div class="spec" id="spec-wrap">
 <div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum: tap to switch between waterfall and bars"></canvas>
@@ -4369,8 +4374,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="card fold" id="cd-amp">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-amp"><span class="fold-t">AMP link</span><span class="fold-sum" id="sum-amp"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-amp">
-<p class="muted small">Node Listen calls the AMP node like a private link: it hears everything the node passes, and
-push-to-talk goes out to the radio and every link. AMP needs Node Listen's login in its login file once.</p>
+<p class="muted small">Node Talker calls the AMP node like a private link: it hears everything the node passes, and
+push-to-talk goes out to the radio and every link. AMP needs Node Talker's login in its login file once.</p>
 <table>
 <tr><th>Link</th><td id="amp-link">-</td></tr>
 <tr><th>AMP</th><td id="amp-proc">-</td></tr>
@@ -4408,7 +4413,7 @@ push-to-talk goes out to the radio and every link. AMP needs Node Listen's login
 <div class="row"><label><input type="checkbox" id="cfg-https"> HTTPS (needed for the microphone)</label></div>
 <div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
 <div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
-<p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Listen.</p>
+<p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div class="row"><button id="cfg-save" class="btn primary" type="button">Save</button></div>
 <div id="cfg-msg" class="msg"></div>
 </div>
@@ -4529,7 +4534,7 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
 <div id="hs-out-row"><label for="hs-out">Audio output</label>
 <select id="hs-out" style="width:100%;min-height:44px;margin-top:6px"></select></div>
-<p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Listen follows it.</p>
+<p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Talker follows it.</p>
 <div style="margin-top:10px"><label for="hs-mic">Microphone for push-to-talk</label>
 <select id="hs-mic" style="width:100%;min-height:44px;margin-top:6px"></select></div>
 <p class="muted small">Default follows Android: the headset mic when a headset is plugged in. With Bluetooth, picking the phone's own mic can keep the headset in music quality while you talk, on some phones.</p>
@@ -4539,7 +4544,7 @@ mic volume, so the gain here is applied in the page.</p>
 <option value="ptt">Push to talk: press to talk, press again to stop</option>
 <option value="off">Off</option>
 </select></div>
-<p class="muted small">The button only reaches the page while Node Listen is playing. Push to talk uses the same transmit as the Talk button, with the same time-out; if the second press doesn't arrive, the time-out ends the transmission.</p>
+<p class="muted small">The button only reaches the page while Node Talker is playing. Push to talk uses the same transmit as the Talk button, with the same time-out; if the second press doesn't arrive, the time-out ends the transmission.</p>
 <div class="row"><button id="hs-names" class="btn hidden" type="button">Show device names</button></div>
 <div class="muted small" id="hs-now"></div>
 <div id="hs-msg" class="msg"></div>
@@ -4611,7 +4616,7 @@ _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "amp_nodelisten/" + VERSION
+    server_version = "amp_nodetalker/" + VERSION
     sys_version = ""
     protocol_version = "HTTP/1.1"
     timeout = 60
@@ -4649,7 +4654,7 @@ class Handler(BaseHTTPRequestHandler):
         if _cfg_get("allow_wan") or not self._wan():
             return False
         self.close_connection = True
-        self._json(403, {"ok": False, "error": "Node Listen is not open to the internet (allow_wan is off)."})
+        self._json(403, {"ok": False, "error": "Node Talker is not open to the internet (allow_wan is off)."})
         return True
 
     def _token(self):
@@ -4933,6 +4938,7 @@ class Server(ThreadingHTTPServer):
 
 def run_server():
     global _TLS_NOTE
+    migrate_legacy()
     load_config()
     port = _cfg_get("port")
     try:
@@ -4957,7 +4963,7 @@ def run_server():
             log_event("No HTTPS certificate; serving plain HTTP (push-to-talk needs HTTPS)", "err")
         if httpd.ssl_ctx is None:
             _TLS_NOTE = ("HTTPS is on in Setup but could not start, so this page is not encrypted and the password "
-                         "is sent in plain text. See the Node Listen log.")
+                         "is sent in plain text. See the Node Talker log.")
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=AMP_LINK.run, name="amp-link", daemon=True).start()
     threading.Thread(target=TALKER.pacer_loop, name="tx-pacer", daemon=True).start()
@@ -4965,7 +4971,7 @@ def run_server():
     scheme = "https" if httpd.ssl_ctx is not None else "http"
     t = amp_target()
     log_event(f"{APP_NAME} v{VERSION} on {scheme} port {port}; AMP node {t['node'] or '(not set)'} on "
-              f"{t['host']}:{t['iax_port']} (IAX) and port {t['http_port']} (web), Node Listen calls in as {t['caller']}", "ok")
+              f"{t['host']}:{t['iax_port']} (IAX) and port {t['http_port']} (web), Node Talker calls in as {t['caller']}", "ok")
     _sd_notify("READY=1")
 
     def _on_term(signum, frame):
@@ -5022,6 +5028,53 @@ def _systemctl(*args, timeout=120):
         return subprocess.CompletedProcess(["systemctl", *args], 1, "", f"systemctl {' '.join(args)}: {exc}")
 
 
+LEGACY_DATA = (("amp_nodelisten.conf", "amp_nodetalker.conf"), ("amp_nodelisten_favorites.json", "amp_nodetalker_favorites.json"),
+               ("amp_nodelisten_tls", "amp_nodetalker_tls"), ("amp_nodelisten_backups", "amp_nodetalker_backups"))
+LEGACY_ASIDE = ".pre-nodetalker"
+
+
+def migrate_legacy(say=None):
+    for old_name, new_name in LEGACY_DATA:
+        old, new = os.path.join(CONFIG_DIR, old_name), os.path.join(CONFIG_DIR, new_name)
+        try:
+            if os.path.islink(old):
+                continue
+            if os.path.isdir(old):
+                if not os.path.lexists(new):
+                    os.rename(old, new)
+                    if say:
+                        say(f"  [+] Moved {old} -> {new}")
+                else:
+                    continue
+            elif os.path.isfile(old):
+                if os.path.lexists(new) and os.path.getmtime(old) <= os.path.getmtime(new):
+                    os.replace(old, old + LEGACY_ASIDE)
+                    if say:
+                        say(f"  [i] Kept {new}; the older {old} is now {old + LEGACY_ASIDE}")
+                else:
+                    os.replace(old, new)
+                    if say:
+                        say(f"  [+] Moved {old} -> {new}")
+            if not os.path.lexists(old) and os.path.lexists(new):
+                os.symlink(new_name, old)
+        except OSError as exc:
+            msg = f"Could not move {old} to {new}: {exc}"
+            if say:
+                say(f"  [!] {msg}")
+            else:
+                log_event(msg, "warn")
+
+
+def _replace_link(path, target):
+    tmp = f"{path}.{secrets.token_hex(4)}.tmp"
+    os.symlink(target, tmp)
+    os.replace(tmp, path)
+
+
+def _legacy_unit_real():
+    return os.path.isfile(LEGACY_SERVICE_PATH) and not os.path.islink(LEGACY_SERVICE_PATH)
+
+
 def install_service():
     if os.geteuid() != 0:
         print("Error: installing needs root. Run with sudo.")
@@ -5038,15 +5091,21 @@ def install_service():
         os.replace(tmp, dest)
         print(f"  [+] Copied {os.path.basename(current)} -> {dest}")
     os.chmod(dest, 0o755)
-    tmp_link = f"{INSTALL_BIN_PATH}.{secrets.token_hex(4)}.tmp"
-    os.symlink(dest, tmp_link)
-    os.replace(tmp_link, INSTALL_BIN_PATH)
+    _replace_link(INSTALL_BIN_PATH, dest)
     print(f"  [+] Symlinked {INSTALL_BIN_PATH} -> {dest}")
     _write_launcher()
+    migrate_legacy(print)
     if not os.path.exists(CONFIG_PATH):
         save_config(dict(DEFAULT_CONFIG))
         print(f"  [+] Wrote {CONFIG_PATH}")
     load_config()
+    save_config(dict(_config))
+    legacy = _legacy_unit_real()
+    aside = LEGACY_SERVICE_PATH + LEGACY_ASIDE
+    if legacy:
+        _systemctl("disable", "--now", LEGACY_SERVICE)
+        os.replace(LEGACY_SERVICE_PATH, aside)
+        print(f"  [-] Stopped Node Listen for AMP ({LEGACY_SERVICE}); its unit is kept as {aside} until {SERVICE_NAME} runs")
     _atomic_write(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
     for args in (("daemon-reload",), ("enable", SERVICE_NAME)):
@@ -5056,9 +5115,24 @@ def install_service():
     r = _systemctl("restart", SERVICE_NAME)
     if r.returncode != 0:
         print(f"  [!] systemctl restart failed: {(r.stderr or r.stdout).strip()}")
-        print(f"      The previous version (if any) is still in {INSTALL_DIR}")
+        if legacy:
+            _systemctl("disable", SERVICE_NAME)
+            _remove_quiet(SYSTEMD_SERVICE_PATH)
+            os.replace(aside, LEGACY_SERVICE_PATH)
+            _systemctl("daemon-reload")
+            r2 = _systemctl("enable", "--now", LEGACY_SERVICE)
+            print(f"  [!] Put Node Listen for AMP back ({LEGACY_SERVICE}" + (" running)" if r2.returncode == 0 else ", but it did not start)"))
+        else:
+            print(f"      The previous version (if any) is still in {INSTALL_DIR}")
         sys.exit(1)
-    print(f"  [+] {SERVICE_NAME} enabled and started")
+    print(f"  [+] {SERVICE_NAME} enabled and started (also answers to {LEGACY_SERVICE})")
+    if not os.path.isfile(LEGACY_BIN_PATH) or os.path.islink(LEGACY_BIN_PATH):
+        _replace_link(LEGACY_BIN_PATH, INSTALL_BIN_PATH)
+    if legacy:
+        _remove_quiet(aside)
+    if os.path.isdir(LEGACY_INSTALL_DIR) and not os.path.islink(LEGACY_INSTALL_DIR):
+        shutil.rmtree(LEGACY_INSTALL_DIR, ignore_errors=True)
+        print(f"  [-] Removed {LEGACY_INSTALL_DIR}")
     for name in os.listdir(INSTALL_DIR):
         old = os.path.join(INSTALL_DIR, name)
         if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
@@ -5067,11 +5141,11 @@ def install_service():
     info = amp_info(max_age=0)
     auth = amp_auth_state(info)
     if not info["running"]:
-        print("  [i] amp-server is not running; Node Listen links to it when it starts.")
+        print("  [i] amp-server is not running; Node Talker links to it when it starts.")
     elif auth["ours"]:
-        print(f"  [i] AMP node {info['node'] or '(not set)'}: Node Listen's login is already in {auth['path']}")
+        print(f"  [i] AMP node {info['node'] or '(not set)'}: Node Talker's login is already in {auth['path']}")
     else:
-        print(f"  [i] AMP node {info['node'] or '(not set)'}: Node Listen's login is not in {auth['path']} yet")
+        print(f"  [i] AMP node {info['node'] or '(not set)'}: Node Talker's login is not in {auth['path']} yet")
     print(f"Open http://<pi-address>:{_cfg_get('port')} , log in as {auth_account()}, then Setup tab, AMP link: Set up for me.")
 
 
@@ -5082,7 +5156,12 @@ def uninstall_service():
     print(f"Removing {APP_NAME}...")
     load_config()
     _systemctl("disable", "--now", SERVICE_NAME)
-    for p in (SYSTEMD_SERVICE_PATH, INSTALL_BIN_PATH):
+    legacy_ours = os.path.islink(LEGACY_BIN_PATH) and \
+        os.path.realpath(LEGACY_BIN_PATH).startswith((os.path.realpath(INSTALL_DIR) + os.sep, os.path.realpath(INSTALL_BIN_PATH)))
+    gone = [SYSTEMD_SERVICE_PATH, INSTALL_BIN_PATH] + ([LEGACY_BIN_PATH] if legacy_ours else [])
+    if os.path.islink(LEGACY_SERVICE_PATH) and os.path.basename(os.readlink(LEGACY_SERVICE_PATH)) == SERVICE_NAME:
+        gone.append(LEGACY_SERVICE_PATH)
+    for p in gone:
         if os.path.lexists(p):
             os.remove(p)
             print(f"  [-] Removed {p}")
@@ -5094,7 +5173,7 @@ def uninstall_service():
     print(f"  Settings kept in {CONFIG_PATH} and {BACKUP_DIR}")
     auth = amp_auth_state()
     if auth["ours"]:
-        print(f"  Node Listen's login ({_cfg_get('amp_user')}) stays in AMP's {auth['path']}; remove that line by hand if you like.")
+        print(f"  Node Talker's login ({_cfg_get('amp_user')}) stays in AMP's {auth['path']}; remove that line by hand if you like.")
 
 
 def main():

@@ -196,7 +196,7 @@ link to the node, and it stands alone: the installer, instmon and the other
 tools don't install or use it.
 
 ```
-sudo python3 amp_nodelisten_v0_2_1_20261020.py --install
+sudo python3 amp_nodetalker_v0_3_0_20261020.py --install
 ```
 
 Open `http://<pi-address>:8993` (it moves you to `https://`), log in with the
@@ -361,7 +361,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
 | `nodetalker_v0_6_0_20261020.py` | common |
-| `amp_nodelisten_v0_2_1_20261020.py` | AMP nodes only (stands alone) |
+| `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_3_1_20261020.sh` | common |
 | `uninstall_all_v1_6_0_20261018.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
