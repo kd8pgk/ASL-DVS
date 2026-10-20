@@ -11,6 +11,7 @@ import http.client
 import ipaddress
 import json
 import math
+import operator
 import os
 import re
 import secrets
@@ -28,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.14"
+VERSION = "0.4.15"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -173,6 +174,9 @@ DEFAULT_CONFIG = {
     "jitter_ms": 250,
     "tx_buffer_ms": 120,
     "allow_wan": False,
+    "rx_hpf": True,
+    "rx_agc": True,
+    "rx_gate": 1,
 }
 
 
@@ -227,6 +231,9 @@ _NORMALIZERS = {
     "jitter_ms": _norm_jitter,
     "tx_buffer_ms": _norm_txbuf,
     "allow_wan": _parse_bool,
+    "rx_hpf": _parse_bool,
+    "rx_agc": _parse_bool,
+    "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -686,6 +693,199 @@ def peak_db(frame):
     return -120.0 if pk <= 0 else max(-120.0, 20.0 * math.log10(pk / 32768.0))
 
 
+def _hp_section(q, fc=300.0, fs=8000.0):
+    w = 2 * math.pi * fc / fs
+    c, al = math.cos(w), math.sin(w) / (2 * q)
+    a0 = 1 + al
+    return ((1 + c) / 2 / a0, -(1 + c) / a0, (1 + c) / 2 / a0, -2 * c / a0, (1 - al) / a0)
+
+
+HP_SECTIONS = (_hp_section(0.5412), _hp_section(1.3066))
+
+
+def _sumsq(ys):
+    if hasattr(math, "sumprod"):
+        return math.sumprod(ys, ys)
+    return math.fsum(map(operator.mul, ys, ys))
+AGC_TARGET_DB = -20.0
+AGC_MIN_DB = -6.0
+AGC_MAX_DB = 18.0
+AGC_ACTIVE_DB = -45.0
+GATE_DELAY = 4
+RX_QUIET_DB = -65.0
+GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "zcr": 0.42, "noise_db": -24.0, "frames": 4},
+              2: {"close_db": -48.0, "hold": 12, "zcr": 0.35, "noise_db": -30.0, "frames": 3}}
+
+
+class RxClean:
+    def __init__(self):
+        self.reset()
+        self.busy_sec = 0.0
+        self.load_pct = 0.0
+        self._load_t = time.monotonic()
+
+    def reset(self):
+        self.z = (0.0,) * 8
+        self.gain_db = 0.0
+        self.level_s = None
+        self.fast = 0
+        self.idle = 999
+        self.open = False
+        self.quiet = 0
+        self.noisy = 0
+        self.tail = False
+        self.calm = 0
+        self.delay = deque()
+        self.prev_g = 1.0
+
+    def _filter(self, a, hpf):
+        if not hpf:
+            ys = [float(v) for v in a]
+        else:
+            (b0, b1, b2, a1, a2), (c0, c1, c2, d1, d2) = HP_SECTIONS
+            x1, x2, w1, w2, p1, p2, y1, y2 = self.z
+            ys = []
+            for v in a:
+                w = b0 * v + b1 * x1 + b2 * x2 - a1 * w1 - a2 * w2
+                x2, x1, w2, w1 = x1, v, w1, w
+                y = c0 * w + c1 * p1 + c2 * p2 - d1 * y1 - d2 * y2
+                p2, p1, y2, y1 = p1, w, y1, y
+                ys.append(y)
+            self.z = (x1, x2, w1, w2, p1, p2, y1, y2)
+        n = len(ys)
+        ss = _sumsq(ys)
+        neg = [y < 0 for y in ys]
+        zc = sum(map(operator.ne, neg, neg[1:]))
+        db = 10.0 * math.log10(ss / n / 1073741824.0) if ss > 0 else -120.0
+        return ys, db, zc / max(1, n - 1)
+
+    def _agc(self, db, speechy):
+        if not speechy:
+            self.idle += 1
+            return
+        if self.idle > 50:
+            self.fast = 25
+        self.idle = 0
+        p = 10.0 ** (db / 10.0)
+        self.level_s = p if self.level_s is None else 0.85 * self.level_s + 0.15 * p
+        want = AGC_TARGET_DB - 10.0 * math.log10(max(self.level_s, 1e-12))
+        want = max(AGC_MIN_DB, min(AGC_MAX_DB, want))
+        if want < self.gain_db:
+            self.gain_db = max(want, self.gain_db - 1.5)
+        else:
+            self.gain_db = min(want, self.gain_db + (0.5 if self.fast > 0 else 0.06))
+        if self.fast > 0:
+            self.fast -= 1
+
+    def _gate(self, db, zcr, mode):
+        r = GATE_RULES[mode]
+        if db > r["noise_db"] and zcr > r["zcr"]:
+            self.noisy += 1
+            self.calm = 0
+        else:
+            self.noisy = 0
+            self.calm = self.calm + 1 if zcr < 0.3 and db > r["close_db"] + 3 else 0
+            if self.tail and self.calm >= 3:
+                self.tail = False
+        hit = self.noisy >= r["frames"] and self.open
+        if hit and not self.tail:
+            self.tail = True
+        if db < r["close_db"]:
+            self.quiet += 1
+            if self.quiet >= r["hold"]:
+                self.open = False
+                self.tail = False
+        else:
+            self.quiet = 0
+            if db > r["close_db"] + 3 and not self.tail:
+                self.open = True
+        return self.open and not self.tail, hit
+
+    def _out(self, pcm, keep, t0):
+        self.delay.append((pcm, keep))
+        if len(self.delay) <= GATE_DELAY:
+            self._account(t0)
+            return PCM_SILENCE
+        pcm, keep = self.delay.popleft()
+        nxt = self.delay[0][1] if self.delay else keep
+        if keep and not nxt:
+            pcm = fade_out(pcm)
+        self._account(t0)
+        return pcm if keep else PCM_SILENCE
+
+    def process(self, frame, user_db, raw_db=0.0):
+        t0 = time.perf_counter()
+        hpf, agc, gate = _cfg_get("rx_hpf"), _cfg_get("rx_agc"), _cfg_get("rx_gate")
+        if not (hpf or agc or gate):
+            if self.delay or any(self.z) or self.gain_db:
+                self.reset()
+            out = apply_gain(frame, user_db)
+            self._account(t0)
+            return out
+        if raw_db < RX_QUIET_DB:
+            self.z = (0.0,) * 8
+            self.idle += 1
+            if not gate:
+                self.delay.clear()
+                self._account(t0)
+                return PCM_SILENCE
+            self._gate(-120.0, 0.0, gate)
+            return self._out(PCM_SILENCE, False, t0)
+        ys, db, zcr = self._filter(_samples(frame), hpf)
+        speechy = db > AGC_ACTIVE_DB and zcr < 0.35
+        if agc:
+            self._agc(db, speechy)
+        elif self.gain_db:
+            self.gain_db = 0.0
+        g1 = 10.0 ** ((self.gain_db + (user_db or 0)) / 20.0)
+        g0, self.prev_g = self.prev_g, g1
+        n = len(ys)
+        if max(map(abs, ys), default=0.0) * max(g0, g1) <= GAIN_KNEE:
+            if abs(g1 - g0) < 1e-6:
+                out = array.array("h", map(round, map(g1.__mul__, ys)))
+            else:
+                step = (g1 - g0) / n
+                out = array.array("h", [round(y * (g0 + step * i)) for i, y in enumerate(ys)])
+        else:
+            out = array.array("h", bytes(2 * n))
+            for i, y in enumerate(ys):
+                v = y * (g0 + (g1 - g0) * i / n)
+                if v > GAIN_KNEE:
+                    v = GAIN_KNEE + GAIN_SPAN * math.tanh((v - GAIN_KNEE) / GAIN_SPAN)
+                elif v < -GAIN_KNEE:
+                    v = -GAIN_KNEE - GAIN_SPAN * math.tanh((-v - GAIN_KNEE) / GAIN_SPAN)
+                out[i] = int(round(v))
+        pcm = out.tobytes()
+        if not gate:
+            if self.delay:
+                self.delay.clear()
+            self._account(t0)
+            return pcm
+        keep, hit = self._gate(db, zcr, gate)
+        if hit:
+            for i in range(len(self.delay)):
+                self.delay[i] = (self.delay[i][0], False)
+        return self._out(pcm, keep, t0)
+
+    def idle_tick(self):
+        self.idle += 1
+        if self.idle > 150 and (self.delay or self.open):
+            self.delay.clear()
+            self.open = False
+            self.tail = False
+
+    def _account(self, t0):
+        now = time.perf_counter()
+        self.busy_sec += now - t0
+        if now - self._load_t >= 5.0:
+            self.load_pct = round(100.0 * self.busy_sec / (now - self._load_t), 1)
+            self.busy_sec = 0.0
+            self._load_t = now
+
+
+RXC = RxClean()
+
+
 def paced_loop(step, what):
     nxt = time.monotonic()
     while True:
@@ -803,7 +1003,11 @@ class Hub:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
         if have_listeners:
-            pcm = apply_gain(frame, tune_value("rx_gain_db")) if frame is not None else PCM_SILENCE
+            if frame is not None:
+                pcm = RXC.process(frame, tune_value("rx_gain_db"), db)
+            else:
+                RXC.idle_tick()
+                pcm = PCM_SILENCE
             enc = None
             with self.cond:
                 for lst in self.listeners:
@@ -811,7 +1015,7 @@ class Hub:
                         lst.q.append(pcm)
                     else:
                         if enc is None:
-                            enc = ulaw_encode(pcm) if frame is not None else ULAW_SILENCE
+                            enc = ULAW_SILENCE if pcm == PCM_SILENCE else ulaw_encode(pcm)
                         lst.q.append(enc)
                 self.cond.notify_all()
         self.pump_beat = now
@@ -852,6 +1056,7 @@ class Hub:
             "max_listeners": _cfg_get("max_listeners"),
             "udp_port": _cfg_get("udp_port"),
             "udp_error": self.udp_error,
+            "rx_load_pct": RXC.load_pct,
         }
 
 
@@ -1121,6 +1326,7 @@ def build_status(full):
     else:
         st.pop("listener_list", None)
         st.pop("udp_error", None)
+        st.pop("rx_load_pct", None)
     return st
 
 
@@ -2532,6 +2738,7 @@ async function pollStatus() {
   $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
     : (tx.last_peak_db != null ? fmtDb(tx.last_peak_db) + ' (last transmission)' : 'no transmission yet');
   $('tune-rxpk').textContent = fmtDb(d.peak_db);
+  if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
   const gaps = tx.keyed ? tx.gaps : tx.last_gaps;
   $('tune-gaps').textContent = gaps == null ? '-' : (gaps ? gaps + ' (raise the TX buffer if this keeps happening)' : 'none');
   $('ptt-info').textContent = tx.ready ? ('Node ' + tx.node + (tx.linked === false ? ' (not linked yet)' : '') + ' · time-out ' + fmtSecs(totSec))
@@ -3286,6 +3493,9 @@ async function loadConfig() {
   $('tune-rx').value = d.config.rx_gain_db;
   $('tune-jit').value = String(d.config.jitter_ms);
   $('tune-txbuf').value = String(d.config.tx_buffer_ms);
+  $('rx-hpf').checked = !!d.config.rx_hpf;
+  $('rx-agc').checked = !!d.config.rx_agc;
+  $('rx-gate').value = String(d.config.rx_gate);
   tuneUi();
   $('tune-sysmon').classList.toggle('hidden', !sysmonPort);
   if (sysmonPort) $('tune-sysmon-link').href = 'http://' + location.hostname + ':' + sysmonPort + '/';
@@ -3293,7 +3503,12 @@ async function loadConfig() {
 
 function tuneUi() {
   const on = $('tune-on').checked;
-  sum('lvl', on ? 'TX ' + fmtGain(Number($('tune-tx').value)) + ' · RX ' + fmtGain(Number($('tune-rx').value)) : 'Off (audio unchanged)');
+  const clean = [];
+  if ($('rx-hpf').checked) clean.push('300 Hz cut');
+  if ($('rx-agc').checked) clean.push('auto level');
+  if ($('rx-gate').value !== '0') clean.push('gate ' + ($('rx-gate').value === '2' ? 'strong' : 'light'));
+  sum('lvl', [on ? 'TX ' + fmtGain(Number($('tune-tx').value)) + ' · RX ' + fmtGain(Number($('tune-rx').value)) : '']
+    .concat(clean).filter((x) => x).join(' · ') || 'Off (audio unchanged)');
   ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
   $('tune-tx-v').textContent = fmtGain(Number($('tune-tx').value));
   $('tune-rx-v').textContent = fmtGain(Number($('tune-rx').value));
@@ -3302,7 +3517,8 @@ function tuneUi() {
 
 async function saveTune() {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
-    rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value};
+    rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value,
+    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value};
   setMsg('tune-msg', await post('/api/config', body));
 }
 
@@ -3380,7 +3596,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('fe-dash-add').addEventListener('click', feAddDash);
   $('fe-save').addEventListener('click', feSave);
   $('cfg-save').addEventListener('click', saveConfig);
-  ['tune-on', 'tune-tx', 'tune-rx'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-save').addEventListener('click', saveTune);
   loadMicUi();
   MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
@@ -3557,7 +3773,7 @@ tunes the M17 bridge and links it to its node.</p>
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-lvl"><span class="fold-t">Audio levels</span><span class="fold-sum" id="sum-lvl"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-lvl">
 <div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
-<p class="muted small">Off: Node Listen passes audio through unchanged. These change only this page's path,
+<p class="muted small">Off: the gains and buffers below aren't used. These change only this page's path,
 not the node, the radio or DVSwitch.</p>
 <div id="tune-body">
 <div class="row"><label for="tune-tx" style="min-width:130px">Mic to node (TX)</label>
@@ -3577,6 +3793,14 @@ not the node, the radio or DVSwitch.</p>
 </table>
 <p class="muted small">Aim for TX peaks around -6 to -3 dBFS on normal speech, without reaching 0.</p>
 </div>
+<h2 style="margin-top:14px">RX cleanup: what listeners hear</h2>
+<p class="muted small">Done once on the Pi for every listener; the node and other links are not changed. Separate from
+"Adjust audio levels here" above.</p>
+<div class="row"><label><input type="checkbox" id="rx-hpf"> Cut below 300 Hz (CTCSS tones and hum)</label></div>
+<div class="row"><label><input type="checkbox" id="rx-agc"> Automatic level (brings quiet stations up, loud ones down a little)</label></div>
+<div class="row"><label for="rx-gate" style="min-width:130px">Squelch-tail gate</label>
+<select id="rx-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong (can clip hissy speech)</option></select></div>
+<table><tr><th>Processing load</th><td id="rx-load" class="mono">-</td></tr></table>
 <p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
 use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
 <div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
