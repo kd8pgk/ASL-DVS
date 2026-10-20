@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.60.0"
+VERSION ="2.61.0"
 DATE_STR ="2026-10-19"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -409,6 +409,63 @@ def _diskimg_ensure_mounted(disk_name):
         log_event(f"_diskimg_ensure_mounted: could not mount {dev_path} at {mountpoint}: {exc}", "err")
         return None, False
     return mountpoint, True
+
+def _diskimg_mount_all(disk_name):
+    data = _lsblk_json()
+    if data is None:
+        return None, "lsblk query failed"
+    node = next((n for n in data.get("blockdevices") or [] if n.get("name") == disk_name), None)
+    if node is None:
+        return None, "Drive not found"
+    parts = node.get("children") or [node]
+    mounted, already, skipped, errors = [], [], [], []
+    for p in parts:
+        fstype = (p.get("fstype") or "").lower()
+        name = p.get("name") or ""
+        dev_path = p.get("path") or f"/dev/{name}"
+        if not fstype:
+            continue
+        if p.get("mountpoint"):
+            already.append(f"{dev_path} at {p['mountpoint']}")
+            continue
+        if not re.fullmatch(r"[A-Za-z0-9_.-]+", name):
+            skipped.append(f"{dev_path} (bad name)")
+            continue
+        opts = "nosuid,nodev"
+        if fstype in ("ntfs", "ntfs3"):
+            mtype = _usbimport_ntfs_type()
+            if mtype is None:
+                skipped.append(f"{dev_path} (NTFS driver not installed)")
+                continue
+        elif fstype in _USBIMPORT_PLAIN_FS:
+            mtype = fstype
+        else:
+            skipped.append(f"{dev_path} ({fstype})")
+            continue
+        mountpoint = os.path.join(_DISKIMG_MOUNT_ROOT, name)
+        try:
+            os.makedirs(mountpoint, exist_ok=True)
+            res = subprocess.run(
+                ["mount", "-t", mtype, "-o", opts, dev_path, mountpoint],
+                capture_output=True, text=True, timeout=20,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"{dev_path}: {exc}")
+            continue
+        if res.returncode != 0:
+            detail = (res.stderr or res.stdout or "").strip().replace("\n", " ")[:200]
+            errors.append(f"{dev_path}: {detail or 'mount failed'}")
+            try:
+                os.rmdir(mountpoint)
+            except OSError:
+                pass
+            continue
+        mounted.append(f"{dev_path} at {mountpoint}")
+    return {"mounted": mounted, "already": already, "skipped": skipped, "errors": errors}, None
+
+def _diskimg_job_running():
+    with _diskimg_job_lock:
+        return _diskimg_job is not None and _diskimg_job.get("state") == "running"
 
 _DISKIMG_BACKUP_DIRNAME = "instmon-backups"
 _DD_PROGRESS_RE = re.compile(rb"(\d+)\s+bytes")
@@ -6141,9 +6198,7 @@ function renderDrives(el, data) {
       if (d.read_only) badges.push('<span class="log-err">write-protected</span>');
       const mounted = d.mounted_at && d.mounted_at.length;
       const mountText = mounted ? `mounted at ${escHtml(d.mounted_at.join(', '))}` : 'not mounted';
-      const unmountBtn = (mounted && !d.is_boot_disk)
-        ? ` <button class="b-danger" data-action="diskimg_unmount" data-dest="${escHtml(d.path)}">Unmount</button>`
-        : '';
+      const unmountBtn = d.is_boot_disk ? '' : diskimgMountBtn(d);
       const label = escHtml(d.model) || (d.tran === 'usb' ? 'USB drive' : 'removable drive');
       return `<div class="row" style="justify-content:space-between">
         <span>${escHtml(d.path)} &middot; ${fmtBytes(d.size)} &middot; ${label}${badges.length ? ' &middot; ' + badges.join(' ') : ''}</span>
@@ -6152,6 +6207,7 @@ function renderDrives(el, data) {
     }).join('');
   }
   el.innerHTML = html;
+  ['backup', 'clone', 'restore'].forEach(k => renderDiskimgDriveStrip(k, drives));
   const depsEl = document.getElementById('diskimg-deps');
   if (depsEl) renderDiskimgDeps(depsEl, data.deps);
   populateDiskimgDestSelect('diskimg-backup-dest', drives);
@@ -6168,6 +6224,34 @@ function renderDrives(el, data) {
   scheduleDiskimgPreview('clone');
   scheduleDiskimgPreview('restore');
   scheduleDiskimgPreview('format');
+}
+
+function diskimgMountBtn(d) {
+  const busy = !!(_diskimgCurrentJob && _diskimgCurrentJob.state === 'running');
+  const dis = busy ? ' disabled title="A disk-image job is running."' : '';
+  const mounted = d.mounted_at && d.mounted_at.length;
+  return mounted
+    ? ` <button class="b-danger" data-action="diskimg_unmount" data-dest="${escHtml(d.path)}"${dis}>Unmount</button>`
+    : ` <button data-action="diskimg_mount" data-dest="${escHtml(d.path)}"${dis}>Mount</button>`;
+}
+
+function renderDiskimgDriveStrip(key, drives) {
+  const el = document.getElementById('diskimg-strip-' + key);
+  if (!el) return;
+  const usable = drives.filter(d => !d.is_boot_disk);
+  if (!usable.length) {
+    el.innerHTML = '<span class="muted">No drives attached. Plug one in -- an SD card in a USB adapter counts.</span>';
+    return;
+  }
+  el.innerHTML = usable.map(d => {
+    const mounted = d.mounted_at && d.mounted_at.length;
+    const label = escHtml(d.model) || (d.tran === 'usb' ? 'USB drive' : 'removable drive');
+    const state = mounted ? `mounted at ${escHtml(d.mounted_at.join(', '))}` : 'not mounted';
+    return `<div class="row" style="justify-content:space-between">
+      <span>${escHtml(d.path)} &middot; ${fmtBytes(d.size)} &middot; ${label}${d.read_only ? ' &middot; <span class="log-err">write-protected</span>' : ''}</span>
+      <span class="small muted">${state}${diskimgMountBtn(d)}</span>
+    </div>`;
+  }).join('');
 }
 
 function populateDiskimgDestSelect(selId, drives) {
@@ -6192,10 +6276,13 @@ function populateDiskimgRawDestSelect(selId, drives) {
   if (!sel) return;
   const prev = sel.value;
   const usable = drives.filter(d => !d.is_boot_disk && !d.read_only && !(d.mounted_at && d.mounted_at.length));
-  sel.innerHTML = usable.length
+  const mounted = drives.filter(d => !d.is_boot_disk && !d.read_only && d.mounted_at && d.mounted_at.length);
+  sel.innerHTML = (usable.length
     ? usable.map(d => `<option value="${escHtml(d.path)}">${escHtml(d.path)} (${fmtBytes(d.size)})</option>`).join('')
-    : '<option value="">No usable (unmounted) drives attached</option>';
+    : '<option value="">No usable (unmounted) drives attached</option>')
+    + mounted.map(d => `<option value="" disabled>${escHtml(d.path)} (${fmtBytes(d.size)}, mounted -- unmount first)</option>`).join('');
   if (usable.some(d => d.path === prev)) sel.value = prev;
+  else sel.selectedIndex = 0;
 }
 
 // Full Format's destination select is deliberately NOT filtered down
@@ -6264,6 +6351,7 @@ async function pollDrives() {
     const r = await fetch('/api/diskimg/drives');
     const data = await r.json();
     renderDrives(el, data);
+    wireButtons();
     usbimpApplyDrives((data.drives || []).filter((d) => !d.is_boot_disk)
       .map((d) => ({name: d.name, model: d.model, size: d.size})), false);
   } catch (e) { /* server restarting or unreachable, ignore this tick */ }
@@ -7427,6 +7515,10 @@ _JS_ACTIONS = """function wireButtons() {
           const dest = btn.dataset.dest;
           if (!confirm(`Unmount ${dest}? Any open files on it will be closed.`)) { btn.disabled = false; return; }
           await postDiskimg('/api/diskimg/unmount', {confirm: true, dest_device: dest});
+        } else if (action === 'diskimg_mount') {
+          const dest = btn.dataset.dest;
+          if (!confirm(`Mount every partition on ${dest} under /mnt/instmon-diskimg? Unmount it again before pulling it out, or before Clone/Restore/Format.`)) { btn.disabled = false; return; }
+          await postDiskimg('/api/diskimg/mount', {confirm: true, dest_device: dest});
         } else if (action === 'diskimg_format_start') {
           const destSel = document.getElementById('diskimg-format-dest');
           const dest = destSel && destSel.value;
@@ -8189,6 +8281,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="card diskimg-card collapsed" data-diskimg-key="backup">
   <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="backup">Show</button>
   <div class="diskimg-card-body">
+  <div class="small muted" style="margin:.1rem 0 .2rem">Drives</div>
+  <div id="diskimg-strip-backup" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
   <div class="row" style="margin-top:.5rem">
     <select id="diskimg-backup-dest"><option value="">Loading drives&hellip;</option></select>
     <input type="text" id="diskimg-backup-label" placeholder="optional label" style="max-width:10rem">
@@ -8252,6 +8346,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="card diskimg-card collapsed" data-diskimg-key="clone">
   <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="clone">Show</button>
   <div class="diskimg-card-body">
+  <div class="small muted" style="margin:.1rem 0 .2rem">Drives</div>
+  <div id="diskimg-strip-clone" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
   <div class="row">
     <select id="diskimg-clone-dest"><option value="">Loading drives&hellip;</option></select>
     <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-clone-verify"> Verify after copy</label>
@@ -8292,6 +8388,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div class="card diskimg-card collapsed" data-diskimg-key="restore">
   <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="restore">Show</button>
   <div class="diskimg-card-body">
+  <div class="small muted" style="margin:.1rem 0 .2rem">Drives</div>
+  <div id="diskimg-strip-restore" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
   <div class="row">
     <select id="diskimg-restore-image"><option value="">No backups available</option></select>
     <select id="diskimg-restore-dest"><option value="">Loading drives&hellip;</option></select>
@@ -8430,6 +8528,7 @@ _POST_ROUTES ={
 "/api/diskimg/job/cancel":lambda self :self .handle_diskimg_job_cancel (),
 "/api/diskimg/job/reset":lambda self :self .handle_diskimg_job_reset (),
 "/api/diskimg/unmount":lambda self :self .handle_diskimg_unmount (),
+"/api/diskimg/mount":lambda self :self .handle_diskimg_mount (),
 "/api/diskimg/format/start":lambda self :self .handle_diskimg_format_start (),
 "/api/diskimg/clone/start":lambda self :self .handle_diskimg_clone_start (),
 "/api/diskimg/restore/start":lambda self :self .handle_diskimg_restore_start (),
@@ -8898,20 +8997,86 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not mountpoints:
             self._send_json(200, {"message": f"{match['path']} is already unmounted.", "level": "ok"})
             return
+        if _diskimg_job_running():
+            self._error_json(409, "A disk-image job is running -- wait for it to finish before unmounting.")
+            return
+        try:
+            subprocess.run(["sync"], capture_output=True, timeout=120)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            log_event(f"Unmount {match['path']}: sync failed: {exc}", "warn")
         errors = []
-        for mp in mountpoints:
+        for mp in sorted(mountpoints, key=len, reverse=True):
             try:
                 result = subprocess.run(["umount", mp], capture_output=True, text=True, timeout=20)
                 if result.returncode != 0:
                     errors.append(f"{mp}: {(result.stderr or result.stdout).strip()}")
+                    continue
             except (subprocess.TimeoutExpired, OSError) as exc:
                 errors.append(f"{mp}: {exc}")
+                continue
+            if os.path.dirname(os.path.normpath(mp)) == _DISKIMG_MOUNT_ROOT:
+                try:
+                    os.rmdir(mp)
+                except OSError:
+                    pass
         if errors:
             log_event(f"Unmount {match['path']}: {'; '.join(errors)}", "warn")
             self._error_json(500, "Could not unmount: " + "; ".join(errors))
             return
         log_event(f"Unmounted {match['path']} ({', '.join(mountpoints)})", "info")
-        self._send_json(200, {"message": f"Unmounted {match['path']}.", "level": "ok"})
+        self._send_json(200, {"message": f"Unmounted {match['path']} -- safe to remove.", "level": "ok"})
+
+    def handle_diskimg_mount(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._error_json(400, "Malformed JSON body")
+            return
+        if not body.get("confirm"):
+            self._error_json(400, "Mount requires confirm:true in the request body")
+            return
+        dest_device = body.get("dest_device")
+        if not dest_device:
+            self._error_json(400, "Missing 'dest_device'")
+            return
+        match = next(
+            (d for d in _list_usb_drives() if d["path"] == dest_device or d["name"] == dest_device),
+            None,
+        )
+        if match is None:
+            self._error_json(400, f"'{dest_device}' is not a currently attached USB drive")
+            return
+        if match["is_boot_disk"]:
+            self._error_json(400, "Refusing to mount the boot disk -- it is this Pi's own root filesystem")
+            return
+        if _diskimg_job_running():
+            self._error_json(409, "A disk-image job is running -- wait for it to finish before mounting.")
+            return
+        result, err = _diskimg_mount_all(match["name"])
+        if result is None:
+            self._error_json(500, f"Could not mount {match['path']}: {err}")
+            return
+        parts = []
+        if result["mounted"]:
+            parts.append("mounted " + ", ".join(result["mounted"]))
+        if result["already"]:
+            parts.append("already mounted " + ", ".join(result["already"]))
+        if result["skipped"]:
+            parts.append("skipped " + ", ".join(result["skipped"]))
+        if result["errors"]:
+            parts.append("failed " + "; ".join(result["errors"]))
+        if not parts:
+            self._error_json(400, f"{match['path']} has no filesystem to mount -- format it first.")
+            return
+        summary = f"{match['path']}: " + "; ".join(parts)
+        if result["errors"]:
+            log_event(f"Mount {summary}", "err" if not result["mounted"] else "warn")
+            self._send_json(200 if result["mounted"] else 500,
+                            {"message": summary, "level": "warn" if result["mounted"] else "err"})
+            return
+        log_event(f"Mount {summary}", "info")
+        self._send_json(200, {"message": summary, "level": "ok" if result["mounted"] or result["already"] else "warn"})
 
     def handle_diskimg_format_start(self):
         length = int(self.headers.get("Content-Length", 0))

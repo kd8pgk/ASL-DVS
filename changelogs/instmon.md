@@ -1,6 +1,24 @@
 # instmon changelog
 
-Current file: `instmon_v2_60_0_20261019.py`. Newest entries first.
+Current file: `instmon_v2_61_0_20261020.py`. Newest entries first.
+
+## 2.61.0 (2026-10-20)
+
+- **Mount and Unmount on the Backup, Clone and Restore cards.** Each card now
+  has a Drives list of the attached USB/SD drives (never the boot disk), with a
+  **Mount** button on an unmounted drive and **Unmount** on a mounted one. The
+  Full Format table gets the Mount button too.
+  - **Mount** mounts every partition that has a filesystem (ext2/3/4, vfat,
+    exFAT, NTFS) read-write at `/mnt/instmon-diskimg/<partition>`, so both the
+    boot and root partitions of a cloned Pi card can be looked at. Partitions
+    already mounted are left alone; others are listed as skipped.
+  - **Unmount** now runs `sync` first, unmounts every partition and removes the
+    empty instmon mount folders. When it says "safe to remove", the drive can
+    be pulled.
+  - Both refuse while a disk-image job is running, and the buttons are greyed
+    out then.
+- Clone and Restore destination lists show mounted drives greyed out as
+  "mounted -- unmount first" instead of hiding them.
 
 ## 2.60.0 (2026-10-19)
 
