@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.16"
+VERSION = "0.4.17"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -703,18 +703,19 @@ def _hp_section(q, fc=300.0, fs=8000.0):
 HP_SECTIONS = (_hp_section(0.5412), _hp_section(1.3066))
 
 
-def _sumsq(ys):
+def _dot(a, b):
     if hasattr(math, "sumprod"):
-        return math.sumprod(ys, ys)
-    return math.fsum(map(operator.mul, ys, ys))
+        return math.sumprod(a, b)
+    return math.fsum(map(operator.mul, a, b))
 AGC_TARGET_DB = -20.0
 AGC_MIN_DB = -6.0
 AGC_MAX_DB = 18.0
 AGC_ACTIVE_DB = -45.0
 GATE_DELAY = 4
 RX_QUIET_DB = -65.0
-GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "zcr": 0.42, "noise_db": -24.0, "frames": 4},
-              2: {"close_db": -48.0, "hold": 12, "zcr": 0.35, "noise_db": -30.0, "frames": 3}}
+GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "r1": 0.3, "noise_db": -24.0, "frames": 4},
+              2: {"close_db": -48.0, "hold": 12, "r1": 0.45, "noise_db": -30.0, "frames": 3}}
+SPEECH_R1 = 0.55
 
 
 class RxClean:
@@ -753,11 +754,10 @@ class RxClean:
                 ys.append(y)
             self.z = (x1, x2, w1, w2, p1, p2, y1, y2)
         n = len(ys)
-        ss = _sumsq(ys)
-        neg = [y < 0 for y in ys]
-        zc = sum(map(operator.ne, neg, neg[1:]))
+        ss = _dot(ys, ys)
+        r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
         db = 10.0 * math.log10(ss / n / 1073741824.0) if ss > 0 else -120.0
-        return ys, db, zc / max(1, n - 1)
+        return ys, db, r1
 
     def _agc(self, db, speechy):
         if not speechy:
@@ -777,14 +777,14 @@ class RxClean:
         if self.fast > 0:
             self.fast -= 1
 
-    def _gate(self, db, zcr, mode):
+    def _gate(self, db, r1, mode):
         r = GATE_RULES[mode]
-        if db > r["noise_db"] and zcr > r["zcr"]:
+        if db > r["noise_db"] and r1 < r["r1"]:
             self.noisy += 1
             self.calm = 0
         else:
             self.noisy = 0
-            self.calm = self.calm + 1 if zcr < 0.3 and db > r["close_db"] + 3 else 0
+            self.calm = self.calm + 1 if r1 > SPEECH_R1 and db > r["close_db"] + 3 else 0
             if self.tail and self.calm >= 3:
                 self.tail = False
         hit = self.noisy >= r["frames"] and self.open
@@ -829,10 +829,10 @@ class RxClean:
                 self.delay.clear()
                 self._account(t0)
                 return PCM_SILENCE
-            self._gate(-120.0, 0.0, gate)
+            self._gate(-120.0, 1.0, gate)
             return self._out(PCM_SILENCE, False, t0)
-        ys, db, zcr = self._filter(_samples(frame), hpf)
-        speechy = db > AGC_ACTIVE_DB and zcr < 0.35
+        ys, db, r1 = self._filter(_samples(frame), hpf)
+        speechy = db > AGC_ACTIVE_DB and r1 > 0.3
         if agc:
             self._agc(db, speechy)
         elif self.gain_db:
@@ -861,7 +861,7 @@ class RxClean:
                 self.delay.clear()
             self._account(t0)
             return pcm
-        keep, hit = self._gate(db, zcr, gate)
+        keep, hit = self._gate(db, r1, gate)
         if hit:
             for i in range(len(self.delay)):
                 self.delay[i] = (self.delay[i][0], False)
@@ -2399,6 +2399,16 @@ background:linear-gradient(90deg,#1b2530 0 90%,#14382f 90% 95%,#1b2530 95% 98.3%
 .rep-n b{font-family:ui-monospace,Menlo,Consolas,monospace}
 .rep-v{font-size:14px;font-weight:600;margin-top:6px}
 .rep-v.ok{color:var(--accent)}.rep-v.warn{color:var(--amber)}.rep-v.err{color:var(--red)}
+.chk{flex:none;padding:0 6px;border-radius:6px;background:var(--amber-bg);color:var(--amber);font:700 11px ui-monospace,Menlo,Consolas,monospace;cursor:pointer}
+.chk-run{font-size:14px;margin:6px 0}
+table.chk-t{table-layout:fixed}
+table.chk-t td,table.chk-t th{padding:5px 3px;font-size:12px;white-space:normal;overflow-wrap:break-word}
+table.chk-t thead th:first-child{width:40%}
+table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
+.sug{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
+.sug .t{flex:1}
+.sug .btn{min-height:36px;padding:0 12px;font-size:13px}
+.st-ok{color:var(--accent)}.st-warn{color:var(--amber)}.st-bad{color:var(--red)}
 .spec-meter .meter{height:6px;min-width:0}
 #ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
 #ptt{width:100%;height:80px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:19px;font-weight:700;cursor:pointer;padding:0 20px;
@@ -2442,6 +2452,7 @@ const PLAY_DEFAULTS = {s16: true, smooth: true, auto: true, spec: true};
 let play = Object.assign({}, PLAY_DEFAULTS);
 try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); } catch (e) {}
 let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false, autoWait = null, starting = false;
+let listenAt = 0, rxLastDb = -120, chk = null, chkUndo = {}, chkCfg = null;
 let busNode = null, analyser = null, specBins = null, specRaf = 0, specLast = 0, busyText = '', pttState = 'off', ownUnkeyAt = -1e9;
 let specMode = 'waterfall';
 try { if (localStorage.getItem('nlSpec') === 'bars') specMode = 'bars'; } catch (e) {}
@@ -2607,7 +2618,7 @@ function addOption(sel, value, text) {
 
 function sendOp(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op})); }
 
-const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'lvl', 'mic', 'play', 'log'];
+const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'chk', 'lvl', 'mic', 'play', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -2650,7 +2661,7 @@ function showTab(name) {
   });
   try { localStorage.setItem('nlTab', name); } catch (e) {}
   if (name === 'connect') loadFavs();
-  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); micSummary(); playSummary(); }
+  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); micSummary(); playSummary(); if (chkShown && !chk) chkShow(chkShown); }
   if (name === 'listen') openTalk();
   document.querySelector('main').classList.toggle('fit', name === 'listen');
   specKick();
@@ -2751,6 +2762,7 @@ async function pollStatus() {
   if (!talking) $('st-level').textContent = fmtDb(d.peak_db);
   if (d.jitter_ms) jitterSec = d.jitter_ms / 1000;
   if (!playing && !talking) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
+  if (chk && chk.running) chkPoll(d);
   if (!authed) return;
   const tx = d.tx || {};
   $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
@@ -2793,7 +2805,10 @@ function flush() {
   pendN = 0;
   if (!buf) return;
   const now = ctx.currentTime;
-  if (nextT < now + 0.05 || nextT > now + jitterSec + 1.25) nextT = now + jitterSec;
+  if (nextT < now + 0.05 || nextT > now + jitterSec + 1.25) {
+    if (chk && chk.running && nextT > 0 && playing && performance.now() - listenAt > 3000) chk.drops++;
+    nextT = now + jitterSec;
+  }
   const src = ctx.createBufferSource();
   src.buffer = buf;
   src.connect(busNode);
@@ -2926,7 +2941,354 @@ function lagOf(tx, rx) {
   return best;
 }
 
+let rfss = 0, rfpk = 0, rfx1 = 0, rfn = 0, rfprev = 0;
+
+function accNew() { return {n: 0, act: 0, pw: 0, pk: -120, hist: new Array(121).fill(0), lim: 0, limSum: 0, gate: 0, clip: 0}; }
+
+function accAdd(a, st) {
+  a.n++;
+  a.hist[Math.max(0, Math.min(120, Math.round(st.db) + 120))]++;
+  if (st.pk > a.pk) a.pk = st.pk;
+  if (st.pk >= -0.5) a.clip++;
+  if (st.db > -45) {
+    a.act++; a.pw += Math.pow(10, st.db / 10);
+    if (st.lim >= 0.5) a.lim++;
+    a.limSum += st.lim || 0;
+    if (st.gate) a.gate++;
+  }
+}
+
+function accSum(a) {
+  let low = 0, tot = 0, pw = 0;
+  for (let i = 30; i <= 120; i++) tot += a.hist[i];
+  const want = Math.max(1, Math.floor(tot / 10));
+  for (let i = 30; i <= 120 && low < want; i++) {
+    const k = Math.min(a.hist[i], want - low);
+    low += k; pw += k * Math.pow(10, (i - 120) / 10);
+  }
+  const speech = a.act ? 10 * Math.log10(a.pw / a.act) : -120, noise = low ? 10 * Math.log10(pw / low) : -120;
+  return {secs: a.n * 0.02, actSecs: a.act * 0.02, speech: speech, peak: a.pk, noise: noise,
+    snr: a.act && low ? Math.min(60, speech - noise) : null, limPct: a.act ? 100 * a.lim / a.act : 0,
+    limAvg: a.act ? (a.limSum || 0) / a.act : 0,
+    gatePct: a.act ? 100 * a.gate / a.act : 0, clipPct: a.n ? 100 * a.clip / a.n : 0};
+}
+
+function chkNew(mins) {
+  return {running: true, v: 1, mins: mins, elapsed: 0, paused: 0, last: Date.now(), rx: accNew(), tx: accNew(),
+    seg: null, rxTx: [], drops: 0, tails: 0, noisy: 0, hum: 0, humN: 0, load: 0, loadMax: 0, loadN: 0,
+    txN: 0, txSecs: 0, keyedAt: 0, deadman: 0, timeout: 0, denied: 0, pend: false, srv: []};
+}
+
+function chkSave() {
+  try {
+    if (chk) localStorage.setItem('nlCheck', JSON.stringify(chk));
+    else localStorage.removeItem('nlCheck');
+  } catch (e) {}
+}
+
+function chkRx(st) {
+  rxLastDb = st.db;
+  accAdd(chk.rx, st);
+  if (st.db > -24 && st.r1 < 0.3) {
+    if (++chk.noisy === 3) chk.tails++;
+  } else chk.noisy = 0;
+}
+
+function chkWs(m) {
+  if (m.ev === 'keyed') { chk.txN++; chk.keyedAt = Date.now(); }
+  else if (m.ev === 'denied') chk.denied++;
+  else if (m.ev === 'unkeyed') {
+    if (chk.keyedAt) chk.txSecs += (Date.now() - chk.keyedAt) / 1000;
+    chk.keyedAt = 0;
+    if (m.why === 'deadman') chk.deadman++;
+    if (m.why === 'timeout') chk.timeout++;
+    chk.pend = true;
+  }
+}
+
+function chkMic(st) {
+  if (chk && chk.running && talking && keyed && !testing && !nodeTesting) accAdd(chk.tx, st);
+}
+micTaps.push(chkMic);
+
+function chkPoll(d) {
+  if (d.rx_load_pct != null) { chk.load += d.rx_load_pct; chk.loadN++; chk.loadMax = Math.max(chk.loadMax, d.rx_load_pct); }
+  if (playing && d.audio_active) {
+    if (!chk.seg) chk.seg = {s: 0, n: 0};
+    if (d.level_db > -60) { chk.seg.s += Math.pow(10, d.level_db / 10); chk.seg.n++; }
+    if (analyser && ctx && rxLastDb > -40) {
+      const f = new Float32Array(analyser.frequencyBinCount);
+      analyser.getFloatFrequencyData(f);
+      const hz = ctx.sampleRate / 2 / f.length;
+      let lo = 0, hi = 0;
+      f.forEach((x, i) => { const p = Math.pow(10, x / 10), fq = i * hz; if (fq >= 50 && fq < 300) lo += p; else if (fq >= 300 && fq < 3400) hi += p; });
+      if (hi > 1e-7) { chk.hum += Math.max(-60, Math.min(20, 10 * Math.log10(Math.max(lo, hi * 1e-6) / hi))); chk.humN++; }
+    }
+  }
+  if (!(playing && d.audio_active) && chk.seg) {
+    if (chk.seg.n >= 2 && chk.rxTx.length < 300) chk.rxTx.push(10 * Math.log10(chk.seg.s / chk.seg.n));
+    chk.seg = null;
+  }
+  const tx = d.tx || {};
+  if (chk.pend && !tx.keyed && tx.last_peak_db != null) { chk.srv.push({pk: tx.last_peak_db, gaps: tx.last_gaps || 0}); chk.pend = false; }
+}
+
+function chkTick() {
+  if (!chk || !chk.running) return;
+  const now = Date.now(), dt = now - chk.last;
+  if (dt < 5000) chk.elapsed += dt; else chk.paused += dt;
+  chk.last = now;
+  const left = Math.max(0, chk.mins * 60000 - chk.elapsed);
+  const txt = fmtSecs(chk.elapsed / 1000);
+  $('chk-badge').textContent = 'CHECK ' + txt;
+  sum('chk', 'Running ' + txt + ' / ' + chk.mins + ':00');
+  $('chk-run').textContent = 'Running: ' + txt + ' of ' + chk.mins + ' min. Heard ' + Math.round(chk.rx.act * 0.02) + ' s of audio, ' +
+    chk.txN + ' transmission(s) of yours.' + (chk.paused > 5000 ? ' Paused ' + fmtSecs(chk.paused / 1000) + ' (page closed or asleep).' : '');
+  if (Math.floor(chk.elapsed / 1000) % 10 === 0) chkSave();
+  if (!left) chkStop();
+}
+
+function chkUi() {
+  const run = !!(chk && chk.running);
+  $('chk-start').classList.toggle('hidden', run);
+  $('chk-stop').classList.toggle('hidden', !run);
+  $('chk-mins').disabled = run;
+  $('chk-run').classList.toggle('hidden', !run);
+  $('chk-badge').classList.toggle('hidden', !run);
+}
+
+function chkStart() {
+  chk = chkNew(Number($('chk-mins').value) || 5);
+  chkSave(); chkUi(); chkTick();
+  note('chk-msg', '', '');
+  if (!playing) startListen();
+}
+
+function chkSummary(c) {
+  const rx = accSum(c.rx), tx = accSum(c.tx);
+  const lv = c.rxTx.slice().sort((a, b) => a - b);
+  return {at: Date.now(), mins: Math.round(c.elapsed / 6000) / 10, paused: Math.round(c.paused / 1000),
+    rx: Object.assign(rx, {nTx: lv.length, spread: lv.length >= 2 ? lv[lv.length - 1] - lv[0] : null,
+      quietest: lv.length ? lv[0] : null, loudest: lv.length ? lv[lv.length - 1] : null,
+      hum: c.humN ? c.hum / c.humN : null, drops: c.drops, dropsMin: c.elapsed ? c.drops / (c.elapsed / 60000) : 0, tails: c.tails,
+      load: c.loadN ? c.load / c.loadN : null, loadMax: c.loadN ? c.loadMax : null}),
+    tx: Object.assign(tx, {nTx: c.txN, txSecs: Math.round(c.txSecs), deadman: c.deadman, timeout: c.timeout, denied: c.denied,
+      gapTx: c.srv.filter((x) => x.gaps > 0).length, srvN: c.srv.length, srvPeak: c.srv.length ? Math.max(...c.srv.map((x) => x.pk)) : null})};
+}
+
+async function chkStop() {
+  if (!chk) return;
+  const now = Date.now();
+  if (now - chk.last < 5000) chk.elapsed += now - chk.last;
+  chk.running = false;
+  const r = chkSummary(chk);
+  chk = null; chkSave(); chkUi();
+  sum('chk', '');
+  try {
+    const prev = localStorage.getItem('nlCheckLast');
+    if (prev) localStorage.setItem('nlCheckPrev', prev);
+    localStorage.setItem('nlCheckLast', JSON.stringify(r));
+  } catch (e) {}
+  await chkShow(r);
+}
+
+const db0 = (x) => (x == null || x <= -119 ? '-' : Math.round(x) + ' dBFS');
+
+function chkRows(r, p, side) {
+  const R = r[side], P = p ? p[side] : null;
+  const st = (ok, warn) => (ok ? 'st-ok' : warn ? 'st-warn' : 'st-bad');
+  const rows = side === 'rx' ? [
+    ['Listened', Math.round(R.secs) + ' s', P && Math.round(P.secs) + ' s', '', 'st-ok'],
+    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -14', R.actSecs < 5 ? '' : st(R.speech >= -24 && R.speech <= -14, R.speech >= -30 && R.speech <= -10)],
+    ['Peak', db0(R.peak), P && db0(P.peak), 'below -1', st(R.peak < -1, R.peak < -0.2)],
+    ['Stations, quietest to loudest', R.spread == null ? '-' : Math.round(R.spread) + ' dB', P && (P.spread == null ? '-' : Math.round(P.spread) + ' dB'), 'under 8 dB', R.spread == null ? '' : st(R.spread < 8, R.spread < 14)],
+    ['Below 300 Hz (tones, hum)', R.hum == null ? '-' : Math.round(R.hum) + ' dB', P && (P.hum == null ? '-' : Math.round(P.hum) + ' dB'), 'under -25 dB', R.hum == null ? '' : st(R.hum < -25, R.hum < -15)],
+    ['Dropouts', R.drops + (R.drops ? ' (' + R.dropsMin.toFixed(1) + '/min)' : ''), P && String(P.drops), 'none', st(R.dropsMin < 0.5, R.dropsMin < 2)],
+    ['Squelch tails heard', String(R.tails), P && String(P.tails), 'none', st(R.tails === 0, R.tails < 3)],
+    ['Pi load (avg / max)', R.load == null ? '-' : R.load.toFixed(1) + ' / ' + R.loadMax.toFixed(1) + ' %', P && (P.load == null ? '-' : P.load.toFixed(1) + ' %'), 'under 25 %', R.load == null ? '' : st(R.loadMax < 25, R.loadMax < 50)],
+  ] : [
+    ['Transmissions', R.nTx + (R.nTx ? ' (' + R.txSecs + ' s)' : ''), P && String(P.nTx), '', 'st-ok'],
+    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -12', R.actSecs < 0.4 ? '' : st(R.speech >= -24 && R.speech <= -12, R.speech >= -30 && R.speech <= -8)],
+    ['Peak', db0(R.peak), P && db0(P.peak), '-8 to -1', R.actSecs < 0.4 ? '' : st(R.peak <= -1 && R.peak >= -8, R.peak < -0.2)],
+    ['Voice above background', R.snr == null ? '-' : (R.snr >= 60 ? 'over 60' : Math.round(R.snr)) + ' dB', P && (P.snr == null ? '-' : Math.round(P.snr) + ' dB'), 'over 20 dB', R.snr == null ? '' : st(R.snr > 20, R.snr > 12)],
+    ['Limiter working', Math.round(R.limPct) + ' %', P && Math.round(P.limPct) + ' %', 'under 20 %', R.actSecs < 0.4 ? '' : st(R.limPct < 20, R.limPct < 40)],
+    ['Gate closed while talking', Math.round(R.gatePct) + ' %', P && Math.round(P.gatePct) + ' %', 'under 10 %', R.actSecs < 0.4 ? '' : st(R.gatePct < 10, R.gatePct < 20)],
+    ['Transmissions with gaps', R.srvN ? R.gapTx + ' of ' + R.srvN : '-', P && (P.srvN ? P.gapTx + ' of ' + P.srvN : '-'), 'none', R.srvN ? st(R.gapTx === 0, R.gapTx / R.srvN < 0.25) : ''],
+    ['Peak at the Pi (after TX gain)', db0(R.srvPeak), P && db0(P.srvPeak), 'below -1', R.srvPeak == null ? '' : st(R.srvPeak < -1, R.srvPeak < -0.2)],
+    ['Audio stopped / time-outs / refused', R.deadman + ' / ' + R.timeout + ' / ' + R.denied, P && (P.deadman + ' / ' + P.timeout + ' / ' + P.denied), '0 / 0 / 0', st(!R.deadman && !R.timeout && !R.denied, R.deadman < 2)],
+  ];
+  return rows;
+}
+
+function chkTable(id, rows, cmp) {
+  const tb = $(id);
+  tb.innerHTML = '';
+  rows.forEach(([k, now, last, target, cls]) => {
+    const tr = document.createElement('tr');
+    [k, now].concat(cmp ? [last == null ? '-' : last] : []).concat([target]).forEach((v, i) => {
+      const td = document.createElement(i ? 'td' : 'th'); td.textContent = v;
+      if (i === 1 && cls) td.className = cls;
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+}
+
+const JIT_STEPS = [150, 250, 500, 1000], TXB_STEPS = [60, 120, 200, 300];
+const nextStep = (steps, v) => steps.find((x) => x > Number(v)) || null;
+
+function chkSuggest(r, cfg) {
+  const out = [], R = r.rx, T = r.tx, c = cfg || {};
+  const mg = Number(mic.gain) || 0;
+  const node = (text, change) => out.push({text: text, change: change && Object.assign({node: true}, change)});
+  if (R.spread != null && R.spread >= 10 && c.rx_agc === false) node('Stations differed by ' + Math.round(R.spread) + ' dB: turn on Automatic level.', {rx_agc: true});
+  if (R.actSecs >= 5 && R.speech < -28) {
+    const d = clampStep(-20 - R.speech);
+    node('Received speech averaged ' + db0(R.speech) + ': raise RX gain by ' + d + ' dB' + (c.rx_agc ? ' (Automatic level is already at its limit)' : '') + '.',
+      {tune_enabled: true, rx_gain_db: Math.min(12, (Number(c.rx_gain_db) || 0) + d)});
+  }
+  if (R.clipPct > 1) node('Received audio hit full scale ' + R.clipPct.toFixed(1) + ' % of the time: lower RX gain by 3 dB' + (c.rx_agc ? '' : ' or turn on Automatic level') + '.',
+    {tune_enabled: true, rx_gain_db: Math.max(-12, (Number(c.rx_gain_db) || 0) - 3)});
+  if (R.hum != null && R.hum > -20 && c.rx_hpf === false) node('Strong sound below 300 Hz (CTCSS tones or hum): turn on Cut below 300 Hz.', {rx_hpf: true});
+  if (R.tails >= 2 && !Number(c.rx_gate)) node(R.tails + ' squelch tails got through: set the Squelch-tail gate to Light.', {rx_gate: 1});
+  else if (R.tails >= 3 && Number(c.rx_gate) === 1) node(R.tails + ' squelch tails got through Light: try Strong.', {rx_gate: 2});
+  if (R.dropsMin >= 0.5) {
+    const j = nextStep(JIT_STEPS, c.tune_enabled ? c.jitter_ms : 250);
+    if (j) node(R.drops + ' dropouts: raise the Listen buffer to ' + (j / 1000) + ' s.', {tune_enabled: true, jitter_ms: j});
+    else out.push({text: R.drops + ' dropouts even with the largest Listen buffer: the phone\'s connection is the problem (try Wi-Fi).'});
+  }
+  if (R.loadMax != null && R.loadMax > 40 && c.rx_hpf) node('The Pi spent up to ' + Math.round(R.loadMax) + ' % of a core on RX cleanup: turn off Cut below 300 Hz to save the most.', {rx_hpf: false});
+  if (!T.nTx) out.push({text: 'You didn\'t transmit during the check, so there is nothing to say about your audio yet.'});
+  else if (T.actSecs >= 0.4) {
+    if (T.limPct > 30 || T.peak > -1) {
+      const d = clampStep(Math.max(T.peak + 4, (T.limAvg || 0) + 3, 3));
+      out.push({text: 'Your audio was limited ' + Math.round(T.limPct) + ' % of the time: lower Mic gain by ' + d + ' dB.', change: {mic: {gain: Math.max(-12, mg - d)}}});
+    } else if (T.speech < -28) {
+      const d = Math.min(clampStep(-18 - T.speech), 24 - mg);
+      if (d > 0) out.push({text: 'Your speech averaged ' + db0(T.speech) + ': raise Mic gain by ' + d + ' dB.', change: {mic: {gain: mg + d}}});
+    }
+    if (T.snr != null && T.snr < 15) {
+      if (!mic.ns) out.push({text: 'Your background was only ' + Math.round(T.snr) + ' dB below your voice: turn on Noise suppression.', change: {mic: {ns: true}}});
+      else if (!Number(mic.gate)) out.push({text: 'Your background was only ' + Math.round(T.snr) + ' dB below your voice: set the Noise gate to Light.', change: {mic: {gate: 1}}});
+    }
+    if (T.gatePct > 15 && Number(mic.gate)) out.push({text: 'The noise gate closed ' + Math.round(T.gatePct) + ' % of the time while you talked: set it ' + (Number(mic.gate) === 2 ? 'to Light.' : 'Off.'), change: {mic: {gate: Number(mic.gate) - 1}}});
+    if (T.srvPeak != null && T.srvPeak > -1 && c.tune_enabled && Number(c.tx_gain_db) > 0) node('Your audio reached ' + db0(T.srvPeak) + ' at the Pi: lower TX gain by 3 dB.', {tx_gain_db: Number(c.tx_gain_db) - 3});
+    if (T.srvN && T.gapTx / T.srvN >= 0.25) {
+      const b = nextStep(TXB_STEPS, c.tune_enabled ? c.tx_buffer_ms : 120);
+      if (b) node(T.gapTx + ' of ' + T.srvN + ' transmissions had gaps: raise the TX buffer to ' + b + ' ms.', {tune_enabled: true, tx_buffer_ms: b});
+    }
+    if (T.deadman >= 2) out.push({text: T.deadman + ' transmissions stopped because your audio stopped arriving: the phone\'s connection dropped out. Wi-Fi is steadier than mobile data.'});
+  }
+  if (T.denied >= 2) out.push({text: 'Push-to-talk was refused ' + T.denied + ' times (the node was busy or someone else was transmitting).'});
+  return out;
+}
+
+async function chkApply(i, s2, btn, undo) {
+  const ch = s2.change;
+  if (ch.mic) {
+    if (!undo) chkUndo[i] = {mic: Object.assign({}, mic)};
+    Object.assign(mic, undo ? chkUndo[i].mic : ch.mic);
+    try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
+    loadMicUi(); micSummary();
+  } else {
+    const keys = Object.keys(ch).filter((k) => k !== 'node');
+    let body = {};
+    if (undo) body = chkUndo[i].cfg;
+    else {
+      const d = await api('/api/config');
+      chkUndo[i] = {cfg: {}};
+      keys.forEach((k) => { chkUndo[i].cfg[k] = d.config ? d.config[k] : undefined; body[k] = ch[k]; });
+    }
+    const res = await post('/api/config', body);
+    if (!res.ok) { note('chk-msg', 'err', res.error || 'Could not save.'); return; }
+    loadConfig();
+  }
+  note('chk-msg', 'ok', undo ? 'Put back.' : 'Changed. Run another check to see the difference.');
+  btn.textContent = undo ? 'Apply' : 'Undo';
+  btn.onclick = () => chkApply(i, s2, btn, !undo);
+}
+
+let chkShown = null, chkCmp = false;
+
+async function chkShow(r) {
+  chkShown = r;
+  if (!r) { $('chk-rep').classList.add('hidden'); return; }
+  let prev = null;
+  try { prev = JSON.parse(localStorage.getItem('nlCheckPrev') || 'null'); } catch (e) {}
+  $('chk-cmp').disabled = !prev;
+  ['chk-prev-h1', 'chk-prev-h2'].forEach((id) => $(id).classList.toggle('hidden', !(chkCmp && prev)));
+  chkTable('chk-rx', chkRows(r, chkCmp && prev, 'rx'), chkCmp && !!prev);
+  chkTable('chk-tx', chkRows(r, chkCmp && prev, 'tx'), chkCmp && !!prev);
+  const cfgRes = authed ? await api('/api/config') : {};
+  chkCfg = cfgRes.config || null;
+  const sugs = chkSuggest(r, chkCfg), box = $('chk-sug');
+  box.innerHTML = ''; chkUndo = {};
+  if (!sugs.length) { const d = document.createElement('div'); d.className = 'sug'; d.textContent = 'Nothing to change: everything is in range.'; box.appendChild(d); }
+  sugs.forEach((s2, i) => {
+    const d = document.createElement('div'); d.className = 'sug';
+    const t = document.createElement('div'); t.className = 't'; t.textContent = s2.text; d.appendChild(t);
+    if (s2.change && (!s2.change.node || authed)) {
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.textContent = 'Apply';
+      b.onclick = () => chkApply(i, s2, b, false); d.appendChild(b);
+    }
+    box.appendChild(d);
+  });
+  const n = sugs.filter((x) => x.change).length;
+  sum('chk', 'Last check: ' + (n ? n + ' thing' + (n > 1 ? 's' : '') + ' to change' : 'all good'));
+  $('chk-rep').classList.remove('hidden');
+}
+
+function chkText() {
+  const r = chkShown;
+  if (!r) return '';
+  const lines = ['Node Listen ' + document.querySelector('header .ver').textContent + ' audio check, ' + new Date(r.at).toLocaleString() + ', ' + r.mins + ' min'];
+  ['rx', 'tx'].forEach((sd) => {
+    lines.push(sd === 'rx' ? 'Receive:' : 'Transmit:');
+    chkRows(r, null, sd).forEach(([k, v, , t]) => lines.push('  ' + k + ': ' + v + (t ? ' (target ' + t + ')' : '')));
+  });
+  lines.push('What to change:');
+  document.querySelectorAll('#chk-sug .sug').forEach((e) => { const t = e.querySelector('.t') || e; lines.push('  - ' + t.textContent); });
+  return lines.join('\n');
+}
+
+async function chkCopy() {
+  const t = chkText();
+  try { await navigator.clipboard.writeText(t); note('chk-msg', 'ok', 'Report copied.'); }
+  catch (e) {
+    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); note('chk-msg', 'ok', 'Report copied.'); } catch (x) { note('chk-msg', 'err', 'Could not copy.'); }
+    ta.remove();
+  }
+}
+
+function chkInit() {
+  try { chk = JSON.parse(localStorage.getItem('nlCheck') || 'null'); } catch (e) { chk = null; }
+  if (chk && (!chk.running || chk.v !== 1)) chk = null;
+  if (chk) {
+    const gap = Date.now() - chk.last;
+    chk.paused += gap; chk.last = Date.now();
+    if (chk.elapsed >= chk.mins * 60000) chkStop();
+  }
+  let last = null;
+  try { last = JSON.parse(localStorage.getItem('nlCheckLast') || 'null'); } catch (e) {}
+  if (!chk && last) chkShow(last);
+  chkUi();
+  setInterval(chkTick, 1000);
+  $('chk-start').addEventListener('click', chkStart);
+  $('chk-stop').addEventListener('click', chkStop);
+  $('chk-copy').addEventListener('click', chkCopy);
+  $('chk-cmp').addEventListener('click', () => { chkCmp = !chkCmp; $('chk-cmp').textContent = chkCmp ? 'Hide last check' : 'Compare with last check'; chkShow(chkShown); });
+  $('chk-badge').addEventListener('click', () => { showTab('setup'); foldSet('chk', true); });
+}
+
 function pushSample(v) {
+  rfss += v * v; if ((v < 0 ? -v : v) > rfpk) rfpk = v < 0 ? -v : v;
+  rfx1 += v * rfprev;
+  rfprev = v;
+  if (++rfn === 160) {
+    if (chk && chk.running) chkRx({db: rfss > 0 ? 10 * Math.log10(rfss / 160) : -120, pk: peakDb(rfpk), r1: rfss > 0 ? rfx1 / rfss : 1});
+    rfss = 0; rfpk = 0; rfx1 = 0; rfn = 0;
+  }
   pend[pendN++] = v;
   if (otaRec) otaRec.push(v);
   const a = v < 0 ? -v : v;
@@ -3089,6 +3451,7 @@ async function startListen() {
     }
   } finally { starting = false; }
   playing = true;
+  listenAt = performance.now();
   specKick();
   setMediaState();
   wakeLockApply();
@@ -3205,6 +3568,7 @@ function openTalk(force) {
   ws.onmessage = (ev) => {
     let m = {};
     try { m = JSON.parse(ev.data); } catch (e) { return; }
+    if (chk && chk.running) chkWs(m);
     if (m.ev === 'keyed') {
       keyed = true; keyedAt = performance.now(); totSec = m.tot || totSec;
       preKey.forEach((f) => ws.send(f)); preKey = [];
@@ -3400,7 +3764,7 @@ async function nodeTest() {
     src.onended = () => { pc.close(); };
   } catch (e) {
     otaRec = null;
-    micTaps = [];
+    micTaps = micTaps.filter((f) => f === chkMic);
     $('vu-mic').classList.add('hidden');
     if (!wasPlaying && playing) stopListen();
     note(out, 'err', 'Node test: ' + (e.message || e));
@@ -3793,6 +4157,7 @@ document.addEventListener('DOMContentLoaded', () => {
   ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-save').addEventListener('click', saveTune);
   loadMicUi();
+  chkInit();
   MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
   $('mic-gate').addEventListener('change', saveMic);
   ['play-s16', 'play-smooth', 'play-auto', 'play-spec'].forEach((id) => $(id).addEventListener('change', savePlay));
@@ -3880,7 +4245,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <span id="st-feed-w"><span id="st-feed" class="dot"></span><span id="st-feed-t">feed</span></span>
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span>
 <span id="s-tx-w" title="Lit while someone transmits from Node Listen"><span id="s-tx" class="dot"></span>TX</span>
-<span id="st-listeners" title="Listeners">-</span></div>
+<span id="st-listeners" title="Listeners">-</span><span id="chk-badge" class="chk hidden" title="An audio check is running (Setup tab)"></span></div>
 <div class="spec" id="spec-wrap">
 <div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum: tap to switch between waterfall and bars"></canvas>
 <span class="spec-lo" aria-hidden="true"></span><span class="spec-t" style="left:7.5%">300</span><span class="spec-t" style="left:25%">1k</span>
@@ -3960,6 +4325,29 @@ tunes the M17 bridge and links it to its node.</p>
 <select id="fe-dash" aria-label="Dashboard favorites"></select><button id="fe-dash-add" class="btn" type="button">Add</button></div>
 <div class="row"><button id="fe-save" class="btn primary" type="button">Save favorites</button></div>
 <div id="fe-msg" class="msg"></div>
+</div>
+</div>
+
+<div class="card fold" id="cd-chk">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Audio check</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-chk">
+<p class="muted small">Start a check, go to the Listen tab and use the node as usual: listen, talk, listen. Come back
+for a report with averages and what to change. Only numbers are kept, never audio, and only in this browser.</p>
+<div class="row"><label for="chk-mins" style="min-width:90px">Length</label>
+<select id="chk-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select>
+<button id="chk-start" class="btn primary" type="button">Start check</button><button id="chk-stop" class="btn hidden" type="button">Stop</button></div>
+<div id="chk-run" class="chk-run hidden"></div>
+<div id="chk-rep" class="hidden">
+<h3 style="margin:10px 0 4px">Receive</h3>
+<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table>
+<h3 style="margin:10px 0 4px">Transmit</h3>
+<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table>
+<h3 style="margin:12px 0 2px">What to change</h3>
+<div id="chk-sug"></div>
+<div class="row"><button id="chk-cmp" class="btn" type="button">Compare with last check</button>
+<button id="chk-copy" class="btn" type="button">Copy report</button></div>
+<div id="chk-msg" class="msg"></div>
+</div>
 </div>
 </div>
 

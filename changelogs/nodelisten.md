@@ -1,6 +1,38 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_16_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_4_17_20261020.py`. Newest entries first.
+
+## 0.4.17 (2026-10-20)
+
+- **Audio check** (new Setup card, before Audio levels). Press **Start check**,
+  go to the Listen tab and use the node as usual for 2 to 15 minutes (5 by
+  default): listen, talk, listen. A `CHECK 2:13` badge on the Listen tab's
+  status line shows it is running (tap it to come back). When it ends, or you
+  press Stop, the card shows a report. Only numbers are kept, never audio, and
+  only in this browser. The check carries on across tab changes and a page
+  reload; time with the page closed or asleep is reported as paused.
+- **Receive** rows: time listened, speech level, peak, how far apart the
+  quietest and loudest stations were (taken from the node's own level, so it
+  is right even with Automatic level on), sound below 300 Hz (CTCSS tones and
+  hum), playback dropouts, squelch tails heard, and the Pi's processing load.
+- **Transmit** rows: your transmissions, speech level, peak, voice above
+  background, how often the limiter worked and the noise gate closed while you
+  talked, transmissions with gaps and the peak the Pi saw (from the Pi), and
+  how many transmissions stopped because audio stopped, timed out, or were
+  refused.
+- Each row is green, amber or red against its target, and **What to change**
+  lists suggestions with amounts. Each has **Apply**, which makes the change
+  (node settings need you to be logged in), and **Undo**.
+- **Compare with last check** adds the previous check's numbers next to this
+  one's; **Copy report** copies it all as text for asking for help.
+- **Fix: the squelch-tail gate could mute speech.** Since 0.4.15 it told hiss
+  from voice by how often the audio crosses zero, and a voice rich in
+  harmonics crosses zero often too, so loud speech could be muted as a tail.
+  It now uses how alike neighbouring samples are (energy-weighted): voice
+  scores high, hiss and de-emphasised FM squelch noise score low. Tested with
+  speech at three levels and white and de-emphasised tails on Light and
+  Strong: all speech kept, all tail frames muted. The Audio check counts
+  squelch tails the same way.
 
 ## 0.4.16 (2026-10-20)
 
