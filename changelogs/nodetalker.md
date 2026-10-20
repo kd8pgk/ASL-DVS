@@ -1,6 +1,37 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_1_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_2_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.2 (2026-10-20)
+
+- **Push-to-talk on this phone** (Settings card): **Hold to talk** (as
+  before, the default) or **Tap to talk, tap to stop**.
+  - In tap mode, one tap keys and the next tap unkeys. Lifting the finger
+    does nothing. A tap within 0.5 s of keying is ignored, so a double tap
+    can't key and drop at once.
+  - Space or Enter toggle in tap mode, and are held in hold mode.
+  - Losing focus or going to the background still unkeys, in both modes.
+  - The button label and its screen-reader label follow the mode. While
+    talking in tap mode it reads **TALKING · tap to stop** with the seconds left counting down.
+- **Guard timer** for tap mode and the headset button's push-to-talk: 30, 60,
+  90, 120 or 180 s, 60 s by default.
+  - 10 s before the end: two quick short beeps (80 ms at 1 kHz, played only
+    on this phone, never into the transmit audio), an amber border and a
+    flashing countdown, and a vibration where the browser allows it.
+  - At zero it unkeys and says *Guard timer: unkeyed after …*. The Audio
+    check counts these with the time-outs.
+  - It never runs past the node's TX time-out, and the setting says so when
+    the time-out is shorter. The TX time-out and the 1 s dead-man on the Pi
+    stay in both modes.
+- **Saved on each phone, backed up on the Pi.**
+  - **Save on this phone** also writes `ptt_mode` and `ptt_guard_sec` to
+    `nodetalker.conf`.
+  - A phone with nothing saved (new phone, cleared browser, private window)
+    starts from that copy.
+  - **Restore from the Pi** puts it back on a phone.
+  - The card says where the values came from. The copy on the Pi is the last
+    one any phone saved.
+  - Older versions ignore the two keys.
 
 ## 0.6.1 (2026-10-20)
 
