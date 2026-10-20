@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.2"
+VERSION = "0.6.3"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -4929,7 +4929,7 @@ function openTalk(force) {
   try { ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/api/talk'); }
   catch (e) { pttUi('off', 'Could not open the talk channel.'); return; }
   ws.binaryType = 'arraybuffer';
-  ws.onopen = () => { wsReady = true; pttUi('ready', ''); };
+  ws.onopen = () => { wsReady = true; pttUi('ready', connBusy ? undefined : ''); };
   ws.onmessage = (ev) => {
     let m = {};
     try { m = JSON.parse(ev.data); } catch (e) { return; }
@@ -5385,14 +5385,43 @@ async function favConnect() {
   if (i === '') return;
   const f = favs[Number(i)];
   const off = selectedLinked();
-  $('c-connect').disabled = true;
-  note('c-msg', '', off ? 'Disconnecting...' : f && (f.mode === 'M17' || DVS.includes(f.mode)) ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
   $('c-net').classList.add('hidden');
-  let d = {};
-  try { d = await post(off ? '/api/disconnect' : '/api/connect', {index: Number(i)}); setMsg('c-msg', d); }
+  if (!off) {
+    const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
+    await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
+      tune ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
+    return;
+  }
+  $('c-connect').disabled = true;
+  note('c-msg', '', 'Disconnecting...');
+  try { setMsg('c-msg', await post('/api/disconnect', {index: Number(i)})); }
   finally { $('c-connect').disabled = false; }
-  if (d.need_net) { netAsk = Number(i); $('c-net').classList.remove('hidden'); }
-  if (off) setTimeout(pollStatus, 1000); else pollStatus();
+  setTimeout(pollStatus, 1000);
+}
+
+let connMsgTimer = null, connBusy = false;
+async function connectFlow(body, listenText, connectText) {
+  $('c-connect').disabled = true;
+  connBusy = true;
+  note('c-msg', '', connectText);
+  showTab('listen');
+  if (connMsgTimer) { clearTimeout(connMsgTimer); connMsgTimer = null; }
+  note('ptt-msg', '', listenText);
+  let d = {};
+  try { d = await post('/api/connect', body); }
+  finally { $('c-connect').disabled = false; connBusy = false; }
+  setMsg('c-msg', d);
+  if (d.ok) {
+    setMsg('ptt-msg', d);
+    const shown = $('ptt-msg').textContent;
+    connMsgTimer = setTimeout(() => { if ($('ptt-msg').textContent === shown) note('ptt-msg', '', ''); }, 8000);
+  } else {
+    if ($('ptt-msg').textContent === listenText) note('ptt-msg', '', '');
+    if (tab === 'listen') showTab('connect');
+    if (d.need_net) { netAsk = Number(body.index); $('c-net').classList.remove('hidden'); }
+  }
+  pollStatus();
+  return d;
 }
 
 let netAsk = null;
@@ -5400,11 +5429,9 @@ async function netAnswer(action) {
   $('c-net').classList.add('hidden');
   const i = netAsk; netAsk = null;
   if (action === '' || i === null) { note('c-msg', '', ''); return; }
-  $('c-connect').disabled = true;
-  note('c-msg', '', action === 'add' ? 'Adding the network to Node Controller and tuning...' : 'Tuning...');
-  try { setMsg('c-msg', await post('/api/connect', {index: i, net_action: action})); }
-  finally { $('c-connect').disabled = false; }
-  pollStatus();
+  const f = favs[i];
+  const text = action === 'add' ? 'Adding the network to Node Controller and tuning...' : 'Tuning...';
+  await connectFlow({index: i, net_action: action}, 'Tuning ' + (f ? f.label : 'the favorite') + '...', text);
 }
 
 async function loadNode() {
