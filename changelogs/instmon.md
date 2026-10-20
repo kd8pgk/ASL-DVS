@@ -1,6 +1,35 @@
 # instmon changelog
 
-Current file: `instmon_v2_61_0_20261020.py`. Newest entries first.
+Current file: `instmon_v2_62_0_20261020.py`. Newest entries first.
+
+## 2.62.0 (2026-10-20)
+
+- **File sync clone with rpi-clone.** The Clone card's method list gets a third
+  choice, **File sync (rpi-clone)**, next to Standard (dd) and Resilient
+  (ddrescue). It is greyed out until rpi-clone is installed.
+  - It copies files, not every block, so the destination only needs room for
+    the space actually used (it may be smaller than the boot disk), and cloning
+    again onto the same card only copies what changed. rpi-clone checks the
+    space itself.
+  - **Force re-initialize** (`-f`) repartitions the card and copies everything.
+    **Hostname for the clone** (`-s`) gives the copy its own name. It always
+    runs unattended (`-U`).
+  - Verify, Freeze, Continue past read errors, Direct I/O and the throttle are
+    greyed out for it. Pause node services still works.
+  - It runs in the same job runner as dd and shows its lines in the console. No
+    percentage is shown. When rpi-clone prints "Aborting!" the job reads as
+    failed, even though rpi-clone exits 0 then. After a failed or stopped
+    clone, leftover mounts under `/mnt/clone` are unmounted.
+- **Install rpi-clone** button on the Clone card (Reinstall once installed). It
+  runs a headless install script, in the same style as 44helper's installs, through
+  the same script runner as library scripts; output goes to the Execution Log. It
+  installs any missing packages (rsync, parted, fdisk, util-linux,
+  bsdextrautils, dosfstools) with apt, without prompts, then downloads
+  `rpi-clone` 2.0.27 and `rpi-clone-setup` from a fixed commit of
+  `geerlingguy/rpi-clone`, checks both against stored sha256 sums and installs
+  them to `/usr/local/sbin`. A checksum mismatch stops it before anything is
+  installed. Refused while a disk-image job is running. There is no uninstall,
+  and `install_all` / `uninstall_all` are unchanged.
 
 ## 2.61.0 (2026-10-20)
 

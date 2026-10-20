@@ -41,7 +41,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_75_20261019.py` | `instmon_v2_61_0_20261020.py` |
+| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_75_20261019.py` | `instmon_v2_62_0_20261020.py` |
 | `VERSION` | `6.13.88` | `6.13.75-pi02w` | `2.60.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -84,7 +84,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_61_0_20261020.py --install
+   sudo python3 instmon_v2_62_0_20261020.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -334,7 +334,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_93_20261019.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_88_20261019.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_75_20261019.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_61_0_20261020.py` | common |
+| `instmon_v2_62_0_20261020.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
 | `nodelisten_v0_4_17_20261020.py` | common |
