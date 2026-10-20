@@ -1,6 +1,30 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_14_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_4_15_20261020.py`. Newest entries first.
+
+## 0.4.15 (2026-10-20)
+
+**RX cleanup** for what listeners hear, done once on the Pi for every listener
+(the node and its other links are not changed). Setup tab, Audio levels card,
+"RX cleanup"; all three are **on by default**, so a node that updates hears the
+difference at once. They are separate from "Adjust audio levels here".
+
+- **Cut below 300 Hz** (on): a 4th-order high-pass. A 100 Hz tone drops by about
+  38 dB, 150 Hz by 24 dB, 250 Hz by 7 dB (the highest CTCSS tones are only
+  partly removed); 1 kHz is unchanged.
+- **Automatic level** (on): aims speech at about -20 dBFS, with up to +18 dB of
+  boost and down to -6 dB. It turns down fast, up at 3 dB a second (faster for
+  the first half-second of a new transmission), and holds between
+  transmissions. Peaks are still soft-limited, so it never clips.
+- **Squelch-tail gate** (Light): mutes the burst of hiss after a station
+  unkeys, and long silences. Listeners hear the audio 80 ms later than before
+  so the start of a tail can be muted too. Strong also mutes shorter, quieter
+  hiss, which can clip hissy speech sounds.
+- **Processing load** on the same card: the share of one CPU core the cleanup
+  took over the last 5 seconds, to check it on a Pi Zero 2 W. Nothing is done
+  while nobody listens, or for frames that are near silent.
+- New settings `rx_hpf`, `rx_agc` and `rx_gate` (0 off, 1 light, 2 strong) in
+  `nodelisten.conf`.
 
 ## 0.4.14 (2026-10-20)
 
