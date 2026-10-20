@@ -1,6 +1,28 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_13_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_4_14_20261020.py`. Newest entries first.
+
+## 0.4.14 (2026-10-20)
+
+- **The Listen tab fits on one screen.** Everything is in one panel, top to
+  bottom: Listen / Stop with the volume, a one-line status (node, feed, RX,
+  TX, listeners), the spectrum with the level bar under it, the message line,
+  and push-to-talk. Only the spectrum grows or shrinks with the screen, so on
+  a phone the tab doesn't scroll (checked down to 375 × 553). On a very short
+  screen (a phone on its side) the spectrum hides first, and only then does the
+  tab scroll.
+- **Push-to-talk is an oblong button** across the panel, 80 px tall, with the
+  time on the right while you talk. When someone else transmits from Node
+  Listen it turns amber and reads "Busy: <who> 0:12".
+- **Spectrum** of what the node is passing, 0 to 4 kHz, drawn in the page
+  (nothing extra on the Pi). It starts as a waterfall; tap it to switch to
+  bars and back (each browser remembers). Below 300 Hz is shaded, where CTCSS
+  tones and hum sit. It runs only while you listen and the page is on screen;
+  **Show the spectrum** (Setup, Playback, on by default) turns it off.
+- **The Status tab is gone**; the tabs are Connect, Listen and Setup. Its node,
+  feed, RX and TX lights are on the Listen tab's status line (hover for the
+  details), and the Links table is at the top of the Connect tab with
+  Disconnect. A browser that last had Status open shows Listen.
 
 ## 0.4.13 (2026-10-20)
 
