@@ -32,7 +32,7 @@
       <tr><td>44helper</td><td class="mono">44helper_v0_0_215_20261018.py</td><td>0.0.215</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_57_0_20261018.py</td><td>2.57.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
-      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_12_20261020.py</td><td>0.4.12</td></tr>
+      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_13_20261020.py</td><td>0.4.13</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_86_20261014.py</td><td>6.13.86</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_84_20261018.py</td><td>9.3.84</td></tr>
@@ -2884,7 +2884,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">Node Listen puts one node in your phone's browser: it plays the node's audio about half a second
     behind, transmits with push-to-talk, and connects up to 10 favorites. Open it at
     <code>http://&lt;pi-address&gt;:8993</code>; it moves you to <code>https://</code>. It is optional, and the same
-    file runs on the Pi Zero 2 W and the full build. This chapter describes Node Listen 0.4.12.</p>
+    file runs on the Pi Zero 2 W and the full build. This chapter describes Node Listen 0.4.13.</p>
 
   <h2><span class="n">15.1</span>Before you start</h2>
   <ol class="steps">
@@ -2893,9 +2893,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <li><b>Open the page and accept the certificate.</b> HTTPS uses a certificate made on the Pi, so the browser warns
       once; accept it. Browsers only allow the microphone on an <code>https://</code> page.</li>
     <li><b>Log in</b> with the Pi's root password.</li>
-    <li><b>Send the node's audio here.</b> Setup tab, Receive card: pick the node, press <b>Send its audio here</b>,
-      then <b>Restart Asterisk</b>.</li>
-    <li><b>For push-to-talk</b>, Setup tab, Transmit card: press <b>Add node 1921</b>, then <b>Restart Asterisk</b>.
+    <li><b>Send the node's audio here.</b> Setup tab: open the <b>Receive</b> card, pick the node, press <b>Send its
+      audio here</b>, then <b>Restart Asterisk</b>. That node becomes Node Listen's main node.</li>
+    <li><b>For push-to-talk</b>, Setup tab: open the <b>Transmit</b> card, press <b>Add node 1921</b>, then <b>Restart Asterisk</b>.
       Node Listen links node 1921 to your node within 20 seconds and keeps it linked.</li>
   </ol>
   <div class="call care"><span class="t">CAREFUL</span>Both buttons edit <code>/etc/asterisk/rpt.conf</code> (a backup
@@ -2905,15 +2905,15 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <h2><span class="n">15.2</span>The page</h2>
   <figure>
     <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--text)">Node Listen</span><span class="meta">v0.4.12 · <span class="btn">Node Controller</span> <span class="btn">Log Out</span></span></div>
-      <div class="row"><span class="btn c">Stop</span><span class="txt">Volume ━━━━━○━━━</span></div>
+      <div class="bar"><span class="ttl" style="color:var(--text)">Node Listen</span><span class="meta">v0.4.13 · <span class="btn">Node Controller</span> <span class="btn">Log Out</span></span></div>
+      <div class="row"><span class="btn c">Stop</span><span class="txt" style="flex:1">🔈 ━━━━━━━━━○━━━━━</span></div>
       <div class="row"><span class="txt" style="flex:1;border:1px solid var(--line);padding:.1em .4em;color:var(--grn)">▮▮▮▮▮▮▮▮▮▮▮▮</span><span class="txt">-18 dBFS</span></div>
       <div class="row"><span class="txt" style="color:var(--grn)">Listening. (16-bit)</span></div>
       <div class="row"><span class="txt">Node 41234 · Feed ● receiving, 50 packets/s · Listeners 1 / 3</span></div>
       <div class="row" style="justify-content:center;padding:.6em 0"><span class="btn" style="border-radius:50%;padding:1.6em 1em">Hold to talk</span></div>
       <div class="tabs" style="justify-content:space-around;border-top:1px solid var(--line)"><span class="tab">Status</span><span class="tab">Connect</span><span class="tab on" style="background:var(--grn)">Listen</span><span class="tab">Setup</span></div>
     </div>
-    <figcaption><b>Figure 15.1 · Illustration.</b> The Listen tab on a phone: Listen/Stop, volume and level meter,
+    <figcaption><b>Figure 15.1 · Illustration.</b> The Listen tab on a phone: Listen/Stop with the volume beside it, the level meter,
       the feed line, push-to-talk, and the tabs bar at the bottom.</figcaption>
   </figure>
   <table>
@@ -2930,17 +2930,16 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <table>
     <tr><th>Control</th><th>What it does</th></tr>
     <tr><td>Listen / Stop</td><td>Starts and stops the audio. If the stream drops, the page tries again every 3 seconds.</td></tr>
-    <tr><td>Volume</td><td>0 to 200 %. The node's audio is muted on this phone while you transmit.</td></tr>
+    <tr><td>Volume</td><td>The slider beside Listen / Stop, 0 to 200 %. The node's audio is muted on this phone while you transmit.</td></tr>
     <tr><td>Meter</td><td>The audio level, in dBFS.</td></tr>
-    <tr><td>Keep the screen on</td><td>Shown where the browser supports it. Keeps the screen awake while you listen or talk.</td></tr>
     <tr><td>Node · Feed · Audio · Listeners</td><td>The node, whether audio is arriving from Asterisk ("receiving", "no audio for 12 s", "nothing received yet"), a light while the node passes audio, and listeners now / the limit.</td></tr>
   </table>
   <h3>Listening starts by itself (0.4.12)</h3>
   <p>When the page opens, and after you log in, Node Listen starts playing by itself. Most browsers hold sound until
     the page has been tapped once; then the Listen tab says <i>Tap anywhere to start listening</i> in amber, and the
     first tap or key press anywhere starts it. <b>Stop</b> stops it until you press Listen again or open the page again.
-    To go back to pressing Listen, turn off <b>Start listening when the page opens</b> on the Setup tab (each browser
-    keeps its own setting).</p>
+    To go back to pressing Listen, turn off <b>Start listening when the page opens</b> on the Setup tab's Playback
+    card (each browser keeps its own setting). <b>Keep the screen on</b> is on the same card (0.4.13).</p>
   <ul>
     <li>The phone's lock screen and headset buttons can play and pause the audio, like any media.</li>
     <li>When every listener slot is taken, the page says <i>All 3 listener slots are in use</i> and keeps trying.</li>
@@ -2967,16 +2966,15 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>Receive</td><td>Lit while the node passes audio.</td></tr>
     <tr><td>Transmit</td><td>Who is transmitting and for how long, "idle", or "transmit node not set up".</td></tr>
     <tr><td>Feed</td><td>Whether the node's audio is arriving, as on the Listen tab.</td></tr>
-    <tr><td>Links</td><td>The node's links (<code>rpt lstats</code>): node, favorite name, direction, time and state. Node 1921 is marked "(transmit)".</td></tr>
+    <tr><td>Links</td><td>The node's links (<code>rpt lstats</code>): node, favorite name, direction, time and state, one link per line. The text gets smaller on a narrow screen, and a long name ends in "…" (hover over it for the whole name). Node 1921 is marked "(TX)".</td></tr>
   </table>
 
   <h2><span class="n">15.5</span>Connect tab</h2>
   <ol class="steps">
     <li>Pick a favorite. The card under the menu shows its network and number. Favorites are set on the Setup tab
       (section 15.6).</li>
-    <li><b>Connect from</b> (shown when there is more than one local node, or when the Dashboard runs) picks which
-      node makes the link. It starts on the main node.</li>
-    <li>Press <b>Connect</b>. For AllStar and EchoLink favorites Node Listen (0.4.11 on) watches the node's links for
+    <li>Press <b>Connect</b>. The link is always made from Node Listen's main node (0.4.13; before, a <b>Connect
+      from</b> menu could pick another local node). For AllStar and EchoLink favorites Node Listen (0.4.11 on) watches the node's links for
       up to 15 seconds, with the button greyed out, and then says how it went.</li>
   </ol>
   <table>
@@ -2993,7 +2991,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
 
   <h2><span class="n">15.6</span>Favorites, and M17 reflectors <span class="badge test">TESTING</span></h2>
   <p>The Connect tab offers only the favorites set on the Setup tab's <b>Favorites</b> card: up to 10, each an
-    AllStar node, an EchoLink station or an M17 reflector. <b>Add row</b> adds one; the menu picks the network, then
+    AllStar node, an EchoLink station or an M17 reflector. Open the card, then <b>Add row</b> adds one; the menu picks the network, then
     the number and a name; ✕ removes it; <b>Save favorites</b> keeps them. <b>From the Dashboard…</b> lists the
     Dashboard's ASL, EchoLink and M17 favorites, and <b>Add</b> copies one. EchoLink numbers are the station's own
     number (Node Listen adds the 3 and the padding).</p>
@@ -3011,7 +3009,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </table>
   <p>Connecting an M17 favorite does what Connect on the Dashboard's M17 tab does: the Dashboard changes to M17 mode,
     writes the reflector and module into <code>USRP2M17.ini</code>, restarts <code>usrp2m17</code> and links the M17
-    bridge node (1917) to your node. It goes from the Dashboard's node only. The message says <i>M17 connected: …
+    bridge node (1917) to your node. It works only when Node Listen's main node is the Dashboard's node. The message says <i>M17 connected: …
     (through Node Controller)</i>, <b>Linked now</b> shows the favorite, and the Dashboard page moves to its M17 tab.
     <b>Disconnect</b> drops the M17 reflector when it is one of your favorites.</p>
   <div class="call care"><span class="t">CAREFUL</span>Connecting an M17 favorite changes the node's mode, just like
@@ -3020,7 +3018,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     Dashboard's M17 tab.</div>
   <table>
     <tr><th>M17 message</th><th>What to do</th></tr>
-    <tr><td>M17 links Node Controller's node &lt;node&gt;: connect from that node.</td><td>Pick the Dashboard's node in <b>Connect from</b>.</td></tr>
+    <tr><td>M17 goes through Node Controller's node &lt;A&gt;, but Node Listen's node is &lt;B&gt;.</td><td>M17 always links the Dashboard's node, so Node Listen's main node must be the same one: Setup tab, Receive card, send node &lt;A&gt;'s audio here.</td></tr>
     <tr><td>M17 goes through Node Controller, which is not running.</td><td>Start the Dashboard (<code>nodecontrol</code>) in SysMon's Services tab or instmon.</td></tr>
     <tr><td>M17 goes through Node Controller; set its node first.</td><td>Set the main node number on the Dashboard's EDIT page (section 12.5).</td></tr>
     <tr><td>… update Node Controller.</td><td>The Dashboard is older than 9.3.92-pi02w (full build 9.3.88). Update it in instmon.</td></tr>
@@ -3030,16 +3028,21 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </table>
 
   <h2><span class="n">15.7</span>Setup tab</h2>
+  <p>The Setup tab is a column of cards, from setting up the node at the top to everyday use at the bottom. Each
+    card's title is a button: tap it to open the card (▾) and again to close it (▸). Every card is closed when the
+    page opens. A closed card shows a one-line summary on the right, such as <i>Node 41234 sends audio here</i>,
+    <i>Set up and linked</i>, <i>HTTPS · 3 listeners</i> or <i>4 / 10</i>, so you can check the node without
+    opening anything (0.4.13).</p>
   <table>
     <tr><th>Card</th><th>What it holds</th></tr>
-    <tr><td>Receive</td><td>Each node in <code>rpt.conf</code> and its <code>outstreamcmd</code>. <b>Send its audio here</b>, <b>Remove</b>, <b>Restart Asterisk</b>, <b>Refresh</b>. Below: the line added, whether the feeder Asterisk runs is running, and the UDP input.</td></tr>
-    <tr><td>Transmit</td><td>Node 1921's state (not set up, set up and linked, linking…), the main node and its <code>rxchannel</code>. <b>Add node 1921</b> also repairs a wrong <code>[nodes]</code> line; <b>Remove</b> takes it out of <code>rpt.conf</code> (asks first).</td></tr>
-    <tr><td>Favorites</td><td>Section 15.6.</td></tr>
-    <tr><td>Tune</td><td><b>Adjust audio levels here</b> (off by default: audio passes unchanged). Mic to node (TX) and node to phone (RX) gain, −12 to +12 dB; Listen buffer (0.15 s to 1 s, 0.25 s default); TX buffer (60 to 300 ms, 120 ms default). TX peak, RX level and TX gaps show how it is doing: aim for TX peaks of −6 to −3 dBFS. These change only Node Listen's path, not the node, the radio or DVSwitch.</td></tr>
-    <tr><td>This device's microphone</td><td>Kept in this browser only. Leveler (on), Automatic gain (off), Noise suppression (on), Echo cancellation (off), Voice filter (on), Radio voice (off), Noise gate (Off, Light, Strong), Mic gain (−12 to +24 dB). <b>Test mic</b> records 4 s and plays back what the node would get; <b>Test through the node</b> transmits 4 s for real and plays back what the node sent out.</td></tr>
-    <tr><td>This device's playback</td><td>Kept in this browser only. <b>Start listening when the page opens</b> (on), <b>16-bit audio</b> (on; 128 kbit/s instead of 64), <b>Smooth playback</b> (on).</td></tr>
-    <tr><td>Settings</td><td>Web port (8993), UDP port (6200), Max listeners (3, up to 10), TX time-out (120 s, 30 to 600), HTTPS (on), Don't transmit while the node is busy (on), Listen without logging in (off). Changing a port or HTTPS restarts Node Listen.</td></tr>
-    <tr><td>Log</td><td>What Node Listen has done: listeners, logins, transmissions, connects, rpt.conf edits.</td></tr>
+<tr><td>1 · Receive</td><td>Each node in <code>rpt.conf</code> and its <code>outstreamcmd</code>. <b>Send its audio here</b>, <b>Remove</b>, <b>Restart Asterisk</b>, <b>Refresh</b>. Below: the line added, whether the feeder Asterisk runs is running, and the UDP input.</td></tr>
+    <tr><td>2 · Transmit</td><td>Node 1921's state (not set up, set up and linked, linking…), the main node and its <code>rxchannel</code>. <b>Add node 1921</b> also repairs a wrong <code>[nodes]</code> line; <b>Remove</b> takes it out of <code>rpt.conf</code> (asks first).</td></tr>
+    <tr><td>3 · Settings</td><td>Web port (8993), UDP port (6200), Max listeners (3, up to 10), TX time-out (120 s, 30 to 600), HTTPS (on), Don't transmit while the node is busy (on), Listen without logging in (off). Changing a port or HTTPS restarts Node Listen.</td></tr>
+    <tr><td>4 · Favorites</td><td>Section 15.6. The <b>From the Dashboard…</b> list is read when you open the card.</td></tr>
+    <tr><td>5 · Audio levels</td><td><b>Adjust audio levels here</b> (off by default: audio passes unchanged). Mic to node (TX) and node to phone (RX) gain, −12 to +12 dB; Listen buffer (0.15 s to 1 s, 0.25 s default); TX buffer (60 to 300 ms, 120 ms default). TX peak, RX level and TX gaps show how it is doing: aim for TX peaks of −6 to −3 dBFS. <b>Save</b> and <b>Reset to 0 dB</b> are in this card. These change only Node Listen's path, not the node, the radio or DVSwitch.</td></tr>
+    <tr><td>6 · Microphone</td><td>Kept in this browser only. Leveler (on), Automatic gain (off), Noise suppression (on), Echo cancellation (off), Voice filter (on), Radio voice (off), Noise gate (Off, Light, Strong), Mic gain (−12 to +24 dB). <b>Test mic</b> records 4 s and plays back what the node would get; <b>Test through the node</b> transmits 4 s for real and plays back what the node sent out.</td></tr>
+    <tr><td>7 · Playback</td><td>Kept in this browser only. <b>Start listening when the page opens</b> (on), <b>Keep the screen on</b> while listening or talking (off; shown where the browser supports it), <b>16-bit audio</b> (on; 128 kbit/s instead of 64), <b>Smooth playback</b> (on).</td></tr>
+    <tr><td>8 · Log</td><td>Fetched only while the card is open. What Node Listen has done: listeners, logins, transmissions, connects, rpt.conf edits.</td></tr>
   </table>
   <div class="call tip"><span class="t">TIP</span>SysMon's ASL-DVS tab (section 4.2) has a <b>Node Listen</b> card:
     its checks (service, ports, the feed, HTTPS), the people listening with a Disconnect for each, <b>Restart
@@ -3066,19 +3069,19 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   </ol>
   <h3>Hear nothing</h3>
   <ol class="steps">
-    <li>Listen tab, Feed: "nothing received yet" means Asterisk isn't sending. Setup tab, Receive card: is the
+    <li>Listen tab, Feed: "nothing received yet" means Asterisk isn't sending. Setup tab, open the Receive card: is the
       node's line there? Press Send its audio here, then Restart Asterisk.</li>
     <li>Feed says receiving but you hear nothing: check the volume, the phone's own volume, and that the Listen button
       reads Stop.</li>
   </ol>
   <h3>Set up push-to-talk</h3>
   <ol class="steps">
-    <li>Setup tab, Transmit: Add node 1921, then Restart Asterisk. Wait for "Set up and linked".</li>
-    <li>Setup tab: Test mic, adjust Mic gain until it says good, then Test through the node.</li>
+    <li>Setup tab, Transmit card: Add node 1921, then Restart Asterisk. Wait for the summary to read "Set up and linked".</li>
+    <li>Setup tab, Microphone card: Test mic, adjust Mic gain until it says good, then Test through the node.</li>
   </ol>
   <h3>Connect an M17 reflector</h3>
   <ol class="steps">
-    <li>Setup tab, Favorites: Add row, pick <b>M17</b>, type <code>M17-USA C</code>, Save favorites.</li>
+    <li>Setup tab, Favorites card: Add row, pick <b>M17</b>, type <code>M17-USA C</code>, Save favorites.</li>
     <li>Connect tab: pick it and press Connect. Disconnect when you're done.</li>
   </ol>
 
@@ -3101,7 +3104,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       <li><b>Transmit:</b> the page sends 20 ms frames of 16-bit audio over a WebSocket (<code>/api/talk</code>).
         Node Listen sends them as USRP to node 1921 (<code>rxchannel = USRP/127.0.0.1:34018:32018</code>), keyed for as
         long as you hold; it unkeys on release, at the time-out, or 1 s after audio stops arriving.</li>
-      <li><b>Links:</b> <code>rpt cmd &lt;node&gt; ilink 3</code> / <code>ilink 1</code>, checked with
+      <li><b>Links:</b> always from the main node (the <code>node</code> setting, else the Dashboard's node):
+        <code>rpt cmd &lt;node&gt; ilink 3</code> / <code>ilink 1</code>, checked with
         <code>rpt lstats</code>; or, from the Dashboard's node, the Dashboard's local API (<code>POST
         /api/local/action</code> on 127.0.0.1 with the key in <code>/etc/asl_dvs/local_api.key</code>), which also
         carries <code>m17-connect</code>, <code>m17-status</code> and <code>m17-disconnect</code>.</li>
