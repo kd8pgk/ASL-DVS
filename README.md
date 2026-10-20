@@ -41,7 +41,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_75_20261019.py` | `instmon_v2_63_0_20261020.py` |
+| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_75_20261019.py` | `instmon_v2_64_0_20261020.py` |
 | `VERSION` | `6.13.88` | `6.13.75-pi02w` | `2.63.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -84,12 +84,12 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_63_0_20261020.py --install
+   sudo python3 instmon_v2_64_0_20261020.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_3_1_20261020.sh
+   sudo bash install_all_v7_4_0_20261020.sh
    ```
    - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`), and git is installed first if it is missing. It also installs instmon when it isn't installed.
    - A tool that is already installed but has no file on the Pi is left as it is; interactive runs ask whether to download and update it, and ask again before installing a download older than the installed version. Use `--offline` (or `--no-download`) to use only the files on the Pi.
@@ -339,7 +339,7 @@ memory settles from the next restart on.
 ## Removing everything
 
 ```
-sudo bash uninstall_all_v1_6_0_20261018.sh
+sudo bash uninstall_all_v1_7_0_20261020.sh
 ```
 
 This removes every tool except instmon. It leaves `/etc/asl_dvs/`,
@@ -357,13 +357,13 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_94_20261020.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_88_20261019.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_75_20261019.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_63_0_20261020.py` | common |
+| `instmon_v2_64_0_20261020.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
 | `nodetalker_v0_6_0_20261020.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
-| `install_all_v7_3_1_20261020.sh` | common |
-| `uninstall_all_v1_6_0_20261018.sh` | common |
+| `install_all_v7_4_0_20261020.sh` | common |
+| `uninstall_all_v1_7_0_20261020.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer

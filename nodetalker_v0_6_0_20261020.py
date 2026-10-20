@@ -1118,8 +1118,19 @@ _STANZA_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?")
 _OUTSTREAM_RE = re.compile(r"^\s*outstreamcmd\s*=>?\s*(.*?)\s*$", re.I)
 
 
+def legacy_bin_ours():
+    if os.path.islink(LEGACY_BIN_PATH) or not os.path.lexists(LEGACY_BIN_PATH):
+        return True
+    try:
+        with open(LEGACY_BIN_PATH, "rb") as fh:
+            head = fh.read(8192)
+    except OSError:
+        return False
+    return b'APP_NAME = "Node Listen"' in head or b'APP_NAME = "Node Talker"' in head
+
+
 def hook_line():
-    path = LEGACY_BIN_PATH if os.path.islink(LEGACY_BIN_PATH) or not os.path.lexists(LEGACY_BIN_PATH) else INSTALL_BIN_PATH
+    path = LEGACY_BIN_PATH if legacy_bin_ours() else INSTALL_BIN_PATH
     return f"outstreamcmd = {FEED_PYTHON},{path},--feed,{_cfg_get('udp_port')}"
 
 
@@ -6451,7 +6462,7 @@ def install_service():
             print(f"      The previous version (if any) is still in {INSTALL_DIR}")
         sys.exit(1)
     print(f"  [+] {SERVICE_NAME} enabled and started (also answers to {LEGACY_SERVICE})")
-    if not os.path.isfile(LEGACY_BIN_PATH) or os.path.islink(LEGACY_BIN_PATH):
+    if legacy_bin_ours():
         _replace_link(LEGACY_BIN_PATH, INSTALL_BIN_PATH)
         print(f"  [+] Symlinked {LEGACY_BIN_PATH} -> {INSTALL_BIN_PATH} (rpt.conf and older tools use this name)")
     if legacy:
@@ -6503,8 +6514,9 @@ def uninstall_service():
     except OSError as exc:
         print(f"  [!] Could not check {RPT_CONF}: {exc}")
     _systemctl("disable", "--now", SERVICE_NAME)
-    legacy_ours = os.path.islink(LEGACY_BIN_PATH) and \
-        os.path.realpath(LEGACY_BIN_PATH).startswith((os.path.realpath(INSTALL_DIR) + os.sep, os.path.realpath(INSTALL_BIN_PATH)))
+    legacy_ours = (os.path.islink(LEGACY_BIN_PATH) and os.path.realpath(LEGACY_BIN_PATH).startswith(
+        (os.path.realpath(INSTALL_DIR) + os.sep, os.path.realpath(INSTALL_BIN_PATH)))) or \
+        (os.path.isfile(LEGACY_BIN_PATH) and not os.path.islink(LEGACY_BIN_PATH) and legacy_bin_ours())
     gone = [SYSTEMD_SERVICE_PATH, INSTALL_BIN_PATH] + ([LEGACY_BIN_PATH] if legacy_ours else [])
     if os.path.islink(LEGACY_SERVICE_PATH) and os.path.basename(os.readlink(LEGACY_SERVICE_PATH)) == SERVICE_NAME:
         gone.append(LEGACY_SERVICE_PATH)

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_all.sh  v1.6.0  (2026-10-18)
+# uninstall_all.sh  v1.7.0  (2026-10-20)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -21,13 +21,17 @@ HELPER_PATH=/usr/local/bin/44helper.py
 if [[ ! -e "$HELPER_PATH" && -e /opt/44helper/asl_dvs_m17_44helper.py ]]; then
     HELPER_PATH=/opt/44helper/asl_dvs_m17_44helper.py
 fi
+TALKER_PATH=/usr/local/bin/nodetalker.py
+if [[ ! -e "$TALKER_PATH" && -e /usr/local/bin/nodelisten.py ]]; then
+    TALKER_PATH=/usr/local/bin/nodelisten.py
+fi
 
 COMPONENTS=(
     "nodecontrol|${DASH_PATH}|python3"
     "sysmon|/usr/local/bin/sysmon.py|python3"
     "wifimon|/usr/local/bin/wifimon.py|python3"
     "44helper|${HELPER_PATH}|python3"
-    "nodelisten|/usr/local/bin/nodelisten.py|python3"
+    "nodetalker|${TALKER_PATH}|python3"
 )
 
 for entry in "${COMPONENTS[@]}"; do
@@ -65,6 +69,6 @@ echo
 echo "== Done =="
 echo "Untouched by design: instmon (and /usr/local/lib/asl_dvs/instmon), /etc/asl_dvs/ (config + instmon_library),"
 echo "/etc/sysmon/, /etc/wifimon/ and /etc/44helper/."
-if grep -q 'nodelisten' /etc/asterisk/rpt.conf 2>/dev/null; then
-    warn "rpt.conf still mentions nodelisten — check /etc/asterisk/rpt.conf"
+if grep -q -e 'nodelisten' -e 'nodetalker' /etc/asterisk/rpt.conf 2>/dev/null; then
+    warn "rpt.conf still has Node Talker lines (nodelisten / nodetalker) — check /etc/asterisk/rpt.conf"
 fi

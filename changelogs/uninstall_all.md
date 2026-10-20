@@ -1,6 +1,13 @@
 # Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_all_v1_6_0_20261018.sh`. Newest entries first.
+Current file: `uninstall_all_v1_7_0_20261020.sh`. Newest entries first.
+
+## 1.7.0 (2026-10-20)
+
+- **Node Talker** (was Node Listen): runs `/usr/local/bin/nodetalker.py
+  --uninstall`, or `/usr/local/bin/nodelisten.py` on a node that still has
+  Node Listen. The leftover check looks for `nodetalker` as well as
+  `nodelisten` in `rpt.conf`.
 
 ## 1.6.0 (2026-10-18)
 

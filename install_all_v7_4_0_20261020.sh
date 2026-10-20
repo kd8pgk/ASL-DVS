@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.3.1  (2026-10-20)
+# install_all.sh  v7.4.0  (2026-10-20)
 
 set -euo pipefail
 
@@ -64,10 +64,19 @@ if [[ ! -e "${HELPER_BIN}" && -e "${HELPER_LEGACY_BIN}" ]]; then
     HELPER_BIN="${HELPER_LEGACY_BIN}"
 fi
 
-NODELISTEN_BIN="/usr/local/bin/nodelisten.py"
-NODELISTEN_SERVICE="nodelisten"
+NODELISTEN_BIN="/usr/local/bin/nodetalker.py"
+NODELISTEN_LEGACY_BIN="/usr/local/bin/nodelisten.py"
+NODELISTEN_SERVICE="nodetalker"
 NODELISTEN_PORT=8993
-NODELISTEN_CONF="/etc/asl_dvs/nodelisten.conf"
+NODELISTEN_CONF="/etc/asl_dvs/nodetalker.conf"
+NODELISTEN_PATTERN="nodetalker*.py|nodelisten*.py"
+if [[ ! -e "${NODELISTEN_BIN}" && -e "${NODELISTEN_LEGACY_BIN}" ]]; then
+    NODELISTEN_BIN="${NODELISTEN_LEGACY_BIN}"
+fi
+if [[ ! -e "${NODELISTEN_CONF}" && -e /etc/asl_dvs/nodelisten.conf ]]; then
+    NODELISTEN_CONF="/etc/asl_dvs/nodelisten.conf"
+fi
+INSTALL_NODELISTEN="${INSTALL_NODETALKER:-${INSTALL_NODELISTEN:-}}"
 
 INSTMON_LIBRARY_DIR="${INSTMON_LIBRARY_DIR:-/etc/asl_dvs/instmon_library}"
 DASH_LIB_DIR="${INSTMON_LIBRARY_DIR}/dashboard"
@@ -630,7 +639,8 @@ systemctl is-active --quiet asl_dvs_dashboard    2>/dev/null && _dash_exists=tru
 systemctl is-active --quiet "${SYSMON_SERVICE}"  2>/dev/null && _sysmon_exists=true  || true
 systemctl is-active --quiet "${WIFIMON_SERVICE}" 2>/dev/null && _wifimon_exists=true || true
 systemctl is-active --quiet "${HELPER_SERVICE}"  2>/dev/null && _helper_exists=true  || true
-systemctl is-active --quiet "${NODELISTEN_SERVICE}" 2>/dev/null && _nodelisten_exists=true || true
+systemctl is-active --quiet nodetalker           2>/dev/null && _nodelisten_exists=true || true
+systemctl is-active --quiet nodelisten           2>/dev/null && _nodelisten_exists=true || true
 [[ -f "${DASH_BIN}"     ]] && _dash_exists=true
 [[ -f "${SYSMON_BIN}"   ]] && _sysmon_exists=true
 [[ -f "${WIFIMON_BIN}"  ]] && _wifimon_exists=true
@@ -646,7 +656,7 @@ if [[ "${_dash_exists}" == "true" || "${_sysmon_exists}" == "true" \
     [[ "${_sysmon_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  SysMon         (${SYSMON_BIN})"
     [[ "${_wifimon_exists}"  == "true" ]] && echo "  ${GRN}  ✔${RST}  wifimon        (${WIFIMON_BIN})"
     [[ "${_helper_exists}"   == "true" ]] && echo "  ${GRN}  ✔${RST}  44helper       (${HELPER_BIN})"
-    [[ "${_nodelisten_exists}" == "true" ]] && echo "  ${GRN}  ✔${RST}  Node Listen    (${NODELISTEN_BIN})"
+    [[ "${_nodelisten_exists}" == "true" ]] && echo "  ${GRN}  ✔${RST}  Node Talker    (${NODELISTEN_BIN})"
     echo
     if [[ "${NONINTERACTIVE}" == "true" ]]; then
         MODE="update"
@@ -793,33 +803,33 @@ if [[ -n "${HELPER_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
-hdr "Node Listen — file discovery"
+hdr "Node Talker — file discovery"
 CHOSEN=""
 _nl_want=true
 if [[ "${_nodelisten_exists}" != "true" ]]; then
-    if [[ "${DOWNLOAD}" != "true" ]] && ! any_file "nodelisten*.py" "${NODELISTEN_LIB_DIR}"; then
+    if [[ "${DOWNLOAD}" != "true" ]] && ! any_file "${NODELISTEN_PATTERN}" "${NODELISTEN_LIB_DIR}"; then
         _nl_want=false
-        info "No nodelisten*.py file found — Node Listen (optional) skipped"
+        info "No nodetalker*.py file found — Node Talker (optional) skipped"
     elif [[ "${NONINTERACTIVE}" == "true" ]]; then
         if [[ "${INSTALL_NODELISTEN:-}" =~ ^([1yY]|yes|YES|true|TRUE)$ ]]; then
-            info "Non-interactive: INSTALL_NODELISTEN is set — installing Node Listen"
+            info "Non-interactive: INSTALL_NODETALKER is set — installing Node Talker"
         else
             _nl_want=false
-            info "Node Listen is optional and not installed — skipped (set INSTALL_NODELISTEN=1 to install it)"
+            info "Node Talker is optional and not installed — skipped (set INSTALL_NODETALKER=1 to install it)"
         fi
     else
-        echo "  Node Listen is optional: it plays this node's audio in a web browser (port ${NODELISTEN_PORT})."
+        echo "  Node Talker is optional: it plays this node's audio in a web browser (port ${NODELISTEN_PORT})."
         echo "  It changes nothing in Asterisk until you pick a node on its page."
-        read -r -p "  Install Node Listen? [y/N]: " _nl_ans </dev/tty
+        read -r -p "  Install Node Talker? [y/N]: " _nl_ans </dev/tty
         case "${_nl_ans,,}" in
             y|yes) ;;
-            *) _nl_want=false; info "Skipping Node Listen" ;;
+            *) _nl_want=false; info "Skipping Node Talker" ;;
         esac
     fi
 fi
 if [[ "${_nl_want}" == "true" ]]; then
-    fetch_if_missing "nodelisten" "Node Listen" "${_nodelisten_exists}" "nodelisten*.py" "" "${NODELISTEN_LIB_DIR}" "" "${NODELISTEN_BIN}"
-    stage_and_select "nodelisten*.py" "Node Listen" "${NODELISTEN_LIB_DIR}" || true
+    fetch_if_missing "nodetalker" "Node Talker" "${_nodelisten_exists}" "${NODELISTEN_PATTERN}" "" "${NODELISTEN_LIB_DIR}" "" "${NODELISTEN_BIN}"
+    stage_and_select "${NODELISTEN_PATTERN}" "Node Talker" "${NODELISTEN_LIB_DIR}" || true
 fi
 NODELISTEN_CHOSEN="${CHOSEN}"
 
@@ -838,11 +848,11 @@ fi
 if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
       && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]]; then
     if [[ "${DOWNLOAD}" != "true" ]]; then
-        die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Listen files found (offline: nothing downloaded)."
+        die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Talker files found (offline: nothing downloaded)."
     elif [[ "${FETCH_STATE}" == "failed" ]]; then
         die "Nothing to install — no files found here, and the download from GitHub failed."
     fi
-    die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Listen files found."
+    die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Talker files found."
 fi
 
 hdr "Up-to-date check"
@@ -859,7 +869,7 @@ uptodate_check "wifimon"   "${WIFIMON_CHOSEN}" "${WIFIMON_BIN}"
 uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && HELPER_CHOSEN=""
 
-uptodate_check "Node Listen" "${NODELISTEN_CHOSEN}" "${NODELISTEN_BIN}"
+uptodate_check "Node Talker" "${NODELISTEN_CHOSEN}" "${NODELISTEN_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && NODELISTEN_CHOSEN=""
 
 if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
@@ -876,7 +886,7 @@ hdr "Port checks"
 if [[ -n "${NODELISTEN_CHOSEN}" && "${_nodelisten_exists}" != "true" ]]; then
     _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
     NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
-    info "Node Listen port ${NODELISTEN_PORT}:"; check_port "${NODELISTEN_PORT}"
+    info "Node Talker port ${NODELISTEN_PORT}:"; check_port "${NODELISTEN_PORT}"
 fi
 
 if [[ -n "${INSTMON_CHOSEN}" ]]; then
@@ -975,11 +985,22 @@ if [[ -n "${HELPER_CHOSEN}" ]]; then
 fi
 
 if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
-    hdr "Installing Node Listen"
+    hdr "Installing Node Talker"
+    if [[ "$(basename "${NODELISTEN_CHOSEN}")" == nodelisten* ]]; then
+        NODELISTEN_SERVICE="nodelisten"
+        if [[ -f /etc/systemd/system/nodetalker.service && -e /usr/local/bin/nodetalker.py ]]; then
+            warn "$(basename "${NODELISTEN_CHOSEN}") is Node Listen, the older name: uninstalling Node Talker first so the two don't both run"
+            python3 /usr/local/bin/nodetalker.py --uninstall \
+                || die "Node Talker --uninstall failed — see output above"
+        fi
+    fi
     info "Delegating to: python3 $(basename "${NODELISTEN_CHOSEN}") --install"
     python3 "${NODELISTEN_CHOSEN}" --install \
-        || die "Node Listen --install failed — see output above"
-    ok "Node Listen installed, enabled, and restarted"
+        || die "Node Talker --install failed — see output above"
+    ok "Node Talker installed, enabled, and restarted"
+    for _nl_c in /etc/asl_dvs/nodetalker.conf /etc/asl_dvs/nodelisten.conf; do
+        [[ -e "${_nl_c}" ]] && { NODELISTEN_CONF="${_nl_c}"; break; }
+    done
     _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
     NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
 fi
@@ -1053,7 +1074,7 @@ print_urls "ASL-DVS Node Control Dashboard"      "${DASH_PORT}"    "${DASH_CHOSE
 print_urls "ASL-DVS System Monitor"              "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
 print_urls "44Net Helper"                        "${HELPER_PORT}"  "${HELPER_CHOSEN}"
 print_urls "wifimon"                             "${WIFIMON_PORT}" "${WIFIMON_CHOSEN}"
-print_urls "Node Listen"                         "${NODELISTEN_PORT}" "${NODELISTEN_CHOSEN}"
+print_urls "Node Talker"                         "${NODELISTEN_PORT}" "${NODELISTEN_CHOSEN}"
 
 if [[ -n "${WIFIMON_CHOSEN}" ]]; then
     info "To add/import WiFi networks: sudo python3 ${WIFIMON_BIN} --setup-wifi"
@@ -1066,6 +1087,6 @@ echo "  ${BLD}Service commands:${RST}"
 [[ -n "${SYSMON_CHOSEN}"   ]] && echo "    SysMon         :  systemctl {status|restart|stop} ${SYSMON_SERVICE}"
 [[ -n "${WIFIMON_CHOSEN}"  ]] && echo "    wifimon        :  systemctl {status|restart|stop} ${WIFIMON_SERVICE}"
 [[ -n "${HELPER_CHOSEN}"   ]] && echo "    44helper       :  systemctl {status|restart|stop} ${HELPER_SERVICE}"
-[[ -n "${NODELISTEN_CHOSEN}" ]] && echo "    Node Listen    :  systemctl {status|restart|stop} ${NODELISTEN_SERVICE}"
+[[ -n "${NODELISTEN_CHOSEN}" ]] && echo "    Node Talker    :  systemctl {status|restart|stop} ${NODELISTEN_SERVICE}"
 echo "    Logs      :  journalctl -u <service> -f"
 echo
