@@ -1,6 +1,19 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_2_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_3_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.3 (2026-10-20)
+
+- **Connect moves to the Listen tab.**
+  - Pressing **Connect** on the Connect tab (or answering the add-network
+    question) switches to the Listen tab. The line under the Talk button
+    reads *Connecting to …* or *Tuning …*.
+  - When the link comes up, the result shows there for 8 s.
+  - If it fails (refused, no answer after 15 s, the node still trying, or a
+    DMR network Node Controller doesn't have), the page goes back to the
+    Connect tab with the error, and the add-network question when it
+    applies. It does this only if you are still on the Listen tab.
+- Disconnect stays on the Connect tab.
 
 ## 0.6.2 (2026-10-20)
 
