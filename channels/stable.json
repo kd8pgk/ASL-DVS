@@ -10,6 +10,15 @@
    "reason": "count",
    "version": "0.0.204"
   },
+  "install_all": {
+   "blob": "d2eeed6da7640f9857ace7f8a0a729ef4783bd1b",
+   "commit": "bf629f9da5426861732b45f18cb0e59673ecbb52",
+   "file": "install_all_v7_1_20261012.sh",
+   "landed": "2026-10-12T08:54:11Z",
+   "promoted": "2026-10-20T15:25:49Z",
+   "reason": "count",
+   "version": "7.1"
+  },
   "instmon": {
    "blob": "bb9f4d9c2171446fa5a845af2374e1fd61a0ad6b",
    "commit": "ca6de14cc366f807a94977edf0029aaea877a7ed",
