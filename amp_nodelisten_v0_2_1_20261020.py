@@ -30,7 +30,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen for AMP"
 
@@ -429,6 +429,7 @@ def _read_shadow_hash(account):
 
 
 _libcrypt_handle = None
+_crypt_lock = threading.Lock()
 
 
 def _crypt_verify(password, stored_hash):
@@ -455,14 +456,16 @@ def _crypt_verify(password, stored_hash):
     if _libcrypt_handle is False:
         return False
     try:
-        result = _libcrypt_handle.crypt(password.encode("utf-8", "surrogateescape"),
-                                        stored_hash.encode("utf-8", "surrogateescape"))
+        with _crypt_lock:
+            result = _libcrypt_handle.crypt(password.encode("utf-8", "surrogateescape"),
+                                            stored_hash.encode("utf-8", "surrogateescape"))
+            result = result.decode("utf-8", "surrogateescape") if result is not None else None
     except Exception as exc:
         log_event(f"_crypt_verify: crypt(3) call failed: {exc}", "warn")
         return False
     if result is None:
         return False
-    return hmac.compare_digest(result.decode("utf-8", "surrogateescape"), stored_hash)
+    return hmac.compare_digest(result, stored_hash)
 
 
 def _usable_hash(account):
@@ -554,7 +557,7 @@ AUTH_FORGET_SEC = 3600
 AUTH_TRACK_MAX = 1000
 WAN_FAIL_MAX = 20
 WAN_FAIL_WINDOW_SEC = 600
-_wan_failures = deque()
+_wan_failures = deque(maxlen=WAN_FAIL_MAX)
 
 
 def _prune_auth(now):
@@ -2088,6 +2091,18 @@ def ensure_tls_cert():
     return True
 
 
+def _set_aside_tls():
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    for p in (TLS_CERT, TLS_KEY):
+        if os.path.exists(p):
+            try:
+                os.replace(p, f"{p}.{stamp}.bad")
+            except OSError as exc:
+                log_event(f"Can't move {p} aside: {exc}", "err")
+                return False
+    return True
+
+
 def make_ssl_context():
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
@@ -2122,7 +2137,8 @@ def plain_redirect(sock):
             host = v.strip()
             break
     if not _REDIRECT_HOST_RE.match(host):
-        host = f"{_lan_ips()[0]}:{_cfg_get('port')}"
+        ips = [ip for ip in _lan_ips() if not ip.startswith("127.")] or ["127.0.0.1"]
+        host = f"{ips[0]}:{_cfg_get('port')}"
     body = b"This page is served over HTTPS.\r\n"
     resp = (f"HTTP/1.1 301 Moved Permanently\r\nLocation: https://{host}{path}\r\n"
             f"Content-Type: text/plain\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode("latin-1") + body
@@ -2431,6 +2447,7 @@ background:transparent;color:#ffd040;border:1px solid #6b4800;border-radius:4px;
 #login-card button:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
 #login-card #login-cancel{color:#22d4ff;border-color:#083a58;margin-top:.6rem}
 #login-msg{min-height:1.1rem;font-size:.78rem;color:#ff3d5a;margin-top:.2rem}
+#login-tls{max-width:300px;font-size:.78rem;color:#ff3d5a;margin-top:.4rem}#login-tls:empty{display:none}
 nav.tabs{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:#111922;border-top:1px solid var(--line);padding:4px 6px calc(8px + env(safe-area-inset-bottom));z-index:5}
 nav.tabs button{background:transparent;border:0;min-height:52px;color:var(--muted);font-size:13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
 nav.tabs button[aria-current=page]{color:var(--accent);font-weight:700}
@@ -4294,6 +4311,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <button id="login-btn" type="submit">Log In</button>
 </form>
 <div id="login-msg"></div>
+<div id="login-tls">__TLS_NOTE__</div>
 <button id="login-cancel" class="hidden" type="button">Cancel</button>
 </div>
 </div>
@@ -4561,6 +4579,7 @@ mic volume, so the gain here is applied in the page.</p>
 
 
 _page = None
+_TLS_NOTE = ""
 
 
 def render_page():
@@ -4568,7 +4587,7 @@ def render_page():
     if _page is None:
         html = _HTML_TEMPLATE
         for key, val in (("__CSS__", _CSS), ("__JS__", _JS), ("__ICON_CONNECT__", _ICON_CONNECT), ("__ICON_LISTEN__", _ICON_LISTEN),
-                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION)):
+                         ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION), ("__TLS_NOTE__", _TLS_NOTE)):
             html = html.replace(key, val)
         _page = html.encode("utf-8")
     return _page
@@ -4913,6 +4932,7 @@ class Server(ThreadingHTTPServer):
 
 
 def run_server():
+    global _TLS_NOTE
     load_config()
     port = _cfg_get("port")
     try:
@@ -4925,9 +4945,19 @@ def run_server():
             try:
                 httpd.ssl_ctx = make_ssl_context()
             except (ssl.SSLError, OSError) as exc:
-                log_event(f"HTTPS certificate could not be loaded ({exc}); serving plain HTTP", "err")
+                log_event(f"HTTPS certificate could not be loaded ({exc}); making a new one", "err")
+                if _set_aside_tls() and ensure_tls_cert():
+                    try:
+                        httpd.ssl_ctx = make_ssl_context()
+                    except (ssl.SSLError, OSError) as exc2:
+                        log_event(f"The new HTTPS certificate could not be loaded either ({exc2}); serving plain HTTP", "err")
+                else:
+                    log_event("No new HTTPS certificate; serving plain HTTP (push-to-talk needs HTTPS)", "err")
         else:
             log_event("No HTTPS certificate; serving plain HTTP (push-to-talk needs HTTPS)", "err")
+        if httpd.ssl_ctx is None:
+            _TLS_NOTE = ("HTTPS is on in Setup but could not start, so this page is not encrypted and the password "
+                         "is sent in plain text. See the Node Listen log.")
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=AMP_LINK.run, name="amp-link", daemon=True).start()
     threading.Thread(target=TALKER.pacer_loop, name="tx-pacer", daemon=True).start()
@@ -4983,8 +5013,13 @@ def _remove_launcher_if_unused():
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 
-def _systemctl(*args):
-    return subprocess.run(["systemctl", *args], capture_output=True, text=True)
+def _systemctl(*args, timeout=120):
+    try:
+        return subprocess.run(["systemctl", *args], capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(["systemctl", *args], 1, "", f"systemctl {' '.join(args)} timed out after {timeout} s")
+    except OSError as exc:
+        return subprocess.CompletedProcess(["systemctl", *args], 1, "", f"systemctl {' '.join(args)}: {exc}")
 
 
 def install_service():
@@ -4997,23 +5032,16 @@ def install_service():
     os.chmod(INSTALL_DIR, 0o755)
     dest = os.path.join(INSTALL_DIR, os.path.basename(current))
     if current != dest:
-        tmp = dest + ".tmp"
+        tmp = f"{dest}.{secrets.token_hex(4)}.tmp"
         shutil.copy2(current, tmp)
         os.chmod(tmp, 0o755)
         os.replace(tmp, dest)
         print(f"  [+] Copied {os.path.basename(current)} -> {dest}")
     os.chmod(dest, 0o755)
-    tmp_link = INSTALL_BIN_PATH + ".tmp"
-    if os.path.lexists(tmp_link):
-        os.remove(tmp_link)
+    tmp_link = f"{INSTALL_BIN_PATH}.{secrets.token_hex(4)}.tmp"
     os.symlink(dest, tmp_link)
     os.replace(tmp_link, INSTALL_BIN_PATH)
     print(f"  [+] Symlinked {INSTALL_BIN_PATH} -> {dest}")
-    for name in os.listdir(INSTALL_DIR):
-        old = os.path.join(INSTALL_DIR, name)
-        if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
-            os.remove(old)
-            print(f"  [-] Removed the previous version {old}")
     _write_launcher()
     if not os.path.exists(CONFIG_PATH):
         save_config(dict(DEFAULT_CONFIG))
@@ -5021,13 +5049,21 @@ def install_service():
     load_config()
     _atomic_write(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
-    _systemctl("daemon-reload")
-    _systemctl("enable", SERVICE_NAME)
+    for args in (("daemon-reload",), ("enable", SERVICE_NAME)):
+        r = _systemctl(*args)
+        if r.returncode != 0:
+            print(f"  [!] systemctl {' '.join(args)} failed: {(r.stderr or r.stdout).strip()}")
     r = _systemctl("restart", SERVICE_NAME)
     if r.returncode != 0:
         print(f"  [!] systemctl restart failed: {(r.stderr or r.stdout).strip()}")
+        print(f"      The previous version (if any) is still in {INSTALL_DIR}")
         sys.exit(1)
     print(f"  [+] {SERVICE_NAME} enabled and started")
+    for name in os.listdir(INSTALL_DIR):
+        old = os.path.join(INSTALL_DIR, name)
+        if old != dest and name.endswith(".py") and os.path.isfile(old) and not os.path.islink(old):
+            os.remove(old)
+            print(f"  [-] Removed the previous version {old}")
     info = amp_info(max_age=0)
     auth = amp_auth_state(info)
     if not info["running"]:
