@@ -1,6 +1,31 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_12_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_4_13_20261020.py`. Newest entries first.
+
+## 0.4.13 (2026-10-20)
+
+- **Setup tab: cards open and close.** Each card's title is a button
+  (▸ / ▾) and every card starts closed when the page opens; closed, it shows
+  a one-line summary (Receive "Node 41234 sends audio here", Transmit "Set up
+  and linked", Settings "HTTPS · 3 listeners", Favorites "4 / 10", and so on).
+  The Log is only fetched while its card is open, and the Dashboard's
+  favorites list only once the Favorites card is opened.
+- **Setup tab in a new order**, one job per card: Receive, Transmit,
+  Settings, Favorites, Audio levels, Microphone, Playback, Log. The old Tune
+  card is split into Audio levels (with its Save and Reset), Microphone and
+  Playback.
+- **Connect tab: always from the main node.** The Connect from menu is gone;
+  Connect and Disconnect use the main node. A page still open from an older
+  version that sends a node is answered from the main node too. For an M17
+  favorite on a node that isn't Node Controller's, the message says to send
+  Node Controller's node's audio here instead.
+- **Listen tab:** the volume slider sits to the right of Listen / Stop on the
+  same line (a speaker icon replaces the word Volume). **Keep the screen on**
+  moved to the Setup tab's Playback card.
+- **Status tab:** the Links table keeps each link on one line: its text
+  shrinks with the screen (14 px down to 10.5 px), long names end in "…" (the
+  full name shows on hover), and node 1921 is marked "(TX)". Table labels no
+  longer break mid-word, and the Name column is filled right after logging in.
 
 ## 0.4.12 (2026-10-20)
 
