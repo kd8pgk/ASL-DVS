@@ -131,7 +131,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_6_1_20261020.py --install
+  sudo python3 nodetalker_v0_6_2_20261020.py --install
   ```
 
 Then:
@@ -166,8 +166,13 @@ node linked to the main node.
 
 - **Setup:** **Add node 1921** on the Setup tab writes its stanza and its
   `[nodes]` line, with a backup. Restart Asterisk once.
+- **Hold or tap** (0.6.2 and later, set on each phone with a copy on the
+  Pi): **Hold to talk**, or **Tap to talk, tap to stop** with a guard timer
+  (30–180 s, 60 s by default). The guard gives two short beeps 10 s before it
+  unkeys.
 - **A transmission stops** at the time-out (120 s by default), 1 s after
-  audio stops arriving, or when you let go.
+  audio stops arriving, when you let go (or tap again), or at the guard
+  timer.
 - **While the node is busy,** PTT is refused unless you turn that off.
 - **HTTPS is on by default** because browsers only allow the microphone on an
   `https://` page.
@@ -431,7 +436,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_64_0_20261020.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodetalker_v0_6_1_20261020.py` | common |
+| `nodetalker_v0_6_2_20261020.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_7_0_20261020.sh` | common |

@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.1"
+VERSION = "0.6.2"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -184,6 +184,8 @@ DEFAULT_CONFIG = {
     "rx_hpf": True,
     "rx_agc": True,
     "rx_gate": 1,
+    "ptt_mode": "hold",
+    "ptt_guard_sec": 60,
 }
 
 
@@ -207,6 +209,23 @@ _norm_listeners = _norm_int(1, 10, "max_listeners must be 1-10")
 _norm_tot = _norm_int(30, 600, "tot_sec must be 30-600")
 _norm_txbuf = _norm_int(40, 400, "tx_buffer_ms must be 40-400")
 _norm_jitter = _norm_int(100, 1500, "jitter_ms must be 100-1500")
+
+
+PTT_GUARDS = (30, 60, 90, 120, 180)
+
+
+def _norm_ptt_mode(value):
+    v = str(value).strip().lower()
+    if v not in ("hold", "tap"):
+        raise ValueError("ptt_mode must be hold or tap")
+    return v
+
+
+def _norm_ptt_guard(value):
+    v = int(str(value).strip())
+    if v not in PTT_GUARDS:
+        raise ValueError("ptt_guard_sec must be 30, 60, 90, 120 or 180")
+    return v
 
 
 def _norm_node(value):
@@ -238,6 +257,8 @@ _NORMALIZERS = {
     "jitter_ms": _norm_jitter,
     "tx_buffer_ms": _norm_txbuf,
     "allow_wan": _parse_bool,
+    "ptt_mode": _norm_ptt_mode,
+    "ptt_guard_sec": _norm_ptt_guard,
     "rx_hpf": _parse_bool,
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
@@ -3615,6 +3636,9 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 #ptt-msg:not(:empty)+#ptt-info{display:none}
 #ptt:disabled{opacity:.45;cursor:default}
 #ptt-time{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;color:var(--soft)}
+#ptt.guard-warn{border-color:var(--amber);box-shadow:0 0 0 6px rgba(244,192,78,.18)}
+#ptt.guard-warn #ptt-time{color:var(--amber);animation:guardblink 1s steps(2,start) infinite}
+@keyframes guardblink{to{visibility:hidden}}
 .sel-card{display:flex;flex-direction:column;gap:6px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px}
 .tag{display:inline-block;padding:2px 8px;border:1px solid var(--accent);border-radius:7px;color:#7fd8c6;font-size:12px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace}
 .fav-row{display:grid;grid-template-columns:110px 124px minmax(0,1fr) 44px;gap:6px;margin:6px 0}
@@ -3663,6 +3687,12 @@ let specMode = 'waterfall';
 let hs = {out: '', mic: '', btn: 'listen'};
 try { Object.assign(hs, JSON.parse(localStorage.getItem('nlHeadset') || '{}')); } catch (e) {}
 let hsTx = false, outLost = 0, devCount = -1, lastDevChange = 0;
+const PTT_GUARDS = [30, 60, 90, 120, 180], TAP_IGNORE_MS = 500, GUARD_WARN_SEC = 10;
+let ptt = {mode: 'hold', guard: 60}, pttSrc = '', tapAt = 0, guardWarned = false, guardStop = '';
+try {
+  const s = JSON.parse(localStorage.getItem('nlPtt') || 'null');
+  if (s && (s.mode === 'hold' || s.mode === 'tap') && PTT_GUARDS.includes(Number(s.guard))) { ptt = {mode: s.mode, guard: Number(s.guard)}; pttSrc = 'phone'; }
+} catch (e) {}
 try { if (localStorage.getItem('nlSpec') === 'bars') specMode = 'bars'; } catch (e) {}
 
 function sincKernels(phases, taps, half, fc, tAt, edgeIn) {
@@ -3915,6 +3945,7 @@ async function whoami() {
   if (!d.backend) $('login-msg').textContent = 'No root password is set on this Pi, so login cannot work.';
   render();
   autoListen();
+  if (authed) pttFromPi(false);
 }
 
 async function login(ev) {
@@ -3924,7 +3955,7 @@ async function login(ev) {
   const d = await post('/api/login', {password: $('pw').value});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); }
+  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); pttFromPi(false); }
   else $('login-msg').textContent = d.error || 'Login failed.';
 }
 
@@ -4870,7 +4901,10 @@ async function wakeLockApply() {
 
 function pttLabel() {
   const idle = pttState !== 'talking' && pttState !== 'keying';
-  $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : 'TALKING') : pttState === 'keying' ? 'Keying...' : (busyText || 'Hold to talk');
+  const tap = ptt.mode === 'tap';
+  $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : tap ? 'TALKING · tap to stop' : 'TALKING')
+    : pttState === 'keying' ? 'Keying...' : (busyText || (tap ? 'Tap to talk' : 'Hold to talk'));
+  $('ptt').setAttribute('aria-label', tap ? 'Push to talk: tap to transmit, tap again to stop' : 'Push to talk: hold to transmit');
   $('ptt').classList.toggle('busy', idle && !!busyText);
 }
 
@@ -4913,6 +4947,7 @@ function openTalk(force) {
       endTalk(); pttUi('ready', why, 'warn');
     } else if (m.ev === 'unkeyed') {
       keyed = false; endTalk();
+      if (guardStop) { pttUi('ready', guardStop, 'warn'); guardStop = ''; return; }
       const why = {timeout: 'Time-out: transmission stopped after ' + fmtSecs(m.secs) + '. Release and press again.',
         deadman: 'Audio stopped reaching the node, so it unkeyed.'}[m.why];
       pttUi('ready', why || '', why ? 'warn' : '');
@@ -5169,6 +5204,7 @@ function endTalk() {
   preKey = [];
   stopMic();
   if (talkTimer) { clearInterval(talkTimer); talkTimer = null; }
+  $('ptt').classList.remove('guard-warn');
   $('ptt-time').textContent = '';
   setTimeout(() => { if (gainNode && !talking) gainNode.gain.value = listenVolume(); }, 1000);
   if (playing && mediaDest && $('player').paused) $('player').play().catch(() => {});
@@ -5179,13 +5215,11 @@ async function pttDown(ev) {
   if (ev) ev.preventDefault();
   if (talking || testing) return;
   if (!wsReady) { openTalk(); return; }
-  talking = true; keyed = false; preKey = [];
+  talking = true; keyed = false; preKey = []; guardWarned = false; guardStop = '';
   if (gainNode) gainNode.gain.value = 0;
   pttUi('keying', '');
   ws.send(JSON.stringify({op: 'key'}));
-  talkTimer = setInterval(() => {
-    if (keyed) $('ptt-time').textContent = fmtSecs((performance.now() - keyedAt) / 1000) + ' / ' + fmtSecs(totSec);
-  }, 250);
+  talkTimer = setInterval(talkTick, 250);
   wakeLockApply();
   micPending = true;
   try { await startMic(sendFrame); }
@@ -5204,6 +5238,110 @@ function pttUp(ev) {
   keyed = false;
   endTalk();
   pttUi(wsReady ? 'ready' : 'off');
+}
+
+function guardOn() { return ptt.mode === 'tap' || hsTx; }
+function guardSec() { return Math.min(ptt.guard, totSec); }
+
+function guardBeep() {
+  try {
+    const c = ctx || newAudioCtx();
+    const out = ctx ? (mediaDest || ctx.destination) : c.destination;
+    const t0 = c.currentTime + 0.02;
+    [0, 0.2].forEach((d) => {
+      const o = c.createOscillator(), g = c.createGain();
+      o.frequency.value = 1000;
+      g.gain.setValueAtTime(0, t0 + d);
+      g.gain.linearRampToValueAtTime(0.18, t0 + d + 0.005);
+      g.gain.setValueAtTime(0.18, t0 + d + 0.075);
+      g.gain.linearRampToValueAtTime(0, t0 + d + 0.08);
+      o.connect(g); g.connect(out);
+      o.start(t0 + d); o.stop(t0 + d + 0.09);
+    });
+    if (!ctx) setTimeout(() => { c.close().catch(() => {}); }, 700);
+  } catch (e) {}
+}
+
+function talkTick() {
+  if (!keyed) return;
+  const secs = (performance.now() - keyedAt) / 1000;
+  if (!guardOn()) { $('ptt-time').textContent = fmtSecs(secs) + ' / ' + fmtSecs(totSec); return; }
+  const left = guardSec() - secs;
+  $('ptt-time').textContent = fmtSecs(Math.max(0, Math.ceil(left))) + ' left';
+  if (left <= GUARD_WARN_SEC && !guardWarned) {
+    guardWarned = true;
+    $('ptt').classList.add('guard-warn');
+    guardBeep();
+    if (navigator.vibrate) navigator.vibrate([60, 60, 60]);
+  }
+  if (left <= 0) {
+    guardStop = 'Guard timer: unkeyed after ' + fmtSecs(guardSec()) + '.';
+    if (chk && chk.running) chk.timeout++;
+    pttUp();
+    pttUi(wsReady ? 'ready' : 'off', guardStop, 'warn');
+  }
+}
+
+function pttPress(e) {
+  if (ptt.mode !== 'tap') { try { $('ptt').setPointerCapture(e.pointerId); } catch (x) {} pttDown(e); return; }
+  e.preventDefault();
+  if (talking) { if (performance.now() - tapAt >= TAP_IGNORE_MS) pttUp(); return; }
+  tapAt = performance.now();
+  pttDown(e);
+}
+
+function pttRelease(e) { if (ptt.mode !== 'tap') pttUp(e); }
+
+function pttKey(e, down) {
+  if (e.key !== ' ' && e.key !== 'Enter') return;
+  if (ptt.mode !== 'tap') { if (down && !e.repeat) pttDown(e); else if (!down) pttUp(e); return; }
+  e.preventDefault();
+  if (down && !e.repeat) pttPress(e);
+}
+
+function pttSetUi() {
+  $('ptt-hold').checked = ptt.mode === 'hold';
+  $('ptt-tap').checked = ptt.mode === 'tap';
+  $('ptt-guard').value = String(ptt.guard);
+  const g = Number($('ptt-guard').value);
+  $('ptt-guard-note').textContent = g > totSec ? 'The node\'s TX time-out is ' + fmtSecs(totSec) + ', so it stops then.' : '';
+  $('ptt-src').textContent = pttSrc === 'phone' ? 'Saved on this phone; a copy is kept on the Pi.'
+    : pttSrc === 'pi' ? 'This phone had nothing saved, so these came from the Pi.' : 'Defaults (nothing saved yet).';
+  pttLabel();
+}
+
+async function pttFromPi(force) {
+  if (pttSrc === 'phone' && !force) { pttSetUi(); return null; }
+  const d = await api('/api/config');
+  if (!d.ok) return d;
+  const c = d.config || {};
+  if ((c.ptt_mode === 'hold' || c.ptt_mode === 'tap') && PTT_GUARDS.includes(Number(c.ptt_guard_sec))) {
+    ptt = {mode: c.ptt_mode, guard: Number(c.ptt_guard_sec)};
+    pttSrc = 'pi';
+  }
+  if (force) {
+    try { localStorage.setItem('nlPtt', JSON.stringify(ptt)); pttSrc = 'phone'; } catch (e) {}
+  }
+  pttSetUi();
+  return d;
+}
+
+async function pttSave() {
+  if (talking) pttUp();
+  ptt = {mode: $('ptt-tap').checked ? 'tap' : 'hold', guard: Number($('ptt-guard').value) || 60};
+  let local = true;
+  try { localStorage.setItem('nlPtt', JSON.stringify(ptt)); pttSrc = 'phone'; } catch (e) { local = false; }
+  const d = await post('/api/config', {ptt_mode: ptt.mode, ptt_guard_sec: ptt.guard});
+  pttSetUi();
+  if (!d.ok) { setMsg('ptt-set-msg', {ok: local, warn: true, message: 'Saved on this phone, but the copy on the Pi failed: ' + (d.error || '?'), error: d.error}); return; }
+  setMsg('ptt-set-msg', local ? {ok: true, message: 'Saved on this phone, with a copy on the Pi.'}
+    : {ok: true, warn: true, message: 'This browser can\'t keep settings, so they were saved on the Pi only.'});
+}
+
+async function pttRestore() {
+  if (talking) pttUp();
+  const d = await pttFromPi(true);
+  setMsg('ptt-set-msg', d && d.ok ? {ok: true, message: 'Restored from the Pi.'} : (d || {ok: false, error: 'Failed.'}));
 }
 
 async function loadFavs() {
@@ -5501,7 +5639,9 @@ async function loadConfig() {
   if (!d.ok) return;
   CFG_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
-  sum('cfg', (d.config.https ? 'HTTPS' : 'HTTP') + ' · ' + d.config.max_listeners + ' listeners' + (d.config.public_listen ? ' · public' : ''));
+  sum('cfg', (d.config.https ? 'HTTPS' : 'HTTP') + ' · ' + d.config.max_listeners + ' listeners' + (d.config.public_listen ? ' · public' : '')
+    + (ptt.mode === 'tap' ? ' · tap to talk ' + ptt.guard + ' s' : ''));
+  pttSetUi();
   $('tune-on').checked = !!d.config.tune_enabled;
   $('tune-tx').value = d.config.tx_gain_db;
   $('tune-rx').value = d.config.rx_gain_db;
@@ -5583,13 +5723,16 @@ document.addEventListener('DOMContentLoaded', () => {
     wakeLockApply();
   });
   const p = $('ptt');
-  p.addEventListener('pointerdown', (e) => { try { p.setPointerCapture(e.pointerId); } catch (x) {} pttDown(e); });
-  p.addEventListener('pointerup', pttUp);
-  p.addEventListener('pointercancel', pttUp);
-  p.addEventListener('lostpointercapture', () => pttUp());
+  p.addEventListener('pointerdown', pttPress);
+  p.addEventListener('pointerup', pttRelease);
+  p.addEventListener('pointercancel', pttRelease);
+  p.addEventListener('lostpointercapture', () => { if (ptt.mode !== 'tap') pttUp(); });
   p.addEventListener('contextmenu', (e) => e.preventDefault());
-  p.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) pttDown(e); });
-  p.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') pttUp(e); });
+  p.addEventListener('keydown', (e) => pttKey(e, true));
+  p.addEventListener('keyup', (e) => pttKey(e, false));
+  $('ptt-save').addEventListener('click', pttSave);
+  $('ptt-restore').addEventListener('click', pttRestore);
+  $('ptt-guard').addEventListener('change', () => { $('ptt-guard-note').textContent = Number($('ptt-guard').value) > totSec ? 'The node\'s TX time-out is ' + fmtSecs(totSec) + ', so it stops then.' : ''; });
   window.addEventListener('blur', () => { if (!micPending) pttUp(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') pttUp(); else { openTalk(); pollStatus(); }
@@ -5783,6 +5926,17 @@ Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div class="row"><button id="cfg-save" class="btn primary" type="button">Save</button></div>
 <div id="cfg-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Push-to-talk on this phone</h3>
+<div class="row"><label><input type="radio" name="ptt-mode" id="ptt-hold" value="hold"> Hold to talk</label>
+<label><input type="radio" name="ptt-mode" id="ptt-tap" value="tap"> Tap to talk, tap to stop</label></div>
+<div class="row"><label>Guard timer <select id="ptt-guard"><option value="30">30 s</option><option value="60">60 s</option>
+<option value="90">90 s</option><option value="120">120 s</option><option value="180">180 s</option></select></label></div>
+<p class="muted small">The guard timer stops a tap-to-talk (or headset) transmission: two short beeps 10 s before, then it
+unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></span></p>
+<p class="muted small" id="ptt-src"></p>
+<div class="row"><button id="ptt-save" class="btn primary" type="button">Save on this phone</button>
+<button id="ptt-restore" class="btn" type="button">Restore from the Pi</button></div>
+<div id="ptt-set-msg" class="msg"></div>
 </div>
 </div>
 
