@@ -1,6 +1,74 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_20_20261020.py`. Newest entries first.
+Current file: `nodelisten_v0_5_0_20261020.py`. Newest entries first.
+
+## 0.5.0 (2026-10-20)
+
+Node Listen can now run a node on its own, with no Node Controller: its
+favorites tune DVSwitch and M17 as well as ASL and EchoLink. The Connect tab
+looks and works as before; everything new is on the Setup tab.
+
+- **Up to 15 favorites** (was 10), now also **DMR, STFU, YSF, P25, NXDN and
+  D-STAR**. FCS and XLX are not offered.
+- **Favorites file in Node Controller's format.** Favorites, DMR networks and
+  the digital settings are kept in `/etc/asl_dvs/nodelisten_favorites.conf`
+  (mode 0600, because it holds DMR passwords), with the same sections and
+  `name|...` lines as `asl_dvs.conf`. The Connect tab lists favorites in file
+  order.
+  - On first start the favorites in `nodelisten_favorites.json` move into it.
+  - The JSON file is kept up to date with only the ASL, EchoLink and M17
+    favorites (up to 10), so going back to an older Node Listen stays safe:
+    older versions read any favorite they don't know as an ASL node.
+- **DMR network list** (Setup tab, Digital card), up to 10:
+  `name|password|address:port|url` in `[DMR_SERVERS]`, with each DMR favorite
+  in its network's `[DMR_<KEY>]` section.
+  - The page never receives a password. An empty password field keeps the
+    saved one.
+  - Renaming a network keeps its favorites. A network that a favorite uses
+    can't be removed.
+  - **Copy from Node Controller** adds the Dashboard's networks. Adding a
+    Dashboard DMR favorite copies its network too.
+- **Solo tuning (Node Controller not running):**
+  - **DVSwitch modes:**
+    1. Start the mode's gateway (`ysfgateway`, `p25gateway`, `nxdngateway`,
+       `ircddbgatewayd`, `stfu`) if it isn't running.
+    2. Link the digital bridge node.
+    3. `dvswitch.sh tune disconnect`, then `mode <MODE>`.
+    4. DMR only: `tune <password>@<address:port>`, skipped when that network
+       is already joined.
+    5. `tune <tg>`.
+    - D-STAR uses Node Controller's tune string (`REF001 C` becomes
+      `REF001CL`), and is unlinked first when you leave it.
+  - **M17:** writes `USRP2M17.ini` the way Node Controller does, with the
+    address from `M17Hosts.json` (checking that the module is published),
+    restarts `usrp2m17` and links the M17 bridge node.
+  - **One digital favorite on the air at a time.** Tuning one drops linked ASL
+    and EchoLink favorites and the other bridge. Connecting an ASL or EchoLink
+    favorite releases a digital tune. Disconnect unlinks the bridge.
+  - Every `dvswitch.sh` call has a time-out, and one lock covers connect and
+    disconnect. A DMR password is never logged or shown in an error.
+  - What was tuned is kept in `nodelisten_tuned.json`. The Connect button
+    turns into Disconnect while the bridge stays linked.
+- **With Node Controller running:**
+  - ASL, EchoLink and M17 go through it as before.
+  - DVSwitch favorites are refused, with a note to tune them on its page, so
+    the two don't both drive `dvswitch.sh`.
+  - If Node Controller starts after Node Listen tuned something, Node Listen
+    leaves it in control.
+- **Digital card** (Setup):
+  - Control mode, what was found (dvswitch.sh, Analog_Bridge, USRP2M17,
+    M17Hosts.json) and the service states.
+  - The digital and M17 bridge nodes and the M17 callsign. Each is set here,
+    or found on its own:
+    - bridge nodes: from the `rpt.conf` USRP ports that match
+      `Analog_Bridge.ini` / `USRP2M17.ini`, then Node Controller, then
+      1999/1917;
+    - callsign: from `USRP2M17.ini`, then Node Controller.
+  - The DMR networks.
+  - Download and upload of the favorites file. An upload is checked line by
+    line and refused if any line is bad.
+- `--install` writes an empty favorites file when none exists and prints what
+  it found. `--uninstall` keeps it.
 
 ## 0.4.20 (2026-10-20)
 

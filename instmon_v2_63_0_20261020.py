@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.62.0"
+VERSION ="2.63.0"
 DATE_STR ="2026-10-20"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -133,6 +133,15 @@ LIBRARY_DIR =os .environ .get ("INSTMON_LIBRARY_DIR","/etc/asl_dvs/instmon_libra
 CONFIG_DIR =os .environ .get ("INSTMON_CONFIG_DIR","/etc/asl_dvs")
 DOCS_DIR = os.path.join(LIBRARY_DIR, "docs")
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
+NODELISTEN_CONFIGS =(("nodelisten_favorites*.conf","nodelisten_favorites.conf"),("nodelisten*.conf","nodelisten.conf"))
+LIVE_CONFIGS =(CONFIG_NAME ,"nodelisten.conf","nodelisten_favorites.conf")
+
+def config_dest_name (name ):
+    low =os .path .basename (name or "").lower ()
+    for pattern ,live in NODELISTEN_CONFIGS :
+        if fnmatch .fnmatch (low ,pattern ):
+            return live 
+    return CONFIG_NAME 
 
 HOME_SCAN_DIR =os .environ .get ("INSTMON_HOME_SCAN_DIR",os .path .expanduser ("~"))
 HOME_SCAN_ENABLED =os .environ .get ("INSTMON_HOME_SCAN_ENABLED","1")!="0"
@@ -1930,7 +1939,7 @@ HOME_SCAN_PATTERN_MAP =[
 ("44helper",["44helper*.py","asl_dvs_m17_44helper*.py"]),
 ("nodelisten",["nodelisten*.py"]),
 ("instmon",["instmon*.py"]),
-("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf"]),
+("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodelisten*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
 ]
 
@@ -3288,7 +3297,7 @@ def scan_library ():
                 else :
                     entry ["installed"]=False 
             elif cat =="config":
-                live_cfg =os .path .join (CONFIG_DIR ,CONFIG_NAME )
+                live_cfg =os .path .join (CONFIG_DIR ,config_dest_name (name ))
                 entry ["installed"]=(file_sha256 (full )==file_sha256 (live_cfg ))
                 entry ["version"]="config"
             else :
@@ -3324,6 +3333,7 @@ def build_status ():
     "config":{
     "name":CONFIG_NAME ,
     "installed":os .path .isfile (os .path .join (CONFIG_DIR ,CONFIG_NAME )),
+    "live":[n for n in LIVE_CONFIGS if os .path .isfile (os .path .join (CONFIG_DIR ,n ))],
     },
     }
 
@@ -5417,6 +5427,12 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
     </div>""")
     if not rows :
         rows .append ('<div class="small muted" style="padding:.4rem .2rem">-- empty --</div>')
+    if category =="config":
+        live =[n for n in LIVE_CONFIGS if os .path .isfile (os .path .join (CONFIG_DIR ,n ))]
+        if live :
+            rows .append ('<div class="librow libgrp-upload"><span class="small muted">Copy the active config into the library:</span>'
+            +''.join (f'<button data-action="save_alternate" data-name="{esc (n )}">Save {esc (n )}</button>'for n in live )
+            +'</div>')
     card_cls ="card libgrp libgrp-nested collapsed"if nested else "card libgrp collapsed"
     upload_html =f"""
     <div class="librow libgrp-upload">
@@ -7505,7 +7521,8 @@ _JS_ACTIONS = """function wireButtons() {
           }
           btn.disabled = false;
         } else if (action === 'install_config') {
-          if (!confirm(`Install ${btn.dataset.name} as the active config? This will restart the Dashboard if it's installed.`)) { btn.disabled = false; return; }
+          const nlCfg = /^nodelisten/i.test(btn.dataset.name || '');
+          if (!confirm(`Install ${btn.dataset.name} as the active ${nlCfg ? 'Node Listen ' : ''}config? This will restart ${nlCfg ? 'Node Listen' : 'the Dashboard'} if it's installed.`)) { btn.disabled = false; return; }
           await postAction({action: 'install_config', name: btn.dataset.name});
         } else if (action === 'gh_check') {
           await postAction({action: 'gh_check'});
@@ -7612,7 +7629,7 @@ _JS_ACTIONS = """function wireButtons() {
           if (r.ok) { fileInput.value = ''; _pendingUploadFiles.delete(cat); }
           if (r.ok && /\\.pdf$/i.test(data.name || '')) docsLoad();
         } else if (action === 'save_alternate') {
-          await postAction({action: 'save_alternate'});
+          await postAction({action: 'save_alternate', name: btn.dataset.name || ''});
         } else if (action === 'comms_restart') {
           if (!confirm('Stop Asterisk, Analog_Bridge, MMDVM_Bridge, STFU, and Allmon3, pause 3s, then start them back up? All active calls/links on this node will drop for the duration.')) { btn.disabled = false; return; }
           await postAction({action: 'comms_restart'});
@@ -8663,7 +8680,7 @@ _ACTION_HANDLERS ={
 "lib_lock":lambda self ,body :self ._action_lib_lock (body ),
 "run_script":lambda self ,body :self ._action_run_script (body ),
 "rpiclone_install":lambda self ,body :self ._action_rpiclone_install (body ),
-"save_alternate":lambda self ,body :self ._action_save_alternate (),
+"save_alternate":lambda self ,body :self ._action_save_alternate (body ),
 "comms_restart":lambda self ,body :self ._action_comms_restart (body ),
 "reboot":lambda self ,body :self ._action_reboot (body ),
 "shutdown":lambda self ,body :self ._action_shutdown (body ),
@@ -10068,7 +10085,12 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (500 ,f"Could not read {name }: {exc }")
             return 
 
-        dest =os .path .join (CONFIG_DIR ,CONFIG_NAME )
+        dest_name =config_dest_name (name )
+        dest =os .path .join (CONFIG_DIR ,dest_name )
+        is_nl =dest_name !=CONFIG_NAME 
+        if dest_name =="nodelisten.conf"and b"[nodelisten]"not in data :
+            self ._error_json (400 ,f"{name } has no [nodelisten] section -- it is not a Node Listen settings file.")
+            return 
         with _running_installs_lock :
             if dest in _running_installs :
                 self ._send_json (409 ,{
@@ -10081,10 +10103,11 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
         try :
 
-            _dash_comp =next ((c for c in COMPONENTS if c ["category"]=="dashboard"),None )
+            _dash_comp =next ((c for c in COMPONENTS if c ["category"]==("nodelisten"if is_nl else "dashboard")),None )
             comp =None 
             if _dash_comp and os .path .isfile (resolve_installed_target (_dash_comp )):
                 comp =_dash_comp 
+            tool ="Node Listen"if is_nl else "The Dashboard"
             if comp is None :
                 try :
                     wrote ,reason =compare_before_write (dest ,data )
@@ -10092,7 +10115,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                     self ._error_json (500 ,f"Install failed writing {dest }: {exc }")
                     return 
                 log_event (f"Install config {name } -> {dest } ({reason })","ok"if wrote else "info")
-                message =(f"Config {name } installed as {CONFIG_NAME }. The Dashboard is not currently installed -- apply it manually."
+                message =(f"Config {name } installed as {dest_name }. {tool } is not currently installed -- apply it manually."
                 if wrote else f"{name } is already the active config (unchanged).")
                 self ._send_json (200 ,{"wrote":wrote ,"reason":reason ,"message":message ,"level":"warn"if wrote else "info"})
                 return 
@@ -10104,7 +10127,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
             log_event (f"Install config {name } -> {dest } ({result ['reason']})","ok"if result ["wrote"]else "info")
             if result ["wrote"]:
-                result ["message"]=f"Config {name } installed as {CONFIG_NAME }. {result ['message']}"
+                result ["message"]=f"Config {name } installed as {dest_name }. {result ['message']}"
             else :
                 result ["message"]=f"{name } is already the active config (unchanged) -- no restart needed."
             self ._send_json (200 ,result )
@@ -10252,13 +10275,17 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         ok, msg, level = build_pref_set(body.get("choice"))
         self._send_json(200 if ok else 409, {"message": msg, "level": level})
 
-    def _action_save_alternate (self ):
-        live_cfg =os .path .join (CONFIG_DIR ,CONFIG_NAME )
+    def _action_save_alternate (self ,body =None ):
+        live_name =(body or {}).get ("name")or CONFIG_NAME 
+        if live_name not in LIVE_CONFIGS :
+            self ._error_json (400 ,f"Unknown config '{live_name }'")
+            return 
+        live_cfg =os .path .join (CONFIG_DIR ,live_name )
         if not os .path .isfile (live_cfg ):
             self ._error_json (404 ,f"No active config at {live_cfg }")
             return 
         stamp =datetime .now ().strftime ("%Y%m%d_%H%M%S")
-        base ,ext =os .path .splitext (CONFIG_NAME )
+        base ,ext =os .path .splitext (live_name )
         alt_name =f"{base }_{stamp }{ext }"
         ensure_dirs ()
         dest =os .path .join (LIB_SUBDIRS ["config"],alt_name )
