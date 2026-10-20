@@ -1,6 +1,23 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_4_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_5_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.5 (2026-10-20)
+
+- **System card** at the top of the Setup tab.
+  - **Reboot** and **Shutdown**, as in Node Controller: the page asks
+    "Reboot the system?" or "Shut down the system?", the Pi answers
+    *Rebooting…* or *Shutting down…*, then runs `reboot` or
+    `shutdown -h now` 1 s later. Login is required, and each request is
+    written to the log.
+  - **Quick links** to Allmon3 (`/allmon3`), DVSwitch (`/dvswitch`) and
+    Cockpit (port 9090), in Node Controller's style. Each shows only when its
+    page answers: the Pi checks them (a page answers with a status below
+    400; Cockpit's port accepts a connection) every 30 s. The row is hidden
+    when none answers.
+- **Header button:** when Node Controller isn't running, it opens InstMon
+  (port 8990) if InstMon is running, and is hidden if neither is. The page
+  re-checks every 30 s, so it switches without a reload.
 
 ## 0.6.4 (2026-10-20)
 

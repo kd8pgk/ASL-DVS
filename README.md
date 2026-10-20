@@ -131,7 +131,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_6_4_20261020.py --install
+  sudo python3 nodetalker_v0_6_5_20261020.py --install
   ```
 
 Then:
@@ -159,6 +159,11 @@ outstreamcmd = /usr/bin/python3,/usr/local/bin/nodelisten.py,--feed,6200
 - **Listeners:** each uses about 64 kbit/s; the default limit is 3.
 - **Listen without logging in** (Settings) lets anyone who can reach the page
   listen, but never change anything.
+- **System card** (0.6.5 and later, top of the Setup tab): **Reboot** and
+  **Shutdown**, as in Node Controller, plus quick links to Allmon3, DVSwitch
+  and Cockpit, each shown only when its page answers on the Pi.
+- **Header button:** opens Node Controller when it is running; otherwise
+  InstMon (0.6.5 and later) when it is running; otherwise hidden.
 
 **Push-to-talk** (0.3.0 and later) sends the phone's microphone to private
 node 1921 (`rxchannel = USRP/127.0.0.1:34018:32018`). Node Talker keeps that
@@ -438,7 +443,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_64_0_20261020.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodetalker_v0_6_4_20261020.py` | common |
+| `nodetalker_v0_6_5_20261020.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_7_0_20261020.sh` | common |
