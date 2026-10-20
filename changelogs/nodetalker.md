@@ -1,6 +1,26 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_3_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_4_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.4 (2026-10-20)
+
+- **Wait 4 s after receive before talking** (Settings, *Push-to-talk on this
+  phone*; off by default).
+  - When it's on, push-to-talk is locked while the node receives and for 4 s
+    after receive ends.
+  - The waterfall or bars show the count, 3, 2, 1, 0, in the upper-right
+    corner: a quarter of the width and half the height (1/8 of the space),
+    in white at 25 % opacity (75 % see-through).
+  - The button reads *Wait...*. Pressing it, tapping it or using the headset
+    button says how long is left.
+  - **What counts as receive:** while listening, the audio as it arrives
+    (above −50 dBFS); otherwise the node's RX light. Someone else
+    transmitting from Node Talker counts too.
+  - Your own transmission and the 2.5 s after it don't start the wait.
+  - With the spectrum hidden, the count shows beside the Talk button.
+  - Saved per phone, with the rest of the push-to-talk settings, and backed
+    up on the Pi as `ptt_rx_gap`.
+- Removed an unused byte counter in the audio input.
 
 ## 0.6.3 (2026-10-20)
 
