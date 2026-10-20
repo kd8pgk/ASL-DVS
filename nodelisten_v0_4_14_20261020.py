@@ -28,7 +28,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.4.13"
+VERSION = "0.4.14"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Listen"
 
@@ -2148,15 +2148,39 @@ background:transparent;color:#ffd040;border:1px solid #6b4800;border-radius:4px;
 #login-card button:disabled{opacity:.4;cursor:default;filter:none;box-shadow:none}
 #login-card #login-cancel{color:#22d4ff;border-color:#083a58;margin-top:.6rem}
 #login-msg{min-height:1.1rem;font-size:.78rem;color:#ff3d5a;margin-top:.2rem}
-nav.tabs{flex:none;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));background:#111922;border-top:1px solid var(--line);padding:4px 6px calc(8px + env(safe-area-inset-bottom));z-index:5}
+nav.tabs{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:#111922;border-top:1px solid var(--line);padding:4px 6px calc(8px + env(safe-area-inset-bottom));z-index:5}
 nav.tabs button{background:transparent;border:0;min-height:52px;color:var(--muted);font-size:13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
 nav.tabs button[aria-current=page]{color:var(--accent);font-weight:700}
 nav.tabs svg{width:22px;height:22px}
-.ptt-wrap{display:flex;flex-direction:column;align-items:center;gap:10px;padding:8px 0}
-#ptt{width:180px;height:180px;border-radius:50%;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:19px;font-weight:700;cursor:pointer;
-touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+main.fit{padding-top:10px;padding-bottom:12px}
+#tab-listen{min-height:100%;display:flex;flex-direction:column}
+.lpanel{flex:1 0 auto;display:flex;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.lpanel>*{flex:none}
+.lpanel .row{margin:0}
+.lpanel .msg{margin-top:0;min-height:0}
+.lpanel #listen-msg:empty{display:none}
+.lstat{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--soft);white-space:nowrap;overflow:hidden}
+.lstat>span{flex:none;display:inline-flex;align-items:center}
+.lstat #st-node{font-weight:700;color:var(--text)}
+.lstat #st-feed-w{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.lstat .dot{margin-right:4px}
+.spec{flex:1 1 0;min-height:14px;display:flex;flex-direction:column;gap:4px}
+.spec-box{position:relative;flex:1;min-height:0;border-radius:8px;overflow:hidden;background:#0a1016;border:1px solid var(--line)}
+.spec-box canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:pointer;touch-action:manipulation}
+.spec-lo{position:absolute;left:0;top:0;bottom:0;width:7.5%;background:rgba(244,192,78,.10);border-right:1px dashed rgba(244,192,78,.45);pointer-events:none}
+.spec-t{position:absolute;bottom:2px;transform:translateX(-50%);font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted);pointer-events:none}
+.spec.small .spec-box,.spec.off .spec-box{display:none}
+.spec-meter{display:flex;align-items:center;gap:8px}
+.spec-meter .meter{height:6px;min-width:0}
+#ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
+#ptt{width:100%;height:80px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:19px;font-weight:700;cursor:pointer;padding:0 20px;
+touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
+#ptt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ptt.ready{border-color:var(--accent)}
-#ptt.talking{background:#4a1418;border-color:var(--red-line);box-shadow:0 0 0 12px rgba(242,84,91,.15)}
+#ptt.busy{border-color:var(--amber)}
+#ptt.talking{background:#4a1418;border-color:var(--red-line);box-shadow:0 0 0 6px rgba(242,84,91,.15)}
+.ptt-line{font-size:12px;text-align:center;min-height:16px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#ptt-msg:not(:empty)+#ptt-info{display:none}
 #ptt:disabled{opacity:.45;cursor:default}
 #ptt-time{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;color:var(--soft)}
 .sel-card{display:flex;flex-direction:column;gap:6px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px}
@@ -2165,7 +2189,7 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 .fav-row input,.fav-row select{min-width:0;width:100%}
 .fav-row button{min-height:40px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--red);cursor:pointer}
 @media (max-width:420px){header{gap:6px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px}header .ver{display:none}.pill{padding:0 10px}}
-@media (max-width:480px){.fav-row{grid-template-columns:92px 108px minmax(0,1fr) 40px}#ptt{width:160px;height:160px}}
+@media (max-width:480px){.fav-row{grid-template-columns:92px 108px minmax(0,1fr) 40px}}
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
@@ -2186,10 +2210,13 @@ try {
   if (st && st.agc !== undefined && st.lev === undefined) st.agc = false;
   Object.assign(mic, st);
 } catch (e) {}
-const PLAY_DEFAULTS = {s16: true, smooth: true, auto: true};
+const PLAY_DEFAULTS = {s16: true, smooth: true, auto: true, spec: true};
 let play = Object.assign({}, PLAY_DEFAULTS);
 try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); } catch (e) {}
 let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false, autoWait = null, starting = false;
+let busNode = null, analyser = null, specBins = null, specRaf = 0, specLast = 0, busyText = '', pttState = 'off', ownUnkeyAt = -1e9;
+let specMode = 'waterfall';
+try { if (localStorage.getItem('nlSpec') === 'bars') specMode = 'bars'; } catch (e) {}
 
 function sincKernels(phases, taps, half, fc, tAt, edgeIn) {
   const kern = [];
@@ -2332,7 +2359,7 @@ async function api(url, opts) {
 }
 
 const post = (url, body) => api(url, {method: 'POST', body: body});
-const TABS = ['status', 'connect', 'listen', 'setup'];
+const TABS = ['connect', 'listen', 'setup'];
 
 function note(id, cls, text) {
   const el = $(id);
@@ -2377,6 +2404,7 @@ function micSummary() {
 function playSummary() {
   const on = [];
   if (play.auto) on.push('Auto start');
+  if (play.spec) on.push('Spectrum');
   if (!$('awake-row').classList.contains('hidden') && $('keep-awake').checked) on.push('Screen on');
   if (play.s16) on.push('16-bit');
   if (play.smooth) on.push('Smooth');
@@ -2384,7 +2412,7 @@ function playSummary() {
 }
 
 function showTab(name) {
-  if (!authed && name !== 'listen') name = 'listen';
+  if ((!authed && name !== 'listen') || TABS.indexOf(name) < 0) name = 'listen';
   tab = name;
   TABS.forEach((t) => {
     $('tab-' + t).classList.toggle('hidden', t !== name || !(authed || (t === 'listen' && publicListen)));
@@ -2395,6 +2423,8 @@ function showTab(name) {
   if (name === 'connect') loadFavs();
   if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); micSummary(); playSummary(); }
   if (name === 'listen') openTalk();
+  document.querySelector('main').classList.toggle('fit', name === 'listen');
+  specKick();
 }
 
 function render() {
@@ -2480,22 +2510,24 @@ async function pollStatus() {
   if (!d || d.ok === false) return;
   lastStatus = d;
   $('st-node').textContent = d.node || '(not set)';
-  $('s-node').textContent = d.node || '(not set)';
   if ((d.node || '') !== nodeLabel) { nodeLabel = d.node || ''; setMediaInfo(); }
   $('st-listeners').textContent = d.listeners + ' / ' + d.max_listeners;
   const feedCls = d.receiving ? 'on' : (d.packets ? 'warn' : 'err');
   const feedTxt = d.receiving ? ('receiving, ' + d.packets_per_sec + ' packets/s')
     : (d.last_rx_age != null ? 'no audio for ' + Math.round(d.last_rx_age) + ' s' : 'nothing received yet');
-  ['st-feed', 's-feed'].forEach((id) => { $(id).className = 'dot ' + feedCls; });
-  ['st-feed-t', 's-feed-t'].forEach((id) => { $(id).textContent = feedTxt; });
-  ['st-active', 's-rx'].forEach((id) => { $(id).className = 'dot ' + (d.audio_active ? 'rx' : ''); });
+  $('st-feed').className = 'dot ' + feedCls;
+  $('st-feed-t').textContent = d.receiving ? 'feed' : (d.last_rx_age != null ? 'no feed ' + Math.round(d.last_rx_age) + ' s' : 'no feed yet');
+  $('st-feed-w').title = 'Feed from Asterisk: ' + feedTxt;
+  $('st-active').className = 'dot ' + (d.audio_active ? 'rx' : '');
   $('st-level').textContent = fmtDb(d.peak_db);
   if (d.jitter_ms) jitterSec = d.jitter_ms / 1000;
   if (!playing) $('meter-bar').style.width = dbPct(d.peak_db) + '%';
   if (!authed) return;
   const tx = d.tx || {};
   $('s-tx').className = 'dot ' + (tx.keyed ? 'tx' : '');
-  $('s-tx-t').textContent = tx.keyed ? ('transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs)) : (tx.ready ? 'idle' : 'transmit node not set up');
+  $('s-tx-w').title = tx.keyed ? 'Transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs) : (tx.ready ? 'Nobody is transmitting' : 'Transmit node not set up');
+  busyText = tx.keyed && !talking && !keyed && performance.now() - ownUnkeyAt > 2500 ? 'Busy: ' + tx.who + ' ' + fmtSecs(tx.secs) : '';
+  pttLabel();
   totSec = tx.tot || totSec;
   $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
     : (tx.last_peak_db != null ? fmtDb(tx.last_peak_db) + ' (last transmission)' : 'no transmission yet');
@@ -2534,7 +2566,7 @@ function flush() {
   if (nextT < now + 0.05 || nextT > now + jitterSec + 1.25) nextT = now + jitterSec;
   const src = ctx.createBufferSource();
   src.buffer = buf;
-  src.connect(gainNode);
+  src.connect(busNode);
   src.start(nextT);
   nextT += buf.duration;
   $('meter-bar').style.width = dbPct(peakDb(peakLocal)) + '%';
@@ -2563,12 +2595,100 @@ function push(bytes) {
 
 function listenVolume() { return talking ? 0 : $('vol').value / 100; }
 
+const SPEC_HZ = 4000, SPEC_FPS = 25;
+const SPEC_PAL = (() => {
+  const stops = [[0, 10, 16, 22], [70, 18, 52, 96], [140, 34, 195, 166], [200, 244, 192, 78], [255, 255, 92, 92]];
+  const p = new Uint8ClampedArray(256 * 3);
+  for (let i = 0; i < 256; i++) {
+    let k = 0;
+    while (k < stops.length - 2 && i > stops[k + 1][0]) k++;
+    const a = stops[k], b = stops[k + 1], t = (i - a[0]) / (b[0] - a[0]);
+    for (let c = 0; c < 3; c++) p[i * 3 + c] = a[c + 1] + (b[c + 1] - a[c + 1]) * Math.max(0, Math.min(1, t));
+  }
+  return p;
+})();
+
+function specOn() { return !!play.spec && !!analyser && playing && tab === 'listen' && document.visibilityState === 'visible'; }
+
+function specFit() {
+  const wrap = $('spec-wrap'), box = $('spec-box');
+  wrap.classList.toggle('off', !play.spec);
+  if (!play.spec) return false;
+  wrap.classList.remove('small');
+  if (box.clientHeight < 40) { wrap.classList.add('small'); return false; }
+  const cv = $('spec'), r = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(box.clientWidth * r)), h = Math.max(1, Math.round(box.clientHeight * r));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; specClear(); }
+  return true;
+}
+
+function specClear() {
+  const cv = $('spec'), g = cv.getContext('2d');
+  g.fillStyle = '#0a1016';
+  g.fillRect(0, 0, cv.width, cv.height);
+}
+
+function specDraw() {
+  const cv = $('spec'), g = cv.getContext('2d'), w = cv.width, h = cv.height;
+  analyser.getByteFrequencyData(specBins);
+  const top = Math.min(specBins.length, Math.ceil(SPEC_HZ / (ctx.sampleRate / 2) * specBins.length));
+  const at = (x) => specBins[Math.min(top - 1, Math.floor(x / w * top))];
+  if (specMode === 'bars') {
+    g.fillStyle = '#0a1016';
+    g.fillRect(0, 0, w, h);
+    const step = Math.max(2, Math.floor(w / 96));
+    for (let x = 0; x < w; x += step) {
+      const v = at(x), bh = v / 255 * h;
+      g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
+      g.fillRect(x, h - bh, step - 1, bh);
+    }
+    return;
+  }
+  g.drawImage(cv, 0, 0, w, h - 1, 0, 1, w, h - 1);
+  const row = g.createImageData(w, 1), px = row.data;
+  for (let x = 0; x < w; x++) {
+    const v = at(x), o = x * 4;
+    px[o] = SPEC_PAL[v * 3]; px[o + 1] = SPEC_PAL[v * 3 + 1]; px[o + 2] = SPEC_PAL[v * 3 + 2]; px[o + 3] = 255;
+  }
+  g.putImageData(row, 0, 0);
+}
+
+function specLoop(t) {
+  specRaf = 0;
+  if (!specOn() || !specFit()) return;
+  if (t - specLast >= 1000 / SPEC_FPS) { specLast = t; specDraw(); }
+  specRaf = requestAnimationFrame(specLoop);
+}
+
+function specKick() {
+  if (!specFit()) return;
+  if (!specOn()) { if (!playing) specClear(); return; }
+  if (!specRaf) specRaf = requestAnimationFrame(specLoop);
+}
+
+function specToggle() {
+  specMode = specMode === 'bars' ? 'waterfall' : 'bars';
+  try { localStorage.setItem('nlSpec', specMode); } catch (e) {}
+  if (specFit()) specClear();
+}
+
 function makeCtx() {
   if (ctx) return true;
   if (!AudioCtx) { $('listen-msg').textContent = 'This browser cannot play live audio.'; return false; }
   ctx = newAudioCtx();
   gainNode = ctx.createGain();
   gainNode.gain.value = listenVolume();
+  busNode = ctx.createGain();
+  busNode.connect(gainNode);
+  if (ctx.createAnalyser) {
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    analyser.smoothingTimeConstant = 0.5;
+    analyser.minDecibels = -100;
+    analyser.maxDecibels = -25;
+    busNode.connect(analyser);
+    specBins = new Uint8Array(analyser.frequencyBinCount);
+  }
   const player = $('player');
   if (ctx.createMediaStreamDestination && player && 'srcObject' in player) {
     mediaDest = ctx.createMediaStreamDestination();
@@ -2616,6 +2736,7 @@ async function startListen() {
     }
   } finally { starting = false; }
   playing = true;
+  specKick();
   setMediaState();
   wakeLockApply();
   nextT = 0; pendN = 0; oddByte = -1; ups = null;
@@ -2650,6 +2771,7 @@ async function startListen() {
 function stopListen() {
   autoWaitEnd();
   playing = false;
+  specKick();
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (ctrl) { ctrl.abort(); ctrl = null; }
   if (mediaDest) $('player').pause();
@@ -2699,12 +2821,19 @@ async function wakeLockApply() {
   }
 }
 
+function pttLabel() {
+  const idle = pttState !== 'talking' && pttState !== 'keying';
+  $('ptt-label').textContent = pttState === 'talking' ? 'TALKING' : pttState === 'keying' ? 'Keying...' : (busyText || 'Hold to talk');
+  $('ptt').classList.toggle('busy', idle && !!busyText);
+}
+
 function pttUi(state, text, cls) {
   const b = $('ptt');
+  pttState = state;
   b.classList.toggle('talking', state === 'talking' || state === 'keying');
   b.classList.toggle('ready', state === 'ready');
   b.disabled = state === 'off';
-  $('ptt-label').textContent = state === 'talking' ? 'TALKING' : state === 'keying' ? 'Keying...' : 'Hold to talk';
+  pttLabel();
   if (text !== undefined) note('ptt-msg', cls, text);
 }
 
@@ -2830,12 +2959,13 @@ function loadMicUi() {
   $('mic-gain').value = mic.gain;
   $('mic-gain-v').textContent = fmtGain(mic.gain);
   $('mic-gate').value = String(Number(mic.gate) || 0);
-  $('play-s16').checked = !!play.s16; $('play-smooth').checked = !!play.smooth; $('play-auto').checked = !!play.auto;
+  $('play-s16').checked = !!play.s16; $('play-smooth').checked = !!play.smooth; $('play-auto').checked = !!play.auto; $('play-spec').checked = !!play.spec;
 }
 
 function savePlay() {
   const was = play.s16;
-  play = {s16: $('play-s16').checked, smooth: $('play-smooth').checked, auto: $('play-auto').checked};
+  play = {s16: $('play-s16').checked, smooth: $('play-smooth').checked, auto: $('play-auto').checked, spec: $('play-spec').checked};
+  specKick();
   try { localStorage.setItem('nlPlay', JSON.stringify(play)); } catch (e) {}
   ups = null;
   playSummary();
@@ -2932,6 +3062,7 @@ function stopMic() {
 }
 
 function endTalk() {
+  if (talking) ownUnkeyAt = performance.now();
   talking = false;
   preKey = [];
   stopMic();
@@ -3232,6 +3363,7 @@ document.addEventListener('DOMContentLoaded', () => {
   window.addEventListener('blur', () => { if (!micPending) pttUp(); });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') pttUp(); else { openTalk(); pollStatus(); }
+    specKick();
     wakeLockApply();
   });
   $('c-fav').addEventListener('change', showSelected);
@@ -3253,7 +3385,9 @@ document.addEventListener('DOMContentLoaded', () => {
   loadMicUi();
   MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
   $('mic-gate').addEventListener('change', saveMic);
-  ['play-s16', 'play-smooth', 'play-auto'].forEach((id) => $(id).addEventListener('change', savePlay));
+  ['play-s16', 'play-smooth', 'play-auto', 'play-spec'].forEach((id) => $(id).addEventListener('change', savePlay));
+  $('spec').addEventListener('click', specToggle);
+  window.addEventListener('resize', specKick);
   $('mic-test').addEventListener('click', micTest);
   $('node-test').addEventListener('click', nodeTest);
   try { window.name = 'asl_dvs_listen'; } catch (e) {}
@@ -3268,7 +3402,6 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 """
 
-_ICON_STATUS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg>'
 _ICON_CONNECT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"></path><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"></path></svg>'
 _ICON_LISTEN = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 14v-2a8 8 0 0 1 16 0v2"></path><rect x="3" y="14" width="4" height="6" rx="1.5"></rect><rect x="17" y="14" width="4" height="6" rx="1.5"></rect></svg>'
 _ICON_SETUP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg>'
@@ -3300,24 +3433,18 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 <main>
 
-<section id="tab-status" class="hidden">
-<div class="card">
-<div class="row" style="justify-content:space-between;margin:0"><span class="muted small">Node</span><span class="big-num" id="s-node">-</span></div>
-<table>
-<tr><th>Receive</th><td><span id="s-rx" class="dot"></span>lit while the node is passing audio</td></tr>
-<tr><th>Transmit</th><td><span id="s-tx" class="dot"></span><span id="s-tx-t">-</span></td></tr>
-<tr><th>Feed</th><td><span id="s-feed" class="dot"></span><span id="s-feed-t">-</span></td></tr>
-</table>
-</div>
+<section id="tab-connect" class="hidden">
 <div class="card">
 <h2>Links</h2>
 <table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
 <div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
 <div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
+<div class="row" style="justify-content:space-between;margin:10px 0 0">
+<div><div class="muted small">Linked favorites</div><div class="mono" id="c-linked" style="font-weight:700">-</div></div>
+<button id="c-disc" class="btn danger" type="button" disabled>Disconnect</button>
 </div>
-</section>
-
-<section id="tab-connect" class="hidden">
+<div class="muted small" style="margin-top:6px">Disconnect drops linked favorites only; other links stay.</div>
+</div>
 <div class="card">
 <h2>Connect</h2>
 <div id="c-empty" class="muted">No favorites yet. Add up to 10 on the Setup tab.</div>
@@ -3332,35 +3459,29 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 </div>
 <div id="c-msg" class="msg"></div>
 </div>
-<div class="card">
-<div class="row" style="justify-content:space-between;margin:0">
-<div><div class="muted small">Linked now</div><div class="mono" id="c-linked" style="font-weight:700">-</div></div>
-<button id="c-disc" class="btn danger" type="button" disabled>Disconnect</button>
-</div>
-<div class="muted small" style="margin-top:6px">Disconnect drops linked favorites only; other links stay.</div>
-</div>
 </section>
 
 <section id="tab-listen" class="hidden">
-<div class="card">
+<div class="lpanel">
 <div class="row listen-row"><button id="listen-btn" class="btn primary big" type="button">Listen</button>
 <svg class="vol-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"></path><path d="M16 9a4 4 0 0 1 0 6"></path></svg>
 <input type="range" id="vol" min="0" max="200" value="100" aria-label="Volume"></div>
-<div class="row"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
+<div class="lstat"><span class="mono" id="st-node" title="Node">-</span>
+<span id="st-feed-w"><span id="st-feed" class="dot"></span><span id="st-feed-t">feed</span></span>
+<span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span>
+<span id="s-tx-w" title="Lit while someone transmits from Node Listen"><span id="s-tx" class="dot"></span>TX</span>
+<span id="st-listeners" title="Listeners">-</span></div>
+<div class="spec" id="spec-wrap">
+<div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum: tap to switch between waterfall and bars"></canvas>
+<span class="spec-lo" aria-hidden="true"></span><span class="spec-t" style="left:7.5%">300</span><span class="spec-t" style="left:25%">1k</span>
+<span class="spec-t" style="left:50%">2k</span><span class="spec-t" style="left:75%">3k</span></div>
+<div class="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
+</div>
 <audio id="player" playsinline class="hidden"></audio>
 <div id="listen-msg" class="msg"></div>
-<table>
-<tr><th>Node</th><td id="st-node">-</td></tr>
-<tr><th>Feed</th><td><span id="st-feed" class="dot"></span><span id="st-feed-t">-</span></td></tr>
-<tr><th>Audio</th><td><span id="st-active" class="dot"></span>lit while the node is passing audio</td></tr>
-<tr><th>Listeners</th><td id="st-listeners">-</td></tr>
-</table>
-</div>
-<div class="card" id="ptt-card">
-<div class="ptt-wrap">
+<div id="ptt-card">
 <button id="ptt" type="button" disabled aria-label="Push to talk: hold to transmit"><span id="ptt-label">Hold to talk</span><span id="ptt-time"></span></button>
-<div id="ptt-info" class="muted small" style="text-align:center">-</div>
-<div id="ptt-msg" class="msg" style="text-align:center"></div>
+<div class="ptt-line"><span id="ptt-msg" class="msg"></span><span id="ptt-info" class="muted">-</span></div>
 </div>
 </div>
 </section>
@@ -3492,6 +3613,7 @@ mic volume, so the gain here is applied in the page.</p>
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-play"><span class="fold-t">Playback</span><span class="fold-sum" id="sum-play"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-play">
 <p class="muted small">Saved in this browser only; each phone keeps its own.</p>
+<div class="row"><label><input type="checkbox" id="play-spec"> Show the spectrum on the Listen tab (tap it to switch waterfall / bars)</label></div>
 <div class="row"><label><input type="checkbox" id="play-auto"> Start listening when the page opens (the browser may want one tap first)</label></div>
 <div class="row hidden" id="awake-row"><label><input type="checkbox" id="keep-awake"> Keep the screen on while listening or talking</label></div>
 <div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
@@ -3509,7 +3631,6 @@ mic volume, so the gain here is applied in the page.</p>
 </section>
 </main>
 <nav class="tabs hidden" id="nav" aria-label="Main">
-<button id="nav-status" type="button">__ICON_STATUS__Status</button>
 <button id="nav-connect" type="button">__ICON_CONNECT__Connect</button>
 <button id="nav-listen" type="button">__ICON_LISTEN__Listen</button>
 <button id="nav-setup" type="button">__ICON_SETUP__Setup</button>
@@ -3527,8 +3648,7 @@ def render_page():
     global _page
     if _page is None:
         html = _HTML_TEMPLATE
-        for key, val in (("__CSS__", _CSS), ("__JS__", _JS), ("__ICON_STATUS__", _ICON_STATUS),
-                         ("__ICON_CONNECT__", _ICON_CONNECT), ("__ICON_LISTEN__", _ICON_LISTEN),
+        for key, val in (("__CSS__", _CSS), ("__JS__", _JS), ("__ICON_CONNECT__", _ICON_CONNECT), ("__ICON_LISTEN__", _ICON_LISTEN),
                          ("__ICON_SETUP__", _ICON_SETUP), ("__VERSION__", VERSION)):
             html = html.replace(key, val)
         _page = html.encode("utf-8")
