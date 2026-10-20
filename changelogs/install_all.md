@@ -1,6 +1,24 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_3_0_20261020.sh`. Newest entries first.
+Current file: `install_all_v7_3_1_20261020.sh`. Newest entries first.
+
+## 7.3.1 (2026-10-20)
+
+- **No silent downgrade.** When an installed tool with no file on the Pi is
+  updated from GitHub, the download's version is compared with the installed
+  one. If the download is older (for example stable wifimon 5.34.0 over an
+  installed 5.39.0.1), the installer says so and asks "Install the older
+  version? [y/N]". No removes the download and leaves the tool as it is.
+- **A failed stable download no longer falls back to `main`.** If the stable
+  build can't be fetched or doesn't match `channels/stable.json`, that tool is
+  skipped with a warning. `main` is used only for a tool that has no stable
+  build at all (Node Listen today), or with `ASL_DVS_CHANNEL=testing`.
+- **Copies in `/tmp` don't stop a download.** The check for a missing file
+  ignores `/tmp`, where the installer stages copies from earlier runs. Those
+  copies are still listed when you pick a version.
+- The `channels/stable.json` file name, commit and blob are checked before use
+  (a plain file name, hex commit and blob ids). Its Python helpers run with
+  `python3 -I`.
 
 ## 7.3.0 (2026-10-20)
 

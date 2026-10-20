@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.3.0  (2026-10-20)
+# install_all.sh  v7.3.1  (2026-10-20)
 
 set -euo pipefail
 
@@ -238,7 +238,7 @@ stage_and_select() {
 }
 
 any_file() {
-    local pattern="$1" lib_dir="${2:-}" exclude="${3:-}" d script_dir p
+    local pattern="$1" lib_dir="${2:-}" exclude="${3:-}" skip_tmp="${4:-false}" d script_dir p
     local -a _pats=() _excl=() _expr=()
     IFS='|' read -r -a _pats <<< "${pattern}"
     [[ -n "${exclude}" ]] && IFS='|' read -r -a _excl <<< "${exclude}"
@@ -253,6 +253,7 @@ any_file() {
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     for d in "${script_dir}" "$(pwd)" "/root" "/home/pi" "/home/${SUDO_USER:-pi}" "/tmp" ${lib_dir:+"${lib_dir}"}; do
         [[ -d "${d}" ]] || continue
+        [[ "${skip_tmp}" == "true" && "${d}" == "/tmp" ]] && continue
         [[ -n "$(find "${d}" -maxdepth 1 "${_expr[@]}" -print -quit 2>/dev/null)" ]] && return 0
     done
     return 1
@@ -307,38 +308,37 @@ open_repo() {
 
 stable_entry() {
     GIT_TERMINAL_PROMPT=0 git -C "${FETCH_REPO}" show HEAD:channels/stable.json 2>/dev/null \
-        | python3 -c 'import json,sys
+        | python3 -I -c 'import json,re,sys
 try:
     t=(json.load(sys.stdin).get("tools") or {}).get(sys.argv[1]) or {}
 except Exception:
     t={}
-f,c,b=t.get("file",""),t.get("commit",""),t.get("blob","")
-print(f"{f} {c} {b}" if f and c and b and "/" not in f and " " not in f else "")' "$1"
+f,c,b=str(t.get("file","")),str(t.get("commit","")),str(t.get("blob",""))
+h=re.compile(r"[0-9a-f]{40}([0-9a-f]{24})?")
+print(f"{f} {c} {b}" if re.fullmatch(r"[A-Za-z0-9._-]+",f) and not f.startswith("-") and h.fullmatch(c) and h.fullmatch(b) else "")' "$1"
 }
 
-FETCHED=""
 fetch_tool() {
     local key="$1" label="$2" pattern="$3" exclude="$4" lib_dir="$5" build="${6:-}"
     local file="" commit="" blob="" rev="HEAD" src="main" entry name tmp
-    FETCHED=""
+    FETCHED_FILE=""
     open_repo || return 1
     if [[ "${GH_CHANNEL}" == "stable" ]]; then
         entry="$(stable_entry "${key}" || true)"
         if [[ -n "${entry}" ]]; then
             read -r file commit blob <<< "${entry}"
             if ! name_matches "${file}" "${pattern}" "${exclude}"; then
-                warn "${label}: the stable list names ${file}, which is not a ${label} file — using main"
-                file=""
+                warn "${label}: the stable list names ${file}, which is not a ${label} file — not downloaded"
+                return 1
             elif ! GIT_TERMINAL_PROMPT=0 git -C "${FETCH_REPO}" fetch -q --depth 1 --filter=blob:none origin "${commit}" 2>/dev/null; then
-                warn "${label}: could not fetch the stable build (${file}) — using main"
-                file=""
+                warn "${label}: could not fetch the stable build (${file}) — not downloaded"
+                return 1
             elif [[ "$(git -C "${FETCH_REPO}" rev-parse "${commit}:${file}" 2>/dev/null)" != "${blob}" ]]; then
-                warn "${label}: ${file} does not match the stable list — using main"
-                file=""
-            else
-                rev="${commit}"
-                src="stable"
+                warn "${label}: ${file} does not match the stable list — not downloaded"
+                return 1
             fi
+            rev="${commit}"
+            src="stable"
         else
             info "${label} has no stable build yet — using the newest file on main"
         fi
@@ -368,7 +368,7 @@ fetch_tool() {
         rm -f -- "${tmp}"
         return 1
     fi
-    if [[ "${file}" == *.py ]] && ! python3 -c 'import sys; compile(open(sys.argv[1],"rb").read(), sys.argv[1], "exec")' "${tmp}" 2>/dev/null; then
+    if [[ "${file}" == *.py ]] && ! python3 -I -c 'import sys; compile(open(sys.argv[1],"rb").read(), sys.argv[1], "exec")' "${tmp}" 2>/dev/null; then
         warn "${label}: ${file} failed the syntax check — not used"
         rm -f -- "${tmp}"
         return 1
@@ -382,15 +382,30 @@ fetch_tool() {
     fi
     chmod 644 "${tmp}"
     mv -f -- "${tmp}" "${lib_dir}/${file}" || { rm -f -- "${tmp}"; return 1; }
-    FETCHED="${lib_dir}/${file}"
+    FETCHED_FILE="${lib_dir}/${file}"
     DOWNLOADED+=("${file} (${src})")
     ok "Downloaded ${file} (${src}) → ${lib_dir}/"
     return 0
 }
 
+file_version() {
+    [[ -f "$1" ]] || return 0
+    sed -n -E 's/^[[:space:]]*(VERSION|APP_VERSION|SCRIPT_VERSION)[[:space:]]*=[[:space:]]*"([^"]+)".*/\2/p' "$1" 2>/dev/null | head -1 || true
+}
+
+version_older() {
+    python3 -I -c 'import re,sys
+def k(v):
+    v=re.sub(r"-pi02w$","",v.strip())
+    return tuple(int(x) for x in re.findall(r"\d+",v))
+a,b=k(sys.argv[1]),k(sys.argv[2])
+sys.exit(0 if a and b and a<b else 1)' "$1" "$2"
+}
+
+FETCHED_FILE=""
 fetch_if_missing() {
-    local key="$1" label="$2" installed="$3" pattern="$4" exclude="$5" lib_dir="$6" build="${7:-}" ans
-    any_file "${pattern}" "${lib_dir}" "${exclude}" && return 0
+    local key="$1" label="$2" installed="$3" pattern="$4" exclude="$5" lib_dir="$6" build="${7:-}" installed_bin="${8:-}" ans new_ver old_ver
+    any_file "${pattern}" "${lib_dir}" "${exclude}" true && return 0
     if [[ "${DOWNLOAD}" != "true" ]]; then
         info "No ${label} file found — offline, nothing downloaded"
         return 0
@@ -409,6 +424,22 @@ fetch_if_missing() {
         info "No ${label} file found — downloading it from GitHub"
     fi
     fetch_tool "${key}" "${label}" "${pattern}" "${exclude}" "${lib_dir}" "${build}" || true
+    if [[ "${installed}" == "true" && -n "${FETCHED_FILE}" && -n "${installed_bin}" ]]; then
+        new_ver="$(file_version "${FETCHED_FILE}")"
+        old_ver="$(file_version "${installed_bin}")"
+        if [[ -n "${new_ver}" && -n "${old_ver}" ]] && version_older "${new_ver}" "${old_ver}"; then
+            warn "${label}: the ${GH_CHANNEL} build (${new_ver}) is older than the installed ${old_ver}"
+            read -r -p "  Install the older version? [y/N]: " ans </dev/tty
+            case "${ans,,}" in
+                y|yes) ok "Proceeding with the older version" ;;
+                *)
+                    rm -f -- "${FETCHED_FILE}"
+                    DOWNLOADED=("${DOWNLOADED[@]:0:${#DOWNLOADED[@]}-1}")
+                    info "${label} left at ${old_ver}"
+                    ;;
+            esac
+        fi
+    fi
     return 0
 }
 
@@ -694,11 +725,11 @@ pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
 DASH_VARIANT="${PICKED_BUILD}"
 if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
     info "Dashboard build: Pi Zero 2 W (nodecontrol_pi02w*.py), from ${PICKED_WHY}"
-    fetch_if_missing "nodecontrol_pi02w" "Dashboard (Pi Zero 2 W)" "${_dash_exists}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "" "${DASH_LIB_DIR}" pi02w
+    fetch_if_missing "nodecontrol_pi02w" "Dashboard (Pi Zero 2 W)" "${_dash_exists}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "" "${DASH_LIB_DIR}" pi02w "${DASH_BIN}"
     stage_and_select "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
 else
     info "Dashboard build: full (nodecontrol*.py without _pi02w), from ${PICKED_WHY}"
-    fetch_if_missing "nodecontrol" "Dashboard" "${_dash_exists}" "nodecontrol*.py|asl_dvs_dashboard*.py" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "${DASH_LIB_DIR}" full
+    fetch_if_missing "nodecontrol" "Dashboard" "${_dash_exists}" "nodecontrol*.py|asl_dvs_dashboard*.py" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "${DASH_LIB_DIR}" full "${DASH_BIN}"
     stage_and_select "nodecontrol*.py|asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" || true
 fi
 DASH_CHOSEN="${CHOSEN}"
@@ -720,10 +751,10 @@ case "${SYSMON_VARIANT}" in
 esac
 CHOSEN=""
 if [[ "${SYSMON_VARIANT}" == "pi02w" ]]; then
-    fetch_if_missing "sysmon_pi02w" "SysMon (Pi Zero 2 W)" "${_sysmon_exists}" "sysmon_pi02w*.py" "" "${SYSMON_LIB_DIR}" pi02w
+    fetch_if_missing "sysmon_pi02w" "SysMon (Pi Zero 2 W)" "${_sysmon_exists}" "sysmon_pi02w*.py" "" "${SYSMON_LIB_DIR}" pi02w "${SYSMON_BIN}"
     stage_and_select "sysmon_pi02w*.py" "SysMon (Pi Zero 2 W)" "${SYSMON_LIB_DIR}" || true
 else
-    fetch_if_missing "sysmon" "SysMon" "${_sysmon_exists}" "sysmon*.py" "sysmon_pi02w*.py" "${SYSMON_LIB_DIR}" full
+    fetch_if_missing "sysmon" "SysMon" "${_sysmon_exists}" "sysmon*.py" "sysmon_pi02w*.py" "${SYSMON_LIB_DIR}" full "${SYSMON_BIN}"
     stage_and_select "sysmon*.py" "SysMon" "${SYSMON_LIB_DIR}" "sysmon_pi02w*.py" || true
 fi
 SYSMON_CHOSEN="${CHOSEN}"
@@ -738,7 +769,7 @@ fi
 
 hdr "wifimon — file discovery"
 CHOSEN=""
-fetch_if_missing "wifimon" "wifimon" "${_wifimon_exists}" "wifimon*.py" "" "${WIFIMON_LIB_DIR}"
+fetch_if_missing "wifimon" "wifimon" "${_wifimon_exists}" "wifimon*.py" "" "${WIFIMON_LIB_DIR}" "" "${WIFIMON_BIN}"
 stage_and_select "wifimon*.py" "wifimon" "${WIFIMON_LIB_DIR}" || true
 WIFIMON_CHOSEN="${CHOSEN}"
 
@@ -751,7 +782,7 @@ fi
 
 hdr "44helper — file discovery"
 CHOSEN=""
-fetch_if_missing "44helper" "44helper" "${_helper_exists}" "44helper*.py|asl_dvs_m17_44helper*.py" "" "${HELPER_LIB_DIR}"
+fetch_if_missing "44helper" "44helper" "${_helper_exists}" "44helper*.py|asl_dvs_m17_44helper*.py" "" "${HELPER_LIB_DIR}" "" "${HELPER_BIN}"
 stage_and_select "44helper*.py|asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
 HELPER_CHOSEN="${CHOSEN}"
 
@@ -787,7 +818,7 @@ if [[ "${_nodelisten_exists}" != "true" ]]; then
     fi
 fi
 if [[ "${_nl_want}" == "true" ]]; then
-    fetch_if_missing "nodelisten" "Node Listen" "${_nodelisten_exists}" "nodelisten*.py" "" "${NODELISTEN_LIB_DIR}"
+    fetch_if_missing "nodelisten" "Node Listen" "${_nodelisten_exists}" "nodelisten*.py" "" "${NODELISTEN_LIB_DIR}" "" "${NODELISTEN_BIN}"
     stage_and_select "nodelisten*.py" "Node Listen" "${NODELISTEN_LIB_DIR}" || true
 fi
 NODELISTEN_CHOSEN="${CHOSEN}"

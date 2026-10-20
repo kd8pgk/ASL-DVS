@@ -89,10 +89,10 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
    ```
-   sudo bash install_all_v7_3_0_20261020.sh
+   sudo bash install_all_v7_3_1_20261020.sh
    ```
    - The installer (7.3.0 and later) only needs its own file. A tool with no file on the Pi is downloaded from this repo (stable channel; set `ASL_DVS_CHANNEL=testing` for `main`), and git is installed first if it is missing. It also installs instmon when it isn't installed.
-   - A tool that is already installed but has no file on the Pi is left as it is; interactive runs ask whether to download and update it. Use `--offline` (or `--no-download`) to use only the files on the Pi.
+   - A tool that is already installed but has no file on the Pi is left as it is; interactive runs ask whether to download and update it, and ask again before installing a download older than the installed version. Use `--offline` (or `--no-download`) to use only the files on the Pi.
    - On first install it asks for your callsign, node number and a label.
    - Run it with `--non-interactive` (or `-y`) to skip the questions. In that case, set `AUTO_CALLSIGN`, `AUTO_NODE` and `AUTO_LABEL` first.
    - Any subset of the tools can be installed.
@@ -341,7 +341,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `44helper_v0_0_216_20261019.py` | common |
 | `nodelisten_v0_4_19_20261020.py` | common |
 | `amp_nodelisten_v0_2_0_20261020.py` | AMP nodes only (stands alone) |
-| `install_all_v7_3_0_20261020.sh` | common |
+| `install_all_v7_3_1_20261020.sh` | common |
 | `uninstall_all_v1_6_0_20261018.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
