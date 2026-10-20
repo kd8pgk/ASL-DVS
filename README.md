@@ -123,7 +123,7 @@ and Full Update, which updates it only where it is installed. It also installs
 on its own:
 
 ```
-sudo python3 nodelisten_v0_5_0_20261020.py --install
+sudo python3 nodetalker_v0_6_0_20261020.py --install
 ```
 
 Then open `http://<pi-address>:8993` (it moves you to `https://`; the
@@ -360,7 +360,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_63_0_20261020.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodelisten_v0_5_0_20261020.py` | common |
+| `nodetalker_v0_6_0_20261020.py` | common |
 | `amp_nodelisten_v0_2_1_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_3_1_20261020.sh` | common |
 | `uninstall_all_v1_6_0_20261018.sh` | common |
