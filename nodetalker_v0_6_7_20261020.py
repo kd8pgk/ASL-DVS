@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.6"
+VERSION = "0.6.7"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -5663,7 +5663,7 @@ async function loadDashFavs() {
   const sel = $('fe-dash');
   sel.innerHTML = '';
   addOption(sel, '', dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites found');
-  dashFavs.forEach((f, i) => addOption(sel, String(i), modeName(f.mode) + ' ' + favNum(f) + ' · ' + f.label));
+  dashFavs.forEach((f, i) => addOption(sel, String(i), f.label || (modeName(f.mode) + ' ' + favNum(f))));
 }
 
 function drawFavEditor() {

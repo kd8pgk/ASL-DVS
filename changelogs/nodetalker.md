@@ -1,6 +1,12 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_6_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_7_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.7 (2026-10-20)
+
+- **Dashboard favorites list** (Setup, *Favorites*, "From the Dashboard...")
+  shows only each favorite's name, as the Connect tab's list does since
+  0.6.6.
 
 ## 0.6.6 (2026-10-20)
 
