@@ -32,7 +32,7 @@
       <tr><td>44helper</td><td class="mono">44helper_v0_0_215_20261018.py</td><td>0.0.215</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_57_0_20261018.py</td><td>2.57.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
-      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_15_20261020.py</td><td>0.4.15</td></tr>
+      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_17_20261020.py</td><td>0.4.17</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_86_20261014.py</td><td>6.13.86</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_84_20261018.py</td><td>9.3.84</td></tr>
@@ -2484,7 +2484,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
       tab later, so audio that is playing keeps playing. It is greyed out while Node Listen isn't running
       (9.3.90-pi02w, full build 9.3.86). Node Listen's <b>Node Controller</b> button comes back.</li>
     <li>When Node Listen connects a favorite from the Dashboard's node, it asks the Dashboard to do it, so the
-      Dashboard changes to that mode's tab and shows the favorite. That includes M17 reflectors (section 15.6), which
+      Dashboard changes to that mode's tab and shows the favorite. That includes M17 reflectors (section 15.5), which
       only the Dashboard can tune (9.3.92-pi02w, full build 9.3.88). The page follows such changes on its next poll
       from 9.3.93-pi02w (full build 9.3.89).</li>
     <li>Node 1921, Node Listen's push-to-talk node, is left linked when you change tab, and the Dashboard won't
@@ -2560,7 +2560,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
         forward, so wifimon no longer alerts at once on a fresh "unregistered". The Phone setup refresh retries every
         15 seconds for up to 5 minutes until Asterisk answers.</li>
       <li><b>Service:</b> <code>nodecontrol</code> (<code>asl_dvs_dashboard</code> before 9.3.76 / 9.3.71.15-pi02w), with <code>Restart=always</code> and <code>WatchdogSec=30</code>, so it is restarted if it stops answering. That is why the separate Watchdog script isn't needed.</li>
-      <li><b>Node Listen's M17 favorites</b> (section 15.6) go through the Dashboard's local API: a
+      <li><b>Node Listen's M17 favorites</b> (section 15.5) go through the Dashboard's local API: a
         <code>POST /api/local/action</code> to <code>127.0.0.1</code> on the Dashboard's port, carrying the key in
         <code>/etc/asl_dvs/local_api.key</code>. <code>m17-connect</code> (reflector, module, name) looks the reflector
         up in <code>M17Hosts.json</code>, then in the <code>[M17]</code> favorites in <code>asl_dvs.conf</code>, checks
@@ -2884,7 +2884,9 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">Node Listen puts one node in your phone's browser: it plays the node's audio about half a second
     behind, transmits with push-to-talk, and connects up to 10 favorites. Open it at
     <code>http://&lt;pi-address&gt;:8993</code>; it moves you to <code>https://</code>. It is optional, and the same
-    file runs on the Pi Zero 2 W and the full build. This chapter describes Node Listen 0.4.15.</p>
+    file runs on the Pi Zero 2 W and the full build. This chapter is a summary for Node Listen 0.4.17. The
+    <b>Node Listen Manual</b> (<code>docs/ASL-DVS_Node_Listen_Manual.pdf</code>) covers receive and transmit audio,
+    every setting, the meters and the Audio check in detail.</p>
 
   <h2><span class="n">15.1</span>Before you start</h2>
   <ol class="steps">
@@ -2903,111 +2905,35 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     moment. A node takes one <code>outstreamcmd</code> line, so a node that already feeds Broadcastify is refused.</div>
 
   <h2><span class="n">15.2</span>The page</h2>
-  <figure>
-    <div class="mock">
-      <div class="bar"><span class="ttl" style="color:var(--text)">Node Listen</span><span class="meta">v0.4.14 · <span class="btn">Node Controller</span> <span class="btn">Log Out</span></span></div>
-      <div class="row"><span class="btn c">Stop</span><span class="txt" style="flex:1">🔈 ━━━━━━━━━○━━━━━</span></div>
-      <div class="row"><span class="txt"><b>41234</b> &nbsp;<span style="color:var(--grn)">●</span> feed &nbsp;<span style="color:var(--yel)">●</span> RX &nbsp;● TX &nbsp;1 / 3</span></div>
-      <div class="row"><span class="txt" style="flex:1;height:5.2em;border:1px solid var(--line);border-radius:4px;background:linear-gradient(90deg,rgba(255,208,64,.12) 0 7.5%,transparent 7.5%),repeating-linear-gradient(180deg,#0b1018 0 3px,#12324f 3px 4px);position:relative"><span style="position:absolute;left:27%;top:0;bottom:0;width:3px;background:var(--yel)"></span><span style="position:absolute;left:58%;top:30%;bottom:20%;width:3px;background:var(--cyan)"></span></span></div>
-      <div class="row"><span class="txt" style="flex:1;height:.35em;background:linear-gradient(90deg,var(--grn) 0 55%,var(--line) 55%)"></span><span class="txt">-18 dBFS</span></div>
-      <div class="row"><span class="txt" style="color:var(--grn)">Listening. (16-bit)</span></div>
-      <div class="row"><span class="btn" style="flex:1;padding:1.1em 1em;border-radius:8px;border-color:var(--grn)">Hold to talk</span></div>
-      <div class="tabs" style="justify-content:space-around;border-top:1px solid var(--line)"><span class="tab">Connect</span><span class="tab on" style="background:var(--grn)">Listen</span><span class="tab">Setup</span></div>
-    </div>
-    <figcaption><b>Figure 15.1 · Illustration.</b> The Listen tab on a phone (0.4.14): Listen/Stop with the volume,
-      the status line, the waterfall (below 300 Hz shaded) with the level bar under it, the message line, the
-      oblong push-to-talk button, and the tabs bar at the bottom.</figcaption>
-  </figure>
+  <p>The title bar stays at the top and the tabs bar at the bottom. <b>Node Controller</b> in the title bar opens the
+    Dashboard. With <b>Listen without logging in</b> on, anyone who can reach the page can listen, but not transmit or
+    change anything.</p>
   <table>
-    <tr><th>Part</th><th>What it does</th></tr>
-    <tr><td>Title bar</td><td>Version; <b>Node Controller</b> opens the Dashboard (only while it runs) and switches to its tab if it is already open; <b>Log In</b> or <b>Log Out</b>.</td></tr>
-    <tr><td>Tabs bar</td><td>Connect, Listen and Setup, at the bottom. Shown after you log in. (Before 0.4.14 there was also a Status tab; its lights are now on the Listen tab and its Links table on the Connect tab.)</td></tr>
-    <tr><td>Login card</td><td>The root password. Five wrong tries from one address lock that address out for a while (5 seconds, doubling up to 5 minutes).</td></tr>
-  </table>
-  <p>The title bar stays at the top and the tabs bar at the bottom; only the page between them scrolls (0.4.11.1).
-    The Listen tab is sized to the screen so it doesn't scroll at all (section 15.3).
-    With <b>Listen without logging in</b> on (Settings card), anyone who can reach the page gets the Listen tab
-    without the password, but can't transmit or change anything; <b>Log In</b> in the title bar opens the login card.</p>
-
-  <h2><span class="n">15.3</span>Listen tab</h2>
-  <p>From 0.4.14 the Listen tab is one panel sized to the screen, so on a phone it doesn't scroll. Only the
-    spectrum grows or shrinks to fit. On a very short screen, such as a phone on its side, the spectrum hides first,
-    and only then does the tab scroll.</p>
-  <table>
-    <tr><th>Part, top to bottom</th><th>What it does</th></tr>
-    <tr><td>Listen / Stop and volume</td><td>Starts and stops the audio; if the stream drops, the page tries again every 3 seconds. The slider beside it sets the volume, 0 to 200 %. The node's audio is muted on this phone while you transmit.</td></tr>
-    <tr><td>Status line</td><td>The node number; <b>feed</b> (green while audio arrives from Asterisk, "no feed 12 s" or "no feed yet" when it doesn't); <b>RX</b>, lit while the node passes audio; <b>TX</b>, lit while someone transmits from Node Listen; and listeners now / the limit. Hover over a light for the details.</td></tr>
-    <tr><td>Spectrum</td><td>What the node is passing, 0 to 4 kHz (below).</td></tr>
-    <tr><td>Level bar</td><td>The audio level, in dBFS, under the spectrum.</td></tr>
-    <tr><td>Message line</td><td><i>Listening.</i>, <i>Tap anywhere to start listening</i>, or why the stream stopped.</td></tr>
-    <tr><td>Push-to-talk</td><td>The wide button at the bottom (below).</td></tr>
-  </table>
-  <h3>Spectrum (0.4.14)</h3>
-  <p>The spectrum shows the node's audio from 0 to 4 kHz, which is all an 8 kHz node carries. It starts as a
-    <b>waterfall</b>: each new line is at the top, so a steady tone draws a vertical stripe and speech draws
-    shifting bands. <b>Tap it</b> to switch to bars and back; each browser remembers. The strip below 300 Hz is
-    shaded: a stripe there is usually a CTCSS (PL) tone or hum, and with <b>Cut below 300 Hz</b> on (section 15.7) it
-    should be faint or gone. Marks along the bottom show 300 Hz, 1, 2 and 3 kHz.</p>
-  <ul>
-    <li>It is drawn by the phone, not the Pi, and only while you listen with the page on screen.</li>
-    <li>It shows the audio before your volume, so it keeps moving while push-to-talk mutes the speaker.</li>
-    <li>To save battery on an old phone, turn off <b>Show the spectrum</b> on the Setup tab's Playback card.</li>
-  </ul>
-  <h3>Listening starts by itself (0.4.12)</h3>
-  <p>When the page opens, and after you log in, Node Listen starts playing by itself. Most browsers hold sound until
-    the page has been tapped once; then the Listen tab says <i>Tap anywhere to start listening</i> in amber, and the
-    first tap or key press anywhere starts it. <b>Stop</b> stops it until you press Listen again or open the page again.
-    To go back to pressing Listen, turn off <b>Start listening when the page opens</b> on the Setup tab's Playback
-    card (each browser keeps its own setting). <b>Keep the screen on</b> is on the same card (0.4.13).</p>
-  <ul>
-    <li>The phone's lock screen and headset buttons can play and pause the audio, like any media.</li>
-    <li>When every listener slot is taken, the page says <i>All 3 listener slots are in use</i> and keeps trying.</li>
-  </ul>
-  <h3>Push-to-talk</h3>
-  <p>Shown after you log in. Hold the wide button at the bottom of the Listen tab (or Space or Enter on a keyboard)
-    and talk; let go to stop. The first press asks for the microphone. While you talk the button turns red, reads
-    TALKING, and counts the time against the time-out on its right. When someone else is transmitting from Node
-    Listen, the button turns amber and reads <i>Busy: &lt;who&gt; 0:12</i> (0.4.14). The line under it shows node
-    1921 and the time-out, or the message below when there is one.</p>
-  <table>
-    <tr><th>Message</th><th>Why</th></tr>
-    <tr><td>The node is busy (someone is talking)</td><td><b>Don't transmit while the node is busy</b> is on and the node is passing audio. Try again when it is quiet.</td></tr>
-    <tr><td>Someone else is transmitting from Node Listen</td><td>Only one person transmits at a time.</td></tr>
-    <tr><td>Node 1921 is not set up yet</td><td>Add node 1921 on the Setup tab (section 15.1).</td></tr>
-    <tr><td>Node 1921 is not linked to the node yet</td><td>Restart Asterisk once after adding it; Node Listen links it within 20 seconds.</td></tr>
-    <tr><td>Time-out: transmission stopped after 2:00</td><td>The TX time-out (Settings card, 120 s by default). Let go and press again.</td></tr>
-    <tr><td>Audio stopped reaching the node, so it unkeyed</td><td>No audio arrived for 1 second, usually a weak phone connection.</td></tr>
-    <tr><td>Push-to-talk needs the https:// page</td><td>You opened the page on plain HTTP. Turn HTTPS on (Settings card).</td></tr>
+    <tr><th>Tab</th><th>What it holds</th></tr>
+    <tr><td>Listen</td><td>Listen/Stop and the volume; the status line (node, <b>feed</b>, <b>RX</b>, <b>TX</b>, listeners); the waterfall (tap for bars) with the level bar under it, which shows your own level while you talk; the oblong push-to-talk button, which reads <i>Busy: …</i> while someone else transmits. Audio starts by itself when the browser allows it. The tab fits the screen without scrolling.</td></tr>
+    <tr><td>Connect</td><td>The node's links, the favorites to connect, and Disconnect. Links are always made from the main node.</td></tr>
+    <tr><td>Setup</td><td>Cards that open and close: Receive, Transmit, Settings, Favorites, Audio check, Audio levels, Microphone, Playback, Log.</td></tr>
   </table>
 
-  <h2><span class="n">15.4</span>Connect tab: links</h2>
-  <p>The Links card at the top of the Connect tab (on the Status tab before 0.4.14) lists the node's links
-    (<code>rpt lstats</code>): node, favorite name, direction, time and state, one link per line. The text gets
-    smaller on a narrow screen, and a long name ends in "…" (hover over it for the whole name). Node 1921 is marked
-    "(TX)". Under the table, <b>Linked favorites</b> lists the favorites that are linked, with <b>Disconnect</b>
-    (section 15.5).</p>
-
-  <h2><span class="n">15.5</span>Connect tab: connecting</h2>
-  <ol class="steps">
-    <li>Pick a favorite. The card under the menu shows its network and number. Favorites are set on the Setup tab
-      (section 15.6).</li>
-    <li>Press <b>Connect</b>. The link is always made from Node Listen's main node (0.4.13; before, a <b>Connect
-      from</b> menu could pick another local node). For AllStar and EchoLink favorites Node Listen (0.4.11 on) watches the node's links for
-      up to 15 seconds, with the button greyed out, and then says how it went.</li>
-  </ol>
+  <h2><span class="n">15.3</span>Audio in brief</h2>
+  <p>Settings marked <b>node</b> live on the Pi and apply to every listener; <b>browser</b> settings belong to one phone.</p>
   <table>
-    <tr><th>Result</th><th>Meaning</th></tr>
-    <tr><td style="color:var(--grn)">Node 41234 is connected to ASL 2000.</td><td>The link is up.</td></tr>
-    <tr><td style="color:var(--yel)">ASL 2000 has not answered after 15 s; node 41234 is still trying.</td><td>The link exists but isn't established. The far node may be offline or busy.</td></tr>
-    <tr><td style="color:var(--red)">Node 41234 did not connect to ASL 2000: no link after 15 s.</td><td>No link appeared. Check the number; the far node may be offline or refusing connections.</td></tr>
-    <tr><td style="color:var(--red)">Asterisk refused: …</td><td>Asterisk turned the command down; the text says why.</td></tr>
+    <tr><th>Where</th><th>Settings</th></tr>
+    <tr><td>Receive (node, Audio levels card)</td><td><b>Cut below 300 Hz</b> (removes CTCSS tones and hum), <b>Automatic level</b>, <b>Squelch-tail gate</b> (Off, Light, Strong), <b>RX gain</b> (±12 dB), <b>Listen buffer</b>.</td></tr>
+    <tr><td>Transmit (node, Audio levels and Settings cards)</td><td><b>TX gain</b> (±12 dB, soft limit), <b>TX buffer</b>, time-out (120 s), busy lockout.</td></tr>
+    <tr><td>Microphone (browser)</td><td>Browser processing, <b>Mic gain</b>, Voice filter or Radio voice, Noise gate, Leveler. <b>Test mic</b> records 4 seconds and reports level, peak, background and limiter use with a bar meter; <b>Test through the node</b> sends it out and back.</td></tr>
+    <tr><td>Playback (browser)</td><td>16-bit audio, Smooth playback, auto-listen, the spectrum, keep the screen on.</td></tr>
   </table>
-  <p><b>Linked favorites</b> (in the Links card above) lists the favorites that are linked. <b>Disconnect</b> drops
-    linked favorites only; other links stay. When the main node connects and the Dashboard runs, Node Listen asks the Dashboard to make the link, so the
-    Dashboard changes to its ASL or Echo tab and shows it (messages end in <i>(through Node Controller)</i>); without
-    the Dashboard it links through Asterisk directly.</p>
+  <p>Set levels in this order: the node's own audio (SysMon, Tune tab) first, then Node Listen's receive settings,
+    then the microphone, and TX gain last. Chapter 7 of the Node Listen Manual walks through it.</p>
 
-  <h2><span class="n">15.6</span>Favorites, and M17 reflectors <span class="badge test">TESTING</span></h2>
+  <h2><span class="n">15.4</span>Audio check</h2>
+  <p>The <b>Audio check</b> card (0.4.17) runs while you use the node as usual for a few minutes: start it, go to the
+    Listen tab, listen and talk, then come back. The report gives averages for receive and transmit against their
+    targets in green, amber or red, with suggestions. <b>Apply</b> makes a change (<b>Undo</b> puts it back), and
+    <b>Compare with last check</b> shows the difference after the next run. It keeps only numbers, in this browser.</p>
+
+  <h2><span class="n">15.5</span>Favorites, and M17 reflectors <span class="badge test">TESTING</span></h2>
   <p>The Connect tab offers only the favorites set on the Setup tab's <b>Favorites</b> card: up to 10, each an
     AllStar node, an EchoLink station or an M17 reflector. Open the card, then <b>Add row</b> adds one; the menu picks the network, then
     the number and a name; ✕ removes it; <b>Save favorites</b> keeps them. <b>From the Dashboard…</b> lists the
@@ -3045,42 +2971,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>USRP2M17 bridge not detected on this host</td><td>Install M17 from 44helper (section 9.5).</td></tr>
   </table>
 
-  <h2><span class="n">15.7</span>Setup tab</h2>
-  <p>The Setup tab is a column of cards, from setting up the node at the top to everyday use at the bottom. Each
-    card's title is a button: tap it to open the card (▾) and again to close it (▸). Every card is closed when the
-    page opens. A closed card shows a one-line summary on the right, such as <i>Node 41234 sends audio here</i>,
-    <i>Set up and linked</i>, <i>HTTPS · 3 listeners</i> or <i>4 / 10</i>, so you can check the node without
-    opening anything (0.4.13).</p>
-  <table>
-    <tr><th>Card</th><th>What it holds</th></tr>
-<tr><td>1 · Receive</td><td>Each node in <code>rpt.conf</code> and its <code>outstreamcmd</code>. <b>Send its audio here</b>, <b>Remove</b>, <b>Restart Asterisk</b>, <b>Refresh</b>. Below: the line added, whether the feeder Asterisk runs is running, and the UDP input.</td></tr>
-    <tr><td>2 · Transmit</td><td>Node 1921's state (not set up, set up and linked, linking…), the main node and its <code>rxchannel</code>. <b>Add node 1921</b> also repairs a wrong <code>[nodes]</code> line; <b>Remove</b> takes it out of <code>rpt.conf</code> (asks first).</td></tr>
-    <tr><td>3 · Settings</td><td>Web port (8993), UDP port (6200), Max listeners (3, up to 10), TX time-out (120 s, 30 to 600), HTTPS (on), Don't transmit while the node is busy (on), Listen without logging in (off). Changing a port or HTTPS restarts Node Listen.</td></tr>
-    <tr><td>4 · Favorites</td><td>Section 15.6. The <b>From the Dashboard…</b> list is read when you open the card.</td></tr>
-    <tr><td>5 · Audio levels</td><td><b>Adjust audio levels here</b> (off by default: audio passes unchanged). Mic to node (TX) and node to phone (RX) gain, −12 to +12 dB; Listen buffer (0.15 s to 1 s, 0.25 s default); TX buffer (60 to 300 ms, 120 ms default). TX peak, RX level and TX gaps show how it is doing: aim for TX peaks of −6 to −3 dBFS. <b>Save</b> and <b>Reset to 0 dB</b> are in this card. These change only Node Listen's path, not the node, the radio or DVSwitch.<br><b>RX cleanup</b> (0.4.15), in the same card: what every listener hears, done once on the Pi. <b>Cut below 300 Hz</b> (on), <b>Automatic level</b> (on), <b>Squelch-tail gate</b> (Off, <b>Light</b>, Strong). <b>Processing load</b> shows how much of one CPU core it used over the last 5 seconds. Save keeps these with the levels above.</td></tr>
-    <tr><td>6 · Microphone</td><td>Kept in this browser only. Leveler (on), Automatic gain (off), Noise suppression (on), Echo cancellation (off), Voice filter (on), Radio voice (off), Noise gate (Off, Light, Strong), Mic gain (−12 to +24 dB). <b>Test mic</b> records 4 s and plays back what the node would get; <b>Test through the node</b> transmits 4 s for real and plays back what the node sent out.</td></tr>
-    <tr><td>7 · Playback</td><td>Kept in this browser only. <b>Show the spectrum</b> on the Listen tab (on), <b>Start listening when the page opens</b> (on), <b>Keep the screen on</b> while listening or talking (off; shown where the browser supports it), <b>16-bit audio</b> (on; 128 kbit/s instead of 64), <b>Smooth playback</b> (on).</td></tr>
-    <tr><td>8 · Log</td><td>Fetched only while the card is open. What Node Listen has done: listeners, logins, transmissions, connects, rpt.conf edits.</td></tr>
-  </table>
-  <h3>RX cleanup (0.4.15)</h3>
-  <p>Three steps clean up what listeners hear. They work on Node Listen's copy of the audio only: the node, the
-    radio and every other link hear exactly what they did before. All three are on when Node Listen is installed or
-    updated, and are separate from <b>Adjust audio levels here</b>.</p>
-  <table>
-    <tr><th>Step</th><th>What it does</th><th>When to change it</th></tr>
-    <tr><td>Cut below 300 Hz</td><td>Removes hum and the low CTCSS (PL) tones: 100 Hz drops by about 38 dB and 150 Hz by 24 dB. The highest tones, near 250 Hz, drop only about 7 dB. Voice is not affected.</td><td>Turn it off only to hear the tones, for example when checking which tone a station sends.</td></tr>
-    <tr><td>Automatic level</td><td>Brings quiet stations up (by up to 18 dB) and loud ones down a little (by up to 6 dB), aiming at an even level. It turns down at once on a loud station, comes up over a second or two on a quiet one, and stays put between transmissions.</td><td>Turn it off if you want to hear stations at their real levels.</td></tr>
-    <tr><td>Squelch-tail gate</td><td><b>Light</b> mutes the burst of hiss after a station unkeys, and long silences. <b>Strong</b> also mutes shorter, quieter hiss, which can clip hissy speech sounds such as "s". With the gate on, listeners hear the audio 80 ms later, so the start of a tail can be muted too.</td><td>Strong on a node with noisy links; Off if the gate ever mutes the start of speech.</td></tr>
-  </table>
-  <p>The work is done only while someone listens, and only for frames with sound in them. <b>Processing load</b>
-    shows what it costs. On a Pi Zero 2 W it should stay at about 10 % of one core or less while audio passes, and
-    near zero when the node is quiet. If it is much higher, turn <b>Cut below 300 Hz</b> off first; it is the
-    costliest step.</p>
-  <div class="call tip"><span class="t">TIP</span>SysMon's ASL-DVS tab (section 4.2) has a <b>Node Listen</b> card:
-    its checks (service, ports, the feed, HTTPS), the people listening with a Disconnect for each, <b>Restart
-    nodelisten</b>, <b>Unlink</b> for node 1921, and <b>Open Node Listen</b>.</div>
-
-  <h2><span class="n">15.8</span>From the internet <span class="badge test">TESTING</span></h2>
+  <h2><span class="n">15.6</span>From the internet <span class="badge test">TESTING</span></h2>
   <p>Node Listen is meant for your home network. Clients from the internet get "not open to the internet" for every
     page unless <code>allow_wan = true</code> is set in <code>/etc/asl_dvs/nodelisten.conf</code> (there is no
     checkbox; then <code>sudo systemctl restart nodelisten</code>). Tailscale addresses (100.64.0.0/10) count as home.</p>
@@ -3093,67 +2984,6 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <div class="call care"><span class="t">CAREFUL</span>The login is the Pi's root password. Before opening Node
     Listen to the internet, make sure that password is long and used nowhere else.</div>
 
-  <h2><span class="n">15.9</span>Common tasks</h2>
-  <h3>Listen from your phone</h3>
-  <ol class="steps">
-    <li>Open <code>http://&lt;pi-address&gt;:8993</code> and accept the certificate warning the first time.</li>
-    <li>Log in (or not, with Listen without logging in on). Tap once if the page asks, and the audio starts.</li>
-  </ol>
-  <h3>Hear nothing</h3>
-  <ol class="steps">
-    <li>Listen tab, status line: "no feed yet" means Asterisk isn't sending. Setup tab, open the Receive card: is the
-      node's line there? Press Send its audio here, then Restart Asterisk.</li>
-    <li>The feed light is green but you hear nothing: check the volume, the phone's own volume, and that the Listen button
-      reads Stop.</li>
-  </ol>
-  <h3>Set up push-to-talk</h3>
-  <ol class="steps">
-    <li>Setup tab, Transmit card: Add node 1921, then Restart Asterisk. Wait for the summary to read "Set up and linked".</li>
-    <li>Setup tab, Microphone card: Test mic, adjust Mic gain until it says good, then Test through the node.</li>
-  </ol>
-  <h3>Connect an M17 reflector</h3>
-  <ol class="steps">
-    <li>Setup tab, Favorites card: Add row, pick <b>M17</b>, type <code>M17-USA C</code>, Save favorites.</li>
-    <li>Connect tab: pick it and press Connect. Disconnect when you're done.</li>
-  </ol>
-
-  <div class="uth">
-    <span class="lbl">UNDER THE HOOD</span>
-    <h2>How Node Listen works</h2>
-    <ul>
-      <li><b>Files:</b> program <code>/usr/local/lib/asl_dvs/nodelisten/</code> (linked from
-        <code>/usr/local/bin/nodelisten.py</code>); settings <code>/etc/asl_dvs/nodelisten.conf</code>; favorites
-        <code>/etc/asl_dvs/nodelisten_favorites.json</code> (an M17 one is
-        <code>{"mode": "M17", "num": "M17-USA", "module": "C", "label": "…"}</code>; versions before 0.4.10 skip it);
-        certificate <code>/etc/asl_dvs/nodelisten_tls/</code>; rpt.conf backups
-        <code>/etc/asl_dvs/nodelisten_backups/</code> (newest 10).</li>
-      <li><b>Service:</b> <code>nodelisten</code>, through the shared launcher, with <code>Restart=always</code> and
-        <code>WatchdogSec=60</code>: it stops pinging the watchdog when the page or the audio pump stops answering.</li>
-      <li><b>Receive:</b> <code>outstreamcmd = /usr/bin/python3,/usr/local/bin/nodelisten.py,--feed,6200</code> in the
-        node's stanza. Asterisk writes the node's audio (8 kHz, 16-bit) to that command, which passes it to
-        <code>127.0.0.1:6200/udp</code>. A pump sends it every 20 ms to each listener as μ-law (64 kbit/s) or 16-bit
-        (128 kbit/s); the page buffers 0.25 s by default.</li>
-      <li><b>Transmit:</b> the page sends 20 ms frames of 16-bit audio over a WebSocket (<code>/api/talk</code>).
-        Node Listen sends them as USRP to node 1921 (<code>rxchannel = USRP/127.0.0.1:34018:32018</code>), keyed for as
-        long as you hold; it unkeys on release, at the time-out, or 1 s after audio stops arriving.</li>
-      <li><b>Links:</b> always from the main node (the <code>node</code> setting, else the Dashboard's node):
-        <code>rpt cmd &lt;node&gt; ilink 3</code> / <code>ilink 1</code>, checked with
-        <code>rpt lstats</code>; or, from the Dashboard's node, the Dashboard's local API (<code>POST
-        /api/local/action</code> on 127.0.0.1 with the key in <code>/etc/asl_dvs/local_api.key</code>), which also
-        carries <code>m17-connect</code>, <code>m17-status</code> and <code>m17-disconnect</code>.</li>
-      <li><b>RX cleanup:</b> in the audio pump, once per 20 ms frame for all listeners: two biquad sections
-        (4th-order Butterworth high-pass at 300 Hz), then a gain that ramps across the frame (the automatic level plus
-        the Tune RX gain) with the soft limiter. The automatic level follows a smoothed frame level (target −20 dBFS,
-        −6 to +18 dB, down 1.5 dB per frame, up 3 dB/s). The gate looks at each frame's level and zero-crossing rate
-        (hiss crosses zero far more often than voice) and keeps a 4-frame (80 ms) delay so it can mute a tail from its
-        start. Frames under −65 dBFS skip the work. Settings <code>rx_hpf</code>, <code>rx_agc</code> and
-        <code>rx_gate</code> (0, 1, 2) in <code>nodelisten.conf</code>.</li>
-      <li><b>Logins:</b> sessions last 12 hours from the last request. Without HTTPS the page is plain HTTP; with
-        it, a plain-HTTP request is sent to the <code>https://</code> address.</li>
-      <li><b>Remove:</b> <code>--uninstall</code> takes the <code>outstreamcmd</code> line and node 1921 out of
-        <code>rpt.conf</code> and keeps the settings. An install within 30 minutes (an update) puts them back.</li>
-    </ul>
-  </div>
 </section>
 
 <section class="part">
@@ -3334,7 +3164,7 @@ free -m; zramctl</pre>
     <tr><td class="port">8991/tcp</td><td>wifimon</td><td>LAN or VPN only</td></tr>
     <tr><td class="port">9997/tcp</td><td>44helper</td><td>LAN only, never on 44Net</td></tr>
     <tr><td class="port">9999/tcp</td><td>SysMon</td><td>LAN or VPN only</td></tr>
-    <tr><td class="port">8993/tcp</td><td>Node Listen</td><td>LAN or VPN; the internet only with <code>allow_wan</code> (section 15.8)</td></tr>
+    <tr><td class="port">8993/tcp</td><td>Node Listen</td><td>LAN or VPN; the internet only with <code>allow_wan</code> (section 15.6)</td></tr>
   </table>
   <h2>The node</h2>
   <table>

@@ -69,11 +69,14 @@ Phone dialplan guide (PDF, 31 pages): dialplan nuts and bolts, stock ASL3 next t
 Idealized node configuration (PDF, 14 pages): the target ASL3 + DVSwitch + USRP2M17 bridge-node files, port map, services and firewall for a clean build, with no identity data (placeholders only):
 [`docs/ASL-DVS_Idealized_Node_Configuration.pdf`](docs/ASL-DVS_Idealized_Node_Configuration.pdf)
 
-User manual (PDF, 103 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
+User manual (PDF, 110 pages): every tool, tab and button, with SysMon and 44helper in depth, troubleshooting, and port, file and service tables. Pi Zero 2 W edition with full-build notes. The source is in `docs/src/user_manual/`:
 [`docs/ASL-DVS_User_Manual.pdf`](docs/ASL-DVS_User_Manual.pdf)
 
 44helper manual (PDF, 51 pages): every 44helper tab and card in detail: the tunnel modes (split, half, full with exceptions, full) side by side, the half-tunnel and exceptions cards with all their checks, every installer step, Update, System Optimization, Config, troubleshooting and a file and routing reference. The source is in `docs/src/44helper_manual/`:
 [`docs/ASL-DVS_44helper_Manual.pdf`](docs/ASL-DVS_44helper_Manual.pdf)
+
+Node Listen manual (PDF, 29 pages): receive and transmit audio from end to end, every setting with its default and when to change it, getting levels right, the meters, the waterfall and the Audio check, troubleshooting by symptom and a file, port and API reference. The source is in `docs/src/nodelisten_manual/`:
+[`docs/ASL-DVS_Node_Listen_Manual.pdf`](docs/ASL-DVS_Node_Listen_Manual.pdf)
 
 To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (needs Playwright with Chromium; set `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH` if they aren't found by default).
 
