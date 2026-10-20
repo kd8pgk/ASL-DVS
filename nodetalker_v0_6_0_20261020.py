@@ -114,14 +114,15 @@ else:
     spec.loader.exec_module(main)
 '''
 
-SYSTEMD_SERVICE_CONTENT = f"""[Unit]
+def service_content(run_path):
+    return f"""[Unit]
 Description=Node Talker: ASL node audio in the browser
 After=network.target asterisk.service
 
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {INSTALL_BIN_PATH}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {run_path}
 Restart=always
 RestartSec=3s
 TimeoutStartSec=60
@@ -6441,8 +6442,20 @@ def install_service():
         _systemctl("disable", "--now", LEGACY_SERVICE)
         os.replace(LEGACY_SERVICE_PATH, aside)
         print(f"  [-] Stopped Node Listen ({LEGACY_SERVICE}); its unit is kept as {aside} until {SERVICE_NAME} runs")
+    run_path, bin_undo = INSTALL_BIN_PATH, None
+    if legacy_bin_ours():
+        if os.path.islink(LEGACY_BIN_PATH):
+            bin_undo = ("link", os.readlink(LEGACY_BIN_PATH))
+        elif os.path.lexists(LEGACY_BIN_PATH):
+            os.replace(LEGACY_BIN_PATH, LEGACY_BIN_PATH + LEGACY_ASIDE)
+            bin_undo = ("file", LEGACY_BIN_PATH + LEGACY_ASIDE)
+        else:
+            bin_undo = ("none", "")
+        _replace_link(LEGACY_BIN_PATH, INSTALL_BIN_PATH)
+        run_path = LEGACY_BIN_PATH
+        print(f"  [+] Symlinked {LEGACY_BIN_PATH} -> {INSTALL_BIN_PATH} (rpt.conf and older tools use this name)")
     _restore_after_update()
-    _atomic_write(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, 0o644)
+    _atomic_write(SYSTEMD_SERVICE_PATH, service_content(run_path), 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
     for args in (("daemon-reload",), ("enable", SERVICE_NAME)):
         r = _systemctl(*args)
@@ -6451,6 +6464,14 @@ def install_service():
     r = _systemctl("restart", SERVICE_NAME)
     if r.returncode != 0:
         print(f"  [!] systemctl restart failed: {(r.stderr or r.stdout).strip()}")
+        if bin_undo is not None:
+            kind, what = bin_undo
+            if kind == "link":
+                _replace_link(LEGACY_BIN_PATH, what)
+            elif kind == "file":
+                os.replace(what, LEGACY_BIN_PATH)
+            else:
+                _remove_quiet(LEGACY_BIN_PATH)
         if legacy:
             _systemctl("disable", SERVICE_NAME)
             _remove_quiet(SYSTEMD_SERVICE_PATH)
@@ -6462,9 +6483,8 @@ def install_service():
             print(f"      The previous version (if any) is still in {INSTALL_DIR}")
         sys.exit(1)
     print(f"  [+] {SERVICE_NAME} enabled and started (also answers to {LEGACY_SERVICE})")
-    if legacy_bin_ours():
-        _replace_link(LEGACY_BIN_PATH, INSTALL_BIN_PATH)
-        print(f"  [+] Symlinked {LEGACY_BIN_PATH} -> {INSTALL_BIN_PATH} (rpt.conf and older tools use this name)")
+    if bin_undo is not None and bin_undo[0] == "file":
+        _remove_quiet(bin_undo[1])
     if legacy:
         _remove_quiet(aside)
     if os.path.isdir(LEGACY_INSTALL_DIR) and not os.path.islink(LEGACY_INSTALL_DIR):

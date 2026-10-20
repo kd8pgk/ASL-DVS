@@ -34,6 +34,13 @@ every mode goes through Node Controller.
 - **Kept working for older tools and versions:**
   - `nodetalker.service` has `Alias=nodelisten.service`.
   - `/usr/local/bin/nodelisten.py` stays as a symlink to `nodetalker.py`.
+    The service starts through it, so tools that look for `nodelisten` in
+    the process list (the full-build SysMon's port checks) still see it.
+    Where that path is some other program's file, it is left alone and the
+    service starts as `nodetalker.py`.
+  - A plain copy of Node Listen or Node Talker at that path (instmon makes
+    one before an install) is turned back into the symlink. If the new
+    service doesn't start, the copy is put back.
   - Each old settings or data path is a symlink to the new one.
   - The settings file holds the same settings under both `[nodetalker]` and
     `[nodelisten]`.

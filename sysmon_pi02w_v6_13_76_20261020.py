@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.75-pi02w"
+VERSION      = "6.13.76-pi02w"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2919,7 +2919,7 @@ body.tab-edit #zone-content{
         <div style="display:flex;align-items:center;gap:.55rem">
           <div class="dvsm-accent" style="background:var(--teal)"></div>
           <div>
-            <div class="dvsm-card-title" style="color:var(--teal)">Node Listen</div>
+            <div class="dvsm-card-title" style="color:var(--teal)">Node Talker</div>
             <div class="dvsm-card-sub" id="nodelisten-sub">listen ports · connections · push-to-talk node 1921</div>
           </div>
         </div>
@@ -2931,11 +2931,11 @@ body.tab-edit #zone-content{
       <div id="nodelisten-clients"></div>
       <div id="nodelisten-actions" style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:.4rem;flex-wrap:wrap">
         <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
-          onclick="nodeListenRestart()">↺ Restart nodelisten</button>
+          onclick="nodeListenRestart()">↺ Restart Node Talker</button>
         <button class="btn btn-sm" id="nodelisten-unlink" style="color:var(--amber);border-color:var(--amber-dim)"
           onclick="nodeListenUnlink()">⨯ Unlink 1921</button>
         <a class="btn btn-sm" id="nodelisten-open" style="color:var(--teal);border-color:var(--teal-dim);text-decoration:none"
-          href="#" target="_blank" rel="noopener">↗ Open Node Listen</a>
+          href="#" target="_blank" rel="noopener">↗ Open Node Talker</a>
         <button class="btn btn-blue btn-sm" onclick="loadNodeListen()">↻ Refresh</button>
         <button class="btn btn-muted btn-sm" onclick="nodeListenCopy(this)" title="Copy this card as text">⎘ Copy</button>
       </div>
@@ -5655,7 +5655,7 @@ async function loadNodeListen() {
   if (!d.installed) {
     _dvsmSetBadge("nodelisten-badge", "info", "NOT INSTALLED");
     document.getElementById("nodelisten-body").innerHTML =
-      `<div class="stub-panel" style="min-height:40px">Node Listen is not installed on this node.</div>`;
+      `<div class="stub-panel" style="min-height:40px">Node Talker is not installed on this node.</div>`;
     if (cl) cl.innerHTML = "";
     if (acts) acts.style.display = "none";
     return;
@@ -5683,21 +5683,21 @@ async function loadNodeListen() {
           : `<div class="stub-panel" style="min-height:30px">No one is connected.</div>`);
 }
 async function nodeListenRestart() {
-  if (!await confirm("Restart nodelisten? Everyone listening is dropped and their pages reconnect.")) return;
+  if (!await confirm("Restart Node Talker? Everyone listening is dropped and their pages reconnect.")) return;
   const d = await api("/api/nodelisten", "POST", {action: "restart"});
   if (!d || !d.ok) { toast(d?.message || "Restart failed", "err"); return; }
-  toast("nodelisten restarted", "ok");
+  toast("Node Talker restarted", "ok");
   setTimeout(loadNodeListen, 2500);
 }
 async function nodeListenDisconnect(ip) {
-  if (!await confirm(`Disconnect ${ip} from Node Listen? Their page tries again in 3 s if they are still listening.`)) return;
+  if (!await confirm(`Disconnect ${ip} from Node Talker? Their page tries again in 3 s if they are still listening.`)) return;
   const d = await api("/api/nodelisten", "POST", {action: "disconnect", ip});
   if (!d || !d.ok) { toast(d?.message || "Disconnect failed", "err"); loadNodeListen(); return; }
   toast(d.message || "Disconnected", "ok");
   setTimeout(loadNodeListen, 800);
 }
 async function nodeListenUnlink() {
-  if (!await confirm("Unlink node 1921 (push-to-talk) from the node? Node Listen links it again within 20 s while it runs.")) return;
+  if (!await confirm("Unlink node 1921 (push-to-talk) from the node? Node Talker links it again within 20 s while it runs.")) return;
   const d = await api("/api/nodelisten", "POST", {action: "unlink"});
   if (!d || !d.ok) { toast(d?.message || "Unlink failed", "err"); return; }
   toast(d.message || "Unlinked", "ok");
@@ -5705,7 +5705,7 @@ async function nodeListenUnlink() {
 }
 function nodeListenCopy(btn) {
   if (!_nodeListen) return;
-  const lines = [`Node Listen (port ${_nodeListen.port || "-"}): ${_nodeListen.badge}`];
+  const lines = [`Node Talker (port ${_nodeListen.port || "-"}): ${_nodeListen.badge}`];
   (_nodeListen.checks || []).forEach(c => {
     lines.push(`[${String(c.status || "").toUpperCase()}] ${c.enables}: ${c.key}`);
     if (c.fix) lines.push(`    -> ${c.fix}`);
@@ -19790,10 +19790,17 @@ def _route_dstar_gw_post(h: Handler, data: dict) -> None:
         return
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
-_NL_BIN       = Path("/usr/local/bin/nodelisten.py")
-_NL_CONF      = Path("/etc/asl_dvs/nodelisten.conf")
+_NL_BINS      = (Path("/usr/local/bin/nodetalker.py"), Path("/usr/local/bin/nodelisten.py"))
+_NL_CONFS     = (Path("/etc/asl_dvs/nodetalker.conf"), Path("/etc/asl_dvs/nodelisten.conf"))
 _NL_DASH_CONF = Path("/etc/asl_dvs/asl_dvs.conf")
-_NL_SERVICE   = "nodelisten.service"
+_NL_SERVICES  = ("nodetalker.service", "nodelisten.service")
+_NL_FEED_MARKS = ("nodelisten.py,--feed,", "nodetalker.py,--feed,")
+
+def _nl_conf_path() -> Path:
+    return next((p for p in _NL_CONFS if p.exists()), _NL_CONFS[0])
+
+def _nl_service() -> str:
+    return next((s for s in _NL_SERVICES if get_service_installed(s)), _NL_SERVICES[0])
 _NL_TX_NODE   = "1921"
 _NL_TX_SEND   = 32018
 _NL_TX_LISTEN = 34018
@@ -19807,15 +19814,17 @@ def _nl_bool(v: str) -> bool:
 
 def _nl_read_conf() -> "tuple[dict, str]":
     cfg = dict(_NL_DEFAULTS)
-    if not _NL_CONF.exists():
+    conf = _nl_conf_path()
+    if not conf.exists():
         return cfg, "missing"
     cp = configparser.ConfigParser(interpolation=None)
     try:
-        cp.read(str(_NL_CONF))
+        cp.read(str(conf))
     except (configparser.Error, OSError) as exc:
         return cfg, f"can't read it: {exc}"
-    if cp.has_section("nodelisten"):
-        sec = cp["nodelisten"]
+    name = next((s for s in ("nodetalker", "nodelisten") if cp.has_section(s)), "")
+    if name:
+        sec = cp[name]
         for k in ("port", "udp_port", "max_listeners"):
             v = sec.get(k, "").strip()
             if v.isdigit():
@@ -19866,7 +19875,8 @@ def _nl_feeder_pids() -> list:
     for d in glob.glob("/proc/[0-9]*/cmdline"):
         try:
             with open(d, "rb") as fh:
-                if b"nodelisten.py\0--feed\0" in fh.read():
+                cmd = fh.read()
+                if b"nodelisten.py\0--feed\0" in cmd or b"nodetalker.py\0--feed\0" in cmd:
                     pids.append(int(d.split("/")[2]))
         except (OSError, ValueError):
             continue
@@ -19929,24 +19939,25 @@ def _nl_lstats(node: str) -> "tuple[bool, list]":
     return True, [ln.split()[0] for ln in out.splitlines() if ln.split() and ln.split()[0].isdigit()]
 
 def _nodelisten_checks() -> dict:
-    installed = _NL_BIN.exists() or get_service_installed(_NL_SERVICE)
+    nl_service = _nl_service()
+    installed = any(p.exists() for p in _NL_BINS) or get_service_installed(nl_service)
     if not installed:
         return {"ok": True, "installed": False, "status": "info", "badge": "NOT INSTALLED", "checks": [],
                 "clients": []}
     cfg, cprob = _nl_read_conf()
-    svc = get_service_state(_NL_SERVICE)
+    svc = get_service_state(nl_service)
     rows: list = []
 
     def row(key, enables, status, fix=None):
         rows.append({"key": key, "enables": enables, "status": status, "fix": fix})
 
-    row(f"{_NL_SERVICE}: {svc}", "Node Listen service running",
+    row(f"{nl_service}: {svc}", "Node Talker service running",
         "pass" if svc == "active" else "fail",
-        None if svc == "active" else "Press Restart nodelisten below")
+        None if svc == "active" else "Press Restart Node Talker below")
     if cprob == "missing":
-        row(str(_NL_CONF), "Settings file", "info", "Not written yet -- Node Listen uses its defaults")
+        row(str(_nl_conf_path()), "Settings file", "info", "Not written yet -- Node Talker uses its defaults")
     elif cprob:
-        row(str(_NL_CONF), "Settings file", "warn", f"{cprob} -- Node Listen uses its defaults")
+        row(str(_nl_conf_path()), "Settings file", "warn", f"{cprob} -- Node Talker uses its defaults")
 
     port, uport = cfg["port"], cfg["udp_port"]
     entries = _parse_ss_entries(_ss_tlnpu_fetch())
@@ -19956,8 +19967,8 @@ def _nodelisten_checks() -> dict:
 
     def who(e):
         cmd = _pid_cmdline(e["pid"])
-        if "nodelisten" in cmd:
-            return "nodelisten"
+        if "nodelisten" in cmd or "nodetalker" in cmd:
+            return "nodetalker"
         return e["process"] or "?"
 
     def port_row(proto, p, enables, want, want_addr=None, needed=True, fix=None):
@@ -19968,13 +19979,13 @@ def _nodelisten_checks() -> dict:
             return False
         if not hs:
             row(f"{label}: not listening", enables, "fail" if needed else "info",
-                (fix or "Restart nodelisten") if needed else None)
+                (fix or "Restart Node Talker") if needed else None)
             return False
         names = sorted({who(e) for e in hs})
         addrs = sorted({e["addr"] for e in hs})
         if want not in names:
             row(f"{label}: held by {', '.join(names)}", enables, "fail",
-                f"Port conflict -- stop {', '.join(names)} or change this port in Node Listen")
+                f"Port conflict -- stop {', '.join(names)} or change this port in Node Talker")
             return False
         if want_addr and not any(a in want_addr for a in addrs):
             row(f"{label}: {want} on {', '.join(addrs)}", enables, "warn",
@@ -19983,9 +19994,9 @@ def _nodelisten_checks() -> dict:
         row(f"{label}: {want} on {', '.join(addrs)}", enables, "pass")
         return True
 
-    web_up = port_row("tcp", port, "Web page and API", "nodelisten", ("0.0.0.0", "*", "[::]"))
-    port_row("udp", uport, "Node audio in (from the Asterisk feed)", "nodelisten", ("127.0.0.1",))
-    port_row("udp", _NL_TX_LISTEN, f"Push-to-talk audio back from node {_NL_TX_NODE}", "nodelisten",
+    web_up = port_row("tcp", port, "Web page and API", "nodetalker", ("0.0.0.0", "*", "[::]"))
+    port_row("udp", uport, "Node audio in (from the Asterisk feed)", "nodetalker", ("127.0.0.1",))
+    port_row("udp", _NL_TX_LISTEN, f"Push-to-talk audio back from node {_NL_TX_NODE}", "nodetalker",
              ("127.0.0.1",))
 
     scheme, version = "", ""
@@ -19997,13 +20008,13 @@ def _nodelisten_checks() -> dict:
                 "Web page answers", "pass")
             if cfg["https"] and scheme != "https":
                 row("HTTPS on, page served on plain HTTP", "HTTPS (needed for push-to-talk)", "warn",
-                    "Node Listen couldn't load its certificate -- see its log")
+                    "Node Talker couldn't load its certificate -- see its log")
             elif not cfg["https"]:
                 row("HTTPS off", "HTTPS (needed for push-to-talk)", "info",
                     "Listening works; push-to-talk needs HTTPS on")
         else:
             row(f"127.0.0.1:{port}/api/health: no answer", "Web page answers", "fail",
-                f"{info} -- restart nodelisten")
+                f"{info} -- restart Node Talker")
 
     main = _nl_main_node(cfg)
     rpt_text, rerr = read_path_file(_RPT_CONF)
@@ -20011,26 +20022,26 @@ def _nodelisten_checks() -> dict:
     if rerr:
         row(str(_RPT_CONF), "Node audio hook", "warn", f"Can't read it: {rerr}")
     elif not main:
-        row("node: (not set)", "Node Listen's node", "warn",
-            "Set the node on the Node Listen page (Send its audio here)")
+        row("node: (not set)", "Node Talker's node", "warn",
+            "Set the node on the Node Talker page (Send its audio here)")
     else:
         nodes = _rpt_scan_full(rpt_text)["nodes"]
         outs = nodes.get(main, {}).get("outstreamcmd", "").replace(" ", "")
-        if "nodelisten.py,--feed," in outs:
+        if any(m in outs for m in _NL_FEED_MARKS):
             hp = outs.rsplit(",", 1)[-1]
             if hp == str(uport):
-                row(f"[{main}] outstreamcmd -> nodelisten UDP {hp}", "Node audio hook in rpt.conf", "pass")
+                row(f"[{main}] outstreamcmd -> Node Talker UDP {hp}", "Node audio hook in rpt.conf", "pass")
             else:
                 row(f"[{main}] outstreamcmd -> UDP {hp}", "Node audio hook in rpt.conf", "fail",
-                    f"Hook sends to UDP {hp} but Node Listen listens on {uport} -- "
-                    f"turn Send its audio here off and on in Node Listen")
+                    f"Hook sends to UDP {hp} but Node Talker listens on {uport} -- "
+                    f"turn Send its audio here off and on in Node Talker")
         elif outs:
             row(f"[{main}] outstreamcmd is another program's", "Node audio hook in rpt.conf", "warn",
-                "Node Listen gets no audio while another outstreamcmd is set")
+                "Node Talker gets no audio while another outstreamcmd is set")
         else:
             row(f"[{main}] no outstreamcmd", "Node audio hook in rpt.conf", "warn",
-                "Turn on Send its audio here on the Node Listen page")
-        if "nodelisten.py,--feed," in outs:
+                "Turn on Send its audio here on the Node Talker page")
+        if any(m in outs for m in _NL_FEED_MARKS):
             fp = _nl_feeder_pids()
             ast = get_service_state("asterisk.service")
             row(f"Feeder: {len(fp)} running" if fp else "Feeder: not running", "Audio feed from Asterisk",
@@ -20050,12 +20061,12 @@ def _nodelisten_checks() -> dict:
                 up = _NL_TX_NODE in links
                 row(f"Node {_NL_TX_NODE} " + ("linked to" if up else "not linked to") + f" {main}",
                     "Push-to-talk link", "pass" if up else "warn",
-                    None if up else "Node Listen links it again within 20 s while it runs")
+                    None if up else "Node Talker links it again within 20 s while it runs")
             else:
                 row(f"rpt lstats {main}", "Push-to-talk link", "info", "Can't check: Asterisk did not answer")
         else:
             row(f"No [{_NL_TX_NODE}] stanza", "Transmit node (push-to-talk)", "info",
-                "Push-to-talk is off (turn it on in Node Listen)")
+                "Push-to-talk is off (turn it on in Node Talker)")
 
     clients, clprob = _nl_web_clients(port)
     if clprob:
@@ -20084,13 +20095,13 @@ def _route_nodelisten_post(h: Handler, data: dict) -> None:
     action = str(data.get("action", "")).strip().lower()
     if action == "restart":
         try:
-            r = subprocess.run(["systemctl", "restart", _NL_SERVICE],
+            r = subprocess.run(["systemctl", "restart", _nl_service()],
                                capture_output=True, text=True, timeout=30)
         except Exception as exc:
             h.send_json({"ok": False, "message": str(exc)}); return
         if r.returncode != 0:
             h.send_json({"ok": False, "message": (r.stderr or r.stdout or "restart failed").strip()}); return
-        h.send_json({"ok": True, "message": "nodelisten restarted"})
+        h.send_json({"ok": True, "message": "Node Talker restarted"})
         return
     if action == "disconnect":
         ip = _nl_clean_ip(data.get("ip", ""))
@@ -20116,7 +20127,7 @@ def _route_nodelisten_post(h: Handler, data: dict) -> None:
     if action == "unlink":
         main = _nl_main_node(_nl_read_conf()[0])
         if not main:
-            h.send_json({"ok": False, "message": "Node Listen's node is not set"}); return
+            h.send_json({"ok": False, "message": "Node Talker's node is not set"}); return
         lok, links = _nl_lstats(main)
         if lok and _NL_TX_NODE not in links:
             h.send_json({"ok": True, "message": f"Node {_NL_TX_NODE} is not linked"}); return
