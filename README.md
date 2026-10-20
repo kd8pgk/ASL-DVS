@@ -16,6 +16,7 @@ By KD8PGK, written with Claude (Anthropic).
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Powers off on sustained low voltage; reboots (or powers off) on a lost network. Hardware watchdog, and alerts by ntfy or webhook. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Listen | `nodelisten_v*.py` | 8993 | Listen to an ASL node's audio in the browser. Asterisk sends the node's audio through one `outstreamcmd` line in rpt.conf, which the Node card adds or removes. |
+| Node Listen for AMP | `amp_nodelisten_v*.py` | 8993 | Node Listen for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. |
 
 Scripts:
 
@@ -161,6 +162,34 @@ as its own; without the Dashboard it connects directly. An opt-in **Tune** card
 sets the mic and listen gains (-12 to +12 dB) and the listen buffer.
 `--uninstall` removes the
 `outstreamcmd` line and node 1921 too.
+
+## Node Listen for AMP
+
+`amp_nodelisten_v*.py` is a fork of Node Listen for a node that runs the
+[Ampersand](https://github.com/Ampersand-ASL/amp-server) AMP server
+(`amp-server`) instead of Asterisk. It is the same page (Listen, push-to-talk,
+favorites, the RX cleanup, the meters and the Audio check) with a different
+link to the node, and it stands alone: the installer, instmon and the other
+tools don't install or use it.
+
+```
+sudo python3 amp_nodelisten_v0_1_0_20261020.py --install
+```
+
+Open `http://<pi-address>:8993` (it moves you to `https://`), log in with the
+root password, or, when root has none, the password of the user that runs
+`amp-server`. On the **Setup** tab, open **AMP link** and press **Set up for
+me**: it adds one line (`nodelisten <password>`) to AMP's login file (its
+`authFile`, by default `/etc/ampersand/auth.txt`, with a backup in
+`/etc/asl_dvs/amp_nodelisten_backups/`), and AMP reloads it within a second.
+
+Node Listen then calls the AMP node over IAX2 as a private link (calling in as
+node 1921): it hears everything the node passes, and push-to-talk goes out to
+the radio and every link. It reads the node number, the IAX port and AMP's web
+port and password from the running `amp-server` and its `amp-server.json`;
+**Advanced** on the same card sets them by hand. Links, Connect and Disconnect
+use AMP's web API. Favorites are AllStar node numbers, or a direct address
+(`iax:user@host:port/node,password`) for a private node.
 
 ## Updating from GitHub (instmon)
 
@@ -309,6 +338,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
 | `nodelisten_v0_4_17_20261020.py` | common |
+| `amp_nodelisten_v0_1_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_2_0_20261018.sh` | common |
 | `uninstall_all_v1_6_0_20261018.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
@@ -343,6 +373,7 @@ per tool and build:
 | [`wifimon.md`](changelogs/wifimon.md) | `wifimon_v*.py` |
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
 | [`nodelisten.md`](changelogs/nodelisten.md) | `nodelisten_v*.py` |
+| [`amp_nodelisten.md`](changelogs/amp_nodelisten.md) | `amp_nodelisten_v*.py` |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
