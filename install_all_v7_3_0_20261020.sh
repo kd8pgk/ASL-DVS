@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install_all.sh  v7.2.0  (2026-10-18)
+# install_all.sh  v7.3.0  (2026-10-20)
 
 set -euo pipefail
 
@@ -18,9 +18,11 @@ hdr()  { echo; echo "${BLD}${CYN}══ $* ${RST}"; }
 sep()  { echo "  ${CYN}──────────────────────────────────────────${RST}"; }
 
 NONINTERACTIVE=false
+DOWNLOAD=true
 for _arg in "$@"; do
     case "${_arg}" in
         --non-interactive|--auto|-y) NONINTERACTIVE=true ;;
+        --offline|--no-download) DOWNLOAD=false ;;
     esac
 done
 if [[ ! -t 0 ]]; then
@@ -73,6 +75,28 @@ SYSMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/sysmon"
 WIFIMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/wifimon"
 HELPER_LIB_DIR="${INSTMON_LIBRARY_DIR}/44helper"
 NODELISTEN_LIB_DIR="${INSTMON_LIBRARY_DIR}/nodelisten"
+INSTMON_LIB_DIR="${INSTMON_LIBRARY_DIR}/instmon"
+
+INSTMON_BIN="/usr/local/bin/instmon.py"
+INSTMON_SERVICE="instmon"
+INSTMON_PORT=8990
+
+GH_REPO="${ASL_DVS_REPO:-kd8pgk/ASL-DVS}"
+GH_CHANNEL="${ASL_DVS_CHANNEL:-stable}"
+case "${GH_CHANNEL,,}" in
+    stable) GH_CHANNEL="stable" ;;
+    testing|main) GH_CHANNEL="testing" ;;
+    *) echo "ASL_DVS_CHANNEL must be stable or testing (got '${GH_CHANNEL}')" >&2; exit 1 ;;
+esac
+FETCH_DIR=""
+FETCH_REPO=""
+FETCH_STATE=""
+DOWNLOADED=()
+cleanup_fetch() {
+    [[ -n "${FETCH_DIR}" && -d "${FETCH_DIR}" ]] && rm -rf -- "${FETCH_DIR}"
+    return 0
+}
+trap cleanup_fetch EXIT
 
 LABELS=(a b c d e f g h i j)
 
@@ -214,13 +238,178 @@ stage_and_select() {
 }
 
 any_file() {
-    local pattern="$1" lib_dir="${2:-}" d script_dir
+    local pattern="$1" lib_dir="${2:-}" exclude="${3:-}" d script_dir p
+    local -a _pats=() _excl=() _expr=()
+    IFS='|' read -r -a _pats <<< "${pattern}"
+    [[ -n "${exclude}" ]] && IFS='|' read -r -a _excl <<< "${exclude}"
+    for p in "${_pats[@]}"; do
+        [[ ${#_expr[@]} -gt 0 ]] && _expr+=(-o)
+        _expr+=(-name "${p}")
+    done
+    _expr=( \( "${_expr[@]}" \) )
+    for p in "${_excl[@]}"; do
+        _expr+=(! -name "${p}")
+    done
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     for d in "${script_dir}" "$(pwd)" "/root" "/home/pi" "/home/${SUDO_USER:-pi}" "/tmp" ${lib_dir:+"${lib_dir}"}; do
         [[ -d "${d}" ]] || continue
-        [[ -n "$(find "${d}" -maxdepth 1 -name "${pattern}" -print -quit 2>/dev/null)" ]] && return 0
+        [[ -n "$(find "${d}" -maxdepth 1 "${_expr[@]}" -print -quit 2>/dev/null)" ]] && return 0
     done
     return 1
+}
+
+name_matches() {
+    local name="$1" pattern="$2" exclude="${3:-}" p
+    local -a _pats=() _excl=()
+    IFS='|' read -r -a _pats <<< "${pattern}"
+    [[ -n "${exclude}" ]] && IFS='|' read -r -a _excl <<< "${exclude}"
+    for p in "${_excl[@]}"; do
+        [[ "${name}" == ${p} ]] && return 1
+    done
+    for p in "${_pats[@]}"; do
+        [[ "${name}" == ${p} ]] && return 0
+    done
+    return 1
+}
+
+ensure_git() {
+    command -v git &>/dev/null && return 0
+    info "git is not installed — installing it to download from GitHub…"
+    if ! command -v apt-get &>/dev/null; then
+        warn "apt-get not found — install git by hand, or copy the files onto the Pi"
+        return 1
+    fi
+    if apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq git; then
+        ok "git installed: $(git --version 2>&1)"
+        return 0
+    fi
+    warn "Could not install git (no network?)"
+    return 1
+}
+
+open_repo() {
+    [[ "${FETCH_STATE}" == "ok" ]] && return 0
+    [[ "${FETCH_STATE}" == "failed" ]] && return 1
+    FETCH_STATE="failed"
+    ensure_git || return 1
+    FETCH_DIR="$(mktemp -d /tmp/asl_dvs_fetch.XXXXXX)" || return 1
+    FETCH_REPO="${FETCH_DIR}/repo"
+    info "Connecting to github.com/${GH_REPO} (${GH_CHANNEL} channel)…"
+    if ! GIT_TERMINAL_PROMPT=0 git clone -q --depth 1 --filter=blob:none --no-checkout \
+            "https://github.com/${GH_REPO}.git" "${FETCH_REPO}" 2>/dev/null; then
+        warn "Could not reach github.com/${GH_REPO} — no files downloaded"
+        return 1
+    fi
+    FETCH_STATE="ok"
+    ok "Connected to github.com/${GH_REPO}"
+    return 0
+}
+
+stable_entry() {
+    GIT_TERMINAL_PROMPT=0 git -C "${FETCH_REPO}" show HEAD:channels/stable.json 2>/dev/null \
+        | python3 -c 'import json,sys
+try:
+    t=(json.load(sys.stdin).get("tools") or {}).get(sys.argv[1]) or {}
+except Exception:
+    t={}
+f,c,b=t.get("file",""),t.get("commit",""),t.get("blob","")
+print(f"{f} {c} {b}" if f and c and b and "/" not in f and " " not in f else "")' "$1"
+}
+
+FETCHED=""
+fetch_tool() {
+    local key="$1" label="$2" pattern="$3" exclude="$4" lib_dir="$5" build="${6:-}"
+    local file="" commit="" blob="" rev="HEAD" src="main" entry name tmp
+    FETCHED=""
+    open_repo || return 1
+    if [[ "${GH_CHANNEL}" == "stable" ]]; then
+        entry="$(stable_entry "${key}" || true)"
+        if [[ -n "${entry}" ]]; then
+            read -r file commit blob <<< "${entry}"
+            if ! name_matches "${file}" "${pattern}" "${exclude}"; then
+                warn "${label}: the stable list names ${file}, which is not a ${label} file — using main"
+                file=""
+            elif ! GIT_TERMINAL_PROMPT=0 git -C "${FETCH_REPO}" fetch -q --depth 1 --filter=blob:none origin "${commit}" 2>/dev/null; then
+                warn "${label}: could not fetch the stable build (${file}) — using main"
+                file=""
+            elif [[ "$(git -C "${FETCH_REPO}" rev-parse "${commit}:${file}" 2>/dev/null)" != "${blob}" ]]; then
+                warn "${label}: ${file} does not match the stable list — using main"
+                file=""
+            else
+                rev="${commit}"
+                src="stable"
+            fi
+        else
+            info "${label} has no stable build yet — using the newest file on main"
+        fi
+    fi
+    if [[ -z "${file}" ]]; then
+        rev="HEAD"
+        src="main"
+        blob=""
+        while IFS= read -r name; do
+            [[ "${name}" == */* ]] && continue
+            name_matches "${name}" "${pattern}" "${exclude}" && file="${name}"
+        done < <(git -C "${FETCH_REPO}" ls-tree --name-only HEAD 2>/dev/null | sort -V)
+        if [[ -z "${file}" ]]; then
+            warn "${label}: no matching file on GitHub"
+            return 1
+        fi
+    fi
+    mkdir -p "${lib_dir}" || return 1
+    tmp="$(mktemp "${FETCH_DIR}/dl.XXXXXX")"
+    if ! GIT_TERMINAL_PROMPT=0 git -C "${FETCH_REPO}" show "${rev}:${file}" > "${tmp}" 2>/dev/null || [[ ! -s "${tmp}" ]]; then
+        warn "${label}: download of ${file} failed"
+        rm -f -- "${tmp}"
+        return 1
+    fi
+    if [[ -n "${blob}" && "$(git hash-object "${tmp}")" != "${blob}" ]]; then
+        warn "${label}: ${file} does not match the stable list — not used"
+        rm -f -- "${tmp}"
+        return 1
+    fi
+    if [[ "${file}" == *.py ]] && ! python3 -c 'import sys; compile(open(sys.argv[1],"rb").read(), sys.argv[1], "exec")' "${tmp}" 2>/dev/null; then
+        warn "${label}: ${file} failed the syntax check — not used"
+        rm -f -- "${tmp}"
+        return 1
+    fi
+    if [[ -n "${build}" ]]; then
+        if grep -qE '^VERSION[[:space:]]*=[[:space:]]*"[^"]*-pi02w"' "${tmp}"; then
+            [[ "${build}" == "pi02w" ]] || { warn "${label}: ${file} is a Pi Zero 2 W build — not used"; rm -f -- "${tmp}"; return 1; }
+        else
+            [[ "${build}" == "full" ]] || { warn "${label}: ${file} is not a Pi Zero 2 W build — not used"; rm -f -- "${tmp}"; return 1; }
+        fi
+    fi
+    chmod 644 "${tmp}"
+    mv -f -- "${tmp}" "${lib_dir}/${file}" || { rm -f -- "${tmp}"; return 1; }
+    FETCHED="${lib_dir}/${file}"
+    DOWNLOADED+=("${file} (${src})")
+    ok "Downloaded ${file} (${src}) → ${lib_dir}/"
+    return 0
+}
+
+fetch_if_missing() {
+    local key="$1" label="$2" installed="$3" pattern="$4" exclude="$5" lib_dir="$6" build="${7:-}" ans
+    any_file "${pattern}" "${lib_dir}" "${exclude}" && return 0
+    if [[ "${DOWNLOAD}" != "true" ]]; then
+        info "No ${label} file found — offline, nothing downloaded"
+        return 0
+    fi
+    if [[ "${installed}" == "true" ]]; then
+        if [[ "${NONINTERACTIVE}" == "true" ]]; then
+            info "No ${label} file found — installed copy left as it is"
+            return 0
+        fi
+        read -r -p "  No ${label} file found. Download the ${GH_CHANNEL} build from GitHub and update ${label}? [y/N]: " ans </dev/tty
+        case "${ans,,}" in
+            y|yes) ;;
+            *) info "${label} left as it is"; return 0 ;;
+        esac
+    else
+        info "No ${label} file found — downloading it from GitHub"
+    fi
+    fetch_tool "${key}" "${label}" "${pattern}" "${exclude}" "${lib_dir}" "${build}" || true
+    return 0
 }
 
 pick_build() {
@@ -483,6 +672,21 @@ retire_watchdog() {
 }
 retire_watchdog
 
+INSTMON_CHOSEN=""
+if [[ ! -f "${INSTMON_BIN}" ]]; then
+    hdr "instmon — file discovery"
+    info "instmon is not installed — it will be installed too"
+    CHOSEN=""
+    fetch_if_missing "instmon" "instmon" false "instmon*.py" "" "${INSTMON_LIB_DIR}"
+    stage_and_select "instmon*.py" "instmon" "${INSTMON_LIB_DIR}" || true
+    INSTMON_CHOSEN="${CHOSEN}"
+    if [[ -n "${INSTMON_CHOSEN}" ]]; then
+        info "Checking syntax…"
+        python3 -m py_compile "${INSTMON_CHOSEN}" \
+            || die "Syntax error in $(basename "${INSTMON_CHOSEN}") — install aborted"
+        ok "Syntax OK"
+    fi
+fi
 
 hdr "Dashboard — file discovery"
 CHOSEN=""
@@ -490,9 +694,11 @@ pick_build "${DASH_VARIANT:-}" "${DASH_BIN}" "DASH_VARIANT"
 DASH_VARIANT="${PICKED_BUILD}"
 if [[ "${DASH_VARIANT}" == "pi02w" ]]; then
     info "Dashboard build: Pi Zero 2 W (nodecontrol_pi02w*.py), from ${PICKED_WHY}"
+    fetch_if_missing "nodecontrol_pi02w" "Dashboard (Pi Zero 2 W)" "${_dash_exists}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "" "${DASH_LIB_DIR}" pi02w
     stage_and_select "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "Dashboard (Pi Zero 2 W)" "${DASH_LIB_DIR}" || true
 else
     info "Dashboard build: full (nodecontrol*.py without _pi02w), from ${PICKED_WHY}"
+    fetch_if_missing "nodecontrol" "Dashboard" "${_dash_exists}" "nodecontrol*.py|asl_dvs_dashboard*.py" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" "${DASH_LIB_DIR}" full
     stage_and_select "nodecontrol*.py|asl_dvs_dashboard*.py" "Dashboard" "${DASH_LIB_DIR}" "nodecontrol_pi02w*.py|asl_dvs_dashboard_pi02w*.py" || true
 fi
 DASH_CHOSEN="${CHOSEN}"
@@ -514,8 +720,10 @@ case "${SYSMON_VARIANT}" in
 esac
 CHOSEN=""
 if [[ "${SYSMON_VARIANT}" == "pi02w" ]]; then
+    fetch_if_missing "sysmon_pi02w" "SysMon (Pi Zero 2 W)" "${_sysmon_exists}" "sysmon_pi02w*.py" "" "${SYSMON_LIB_DIR}" pi02w
     stage_and_select "sysmon_pi02w*.py" "SysMon (Pi Zero 2 W)" "${SYSMON_LIB_DIR}" || true
 else
+    fetch_if_missing "sysmon" "SysMon" "${_sysmon_exists}" "sysmon*.py" "sysmon_pi02w*.py" "${SYSMON_LIB_DIR}" full
     stage_and_select "sysmon*.py" "SysMon" "${SYSMON_LIB_DIR}" "sysmon_pi02w*.py" || true
 fi
 SYSMON_CHOSEN="${CHOSEN}"
@@ -530,6 +738,7 @@ fi
 
 hdr "wifimon — file discovery"
 CHOSEN=""
+fetch_if_missing "wifimon" "wifimon" "${_wifimon_exists}" "wifimon*.py" "" "${WIFIMON_LIB_DIR}"
 stage_and_select "wifimon*.py" "wifimon" "${WIFIMON_LIB_DIR}" || true
 WIFIMON_CHOSEN="${CHOSEN}"
 
@@ -542,6 +751,7 @@ fi
 
 hdr "44helper — file discovery"
 CHOSEN=""
+fetch_if_missing "44helper" "44helper" "${_helper_exists}" "44helper*.py|asl_dvs_m17_44helper*.py" "" "${HELPER_LIB_DIR}"
 stage_and_select "44helper*.py|asl_dvs_m17_44helper*.py" "44helper" "${HELPER_LIB_DIR}" || true
 HELPER_CHOSEN="${CHOSEN}"
 
@@ -556,7 +766,7 @@ hdr "Node Listen — file discovery"
 CHOSEN=""
 _nl_want=true
 if [[ "${_nodelisten_exists}" != "true" ]]; then
-    if ! any_file "nodelisten*.py" "${NODELISTEN_LIB_DIR}"; then
+    if [[ "${DOWNLOAD}" != "true" ]] && ! any_file "nodelisten*.py" "${NODELISTEN_LIB_DIR}"; then
         _nl_want=false
         info "No nodelisten*.py file found — Node Listen (optional) skipped"
     elif [[ "${NONINTERACTIVE}" == "true" ]]; then
@@ -577,6 +787,7 @@ if [[ "${_nodelisten_exists}" != "true" ]]; then
     fi
 fi
 if [[ "${_nl_want}" == "true" ]]; then
+    fetch_if_missing "nodelisten" "Node Listen" "${_nodelisten_exists}" "nodelisten*.py" "" "${NODELISTEN_LIB_DIR}"
     stage_and_select "nodelisten*.py" "Node Listen" "${NODELISTEN_LIB_DIR}" || true
 fi
 NODELISTEN_CHOSEN="${CHOSEN}"
@@ -588,9 +799,19 @@ if [[ -n "${NODELISTEN_CHOSEN}" ]]; then
     ok "Syntax OK"
 fi
 
-if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
+if [[ ${#DOWNLOADED[@]} -gt 0 ]]; then
+    hdr "Downloaded from GitHub"
+    for _d in "${DOWNLOADED[@]}"; do ok "${_d}"; done
+fi
+
+if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
       && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]]; then
-    die "Nothing to install — no dashboard, sysmon, wifimon, 44helper or Node Listen files found."
+    if [[ "${DOWNLOAD}" != "true" ]]; then
+        die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Listen files found (offline: nothing downloaded)."
+    elif [[ "${FETCH_STATE}" == "failed" ]]; then
+        die "Nothing to install — no files found here, and the download from GitHub failed."
+    fi
+    die "Nothing to install — no instmon, dashboard, sysmon, wifimon, 44helper or Node Listen files found."
 fi
 
 hdr "Up-to-date check"
@@ -610,13 +831,14 @@ uptodate_check "44helper"  "${HELPER_CHOSEN}"  "${HELPER_BIN}"
 uptodate_check "Node Listen" "${NODELISTEN_CHOSEN}" "${NODELISTEN_BIN}"
 [[ "${UP_TO_DATE_SKIP}" == "true" ]] && NODELISTEN_CHOSEN=""
 
-if [[ -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
+if [[ -z "${INSTMON_CHOSEN}" && -z "${DASH_CHOSEN}" && -z "${SYSMON_CHOSEN}" \
       && -z "${WIFIMON_CHOSEN}" && -z "${HELPER_CHOSEN}" && -z "${NODELISTEN_CHOSEN}" ]]; then
     ok "All selected files are already up to date — nothing to install."
     exit 0
 fi
 
 hdr "Port checks"
+[[ -n "${INSTMON_CHOSEN}" ]] && { info "instmon port ${INSTMON_PORT}:"; check_port "${INSTMON_PORT}"; }
 [[ -n "${DASH_CHOSEN}"    ]] && { info "Dashboard port ${DASH_PORT}:"; check_port "${DASH_PORT}"; }
 [[ -n "${SYSMON_CHOSEN}"  ]] && { info "SysMon port ${SYSMON_PORT}:";  check_port "${SYSMON_PORT}"; }
 [[ -n "${HELPER_CHOSEN}"  ]] && { info "44helper port ${HELPER_PORT}:"; check_port "${HELPER_PORT}"; }
@@ -624,6 +846,14 @@ if [[ -n "${NODELISTEN_CHOSEN}" && "${_nodelisten_exists}" != "true" ]]; then
     _nl_port="$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\([0-9]\{4,5\}\)[[:space:]]*$/\1/p' "${NODELISTEN_CONF}" 2>/dev/null | head -1 || true)"
     NODELISTEN_PORT="${_nl_port:-${NODELISTEN_PORT}}"
     info "Node Listen port ${NODELISTEN_PORT}:"; check_port "${NODELISTEN_PORT}"
+fi
+
+if [[ -n "${INSTMON_CHOSEN}" ]]; then
+    hdr "Installing instmon"
+    info "Delegating to: python3 $(basename "${INSTMON_CHOSEN}") --install"
+    python3 "${INSTMON_CHOSEN}" --install \
+        || die "instmon --install failed — see output above"
+    ok "instmon installed, enabled, and restarted"
 fi
 
 if [[ -n "${DASH_CHOSEN}" ]]; then
@@ -728,6 +958,7 @@ info "Waiting for services to stabilise…"
 sleep 3
 
 for svc_entry in \
+    "${INSTMON_SERVICE}:${INSTMON_CHOSEN}:${INSTMON_PORT}" \
     "${DASH_SERVICE}:${DASH_CHOSEN}:${DASH_PORT}" \
     "${SYSMON_SERVICE}:${SYSMON_CHOSEN}:${SYSMON_PORT}" \
     "${WIFIMON_SERVICE}:${WIFIMON_CHOSEN}:${WIFIMON_PORT}" \
@@ -786,6 +1017,7 @@ print_urls() {
     sep
 }
 
+print_urls "instmon"                             "${INSTMON_PORT}" "${INSTMON_CHOSEN}"
 print_urls "ASL-DVS Node Control Dashboard"      "${DASH_PORT}"    "${DASH_CHOSEN}"
 print_urls "ASL-DVS System Monitor"              "${SYSMON_PORT}"  "${SYSMON_CHOSEN}"
 print_urls "44Net Helper"                        "${HELPER_PORT}"  "${HELPER_CHOSEN}"
@@ -798,6 +1030,7 @@ fi
 
 echo
 echo "  ${BLD}Service commands:${RST}"
+[[ -n "${INSTMON_CHOSEN}"  ]] && echo "    instmon        :  systemctl {status|restart|stop} ${INSTMON_SERVICE}"
 [[ -n "${DASH_CHOSEN}"     ]] && echo "    Dashboard      :  systemctl {status|restart|stop} ${DASH_SERVICE}"
 [[ -n "${SYSMON_CHOSEN}"   ]] && echo "    SysMon         :  systemctl {status|restart|stop} ${SYSMON_SERVICE}"
 [[ -n "${WIFIMON_CHOSEN}"  ]] && echo "    wifimon        :  systemctl {status|restart|stop} ${WIFIMON_SERVICE}"

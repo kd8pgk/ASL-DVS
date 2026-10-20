@@ -1,6 +1,35 @@
 # Installer (install_all) changelog
 
-Current file: `install_all_v7_2_0_20261018.sh`. Newest entries first.
+Current file: `install_all_v7_3_0_20261020.sh`. Newest entries first.
+
+## 7.3.0 (2026-10-20)
+
+- **Downloads missing files from GitHub.** For each tool it looks in the usual
+  places (the script's folder, the current folder, `/root`, `/home/pi`, the
+  `sudo` user's home, `/tmp` and the tool's instmon library folder). A tool with
+  no file there is downloaded from `github.com/kd8pgk/ASL-DVS` into its instmon
+  library folder, then picked and installed as before.
+  - The Dashboard and SysMon download the build the installer already chose
+    (Pi Zero 2 W or full).
+  - Channel: stable by default (the file and commit in `channels/stable.json`,
+    checked against its blob). A tool with no stable build yet uses the newest
+    file on `main`. `ASL_DVS_CHANNEL=testing` takes every file from `main`.
+    `ASL_DVS_REPO` sets another repo.
+  - Each download gets a syntax check and a build check (`-pi02w` or not). A
+    file that fails is removed and that tool is skipped.
+  - git is installed (`apt-get install git`) only when a download is needed
+    and git is missing. If git or GitHub can't be reached, the installer goes
+    on with the files it has.
+  - A tool that is installed but has no file is left as it is. Interactive runs
+    ask "Download the stable build from GitHub and update …? [y/N]". Runs
+    from instmon (non-interactive) never update it this way.
+  - Node Listen: the "Install Node Listen?" question is asked even with no
+    local file, since it can be downloaded.
+  - `--offline` (or `--no-download`) turns downloads off.
+- **Installs instmon** when `/usr/local/bin/instmon.py` is missing, before the
+  other tools, from a local `instmon*.py` file or from GitHub. It shows in the
+  port check, the startup check, the URLs and the service commands. An installed
+  instmon is left alone (it updates itself).
 
 ## 7.2.0 (2026-10-18)
 
