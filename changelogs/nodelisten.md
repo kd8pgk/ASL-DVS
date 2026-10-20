@@ -1,6 +1,21 @@
 # nodelisten changelog
 
-Current file: `nodelisten_v0_4_11_1_20261019.py`. Newest entries first.
+Current file: `nodelisten_v0_4_12_20261020.py`. Newest entries first.
+
+## 0.4.12 (2026-10-20)
+
+- **Listening starts when the page opens.** When the page loads (and after
+  logging in), Node Listen starts playing the node's audio by itself. A new
+  setting, **Start listening when the page opens** (Setup tab, This device's
+  playback), is on by default and is kept per browser like the other playback
+  settings; turn it off to go back to pressing Listen.
+- Most browsers hold sound until the page has been tapped once. Then the
+  Listen tab says "Tap anywhere to start listening" in amber, and the first
+  tap or key press anywhere on the page starts it. Tapping Listen itself also
+  works and starts one stream, not two.
+- Stop still stops; listening only starts by itself on opening the page or
+  logging in. With "Listen without logging in" off, nothing plays until you
+  log in.
 
 ## 0.4.11.1 (2026-10-19)
 
