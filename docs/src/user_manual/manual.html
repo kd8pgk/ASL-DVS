@@ -32,7 +32,7 @@
       <tr><td>44helper</td><td class="mono">44helper_v0_0_215_20261018.py</td><td>0.0.215</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_57_0_20261018.py</td><td>2.57.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
-      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_14_20261020.py</td><td>0.4.14</td></tr>
+      <tr><td>Node Listen</td><td class="mono">nodelisten_v0_4_15_20261020.py</td><td>0.4.15</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_86_20261014.py</td><td>6.13.86</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_84_20261018.py</td><td>9.3.84</td></tr>
@@ -2884,7 +2884,7 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p class="ch-lede">Node Listen puts one node in your phone's browser: it plays the node's audio about half a second
     behind, transmits with push-to-talk, and connects up to 10 favorites. Open it at
     <code>http://&lt;pi-address&gt;:8993</code>; it moves you to <code>https://</code>. It is optional, and the same
-    file runs on the Pi Zero 2 W and the full build. This chapter describes Node Listen 0.4.14.</p>
+    file runs on the Pi Zero 2 W and the full build. This chapter describes Node Listen 0.4.15.</p>
 
   <h2><span class="n">15.1</span>Before you start</h2>
   <ol class="steps">
@@ -2946,7 +2946,8 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
   <p>The spectrum shows the node's audio from 0 to 4 kHz, which is all an 8 kHz node carries. It starts as a
     <b>waterfall</b>: each new line is at the top, so a steady tone draws a vertical stripe and speech draws
     shifting bands. <b>Tap it</b> to switch to bars and back; each browser remembers. The strip below 300 Hz is
-    shaded: a stripe there is usually a CTCSS (PL) tone or hum. Marks along the bottom show 300 Hz, 1, 2 and 3 kHz.</p>
+    shaded: a stripe there is usually a CTCSS (PL) tone or hum, and with <b>Cut below 300 Hz</b> on (section 15.7) it
+    should be faint or gone. Marks along the bottom show 300 Hz, 1, 2 and 3 kHz.</p>
   <ul>
     <li>It is drawn by the phone, not the Pi, and only while you listen with the page on screen.</li>
     <li>It shows the audio before your volume, so it keeps moving while push-to-talk mutes the speaker.</li>
@@ -3056,11 +3057,25 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><td>2 · Transmit</td><td>Node 1921's state (not set up, set up and linked, linking…), the main node and its <code>rxchannel</code>. <b>Add node 1921</b> also repairs a wrong <code>[nodes]</code> line; <b>Remove</b> takes it out of <code>rpt.conf</code> (asks first).</td></tr>
     <tr><td>3 · Settings</td><td>Web port (8993), UDP port (6200), Max listeners (3, up to 10), TX time-out (120 s, 30 to 600), HTTPS (on), Don't transmit while the node is busy (on), Listen without logging in (off). Changing a port or HTTPS restarts Node Listen.</td></tr>
     <tr><td>4 · Favorites</td><td>Section 15.6. The <b>From the Dashboard…</b> list is read when you open the card.</td></tr>
-    <tr><td>5 · Audio levels</td><td><b>Adjust audio levels here</b> (off by default: audio passes unchanged). Mic to node (TX) and node to phone (RX) gain, −12 to +12 dB; Listen buffer (0.15 s to 1 s, 0.25 s default); TX buffer (60 to 300 ms, 120 ms default). TX peak, RX level and TX gaps show how it is doing: aim for TX peaks of −6 to −3 dBFS. <b>Save</b> and <b>Reset to 0 dB</b> are in this card. These change only Node Listen's path, not the node, the radio or DVSwitch.</td></tr>
+    <tr><td>5 · Audio levels</td><td><b>Adjust audio levels here</b> (off by default: audio passes unchanged). Mic to node (TX) and node to phone (RX) gain, −12 to +12 dB; Listen buffer (0.15 s to 1 s, 0.25 s default); TX buffer (60 to 300 ms, 120 ms default). TX peak, RX level and TX gaps show how it is doing: aim for TX peaks of −6 to −3 dBFS. <b>Save</b> and <b>Reset to 0 dB</b> are in this card. These change only Node Listen's path, not the node, the radio or DVSwitch.<br><b>RX cleanup</b> (0.4.15), in the same card: what every listener hears, done once on the Pi. <b>Cut below 300 Hz</b> (on), <b>Automatic level</b> (on), <b>Squelch-tail gate</b> (Off, <b>Light</b>, Strong). <b>Processing load</b> shows how much of one CPU core it used over the last 5 seconds. Save keeps these with the levels above.</td></tr>
     <tr><td>6 · Microphone</td><td>Kept in this browser only. Leveler (on), Automatic gain (off), Noise suppression (on), Echo cancellation (off), Voice filter (on), Radio voice (off), Noise gate (Off, Light, Strong), Mic gain (−12 to +24 dB). <b>Test mic</b> records 4 s and plays back what the node would get; <b>Test through the node</b> transmits 4 s for real and plays back what the node sent out.</td></tr>
     <tr><td>7 · Playback</td><td>Kept in this browser only. <b>Show the spectrum</b> on the Listen tab (on), <b>Start listening when the page opens</b> (on), <b>Keep the screen on</b> while listening or talking (off; shown where the browser supports it), <b>16-bit audio</b> (on; 128 kbit/s instead of 64), <b>Smooth playback</b> (on).</td></tr>
     <tr><td>8 · Log</td><td>Fetched only while the card is open. What Node Listen has done: listeners, logins, transmissions, connects, rpt.conf edits.</td></tr>
   </table>
+  <h3>RX cleanup (0.4.15)</h3>
+  <p>Three steps clean up what listeners hear. They work on Node Listen's copy of the audio only: the node, the
+    radio and every other link hear exactly what they did before. All three are on when Node Listen is installed or
+    updated, and are separate from <b>Adjust audio levels here</b>.</p>
+  <table>
+    <tr><th>Step</th><th>What it does</th><th>When to change it</th></tr>
+    <tr><td>Cut below 300 Hz</td><td>Removes hum and the low CTCSS (PL) tones: 100 Hz drops by about 38 dB and 150 Hz by 24 dB. The highest tones, near 250 Hz, drop only about 7 dB. Voice is not affected.</td><td>Turn it off only to hear the tones, for example when checking which tone a station sends.</td></tr>
+    <tr><td>Automatic level</td><td>Brings quiet stations up (by up to 18 dB) and loud ones down a little (by up to 6 dB), aiming at an even level. It turns down at once on a loud station, comes up over a second or two on a quiet one, and stays put between transmissions.</td><td>Turn it off if you want to hear stations at their real levels.</td></tr>
+    <tr><td>Squelch-tail gate</td><td><b>Light</b> mutes the burst of hiss after a station unkeys, and long silences. <b>Strong</b> also mutes shorter, quieter hiss, which can clip hissy speech sounds such as "s". With the gate on, listeners hear the audio 80 ms later, so the start of a tail can be muted too.</td><td>Strong on a node with noisy links; Off if the gate ever mutes the start of speech.</td></tr>
+  </table>
+  <p>The work is done only while someone listens, and only for frames with sound in them. <b>Processing load</b>
+    shows what it costs. On a Pi Zero 2 W it should stay at about 10 % of one core or less while audio passes, and
+    near zero when the node is quiet. If it is much higher, turn <b>Cut below 300 Hz</b> off first; it is the
+    costliest step.</p>
   <div class="call tip"><span class="t">TIP</span>SysMon's ASL-DVS tab (section 4.2) has a <b>Node Listen</b> card:
     its checks (service, ports, the feed, HTTPS), the people listening with a Disconnect for each, <b>Restart
     nodelisten</b>, <b>Unlink</b> for node 1921, and <b>Open Node Listen</b>.</div>
@@ -3126,6 +3141,13 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
         <code>rpt lstats</code>; or, from the Dashboard's node, the Dashboard's local API (<code>POST
         /api/local/action</code> on 127.0.0.1 with the key in <code>/etc/asl_dvs/local_api.key</code>), which also
         carries <code>m17-connect</code>, <code>m17-status</code> and <code>m17-disconnect</code>.</li>
+      <li><b>RX cleanup:</b> in the audio pump, once per 20 ms frame for all listeners: two biquad sections
+        (4th-order Butterworth high-pass at 300 Hz), then a gain that ramps across the frame (the automatic level plus
+        the Tune RX gain) with the soft limiter. The automatic level follows a smoothed frame level (target −20 dBFS,
+        −6 to +18 dB, down 1.5 dB per frame, up 3 dB/s). The gate looks at each frame's level and zero-crossing rate
+        (hiss crosses zero far more often than voice) and keeps a 4-frame (80 ms) delay so it can mute a tail from its
+        start. Frames under −65 dBFS skip the work. Settings <code>rx_hpf</code>, <code>rx_agc</code> and
+        <code>rx_gate</code> (0, 1, 2) in <code>nodelisten.conf</code>.</li>
       <li><b>Logins:</b> sessions last 12 hours from the last request. Without HTTPS the page is plain HTTP; with
         it, a plain-HTTP request is sent to the <code>https://</code> address.</li>
       <li><b>Remove:</b> <code>--uninstall</code> takes the <code>outstreamcmd</code> line and node 1921 out of
