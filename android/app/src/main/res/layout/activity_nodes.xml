@@ -61,6 +61,22 @@
             android:minHeight="48dp"
             android:text="@string/audio_settings" />
 
+        <Button
+            android:id="@+id/battery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp"
+            android:text="@string/battery" />
+
+        <TextView
+            android:id="@+id/battery_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/muted"
+            android:textSize="13sp" />
+
         <CheckBox
             android:id="@+id/keep_on"
             android:layout_width="match_parent"

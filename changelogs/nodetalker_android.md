@@ -19,6 +19,13 @@ Current version: `0.3.0`. The app is in `android/`; its version is `appVersion` 
 - **Audio settings:** "Phone's echo and noise filter" for the microphone (on
   by default; turn it off if the audio sounds choppy or muffled).
 - Asks for the microphone the first time push-to-talk is used.
+- **Background play everywhere:** another app playing sound (music, video)
+  no longer pauses receive; only a phone call (or a voice assistant)
+  does. Hold-to-talk unkeys when the screen goes off or you switch apps
+  (the button can't be held); tap-to-talk keeps going.
+- **Battery** button on the node list: opens Android's setting to let Node
+  Talker run in the background, with a warning while battery saver may stop
+  it. Page audio's setting now says it stops when the screen goes off.
 
 ## 0.2.1 (2026-10-21)
 

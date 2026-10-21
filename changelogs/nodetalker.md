@@ -12,6 +12,8 @@ Current file: `nodetalker_v0_6_11_20261021.py`. Before 0.6.0 the tool was Node L
   time-out, guard timer) from the node's own answers, and the TX level from
   the app. The page's microphone gain is passed on; its other microphone
   settings (leveler, gate, filter) apply in a browser only.
+- In app mode, switching apps or the screen going off keeps a tap-to-talk
+  transmission going and unkeys a hold-to-talk one.
 - In a browser, or with page audio, nothing changes.
 
 ## 0.6.10 (2026-10-21)

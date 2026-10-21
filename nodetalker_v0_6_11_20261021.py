@@ -5159,7 +5159,7 @@ function appCall(name, arg) {
 }
 
 const APP_STATE_TEXT = {connecting: ['', 'Connecting...'], playing: ['ok', 'Listening (in the app; keeps playing with the screen locked).'],
-  reconnecting: ['warn', 'Reconnecting...'], paused: ['warn', 'Paused for a call or other audio.']};
+  reconnecting: ['warn', 'Reconnecting...'], paused: ['warn', 'Paused for a call.']};
 
 function appListenUi(on) {
   playing = on;
@@ -6664,9 +6664,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('ptt-save').addEventListener('click', pttSave);
   $('ptt-restore').addEventListener('click', pttRestore);
   $('ptt-guard').addEventListener('change', () => { $('ptt-guard-note').textContent = Number($('ptt-guard').value) > totSec ? 'The node\'s TX time-out is ' + fmtSecs(totSec) + ', so it stops then.' : ''; });
-  window.addEventListener('blur', () => { if (!micPending && !appTalk()) pttUp(); });
+  window.addEventListener('blur', () => { if (!micPending && (!appTalk() || (ptt.mode !== 'tap' && !hsTx))) pttUp(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') { if (!appTalk()) pttUp(); } else { appSync(); appTalkSync(); openTalk(); pollStatus(); }
+    if (document.visibilityState === 'hidden') { if (!appTalk() || (ptt.mode !== 'tap' && !hsTx)) pttUp(); } else { appSync(); appTalkSync(); openTalk(); pollStatus(); }
     specKick();
     wakeLockApply();
   });

@@ -543,7 +543,7 @@ class ListenService : Service() {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setWillPauseWhenDucked(false)
             .setOnAudioFocusChangeListener { change ->
-                focusLost = change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                focusLost = change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
                 if (focusLost && talking) handler.post { unkey() }
                 if (running && Listen.state != Listen.RECONNECTING && Listen.state != Listen.CONNECTING) {
                     set(if (focusLost) Listen.PAUSED else Listen.PLAYING, "")
