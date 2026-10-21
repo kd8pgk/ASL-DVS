@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_9_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_10_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.10 (2026-10-21)
+
+- **Works with Node Talker for Android 0.2.0 (app audio).** Inside the app,
+  with app audio on, Listen hands receive to the app, which keeps playing
+  with the screen locked; the page shows the app's state (connecting,
+  listening, reconnecting, paused for a call) and level, a Stop from the
+  app's notification turns the page's button back, push-to-talk mutes the
+  app's receive and the volume slider sets the app's volume.
+- In a browser, or in the app with page audio, nothing changes.
 
 ## 0.6.9 (2026-10-21)
 

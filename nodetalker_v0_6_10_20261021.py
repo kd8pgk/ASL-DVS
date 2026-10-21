@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.9"
+VERSION = "0.6.10"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -5146,7 +5146,51 @@ function autoWaitEnd() {
   autoWait = null;
 }
 
+function appAudio() {
+  try { return !!(window.NodeTalkerApp && NodeTalkerApp.audioMode() === 'app'); } catch (e) { return false; }
+}
+
+function appCall(name, arg) {
+  try { if (appAudio() && typeof NodeTalkerApp[name] === 'function') return arg === undefined ? NodeTalkerApp[name]() : NodeTalkerApp[name](arg); } catch (e) {}
+  return null;
+}
+
+const APP_STATE_TEXT = {connecting: ['', 'Connecting...'], playing: ['ok', 'Listening (in the app; keeps playing with the screen locked).'],
+  reconnecting: ['warn', 'Reconnecting...'], paused: ['warn', 'Paused for a call or other audio.']};
+
+function appListenUi(on) {
+  playing = on;
+  $('listen-btn').textContent = on ? 'Stop' : 'Listen';
+  $('listen-btn').classList.toggle('primary', !on);
+  if (!on) { note('listen-msg', '', ''); if (!talking) $('meter-bar').style.width = '0%'; }
+}
+
+window.ntAppEvent = (e) => {
+  if (!e || !appAudio()) return;
+  if (e.state === 'off') { if (playing) appListenUi(false); if (e.error) note('listen-msg', 'warn', e.error); return; }
+  if (!playing) appListenUi(true);
+  const t = APP_STATE_TEXT[e.state];
+  if (t) note('listen-msg', e.error ? 'warn' : t[0], e.error || t[1]);
+  if (typeof e.level === 'number' && !talking) {
+    $('meter-bar').style.width = dbPct(e.level) + '%';
+    $('st-level').textContent = fmtDb(e.level);
+  }
+};
+
+function appSync() {
+  if (!appAudio()) return false;
+  let st = null;
+  try { st = JSON.parse(NodeTalkerApp.listenState() || 'null'); } catch (e) {}
+  if (st) window.ntAppEvent(st);
+  return true;
+}
+
 async function autoListen() {
+  if (appAudio()) {
+    appSync();
+    if (!playing && play.auto && (authed || publicListen)) startListen();
+    return;
+  }
   if (playing || starting || autoWait || !play.auto || !(authed || publicListen) || !makeCtx()) return;
   await Promise.race([ctx.resume().catch(() => {}), sleep(400)]);
   if (playing || starting || autoWait) return;
@@ -5163,6 +5207,12 @@ async function autoListen() {
 
 async function startListen() {
   autoWaitEnd();
+  if (appAudio()) {
+    appCall('setVolume', listenVolume());
+    if (appCall('listenStart')) { appListenUi(true); note('listen-msg', '', 'Connecting...'); }
+    else note('listen-msg', 'err', 'The app could not start listening.');
+    return;
+  }
   if (starting) return;
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (!makeCtx()) return;
@@ -5210,6 +5260,7 @@ async function startListen() {
 
 function stopListen() {
   autoWaitEnd();
+  if (appAudio()) { appCall('listenStop'); appListenUi(false); return; }
   playing = false;
   specKick();
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
@@ -5676,7 +5727,7 @@ function endTalk() {
   if (talkTimer) { clearInterval(talkTimer); talkTimer = null; }
   $('ptt').classList.remove('guard-warn');
   $('ptt-time').textContent = '';
-  setTimeout(() => { if (gainNode && !talking) gainNode.gain.value = listenVolume(); }, 1000);
+  setTimeout(() => { if (talking) return; if (gainNode) gainNode.gain.value = listenVolume(); appCall('rxMute', false); }, 1000);
   if (playing && mediaDest && $('player').paused) $('player').play().catch(() => {});
   wakeLockApply();
 }
@@ -5693,6 +5744,7 @@ async function pttDown(ev) {
   if (!wsReady) { openTalk(); return; }
   talking = true; keyed = false; preKey = []; guardWarned = false; guardStop = '';
   if (gainNode) gainNode.gain.value = 0;
+  appCall('rxMute', true);
   pttUi('keying', '');
   ws.send(JSON.stringify({op: 'key'}));
   talkTimer = setInterval(talkTick, 250);
@@ -6531,7 +6583,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('login-cancel').addEventListener('click', cancelLogin);
   TABS.forEach((t) => $('nav-' + t).addEventListener('click', () => showTab(t)));
   $('listen-btn').addEventListener('click', toggleListen);
-  $('vol').addEventListener('input', () => { if (gainNode) gainNode.gain.value = listenVolume(); });
+  $('vol').addEventListener('input', () => { if (gainNode) gainNode.gain.value = listenVolume(); appCall('setVolume', listenVolume()); });
   if ('wakeLock' in navigator) {
     $('awake-row').classList.remove('hidden');
     try { $('keep-awake').checked = localStorage.getItem('nlKeepAwake') === '1'; } catch (e) {}

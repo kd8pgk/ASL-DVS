@@ -12,7 +12,9 @@ import android.net.http.SslError
 import android.os.Bundle
 import android.view.View
 import android.view.WindowManager
+import android.os.Build
 import android.webkit.CookieManager
+import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
 import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
@@ -35,6 +37,7 @@ class TalkerActivity : Activity() {
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingDownload: String? = null
     private var certDialog: AlertDialog? = null
+    private val pushState: () -> Unit = { runOnUiThread { sendState() } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,6 +57,78 @@ class TalkerActivity : Activity() {
         findViewById<Button>(R.id.back).setOnClickListener { finish() }
         setup()
         if (savedInstanceState == null || web.restoreState(savedInstanceState) == null) load()
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val n = NodeStore.get(this, intent.getStringExtra(EXTRA_NODE)) ?: return
+        if (n.id == node.id) return
+        setIntent(intent)
+        node = n
+        title = node.title
+        load()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        Listen.listeners.add(pushState)
+        sendState()
+    }
+
+    override fun onPause() {
+        Listen.listeners.remove(pushState)
+        super.onPause()
+    }
+
+    private fun sendState() {
+        if (!::web.isInitialized) return
+        val st = if (Listen.nodeId == null || Listen.nodeId == node.id) Listen.json() else "{\"state\":\"off\"}"
+        web.evaluateJavascript("window.ntAppEvent && window.ntAppEvent($st)", null)
+    }
+
+    inner class Bridge {
+        @JavascriptInterface
+        fun version(): String = BuildConfig.VERSION_NAME
+
+        @JavascriptInterface
+        fun audioMode(): String = NodeStore.audio(this@TalkerActivity).mode
+
+        @JavascriptInterface
+        fun listenStart(): Boolean {
+            val n = node
+            askNotifications()
+            return try {
+                Listen.start(this@TalkerActivity, n)
+                true
+            } catch (e: IllegalStateException) {
+                false
+            } catch (e: SecurityException) {
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun listenStop() = Listen.stop(this@TalkerActivity)
+
+        @JavascriptInterface
+        fun listenState(): String =
+            if (Listen.nodeId == null || Listen.nodeId == node.id) Listen.json() else "{\"state\":\"off\"}"
+
+        @JavascriptInterface
+        fun rxMute(on: Boolean) {
+            Listen.muted = on
+        }
+
+        @JavascriptInterface
+        fun setVolume(v: Double) {
+            Listen.volume = v.toFloat().coerceIn(0f, 1f)
+        }
+    }
+
+    private fun askNotifications() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED) return
+        runOnUiThread { requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), REQ_NOTIFY) }
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
@@ -94,6 +169,7 @@ class TalkerActivity : Activity() {
             mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
             userAgentString = "$userAgentString NodeTalkerApp/${BuildConfig.VERSION_NAME}"
         }
+        web.addJavascriptInterface(Bridge(), "NodeTalkerApp")
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame || node.sameOrigin(request.url)) return false
@@ -103,6 +179,10 @@ class TalkerActivity : Activity() {
 
             override fun onReceivedSslError(view: WebView, handler: SslErrorHandler, err: SslError) {
                 checkCert(handler, err)
+            }
+
+            override fun onPageFinished(view: WebView, url: String?) {
+                sendState()
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, err: WebResourceError) {
@@ -259,5 +339,6 @@ class TalkerActivity : Activity() {
         private const val REQ_MIC = 1
         private const val REQ_FILE = 2
         private const val REQ_SAVE = 3
+        private const val REQ_NOTIFY = 4
     }
 }

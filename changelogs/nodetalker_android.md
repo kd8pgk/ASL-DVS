@@ -1,6 +1,24 @@
 # Node Talker for Android changelog
 
-Current version: `0.1.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.2.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.2.0 (2026-10-21)
+
+- **Phase 2: receive in the background ("app audio", the default).** With
+  Node Talker 0.6.10 or later, Listen on the page plays through the app,
+  which keeps playing with the screen locked or the app in the background.
+  - A notification shows the node and its state (connecting, listening,
+    reconnecting, paused) with **Stop**; tapping it opens the node.
+  - Reconnects by itself (1 s, then up to every 10 s) if the stream drops.
+  - Pauses for a phone call or other audio and carries on after.
+  - Keeps Wi-Fi awake while listening.
+  - Push-to-talk on the page mutes it; the page's volume slider sets it.
+- **Audio settings** (node list): app audio or page audio (as in a browser,
+  for when app audio sounds bad); receive buffer 100–1000 ms (default
+  300 ms; raise it if audio breaks up); speaker (media volume) or earpiece
+  (call volume). Changes apply at once to a node that is playing.
+- Android 13+ asks once to show notifications.
+- An older Node Talker (without the page side) keeps page audio.
 
 ## 0.1.0 (2026-10-21)
 

@@ -76,6 +76,9 @@
   publishes the debug APK as a pre-release `android-vX.Y.Z`. Release signing
   waits until the keystore secrets exist.
 - The app is not on the stable/testing channels: those update node tools.
+- **After an Android build is merged, always post its APK download link**:
+  `https://github.com/kd8pgk/ASL-DVS/releases/download/android-vX.Y.Z/NodeTalker-X.Y.Z-debug.apk`
+  (check the release exists first).
 
 ## Workflow
 
