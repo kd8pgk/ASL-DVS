@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.72.0"
+VERSION ="2.73.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -1615,6 +1615,28 @@ def _diskimg_finish_quiesce(job_id, frozen=False):
         _diskimg_lastjob_write({"id": job_id, "kind": snap.get("kind"), "state": snap.get("state"),
                                 "message": snap.get("message"), "finished": snap.get("finished")})
 
+_RPICLONE_DEST_ERR_RE = re.compile(
+    rb"Bad message|Input/output error|Structure needs cleaning|Read-only file system")
+_RPICLONE_DEST_ERR_SHOWN = 10
+_RPICLONE_DEST_ERR_LIMIT = 20
+
+def _diskimg_stop_running_copy(job_id):
+    with _diskimg_job_lock:
+        job = _diskimg_job
+        if job is None or job["id"] != job_id:
+            return
+        proc, unit_name = job.get("proc"), job.get("unit_name")
+    try:
+        if unit_name:
+            subprocess.run(["systemctl", "stop", f"{unit_name}.service"], capture_output=True, timeout=30)
+        elif proc is not None:
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, PermissionError, OSError):
+                proc.terminate()
+    except Exception as exc:
+        log_event(f"Disk-image job {job_id}: could not stop the copy: {exc}", "warn")
+
 def _diskimg_reader_thread_body(job_id):
     with _diskimg_job_lock:
         job = _diskimg_job
@@ -1625,6 +1647,8 @@ def _diskimg_reader_thread_body(job_id):
     buf = b""
     last_nonprogress_line = ""
     rpiclone_aborted = False
+    dest_errors = 0
+    dest_error_stop = False
     stream = proc.stdout
     read_some = getattr(stream, "read1", None) or (lambda n: stream.read(n))
     try:
@@ -1644,6 +1668,15 @@ def _diskimg_reader_thread_body(job_id):
                     parsed = None
                     if b"Aborting" in piece:
                         rpiclone_aborted = True
+                    if _RPICLONE_DEST_ERR_RE.search(piece):
+                        dest_errors += 1
+                        if dest_errors == _RPICLONE_DEST_ERR_LIMIT and not dest_error_stop:
+                            dest_error_stop = True
+                            _diskimg_console_append(job_id, f"Stopping: {dest_errors} write errors on the destination.")
+                            log_event(f"Disk-image job {job_id}: rpi-clone hit {dest_errors} write errors on the destination -- stopping it.", "err")
+                            threading.Thread(target=_diskimg_stop_running_copy, args=(job_id,), daemon=True).start()
+                        if dest_errors > _RPICLONE_DEST_ERR_SHOWN:
+                            continue
                 elif progress_format == "pv":
                     m = _PV_PROGRESS_RE.search(piece)
                     parsed = _diskimg_parse_meter_bytes(m.group(1), m.group(2)) if m else None
@@ -1679,6 +1712,15 @@ def _diskimg_reader_thread_body(job_id):
             job["finished"] = time.time()
             job["state"] = "cancelled"
             job["message"] = "Cancelled -- the destination is left partial and unusable."
+        elif dest_error_stop:
+            job["finished"] = time.time()
+            job["state"] = "failed"
+            job["message"] = (
+                f"Stopped after {dest_errors} write errors on {job['dest']} (for example \"Bad message\" or "
+                "\"Input/output error\"). The filesystem on that card is damaged, or the card is failing. Run the clone "
+                "again with Force re-initialize ticked, which makes a fresh filesystem, or Full Format the card first. "
+                "If it happens again on a freshly formatted card, replace the card."
+            )
         elif progress_format == "rpiclone" and returncode == 0 and rpiclone_aborted:
             job["finished"] = time.time()
             job["state"] = "failed"
