@@ -1,6 +1,28 @@
 # instmon changelog
 
-Current file: `instmon_v2_65_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_66_0_20261021.py`. Newest entries first.
+
+## 2.66.0 (2026-10-21)
+
+- **Disk Image & Clone cards laid out as numbered steps.** Full Format,
+  Backup, Clone and Restore each run top to bottom in the order the job is
+  done, each step on its own rows:
+  - Full Format: 1 Pick drive, 2 Options, 3 Check, 4 Run.
+  - Backup: 1 Destination, 2 Options, 3 Safety and speed, 4 Check, 5 Run,
+    then Existing Backups and Scheduled Backups (**Save Schedule** on its
+    own row at the end).
+  - Clone: 1 Destination, 2 Copy method (backend and rpi-clone), 3 Options,
+    4 Check, 5 Run.
+  - Restore: 1 Pick backup, 2 Destination, 3 Options, 4 Check, 5 Run.
+  - The run, Stop and Reset buttons are always the last step, right above
+    the card's progress and console.
+- **Help button on each card.** The explanatory text (including the
+  pause-services note and the intro on the drives card) is hidden until the
+  card's **Help** is pressed; **Hide Help** puts it away. Help starts hidden
+  on every page load. Drive lists, prerequisites, the command preview, the
+  rpi-clone status, the schedule status, progress and the console stay
+  visible. Checkbox tooltips are unchanged.
+- Every control keeps its id and action; nothing about how jobs run changed.
 
 ## 2.65.0 (2026-10-21)
 

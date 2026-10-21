@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.65.0"
+VERSION ="2.66.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -6004,14 +6004,28 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
    inline in a header row, per explicit request. Extra top padding on
    .diskimg-card (vs. plain .card) leaves room so the button never
    overlaps the card's own first line of content when expanded. */
-.diskimg-card{position:relative;padding-top:2.1rem}
-.diskimg-toggle{
-  position:absolute;top:.55rem;right:.7rem;z-index:2;
+.diskimg-card,.diskimg-intro{position:relative;padding-top:2.1rem}
+.diskimg-corner{position:absolute;top:.55rem;right:.7rem;z-index:2;display:flex;gap:.35rem}
+.diskimg-toggle,.diskimg-help-toggle{
   font-family:var(--mono);font-size:.68rem;color:var(--fg);
   cursor:pointer;padding:.15rem .55rem;border:1px solid var(--border2);
   border-radius:3px;background:transparent;
 }
 .diskimg-card.collapsed .diskimg-card-body{display:none}
+/* v2.66.0: numbered steps, and help text that stays hidden until the
+   card's Help button is pressed. */
+.diskimg-card.collapsed .diskimg-help-toggle{display:none}
+.card:not(.help-open) .diskimg-help{display:none}
+.diskimg-help{margin:.3rem 0}
+.diskimg-step{display:flex;align-items:center;gap:.45rem;margin:.75rem 0 .3rem;
+  font-size:.8rem;font-weight:700;color:var(--amber)}
+.diskimg-step:first-child{margin-top:0}
+.diskimg-step-n{display:inline-flex;align-items:center;justify-content:center;
+  width:1.3rem;height:1.3rem;border-radius:50%;background:var(--amber);
+  color:#070b10;font-size:.72rem;flex-shrink:0}
+.diskimg-step-body{margin-left:1.75rem}
+.diskimg-sub{font-size:.8rem;font-weight:700;color:var(--text-bright);
+  margin:.9rem 0 .3rem;padding-top:.5rem;border-top:1px solid var(--border2)}
 """
 
 _CSS = (
@@ -6227,7 +6241,7 @@ function renderQuietFullUpdate(quiet, fu) {
   // While Full Update runs every other button waits (the server refuses
   // them anyway); only buttons disabled here are re-enabled afterwards.
   document.querySelectorAll('button[data-action], #diskimg-refresh-btn, #backup-btn').forEach(b => {
-    if (['fu_dismiss', 'fu_stop', 'full_update', 'quiet', 'restore', 'toggle_lib', 'toggle_diskimg_card', 'go', 'router',
+    if (['fu_dismiss', 'fu_stop', 'full_update', 'quiet', 'restore', 'toggle_lib', 'toggle_diskimg_card', 'toggle_diskimg_help', 'go', 'router',
          'download', 'diskimg_backup_download'].includes(b.dataset.action)) return;
     if (running && !b.disabled) { b.disabled = true; b.dataset.fuDisabled = '1'; }
     else if (!running && b.dataset.fuDisabled) { b.disabled = false; delete b.dataset.fuDisabled; }
@@ -7482,6 +7496,14 @@ _JS_ACTIONS = """function wireButtons() {
         btn.textContent = open ? 'Hide' : 'Show';
         return;
       }
+      if (action === 'toggle_diskimg_help') {
+        // v2.66.0: local UI-only toggle for the card's help text.
+        const card = btn.closest('.card');
+        if (!card) return;
+        const open = card.classList.toggle('help-open');
+        btn.textContent = open ? 'Hide Help' : 'Help';
+        return;
+      }
       if (action === 'diskimg_stop') {
         // v2.30.0: handled before the generic disable/finally below --
         // this button's enabled state belongs to syncDiskimgCardButtons(),
@@ -8447,24 +8469,30 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
 </div>
 
-<div class="hdr">Disk Image &amp; Clone</div>  <!-- v2.10.0-2.12.0: broken into 4 cards (Full Format, Backup, Clone, Restore) sharing one drives/deps panel and one job engine; each card gets its own command-preview field, its own rolling terminal console, and shows an idle placeholder whenever the running job (if any) belongs to a different card -->
-<div class="card">
-  <div class="small muted" style="margin-bottom:.4rem">
+<div class="hdr">Disk Image &amp; Clone</div>
+<div class="card diskimg-intro">
+  <div class="diskimg-corner">
+    <button class="diskimg-help-toggle" data-action="toggle_diskimg_help">Help</button>
+  </div>
+  <div class="diskimg-help small muted">
     Images/formats the Pi's whole boot disk or an attached USB drive
     (including an SD card in a USB adapter). Not the same as Backup
-    &amp; Export above, which archives instmon's own library directory.</div>
+    &amp; Export above, which archives instmon's own library directory.
+    Attached drives refresh automatically every 5s.</div>
   <div id="diskimg-deps" class="small">Checking dependencies&hellip;</div>
-  <div class="row" style="justify-content:space-between">
-    <span class="small muted">Attached drives refresh automatically every 5s.</span>
+  <div class="row" style="justify-content:flex-end">
     <button id="diskimg-refresh-btn">Refresh Now</button>
   </div>
 </div>
 
 <div class="hdr">Full Format</div>
 <div class="card danger-card diskimg-card collapsed" data-diskimg-key="format">
-  <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="format">Show</button>
+  <div class="diskimg-corner">
+    <button class="diskimg-help-toggle" data-action="toggle_diskimg_help">Help</button>
+    <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="format">Show</button>
+  </div>
   <div class="diskimg-card-body">
-  <div class="small muted" style="margin-bottom:.4rem">
+  <div class="diskimg-help small muted">
     Wipes the destination drive completely (zero-fill), then writes a
     fresh GPT partition table with a single partition and formats it.
     Use this to prep a blank SD card/USB drive from scratch -- not for
@@ -8473,75 +8501,111 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     drive (old partition table and filesystem headers) -- much faster,
     but the rest of the old data stays on the drive, so it is not a
     secure erase.</div>
-  <div class="small muted" style="margin:.2rem 0 .2rem">Attached Drives</div>
-  <div id="diskimg-drives-table" class="small muted">Loading attached drives&hellip;</div>
-  <div class="row" style="margin-top:.6rem">
-    <select id="diskimg-format-dest"><option value="">Loading drives&hellip;</option></select>
-    <select id="diskimg-format-fs">
-      <option value="ext4" selected>ext4 (recommended)</option>
-      <option value="fat32">FAT32</option>
-      <option value="exfat">exFAT</option>
-    </select>
-    <label class="small muted" style="white-space:nowrap" title="Clears only the start of the drive (old partition table and filesystem headers), then partitions and formats. Takes seconds instead of the drive's full write time. NOT a secure erase: the rest of the old data stays on the drive."><input type="checkbox" id="diskimg-format-quick"> Quick format</label>
-    <button class="b-danger" data-action="diskimg_format_start">Format</button>
-    <button class="b-danger" data-action="diskimg_stop" data-kind="format" disabled title="Nothing is running on this card.">Stop</button>
-    <button data-action="diskimg_reset" data-kind="format" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
+  <div class="diskimg-step"><span class="diskimg-step-n">1</span>Pick drive</div>
+  <div class="diskimg-step-body">
+    <div id="diskimg-drives-table" class="small muted">Loading attached drives&hellip;</div>
+    <div class="row" style="margin-top:.4rem">
+      <select id="diskimg-format-dest"><option value="">Loading drives&hellip;</option></select>
+    </div>
   </div>
-  <div id="diskimg-format-prereqs" class="small" style="margin-top:.3rem">Pick a destination drive to check prerequisites.</div>
-  <div class="small muted">ext4: Linux-native, journaled (safer against corruption if the card is pulled without unmounting), no file-size limit -- best choice for a drive that lives on this Pi or is read from other Linux tools. FAT32: read/write on virtually anything, but individual files over 4GB will fail to write -- a problem if this drive will ever hold a raw disk-image backup. exFAT: no practical file-size limit and reads/writes on Windows/macOS/Linux, but not journaled.</div>
-  <input type="text" id="diskimg-format-cmd" class="diskimg-cmd placeholder" readonly value="Pick a destination drive to preview the command">
-  <div id="diskimg-format-cmd-note" class="diskimg-cmd-note"></div>
-
-  <div id="diskimg-job-format" style="margin-top:.5rem"></div>
-  <div id="diskimg-console-format" class="diskimg-console placeholder">(no job running)</div>
+  <div class="diskimg-step"><span class="diskimg-step-n">2</span>Options</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <select id="diskimg-format-fs">
+        <option value="ext4" selected>ext4 (recommended)</option>
+        <option value="fat32">FAT32</option>
+        <option value="exfat">exFAT</option>
+      </select>
+      <label class="small muted" style="white-space:nowrap" title="Clears only the start of the drive (old partition table and filesystem headers), then partitions and formats. Takes seconds instead of the drive's full write time. NOT a secure erase: the rest of the old data stays on the drive."><input type="checkbox" id="diskimg-format-quick"> Quick format</label>
+    </div>
+    <div class="diskimg-help small muted">ext4: Linux-native, journaled (safer against corruption if the card is pulled without unmounting), no file-size limit -- best choice for a drive that lives on this Pi or is read from other Linux tools. FAT32: read/write on virtually anything, but individual files over 4GB will fail to write -- a problem if this drive will ever hold a raw disk-image backup. exFAT: no practical file-size limit and reads/writes on Windows/macOS/Linux, but not journaled.</div>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">3</span>Check</div>
+  <div class="diskimg-step-body">
+    <div id="diskimg-format-prereqs" class="small">Pick a destination drive to check prerequisites.</div>
+    <input type="text" id="diskimg-format-cmd" class="diskimg-cmd placeholder" readonly value="Pick a destination drive to preview the command">
+    <div id="diskimg-format-cmd-note" class="diskimg-cmd-note"></div>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">4</span>Run</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <button class="b-danger" data-action="diskimg_format_start">Format</button>
+      <button class="b-danger" data-action="diskimg_stop" data-kind="format" disabled title="Nothing is running on this card.">Stop</button>
+      <button data-action="diskimg_reset" data-kind="format" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
+    </div>
+    <div id="diskimg-job-format" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-format" class="diskimg-console placeholder">(no job running)</div>
+  </div>
   </div>
 </div>
 
 <div class="hdr">Backup</div>
 <div class="card diskimg-card collapsed" data-diskimg-key="backup">
-  <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="backup">Show</button>
+  <div class="diskimg-corner">
+    <button class="diskimg-help-toggle" data-action="toggle_diskimg_help">Help</button>
+    <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="backup">Show</button>
+  </div>
   <div class="diskimg-card-body">
-  <div class="small muted" style="margin:.1rem 0 .2rem">Drives</div>
-  <div id="diskimg-strip-backup" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
-  <div class="row" style="margin-top:.5rem">
-    <select id="diskimg-backup-dest"><option value="">Loading drives&hellip;</option></select>
-    <input type="text" id="diskimg-backup-label" placeholder="optional label" style="max-width:10rem">
-    <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-backup-shrink"> Shrink to fit</label>
-    <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-backup-verify"> Verify after copy</label>
-    <select id="diskimg-backup-verify-algo" title="Hash algorithm for Verify after copy">
-      <option value="sha256" selected>sha256</option>
-      <option value="blake2b">blake2b (faster)</option>
-    </select>
-    <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-backup-encrypt"> Encrypt</label>
-    <label class="small muted diskimg-quiesce" style="white-space:nowrap" title="Stops the watchdog, the suite dashboards, Asterisk and the bridges while the copy runs, so far fewer writes are in flight. The node is OFF THE AIR for the whole job. The image is still crash-consistent, not a filesystem snapshot."><input type="checkbox" id="diskimg-backup-quiesce"> Pause node services during copy</label>
-    <input type="password" id="diskimg-backup-passphrase" placeholder="passphrase" style="max-width:9rem" autocomplete="new-password">
-    <button class="b-danger" data-action="diskimg_backup_start">Create Backup</button>
-    <button class="b-danger" data-action="diskimg_stop" data-kind="backup" disabled title="Nothing is running on this card.">Stop</button>
-    <button data-action="diskimg_reset" data-kind="backup" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
+  <div class="diskimg-step"><span class="diskimg-step-n">1</span>Destination</div>
+  <div class="diskimg-step-body">
+    <div id="diskimg-strip-backup" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
+    <div class="row">
+      <select id="diskimg-backup-dest"><option value="">Loading drives&hellip;</option></select>
+      <input type="text" id="diskimg-backup-label" placeholder="optional label" style="max-width:10rem">
+    </div>
   </div>
-  <div class="row" style="margin-top:.3rem">
-    <label class="small muted" style="white-space:nowrap" title="Sub-option of Pause node services -- freezes the root filesystem for the copy so the image is crash-consistent without a snapshot. Requires Pause node services to be ticked."><input type="checkbox" id="diskimg-backup-freeze" disabled> Freeze filesystem during copy</label>
-    <label class="small muted" style="white-space:nowrap" title="Continue past a read error on the source instead of aborting the backup. Skipped sectors are padded with nulls."><input type="checkbox" id="diskimg-backup-best-effort"> Continue past read errors</label>
-    <select id="diskimg-backup-backend" title="Copy backend">
-      <option value="dd" selected>Standard (dd)</option>
-      <option value="ddrescue">Resilient (ddrescue)</option>
-    </select>
-    <select id="diskimg-backup-throttle" title="Bandwidth throttle">
-      <option value="" selected>No throttle</option>
-      <option value="5">5 MB/s</option>
-      <option value="10">10 MB/s</option>
-      <option value="20">20 MB/s</option>
-    </select>
+  <div class="diskimg-step"><span class="diskimg-step-n">2</span>Options</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-backup-shrink"> Shrink to fit</label>
+      <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-backup-verify"> Verify after copy</label>
+      <select id="diskimg-backup-verify-algo" title="Hash algorithm for Verify after copy">
+        <option value="sha256" selected>sha256</option>
+        <option value="blake2b">blake2b (faster)</option>
+      </select>
+      <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-backup-encrypt"> Encrypt</label>
+      <input type="password" id="diskimg-backup-passphrase" placeholder="passphrase" style="max-width:9rem" autocomplete="new-password">
+    </div>
+    <div class="diskimg-help small muted">Shrink to fit: after copying, shrink the last partition's filesystem to its minimum size and truncate the file to match (smaller backup, slower -- needs resize2fs/parted; skipped automatically if the disk layout doesn't support it). Verify after copy: re-reads both sides and compares checksums before declaring success (slower, catches silent corruption dd's own exit code wouldn't); blake2b is faster than sha256 at the same integrity guarantee for this use. Encrypt: AES-256 encrypts the backup file with the given passphrase (openssl enc, PBKDF2) -- there's no way to recover it without that passphrase, so keep it somewhere safe; can't be combined with Shrink to fit or Verify after copy.</div>
   </div>
-  <textarea id="diskimg-backup-cmd" class="diskimg-cmd placeholder" readonly rows="1" spellcheck="false">Pick a destination drive to preview the command</textarea>
-  <div class="diskimg-quiesce-note">Pausing services reduces in-flight writes; it is not a filesystem snapshot. The image stays crash-consistent &mdash; ext4 replays its journal on the first boot of a restored card. sysmon keeps running so the node stays observable.</div>
-  <div id="diskimg-backup-cmd-note" class="diskimg-cmd-note"></div>
-  <div class="small muted">Shrink to fit: after copying, shrink the last partition's filesystem to its minimum size and truncate the file to match (smaller backup, slower -- needs resize2fs/parted; skipped automatically if the disk layout doesn't support it). Verify after copy: re-reads both sides and compares checksums before declaring success (slower, catches silent corruption dd's own exit code wouldn't); blake2b is faster than sha256 at the same integrity guarantee for this use. Encrypt: AES-256 encrypts the backup file with the given passphrase (openssl enc, PBKDF2) -- there's no way to recover it without that passphrase, so keep it somewhere safe; can't be combined with Shrink to fit or Verify after copy. Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy so the image is crash-consistent without needing a real snapshot; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default, since a failed backup is a clearer signal than a silently incomplete one. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Encrypt or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed to go easier on a small/shared-bus board -- runs as a shell pipeline that does not currently survive an instmon restart.</div>
-  <div id="diskimg-job-backup" style="margin-top:.5rem"></div>
-  <div id="diskimg-console-backup" class="diskimg-console placeholder">(no job running)</div>
-  <div class="small muted" style="margin:.6rem 0 .2rem">Existing Backups</div>
+  <div class="diskimg-step"><span class="diskimg-step-n">3</span>Safety and speed</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <label class="small muted diskimg-quiesce" style="white-space:nowrap" title="Stops the watchdog, the suite dashboards, Asterisk and the bridges while the copy runs, so far fewer writes are in flight. The node is OFF THE AIR for the whole job. The image is still crash-consistent, not a filesystem snapshot."><input type="checkbox" id="diskimg-backup-quiesce"> Pause node services during copy</label>
+      <label class="small muted" style="white-space:nowrap" title="Sub-option of Pause node services -- freezes the root filesystem for the copy so the image is crash-consistent without a snapshot. Requires Pause node services to be ticked."><input type="checkbox" id="diskimg-backup-freeze" disabled> Freeze filesystem during copy</label>
+      <label class="small muted" style="white-space:nowrap" title="Continue past a read error on the source instead of aborting the backup. Skipped sectors are padded with nulls."><input type="checkbox" id="diskimg-backup-best-effort"> Continue past read errors</label>
+      <select id="diskimg-backup-backend" title="Copy backend">
+        <option value="dd" selected>Standard (dd)</option>
+        <option value="ddrescue">Resilient (ddrescue)</option>
+      </select>
+      <select id="diskimg-backup-throttle" title="Bandwidth throttle">
+        <option value="" selected>No throttle</option>
+        <option value="5">5 MB/s</option>
+        <option value="10">10 MB/s</option>
+        <option value="20">20 MB/s</option>
+      </select>
+    </div>
+    <div class="diskimg-quiesce-note diskimg-help">Pausing services reduces in-flight writes; it is not a filesystem snapshot. The image stays crash-consistent &mdash; ext4 replays its journal on the first boot of a restored card. sysmon keeps running so the node stays observable.</div>
+    <div class="diskimg-help small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy so the image is crash-consistent without needing a real snapshot; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default, since a failed backup is a clearer signal than a silently incomplete one. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Encrypt or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed to go easier on a small/shared-bus board -- runs as a shell pipeline that does not currently survive an instmon restart.</div>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">4</span>Check</div>
+  <div class="diskimg-step-body">
+    <textarea id="diskimg-backup-cmd" class="diskimg-cmd placeholder" readonly rows="1" spellcheck="false">Pick a destination drive to preview the command</textarea>
+    <div id="diskimg-backup-cmd-note" class="diskimg-cmd-note"></div>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">5</span>Run</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <button class="b-danger" data-action="diskimg_backup_start">Create Backup</button>
+      <button class="b-danger" data-action="diskimg_stop" data-kind="backup" disabled title="Nothing is running on this card.">Stop</button>
+      <button data-action="diskimg_reset" data-kind="backup" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
+    </div>
+    <div id="diskimg-job-backup" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-backup" class="diskimg-console placeholder">(no job running)</div>
+  </div>
+  <div class="diskimg-sub">Existing Backups</div>
   <div id="diskimg-backups" class="small muted">Loading&hellip;</div>
-  <div class="small muted" style="margin:.6rem 0 .2rem">Scheduled Backups</div>
+  <div class="diskimg-sub">Scheduled Backups</div>
   <div class="row">
     <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-sched-enabled"> Enabled</label>
     <span class="small muted">every</span>
@@ -8556,6 +8620,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-sched-verify"> Verify after copy</label>
     <label class="small muted diskimg-quiesce" style="white-space:nowrap" title="UNATTENDED: the node goes off the air on its own, at the scheduled time, with nobody watching. Services are restarted automatically when the job ends."><input type="checkbox" id="diskimg-sched-quiesce"> Pause node services during copy</label>
     <input type="text" id="diskimg-sched-label" placeholder="label" style="max-width:8rem" value="auto">
+  </div>
+  <div class="row" style="margin-top:.3rem">
     <button data-action="diskimg_schedule_save">Save Schedule</button>
   </div>
   <div id="diskimg-schedule-status" class="small muted" style="margin-top:.3rem">Loading schedule&hellip;</div>
@@ -8564,84 +8630,130 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 
 <div class="hdr">Clone</div>
 <div class="card diskimg-card collapsed" data-diskimg-key="clone">
-  <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="clone">Show</button>
+  <div class="diskimg-corner">
+    <button class="diskimg-help-toggle" data-action="toggle_diskimg_help">Help</button>
+    <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="clone">Show</button>
+  </div>
   <div class="diskimg-card-body">
-  <div class="small muted" style="margin:.1rem 0 .2rem">Drives</div>
-  <div id="diskimg-strip-clone" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
-  <div class="row">
-    <select id="diskimg-clone-dest"><option value="">Loading drives&hellip;</option></select>
-    <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-clone-verify"> Verify after copy</label>
-    <select id="diskimg-clone-verify-algo" title="Hash algorithm for Verify after copy">
-      <option value="sha256" selected>sha256</option>
-      <option value="blake2b">blake2b (faster)</option>
-    </select>
-    <label class="small muted diskimg-quiesce" style="white-space:nowrap" title="Stops the watchdog, the suite dashboards, Asterisk and the bridges while the copy runs, so far fewer writes are in flight. The node is OFF THE AIR for the whole job. The image is still crash-consistent, not a filesystem snapshot."><input type="checkbox" id="diskimg-clone-quiesce"> Pause node services during copy</label>
-    <button class="b-danger" data-action="diskimg_clone_start">Clone Now</button>
-    <button class="b-danger" data-action="diskimg_stop" data-kind="clone" disabled title="Nothing is running on this card.">Stop</button>
-    <button data-action="diskimg_reset" data-kind="clone" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
-    <span class="small muted">Direct copy, no backup file -- for a spare drive plugged in right now (e.g. an SD card in a USB adapter). Destination must be unmounted first.</span>
+  <div class="diskimg-help small muted">Direct copy, no backup file -- for a spare drive plugged in right now (e.g. an SD card in a USB adapter). Destination must be unmounted first.</div>
+  <div class="diskimg-step"><span class="diskimg-step-n">1</span>Destination</div>
+  <div class="diskimg-step-body">
+    <div id="diskimg-strip-clone" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
+    <div class="row">
+      <select id="diskimg-clone-dest"><option value="">Loading drives&hellip;</option></select>
+    </div>
   </div>
-  <div class="row" style="margin-top:.3rem">
-    <label class="small muted" style="white-space:nowrap" title="Sub-option of Pause node services -- freezes the root filesystem for the copy so the image is crash-consistent without a snapshot. Requires Pause node services to be ticked."><input type="checkbox" id="diskimg-clone-freeze" disabled> Freeze filesystem during copy</label>
-    <label class="small muted" style="white-space:nowrap" title="Continue past a read error on the source instead of aborting the clone. Skipped sectors are padded with nulls."><input type="checkbox" id="diskimg-clone-best-effort"> Continue past read errors</label>
-    <label class="small muted" style="white-space:nowrap" title="Bypass the page cache on the write side -- steadier write behavior on a small/shared-bus board."><input type="checkbox" id="diskimg-clone-direct-io"> Direct I/O</label>
-    <select id="diskimg-clone-backend" title="Copy backend">
-      <option value="dd" selected>Standard (dd)</option>
-      <option value="ddrescue">Resilient (ddrescue)</option>
-      <option value="rpiclone" disabled>File sync (rpi-clone) -- not installed</option>
-    </select>
-    <select id="diskimg-clone-throttle" title="Bandwidth throttle">
-      <option value="" selected>No throttle</option>
-      <option value="5">5 MB/s</option>
-      <option value="10">10 MB/s</option>
-      <option value="20">20 MB/s</option>
-    </select>
+  <div class="diskimg-step"><span class="diskimg-step-n">2</span>Copy method</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <select id="diskimg-clone-backend" title="Copy backend">
+        <option value="dd" selected>Standard (dd)</option>
+        <option value="ddrescue">Resilient (ddrescue)</option>
+        <option value="rpiclone" disabled>File sync (rpi-clone) -- not installed</option>
+      </select>
+      <span class="small muted" id="diskimg-rpiclone-status">rpi-clone: checking&hellip;</span>
+      <button data-action="rpiclone_install" id="diskimg-rpiclone-install-btn">Install rpi-clone</button>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <label class="small muted" style="white-space:nowrap" title="rpi-clone -f: repartition the destination and copy everything, even if it already holds a matching clone."><input type="checkbox" id="diskimg-clone-rpi-force" disabled> Force re-initialize</label>
+      <input type="text" id="diskimg-clone-rpi-host" placeholder="hostname for the clone (optional)" style="max-width:14rem" maxlength="63" disabled>
+    </div>
+    <div class="diskimg-help small muted">File sync (rpi-clone): copies files instead of every block, so the destination only needs room for the space actually used, and cloning again onto the same card only copies what changed. The first clone onto a card (or Force re-initialize) partitions it and erases it. The clone gets its own partition IDs, and a new hostname if you enter one. No percentage is shown -- watch the console. Install rpi-clone downloads a fixed, checksum-checked version from GitHub and installs the packages it needs, with no prompts; its output goes to the Execution Log. Verify, Freeze, Continue past read errors, Direct I/O and the throttle don't apply to it.</div>
   </div>
-  <div class="row" style="margin-top:.3rem">
-    <span class="small muted" id="diskimg-rpiclone-status">rpi-clone: checking&hellip;</span>
-    <button data-action="rpiclone_install" id="diskimg-rpiclone-install-btn">Install rpi-clone</button>
-    <label class="small muted" style="white-space:nowrap" title="rpi-clone -f: repartition the destination and copy everything, even if it already holds a matching clone."><input type="checkbox" id="diskimg-clone-rpi-force" disabled> Force re-initialize</label>
-    <input type="text" id="diskimg-clone-rpi-host" placeholder="hostname for the clone (optional)" style="max-width:14rem" maxlength="63" disabled>
+  <div class="diskimg-step"><span class="diskimg-step-n">3</span>Options</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-clone-verify"> Verify after copy</label>
+      <select id="diskimg-clone-verify-algo" title="Hash algorithm for Verify after copy">
+        <option value="sha256" selected>sha256</option>
+        <option value="blake2b">blake2b (faster)</option>
+      </select>
+      <label class="small muted diskimg-quiesce" style="white-space:nowrap" title="Stops the watchdog, the suite dashboards, Asterisk and the bridges while the copy runs, so far fewer writes are in flight. The node is OFF THE AIR for the whole job. The image is still crash-consistent, not a filesystem snapshot."><input type="checkbox" id="diskimg-clone-quiesce"> Pause node services during copy</label>
+      <label class="small muted" style="white-space:nowrap" title="Sub-option of Pause node services -- freezes the root filesystem for the copy so the image is crash-consistent without a snapshot. Requires Pause node services to be ticked."><input type="checkbox" id="diskimg-clone-freeze" disabled> Freeze filesystem during copy</label>
+    </div>
+    <div class="row" style="margin-top:.3rem">
+      <label class="small muted" style="white-space:nowrap" title="Continue past a read error on the source instead of aborting the clone. Skipped sectors are padded with nulls."><input type="checkbox" id="diskimg-clone-best-effort"> Continue past read errors</label>
+      <label class="small muted" style="white-space:nowrap" title="Bypass the page cache on the write side -- steadier write behavior on a small/shared-bus board."><input type="checkbox" id="diskimg-clone-direct-io"> Direct I/O</label>
+      <select id="diskimg-clone-throttle" title="Bandwidth throttle">
+        <option value="" selected>No throttle</option>
+        <option value="5">5 MB/s</option>
+        <option value="10">10 MB/s</option>
+        <option value="20">20 MB/s</option>
+      </select>
+    </div>
+    <div class="diskimg-quiesce-note diskimg-help">Pausing services reduces in-flight writes; it is not a filesystem snapshot. The image stays crash-consistent &mdash; ext4 replays its journal on the first boot of a restored card. sysmon keeps running so the node stays observable.</div>
+    <div class="diskimg-help small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default. Direct I/O: bypasses the page cache on the write side; offered here since Clone's destination is always a raw block device. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Continue past read errors, Direct I/O, or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed -- runs as a shell pipeline that does not currently survive an instmon restart.</div>
   </div>
-  <textarea id="diskimg-clone-cmd" class="diskimg-cmd placeholder" readonly rows="1" spellcheck="false">Pick a destination drive to preview the command</textarea>
-  <div class="diskimg-quiesce-note">Pausing services reduces in-flight writes; it is not a filesystem snapshot. The image stays crash-consistent &mdash; ext4 replays its journal on the first boot of a restored card. sysmon keeps running so the node stays observable.</div>
-  <div class="small muted">File sync (rpi-clone): copies files instead of every block, so the destination only needs room for the space actually used, and cloning again onto the same card only copies what changed. The first clone onto a card (or Force re-initialize) partitions it and erases it. The clone gets its own partition IDs, and a new hostname if you enter one. No percentage is shown -- watch the console. Install rpi-clone downloads a fixed, checksum-checked version from GitHub and installs the packages it needs, with no prompts; its output goes to the Execution Log. Verify, Freeze, Continue past read errors, Direct I/O and the throttle don't apply to it.</div>
-  <div class="small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default. Direct I/O: bypasses the page cache on the write side; offered here since Clone's destination is always a raw block device. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Continue past read errors, Direct I/O, or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed -- runs as a shell pipeline that does not currently survive an instmon restart.</div>
-  <div id="diskimg-job-clone" style="margin-top:.5rem"></div>
-  <div id="diskimg-console-clone" class="diskimg-console placeholder">(no job running)</div>
+  <div class="diskimg-step"><span class="diskimg-step-n">4</span>Check</div>
+  <div class="diskimg-step-body">
+    <textarea id="diskimg-clone-cmd" class="diskimg-cmd placeholder" readonly rows="1" spellcheck="false">Pick a destination drive to preview the command</textarea>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">5</span>Run</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <button class="b-danger" data-action="diskimg_clone_start">Clone Now</button>
+      <button class="b-danger" data-action="diskimg_stop" data-kind="clone" disabled title="Nothing is running on this card.">Stop</button>
+      <button data-action="diskimg_reset" data-kind="clone" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
+    </div>
+    <div id="diskimg-job-clone" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-clone" class="diskimg-console placeholder">(no job running)</div>
+  </div>
   </div>
 </div>
 
 <div class="hdr">Restore</div>
 <div class="card diskimg-card collapsed" data-diskimg-key="restore">
-  <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="restore">Show</button>
-  <div class="diskimg-card-body">
-  <div class="small muted" style="margin:.1rem 0 .2rem">Drives</div>
-  <div id="diskimg-strip-restore" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
-  <div class="row">
-    <select id="diskimg-restore-image"><option value="">No backups available</option></select>
-    <select id="diskimg-restore-dest"><option value="">Loading drives&hellip;</option></select>
-    <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-restore-verify"> Verify after copy</label>
-    <select id="diskimg-restore-verify-algo" title="Hash algorithm for Verify after copy">
-      <option value="sha256" selected>sha256</option>
-      <option value="blake2b">blake2b (faster)</option>
-    </select>
-    <input type="password" id="diskimg-restore-passphrase" placeholder="passphrase (if encrypted)" style="max-width:12rem" autocomplete="new-password">
-    <select id="diskimg-restore-throttle" title="Bandwidth throttle (unencrypted backups only)">
-      <option value="" selected>No throttle</option>
-      <option value="5">5 MB/s</option>
-      <option value="10">10 MB/s</option>
-      <option value="20">20 MB/s</option>
-    </select>
-    <button class="b-danger" data-action="diskimg_restore_start">Restore</button>
-    <button class="b-danger" data-action="diskimg_stop" data-kind="restore" disabled title="Nothing is running on this card.">Stop</button>
-    <button data-action="diskimg_reset" data-kind="restore" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
+  <div class="diskimg-corner">
+    <button class="diskimg-help-toggle" data-action="toggle_diskimg_help">Help</button>
+    <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="restore">Show</button>
   </div>
-  <input type="text" id="diskimg-restore-cmd" class="diskimg-cmd placeholder" readonly value="Pick a backup and destination drive to preview the command">
-  <div class="small muted" style="margin-top:.3rem">
+  <div class="diskimg-card-body">
+  <div class="diskimg-help small muted">
     Writes to a spare drive only -- never onto the disk this Pi is currently running from. Destination must be unmounted first. Backups marked "encrypted" below need their passphrase entered here; Verify after copy and Bandwidth throttle aren't supported for those.</div>
-  <div id="diskimg-job-restore" style="margin-top:.5rem"></div>
-  <div id="diskimg-console-restore" class="diskimg-console placeholder">(no job running)</div>
+  <div class="diskimg-step"><span class="diskimg-step-n">1</span>Pick backup</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <select id="diskimg-restore-image"><option value="">No backups available</option></select>
+    </div>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">2</span>Destination</div>
+  <div class="diskimg-step-body">
+    <div id="diskimg-strip-restore" class="small muted" style="margin-bottom:.4rem">Loading attached drives&hellip;</div>
+    <div class="row">
+      <select id="diskimg-restore-dest"><option value="">Loading drives&hellip;</option></select>
+    </div>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">3</span>Options</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <input type="password" id="diskimg-restore-passphrase" placeholder="passphrase (if encrypted)" style="max-width:12rem" autocomplete="new-password">
+      <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-restore-verify"> Verify after copy</label>
+      <select id="diskimg-restore-verify-algo" title="Hash algorithm for Verify after copy">
+        <option value="sha256" selected>sha256</option>
+        <option value="blake2b">blake2b (faster)</option>
+      </select>
+      <select id="diskimg-restore-throttle" title="Bandwidth throttle (unencrypted backups only)">
+        <option value="" selected>No throttle</option>
+        <option value="5">5 MB/s</option>
+        <option value="10">10 MB/s</option>
+        <option value="20">20 MB/s</option>
+      </select>
+    </div>
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">4</span>Check</div>
+  <div class="diskimg-step-body">
+    <input type="text" id="diskimg-restore-cmd" class="diskimg-cmd placeholder" readonly value="Pick a backup and destination drive to preview the command">
+  </div>
+  <div class="diskimg-step"><span class="diskimg-step-n">5</span>Run</div>
+  <div class="diskimg-step-body">
+    <div class="row">
+      <button class="b-danger" data-action="diskimg_restore_start">Restore</button>
+      <button class="b-danger" data-action="diskimg_stop" data-kind="restore" disabled title="Nothing is running on this card.">Stop</button>
+      <button data-action="diskimg_reset" data-kind="restore" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
+    </div>
+    <div id="diskimg-job-restore" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-restore" class="diskimg-console placeholder">(no job running)</div>
+  </div>
   </div>
 </div>
 
