@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.10"
+VERSION = "0.6.11"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -4283,7 +4283,10 @@ function addOption(sel, value, text) {
   sel.appendChild(o);
 }
 
-function sendOp(op) { if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op})); }
+function sendOp(op) {
+  if (appTalk() && op === 'unkey') { appCall('talkUnkey'); return; }
+  if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op}));
+}
 
 const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'dig', 'chk', 'lvl', 'mic', 'hs', 'play', 'log'];
 
@@ -5439,7 +5442,75 @@ function pttUi(state, text, cls) {
   if (text !== undefined) note('ptt-msg', cls, text);
 }
 
+function appTalk() {
+  try { return appAudio() && typeof NodeTalkerApp.talkOpen === 'function'; } catch (e) { return false; }
+}
+
+function talkMsg(m) {
+  if (chk && chk.running) chkWs(m);
+  if (m.ev === 'keyed') {
+    keyed = true; keyedAt = performance.now(); totSec = m.tot || totSec;
+    if (ws) preKey.forEach((f) => ws.send(f));
+    preKey = [];
+    pttUi('talking', '');
+    if (navigator.vibrate) navigator.vibrate(30);
+  } else if (m.ev === 'denied') {
+    const why = {busy: 'The node is busy (someone is talking). Try again when it is quiet.',
+      'in-use': 'Someone else is transmitting from Node Talker.',
+      'not-ready': 'Node 1921 is not set up yet (Setup tab).',
+      'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Talker relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
+    endTalk(); pttUi('ready', why, 'warn');
+  } else if (m.ev === 'unkeyed') {
+    keyed = false; endTalk();
+    if (guardStop) { pttUi('ready', guardStop, 'warn'); guardStop = ''; return; }
+    const why = {timeout: 'Time-out: transmission stopped after ' + fmtSecs(m.secs) + '. Release and press again.',
+      deadman: 'Audio stopped reaching the node, so it unkeyed.'}[m.why];
+    pttUi('ready', why || '', why ? 'warn' : '');
+    if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
+  }
+}
+
+function appTalkClosed(err) {
+  wsReady = false;
+  if (talking) { keyed = false; endTalk(); }
+  pttUi('off', authed ? (err ? 'Talk channel: ' + err + '. Reconnecting...' : 'Talk channel closed. Reconnecting...') : '');
+}
+
+window.ntAppTalk = (m) => {
+  if (!m || !appTalk()) return;
+  if (m.ev === 'open') { if (!wsReady) { wsReady = true; pttUi('ready', connBusy ? undefined : ''); } return; }
+  if (m.ev === 'closed') { appTalkClosed(m.error); return; }
+  if (m.ev === 'retry') { openTalk(true); return; }
+  if (m.ev === 'level') { if (talking) txMeter({pk: m.db}); return; }
+  if (m.ev === 'micfail') { keyed = false; endTalk(); pttUi(wsReady ? 'ready' : 'off', 'The app could not open the microphone.', 'err'); return; }
+  if (m.ev === 'guard') {
+    if (!talking) return;
+    guardStop = 'Guard timer: unkeyed after ' + fmtSecs(guardSec()) + '.';
+    keyed = false; endTalk();
+    pttUi(wsReady ? 'ready' : 'off', guardStop, 'warn');
+    return;
+  }
+  talkMsg(m);
+};
+
+function appTalkSync() {
+  if (!appTalk()) return;
+  let st = null;
+  try { st = JSON.parse(NodeTalkerApp.talkState() || 'null'); } catch (e) {}
+  if (!st) return;
+  if (st.open && !wsReady) window.ntAppTalk({ev: 'open'});
+  else if (!st.open && wsReady) appTalkClosed('');
+  if (talking && !st.talking) { keyed = false; endTalk(); pttUi(wsReady ? 'ready' : 'off', ''); }
+}
+
 function openTalk(force) {
+  if (appTalk()) {
+    if (!authed || (tab !== 'listen' && force !== true)) return;
+    if (wsReady) { appTalkSync(); return; }
+    if (!appCall('talkOpen')) pttUi('off', 'Allow the microphone for Node Talker (Android asks), then press again.', 'warn');
+    else pttUi('off', 'Opening the talk channel...');
+    return;
+  }
   if (!authed || (tab !== 'listen' && force !== true) || document.visibilityState === 'hidden') return;
   if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
   if (wsRetry) { clearTimeout(wsRetry); wsRetry = null; }
@@ -5454,26 +5525,7 @@ function openTalk(force) {
   ws.onmessage = (ev) => {
     let m = {};
     try { m = JSON.parse(ev.data); } catch (e) { return; }
-    if (chk && chk.running) chkWs(m);
-    if (m.ev === 'keyed') {
-      keyed = true; keyedAt = performance.now(); totSec = m.tot || totSec;
-      preKey.forEach((f) => ws.send(f)); preKey = [];
-      pttUi('talking', '');
-      if (navigator.vibrate) navigator.vibrate(30);
-    } else if (m.ev === 'denied') {
-      const why = {busy: 'The node is busy (someone is talking). Try again when it is quiet.',
-        'in-use': 'Someone else is transmitting from Node Talker.',
-        'not-ready': 'Node 1921 is not set up yet (Setup tab).',
-        'not-linked': 'Node 1921 is not linked to the node yet. Restart Asterisk once after adding it; Node Talker relinks it within 20 s.'}[m.why] || ('Refused: ' + m.why);
-      endTalk(); pttUi('ready', why, 'warn');
-    } else if (m.ev === 'unkeyed') {
-      keyed = false; endTalk();
-      if (guardStop) { pttUi('ready', guardStop, 'warn'); guardStop = ''; return; }
-      const why = {timeout: 'Time-out: transmission stopped after ' + fmtSecs(m.secs) + '. Release and press again.',
-        deadman: 'Audio stopped reaching the node, so it unkeyed.'}[m.why];
-      pttUi('ready', why || '', why ? 'warn' : '');
-      if (navigator.vibrate) navigator.vibrate([20, 40, 20]);
-    }
+    talkMsg(m);
   };
   ws.onclose = () => {
     wsReady = false;
@@ -5746,6 +5798,14 @@ async function pttDown(ev) {
   if (gainNode) gainNode.gain.value = 0;
   appCall('rxMute', true);
   pttUi('keying', '');
+  if (appTalk()) {
+    talkTimer = setInterval(talkTick, 250);
+    if (!appCall('talkKey', JSON.stringify({guard: guardOn() ? guardSec() : 0, gain: Number(mic.gain) || 0}))) {
+      keyed = false; endTalk();
+      pttUi(wsReady ? 'ready' : 'off', 'The app could not key up (talk channel or microphone).', 'err');
+    }
+    return;
+  }
   ws.send(JSON.stringify({op: 'key'}));
   talkTimer = setInterval(talkTick, 250);
   wakeLockApply();
@@ -6604,9 +6664,9 @@ document.addEventListener('DOMContentLoaded', () => {
   $('ptt-save').addEventListener('click', pttSave);
   $('ptt-restore').addEventListener('click', pttRestore);
   $('ptt-guard').addEventListener('change', () => { $('ptt-guard-note').textContent = Number($('ptt-guard').value) > totSec ? 'The node\'s TX time-out is ' + fmtSecs(totSec) + ', so it stops then.' : ''; });
-  window.addEventListener('blur', () => { if (!micPending) pttUp(); });
+  window.addEventListener('blur', () => { if (!micPending && !appTalk()) pttUp(); });
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') pttUp(); else { openTalk(); pollStatus(); }
+    if (document.visibilityState === 'hidden') { if (!appTalk()) pttUp(); } else { appSync(); appTalkSync(); openTalk(); pollStatus(); }
     specKick();
     wakeLockApply();
   });

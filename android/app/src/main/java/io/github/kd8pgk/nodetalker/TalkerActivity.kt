@@ -38,6 +38,7 @@ class TalkerActivity : Activity() {
     private var pendingDownload: String? = null
     private var certDialog: AlertDialog? = null
     private val pushState: () -> Unit = { runOnUiThread { sendState() } }
+    private val pushTalk: (String) -> Unit = { ev -> runOnUiThread { sendTalk(ev) } }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -72,12 +73,19 @@ class TalkerActivity : Activity() {
     override fun onResume() {
         super.onResume()
         Listen.listeners.add(pushState)
+        Talk.listeners.add(pushTalk)
         sendState()
     }
 
     override fun onPause() {
         Listen.listeners.remove(pushState)
+        Talk.listeners.remove(pushTalk)
         super.onPause()
+    }
+
+    private fun sendTalk(ev: String) {
+        if (!::web.isInitialized || (Talk.nodeId != null && Talk.nodeId != node.id)) return
+        web.evaluateJavascript("window.ntAppTalk && window.ntAppTalk($ev)", null)
     }
 
     private fun sendState() {
@@ -115,6 +123,46 @@ class TalkerActivity : Activity() {
             if (Listen.nodeId == null || Listen.nodeId == node.id) Listen.json() else "{\"state\":\"off\"}"
 
         @JavascriptInterface
+        fun talkOpen(): Boolean {
+            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread {
+                    Toast.makeText(this@TalkerActivity, R.string.mic_needed, Toast.LENGTH_LONG).show()
+                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_TALK_MIC)
+                }
+                return false
+            }
+            askNotifications()
+            return try {
+                Talk.open(this@TalkerActivity, node)
+                true
+            } catch (e: IllegalStateException) {
+                false
+            } catch (e: SecurityException) {
+                false
+            }
+        }
+
+        @JavascriptInterface
+        fun talkKey(opts: String): Boolean {
+            val o = try {
+                org.json.JSONObject(opts)
+            } catch (e: org.json.JSONException) {
+                org.json.JSONObject()
+            }
+            val s = Talk.svc ?: return false
+            return s.key(o.optDouble("guard", 0.0), o.optDouble("gain", 0.0))
+        }
+
+        @JavascriptInterface
+        fun talkUnkey() {
+            Talk.svc?.unkey()
+        }
+
+        @JavascriptInterface
+        fun talkState(): String =
+            if (Talk.nodeId == null || Talk.nodeId == node.id) Talk.json() else "{\"open\":false,\"talking\":false}"
+
+        @JavascriptInterface
         fun rxMute(on: Boolean) {
             Listen.muted = on
         }
@@ -138,6 +186,7 @@ class TalkerActivity : Activity() {
 
     override fun onDestroy() {
         certDialog?.dismiss()
+        if (isFinishing && ::node.isInitialized && Talk.nodeId == node.id) Talk.close(this)
         if (::web.isInitialized) {
             web.stopLoading()
             web.destroy()
@@ -288,6 +337,12 @@ class TalkerActivity : Activity() {
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQ_TALK_MIC) {
+            if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+                web.evaluateJavascript("window.ntAppTalk && window.ntAppTalk({ev:'retry'})", null)
+            }
+            return
+        }
         if (requestCode != REQ_MIC) return
         val r = micRequest ?: return
         micRequest = null
@@ -345,5 +400,6 @@ class TalkerActivity : Activity() {
         private const val REQ_FILE = 2
         private const val REQ_SAVE = 3
         private const val REQ_NOTIFY = 4
+        private const val REQ_TALK_MIC = 5
     }
 }

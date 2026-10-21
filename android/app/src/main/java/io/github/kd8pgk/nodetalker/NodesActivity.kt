@@ -145,6 +145,8 @@ class NodesActivity : Activity() {
         val bufText = v.findViewById<TextView>(R.id.buffer_text)
         val speaker = v.findViewById<RadioButton>(R.id.out_speaker)
         val ear = v.findViewById<RadioButton>(R.id.out_earpiece)
+        val voice = v.findViewById<CheckBox>(R.id.voice_mic)
+        voice.isChecked = a.voiceMic
         app.isChecked = a.app
         page.isChecked = !a.app
         speaker.isChecked = !a.earpiece
@@ -166,7 +168,7 @@ class NodesActivity : Activity() {
             .setTitle(R.string.audio_settings)
             .setView(v)
             .setPositiveButton(R.string.save) { _, _ ->
-                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), ear.isChecked)
+                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), ear.isChecked, voice.isChecked)
                 NodeStore.setAudio(this, b)
                 if (!b.app) Listen.stop(this)
                 else Listen.nodeId?.let { id -> NodeStore.get(this, id)?.let { Listen.start(this, it) } }

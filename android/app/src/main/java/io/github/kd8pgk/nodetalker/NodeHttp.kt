@@ -26,7 +26,7 @@ object NodeHttp {
     }
 
     @SuppressLint("CustomX509TrustManager")
-    private fun pinned(pin: String): SSLContext {
+    fun pinned(pin: String): SSLContext {
         val tm = object : X509TrustManager {
             override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {
                 throw CertificateException("client certificates are not used")

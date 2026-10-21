@@ -54,4 +54,9 @@
     <string name="listen_login">Log in on the page first (or turn on \"Listen without logging in\" in Node Talker).</string>
     <string name="listen_ended">the stream ended</string>
     <string name="listen_retry">Disconnected (%1$s). Retrying in %2$d s…</string>
+    <string name="mic">Microphone (app audio)</string>
+    <string name="voice_mic">Phone\'s echo and noise filter (turn off if your audio sounds choppy or muffled)</string>
+    <string name="notif_talking">Transmitting</string>
+    <string name="notif_talk_ready">Ready to talk</string>
+    <string name="mic_needed">Allow the microphone so Node Talker can transmit.</string>
 </resources>
