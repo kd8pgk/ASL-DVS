@@ -1,6 +1,33 @@
 # instmon changelog
 
-Current file: `instmon_v2_67_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_68_0_20261021.py`. Newest entries first.
+
+## 2.68.0 (2026-10-21)
+
+Disk Image & Clone safety fixes.
+
+- **Scheduled backups only delete their own files.** Scheduled backups are
+  now named `<host>_<date>_<label>.sched.img`, and "keep newest" deletes
+  only those. Backups you made yourself are never deleted by the schedule.
+  Scheduled backups made before 2.68.0 have no `.sched` mark, so they are
+  no longer deleted automatically either; remove them by hand when done.
+- **Unfinished backups no longer look finished.** A backup is written as
+  `<name>.img.part` (or `.img.enc.part`) and renamed to its real name only
+  after the copy, verify and shrink all succeed, with the file and folder
+  synced to disk first. A failed or cancelled backup deletes its `.part`
+  file. A `.part` left by a power loss or restart never appears under
+  Existing Backups or Restore, and is deleted when the next backup to that
+  drive starts.
+- **No reboot, shutdown, install, uninstall or script during a disk job.**
+  These are refused while a Format, Backup, Clone or Restore is running, or
+  while node services are being restarted after one. Full Update already
+  was. A scheduled backup now also waits while Full Update or an install
+  is running.
+- **Format refuses when the boot disk can't be identified**, as Backup,
+  Clone and Restore already did.
+- **FAT32 backup drives are refused up front** when the image is over
+  4 GB, instead of failing at 4 GB into the copy. Scheduled backups skip
+  with the same reason.
 
 ## 2.67.0 (2026-10-21)
 

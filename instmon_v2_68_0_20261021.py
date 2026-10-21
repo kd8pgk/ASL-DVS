@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.67.0"
+VERSION ="2.68.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -493,6 +493,54 @@ def _diskimg_mount_all(disk_name):
 def _diskimg_job_running():
     with _diskimg_job_lock:
         return _diskimg_job is not None and _diskimg_job.get("state") == "running"
+
+def _diskimg_busy_reason():
+    with _diskimg_job_lock:
+        job = _diskimg_job
+        if job is None:
+            return None
+        if job.get("state") == "running":
+            return f"A disk-image {job.get('kind') or 'job'} is running -- wait for it to finish (or stop it) first."
+        if job.get("quiesced") and job.get("phase") != "done":
+            return "Node services are being restarted after a disk-image job -- try again in a moment."
+    return None
+
+_DISKIMG_PART_SUFFIX = ".part"
+_FAT_MAX_FILE_BYTES = 4 * 1024 ** 3 - 1
+
+def _diskimg_mount_fstype(mountpoint):
+    try:
+        r = subprocess.run(["findmnt", "-no", "FSTYPE", "--target", mountpoint],
+                           capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return ""
+    return (r.stdout or "").strip().splitlines()[0].lower() if (r.stdout or "").strip() else ""
+
+def _diskimg_fat_limit_reason(mountpoint, size_bytes, drive_path):
+    fstype = _diskimg_mount_fstype(mountpoint)
+    if fstype in ("vfat", "msdos", "fat") and size_bytes > _FAT_MAX_FILE_BYTES:
+        return (f"{drive_path} is formatted FAT32, which can't hold a file over 4 GB, and this image is "
+                f"{fmt_bytes(size_bytes)} -- format the drive as ext4 or exFAT on the Full Format card first.")
+    return None
+
+def _diskimg_clear_stale_parts(backup_dir):
+    with _diskimg_job_lock:
+        active = _diskimg_job.get("dest") if (_diskimg_job is not None and _diskimg_job.get("state") == "running") else None
+    try:
+        names = os.listdir(backup_dir)
+    except OSError:
+        return
+    for name in names:
+        if not (name.endswith(".img" + _DISKIMG_PART_SUFFIX) or name.endswith(_DISKIMG_ENCRYPTED_SUFFIX + _DISKIMG_PART_SUFFIX)):
+            continue
+        full = os.path.join(backup_dir, name)
+        if full == active or os.path.islink(full) or not os.path.isfile(full):
+            continue
+        try:
+            os.remove(full)
+            log_event(f"Deleted an unfinished backup left by an interrupted job: {name}", "warn")
+        except OSError as exc:
+            log_event(f"Could not delete the unfinished backup {name}: {exc}", "warn")
 
 _DISKIMG_BACKUP_DIRNAME = "instmon-backups"
 _DD_PROGRESS_RE = re.compile(rb"(\d+)\s+bytes")
@@ -1140,6 +1188,35 @@ def _diskimg_reader_thread_body(job_id):
                 final_message = f"Completed successfully. {fmt_message}"
             _diskimg_console_append(job_id, fmt_message)
 
+    if kind == "backup" and dest.endswith(_DISKIMG_PART_SUFFIX):
+        if final_state == "done":
+            final_path = dest[:-len(_DISKIMG_PART_SUFFIX)]
+            try:
+                file_fd = os.open(dest, os.O_RDONLY)
+                try:
+                    os.fsync(file_fd)
+                finally:
+                    os.close(file_fd)
+                os.replace(dest, final_path)
+                dir_fd = os.open(os.path.dirname(final_path), os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+                with _diskimg_job_lock:
+                    if _diskimg_job is not None and _diskimg_job["id"] == job_id:
+                        _diskimg_job["dest"] = final_path
+                dest = final_path
+            except OSError as exc:
+                final_state = "failed"
+                final_message = f"The backup was written but could not be renamed from {os.path.basename(dest)}: {exc}"
+        if final_state != "done":
+            outcome = _diskimg_remove_partial_backup(dest)
+            if outcome == "deleted":
+                final_message += " The unfinished backup file was deleted."
+            elif outcome:
+                final_message += f" Could not delete the unfinished backup file ({outcome})."
+
     with _diskimg_job_lock:
         if _diskimg_job is None or _diskimg_job["id"] != job_id:
             return
@@ -1393,7 +1470,8 @@ def _diskimg_remove_partial_backup(path):
     try:
         if os.path.basename(os.path.dirname(path)) != _DISKIMG_BACKUP_DIRNAME:
             return ""
-        if not (path.endswith(".img") or path.endswith(".img.enc")):
+        if not (path.endswith(".img") or path.endswith(".img.enc")
+                or path.endswith(".img" + _DISKIMG_PART_SUFFIX) or path.endswith(".img.enc" + _DISKIMG_PART_SUFFIX)):
             return ""
         if os.path.islink(path) or not os.path.isfile(path):
             return ""
@@ -1650,6 +1728,7 @@ def _diskimg_partition_and_format(dest, fs_type, quick=False):
     return True, f"Partitioned (GPT) and formatted {part_path} as {fs_type}." + (" (Quick format.)" if quick else "")
 
 _DISKIMG_SCHEDULE_PATH = os.path.join(CONFIG_DIR, "instmon_diskimg_schedule.json")
+_DISKIMG_SCHED_SUFFIX = ".sched.img"
 _diskimg_schedule_lock = threading.Lock()
 
 _DISKIMG_SCHEDULE_DEFAULTS = {
@@ -1696,7 +1775,8 @@ def _diskimg_schedule_prune(dest_drive_path, retention):
     except (TypeError, ValueError):
         retention = 5
     on_drive = sorted(
-        (b for b in _diskimg_list_backups() if b["drive"] == dest_drive_path),
+        (b for b in _diskimg_list_backups()
+         if b["drive"] == dest_drive_path and b["name"].endswith(_DISKIMG_SCHED_SUFFIX)),
         key=lambda b: b["mtime"], reverse=True,
     )
     for stale in on_drive[retention:]:
@@ -1775,6 +1855,14 @@ def _diskimg_schedule_tick():
     if job_running:
         skip("A disk-image job (manual or scheduled) is already running.")
         return
+    if full_update_running():
+        skip("Full Update is running.")
+        return
+    with _running_installs_lock:
+        installing = sorted(_running_installs)
+    if installing:
+        skip(f"An install is running ({', '.join(installing)}).")
+        return
 
     boot_disk = _get_boot_disk()
     if not boot_disk:
@@ -1812,6 +1900,7 @@ def _diskimg_schedule_tick():
     if mountpoint is None:
         skip(f"Could not find or mount a writable filesystem on {match['path']}.")
         return
+    _diskimg_clear_stale_parts(os.path.join(mountpoint, _DISKIMG_BACKUP_DIRNAME))
     try:
         free = shutil.disk_usage(mountpoint).free
     except OSError as exc:
@@ -1819,6 +1908,10 @@ def _diskimg_schedule_tick():
         return
     if free < src_size:
         skip(f"Not enough free space on {match['path']} ({fmt_bytes(free)} free, need {fmt_bytes(src_size)}).")
+        return
+    fat_reason = _diskimg_fat_limit_reason(mountpoint, src_size, match["path"])
+    if fat_reason:
+        skip(fat_reason)
         return
 
     backup_dir = os.path.join(mountpoint, _DISKIMG_BACKUP_DIRNAME)
@@ -1831,7 +1924,7 @@ def _diskimg_schedule_tick():
     label = re.sub(r"[^A-Za-z0-9_-]+", "_", (cfg.get("label") or "").strip())[:40]
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     hostname = socket.gethostname()
-    fname = f"{hostname}_{stamp}" + (f"_{label}" if label else "") + ".img"
+    fname = f"{hostname}_{stamp}" + (f"_{label}" if label else "") + _DISKIMG_SCHED_SUFFIX
     dest_path = os.path.join(backup_dir, fname)
 
     quiesce = bool(cfg.get("quiesce"))
@@ -1842,8 +1935,9 @@ def _diskimg_schedule_tick():
             return
 
     subprocess.run(["sync"], capture_output=True, timeout=30)
+    part_path = dest_path + _DISKIMG_PART_SUFFIX
     ok, result = _diskimg_start_job(
-        "backup", src_path, dest_path, src_path, dest_path, src_size,
+        "backup", src_path, part_path, src_path, part_path, src_size,
         shrink_requested=bool(cfg.get("shrink")), verify_requested=bool(cfg.get("verify")),
         quiesce_requested=quiesce,
     )
@@ -8634,7 +8728,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <select id="diskimg-sched-dest"><option value="">Loading drives&hellip;</option></select>
   </div>
   <div class="row" style="margin-top:.3rem">
-    <span class="small muted">keep newest</span>
+    <span class="small muted" title="Only backups made by the schedule (.sched.img) are deleted. Backups you made yourself are never touched.">keep newest scheduled</span>
     <input type="number" id="diskimg-sched-retention" min="1" max="50" step="1" style="max-width:5rem" value="5">
     <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-sched-shrink"> Shrink to fit</label>
     <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-sched-verify"> Verify after copy</label>
@@ -9231,6 +9325,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if mountpoint is None:
             self._error_json(500, f"Could not find or mount a writable filesystem on {match['path']}")
             return
+        if _diskimg_busy_reason() is None:
+            _diskimg_clear_stale_parts(os.path.join(mountpoint, _DISKIMG_BACKUP_DIRNAME))
         try:
             free = shutil.disk_usage(mountpoint).free
         except OSError as exc:
@@ -9241,6 +9337,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 400,
                 f"Not enough free space on {match['path']} ({fmt_bytes(free)} free, need {fmt_bytes(src_size)})",
             )
+            return
+        fat_reason = _diskimg_fat_limit_reason(mountpoint, src_size, match["path"])
+        if fat_reason:
+            self._error_json(400, fat_reason)
             return
 
         backup_dir = os.path.join(mountpoint, _DISKIMG_BACKUP_DIRNAME)
@@ -9257,8 +9357,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
         quiesce = bool(body.get("quiesce"))
         subprocess.run(["sync"], capture_output=True, timeout=30)
+        part_path = dest_path + _DISKIMG_PART_SUFFIX
         ok, result = _diskimg_start_job(
-            "backup", src_path, dest_path, src_path, dest_path, src_size,
+            "backup", src_path, part_path, src_path, part_path, src_size,
             shrink_requested=shrink, verify_requested=verify,
             encrypt_passphrase=passphrase if encrypt else None,
             quiesce_requested=quiesce,
@@ -9463,6 +9564,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         fs_type = body.get("fs_type")
         if fs_type not in _DISKIMG_FORMAT_FS_TOOLS:
             self._error_json(400, f"Missing or unknown 'fs_type' -- must be one of {sorted(_DISKIMG_FORMAT_FS_TOOLS)}")
+            return
+        if not _get_boot_disk():
+            self._error_json(409, "Could not determine this Pi's boot disk -- refusing to start a format until this resolves.")
             return
 
         match = next(
@@ -10098,6 +10202,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not body .get ("confirm"):
             self ._error_json (400 ,"This action runs a script's own --install and requires confirm:true in the request body")
             return 
+        busy =_diskimg_busy_reason ()
+        if busy :
+            self ._send_json (409 ,{"error":busy ,"message":f"Not now: {busy }","level":"warn"})
+            return 
 
         category =body .get ("category")
         name =body .get ("name")
@@ -10152,6 +10260,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         })
 
     def _action_uninstall (self ,body ):
+        busy =_diskimg_busy_reason ()
+        if busy :
+            self ._send_json (409 ,{"error":busy ,"message":f"Not now: {busy }","level":"warn"})
+            return 
 
         category =body .get ("category")
         comp =next ((c for c in COMPONENTS if c ["category"]==category ),None )
@@ -10362,6 +10474,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not body .get ("confirm"):
             self ._error_json (400 ,"Running a script requires confirm:true in the request body")
             return 
+        busy =_diskimg_busy_reason ()
+        if busy :
+            self ._send_json (409 ,{"error":busy ,"message":f"Not now: {busy }","level":"warn"})
+            return 
         name =body .get ("name")
         target =safe_join (LIB_SUBDIRS ["scripts"],name or "")
         if target is None or not os .path .isfile (target ):
@@ -10507,6 +10623,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         })
 
     def _schedule_power (self ,what ,unit ,verb ,message ):
+        busy =_diskimg_busy_reason ()
+        if busy :
+            self ._send_json (409 ,{"error":busy ,"message":f"Not now: {busy }","level":"warn"})
+            return 
         log_event (f"System {what } requested from instmon UI","warn")
         try :
             subprocess .run ([
