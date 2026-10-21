@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.7.1"
+VERSION = "0.6.8"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -1406,6 +1406,7 @@ def build_status(full):
         favs = fav_load()
         st["m17"] = m17_current() if nc and _has_m17(favs) else ""
         st["tuned"] = (nc_dvs_target(favs) if _has_dvs(favs) else "") if nc else solo_status(node)
+        st["tuned_now"] = tuned_now(nc)
         tx = tx_state(node)
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
@@ -3017,6 +3018,267 @@ def fav_disconnect(index=None):
     return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
 
 
+MMDVM_DIR = os.environ.get("NODETALKER_MMDVM_DIR", "/var/lib/mmdvm")
+TUNE_LIST_FILES = {
+    "YSF": (("YSFHosts.txt", "/opt/YSFGateway"),),
+    "P25": (("P25Hosts.txt", "/opt/P25Gateway"),),
+    "NXDN": (("NXDNHosts.txt", "/opt/NXDNGateway"),),
+    "STFU": (("TGList_BM.txt", ""),),
+    "DSTAR": (("DPlus_Hosts.txt", ""), ("DExtra_Hosts.txt", ""), ("DCS_Hosts.txt", "")),
+}
+TUNE_TEXT_MAX = 64
+_DSTAR_REF_RE = re.compile(r"(REF|XRF|DCS)\d{3}")
+_tune_lists = {}
+_tune_lists_lock = threading.Lock()
+
+
+def _host_url(addr):
+    addr = str(addr or "").strip()
+    if not addr or not re.fullmatch(r"[A-Za-z0-9.:-]{1,253}", addr):
+        return ""
+    return "http://" + (f"[{addr}]" if ":" in addr else addr) + "/"
+
+
+def _list_text(value):
+    return _CALL_TRIM.sub(" ", str(value or "")).strip()[:TUNE_TEXT_MAX]
+
+
+def _ysf_rows(lines):
+    rows, seen = [], set()
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        p = [_list_text(x) for x in line.split(";")]
+        if len(p) < 5 or not re.fullmatch(r"\d{1,5}", p[0]) or not p[1] or not p[4].isdigit():
+            continue
+        addr = p[3]
+        if not addr or any(c.isspace() for c in addr) or not 0 < int(p[4]) < 65536:
+            continue
+        value = f"{addr}:{int(p[4])}"
+        if value.lower() in seen:
+            continue
+        seen.add(value.lower())
+        link = next((x for x in p[6:] if re.fullmatch(r"https?://\S+", x)), "") or _host_url(addr)
+        rows.append([value, f"{p[0]} · {p[1]}", link])
+    return rows
+
+
+def _tg_host_rows(lines):
+    rows, seen = [], set()
+    for raw in lines:
+        p = raw.replace("\t", " ").split()
+        if len(p) < 3 or p[0].startswith("#") or not p[0].isdigit() or len(p[0]) > 8 or not p[2].isdigit():
+            continue
+        tg = str(int(p[0]))
+        if tg in seen:
+            continue
+        seen.add(tg)
+        rows.append([tg, f"{tg} · {_list_text(p[1])}", _host_url(p[1])])
+    return sorted(rows, key=lambda r: int(r[0]))
+
+
+def _stfu_rows(lines):
+    rows, seen = [], set()
+    for raw in lines:
+        p = [x.strip() for x in raw.split(";")]
+        if len(p) < 3 or not p[0].isdigit() or len(p[0]) > 8 or p[1] != "0":
+            continue
+        tg = str(int(p[0]))
+        if tg in seen:
+            continue
+        seen.add(tg)
+        rows.append([tg, f"{tg} · {_list_text(p[2]) or 'TG' + tg}", ""])
+    return sorted(rows, key=lambda r: int(r[0]))
+
+
+def _dstar_rows(lines):
+    rows = []
+    for raw in lines:
+        p = raw.replace("\t", " ").split()
+        if len(p) < 2 or not _DSTAR_REF_RE.fullmatch(p[0].upper()):
+            continue
+        rows.append([p[0].upper(), f"{p[0].upper()} · {_list_text(p[1])}", _host_url(p[1])])
+    return rows
+
+
+def _m17_rows(text):
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        return []
+    rows, seen = [], set()
+    for e in (doc.get("reflectors") if isinstance(doc, dict) else None) or []:
+        if not isinstance(e, dict):
+            continue
+        rid = _list_text(e.get("designator")).upper()
+        if not _M17_REF_RE.fullmatch(rid) or rid in seen:
+            continue
+        if e.get("port") not in (None, "") and str(e.get("port")) != "17000":
+            continue
+        if not (str(e.get("dns") or "").strip() or str(e.get("ipv4") or "").strip()):
+            continue
+        seen.add(rid)
+        name = _list_text(e.get("name")) or _list_text(e.get("sponsor"))
+        url = _list_text(e.get("url")) if str(e.get("url") or "").startswith(("http://", "https://")) else ""
+        mods = e.get("modules")
+        mods = "".join(sorted({str(x).strip().upper()[:1] for x in mods if str(x).strip()[:1].isalpha()})) \
+            if isinstance(mods, list) else re.sub(r"[^A-Z]", "", mods.upper()) if isinstance(mods, str) else ""
+        rows.append([rid, rid + (f" · {name}" if name and name.upper() != rid else ""), url, mods])
+    return sorted(rows, key=lambda r: r[0])
+
+
+def _tune_paths(mode):
+    if mode == "M17":
+        return [M17_HOSTS]
+    out = []
+    for name, alt in TUNE_LIST_FILES[mode]:
+        cands = [os.path.join(MMDVM_DIR, name)] + ([os.path.join(alt, name)] if alt else [])
+        out.append(next((p for p in cands if os.path.isfile(p)), ""))
+    return [p for p in out if p]
+
+
+def tune_list(mode):
+    try:
+        mode = _mode_of(mode)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if mode not in TUNE_LIST_FILES and mode != "M17":
+        return {"ok": True, "mode": mode, "found": False, "rows": [], "files": []}
+    paths = _tune_paths(mode)
+    key = []
+    for p in paths:
+        try:
+            st = os.stat(p)
+            key.append((p, st.st_mtime_ns, st.st_size))
+        except OSError:
+            pass
+    with _tune_lists_lock:
+        hit = _tune_lists.get(mode)
+        if hit and hit[0] == key:
+            return hit[1]
+    rows = []
+    for p, _m, _s in key:
+        try:
+            with open(p, "r", encoding="utf-8", errors="replace") as fh:
+                if mode == "M17":
+                    rows += _m17_rows(fh.read())
+                elif mode == "YSF":
+                    rows += _ysf_rows(fh)
+                elif mode == "STFU":
+                    rows += _stfu_rows(fh)
+                elif mode == "DSTAR":
+                    rows += _dstar_rows(fh)
+                else:
+                    rows += _tg_host_rows(fh)
+        except OSError:
+            continue
+    out = {"ok": True, "mode": mode, "found": bool(rows), "rows": rows,
+           "files": [os.path.basename(p) for p, _m, _s in key]}
+    with _tune_lists_lock:
+        _tune_lists[mode] = (key, out)
+    return out
+
+
+def _tune_fav(b):
+    if not isinstance(b, dict):
+        raise ValueError("Pick a mode and a station.")
+    mode = _mode_of(b.get("mode"))
+    if mode not in DVS_MODES and mode != "M17":
+        raise ValueError(f"{mode} is not a digital mode; connect it from a favorite.")
+    num = str(b.get("num", "") or "").strip()
+    if not num:
+        raise ValueError("Type or pick a talkgroup, room or reflector first.")
+    mod = str(b.get("module", "") or "").strip().upper()
+    f = {"mode": mode, "num": num, "net": b.get("net", ""), "label": b.get("label", "")}
+    if mode == "DSTAR" and mod and " " not in num and not num.upper().endswith("L"):
+        f["num"] = f"{num} {mod}"
+    if mode == "M17":
+        f["module"] = mod
+    return _norm_fav(f, nets_load())
+
+
+def tune_connect(b):
+    try:
+        f = _tune_fav(b)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    node, err = _connect_node()
+    if not node:
+        return {"ok": False, "error": err}
+    if f["mode"] == "M17":
+        return m17_connect(f, node)
+    act = b.get("net_action")
+    return solo_dvs(f, node, act if act in ("add", "once") else None)
+
+
+def tune_save(b):
+    try:
+        f = _tune_fav(b)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    favs = fav_load()
+    if any(fav_target(x) == fav_target(f) for x in favs):
+        return {"ok": True, "message": f"{fav_name(f)} is already in favorites."}
+    if len(favs) >= FAV_MAX:
+        return {"ok": False, "error": f"Favorites are full ({FAV_MAX}). Remove one on the Setup tab first."}
+    n = len(favs) + 1
+    r = fav_save(favs + [f])
+    if r.get("ok"):
+        log_event(f"Saved {fav_name(f)} to favorites", "ok")
+        return {"ok": True, "message": f"Saved {fav_name(f)} to favorites ({n} of {FAV_MAX})."}
+    return r
+
+
+def tune_disconnect():
+    node, err = _connect_node()
+    if not node:
+        return {"ok": False, "error": err}
+    if not nc_running():
+        if not _solo["target"]:
+            return {"ok": True, "message": "Nothing is tuned."}
+        name = solo_disconnect(node)
+        if isinstance(name, dict):
+            return name
+        _lstats_invalidate()
+        return {"ok": True, "message": f"Disconnected {name}."}
+    done = []
+    d = nc_dvs_current(0)
+    if d and d.get("fav"):
+        r = dash_call({"action": "dvs-disconnect"}, timeout=60)
+        _nc_dvs_status["t"] = -M17_STATUS_TTL
+        if r is None or not r["ok"]:
+            return {"ok": False, "error": "Node Controller is not answering." if r is None else f"Node Controller: {r['error']}"}
+        done.append(tuned_text(d))
+    m17 = m17_current(0)
+    if m17:
+        r = dash_call({"action": "m17-disconnect"})
+        _m17_status["t"] = -M17_STATUS_TTL
+        if r is None or not r["ok"]:
+            return {"ok": False, "error": _m17_error(r)}
+        done.append(f"M17 {m17}")
+    _lstats_invalidate()
+    if not done:
+        return {"ok": True, "message": "Nothing is tuned."}
+    log_event(f"Disconnect {', '.join(done)} through Node Controller", "ok")
+    return {"ok": True, "message": f"Disconnected {', '.join(done)}."}
+
+
+def tuned_text(d):
+    if not d or not d.get("fav"):
+        return ""
+    page = str(d.get("page", "") or "")
+    net = f" {d.get('server')}" if page == "DMR" and d.get("server") else ""
+    return f"{MODE_LABEL.get(page, page)}{net} {d['fav']}".strip()[:TUNE_TEXT_MAX * 2]
+
+
+def tuned_now(nc):
+    if not nc:
+        return _solo["name"] if _solo["target"] else ""
+    m17 = m17_current()
+    return " · ".join(x for x in (tuned_text(nc_dvs_current()), f"M17 {m17}" if m17 else "") if x)
+
+
 def _lan_ips():
     ips = set()
     try:
@@ -3602,6 +3864,22 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #log{max-height:260px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px}
 #log .err{color:var(--red)}#log .warn{color:var(--amber)}#log .ok{color:var(--accent)}
 .hidden{display:none !important}
+:root{--tn-gap:8px;--tn-h:44px;--tn-font:15px}
+.tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
+.tn-bar select,.tn-bar input{min-height:var(--tn-h);font-size:var(--tn-font)}
+#t-mode{flex:0 0 auto;width:6.2rem}
+#t-net{flex:0 0 auto;width:7rem}
+#t-mod{flex:0 0 auto;width:4.6rem}
+#t-find{flex:1 1 6rem;min-width:5rem;max-width:10rem}
+#t-pick{flex:2 1 7rem;min-width:0}
+.tn-bar .btn{min-height:var(--tn-h);padding:0 14px}
+.btn-last{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;font-weight:700;letter-spacing:.04em;min-height:var(--tn-h);padding:0 10px;border-radius:6px;border:1px solid rgba(244,192,78,.45);background:rgba(255,208,64,.05);color:var(--amber);cursor:pointer}
+.btn-last.lh-off{opacity:.4;color:var(--muted);border-color:var(--muted);background:transparent;cursor:default}
+.tn-msg{margin-top:8px;font-size:13px;color:var(--muted);min-height:1em}
+.tn-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
+#t-now{flex:1;min-width:0;overflow-wrap:anywhere}
+#t-off{flex:none;white-space:nowrap}
+@media (max-width:560px){#t-mode,#t-net,#t-mod{flex:1 1 40%;width:auto}#t-find{flex:1 1 100%;max-width:none}#t-pick{flex:1 1 100%}.tn-bar .btn.primary{flex:1 1 auto}}
 #login-screen{display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;
 padding:16px;background:rgba(5,8,14,.88);backdrop-filter:blur(3px)}
 #login-screen.open{display:flex}
@@ -4135,6 +4413,7 @@ async function pollStatus() {
   $('s-links-err').classList.toggle('hidden', d.links_ok !== false);
   linkedTargets = new Set(linkedFavs(d).map((f) => f.target));
   connectLabel();
+  $('t-now').textContent = d.tuned_now ? 'Tuned: ' + d.tuned_now : '';
   $('nd-feeder').textContent = d.feeder_pids && d.feeder_pids.length ? 'running (pid ' + d.feeder_pids.join(', ') + ')' : 'not running';
   if (d.udp_port) $('nd-udp').textContent = d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)';
 }
@@ -5490,8 +5769,10 @@ async function loadFavs() {
   const sel = $('c-fav'), keep = sel.value;
   sel.innerHTML = '';
   favNets = d.nets || [];
+  favNetLinks = d.net_links || {};
   favModes = d.modes || favModes;
   favs.forEach((f, i) => addOption(sel, String(i), f.label || (modeName(f.mode) + ' ' + favNum(f))));
+  tnNets();
   if (keep && Number(keep) < favs.length) sel.value = keep;
   $('c-empty').classList.toggle('hidden', favs.length > 0);
   $('c-pick').classList.toggle('hidden', favs.length === 0);
@@ -5523,7 +5804,7 @@ async function favConnect() {
   if (i === '') return;
   const f = favs[Number(i)];
   const off = selectedLinked();
-  $('c-net').classList.add('hidden');
+  netHide();
   if (!off) {
     const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
     await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
@@ -5538,17 +5819,19 @@ async function favConnect() {
 }
 
 let connMsgTimer = null, connBusy = false;
-async function connectFlow(body, listenText, connectText) {
-  $('c-connect').disabled = true;
+async function connectFlow(body, listenText, connectText, url, box) {
+  url = url || '/api/connect';
+  box = box || {msg: 'c-msg', btn: 'c-connect', ask: 'c-net'};
+  $(box.btn).disabled = true;
   connBusy = true;
-  note('c-msg', '', connectText);
+  note(box.msg, '', connectText);
   showTab('listen');
   if (connMsgTimer) { clearTimeout(connMsgTimer); connMsgTimer = null; }
   note('ptt-msg', '', listenText);
   let d = {};
-  try { d = await post('/api/connect', body); }
-  finally { $('c-connect').disabled = false; connBusy = false; }
-  setMsg('c-msg', d);
+  try { d = await post(url, body); }
+  finally { $(box.btn).disabled = false; connBusy = false; }
+  setMsg(box.msg, d);
   if (d.ok) {
     setMsg('ptt-msg', d);
     const shown = $('ptt-msg').textContent;
@@ -5556,20 +5839,251 @@ async function connectFlow(body, listenText, connectText) {
   } else {
     if ($('ptt-msg').textContent === listenText) note('ptt-msg', '', '');
     if (tab === 'listen') showTab('connect');
-    if (d.need_net) { netAsk = Number(body.index); $('c-net').classList.remove('hidden'); }
+    if (d.need_net) { netAsk = {url: url, body: body, box: box, label: listenText}; $(box.ask).classList.remove('hidden'); }
   }
   pollStatus();
   return d;
 }
 
 let netAsk = null;
-async function netAnswer(action) {
+function netHide() {
   $('c-net').classList.add('hidden');
-  const i = netAsk; netAsk = null;
-  if (action === '' || i === null) { note('c-msg', '', ''); return; }
-  const f = favs[i];
+  $('t-ask').classList.add('hidden');
+  netAsk = null;
+}
+
+async function netAnswer(action) {
+  const a = netAsk;
+  netHide();
+  if (!a) return;
+  if (action === '') { note(a.box.msg, '', ''); return; }
   const text = action === 'add' ? 'Adding the network to Node Controller and tuning...' : 'Tuning...';
-  await connectFlow({index: i, net_action: action}, 'Tuning ' + (f ? f.label : 'the favorite') + '...', text);
+  await connectFlow(Object.assign({}, a.body, {net_action: action}), a.label, text, a.url, a.box);
+}
+
+const TN_MODES = ['DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR', 'M17'];
+const TN_HINT = {DMR: 'TG number', STFU: 'TG, ID or name', YSF: 'Name, # or IP:port', P25: 'TG # or host',
+  NXDN: 'TG # or host', DSTAR: 'REF001 C or callsign', M17: 'M17-USA A'};
+const TN_NOUN = {STFU: 'talkgroups', YSF: 'reflectors', P25: 'talkgroups', NXDN: 'talkgroups', DSTAR: 'reflectors', M17: 'reflectors'};
+const TN_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const TN_TYPED = {DMR: /^\d{1,8}$/, STFU: /^\d{1,8}$/, P25: /^\d{1,8}$/, NXDN: /^\d{1,8}$/,
+  YSF: /^(\d{1,5}|[A-Za-z0-9.-]+:\d{1,5})$/,
+  DSTAR: /^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
+  M17: /^[A-Z0-9]+-[A-Z0-9-]{1,14}(?:\s+(?:[A-Z]|@ALL))?$/i};
+const TN_SIZE = {gap: 8, h: 44, font: 15};
+const tnLists = {};
+let favNetLinks = {}, tnWin = null, tnTimer = 0, tnState = {};
+try { tnState = JSON.parse(localStorage.getItem('nlTune') || '{}') || {}; } catch (e) {}
+
+function tnRemember() {
+  tnState = {mode: $('t-mode').value, net: $('t-net').value || tnState.net, mod: $('t-mod').value,
+    find: $('t-find').value, pick: $('t-pick').value};
+  try { localStorage.setItem('nlTune', JSON.stringify(tnState)); } catch (e) {}
+}
+
+function tnSizeLoad() {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem('nlTuneSize') || '{}') || {}; } catch (e) {}
+  Object.keys(TN_SIZE).forEach((k) => {
+    const n = Number(v[k]), r = $('tn-' + k);
+    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : TN_SIZE[k];
+  });
+  tnSizeApply(false);
+}
+
+function tnSizeApply(save) {
+  const v = {};
+  Object.keys(TN_SIZE).forEach((k) => {
+    v[k] = Number($('tn-' + k).value);
+    document.documentElement.style.setProperty('--tn-' + k, v[k] + 'px');
+    $('tn-' + k + '-v').textContent = v[k] + ' px';
+  });
+  if (save) { try { localStorage.setItem('nlTuneSize', JSON.stringify(v)); } catch (e) {} }
+}
+
+function tnSizeReset() {
+  Object.keys(TN_SIZE).forEach((k) => { $('tn-' + k).value = TN_SIZE[k]; });
+  tnSizeApply(false);
+  try { localStorage.removeItem('nlTuneSize'); } catch (e) {}
+}
+
+function tnInit() {
+  const m = $('t-mode');
+  TN_MODES.forEach((x) => addOption(m, x, modeName(x)));
+  m.value = TN_MODES.includes(tnState.mode) ? tnState.mode : 'DMR';
+  $('t-find').value = tnState.find || '';
+  $('t-mode').addEventListener('change', () => tnMode(false));
+  $('t-net').addEventListener('change', () => { tnButtons(); tnRemember(); });
+  $('t-mod').addEventListener('change', () => { tnButtons(); tnRemember(); });
+  $('t-find').addEventListener('input', () => { tnButtons(); clearTimeout(tnTimer); tnTimer = setTimeout(() => { tnFill(); tnRemember(); }, 150); });
+  $('t-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') tnConnect(); });
+  $('t-pick').addEventListener('change', () => { tnMods(); tnButtons(); tnRemember(); });
+  $('t-go').addEventListener('click', tnConnect);
+  $('t-lh').addEventListener('click', tnLast);
+  $('t-save').addEventListener('click', tnSaveFav);
+  $('t-off').addEventListener('click', tnOff);
+  ['gap', 'h', 'font'].forEach((k) => $('tn-' + k).addEventListener('input', () => tnSizeApply(true)));
+  $('tn-reset').addEventListener('click', tnSizeReset);
+  tnSizeLoad();
+  tnMode(true);
+}
+
+function tnNets() {
+  const sel = $('t-net'), keep = sel.value || tnState.net;
+  sel.innerHTML = '';
+  if (!favNets.length) addOption(sel, '', 'No networks');
+  favNets.forEach((n) => addOption(sel, n, n));
+  if (keep && favNets.includes(keep)) sel.value = keep;
+  if ($('t-mode').value === 'DMR') tnFill();
+  else tnLoad($('t-mode').value);
+}
+
+function tnMods() {
+  const m = $('t-mode').value, sel = $('t-mod'), keep = sel.value || tnState.mod, r = tnRow();
+  const list = m === 'M17' ? ['@ALL'].concat((r && r[3] ? r[3] : TN_LETTERS).split('')) : TN_LETTERS.split('');
+  sel.innerHTML = '';
+  list.forEach((x) => addOption(sel, x, x === '@ALL' ? 'All' : x));
+  sel.value = list.includes(keep) ? keep : (m === 'M17' ? '@ALL' : 'C');
+}
+
+function tnMode(first) {
+  const m = $('t-mode').value;
+  netHide();
+  note('t-msg', '', '');
+  $('t-net').classList.toggle('hidden', m !== 'DMR');
+  $('t-mod').classList.toggle('hidden', m !== 'DSTAR' && m !== 'M17');
+  $('t-pick').classList.toggle('hidden', m === 'DMR');
+  $('t-find').placeholder = TN_HINT[m];
+  if (!first) $('t-find').value = '';
+  tnMods();
+  tnFill(first ? tnState.pick : '');
+  if (m !== 'DMR' && authed) tnLoad(m);
+  if (!first) tnRemember();
+}
+
+async function tnLoad(m, want) {
+  const c = tnLists[m];
+  if (c && (c.loading || Date.now() - c.at < 300000)) return;
+  const s = tnLists[m] = Object.assign(c || {rows: [], files: [], found: false}, {loading: true, at: Date.now(), err: ''});
+  if (!c) tnFill(want);
+  const d = await api('/api/tune-list?mode=' + encodeURIComponent(m));
+  s.loading = false;
+  if (d.ok) {
+    s.rows = d.rows || [];
+    s.found = !!d.found;
+    s.files = d.files || [];
+    s.rows.forEach((r) => { r.s = (r[0] + ' ' + r[1]).toLowerCase(); });
+  } else {
+    s.at = 0;
+    s.err = d.error || 'Could not load the list.';
+  }
+  if ($('t-mode').value === m) tnFill(want);
+}
+
+function tnRow() {
+  const s = tnLists[$('t-mode').value], v = $('t-pick').value;
+  return s && v ? s.rows.find((r) => r[0] === v) || null : null;
+}
+
+function tnFill(want) {
+  const m = $('t-mode').value, s = tnLists[m], sel = $('t-pick');
+  if (m === 'DMR') {
+    $('t-list').textContent = favNets.length ? 'Type the talkgroup number.' : 'Add a DMR network on the Setup tab (Digital card) first.';
+    tnButtons();
+    return;
+  }
+  const keep = want !== undefined ? want : (sel.value || tnState.pick || '');
+  sel.textContent = '';
+  if (!s || s.loading || !s.found) {
+    addOption(sel, '', s && !s.loading ? 'No list' : 'Loading...');
+    sel.disabled = true;
+    $('t-list').textContent = !s || s.loading ? 'Loading the ' + modeName(m) + ' list...'
+      : (s.err || 'No ' + modeName(m) + ' list was found on the Pi.') + ' You can still type one.';
+    tnButtons();
+    return;
+  }
+  const words = $('t-find').value.toLowerCase().split(/\s+/).filter(Boolean);
+  const list = s.rows.filter((r) => words.every((w) => r.s.includes(w)));
+  addOption(sel, '', list.length ? 'Select... (' + list.length.toLocaleString() + ')' : 'No matches');
+  const frag = document.createDocumentFragment();
+  list.forEach((r) => { const o = document.createElement('option'); o.value = r[0]; o.textContent = r[1]; frag.appendChild(o); });
+  sel.appendChild(frag);
+  sel.disabled = list.length === 0;
+  if (keep && list.some((r) => r[0] === keep)) sel.value = keep;
+  else if (list.length === 1) sel.value = list[0][0];
+  const n = list.length, t = s.rows.length, noun = t === 1 ? TN_NOUN[m].slice(0, -1) : TN_NOUN[m];
+  $('t-list').textContent = (n === t ? t.toLocaleString() + ' ' + noun
+    : 'Showing ' + n.toLocaleString() + ' of ' + t.toLocaleString() + ' ' + noun) + ' (' + s.files.join(', ') + ').';
+  if (m === 'M17') tnMods();
+  tnButtons();
+}
+
+function tnBody() {
+  const m = $('t-mode').value, r = tnRow(), t = $('t-find').value.trim(), typed = TN_TYPED[m].test(t) ? t : '';
+  const b = {mode: m};
+  if (m === 'DMR') {
+    b.net = $('t-net').value;
+    b.num = typed;
+  } else if (r) {
+    b.num = r[0];
+    if (m === 'YSF' || m === 'STFU') b.label = r[1];
+  } else {
+    b.num = typed;
+  }
+  if (m === 'DSTAR' || m === 'M17') b.module = $('t-mod').value;
+  return b.num && (m !== 'DMR' || b.net) ? b : null;
+}
+
+function tnName(b) {
+  return modeName(b.mode) + (b.net ? ' ' + b.net : '') + ' ' + (b.label || b.num) + (b.module && !/\s/.test(b.num) ? ' ' + b.module : '');
+}
+
+function tnLink() {
+  const m = $('t-mode').value;
+  if (m === 'DMR') return favNetLinks[$('t-net').value] || '';
+  const r = tnRow();
+  return r ? r[2] || '' : '';
+}
+
+function tnButtons() {
+  const ok = !!tnBody();
+  $('t-go').disabled = !ok || connBusy;
+  $('t-save').disabled = !ok;
+  $('t-lh').classList.toggle('lh-off', !tnLink());
+  $('t-lh').setAttribute('aria-disabled', tnLink() ? 'false' : 'true');
+}
+
+function tnLast() {
+  const u = tnLink();
+  if (!u) return;
+  if (tnWin && !tnWin.closed) { tnWin.location.href = u; tnWin.focus(); }
+  else tnWin = window.open(u, 'nt_lh');
+}
+
+async function tnConnect() {
+  const b = tnBody();
+  if (!b || connBusy) return;
+  netHide();
+  tnRemember();
+  await connectFlow(b, 'Tuning ' + tnName(b) + '...', 'Tuning...', '/api/tune', {msg: 't-msg', btn: 't-go', ask: 't-ask'});
+  tnButtons();
+}
+
+async function tnSaveFav() {
+  const b = tnBody();
+  if (!b) return;
+  $('t-save').disabled = true;
+  try { setMsg('t-msg', await post('/api/tune/save', b)); }
+  finally { tnButtons(); }
+  loadFavs();
+}
+
+async function tnOff() {
+  $('t-off').disabled = true;
+  note('t-msg', '', 'Disconnecting...');
+  try { setMsg('t-msg', await post('/api/tune/disconnect', {})); }
+  finally { $('t-off').disabled = false; }
+  setTimeout(pollStatus, 1000);
 }
 
 async function loadNode() {
@@ -5917,10 +6431,13 @@ document.addEventListener('DOMContentLoaded', () => {
   $('fe-dash-add').addEventListener('click', feAddDash);
   $('fe-save').addEventListener('click', feSave);
   $('nw-add').addEventListener('click', nwAdd);
-  $('c-net-add').addEventListener('click', () => netAnswer('add'));
-  $('c-net-once').addEventListener('click', () => netAnswer('once'));
-  $('c-net-no').addEventListener('click', () => netAnswer(''));
-  $('c-fav').addEventListener('change', () => { $('c-net').classList.add('hidden'); netAsk = null; });
+  ['c', 't'].forEach((p) => {
+    $(p + '-net-add').addEventListener('click', () => netAnswer('add'));
+    $(p + '-net-once').addEventListener('click', () => netAnswer('once'));
+    $(p + '-net-no').addEventListener('click', () => netAnswer(''));
+  });
+  $('c-fav').addEventListener('change', netHide);
+  tnInit();
   $('nw-save').addEventListener('click', nwSave);
   $('nw-import').addEventListener('click', nwImport);
   $('dg-save').addEventListener('click', dgSave);
@@ -5994,12 +6511,6 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 
 <section id="tab-connect" class="hidden">
 <div class="card">
-<h2>Links</h2>
-<table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
-<div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
-<div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
-</div>
-<div class="card">
 <h2>Connect</h2>
 <div id="c-empty" class="muted">No favorites yet. Add up to 15 on the Setup tab.</div>
 <div id="c-pick">
@@ -6017,6 +6528,27 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <button id="c-net-once" class="btn" type="button">Tune this once</button>
 <button id="c-net-no" class="btn" type="button">Cancel</button></div>
 </div>
+</div>
+<div class="card" id="cd-tune">
+<h2>Tune</h2>
+<div class="tn-bar">
+<select id="t-mode" aria-label="Mode"></select>
+<select id="t-net" aria-label="DMR network"></select>
+<select id="t-mod" aria-label="Module"></select>
+<input id="t-find" type="search" maxlength="40" aria-label="Search or type" autocomplete="off" autocapitalize="off" spellcheck="false">
+<select id="t-pick" aria-label="Pick from the list"></select>
+<button id="t-go" class="btn primary" type="button">Connect</button>
+<button id="t-lh" class="btn-last lh-off" type="button" aria-label="Open Last Heard">LH</button>
+<button id="t-save" class="btn" type="button" aria-label="Save to favorites">Save</button>
+</div>
+<div id="t-list" class="tn-msg"></div>
+<div id="t-msg" class="msg"></div>
+<div id="t-ask" class="hidden">
+<div class="row"><button id="t-net-add" class="btn primary" type="button">Add it to Node Controller and tune</button>
+<button id="t-net-once" class="btn" type="button">Tune this once</button>
+<button id="t-net-no" class="btn" type="button">Cancel</button></div>
+</div>
+<div class="tn-foot"><span id="t-now" class="muted small"></span><button id="t-off" class="btn danger" type="button">Disconnect</button></div>
 </div>
 </section>
 
@@ -6057,6 +6589,12 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <a class="ql hidden" data-ql="dvswitch" data-ql-path="/dvswitch" href="#" target="_blank" rel="noopener">DVSwitch</a>
 <a class="ql hidden" data-ql="cockpit" data-ql-port="9090" href="#" target="_blank" rel="noopener">Cockpit</a>
 </div>
+</div>
+<div class="card" id="cd-links">
+<h2>Links</h2>
+<table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
+<div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
+<div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
 </div>
 <div class="card fold" id="cd-rx">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-rx"><span class="fold-t">Receive</span><span class="fold-sum" id="sum-rx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
@@ -6121,6 +6659,11 @@ unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></s
 <div class="row"><button id="ptt-save" class="btn primary" type="button">Save on this phone</button>
 <button id="ptt-restore" class="btn" type="button">Restore from the Pi</button></div>
 <div id="ptt-set-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Tune card on this phone</h3>
+<div class="row"><label>Gap <input type="range" id="tn-gap" min="2" max="20" step="1"> <span id="tn-gap-v" class="mono small"></span></label></div>
+<div class="row"><label>Height <input type="range" id="tn-h" min="32" max="56" step="1"> <span id="tn-h-v" class="mono small"></span></label></div>
+<div class="row"><label>Text <input type="range" id="tn-font" min="12" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
+<div class="row"><button id="tn-reset" class="btn" type="button">Default spacing</button></div>
 </div>
 </div>
 
@@ -6360,6 +6903,9 @@ _POST_ACTIONS = {
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
     "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
     "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
+    "/api/tune": (tune_connect, ()),
+    "/api/tune/save": (tune_save, ()),
+    "/api/tune/disconnect": (lambda b: tune_disconnect(), ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
     "/api/system/reboot": (lambda b: system_power("reboot"), ()),
     "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),
@@ -6510,7 +7056,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(),
                                  "dash_node": dash["asl_node"] if port_open_cached(dash["port"]) else "",
                                  "modes": list(FAV_MODES), "nets": [n["name"] for n in nets_load()],
+                                 "net_links": {n["name"]: n["url"] for n in nets_load()},
                                  "favs": [dict(f, target=fav_target(f)) for f in fav_load()]})
+            elif path == "/api/tune-list":
+                self._json(200, tune_list(query.get("mode", [""])[0]))
             elif path == "/api/digital":
                 self._json(200, digital_info())
             elif path == "/api/favorites-file":
