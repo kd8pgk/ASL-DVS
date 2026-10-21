@@ -275,5 +275,36 @@ class CheckTests(unittest.TestCase):
         self.assertCheck(False, "overrides.json")
 
 
+    def android(self, ver, log_ver=None, extra="x"):
+        self.r.write("android/app/build.gradle.kts", f'val appVersion = "{ver}"\n')
+        self.r.write("android/app/src/Main.kt", extra + "\n")
+        v = log_ver or ver
+        self.r.write("changelogs/nodetalker_android.md", f"# log\n\nCurrent version: `{v}`.\n\n## {v} (2026-10-01)\n\n- x\n")
+
+    def test_android_first_and_bump(self):
+        self.android("0.1.0")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(True)
+        self.r.git("checkout", "-q", "main")
+        self.r.git("merge", "-q", "pr")
+        self.r.git("checkout", "-q", "pr")
+        self.android("0.1.0", extra="y")
+        self.r.commit("b", T0 + 2 * DAY)
+        self.assertCheck(False, "not newer than 0.1.0")
+        self.android("0.1.1", extra="y")
+        self.r.commit("c", T0 + 3 * DAY)
+        self.assertCheck(True)
+
+    def test_android_changelog(self):
+        self.android("0.1.0", log_ver="0.0.9")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "Current version")
+
+    def test_android_bad_version(self):
+        self.android("0.1")
+        self.r.commit("a", T0 + DAY)
+        self.assertCheck(False, "must be X.Y.Z")
+
+
 if __name__ == "__main__":
     unittest.main()

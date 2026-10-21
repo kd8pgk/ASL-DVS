@@ -17,6 +17,7 @@ By KD8PGK, written with Claude (Anthropic).
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
+| Node Talker for Android | `android/` (APK under Releases) | - | Optional Android app for Node Talker: opens only a Node Talker page, remembers its certificate, and (in later versions) runs receive, transmit and PTT in the background. Sideload test builds for now. |
 
 Scripts:
 
@@ -297,6 +298,37 @@ node 1921:
 - Favorites are AllStar node numbers, or a direct address
   (`iax:user@host:port/node,password`) for a private node.
 
+## Node Talker for Android
+
+An optional Android app (Android 8.0 and newer) that opens only a Node
+Talker page. Node Talker works the same in a browser; the app is for
+phones that should keep receiving and transmitting with the screen locked.
+It comes in phases:
+
+1. **Shell (0.1.x, now):** a list of your nodes; the page opens with nothing
+   else around it; Node Talker's own HTTPS certificate is trusted once, by
+   its fingerprint, with no browser warnings after that.
+2. Receive in the background (notification, Wi-Fi lock), with a switch back
+   to page audio.
+3. Transmit in the background.
+4. PTT on the screen button or a volume key.
+
+**Install a test build:** on the phone, open the repository's
+[Releases](https://github.com/kd8pgk/ASL-DVS/releases), pick the newest
+`android-v…` release and download `NodeTalker-…-debug.apk`. Android asks to
+allow installs from the browser once. Test builds use a debug key: when
+signed builds start, uninstall the test build first.
+
+**Add a node:** the Pi's address (for example `192.168.1.50`), port `8993`,
+and HTTPS if Node Talker uses it (needed for the microphone in page
+audio). The first HTTPS connection shows the certificate's fingerprint;
+check it on the Pi with:
+
+  openssl x509 -noout -fingerprint -sha256 -in /etc/asl_dvs/nodetalker_tls/cert.pem
+
+The source is in `android/`; the changelog is
+[`nodetalker_android.md`](changelogs/nodetalker_android.md).
+
 ## Updating from GitHub (instmon)
 
 The **GitHub Updates** card in instmon reads this repo's file list directly.
@@ -480,6 +512,7 @@ per tool and build:
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
 | [`nodetalker.md`](changelogs/nodetalker.md) | `nodetalker_v*.py` (was `nodelisten_v*.py`) |
 | [`amp_nodetalker.md`](changelogs/amp_nodetalker.md) | `amp_nodetalker_v*.py` (was `amp_nodelisten_v*.py`) |
+| [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker for Android) |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |
