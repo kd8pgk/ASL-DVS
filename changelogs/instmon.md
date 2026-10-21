@@ -1,6 +1,16 @@
 # instmon changelog
 
-Current file: `instmon_v2_66_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_67_0_20261021.py`. Newest entries first.
+
+## 2.67.0 (2026-10-21)
+
+- **Copy Log on each Disk Image & Clone card.** Full Format, Backup, Clone
+  and Restore each have a **Copy Log** button above their console. It
+  copies that card's console one line per entry, with the same
+  check-the-clipboard step as the Execution Log's Copy Log. An empty
+  console says there is nothing to copy.
+- **Manuals card has Show/Hide.** It starts collapsed, like the Disk Image
+  & Clone cards.
 
 ## 2.66.0 (2026-10-21)
 

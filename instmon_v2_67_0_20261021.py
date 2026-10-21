@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.66.0"
+VERSION ="2.67.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -6017,6 +6017,8 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
 .diskimg-card.collapsed .diskimg-help-toggle{display:none}
 .card:not(.help-open) .diskimg-help{display:none}
 .diskimg-help{margin:.3rem 0}
+.diskimg-copy-row{justify-content:flex-end;margin-top:.5rem}
+.diskimg-copy-row button{font-size:.7rem;padding:.15rem .55rem}
 .diskimg-step{display:flex;align-items:center;gap:.45rem;margin:.75rem 0 .3rem;
   font-size:.8rem;font-weight:700;color:var(--amber)}
 .diskimg-step:first-child{margin-top:0}
@@ -6241,7 +6243,7 @@ function renderQuietFullUpdate(quiet, fu) {
   // While Full Update runs every other button waits (the server refuses
   // them anyway); only buttons disabled here are re-enabled afterwards.
   document.querySelectorAll('button[data-action], #diskimg-refresh-btn, #backup-btn').forEach(b => {
-    if (['fu_dismiss', 'fu_stop', 'full_update', 'quiet', 'restore', 'toggle_lib', 'toggle_diskimg_card', 'toggle_diskimg_help', 'go', 'router',
+    if (['fu_dismiss', 'fu_stop', 'full_update', 'quiet', 'restore', 'toggle_lib', 'toggle_diskimg_card', 'toggle_diskimg_help', 'copy_diskimg_console', 'go', 'router',
          'download', 'diskimg_backup_download'].includes(b.dataset.action)) return;
     if (running && !b.disabled) { b.disabled = true; b.dataset.fuDisabled = '1'; }
     else if (!running && b.dataset.fuDisabled) { b.disabled = false; delete b.dataset.fuDisabled; }
@@ -7504,6 +7506,13 @@ _JS_ACTIONS = """function wireButtons() {
         btn.textContent = open ? 'Hide Help' : 'Help';
         return;
       }
+      if (action === 'copy_diskimg_console') {
+        // v2.67.0: copies that card's console, one line per entry.
+        const el = document.getElementById(btn.dataset.target);
+        const text = el && !el.classList.contains('placeholder') ? collectLogText(el) : '';
+        await copyTextWithVerify(text, 'Log copied');
+        return;
+      }
       if (action === 'diskimg_stop') {
         // v2.30.0: handled before the generic disable/finally below --
         // this button's enabled state belongs to syncDiskimgCardButtons(),
@@ -8443,7 +8452,11 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 </div>
 
 <div class="hdr">Manuals</div>
-<div class="card" id="docs-card">
+<div class="card diskimg-card collapsed" id="docs-card">
+  <div class="diskimg-corner">
+    <button class="diskimg-toggle" data-action="toggle_diskimg_card" data-key="docs">Show</button>
+  </div>
+  <div class="diskimg-card-body">
   <div class="row">
     <button id="docs-fetch">Get from GitHub</button>
     <span class="small muted" id="docs-msg"></span>
@@ -8459,6 +8472,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     fetches any that are new or changed on GitHub. Open shows one in a new tab in the browser's own PDF reader;
     Download saves it. Get from GitHub only fetches files that are new or changed.</div>
   <div id="docs-list" style="margin-top:.5rem"></div>
+  </div>
 </div>
 
 <div class="hdr">Backup &amp; Export</div>  <!-- [PHASE 3] -->
@@ -8534,6 +8548,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="format" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-format" style="margin-top:.5rem"></div>
+    <div class="row diskimg-copy-row">
+      <button data-action="copy_diskimg_console" data-target="diskimg-console-format">&#9111; Copy Log</button>
+    </div>
     <div id="diskimg-console-format" class="diskimg-console placeholder">(no job running)</div>
   </div>
   </div>
@@ -8601,6 +8618,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="backup" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-backup" style="margin-top:.5rem"></div>
+    <div class="row diskimg-copy-row">
+      <button data-action="copy_diskimg_console" data-target="diskimg-console-backup">&#9111; Copy Log</button>
+    </div>
     <div id="diskimg-console-backup" class="diskimg-console placeholder">(no job running)</div>
   </div>
   <div class="diskimg-sub">Existing Backups</div>
@@ -8696,6 +8716,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="clone" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-clone" style="margin-top:.5rem"></div>
+    <div class="row diskimg-copy-row">
+      <button data-action="copy_diskimg_console" data-target="diskimg-console-clone">&#9111; Copy Log</button>
+    </div>
     <div id="diskimg-console-clone" class="diskimg-console placeholder">(no job running)</div>
   </div>
   </div>
@@ -8752,6 +8775,9 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="restore" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-restore" style="margin-top:.5rem"></div>
+    <div class="row diskimg-copy-row">
+      <button data-action="copy_diskimg_console" data-target="diskimg-console-restore">&#9111; Copy Log</button>
+    </div>
     <div id="diskimg-console-restore" class="diskimg-console placeholder">(no job running)</div>
   </div>
   </div>
