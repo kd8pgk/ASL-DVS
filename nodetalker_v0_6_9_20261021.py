@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.8"
+VERSION = "0.6.9"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -2937,6 +2937,10 @@ def fav_connect(index, net_action=None):
         return solo_dvs(f, node, net_action if net_action in ("add", "once") else None)
     if f["mode"] == "M17":
         return m17_connect(f, node)
+    return node_connect(f, node)
+
+
+def node_connect(f, node):
     if node == dashboard_conf()["asl_node"]:
         r = dash_call({"action": "connect", "mode": f["mode"], "node": f["num"], "name": f["label"]})
         if r is not None:
@@ -3005,6 +3009,11 @@ def fav_disconnect(index=None):
         log_event(f"Disconnect {done[0]} through Node Controller", "ok")
     if not hit:
         return {"ok": True, "message": f"Disconnected {done[0]}." if done else ("That favorite is not linked." if index is not None else "No favorite is linked.")}
+    drop_peers(node, hit)
+    return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
+
+
+def drop_peers(node, hit):
     via = node == dashboard_conf()["asl_node"]
     for peer in hit:
         r = dash_call({"action": "disconnect", "node": peer}) if via else None
@@ -3015,7 +3024,6 @@ def fav_disconnect(index=None):
     if _asl_keep["v"] in hit:
         _asl_keep["v"] = ""
     log_event(f"Disconnect {', '.join(hit)} from node {node}" + (" through Node Controller" if via else ""), "ok")
-    return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
 
 
 MMDVM_DIR = os.environ.get("NODETALKER_MMDVM_DIR", "/var/lib/mmdvm")
@@ -3027,6 +3035,13 @@ TUNE_LIST_FILES = {
     "DSTAR": (("DPlus_Hosts.txt", ""), ("DExtra_Hosts.txt", ""), ("DCS_Hosts.txt", "")),
 }
 TUNE_TEXT_MAX = 64
+ASTDB_PATH = os.environ.get("NODETALKER_ASTDB", "/var/lib/asterisk/astdb.txt")
+ASL_STATS_URL = "https://stats.allstarlink.org/stats/{}"
+SEARCH_MIN = 2
+SEARCH_MAX = 200
+ECHODB_TTL = 300.0
+_echodb = {"t": -1e9, "rows": [], "ok": False}
+_echodb_lock = threading.Lock()
 _DSTAR_REF_RE = re.compile(r"(REF|XRF|DCS)\d{3}")
 _tune_lists = {}
 _tune_lists_lock = threading.Lock()
@@ -3180,15 +3195,84 @@ def tune_list(mode):
     return out
 
 
+def _astdb_rows():
+    try:
+        with open(ASTDB_PATH, "r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                p = [_list_text(x) for x in raw.strip().split("|")]
+                if not p[0].isdigit() or len(p[0]) > 7 or raw.lstrip().startswith(("#", ";")):
+                    continue
+                num = str(int(p[0]))
+                text = " · ".join(x for x in [num] + p[1:4] if x)
+                yield num, text, ASL_STATS_URL.format(num)
+    except OSError:
+        return
+
+
+def _echodb_rows():
+    with _echodb_lock:
+        now = time.monotonic()
+        if now - _echodb["t"] >= ECHODB_TTL:
+            ok, out = ast_cli("echolink dbdump", timeout=10)
+            rows, seen = [], set()
+            if ok and "no such command" not in out.lower():
+                for raw in out.splitlines():
+                    p = raw.split("|", 2)
+                    if len(p) < 2 or not p[0].strip().isdigit() or len(p[0].strip()) > 6:
+                        continue
+                    num = str(int(p[0].strip()))
+                    if num == "0" or num in seen:
+                        continue
+                    seen.add(num)
+                    rows.append((num, f"{num} · {_list_text(p[1])[:24]}", ""))
+                rows.sort(key=lambda r: int(r[0]))
+            _echodb.update(t=now, rows=rows, ok=bool(rows))
+        return _echodb["rows"], _echodb["ok"]
+
+
+def tune_search(mode, q):
+    try:
+        mode = _mode_of(mode)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if mode not in ("ASL", "EchoLink"):
+        return {"ok": False, "error": f"{mode} has a list; it is not searched here."}
+    q = _CALL_TRIM.sub(" ", str(q or "")).strip().lower()[:40]
+    if mode == "ASL":
+        found, rows = os.path.isfile(ASTDB_PATH), _astdb_rows()
+        what = os.path.basename(ASTDB_PATH)
+    else:
+        rows, found = _echodb_rows()
+        what = "echolink dbdump"
+    out = {"ok": True, "mode": mode, "found": found, "file": what, "min": SEARCH_MIN, "count": 0, "rows": []}
+    if not found or len(q) < SEARCH_MIN:
+        return out
+    skip = {v for k, v in bridge_nodes().items() if k in ("digital", "m17") and v} | {TX_NODE}
+    words = q.split()
+    pre = words[0].lstrip("0") or "0" if len(words) == 1 and words[0].isdigit() else None
+    for r in rows:
+        if mode == "ASL" and r[0] in skip:
+            continue
+        if pre is not None:
+            if not r[0].startswith(pre):
+                continue
+        elif not all(w in r[1].lower() for w in words):
+            continue
+        out["count"] += 1
+        if len(out["rows"]) < SEARCH_MAX:
+            out["rows"].append(list(r))
+    return out
+
+
 def _tune_fav(b):
     if not isinstance(b, dict):
         raise ValueError("Pick a mode and a station.")
     mode = _mode_of(b.get("mode"))
-    if mode not in DVS_MODES and mode != "M17":
-        raise ValueError(f"{mode} is not a digital mode; connect it from a favorite.")
     num = str(b.get("num", "") or "").strip()
     if not num:
-        raise ValueError("Type or pick a talkgroup, room or reflector first.")
+        raise ValueError("Type or pick a node, talkgroup, room or reflector first.")
+    if mode == "ASL" and num.isdigit() and str(int(num)) in {v for k, v in bridge_nodes().items() if k in ("digital", "m17") and v}:
+        raise ValueError(f"Node {int(num)} is a bridge node; pick a mode to tune it.")
     mod = str(b.get("module", "") or "").strip().upper()
     f = {"mode": mode, "num": num, "net": b.get("net", ""), "label": b.get("label", "")}
     if mode == "DSTAR" and mod and " " not in num and not num.upper().endswith("L"):
@@ -3208,6 +3292,8 @@ def tune_connect(b):
         return {"ok": False, "error": err}
     if f["mode"] == "M17":
         return m17_connect(f, node)
+    if f["mode"] in ("ASL", "EchoLink"):
+        return node_connect(f, node)
     act = b.get("net_action")
     return solo_dvs(f, node, act if act in ("add", "once") else None)
 
@@ -3230,10 +3316,22 @@ def tune_save(b):
     return r
 
 
-def tune_disconnect():
+def tune_disconnect(b=None):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
+    if isinstance(b, dict) and _mode_safe(b) in ("ASL", "EchoLink") and b.get("num"):
+        try:
+            f = _tune_fav(b)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        ok, links = rpt_links(node, max_age=0)
+        if not ok:
+            return {"ok": False, "error": NO_LINK_LIST}
+        if not any(l["node"] == fav_target(f) for l in links):
+            return {"ok": True, "message": f"{fav_name(f)} is not linked."}
+        drop_peers(node, [fav_target(f)])
+        return {"ok": True, "message": f"Disconnected {fav_name(f)}."}
     if not nc_running():
         if not _solo["target"]:
             return {"ok": True, "message": "Nothing is tuned."}
@@ -3867,7 +3965,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 :root{--tn-gap:8px;--tn-h:44px;--tn-font:15px}
 .tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
 .tn-bar select,.tn-bar input{min-height:var(--tn-h);font-size:var(--tn-font)}
-#t-mode{flex:0 0 auto;width:6.2rem}
+#t-mode{flex:0 0 auto;width:7rem}
 #t-net{flex:0 0 auto;width:7rem}
 #t-mod{flex:0 0 auto;width:4.6rem}
 #t-find{flex:1 1 6rem;min-width:5rem;max-width:10rem}
@@ -5861,12 +5959,13 @@ async function netAnswer(action) {
   await connectFlow(Object.assign({}, a.body, {net_action: action}), a.label, text, a.url, a.box);
 }
 
-const TN_MODES = ['DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR', 'M17'];
-const TN_HINT = {DMR: 'TG number', STFU: 'TG, ID or name', YSF: 'Name, # or IP:port', P25: 'TG # or host',
+const TN_MODES = ['ASL', 'EchoLink', 'DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR', 'M17'];
+const TN_SEARCH = ['ASL', 'EchoLink'];
+const TN_HINT = {ASL: 'Node #, call or place', EchoLink: 'Node # or call', DMR: 'TG number', STFU: 'TG, ID or name', YSF: 'Name, # or IP:port', P25: 'TG # or host',
   NXDN: 'TG # or host', DSTAR: 'REF001 C or callsign', M17: 'M17-USA A'};
-const TN_NOUN = {STFU: 'talkgroups', YSF: 'reflectors', P25: 'talkgroups', NXDN: 'talkgroups', DSTAR: 'reflectors', M17: 'reflectors'};
+const TN_NOUN = {ASL: 'nodes', EchoLink: 'stations', STFU: 'talkgroups', YSF: 'reflectors', P25: 'talkgroups', NXDN: 'talkgroups', DSTAR: 'reflectors', M17: 'reflectors'};
 const TN_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
-const TN_TYPED = {DMR: /^\d{1,8}$/, STFU: /^\d{1,8}$/, P25: /^\d{1,8}$/, NXDN: /^\d{1,8}$/,
+const TN_TYPED = {ASL: /^\d{1,7}$/, EchoLink: /^\d{1,6}$/, DMR: /^\d{1,8}$/, STFU: /^\d{1,8}$/, P25: /^\d{1,8}$/, NXDN: /^\d{1,8}$/,
   YSF: /^(\d{1,5}|[A-Za-z0-9.-]+:\d{1,5})$/,
   DSTAR: /^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
   M17: /^[A-Z0-9]+-[A-Z0-9-]{1,14}(?:\s+(?:[A-Z]|@ALL))?$/i};
@@ -5915,7 +6014,12 @@ function tnInit() {
   $('t-mode').addEventListener('change', () => tnMode(false));
   $('t-net').addEventListener('change', () => { tnButtons(); tnRemember(); });
   $('t-mod').addEventListener('change', () => { tnButtons(); tnRemember(); });
-  $('t-find').addEventListener('input', () => { tnButtons(); clearTimeout(tnTimer); tnTimer = setTimeout(() => { tnFill(); tnRemember(); }, 150); });
+  $('t-find').addEventListener('input', () => {
+    tnButtons();
+    clearTimeout(tnTimer);
+    const m = $('t-mode').value;
+    tnTimer = setTimeout(() => { if (TN_SEARCH.includes(m)) tnSearch(m); else tnFill(); tnRemember(); }, TN_SEARCH.includes(m) ? 300 : 150);
+  });
   $('t-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') tnConnect(); });
   $('t-pick').addEventListener('change', () => { tnMods(); tnButtons(); tnRemember(); });
   $('t-go').addEventListener('click', tnConnect);
@@ -5934,8 +6038,10 @@ function tnNets() {
   if (!favNets.length) addOption(sel, '', 'No networks');
   favNets.forEach((n) => addOption(sel, n, n));
   if (keep && favNets.includes(keep)) sel.value = keep;
-  if ($('t-mode').value === 'DMR') tnFill();
-  else tnLoad($('t-mode').value);
+  const m = $('t-mode').value;
+  if (m === 'DMR') tnFill();
+  else if (TN_SEARCH.includes(m)) { if (!tnLists[m]) tnSearch(m); }
+  else tnLoad(m);
 }
 
 function tnMods() {
@@ -5957,7 +6063,8 @@ function tnMode(first) {
   if (!first) $('t-find').value = '';
   tnMods();
   tnFill(first ? tnState.pick : '');
-  if (m !== 'DMR' && authed) tnLoad(m);
+  if (TN_SEARCH.includes(m)) { if (authed) tnSearch(m, first ? tnState.pick : undefined); }
+  else if (m !== 'DMR' && authed) tnLoad(m);
   if (!first) tnRemember();
 }
 
@@ -5980,6 +6087,23 @@ async function tnLoad(m, want) {
   if ($('t-mode').value === m) tnFill(want);
 }
 
+let tnSeq = 0;
+async function tnSearch(m, want) {
+  const q = $('t-find').value.trim();
+  const seq = ++tnSeq;
+  if (q.length < 2) {
+    tnLists[m] = {search: true, short: true, rows: [], found: true, files: [], count: 0};
+    tnFill(want);
+    return;
+  }
+  const d = await api('/api/tune-search?mode=' + encodeURIComponent(m) + '&q=' + encodeURIComponent(q));
+  if (seq !== tnSeq || $('t-mode').value !== m) return;
+  const s = tnLists[m] = {search: true, rows: d.rows || [], found: !!d.found, files: d.file ? [d.file] : [],
+    count: d.count || 0, err: d.ok ? '' : (d.error || 'Search failed.')};
+  s.rows.forEach((r) => { r.s = (r[0] + ' ' + r[1]).toLowerCase(); });
+  tnFill(want);
+}
+
 function tnRow() {
   const s = tnLists[$('t-mode').value], v = $('t-pick').value;
   return s && v ? s.rows.find((r) => r[0] === v) || null : null;
@@ -5994,6 +6118,15 @@ function tnFill(want) {
   }
   const keep = want !== undefined ? want : (sel.value || tnState.pick || '');
   sel.textContent = '';
+  if (s && s.search && (s.short || !s.found || s.err)) {
+    addOption(sel, '', 'Type to search...');
+    sel.disabled = true;
+    $('t-list').textContent = s.err ? s.err : s.short ? 'Type 2 or more characters to search, or a ' + (m === 'ASL' ? 'node' : 'station') + ' number.'
+      : 'No ' + (m === 'ASL' ? 'AllStar node list (' + (s.files[0] || 'astdb.txt') + ')' : 'EchoLink station list (is EchoLink loaded in Asterisk?)')
+        + ' was found. You can still type a number.';
+    tnButtons();
+    return;
+  }
   if (!s || s.loading || !s.found) {
     addOption(sel, '', s && !s.loading ? 'No list' : 'Loading...');
     sel.disabled = true;
@@ -6003,7 +6136,7 @@ function tnFill(want) {
     return;
   }
   const words = $('t-find').value.toLowerCase().split(/\s+/).filter(Boolean);
-  const list = s.rows.filter((r) => words.every((w) => r.s.includes(w)));
+  const list = s.search ? s.rows : s.rows.filter((r) => words.every((w) => r.s.includes(w)));
   addOption(sel, '', list.length ? 'Select... (' + list.length.toLocaleString() + ')' : 'No matches');
   const frag = document.createDocumentFragment();
   list.forEach((r) => { const o = document.createElement('option'); o.value = r[0]; o.textContent = r[1]; frag.appendChild(o); });
@@ -6011,9 +6144,12 @@ function tnFill(want) {
   sel.disabled = list.length === 0;
   if (keep && list.some((r) => r[0] === keep)) sel.value = keep;
   else if (list.length === 1) sel.value = list[0][0];
-  const n = list.length, t = s.rows.length, noun = t === 1 ? TN_NOUN[m].slice(0, -1) : TN_NOUN[m];
-  $('t-list').textContent = (n === t ? t.toLocaleString() + ' ' + noun
-    : 'Showing ' + n.toLocaleString() + ' of ' + t.toLocaleString() + ' ' + noun) + ' (' + s.files.join(', ') + ').';
+  const n = list.length, t = s.search ? s.count : s.rows.length, noun = t === 1 ? TN_NOUN[m].slice(0, -1) : TN_NOUN[m];
+  $('t-list').textContent = s.search ? (t === 0 ? 'No matches (' + s.files.join(', ') + ').'
+      : n < t ? 'Showing ' + n + ' of ' + t.toLocaleString() + ' matches (' + s.files.join(', ') + '). Type more to narrow it down.'
+      : t.toLocaleString() + ' ' + (t === 1 ? 'match' : 'matches') + ' (' + s.files.join(', ') + ').')
+    : (n === t ? t.toLocaleString() + ' ' + noun
+      : 'Showing ' + n.toLocaleString() + ' of ' + t.toLocaleString() + ' ' + noun) + ' (' + s.files.join(', ') + ').';
   if (m === 'M17') tnMods();
   tnButtons();
 }
@@ -6026,7 +6162,7 @@ function tnBody() {
     b.num = typed;
   } else if (r) {
     b.num = r[0];
-    if (m === 'YSF' || m === 'STFU') b.label = r[1];
+    if (['YSF', 'STFU', 'ASL', 'EchoLink'].includes(m)) b.label = r[1];
   } else {
     b.num = typed;
   }
@@ -6065,7 +6201,9 @@ async function tnConnect() {
   if (!b || connBusy) return;
   netHide();
   tnRemember();
-  await connectFlow(b, 'Tuning ' + tnName(b) + '...', 'Tuning...', '/api/tune', {msg: 't-msg', btn: 't-go', ask: 't-ask'});
+  const link = TN_SEARCH.includes(b.mode);
+  await connectFlow(b, (link ? 'Connecting to ' : 'Tuning ') + tnName(b) + '...', link ? 'Connecting... (checking the link for up to 15 s)' : 'Tuning...',
+    '/api/tune', {msg: 't-msg', btn: 't-go', ask: 't-ask'});
   tnButtons();
 }
 
@@ -6081,7 +6219,9 @@ async function tnSaveFav() {
 async function tnOff() {
   $('t-off').disabled = true;
   note('t-msg', '', 'Disconnecting...');
-  try { setMsg('t-msg', await post('/api/tune/disconnect', {})); }
+  const b = TN_SEARCH.includes($('t-mode').value) ? tnBody() : null;
+  if (TN_SEARCH.includes($('t-mode').value) && !b) { $('t-off').disabled = false; note('t-msg', 'warn', 'Pick or type the node to disconnect.'); return; }
+  try { setMsg('t-msg', await post('/api/tune/disconnect', b || {})); }
   finally { $('t-off').disabled = false; }
   setTimeout(pollStatus, 1000);
 }
@@ -6905,7 +7045,7 @@ _POST_ACTIONS = {
     "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
     "/api/tune": (tune_connect, ()),
     "/api/tune/save": (tune_save, ()),
-    "/api/tune/disconnect": (lambda b: tune_disconnect(), ()),
+    "/api/tune/disconnect": (tune_disconnect, ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
     "/api/system/reboot": (lambda b: system_power("reboot"), ()),
     "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),
@@ -7058,6 +7198,8 @@ class Handler(BaseHTTPRequestHandler):
                                  "modes": list(FAV_MODES), "nets": [n["name"] for n in nets_load()],
                                  "net_links": {n["name"]: n["url"] for n in nets_load()},
                                  "favs": [dict(f, target=fav_target(f)) for f in fav_load()]})
+            elif path == "/api/tune-search":
+                self._json(200, tune_search(query.get("mode", [""])[0], query.get("q", [""])[0]))
             elif path == "/api/tune-list":
                 self._json(200, tune_list(query.get("mode", [""])[0]))
             elif path == "/api/digital":

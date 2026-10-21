@@ -1,6 +1,24 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_8_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_9_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.9 (2026-10-21)
+
+- **ASL and EchoLink on the Tune card**, first in the Mode menu.
+  - Search as you type (2 characters or more), as in Node Controller: ASL
+    searches the AllStar node list (`/var/lib/asterisk/astdb.txt`) by node
+    number, call or place; EchoLink searches Asterisk's station list
+    (`echolink dbdump`, kept for 5 minutes) by number or call. A number
+    alone matches nodes that start with it. Up to 200 matches are listed.
+  - A node number can be typed when it isn't found, or the list is missing.
+  - Connect links the node as an ASL or EchoLink favorite does, through Node
+    Controller when it runs, and checks the link for up to 15 s.
+  - LH opens the node's AllStar stats page (ASL). Save adds it to favorites.
+  - Disconnect drops the link to the node picked or typed.
+  - Bridge nodes and the transmit node are left out of the ASL search and
+    refused.
+- New API: `GET /api/tune-search?mode=&q=`; `/api/tune` and
+  `/api/tune/disconnect` take ASL and EchoLink.
 
 ## 0.6.8 (2026-10-21)
 
