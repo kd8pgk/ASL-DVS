@@ -1,6 +1,27 @@
 # instmon changelog
 
-Current file: `instmon_v2_70_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_71_0_20261021.py`. Newest entries first.
+
+## 2.71.0 (2026-10-21)
+
+Disk Image & Clone: a job that stops no longer disappears.
+
+- **A restart during a job is reported.** Each Format, Backup, Clone and
+  Restore is recorded in `/etc/asl_dvs/instmon_diskimg_lastjob.json`. If
+  instmon restarts while one is running (an update, a crash, its
+  watchdog), it stops the leftover copy and the card shows "instmon
+  restarted while this clone was running ... the destination is
+  incomplete", instead of a blank console. The same line goes to the
+  Execution Log. It is reported once.
+- **An internal error ends the job as failed**, with the error on the card
+  and in the log, instead of leaving it stuck as running. Node services
+  are still restored.
+- **Freeze filesystem no longer hangs Clone or Restore.** The root
+  filesystem is now thawed as soon as the copy itself finishes, before
+  Expand and New disk IDs, which need to write to it. If it can't be
+  thawed, those two steps are skipped and the result says so.
+- A timeout or error inside Expand or New disk IDs is reported on the card
+  and the job still finishes.
 
 ## 2.70.0 (2026-10-21)
 
