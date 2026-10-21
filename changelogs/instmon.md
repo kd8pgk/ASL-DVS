@@ -1,6 +1,14 @@
 # instmon changelog
 
-Current file: `instmon_v2_64_0_20261020.py`. Newest entries first.
+Current file: `instmon_v2_65_0_20261021.py`. Newest entries first.
+
+## 2.65.0 (2026-10-21)
+
+- **Components no longer shows a Watchdog card.** The watchdog is still
+  tracked: Full Update, Quiet System, the disk-image pause and installs
+  handle it as before.
+- The **Watchdog** library group (its `.sh` files, Install, GitHub Updates,
+  upload) moves from the old card to the Library section, above Scripts.
 
 ## 2.64.0 (2026-10-20)
 

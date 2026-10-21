@@ -35,8 +35,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.64.0"
-DATE_STR ="2026-10-20"
+VERSION ="2.65.0"
+DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -1951,6 +1951,8 @@ COMPONENTS =[
 ]
 
 INSTALLABLE_CATEGORIES ={c ["category"]for c in COMPONENTS }
+
+NO_CARD_CATEGORIES =("watchdog",)
 
 HOME_SCAN_PATTERN_MAP =[
 ("watchdog",["asl_dvs_watchdog*.sh"]),
@@ -5321,6 +5323,8 @@ def esc (s ):
 def render_components_html (components ,library =None ):
     cards =[]
     for c in components :
+        if c ["category"]in NO_CARD_CATEGORIES :
+            continue 
         label ,cls =BADGE_BY_STATE .get (c ["state"],("UNKNOWN","b-src"))
         if c ["port"]is None :
             port_note ="no web UI"
@@ -5490,13 +5494,13 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
 _LIBRARY_GROUPS_BY_CATEGORY: dict [str ,tuple [str ,str ,str ]]={
     category :(title ,category ,action_label )
     for title ,category ,action_label in _LIBRARY_GROUPS
-    if category in INSTALLABLE_CATEGORIES 
+    if category in INSTALLABLE_CATEGORIES and category not in NO_CARD_CATEGORIES 
 }
 
 _ORPHAN_LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     (title ,category ,action_label )
     for title ,category ,action_label in _LIBRARY_GROUPS
-    if category not in INSTALLABLE_CATEGORIES 
+    if category not in INSTALLABLE_CATEGORIES or category in NO_CARD_CATEGORIES 
 ]
 
 _RTF_UP =0x0001
