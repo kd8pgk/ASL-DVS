@@ -1,6 +1,38 @@
 # instmon changelog
 
-Current file: `instmon_v2_69_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_70_0_20261021.py`. Newest entries first.
+
+## 2.70.0 (2026-10-21)
+
+Disk Image & Clone: copies, the node and the drives.
+
+- **New disk IDs on Clone and Restore** (on by default). After a dd or
+  ddrescue clone, or a restore, the copy gets its own disk ID (MBR) or
+  GUIDs (GPT, needs `sgdisk`), and its `cmdline.txt` and `fstab` are
+  updated to match. A copy left plugged in can no longer be booted by
+  mistake. rpi-clone already did this itself and is unchanged. If it
+  fails, the result says not to leave the copy plugged in at a reboot.
+- **Only the partitions are copied.** On a normal Raspberry Pi OS card (MBR),
+  Backup and Clone copy up to the end of the last partition instead of the
+  whole disk. Backups are smaller and faster, and Clone works onto a
+  destination that is a little smaller than the source, as long as the
+  partitions fit. GPT disks are still copied whole. The preview and the
+  start message show how much is copied.
+- **Expand to fill drive on Clone** (on by default), as on Restore. It now
+  runs before New disk IDs, so a shrunk backup's full root filesystem
+  can still get its new `fstab`.
+- **Low priority copies.** Every Format, Backup, Clone and Restore runs at
+  low disk and CPU priority (`Nice=10`, best-effort I/O priority 7), so
+  the node stays responsive during a long copy.
+- **The schedule finds its drive by filesystem UUID**, not by `/dev/sdX`,
+  so another drive that takes the same name is never written to. A
+  schedule saved before 2.70.0 is matched by name once, then remembered
+  by UUID. Saving a schedule for a drive with no filesystem is refused.
+- **Eject** button on every attached drive: unmounts, flushes and powers
+  the drive off so it is safe to unplug. Refused during a disk job.
+- Partition table type, filesystem type and partition IDs are now read
+  with `blkid -p` instead of the udev cache, which can lag right after a
+  disk is written.
 
 ## 2.69.0 (2026-10-21)
 

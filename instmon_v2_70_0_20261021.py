@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.69.0"
+VERSION ="2.70.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -315,7 +315,7 @@ def _get_boot_disk():
 def _lsblk_json():
     try:
         result = subprocess.run(
-            ["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,MODEL,TRAN,TYPE,RM,MOUNTPOINT,FSTYPE"],
+            ["lsblk", "-J", "-b", "-o", "NAME,PATH,SIZE,MODEL,TRAN,TYPE,RM,MOUNTPOINT,FSTYPE,UUID"],
             capture_output=True, text=True, timeout=5,
         )
         if result.returncode != 0:
@@ -371,6 +371,7 @@ def _list_usb_drives():
             "mounted_at": _disk_mountpoints(node),
             "read_only": _disk_read_only(name),
             "is_boot_disk": bool(boot_disk) and name == boot_disk,
+            "fs_uuids": [c.get("uuid") for c in (node.get("children") or [node]) if c.get("uuid")],
         })
     return drives
 
@@ -613,9 +614,9 @@ def _diskimg_hasher_shell(algo, in_path_expr, out_path):
             + f" < {in_path_expr} > {shlex.quote(out_path)}")
 
 def _diskimg_hashed_stream_command(mode, src, dst, unit_name, hash_path, algo,
-                                   best_effort=False, direct_io=False, rate_mb=None):
+                                   best_effort=False, direct_io=False, rate_mb=None, count_bytes=None):
     q = shlex.quote
-    in_conv = " conv=sync,noerror" if best_effort else ""
+    in_conv = (" conv=sync,noerror" if best_effort else "") + (f" count={int(count_bytes)} iflag=count_bytes" if count_bytes else "")
     out_flags = "iflag=fullblock conv=fsync status=none" + (" oflag=direct" if direct_io else "")
     openssl = " ".join(q(a) for a in ["openssl", "enc"] + _OPENSSL_ENC_ARGS + ["-pass", f"env:{_DISKIMG_PASS_ENV_VAR}"])
     stages = [f"dd if={q(src)} bs=4M status=progress{in_conv}"]
@@ -738,19 +739,225 @@ def _diskimg_remove_sidecar(image_path):
     except OSError:
         pass
 
+def _diskimg_settle(dest):
+    try:
+        subprocess.run(["partprobe", dest], capture_output=True, timeout=20)
+        if shutil.which("udevadm"):
+            subprocess.run(["udevadm", "settle", "--timeout=10"], capture_output=True, timeout=15)
+    except (subprocess.TimeoutExpired, OSError):
+        pass
+    time.sleep(0.5)
+
+_MIB = 1024 * 1024
+
+def _blkid_probe(dev):
+    try:
+        res = subprocess.run(["blkid", "-p", "-o", "export", dev], capture_output=True, text=True, timeout=10)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return {}
+    out = {}
+    for line in (res.stdout or "").splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
+
+def _diskimg_pttype(dev, lsblk_value=None):
+    return (lsblk_value or _blkid_probe(dev).get("PTTYPE") or "").lower()
+
+def _diskimg_copy_extent(disk_path, disk_size):
+    try:
+        out = subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,START,SIZE,TYPE,PTTYPE", disk_path],
+                             capture_output=True, text=True, timeout=10, check=True)
+        tree = json.loads(out.stdout)
+        disk = (tree.get("blockdevices") or [None])[0]
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError, IndexError):
+        return disk_size, None
+    if not disk or _diskimg_pttype(disk_path, disk.get("pttype")) != "dos":
+        return disk_size, None
+    ends = []
+    for c in disk.get("children") or []:
+        try:
+            if c.get("type") == "part" and c.get("start") is not None:
+                ends.append(int(c["start"]) * 512 + int(c.get("size") or 0))
+        except (TypeError, ValueError):
+            return disk_size, None
+    if not ends:
+        return disk_size, None
+    end = min(disk_size, -(-max(ends) // _MIB) * _MIB)
+    if end <= 0 or end >= disk_size:
+        return disk_size, None
+    return end, f"Only the partitions are copied -- {fmt_bytes(end)} of the {fmt_bytes(disk_size)} disk."
+
+def _diskimg_low_priority(cmd, detached):
+    if detached and cmd[:1] == ["systemd-run"]:
+        return cmd[:1] + ["-p", "Nice=10", "-p", "IOSchedulingClass=best-effort", "-p", "IOSchedulingPriority=7"] + cmd[1:]
+    prefix = []
+    if shutil.which("nice"):
+        prefix += ["nice", "-n", "10"]
+    if shutil.which("ionice"):
+        prefix += ["ionice", "-c2", "-n7"]
+    return prefix + cmd
+
+def _diskimg_partition_ids(dest):
+    out = subprocess.run(["lsblk", "-J", "-o", "NAME,PATH,TYPE", dest],
+                         capture_output=True, text=True, timeout=10, check=True)
+    disk = (json.loads(out.stdout).get("blockdevices") or [None])[0] or {}
+    parts = []
+    for c in disk.get("children") or []:
+        if c.get("type") != "part" or not c.get("path"):
+            continue
+        probe = _blkid_probe(c["path"])
+        parts.append((c["path"], (probe.get("TYPE") or "").lower(), (probe.get("PART_ENTRY_UUID") or "").lower()))
+    return _diskimg_pttype(dest), parts
+
+_RELABEL_FILES = ("cmdline.txt", "etc/fstab")
+
+def _diskimg_new_disk_ids(dest):
+    for tool in ("lsblk", "mount", "umount", "partprobe"):
+        if not shutil.which(tool):
+            return False, f"'{tool}' is not installed"
+    _diskimg_settle(dest)
+    try:
+        pttype, before = _diskimg_partition_ids(dest)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        return False, f"could not read the partition table: {exc}"
+    if pttype == "dos":
+        if not shutil.which("sfdisk"):
+            return False, "sfdisk (package fdisk) is not installed"
+        new_id = secrets.randbits(32) or 1
+        res = subprocess.run(["sfdisk", "--disk-id", dest, f"0x{new_id:08x}"], capture_output=True, text=True, timeout=30)
+        label = f"disk ID 0x{new_id:08x}"
+    elif pttype == "gpt":
+        if not shutil.which("sgdisk"):
+            return False, "the drive uses GPT and sgdisk (package gdisk) is not installed"
+        res = subprocess.run(["sgdisk", "-G", dest], capture_output=True, text=True, timeout=30)
+        label = "new GPT disk and partition GUIDs"
+    else:
+        return False, "the drive has no partition table"
+    if res.returncode != 0:
+        return False, f"could not change the disk ID: {(res.stderr or res.stdout).strip()}"
+    _diskimg_settle(dest)
+    try:
+        _pt, after = _diskimg_partition_ids(dest)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        return False, f"the disk ID was changed, but the new partition IDs could not be read ({exc}) -- check cmdline.txt and fstab on the copy before booting it"
+    old_by_path = {path: pu for path, _fs, pu in before}
+    mapping = {old_by_path[path]: pu for path, _fs, pu in after
+               if old_by_path.get(path) and pu and old_by_path[path] != pu}
+    if not mapping:
+        return False, "the partition IDs did not change"
+    edited, problems = [], []
+    os.makedirs(_DISKIMG_MOUNT_ROOT, exist_ok=True)
+    for path, fstype, _pu in after:
+        if fstype not in ("vfat", "ext2", "ext3", "ext4"):
+            continue
+        mp = os.path.join(_DISKIMG_MOUNT_ROOT, "relabel-" + os.path.basename(path))
+        try:
+            os.makedirs(mp, exist_ok=True)
+            m = subprocess.run(["mount", "-t", fstype, "-o", "nosuid,nodev", path, mp],
+                               capture_output=True, text=True, timeout=30)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            problems.append(f"{path}: {exc}")
+            continue
+        if m.returncode != 0:
+            problems.append(f"{path}: {(m.stderr or m.stdout).strip()}")
+            try:
+                os.rmdir(mp)
+            except OSError:
+                pass
+            continue
+        try:
+            for rel in _RELABEL_FILES:
+                target = os.path.join(mp, rel)
+                if os.path.islink(target) or not os.path.isfile(target):
+                    continue
+                try:
+                    with open(target, "r", errors="surrogateescape") as fh:
+                        text = fh.read()
+                    new_text = text
+                    for old, new in mapping.items():
+                        new_text = re.sub(re.escape(old), new, new_text, flags=re.IGNORECASE)
+                    if new_text == text:
+                        continue
+                    tmp = target + ".instmon-tmp"
+                    try:
+                        with open(tmp, "w", errors="surrogateescape") as fh:
+                            fh.write(new_text)
+                            fh.flush()
+                            os.fsync(fh.fileno())
+                        os.replace(tmp, target)
+                    except OSError:
+                        try:
+                            os.remove(tmp)
+                        except OSError:
+                            pass
+                        if len(new_text.encode("utf-8", "surrogateescape")) != len(text.encode("utf-8", "surrogateescape")):
+                            raise
+                        with open(target, "r+", errors="surrogateescape") as fh:
+                            fh.write(new_text)
+                            fh.flush()
+                            os.fsync(fh.fileno())
+                    edited.append(f"{rel} on {os.path.basename(path)}")
+                except OSError as exc:
+                    problems.append(f"{rel} on {os.path.basename(path)}: {exc}")
+        finally:
+            subprocess.run(["sync"], capture_output=True, timeout=60)
+            subprocess.run(["umount", mp], capture_output=True, timeout=30)
+            try:
+                os.rmdir(mp)
+            except OSError:
+                pass
+    message = f"Gave the copy {label}"
+    message += f" and updated {', '.join(edited)}." if edited else " (no cmdline.txt or fstab on it referred to the old IDs)."
+    if problems:
+        return False, message + " Problems: " + "; ".join(problems) + " -- check the copy before booting it."
+    return True, message
+
+def _diskimg_unmount_all(mountpoints):
+    errors = []
+    for mp in sorted(mountpoints, key=len, reverse=True):
+        try:
+            result = subprocess.run(["umount", mp], capture_output=True, text=True, timeout=20)
+            if result.returncode != 0:
+                errors.append(f"{mp}: {(result.stderr or result.stdout).strip()}")
+                continue
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            errors.append(f"{mp}: {exc}")
+            continue
+        if os.path.dirname(os.path.normpath(mp)) == _DISKIMG_MOUNT_ROOT:
+            try:
+                os.rmdir(mp)
+            except OSError:
+                pass
+    return errors
+
+def _diskimg_power_off(drive):
+    name = drive.get("name") or ""
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        return False, "bad drive name"
+    if shutil.which("udisksctl"):
+        try:
+            r = subprocess.run(["udisksctl", "power-off", "-b", drive["path"], "--no-user-interaction"],
+                               capture_output=True, text=True, timeout=30)
+            if r.returncode == 0:
+                return True, "powered off"
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+    try:
+        with open(f"/sys/block/{name}/device/delete", "w") as fh:
+            fh.write("1\n")
+        return True, "removed from the system"
+    except OSError as exc:
+        return False, str(exc)
+
 def _diskimg_expand_to_fill(dest):
     for tool in ("parted", "partprobe", "lsblk", "blkid", "e2fsck", "resize2fs"):
         if not shutil.which(tool):
             return False, f"'{tool}' is not installed"
 
     def settle():
-        try:
-            subprocess.run(["partprobe", dest], capture_output=True, timeout=20)
-            if shutil.which("udevadm"):
-                subprocess.run(["udevadm", "settle", "--timeout=10"], capture_output=True, timeout=15)
-        except (subprocess.TimeoutExpired, OSError):
-            pass
-        time.sleep(0.5)
+        _diskimg_settle(dest)
 
     settle()
     try:
@@ -772,7 +979,7 @@ def _diskimg_expand_to_fill(dest):
     if not m or not part_path:
         return False, "could not identify the last partition"
     number = int(m.group(1))
-    pttype = (disk.get("pttype") or "").lower()
+    pttype = _diskimg_pttype(dest, disk.get("pttype"))
     if pttype == "dos" and number > 4:
         return False, "the last partition is a logical partition, which isn't expanded here"
     try:
@@ -780,10 +987,9 @@ def _diskimg_expand_to_fill(dest):
         part_end = int(last["start"]) * 512 + int(last.get("size") or 0)
     except (TypeError, ValueError):
         return False, "could not read partition sizes"
-    if disk_size - part_end < 16 * 1024 * 1024:
+    if disk_size - part_end < 2 * _MIB:
         return True, "The last partition already fills the drive."
-    fstype = subprocess.run(["blkid", "-o", "value", "-s", "TYPE", part_path],
-                            capture_output=True, text=True, timeout=10).stdout.strip()
+    fstype = (_blkid_probe(part_path).get("TYPE") or "").lower()
     if fstype not in ("ext2", "ext3", "ext4"):
         return False, f"the last partition is '{fstype or 'unknown'}' -- only ext2/3/4 can be expanded here"
     if pttype == "gpt":
@@ -834,9 +1040,11 @@ def _diskimg_wipe_command(dst, size_bytes, unit_name, quick=False):
               "and will NOT survive an instmon restart", "warn")
     return dd_cmd, False
 
-def _diskimg_dd_command(src, dst, unit_name, best_effort=False, direct_io=False):
+def _diskimg_dd_command(src, dst, unit_name, best_effort=False, direct_io=False, count_bytes=None):
     conv = "fsync,sync,noerror" if best_effort else "fsync"
     dd_cmd = ["dd", f"if={src}", f"of={dst}", "bs=4M", "status=progress", f"conv={conv}"]
+    if count_bytes:
+        dd_cmd += [f"count={int(count_bytes)}", "iflag=count_bytes"]
     if direct_io:
         dd_cmd.append("oflag=direct")
     if shutil.which("systemd-run"):
@@ -868,8 +1076,8 @@ def _diskimg_pipeline_command(mode, src, dst, best_effort=False):
         )
     return ["bash", "-c", script]
 
-def _diskimg_throttled_dd_command(src, dst, rate_mb, unit_name, best_effort=False, direct_io=False):
-    in_conv = " conv=sync,noerror" if best_effort else ""
+def _diskimg_throttled_dd_command(src, dst, rate_mb, unit_name, best_effort=False, direct_io=False, count_bytes=None):
+    in_conv = (" conv=sync,noerror" if best_effort else "") + (f" count={int(count_bytes)} iflag=count_bytes" if count_bytes else "")
     out_flags = "status=none conv=fsync" + (" oflag=direct" if direct_io else "")
     script = (
         f"set -o pipefail; dd if={shlex.quote(src)} bs=4M status=progress{in_conv} | "
@@ -883,8 +1091,8 @@ _DISKIMG_MAPFILE_SUFFIX = ".ddrescue.map"
 def _diskimg_ddrescue_mapfile_path(job_id):
     return os.path.join(CONFIG_DIR, f"instmon_diskimg_{job_id}{_DISKIMG_MAPFILE_SUFFIX}")
 
-def _diskimg_ddrescue_command(src, dst, mapfile_path, unit_name):
-    ddrescue_cmd = ["ddrescue", "-d", "-b", "4MiB", src, dst, mapfile_path]
+def _diskimg_ddrescue_command(src, dst, mapfile_path, unit_name, count_bytes=None):
+    ddrescue_cmd = ["ddrescue", "-d", "-b", "4MiB"] + ([f"--size={int(count_bytes)}"] if count_bytes else []) + [src, dst, mapfile_path]
     if shutil.which("systemd-run"):
         return (
             ["systemd-run", "--quiet", "--pipe", "--collect", f"--unit={unit_name}"] + ddrescue_cmd,
@@ -1054,15 +1262,19 @@ def _diskimg_build_command_preview_base(kind, params):
             fname = f"{hostname}_{stamp}" + (f"_{label}" if label else "") + ext
             dest_display = os.path.join(f"<mount of {match['path']}>", _DISKIMG_BACKUP_DIRNAME, fname)
             algo = params.get("verify_algo") if params.get("verify_algo") in _HASH_HEX_LEN else "sha256"
+            full = _disk_size_bytes(boot_disk) or 0
+            extent, extent_note = _diskimg_copy_extent(src_path, full) if full else (0, None)
+            count = extent if (extent and extent < full) else None
             if backend != "ddrescue":
                 cmd, _detached = _diskimg_hashed_stream_command(
                     "encrypt" if encrypt else "plain", src_path, dest_display + _DISKIMG_PART_SUFFIX,
                     "instmon-diskimg-<job>", os.path.join(_DISKIMG_RUN_DIR, "instmon-diskimg-<job>.hash"), algo,
                     best_effort=best_effort, rate_mb=throttle_rate_mb if (throttle_rate_mb and not encrypt) else None,
+                    count_bytes=count,
                 )
             elif backend == "ddrescue":
                 cmd, _detached = _diskimg_ddrescue_command(
-                    src_path, dest_display, "<job-id>.ddrescue.map", "instmon-diskimg-<job>",
+                    src_path, dest_display, "<job-id>.ddrescue.map", "instmon-diskimg-<job>", count_bytes=count,
                 )
             elif throttle_rate_mb:
                 cmd, _detached = _diskimg_throttled_dd_command(
@@ -1072,7 +1284,8 @@ def _diskimg_build_command_preview_base(kind, params):
                 cmd, _detached = _diskimg_dd_command(src_path, dest_display, "instmon-diskimg-<job>", best_effort=best_effort)
             return (
                 _diskimg_command_display(cmd),
-                "Exact filename/timestamp and mount path are finalized when the job actually starts.",
+                ((extent_note + " ") if extent_note else "")
+                + "Exact filename/timestamp and mount path are finalized when the job actually starts.",
             )
 
         if kind == "clone":
@@ -1102,27 +1315,31 @@ def _diskimg_build_command_preview_base(kind, params):
                 )
                 note = None if _rpiclone_status()["installed"] else "rpi-clone is not installed -- press Install rpi-clone first."
                 return _diskimg_command_display(cmd), note
+            full = _disk_size_bytes(boot_disk) or 0
+            extent, extent_note = _diskimg_copy_extent(src_path, full) if full else (0, None)
+            count = extent if (extent and extent < full) else None
             if backend == "ddrescue":
                 cmd, _detached = _diskimg_ddrescue_command(
-                    src_path, match["path"], "<job-id>.ddrescue.map", "instmon-diskimg-<job>",
+                    src_path, match["path"], "<job-id>.ddrescue.map", "instmon-diskimg-<job>", count_bytes=count,
                 )
             elif params.get("verify"):
                 algo = params.get("verify_algo") if params.get("verify_algo") in _HASH_HEX_LEN else "sha256"
                 cmd, _detached = _diskimg_hashed_stream_command(
                     "plain", src_path, match["path"], "instmon-diskimg-<job>",
                     os.path.join(_DISKIMG_RUN_DIR, "instmon-diskimg-<job>.hash"), algo,
-                    best_effort=best_effort, direct_io=direct_io, rate_mb=throttle_rate_mb,
+                    best_effort=best_effort, direct_io=direct_io, rate_mb=throttle_rate_mb, count_bytes=count,
                 )
             elif throttle_rate_mb:
                 cmd, _detached = _diskimg_throttled_dd_command(
                     src_path, match["path"], throttle_rate_mb, "instmon-diskimg-<job>",
-                    best_effort=best_effort, direct_io=direct_io,
+                    best_effort=best_effort, direct_io=direct_io, count_bytes=count,
                 )
             else:
                 cmd, _detached = _diskimg_dd_command(
                     src_path, match["path"], "instmon-diskimg-<job>", best_effort=best_effort, direct_io=direct_io,
+                    count_bytes=count,
                 )
-            return _diskimg_command_display(cmd), None
+            return _diskimg_command_display(cmd), extent_note
 
         if kind == "format":
             dest_device = params.get("dest_device")
@@ -1350,6 +1567,7 @@ def _diskimg_reader_thread_body(job_id):
         hash_algo = job.get("hash_algo") or verify_algo
         expect_hash = job.get("expect_hash")
         expand_requested = bool(job.get("expand_requested"))
+        new_ids_requested = bool(job.get("new_ids_requested"))
 
     stream_hash = _diskimg_read_hash_file(hash_path, hash_algo) if (hash_path and copy_ok) else None
     _diskimg_hash_cleanup(hash_path)
@@ -1475,7 +1693,7 @@ def _diskimg_reader_thread_body(job_id):
                 final_message = f"Completed successfully. {fmt_message}"
             _diskimg_console_append(job_id, fmt_message)
 
-    if final_state == "done" and kind == "restore" and expand_requested:
+    if final_state == "done" and kind in ("clone", "restore") and expand_requested:
         with _diskimg_job_lock:
             if _diskimg_job is None or _diskimg_job["id"] != job_id:
                 return
@@ -1484,6 +1702,17 @@ def _diskimg_reader_thread_body(job_id):
         exp_ok, exp_message = _diskimg_expand_to_fill(dest)
         _diskimg_console_append(job_id, exp_message if exp_ok else f"Not expanded: {exp_message}")
         final_message += f" {exp_message}" if exp_ok else f" Not expanded: {exp_message}."
+
+    if final_state == "done" and kind in ("clone", "restore") and new_ids_requested:
+        with _diskimg_job_lock:
+            if _diskimg_job is None or _diskimg_job["id"] != job_id:
+                return
+            _diskimg_job["phase"] = "relabeling"
+        _diskimg_console_append(job_id, "Giving the copy new disk IDs so it can't be confused with this Pi's own disk...")
+        ids_ok, ids_message = _diskimg_new_disk_ids(dest)
+        _diskimg_console_append(job_id, ids_message if ids_ok else f"New disk IDs: {ids_message}")
+        final_message += f" {ids_message}" if ids_ok else (
+            f" New disk IDs failed: {ids_message}. Don't leave the copy plugged in when this Pi reboots.")
 
     sidecar = None
     if final_state == "done" and kind == "backup":
@@ -1590,6 +1819,7 @@ def _diskimg_start_job(
     verify_algo="sha256", backend="dd", throttle_rate_mb=None,
     freeze_requested=False, quick_requested=False, rpiclone_args=None,
     hash_algo=None, expect_hash=None, expand_requested=False,
+    copy_bytes=None, new_ids_requested=False,
 ):
     global _diskimg_job
 
@@ -1613,7 +1843,9 @@ def _diskimg_start_job(
     )
     progress_format = backend if backend in ("ddrescue", "rpiclone") else "dd"
     hash_algo = hash_algo if hash_algo in _HASH_HEX_LEN else verify_algo
-    expand_requested = bool(expand_requested) and kind == "restore"
+    expand_requested = bool(expand_requested) and (kind == "restore" or (kind == "clone" and backend != "rpiclone"))
+    new_ids_requested = bool(new_ids_requested) and (kind == "restore" or (kind == "clone" and backend != "rpiclone"))
+    copy_bytes = int(copy_bytes) if (copy_bytes and kind in ("backup", "clone") and backend != "rpiclone") else None
     use_stream_hash = (
         (kind == "backup" and backend == "dd")
         or (kind == "clone" and backend == "dd" and bool(verify_requested))
@@ -1697,7 +1929,7 @@ def _diskimg_start_job(
             cmd, detached = _diskimg_hashed_stream_command(
                 stream_mode, src_path, dst_path, unit_name, hash_path, hash_algo,
                 best_effort=best_effort_requested, direct_io=direct_io_requested,
-                rate_mb=throttle_rate_mb if throttle_requested else None,
+                rate_mb=throttle_rate_mb if throttle_requested else None, count_bytes=copy_bytes,
             )
         elif encrypt_passphrase:
             cmd, detached = _diskimg_pipeline_command("encrypt", src_path, dst_path, best_effort=best_effort_requested), False
@@ -1707,19 +1939,20 @@ def _diskimg_start_job(
             cmd, detached = _diskimg_rpiclone_command(dst_path, unit_name, rpiclone_args)
         elif backend == "ddrescue":
             mapfile_path = _diskimg_ddrescue_mapfile_path(job_id)
-            cmd, detached = _diskimg_ddrescue_command(src_path, dst_path, mapfile_path, unit_name)
+            cmd, detached = _diskimg_ddrescue_command(src_path, dst_path, mapfile_path, unit_name, count_bytes=copy_bytes)
         elif throttle_requested:
             cmd, detached = _diskimg_throttled_dd_command(
                 src_path, dst_path, throttle_rate_mb, unit_name,
-                best_effort=best_effort_requested, direct_io=direct_io_requested,
+                best_effort=best_effort_requested, direct_io=direct_io_requested, count_bytes=copy_bytes,
             )
             log_event(f"Disk-image {kind}: bandwidth-throttled copy runs undetached (pv pipeline) -- "
                       "will NOT survive an instmon restart", "warn")
         else:
             cmd, detached = _diskimg_dd_command(
                 src_path, dst_path, unit_name,
-                best_effort=best_effort_requested, direct_io=direct_io_requested,
+                best_effort=best_effort_requested, direct_io=direct_io_requested, count_bytes=copy_bytes,
             )
+        cmd = _diskimg_low_priority(cmd, detached)
         if passphrase:
             env = dict(os.environ)
             env[_DISKIMG_PASS_ENV_VAR] = passphrase
@@ -1774,6 +2007,7 @@ def _diskimg_start_job(
                 "hash_algo": hash_algo,
                 "expect_hash": expect_hash,
                 "expand_requested": expand_requested,
+                "new_ids_requested": new_ids_requested,
                 "console": quiesce_console + [
                     f"[{datetime.now().strftime('%H:%M:%S')}] Starting {kind}: {source_desc} -> {dest_desc}",
                     f"[{datetime.now().strftime('%H:%M:%S')}] $ {command_display}",
@@ -1813,7 +2047,9 @@ def _diskimg_cancel_job():
         if job.get("phase") == "formatting":
             return False, "The drive has been wiped and is now being partitioned and formatted -- this finishes on its own shortly and cannot be stopped mid-step."
         if job.get("phase") == "expanding":
-            return False, "The restore is complete and the drive is being expanded -- this finishes on its own shortly and can't be stopped mid-step."
+            return False, "The copy is complete and the drive is being expanded -- this finishes on its own shortly and can't be stopped mid-step."
+        if job.get("phase") == "relabeling":
+            return False, "The copy is complete and is getting new disk IDs -- this finishes on its own shortly and can't be stopped mid-step."
         job["cancelled"] = True
         proc, unit_name, phase = job["proc"], job["unit_name"], job.get("phase")
         cancel_kind = job.get("kind")
@@ -2117,6 +2353,7 @@ _DISKIMG_SCHEDULE_DEFAULTS = {
     "last_skip_at": None,
     "last_skip_message": None,
     "last_quiesce_restore_ok": None,
+    "dest_uuid": None,
 }
 
 def _diskimg_schedule_load():
@@ -2243,16 +2480,27 @@ def _diskimg_schedule_tick():
     src_path = f"/dev/{boot_disk}"
 
     dest_device = cfg.get("dest_device")
-    if not dest_device:
+    dest_uuid = cfg.get("dest_uuid")
+    if not dest_device and not dest_uuid:
         skip("No destination drive configured.")
         return
-    match = next(
-        (d for d in _list_usb_drives() if d["path"] == dest_device or d["name"] == dest_device),
-        None,
-    )
-    if match is None:
-        skip(f"Configured destination drive '{dest_device}' is not currently attached.")
-        return
+    drives = _list_usb_drives()
+    if dest_uuid:
+        match = next((d for d in drives if dest_uuid in (d.get("fs_uuids") or [])), None)
+        if match is None:
+            skip(f"The backup drive (filesystem {dest_uuid}, last seen as {dest_device or '?'}) is not currently attached.")
+            return
+        if match["path"] != dest_device:
+            cfg["dest_device"] = match["path"]
+            dest_device = match["path"]
+    else:
+        match = next((d for d in drives if d["path"] == dest_device or d["name"] == dest_device), None)
+        if match is None:
+            skip(f"Configured destination drive '{dest_device}' is not currently attached.")
+            return
+        if match.get("fs_uuids"):
+            cfg["dest_uuid"] = match["fs_uuids"][0]
+            log_event(f"Scheduled backup: remembering the backup drive by its filesystem UUID ({cfg['dest_uuid']}).", "info")
     if match["is_boot_disk"]:
         skip(f"Configured destination drive '{dest_device}' is this Pi's boot disk.")
         return
@@ -2264,8 +2512,9 @@ def _diskimg_schedule_tick():
     if not src_size:
         skip("Could not determine the boot disk's size.")
         return
-    if match["size"] < src_size:
-        skip(f"Configured destination drive '{dest_device}' is smaller than the boot disk.")
+    copy_size, _extent_note = _diskimg_copy_extent(src_path, src_size)
+    if match["size"] < copy_size:
+        skip(f"Configured destination drive '{dest_device}' is smaller than the boot disk's partitions.")
         return
 
     mountpoint, _we_mounted = _diskimg_ensure_mounted(match["name"])
@@ -2278,10 +2527,10 @@ def _diskimg_schedule_tick():
     except OSError as exc:
         skip(f"Could not check free space on {mountpoint}: {exc}")
         return
-    if free < src_size:
-        skip(f"Not enough free space on {match['path']} ({fmt_bytes(free)} free, need {fmt_bytes(src_size)}).")
+    if free < copy_size:
+        skip(f"Not enough free space on {match['path']} ({fmt_bytes(free)} free, need {fmt_bytes(copy_size)}).")
         return
-    fat_reason = _diskimg_fat_limit_reason(mountpoint, src_size, match["path"])
+    fat_reason = _diskimg_fat_limit_reason(mountpoint, copy_size, match["path"])
     if fat_reason:
         skip(fat_reason)
         return
@@ -2309,7 +2558,8 @@ def _diskimg_schedule_tick():
     subprocess.run(["sync"], capture_output=True, timeout=30)
     part_path = dest_path + _DISKIMG_PART_SUFFIX
     ok, result = _diskimg_start_job(
-        "backup", src_path, part_path, src_path, part_path, src_size,
+        "backup", src_path, part_path, src_path, part_path, copy_size,
+        copy_bytes=copy_size if copy_size < src_size else None,
         shrink_requested=bool(cfg.get("shrink")), verify_requested=bool(cfg.get("verify")),
         quiesce_requested=quiesce,
     )
@@ -6871,9 +7121,10 @@ function diskimgMountBtn(d) {
   const busy = !!(_diskimgCurrentJob && _diskimgCurrentJob.state === 'running');
   const dis = busy ? ' disabled title="A disk-image job is running."' : '';
   const mounted = d.mounted_at && d.mounted_at.length;
-  return mounted
+  return (mounted
     ? ` <button class="b-danger" data-action="diskimg_unmount" data-dest="${escHtml(d.path)}"${dis}>Unmount</button>`
-    : ` <button data-action="diskimg_mount" data-dest="${escHtml(d.path)}"${dis}>Mount</button>`;
+    : ` <button data-action="diskimg_mount" data-dest="${escHtml(d.path)}"${dis}>Mount</button>`)
+    + ` <button data-action="diskimg_eject" data-dest="${escHtml(d.path)}"${dis} title="Unmount, flush and power off the drive so it is safe to unplug.">Eject</button>`;
 }
 
 function renderRpicloneStatus(rc) {
@@ -6909,6 +7160,10 @@ function applyCloneBackend() {
   ['diskimg-clone-rpi-force', 'diskimg-clone-rpi-host'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = !rpi;
+  });
+  ['diskimg-clone-expand', 'diskimg-clone-new-ids'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.disabled = rpi;
   });
 }
 
@@ -7097,7 +7352,7 @@ const _DISKIMG_KIND_LABELS = {backup: 'Backup', clone: 'Clone', restore: 'Restor
 // Phases with no dd process to interrupt. Mirrors the refusals in
 // _diskimg_cancel_job(), so Stop is disabled exactly where the server
 // would say no.
-const _DISKIMG_UNSTOPPABLE_PHASES = ['quiescing', 'thawing', 'unquiescing', 'shrinking', 'formatting', 'expanding'];
+const _DISKIMG_UNSTOPPABLE_PHASES = ['quiescing', 'thawing', 'unquiescing', 'shrinking', 'formatting', 'expanding', 'relabeling'];
 
 // Live-progress tracking (v2.30.2). One sample per job poll, kept for
 // the job that is running: gives a rate over roughly the last minute
@@ -7173,6 +7428,7 @@ function diskimgBarState(job) {
   if (phase === 'shrinking') return {label: 'Shrinking image', pct: null, cls: 'indet'};
   if (phase === 'formatting') return {label: 'Partitioning and formatting', pct: null, cls: 'indet'};
   if (phase === 'expanding') return {label: 'Expanding to fill the drive', pct: null, cls: 'indet'};
+  if (phase === 'relabeling') return {label: 'Giving the copy new disk IDs', pct: null, cls: 'indet'};
   if (phase === 'checksumming') {
     if (!total) return {label: 'Saving checksum', pct: null, cls: 'indet'};
     return {label: 'Saving checksum', pct: diskimgPct(job.verify_bytes_done || 0, total), cls: ''};
@@ -8225,6 +8481,10 @@ _JS_ACTIONS = """function wireButtons() {
           const dest = btn.dataset.dest;
           if (!confirm(`Unmount ${dest}? Any open files on it will be closed.`)) { btn.disabled = false; return; }
           await postDiskimg('/api/diskimg/unmount', {confirm: true, dest_device: dest});
+        } else if (action === 'diskimg_eject') {
+          const dest = btn.dataset.dest;
+          if (!confirm(`Eject ${dest}? It is unmounted, flushed and powered off. Unplug and plug it back in to use it again.`)) { btn.disabled = false; return; }
+          await postDiskimg('/api/diskimg/eject', {confirm: true, dest_device: dest});
         } else if (action === 'diskimg_mount') {
           const dest = btn.dataset.dest;
           if (!confirm(`Mount every partition on ${dest} under /mnt/instmon-diskimg? Unmount it again before pulling it out, or before Clone/Restore/Format.`)) { btn.disabled = false; return; }
@@ -8279,7 +8539,10 @@ _JS_ACTIONS = """function wireButtons() {
           if (bestEffort && !confirm('Continue past read errors is ticked -- an unreadable source sector will be padded with nulls and the clone will still report success. Continue?')) { btn.disabled = false; return; }
           if (!confirm(`Really sure? ${dest} will become a byte-for-byte copy of this Pi's boot disk.`)) { btn.disabled = false; return; }
           }
+          const cExpandEl = document.getElementById('diskimg-clone-expand');
+          const cNewIdsEl = document.getElementById('diskimg-clone-new-ids');
           await postDiskimg('/api/diskimg/clone/start', {
+            expand: !!(cExpandEl && cExpandEl.checked), new_ids: !!(cNewIdsEl && cNewIdsEl.checked),
             confirm: true, dest_device: dest, verify: verify, verify_algo: verifyAlgo, quiesce: cQuiesce,
             freeze: freeze, best_effort: bestEffort, direct_io: directIo, backend: backend,
             throttle_rate_mb: throttleRateMb, rpi_force: rpiForce, rpi_hostname: rpiHost,
@@ -8309,6 +8572,7 @@ _JS_ACTIONS = """function wireButtons() {
           await postDiskimg('/api/diskimg/restore/start', {
             confirm: true, name: imgName, drive: imgDrive, dest_device: dest, verify: verify,
             verify_algo: verifyAlgo, passphrase: passphrase, throttle_rate_mb: throttleRateMb, expand: expand,
+            new_ids: !!((document.getElementById('diskimg-restore-new-ids') || {}).checked),
           });
           if (passphraseEl) passphraseEl.value = '';
         } else if (action === 'diskimg_schedule_save') {
@@ -9083,7 +9347,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       </select>
     </div>
     <div class="diskimg-quiesce-note diskimg-help">Pausing services reduces in-flight writes; it is not a filesystem snapshot. The image stays crash-consistent &mdash; ext4 replays its journal on the first boot of a restored card. sysmon keeps running so the node stays observable.</div>
-    <div class="diskimg-help small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy so the image is crash-consistent without needing a real snapshot; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default, since a failed backup is a clearer signal than a silently incomplete one. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Encrypt or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed to go easier on a small/shared-bus board -- runs as a shell pipeline that does not currently survive an instmon restart.</div>
+    <div class="diskimg-help small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy so the image is crash-consistent without needing a real snapshot; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default, since a failed backup is a clearer signal than a silently incomplete one. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Encrypt or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed to go easier on a small/shared-bus board -- runs as a shell pipeline that does not currently survive an instmon restart. On a normal Raspberry Pi OS card only the partitions are copied, not the empty space after them, so backups are smaller and faster. Copies run at low disk and CPU priority so the node stays responsive.</div>
   </div>
   <div class="diskimg-step"><span class="diskimg-step-n">4</span>Check</div>
   <div class="diskimg-step-body">
@@ -9174,6 +9438,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <div class="row" style="margin-top:.3rem">
       <label class="small muted" style="white-space:nowrap" title="Continue past a read error on the source instead of aborting the clone. Skipped sectors are padded with nulls."><input type="checkbox" id="diskimg-clone-best-effort"> Continue past read errors</label>
       <label class="small muted" style="white-space:nowrap" title="Bypass the page cache on the write side -- steadier write behavior on a small/shared-bus board."><input type="checkbox" id="diskimg-clone-direct-io"> Direct I/O</label>
+      <label class="small muted" style="white-space:nowrap" title="After the copy, grow the last partition and its ext4 filesystem to use the whole destination drive."><input type="checkbox" id="diskimg-clone-expand" checked> Expand to fill drive</label>
+      <label class="small muted" style="white-space:nowrap" title="Give the copy its own disk and partition IDs, and update its cmdline.txt and fstab to match, so this Pi can't boot from the copy by mistake if it is left plugged in."><input type="checkbox" id="diskimg-clone-new-ids" checked> New disk IDs</label>
       <select id="diskimg-clone-throttle" title="Bandwidth throttle">
         <option value="" selected>No throttle</option>
         <option value="5">5 MB/s</option>
@@ -9182,7 +9448,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       </select>
     </div>
     <div class="diskimg-quiesce-note diskimg-help">Pausing services reduces in-flight writes; it is not a filesystem snapshot. The image stays crash-consistent &mdash; ext4 replays its journal on the first boot of a restored card. sysmon keeps running so the node stays observable.</div>
-    <div class="diskimg-help small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default. Direct I/O: bypasses the page cache on the write side; offered here since Clone's destination is always a raw block device. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Continue past read errors, Direct I/O, or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed -- runs as a shell pipeline that does not currently survive an instmon restart.</div>
+    <div class="diskimg-help small muted">Freeze filesystem during copy: pauses writes to this Pi's own root filesystem for the duration of the copy; only offered alongside Pause node services. Continue past read errors: skips and nulls-out unreadable sectors on the source instead of aborting -- off by default. Direct I/O: bypasses the page cache on the write side; offered here since Clone's destination is always a raw block device. Resilient (ddrescue): retries bad sectors instead of skipping them; can't be combined with Continue past read errors, Direct I/O, or a bandwidth throttle. Bandwidth throttle: caps the copy's write speed -- runs as a shell pipeline that does not currently survive an instmon restart. Expand to fill drive: grows the copy's last partition to use the whole destination. New disk IDs: gives the copy its own disk and partition IDs and updates its cmdline.txt and fstab, so a copy left plugged in can't be booted by mistake. On a normal Raspberry Pi OS card only the partitions are copied, not the empty space after them, so a destination only needs to be as big as the partitions. Copies run at low disk and CPU priority so the node stays responsive.</div>
   </div>
   <div class="diskimg-step"><span class="diskimg-step-n">4</span>Check</div>
   <div class="diskimg-step-body">
@@ -9212,7 +9478,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
   <div class="diskimg-card-body">
   <div class="diskimg-help small muted">
-    Writes to a spare drive only -- never onto the disk this Pi is currently running from. Destination must be unmounted first. Backups marked "encrypted" below need their passphrase entered here; Verify after copy and Bandwidth throttle aren't supported for those. A backup with a saved checksum is checked as it is read; if it doesn't match, the restore is marked failed. Expand to fill drive grows the last partition afterward -- leave it on for a backup made with Shrink to fit, or the restored node keeps only its shrunk size.</div>
+    Writes to a spare drive only -- never onto the disk this Pi is currently running from. Destination must be unmounted first. Backups marked "encrypted" below need their passphrase entered here; Verify after copy and Bandwidth throttle aren't supported for those. A backup with a saved checksum is checked as it is read; if it doesn't match, the restore is marked failed. Expand to fill drive grows the last partition afterward -- leave it on for a backup made with Shrink to fit, or the restored node keeps only its shrunk size. New disk IDs gives the restored drive its own IDs and updates its cmdline.txt and fstab to match.</div>
   <div class="diskimg-step"><span class="diskimg-step-n">1</span>Pick backup</div>
   <div class="diskimg-step-body">
     <div class="row">
@@ -9236,6 +9502,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
         <option value="blake2b">blake2b (faster)</option>
       </select>
       <label class="small muted" style="white-space:nowrap" title="After the restore, grow the last partition and its ext4 filesystem to use the whole drive. Needed for a backup made with Shrink to fit."><input type="checkbox" id="diskimg-restore-expand" checked> Expand to fill drive</label>
+      <label class="small muted" style="white-space:nowrap" title="Give the restored drive its own disk and partition IDs, and update its cmdline.txt and fstab to match, so it can't be confused with this Pi's own disk."><input type="checkbox" id="diskimg-restore-new-ids" checked> New disk IDs</label>
       <select id="diskimg-restore-throttle" title="Bandwidth throttle (unencrypted backups only)">
         <option value="" selected>No throttle</option>
         <option value="5">5 MB/s</option>
@@ -9377,6 +9644,7 @@ _POST_ROUTES ={
 "/api/diskimg/job/reset":lambda self :self .handle_diskimg_job_reset (),
 "/api/diskimg/unmount":lambda self :self .handle_diskimg_unmount (),
 "/api/diskimg/mount":lambda self :self .handle_diskimg_mount (),
+"/api/diskimg/eject":lambda self :self .handle_diskimg_eject (),
 "/api/diskimg/format/start":lambda self :self .handle_diskimg_format_start (),
 "/api/diskimg/clone/start":lambda self :self .handle_diskimg_clone_start (),
 "/api/diskimg/restore/start":lambda self :self .handle_diskimg_restore_start (),
@@ -9551,6 +9819,47 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         cfg["next_run_at"] = next_run_at
         self._send_json(200, {"schedule": cfg})
 
+    def handle_diskimg_eject(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            self._error_json(400, "Malformed JSON body")
+            return
+        if not body.get("confirm"):
+            self._error_json(400, "Eject requires confirm:true in the request body")
+            return
+        dest_device = body.get("dest_device")
+        match = next(
+            (d for d in _list_usb_drives() if dest_device and (d["path"] == dest_device or d["name"] == dest_device)),
+            None,
+        )
+        if match is None:
+            self._error_json(400, f"'{dest_device}' is not a currently attached USB drive")
+            return
+        if match["is_boot_disk"]:
+            self._error_json(400, "Refusing to eject the boot disk -- that's this Pi's own root filesystem")
+            return
+        busy = _diskimg_busy_reason()
+        if busy:
+            self._error_json(409, busy)
+            return
+        try:
+            subprocess.run(["sync"], capture_output=True, timeout=120)
+        except (subprocess.TimeoutExpired, OSError) as exc:
+            log_event(f"Eject {match['path']}: sync failed: {exc}", "warn")
+        errors = _diskimg_unmount_all(match.get("mounted_at") or [])
+        if errors:
+            self._error_json(500, "Could not unmount, so the drive was not ejected: " + "; ".join(errors))
+            return
+        ok, how = _diskimg_power_off(match)
+        if not ok:
+            log_event(f"Eject {match['path']}: unmounted, but could not power it off: {how}", "warn")
+            self._send_json(200, {"message": f"Unmounted {match['path']} -- safe to remove (it could not be powered off: {how}).", "level": "warn"})
+            return
+        log_event(f"Ejected {match['path']} ({how})", "info")
+        self._send_json(200, {"message": f"Ejected {match['path']} -- safe to unplug.", "level": "ok"})
+
     def handle_diskimg_schedule_set(self):
         length = int(self.headers.get("Content-Length", 0))
         try:
@@ -9589,6 +9898,14 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         label = re.sub(r"[^A-Za-z0-9_-]+", "_", (body.get("label") or "").strip())[:40]
 
         cfg = _diskimg_schedule_load()
+        drive = next((d for d in _list_usb_drives() if dest_device and (d["path"] == dest_device or d["name"] == dest_device)), None)
+        if drive is not None:
+            if enabled and not drive.get("fs_uuids"):
+                self._error_json(400, f"{drive['path']} has no filesystem -- format it on the Full Format card first.")
+                return
+            cfg["dest_uuid"] = (drive.get("fs_uuids") or [None])[0]
+        elif dest_device != cfg.get("dest_device"):
+            cfg["dest_uuid"] = None
         cfg["enabled"] = enabled
         cfg["interval_hours"] = interval_hours
         cfg["dest_device"] = dest_device
@@ -9700,11 +10017,12 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not src_size:
             self._error_json(500, "Could not determine the boot disk's size")
             return
-        if match["size"] < src_size:
+        copy_size, _extent_note = _diskimg_copy_extent(src_path, src_size)
+        if match["size"] < copy_size:
             self._error_json(
                 400,
-                f"{match['path']} ({fmt_bytes(match['size'])}) is smaller than the boot disk "
-                f"({fmt_bytes(src_size)}) -- a raw image needs a destination at least as large",
+                f"{match['path']} ({fmt_bytes(match['size'])}) is smaller than the boot disk's partitions "
+                f"({fmt_bytes(copy_size)}) -- a raw image needs a destination at least as large",
             )
             return
 
@@ -9719,13 +10037,13 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         except OSError as exc:
             self._error_json(500, f"Could not check free space on {mountpoint}: {exc}")
             return
-        if free < src_size:
+        if free < copy_size:
             self._error_json(
                 400,
-                f"Not enough free space on {match['path']} ({fmt_bytes(free)} free, need {fmt_bytes(src_size)})",
+                f"Not enough free space on {match['path']} ({fmt_bytes(free)} free, need {fmt_bytes(copy_size)})",
             )
             return
-        fat_reason = _diskimg_fat_limit_reason(mountpoint, src_size, match["path"])
+        fat_reason = _diskimg_fat_limit_reason(mountpoint, copy_size, match["path"])
         if fat_reason:
             self._error_json(400, fat_reason)
             return
@@ -9746,7 +10064,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         subprocess.run(["sync"], capture_output=True, timeout=30)
         part_path = dest_path + _DISKIMG_PART_SUFFIX
         ok, result = _diskimg_start_job(
-            "backup", src_path, part_path, src_path, part_path, src_size,
+            "backup", src_path, part_path, src_path, part_path, copy_size,
+            copy_bytes=copy_size if copy_size < src_size else None,
             shrink_requested=shrink, verify_requested=verify,
             encrypt_passphrase=passphrase if encrypt else None,
             quiesce_requested=quiesce,
@@ -9861,21 +10180,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             subprocess.run(["sync"], capture_output=True, timeout=120)
         except (subprocess.TimeoutExpired, OSError) as exc:
             log_event(f"Unmount {match['path']}: sync failed: {exc}", "warn")
-        errors = []
-        for mp in sorted(mountpoints, key=len, reverse=True):
-            try:
-                result = subprocess.run(["umount", mp], capture_output=True, text=True, timeout=20)
-                if result.returncode != 0:
-                    errors.append(f"{mp}: {(result.stderr or result.stdout).strip()}")
-                    continue
-            except (subprocess.TimeoutExpired, OSError) as exc:
-                errors.append(f"{mp}: {exc}")
-                continue
-            if os.path.dirname(os.path.normpath(mp)) == _DISKIMG_MOUNT_ROOT:
-                try:
-                    os.rmdir(mp)
-                except OSError:
-                    pass
+        errors = _diskimg_unmount_all(mountpoints)
         if errors:
             log_event(f"Unmount {match['path']}: {'; '.join(errors)}", "warn")
             self._error_json(500, "Could not unmount: " + "; ".join(errors))
@@ -10087,19 +10392,24 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if not src_size:
             self._error_json(500, "Could not determine the boot disk's size")
             return
-        if backend != "rpiclone" and match["size"] < src_size:
+        copy_size, _extent_note = _diskimg_copy_extent(src_path, src_size)
+        if backend != "rpiclone" and match["size"] < copy_size:
             self._error_json(
                 400,
-                f"{match['path']} ({fmt_bytes(match['size'])}) is smaller than the boot disk "
-                f"({fmt_bytes(src_size)}) -- a raw clone needs a destination at least as large",
+                f"{match['path']} ({fmt_bytes(match['size'])}) is smaller than the boot disk's partitions "
+                f"({fmt_bytes(copy_size)}) -- a raw clone needs a destination at least as large",
             )
             return
+        expand = bool(body.get("expand")) and backend != "rpiclone"
+        new_ids = bool(body.get("new_ids")) and backend != "rpiclone"
 
         quiesce = bool(body.get("quiesce"))
         subprocess.run(["sync"], capture_output=True, timeout=30)
         ok, result = _diskimg_start_job(
             "clone", src_path, match["path"], src_path, match["path"],
-            0 if backend == "rpiclone" else src_size,
+            0 if backend == "rpiclone" else copy_size,
+            copy_bytes=copy_size if copy_size < src_size else None,
+            expand_requested=expand, new_ids_requested=new_ids,
             verify_requested=verify, quiesce_requested=quiesce,
             best_effort_requested=best_effort, direct_io_requested=direct_io,
             backend=backend, throttle_rate_mb=throttle_rate_mb,
@@ -10120,6 +10430,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 + (" Using direct I/O." if (direct_io and backend != "ddrescue") else "")
                 + (" Using File sync (rpi-clone): no percentage is shown, watch the console." if backend == "rpiclone" else "")
                 + (f" Throttled to {throttle_rate_mb:g} MB/s." if throttle_rate_mb else "")
+                + (f" Copying {fmt_bytes(copy_size)} (the partitions) of the {fmt_bytes(src_size)} disk." if (backend != "rpiclone" and copy_size < src_size) else "")
+                + (" The copy then gets new disk IDs." if new_ids else "")
+                + (" Its last partition is then expanded to fill the drive." if expand else "")
             ),
             "level": "ok",
             "job_id": result,
@@ -10182,6 +10495,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                                    f"{fmt_bytes(sidecar['size'])} -- the backup is damaged or incomplete."))
             return
         expand = bool(body.get("expand"))
+        new_ids = bool(body.get("new_ids"))
 
         boot_disk = _get_boot_disk()
         if not boot_disk:
@@ -10227,7 +10541,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             throttle_rate_mb=throttle_rate_mb, verify_algo=verify_algo,
             hash_algo=sidecar["algo"] if sidecar else verify_algo,
             expect_hash=sidecar["hash"] if sidecar else None,
-            expand_requested=expand,
+            expand_requested=expand, new_ids_requested=new_ids,
         )
         passphrase = None
         if not ok:
