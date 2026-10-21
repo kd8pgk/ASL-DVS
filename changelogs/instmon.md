@@ -1,6 +1,37 @@
 # instmon changelog
 
-Current file: `instmon_v2_68_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_69_0_20261021.py`. Newest entries first.
+
+## 2.69.0 (2026-10-21)
+
+Disk Image & Clone integrity.
+
+- **Every backup saves a checksum.** A checksum is taken as the backup is
+  copied, and saved next to it as `<backup>.json` with its size, source,
+  host and date. If the backup was shrunk, or used the resilient (ddrescue)
+  backend, the finished file is read back to take the checksum instead
+  (shown as "Saving checksum"; Stop discards the backup). Existing Backups
+  shows "checksum saved" or "no checksum". Delete and the schedule's
+  clean-up remove the `.json` too.
+- **Restore checks the backup.** A backup with a saved checksum is checked
+  as it is read. If it doesn't match, the restore is marked failed and says
+  not to use the drive. A backup whose size doesn't match its checksum file
+  is refused before anything is written. Encrypted backups are checked too.
+- **Verify after copy works on a running node.** It used to re-read the
+  live boot disk after the copy, so anything written in the meantime gave a
+  false mismatch, and the destination was often read back from memory
+  instead of the drive. Now the checksum is taken during the copy and only
+  the destination is read back, straight from the drive. The resilient
+  (ddrescue) backend still compares both sides, and a mismatch there says
+  it may be a false alarm unless the node was paused and frozen.
+- **Expand to fill drive on Restore** (on by default). After the restore,
+  the last partition and its ext2/3/4 filesystem are grown to use the whole
+  drive, so a backup made with Shrink to fit doesn't leave the node with
+  no free space. GPT drives need `sgdisk`. A logical or non-ext last
+  partition is left as it is, and the result says why.
+- Encrypted backups are now synced to disk like the others.
+- The command preview shows the checksum step, and updates when Verify or
+  its hash is changed.
 
 ## 2.68.0 (2026-10-21)
 

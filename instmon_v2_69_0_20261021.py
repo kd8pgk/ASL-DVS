@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.68.0"
+VERSION ="2.69.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -583,7 +583,232 @@ def _diskimg_console_append(job_id, text):
 def _diskimg_command_display(cmd):
     if len(cmd) == 3 and cmd[0] == "bash" and cmd[1] == "-c":
         return cmd[2]
+    if len(cmd) > 3 and cmd[-3] == "bash" and cmd[-2] == "-c":
+        return " ".join(shlex.quote(a) for a in cmd[:-3]) + " bash -c:\n" + cmd[-1]
     return " ".join(shlex.quote(a) for a in cmd)
+
+_DISKIMG_RUN_DIR = "/run" if os.path.isdir("/run") else tempfile.gettempdir()
+_HASH_TOOLS = {"sha256": "sha256sum", "blake2b": "b2sum"}
+_HASH_HEX_LEN = {"sha256": 64, "blake2b": 128}
+
+def _diskimg_hash_path(job_id):
+    return os.path.join(_DISKIMG_RUN_DIR, f"instmon-diskimg-{job_id}.hash")
+
+def _diskimg_hash_cleanup(hash_path):
+    if not hash_path:
+        return
+    for suffix in ("", ".tmp", ".fifo"):
+        try:
+            os.remove(hash_path + suffix)
+        except OSError:
+            pass
+
+def _diskimg_hasher_shell(algo, in_path_expr, out_path):
+    tool = _HASH_TOOLS.get(algo)
+    if tool and shutil.which(tool):
+        return f"{tool} < {in_path_expr} | cut -d' ' -f1 > {shlex.quote(out_path)}"
+    py = ("import hashlib,sys;h=hashlib.new(sys.argv[1]);"
+          "[h.update(b) for b in iter(lambda: sys.stdin.buffer.read(4194304), b'')];print(h.hexdigest())")
+    return (" ".join(shlex.quote(a) for a in [sys.executable or "python3", "-c", py, algo])
+            + f" < {in_path_expr} > {shlex.quote(out_path)}")
+
+def _diskimg_hashed_stream_command(mode, src, dst, unit_name, hash_path, algo,
+                                   best_effort=False, direct_io=False, rate_mb=None):
+    q = shlex.quote
+    in_conv = " conv=sync,noerror" if best_effort else ""
+    out_flags = "iflag=fullblock conv=fsync status=none" + (" oflag=direct" if direct_io else "")
+    openssl = " ".join(q(a) for a in ["openssl", "enc"] + _OPENSSL_ENC_ARGS + ["-pass", f"env:{_DISKIMG_PASS_ENV_VAR}"])
+    stages = [f"dd if={q(src)} bs=4M status=progress{in_conv}"]
+    if rate_mb:
+        stages.append(f"pv -q -L {int(rate_mb)}m")
+    if mode == "encrypt":
+        stages.append(openssl + " -e")
+    stages.append('tee "$fifo"')
+    if mode == "decrypt":
+        stages.append(openssl + " -d")
+    stages.append(f"dd of={q(dst)} bs=4M {out_flags}")
+    tmp = hash_path + ".tmp"
+    script = (
+        "set -o pipefail\n"
+        f"fifo={q(hash_path + '.fifo')}\n"
+        'rm -f "$fifo"; mkfifo -m 600 "$fifo" || exit 1\n'
+        "trap 'rm -f \"$fifo\"' EXIT\n"
+        f'{_diskimg_hasher_shell(algo, chr(34) + "$fifo" + chr(34), tmp)} &\n'
+        "hp=$!\n"
+        + " | ".join(stages) + "\n"
+        "rc=$?\n"
+        'wait "$hp"; hrc=$?\n'
+        'if [ "$rc" -eq 0 ] && [ "$hrc" -ne 0 ]; then echo "checksum process failed (exit $hrc)" >&2; rc=1; fi\n'
+        f'if [ "$rc" -eq 0 ]; then mv -f {q(tmp)} {q(hash_path)}; else rm -f {q(tmp)}; fi\n'
+        'exit "$rc"\n'
+    )
+    cmd = ["bash", "-c", script]
+    if mode in ("encrypt", "decrypt") or not shutil.which("systemd-run"):
+        return cmd, False
+    return ["systemd-run", "--quiet", "--pipe", "--collect", f"--unit={unit_name}"] + cmd, True
+
+def _diskimg_read_hash_file(path, algo):
+    try:
+        with open(path, "r", errors="replace") as fh:
+            words = fh.read(4096).split()
+    except OSError:
+        return None
+    want = _HASH_HEX_LEN.get(algo)
+    if words and want and re.fullmatch(r"[0-9a-f]{%d}" % want, words[0]):
+        return words[0]
+    return None
+
+def _diskimg_drop_cache(fileobj):
+    try:
+        os.fsync(fileobj.fileno())
+    except OSError:
+        pass
+    try:
+        os.posix_fadvise(fileobj.fileno(), 0, 0, os.POSIX_FADV_DONTNEED)
+    except (AttributeError, OSError):
+        pass
+
+def _diskimg_hash_readback(job_id, path, nbytes, algo):
+    hasher = _VERIFY_HASHERS.get(algo, hashlib.sha256)()
+    try:
+        with open(path, "rb") as fh:
+            _diskimg_drop_cache(fh)
+            remaining = nbytes
+            while remaining > 0:
+                with _diskimg_job_lock:
+                    if _diskimg_job is None or _diskimg_job["id"] != job_id:
+                        return "cancelled", "Job no longer active."
+                    if _diskimg_job.get("cancelled"):
+                        return "cancelled", "Stopped -- the copy on disk is unaffected."
+                chunk = fh.read(min(_VERIFY_CHUNK_SIZE, remaining))
+                if not chunk:
+                    return "error", f"{path} ended {fmt_bytes(remaining)} earlier than expected."
+                hasher.update(chunk)
+                remaining -= len(chunk)
+                with _diskimg_job_lock:
+                    if _diskimg_job is not None and _diskimg_job["id"] == job_id:
+                        _diskimg_job["verify_bytes_done"] = nbytes - remaining
+            _diskimg_drop_cache(fh)
+    except OSError as exc:
+        return "error", f"Could not read {path}: {exc}"
+    return "ok", hasher.hexdigest()
+
+_DISKIMG_SIDECAR_SUFFIX = ".json"
+
+def _diskimg_read_sidecar(image_path):
+    try:
+        with open(image_path + _DISKIMG_SIDECAR_SUFFIX, "r") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    algo = data.get("algo")
+    digest = data.get("hash")
+    if algo not in _HASH_HEX_LEN or not isinstance(digest, str) \
+            or not re.fullmatch(r"[0-9a-f]{%d}" % _HASH_HEX_LEN[algo], digest):
+        return None
+    try:
+        data["size"] = int(data.get("size"))
+    except (TypeError, ValueError):
+        return None
+    return data
+
+def _diskimg_write_sidecar(image_path, data):
+    target = image_path + _DISKIMG_SIDECAR_SUFFIX
+    tmp = target + ".tmp"
+    try:
+        with open(tmp, "w") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, target)
+        return None
+    except OSError as exc:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return str(exc)
+
+def _diskimg_remove_sidecar(image_path):
+    try:
+        os.remove(image_path + _DISKIMG_SIDECAR_SUFFIX)
+    except OSError:
+        pass
+
+def _diskimg_expand_to_fill(dest):
+    for tool in ("parted", "partprobe", "lsblk", "blkid", "e2fsck", "resize2fs"):
+        if not shutil.which(tool):
+            return False, f"'{tool}' is not installed"
+
+    def settle():
+        try:
+            subprocess.run(["partprobe", dest], capture_output=True, timeout=20)
+            if shutil.which("udevadm"):
+                subprocess.run(["udevadm", "settle", "--timeout=10"], capture_output=True, timeout=15)
+        except (subprocess.TimeoutExpired, OSError):
+            pass
+        time.sleep(0.5)
+
+    settle()
+    try:
+        out = subprocess.run(["lsblk", "-J", "-b", "-o", "NAME,PATH,START,SIZE,TYPE,PTTYPE", dest],
+                             capture_output=True, text=True, timeout=10, check=True)
+        tree = json.loads(out.stdout)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError) as exc:
+        return False, f"could not read the partition table: {exc}"
+    disks = tree.get("blockdevices") or []
+    if not disks:
+        return False, "the drive was not found"
+    disk = disks[0]
+    parts = [c for c in disk.get("children") or [] if c.get("type") == "part" and c.get("start") is not None]
+    if not parts:
+        return False, "no partitions found on the drive"
+    last = max(parts, key=lambda c: int(c.get("start") or 0))
+    m = re.search(r"(\d+)$", last.get("name") or "")
+    part_path = last.get("path")
+    if not m or not part_path:
+        return False, "could not identify the last partition"
+    number = int(m.group(1))
+    pttype = (disk.get("pttype") or "").lower()
+    if pttype == "dos" and number > 4:
+        return False, "the last partition is a logical partition, which isn't expanded here"
+    try:
+        disk_size = int(disk.get("size") or 0)
+        part_end = int(last["start"]) * 512 + int(last.get("size") or 0)
+    except (TypeError, ValueError):
+        return False, "could not read partition sizes"
+    if disk_size - part_end < 16 * 1024 * 1024:
+        return True, "The last partition already fills the drive."
+    fstype = subprocess.run(["blkid", "-o", "value", "-s", "TYPE", part_path],
+                            capture_output=True, text=True, timeout=10).stdout.strip()
+    if fstype not in ("ext2", "ext3", "ext4"):
+        return False, f"the last partition is '{fstype or 'unknown'}' -- only ext2/3/4 can be expanded here"
+    if pttype == "gpt":
+        if not shutil.which("sgdisk"):
+            return False, "the drive uses GPT and sgdisk (package gdisk) is not installed"
+        g = subprocess.run(["sgdisk", "-e", dest], capture_output=True, text=True, timeout=30)
+        if g.returncode != 0:
+            return False, f"sgdisk -e failed: {(g.stderr or g.stdout).strip()}"
+        settle()
+    resize = subprocess.run(["parted", "-s", dest, "unit", "s", "resizepart", str(number), "100%"],
+                            capture_output=True, text=True, timeout=60)
+    if resize.returncode != 0:
+        resize = subprocess.run(["parted", "---pretend-input-tty", dest, "unit", "s", "resizepart", str(number), "100%"],
+                                input="Yes\n", capture_output=True, text=True, timeout=60)
+        if resize.returncode != 0:
+            return False, f"parted resizepart failed: {(resize.stderr or resize.stdout).strip()}"
+    settle()
+    fsck = subprocess.run(["e2fsck", "-f", "-y", part_path], capture_output=True, text=True, timeout=1800)
+    if fsck.returncode not in (0, 1):
+        return False, (f"the partition was grown, but e2fsck -f -y exited {fsck.returncode}, so the filesystem "
+                       "was left at its old size -- check the drive before using it")
+    grow = subprocess.run(["resize2fs", part_path], capture_output=True, text=True, timeout=1800)
+    if grow.returncode != 0:
+        return False, f"the partition was grown, but resize2fs failed: {(grow.stderr or grow.stdout).strip()}"
+    return True, f"Expanded {part_path} to fill the drive ({fmt_bytes(disk_size - int(last['start']) * 512)})."
 
 _WIPE_BLOCK_SIZE = 4 * 1024 * 1024
 
@@ -828,8 +1053,13 @@ def _diskimg_build_command_preview_base(kind, params):
             ext = _DISKIMG_ENCRYPTED_SUFFIX if encrypt else ".img"
             fname = f"{hostname}_{stamp}" + (f"_{label}" if label else "") + ext
             dest_display = os.path.join(f"<mount of {match['path']}>", _DISKIMG_BACKUP_DIRNAME, fname)
-            if encrypt:
-                cmd = _diskimg_pipeline_command("encrypt", src_path, dest_display, best_effort=best_effort)
+            algo = params.get("verify_algo") if params.get("verify_algo") in _HASH_HEX_LEN else "sha256"
+            if backend != "ddrescue":
+                cmd, _detached = _diskimg_hashed_stream_command(
+                    "encrypt" if encrypt else "plain", src_path, dest_display + _DISKIMG_PART_SUFFIX,
+                    "instmon-diskimg-<job>", os.path.join(_DISKIMG_RUN_DIR, "instmon-diskimg-<job>.hash"), algo,
+                    best_effort=best_effort, rate_mb=throttle_rate_mb if (throttle_rate_mb and not encrypt) else None,
+                )
             elif backend == "ddrescue":
                 cmd, _detached = _diskimg_ddrescue_command(
                     src_path, dest_display, "<job-id>.ddrescue.map", "instmon-diskimg-<job>",
@@ -875,6 +1105,13 @@ def _diskimg_build_command_preview_base(kind, params):
             if backend == "ddrescue":
                 cmd, _detached = _diskimg_ddrescue_command(
                     src_path, match["path"], "<job-id>.ddrescue.map", "instmon-diskimg-<job>",
+                )
+            elif params.get("verify"):
+                algo = params.get("verify_algo") if params.get("verify_algo") in _HASH_HEX_LEN else "sha256"
+                cmd, _detached = _diskimg_hashed_stream_command(
+                    "plain", src_path, match["path"], "instmon-diskimg-<job>",
+                    os.path.join(_DISKIMG_RUN_DIR, "instmon-diskimg-<job>.hash"), algo,
+                    best_effort=best_effort, direct_io=direct_io, rate_mb=throttle_rate_mb,
                 )
             elif throttle_rate_mb:
                 cmd, _detached = _diskimg_throttled_dd_command(
@@ -932,6 +1169,17 @@ def _diskimg_build_command_preview_base(kind, params):
             if match is None:
                 return None, f"'{dest_device}' is not a currently attached USB drive."
             throttle_rate_mb = params.get("throttle_rate_mb")
+            sidecar = _diskimg_read_sidecar(backup["path"])
+            if sidecar or params.get("verify"):
+                algo = sidecar["algo"] if sidecar else (params.get("verify_algo") if params.get("verify_algo") in _HASH_HEX_LEN else "sha256")
+                cmd, _detached = _diskimg_hashed_stream_command(
+                    "decrypt" if backup.get("encrypted") else "plain", backup["path"], match["path"],
+                    "instmon-diskimg-<job>", os.path.join(_DISKIMG_RUN_DIR, "instmon-diskimg-<job>.hash"), algo,
+                    rate_mb=throttle_rate_mb if not backup.get("encrypted") else None,
+                )
+                note = (f"The backup is checked against its saved {algo} checksum as it is read." if sidecar
+                        else "This backup has no saved checksum, so it can't be checked for damage.")
+                return _diskimg_command_display(cmd), note
             if backup.get("encrypted"):
                 cmd = _diskimg_pipeline_command("decrypt", backup["path"], match["path"])
             elif throttle_rate_mb:
@@ -1098,6 +1346,13 @@ def _diskimg_reader_thread_body(job_id):
         fs_type = job.get("fs_type")
         quick = bool(job.get("quick"))
         mapfile_path = job.get("mapfile_path")
+        hash_path = job.get("hash_path")
+        hash_algo = job.get("hash_algo") or verify_algo
+        expect_hash = job.get("expect_hash")
+        expand_requested = bool(job.get("expand_requested"))
+
+    stream_hash = _diskimg_read_hash_file(hash_path, hash_algo) if (hash_path and copy_ok) else None
+    _diskimg_hash_cleanup(hash_path)
 
     if mapfile_path:
         try:
@@ -1131,24 +1386,55 @@ def _diskimg_reader_thread_body(job_id):
 
     final_state, final_message = "done", "Completed successfully."
 
-    if verify_requested:
+    if kind == "restore" and expect_hash:
+        if stream_hash is None:
+            final_message += " Could not check the backup against its saved checksum."
+            _diskimg_console_append(job_id, "Could not check the backup against its saved checksum.")
+        elif stream_hash != expect_hash:
+            final_state = "failed"
+            final_message = ("The backup file doesn't match the checksum saved when it was made -- it is damaged, "
+                             "so this restore can't be trusted. Don't use the destination drive.")
+            _diskimg_console_append(job_id, final_message)
+        else:
+            final_message += f" The backup matched its saved {hash_algo} checksum."
+            _diskimg_console_append(job_id, f"The backup matched its saved {hash_algo} checksum.")
+
+    if final_state == "done" and verify_requested:
         with _diskimg_job_lock:
             if _diskimg_job is None or _diskimg_job["id"] != job_id:
                 return
             _diskimg_job["phase"] = "verifying"
-        log_event(f"Disk-image {kind} copy done -- verifying {src} == {dest} ...", "info")
-        _diskimg_console_append(job_id, f"Copy complete -- verifying (re-reading and comparing {verify_algo} checksums)...")
-        result, verify_message = _diskimg_verify_copy(job_id, src, dest, bytes_total, algo=verify_algo)
+            _diskimg_job["verify_bytes_done"] = 0
+        if stream_hash:
+            log_event(f"Disk-image {kind} copy done -- reading {dest} back to verify ...", "info")
+            _diskimg_console_append(job_id, f"Copy complete -- reading the destination back from the drive and comparing {hash_algo} checksums...")
+            res, value = _diskimg_hash_readback(job_id, dest, bytes_total, hash_algo)
+            if res == "ok" and value == stream_hash:
+                result, verify_message = "ok", f"Verified -- the data read back from the drive matches what was copied ({hash_algo} {value[:12]}...)."
+            elif res == "ok":
+                result, verify_message = "mismatch", (
+                    f"CHECKSUM MISMATCH -- the data read back from the drive differs from what was copied ({hash_algo}). "
+                    "The drive may be failing or the copy is corrupt.")
+            else:
+                result, verify_message = res, value
+        else:
+            log_event(f"Disk-image {kind} copy done -- verifying {src} == {dest} ...", "info")
+            _diskimg_console_append(job_id, f"Copy complete -- verifying (re-reading both sides and comparing {verify_algo} checksums)...")
+            result, verify_message = _diskimg_verify_copy(job_id, src, dest, bytes_total, algo=verify_algo)
+            if result == "mismatch" and kind in ("backup", "clone"):
+                verify_message += (" The source is this Pi's live disk, which keeps changing unless Pause node services "
+                                   "and Freeze filesystem were ticked, so this can be a false alarm with the resilient backend.")
         if result == "mismatch":
             final_state, final_message = "failed", verify_message
         elif result == "cancelled":
             final_state, final_message = "cancelled", verify_message
         elif result == "error":
-            final_message = f"Completed successfully. Verification could not run: {verify_message}"
+            final_message = f"{final_message} Verification could not run: {verify_message}"
         else:
-            final_message = f"Completed successfully. {verify_message}"
+            final_message = f"{final_message} {verify_message}"
         _diskimg_console_append(job_id, verify_message)
 
+    shrunk = False
     if final_state == "done" and kind == "backup" and shrink_requested:
         with _diskimg_job_lock:
             if _diskimg_job is None or _diskimg_job["id"] != job_id:
@@ -1157,6 +1443,7 @@ def _diskimg_reader_thread_body(job_id):
         log_event(f"Disk-image backup copy/verify done -- shrinking {dest} ...", "info")
         _diskimg_console_append(job_id, "Copy complete -- shrinking image to its minimum size...")
         shrink_ok, shrink_message, new_size = _diskimg_shrink_image(dest)
+        shrunk = shrink_ok
         final_message += f" {shrink_message}" if shrink_ok else f" Shrink skipped: {shrink_message}"
         _diskimg_console_append(job_id, shrink_message)
         if shrink_ok:
@@ -1188,6 +1475,58 @@ def _diskimg_reader_thread_body(job_id):
                 final_message = f"Completed successfully. {fmt_message}"
             _diskimg_console_append(job_id, fmt_message)
 
+    if final_state == "done" and kind == "restore" and expand_requested:
+        with _diskimg_job_lock:
+            if _diskimg_job is None or _diskimg_job["id"] != job_id:
+                return
+            _diskimg_job["phase"] = "expanding"
+        _diskimg_console_append(job_id, "Expanding the last partition to fill the drive...")
+        exp_ok, exp_message = _diskimg_expand_to_fill(dest)
+        _diskimg_console_append(job_id, exp_message if exp_ok else f"Not expanded: {exp_message}")
+        final_message += f" {exp_message}" if exp_ok else f" Not expanded: {exp_message}."
+
+    sidecar = None
+    if final_state == "done" and kind == "backup":
+        file_hash = stream_hash if (stream_hash and not shrunk) else None
+        if file_hash is None:
+            with _diskimg_job_lock:
+                if _diskimg_job is None or _diskimg_job["id"] != job_id:
+                    return
+                _diskimg_job["phase"] = "checksumming"
+                _diskimg_job["verify_bytes_done"] = 0
+            _diskimg_console_append(job_id, f"Taking a {hash_algo} checksum of the finished backup...")
+            try:
+                file_size = os.path.getsize(dest)
+            except OSError as exc:
+                file_size = None
+                res, value = "error", str(exc)
+            if file_size is not None:
+                with _diskimg_job_lock:
+                    if _diskimg_job is not None and _diskimg_job["id"] == job_id:
+                        _diskimg_job["bytes_total"] = file_size
+                res, value = _diskimg_hash_readback(job_id, dest, file_size, hash_algo)
+            if res == "ok":
+                file_hash = value
+            elif res == "cancelled":
+                final_state, final_message = "cancelled", "Cancelled while saving the checksum."
+            else:
+                final_message += f" No checksum was saved: {value}"
+                _diskimg_console_append(job_id, f"No checksum was saved: {value}")
+        if final_state == "done" and file_hash:
+            try:
+                image_size = os.path.getsize(dest)
+            except OSError:
+                image_size = None
+            sidecar = {
+                "format": "instmon-diskimg-backup", "version": 1,
+                "image": os.path.basename(dest[:-len(_DISKIMG_PART_SUFFIX)] if dest.endswith(_DISKIMG_PART_SUFFIX) else dest),
+                "size": image_size, "algo": hash_algo, "hash": file_hash,
+                "source": src, "source_size": bytes_total if not shrunk else None,
+                "host": socket.gethostname(), "created": datetime.now().isoformat(timespec="seconds"),
+                "encrypted": dest.endswith(_DISKIMG_ENCRYPTED_SUFFIX + _DISKIMG_PART_SUFFIX) or dest.endswith(_DISKIMG_ENCRYPTED_SUFFIX),
+                "shrunk": shrunk, "instmon": VERSION,
+            }
+
     if kind == "backup" and dest.endswith(_DISKIMG_PART_SUFFIX):
         if final_state == "done":
             final_path = dest[:-len(_DISKIMG_PART_SUFFIX)]
@@ -1207,6 +1546,12 @@ def _diskimg_reader_thread_body(job_id):
                     if _diskimg_job is not None and _diskimg_job["id"] == job_id:
                         _diskimg_job["dest"] = final_path
                 dest = final_path
+                if sidecar:
+                    side_err = _diskimg_write_sidecar(final_path, sidecar)
+                    if side_err:
+                        final_message += f" The checksum file could not be written: {side_err}"
+                    else:
+                        _diskimg_console_append(job_id, f"Saved {os.path.basename(final_path)}{_DISKIMG_SIDECAR_SUFFIX} ({sidecar['algo']} {sidecar['hash'][:12]}...).")
             except OSError as exc:
                 final_state = "failed"
                 final_message = f"The backup was written but could not be renamed from {os.path.basename(dest)}: {exc}"
@@ -1244,6 +1589,7 @@ def _diskimg_start_job(
     best_effort_requested=False, direct_io_requested=False,
     verify_algo="sha256", backend="dd", throttle_rate_mb=None,
     freeze_requested=False, quick_requested=False, rpiclone_args=None,
+    hash_algo=None, expect_hash=None, expand_requested=False,
 ):
     global _diskimg_job
 
@@ -1266,9 +1612,17 @@ def _diskimg_start_job(
         and backend == "dd" and not (encrypt_passphrase or decrypt_passphrase)
     )
     progress_format = backend if backend in ("ddrescue", "rpiclone") else "dd"
+    hash_algo = hash_algo if hash_algo in _HASH_HEX_LEN else verify_algo
+    expand_requested = bool(expand_requested) and kind == "restore"
+    use_stream_hash = (
+        (kind == "backup" and backend == "dd")
+        or (kind == "clone" and backend == "dd" and bool(verify_requested))
+        or (kind == "restore" and (bool(expect_hash) or bool(verify_requested)))
+    )
 
     job_id = secrets.token_hex(8)
     unit_name = f"instmon-diskimg-{job_id}"
+    hash_path = _diskimg_hash_path(job_id) if use_stream_hash else None
 
     if quiesce_requested:
         with _diskimg_job_lock:
@@ -1338,6 +1692,13 @@ def _diskimg_start_job(
         mapfile_path = None
         if kind == "format":
             cmd, detached = _diskimg_wipe_command(dst_path, bytes_total, unit_name, quick=quick_requested)
+        elif hash_path:
+            stream_mode = "encrypt" if encrypt_passphrase else ("decrypt" if decrypt_passphrase else "plain")
+            cmd, detached = _diskimg_hashed_stream_command(
+                stream_mode, src_path, dst_path, unit_name, hash_path, hash_algo,
+                best_effort=best_effort_requested, direct_io=direct_io_requested,
+                rate_mb=throttle_rate_mb if throttle_requested else None,
+            )
         elif encrypt_passphrase:
             cmd, detached = _diskimg_pipeline_command("encrypt", src_path, dst_path, best_effort=best_effort_requested), False
         elif decrypt_passphrase:
@@ -1409,6 +1770,10 @@ def _diskimg_start_job(
                 "throttle_rate_mb": throttle_rate_mb if throttle_requested else None,
                 "progress_format": progress_format,
                 "mapfile_path": mapfile_path,
+                "hash_path": hash_path,
+                "hash_algo": hash_algo,
+                "expect_hash": expect_hash,
+                "expand_requested": expand_requested,
                 "console": quiesce_console + [
                     f"[{datetime.now().strftime('%H:%M:%S')}] Starting {kind}: {source_desc} -> {dest_desc}",
                     f"[{datetime.now().strftime('%H:%M:%S')}] $ {command_display}",
@@ -1447,11 +1812,15 @@ def _diskimg_cancel_job():
             return False, "The backup copy is already complete and is now being shrunk -- this finishes on its own shortly and can't be cancelled mid-step."
         if job.get("phase") == "formatting":
             return False, "The drive has been wiped and is now being partitioned and formatted -- this finishes on its own shortly and cannot be stopped mid-step."
+        if job.get("phase") == "expanding":
+            return False, "The restore is complete and the drive is being expanded -- this finishes on its own shortly and can't be stopped mid-step."
         job["cancelled"] = True
         proc, unit_name, phase = job["proc"], job["unit_name"], job.get("phase")
         cancel_kind = job.get("kind")
     if phase == "verifying":
         return True, "Cancel requested -- verification will stop shortly. The copy on disk is unaffected."
+    if phase == "checksumming":
+        return True, "Cancel requested -- the backup will be discarded."
     try:
         if unit_name:
             subprocess.run(["systemctl", "stop", f"{unit_name}.service"], capture_output=True, timeout=10)
@@ -1519,6 +1888,7 @@ def _diskimg_list_backups():
             results.append({
                 "name": name, "path": full, "drive": d["path"],
                 "size": st.st_size, "mtime": st.st_mtime, "encrypted": encrypted,
+                "checksum": os.path.isfile(full + _DISKIMG_SIDECAR_SUFFIX),
             })
     results.sort(key=lambda e: e["mtime"], reverse=True)
     return results
@@ -1533,6 +1903,7 @@ def _diskimg_verify_copy(job_id, src_path, dst_path, expected_bytes, algo="sha25
         dst_hash = hasher_factory()
         remaining = expected_bytes
         with open(src_path, "rb") as sf, open(dst_path, "rb") as df:
+            _diskimg_drop_cache(df)
             while remaining > 0:
                 with _diskimg_job_lock:
                     if _diskimg_job is None or _diskimg_job["id"] != job_id:
@@ -1782,6 +2153,7 @@ def _diskimg_schedule_prune(dest_drive_path, retention):
     for stale in on_drive[retention:]:
         try:
             os.remove(stale["path"])
+            _diskimg_remove_sidecar(stale["path"])
             log_event(f"Scheduled backup retention: deleted old backup {stale['name']}", "info")
         except OSError as exc:
             log_event(f"Scheduled backup retention: could not delete {stale['name']}: {exc}", "warn")
@@ -6725,7 +7097,7 @@ const _DISKIMG_KIND_LABELS = {backup: 'Backup', clone: 'Clone', restore: 'Restor
 // Phases with no dd process to interrupt. Mirrors the refusals in
 // _diskimg_cancel_job(), so Stop is disabled exactly where the server
 // would say no.
-const _DISKIMG_UNSTOPPABLE_PHASES = ['quiescing', 'thawing', 'unquiescing', 'shrinking', 'formatting'];
+const _DISKIMG_UNSTOPPABLE_PHASES = ['quiescing', 'thawing', 'unquiescing', 'shrinking', 'formatting', 'expanding'];
 
 // Live-progress tracking (v2.30.2). One sample per job poll, kept for
 // the job that is running: gives a rate over roughly the last minute
@@ -6738,7 +7110,7 @@ function diskimgTrackJob(job) {
   if (!job || job.state !== 'running') return;
   const now = Date.now();
   const phase = job.phase || 'copying';
-  const done = phase === 'verifying' ? (job.verify_bytes_done || 0) : (job.bytes_done || 0);
+  const done = (phase === 'verifying' || phase === 'checksumming') ? (job.verify_bytes_done || 0) : (job.bytes_done || 0);
   const t = _diskimgTrack;
   if (t.id !== job.id || t.phase !== phase) {
     t.id = job.id; t.phase = phase; t.pts = []; t.lastDone = -1; t.lastChangeAt = now;
@@ -6800,6 +7172,11 @@ function diskimgBarState(job) {
   if (phase === 'unquiescing') return {label: 'Restarting node services', pct: null, cls: 'indet'};
   if (phase === 'shrinking') return {label: 'Shrinking image', pct: null, cls: 'indet'};
   if (phase === 'formatting') return {label: 'Partitioning and formatting', pct: null, cls: 'indet'};
+  if (phase === 'expanding') return {label: 'Expanding to fill the drive', pct: null, cls: 'indet'};
+  if (phase === 'checksumming') {
+    if (!total) return {label: 'Saving checksum', pct: null, cls: 'indet'};
+    return {label: 'Saving checksum', pct: diskimgPct(job.verify_bytes_done || 0, total), cls: ''};
+  }
   if (phase === 'verifying') {
     const vdone = job.verify_bytes_done || 0;
     if (!total) return {label: 'Verifying', pct: null, cls: 'indet'};
@@ -6854,7 +7231,7 @@ function renderDiskimgJobInto(elId, job) {
     if (job.cancelled) {
       html += `<div class="small muted">Stopping &mdash; waiting for the job to wind down&hellip;</div>`;
     } else {
-      const meterDone = phase === 'verifying' ? (job.verify_bytes_done || 0) : (job.bytes_done || 0);
+      const meterDone = (phase === 'verifying' || phase === 'checksumming') ? (job.verify_bytes_done || 0) : (job.bytes_done || 0);
       const flushing = bar.label === 'Flushing to disk';
       let line = bar.label;
       if (hasPct) line += ` &middot; ${fmtPct(bar.pct)}%`;
@@ -6864,7 +7241,7 @@ function renderDiskimgJobInto(elId, job) {
       // How long: always the elapsed time; time left once there is a
       // window of samples to base it on.
       let timing = `Elapsed ${elapsedTxt}`;
-      if (hasPct && !flushing && (phase === 'copying' || phase === 'verifying')) {
+      if (hasPct && !flushing && (phase === 'copying' || phase === 'verifying' || phase === 'checksumming')) {
         const rate = diskimgWindowRate(job.id);
         const left = job.bytes_total ? job.bytes_total - meterDone : null;
         if (rate && left !== null && left > 0) {
@@ -6875,7 +7252,7 @@ function renderDiskimgJobInto(elId, job) {
       }
       html += `<div class="small muted">${timing}</div>`;
       const trk = _diskimgTrack;
-      if (trk.id === job.id && hasPct && !flushing && (phase === 'copying' || phase === 'verifying')) {
+      if (trk.id === job.id && hasPct && !flushing && (phase === 'copying' || phase === 'verifying' || phase === 'checksumming')) {
         const idle = (Date.now() - trk.lastChangeAt) / 1000;
         if (idle >= 30) {
           html += `<div class="small log-warn">No progress reported for ${fmtDuration(idle)} &mdash; the drive may be stalled or very slow.</div>`;
@@ -7074,6 +7451,7 @@ async function updateDiskimgPreview(kind) {
     body.encrypt = (document.getElementById('diskimg-backup-encrypt') || {}).checked || false;
     body.quiesce = (document.getElementById('diskimg-backup-quiesce') || {}).checked || false;
     body.best_effort = (document.getElementById('diskimg-backup-best-effort') || {}).checked || false;
+    body.verify_algo = (document.getElementById('diskimg-backup-verify-algo') || {}).value || 'sha256';
     body.backend = (document.getElementById('diskimg-backup-backend') || {}).value || 'dd';
     const bThrottle = (document.getElementById('diskimg-backup-throttle') || {}).value || '';
     body.throttle_rate_mb = bThrottle ? Number(bThrottle) : null;
@@ -7083,6 +7461,8 @@ async function updateDiskimgPreview(kind) {
     body.quiesce = (document.getElementById('diskimg-clone-quiesce') || {}).checked || false;
     body.best_effort = (document.getElementById('diskimg-clone-best-effort') || {}).checked || false;
     body.direct_io = (document.getElementById('diskimg-clone-direct-io') || {}).checked || false;
+    body.verify = (document.getElementById('diskimg-clone-verify') || {}).checked || false;
+    body.verify_algo = (document.getElementById('diskimg-clone-verify-algo') || {}).value || 'sha256';
     body.backend = (document.getElementById('diskimg-clone-backend') || {}).value || 'dd';
     body.rpi_force = (document.getElementById('diskimg-clone-rpi-force') || {}).checked || false;
     body.rpi_hostname = ((document.getElementById('diskimg-clone-rpi-host') || {}).value || '').trim();
@@ -7099,6 +7479,8 @@ async function updateDiskimgPreview(kind) {
     body.name = sepIdx >= 0 ? imgVal.slice(0, sepIdx) : imgVal;
     body.drive = sepIdx >= 0 ? imgVal.slice(sepIdx + 2) : '';
     body.dest_device = (document.getElementById('diskimg-restore-dest') || {}).value || '';
+    body.verify = (document.getElementById('diskimg-restore-verify') || {}).checked || false;
+    body.verify_algo = (document.getElementById('diskimg-restore-verify-algo') || {}).value || 'sha256';
     const rThrottle = (document.getElementById('diskimg-restore-throttle') || {}).value || '';
     body.throttle_rate_mb = rThrottle ? Number(rThrottle) : null;
   } else {
@@ -7146,7 +7528,8 @@ function renderDiskimgBackups(backups) {
     } else {
       el.innerHTML = backups.map(b => {
         const age = new Date(b.mtime * 1000).toLocaleString();
-        const encBadge = b.encrypted ? ' &middot; <span class="log-warn">encrypted</span>' : '';
+        const encBadge = (b.encrypted ? ' &middot; <span class="log-warn">encrypted</span>' : '')
+          + (b.checksum ? ' &middot; <span class="log-ok">checksum saved</span>' : ' &middot; <span class="muted">no checksum</span>');
         return `<div class="row" style="justify-content:space-between">
           <span>${escHtml(b.name)} &middot; ${fmtBytes(b.size)} &middot; ${escHtml(b.drive)} &middot; ${age}${encBadge}</span>
           <span>
@@ -7919,11 +8302,13 @@ _JS_ACTIONS = """function wireButtons() {
           const passphrase = passphraseEl ? passphraseEl.value : '';
           const throttleEl = document.getElementById('diskimg-restore-throttle');
           const throttleRateMb = throttleEl && throttleEl.value ? Number(throttleEl.value) : null;
+          const expandEl = document.getElementById('diskimg-restore-expand');
+          const expand = expandEl ? expandEl.checked : false;
           if (!confirm(`Restore ${imgName} onto ${dest}? This ERASES everything currently on ${dest} and cannot be undone.`)) { btn.disabled = false; return; }
           if (!confirm(`Really sure? ${dest} will become a byte-for-byte copy of that backup image.`)) { btn.disabled = false; return; }
           await postDiskimg('/api/diskimg/restore/start', {
             confirm: true, name: imgName, drive: imgDrive, dest_device: dest, verify: verify,
-            verify_algo: verifyAlgo, passphrase: passphrase, throttle_rate_mb: throttleRateMb,
+            verify_algo: verifyAlgo, passphrase: passphrase, throttle_rate_mb: throttleRateMb, expand: expand,
           });
           if (passphraseEl) passphraseEl.value = '';
         } else if (action === 'diskimg_schedule_save') {
@@ -8076,12 +8461,13 @@ document.getElementById('diskimg-refresh-btn').addEventListener('click', async f
 // what would actually run. Text/password-ish inputs use 'input' (live
 // as you type), selects and checkboxes use 'change'.
 [['diskimg-backup-dest', 'change'], ['diskimg-backup-label', 'input'], ['diskimg-backup-encrypt', 'change'], ['diskimg-backup-quiesce', 'change'],
- ['diskimg-backup-best-effort', 'change'], ['diskimg-backup-backend', 'change'], ['diskimg-backup-throttle', 'change']]
+ ['diskimg-backup-best-effort', 'change'], ['diskimg-backup-backend', 'change'], ['diskimg-backup-throttle', 'change'],
+ ['diskimg-backup-verify-algo', 'change']]
   .forEach(([id, evt]) => {
     const el = document.getElementById(id);
     if (el) el.addEventListener(evt, () => scheduleDiskimgPreview('backup'));
   });
-['diskimg-clone-dest', 'diskimg-clone-quiesce', 'diskimg-clone-best-effort', 'diskimg-clone-direct-io', 'diskimg-clone-backend', 'diskimg-clone-throttle', 'diskimg-clone-rpi-force'].forEach(id => {
+['diskimg-clone-dest', 'diskimg-clone-quiesce', 'diskimg-clone-best-effort', 'diskimg-clone-direct-io', 'diskimg-clone-backend', 'diskimg-clone-throttle', 'diskimg-clone-rpi-force', 'diskimg-clone-verify', 'diskimg-clone-verify-algo'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => scheduleDiskimgPreview('clone'));
 });
@@ -8100,7 +8486,7 @@ document.getElementById('diskimg-refresh-btn').addEventListener('click', async f
   const el = document.getElementById('diskimg-format-quick');
   if (el) el.addEventListener('change', () => scheduleDiskimgPreview('format'));
 })();
-['diskimg-restore-image', 'diskimg-restore-dest', 'diskimg-restore-throttle'].forEach(id => {
+['diskimg-restore-image', 'diskimg-restore-dest', 'diskimg-restore-throttle', 'diskimg-restore-verify', 'diskimg-restore-verify-algo'].forEach(id => {
   const el = document.getElementById(id);
   if (el) el.addEventListener('change', () => scheduleDiskimgPreview('restore'));
 });
@@ -8677,7 +9063,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <label class="small muted" style="white-space:nowrap"><input type="checkbox" id="diskimg-backup-encrypt"> Encrypt</label>
       <input type="password" id="diskimg-backup-passphrase" placeholder="passphrase" style="max-width:9rem" autocomplete="new-password">
     </div>
-    <div class="diskimg-help small muted">Shrink to fit: after copying, shrink the last partition's filesystem to its minimum size and truncate the file to match (smaller backup, slower -- needs resize2fs/parted; skipped automatically if the disk layout doesn't support it). Verify after copy: re-reads both sides and compares checksums before declaring success (slower, catches silent corruption dd's own exit code wouldn't); blake2b is faster than sha256 at the same integrity guarantee for this use. Encrypt: AES-256 encrypts the backup file with the given passphrase (openssl enc, PBKDF2) -- there's no way to recover it without that passphrase, so keep it somewhere safe; can't be combined with Shrink to fit or Verify after copy.</div>
+    <div class="diskimg-help small muted">Shrink to fit: after copying, shrink the last partition's filesystem to its minimum size and truncate the file to match (smaller backup, slower -- needs resize2fs/parted; skipped automatically if the disk layout doesn't support it). Verify after copy: a checksum is taken of everything as it is copied, then the backup is read back from the drive and compared (slower, catches a failing drive or silent corruption dd's own exit code wouldn't); blake2b is faster than sha256 at the same integrity guarantee for this use. Every backup also saves its checksum in a .json file next to it, which Restore uses to check the backup isn't damaged. Encrypt: AES-256 encrypts the backup file with the given passphrase (openssl enc, PBKDF2) -- there's no way to recover it without that passphrase, so keep it somewhere safe; can't be combined with Shrink to fit or Verify after copy.</div>
   </div>
   <div class="diskimg-step"><span class="diskimg-step-n">3</span>Safety and speed</div>
   <div class="diskimg-step-body">
@@ -8826,7 +9212,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
   <div class="diskimg-card-body">
   <div class="diskimg-help small muted">
-    Writes to a spare drive only -- never onto the disk this Pi is currently running from. Destination must be unmounted first. Backups marked "encrypted" below need their passphrase entered here; Verify after copy and Bandwidth throttle aren't supported for those.</div>
+    Writes to a spare drive only -- never onto the disk this Pi is currently running from. Destination must be unmounted first. Backups marked "encrypted" below need their passphrase entered here; Verify after copy and Bandwidth throttle aren't supported for those. A backup with a saved checksum is checked as it is read; if it doesn't match, the restore is marked failed. Expand to fill drive grows the last partition afterward -- leave it on for a backup made with Shrink to fit, or the restored node keeps only its shrunk size.</div>
   <div class="diskimg-step"><span class="diskimg-step-n">1</span>Pick backup</div>
   <div class="diskimg-step-body">
     <div class="row">
@@ -8849,6 +9235,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
         <option value="sha256" selected>sha256</option>
         <option value="blake2b">blake2b (faster)</option>
       </select>
+      <label class="small muted" style="white-space:nowrap" title="After the restore, grow the last partition and its ext4 filesystem to use the whole drive. Needed for a backup made with Shrink to fit."><input type="checkbox" id="diskimg-restore-expand" checked> Expand to fill drive</label>
       <select id="diskimg-restore-throttle" title="Bandwidth throttle (unencrypted backups only)">
         <option value="" selected>No throttle</option>
         <option value="5">5 MB/s</option>
@@ -9411,6 +9798,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         except OSError as exc:
             self._error_json(500, f"Could not delete {match['name']}: {exc}")
             return
+        _diskimg_remove_sidecar(match["path"])
         log_event(f"Deleted disk-image backup: {match['name']}", "warn")
         self._send_json(200, {"message": f"Deleted {match['name']}.", "level": "ok"})
 
@@ -9788,6 +10176,12 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         if image["encrypted"] and throttle_rate_mb:
             self._error_json(400, "Bandwidth throttle isn't supported when restoring an encrypted backup yet -- turn off one or the other")
             return
+        sidecar = _diskimg_read_sidecar(image["path"])
+        if sidecar and sidecar["size"] != image["size"]:
+            self._error_json(400, (f"{image['name']} is {fmt_bytes(image['size'])}, but its checksum file says it should be "
+                                   f"{fmt_bytes(sidecar['size'])} -- the backup is damaged or incomplete."))
+            return
+        expand = bool(body.get("expand"))
 
         boot_disk = _get_boot_disk()
         if not boot_disk:
@@ -9831,6 +10225,9 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             verify_requested=verify,
             decrypt_passphrase=passphrase if image["encrypted"] else None,
             throttle_rate_mb=throttle_rate_mb, verify_algo=verify_algo,
+            hash_algo=sidecar["algo"] if sidecar else verify_algo,
+            expect_hash=sidecar["hash"] if sidecar else None,
+            expand_requested=expand,
         )
         passphrase = None
         if not ok:
@@ -9840,6 +10237,8 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             "message": (
                 f"Restore started: {image['name']} -> {match['path']}. This can take a long time -- watch the progress panel."
                 + (" It will be decrypted on the way out." if image["encrypted"] else "")
+                + (" The backup is checked against its saved checksum as it is read." if sidecar else "")
+                + (" The last partition is expanded to fill the drive afterward." if expand else "")
                 + (" It will be verified against the source afterward." if verify else "")
                 + (f" Throttled to {throttle_rate_mb:g} MB/s." if throttle_rate_mb else "")
             ),
