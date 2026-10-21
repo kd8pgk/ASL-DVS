@@ -1,6 +1,16 @@
 # instmon changelog
 
-Current file: `instmon_v2_72_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_73_0_20261021.py`. Newest entries first.
+
+## 2.73.0 (2026-10-21)
+
+- **rpi-clone stops on a damaged destination.** When the filesystem on the
+  destination card is damaged, rpi-clone used to print thousands of
+  `Bad message (74)` (or `Input/output error`) lines and carry on. After
+  20 such errors the clone is now stopped and marked failed, with what to
+  do next: run it again with Force re-initialize, or Full Format the card
+  first, and replace the card if it happens again on a fresh format. Only
+  the first 10 error lines go to the console.
 
 ## 2.72.0 (2026-10-21)
 
