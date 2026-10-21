@@ -173,6 +173,11 @@ class TalkerActivity : Activity() {
         web.webViewClient = object : WebViewClient() {
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame || node.sameOrigin(request.url)) return false
+                if (node.httpsUpgrade(request.url)) {
+                    node = (NodeStore.get(this@TalkerActivity, node.id) ?: node).copy(https = true, pin = "")
+                    NodeStore.put(this@TalkerActivity, node)
+                    return false
+                }
                 openExternal(request.url)
                 return true
             }
