@@ -17,7 +17,7 @@ By KD8PGK, written with Claude (Anthropic).
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
-| Node Talker for Android | `android/` (APK under Releases) | - | Optional Android app for Node Talker: opens only a Node Talker page, remembers its certificate, and (in later versions) runs receive, transmit and PTT in the background. Sideload test builds for now. |
+| Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 
 Scripts:
 
@@ -132,7 +132,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_6_11_20261021.py --install
+  sudo python3 nodetalker_v0_6_12_20261021.py --install
   ```
 
 Then:
@@ -177,7 +177,7 @@ node linked to the main node.
   (30–180 s, 60 s by default). The guard gives two short beeps 10 s before it
   unkeys. **Wait 4 s after receive** (0.6.4 and later) locks push-to-talk
   while the node receives and for 4 s after, counting 3 to 0 on the
-  waterfall.
+  spectrum.
 - **A transmission stops** at the time-out (120 s by default), 1 s after
   audio stops arriving, when you let go (or tap again), or at the guard
   timer.
@@ -298,7 +298,7 @@ node 1921:
 - Favorites are AllStar node numbers, or a direct address
   (`iax:user@host:port/node,password`) for a private node.
 
-## Node Talker for Android
+## Node Talker Mobile
 
 An optional Android app (Android 8.0 and newer) that opens only a Node
 Talker page. Node Talker works the same in a browser; the app is for
@@ -320,8 +320,11 @@ It comes in phases:
 **Install a test build:** on the phone, open the repository's
 [Releases](https://github.com/kd8pgk/ASL-DVS/releases), pick the newest
 `android-v…` release and download `NodeTalker-…-debug.apk`. Android asks to
-allow installs from the browser once. Test builds use a debug key: when
-signed builds start, uninstall the test build first.
+allow installs from the browser once. From 0.3.1 every test build is signed
+with the same debug key (`android/app/debug.keystore`), so a new build
+installs over the old one and keeps your nodes; going from 0.3.0 or older to
+0.3.1 needs one uninstall first. When signed release builds start, uninstall
+the test build once more.
 
 **Add a node:** the Pi's address (for example `192.168.1.50`), port `8993`,
 and HTTPS if Node Talker uses it (needed for the microphone in page
@@ -479,7 +482,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_73_0_20261021.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodetalker_v0_6_11_20261021.py` | common |
+| `nodetalker_v0_6_12_20261021.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_7_0_20261020.sh` | common |
@@ -516,7 +519,7 @@ per tool and build:
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
 | [`nodetalker.md`](changelogs/nodetalker.md) | `nodetalker_v*.py` (was `nodelisten_v*.py`) |
 | [`amp_nodetalker.md`](changelogs/amp_nodetalker.md) | `amp_nodetalker_v*.py` (was `amp_nodelisten_v*.py`) |
-| [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker for Android) |
+| [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker Mobile) |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |

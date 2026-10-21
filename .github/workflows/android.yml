@@ -63,6 +63,6 @@ jobs:
             gh release upload "$tag" "NodeTalker-$V-debug.apk" --clobber
           else
             gh release create "$tag" "NodeTalker-$V-debug.apk" --prerelease --target "$GITHUB_SHA" \
-              --title "Node Talker for Android $V (test build)" \
+              --title "Node Talker Mobile $V (test build)" \
               --notes "Test build signed with a debug key, for sideloading. See changelogs/nodetalker_android.md."
           fi

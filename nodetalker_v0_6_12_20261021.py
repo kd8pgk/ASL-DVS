@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.11"
+VERSION = "0.6.12"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -4013,7 +4013,7 @@ main.fit{padding-top:10px;padding-bottom:12px}
 .lstat .dot{margin-right:4px}
 .spec{flex:1 1 0;min-height:14px;display:flex;flex-direction:column;gap:4px}
 .spec-box{position:relative;flex:1;min-height:0;border-radius:8px;overflow:hidden;background:#0a1016;border:1px solid var(--line)}
-.spec-box canvas{position:absolute;inset:0;width:100%;height:100%;display:block;cursor:pointer;touch-action:manipulation}
+.spec-box canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
 .spec-lo{position:absolute;left:0;top:0;bottom:0;width:7.5%;background:rgba(244,192,78,.10);border-right:1px dashed rgba(244,192,78,.45);pointer-events:none}
 .spec-t{position:absolute;bottom:2px;transform:translateX(-50%);font:10px ui-monospace,Menlo,Consolas,monospace;color:var(--muted);pointer-events:none}
 .spec.small .spec-box,.spec.off .spec-box{display:none}
@@ -4110,7 +4110,6 @@ try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); }
 let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false, autoWait = null, starting = false;
 let listenAt = 0, rxLastDb = -120, chk = null, chkUndo = {}, chkCfg = null;
 let busNode = null, analyser = null, specBins = null, specRaf = 0, specLast = 0, busyText = '', pttState = 'off', ownUnkeyAt = -1e9;
-let specMode = 'waterfall';
 let hs = {out: '', mic: '', btn: 'listen'};
 try { Object.assign(hs, JSON.parse(localStorage.getItem('nlHeadset') || '{}')); } catch (e) {}
 let hsTx = false, outLost = 0, devCount = -1, lastDevChange = 0;
@@ -4122,7 +4121,6 @@ try {
   const s = JSON.parse(localStorage.getItem('nlPtt') || 'null');
   if (s && (s.mode === 'hold' || s.mode === 'tap') && PTT_GUARDS.includes(Number(s.guard))) { ptt = {mode: s.mode, guard: Number(s.guard), gap: s.gap === true}; pttSrc = 'phone'; }
 } catch (e) {}
-try { if (localStorage.getItem('nlSpec') === 'bars') specMode = 'bars'; } catch (e) {}
 
 function sincKernels(phases, taps, half, fc, tAt, edgeIn) {
   const kern = [];
@@ -5074,24 +5072,14 @@ function specDraw() {
   analyser.getByteFrequencyData(specBins);
   const top = Math.min(specBins.length, Math.ceil(SPEC_HZ / (ctx.sampleRate / 2) * specBins.length));
   const at = (x) => specBins[Math.min(top - 1, Math.floor(x / w * top))];
-  if (specMode === 'bars') {
-    g.fillStyle = '#0a1016';
-    g.fillRect(0, 0, w, h);
-    const step = Math.max(2, Math.floor(w / 96));
-    for (let x = 0; x < w; x += step) {
-      const v = at(x), bh = v / 255 * h;
-      g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
-      g.fillRect(x, h - bh, step - 1, bh);
-    }
-    return;
+  g.fillStyle = '#0a1016';
+  g.fillRect(0, 0, w, h);
+  const step = Math.max(2, Math.floor(w / 96));
+  for (let x = 0; x < w; x += step) {
+    const v = at(x), bh = v / 255 * h;
+    g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
+    g.fillRect(x, h - bh, step - 1, bh);
   }
-  g.drawImage(cv, 0, 0, w, h - 1, 0, 1, w, h - 1);
-  const row = g.createImageData(w, 1), px = row.data;
-  for (let x = 0; x < w; x++) {
-    const v = at(x), o = x * 4;
-    px[o] = SPEC_PAL[v * 3]; px[o + 1] = SPEC_PAL[v * 3 + 1]; px[o + 2] = SPEC_PAL[v * 3 + 2]; px[o + 3] = 255;
-  }
-  g.putImageData(row, 0, 0);
 }
 
 function specLoop(t) {
@@ -5107,11 +5095,6 @@ function specKick() {
   if (!specRaf) specRaf = requestAnimationFrame(specLoop);
 }
 
-function specToggle() {
-  specMode = specMode === 'bars' ? 'waterfall' : 'bars';
-  try { localStorage.setItem('nlSpec', specMode); } catch (e) {}
-  if (specFit()) specClear();
-}
 
 function makeCtx() {
   if (ctx) return true;
@@ -6702,7 +6685,6 @@ document.addEventListener('DOMContentLoaded', () => {
   MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
   $('mic-gate').addEventListener('change', saveMic);
   ['play-s16', 'play-smooth', 'play-auto', 'play-spec'].forEach((id) => $(id).addEventListener('change', savePlay));
-  $('spec').addEventListener('click', specToggle);
   window.addEventListener('resize', specKick);
   $('mic-test').addEventListener('click', micTest);
   $('node-test').addEventListener('click', nodeTest);
@@ -6815,7 +6797,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <span id="s-tx-w" title="Lit while someone transmits from Node Talker"><span id="s-tx" class="dot"></span>TX</span>
 <span id="st-listeners" title="Listeners">-</span><span id="chk-badge" class="chk hidden" title="An audio check is running (Setup tab)"></span></div>
 <div class="spec" id="spec-wrap">
-<div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum: tap to switch between waterfall and bars"></canvas>
+<div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum"></canvas>
 <span id="gap-cd" class="gap-cd hidden" aria-hidden="true"></span>
 <span class="spec-lo" aria-hidden="true"></span><span class="spec-t" style="left:7.5%">300</span><span class="spec-t" style="left:25%">1k</span>
 <span class="spec-t" style="left:50%">2k</span><span class="spec-t" style="left:75%">3k</span></div>
@@ -6904,7 +6886,7 @@ Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <option value="90">90 s</option><option value="120">120 s</option><option value="180">180 s</option></select></label></div>
 <div class="row"><label><input type="checkbox" id="ptt-gap"> Wait 4 s after receive before talking</label></div>
 <p class="muted small">With the wait on, push-to-talk is locked while the node receives and for 4 s after, counting
-3 to 0 in the corner of the waterfall, so other stations get a chance to answer first.</p>
+3 to 0 in the corner of the spectrum, so other stations get a chance to answer first.</p>
 <p class="muted small">The guard timer stops a tap-to-talk (or headset) transmission: two short beeps 10 s before, then it
 unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></span></p>
 <p class="muted small" id="ptt-src"></p>
@@ -7103,7 +7085,7 @@ mic volume, so the gain here is applied in the page.</p>
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-play"><span class="fold-t">Playback</span><span class="fold-sum" id="sum-play"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-play">
 <p class="muted small">Saved in this browser only; each phone keeps its own.</p>
-<div class="row"><label><input type="checkbox" id="play-spec"> Show the spectrum on the Listen tab (tap it to switch waterfall / bars)</label></div>
+<div class="row"><label><input type="checkbox" id="play-spec"> Show the spectrum on the Listen tab</label></div>
 <div class="row"><label><input type="checkbox" id="play-auto"> Start listening when the page opens (the browser may want one tap first)</label></div>
 <div class="row hidden" id="awake-row"><label><input type="checkbox" id="keep-awake"> Keep the screen on while listening or talking</label></div>
 <div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
