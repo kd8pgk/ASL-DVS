@@ -31,6 +31,12 @@ data class Node(
             uri.host.orEmpty().trim('[', ']').equals(host, ignoreCase = true) && p == port
     }
 
+    fun httpsUpgrade(uri: Uri?): Boolean {
+        if (https || uri == null || uri.scheme?.lowercase() != "https") return false
+        val p = if (uri.port != -1) uri.port else 443
+        return uri.host.orEmpty().trim('[', ']').equals(host, ignoreCase = true) && p == port
+    }
+
     fun toJson(): JSONObject = JSONObject()
         .put("id", id).put("name", name).put("host", host)
         .put("port", port).put("https", https).put("pin", pin)

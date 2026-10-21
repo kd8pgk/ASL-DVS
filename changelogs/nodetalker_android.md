@@ -1,6 +1,13 @@
 # Node Talker for Android changelog
 
-Current version: `0.2.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.2.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.2.1 (2026-10-21)
+
+- **Fix:** a node saved as plain HTTP whose Node Talker uses HTTPS opened in
+  the phone's browser (Node Talker sends plain HTTP on to HTTPS, and the app
+  took that for an outside link). The app now follows it, switches the node
+  to HTTPS and saves that; the certificate question follows once.
 
 ## 0.2.0 (2026-10-21)
 
