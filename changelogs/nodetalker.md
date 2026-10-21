@@ -1,6 +1,10 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_7_20261020.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_7_1_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.7.1 (2026-10-21)
+
+- **Favorites list on the Connect tab**: text 5% smaller (16px to 15.2px).
 
 ## 0.6.7 (2026-10-20)
 
