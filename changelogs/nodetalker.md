@@ -1,6 +1,20 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_10_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_11_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.11 (2026-10-21)
+
+- **Works with Node Talker for Android 0.3.0 (transmit in the app).** With app
+  audio on, push-to-talk goes through the app: it opens the talk channel,
+  keys, sends the phone's microphone and unkeys, so the page needs no HTTPS
+  for the microphone and a tap-to-talk transmission carries on with the
+  screen locked. The page shows the same messages as before (keyed, busy,
+  time-out, guard timer) from the node's own answers, and the TX level from
+  the app. The page's microphone gain is passed on; its other microphone
+  settings (leveler, gate, filter) apply in a browser only.
+- In app mode, switching apps or the screen going off keeps a tap-to-talk
+  transmission going and unkeys a hold-to-talk one.
+- In a browser, or with page audio, nothing changes.
 
 ## 0.6.10 (2026-10-21)
 

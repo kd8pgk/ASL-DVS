@@ -39,7 +39,7 @@
     <string name="audio_settings">Audio settings</string>
     <string name="audio_mode">Audio</string>
     <string name="audio_mode_app">App audio: keeps playing with the screen locked</string>
-    <string name="audio_mode_page">Page audio: as in a browser (use it if app audio sounds bad)</string>
+    <string name="audio_mode_page">Page audio: as in a browser; stops when the screen goes off or you switch apps (use it only if app audio sounds bad)</string>
     <string name="rx_buffer">Receive buffer: %1$d ms (raise it if audio breaks up)</string>
     <string name="output">Output</string>
     <string name="output_speaker">Speaker / media volume</string>
@@ -48,10 +48,18 @@
     <string name="channel_listen">Listening</string>
     <string name="notif_connecting">Connecting…</string>
     <string name="notif_playing">Listening</string>
-    <string name="notif_paused">Paused for a call or other audio</string>
+    <string name="notif_paused">Paused for a call</string>
     <string name="notif_reconnecting">Reconnecting…</string>
     <string name="stop">Stop</string>
     <string name="listen_login">Log in on the page first (or turn on \"Listen without logging in\" in Node Talker).</string>
     <string name="listen_ended">the stream ended</string>
     <string name="listen_retry">Disconnected (%1$s). Retrying in %2$d s…</string>
+    <string name="mic">Microphone (app audio)</string>
+    <string name="voice_mic">Phone\'s echo and noise filter (turn off if your audio sounds choppy or muffled)</string>
+    <string name="notif_talking">Transmitting</string>
+    <string name="notif_talk_ready">Ready to talk</string>
+    <string name="mic_needed">Allow the microphone so Node Talker can transmit.</string>
+    <string name="battery">Battery: let Node Talker run in the background</string>
+    <string name="battery_warn">Battery saver can stop Node Talker when the screen is off. Tap Battery, find Node Talker and choose \"Unrestricted\" or \"Don\'t optimize\".</string>
+    <string name="battery_ok">Battery: Node Talker may run in the background.</string>
 </resources>

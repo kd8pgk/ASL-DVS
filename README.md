@@ -132,7 +132,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_6_10_20261021.py --install
+  sudo python3 nodetalker_v0_6_11_20261021.py --install
   ```
 
 Then:
@@ -308,11 +308,13 @@ It comes in phases:
 1. **Shell (0.1.0):** a list of your nodes; the page opens with nothing
    else around it; Node Talker's own HTTPS certificate is trusted once, by
    its fingerprint, with no browser warnings after that.
-2. **Receive in the background (0.2.0, now; needs Node Talker 0.6.10):**
+2. **Receive in the background (0.2.0; needs Node Talker 0.6.10):**
    notification with Stop, reconnects, pauses for calls, Wi-Fi kept awake;
    Audio settings on the node list switch back to page audio, set the
    receive buffer and pick speaker or earpiece.
-3. Transmit in the background.
+3. **Transmit in the app (0.3.0; needs Node Talker 0.6.11):** the page's
+   push-to-talk keys through the app, works on plain HTTP too, and a
+   tap-to-talk transmission keeps going with the screen locked.
 4. PTT on the screen button or a volume key.
 
 **Install a test build:** on the phone, open the repository's
@@ -477,7 +479,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_73_0_20261021.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodetalker_v0_6_10_20261021.py` | common |
+| `nodetalker_v0_6_11_20261021.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_7_0_20261020.sh` | common |

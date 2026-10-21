@@ -1,6 +1,31 @@
 # Node Talker for Android changelog
 
-Current version: `0.2.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.3.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.3.0 (2026-10-21)
+
+- **Phase 3: transmit in the app** (needs Node Talker 0.6.11; app audio).
+  The page's push-to-talk button keys through the app, which opens the talk
+  channel itself and sends the phone's microphone (8 kHz), so:
+  - push-to-talk works on a plain `http://` node too (a browser needs HTTPS
+    for the microphone);
+  - a tap-to-talk transmission carries on with the screen locked.
+- It always unkeys on release, when the page's guard timer runs out (the
+  app keeps that time itself), when a phone call or other audio takes
+  over, and when the talk channel drops; the node's own time-out and busy
+  lock still apply.
+- Receive is muted while talking and comes back 1 s after.
+- Notification shows "Ready to talk" and "Transmitting".
+- **Audio settings:** "Phone's echo and noise filter" for the microphone (on
+  by default; turn it off if the audio sounds choppy or muffled).
+- Asks for the microphone the first time push-to-talk is used.
+- **Background play everywhere:** another app playing sound (music, video)
+  no longer pauses receive; only a phone call (or a voice assistant)
+  does. Hold-to-talk unkeys when the screen goes off or you switch apps
+  (the button can't be held); tap-to-talk keeps going.
+- **Battery** button on the node list: opens Android's setting to let Node
+  Talker run in the background, with a warning while battery saver may stop
+  it. Page audio's setting now says it stops when the screen goes off.
 
 ## 0.2.1 (2026-10-21)
 

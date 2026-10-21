@@ -5,6 +5,8 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.PowerManager
+import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -36,6 +38,7 @@ class NodesActivity : Activity() {
         list.setOnItemLongClickListener { _, _, pos, _ -> manage(nodes[pos]); true }
         findViewById<Button>(R.id.add).setOnClickListener { edit(null) }
         findViewById<Button>(R.id.audio).setOnClickListener { audioSettings() }
+        findViewById<Button>(R.id.battery).setOnClickListener { batterySettings() }
         val keep = findViewById<CheckBox>(R.id.keep_on)
         keep.isChecked = NodeStore.keepScreenOn(this)
         keep.setOnCheckedChangeListener { _, on -> NodeStore.setKeepScreenOn(this, on) }
@@ -47,7 +50,27 @@ class NodesActivity : Activity() {
         refresh()
     }
 
+    private fun batteryFree() = (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)
+
+    private fun batterySettings() {
+        val tries = listOf(
+            Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, android.net.Uri.parse("package:$packageName")),
+        )
+        for (i in tries) {
+            try {
+                startActivity(i)
+                return
+            } catch (e: android.content.ActivityNotFoundException) {
+                continue
+            }
+        }
+    }
+
     private fun refresh() {
+        val free = batteryFree()
+        findViewById<TextView>(R.id.battery_text).text = getString(if (free) R.string.battery_ok else R.string.battery_warn)
+        findViewById<TextView>(R.id.battery_text).setTextColor(getColor(if (free) R.color.muted else R.color.amber))
         nodes = NodeStore.all(this)
         adapter.notifyDataSetChanged()
         list.visibility = if (nodes.isEmpty()) View.GONE else View.VISIBLE
@@ -145,6 +168,8 @@ class NodesActivity : Activity() {
         val bufText = v.findViewById<TextView>(R.id.buffer_text)
         val speaker = v.findViewById<RadioButton>(R.id.out_speaker)
         val ear = v.findViewById<RadioButton>(R.id.out_earpiece)
+        val voice = v.findViewById<CheckBox>(R.id.voice_mic)
+        voice.isChecked = a.voiceMic
         app.isChecked = a.app
         page.isChecked = !a.app
         speaker.isChecked = !a.earpiece
@@ -166,7 +191,7 @@ class NodesActivity : Activity() {
             .setTitle(R.string.audio_settings)
             .setView(v)
             .setPositiveButton(R.string.save) { _, _ ->
-                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), ear.isChecked)
+                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), ear.isChecked, voice.isChecked)
                 NodeStore.setAudio(this, b)
                 if (!b.app) Listen.stop(this)
                 else Listen.nodeId?.let { id -> NodeStore.get(this, id)?.let { Listen.start(this, it) } }

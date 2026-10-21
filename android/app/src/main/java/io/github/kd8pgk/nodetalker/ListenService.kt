@@ -7,6 +7,8 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.Manifest
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.media.AudioAttributes
 import android.media.AudioFocusRequest
@@ -15,6 +17,7 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
 import android.os.PowerManager
 import android.webkit.CookieManager
@@ -56,7 +59,31 @@ object Listen {
 
     fun stop(c: Context) {
         if (state == OFF) return
-        c.startService(Intent(c, ListenService::class.java).setAction(ListenService.ACTION_STOP))
+        c.startService(Intent(c, ListenService::class.java).setAction(ListenService.ACTION_LISTEN_STOP))
+    }
+}
+
+object Talk {
+    @Volatile var nodeId: String? = null
+    @Volatile var open = false
+    @Volatile var talking = false
+    @Volatile var error = ""
+    @Volatile var svc: ListenService? = null
+
+    val listeners = CopyOnWriteArrayList<(String) -> Unit>()
+
+    fun emit(json: String) = listeners.forEach { it(json) }
+
+    fun json(): String = JSONObject().put("open", open).put("talking", talking).put("error", error).toString()
+
+    fun open(c: Context, node: Node) {
+        val i = Intent(c, ListenService::class.java).setAction(ListenService.ACTION_TALK).putExtra(ListenService.EXTRA_NODE, node.id)
+        c.startForegroundService(i)
+    }
+
+    fun close(c: Context) {
+        if (svc == null) return
+        c.startService(Intent(c, ListenService::class.java).setAction(ListenService.ACTION_TALK_CLOSE))
     }
 }
 
@@ -74,32 +101,74 @@ class ListenService : Service() {
     private var wifiLow: WifiManager.WifiLock? = null
     private var focus: AudioFocusRequest? = null
     @Volatile private var stream: InputStream? = null
+    private val handler by lazy { Handler(mainLooper) }
+    @Volatile private var talkWanted = false
+    @Volatile private var talkGen = 0
+    private var talkThread: Thread? = null
+    @Volatile private var ws: WsClient? = null
+    private var mic: Mic? = null
+    private val talkLock = Any()
+    @Volatile private var talking = false
+    @Volatile private var keyed = false
+    private val preKey = ArrayList<ByteArray>()
+    private var guardMs = 0L
+    private val guardRun = Runnable {
+        if (talking && keyed) {
+            Talk.emit("{\"ev\":\"guard\"}")
+            unkey()
+        }
+    }
+    private val unmute = Runnable { if (!talking) Listen.muted = false }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        Talk.svc = this
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            shutdown()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                shutdown()
+                return START_NOT_STICKY
+            }
+            ACTION_LISTEN_STOP -> {
+                listenStop()
+                return START_NOT_STICKY
+            }
+            ACTION_TALK_CLOSE -> {
+                talkClose()
+                if (!running) shutdown() else node?.let { notifyState(it) }
+                return START_NOT_STICKY
+            }
         }
         val n = NodeStore.get(this, intent?.getStringExtra(EXTRA_NODE))
         if (n == null) {
-            shutdown()
+            if (!running && !talkWanted) shutdown()
             return START_NOT_STICKY
         }
+        if (node != null && node?.id != n.id) {
+            talkClose()
+            stopWorkers()
+        }
+        node = n
         startInForeground(n)
+        locks(true)
+        if (focus == null) requestFocus()
+        if (intent?.action == ACTION_TALK) {
+            talkOpen(n)
+            return START_NOT_STICKY
+        }
         if (running && node?.id == n.id) {
             if (NodeStore.audio(this) != playerSettings) restartPlayer()
             if (focusLost) requestFocus()
             return START_NOT_STICKY
         }
         stopWorkers()
-        node = n
         Listen.nodeId = n.id
         Listen.error = ""
         set(Listen.CONNECTING)
-        locks(true)
-        requestFocus()
         running = true
         val g = ++gen
         queue.clear()
@@ -110,7 +179,180 @@ class ListenService : Service() {
 
     override fun onDestroy() {
         shutdown()
+        if (Talk.svc === this) Talk.svc = null
         super.onDestroy()
+    }
+
+    private fun listenStop() {
+        stopWorkers()
+        Listen.nodeId = null
+        Listen.level = -120.0
+        set(Listen.OFF, "")
+        if (!talkWanted) shutdown() else node?.let { notifyState(it) }
+    }
+
+    private fun talkOpen(n: Node) {
+        Talk.nodeId = n.id
+        if (talkWanted && talkThread?.isAlive == true) {
+            if (Talk.open) Talk.emit("{\"ev\":\"open\"}")
+            return
+        }
+        talkWanted = true
+        val g = ++talkGen
+        talkThread = Thread({ talkLoop(n, g) }, "nt-talk").apply { start() }
+    }
+
+    private fun talkClose() {
+        unkey()
+        talkWanted = false
+        talkGen++
+        val c = ws
+        ws = null
+        if (c != null) Thread({ c.close() }, "nt-talk-close").start()
+        talkThread?.interrupt()
+        talkThread = null
+        Talk.open = false
+        Talk.nodeId = null
+    }
+
+    private fun talkLoop(n: Node, g: Int) {
+        var delayMs = 2000L
+        while (talkWanted && g == talkGen) {
+            val c = WsClient(n, CookieManager.getInstance().getCookie(n.origin))
+            try {
+                c.connect()
+                if (!(talkWanted && g == talkGen)) {
+                    c.close()
+                    return
+                }
+                ws = c
+                Talk.open = true
+                Talk.error = ""
+                delayMs = 2000L
+                Talk.emit("{\"ev\":\"open\"}")
+                node?.let { notifyState(it) }
+                c.read { onTalkText(it) }
+            } catch (e: IOException) {
+                Talk.error = e.message ?: e.javaClass.simpleName
+            }
+            ws = null
+            if (talking) stopTalk()
+            c.close()
+            val was = Talk.open
+            Talk.open = false
+            if (!(talkWanted && g == talkGen)) return
+            if (was) Talk.emit(JSONObject().put("ev", "closed").put("error", Talk.error).toString())
+            node?.let { notifyState(it) }
+            try {
+                Thread.sleep(delayMs)
+            } catch (e: InterruptedException) {
+                return
+            }
+            delayMs = minOf(delayMs * 2, 10000L)
+        }
+    }
+
+    private fun onTalkText(t: String) {
+        val m = try {
+            JSONObject(t)
+        } catch (e: org.json.JSONException) {
+            return
+        }
+        when (m.optString("ev")) {
+            "keyed" -> {
+                val pk: List<ByteArray>
+                synchronized(talkLock) {
+                    keyed = talking
+                    pk = preKey.toList()
+                    preKey.clear()
+                }
+                val c = ws
+                try {
+                    pk.forEach { c?.sendBinary(it) }
+                } catch (e: IOException) {
+                    Talk.error = e.message ?: ""
+                }
+                if (guardMs > 0) handler.postDelayed(guardRun, guardMs)
+            }
+            "denied", "unkeyed" -> if (talking) stopTalk()
+        }
+        Talk.emit(t)
+    }
+
+    fun key(guardSec: Double, gainDb: Double): Boolean {
+        val c = ws ?: return false
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
+        synchronized(talkLock) {
+            if (talking) return true
+            talking = true
+            keyed = false
+            preKey.clear()
+            guardMs = (guardSec * 1000).toLong()
+        }
+        handler.removeCallbacks(unmute)
+        handler.removeCallbacks(guardRun)
+        Listen.muted = true
+        try {
+            c.sendText("{\"op\":\"key\"}")
+        } catch (e: IOException) {
+            stopTalk()
+            return false
+        }
+        val m = Mic(NodeStore.audio(this).voiceMic, gainDb, ::micFrame) { db ->
+            Talk.emit(JSONObject().put("ev", "level").put("db", db).toString())
+        }
+        if (!m.start()) {
+            unkey()
+            Talk.emit("{\"ev\":\"micfail\"}")
+            return false
+        }
+        mic = m
+        Talk.talking = true
+        node?.let { notifyState(it) }
+        return true
+    }
+
+    private fun micFrame(f: ByteArray) {
+        synchronized(talkLock) {
+            if (!talking) return
+            if (!keyed) {
+                if (preKey.size < PRE_KEY_FRAMES) preKey.add(f)
+                return
+            }
+        }
+        try {
+            ws?.sendBinary(f)
+        } catch (e: IOException) {
+            Talk.error = e.message ?: ""
+        }
+    }
+
+    fun unkey() {
+        if (!talking) return
+        if (android.os.Looper.myLooper() == mainLooper) {
+            Thread({ unkey() }, "nt-unkey").start()
+            return
+        }
+        try {
+            ws?.sendText("{\"op\":\"unkey\"}")
+        } catch (e: IOException) {
+            Talk.error = e.message ?: ""
+        }
+        stopTalk()
+    }
+
+    private fun stopTalk() {
+        synchronized(talkLock) {
+            talking = false
+            keyed = false
+            preKey.clear()
+        }
+        handler.removeCallbacks(guardRun)
+        mic?.stop()
+        mic = null
+        Talk.talking = false
+        handler.postDelayed(unmute, 1000)
+        node?.let { notifyState(it) }
     }
 
     private fun set(state: String, err: String = Listen.error) {
@@ -124,6 +366,7 @@ class ListenService : Service() {
     }
 
     private fun shutdown() {
+        talkClose()
         stopWorkers()
         locks(false)
         focus?.let { (getSystemService(AUDIO_SERVICE) as AudioManager).abandonAudioFocusRequest(it) }
@@ -131,6 +374,7 @@ class ListenService : Service() {
         Listen.nodeId = null
         Listen.level = -120.0
         Listen.muted = false
+        node = null
         set(Listen.OFF)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -299,7 +543,8 @@ class ListenService : Service() {
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setWillPauseWhenDucked(false)
             .setOnAudioFocusChangeListener { change ->
-                focusLost = change == AudioManager.AUDIOFOCUS_LOSS || change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                focusLost = change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
+                if (focusLost && talking) handler.post { unkey() }
                 if (running && Listen.state != Listen.RECONNECTING && Listen.state != Listen.CONNECTING) {
                     set(if (focusLost) Listen.PAUSED else Listen.PLAYING, "")
                 }
@@ -347,7 +592,11 @@ class ListenService : Service() {
             )
         }
         val notif = build(n)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val micOk = checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK or
+                (if (micOk) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0))
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK)
         } else {
             startForeground(NOTIF_ID, notif)
@@ -355,7 +604,7 @@ class ListenService : Service() {
     }
 
     private fun notifyState(n: Node) {
-        if (Listen.state == Listen.OFF) return
+        if (Listen.state == Listen.OFF && !talkWanted) return
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(NOTIF_ID, build(n))
     }
 
@@ -369,11 +618,10 @@ class ListenService : Service() {
         val stop = PendingIntent.getService(
             this, 1, Intent(this, ListenService::class.java).setAction(ACTION_STOP), PendingIntent.FLAG_IMMUTABLE,
         )
-        val text = when (Listen.state) {
-            Listen.PLAYING -> getString(R.string.notif_playing)
-            Listen.PAUSED -> getString(R.string.notif_paused)
-            Listen.RECONNECTING -> getString(R.string.notif_reconnecting)
-            else -> getString(R.string.notif_connecting)
+        val text = when {
+            talking -> getString(R.string.notif_talking)
+            Listen.state == Listen.OFF -> getString(if (Talk.open) R.string.notif_talk_ready else R.string.notif_connecting)
+            else -> listenText()
         }
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_listen)
@@ -387,9 +635,22 @@ class ListenService : Service() {
             .build()
     }
 
+    private fun listenText(): String {
+        return when (Listen.state) {
+            Listen.PLAYING -> getString(R.string.notif_playing)
+            Listen.PAUSED -> getString(R.string.notif_paused)
+            Listen.RECONNECTING -> getString(R.string.notif_reconnecting)
+            else -> getString(R.string.notif_connecting)
+        }
+    }
+
     companion object {
         const val ACTION_START = "io.github.kd8pgk.nodetalker.LISTEN"
         const val ACTION_STOP = "io.github.kd8pgk.nodetalker.STOP"
+        const val ACTION_LISTEN_STOP = "io.github.kd8pgk.nodetalker.LISTEN_STOP"
+        const val ACTION_TALK = "io.github.kd8pgk.nodetalker.TALK"
+        const val ACTION_TALK_CLOSE = "io.github.kd8pgk.nodetalker.TALK_CLOSE"
+        private const val PRE_KEY_FRAMES = 25
         const val EXTRA_NODE = "node"
         private const val CHANNEL = "listen"
         private const val NOTIF_ID = 1
