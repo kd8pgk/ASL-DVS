@@ -57,6 +57,26 @@
   `docs/`) are updated only when the request says so. A code change alone does
   not update them.
 
+## Android app (`android/`)
+
+- **Node Talker for Android** is a Kotlin/Gradle project in `android/`. The
+  tool-file rules (one file per version, renamed each version) do not apply
+  to it.
+- **Version** is `appVersion` (`X.Y.Z`) in `android/app/build.gradle.kts`;
+  `versionCode` is worked out from it. Any change under `android/` raises it
+  and adds an entry at the top of `changelogs/nodetalker_android.md` with
+  its "Current version" line updated (`ci/check_repo.py` checks this). No
+  cosmetic fourth part.
+- **Kotlin and Gradle files carry no comments**, like the scripts.
+- **No libraries** beyond the Kotlin standard library unless a phase needs
+  one.
+- **Package name** `io.github.kd8pgk.nodetalker` never changes (the Play
+  Store ties the app to it).
+- The `android` workflow builds and lints every change; on `main` it
+  publishes the debug APK as a pre-release `android-vX.Y.Z`. Release signing
+  waits until the keystore secrets exist.
+- The app is not on the stable/testing channels: those update node tools.
+
 ## Workflow
 
 - After a build is pushed, open the pull request and merge it, without
