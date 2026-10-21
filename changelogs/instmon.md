@@ -1,6 +1,22 @@
 # instmon changelog
 
-Current file: `instmon_v2_71_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_72_0_20261021.py`. Newest entries first.
+
+## 2.72.0 (2026-10-21)
+
+- **rpi-clone: "Unable to locate boot device" fixed.** rpi-clone finds the
+  boot device by looking for the boot partition mounted as vfat at
+  `/boot/firmware` or `/boot`. Before starting (and before node services are
+  paused), instmon now makes sure it is: it opens the folder, which mounts
+  a boot partition set to mount on first use, or mounts it from
+  `/etc/fstab`. If it still isn't there, the clone is refused with the
+  reason, so the node is never taken off the air for nothing. The
+  rpi-clone command also opens the folder again right before it runs.
+- **Copy Log moved below the console**, away from Reset, and **Reset asks
+  first** when the card has a result to clear.
+- **No 401 flood.** Once the login is lost, the page stops sending requests
+  while it reloads to the login screen, and the Execution Log records at
+  most one "HTTP 401" line per browser per minute, with a count of the rest.
 
 ## 2.71.0 (2026-10-21)
 
