@@ -308,7 +308,7 @@ It comes in phases:
 1. **Shell (0.1.0):** a list of your nodes; the page opens with nothing
    else around it; Node Talker's own HTTPS certificate is trusted once, by
    its fingerprint, with no browser warnings after that.
-2. **Receive in the background (0.2.0, now; needs Node Talker 0.6.10):**
+2. **Receive in the background (0.2.0; needs Node Talker 0.6.10):**
    notification with Stop, reconnects, pauses for calls, Wi-Fi kept awake;
    Audio settings on the node list switch back to page audio, set the
    receive buffer and pick speaker or earpiece.
