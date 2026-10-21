@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.71.0"
+VERSION ="2.72.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -233,6 +233,8 @@ def _verify_root_password(password):
 
 _SESSION_COOKIE_NAME = "instmon_session"
 _SESSION_TTL_SEC = 12 * 3600
+_auth_log_lock = threading.Lock()
+_auth_log_state = {}
 
 _sessions = {}
 _sessions_lock = threading.Lock()
@@ -1233,8 +1235,61 @@ def _rpiclone_args(force=False, hostname=None):
         args += ["-s", hostname]
     return args
 
+_RPICLONE_BOOT_DIRS = ("/boot/firmware", "/boot")
+
+def _rpiclone_boot_mounted():
+    try:
+        with open("/proc/mounts", "r") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 3 and parts[1] in _RPICLONE_BOOT_DIRS and parts[2] == "vfat":
+            return parts[1]
+    return None
+
+def _rpiclone_fstab_has(mountpoint):
+    try:
+        with open("/etc/fstab", "r") as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) >= 2 and not parts[0].startswith("#") and parts[1] == mountpoint:
+                    return True
+    except OSError:
+        pass
+    return False
+
+def _rpiclone_prepare_boot():
+    mp = _rpiclone_boot_mounted()
+    if mp:
+        return True, mp
+    for d in _RPICLONE_BOOT_DIRS:
+        if os.path.isdir(d):
+            try:
+                os.listdir(d)
+            except OSError:
+                pass
+    mp = _rpiclone_boot_mounted()
+    if mp:
+        return True, mp
+    for d in _RPICLONE_BOOT_DIRS:
+        if _rpiclone_fstab_has(d):
+            try:
+                subprocess.run(["mount", d], capture_output=True, text=True, timeout=20)
+            except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+                continue
+            mp = _rpiclone_boot_mounted()
+            if mp:
+                log_event(f"rpi-clone: mounted the boot partition at {mp} so rpi-clone can find it.", "info")
+                return True, mp
+    return False, ("This Pi's boot partition isn't mounted as vfat at /boot/firmware or /boot, and rpi-clone needs it "
+                   "there to find the boot device. Mount it (for example: mount /boot/firmware) and try again, or use "
+                   "the Standard (dd) copy method.")
+
 def _diskimg_rpiclone_command(dst, unit_name, extra_args):
-    cmd = ["rpi-clone", os.path.basename(dst)] + list(extra_args or ["-U"])
+    cmd = ["bash", "-c", 'ls /boot/firmware /boot >/dev/null 2>&1; exec rpi-clone "$@"', "rpi-clone",
+           os.path.basename(dst)] + list(extra_args or ["-U"])
     if shutil.which("systemd-run"):
         return (
             ["systemd-run", "--quiet", "--pipe", "--collect", f"--unit={unit_name}"] + cmd,
@@ -6854,7 +6909,7 @@ textarea.diskimg-cmd{resize:vertical;line-height:1.35;overflow-x:auto;
 .diskimg-card.collapsed .diskimg-help-toggle{display:none}
 .card:not(.help-open) .diskimg-help{display:none}
 .diskimg-help{margin:.3rem 0}
-.diskimg-copy-row{justify-content:flex-end;margin-top:.5rem}
+.diskimg-copy-row{justify-content:flex-end;margin-top:.4rem}
 .diskimg-copy-row button{font-size:.7rem;padding:.15rem .55rem}
 .diskimg-step{display:flex;align-items:center;gap:.45rem;margin:.75rem 0 .3rem;
   font-size:.8rem;font-weight:700;color:var(--amber)}
@@ -8390,6 +8445,9 @@ _JS_ACTIONS = """function wireButtons() {
         return;
       }
       if (action === 'diskimg_reset') {
+        const cur = _diskimgCurrentJob;
+        if (cur && cur.kind === btn.dataset.kind && cur.state !== 'running'
+            && !confirm('Reset this card? Its result and console are cleared, and its options go back to their defaults.')) return;
         btn.disabled = true;
         try {
           await resetDiskimgCard(btn.dataset.kind);
@@ -8739,8 +8797,12 @@ _JS_AUTH = """// Fetch wrapper: any 401 from an /api/* call (other than the logi
 // login screen instead of letting the app keep polling into failures.
 const _rawFetch = window.fetch.bind(window);
 window.fetch = async function(input, init) {
-  const resp = await _rawFetch(input, init);
   const url = typeof input === 'string' ? input : ((input && input.url) || '');
+  // v2.72.0: once the login is lost, stop sending -- the page is reloading.
+  if (_authLostReloading && url.startsWith('/api/') && url !== '/api/login') {
+    return new Response('{"error":"Authentication required"}', {status: 401, headers: {'Content-Type': 'application/json'}});
+  }
+  const resp = await _rawFetch(input, init);
   if (resp.status === 401 && url.startsWith('/api/') && url !== '/api/login') {
     _onAuthLost();
   }
@@ -9413,10 +9475,10 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="format" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-format" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-format" class="diskimg-console placeholder">(no job running)</div>
     <div class="row diskimg-copy-row">
       <button data-action="copy_diskimg_console" data-target="diskimg-console-format">&#9111; Copy Log</button>
     </div>
-    <div id="diskimg-console-format" class="diskimg-console placeholder">(no job running)</div>
   </div>
   </div>
 </div>
@@ -9483,10 +9545,10 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="backup" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-backup" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-backup" class="diskimg-console placeholder">(no job running)</div>
     <div class="row diskimg-copy-row">
       <button data-action="copy_diskimg_console" data-target="diskimg-console-backup">&#9111; Copy Log</button>
     </div>
-    <div id="diskimg-console-backup" class="diskimg-console placeholder">(no job running)</div>
   </div>
   <div class="diskimg-sub">Existing Backups</div>
   <div id="diskimg-backups" class="small muted">Loading&hellip;</div>
@@ -9583,10 +9645,10 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="clone" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-clone" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-clone" class="diskimg-console placeholder">(no job running)</div>
     <div class="row diskimg-copy-row">
       <button data-action="copy_diskimg_console" data-target="diskimg-console-clone">&#9111; Copy Log</button>
     </div>
-    <div id="diskimg-console-clone" class="diskimg-console placeholder">(no job running)</div>
   </div>
   </div>
 </div>
@@ -9644,10 +9706,10 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <button data-action="diskimg_reset" data-kind="restore" title="Clear this card's last result and put its options back to their defaults for another try.">Reset</button>
     </div>
     <div id="diskimg-job-restore" style="margin-top:.5rem"></div>
+    <div id="diskimg-console-restore" class="diskimg-console placeholder">(no job running)</div>
     <div class="row diskimg-copy-row">
       <button data-action="copy_diskimg_console" data-target="diskimg-console-restore">&#9111; Copy Log</button>
     </div>
-    <div id="diskimg-console-restore" class="diskimg-console placeholder">(no job running)</div>
   </div>
   </div>
 </div>
@@ -9833,7 +9895,16 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self.end_headers()
             self.wfile.write(body)
             return
-        self._error_json(401, "Authentication required")
+        now = time.time()
+        with _auth_log_lock:
+            last, suppressed = _auth_log_state.get(client_ip, (0.0, 0))
+            if now - last >= 60:
+                _auth_log_state[client_ip] = (now, 0)
+                note = f" -- {suppressed} more from this browser in the last minute were not logged" if suppressed else ""
+                log_event(f"HTTP 401: Authentication required ({self.command} {self.path}) from {client_ip}{note}", "err")
+            else:
+                _auth_log_state[client_ip] = (last, suppressed + 1)
+        self._send_json(401, {"error": "Authentication required"})
 
     def _find_library_file (self ,filename ,category =None ):
         if category and category in LIB_SUBDIRS :
@@ -10462,6 +10533,10 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
                 self._error_json(400, "Hostname for the clone: letters, digits and dashes only, up to 63 characters.")
                 return
             rpiclone_args = _rpiclone_args(bool(body.get("rpi_force")), rpi_host or None)
+            boot_ok, boot_detail = _rpiclone_prepare_boot()
+            if not boot_ok:
+                self._error_json(409, boot_detail)
+                return
             verify = best_effort = direct_io = False
             body["throttle_rate_mb"] = None
         throttle_rate_mb = body.get("throttle_rate_mb")
