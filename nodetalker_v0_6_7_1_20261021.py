@@ -29,7 +29,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.7"
+VERSION = "0.6.7.1"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker"
 
@@ -6004,7 +6004,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="c-empty" class="muted">No favorites yet. Add up to 15 on the Setup tab.</div>
 <div id="c-pick">
 <label for="c-fav">Favorite</label>
-<select id="c-fav" style="width:100%;min-height:52px;margin-top:6px;font-size:16px"></select>
+<select id="c-fav" style="width:100%;min-height:52px;margin-top:6px;font-size:15.2px"></select>
 <div class="sel-card">
 <div class="row" style="margin:0"><span class="tag" id="c-mode"></span><span class="big-num" id="c-num"></span></div>
 <div class="muted" id="c-label"></div>
