@@ -1,6 +1,33 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_7_1_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_8_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.8 (2026-10-21)
+
+- **Tune card** on the Connect tab, after Node Controller's search cards:
+  Mode, Network (DMR) or Module (D-STAR, M17), Search, the list, Connect,
+  LH and Save on one line (wrapping on a phone), with Disconnect below.
+  - The lists come from the files on the Pi that Node Controller reads:
+    `YSFHosts.txt`, `P25Hosts.txt`, `NXDNHosts.txt`, `TGList_BM.txt` (STFU),
+    the DPlus, DExtra and DCS host lists (D-STAR) and `M17Hosts.json`. Search
+    matches every word typed; one match is picked for you.
+  - A talkgroup, room or reflector can also be typed when it is not in the
+    list, or when the list is missing. DMR has no list: type the talkgroup.
+  - Connect tunes through Node Controller when it runs, otherwise on its own,
+    the same way a favorite does. A DMR network Node Controller doesn't have
+    gets the same "add it / tune this once / cancel" question.
+  - LH opens Last Heard for the pick: the network's link for DMR, the
+    reflector's own link or its address for the others.
+  - Save adds the pick to the favorites (up to 15).
+  - Disconnect ends whatever DVSwitch or M17 has tuned, favorite or not; the
+    card shows what is tuned.
+  - The mode, network, module, search and pick are remembered on the phone.
+- **Tune card on this phone** (Setup tab, Settings): sliders for the card's
+  gap, height and text size, kept on the phone, with "Default spacing".
+- **Links card** moved from the Connect tab to the Setup tab, under System.
+- New API: `GET /api/tune-list?mode=`, `POST /api/tune`, `/api/tune/save`,
+  `/api/tune/disconnect`. `/api/status` adds `tuned_now`; `/api/favorites`
+  adds `net_links`. Node Controller needs no update.
 
 ## 0.6.7.1 (2026-10-21)
 
