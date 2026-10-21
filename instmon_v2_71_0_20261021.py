@@ -35,7 +35,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.70.0"
+VERSION ="2.71.0"
 DATE_STR ="2026-10-21"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -494,6 +494,67 @@ def _diskimg_mount_all(disk_name):
 def _diskimg_job_running():
     with _diskimg_job_lock:
         return _diskimg_job is not None and _diskimg_job.get("state") == "running"
+
+_DISKIMG_LASTJOB_PATH = os.path.join(CONFIG_DIR, "instmon_diskimg_lastjob.json")
+
+def _diskimg_lastjob_write(info):
+    tmp = _DISKIMG_LASTJOB_PATH + ".tmp"
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(tmp, "w") as fh:
+            json.dump(info, fh)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, _DISKIMG_LASTJOB_PATH)
+    except (OSError, TypeError, ValueError) as exc:
+        log_event(f"Could not record the disk-image job state: {exc}", "warn")
+
+def _diskimg_lastjob_recover():
+    global _diskimg_job
+    try:
+        with open(_DISKIMG_LASTJOB_PATH, "r") as fh:
+            info = json.load(fh)
+    except (OSError, ValueError):
+        return
+    if not isinstance(info, dict) or info.get("state") not in ("starting", "running"):
+        return
+    job_id = str(info.get("id") or "")
+    kind = info.get("kind") or "job"
+    if not re.fullmatch(r"[0-9a-f]{16}", job_id):
+        return
+    unit = f"instmon-diskimg-{job_id}.service"
+    stopped_note = ""
+    try:
+        r = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=5)
+        if (r.stdout or "").strip() == "active":
+            subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
+            stopped_note = " The copy was still running on its own and has been stopped."
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    started = info.get("started") or time.time()
+    when = datetime.fromtimestamp(started).strftime("%H:%M:%S")
+    message = (f"instmon restarted while this {kind} was running (started {when}).{stopped_note} "
+               "The destination is incomplete -- start it again.")
+    log_event(f"STARTUP RECOVERY: disk-image {kind} {job_id} was interrupted by an instmon restart.{stopped_note}", "err")
+    dest = info.get("dest") or ""
+    if kind == "backup" and dest.endswith(_DISKIMG_PART_SUFFIX):
+        _diskimg_remove_partial_backup(dest)
+    with _diskimg_job_lock:
+        if _diskimg_job is None:
+            _diskimg_job = {
+                "id": job_id, "kind": kind, "state": "failed", "phase": "done",
+                "source": info.get("source") or "", "dest": dest,
+                "bytes_done": 0, "bytes_total": info.get("bytes_total") or 0,
+                "started": started, "finished": time.time(), "message": message,
+                "proc": None, "unit_name": None, "cancelled": False,
+                "verify_bytes_done": 0, "quiesced": False, "quiesce_stopped": [],
+                "backend": info.get("backend") or "dd", "progress_format": "dd",
+                "command_display": info.get("command_display") or "",
+                "console": [f"[{when}] Started {kind}: {info.get('source') or '?'} -> {dest or '?'}",
+                            f"[{datetime.now().strftime('%H:%M:%S')}] failed: {message}"],
+            }
+    info.update(state="failed", message=message, finished=time.time())
+    _diskimg_lastjob_write(info)
 
 def _diskimg_busy_reason():
     with _diskimg_job_lock:
@@ -1429,7 +1490,25 @@ def _diskimg_reader_thread(job_id):
             frozen = bool(_diskimg_job.get("frozen"))
     try:
         _diskimg_reader_thread_body(job_id)
+    except Exception as exc:
+        detail = f"{type(exc).__name__}: {exc}"
+        log_event(f"Disk-image job {job_id} stopped on an internal error: {detail}", "err")
+        with _diskimg_job_lock:
+            if _diskimg_job is not None and _diskimg_job["id"] == job_id and _diskimg_job.get("state") == "running":
+                _diskimg_job["state"] = "failed"
+                _diskimg_job["finished"] = time.time()
+                _diskimg_job["message"] = f"Stopped on an internal error ({detail}). Check the destination before using it."
+                _diskimg_job["proc"] = None
+        _diskimg_console_append(job_id, f"failed: internal error ({detail})")
     finally:
+        with _diskimg_job_lock:
+            if _diskimg_job is not None and _diskimg_job["id"] == job_id:
+                frozen = bool(_diskimg_job.get("frozen"))
+        with _diskimg_job_lock:
+            snap = dict(_diskimg_job) if (_diskimg_job is not None and _diskimg_job["id"] == job_id) else None
+        if snap is not None and not snap.get("quiesced"):
+            _diskimg_lastjob_write({"id": job_id, "kind": snap.get("kind"), "state": snap.get("state"),
+                                    "message": snap.get("message"), "finished": snap.get("finished")})
         if quiesced:
             try:
                 _diskimg_finish_quiesce(job_id, frozen)
@@ -1475,6 +1554,11 @@ def _diskimg_finish_quiesce(job_id, frozen=False):
             _diskimg_job["message"] = (_diskimg_job.get("message") or "").rstrip()
             _diskimg_job["message"] += ("  " if _diskimg_job["message"] else "") + summary
     log_event(f"Disk-image job {job_id}: {summary}", "ok" if ok else "err")
+    with _diskimg_job_lock:
+        snap = dict(_diskimg_job) if (_diskimg_job is not None and _diskimg_job["id"] == job_id) else None
+    if snap is not None:
+        _diskimg_lastjob_write({"id": job_id, "kind": snap.get("kind"), "state": snap.get("state"),
+                                "message": snap.get("message"), "finished": snap.get("finished")})
 
 def _diskimg_reader_thread_body(job_id):
     with _diskimg_job_lock:
@@ -1571,6 +1655,24 @@ def _diskimg_reader_thread_body(job_id):
 
     stream_hash = _diskimg_read_hash_file(hash_path, hash_algo) if (hash_path and copy_ok) else None
     _diskimg_hash_cleanup(hash_path)
+
+    root_frozen = False
+    with _diskimg_job_lock:
+        still_frozen = _diskimg_job is not None and _diskimg_job["id"] == job_id and bool(_diskimg_job.get("frozen"))
+        if still_frozen:
+            _diskimg_job["phase"] = "thawing"
+    if still_frozen:
+        _diskimg_console_append(job_id, "Copy finished -- thawing the root filesystem...")
+        thaw_ok, thaw_message = _diskimg_freeze("unfreeze")
+        _diskimg_console_append(job_id, thaw_message)
+        with _diskimg_job_lock:
+            if _diskimg_job is not None and _diskimg_job["id"] == job_id:
+                if thaw_ok:
+                    _diskimg_job["frozen"] = False
+                _diskimg_job["phase"] = "copying"
+        if not thaw_ok:
+            root_frozen = True
+            log_event(f"Disk-image job {job_id}: {thaw_message} -- will retry when the job ends.", "err")
 
     if mapfile_path:
         try:
@@ -1693,13 +1795,20 @@ def _diskimg_reader_thread_body(job_id):
                 final_message = f"Completed successfully. {fmt_message}"
             _diskimg_console_append(job_id, fmt_message)
 
+    if final_state == "done" and root_frozen and (expand_requested or new_ids_requested):
+        final_message += " Expand and New disk IDs were skipped because the root filesystem could not be thawed."
+        expand_requested = new_ids_requested = False
+
     if final_state == "done" and kind in ("clone", "restore") and expand_requested:
         with _diskimg_job_lock:
             if _diskimg_job is None or _diskimg_job["id"] != job_id:
                 return
             _diskimg_job["phase"] = "expanding"
         _diskimg_console_append(job_id, "Expanding the last partition to fill the drive...")
-        exp_ok, exp_message = _diskimg_expand_to_fill(dest)
+        try:
+            exp_ok, exp_message = _diskimg_expand_to_fill(dest)
+        except Exception as exc:
+            exp_ok, exp_message = False, f"unexpected error: {exc}"
         _diskimg_console_append(job_id, exp_message if exp_ok else f"Not expanded: {exp_message}")
         final_message += f" {exp_message}" if exp_ok else f" Not expanded: {exp_message}."
 
@@ -1709,7 +1818,10 @@ def _diskimg_reader_thread_body(job_id):
                 return
             _diskimg_job["phase"] = "relabeling"
         _diskimg_console_append(job_id, "Giving the copy new disk IDs so it can't be confused with this Pi's own disk...")
-        ids_ok, ids_message = _diskimg_new_disk_ids(dest)
+        try:
+            ids_ok, ids_message = _diskimg_new_disk_ids(dest)
+        except Exception as exc:
+            ids_ok, ids_message = False, f"unexpected error: {exc}"
         _diskimg_console_append(job_id, ids_message if ids_ok else f"New disk IDs: {ids_message}")
         final_message += f" {ids_message}" if ids_ok else (
             f" New disk IDs failed: {ids_message}. Don't leave the copy plugged in when this Pi reboots.")
@@ -1810,7 +1922,13 @@ def _diskimg_reader_thread_body(job_id):
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as exc:
             log_event(f"partprobe {dest} failed (copy itself still succeeded): {exc}", "warn")
 
-def _diskimg_start_job(
+def _diskimg_start_job(*args, **kwargs):
+    ok, result = _diskimg_start_job_inner(*args, **kwargs)
+    if not ok:
+        _diskimg_lastjob_write({"state": "not_started", "message": result})
+    return ok, result
+
+def _diskimg_start_job_inner(
     kind, source_desc, dest_desc, src_path, dst_path, bytes_total,
     shrink_requested=False, verify_requested=False,
     encrypt_passphrase=None, decrypt_passphrase=None,
@@ -1854,6 +1972,9 @@ def _diskimg_start_job(
 
     job_id = secrets.token_hex(8)
     unit_name = f"instmon-diskimg-{job_id}"
+    _diskimg_lastjob_write({"id": job_id, "kind": kind, "state": "starting", "source": source_desc,
+                            "dest": dest_desc, "bytes_total": bytes_total, "backend": backend,
+                            "started": time.time()})
     hash_path = _diskimg_hash_path(job_id) if use_stream_hash else None
 
     if quiesce_requested:
@@ -11565,6 +11686,7 @@ def run ():
         )
 
     _quiesce_startup_sweep ()
+    _diskimg_lastjob_recover ()
     full_update_resume_at_startup ()
     docs_start_first_fetch()
 
