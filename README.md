@@ -132,7 +132,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_6_11_20261021.py --install
+  sudo python3 nodetalker_v0_6_12_20261021.py --install
   ```
 
 Then:
@@ -177,7 +177,7 @@ node linked to the main node.
   (30–180 s, 60 s by default). The guard gives two short beeps 10 s before it
   unkeys. **Wait 4 s after receive** (0.6.4 and later) locks push-to-talk
   while the node receives and for 4 s after, counting 3 to 0 on the
-  waterfall.
+  spectrum.
 - **A transmission stops** at the time-out (120 s by default), 1 s after
   audio stops arriving, when you let go (or tap again), or at the guard
   timer.
@@ -482,7 +482,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_73_0_20261021.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
-| `nodetalker_v0_6_11_20261021.py` | common |
+| `nodetalker_v0_6_12_20261021.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_7_0_20261020.sh` | common |

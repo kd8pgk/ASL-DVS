@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_11_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_6_12_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.6.12 (2026-10-21)
+
+- **Spectrum on the Listen tab is bars only.** The waterfall view is gone,
+  and tapping the spectrum no longer switches views; a saved "waterfall"
+  choice is ignored. The setting (Setup tab, Playback) still shows or hides
+  the spectrum.
 
 ## 0.6.11 (2026-10-21)
 
