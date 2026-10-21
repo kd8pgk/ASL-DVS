@@ -36,4 +36,22 @@
     <string name="mic_denied">Microphone permission was refused, so this node can\'t use the microphone.</string>
     <string name="saved_file">Saved %1$s</string>
     <string name="save_failed">Could not save the file: %1$s</string>
+    <string name="audio_settings">Audio settings</string>
+    <string name="audio_mode">Audio</string>
+    <string name="audio_mode_app">App audio: keeps playing with the screen locked</string>
+    <string name="audio_mode_page">Page audio: as in a browser (use it if app audio sounds bad)</string>
+    <string name="rx_buffer">Receive buffer: %1$d ms (raise it if audio breaks up)</string>
+    <string name="output">Output</string>
+    <string name="output_speaker">Speaker / media volume</string>
+    <string name="output_earpiece">Earpiece / call volume</string>
+    <string name="audio_saved">Saved. Reopen the node page to switch the audio mode.</string>
+    <string name="channel_listen">Listening</string>
+    <string name="notif_connecting">Connecting…</string>
+    <string name="notif_playing">Listening</string>
+    <string name="notif_paused">Paused for a call or other audio</string>
+    <string name="notif_reconnecting">Reconnecting…</string>
+    <string name="stop">Stop</string>
+    <string name="listen_login">Log in on the page first (or turn on \"Listen without logging in\" in Node Talker).</string>
+    <string name="listen_ended">the stream ended</string>
+    <string name="listen_retry">Disconnected (%1$s). Retrying in %2$d s…</string>
 </resources>

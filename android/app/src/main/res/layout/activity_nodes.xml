@@ -53,6 +53,14 @@
             android:text="@string/add_node"
             android:textColor="@color/accent_ink" />
 
+        <Button
+            android:id="@+id/audio"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:minHeight="48dp"
+            android:text="@string/audio_settings" />
+
         <CheckBox
             android:id="@+id/keep_on"
             android:layout_width="match_parent"

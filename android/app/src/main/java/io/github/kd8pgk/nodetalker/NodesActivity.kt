@@ -14,6 +14,8 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.ListView
+import android.widget.RadioButton
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import java.util.UUID
@@ -33,6 +35,7 @@ class NodesActivity : Activity() {
         list.setOnItemClickListener { _, _, pos, _ -> open(nodes[pos]) }
         list.setOnItemLongClickListener { _, _, pos, _ -> manage(nodes[pos]); true }
         findViewById<Button>(R.id.add).setOnClickListener { edit(null) }
+        findViewById<Button>(R.id.audio).setOnClickListener { audioSettings() }
         val keep = findViewById<CheckBox>(R.id.keep_on)
         keep.isChecked = NodeStore.keepScreenOn(this)
         keep.setOnCheckedChangeListener { _, on -> NodeStore.setKeepScreenOn(this, on) }
@@ -131,6 +134,46 @@ class NodesActivity : Activity() {
             }
         }
         dlg.show()
+    }
+
+    private fun audioSettings() {
+        val a = NodeStore.audio(this)
+        val v = LayoutInflater.from(this).inflate(R.layout.dialog_audio, null)
+        val app = v.findViewById<RadioButton>(R.id.mode_app)
+        val page = v.findViewById<RadioButton>(R.id.mode_page)
+        val buf = v.findViewById<SeekBar>(R.id.buffer)
+        val bufText = v.findViewById<TextView>(R.id.buffer_text)
+        val speaker = v.findViewById<RadioButton>(R.id.out_speaker)
+        val ear = v.findViewById<RadioButton>(R.id.out_earpiece)
+        app.isChecked = a.app
+        page.isChecked = !a.app
+        speaker.isChecked = !a.earpiece
+        ear.isChecked = a.earpiece
+        val step = 50
+        buf.max = (AudioSettings.MAX_BUFFER - AudioSettings.MIN_BUFFER) / step
+        buf.progress = (a.bufferMs - AudioSettings.MIN_BUFFER) / step
+        val ms = { AudioSettings.MIN_BUFFER + buf.progress * step }
+        bufText.text = getString(R.string.rx_buffer, ms())
+        buf.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, p: Int, user: Boolean) {
+                bufText.text = getString(R.string.rx_buffer, ms())
+            }
+
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+        })
+        AlertDialog.Builder(this)
+            .setTitle(R.string.audio_settings)
+            .setView(v)
+            .setPositiveButton(R.string.save) { _, _ ->
+                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), ear.isChecked)
+                NodeStore.setAudio(this, b)
+                if (!b.app) Listen.stop(this)
+                else Listen.nodeId?.let { id -> NodeStore.get(this, id)?.let { Listen.start(this, it) } }
+                Toast.makeText(this, R.string.audio_saved, Toast.LENGTH_LONG).show()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     companion object {

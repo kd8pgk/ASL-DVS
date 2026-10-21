@@ -60,10 +60,26 @@ data class Node(
     }
 }
 
+data class AudioSettings(val mode: String, val bufferMs: Int, val earpiece: Boolean) {
+    val app: Boolean
+        get() = mode == APP
+
+    companion object {
+        const val APP = "app"
+        const val PAGE = "page"
+        const val DEFAULT_BUFFER = 300
+        const val MIN_BUFFER = 100
+        const val MAX_BUFFER = 1000
+    }
+}
+
 object NodeStore {
     private const val PREFS = "nodetalker"
     private const val KEY_NODES = "nodes"
     private const val KEY_KEEP_ON = "keep_screen_on"
+    private const val KEY_MODE = "audio_mode"
+    private const val KEY_BUFFER = "rx_buffer_ms"
+    private const val KEY_EARPIECE = "earpiece"
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -95,6 +111,17 @@ object NodeStore {
     fun delete(c: Context, id: String) = write(c, all(c).filter { it.id != id })
 
     fun keepScreenOn(c: Context) = prefs(c).getBoolean(KEY_KEEP_ON, false)
+
+    fun audio(c: Context) = prefs(c).let {
+        AudioSettings(
+            it.getString(KEY_MODE, AudioSettings.APP) ?: AudioSettings.APP,
+            it.getInt(KEY_BUFFER, AudioSettings.DEFAULT_BUFFER).coerceIn(AudioSettings.MIN_BUFFER, AudioSettings.MAX_BUFFER),
+            it.getBoolean(KEY_EARPIECE, false),
+        )
+    }
+
+    fun setAudio(c: Context, a: AudioSettings) = prefs(c).edit()
+        .putString(KEY_MODE, a.mode).putInt(KEY_BUFFER, a.bufferMs).putBoolean(KEY_EARPIECE, a.earpiece).apply()
 
     fun setKeepScreenOn(c: Context, on: Boolean) = prefs(c).edit().putBoolean(KEY_KEEP_ON, on).apply()
 }
