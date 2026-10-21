@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersion = "0.3.0"
+val appVersion = "0.3.1"
 
 android {
     namespace = "io.github.kd8pgk.nodetalker"
@@ -17,6 +17,15 @@ android {
         targetSdk = 36
         versionName = appVersion
         versionCode = appVersion.split(".").map { it.toInt() }.let { it[0] * 10000 + it[1] * 100 + it[2] }
+    }
+
+    signingConfigs {
+        getByName("debug") {
+            storeFile = file("debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
     }
 
     buildTypes {

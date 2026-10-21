@@ -320,8 +320,11 @@ It comes in phases:
 **Install a test build:** on the phone, open the repository's
 [Releases](https://github.com/kd8pgk/ASL-DVS/releases), pick the newest
 `android-v…` release and download `NodeTalker-…-debug.apk`. Android asks to
-allow installs from the browser once. Test builds use a debug key: when
-signed builds start, uninstall the test build first.
+allow installs from the browser once. From 0.3.1 every test build is signed
+with the same debug key (`android/app/debug.keystore`), so a new build
+installs over the old one and keeps your nodes; going from 0.3.0 or older to
+0.3.1 needs one uninstall first. When signed release builds start, uninstall
+the test build once more.
 
 **Add a node:** the Pi's address (for example `192.168.1.50`), port `8993`,
 and HTTPS if Node Talker uses it (needed for the microphone in page
