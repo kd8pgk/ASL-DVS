@@ -77,7 +77,7 @@ User manual (PDF, 110 pages): every tool, tab and button, with SysMon and 44help
 44helper manual (PDF, 51 pages): every 44helper tab and card in detail: the tunnel modes (split, half, full with exceptions, full) side by side, the half-tunnel and exceptions cards with all their checks, every installer step, Update, System Optimization, Config, troubleshooting and a file and routing reference. The source is in `docs/src/44helper_manual/`:
 [`docs/ASL-DVS_44helper_Manual.pdf`](docs/ASL-DVS_44helper_Manual.pdf)
 
-Node Talker manual (PDF, 30 pages): receive and transmit audio from end to end, every setting with its default and when to change it, getting levels right, the meters, the waterfall and the Audio check, troubleshooting by symptom and a file, port and API reference. The source is in `docs/src/nodetalker_manual/`:
+Node Talker manual (PDF, 40 pages): the RX and TX chain end to end with the private node 1921 taken apart line by line, receive and transmit audio step by step, every setting with its default and when to change it, getting levels right, the spectrum, meters and Audio check, Connect and the Tune card, Node Talker Mobile (the Android app), troubleshooting by symptom and a file, port and API reference. The source is in `docs/src/nodetalker_manual/`:
 [`docs/ASL-DVS_Node_Talker_Manual.pdf`](docs/ASL-DVS_Node_Talker_Manual.pdf)
 
 To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (needs Playwright with Chromium; set `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH` if they aren't found by default).
