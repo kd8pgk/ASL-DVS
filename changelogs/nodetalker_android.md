@@ -1,9 +1,12 @@
-# Node Talker for Android changelog
+# Node Talker Mobile changelog
 
 Current version: `0.3.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
 
 ## 0.3.1 (2026-10-21)
 
+- **Renamed Node Talker Mobile** (was Node Talker for Android): the name
+  under the icon, on the node list and on the releases. The package, the
+  release tags (`android-vX.Y.Z`) and the APK file name stay the same.
 - **Updates install over the old app.** Test builds were signed with a debug
   key made fresh on each build machine, so Android refused to install one
   over another ("app not installed" / package conflict). Every build is now

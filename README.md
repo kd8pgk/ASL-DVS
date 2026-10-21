@@ -17,7 +17,7 @@ By KD8PGK, written with Claude (Anthropic).
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
-| Node Talker for Android | `android/` (APK under Releases) | - | Optional Android app for Node Talker: opens only a Node Talker page, remembers its certificate, and (in later versions) runs receive, transmit and PTT in the background. Sideload test builds for now. |
+| Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 
 Scripts:
 
@@ -298,7 +298,7 @@ node 1921:
 - Favorites are AllStar node numbers, or a direct address
   (`iax:user@host:port/node,password`) for a private node.
 
-## Node Talker for Android
+## Node Talker Mobile
 
 An optional Android app (Android 8.0 and newer) that opens only a Node
 Talker page. Node Talker works the same in a browser; the app is for
@@ -519,7 +519,7 @@ per tool and build:
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
 | [`nodetalker.md`](changelogs/nodetalker.md) | `nodetalker_v*.py` (was `nodelisten_v*.py`) |
 | [`amp_nodetalker.md`](changelogs/amp_nodetalker.md) | `amp_nodetalker_v*.py` (was `amp_nodelisten_v*.py`) |
-| [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker for Android) |
+| [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker Mobile) |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |

@@ -59,9 +59,10 @@
 
 ## Android app (`android/`)
 
-- **Node Talker for Android** is a Kotlin/Gradle project in `android/`. The
-  tool-file rules (one file per version, renamed each version) do not apply
-  to it.
+- **Node Talker Mobile** (was Node Talker for Android) is a Kotlin/Gradle
+  project in `android/`. Its file, package, tag and APK names keep
+  `nodetalker` / `NodeTalker`. The tool-file rules (one file per version,
+  renamed each version) do not apply to it.
 - **Version** is `appVersion` (`X.Y.Z`) in `android/app/build.gradle.kts`;
   `versionCode` is worked out from it. Any change under `android/` raises it
   and adds an entry at the top of `changelogs/nodetalker_android.md` with
