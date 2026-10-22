@@ -20,31 +20,31 @@
    "version": "7.1"
   },
   "instmon": {
-   "blob": "ac5dd822c7decbbb45938cca607990142fa1d2e2",
-   "commit": "21b42a967903cea1b0f1039190e15ca5e6c4cfef",
-   "file": "instmon_v2_57_0_20261018.py",
-   "landed": "2026-10-18T16:14:54Z",
-   "promoted": "2026-10-21T16:14:54Z",
+   "blob": "ad39041dcd25feacd5232f8987476ce4424ef838",
+   "commit": "1832ca4fe9bfe3aa754d3b5bf8cfd6b56e2e03f3",
+   "file": "instmon_v2_58_0_20261018.py",
+   "landed": "2026-10-18T23:43:56Z",
+   "promoted": "2026-10-21T23:43:56Z",
    "reason": "count",
-   "version": "2.57.0"
+   "version": "2.58.0"
   },
   "nodecontrol": {
-   "blob": "ffc952a77dc56fdff8b08072d51168fc428c9a0b",
-   "commit": "d8ba0e7893949992aab96fd5374ce5e0b4a42599",
-   "file": "nodecontrol_v9_3_83_20261014.py",
-   "landed": "2026-10-14T21:41:22Z",
-   "promoted": "2026-10-19T17:11:56Z",
+   "blob": "efeac0c3b9b47a4e8a6c176e32485363429df9b7",
+   "commit": "58b3a8b217972a9a8c175cd86f79b5edc4bdc95b",
+   "file": "nodecontrol_v9_3_85_20261019.py",
+   "landed": "2026-10-19T07:10:56Z",
+   "promoted": "2026-10-22T07:10:56Z",
    "reason": "count",
-   "version": "9.3.83"
+   "version": "9.3.85"
   },
   "nodecontrol_pi02w": {
-   "blob": "8f0fb2c73480d340f6e501d4a45ac7e3526271af",
-   "commit": "89f340a6878dfe61b931c8d98e2d99798cecb2fb",
-   "file": "nodecontrol_pi02w_v9_3_77_20261018.py",
-   "landed": "2026-10-18T12:02:32Z",
-   "promoted": "2026-10-21T12:02:32Z",
+   "blob": "94709c4eeeb3666e46ccc17d9d80d1df5a32f08d",
+   "commit": "c1ceb7c407f6bd4aaee6dc9ad1e69ebfe392b8a8",
+   "file": "nodecontrol_pi02w_v9_3_90_20261019.py",
+   "landed": "2026-10-19T09:17:09Z",
+   "promoted": "2026-10-22T09:17:09Z",
    "reason": "count",
-   "version": "9.3.77-pi02w"
+   "version": "9.3.90-pi02w"
   },
   "sysmon": {
    "blob": "b5779da88142f12b28ce06895f14fe506406f54e",
