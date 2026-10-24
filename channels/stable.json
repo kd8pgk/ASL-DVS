@@ -20,13 +20,13 @@
    "version": "7.1"
   },
   "instmon": {
-   "blob": "f48acef6231755e1abc98365f177e77792c672f2",
-   "commit": "ce3659df929f9041e39982757a5a31adda39e103",
-   "file": "instmon_v2_62_0_20261020.py",
-   "landed": "2026-10-20T07:04:51Z",
-   "promoted": "2026-10-23T07:04:51Z",
+   "blob": "70e3847b0c83efccdb49c1ecb460d3be4fd884ef",
+   "commit": "781e2be284e6f6e222816bcd6b5fc680e6537de6",
+   "file": "instmon_v2_69_0_20261021.py",
+   "landed": "2026-10-21T09:30:39Z",
+   "promoted": "2026-10-24T09:30:39Z",
    "reason": "count",
-   "version": "2.62.0"
+   "version": "2.69.0"
   },
   "nodecontrol": {
    "blob": "efeac0c3b9b47a4e8a6c176e32485363429df9b7",
@@ -45,6 +45,15 @@
    "promoted": "2026-10-22T09:17:09Z",
    "reason": "count",
    "version": "9.3.90-pi02w"
+  },
+  "nodetalker": {
+   "blob": "1a7ad076052d5e1fee6d90727a8e2b5eb542b00c",
+   "commit": "8f4e0f2ee4261632d18a9ef55960b4fc8d3988c1",
+   "file": "nodetalker_v0_6_7_20261020.py",
+   "landed": "2026-10-20T23:47:35Z",
+   "promoted": "2026-10-23T23:47:35Z",
+   "reason": "count",
+   "version": "0.6.7"
   },
   "sysmon": {
    "blob": "b5779da88142f12b28ce06895f14fe506406f54e",
