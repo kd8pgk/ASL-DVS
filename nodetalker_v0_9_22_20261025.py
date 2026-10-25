@@ -29,8 +29,9 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.6.12"
-DATE_STR = "2026-10-20"
+
+VERSION = "0.9.22"
+DATE_STR = "2026-10-25"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -684,7 +685,14 @@ def frame_db(frame):
     return max(-120.0, 10.0 * math.log10(ms / (32768.0 * 32768.0)))
 
 
+_active_gain = {"target": None, "rx_gain_db": None, "tx_gain_db": None}
+
+
 def tune_value(key):
+    if key in ("rx_gain_db", "tx_gain_db"):
+        ov = _active_gain.get(key)
+        if ov is not None:
+            return ov
     if not _cfg_get("tune_enabled"):
         return DEFAULT_CONFIG[key]
     return _cfg_get(key)
@@ -699,6 +707,10 @@ def apply_gain(frame, gain_db):
         return frame
     g = 10.0 ** (gain_db / 20.0)
     a = _samples(frame)
+    if not a:
+        return frame
+    if max(max(a), -min(a)) * g <= GAIN_KNEE:
+        return array.array("h", map(round, map(g.__mul__, a))).tobytes()
     for i, x in enumerate(a):
         v = x * g
         if v > GAIN_KNEE:
@@ -714,6 +726,14 @@ def fade_out(frame):
     n = len(a)
     for i in range(n):
         a[i] = int(round(a[i] * (n - 1 - i) / n))
+    return a.tobytes()
+
+
+def fade_in(frame):
+    a = _samples(frame)
+    n = len(a)
+    for i in range(n):
+        a[i] = int(round(a[i] * (i + 1) / n))
     return a.tobytes()
 
 
@@ -748,6 +768,7 @@ RX_QUIET_DB = -65.0
 GATE_RULES = {1: {"close_db": -55.0, "hold": 20, "r1": 0.3, "noise_db": -24.0, "frames": 4},
               2: {"close_db": -48.0, "hold": 12, "r1": 0.45, "noise_db": -30.0, "frames": 3}}
 SPEECH_R1 = 0.55
+GATE_PREROLL = 2
 
 
 class RxClean:
@@ -770,6 +791,8 @@ class RxClean:
         self.calm = 0
         self.delay = deque()
         self.prev_g = 1.0
+        self.r2 = 1.0
+        self.out_keep = False
 
     def _filter(self, a, hpf):
         if not hpf:
@@ -788,6 +811,7 @@ class RxClean:
         n = len(ys)
         ss = _dot(ys, ys)
         r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
+        self.r2 = _dot(ys[2:], ys[:-2]) / ss if ss > 0 else 1.0
         db = 10.0 * math.log10(ss / n / 1073741824.0) if ss > 0 else -120.0
         return ys, db, r1
 
@@ -811,7 +835,10 @@ class RxClean:
 
     def _gate(self, db, r1, mode):
         r = GATE_RULES[mode]
-        if db > r["noise_db"] and r1 < r["r1"]:
+
+
+        flat = abs(r1) < r["r1"] and abs(self.r2) < r["r1"]
+        if db > r["noise_db"] and flat:
             self.noisy += 1
             self.calm = 0
         else:
@@ -840,6 +867,9 @@ class RxClean:
             return PCM_SILENCE
         pcm, keep = self.delay.popleft()
         nxt = self.delay[0][1] if self.delay else keep
+        was, self.out_keep = self.out_keep, keep
+        if keep and not was:
+            pcm = fade_in(pcm)
         if keep and not nxt:
             pcm = fade_out(pcm)
         self._account(t0)
@@ -893,10 +923,14 @@ class RxClean:
                 self.delay.clear()
             self._account(t0)
             return pcm
+        was_open = self.open
         keep, hit = self._gate(db, r1, gate)
         if hit:
             for i in range(len(self.delay)):
                 self.delay[i] = (self.delay[i][0], False)
+        elif keep and not was_open:
+            for i in range(max(0, len(self.delay) - GATE_PREROLL), len(self.delay)):
+                self.delay[i] = (self.delay[i][0], True)
         return self._out(pcm, keep, t0)
 
     def idle_tick(self):
@@ -905,6 +939,7 @@ class RxClean:
             self.delay.clear()
             self.open = False
             self.tail = False
+            self.out_keep = False
 
     def _account(self, t0):
         now = time.perf_counter()
@@ -1032,12 +1067,16 @@ class Hub:
         else:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
-        if have_listeners:
+        if TONE.recording:
+            TONE.tap_raw(frame)
+        if have_listeners or TONE.recording:
             if frame is not None:
                 pcm = RXC.process(frame, tune_value("rx_gain_db"), db)
             else:
                 RXC.idle_tick()
                 pcm = PCM_SILENCE
+            if TONE.recording:
+                TONE.tap_proc(pcm)
             enc = None
             with self.cond:
                 for lst in self.listeners:
@@ -1391,11 +1430,99 @@ def feeder_pids():
     return pids
 
 
+PI_SAMPLE_SEC = 10
+PI_THROTTLE_NOW = {0: "under-voltage", 1: "frequency capped", 2: "throttled", 3: "soft temperature limit"}
+PI_THROTTLE_SINCE = {16: "under-voltage", 17: "frequency capped", 18: "throttled", 19: "soft temperature limit"}
+_pi_lock = threading.Lock()
+_pi_state = {"temp_c": None, "throttled": None, "now": [], "since_boot": []}
+
+
+def pi_read_temp():
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", encoding="ascii") as fh:
+            return round(int(fh.read().strip()) / 1000.0, 1)
+    except (OSError, ValueError):
+        return None
+
+
+def pi_read_throttled():
+    try:
+        r = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.search(r"0x([0-9a-fA-F]+)", r.stdout or "")
+    return int(m.group(1), 16) if m else None
+
+
+def pi_flags(bits):
+    if bits is None:
+        return [], []
+    now = [name for b, name in PI_THROTTLE_NOW.items() if bits & (1 << b)]
+    since = [name for b, name in PI_THROTTLE_SINCE.items() if bits & (1 << b)]
+    return now, since
+
+
+def pi_sample():
+    bits = pi_read_throttled()
+    now, since = pi_flags(bits)
+    temp = pi_read_temp()
+    with _pi_lock:
+        _pi_state.update(temp_c=temp, throttled=bits, now=now, since_boot=since)
+
+
+def pi_loop():
+    while True:
+        try:
+            pi_sample()
+        except Exception:
+            pass
+        time.sleep(PI_SAMPLE_SEC)
+
+
+def pi_snapshot():
+    with _pi_lock:
+        s = dict(_pi_state)
+    return {"temp_c": s["temp_c"], "throttled": s["throttled"], "now": list(s["now"]), "since_boot": list(s["since_boot"])}
+
+
+def _parse_rpt_stats(text):
+    keyups = secs = None
+    for ln in text.splitlines():
+        low = ln.lower()
+        if keyups is None and "keyups since system" in low:
+            m = re.search(r"(\d+)\s*$", ln.strip())
+            keyups = int(m.group(1)) if m else None
+        if secs is None and "tx time since system" in low:
+            m = re.search(r"(\d+):(\d+):(\d+):(\d+)", ln)
+            if m:
+                h, mi, se, ms = (int(x) for x in m.groups())
+                secs = h * 3600 + mi * 60 + se + ms / 1000.0
+    if keyups is None:
+        for ln in text.splitlines():
+            low = ln.lower()
+            if "keyup" in low and "today" not in low:
+                nums = re.findall(r"\d+", ln)
+                if nums:
+                    keyups = int(nums[-1])
+                    break
+    return keyups, secs
+
+
+def node_counters():
+    ok, out = ast_cli(f"rpt stats {TX_NODE}", timeout=6)
+    if not ok:
+        return {"ok": False, "node": TX_NODE, "keyups": None, "tx_secs": None, "raw": []}
+    keyups, secs = _parse_rpt_stats(out)
+    lines = [ln[:120] for ln in out.splitlines() if ln.strip()][:12]
+    return {"ok": True, "node": TX_NODE, "keyups": keyups, "tx_secs": secs, "raw": lines}
+
+
 def build_status(full):
     st = HUB.snapshot()
     st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME),
                "jitter_ms": tune_value("jitter_ms")})
     if full:
+        st["pi"] = pi_snapshot()
         st["feeder_pids"] = feeder_pids()
         node = main_node()
         st["node"] = node
@@ -1407,6 +1534,8 @@ def build_status(full):
         st["m17"] = m17_current() if nc and _has_m17(favs) else ""
         st["tuned"] = (nc_dvs_target(favs) if _has_dvs(favs) else "") if nc else solo_status(node)
         st["tuned_now"] = tuned_now(nc)
+        st["link"] = live_link(links, ok, nc, favs)
+        st["default_mode"] = _default_tune_mode(nc)
         tx = tx_state(node)
         tx.update(TALKER.state())
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
@@ -1638,7 +1767,23 @@ def _norm_m17_fav(f):
     return out
 
 
+def _norm_gain_opt(value):
+    if value is None or str(value).strip() == "":
+        return None
+    return _norm_gain(value)
+
+
 def _norm_fav(f, nets=None):
+    out = _norm_fav_core(f, nets)
+    if isinstance(f, dict):
+        for k in ("rx_gain_db", "tx_gain_db"):
+            g = _norm_gain_opt(f.get(k))
+            if g is not None:
+                out[k] = g
+    return out
+
+
+def _norm_fav_core(f, nets=None):
     if not isinstance(f, dict):
         raise ValueError("bad favorite")
     mode = _mode_of(f.get("mode", "ASL") or "ASL")
@@ -1715,10 +1860,17 @@ def _fav_section(f):
     return {"ASL": "ASL", "EchoLink": "ECHO"}.get(f["mode"], f["mode"])
 
 
+_GAIN_TOKEN_RE = re.compile(r"(rx|tx)=(-?\d+)")
+
+
+def _fav_gain_tail(f):
+    return "".join(f"|{k[:2]}={f[k]}" for k in ("rx_gain_db", "tx_gain_db") if k in f)
+
+
 def _fav_line(f):
     if f["mode"] == "M17":
-        return f"{f['label']}|{f['num']}|{f['module']}|{f.get('ip', '')}"
-    return f"{f['label']}|{f['num']}"
+        return f"{f['label']}|{f['num']}|{f['module']}|{f.get('ip', '')}" + _fav_gain_tail(f)
+    return f"{f['label']}|{f['num']}" + _fav_gain_tail(f)
 
 
 def parse_fav_conf(text, fav_limit=FAV_MAX, net_limit=DMR_NET_MAX):
@@ -1753,6 +1905,17 @@ def parse_fav_conf(text, fav_limit=FAV_MAX, net_limit=DMR_NET_MAX):
             elif len(nets) < net_limit:
                 nets.append(n)
             continue
+        gains = {}
+        kept = []
+        for p in parts:
+            m = _GAIN_TOKEN_RE.fullmatch(p)
+            if m:
+                gains[m.group(1) + "_gain_db"] = m.group(2)
+            else:
+                kept.append(p)
+        parts = kept
+        if len(parts) < 2:
+            continue
         name, val = parts[0], parts[1]
         if not name or name.lower() == BLANK_NAME or val in ("", BLANK_ADDR):
             continue
@@ -1769,6 +1932,7 @@ def parse_fav_conf(text, fav_limit=FAV_MAX, net_limit=DMR_NET_MAX):
                 f = {"mode": "M17", "num": name, "module": "@ALL", "ip": val, "label": name}
         else:
             continue
+        f.update(gains)
         rows.append((no, f))
     keys = {_server_key(n["name"]): n["name"] for n in nets}
     favs, seen, more = [], set(), 0
@@ -2924,7 +3088,30 @@ def _link_outcome(f, node, via):
                                   "Check the number; the node may be offline or refusing connections."}
 
 
+def _set_active(f, r):
+    if isinstance(r, dict) and r.get("ok"):
+        t = fav_target(f)
+        saved = next((x for x in fav_load() if fav_target(x) == t), f)
+        _active_gain.update(target=t, rx_gain_db=saved.get("rx_gain_db"), tx_gain_db=saved.get("tx_gain_db"))
+    return r
+
+
+def _clear_active(target, r):
+    if isinstance(r, dict) and r.get("ok") and (target is None or _active_gain["target"] == target):
+        _active_gain.update(target=None, rx_gain_db=None, tx_gain_db=None)
+    return r
+
+
 def fav_connect(index, net_action=None):
+    r = _fav_connect_impl(index, net_action)
+    try:
+        f = fav_load()[int(index)]
+    except (ValueError, TypeError, IndexError):
+        return r
+    return _set_active(f, r)
+
+
+def _fav_connect_impl(index, net_action=None):
     favs = fav_load()
     try:
         f = favs[int(index)]
@@ -2969,6 +3156,16 @@ def node_connect(f, node):
 
 
 def fav_disconnect(index=None):
+    if index is None:
+        return _clear_active(None, _fav_disconnect_impl(index))
+    try:
+        target = fav_target(fav_load()[int(index)])
+    except (ValueError, TypeError, IndexError):
+        return _fav_disconnect_impl(index)
+    return _clear_active(target, _fav_disconnect_impl(index))
+
+
+def _fav_disconnect_impl(index=None):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
@@ -3282,7 +3479,7 @@ def _tune_fav(b):
     return _norm_fav(f, nets_load())
 
 
-def tune_connect(b):
+def _tune_connect_impl(b):
     try:
         f = _tune_fav(b)
     except ValueError as exc:
@@ -3296,6 +3493,15 @@ def tune_connect(b):
         return node_connect(f, node)
     act = b.get("net_action")
     return solo_dvs(f, node, act if act in ("add", "once") else None)
+
+
+def tune_connect(b):
+    r = _tune_connect_impl(b)
+    try:
+        f = _tune_fav(b)
+    except ValueError:
+        return r
+    return _set_active(f, r)
 
 
 def tune_save(b):
@@ -3317,6 +3523,16 @@ def tune_save(b):
 
 
 def tune_disconnect(b=None):
+    if b is None:
+        return _clear_active(None, _tune_disconnect_impl(b))
+    try:
+        target = fav_target(_tune_fav(b))
+    except ValueError:
+        return _tune_disconnect_impl(b)
+    return _clear_active(target, _tune_disconnect_impl(b))
+
+
+def _tune_disconnect_impl(b=None):
     node, err = _connect_node()
     if not node:
         return {"ok": False, "error": err}
@@ -3368,6 +3584,84 @@ def tuned_text(d):
     page = str(d.get("page", "") or "")
     net = f" {d.get('server')}" if page == "DMR" and d.get("server") else ""
     return f"{MODE_LABEL.get(page, page)}{net} {d['fav']}".strip()[:TUNE_TEXT_MAX * 2]
+
+
+def _dvs_label(d):
+    net = str(d.get("server", "") or "") if str(d.get("page", "") or "") == "DMR" else ""
+    return f"{net} {d.get('fav', '')}".strip()
+
+
+_astdb_names = {"key": None, "map": {}}
+
+
+def astdb_name(num):
+    key = _file_key(ASTDB_PATH)
+    if _astdb_names["key"] != key:
+        m = {}
+        for n, text, _ in _astdb_rows():
+            m[n] = " · ".join(text.split(" · ")[1:3])
+        _astdb_names.update(key=key, map=m)
+    return _astdb_names["map"].get(str(int(num)), "") if str(num).isdigit() else ""
+
+
+def _bridge_tune(n, nc, dvs, m17_now, dig, m17):
+    if nc:
+        if n == m17 and m17_now:
+            return "M17", m17_now
+        if n == dig and dvs.get("fav"):
+            return str(dvs.get("page", "") or ""), _dvs_label(dvs)
+        return "", ""
+    if _solo["target"] and _solo["bridge"] == n:
+        return _solo["mode"], _solo["name"]
+    return "", ""
+
+
+def live_link(links, links_ok, nc, favs):
+    if not links_ok:
+        return {"state": "unreachable", "mode": "", "label": "", "tag": ""}
+    if not links:
+        return {"state": "none", "mode": "", "label": "", "tag": ""}
+    bridges = bridge_nodes(5.0)
+    dig, m17 = bridges.get("digital", ""), bridges.get("m17", "")
+    linked = {l["node"] for l in links}
+    linked_bridge = bool(linked & {dig, m17} - {""})
+    dvs = (nc_dvs_current() or {}) if nc and dig in linked else {}
+    m17_now = m17_current() if nc and m17 in linked else ""
+    infra = {TX_NODE, dig, m17} - {""}
+
+    bridge = None
+    for l in links:
+        if l["node"] in (dig, m17):
+            mode, label = _bridge_tune(l["node"], nc, dvs, m17_now, dig, m17)
+            if label:
+                m = MODE_LABEL.get(mode, mode).upper()
+                text = label[len(m):].strip() if label.upper().split()[:1] == [m] else label
+                bridge = (m, text, "linking" if str(l.get("state", "")).upper().startswith("CONN") else "connected")
+                break
+
+    asl = [l for l in links if l["node"] not in infra]
+    if asl:
+        num = asl[0]["node"]
+        fav = next((f for f in favs if fav_target(f) == num), None)
+        name = (fav or {}).get("label") or astdb_name(num) or f"Node {num}"
+        mode = ((fav or {}).get("mode") or "ASL").upper()
+        mode = {"ECHOLINK": "ECHO"}.get(mode, mode)
+        state = "linking" if str(asl[0].get("state", "")).upper().startswith("CONN") else "connected"
+        tag = f"{bridge[0]} {bridge[1]}" if bridge else ""
+        return {"state": state, "mode": mode, "label": name, "tag": tag}
+    if bridge:
+        return {"state": bridge[2], "mode": bridge[0], "label": bridge[1], "tag": ""}
+    if linked_bridge:
+        return {"state": "idle", "mode": "", "label": "Bridge linked, nothing tuned", "tag": ""}
+    return {"state": "noasl", "mode": "", "label": "No ASL node linked", "tag": ""}
+
+
+def _default_tune_mode(nc):
+    if nc:
+        page = str((nc_dvs_current() or {}).get("page", "") or "")
+        if page:
+            return page
+    return _solo["mode"] or ""
 
 
 def tuned_now(nc):
@@ -3525,9 +3819,12 @@ class WebSocket:
             if n > WS_MAX_PAYLOAD or not masked:
                 raise EOFError("bad frame")
             mask = self._read(4)
-            payload = bytearray(self._read(n))
-            for i in range(n):
-                payload[i] ^= mask[i & 3]
+            raw = self._read(n)
+            if n:
+                key = (mask * (n // 4 + 1))[:n]
+                payload = (int.from_bytes(raw, "little") ^ int.from_bytes(key, "little")).to_bytes(n, "little")
+            else:
+                payload = b""
             if op >= 8:
                 if op == 9:
                     self.send(10, bytes(payload))
@@ -3586,6 +3883,10 @@ class Talker:
         self.gaps = 0
         self.last_gaps = None
         self.primed_once = False
+        self.key_at = None
+        self.first_at = None
+        self.last_frame = None
+        self.after_gap = False
 
     def _socket(self):
         if self.sock is None:
@@ -3628,11 +3929,14 @@ class Talker:
             self.owner, self.who = owner, who
             self.keyed, self.sending, self.releasing = True, False, False
             self.start = self.last_rx = now
+            self.key_at, self.first_at = now, None
             self.q.clear()
             self.buf = bytearray()
             self.peak = -120.0
             self.gaps = 0
             self.primed_once = False
+            self.last_frame = None
+            self.after_gap = False
         log_event(f"TX: {who} keyed node {TX_NODE}", "ok")
         return True, ""
 
@@ -3668,6 +3972,7 @@ class Talker:
                 return
             owner, who = self.owner, self.who
             secs = time.monotonic() - self.start
+            audio_ms = round((self.first_at - self.key_at) * 1000) if (self.first_at and self.key_at) else None
             self.keyed = self.sending = self.releasing = False
             self.owner = None
             self.q.clear()
@@ -3680,7 +3985,7 @@ class Talker:
         log_event(f"TX: {who} unkeyed after {secs:.1f} s ({why})" + (f", {gaps} audio gap(s)" if gaps else ""),
                   "warn" if why in ("timeout", "deadman") or gaps else "ok")
         if owner is not None:
-            owner.send_json({"ev": "unkeyed", "why": why, "secs": round(secs, 1)})
+            owner.send_json({"ev": "unkeyed", "why": why, "secs": round(secs, 1), "audio_ms": audio_ms})
 
     def pacer_loop(self):
         def step():
@@ -3713,23 +4018,403 @@ class Talker:
             if why is None and self.sending:
                 if self.q:
                     frame = self.q.popleft()
+                    if self.after_gap:
+                        frame = fade_in(frame)
+                        self.after_gap = False
                     if self.releasing and not self.q:
                         frame = fade_out(frame)
+                    self.last_frame = frame
                 elif self.releasing:
                     why = "release"
                 elif now - self.last_rx > TX_DEADMAN_SEC:
                     why = "deadman"
                 else:
+
                     self.gaps += 1
                     self.sending = False
-                    frame = PCM_SILENCE
+                    self.after_gap = True
+                    frame = fade_out(self.last_frame) if self.last_frame else PCM_SILENCE
+                    self.last_frame = None
         if why:
             self._unkey(why)
         elif frame is not None:
+            if self.first_at is None:
+                self.first_at = now
             self._packet(frame, True)
 
 
 TALKER = Talker()
+
+
+TONE_RATE = 8000
+TONE_DEFAULT_HZ = [150, 300, 500, 1000, 1500, 2000, 2500, 3000, 3400]
+TONE_SEC_CHOICES = (0.5, 1.0, 2.0)
+TONE_LEVEL_DB = -10.0
+TONE_PRE_FRAMES = 25
+TONE_LEAD_FRAMES = 25
+TONE_GAP_FRAMES = 10
+TONE_TAIL_FRAMES = 10
+TONE_TRIM_FRAMES = 5
+TONE_RETURN_SEC = 1.5
+TONE_MAX_SEC = 60.0
+TONE_CLEAR_SEC = 3.0
+TONE_MAX_COUNT = 12
+TONE_HZ_MIN, TONE_HZ_MAX = 100, 3800
+TONE_ONSET_DB = 12.0
+TONE_EDGE_DB = -6.0
+TONE_ID_WPM = 20
+TONE_ID_HZ = 700
+TONE_ID_LEVEL_DB = -10.0
+TONE_KEY_ERRORS = {
+    "not-ready": "The node is not ready (check the Node Talker setup).",
+    "not-linked": "The node is not linked to the network.",
+    "busy": "The node is busy (someone is talking).",
+    "in-use": "Another transmission is using the node.",
+}
+TONE_MORSE = {
+    "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".", "F": "..-.", "G": "--.", "H": "....",
+    "I": "..", "J": ".---", "K": "-.-", "L": ".-..", "M": "--", "N": "-.", "O": "---", "P": ".--.",
+    "Q": "--.-", "R": ".-.", "S": "...", "T": "-", "U": "..-", "V": "...-", "W": ".--", "X": "-..-",
+    "Y": "-.--", "Z": "--..", "0": "-----", "1": ".----", "2": "..---", "3": "...--", "4": "....-",
+    "5": ".....", "6": "-....", "7": "--...", "8": "---..", "9": "----.", "/": "-..-.", "-": "-....-",
+}
+
+
+class _ToneOwner:
+
+    def send_json(self, obj):
+        pass
+
+
+def _tone_request(body):
+    hz = body.get("tones") or TONE_DEFAULT_HZ
+    if not isinstance(hz, list) or not 1 <= len(hz) <= TONE_MAX_COUNT:
+        raise ValueError(f"tones must be a list of 1 to {TONE_MAX_COUNT} frequencies")
+    try:
+        hz = [int(x) for x in hz]
+    except (TypeError, ValueError):
+        raise ValueError("tones must be whole numbers of Hz")
+    if any(not TONE_HZ_MIN <= x <= TONE_HZ_MAX for x in hz):
+        raise ValueError(f"each tone must be {TONE_HZ_MIN}-{TONE_HZ_MAX} Hz")
+    try:
+        sec = float(body.get("tone_sec", 1.0))
+    except (TypeError, ValueError):
+        raise ValueError("tone_sec must be 0.5, 1 or 2")
+    if sec not in TONE_SEC_CHOICES:
+        raise ValueError("tone_sec must be 0.5, 1 or 2")
+    return hz, sec
+
+
+def _cw_frames(text):
+    dot = int(round(1.2 / TONE_ID_WPM * TONE_RATE))
+    ramp = 40
+    amp = 10 ** (TONE_ID_LEVEL_DB / 20.0) * 32767.0
+    w = 2.0 * math.pi * TONE_ID_HZ / TONE_RATE
+
+    def mark(n):
+        return [int(round(amp * min(1.0, i / ramp, (n - 1 - i) / ramp) * math.sin(w * i))) for i in range(n)]
+
+    out = []
+    for wi, word in enumerate(text.split()):
+        if wi:
+            out += [0] * (7 * dot)
+        for ci, ch in enumerate(word):
+            if ci:
+                out += [0] * (3 * dot)
+            code = TONE_MORSE.get(ch)
+            if code is None:
+                raise ValueError(f"the callsign has a character the ID cannot send: {ch!r}")
+            for ei, e in enumerate(code):
+                if ei:
+                    out += [0] * dot
+                out += mark(dot if e == "." else 3 * dot)
+    out += [0] * ((-len(out)) % FRAME_SAMPLES)
+    return [struct.pack("<%dh" % FRAME_SAMPLES, *out[i:i + FRAME_SAMPLES]) for i in range(0, len(out), FRAME_SAMPLES)]
+
+
+def _tone_plan(hz_list, tone_sec, call):
+    id_frames = _cw_frames(f"DE {call}")
+    tone_frames = max(1, int(round(tone_sec / FRAME_SEC)))
+    amp = 10 ** (TONE_LEVEL_DB / 20.0) * 32767.0
+    w_scale = 2.0 * math.pi / TONE_RATE
+    frames = [PCM_SILENCE] * TONE_PRE_FRAMES + id_frames + [PCM_SILENCE] * TONE_LEAD_FRAMES
+    plan = []
+    for hz in hz_list:
+        start = len(frames)
+        w = w_scale * hz
+        for f in range(tone_frames):
+            base = f * FRAME_SAMPLES
+            samples = [int(round(amp * math.sin(w * (base + i)))) for i in range(FRAME_SAMPLES)]
+            frames.append(struct.pack("<%dh" % FRAME_SAMPLES, *samples))
+        plan.append({"hz": hz, "start": start, "end": len(frames)})
+        frames.extend([PCM_SILENCE] * TONE_GAP_FRAMES)
+    frames.extend([PCM_SILENCE] * TONE_TAIL_FRAMES)
+    frames.extend(id_frames)
+    return frames, plan
+
+
+def _goertzel(samples, hz):
+    n = len(samples)
+    if not n:
+        return 0.0
+    coeff = 2.0 * math.cos(2.0 * math.pi * hz / TONE_RATE)
+    s1 = s2 = 0.0
+    for x in samples:
+        s0 = x + coeff * s1 - s2
+        s2, s1 = s1, s0
+    power = s1 * s1 + s2 * s2 - coeff * s1 * s2
+    return 2.0 * math.sqrt(max(power, 0.0)) / n
+
+
+def _amp_db(amp):
+    return max(-120.0, 20.0 * math.log10(amp / 32768.0)) if amp > 0 else -120.0
+
+
+def _median_db(vals):
+    if not vals:
+        return -120.0
+    s = sorted(vals)
+    return s[len(s) // 2]
+
+
+def _window_samples(frames):
+    data = b"".join(f if f is not None else PCM_SILENCE for f in frames)
+    if not data:
+        return ()
+    return struct.unpack("<%dh" % (len(data) // 2), data)
+
+
+def _tone_measure(samples, hz):
+    if len(samples) < FRAME_SAMPLES * 4:
+        return None
+    best_hz, best = float(hz), 0.0
+    for k in range(-20, 21):
+        cand = hz * (1.0 + 0.0025 * k)
+        amp = _goertzel(samples, cand)
+        if amp > best:
+            best, best_hz = amp, cand
+    step = hz * 0.0025
+    for _ in range(8):
+        for cand in (best_hz - step, best_hz + step):
+            amp = _goertzel(samples, cand)
+            if amp > best:
+                best, best_hz = amp, cand
+        step /= 2.0
+    fund_db = _amp_db(best)
+
+    def rel(mult):
+        f = mult * best_hz
+        if f >= TONE_RATE / 2:
+            return None
+        return round(_amp_db(_goertzel(samples, f)) - fund_db, 1)
+
+    return {"db": round(fund_db, 1), "hz": round(best_hz, 1), "err_hz": round(best_hz - hz, 1),
+            "h2": rel(2), "h3": rel(3)}
+
+
+def _tone_analyse(raw, proc, plan, meta):
+    pre = TONE_PRE_FRAMES
+    n = min(len(raw), len(proc))
+    raw, proc = raw[:n], proc[:n]
+    noise_raw = _median_db([frame_db(f) for f in raw[:pre] if f is not None])
+    noise_proc = _median_db([frame_db(f) for f in proc[:pre] if f is not None])
+
+
+    lvl = [frame_db(f) if f is not None else -120.0 for f in raw]
+    thr = noise_raw + TONE_ONSET_DB
+    onset = None
+    for i in range(pre, n - 2):
+        if lvl[i] > thr and lvl[i + 1] > thr and lvl[i + 2] > thr:
+            onset = i
+            break
+    detected = onset is not None
+    lat = (onset - pre) if detected else 0
+
+    sent_db = meta["level_db"] + meta["tx_gain_db"]
+    rows = []
+    for p in plan:
+        row = {"hz": p["hz"], "sent_db": round(sent_db, 1)}
+        if detected:
+            a = max(0, p["start"] + lat + TONE_TRIM_FRAMES)
+            b = min(n, p["end"] + lat - TONE_TRIM_FRAMES)
+            pd = GATE_DELAY if meta.get("rx_gate") else 0
+            raw_w, proc_w = raw[a:b], proc[min(n, a + pd):min(n, b + pd)]
+            row["dropouts"] = sum(1 for f in raw_w if f is None)
+            mr = _tone_measure(_window_samples(raw_w), p["hz"])
+            mp = _tone_measure(_window_samples(proc_w), p["hz"])
+            if mr:
+                row.update(raw_db=mr["db"], raw_resp_db=round(mr["db"] - sent_db, 1),
+                           raw_freq_hz=mr["hz"], raw_freq_err_hz=mr["err_hz"],
+                           raw_h2_db=mr["h2"], raw_h3_db=mr["h3"],
+                           raw_snr_db=round((mr["db"] - 3.01) - noise_raw, 1))
+            if mp:
+                row.update(proc_db=mp["db"], proc_resp_db=round(mp["db"] - sent_db, 1),
+                           proc_freq_err_hz=mp["err_hz"])
+                if mr:
+                    row["proc_minus_raw_db"] = round(mp["db"] - mr["db"], 1)
+        rows.append(row)
+
+
+    cand = [r for r in rows if "raw_resp_db" in r]
+    ref = next((r for r in cand if r["hz"] == 1000), None)
+    ref_val = ref["raw_resp_db"] if ref else (max(r["raw_resp_db"] for r in cand) if cand else None)
+    usable = [r["hz"] for r in cand if ref_val is not None and r["raw_resp_db"] - ref_val >= TONE_EDGE_DB]
+
+    warnings = []
+    if not detected:
+        warnings.append("No return signal: the Pi heard nothing above the noise floor during the test. "
+                        "The node may not be sending transmitted audio back, so only the TX levels are meaningful.")
+    elif ref is None:
+        warnings.append("No 1 kHz tone in the set: the response is shown relative to the strongest tone.")
+    if detected and lat < 0:
+        warnings.append("Return audio started before the transmission, so the delay estimate is unreliable.")
+
+    return {
+        "ok": True,
+        "rx_detected": detected,
+        "latency_ms": round(lat * FRAME_SEC * 1000) if detected else None,
+        "noise_raw_db": round(noise_raw, 1),
+        "noise_proc_db": round(noise_proc, 1),
+        "seconds": round(n * FRAME_SEC, 1),
+        "dropouts": sum(r.get("dropouts", 0) for r in rows),
+        "reference_hz": 1000 if ref else None,
+        "band_low_hz": min(usable) if usable else None,
+        "band_high_hz": max(usable) if usable else None,
+        "rows": rows,
+        "warnings": warnings,
+        "node": meta["node"],
+        "callsign": meta["callsign"],
+        "tx_gain_db": meta["tx_gain_db"],
+        "rx_gain_db": meta["rx_gain_db"],
+        "level_db": meta["level_db"],
+        "tone_sec": meta["tone_sec"],
+        "tones": meta["tones"],
+        "started": meta["started"],
+    }
+
+
+def _tone_keyed(owner):
+    with TALKER.lock:
+        return TALKER.keyed and TALKER.owner is owner
+
+
+class ToneTest:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.recording = False
+        self.running = False
+        self.abort = False
+        self.stage = "idle"
+        self.progress = 0.0
+        self.error = ""
+        self.report = None
+        self.raw = []
+        self.proc = []
+
+
+    def tap_raw(self, frame):
+        self.raw.append(frame)
+
+    def tap_proc(self, pcm):
+        self.proc.append(pcm)
+
+    def _set(self, **kw):
+        with self.lock:
+            for k, v in kw.items():
+                setattr(self, k, v)
+
+    def status(self):
+        with self.lock:
+            return {"ok": True, "running": self.running, "stage": self.stage,
+                    "progress": round(self.progress, 3), "error": self.error, "report": self.report}
+
+    def stop(self):
+        with self.lock:
+            if not self.running:
+                return {"ok": False, "error": "No tone test is running."}
+            self.abort = True
+        return {"ok": True, "message": "Stopping the tone test."}
+
+    def start(self, body):
+        hz, sec = _tone_request(body)
+        call, _src = callsign_now()
+        if not call:
+            return {"ok": False, "error": "Set your callsign in Setup first: the test identifies itself on air."}
+        frames, plan = _tone_plan(hz, sec, call)
+        total = len(frames) * FRAME_SEC
+        limit = min(TONE_MAX_SEC, float(_cfg_get("tot_sec")) - 5.0)
+        if total > limit:
+            raise ValueError(f"the test would last {total:.0f} s; the limit is {limit:.0f} s (the TX time-out less 5 s)")
+        now = time.monotonic()
+        with self.lock:
+            if self.running:
+                return {"ok": False, "error": "A tone test is already running."}
+
+
+            if now - HUB.last_active < TONE_CLEAR_SEC:
+                return {"ok": False, "error": "Audio is coming in on the channel (above the activity level), so the test waits. If the channel is always busy, the background noise is above that level."}
+            if TALKER.state()["keyed"]:
+                return {"ok": False, "error": "The node is already transmitting."}
+            self.running, self.abort = True, False
+            self.stage, self.progress, self.error, self.report = "keying", 0.0, "", None
+            self.raw, self.proc = [], []
+        owner = _ToneOwner()
+        ok, why = TALKER.key(owner, "tone test")
+        if not ok:
+            msg = TONE_KEY_ERRORS.get(why, why)
+            self._set(running=False, stage="idle", error=msg)
+            return {"ok": False, "error": msg}
+        meta = {"node": TX_NODE, "callsign": call, "tx_gain_db": tune_value("tx_gain_db"),
+                "rx_gain_db": tune_value("rx_gain_db"), "level_db": TONE_LEVEL_DB, "rx_gate": _cfg_get("rx_gate"),
+                "tone_sec": sec, "tones": hz, "started": time.time()}
+        threading.Thread(target=self._run, args=(owner, frames, plan, meta), daemon=True,
+                         name="tone-test").start()
+        log_event(f"Tone test started: {len(hz)} tones, {sec} s each, {total:.1f} s", "ok")
+        return {"ok": True, "message": "Tone test started.", "tones": hz, "tone_sec": sec,
+                "seconds": round(total, 1), "callsign": call}
+
+    def _run(self, owner, frames, plan, meta):
+        err = ""
+        try:
+            self.recording = True
+            self._set(stage="sending")
+            t0 = time.monotonic()
+            for i, fr in enumerate(frames):
+                if self.abort:
+                    err = "Stopped."
+                    break
+                if not _tone_keyed(owner):
+                    err = "The transmitter dropped out."
+                    break
+                TALKER.audio(owner, fr)
+                self._set(progress=(i + 1) / len(frames))
+                time.sleep(max(0.0, t0 + (i + 1) * FRAME_SEC - time.monotonic()))
+            TALKER.release(owner)
+            end = time.monotonic() + 5.0
+            while _tone_keyed(owner) and time.monotonic() < end:
+                time.sleep(0.05)
+            time.sleep(TONE_RETURN_SEC)
+        except Exception as exc:
+            err = f"Test error: {exc}"
+        finally:
+            self.recording = False
+            TALKER.release(owner)
+        if err:
+            self._set(running=False, stage="failed", error=err)
+            log_event(f"Tone test ended early: {err}", "warn")
+            return
+        self._set(stage="analysing")
+        try:
+            report = _tone_analyse(list(self.raw), list(self.proc), plan, meta)
+        except Exception as exc:
+            self._set(running=False, stage="failed", error=f"Analysis error: {exc}")
+            log_event(f"Tone test analysis failed: {exc}", "err")
+            return
+        self._set(running=False, stage="done", report=report, progress=1.0)
+        log_event("Tone test finished", "ok")
+
+
+TONE = ToneTest()
 
 
 def usrp_drain_loop():
@@ -3827,7 +4512,7 @@ def tx_enable():
         tpl = f"({','.join(main_st['templates'])})" if main_st["templates"] else ""
         block = ["", TX_NOTE, f"[{TX_NODE}]{tpl}", f"rxchannel = USRP/127.0.0.1:{TX_USRP_LISTEN}:{TX_USRP_SEND}",
                  "duplex = 0", "hangtime = 0", "althangtime = 0", "holdofftelem = 1", "telemdefault = 0",
-                 "nounkeyct = 1"]
+                 "nounkeyct = 1", "idrecording = |t(0,0,10,0)"]
         new = list(lines)
         while new and new[-1].strip() == "":
             new.pop()
@@ -3927,6 +4612,10 @@ button{font:inherit;color:var(--text)}
 .btn:hover{border-color:var(--accent)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn.danger{background:transparent;border-color:var(--red-line);color:var(--red)}
+.btn.connect{background:#1fae63;border-color:#1fae63;color:#04210f}
+.btn.connect:hover{border-color:#3fd27f}
+.btn.disconnect{background:#d93a44;border-color:#d93a44;color:#fff}
+.btn.disconnect:hover{border-color:#f2545b}
 .btn:disabled{opacity:.45;cursor:default}
 .btn.big{min-height:56px;font-size:17px;min-width:160px}
 input,select{background:var(--card2);color:var(--text);border:1px solid var(--line2);border-radius:8px;padding:8px 10px;font:inherit;min-height:40px}
@@ -3937,7 +4626,7 @@ label{color:var(--soft)}
 .muted{color:var(--muted)}
 .small{font-size:13px}
 .mono{font-family:ui-monospace,Menlo,Consolas,monospace}
-.big-num{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:28px;font-weight:700}
+.big-num{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:22px;font-weight:700}
 .meter{position:relative;height:12px;flex:1;min-width:140px;background:#1b2530;border-radius:6px;overflow:hidden}
 .meter i{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,#22c3a6,#22c3a6 70%,#e3a008 90%,#f2545b);transition:width .1s}
 .dot{display:inline-block;width:11px;height:11px;border-radius:50%;background:#33404d;vertical-align:middle;margin-right:6px}
@@ -3962,7 +4651,10 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #log{max-height:260px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px}
 #log .err{color:var(--red)}#log .warn{color:var(--amber)}#log .ok{color:var(--accent)}
 .hidden{display:none !important}
-:root{--tn-gap:8px;--tn-h:44px;--tn-font:15px}
+.na{opacity:.45}
+.na,.na *{cursor:not-allowed}
+.why{margin:4px 0 8px}
+:root{--tn-gap:8px;--tn-h:40px;--tn-font:14px}
 .tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
 .tn-bar select,.tn-bar input{min-height:var(--tn-h);font-size:var(--tn-font)}
 #t-mode{flex:0 0 auto;width:7rem}
@@ -3976,7 +4668,22 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .tn-msg{margin-top:8px;font-size:13px;color:var(--muted);min-height:1em}
 .tn-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
 #t-now{flex:1;min-width:0;overflow-wrap:anywhere}
-#t-off{flex:none;white-space:nowrap}
+.tn-bar #t-go{flex:1 1 100%;min-height:56px;font-size:17px}
+#tab-connect{min-height:100%;display:flex;flex-direction:column}
+#tab-connect .card{padding:8px 10px;margin-bottom:8px}
+#tab-connect h2{font-size:14px;margin:0 0 4px}
+#tab-connect .sel-card{margin-top:4px;padding:6px 8px;gap:3px}
+#tab-connect .big-num{font-size:18px}
+#tab-connect .btn.big{min-height:40px;font-size:14px;min-width:0}
+#tab-connect .tn-bar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#tab-connect .tn-bar>*{width:100%!important;flex:none!important;max-width:none!important;min-width:0}
+#tab-connect #t-find,#tab-connect #t-pick{grid-column:span 2}
+#tab-connect #t-go{grid-column:1 / -1;min-height:44px;font-size:15px}
+#tab-connect .tn-msg,#tab-connect .msg,#tab-connect .small{font-size:12px;margin-top:2px}
+#tab-connect .tn-foot{margin-top:2px}
+#tab-connect .tn-bar .btn-last{min-height:40px}
+#tab-connect #cd-tune .tn-msg{min-height:0}
+#tab-listen .lpanel{padding:8px 10px}
 @media (max-width:560px){#t-mode,#t-net,#t-mod{flex:1 1 40%;width:auto}#t-find{flex:1 1 100%;max-width:none}#t-pick{flex:1 1 100%}.tn-bar .btn.primary{flex:1 1 auto}}
 #login-screen{display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;
 padding:16px;background:rgba(5,8,14,.88);backdrop-filter:blur(3px)}
@@ -4006,6 +4713,7 @@ main.fit{padding-top:10px;padding-bottom:12px}
 .lpanel .row{margin:0}
 .lpanel .msg{margin-top:0;min-height:0}
 .lpanel #listen-msg:empty{display:none}
+#listen-msg{display:none}
 .lstat{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--soft);white-space:nowrap;overflow:hidden}
 .lstat>span{flex:none;display:inline-flex;align-items:center}
 .lstat #st-node{font-weight:700;color:var(--text)}
@@ -4046,6 +4754,15 @@ background:linear-gradient(90deg,#1b2530 0 90%,#14382f 90% 95%,#1b2530 95% 98.3%
 table.chk-t{table-layout:fixed}
 table.chk-t td,table.chk-t th{padding:5px 3px;font-size:12px;white-space:normal;overflow-wrap:break-word}
 table.chk-t thead th:first-child{width:40%}
+.tone-scroll{overflow-x:auto}
+table.tone-t{table-layout:auto}
+.chk-min{display:grid;grid-template-columns:76px repeat(var(--n,5),minmax(0,1fr));gap:3px;font-size:11px;align-items:end}
+.chk-min .lab{color:var(--muted);align-self:center;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chk-min .cell{display:flex;flex-direction:column;align-items:center;gap:2px}
+.chk-min .bar{width:100%;height:36px;background:var(--line);border-radius:3px;position:relative;overflow:hidden}
+.chk-min .fill{position:absolute;left:0;right:0;bottom:0;background:#4da3ff}
+.chk-min .val{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:10px}
+table.tone-t td,table.tone-t th{padding:4px 3px;font-size:11px;white-space:nowrap}
 table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 .sug{display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--line);font-size:14px}
 .sug .t{flex:1}
@@ -4053,7 +4770,7 @@ table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 .st-ok{color:var(--accent)}.st-warn{color:var(--amber)}.st-bad{color:var(--red)}
 .spec-meter .meter{height:6px;min-width:0}
 #ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
-#ptt{width:100%;height:80px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:19px;font-weight:700;cursor:pointer;padding:0 20px;
+#ptt{width:100%;height:64px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
 touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
 #ptt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ptt.ready{border-color:var(--accent)}
@@ -4068,12 +4785,18 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 @keyframes guardblink{to{visibility:hidden}}
 .sel-card{display:flex;flex-direction:column;gap:6px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px}
 .tag{display:inline-block;padding:2px 8px;border:1px solid var(--accent);border-radius:7px;color:#7fd8c6;font-size:12px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace}
+#listen-btn{line-height:1.05}
+#listen-btn .lb{display:inline-block;font-size:.72em;line-height:1.05}
+.lk-badge{display:inline-block;padding:0 .4em;border:1px solid var(--accent);border-radius:.3em;color:#7fd8c6;font-size:1em;line-height:1.4;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.03em;vertical-align:baseline}
 .fav-row{display:grid;grid-template-columns:110px 124px minmax(0,1fr) 44px;gap:6px;margin:6px 0}
 .fav-row input,.fav-row select{min-width:0;width:100%}
 .fav-row button{min-height:40px;border-radius:8px;border:1px solid var(--line2);background:transparent;color:var(--red);cursor:pointer}
 @media (max-width:420px){header{gap:6px;padding:calc(10px + env(safe-area-inset-top)) 12px 10px}header .ver{display:none}.pill{padding:0 10px}}
 @media (max-width:480px){.fav-row{grid-template-columns:92px 108px minmax(0,1fr) 40px}}
 .fav-row .fav-net{grid-column:2/-1}
+.fav-row .fav-gain{grid-column:1/-1;display:flex;gap:6px;align-items:center;font-size:.85em;opacity:.85}
+.fav-row .fav-gain span{flex:1 1 auto;min-width:0}
+.fav-row .fav-gain input{width:72px;min-width:0}
 .net-row{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.3fr) minmax(0,.9fr) 44px;gap:6px;margin:6px 0}
 .net-row input{min-width:0;width:100%}
 .net-row .net-url{grid-column:1/-1}
@@ -4108,14 +4831,14 @@ const PLAY_DEFAULTS = {s16: true, smooth: true, auto: true, spec: true};
 let play = Object.assign({}, PLAY_DEFAULTS);
 try { Object.assign(play, JSON.parse(localStorage.getItem('nlPlay') || '{}')); } catch (e) {}
 let streamPcm = false, oddByte = -1, ups = null, otaRec = null, nodeTesting = false, autoWait = null, starting = false;
-let listenAt = 0, rxLastDb = -120, chk = null, chkUndo = {}, chkCfg = null;
-let busNode = null, analyser = null, specBins = null, specRaf = 0, specLast = 0, busyText = '', pttState = 'off', ownUnkeyAt = -1e9;
+let listenAt = 0, rxLastDb = -120, chk = null, chkUndo = {}, chkCfg = null, keyReqAt = 0;
+let sessNode = null, draining = false, busNode = null, analyser = null, specBins = null, specRaf = 0, specLast = 0, busyText = '', pttState = 'off', ownUnkeyAt = -1e9;
 let hs = {out: '', mic: '', btn: 'listen'};
 try { Object.assign(hs, JSON.parse(localStorage.getItem('nlHeadset') || '{}')); } catch (e) {}
 let hsTx = false, outLost = 0, devCount = -1, lastDevChange = 0;
 const PTT_GUARDS = [30, 60, 90, 120, 180], TAP_IGNORE_MS = 500, GUARD_WARN_SEC = 10;
 const RX_GAP_MS = 4000, RX_QUIET_MS = 300, RX_ACTIVE_DB = -50, OWN_TX_IGNORE_MS = 2500, RX_LOCAL_TRUST_MS = 2000, RX_HOLD_MS = 600;
-let ptt = {mode: 'hold', guard: 60, gap: false}, pttSrc = '', tapAt = 0, guardWarned = false, guardStop = '';
+let ptt = {mode: 'hold', guard: 60, gap: true}, pttSrc = '', tapAt = 0, guardWarned = false, guardStop = '';
 let rxSeenAt = -1e9, rxLocalAt = -1e9, rxStatusOn = false, gapShown = '';
 try {
   const s = JSON.parse(localStorage.getItem('nlPtt') || 'null');
@@ -4140,10 +4863,11 @@ function sincKernels(phases, taps, half, fc, tAt, edgeIn) {
 }
 
 function makeResampler(inRate) {
-  const ratio = inRate / 8000, half = Math.ceil(8 * ratio), taps = 2 * half + 1, phases = 32;
-  const kern = sincKernels(phases, taps, half, 3400 / inRate, (i, off) => i - half - off, true);
+  // 16 output samples each side: flat to 3 kHz, -3.6 dB at 3.4 kHz, about -40 dB at 4 kHz (less hiss folds back).
+  const ratio = inRate / 8000, half = Math.ceil(16 * ratio), taps = 2 * half + 1, phases = 32;
+  const kern = sincKernels(phases, taps, half, 3500 / inRate, (i, off) => i - half - off, true);
   return {ratio: ratio, half: half, taps: taps, phases: phases, kern: kern,
-    buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hpX: 0, hpY: 0, peak: 0, dyn: makeDyn(),
+    buf: new Float32Array(half), pos: half, out: new Int16Array(160), n: 0, hp: biquad('hp', 250, 0.707, 0), peak: 0, dyn: makeDyn(),
     fss: 0, fpk: 0, flg: 1, fgg: 1};
 }
 function biquad(type, f0, q, gainDb) {
@@ -4272,7 +4996,13 @@ function note(id, cls, text) {
   el.textContent = text;
 }
 
-function setMsg(id, d) { note(id, d.warn ? 'warn' : d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Done.') : (d.error || 'Failed.')); }
+const msgTimers = {};
+function setMsg(id, d) {
+  note(id, d.warn ? 'warn' : d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Done.') : (d.error || 'Failed.'));
+  clearTimeout(msgTimers[id]);
+  const shown = $(id).textContent;
+  msgTimers[id] = setTimeout(() => { if ($(id).textContent === shown) note(id, '', ''); }, 30000);
+}
 function fmtGain(v) { return (v > 0 ? '+' : '') + v + ' dB'; }
 
 function addOption(sel, value, text) {
@@ -4286,7 +5016,7 @@ function sendOp(op) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op}));
 }
 
-const FOLDS = ['rx', 'tx', 'cfg', 'fav', 'dig', 'chk', 'lvl', 'mic', 'hs', 'play', 'log'];
+const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'chk', 'phone', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -4302,7 +5032,7 @@ function foldSet(k, open) {
   if (k === 'hs') hsDevices();
 }
 
-function sum(k, text) { $('sum-' + k).textContent = text; }
+function sum(k, text) { const el = $('sum-' + k); if (el) el.textContent = text; }
 
 function micSummary() {
   const on = [];
@@ -4331,9 +5061,11 @@ function showTab(name) {
   });
   try { localStorage.setItem('nlTab', name); } catch (e) {}
   if (name === 'connect') loadFavs();
-  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); if (chkShown && !chk) chkShow(chkShown); }
+  if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); if (chkShown && !chk) chkShow(chkShown); tonePoll(); }
   if (name === 'listen') openTalk();
-  document.querySelector('main').classList.toggle('fit', name === 'listen');
+  if (name === 'setup') { loadDashFavs(); loadDigital(); }
+  if (name === 'connect') connectTabEnter();
+  document.querySelector('main').classList.toggle('fit', name === 'listen' || name === 'connect');
   specKick();
 }
 
@@ -4495,8 +5227,6 @@ async function pollStatus() {
   if (d.rx_load_pct != null) $('rx-load').textContent = d.rx_load_pct + ' % of one CPU core (last 5 s)';
   const gaps = tx.keyed ? tx.gaps : tx.last_gaps;
   $('tune-gaps').textContent = gaps == null ? '-' : (gaps ? gaps + ' (raise the TX buffer if this keeps happening)' : 'none');
-  $('ptt-info').textContent = tx.ready ? ('Node ' + tx.node + (tx.linked === false ? ' (not linked yet)' : '') + ' · time-out ' + fmtSecs(totSec))
-    : 'Set up node ' + (tx.node || '1921') + ' on the Setup tab to transmit.';
   const tb = $('s-links');
   tb.innerHTML = '';
   const links = d.links || [];
@@ -4510,9 +5240,19 @@ async function pollStatus() {
   });
   $('s-nolinks').classList.toggle('hidden', links.length > 0);
   $('s-links-err').classList.toggle('hidden', d.links_ok !== false);
+  listenLink = d.link || null;
+  listenLinkShow();
   linkedTargets = new Set(linkedFavs(d).map((f) => f.target));
   connectLabel();
   $('t-now').textContent = d.tuned_now ? 'Tuned: ' + d.tuned_now : '';
+  tunedNow = d.tuned_now || '';
+  defaultMode = d.default_mode || '';
+  if (tnLast) {
+    if (tnLinkedB(tnLast.b)) tnLast.seen = true;
+    else if (tnLast.seen) tnLast = null;
+  }
+  if (!tnPrimed && authed) tnSetSel(defaultSel());
+  tnButtons();
   $('nd-feeder').textContent = d.feeder_pids && d.feeder_pids.length ? 'running (pid ' + d.feeder_pids.join(', ') + ')' : 'not running';
   if (d.udp_port) $('nd-udp').textContent = d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)';
 }
@@ -4524,13 +5264,20 @@ function flush() {
   pendN = 0;
   if (!buf) return;
   const now = ctx.currentTime;
-  if (nextT < now + 0.05 || nextT > now + jitterSec + 1.25) {
-    if (chk && chk.running && nextT > 0 && playing && performance.now() - listenAt > 3000) chk.drops++;
+  // Far ahead (a burst after a stall): drop audio until playback is back at the Listen buffer.
+  // Rescheduling here would play the new audio on top of what is already queued.
+  if (draining || nextT > now + jitterSec + 1.25) {
+    if (!draining && chk && chk.running && playing && performance.now() - listenAt > 3000) chkDrop(-1);
+    draining = nextT > now + jitterSec;
+    if (draining) { peakLocal = 0; return; }
+  }
+  if (nextT < now + 0.05) {
+    if (chk && chk.running && nextT > 0 && playing && performance.now() - listenAt > 3000) chkDrop(Math.max(0, now - nextT));
     nextT = now + jitterSec;
   }
   const src = ctx.createBufferSource();
   src.buffer = buf;
-  src.connect(busNode);
+  src.connect(sessNode || busNode);
   src.start(nextT);
   nextT += buf.duration;
   if (!talking) $('meter-bar').style.width = dbPct(peakDb(peakLocal)) + '%';
@@ -4661,7 +5408,7 @@ function lagOf(tx, rx) {
   return best;
 }
 
-let rfss = 0, rfpk = 0, rfx1 = 0, rfn = 0, rfprev = 0;
+let rfss = 0, rfpk = 0, rfx1 = 0, rfx2 = 0, rfn = 0, rfprev = 0, rfprev2 = 0;
 
 function accNew() { return {n: 0, act: 0, pw: 0, pk: -120, hist: new Array(121).fill(0), lim: 0, limSum: 0, gate: 0, clip: 0}; }
 
@@ -4694,9 +5441,73 @@ function accSum(a) {
 }
 
 function chkNew(mins) {
-  return {running: true, v: 1, mins: mins, elapsed: 0, paused: 0, last: Date.now(), rx: accNew(), tx: accNew(),
-    seg: null, rxTx: [], drops: 0, tails: 0, noisy: 0, hum: 0, humN: 0, load: 0, loadMax: 0, loadN: 0,
+  return {running: true, v: 2, mins: mins, elapsed: 0, paused: 0, last: Date.now(), rx: accNew(), tx: accNew(), slots: [],
+    seg: null, rxTx: [], drops: 0, dropS: 0, dropM: 0, dropL: 0, dropSilSec: 0, resets: 0, tails: 0, noisy: 0, hum: 0, humN: 0, load: 0, loadMax: 0, loadN: 0,
     txN: 0, txSecs: 0, keyedAt: 0, deadman: 0, timeout: 0, denied: 0, pend: false, srv: [], outDrops: 0, hsPtt: 0};
+}
+
+// Dropouts split by silence length: short under 0.1 s, mid 0.1-0.5 s, long over 0.5 s.
+// A negative silence means the queue overflowed and was reset (not silence), counted apart.
+function chkDrop(silence) {
+  if (silence < 0) { chk.resets = (chk.resets || 0) + 1; return; }
+  chk.drops++;
+  chkSlot().dr++;
+  chk.dropSilSec = (chk.dropSilSec || 0) + silence;
+  if (silence < 0.1) chk.dropS = (chk.dropS || 0) + 1;
+  else if (silence <= 0.5) chk.dropM = (chk.dropM || 0) + 1;
+  else chk.dropL = (chk.dropL || 0) + 1;
+}
+
+// Per-minute slots (v2): one slot per minute of the run, up to 15. Each holds the raw sums needed
+// for speech level, noise floor, Pi load and dropouts for that minute. The run totals are kept
+// as before, so the existing report and suggestions are unchanged.
+const CHK_SLOTS = 15;
+
+function chkSlot() {
+  const i = Math.min(CHK_SLOTS - 1, Math.floor(chk.elapsed / 60000));
+  if (!chk.slots) chk.slots = [];
+  while (chk.slots.length <= i) chk.slots.push(null);
+  return chk.slots[i] || (chk.slots[i] = {a: 0, sp: 0, nz: 0, nzN: 0, ld: 0, ldN: 0, ldMax: 0, dr: 0});
+}
+
+// Runs saved before v2 have no slots. Add them so the run continues; earlier minutes show no trend.
+function chkMigrate(c) {
+  if (!c.slots) c.slots = [];
+  c.v = 2;
+  return c;
+}
+
+function chkMed(a) {
+  if (!a || !a.length) return null;
+  const s = a.slice().sort((x, y) => x - y);
+  return Math.round(s[Math.floor(s.length / 2)]);
+}
+
+// Node-side keyups between the start and end of a check, from rpt stats, compared with the
+// transmissions the phone counted. Never guesses: anything unreadable is reported as such.
+function chkNodeCheck(c) {
+  const a = c.nodeStart, b = c.nodeEnd;
+  if (!a || !b || !a.ok || !b.ok) return {available: false, why: 'Asterisk did not answer, so the keyups could not be read.', raw: []};
+  if (a.keyups == null || b.keyups == null) return {available: false, why: 'rpt stats did not show a keyup count Node Talker recognises.', raw: b.raw || []};
+  const delta = b.keyups - a.keyups;
+  if (delta < 0) return {available: false, why: 'The keyup count went down during the check, so Asterisk probably restarted.', raw: []};
+  const phone = c.txN || 0;
+  return {available: true, nodeKeyups: delta, phoneKeyings: phone, match: delta === phone,
+    nodeSecs: a.tx_secs != null && b.tx_secs != null ? Math.round(b.tx_secs - a.tx_secs) : null, raw: []};
+}
+
+function chkPiSummary(c) {
+  const p = c.pi || {};
+  return {tempMax: p.tempMax == null ? null : p.tempMax, tempAvg: p.tempN ? p.tempSum / p.tempN : null,
+    samples: p.n || 0, throttledSamples: p.thr || 0, flags: p.flags || []};
+}
+
+function chkSlotsSummary(slots) {
+  return slots.map((x, i) => (x ? {min: i + 1,
+    speech: x.a ? 10 * Math.log10(x.sp / x.a) : null,
+    noise: x.nzN ? 10 * Math.log10(x.nz / x.nzN) : null,
+    load: x.ldN ? x.ld / x.ldN : null, loadMax: x.ldN ? x.ldMax : null,
+    drops: x.dr || 0} : null));
 }
 
 function chkSave() {
@@ -4708,14 +5519,20 @@ function chkSave() {
 
 function chkRx(st) {
   rxLastDb = st.db;
+  const sl = chkSlot();
+  if (st.db > -45) { sl.a++; sl.sp += Math.pow(10, st.db / 10); }
+  else if (st.db > -100) { sl.nz += Math.pow(10, st.db / 10); sl.nzN++; }
   accAdd(chk.rx, st);
-  if (st.db > -24 && st.r1 < 0.3) {
+  if (st.db > -24 && Math.abs(st.r1) < 0.3 && Math.abs(st.r2 == null ? 1 : st.r2) < 0.3) {
     if (++chk.noisy === 3) chk.tails++;
   } else chk.noisy = 0;
 }
 
 function chkWs(m) {
-  if (m.ev === 'keyed') { chk.txN++; chk.keyedAt = Date.now(); }
+  if (m.ev === 'keyed') {
+    chk.txN++; chk.keyedAt = Date.now();
+    if (keyReqAt) { chk.rtt = chk.rtt || []; if (chk.rtt.length < 300) chk.rtt.push(performance.now() - keyReqAt); keyReqAt = 0; }
+  }
   else if (m.ev === 'denied') chk.denied++;
   else if (m.ev === 'unkeyed') {
     if (chk.keyedAt) chk.txSecs += (Date.now() - chk.keyedAt) / 1000;
@@ -4723,6 +5540,7 @@ function chkWs(m) {
     if (m.why === 'deadman') chk.deadman++;
     if (m.why === 'timeout') chk.timeout++;
     chk.pend = true;
+    if (m.audio_ms != null) { chk.audioMs = chk.audioMs || []; if (chk.audioMs.length < 300) chk.audioMs.push(m.audio_ms); }
   }
 }
 
@@ -4733,6 +5551,14 @@ micTaps.push(chkMic);
 
 function chkPoll(d) {
   if (d.rx_load_pct != null) { chk.load += d.rx_load_pct; chk.loadN++; chk.loadMax = Math.max(chk.loadMax, d.rx_load_pct); }
+  if (d.rx_load_pct != null) { const sl = chkSlot(); sl.ld += d.rx_load_pct; sl.ldN++; sl.ldMax = Math.max(sl.ldMax, d.rx_load_pct); }
+  if (d.pi) {
+    const p = chk.pi || (chk.pi = {n: 0, thr: 0, tempN: 0, tempSum: 0, tempMax: null, flags: []});
+    p.n++;
+    if (d.pi.temp_c != null) { p.tempN++; p.tempSum += d.pi.temp_c; p.tempMax = p.tempMax == null ? d.pi.temp_c : Math.max(p.tempMax, d.pi.temp_c); }
+    if (d.pi.now && d.pi.now.length) p.thr++;
+    (d.pi.now || []).concat(d.pi.since_boot || []).forEach((f) => { if (!p.flags.includes(f)) p.flags.push(f); });
+  }
   if (playing && d.audio_active) {
     if (!chk.seg) chk.seg = {s: 0, n: 0};
     if (d.level_db > -60) { chk.seg.s += Math.pow(10, d.level_db / 10); chk.seg.n++; }
@@ -4764,6 +5590,8 @@ function chkTick() {
   sum('chk', 'Running ' + txt + ' / ' + chk.mins + ':00');
   $('chk-run').textContent = 'Running: ' + txt + ' of ' + chk.mins + ' min. Heard ' + Math.round(chk.rx.act * 0.02) + ' s of audio, ' +
     chk.txN + ' transmission(s) of yours.' + (chk.paused > 5000 ? ' Paused ' + fmtSecs(chk.paused / 1000) + ' (page closed or asleep).' : '');
+  if (chk.guide) $('chk-run').textContent += chkPromptText(chk.elapsed / 1000);
+  if (!chkWakeHeld()) $('chk-run').textContent += ' Screen may sleep: keep this page open.';
   if (Math.floor(chk.elapsed / 1000) % 10 === 0) chkSave();
   if (!left) chkStop();
 }
@@ -4773,12 +5601,45 @@ function chkUi() {
   $('chk-start').classList.toggle('hidden', run);
   $('chk-stop').classList.toggle('hidden', !run);
   $('chk-mins').disabled = run;
+  $('chk-guide').disabled = run;
   $('chk-run').classList.toggle('hidden', !run);
   $('chk-badge').classList.toggle('hidden', !run);
 }
 
+// Keep the screen awake during a check. The lock is released by the browser when the page is
+// hidden, so it is requested again when the page comes back.
+const CHK_PHRASE = 'This is a level check. One, two, three, four, five. The quick brown fox jumps over the lazy dog.';
+let chkWake = null;
+
+async function chkWakeOn() {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') chkWake = await navigator.wakeLock.request('screen');
+  } catch (e) { chkWake = null; }
+}
+
+function chkWakeOff() {
+  try { if (chkWake) chkWake.release(); } catch (e) {}
+  chkWake = null;
+}
+
+function chkWakeHeld() { return !!(chkWake && !chkWake.released); }
+
+document.addEventListener('visibilitychange', () => {
+  if (chk && chk.running && document.visibilityState === 'visible' && !chkWakeHeld()) chkWakeOn();
+});
+
+// A prompt at 0:30 and every 2 minutes after, lasting 20 s.
+function chkPromptText(e) {
+  if (e < 30) return '';
+  return (e - 30) % 120 < 20 ? ' TALK NOW for 20 s at your normal voice: "' + CHK_PHRASE + '"' : '';
+}
+
 function chkStart() {
   chk = chkNew(Number($('chk-mins').value) || 5);
+  chk.guide = $('chk-guide').checked;
+  chkWakeOn();
+  chk.nodeStart = null;
+  api('/api/node/counters').then((d) => { if (chk) chk.nodeStart = d; });
   chkSave(); chkUi(); chkTick();
   note('chk-msg', '', '');
   if (!playing) startListen();
@@ -4788,19 +5649,24 @@ function chkSummary(c) {
   const rx = accSum(c.rx), tx = accSum(c.tx);
   const lv = c.rxTx.slice().sort((a, b) => a - b);
   return {at: Date.now(), mins: Math.round(c.elapsed / 6000) / 10, paused: Math.round(c.paused / 1000),
+    minutes: chkSlotsSummary(c.slots || []),
+    pttRtt: chkMed(c.rtt || []), piAudio: chkMed(c.audioMs || []), node: chkNodeCheck(c), pi: chkPiSummary(c),
     rx: Object.assign(rx, {nTx: lv.length, spread: lv.length >= 2 ? lv[lv.length - 1] - lv[0] : null,
       quietest: lv.length ? lv[0] : null, loudest: lv.length ? lv[lv.length - 1] : null,
       hum: c.humN ? c.hum / c.humN : null, drops: c.drops, dropsMin: c.elapsed ? c.drops / (c.elapsed / 60000) : 0, tails: c.tails,
+      dropS: c.dropS || 0, dropM: c.dropM || 0, dropL: c.dropL || 0, dropSil: Math.round((c.dropSilSec || 0) * 10) / 10, resets: c.resets || 0,
       load: c.loadN ? c.load / c.loadN : null, loadMax: c.loadN ? c.loadMax : null, outDrops: c.outDrops || 0, out: canSink() ? hsLabel('hs-out') : 'phone default'}),
     tx: Object.assign(tx, {nTx: c.txN, txSecs: Math.round(c.txSecs), deadman: c.deadman, timeout: c.timeout, denied: c.denied,
       gapTx: c.srv.filter((x) => x.gaps > 0).length, srvN: c.srv.length, srvPeak: c.srv.length ? Math.max(...c.srv.map((x) => x.pk)) : null, hsPtt: c.hsPtt || 0, mic: hsLabel('hs-mic')})};
 }
 
 async function chkStop() {
+  chkWakeOff();
   if (!chk) return;
   const now = Date.now();
   if (now - chk.last < 5000) chk.elapsed += now - chk.last;
   chk.running = false;
+  chk.nodeEnd = await api('/api/node/counters');
   const r = chkSummary(chk);
   chk = null; chkSave(); chkUi();
   sum('chk', '');
@@ -4817,21 +5683,27 @@ const db0 = (x) => (x == null || x <= -119 ? '-' : Math.round(x) + ' dBFS');
 function chkRows(r, p, side) {
   const R = r[side], P = p ? p[side] : null;
   const st = (ok, warn) => (ok ? 'st-ok' : warn ? 'st-warn' : 'st-bad');
+  const PI = r.pi || {samples: 0, tempMax: null, tempAvg: null, throttledSamples: 0, flags: []};
   const rows = side === 'rx' ? [
     ['Listened', Math.round(R.secs) + ' s', P && Math.round(P.secs) + ' s', '', 'st-ok'],
-    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -14', R.actSecs < 5 ? '' : st(R.speech >= -24 && R.speech <= -14, R.speech >= -30 && R.speech <= -10)],
+    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -14', R.actSecs < CHK_MIN_SPEECH ? '' : st(R.speech >= -24 && R.speech <= -14, R.speech >= -30 && R.speech <= -10)],
     ['Peak', db0(R.peak), P && db0(P.peak), 'below -1', st(R.peak < -1, R.peak < -0.2)],
+    ['Samples at full scale', R.clipPct.toFixed(1) + ' %', P && P.clipPct != null ? P.clipPct.toFixed(1) + ' %' : '-', 'under 1 %', st(R.clipPct < 1, R.clipPct < 3)],
     ['Stations, quietest to loudest', R.spread == null ? '-' : Math.round(R.spread) + ' dB', P && (P.spread == null ? '-' : Math.round(P.spread) + ' dB'), 'under 8 dB', R.spread == null ? '' : st(R.spread < 8, R.spread < 14)],
     ['Below 300 Hz (tones, hum)', R.hum == null ? '-' : Math.round(R.hum) + ' dB', P && (P.hum == null ? '-' : Math.round(P.hum) + ' dB'), 'under -25 dB', R.hum == null ? '' : st(R.hum < -25, R.hum < -15)],
-    ['Dropouts', R.drops + (R.drops ? ' (' + R.dropsMin.toFixed(1) + '/min)' : ''), P && String(P.drops), 'none', st(R.dropsMin < 0.5, R.dropsMin < 2)],
+    ['Dropouts', R.drops + (R.drops ? ' (' + R.dropsMin.toFixed(1) + '/min): under 0.1 s ' + R.dropS + ', 0.1-0.5 s ' + R.dropM + ', over 0.5 s ' + R.dropL + ', silent ' + R.dropSil + ' s' : ''), P && String(P.drops), 'none', st(R.dropsMin < 0.5, R.dropsMin < 2)],
+    ['Buffer resets (queue overflow)', String(R.resets), P && String(P.resets || 0), 'none', st(R.resets === 0, R.resets < 3)],
     ['Squelch tails heard', String(R.tails), P && String(P.tails), 'none', st(R.tails === 0, R.tails < 3)],
     ['Pi load (avg / max)', R.load == null ? '-' : R.load.toFixed(1) + ' / ' + R.loadMax.toFixed(1) + ' %', P && (P.load == null ? '-' : P.load.toFixed(1) + ' %'), 'under 25 %', R.load == null ? '' : st(R.loadMax < 25, R.loadMax < 50)],
+    ['Pi temperature (max / avg)', PI.tempMax == null ? '-' : Math.round(PI.tempMax) + ' / ' + Math.round(PI.tempAvg) + ' C', '', 'under 70 C', PI.tempMax == null ? '' : st(PI.tempMax < 70, PI.tempMax < 80)],
+    ['Pi throttling or under-voltage', PI.samples ? (PI.flags.length ? PI.flags.join(', ') + ' (' + Math.round(100 * PI.throttledSamples / PI.samples) + ' % of samples)' : 'none') : '-', '', 'none', PI.samples ? st(!PI.flags.length, PI.throttledSamples / PI.samples < 0.05) : ''],
     ['Headset unplugged / output lost', R.outDrops == null ? '-' : String(R.outDrops), P && (P.outDrops == null ? '-' : String(P.outDrops)), 'none', R.outDrops == null ? '' : st(R.outDrops === 0, R.outDrops < 2)],
     ['Audio output', R.out || '-', P && (P.out || '-'), '', ''],
   ] : [
     ['Transmissions', R.nTx + (R.nTx ? ' (' + R.txSecs + ' s)' : ''), P && String(P.nTx), '', 'st-ok'],
-    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -12', R.actSecs < 0.4 ? '' : st(R.speech >= -24 && R.speech <= -12, R.speech >= -30 && R.speech <= -8)],
+    ['Speech level', db0(R.speech), P && db0(P.speech), '-24 to -12', R.actSecs < CHK_MIN_SPEECH ? '' : st(R.speech >= -24 && R.speech <= -12, R.speech >= -30 && R.speech <= -8)],
     ['Peak', db0(R.peak), P && db0(P.peak), '-8 to -1', R.actSecs < 0.4 ? '' : st(R.peak <= -1 && R.peak >= -8, R.peak < -0.2)],
+    ['Samples at full scale', R.clipPct.toFixed(1) + ' %', P && P.clipPct != null ? P.clipPct.toFixed(1) + ' %' : '-', 'under 1 %', st(R.clipPct < 1, R.clipPct < 3)],
     ['Voice above background', R.snr == null ? '-' : (R.snr >= 60 ? 'over 60' : Math.round(R.snr)) + ' dB', P && (P.snr == null ? '-' : Math.round(P.snr) + ' dB'), 'over 20 dB', R.snr == null ? '' : st(R.snr > 20, R.snr > 12)],
     ['Limiter working', Math.round(R.limPct) + ' %', P && Math.round(P.limPct) + ' %', 'under 20 %', R.actSecs < 0.4 ? '' : st(R.limPct < 20, R.limPct < 40)],
     ['Gate closed while talking', Math.round(R.gatePct) + ' %', P && Math.round(P.gatePct) + ' %', 'under 10 %', R.actSecs < 0.4 ? '' : st(R.gatePct < 10, R.gatePct < 20)],
@@ -4839,6 +5711,9 @@ function chkRows(r, p, side) {
     ['Peak at the Pi (after TX gain)', db0(R.srvPeak), P && db0(P.srvPeak), 'below -1', R.srvPeak == null ? '' : st(R.srvPeak < -1, R.srvPeak < -0.2)],
     ['Microphone', R.mic || '-', P && (P.mic || '-'), '', ''],
     ['Headset-button transmissions', R.hsPtt == null ? '-' : String(R.hsPtt), P && (P.hsPtt == null ? '-' : String(P.hsPtt)), '', ''],
+    ['PTT round trip, phone to Pi and back (median)', r.pttRtt == null ? '-' : r.pttRtt + ' ms', '', 'under 200 ms', r.pttRtt == null ? '' : st(r.pttRtt < 200, r.pttRtt < 400)],
+    ['Pi key to first audio sent (median)', r.piAudio == null ? '-' : r.piAudio + ' ms', '', 'about 120 ms (TX buffer)', r.piAudio == null ? '' : st(r.piAudio <= 200, r.piAudio <= 300)],
+    ['Keyups at node (phone sent)', r.node && r.node.available ? r.node.nodeKeyups + ' (' + r.node.phoneKeyings + ')' : 'not readable', '', 'equal', r.node && r.node.available ? st(r.node.match, false) : ''],
     ['Audio stopped / time-outs / refused', R.deadman + ' / ' + R.timeout + ' / ' + R.denied, P && (P.deadman + ' / ' + P.timeout + ' / ' + P.denied), '0 / 0 / 0', st(!R.deadman && !R.timeout && !R.denied, R.deadman < 2)],
   ];
   return rows;
@@ -4861,50 +5736,86 @@ function chkTable(id, rows, cmp) {
 const JIT_STEPS = [150, 250, 500, 1000], TXB_STEPS = [60, 120, 200, 300];
 const nextStep = (steps, v) => steps.find((x) => x > Number(v)) || null;
 
+// Suggestions are sorted by tier: 0 loses or distorts audio, 1 level, 2 noise and filters, 3 information.
+// At most CHK_MAX_CHANGES changes carry an Apply button; the rest are marked Later, so each change is
+// judged on its own in the next check. Levels are judged only after CHK_MIN_SPEECH seconds of speech.
+const CHK_MIN_SPEECH = 5, CHK_MAX_CHANGES = 2;
+
 function chkSuggest(r, cfg) {
-  const out = [], R = r.rx, T = r.tx, c = cfg || {};
-  const mg = Number(mic.gain) || 0;
-  const node = (text, change) => out.push({text: text, change: change && Object.assign({node: true}, change)});
-  if (R.spread != null && R.spread >= 10 && c.rx_agc === false) node('Stations differed by ' + Math.round(R.spread) + ' dB: turn on Automatic level.', {rx_agc: true});
-  if (R.actSecs >= 5 && R.speech < -28) {
-    const d = clampStep(-20 - R.speech);
-    node('Received speech averaged ' + db0(R.speech) + ': raise RX gain by ' + d + ' dB' + (c.rx_agc ? ' (Automatic level is already at its limit)' : '') + '.',
-      {tune_enabled: true, rx_gain_db: Math.min(12, (Number(c.rx_gain_db) || 0) + d)});
-  }
-  if (R.clipPct > 1) node('Received audio hit full scale ' + R.clipPct.toFixed(1) + ' % of the time: lower RX gain by 3 dB' + (c.rx_agc ? '' : ' or turn on Automatic level') + '.',
-    {tune_enabled: true, rx_gain_db: Math.max(-12, (Number(c.rx_gain_db) || 0) - 3)});
-  if (R.hum != null && R.hum > -20 && c.rx_hpf === false) node('Strong sound below 300 Hz (CTCSS tones or hum): turn on Cut below 300 Hz.', {rx_hpf: true});
-  if (R.tails >= 2 && !Number(c.rx_gate)) node(R.tails + ' squelch tails got through: set the Squelch-tail gate to Light.', {rx_gate: 1});
-  else if (R.tails >= 3 && Number(c.rx_gate) === 1) node(R.tails + ' squelch tails got through Light: try Strong.', {rx_gate: 2});
+  const R = r.rx, T = r.tx, c = cfg || {}, mg = Number(mic.gain) || 0;
+  const rxGain = Number(c.rx_gain_db) || 0, txGain = Number(c.tx_gain_db) || 0;
+  const items = [];
+  const add = (tier, text, change) => items.push({tier: tier, text: text, change: change || null});
+  const node = (tier, text, change) => add(tier, text, change && Object.assign({node: true}, change));
+  const rxOk = (R.actSecs || 0) >= CHK_MIN_SPEECH, txOk = (T.actSecs || 0) >= CHK_MIN_SPEECH;
+  const clipping = R.clipPct > 1;
+  const agcSuggest = R.spread != null && R.spread >= 10 && c.rx_agc === false;
+
+  // Tier 0: audio that is lost, cut or distorted.
+  if (clipping) node(0, 'Received audio hit full scale ' + R.clipPct.toFixed(1) + ' % of the time: lower RX gain by 3 dB'
+    + (c.rx_agc ? '' : ' or turn on Automatic level') + '.', {tune_enabled: true, rx_gain_db: Math.max(-12, rxGain - 3)});
   if (R.dropsMin >= 0.5) {
     const j = nextStep(JIT_STEPS, c.tune_enabled ? c.jitter_ms : 250);
-    if (j) node(R.drops + ' dropouts: raise the Listen buffer to ' + (j / 1000) + ' s.', {tune_enabled: true, jitter_ms: j});
-    else out.push({text: R.drops + ' dropouts even with the largest Listen buffer: the phone\'s connection is the problem (try Wi-Fi).'});
+    if (j) node(0, R.drops + ' dropouts: raise the Listen buffer to ' + (j / 1000) + ' s.', {tune_enabled: true, jitter_ms: j});
+    else add(0, R.drops + ' dropouts even with the largest Listen buffer: the phone\'s connection is the problem (try Wi-Fi).');
   }
-  if (R.loadMax != null && R.loadMax > 40 && c.rx_hpf) node('The Pi spent up to ' + Math.round(R.loadMax) + ' % of a core on RX cleanup: turn off Cut below 300 Hz to save the most.', {rx_hpf: false});
-  if (!T.nTx) out.push({text: 'You didn\'t transmit during the check, so there is nothing to say about your audio yet.'});
+  const N = r.node;
+  if (N && !N.available) add(3, 'Node cross-check unavailable: ' + N.why
+    + (N.raw && N.raw.length ? ' First lines of rpt stats: ' + N.raw.slice(0, 6).join(' | ') : ''));
+  else if (N && !N.match) add(0, 'The node counted ' + N.nodeKeyups + ' keyups but the phone sent ' + N.phoneKeyings + ': '
+    + (N.phoneKeyings > N.nodeKeyups ? 'some transmissions did not reach the node. Check the link and the TX node in Setup.'
+      : 'the node saw extra keyups from other sources.'));
+  if (r.pi && r.pi.flags && r.pi.flags.length) add(0, 'The Pi reported ' + r.pi.flags.join(', ') + ' during the check. Check the power supply and cooling.');
+
+  // Tier 1 and 2: received audio.
+  if (agcSuggest) node(1, 'Stations differed by ' + Math.round(R.spread) + ' dB (target under 8 dB): turn on Automatic level.', {rx_agc: true});
+  if (rxOk && !clipping && !agcSuggest && R.speech != null && R.speech < -24) {
+    const d = clampStep(-19 - R.speech);
+    node(1, 'Received speech averaged ' + db0(R.speech) + ' (target -24 to -14 dB): raise RX gain by ' + d + ' dB'
+      + (c.rx_agc ? ' (Automatic level is already at its limit)' : '') + '.', {tune_enabled: true, rx_gain_db: Math.min(12, rxGain + d)});
+  }
+  if (R.actSecs > 0 && !rxOk) add(3, 'Only ' + R.actSecs.toFixed(1) + ' s of received speech was measured: too little to judge RX levels.');
+  if (R.hum != null && R.hum >= -25 && c.rx_hpf === false) node(2, 'Strong sound below 300 Hz (CTCSS tones or hum): turn on Cut below 300 Hz.', {rx_hpf: true});
+  if (R.tails >= 2 && !Number(c.rx_gate)) node(2, R.tails + ' squelch tails got through: set the Squelch-tail gate to Light.', {rx_gate: 1});
+  else if (R.tails >= 3 && Number(c.rx_gate) === 1) node(2, R.tails + ' squelch tails got through Light: try Strong.', {rx_gate: 2});
+  if (R.loadMax != null && R.loadMax > 40 && c.rx_hpf && !(R.hum != null && R.hum >= -25)) {
+    node(2, 'The Pi spent up to ' + Math.round(R.loadMax) + ' % of a core on RX cleanup: turn off Cut below 300 Hz to save the most.', {rx_hpf: false});
+  }
+
+  // Transmitted audio.
+  if (!T.nTx) add(3, 'You didn\'t transmit during the check, so there is nothing to say about your audio yet.');
   else if (T.actSecs >= 0.4) {
-    if (T.limPct > 30 || T.peak > -1) {
+    if (T.limPct >= 20 || T.peak > -1) {
       const d = clampStep(Math.max(T.peak + 4, (T.limAvg || 0) + 3, 3));
-      out.push({text: 'Your audio was limited ' + Math.round(T.limPct) + ' % of the time: lower Mic gain by ' + d + ' dB.', change: {mic: {gain: Math.max(-12, mg - d)}}});
-    } else if (T.speech < -28) {
+      add(0, 'Your audio was limited ' + Math.round(T.limPct) + ' % of the time: lower Mic gain by ' + d + ' dB.', {mic: {gain: Math.max(-12, mg - d)}});
+    } else if (txOk && T.speech != null && T.speech < -24) {
       const d = Math.min(clampStep(-18 - T.speech), 24 - mg);
-      if (d > 0) out.push({text: 'Your speech averaged ' + db0(T.speech) + ': raise Mic gain by ' + d + ' dB.', change: {mic: {gain: mg + d}}});
+      if (d > 0) add(1, 'Your speech averaged ' + db0(T.speech) + ' (target -24 to -12 dB): raise Mic gain by ' + d + ' dB.', {mic: {gain: mg + d}});
     }
+    if (!txOk) add(3, 'Only ' + T.actSecs.toFixed(1) + ' s of your speech was measured: too little to judge your levels. Talk for longer in the next check.');
     if (T.snr != null && T.snr < 15) {
-      if (!mic.ns) out.push({text: 'Your background was only ' + Math.round(T.snr) + ' dB below your voice: turn on Noise suppression.', change: {mic: {ns: true}}});
-      else if (!Number(mic.gate)) out.push({text: 'Your background was only ' + Math.round(T.snr) + ' dB below your voice: set the Noise gate to Light.', change: {mic: {gate: 1}}});
+      if (!mic.ns) add(2, 'Your background was only ' + Math.round(T.snr) + ' dB below your voice: turn on Noise suppression.', {mic: {ns: true}});
+      else if (!Number(mic.gate)) add(2, 'Your background was only ' + Math.round(T.snr) + ' dB below your voice: set the Noise gate to Light.', {mic: {gate: 1}});
     }
-    if (T.gatePct > 15 && Number(mic.gate)) out.push({text: 'The noise gate closed ' + Math.round(T.gatePct) + ' % of the time while you talked: set it ' + (Number(mic.gate) === 2 ? 'to Light.' : 'Off.'), change: {mic: {gate: Number(mic.gate) - 1}}});
-    if (T.srvPeak != null && T.srvPeak > -1 && c.tune_enabled && Number(c.tx_gain_db) > 0) node('Your audio reached ' + db0(T.srvPeak) + ' at the Pi: lower TX gain by 3 dB.', {tx_gain_db: Number(c.tx_gain_db) - 3});
+    if (T.gatePct >= 10 && Number(mic.gate)) add(2, 'The noise gate closed ' + Math.round(T.gatePct) + ' % of the time while you talked: set it ' + (Number(mic.gate) === 2 ? 'to Light.' : 'Off.'), {mic: {gate: Number(mic.gate) - 1}});
+    if (T.srvPeak != null && T.srvPeak > -1 && c.tune_enabled && txGain > 0) node(0, 'Your audio reached ' + db0(T.srvPeak) + ' at the Pi: lower TX gain by 3 dB.', {tx_gain_db: txGain - 3});
     if (T.srvN && T.gapTx / T.srvN >= 0.25) {
       const b = nextStep(TXB_STEPS, c.tune_enabled ? c.tx_buffer_ms : 120);
-      if (b) node(T.gapTx + ' of ' + T.srvN + ' transmissions had gaps: raise the TX buffer to ' + b + ' ms.', {tune_enabled: true, tx_buffer_ms: b});
+      if (b) node(0, T.gapTx + ' of ' + T.srvN + ' transmissions had gaps: raise the TX buffer to ' + b + ' ms.', {tune_enabled: true, tx_buffer_ms: b});
     }
-    if (T.deadman >= 2) out.push({text: T.deadman + ' transmissions stopped because your audio stopped arriving: the phone\'s connection dropped out. Wi-Fi is steadier than mobile data.'});
+    if (T.deadman >= 2) add(0, T.deadman + ' transmissions stopped because your audio stopped arriving: the phone\'s connection dropped out. Wi-Fi is steadier than mobile data.');
   }
-  if (T.denied >= 2) out.push({text: 'Push-to-talk was refused ' + T.denied + ' times (the node was busy or someone else was transmitting).'});
-  return out;
+  if (T.denied >= 2) add(3, 'Push-to-talk was refused ' + T.denied + ' times (the node was busy or someone else was transmitting).');
+
+  // Order by tier, then cap the Apply buttons so only the first changes are offered at once.
+  items.sort((a, b) => a.tier - b.tier);
+  let changes = 0;
+  items.forEach((it) => {
+    if (!it.change) return;
+    if (changes < CHK_MAX_CHANGES) changes++;
+    else { it.change = null; it.text = 'Later: ' + it.text; }
+  });
+  return items.map((it) => ({text: it.text, change: it.change}));
 }
 
 async function chkApply(i, s2, btn, undo) {
@@ -4934,15 +5845,204 @@ async function chkApply(i, s2, btn, undo) {
 
 let chkShown = null, chkCmp = false;
 
+// ---- Tone test (Pi side, v0.9.3): start, poll, show the report ----
+let toneTimer = null, toneWasRunning = false;
+const TONE_STAGE = {keying: 'Keying the node', sending: 'Transmitting', analysing: 'Analysing'};
+const toneFmt = (v, digits, signed) => (v == null ? '-' : ((signed && v > 0) ? '+' : '') + Number(v).toFixed(digits == null ? 1 : digits));
+
+function toneUi(running) {
+  $('tone-start').classList.toggle('hidden', running);
+  $('tone-stop').classList.toggle('hidden', !running);
+  $('tone-prog').classList.toggle('hidden', !running);
+  $('tone-hz').disabled = running;
+  $('tone-sec').disabled = running;
+}
+
+async function toneStart() {
+  const raw = $('tone-hz').value.trim();
+  const tones = raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null;
+  $('tone-start').disabled = true;
+  note('tone-msg', '', 'Starting...');
+  const d = await post('/api/tonetest/start', {tones: tones, tone_sec: Number($('tone-sec').value)});
+  $('tone-start').disabled = false;
+  if (!d.ok) { note('tone-msg', 'err', d.error || 'Could not start the tone test.'); return; }
+  note('tone-msg', '', '');
+  $('tone-rep').classList.add('hidden');
+  toneWasRunning = true;
+  toneUi(true);
+  tonePoll();
+}
+
+async function toneStop() {
+  const d = await post('/api/tonetest/stop', {});
+  if (!d.ok) note('tone-msg', 'err', d.error || 'Could not stop the tone test.');
+}
+
+async function tonePoll() {
+  clearTimeout(toneTimer);
+  const s = await api('/api/tonetest/status');
+  if (!s.ok) { note('tone-msg', 'err', s.error || 'Node Talker is not answering.'); toneUi(false); return; }
+  if (s.running) {
+    toneWasRunning = true;
+    toneUi(true);
+    $('tone-prog').textContent = (TONE_STAGE[s.stage] || 'Working') + ' ' + Math.round(s.progress * 100) + ' %';
+    toneTimer = setTimeout(tonePoll, 1000);
+    return;
+  }
+  toneUi(false);
+  if (toneWasRunning && s.stage === 'failed') note('tone-msg', 'err', s.error || 'The tone test failed.');
+  if (toneWasRunning && s.stage === 'done') note('tone-msg', 'ok', 'Tone test finished.');
+  toneWasRunning = false;
+  if (s.report) toneShow(s.report);
+}
+
+function toneShow(r) {
+  $('tone-rep').classList.remove('hidden');
+  const head = [
+    r.rx_detected ? 'Return heard, delay ' + r.latency_ms + ' ms' : 'No return signal',
+    r.band_low_hz != null ? 'usable from ' + r.band_low_hz + ' to ' + r.band_high_hz + ' Hz (within 6 dB of ' + (r.reference_hz ? '1 kHz' : 'the strongest tone') + ')' : null,
+    'node ' + r.node + ', ID ' + r.callsign,
+    'TX gain ' + fmtGain(r.tx_gain_db) + ', RX gain ' + fmtGain(r.rx_gain_db),
+    r.rx_detected ? 'raw noise floor ' + r.noise_raw_db + ' dBFS' : null,
+  ].filter(Boolean);
+  $('tone-sum').textContent = head.join('. ') + '.';
+  const tb = $('tone-rows');
+  tb.innerHTML = '';
+  r.rows.forEach((row) => {
+    const tr = document.createElement('tr');
+    const cells = [
+      row.hz,
+      toneFmt(row.sent_db),
+      toneFmt(row.raw_db),
+      toneFmt(row.raw_resp_db, 1, true),
+      toneFmt(row.proc_db),
+      toneFmt(row.proc_minus_raw_db, 1, true),
+      toneFmt(row.raw_freq_err_hz, 1, true),
+      row.dropouts == null ? '-' : String(row.dropouts),
+    ];
+    cells.forEach((v, i) => { const td = document.createElement(i ? 'td' : 'th'); td.textContent = v; tr.appendChild(td); });
+    tb.appendChild(tr);
+  });
+  const wb = $('tone-warn');
+  wb.innerHTML = '';
+  (r.warnings || []).forEach((w) => {
+    const p = document.createElement('div');
+    p.className = 'msg warn';
+    p.textContent = w;
+    wb.appendChild(p);
+  });
+}
+
+// Per-minute strip: one bar per minute for each metric. Each metric has a fixed scale so
+// runs can be compared by eye; dropouts scale to the largest count in the run.
+const CHK_METRICS = [
+  {label: 'Speech dB', key: 'speech', lo: -40, hi: -5},
+  {label: 'Noise dB', key: 'noise', lo: -80, hi: -40},
+  {label: 'Pi load %', key: 'load', lo: 0, hi: 100},
+  {label: 'Dropouts', key: 'drops', lo: 0, hi: null},
+];
+
+function chkCellText(cls, text) {
+  const d = document.createElement('div');
+  d.className = cls;
+  d.textContent = text;
+  return d;
+}
+
+function chkBarCell(text, pct) {
+  const c = document.createElement('div');
+  c.className = 'cell';
+  const bar = document.createElement('div');
+  bar.className = 'bar';
+  const fill = document.createElement('div');
+  fill.className = 'fill';
+  fill.style.height = pct + '%';
+  bar.appendChild(fill);
+  c.appendChild(bar);
+  c.appendChild(chkCellText('val', text));
+  return c;
+}
+
+function chkMinutes(slots) {
+  const box = $('chk-min');
+  box.innerHTML = '';
+  if (!slots.length) { box.textContent = 'No per-minute data for this check.'; return; }
+  const n = slots.length;
+  box.style.setProperty('--n', n);
+  const maxDrops = Math.max(1, ...slots.map((x) => (x ? x.drops : 0)));
+  box.appendChild(chkCellText('lab', 'Minute'));
+  for (let i = 0; i < n; i++) box.appendChild(chkCellText('val', String(i + 1)));
+  CHK_METRICS.forEach((m) => {
+    box.appendChild(chkCellText('lab', m.label));
+    for (let i = 0; i < n; i++) {
+      const x = slots[i];
+      const v = x ? x[m.key] : null;
+      const hi = m.hi == null ? maxDrops : m.hi;
+      const pct = v == null ? 0 : Math.max(0, Math.min(100, 100 * (v - m.lo) / (hi - m.lo)));
+      const text = v == null ? '-' : (m.key === 'drops' ? String(v) : String(Math.round(v)));
+      box.appendChild(chkBarCell(text, pct));
+    }
+  });
+}
+
+// Export and import (v0.9.7). A report is downloaded to this phone as a file. Nothing is stored
+// on the Pi. Comparing with a saved report reads a file the user picks; it is not kept afterwards.
+let chkCompareWith = null;
+
+function chkPad(n) { return String(n).padStart(2, '0'); }
+
+function chkExport() {
+  if (!chkShown) return;
+  const doc = {format: 'nodetalker-check', version: '__VERSION__', saved: new Date().toISOString(), summary: chkShown};
+  const blob = new Blob([JSON.stringify(doc, null, 1)], {type: 'application/json'});
+  const url = URL.createObjectURL(blob);
+  const d = new Date();
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'nodetalker-check-' + d.getFullYear() + chkPad(d.getMonth() + 1) + chkPad(d.getDate()) + '-' + chkPad(d.getHours()) + chkPad(d.getMinutes()) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+
+async function chkCompareFile(file) {
+  let obj = null;
+  try { obj = JSON.parse(await file.text()); } catch (e) { obj = null; }
+  if (!obj || obj.format !== 'nodetalker-check' || !obj.summary || !obj.summary.rx || !obj.summary.tx) {
+    note('chk-msg', 'err', 'That file is not a saved check report.');
+    return;
+  }
+  chkCompareWith = obj.summary;
+  chkCmp = true;
+  $('chk-cmp').textContent = 'Hide last check';
+  const when = obj.saved ? new Date(obj.saved).toLocaleString() : 'an unknown time';
+  note('chk-msg', 'ok', 'Comparing with the report saved ' + when + '.');
+  chkShow(chkShown);
+}
+
+function chkClearFile() {
+  chkCompareWith = null;
+  chkCmp = false;
+  $('chk-cmp').textContent = 'Compare with last check';
+  note('chk-msg', '', '');
+  chkShow(chkShown);
+}
+
 async function chkShow(r) {
   chkShown = r;
   if (!r) { $('chk-rep').classList.add('hidden'); return; }
-  let prev = null;
-  try { prev = JSON.parse(localStorage.getItem('nlCheckPrev') || 'null'); } catch (e) {}
-  $('chk-cmp').disabled = !prev;
+  $('chk-export').disabled = false;
+  let prev = chkCompareWith;
+  if (!prev) { try { prev = JSON.parse(localStorage.getItem('nlCheckPrev') || 'null'); } catch (e) {} }
+  $('chk-cmp').disabled = !prev || !!chkCompareWith;
+  $('chk-clear-file').classList.toggle('hidden', !chkCompareWith);
+  $('chk-prev-h1').textContent = chkCompareWith ? 'Saved' : 'Last';
+  $('chk-prev-h2').textContent = chkCompareWith ? 'Saved' : 'Last';
   ['chk-prev-h1', 'chk-prev-h2'].forEach((id) => $(id).classList.toggle('hidden', !(chkCmp && prev)));
   chkTable('chk-rx', chkRows(r, chkCmp && prev, 'rx'), chkCmp && !!prev);
   chkTable('chk-tx', chkRows(r, chkCmp && prev, 'tx'), chkCmp && !!prev);
+  chkMinutes(r.minutes || []);
   const cfgRes = authed ? await api('/api/config') : {};
   chkCfg = cfgRes.config || null;
   const sugs = chkSuggest(r, chkCfg), box = $('chk-sug');
@@ -4950,16 +6050,113 @@ async function chkShow(r) {
   if (!sugs.length) { const d = document.createElement('div'); d.className = 'sug'; d.textContent = 'Nothing to change: everything is in range.'; box.appendChild(d); }
   sugs.forEach((s2, i) => {
     const d = document.createElement('div'); d.className = 'sug';
-    const t = document.createElement('div'); t.className = 't'; t.textContent = s2.text; d.appendChild(t);
+    const t = document.createElement('div'); t.className = 't';
+    t.textContent = s2.text + (s2.change && s2.change.mic ? ' *' : ''); d.appendChild(t);
     if (s2.change && (!s2.change.node || authed)) {
       const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.textContent = 'Apply';
       b.onclick = () => chkApply(i, s2, b, false); d.appendChild(b);
     }
     box.appendChild(d);
   });
+  if (sugs.some((x) => x.change && x.change.mic)) {
+    const lg = document.createElement('div'); lg.className = 'muted small';
+    lg.textContent = '* You can change this on the phone.'; box.appendChild(lg);
+  }
   const n = sugs.filter((x) => x.change).length;
   sum('chk', 'Last check: ' + (n ? n + ' thing' + (n > 1 ? 's' : '') + ' to change' : 'all good'));
   $('chk-rep').classList.remove('hidden');
+}
+
+// Settings Node Talker Mobile reports, when it provides NodeTalkerApp.audioInfo(). It returns JSON:
+// {output: 'earpiece'|'speaker', bufferMs, voiceMic, micRate, volume: {now, max}, batteryFree, keepScreenOn}.
+// Any field can be missing; unknown fields are shown as they are.
+function appInfo() {
+  try {
+    if (window.NodeTalkerApp && typeof NodeTalkerApp.audioInfo === 'function') {
+      const d = JSON.parse(NodeTalkerApp.audioInfo() || 'null');
+      return d && typeof d === 'object' ? d : null;
+    }
+  } catch (e) {}
+  return null;
+}
+
+function appRows(add) {
+  let ver = '';
+  try { ver = typeof NodeTalkerApp.version === 'function' ? String(NodeTalkerApp.version() || '') : ''; } catch (e) {}
+  const onOff = (b) => (b ? 'on' : 'off');
+  add('App version', ver || 'not reported');
+  add('Audio', appAudio() ? 'App audio (keeps playing with the screen locked)' : 'Page audio (as in a browser)', true);
+  const d = appInfo();
+  if (!d) { add('App settings', 'not reported by this app version (it needs audioInfo)'); return; }
+  const known = {
+    output: ['Output', (v) => (v === 'earpiece' ? 'Earpiece / call volume' : v === 'speaker' ? 'Speaker / media volume' : String(v)), true],
+    bufferMs: ['Receive buffer', (v) => v + ' ms', true],
+    voiceMic: ['Phone\'s echo and noise filter', onOff, true],
+    micRate: ['Microphone rate', (v) => v + ' Hz'],
+    volume: ['Phone volume (stream in use)', (v) => (v && typeof v === 'object' ? v.now + ' of ' + v.max : String(v)), true],
+    batteryFree: ['Battery saver', (v) => (v ? 'lets the app run in the background' : 'may stop the app when the screen is off'), true],
+    keepScreenOn: ['Keep the screen on', onOff, true],
+  };
+  Object.keys(d).forEach((k) => {
+    const f = known[k];
+    if (f) add(f[0], f[1](d[k]), f[2]);
+    else add(k, typeof d[k] === 'object' ? JSON.stringify(d[k]) : String(d[k]));
+  });
+}
+
+function phoneTable(rows) {
+  const t = document.createElement('table'); t.className = 'chk-t';
+  rows.forEach(([k, v, star]) => {
+    const tr = document.createElement('tr');
+    const a = document.createElement('td'); a.textContent = k + (star ? ' *' : '');
+    const b = document.createElement('td'); b.textContent = v;
+    tr.appendChild(a); tr.appendChild(b); t.appendChild(tr);
+  });
+  return t;
+}
+
+async function phoneRefresh() {
+  const rows = [];
+  const app = appAudio(), appT = appTalk();
+  const add = (k, v, star, notInApp, notInAppTalk) => rows.push([k, v + ((app && notInApp) || (appT && notInAppTalk) ? ' (not used: app audio)' : ''), !!star]);
+  const md = navigator.mediaDevices;
+  add('Page is secure (https)', window.isSecureContext ? 'yes' : 'no: microphone and device names are blocked');
+  add('Network', navigator.onLine ? 'online' : 'offline');
+  add('Sound system rate', ctx ? ctx.sampleRate + ' Hz, ' + ctx.state : 'starts when Listen is pressed', false, true);
+  if (ctx && typeof ctx.baseLatency === 'number') add('Playback latency', Math.round(ctx.baseLatency * 1000) + ' ms', false, true);
+  add('Output picking', canSink() ? 'supported' : 'not supported: phone default only', false, true);
+  add('Output in use', canSink() ? (hsLabel('hs-out') || 'phone default') : 'phone default', true, true);
+  let list = [];
+  try { list = md && md.enumerateDevices ? await md.enumerateDevices() : []; } catch (e) { list = []; }
+  const ins = list.filter((d) => d.kind === 'audioinput');
+  const outs = list.filter((d) => d.kind === 'audiooutput');
+  add('Microphones found', ins.length ? ins.length + (ins.some((d) => d.label) ? '' : ' (names appear once the mic is allowed)') : 'none', true);
+  add('Output devices found', outs.length ? String(outs.length) : 'none', true);
+  add('Microphone in use', hsLabel('hs-mic') || 'Default (follows Android)', true, false, true);
+  const sup = md && md.getSupportedConstraints ? md.getSupportedConstraints() : {};
+  add('Browser can do echo cancel / noise suppress / auto gain', ['echoCancellation', 'noiseSuppression', 'autoGainControl'].map((k) => (sup[k] ? 'yes' : 'no')).join(' / '), false, false, true);
+  add('Leveler', mic.lev ? 'on' : 'off', true, false, true);
+  add('Automatic gain', mic.agc ? 'on' : 'off', true, false, true);
+  add('Noise suppression', mic.ns ? 'on' : 'off', true, false, true);
+  add('Echo cancellation', mic.ec ? 'on' : 'off', true, false, true);
+  add('Voice filter / Radio voice', (mic.hp ? 'filter on' : 'filter off') + ' / ' + (mic.eq ? 'radio voice on' : 'radio voice off'), true, false, true);
+  add('Noise gate', ['Off', 'Light', 'Strong'][Number(mic.gate) || 0], true, false, true);
+  add('Mic gain (this page)', (mic.gain > 0 ? '+' : '') + mic.gain + ' dB', true);
+  const ai = appInfo();
+  if (!(ai && ai.volume != null)) add('Phone media volume', 'not readable from a web page', true);
+  const body = $('phone-body');
+  body.innerHTML = '';
+  body.appendChild(phoneTable(rows));
+  let n = rows.length;
+  if (window.NodeTalkerApp) {
+    const ar = [];
+    appRows((k, v, star) => ar.push([k, v, !!star]));
+    const h = document.createElement('h3'); h.style.margin = '12px 0 4px'; h.textContent = 'Node Talker Mobile';
+    body.appendChild(h);
+    body.appendChild(phoneTable(ar));
+    n += ar.length;
+  }
+  sum('phone', n + ' items');
 }
 
 function chkText() {
@@ -4985,9 +6182,72 @@ async function chkCopy() {
   }
 }
 
+// Plain text of a whole Settings card: folded sections opened for the read, field values shown as text,
+// buttons left out. Everything is restored before returning, so nothing is painted in between.
+function cardText(card) {
+  const undo = [];
+  const hide = (el) => { const s = el.style.display; el.style.display = 'none'; undo.push(() => { el.style.display = s; }); };
+  card.querySelectorAll('.fold-body.hidden').forEach((el) => {
+    el.classList.remove('hidden'); undo.push(() => el.classList.add('hidden'));
+  });
+  card.querySelectorAll('.copy-row, .copy-msg, button:not(.fold-btn)').forEach(hide);
+  card.querySelectorAll('input, select, textarea').forEach((el) => {
+    if (el.type === 'file' || el.closest('.copy-row')) return;
+    const s = document.createElement('span');
+    let val;
+    if (el.type === 'password') val = el.value ? ' [hidden]' : '';
+    else if (el.type === 'checkbox' || el.type === 'radio') val = el.checked ? ' [on]' : ' [off]';
+    else if (el.tagName === 'SELECT') val = ' ' + (el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '');
+    else val = ' ' + el.value;
+    s.textContent = val;
+    el.after(s); undo.push(() => s.remove());
+    if (el.type !== 'checkbox' && el.type !== 'radio') hide(el);
+  });
+  const t = (card.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+  undo.reverse().forEach((f) => f());
+  return t;
+}
+
+async function copyCard(card, msg) {
+  const t = cardText(card);
+  let ok = false;
+  try { await navigator.clipboard.writeText(t); ok = true; }
+  catch (e) {
+    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
+    try { ok = document.execCommand('copy'); } catch (x) { ok = false; }
+    ta.remove();
+  }
+  msg.textContent = ok ? 'Copied.' : 'Could not copy.';
+  clearTimeout(msg._t); msg._t = setTimeout(() => { msg.textContent = ''; }, 2500);
+}
+
+// Adds a Copy all row to the foot of every Settings card that doesn't have one already.
+function addCopyAll() {
+  document.querySelectorAll('#tab-setup > .card').forEach((card) => {
+    const own = card.querySelector('#chk-copy-card');  // Audio check keeps its button in the Start row
+    if (own) {
+      const msg = document.createElement('span');
+      msg.className = 'muted small copy-msg';
+      own.after(msg);
+      own.addEventListener('click', () => copyCard(card, msg));
+      return;
+    }
+    const row = document.createElement('div');
+    row.className = 'row copy-row';
+    const btn = document.createElement('button');
+    btn.className = 'btn'; btn.type = 'button'; btn.textContent = 'Copy all';
+    const msg = document.createElement('span');
+    msg.className = 'muted small copy-msg';
+    row.append(btn, msg);
+    card.appendChild(row);
+    btn.addEventListener('click', () => copyCard(card, msg));
+  });
+}
+
 function chkInit() {
   try { chk = JSON.parse(localStorage.getItem('nlCheck') || 'null'); } catch (e) { chk = null; }
-  if (chk && (!chk.running || chk.v !== 1)) chk = null;
+  if (chk && !chk.running) chk = null;
+  if (chk) chkMigrate(chk);
   if (chk) {
     const gap = Date.now() - chk.last;
     chk.paused += gap; chk.last = Date.now();
@@ -5000,7 +6260,15 @@ function chkInit() {
   setInterval(chkTick, 1000);
   $('chk-start').addEventListener('click', chkStart);
   $('chk-stop').addEventListener('click', chkStop);
+  $('tone-start').addEventListener('click', toneStart);
+  $('tone-stop').addEventListener('click', toneStop);
+  $('chk-export').addEventListener('click', chkExport);
+  $('chk-file').addEventListener('click', () => $('chk-file-in').click());
+  $('chk-file-in').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) chkCompareFile(f); });
+  $('chk-clear-file').addEventListener('click', chkClearFile);
   $('chk-copy').addEventListener('click', chkCopy);
+  $('fav-save').addEventListener('click', () => feSave());
+  $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
   $('chk-cmp').addEventListener('click', () => { chkCmp = !chkCmp; $('chk-cmp').textContent = chkCmp ? 'Hide last check' : 'Compare with last check'; chkShow(chkShown); });
   $('chk-badge').addEventListener('click', () => { showTab('setup'); foldSet('chk', true); });
 }
@@ -5008,10 +6276,11 @@ function chkInit() {
 function pushSample(v) {
   rfss += v * v; if ((v < 0 ? -v : v) > rfpk) rfpk = v < 0 ? -v : v;
   rfx1 += v * rfprev;
-  rfprev = v;
+  rfx2 += v * rfprev2;
+  rfprev2 = rfprev; rfprev = v;
   if (++rfn === 160) {
-    if (chk && chk.running) chkRx({db: rfss > 0 ? 10 * Math.log10(rfss / 160) : -120, pk: peakDb(rfpk), r1: rfss > 0 ? rfx1 / rfss : 1});
-    rfss = 0; rfpk = 0; rfx1 = 0; rfn = 0;
+    if (chk && chk.running) chkRx({db: rfss > 0 ? 10 * Math.log10(rfss / 160) : -120, pk: peakDb(rfpk), r1: rfss > 0 ? rfx1 / rfss : 1, r2: rfss > 0 ? rfx2 / rfss : 1});
+    rfss = 0; rfpk = 0; rfx1 = 0; rfx2 = 0; rfn = 0;
   }
   pend[pendN++] = v;
   if (otaRec) otaRec.push(v);
@@ -5146,8 +6415,10 @@ const APP_STATE_TEXT = {connecting: ['', 'Connecting...'], playing: ['ok', 'List
 
 function appListenUi(on) {
   playing = on;
-  $('listen-btn').textContent = on ? 'Stop' : 'Listen';
-  $('listen-btn').classList.toggle('primary', !on);
+  listenBtnText(on);
+  $('listen-btn').classList.remove('primary');
+  $('listen-btn').classList.toggle('connect', !on);
+  $('listen-btn').classList.toggle('disconnect', on);
   if (!on) { note('listen-msg', '', ''); if (!talking) $('meter-bar').style.width = '0%'; }
 }
 
@@ -5215,9 +6486,11 @@ async function startListen() {
   specKick();
   setMediaState();
   wakeLockApply();
-  nextT = 0; pendN = 0; oddByte = -1; ups = null;
-  $('listen-btn').textContent = 'Stop';
-  $('listen-btn').classList.remove('primary');
+  nextT = 0; pendN = 0; oddByte = -1; ups = null; draining = false;
+  listenSession();
+  listenBtnText(true);
+  $('listen-btn').classList.remove('connect');
+  $('listen-btn').classList.add('disconnect');
   note('listen-msg', '', 'Connecting...');
   ctrl = new AbortController();
   try {
@@ -5251,13 +6524,22 @@ function stopListen() {
   specKick();
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (ctrl) { ctrl.abort(); ctrl = null; }
+  listenSession(true);
   if (mediaDest) $('player').pause();
   if (ctx) ctx.suspend();
   setMediaState();
   wakeLockApply();
-  $('listen-btn').textContent = 'Listen';
-  $('listen-btn').classList.add('primary');
+  listenBtnText(false);
+  $('listen-btn').classList.remove('disconnect');
+  $('listen-btn').classList.add('connect');
   note('listen-msg', '', '');
+}
+
+// Each Listen session plays through its own node, so audio still queued when it stops is dropped
+// instead of playing at the start of the next session.
+function listenSession(end) {
+  if (sessNode) { try { sessNode.disconnect(); } catch (e) {} sessNode = null; }
+  if (!end && ctx && busNode) { sessNode = ctx.createGain(); sessNode.connect(busNode); }
 }
 
 function toggleListen() { if (playing) stopListen(); else startListen(); }
@@ -5531,7 +6813,6 @@ function feedMic(f32) {
   merged.set(r.buf, 0);
   for (let i = 0; i < f32.length; i++) merged[r.buf.length + i] = f32[i] * g;
   let pos = r.pos;
-  const hpA = 0.83, hpK = (1 + hpA) / (2 * hpA);
   while (pos + r.half + 1 < merged.length) {
     const base = Math.floor(pos);
     const k = r.kern[Math.round((pos - base) * r.phases)];
@@ -5539,7 +6820,7 @@ function feedMic(f32) {
     let acc = 0;
     for (let i = 0; i < r.taps; i++) acc += merged[start + i] * k[i];
     let v = acc;
-    if (mic.hp && !mic.eq) { const y = hpA * (r.hpY + v - r.hpX); r.hpX = v; r.hpY = y; v = y * hpK; }
+    if (mic.hp && !mic.eq) v = bq(r.hp, v);
     v = dynProcess(r.dyn, v);
     const a = v < 0 ? -v : v;
     if (a > r.peak) r.peak = a;
@@ -5599,12 +6880,78 @@ async function startMic(sink) {
 
 const MIC_CHECKS = ['agc', 'ns', 'ec', 'hp', 'lev', 'eq'];
 
+// ---- What can be used right now --------------------------------------------------------------------
+// A setting that can't be used is disabled and grayed out; the reason goes in the note under its section
+// (and in the row's tooltip). The saved value is kept, so it comes back when the setting can be used again.
+function naSet(id, why, busy) {
+  const el = $(id);
+  if (!el) return;
+  el.disabled = !!why || !!busy;
+  const p = el.parentElement;
+  const row = p && p.tagName === 'LABEL' ? p.parentElement : p;
+  if (row) { row.classList.toggle('na', !!why); row.title = why || ''; }
+}
+
+function whyNote(id, list) {
+  const u = list.filter((x, i) => x && list.indexOf(x) === i);
+  $(id).textContent = u.length ? 'Grayed out: ' + u.join(' ') : '';
+  $(id).classList.toggle('hidden', !u.length);
+}
+
+function availUi() {
+  const app = appAudio(), appT = appTalk(), md = navigator.mediaDevices;
+  const sup = md && md.getSupportedConstraints ? md.getSupportedConstraints() : {};
+  const noMic = !window.isSecureContext ? 'The microphone needs the https:// page.'
+    : !(md && md.getUserMedia) ? 'This browser gives the page no microphone.' : '';
+  const A_PLAY = 'App audio plays the node itself, so the page\'s playback options aren\'t used.';
+  const A_MIC = 'App audio sends the mic with only Mic gain applied (for echo and noise, use the app\'s own filter in its Audio settings).';
+  const A_TEST = 'The tests use page audio; switch the app to Page audio in its Audio settings to run them.';
+  const playWhy = {
+    'play-s16': app ? A_PLAY : '',
+    'play-smooth': app ? A_PLAY : (ctx && ctx.sampleRate === 8000 ? 'This phone already plays at 8 kHz, so there is nothing to smooth.' : ''),
+    'play-spec': app ? A_PLAY : '',
+  };
+  Object.keys(playWhy).forEach((id) => naSet(id, playWhy[id]));
+  whyNote('why-play', Object.values(playWhy));
+
+  const browserCan = (k, what) => (sup[k] ? '' : 'This browser can\'t do ' + what + '.');
+  const micWhy = {
+    'mic-lev': appT ? A_MIC : noMic,
+    'mic-agc': appT ? A_MIC : noMic || browserCan('autoGainControl', 'automatic gain'),
+    'mic-ns': appT ? A_MIC : noMic || browserCan('noiseSuppression', 'noise suppression'),
+    'mic-ec': appT ? A_MIC : noMic || browserCan('echoCancellation', 'echo cancellation'),
+    'mic-hp': appT ? A_MIC : noMic || ($('mic-eq').checked ? 'Radio voice already includes the Voice filter\'s low cut.' : ''),
+    'mic-eq': appT ? A_MIC : noMic,
+    'mic-gate': appT ? A_MIC : noMic,
+    'mic-gain': appT ? '' : noMic,
+  };
+  Object.keys(micWhy).forEach((id) => naSet(id, micWhy[id]));
+  const testWhy = app ? A_TEST : noMic;
+  naSet('mic-test', testWhy, testing);
+  naSet('node-test', testWhy, nodeTesting);
+  whyNote('why-mic', Object.values(micWhy).concat([testWhy]));
+
+  const hsWhy = {
+    'hs-out': app ? 'In app audio, pick earpiece or speaker in the app\'s Audio settings.' : '',
+    'hs-mic': app ? 'In app audio the app uses Android\'s default microphone.' : noMic,
+    'hs-btn': app ? 'The headset button only reaches the page while the page plays the audio (Page audio).' : '',
+  };
+  Object.keys(hsWhy).forEach((id) => naSet(id, hsWhy[id]));
+  naSet('hs-names', hsWhy['hs-mic']);
+  whyNote('why-hs', Object.values(hsWhy));
+
+  const chkWhy = app && !(chk && chk.running) ? 'The check measures page audio; switch the app to Page audio in its Audio settings to run it. The Tone test runs on the Pi and works either way.' : '';
+  naSet('chk-start', chkWhy);
+  whyNote('why-chk', [chkWhy]);
+}
+
 function saveMic() {
   mic = {gain: Number($('mic-gain').value), gate: Number($('mic-gate').value)};
   MIC_CHECKS.forEach((k) => { mic[k] = $('mic-' + k).checked; });
   try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
   $('mic-gain-v').textContent = fmtGain(mic.gain);
   micSummary();
+  availUi();
 }
 
 function loadMicUi() {
@@ -5789,6 +7136,7 @@ async function pttDown(ev) {
     }
     return;
   }
+  keyReqAt = performance.now();
   ws.send(JSON.stringify({op: 'key'}));
   talkTimer = setInterval(talkTick, 250);
   wakeLockApply();
@@ -5970,6 +7318,26 @@ async function loadFavs() {
   $('c-empty').classList.toggle('hidden', favs.length > 0);
   $('c-pick').classList.toggle('hidden', favs.length === 0);
   showSelected();
+  showSelected();
+}
+
+let listenLink = null;  // live link from the status poll: {state, mode, label, tag}
+function listenBtnText(on) {
+  $('listen-btn').innerHTML = '<span class="lb">' + (on ? 'Disconnect' : 'Connect') + '<br>feed</span>';
+}
+function listenLinkShow() {
+  const el = $('ptt-info');
+  el.textContent = '';
+  const k = listenLink;
+  if (!k) { el.textContent = '-'; return; }
+  if (k.state === 'unreachable') { el.textContent = 'Node unreachable'; return; }
+  if (k.state === 'none') { el.textContent = 'Not connected'; return; }
+  if (k.state === 'idle' || k.state === 'noasl') el.textContent = k.label;
+  else {
+    if (k.mode) { const b = document.createElement('span'); b.className = 'lk-badge'; b.textContent = k.mode; el.append(b, ' '); }
+    el.append(k.label + (k.state === 'linking' ? ' (connecting)' : ''));
+  }
+  if (k.tag) { const t = document.createElement('span'); t.className = 'muted'; t.textContent = ' · ' + k.tag; el.append(t); }
 }
 
 function showSelected() {
@@ -6002,6 +7370,7 @@ async function favConnect() {
     const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
     await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
       tune ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
+    if ($('c-msg').classList.contains('ok')) { tuneDone = true; favSel = Number(i); }
     return;
   }
   $('c-connect').disabled = true;
@@ -6064,15 +7433,13 @@ const TN_TYPED = {ASL: /^\d{1,7}$/, EchoLink: /^\d{1,6}$/, DMR: /^\d{1,8}$/, STF
   YSF: /^(\d{1,5}|[A-Za-z0-9.-]+:\d{1,5})$/,
   DSTAR: /^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
   M17: /^[A-Z0-9]+-[A-Z0-9-]{1,14}(?:\s+(?:[A-Z]|@ALL))?$/i};
-const TN_SIZE = {gap: 8, h: 44, font: 15};
+const TN_SIZE = {gap: 8, h: 40, font: 14};
 const tnLists = {};
 let favNetLinks = {}, tnWin = null, tnTimer = 0, tnState = {};
-try { tnState = JSON.parse(localStorage.getItem('nlTune') || '{}') || {}; } catch (e) {}
 
 function tnRemember() {
   tnState = {mode: $('t-mode').value, net: $('t-net').value || tnState.net, mod: $('t-mod').value,
     find: $('t-find').value, pick: $('t-pick').value};
-  try { localStorage.setItem('nlTune', JSON.stringify(tnState)); } catch (e) {}
 }
 
 function tnSizeLoad() {
@@ -6104,7 +7471,7 @@ function tnSizeReset() {
 function tnInit() {
   const m = $('t-mode');
   TN_MODES.forEach((x) => addOption(m, x, modeName(x)));
-  m.value = TN_MODES.includes(tnState.mode) ? tnState.mode : 'DMR';
+  m.value = 'ASL';
   $('t-find').value = tnState.find || '';
   $('t-mode').addEventListener('change', () => tnMode(false));
   $('t-net').addEventListener('change', () => { tnButtons(); tnRemember(); });
@@ -6117,10 +7484,9 @@ function tnInit() {
   });
   $('t-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') tnConnect(); });
   $('t-pick').addEventListener('change', () => { tnMods(); tnButtons(); tnRemember(); });
-  $('t-go').addEventListener('click', tnConnect);
-  $('t-lh').addEventListener('click', tnLast);
+  $('t-go').addEventListener('click', tnToggle);
+  $('t-lh').addEventListener('click', tnOpenLink);
   $('t-save').addEventListener('click', tnSaveFav);
-  $('t-off').addEventListener('click', tnOff);
   ['gap', 'h', 'font'].forEach((k) => $('tn-' + k).addEventListener('input', () => tnSizeApply(true)));
   $('tn-reset').addEventListener('click', tnSizeReset);
   tnSizeLoad();
@@ -6197,6 +7563,54 @@ async function tnSearch(m, want) {
     count: d.count || 0, err: d.ok ? '' : (d.error || 'Search failed.')};
   s.rows.forEach((r) => { r.s = (r[0] + ' ' + r[1]).toLowerCase(); });
   tnFill(want);
+}
+
+let tunedNow = '';
+function findFavFor(tb) {
+  return favs.find((x) => x.mode === tb.mode && x.num === String(tb.num)
+    && (tb.mode !== 'DMR' || x.net === tb.net) && (tb.mode !== 'M17' && tb.mode !== 'DSTAR' || x.module === tb.module));
+}
+
+function tnLinkedB(tb) {
+  if (!tb) return false;
+  const fav = findFavFor(tb);
+  if (fav) return linkedTargets.has(fav.target);
+  return !!tunedNow && tunedNow.includes(String(tb.num));
+}
+
+function tnLinked() { return tnLinkedB(tnBody()); }
+
+// Session-only memory (cleared on restart): Tune card link and favorite choice
+let tnLast = null, tnPrimed = false, defaultMode = '', tuneDone = false, favSel = null;
+
+function tnSnap() {
+  return {mode: $('t-mode').value, net: $('t-net').value, mod: $('t-mod').value,
+    find: $('t-find').value, pick: $('t-pick').value};
+}
+
+function defaultSel() {
+  return {mode: TN_MODES.includes(defaultMode) ? defaultMode : 'ASL', net: '', mod: '', find: '', pick: ''};
+}
+
+function tnSetSel(s) {
+  tnPrimed = true;
+  tnState = {mode: s.mode, net: s.net || '', mod: s.mod || '', find: s.find || '', pick: s.pick || ''};
+  $('t-mode').value = s.mode;
+  $('t-find').value = s.find || '';
+  tnMode(true);
+  if (s.net && favNets.includes(s.net)) $('t-net').value = s.net;
+  if (s.mod) $('t-mod').value = s.mod;
+  tnButtons();
+}
+
+function connectTabEnter() {
+  if (favs.length) {
+    const i = tuneDone && favSel !== null && favSel < favs.length ? favSel : 0;
+    $('c-fav').value = String(i);
+    showSelected();
+  }
+  if (tnLast && tnLinkedB(tnLast.b)) tnSetSel(tnLast.snap);
+  else tnSetSel(defaultSel());
 }
 
 function tnRow() {
@@ -6278,13 +7692,17 @@ function tnLink() {
 
 function tnButtons() {
   const ok = !!tnBody();
-  $('t-go').disabled = !ok || connBusy;
+  const on = tnLinked(), go = $('t-go');
+  go.textContent = on ? 'Disconnect' : 'Connect';
+  go.classList.toggle('primary', !on);
+  go.classList.toggle('danger', on);
+  go.disabled = connBusy || (!on && !ok);
   $('t-save').disabled = !ok;
   $('t-lh').classList.toggle('lh-off', !tnLink());
   $('t-lh').setAttribute('aria-disabled', tnLink() ? 'false' : 'true');
 }
 
-function tnLast() {
+function tnOpenLink() {
   const u = tnLink();
   if (!u) return;
   if (tnWin && !tnWin.closed) { tnWin.location.href = u; tnWin.focus(); }
@@ -6299,6 +7717,12 @@ async function tnConnect() {
   const link = TN_SEARCH.includes(b.mode);
   await connectFlow(b, (link ? 'Connecting to ' : 'Tuning ') + tnName(b) + '...', link ? 'Connecting... (checking the link for up to 15 s)' : 'Tuning...',
     '/api/tune', {msg: 't-msg', btn: 't-go', ask: 't-ask'});
+  if ($('t-msg').classList.contains('ok')) {
+    tnLast = {b: b, snap: tnSnap(), seen: false};
+    tuneDone = true;
+    const fav = findFavFor(b);
+    if (fav) favSel = favs.indexOf(fav);
+  }
   tnButtons();
 }
 
@@ -6311,13 +7735,15 @@ async function tnSaveFav() {
   loadFavs();
 }
 
+function tnToggle() { return tnLinked() ? tnOff() : tnConnect(); }
+
 async function tnOff() {
-  $('t-off').disabled = true;
+  tnLast = null;
   note('t-msg', '', 'Disconnecting...');
   const b = TN_SEARCH.includes($('t-mode').value) ? tnBody() : null;
-  if (TN_SEARCH.includes($('t-mode').value) && !b) { $('t-off').disabled = false; note('t-msg', 'warn', 'Pick or type the node to disconnect.'); return; }
+  if (TN_SEARCH.includes($('t-mode').value) && !b) { note('t-msg', 'warn', 'Pick or type the node to disconnect.'); return; }
   try { setMsg('t-msg', await post('/api/tune/disconnect', b || {})); }
-  finally { $('t-off').disabled = false; }
+  finally { tnButtons(); }
   setTimeout(pollStatus, 1000);
 }
 
@@ -6393,7 +7819,7 @@ async function txDisable() {
   setMsg('tx-msg', await post('/api/tx/disable', {})); loadTx();
 }
 
-function favCopy(f) { return {mode: f.mode, num: f.num, module: f.module, net: f.net, ip: f.ip, label: f.label}; }
+function favCopy(f) { return {mode: f.mode, num: f.num, module: f.module, net: f.net, ip: f.ip, label: f.label, rx_gain_db: f.rx_gain_db, tx_gain_db: f.tx_gain_db}; }
 
 async function loadFavEditor() {
   const d = await api('/api/favorites');
@@ -6442,7 +7868,17 @@ function drawFavEditor() {
     l.setAttribute('aria-label', 'Name ' + (i + 1)); l.oninput = () => { f.label = l.value; };
     const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Remove favorite ' + (i + 1));
     x.onclick = () => { favEdit.splice(i, 1); drawFavEditor(); };
-    row.appendChild(m); row.appendChild(n); row.appendChild(l); row.appendChild(x); row.appendChild(net);
+    const g = document.createElement('div'); g.className = 'fav-gain';
+    const gain = (key, lab) => {
+      const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'numeric'; inp.maxLength = 4;
+      inp.placeholder = lab; inp.value = f[key] == null ? '' : String(f[key]);
+      inp.setAttribute('aria-label', lab + ' gain ' + (i + 1) + ' (blank = global)');
+      inp.oninput = () => { const v = inp.value.trim(); if (v === '') delete f[key]; else f[key] = v; };
+      return inp;
+    };
+    const gl = document.createElement('span'); gl.textContent = 'Gain dB (blank = global)';
+    g.appendChild(gl); g.appendChild(gain('rx_gain_db', 'RX dB')); g.appendChild(gain('tx_gain_db', 'TX dB'));
+    row.appendChild(m); row.appendChild(n); row.appendChild(l); row.appendChild(x); row.appendChild(net); row.appendChild(g);
     box.appendChild(row);
   });
   $('fe-count').textContent = favEdit.length + ' / ' + favMax;
@@ -6457,6 +7893,15 @@ function feAddDash() {
   favEdit.push(favCopy(dashFavs[Number(i)]));
   drawFavEditor();
 }
+async function setupSave() {
+  note('setup-msg', '', 'Saving...');
+  await saveConfig();
+  await feSave();
+  await nwSave();
+  await dgSave();
+  note('setup-msg', '', '');
+}
+
 async function feSave() {
   const d = await post('/api/favorites', {favs: favEdit});
   setMsg('fe-msg', d);
@@ -6580,14 +8025,15 @@ function tuneUi() {
   ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
   $('tune-tx-v').textContent = fmtGain(Number($('tune-tx').value));
   $('tune-rx-v').textContent = fmtGain(Number($('tune-rx').value));
-  $('tune-body').classList.toggle('muted', !on);
+  ['tune-body', 'tune-body-rx'].forEach((id) => { $(id).classList.toggle('muted', !on); $(id).classList.toggle('na', !on); });
+  $('tune-body').title = $('tune-body-rx').title = on ? '' : 'Turn on Adjust audio levels here (TX card) to use these.';
 }
 
-async function saveTune() {
+async function saveTune(msgId = 'tune-msg') {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
     rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value,
     rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value};
-  setMsg('tune-msg', await post('/api/config', body));
+  setMsg(msgId, await post('/api/config', body));
 }
 
 function tuneReset() {
@@ -6654,17 +8100,15 @@ document.addEventListener('DOMContentLoaded', () => {
     wakeLockApply();
   });
   $('c-fav').addEventListener('change', showSelected);
+  $('c-fav').addEventListener('change', () => { favSel = Number($('c-fav').value); });
   $('c-connect').addEventListener('click', favConnect);
   $('nd-enable').addEventListener('click', nodeEnable);
   $('nd-disable').addEventListener('click', nodeDisable);
-  $('nd-restart').addEventListener('click', () => astRestart('nd-msg'));
   $('nd-refresh').addEventListener('click', loadNode);
   $('tx-add').addEventListener('click', txEnable);
   $('tx-remove').addEventListener('click', txDisable);
-  $('tx-restart').addEventListener('click', () => astRestart('tx-msg'));
   $('fe-add').addEventListener('click', feAdd);
   $('fe-dash-add').addEventListener('click', feAddDash);
-  $('fe-save').addEventListener('click', feSave);
   $('nw-add').addEventListener('click', nwAdd);
   ['c', 't'].forEach((p) => {
     $(p + '-net-add').addEventListener('click', () => netAnswer('add'));
@@ -6673,15 +8117,18 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('c-fav').addEventListener('change', netHide);
   tnInit();
-  $('nw-save').addEventListener('click', nwSave);
   $('nw-import').addEventListener('click', nwImport);
-  $('dg-save').addEventListener('click', dgSave);
   $('ff-up').addEventListener('change', ffUpload);
-  $('cfg-save').addEventListener('click', saveConfig);
+  $('setup-save').addEventListener('click', setupSave);
+  $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
+  $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
   ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
-  $('tune-save').addEventListener('click', saveTune);
+  $('tune-save').addEventListener('click', () => saveTune('tune-msg'));
   loadMicUi();
   chkInit();
+  addCopyAll();
+  $('mic-lev').addEventListener('input', () => { if ($('mic-lev').checked) $('mic-agc').checked = false; });
+  $('mic-agc').addEventListener('input', () => { if ($('mic-agc').checked) $('mic-lev').checked = false; });
   MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
   $('mic-gate').addEventListener('change', saveMic);
   ['play-s16', 'play-smooth', 'play-auto', 'play-spec'].forEach((id) => $(id).addEventListener('change', savePlay));
@@ -6694,7 +8141,14 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sys-shutdown').addEventListener('click', doShutdown);
   setInterval(pollHostLinks, 30000);
   $('tune-reset').addEventListener('click', tuneReset);
-  FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => foldSet(k, !foldOpen(k))));
+  FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => {
+    foldSet(k, !foldOpen(k));
+    if (k === 'phone' && foldOpen('phone')) phoneRefresh();
+  }));
+  $('phone-refresh').addEventListener('click', phoneRefresh);
+  if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
+    navigator.mediaDevices.addEventListener('devicechange', () => { if (foldOpen('phone')) phoneRefresh(); });
+  }
   setupMediaSession();
   $('hs-btn').value = hs.btn;
   ['hs-out', 'hs-mic', 'hs-btn'].forEach((id) => $(id).addEventListener('change', hsSave));
@@ -6705,6 +8159,8 @@ document.addEventListener('DOMContentLoaded', () => {
   hsDevices().then((l) => { devCount = l.length; });
   pttUi('off', '');
   whoami().then(() => { if (authed) loadFavs(); });
+  availUi();
+  setInterval(availUi, 2000);
   setInterval(pollStatus, 1500);
   setInterval(gapTick, 100);
   setInterval(pollLog, 3000);
@@ -6749,7 +8205,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="c-empty" class="muted">No favorites yet. Add up to 15 on the Setup tab.</div>
 <div id="c-pick">
 <label for="c-fav">Favorite</label>
-<select id="c-fav" style="width:100%;min-height:52px;margin-top:6px;font-size:15.2px"></select>
+<select id="c-fav" style="width:100%;min-height:40px;margin-top:4px;font-size:14px"></select>
 <div class="sel-card">
 <div class="row" style="margin:0"><span class="tag" id="c-mode"></span><span class="big-num" id="c-num"></span></div>
 <div class="muted" id="c-label"></div>
@@ -6771,9 +8227,9 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <select id="t-mod" aria-label="Module"></select>
 <input id="t-find" type="search" maxlength="40" aria-label="Search or type" autocomplete="off" autocapitalize="off" spellcheck="false">
 <select id="t-pick" aria-label="Pick from the list"></select>
-<button id="t-go" class="btn primary" type="button">Connect</button>
 <button id="t-lh" class="btn-last lh-off" type="button" aria-label="Open Last Heard">LH</button>
 <button id="t-save" class="btn" type="button" aria-label="Save to favorites">Save</button>
+<button id="t-go" class="btn big primary" type="button">Connect</button>
 </div>
 <div id="t-list" class="tn-msg"></div>
 <div id="t-msg" class="msg"></div>
@@ -6782,13 +8238,13 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <button id="t-net-once" class="btn" type="button">Tune this once</button>
 <button id="t-net-no" class="btn" type="button">Cancel</button></div>
 </div>
-<div class="tn-foot"><span id="t-now" class="muted small"></span><button id="t-off" class="btn danger" type="button">Disconnect</button></div>
+<div class="tn-foot"><span id="t-now" class="muted small"></span></div>
 </div>
 </section>
 
 <section id="tab-listen" class="hidden">
 <div class="lpanel">
-<div class="row listen-row"><button id="listen-btn" class="btn primary big" type="button">Listen</button>
+<div class="row listen-row"><button id="listen-btn" class="btn connect big" type="button"><span class="lb">Connect<br>feed</span></button>
 <svg class="vol-i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9h4l5-4v14l-5-4H4z"></path><path d="M16 9a4 4 0 0 1 0 6"></path></svg>
 <input type="range" id="vol" min="0" max="200" value="100" aria-label="Volume"></div>
 <div class="lstat"><span class="mono" id="st-node" title="Node">-</span>
@@ -6830,45 +8286,11 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
 <div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
 </div>
-<div class="card fold" id="cd-rx">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-rx"><span class="fold-t">Receive</span><span class="fold-sum" id="sum-rx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-rx">
-<p class="muted small">Asterisk sends a node's audio here through one <code>outstreamcmd</code> line in <code id="nd-path">rpt.conf</code>.</p>
-<table><thead><tr><th>Node</th><th>outstreamcmd</th></tr></thead><tbody id="nd-rows"></tbody></table>
-<div class="row"><label>Node <select id="nd-select"></select></label>
-<button id="nd-enable" class="btn primary" type="button">Send its audio here</button>
-<button id="nd-disable" class="btn" type="button">Remove</button>
-<button id="nd-restart" class="btn danger" type="button">Restart Asterisk</button>
-<button id="nd-refresh" class="btn" type="button">Refresh</button></div>
-<div id="nd-msg" class="msg"></div>
-<table>
-<tr><th>Line added</th><td><code id="nd-line">-</code></td></tr>
-<tr><th>Feeder</th><td id="nd-feeder">-</td></tr>
-<tr><th>UDP input</th><td id="nd-udp">-</td></tr>
-</table>
-</div>
-</div>
-
-<div class="card fold" id="cd-tx">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-tx"><span class="fold-t">Transmit: node <span id="tx-node">1921</span></span><span class="fold-sum" id="sum-tx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-tx">
-<p class="muted small">Push-to-talk sends your voice to private node 1921, which stays linked to the main node.
-Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a backup) and relinks it if it drops.</p>
-<table>
-<tr><th>State</th><td id="tx-state">-</td></tr>
-<tr><th>Main node</th><td id="tx-main">-</td></tr>
-<tr><th>rxchannel</th><td><code id="tx-rxch">-</code></td></tr>
-</table>
-<div class="row"><button id="tx-add" class="btn primary" type="button">Add node 1921</button>
-<button id="tx-remove" class="btn" type="button">Remove</button>
-<button id="tx-restart" class="btn danger" type="button">Restart Asterisk</button></div>
-<div id="tx-msg" class="msg"></div>
-</div>
-</div>
-
-<div class="card fold" id="cd-cfg">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-cfg"><span class="fold-t">Settings</span><span class="fold-sum" id="sum-cfg"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-cfg">
+<div class="card fold" id="cd-setup">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-setup"><span class="fold-t">Setup</span><span class="fold-sum" id="sum-setup"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-setup">
+<h3 style="margin:6px 0 4px">1. Node Talker settings</h3>
+<div id="cb-cfg">
 <div class="row"><label>Web port <input type="number" id="cfg-port" min="1024" max="65535"></label>
 <label>UDP port <input type="number" id="cfg-udp_port" min="1024" max="65535"></label>
 <label>Max listeners <input type="number" id="cfg-max_listeners" min="1" max="10"></label>
@@ -6877,32 +8299,20 @@ Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
 <div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
-<div class="row"><button id="cfg-save" class="btn primary" type="button">Save</button></div>
 <div id="cfg-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Push-to-talk on this phone</h3>
-<div class="row"><label><input type="radio" name="ptt-mode" id="ptt-hold" value="hold"> Hold to talk</label>
-<label><input type="radio" name="ptt-mode" id="ptt-tap" value="tap"> Tap to talk, tap to stop</label></div>
-<div class="row"><label>Guard timer <select id="ptt-guard"><option value="30">30 s</option><option value="60">60 s</option>
-<option value="90">90 s</option><option value="120">120 s</option><option value="180">180 s</option></select></label></div>
-<div class="row"><label><input type="checkbox" id="ptt-gap"> Wait 4 s after receive before talking</label></div>
-<p class="muted small">With the wait on, push-to-talk is locked while the node receives and for 4 s after, counting
-3 to 0 in the corner of the spectrum, so other stations get a chance to answer first.</p>
-<p class="muted small">The guard timer stops a tap-to-talk (or headset) transmission: two short beeps 10 s before, then it
-unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></span></p>
-<p class="muted small" id="ptt-src"></p>
-<div class="row"><button id="ptt-save" class="btn primary" type="button">Save on this phone</button>
-<button id="ptt-restore" class="btn" type="button">Restore from the Pi</button></div>
-<div id="ptt-set-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">Tune card on this phone</h3>
 <div class="row"><label>Gap <input type="range" id="tn-gap" min="2" max="20" step="1"> <span id="tn-gap-v" class="mono small"></span></label></div>
 <div class="row"><label>Height <input type="range" id="tn-h" min="32" max="56" step="1"> <span id="tn-h-v" class="mono small"></span></label></div>
 <div class="row"><label>Text <input type="range" id="tn-font" min="12" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
 <div class="row"><button id="tn-reset" class="btn" type="button">Default spacing</button></div>
 </div>
+<div class="row"><button id="setup-save" class="btn primary" type="button">Save</button>
+<button id="setup-restart" class="btn danger" type="button">Restart Asterisk</button></div>
+<div id="setup-msg" class="msg"></div>
 </div>
-
+</div>
 <div class="card fold" id="cd-fav">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-fav"><span class="fold-t">Favorites</span><span class="fold-sum" id="fe-count"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-fav"><span class="fold-t">Favorites</span><span class="fold-sum" id="sum-fav"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-fav">
 <p class="muted small">The Connect tab offers only these. EchoLink numbers are the station's own number.
 DMR: the talkgroup and its network (Digital card). STFU, YSF, P25 and NXDN: the talkgroup or reflector, as DVSwitch
@@ -6910,13 +8320,18 @@ tunes it. D-STAR: the reflector and module, for example <code>REF001 C</code>. M
 <code>M17-USA A</code> (or <code>@ALL</code> for every module). Connect sets the mode, tunes and links the bridge node;
 while Node Controller runs, it does that instead.</p>
 <div id="fe-rows"></div>
-<div class="row"><button id="fe-add" class="btn" type="button">Add row</button>
+<div class="row"><span id="fe-count" class="muted small"></span><button id="fe-add" class="btn" type="button">Add row</button>
 <select id="fe-dash" aria-label="Dashboard favorites"></select><button id="fe-dash-add" class="btn" type="button">Add</button></div>
-<div class="row"><button id="fe-save" class="btn primary" type="button">Save favorites</button></div>
 <div id="fe-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Favorites file</h3>
+<p class="muted small"><code id="dg-file">nodetalker_favorites.conf</code> holds the favorites, the DMR networks and these
+settings in Node Controller's format. It holds the DMR passwords too.</p>
+<div class="row"><a id="ff-down" class="btn" href="/api/favorites-file" download="nodetalker_favorites.conf" style="display:inline-flex;align-items:center;text-decoration:none">Download</a>
+<label class="btn" style="display:inline-flex;align-items:center">Upload<input type="file" id="ff-up" accept=".conf,text/plain" class="hidden"></label></div>
+<div id="ff-msg" class="msg"></div>
+<div class="row"><button id="fav-save" class="btn primary" type="button">Save favorites</button></div>
 </div>
 </div>
-
 <div class="card fold" id="cd-dig">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-dig"><span class="fold-t">Digital</span><span class="fold-sum" id="sum-dig"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-dig">
@@ -6933,7 +8348,6 @@ A DMR network Node Controller doesn't have can be added to it, or used for one t
 <label>M17 bridge <input type="text" inputmode="numeric" id="dg-mbridge" maxlength="7" style="width:96px"></label>
 <label>Callsign <input type="text" id="dg-call" maxlength="10" style="width:110px;text-transform:uppercase"></label></div>
 <p class="muted small" id="dg-auto"></p>
-<div class="row"><button id="dg-save" class="btn primary" type="button">Save</button></div>
 <div id="dg-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">DMR networks</h3>
 <p class="muted small">Each DMR favorite joins its network with <code>password@address:port</code> before it tunes the
@@ -6941,91 +8355,118 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div id="nw-rows"></div>
 <div class="row"><button id="nw-add" class="btn" type="button">Add network</button>
 <button id="nw-import" class="btn" type="button">Copy from Node Controller</button></div>
-<div class="row"><button id="nw-save" class="btn primary" type="button">Save networks</button></div>
 <div id="nw-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Favorites file</h3>
-<p class="muted small"><code id="dg-file">nodetalker_favorites.conf</code> holds the favorites, the DMR networks and these
-settings in Node Controller's format. It holds the DMR passwords too.</p>
-<div class="row"><a id="ff-down" class="btn" href="/api/favorites-file" download="nodetalker_favorites.conf" style="display:inline-flex;align-items:center;text-decoration:none">Download</a>
-<label class="btn" style="display:inline-flex;align-items:center">Upload<input type="file" id="ff-up" accept=".conf,text/plain" class="hidden"></label></div>
-<div id="ff-msg" class="msg"></div>
+<div class="row"><button id="dig-save" class="btn primary" type="button">Save digital and DMR networks</button></div>
 </div>
 </div>
-
-<div class="card fold" id="cd-chk">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Audio check</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-chk">
-<p class="muted small">Start a check, go to the Listen tab and use the node as usual: listen, talk, listen. Come back
-for a report with averages and what to change. Only numbers are kept, never audio, and only in this browser.</p>
-<div class="row"><label for="chk-mins" style="min-width:90px">Length</label>
-<select id="chk-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select>
-<button id="chk-start" class="btn primary" type="button">Start check</button><button id="chk-stop" class="btn hidden" type="button">Stop</button></div>
-<div id="chk-run" class="chk-run hidden"></div>
-<div id="chk-rep" class="hidden">
-<h3 style="margin:10px 0 4px">Receive</h3>
-<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table>
-<h3 style="margin:10px 0 4px">Transmit</h3>
-<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table>
-<h3 style="margin:12px 0 2px">What to change</h3>
-<div id="chk-sug"></div>
-<div class="row"><button id="chk-cmp" class="btn" type="button">Compare with last check</button>
-<button id="chk-copy" class="btn" type="button">Copy report</button></div>
-<div id="chk-msg" class="msg"></div>
+<div class="card fold" id="cd-rx">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-rx"><span class="fold-t">RX</span><span class="fold-sum" id="sum-rx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-rx">
+<h3 style="margin:6px 0 4px">Node receive</h3>
+<p class="muted small">Asterisk sends a node's audio here through one <code>outstreamcmd</code> line in <code id="nd-path">rpt.conf</code>.</p>
+<table><thead><tr><th>Node</th><th>outstreamcmd</th></tr></thead><tbody id="nd-rows"></tbody></table>
+<div class="row"><label>Node <select id="nd-select"></select></label>
+<button id="nd-enable" class="btn primary" type="button">Send its audio here</button>
+<button id="nd-disable" class="btn" type="button">Remove</button>
+<button id="nd-refresh" class="btn" type="button">Refresh</button></div>
+<div id="nd-msg" class="msg"></div>
+<table>
+<tr><th>Line added</th><td><code id="nd-line">-</code></td></tr>
+<tr><th>Feeder</th><td id="nd-feeder">-</td></tr>
+<tr><th>UDP input</th><td id="nd-udp">-</td></tr>
+</table>
+<h3 style="margin:14px 0 4px">Playback</h3>
+<div id="cb-play">
+<p class="muted small">Saved in this browser only; each phone keeps its own.</p>
+<p class="muted small why hidden" id="why-play"></p>
+<div class="row"><label><input type="checkbox" id="play-spec"> Show the spectrum on the Listen tab</label></div>
+<div class="row"><label><input type="checkbox" id="play-auto"> Start listening when the page opens (the browser may want one tap first)</label></div>
+<div class="row hidden" id="awake-row"><label><input type="checkbox" id="keep-awake"> Keep the screen on while listening or talking</label></div>
+<div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
+<div class="row"><label><input type="checkbox" id="play-smooth"> Smooth playback (filtered upsampling, no sizzle)</label></div>
 </div>
-</div>
-</div>
-
-<div class="card fold" id="cd-lvl">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-lvl"><span class="fold-t">Audio levels</span><span class="fold-sum" id="sum-lvl"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-lvl">
-<div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
-<p class="muted small">Off: the gains and buffers below aren't used. These change only this page's path,
-not the node, the radio or DVSwitch.</p>
-<div id="tune-body">
-<div class="row"><label for="tune-tx" style="min-width:130px">Mic to node (TX)</label>
-<input type="range" id="tune-tx" min="-12" max="12" step="1" style="flex:1"><span id="tune-tx-v" class="mono small">0 dB</span></div>
+<h3 style="margin:14px 0 4px">Audio levels</h3>
+<div id="tune-body-rx">
 <div class="row"><label for="tune-rx" style="min-width:130px">Node to phone (RX)</label>
 <input type="range" id="tune-rx" min="-12" max="12" step="1" style="flex:1"><span id="tune-rx-v" class="mono small">0 dB</span></div>
 <div class="row"><label for="tune-jit" style="min-width:130px">Listen buffer</label>
 <select id="tune-jit"><option value="150">0.15 s (Wi-Fi, fastest)</option><option value="250">0.25 s (default)</option>
 <option value="500">0.5 s</option><option value="1000">1 s (weak signal)</option></select></div>
-<div class="row"><label for="tune-txbuf" style="min-width:130px">TX buffer</label>
-<select id="tune-txbuf"><option value="60">60 ms</option><option value="120">120 ms (default)</option>
-<option value="200">200 ms</option><option value="300">300 ms (busy Wi-Fi)</option></select></div>
-<table>
-<tr><th>TX peak</th><td id="tune-txpk" class="mono">-</td></tr>
-<tr><th>RX level</th><td id="tune-rxpk" class="mono">-</td></tr>
-<tr><th>TX gaps</th><td id="tune-gaps" class="mono">-</td></tr>
-</table>
-<p class="muted small">Aim for TX peaks around -6 to -3 dBFS on normal speech, without reaching 0.</p>
+<table><tr><th>RX level</th><td id="tune-rxpk" class="mono">-</td></tr></table>
 </div>
-<h2 style="margin-top:14px">RX cleanup: what listeners hear</h2>
-<p class="muted small">Done once on the Pi for every listener; the node and other links are not changed. Separate from
-"Adjust audio levels here" above.</p>
-<div class="row"><label><input type="checkbox" id="rx-hpf"> Cut below 300 Hz (CTCSS tones and hum)</label></div>
+<h3 style="margin:14px 0 4px">RX cleanup: what listeners hear (always applies; not affected by Adjust audio levels)</h3>
+<p class="muted small">Done once on the Pi for every listener; the node and other links are not changed.</p>
+<div class="row"><label><input type="checkbox" id="rx-hpf"> Cut below 300 Hz (removes CTCSS tones and hum; tone-squelch listeners may lose audio)</label></div>
 <div class="row"><label><input type="checkbox" id="rx-agc"> Automatic level (brings quiet stations up, loud ones down a little)</label></div>
 <div class="row"><label for="rx-gate" style="min-width:130px">Squelch-tail gate</label>
 <select id="rx-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong (can clip hissy speech)</option></select></div>
 <table><tr><th>Processing load</th><td id="rx-load" class="mono">-</td></tr></table>
 <p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
 use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
-<div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
-<button id="tune-reset" class="btn" type="button">Reset to 0 dB</button></div>
-<div id="tune-msg" class="msg"></div>
+<div class="row"><button id="rx-save" class="btn primary" type="button">Save</button></div>
+<div id="rx-msg" class="msg"></div>
 </div>
 </div>
 
-<div class="card fold" id="cd-mic">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-mic"><span class="fold-t">Microphone</span><span class="fold-sum" id="sum-mic"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-mic">
+<div class="card fold" id="cd-tx">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-tx"><span class="fold-t">TX: node <span id="tx-node">1921</span></span><span class="fold-sum" id="sum-tx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-tx">
+<h3 style="margin:6px 0 4px">Transmit node</h3>
+<p class="muted small">Push-to-talk sends your voice to private node 1921, which stays linked to the main node.
+Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a backup) and relinks it if it drops.</p>
+<table>
+<tr><th>State</th><td id="tx-state">-</td></tr>
+<tr><th>Main node</th><td id="tx-main">-</td></tr>
+<tr><th>rxchannel</th><td><code id="tx-rxch">-</code></td></tr>
+</table>
+<div class="row"><button id="tx-add" class="btn primary" type="button">Add node 1921</button>
+<button id="tx-remove" class="btn" type="button">Remove</button>
+</div>
+<div id="tx-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Audio levels</h3>
+<div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
+<p class="muted small">Off: the gains and buffers below aren't used. These change only this page's path,
+not the node, the radio or DVSwitch.</p>
+<div id="tune-body">
+<div class="row"><label for="tune-tx" style="min-width:130px">Mic to node (TX)</label>
+<input type="range" id="tune-tx" min="-12" max="12" step="1" style="flex:1"><span id="tune-tx-v" class="mono small">0 dB</span></div>
+<div class="row"><label for="tune-txbuf" style="min-width:130px">TX buffer</label>
+<select id="tune-txbuf"><option value="60">60 ms</option><option value="120">120 ms (default)</option>
+<option value="200">200 ms</option><option value="300">300 ms (busy Wi-Fi)</option></select></div>
+<table>
+<tr><th>TX peak</th><td id="tune-txpk" class="mono">-</td></tr>
+<tr><th>TX gaps</th><td id="tune-gaps" class="mono">-</td></tr>
+</table>
+<p class="muted small">Aim for TX peaks around -6 to -3 dBFS on normal speech, without reaching 0.</p>
+</div>
+<div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
+<button id="tune-reset" class="btn" type="button">Reset gains and buffers to defaults</button></div>
+<div id="tune-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Push-to-talk on this phone</h3>
+<div class="row"><label><input type="radio" name="ptt-mode" id="ptt-hold" value="hold"> Hold to talk</label>
+<label><input type="radio" name="ptt-mode" id="ptt-tap" value="tap"> Tap to talk, tap to stop</label></div>
+<div class="row"><label>Guard timer <select id="ptt-guard"><option value="30">30 s</option><option value="60">60 s</option>
+<option value="90">90 s</option><option value="120">120 s</option><option value="180">180 s</option></select></label></div>
+<div class="row"><label><input type="checkbox" id="ptt-gap"> Quick Key Guard</label></div>
+<p class="muted small">With Quick Key Guard on, push-to-talk is locked while the node receives and for 4 s after, counting
+3 to 0 in the corner of the spectrum, so other stations get a chance to answer first.</p>
+<p class="muted small">The guard timer stops a tap-to-talk (or headset) transmission: two short beeps 10 s before, then it
+unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></span></p>
+<p class="muted small" id="ptt-src"></p>
+<div class="row"><button id="ptt-save" class="btn primary" type="button">Save on this phone</button>
+<button id="ptt-restore" class="btn" type="button">Restore from the Pi</button></div>
+<div id="ptt-set-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Microphone</h3>
+<div id="cb-mic">
 <p class="muted small">Saved in this browser only; each phone keeps its own. Browsers can't change the phone's own
 mic volume, so the gain here is applied in the page.</p>
+<p class="muted small why hidden" id="why-mic"></p>
 <div class="row"><label><input type="checkbox" id="mic-lev"> Leveler (keeps an even level and never clips)</label></div>
-<div class="row"><label><input type="checkbox" id="mic-agc"> Automatic gain (the browser levels the mic; leave off with the leveler)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-agc"> Automatic gain (the browser levels the mic; turns off the leveler)</label></div>
 <div class="row"><label><input type="checkbox" id="mic-ns"> Noise suppression</label></div>
 <div class="row"><label><input type="checkbox" id="mic-ec"> Echo cancellation (rarely needed: listen audio is muted while you talk)</label></div>
-<div class="row"><label><input type="checkbox" id="mic-hp"> Voice filter (cuts rumble below about 250 Hz)</label></div>
-<div class="row"><label><input type="checkbox" id="mic-eq"> Radio voice (cuts below 300 Hz, lifts 2.5 kHz; leave off if the radio adds pre-emphasis)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-hp"> Voice filter (cuts rumble below about 250 Hz; Radio voice already cuts below 300 Hz)</label></div>
+<div class="row"><label><input type="checkbox" id="mic-eq"> Radio voice (cuts below 300 Hz, lifts 2.5 kHz; includes the Voice filter's low cut; leave off if the radio adds pre-emphasis)</label></div>
 <div class="row"><label for="mic-gate" style="min-width:130px">Noise gate</label>
 <select id="mic-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong</option></select></div>
 <div class="row"><label for="mic-gain" style="min-width:130px">Mic gain</label>
@@ -7056,12 +8497,10 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="rep-v" id="rep-node-v"></div>
 </div>
 </div>
-</div>
-
-<div class="card fold" id="cd-hs">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-hs"><span class="fold-t">Headset / audio output</span><span class="fold-sum" id="sum-hs"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-hs">
+<h3 style="margin:14px 0 4px">Headset / audio output</h3>
+<div id="cb-hs">
 <p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
+<p class="muted small why hidden" id="why-hs"></p>
 <div id="hs-out-row"><label for="hs-out">Audio output</label>
 <select id="hs-out" style="width:100%;min-height:44px;margin-top:6px"></select></div>
 <p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Talker follows it.</p>
@@ -7074,22 +8513,67 @@ mic volume, so the gain here is applied in the page.</p>
 <option value="ptt">Push to talk: press to talk, press again to stop</option>
 <option value="off">Off</option>
 </select></div>
-<p class="muted small">The button only reaches the page while Node Talker is playing. Push to talk uses the same transmit as the Talk button, with the same time-out; if the second press doesn't arrive, the time-out ends the transmission.</p>
+<p class="muted small">The button only reaches the page while Node Talker is playing. Push to talk uses the same transmit as the Talk button, and the same guard timer (set under Push-to-talk on this phone, never past the node's time-out); if the second press doesn't arrive, the guard timer ends the transmission.</p>
 <div class="row"><button id="hs-names" class="btn hidden" type="button">Show device names</button></div>
 <div class="muted small" id="hs-now"></div>
 <div id="hs-msg" class="msg"></div>
 </div>
 </div>
+</div>
 
-<div class="card fold" id="cd-play">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-play"><span class="fold-t">Playback</span><span class="fold-sum" id="sum-play"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-play">
-<p class="muted small">Saved in this browser only; each phone keeps its own.</p>
-<div class="row"><label><input type="checkbox" id="play-spec"> Show the spectrum on the Listen tab</label></div>
-<div class="row"><label><input type="checkbox" id="play-auto"> Start listening when the page opens (the browser may want one tap first)</label></div>
-<div class="row hidden" id="awake-row"><label><input type="checkbox" id="keep-awake"> Keep the screen on while listening or talking</label></div>
-<div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
-<div class="row"><label><input type="checkbox" id="play-smooth"> Smooth playback (filtered upsampling, no sizzle)</label></div>
+<div class="card fold" id="cd-chk">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Audio check</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-chk">
+<p class="muted small">Start a check, go to the Listen tab and use the node as usual: listen, talk, listen. Come back
+for a report with averages and what to change. Only numbers are kept, never audio, and only in this browser.</p>
+<div class="row"><label for="chk-mins" style="min-width:90px">Length</label>
+<select id="chk-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select>
+<button id="chk-start" class="btn primary" type="button">Start check</button><button id="chk-stop" class="btn hidden" type="button">Stop</button>
+<button id="chk-copy-card" class="btn" type="button">Copy all</button></div>
+<p class="muted small why hidden" id="why-chk"></p>
+<div class="row"><label class="small"><input type="checkbox" id="chk-guide" checked> Prompt me to talk during the check</label></div>
+<div id="chk-run" class="chk-run hidden"></div>
+<div id="chk-rep" class="hidden">
+<h3 style="margin:10px 0 4px">Receive</h3>
+<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table>
+<h3 style="margin:10px 0 4px">Transmit</h3>
+<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table>
+<h3 style="margin:10px 0 4px">Per minute</h3>
+<div id="chk-min" class="chk-min"></div>
+<h3 style="margin:12px 0 2px">What to change</h3>
+<div id="chk-sug"></div>
+<div class="row"><button id="chk-cmp" class="btn" type="button">Compare with last check</button>
+<button id="chk-copy" class="btn" type="button">Copy report</button>
+<button id="chk-export" class="btn" type="button">Download report</button>
+<button id="chk-file" class="btn" type="button">Compare with a saved report</button>
+<button id="chk-clear-file" class="btn hidden" type="button">Stop comparing</button>
+<input id="chk-file-in" type="file" accept="application/json,.json" class="hidden"></div>
+<div id="chk-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Tone test</h3>
+<p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. Local network only. The report is kept in memory on the Pi until the next test.</p>
+<div class="row"><label for="tone-sec" style="min-width:90px">Tone length</label>
+<select id="tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
+<div class="row"><label for="tone-hz" style="min-width:90px">Tones (Hz)</label>
+<input id="tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
+<div class="row"><button id="tone-start" class="btn primary" type="button">Run tone test</button><button id="tone-stop" class="btn hidden" type="button">Stop</button></div>
+<div id="tone-prog" class="chk-run hidden"></div>
+<div id="tone-rep" class="hidden">
+<div id="tone-sum" class="muted small"></div>
+<div class="tone-scroll"><table class="chk-t tone-t"><thead><tr><th>Hz</th><th>Sent dB</th><th>Raw dB</th><th>Raw vs sent</th><th>After cleanup dB</th><th>Cleanup effect</th><th>Freq err Hz</th><th>Drops</th></tr></thead><tbody id="tone-rows"></tbody></table></div>
+<div id="tone-warn"></div>
+</div>
+<div id="tone-msg" class="msg"></div>
+</div>
+</div>
+</div>
+
+<div class="card fold" id="cd-phone">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-phone"><span class="fold-t">Phone</span><span class="fold-sum" id="sum-phone"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-phone">
+<p class="muted small">Audio this phone's browser (and Node Talker Mobile, when the page runs in it) can read. Read-only: nothing here changes a setting.</p>
+<div id="phone-body"></div>
+<div class="row"><button id="phone-refresh" class="btn" type="button">Refresh</button></div>
+<p class="muted small">* You can change this on the phone.</p>
 </div>
 </div>
 
@@ -7147,6 +8631,8 @@ _POST_ACTIONS = {
     "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
     "/api/favorites-file": (lambda b: fav_file_put(b.get("text")), ()),
+    "/api/tonetest/start": (lambda b: TONE.start(b), (ValueError,)),
+    "/api/tonetest/stop": (lambda b: TONE.stop(), ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
@@ -7283,6 +8769,10 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 d.update(ok=True, config_node=_cfg_get("node") or main_node())
                 self._json(200, d)
+            elif path == "/api/node/counters":
+                self._json(200, node_counters())
+            elif path == "/api/tonetest/status":
+                self._json(200, TONE.status())
             elif path == "/api/tx":
                 self._json(200, dict(tx_state(), ok=True))
             elif path == "/api/favorites":
@@ -7441,6 +8931,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             self._json(401, {"ok": False, "error": "Log in first."})
             return
+        if path in ("/api/tonetest/start", "/api/tonetest/stop") and self._wan():
+            self._json(403, {"ok": False, "error": "The tone test runs from the local network only."})
+            return
         action = _POST_ACTIONS.get(path)
         try:
             if action is None:
@@ -7527,6 +9020,7 @@ def run_server():
     _solo_load()
     fav_doc()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
+    threading.Thread(target=pi_loop, name="pi-health", daemon=True).start()
     threading.Thread(target=udp_loop, args=(_cfg_get("udp_port"),), name="udp", daemon=True).start()
     threading.Thread(target=TALKER.pacer_loop, name="tx-pacer", daemon=True).start()
     threading.Thread(target=usrp_drain_loop, name="tx-drain", daemon=True).start()

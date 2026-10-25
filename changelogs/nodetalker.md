@@ -1,6 +1,103 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_6_12_20261021.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_22_20261025.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.22 (2026-10-25)
+
+- **0.9.21 brought into the repo** (it came in as a file, not through the repo). Comments and docstrings are stripped and the history below is moved here.
+- `ptt_rx_gap` stays off by default (0.9.21 had turned it on).
+- Pi health (`pi`) is part of the status only for a logged-in client, not the public status.
+- Tone test: the Stop route is local network only like Start, and a test that would run past the TX time-out less 5 s is refused.
+
+Entries 0.9.0 to 0.9.21 below were kept in the file header and carry no dates of their own; the 0.7 and 0.8 series have no written history.
+
+## 0.9.21 (2026-10-25)
+
+- Settings that can't be used right now are grayed out, with the reason in a note under the section: in app audio (Node Talker Mobile) the page playback options, the page's mic processing, Mic test, Test through the node, output / mic picking, the headset button and Start check; without the https:// page the microphone options; browser-unsupported echo cancel / noise suppression / auto gain; the Voice filter while Radio voice is on; the level fields while Adjust audio levels is off. Phone card: rows the app doesn't use are marked, and inside the app a Node Talker Mobile section shows the audio mode and version, plus the app's own settings when the app provides audioInfo().
+
+## 0.9.20 (2026-10-25)
+
+- Review fixes. Audio check: Download report works again (the page used an undefined VERSION). RX cleanup: the squelch-tail gate counts a frame as noise only when its samples one and two apart are both unrelated (flat hiss), so steady tones and loud "s" sounds are no longer muted; the check's squelch-tail count uses the same test. When the gate opens it keeps the 40 ms before the opening and fades in. TX: a gap repeats the last frame faded out instead of a hard cut, and the frame after a gap fades in. Phone mic: longer down-sampling filter (flat to 3 kHz, less hiss folding back) and a steeper Voice filter. Listen: a burst that runs far ahead is dropped until playback is back at the Listen buffer, instead of playing on top of queued audio; Disconnect drops audio already queued. Listen line reads the bridge settings at most every 5 s. Copy all hides password fields. Audio check: suggestions use the table's own limits. Tone test: the processed column is measured 80 ms later when the gate is on (its delay). Faster gain and WebSocket unmasking on the Pi.
+
+## 0.9.19 (2026-10-25)
+
+- Listen tab: the feed button label is two lines in a smaller font (Connect / feed, Disconnect / feed).
+
+## 0.9.18 (2026-10-25)
+
+- Listen tab: the feed button reads Connect feed / Disconnect feed.
+
+## 0.9.17 (2026-10-25)
+
+- Listen line: the DVSwitch and M17 status is read only when a bridge is linked to the main node.
+
+## 0.9.16 (2026-10-25)
+
+- Listen line: with no ASL node linked, a tuned DVSwitch or M17 bridge is the primary (its talkgroup or reflector, with the mode badge) instead of No ASL node linked.
+
+## 0.9.15 (2026-10-25)
+
+- Listen line shows the ASL node the main node is linked to (its number from rpt lstats, named from the favorites or astdb.txt). TX node 1921 and bridges 1999/1917 are infrastructure, so they never become the primary; a tuned bridge (DVSwitch or M17) follows as a tag. Favorites editor counter fixed.
+
+## 0.9.14 (2026-10-25)
+
+- Audio check suggestions: ordered by how much audio they affect (lost or distorted audio first, then levels, then noise and filters). At most two changes carry Apply at once; the rest are marked Later. Level suggestions use the report table's targets and need 5 s of speech before they are made.
+
+## 0.9.13 (2026-10-25)
+
+- Listen line under PTT shows the live link, not the Connect or Tune selection. It reads the main node's links; a DVSwitch or M17 bridge is labelled from its own status. Shows Not connected, Node unreachable, or Bridge linked, nothing tuned. The badge is sized to the line's font.
+
+## 0.9.12 (2026-10-25)
+
+- Settings tab: every card has a Copy all button at its foot. It copies the whole card as plain text, including folded sections and the values of its fields. Audio check's button is renamed to match.
+
+## 0.9.11 (2026-10-25)
+
+- Node cross-check: rpt stats parser now reads the 'since system initialization' keyup count and TX time (HH:MM:SS:mmm). It used to read the 'today' count, which resets at midnight.
+
+## 0.9.10 (2026-10-25)
+
+- Audio check: Copy whole card moved to the Start check row so it is visible before a check runs (it was inside the report area, which stays hidden until a check finishes).
+
+## 0.9.9 (2026-10-25)
+
+- Page layout: Favorites (with the favorites file) and Digital (with DMR networks) are now cards of their own, each with its own save button; Setup keeps node settings, Save and Restart. Audio check has a Copy whole card button that copies the card as plain text.
+
+## 0.9.8 (2026-10-25)
+
+- Tone test: the busy check looked at any packet from the node, which the node sends continuously, so the test always refused with 'channel busy'. It now uses audio above the activity level only.
+
+## 0.9.7 (2026-10-25)
+
+- Audio check (Phase 4, page only): Download report saves the current report to this phone as a JSON file. Compare with a saved report loads such a file and compares it with the current check; nothing is kept on the Pi. Compare with last check is unchanged.
+
+## 0.9.6 (2026-10-25)
+
+- Audio check (Phase 3): Pi temperature and throttling sampled every 10 s (in memory, shown in the report); PTT round trip from the page and key-to-first-audio on the Pi (from the unkeyed event); node cross-check comparing rpt stats keyups with the phone's transmissions (/api/node/counters). The rpt stats format is parsed defensively and shows raw lines when it is not recognised.
+
+## 0.9.5 (2026-10-25)
+
+- Audio check (Phase 2): per-minute data (speech level, noise floor, Pi load, dropouts) for up to 15 minutes, shown as a bar strip in the report. Run totals are unchanged. Saved runs in the older format are migrated on load instead of discarded.
+
+## 0.9.4 (2026-10-25)
+
+- Audio check (Phase 1, client only): full-scale sample rows for RX and TX; dropouts split into under 0.1 s, 0.1-0.5 s and over 0.5 s, with silent seconds; queue resets counted separately; screen kept awake during a check (Wake Lock, with a warning if it can't be held); optional "talk now" prompts every 2 minutes from 0:30 (on by default).
+
+## 0.9.3 (2026-10-25)
+
+- Tone test in the web page: Audio check card, Tone test section (length, tone list, run and stop). Shows the report as a per-tone table with raw, after-cleanup and cleanup-effect columns, the usable band and warnings. Reloads the last in-memory report when the Setup tab opens.
+
+## 0.9.2 (2026-10-25)
+
+- Tone test: reports are no longer saved to disk. The report stays in memory until the next test. Removed /api/tonetest/list and /api/tonetest/report (test results are not logged).
+
+## 0.9.1 (2026-10-25)
+
+- Tone test: station ID (Morse "DE <callsign>") sent at the start and end, using the callsign from Setup; the test refuses to key without one. Each finished run is saved as JSON in CONFIG_DIR/nodetalker_tonetests (newest 50 kept). New GET endpoints: /api/tonetest/list and /api/tonetest/report?name=. Start ID also sets the delay figure.
+
+## 0.9.0 (2026-10-25)
+
+- Tone test (Pi side): raw and processed RX taps in the audio pump (inactive unless a test runs); tone sequence keyed through the Talker; Goertzel analysis with frequency search; /api/tonetest/start, /stop and /status (start is LAN-only and needs login).
 
 ## 0.6.12 (2026-10-21)
 
