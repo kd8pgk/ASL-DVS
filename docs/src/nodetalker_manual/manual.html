@@ -25,7 +25,7 @@ td .sc{margin-left:.3em}
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Node Talker 0.6.12</b><br>Edition 2026-10-21</div>
+    <div class="ed"><b>Node Talker 0.9.22</b><br>Edition 2026-10-25</div>
   </div>
   <div class="body">
     <h1>Node Talker Manual<br><span>Receive and transmit audio, setting by setting</span></h1>
@@ -41,8 +41,8 @@ td .sc{margin-left:.3em}
     <div class="kicker" style="margin-top:1.2em">Covered by this edition</div>
     <table>
       <tr><th>Tool</th><th>File</th><th>Version</th></tr>
-      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_6_12_20261021.py</td><td>0.6.12</td></tr>
-      <tr><td>Node Talker Mobile</td><td class="mono">NodeTalker-0.3.1-debug.apk</td><td>0.3.1 (Android 8.0 and later; Node Talker 0.6.11 or later for app audio)</td></tr>
+      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_9_22_20261025.py</td><td>0.9.22</td></tr>
+      <tr><td>Node Talker Mobile</td><td class="mono">NodeTalker-0.3.1-debug.apk</td><td>0.3.1 (Android 8.0 and later; Node Talker 0.6.11 or later for app audio; sections 7.9 and 11.1 list what 0.9.22 adds that the app does not yet use)</td></tr>
       <tr><td>Dashboard</td><td class="mono">nodecontrol_pi02w_v9_3_94 / nodecontrol_v9_3_89</td><td>9.3.94-pi02w for DVSwitch through the Dashboard; 9.3.89 or later (both builds) for ASL, EchoLink and M17</td></tr>
     </table>
     <p style="font-size:8pt;color:var(--muted)">Node Talker is a common tool: the same file runs on the Pi Zero 2 W and the
@@ -146,7 +146,7 @@ td .sc{margin-left:.3em}
   </ol>
   <h2><span class="n">2.2</span>Receive: send the node's audio here</h2>
   <ol class="steps">
-    <li>Setup tab, open the <b>Receive</b> card. The table lists each node in <code>rpt.conf</code> and its
+    <li>Setup tab, open the <b>RX</b> card (Node receive). The table lists each node in <code>rpt.conf</code> and its
       <code>outstreamcmd</code>, if any.</li>
     <li>Pick your node and press <b>Send its audio here</b>. That node becomes Node Talker's main node.</li>
     <li>Press <b>Restart Asterisk</b> (it asks first; every link drops and reconnects).</li>
@@ -157,15 +157,15 @@ td .sc{margin-left:.3em}
     one (a Broadcastify feed, for example), Node Talker refuses rather than replace it.</div>
   <h2><span class="n">2.3</span>Transmit: add node 1921</h2>
   <ol class="steps">
-    <li>Setup tab, open the <b>Transmit</b> card and press <b>Add node 1921</b>. Node Talker adds a <code>[1921]</code>
-      stanza (your node's template, a USRP channel, no hang time, telemetry or courtesy tone) and a <code>[nodes]</code>
+    <li>Setup tab, open the <b>TX: node 1921</b> card (Transmit node) and press <b>Add node 1921</b>. Node Talker adds a <code>[1921]</code>
+      stanza (your node's template, a USRP channel, no hang time, telemetry, courtesy tone or station ID) and a <code>[nodes]</code>
       line, after a backup.</li>
     <li>Press <b>Restart Asterisk</b>. Within 20 seconds the card's summary reads <i>Set up and linked</i>: Node Talker
       links 1921 to your node and relinks it whenever it drops.</li>
   </ol>
   <h2><span class="n">2.4</span>First test transmission</h2>
   <ol class="steps">
-    <li>Setup tab, <b>Microphone</b> card: press <b>Test mic</b>, talk for 4 seconds, and read the report (section 9.2).
+    <li>Setup tab, <b>TX: node 1921</b> card, Microphone: press <b>Test mic</b>, talk for 4 seconds, and read the report (section 9.2).
       Adjust <b>Mic gain</b> until it says <i>Good</i>.</li>
     <li>Press <b>Test through the node</b>. It transmits for 4 seconds, over the air and to every link, and plays back what
       the node sent out.</li>
@@ -180,9 +180,9 @@ td .sc{margin-left:.3em}
     only the middle scrolls, and the Listen tab is sized to fit the screen without scrolling.</p>
   <div class="grid2" style="grid-template-columns:1fr 1fr;align-items:start">
     <figure><img class="shot" src="img/listen.jpg" style="width:2.3in" alt="The Listen tab">
-      <figcaption><b>Figure 3.1 · Screenshot (test signal).</b> The Listen tab, with the spectrum as bars.</figcaption></figure>
+      <figcaption><b>Figure 3.1 · Screenshot (test signal).</b> The Listen tab, with the spectrum as bars and the link line under push-to-talk.</figcaption></figure>
     <figure><img class="shot" src="img/setup.jpg" style="width:2.3in" alt="The Setup tab">
-      <figcaption><b>Figure 3.2 · Screenshot (test node).</b> The Setup tab: System and Links at the top, then each card closed, with its summary.</figcaption></figure>
+      <figcaption><b>Figure 3.2 · Screenshot (test node).</b> The Setup tab: System and Links at the top, then the cards, each closed with its summary and a Copy all button.</figcaption></figure>
   </div>
   <h2><span class="n">3.1</span>Title bar and login</h2>
   <table>
@@ -191,25 +191,30 @@ td .sc{margin-left:.3em}
     <tr><td>Node Controller / InstMon</td><td>Opens the Dashboard, or switches to its tab if it is already open. When the Dashboard isn't running, the button opens InstMon instead.</td></tr>
     <tr><td>Log In / Log Out</td><td>The root password. Five wrong tries from one address lock that address out for 5 seconds, doubling up to 5 minutes. A login lasts 12 hours from the last use.</td></tr>
   </table>
-  <p>With <b>Listen without logging in</b> on (Settings card), anyone who can reach the page gets the Listen tab
+  <p>With <b>Listen without logging in</b> on (Setup card), anyone who can reach the page gets the Listen tab
     without the password but can't transmit or change anything.</p>
   <h2><span class="n">3.2</span>Listen tab, top to bottom</h2>
   <table>
     <tr><th>Part</th><th>What it does</th></tr>
-    <tr><td>Listen / Stop and volume</td><td>Starts and stops the audio; the slider beside it is the volume, 0 to 200 %. Listening starts by itself when the page opens (section 7.7).</td></tr>
+    <tr><td>Connect feed / Disconnect feed and volume</td><td>Starts and stops the audio (the button reads <i>Connect feed</i> while stopped and <i>Disconnect feed</i> while it plays; this is the page's own audio feed, not a link on the node); the slider beside it is the volume, 0 to 200 %. Listening starts by itself when the page opens (section 7.7).</td></tr>
     <tr><td>Status line</td><td>Node number · <b>feed</b> light (green while audio arrives from Asterisk; "no feed 12 s" otherwise) · <b>RX</b> light (the node is passing audio) · <b>TX</b> light (someone transmits from Node Talker) · listeners now / limit · <span class="k">CHECK 2:13</span> while an Audio check runs. Hover over a light for details.</td></tr>
-    <tr><td>Spectrum</td><td>0 to 4 kHz as bars (chapter 9). Off in the Playback card. With app audio in Node Talker Mobile it stays empty: the app plays the sound, not the page.</td></tr>
+    <tr><td>Spectrum</td><td>0 to 4 kHz as bars (chapter 9). Off in Playback (RX card). With app audio in Node Talker Mobile it stays empty: the app plays the sound, not the page.</td></tr>
     <tr><td>Level bar</td><td>The node's level, or your mic level (red <b>TX</b>) while you hold push-to-talk.</td></tr>
     <tr><td>Message line</td><td><i>Listening.</i>, <i>Tap anywhere to start listening</i>, or why the stream stopped.</td></tr>
-    <tr><td>Push-to-talk</td><td>Hold to talk, or tap to talk and tap to stop (chapter 6; the Settings card picks which). Red <b>TALKING</b> with the time, or the guard countdown in tap mode; amber <b>Busy: who 0:12</b> when someone else transmits; a 3-2-1 count in the spectrum's corner while <b>Wait 4 s after receive</b> holds it.</td></tr>
+    <tr><td>Push-to-talk</td><td>Hold to talk, or tap to talk and tap to stop (chapter 6; Push-to-talk on this phone, TX card, picks which). Red <b>TALKING</b> with the time, or the guard countdown in tap mode; amber <b>Busy: who 0:12</b> when someone else transmits; a 3-2-1 count in the spectrum's corner while <b>Quick Key Guard</b> holds it.</td></tr>
+    <tr><td>Link line</td><td>Under the push-to-talk button: what the node is linked to right now, with a mode tag and a name (for example <span class="k">ASL</span> and the net's name, or the talkgroup or reflector of a tuned DVSwitch or M17 bridge). It reads the node's own links, not your Connect or Tune choice, so a link made from the Dashboard or another phone shows too. Other states: <i>No ASL node linked</i>, <i>Bridge linked, nothing tuned</i>, <i>Not connected</i> and <i>Node unreachable</i>. Node 1921 and the bridge nodes are never shown as the link itself; a tuned DVSwitch or M17 bridge follows an ASL name as a tag. Names come from your favorites, then the AllStar list (<code>astdb.txt</code>).</td></tr>
   </table>
   <h2><span class="n">3.3</span>Setup tab</h2>
   <p>At the top, always open: <b>System</b> (<b>Reboot</b> and <b>Shutdown</b> the Pi, each asked first) and <b>Links</b>
-    (the node's links, one per line; node 1921 is marked TX). Below them, cards from one-time setup to everyday use:
-    <b>Receive</b>, <b>Transmit</b>, <b>Settings</b>, <b>Favorites</b>, <b>Digital</b>, <b>Audio check</b>, <b>Audio
-    levels</b>, <b>Microphone</b>, <b>Headset / audio output</b>, <b>Playback</b>, <b>Log</b>. Tap a title to open or
-    close it; every card starts closed, showing a one-line summary such as <i>Set up and linked</i> or
-    <i>300 Hz cut · auto level · gate light</i>. Chapter 7 goes through them all.</p>
+    (the node's links, one per line; node 1921 is marked TX). Below them, eight cards that follow the audio from
+    one-time setup to everyday use: <b>Setup</b> (the node's settings, Save, Restart Asterisk), <b>Favorites</b>,
+    <b>Digital</b>, <b>RX</b> (Node receive, Playback, Audio levels and RX cleanup), <b>TX: node 1921</b> (Transmit node,
+    Audio levels, Push-to-talk on this phone, Microphone, Headset / audio output), <b>Audio check</b> (with the Tone
+    test), <b>Phone</b> and <b>Log</b>. Tap a title to open or close it; every card starts closed, showing a one-line
+    summary such as <i>Set up and linked</i> or <i>300 Hz cut · auto level · gate light</i>. Each card ends with a
+    <b>Copy all</b> button that copies the whole card as plain text, folded sections and field values included
+    (password fields are left out), which is the easiest way to show someone your settings. Chapter 7 goes through
+    them all.</p>
   <h2><span class="n">3.4</span>Connect tab</h2>
   <div class="grid2" style="grid-template-columns:2.3in 1fr;align-items:start">
     <figure><img class="shot" src="img/connect.jpg" style="width:2.3in" alt="The Connect tab">
@@ -218,8 +223,8 @@ td .sc{margin-left:.3em}
       <p><b>Connect</b>: pick one of your favorites and press <b>Connect</b>; the button turns into <b>Disconnect</b>
         while it is on.</p>
       <p><b>Tune</b>: anything that isn't a favorite. Pick the mode (ASL, EchoLink, DMR, STFU, YSF, P25, NXDN, D-STAR,
-        M17), search or type, then <b>Connect</b>, <b>LH</b> (Last Heard) or <b>Save</b> as a favorite.
-        <b>Disconnect</b> under it ends what is tuned. Chapter 10 has both.</p>
+        M17), search or type, then <b>LH</b> (Last Heard), <b>Save</b> as a favorite or <b>Connect</b>, which
+        turns into <b>Disconnect</b> while what you picked is linked. Chapter 10 has both.</p>
       <p>The node's links are on the Setup tab (Links card).</p>
     </div>
   </div>
@@ -285,7 +290,7 @@ td .sc{margin-left:.3em}
   <h2><span class="n">4.1</span>The pieces</h2>
   <table>
     <tr><th>Piece</th><th>What it is</th><th>Where it is set up</th></tr>
-    <tr><td>Your node</td><td>The node in <code>rpt.conf</code> you picked with <b>Send its audio here</b> (41234 in the examples). Node Talker calls it the main node.</td><td>Receive card</td></tr>
+    <tr><td>Your node</td><td>The node in <code>rpt.conf</code> you picked with <b>Send its audio here</b> (41234 in the examples). Node Talker calls it the main node.</td><td>RX card (Node receive)</td></tr>
     <tr><td><code>outstreamcmd</code></td><td>One line in your node's stanza. app_rpt starts the program it names and writes everything the node hears into it: 8,000 samples a second, 16 bits. The program is a small part of Node Talker that passes the audio on over UDP.</td><td>Receive card (writes the line)</td></tr>
     <tr><td>Node Talker</td><td>The service on port 8993: the page, the audio pump, RX cleanup, the TX buffer and every safety rule. It sends the audio to each listener and takes transmit audio from one talker at a time.</td><td>Settings, Audio levels</td></tr>
     <tr><td>The page, or the app</td><td>Plays the audio and records your microphone. In a browser the page does both; in Node Talker Mobile with app audio, the app does them and the page only shows what happens.</td><td>Microphone, Playback; the app's Audio settings</td></tr>
@@ -324,7 +329,7 @@ td .sc{margin-left:.3em}
   <p>A <b>private node</b> is a node number from 1 to 1999. These numbers aren't registered with AllStarLink, so
     nobody outside can connect to them: they exist only on your Pi, linked locally. That makes them the right tool for
     feeding audio into a node from software. Node Talker uses 1921 and writes this when you press <b>Add node
-    1921</b> on the Transmit card (here for a node 41234 that uses ASL3's usual <code>node-main</code> template):</p>
+    1921</b> on the TX card, Transmit node (here for a node 41234 that uses ASL3's usual <code>node-main</code> template):</p>
   <pre>; nodelisten: transmit node for the Node Listen page (remove it from that page)
 [1921](node-main)
 rxchannel = USRP/127.0.0.1:34018:32018
@@ -334,6 +339,7 @@ althangtime = 0
 holdofftelem = 1
 telemdefault = 0
 nounkeyct = 1
+idrecording = |t(0,0,10,0)
 
 [nodes]
 41234 = radio@127.0.0.1/41234,NONE
@@ -347,6 +353,7 @@ nounkeyct = 1
     <tr><td><code>hangtime = 0</code>, <code>althangtime = 0</code></td><td>No hang after you unkey, so the node drops straight away.</td></tr>
     <tr><td><code>holdofftelem = 1</code>, <code>telemdefault = 0</code></td><td>No telemetry (IDs, link announcements) from 1921 itself; your node keeps its own.</td></tr>
     <tr><td><code>nounkeyct = 1</code></td><td>No courtesy tone when you unkey from Node Talker.</td></tr>
+    <tr><td><code>idrecording = |t(0,0,10,0)</code></td><td>Node 1921's own station ID is a 10 ms silent tone. Without this line 1921 would use the ID of the template it is built on, which on a stock ASL3 install is someone else's callsign, and send it on the air whenever it keys.</td></tr>
     <tr><td><code>1921 = radio@127.0.0.1/1921,NONE</code></td><td>The <code>[nodes]</code> entry that lets your node find 1921 on this Pi. If Asterisk listens on another IAX port than 4569, the port is added (<code>127.0.0.1:4570</code>).</td></tr>
   </table>
   <h3>Checking it from the Pi</h3>
@@ -365,8 +372,9 @@ T41234</pre>
     <code>sudo asterisk -rx "rpt cmd 41234 ilink 3 1921"</code>. To see it key while you talk:
     <code>sudo asterisk -rx "rpt stats 1921"</code> shows <i>Signal on input</i> as <i>YES</i>. The <i>T</i> in front of
     41234 means a transceive link: audio goes both ways.</p>
+  <div class="call note"><span class="t">NOTE</span>Node Talker 0.9.22 writes the <code>idrecording</code> line only into a new stanza. A 1921 that an earlier version added keeps its stanza as it is: add the line by hand, or press <b>Remove</b> and then <b>Add node 1921</b> on the TX card (and Restart Asterisk).</div>
   <div class="call care"><span class="t">CAREFUL</span>Node 1921 is fixed. If your <code>rpt.conf</code> already has a
-    <code>[1921]</code> for something else, the Transmit card refuses rather than overwrite it: move the other one to a
+    <code>[1921]</code> for something else, the TX card refuses rather than overwrite it: move the other one to a
     free private number (for example <code>[1922]</code>, with its <code>[nodes]</code> line) first.</div>
   <div class="call note"><span class="t">NOTE</span>Private nodes follow their own rules elsewhere too: connecting a
     favorite drops every other <i>public</i> link but never node 1921, the digital bridge nodes or any other private node
@@ -438,7 +446,7 @@ T41234</pre>
     <tr><td>Cut below 300 Hz</td><td>Removes hum and the lower CTCSS (PL) tones: 100 Hz drops by about 38 dB, 150 Hz by 24 dB, 250 Hz by 7 dB. Voice above 300 Hz is untouched.</td></tr>
     <tr><td>Automatic level</td><td>Aims speech at about −20 dBFS: brings quiet stations up by as much as 18 dB and loud ones down by as much as 6 dB. It turns down within a frame or two, comes up at 3 dB a second (faster for the first half second of a new transmission), and holds still between transmissions. RX gain (Audio levels) is added on top.</td></tr>
     <tr><td>Soft limiter</td><td>Up to about −1 dBFS nothing changes; above that, peaks are rounded off smoothly instead of clipped.</td></tr>
-    <tr><td>Squelch-tail gate</td><td>Mutes the burst of hiss after a station unkeys, and long silences. It tells hiss from voice by how alike neighbouring samples are: voice scores high, hiss low. To mute a tail from its first frame, it holds the audio back 80 ms.</td></tr>
+    <tr><td>Squelch-tail gate</td><td>Mutes the burst of hiss after a station unkeys, and long silences. It tells hiss from voice by how alike neighbouring samples are: voice scores high, hiss low. A frame counts as hiss only when its samples one and two apart are both unrelated (flat hiss), so steady tones and loud "s" sounds are not muted. To mute a tail from its first frame, it holds the audio back 80 ms; when the gate opens it keeps the 40 ms before the opening and fades in, so the start of a word is not clipped.</td></tr>
   </table>
 
   <h2><span class="n">5.3</span>To your phone and out of the speaker</h2>
@@ -521,7 +529,7 @@ T41234</pre>
       refills, and counts a <i>gap</i>.</li>
     <li><b>TX gain</b> (−12 to +12 dB, with a soft limit at about −1 dBFS), only with <b>Adjust audio levels here</b> on.</li>
     <li>The frames go as USRP packets to node 1921 (<code>127.0.0.1:32018</code>), keyed. On release the last frame is
-      faded out and three unkey packets follow.</li>
+      faded out and three unkey packets follow. If the audio has a gap, the last frame is repeated faded out instead of a hard cut, and the frame after the gap fades in.</li>
     <li>Node 1921 is linked to your node, so your audio goes out on the radio and to every link, like a local user's.</li>
   </ol>
   <h2><span class="n">6.3</span>The safety rules</h2>
@@ -532,7 +540,7 @@ T41234</pre>
     <tr><td>Time-out</td><td>The transmission stops at <b>TX time-out</b> (120 s by default). Let go and press again.</td></tr>
     <tr><td>Audio stopped</td><td>If no audio reaches the Pi for 1 s (a dropped connection), it unkeys.</td></tr>
     <tr><td>Guard timer</td><td>In tap-to-talk mode (and for the headset button), the transmission stops after the guard time (30–180 s, 60 s by default; never past the TX time-out), with two short beeps and a flashing count 10 s before.</td></tr>
-    <tr><td>Wait after receive</td><td>With <b>Wait 4 s after receive</b> on, push-to-talk is locked while the node receives and for 4 s after, so other stations can answer first.</td></tr>
+    <tr><td>Quick Key Guard</td><td>With <b>Quick Key Guard</b> on (it was called Wait 4 s after receive), push-to-talk is locked while the node receives and for 4 s after, so other stations can answer first.</td></tr>
     <tr><td>Page hidden</td><td>In a browser, switching apps, locking the phone or leaving the page releases push-to-talk. In Node Talker Mobile a tap-to-talk transmission carries on and hold-to-talk releases (chapter 11).</td></tr>
   </table>
 </section>
@@ -540,10 +548,10 @@ T41234</pre>
 <section class="chapter" id="ch7">
   <div class="kicker">Chapter 7</div>
   <h1 class="ch">Settings reference</h1>
-  <p class="ch-lede">Every setting, card by card, in the order of the Setup tab. <span class="sc n">NODE</span> settings
+  <p class="ch-lede">Every setting, card by card, in the order of the audio (the Favorites and Digital cards are in chapter 10). <span class="sc n">NODE</span> settings
     need you to be logged in and apply to everyone; <span class="sc b">BROWSER</span> settings are this device's own.</p>
 
-  <h2><span class="n">7.1</span>Receive card</h2>
+  <h2><span class="n">7.1</span>Node receive <span class="sc n">NODE</span> <span class="k">RX card</span></h2>
   <table>
     <tr><th>Control</th><th>What it does</th></tr>
     <tr><td>Node table</td><td>Each node in <code>rpt.conf</code> and its <code>outstreamcmd</code>: <i>Sends audio here</i>, <i>to another UDP port (press Send again)</i>, another program's line, one inherited from a template, or <i>Not sending</i>.</td></tr>
@@ -553,7 +561,7 @@ T41234</pre>
     <tr><td>Line added · Feeder · UDP input</td><td>The exact line; whether Asterisk is running the feeder program now; whether Node Talker is listening on the UDP port.</td></tr>
   </table>
 
-  <h2><span class="n">7.2</span>Transmit card</h2>
+  <h2><span class="n">7.2</span>Transmit node and push-to-talk <span class="k">TX card</span></h2>
   <table>
     <tr><th>Control</th><th>What it does</th></tr>
     <tr><td>State</td><td><i>Not set up</i>, <i>Set up and linked</i>, <i>Set up; linking</i>, <i>Asterisk does not know it yet: restart Asterisk</i>, or what is wrong.</td></tr>
@@ -561,7 +569,18 @@ T41234</pre>
     <tr><td>Remove</td><td>Takes both out (asks first). Push-to-talk stops working.</td></tr>
   </table>
 
-  <h2><span class="n">7.3</span>Settings card <span class="sc n">NODE</span></h2>
+  <h3>Push-to-talk on this phone <span class="sc b">BROWSER</span></h3>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
+    <tr><td>Hold to talk / Tap to talk, tap to stop</td><td>Hold</td><td>Tap mode: one tap keys, the next unkeys; a tap within 0.5 s of keying is ignored. Space or Enter work the same way.</td></tr>
+    <tr><td>Guard timer</td><td>60 s</td><td>30, 60, 90, 120 or 180 s, for tap mode and the headset button (section 6.3).</td></tr>
+    <tr><td>Quick Key Guard</td><td>off</td><td>Locks push-to-talk while the node receives and for 4 s after, counting 3 to 0 in the corner of the spectrum, so other stations can answer first. It was called Wait 4 s after receive.</td></tr>
+  </table>
+  <p><b>Save on this phone</b> also keeps a copy on the Pi (<code>ptt_mode</code>, <code>ptt_guard_sec</code>,
+    <code>ptt_rx_gap</code>); a phone with nothing saved starts from that copy, and <b>Restore from the Pi</b> puts it
+    back. The guard timer never runs past the node's TX time-out.</p>
+
+  <h2><span class="n">7.3</span>Setup card <span class="sc n">NODE</span></h2>
   <table>
     <tr><th>Setting</th><th>Default</th><th>Range</th><th>What it does, and when to change it</th></tr>
     <tr><td>Web port</td><td>8993</td><td>1024–65535</td><td>The page's port. Change only if something else uses 8993. Restarts Node Talker.</td></tr>
@@ -572,23 +591,19 @@ T41234</pre>
     <tr><td>Don't transmit while the node is busy</td><td>on</td><td>on / off</td><td>The busy lockout (section 6.3). Turn it off only if a constant noise on the node keeps it busy.</td></tr>
     <tr><td>Listen without logging in</td><td>off</td><td>on / off</td><td>Anyone who can reach the page may listen (not transmit).</td></tr>
   </table>
-  <h3>Push-to-talk on this phone <span class="sc b">BROWSER</span></h3>
-  <table>
-    <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
-    <tr><td>Hold to talk / Tap to talk, tap to stop</td><td>Hold</td><td>Tap mode: one tap keys, the next unkeys; a tap within 0.5 s of keying is ignored. Space or Enter work the same way.</td></tr>
-    <tr><td>Guard timer</td><td>60 s</td><td>30, 60, 90, 120 or 180 s, for tap mode and the headset button (section 6.3).</td></tr>
-    <tr><td>Wait 4 s after receive before talking</td><td>off</td><td>Locks push-to-talk while the node receives and for 4 s after, counting 3 to 0 in the corner of the spectrum.</td></tr>
-  </table>
-  <p><b>Save on this phone</b> also keeps a copy on the Pi (<code>ptt_mode</code>, <code>ptt_guard_sec</code>,
-    <code>ptt_rx_gap</code>); a phone with nothing saved starts from that copy, and <b>Restore from the Pi</b> puts it
-    back. <b>Tune card on this phone</b>: sliders for the Tune card's gap, height and text size, with <b>Default
-    spacing</b>.</p>
+  <p><b>Tune card on this phone</b>: sliders for the Tune card's gap, height and text size (kept in this browser), with <b>Default spacing</b>. <b>Save</b> keeps the node settings above; <b>Restart Asterisk</b> asks first and drops every link while Asterisk comes back.</p>
 
   <h2><span class="n">7.4</span>Audio check card <span class="sc b">BROWSER</span></h2>
-  <p>Length (2, 5, 10 or 15 minutes; 5 by default), <b>Start check</b>, <b>Stop</b>, then the report with
-    <b>Apply</b>/<b>Undo</b>, <b>Compare with last check</b> and <b>Copy report</b>. Section 8.4 explains it.</p>
+  <p>Length (2, 5, 10 or 15 minutes; 5 by default), <b>Start check</b>, <b>Stop</b>, <b>Copy all</b> and <b>Prompt me to
+    talk during the check</b> (on by default). The report has the Receive and Transmit tables, a <b>Per minute</b> strip,
+    <b>What to change</b> with <b>Apply</b>/<b>Undo</b>, and the buttons <b>Compare with last check</b>, <b>Copy
+    report</b>, <b>Download report</b> and <b>Compare with a saved report</b>. The <b>Tone test</b> is further down the
+    same card. Section 8.4 explains the check and section 8.5 the tone test.</p>
 
-  <h2><span class="n">7.5</span>Audio levels card <span class="sc n">NODE</span></h2>
+  <h2><span class="n">7.5</span>Audio levels <span class="sc n">NODE</span> <span class="k">RX and TX cards</span></h2>
+  <p>The settings are split by direction: <b>Adjust audio levels here</b>, <b>Mic to node (TX)</b>, <b>TX buffer</b> and
+    the reset button are on the TX card; <b>Node to phone (RX)</b>, <b>Listen buffer</b> and RX cleanup are on the RX
+    card. Each card has its own <b>Save</b>.</p>
   <h3>Adjust audio levels here</h3>
   <p>Off by default. Off, the four settings below are not used: no TX or RX gain, a 0.25 s listen buffer and a 120 ms TX
     buffer. On, they take effect. The RX cleanup further down works either way.</p>
@@ -609,10 +624,11 @@ T41234</pre>
     <tr><td>Squelch-tail gate</td><td>Light</td><td><b>Light</b> mutes the hiss after a station unkeys and long silences. <b>Strong</b> also mutes shorter and quieter hiss: use it on a node with noisy links, and turn it back if the start of speech is ever clipped. <b>Off</b> passes everything, with no 80 ms delay.</td></tr>
   </table>
   <p><b>Processing load</b>: how much of one CPU core the cleanup took over the last 5 seconds. On a Pi Zero 2 W it
-    should stay at about 10 % or less while audio passes. <b>Save</b> keeps everything on the card; <b>Reset to
-    0 dB</b> puts the gains and buffers back (Save to keep it).</p>
+    should stay at about 10 % or less while audio passes. <b>Save</b> keeps everything on the card; <b>Reset gains and buffers to defaults</b> (TX card) puts
+    them back (Save to keep it). A favorite can carry its own RX and TX gain (section 10.1); while it is on, those
+    values replace the two gains above, even with <b>Adjust audio levels here</b> off.</p>
 
-  <h2><span class="n">7.6</span>Microphone card <span class="sc b">BROWSER</span></h2>
+  <h2><span class="n">7.6</span>Microphone <span class="sc b">BROWSER</span> <span class="k">TX card</span></h2>
   <table>
     <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
     <tr><td>Leveler</td><td>on</td><td>A compressor and limiter in the page: quiet speech comes up (by up to 9 dB), loud speech is held back, and nothing passes −1 dBFS. Leave on; turn off only if you level the audio somewhere else.</td></tr>
@@ -624,9 +640,9 @@ T41234</pre>
     <tr><td>Noise gate</td><td>Off</td><td><b>Light</b> opens above −45 dBFS and turns the mic down 15 dB between words; <b>Strong</b> opens above −35 dBFS and turns it down 30 dB. Use Light in a noisy room. If the starts of words are clipped, go back a step (the Audio check measures it).</td></tr>
     <tr><td>Mic gain</td><td>0 dB</td><td>−12 to +24 dB. The main control for your level: set it with the mic test (section 8.2).</td></tr>
   </table>
-  <p><b>Test mic</b> and <b>Test through the node</b> are on this card; chapter 9 shows their meters and reports.</p>
+  <p><b>Test mic</b> and <b>Test through the node</b> are in this section of the TX card; chapter 9 shows their meters and reports.</p>
 
-  <h2><span class="n">7.7</span>Playback card <span class="sc b">BROWSER</span></h2>
+  <h2><span class="n">7.7</span>Playback <span class="sc b">BROWSER</span> <span class="k">RX card</span></h2>
   <table>
     <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
     <tr><td>Show the spectrum</td><td>on</td><td>The bars on the Listen tab. Off saves battery on an old phone.</td></tr>
@@ -638,6 +654,36 @@ T41234</pre>
   <h2><span class="n">7.8</span>Log card</h2>
   <p>What Node Talker has done: listeners, logins, transmissions (with length, gaps and why they ended), connects and
     every <code>rpt.conf</code> edit. Fetched only while the card is open.</p>
+  <h2><span class="n">7.9</span>Phone card <span class="sc b">BROWSER</span></h2>
+  <p>Read-only: nothing here changes a setting. It lists what this phone's browser can tell the page about audio, so you
+    can see why a setting has no effect. <b>Refresh</b> rereads it, and <b>Copy all</b> puts it in a message when you ask
+    someone for help.</p>
+  <ul>
+    <li>Whether the page is secure (<code>https://</code>; the microphone and device names are blocked if not), the network
+      state, the sound system's rate and playback latency, and whether the browser can pick the output.</li>
+    <li>The output in use, the microphones and output devices found, and the microphone in use (names appear once the
+      microphone has been allowed).</li>
+    <li>Which of echo cancellation, noise suppression and automatic gain the browser can do, and the page's own Leveler,
+      Automatic gain, Noise suppression, Echo cancellation, Voice filter / Radio voice, Noise gate and Mic gain.</li>
+    <li>A star (<b>*</b>) marks a value you can change on the phone. A page can't read the phone's media volume, so that row
+      says so unless the app reports it.</li>
+    <li>Inside Node Talker Mobile a second table, <i>Node Talker Mobile</i>, shows the app version and whether the audio is
+      app audio or page audio, and rows the app doesn't use are marked <i>not used: app audio</i>. The app's own settings
+      (output, receive buffer, echo and noise filter, microphone rate, phone volume, battery saver, keep the screen on)
+      appear once the app reports them; Node Talker Mobile 0.3.1 does not yet, and the table says so.</li>
+  </ul>
+
+  <h2><span class="n">7.10</span>Settings that are grayed out</h2>
+  <p>A setting that can't do anything right now is grayed out, and a note under its section says why, so you don't spend
+    time on a control that has no effect. The page rechecks every 2 seconds.</p>
+  <table>
+    <tr><th>Grayed out</th><th>Because</th></tr>
+    <tr><td>The page's playback options, its microphone processing, Test mic, Test through the node, output and microphone picking, the headset button and Start check</td><td>The app is doing the audio (Node Talker Mobile with app audio).</td></tr>
+    <tr><td>The microphone options</td><td>The page isn't the <code>https://</code> one, so the browser blocks the microphone.</td></tr>
+    <tr><td>Echo cancellation, Noise suppression, Automatic gain</td><td>This browser can't do them.</td></tr>
+    <tr><td>Voice filter</td><td>Radio voice is on, which includes it.</td></tr>
+    <tr><td>The gain and buffer fields</td><td>Adjust audio levels here is off.</td></tr>
+  </table>
 </section>
 
 <section class="chapter" id="ch8">
@@ -658,7 +704,7 @@ T41234</pre>
     and on links, fix it in SysMon (radio) first; Node Talker's settings only paper over it for Node Talker's users.</div>
   <h2><span class="n">8.2</span>Transmit, step by step</h2>
   <ol class="steps">
-    <li><b>Start clean.</b> Microphone card: Leveler on, Automatic gain off, Noise suppression on, Voice filter on, Noise gate Off, Mic gain 0 dB.</li>
+    <li><b>Start clean.</b> Microphone (TX card): Leveler on, Automatic gain off, Noise suppression on, Voice filter on, Noise gate Off, Mic gain 0 dB.</li>
     <li><b>Test mic.</b> Hold the phone where you will hold it on the air and talk normally for 4 seconds. Targets: speech <b>−24 to −12 dBFS</b>, peaks <b>−8 to −1 dBFS</b>, limiter working under 20 % of the time. Change Mic gain by the amount the report suggests and test again until it says <i>Good</i>.</li>
     <li><b>Noise.</b> If the report says <i>Noisy</i>, move to a quieter spot or closer to the mic first; then try Noise gate Light.</li>
     <li><b>Test through the node.</b> For an exact comparison, turn Automatic level off for a minute (Audio levels). <i>Came back</i> should be within about 6 dB of <i>Sent</i>. If every phone comes back quieter or louder by the same amount, use TX gain; if the radio side is off, use SysMon's Tune tab. Turn Automatic level back on.</li>
@@ -666,7 +712,7 @@ T41234</pre>
   </ol>
   <h2><span class="n">8.3</span>Receive, step by step</h2>
   <ol class="steps">
-    <li><b>The node first.</b> With the radio's own levels right (SysMon, Tune), the RX level on the Audio levels card should peak around −10 to −3 dBFS on a strong local station.</li>
+    <li><b>The node first.</b> With the radio's own levels right (SysMon, Tune), the RX level in Audio levels (RX card) should peak around −10 to −3 dBFS on a strong local station.</li>
     <li><b>Look at the spectrum.</b> A steady line or band below 300 Hz is a CTCSS tone or hum; with Cut below 300 Hz on it should be faint or gone. Thin bright lines right after transmissions are squelch tails: the gate should remove them.</li>
     <li><b>Leave Automatic level on.</b> If speech is still quiet (the Audio check says so), raise RX gain by the amount it suggests.</li>
     <li><b>Dropouts.</b> If audio breaks up on your connection, raise the Listen buffer a step.</li>
@@ -675,10 +721,15 @@ T41234</pre>
   <p>The quick tests show four seconds; the Audio check shows a few minutes of real use, with several stations and
     several of your own transmissions.</p>
   <ol class="steps">
-    <li>Setup tab, <b>Audio check</b> card: choose a length and press <b>Start check</b>.</li>
-    <li>Go to the Listen tab and use the node as usual: listen, talk, listen. The status line shows <span class="k">CHECK 2:13</span>; tap it to come back.</li>
+    <li>Setup tab, <b>Audio check</b> card: choose a length and press <b>Start check</b>. The screen is kept awake while a
+      check runs (a warning shows if the browser can't).</li>
+    <li>Go to the Listen tab and use the node as usual: listen, talk, listen. The status line shows <span class="k">CHECK 2:13</span>; tap it to come back.
+      With <b>Prompt me to talk during the check</b> on (the default), the page asks you to talk at 0:30 and every 2
+      minutes after, so the transmit side has real speech to measure.</li>
     <li>When it ends (or you press Stop), open the card. Each row is green, amber or red against its target, and
-      <b>What to change</b> lists suggestions with amounts.</li>
+      <b>What to change</b> lists suggestions with amounts, ordered by how much audio they affect: lost or distorted
+      audio first, then levels, then noise and filters. At most two carry <b>Apply</b> at once; the rest are marked
+      <i>Later</i>. Level suggestions wait for 5 seconds of speech.</li>
     <li>Press <b>Apply</b> on a suggestion to make the change (<b>Undo</b> puts it back), run another check, and press
       <b>Compare with last check</b> to see the difference.</li>
   </ol>
@@ -701,9 +752,50 @@ T41234</pre>
     <tr><td>Transmissions with gaps</td><td>none</td><td>Larger TX buffer; Wi-Fi</td></tr>
     <tr><td>Peak at the Pi</td><td>below −1 dBFS</td><td>Lower TX gain</td></tr>
   </table>
+  <p>Beyond the rows above, the report has:</p>
+  <ul>
+    <li><b>Per minute</b>: one bar per minute (up to 15) for speech level, noise floor, Pi load and dropouts, each on a
+      fixed scale so two checks can be compared by eye.</li>
+    <li><b>The Pi</b>: its temperature and any throttling, sampled every 10 seconds (kept in memory, not saved).</li>
+    <li><b>Transmit timing</b>: the push-to-talk round trip from the page, and the time from key to first audio on the Pi.</li>
+    <li><b>Node cross-check</b>: the node's own count of key-ups since it started (<code>rpt stats</code>) beside the
+      transmissions your phone made. If the format of <code>rpt stats</code> isn't recognised, the raw lines are shown instead.</li>
+    <li><b>Download report</b> saves the report as a JSON file on the phone, and <b>Compare with a saved report</b> loads
+      one and compares it with the current check. Nothing is kept on the Pi. (In Node Talker Mobile 0.3.1 the download
+      doesn't work; use <b>Copy report</b>.)</li>
+  </ul>
   <div class="call note"><span class="t">NOTE</span>The check keeps only numbers, never audio, and only in this browser.
     It carries on if you switch tabs or reload; time with the page closed or the phone asleep is shown as paused.</div>
-  <h2><span class="n">8.5</span>Common mistakes</h2>
+  <h2><span class="n">8.5</span>The tone test</h2>
+  <p>The Audio check measures real speech; the tone test measures the path itself. On the Audio check card, <b>Run tone
+    test</b> sends your station ID, a series of tones and the ID again through node 1921, listens to what comes back
+    from the node, and shows the response tone by tone: raw from the node, and after the Pi's RX cleanup. Use it to find
+    out which frequencies the radio path passes, what the cleanup does to them, and how long the round trip takes.</p>
+  <table>
+    <tr><th>Setting</th><th>What it does</th></tr>
+    <tr><td>Tone length</td><td>0.5, 1 (default) or 2 seconds for each tone.</td></tr>
+    <tr><td>Tones (Hz)</td><td>Blank uses 150, 300, 500, 1000, 1500, 2000, 2500, 3000 and 3400 Hz. Type your own list: up to 12 tones, each 100 to 3800 Hz.</td></tr>
+  </table>
+  <p>With the default settings the test keys the node for about 20 seconds: half a second of quiet (the noise floor), a Morse station ID
+    (<i>DE</i> and your callsign), the tones at −10 dBFS with a pause between, then the ID again. Your callsign comes from
+    the Digital card, or failing that from <code>USRP2M17.ini</code> or the Dashboard; the test refuses without one.</p>
+  <div class="call care"><span class="t">CAREFUL</span>The tone test transmits. It goes out over the air and to every link
+    on the node, like a Test through the node. It runs from the local network only (Run and Stop), refuses while the
+    channel has audio above the activity level or the node is already transmitting, and is limited to 60 seconds and to the
+    TX time-out less 5 seconds.</div>
+  <p>The report shows a one-line summary (whether a return was heard and its delay, the usable band, the gains in force and the raw noise floor) and a table with one row per tone:</p>
+  <table>
+    <tr><th>Column</th><th>Meaning</th></tr>
+    <tr><td>Sent dB</td><td>The level sent, after TX gain.</td></tr>
+    <tr><td>Raw dB · Raw vs sent</td><td>What came back from the node before cleanup, and how far that is from what was sent.</td></tr>
+    <tr><td>After cleanup dB · Cleanup effect</td><td>The same tone after the Pi's cleanup (measured 80 ms later when the gate is on, its delay), and the difference from raw.</td></tr>
+    <tr><td>Freq err Hz</td><td>How far the returned tone is from the one sent.</td></tr>
+    <tr><td>Drops</td><td>Breaks in the returned tone.</td></tr>
+  </table>
+  <p>The <i>usable band</i> is where the raw response stays within 6 dB of the 1 kHz tone (or of the strongest tone if 1 kHz
+    isn't in your list). Warnings appear under the table, for example when nothing came back above the noise floor or when
+    the delay can't be trusted. The report stays in memory on the Pi until the next test and is never saved to disk.</p>
+  <h2><span class="n">8.6</span>Common mistakes</h2>
   <ul>
     <li><b>Two automatic gains.</b> The browser's Automatic gain and the leveler fight; leave the browser's off.</li>
     <li><b>Mic gain into the limiter.</b> More mic gain past the point where the limiter works most of the time adds
@@ -797,6 +889,12 @@ T41234</pre>
     <tr><td>D-STAR</td><td>The reflector and module: <code>REF001 C</code> (kept as the tune string <code>REF001CL</code>).</td></tr>
     <tr><td>M17</td><td>The reflector and module: <code>M17-USA C</code>, or <code>M17-USA @ALL</code> (just <code>M17-USA</code> means every module).</td></tr>
   </table>
+  <p><b>Gain per favorite.</b> Each row has two small boxes, <b>RX dB</b> and <b>TX dB</b> (whole decibels; blank means
+    use the global setting). While that favorite is the active link, its values replace the global <b>Node to phone
+    (RX)</b> and <b>Mic to node (TX)</b> gains, even with <b>Adjust audio levels here</b> off. They go back to the global
+    values when you disconnect the favorite, connect another one, or restart Node Talker. Use them for a net that is
+    always quieter or louder than the rest. They are kept in the favorites file as <code>|rx=</code> and <code>|tx=</code>
+    after the row.</p>
   <h2><span class="n">10.2</span>The Digital card and DMR networks</h2>
   <p>The <b>Digital</b> card on the Setup tab shows who does the tuning (Solo, or the Dashboard), what was found
     (<code>dvswitch.sh</code>, Analog_Bridge, USRP2M17, <code>M17Hosts.json</code>) and the gateway services. It sets
@@ -804,7 +902,7 @@ T41234</pre>
     the USRP ports in <code>rpt.conf</code>, the callsign from <code>USRP2M17.ini</code>). <b>DMR networks</b> holds up
     to 10 networks, each a name, <code>address:port</code>, password and optional dashboard link; <b>Copy from Node
     Controller</b> adds the Dashboard's. The page never shows a password: leave it empty to keep the saved one.
-    <b>Favorites file</b> downloads or uploads <code>nodetalker_favorites.conf</code>; an upload with a bad line is
+    <b>Favorites file</b>, on the Favorites card, downloads or uploads <code>nodetalker_favorites.conf</code>; an upload with a bad line is
     refused whole.</p>
   <h2><span class="n">10.3</span>Connecting</h2>
   <p>Connect tab: pick a favorite and press <b>Connect</b>; it turns into <b>Disconnect</b> while that favorite is on.
@@ -833,8 +931,9 @@ T41234</pre>
     at a time; tuning one drops linked ASL and EchoLink favorites.</p>
   <h2><span class="n">10.4</span>The Tune card</h2>
   <p>For anything that isn't a favorite, laid out like the Dashboard's search cards (Figure 3.3):
-    <b>Mode</b> · <b>Network</b> (DMR) or <b>Module</b> (D-STAR, M17) · <b>Search</b> · the list · <b>Connect</b> ·
-    <b>LH</b> · <b>Save</b>, wrapping onto more lines on a phone, with <b>Disconnect</b> below.</p>
+    <b>Mode</b> · <b>Network</b> (DMR) or <b>Module</b> (D-STAR, M17) · <b>Search</b> · the list · <b>LH</b> ·
+    <b>Save</b> · <b>Connect</b>, wrapping onto more lines on a phone. <b>Connect</b> turns into <b>Disconnect</b> while
+    what you picked is linked.</p>
   <table>
     <tr><th>Mode</th><th>The list comes from</th><th>Search by</th></tr>
     <tr><td>ASL</td><td><code>/var/lib/asterisk/astdb.txt</code>, searched on the Pi as you type (2 characters or more, up to 200 matches)</td><td>Node number (a number alone matches nodes starting with it), call or place</td></tr>
@@ -853,10 +952,11 @@ T41234</pre>
       gets the same add / tune once / cancel question.</li>
     <li><b>LH</b> opens Last Heard: the network's link for DMR, the reflector's own link or address, or the AllStar
       stats page for an ASL node. Greyed out when there is none.</li>
-    <li><b>Save</b> adds the pick to the favorites (up to 15). <b>Disconnect</b> ends what DVSwitch or M17 has tuned, or,
-      for ASL and EchoLink, drops the link to the node picked or typed. The card shows what is tuned.</li>
-    <li>The card remembers its mode, network, module, search and pick on each phone; its spacing (gap, height, text)
-      is set in the Settings card.</li>
+    <li><b>Save</b> adds the pick to the favorites (up to 15). <b>Disconnect</b> (the Connect button while the pick is
+      linked) ends what DVSwitch or M17 has tuned, or, for ASL and EchoLink, drops the link to the node picked or typed.
+      The card shows what is tuned.</li>
+    <li>The card starts on the mode last tuned (ASL when there is none) and keeps your mode, network, module, search and
+      pick while the page stays open; its spacing (gap, height, text) is set in the Setup card.</li>
   </ul>
   <h2><span class="n">10.5</span>Links and Disconnect</h2>
   <p>The <b>Links</b> card at the top of the Setup tab lists the node's links, one per line, with the favorite's name.
@@ -878,6 +978,7 @@ T41234</pre>
     <tr><td>Phone calls</td><td>Depends on the browser</td><td>Receive pauses for the call, transmit unkeys</td></tr>
     <tr><td>Other apps' sound</td><td>Depends on the browser</td><td>Plays alongside music or video</td></tr>
     <tr><td>Spectrum on the Listen tab</td><td>Yes</td><td>Empty (the app plays the sound, not the page)</td></tr>
+    <tr><td>Download report (Audio check)</td><td>Saves a JSON file on the phone</td><td>Not yet: use Copy report</td></tr>
     <tr><td>Microphone processing</td><td>The page's leveler, filters and gate (section 6.1)</td><td>Android's echo and noise filter, plus the page's Mic gain</td></tr>
   </table>
   <h2><span class="n">11.2</span>Install and update</h2>
@@ -923,9 +1024,9 @@ T41234</pre>
   <h2><span class="n">11.5</span>How the chain changes in the app</h2>
   <p>The chain of chapter 4 stays the same on the Pi; only the end on your phone moves from the page into the app:</p>
   <ul>
-    <li><b>Receive.</b> When you press Listen, the app opens <code>/api/listen?fmt=s16</code> itself, in a background
+    <li><b>Receive.</b> When you press Connect feed, the app opens <code>/api/listen?fmt=s16</code> itself, in a background
       service with a notification, and plays it through Android's audio with its own receive buffer. It keeps Wi-Fi
-      awake and reconnects by itself (after 1 s, then up to every 10 s) if the stream drops. The page's Listen button,
+      awake and reconnects by itself (after 1 s, then up to every 10 s) if the stream drops. The page's Connect feed button,
       volume slider, level bar and message line follow the app.</li>
     <li><b>Transmit.</b> The app opens the talk channel <code>/api/talk</code> itself (with the same login), so the
       page's push-to-talk button keys through the app. It records the microphone at 8 kHz (or at 16 or 48 kHz and
@@ -954,11 +1055,11 @@ T41234</pre>
     <tr><td>Audio stops with the screen off</td><td>Battery button: set the app to Unrestricted. Check that Audio is App audio.</td></tr>
     <tr><td>Audio breaks up</td><td>Raise the Receive buffer.</td></tr>
     <tr><td>Push-to-talk asks for the microphone</td><td>Allow it, then press push-to-talk again.</td></tr>
-    <tr><td><i>Log in on the page first</i></td><td>Log in on the page; or turn on Listen without logging in (Settings card) for listen-only use.</td></tr>
+    <tr><td><i>Log in on the page first</i></td><td>Log in on the page; or turn on Listen without logging in (Setup card) for listen-only use.</td></tr>
     <tr><td>Transmit sounds choppy or muffled</td><td>Turn the phone's echo and noise filter off (Audio settings).</td></tr>
     <tr><td><i>Certificate changed</i></td><td>Compare the new fingerprint on the Pi; trust it only if Node Talker made a new certificate.</td></tr>
   </table>
-  <div class="call note"><span class="t">NOTE</span>Still to come: push-to-talk on the volume keys, and Bluetooth headset
+  <div class="call note"><span class="t">NOTE</span>Still to come: push-to-talk on the volume keys, the app's own settings in the Phone card (section 7.9), saving Audio check reports, and Bluetooth headset
     microphones and buttons. Test builds use a debug key; when signed release builds start, uninstall the test build
     once more.</div>
 </section>
@@ -970,7 +1071,7 @@ T41234</pre>
     ASL-DVS tab) show what Node Talker and the node are doing.</p>
   <h3>No audio at all</h3>
   <ol class="steps">
-    <li>Status line: <i>no feed yet</i> means Asterisk isn't sending. Receive card: is the line on your node? Send its audio here, then Restart Asterisk.</li>
+    <li>Status line: <i>no feed yet</i> means Asterisk isn't sending. RX card, Node receive: is the line on your node? Send its audio here, then Restart Asterisk.</li>
     <li>Feed green but silent: is the RX light on? Is Listen showing <i>Listening.</i>? Check the volume and the phone's own volume.</li>
     <li><i>Tap anywhere to start listening</i>: the browser is holding sound until you tap.</li>
     <li><i>All 3 listener slots are in use</i>: raise Max listeners or wait.</li>
@@ -994,7 +1095,8 @@ T41234</pre>
     <tr><th>Message</th><th>Fix</th></tr>
     <tr><td>The node is busy</td><td>Wait for quiet, or turn off the busy lockout if a constant noise keeps the node busy.</td></tr>
     <tr><td>Someone else is transmitting</td><td>Wait; the button shows Busy with who and how long.</td></tr>
-    <tr><td>Node 1921 is not set up / not linked yet</td><td>Transmit card: Add node 1921, Restart Asterisk, wait 20 s.</td></tr>
+    <tr><td>Node 1921 is not set up / not linked yet</td><td>TX card, Transmit node: Add node 1921, Restart Asterisk, wait 20 s.</td></tr>
+    <tr><td>Tone test: the channel is busy / a callsign is needed / the test would last too long</td><td>The test waits for 3 s without audio above the activity level on the node, so wait for quiet (a constant noise above that level keeps it refusing). It identifies itself on the air, so set your callsign on the Digital card. It is also limited to 60 s and to the TX time-out less 5 s: use fewer tones or shorter ones.</td></tr>
     <tr><td>Push-to-talk needs the https:// page</td><td>Turn HTTPS on and open the <code>https://</code> address, or use Node Talker Mobile with app audio (chapter 11).</td></tr>
     <tr><td>Microphone: Permission denied</td><td>Allow the microphone for the page in the browser's site settings.</td></tr>
   </table>
@@ -1071,29 +1173,30 @@ althangtime = 0
 holdofftelem = 1
 telemdefault = 0
 nounkeyct = 1
+idrecording = |t(0,0,10,0)
 
 [nodes]
 1921 = radio@127.0.0.1/1921,NONE</pre>
   <h2><span class="n">14.4</span>Settings keys (nodetalker.conf)</h2>
   <table>
     <tr><th>Key</th><th>Default</th><th>Range</th><th>Page</th></tr>
-    <tr><td class="mono">port</td><td>8993</td><td>1024–65535</td><td>Settings: Web port</td></tr>
-    <tr><td class="mono">udp_port</td><td>6200</td><td>1024–65535</td><td>Settings: UDP port</td></tr>
-    <tr><td class="mono">node</td><td>(empty)</td><td>node number</td><td>Receive: Send its audio here</td></tr>
-    <tr><td class="mono">max_listeners</td><td>3</td><td>1–10</td><td>Settings</td></tr>
-    <tr><td class="mono">public_listen</td><td>false</td><td>bool</td><td>Settings: Listen without logging in</td></tr>
-    <tr><td class="mono">https</td><td>true</td><td>bool</td><td>Settings: HTTPS</td></tr>
-    <tr><td class="mono">tot_sec</td><td>120</td><td>30–600</td><td>Settings: TX time-out</td></tr>
-    <tr><td class="mono">busy_lockout</td><td>true</td><td>bool</td><td>Settings</td></tr>
-    <tr><td class="mono">tune_enabled</td><td>false</td><td>bool</td><td>Audio levels: Adjust audio levels here</td></tr>
-    <tr><td class="mono">tx_gain_db / rx_gain_db</td><td>0</td><td>−12–12</td><td>Audio levels</td></tr>
-    <tr><td class="mono">jitter_ms</td><td>250</td><td>100–1500</td><td>Audio levels: Listen buffer</td></tr>
-    <tr><td class="mono">tx_buffer_ms</td><td>120</td><td>40–400</td><td>Audio levels: TX buffer</td></tr>
-    <tr><td class="mono">rx_hpf / rx_agc</td><td>true</td><td>bool</td><td>Audio levels: RX cleanup</td></tr>
-    <tr><td class="mono">rx_gate</td><td>1</td><td>0 off, 1 light, 2 strong</td><td>Audio levels: Squelch-tail gate</td></tr>
-    <tr><td class="mono">ptt_mode</td><td>hold</td><td>hold, tap</td><td>Settings: the copy of Push-to-talk on this phone</td></tr>
-    <tr><td class="mono">ptt_guard_sec</td><td>60</td><td>30, 60, 90, 120, 180</td><td>Settings: Guard timer (copy)</td></tr>
-    <tr><td class="mono">ptt_rx_gap</td><td>false</td><td>bool</td><td>Settings: Wait 4 s after receive (copy)</td></tr>
+    <tr><td class="mono">port</td><td>8993</td><td>1024–65535</td><td>Setup card: Web port</td></tr>
+    <tr><td class="mono">udp_port</td><td>6200</td><td>1024–65535</td><td>Setup card: UDP port</td></tr>
+    <tr><td class="mono">node</td><td>(empty)</td><td>node number</td><td>RX card: Send its audio here</td></tr>
+    <tr><td class="mono">max_listeners</td><td>3</td><td>1–10</td><td>Setup card</td></tr>
+    <tr><td class="mono">public_listen</td><td>false</td><td>bool</td><td>Setup card: Listen without logging in</td></tr>
+    <tr><td class="mono">https</td><td>true</td><td>bool</td><td>Setup card: HTTPS</td></tr>
+    <tr><td class="mono">tot_sec</td><td>120</td><td>30–600</td><td>Setup card: TX time-out</td></tr>
+    <tr><td class="mono">busy_lockout</td><td>true</td><td>bool</td><td>Setup card</td></tr>
+    <tr><td class="mono">tune_enabled</td><td>false</td><td>bool</td><td>TX card: Adjust audio levels here</td></tr>
+    <tr><td class="mono">tx_gain_db / rx_gain_db</td><td>0</td><td>−12–12</td><td>Audio levels (RX and TX cards)</td></tr>
+    <tr><td class="mono">jitter_ms</td><td>250</td><td>100–1500</td><td>RX card: Listen buffer</td></tr>
+    <tr><td class="mono">tx_buffer_ms</td><td>120</td><td>40–400</td><td>TX card: TX buffer</td></tr>
+    <tr><td class="mono">rx_hpf / rx_agc</td><td>true</td><td>bool</td><td>RX card: RX cleanup</td></tr>
+    <tr><td class="mono">rx_gate</td><td>1</td><td>0 off, 1 light, 2 strong</td><td>RX card: Squelch-tail gate</td></tr>
+    <tr><td class="mono">ptt_mode</td><td>hold</td><td>hold, tap</td><td>TX card: the copy of Push-to-talk on this phone</td></tr>
+    <tr><td class="mono">ptt_guard_sec</td><td>60</td><td>30, 60, 90, 120, 180</td><td>TX card: Guard timer (copy)</td></tr>
+    <tr><td class="mono">ptt_rx_gap</td><td>false</td><td>bool</td><td>TX card: Quick Key Guard (copy)</td></tr>
     <tr><td class="mono">allow_wan</td><td>false</td><td>bool</td><td>none (chapter 13)</td></tr>
   </table>
   <h2><span class="n">14.5</span>API</h2>
@@ -1101,13 +1204,15 @@ nounkeyct = 1
     <tr><th>Request</th><th>What</th></tr>
     <tr><td class="mono">GET /api/health</td><td>Version; no login. Used by the watchdog and SysMon.</td></tr>
     <tr><td class="mono">GET /api/whoami</td><td>Logged in?, public listening, Dashboard and SysMon ports; no login.</td></tr>
-    <tr><td class="mono">GET /api/status</td><td>Feed, levels, listeners, links, transmit state, Pi load (login, or public listening)</td></tr>
+    <tr><td class="mono">GET /api/status</td><td>Feed, levels, listeners, links, transmit state, Pi load (login, or public listening); the Pi's temperature and throttling only with a login</td></tr>
     <tr><td class="mono">GET /api/listen[?fmt=s16]</td><td>The audio stream (login, or public listening)</td></tr>
     <tr><td class="mono">GET /api/talk</td><td>WebSocket for push-to-talk (login, same origin)</td></tr>
     <tr><td class="mono">GET /api/node · /api/tx · /api/favorites · /api/dash-favorites · /api/digital · /api/favorites-file · /api/config · /api/log</td><td>Setup data (login)</td></tr>
+    <tr><td class="mono">GET /api/node/counters</td><td>The node's key-up count and transmit time from <code>rpt stats</code> (login); used by the Audio check's node cross-check</td></tr>
+    <tr><td class="mono">GET /api/tonetest/status</td><td>Progress and the last report of the tone test (login)</td></tr>
     <tr><td class="mono">GET /api/tune-list?mode= · /api/tune-search?mode=&amp;q=</td><td>The Tune card's lists and the ASL and EchoLink search (login)</td></tr>
     <tr><td class="mono">POST /api/login · /api/logout</td><td>Session</td></tr>
-    <tr><td class="mono">POST /api/config · /api/node/enable · /api/node/disable · /api/tx/enable · /api/tx/disable · /api/favorites · /api/connect · /api/disconnect · /api/tune · /api/tune/save · /api/tune/disconnect · /api/digital · /api/dmr-networks · /api/dmr-networks/import · /api/favorites-file · /api/asterisk/restart · /api/system/reboot · /api/system/shutdown</td><td>Changes (login; header <code>X-Requested-With: XMLHttpRequest</code>)</td></tr>
+    <tr><td class="mono">POST /api/config · /api/node/enable · /api/node/disable · /api/tx/enable · /api/tx/disable · /api/favorites · /api/connect · /api/disconnect · /api/tune · /api/tune/save · /api/tune/disconnect · /api/digital · /api/dmr-networks · /api/dmr-networks/import · /api/tonetest/start · /api/tonetest/stop · /api/favorites-file · /api/asterisk/restart · /api/system/reboot · /api/system/shutdown</td><td>Changes (login; header <code>X-Requested-With: XMLHttpRequest</code>)</td></tr>
   </table>
   <h2><span class="n">14.6</span>Version history (highlights)</h2>
   <table>
@@ -1132,6 +1237,14 @@ nounkeyct = 1
     <tr><td>0.6.8–0.6.9</td><td>Tune card (every mode, with ASL and EchoLink search); Links card moved to the Setup tab</td></tr>
     <tr><td>0.6.10–0.6.11</td><td>Receive and transmit through Node Talker Mobile (app audio)</td></tr>
     <tr><td>0.6.12</td><td>Spectrum is bars only</td></tr>
+    <tr><td>0.6.13–0.8.x</td><td>No per-version history was kept for these. Changes between 0.6.12 and 0.9.0 that the notes of 0.9.x do not cover include gain per favorite, Quick Key Guard (was Wait 4 s after receive), the Connect feed button and the regrouping of the Setup tab into its present cards</td></tr>
+    <tr><td>0.9.0–0.9.3</td><td>Tone test (Pi side, then in the page)</td></tr>
+    <tr><td>0.9.4–0.9.7</td><td>Audio check: dropout classes, per-minute strip, Pi temperature, PTT round trip, node cross-check, report download and compare</td></tr>
+    <tr><td>0.9.8–0.9.12</td><td>Tone test busy check fixed; Favorites and Digital become cards of their own; Copy all on every card; <code>rpt stats</code> reads the count since start-up</td></tr>
+    <tr><td>0.9.13–0.9.17</td><td>The link line shows the live link (ASL node, DVSwitch or M17 bridge)</td></tr>
+    <tr><td>0.9.20</td><td>RX cleanup: gate tells hiss from tones, keeps 40 ms before opening and fades in; TX fades at a gap; Phone mic filter</td></tr>
+    <tr><td>0.9.21</td><td>Settings that can't be used are grayed out; the Phone card shows the app</td></tr>
+    <tr><td>0.9.22</td><td>The first build in the repository: <code>ptt_rx_gap</code> off by default; Pi health only with a login; the tone test is local-only for Stop too and limited by the TX time-out; node 1921 gets a silent ID</td></tr>
   </table>
   <table>
     <tr><th>Node Talker Mobile</th><th>What arrived</th></tr>
