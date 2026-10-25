@@ -1,6 +1,38 @@
 # instmon changelog
 
-Current file: `instmon_v2_74_0_20261025.py`. Newest entries first.
+Current file: `instmon_v2_75_0_20261025.py`. Newest entries first.
+
+## 2.75.0 (2026-10-25)
+
+- **Slow links (dial-up speed) work.** GitHub downloads from a link of a few KB
+  a second now finish instead of failing. The old limits cut each file off at
+  60 seconds and a whole check off at 4 minutes, which a 56k modem could not meet.
+  - A file fails only after **60 seconds with no data** (`INSTMON_GITHUB_TIMEOUT_SEC`,
+    default now 60). The total time for a file is sized from its maximum size, at
+    least 2 minutes and at most an hour.
+  - A check fails only after **4 minutes with no progress** from any GitHub
+    transfer (`INSTMON_GH_CHECK_LIMIT_SEC`), not 4 minutes of total time.
+- **The version check reads only the top of each file.** It asks GitHub for the
+  first 8 KB (an HTTP Range request) and reads the `VERSION` line there. A file
+  whose version is not in those 8 KB is downloaded whole, as before. Nothing
+  unverified is installed: an update still downloads the whole file and checks
+  it against GitHub's blob ID.
+- **The version check survives a restart.** The version of each GitHub file is
+  saved in `/etc/asl_dvs/instmon_version_cache.json`, keyed by blob ID, so a
+  restart does not download the files again.
+- **Slow link detection.** instmon times each GitHub download of 16 KB or more
+  and keeps the last five rates. A median under 20 KB/s is a slow link, saved in
+  `/etc/asl_dvs/instmon_link.json`. A median back above that is normal again.
+  Nothing needs to be turned on.
+  - On a slow link the manuals and the Node Talker Mobile APK are not
+    downloaded automatically when instmon starts. Press **Get from GitHub** on
+    the Manuals card, or **Check** on the Node Talker Mobile row. Full Update and
+    every button still work.
+- **Progress shows.** The GitHub panel shows the file being fetched, how much has
+  arrived, and the rate, for example "Fetching instmon_v2_75_0_20261025.py: 340 of
+  559 KB, 4.1 KB/s". On a slow link the panel also says so.
+- instmon is a common tool: the same file serves the full and the Pi Zero 2 W
+  builds.
 
 ## 2.74.0 (2026-10-25)
 

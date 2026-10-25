@@ -36,7 +36,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.74.0"
+VERSION ="2.75.0"
 DATE_STR ="2026-10-25"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4315,7 +4315,7 @@ GITHUB_BRANCH =os .environ .get ("INSTMON_GITHUB_BRANCH","main")
 GITHUB_RAW_BASE =f"https://raw.githubusercontent.com/{GITHUB_REPO }/{GITHUB_BRANCH }"
 GITHUB_API_LIST_URL =(f"https://api.github.com/repos/{GITHUB_REPO }/contents"
 f"?ref={urllib .parse .quote (GITHUB_BRANCH ,safe ='')}")
-GITHUB_TIMEOUT_SEC =int (os .environ .get ("INSTMON_GITHUB_TIMEOUT_SEC","15"))
+GITHUB_TIMEOUT_SEC =int (os .environ .get ("INSTMON_GITHUB_TIMEOUT_SEC","60"))
 GITHUB_LIST_MAX_BYTES =1024 *1024 
 GITHUB_FILE_MAX_BYTES =MAX_UPLOAD_BYTES 
 GITHUB_MAX_ENTRIES =1000 
@@ -4355,10 +4355,24 @@ _gh_state ={
 }
 
 GH_CHECK_LIMIT_SEC =int (os .environ .get ("INSTMON_GH_CHECK_LIMIT_SEC","240"))
+GH_CHECK_WATCH_SEC = 15
+GH_PROBE_BYTES = 8192
+GITHUB_CEILING_MIN_SEC = 120
+GITHUB_CEILING_MAX_SEC = 3600
+LINK_MIN_SAMPLE_BYTES = 16 * 1024
+LINK_SLOW_BPS = 20 * 1024
+LINK_WINDOW = 5
+LINK_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_link.json")
+GH_VERSION_CACHE_PATH = os.path.join(CONFIG_DIR, "instmon_version_cache.json")
 
 _gh_version_cache ={}
+_gh_version_cache_loaded = [False]
 _GH_VERSION_CACHE_MAX =200 
 _gh_last_cands = []
+_gh_transfers = {}
+_gh_idle_mark = [0.0]
+_link_lock = threading.Lock()
+_link = None
 
 def _gh_event (message ,level ):
     log_event (message ,level )
@@ -4469,39 +4483,107 @@ def _gh_stable_cands ():
         "url":f"https://raw.githubusercontent.com/{GITHUB_REPO }/{commit }/{urllib .parse .quote (name )}"})
     return out ,skipped 
 
-def _gh_fetch_https (url ,max_bytes ):
+def _link_load():
+    global _link
+    if _link is None:
+        try:
+            with open(LINK_STATE_PATH) as fh:
+                _link = [float(r) for r in json.load(fh).get("rates", [])][-LINK_WINDOW:]
+        except (OSError, ValueError, TypeError, AttributeError):
+            _link = []
+    return _link
+
+def _link_median(rates):
+    ordered = sorted(rates)
+    mid = len(ordered) // 2
+    return ordered[mid] if len(ordered) % 2 else (ordered[mid - 1] + ordered[mid]) / 2
+
+def _link_is_slow_now(rates):
+    return len(rates) >= 2 and _link_median(rates) < LINK_SLOW_BPS
+
+def link_is_slow():
+    with _link_lock:
+        return _link_is_slow_now(_link_load())
+
+def link_rate_bps():
+    with _link_lock:
+        rates = _link_load()
+        return _link_median(rates) if rates else 0
+
+def link_record(nbytes, seconds):
+    global _link
+    if nbytes < LINK_MIN_SAMPLE_BYTES or seconds <= 0:
+        return
+    with _link_lock:
+        rates = _link_load()
+        was_slow = _link_is_slow_now(rates)
+        rates = (rates + [nbytes / seconds])[-LINK_WINDOW:]
+        _link = rates
+        now_slow = _link_is_slow_now(rates)
+        median = _link_median(rates)
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            tmp = f"{LINK_STATE_PATH}.{os.getpid()}.tmp"
+            with open(tmp, "w") as fh:
+                json.dump({"rates": rates}, fh)
+            os.replace(tmp, LINK_STATE_PATH)
+        except OSError as exc:
+            log_event(f"Link speed: could not save {LINK_STATE_PATH}: {exc}", "warn")
+    if now_slow and not was_slow:
+        log_event(f"Slow link detected (about {median / 1024:.0f} KB/s from GitHub) -- automatic manual "
+                  "and Node Talker Mobile downloads are paused; press Get from GitHub to fetch them", "warn")
+    elif was_slow and not now_slow:
+        log_event(f"Link speed is back to normal (about {median / 1024:.0f} KB/s from GitHub)", "ok")
+
+def _gh_fetch_https (url ,max_bytes ,head_bytes =None ):
     if not url .lower ().startswith ("https://"):
         raise GhRejected ("the GitHub address must start with https://")
     if not _GH_REPO_RE .match (GITHUB_REPO ):
         raise GhRejected (f"'{GITHUB_REPO }' is not an owner/repo name")
     shown =url .split ("?",1 )[0 ].rsplit ("/",1 )[-1 ]or url 
-    req =urllib .request .Request (url ,headers ={
+    headers ={
     "User-Agent":f"instmon/{VERSION }",
     "Accept":"application/vnd.github+json"if "api.github.com"in url else "*/*",
     "Cache-Control":"no-cache",
-    })
+    }
+    if head_bytes :
+        headers ["Range"]=f"bytes=0-{head_bytes -1 }"
+    req =urllib .request .Request (url ,headers =headers )
     ctx =ssl .create_default_context ()
-    deadline =time .monotonic ()+GITHUB_TIMEOUT_SEC *4 
+    started =time .monotonic ()
+    ceiling =min (GITHUB_CEILING_MAX_SEC ,max (GITHUB_CEILING_MIN_SEC ,max_bytes //1024 ))
+    deadline =started +ceiling 
+    ident =threading .get_ident ()
+    _gh_transfers [ident ]={"name":shown ,"done":0 ,"total":None ,"started":started }
+    _gh_idle_mark [0 ]=started 
     try :
         with urllib .request .urlopen (req ,timeout =GITHUB_TIMEOUT_SEC ,context =ctx )as resp :
             if not resp .geturl ().lower ().startswith ("https://"):
                 raise GhRejected ("GitHub redirected the download off HTTPS")
             length =resp .headers .get ("Content-Length")
-            if length and length .isdigit ()and int (length )>max_bytes :
-                raise GhRejected (f"{shown } is larger than the {max_bytes //1024 } KB limit")
+            if length and length .isdigit ():
+                _gh_transfers [ident ]["total"]=int (length )
+                if not head_bytes and int (length )>max_bytes :
+                    raise GhRejected (f"{shown } is larger than the {max_bytes //1024 } KB limit")
             chunks =[]
             total =0 
             while True :
                 if time .monotonic ()>deadline :
                     raise GhRejected (f"download of {shown } took too long")
-                chunk =resp .read (65536 )
+                chunk =resp .read1 (65536 )
                 if not chunk :
                     break 
                 total +=len (chunk )
-                if total >max_bytes :
+                _gh_transfers [ident ]["done"]=total 
+                _gh_idle_mark [0 ]=time .monotonic ()
+                if not head_bytes and total >max_bytes :
                     raise GhRejected (f"{shown } is larger than the {max_bytes //1024 } KB limit")
                 chunks .append (chunk )
-            return b"".join (chunks )
+                if head_bytes and total >=head_bytes :
+                    break 
+            if not head_bytes :
+                link_record (total ,time .monotonic ()-started )
+            return b"".join (chunks )[:head_bytes ]if head_bytes else b"".join (chunks )
     except GhRejected :
         raise 
     except urllib .error .HTTPError as exc :
@@ -4520,6 +4602,8 @@ def _gh_fetch_https (url ,max_bytes ):
         raise GhRejected (f"GitHub did not answer within {GITHUB_TIMEOUT_SEC }s")
     except (OSError ,http .client .HTTPException ,ValueError )as exc :
         raise GhRejected (f"download of {shown } failed: {exc }")
+    finally :
+        _gh_transfers .pop (ident ,None )
 
 _gh_fetch_impl =_gh_fetch_https 
 
@@ -4707,6 +4791,10 @@ def _docs_first_fetch_loop():
     for delay in _DOCS_FIRST_FETCH_DELAYS:
         time.sleep(delay)
         if os.path.exists(_DOCS_FETCHED_PATH):
+            return
+        if link_is_slow():
+            log_event("Manuals: not downloaded automatically on a slow link -- press Get from GitHub "
+                      "on the Manuals card", "warn")
             return
         if not _docs_claim():
             continue
@@ -4968,6 +5056,10 @@ def _app_first_fetch_loop():
         time.sleep(delay)
         if os.path.exists(_APP_FETCHED_PATH):
             return
+        if link_is_slow():
+            log_event("Node Talker Mobile: not downloaded automatically on a slow link -- press Check "
+                      "on its row in Components", "warn")
+            return
         if not _app_claim():
             continue
         log_event(f"Node Talker Mobile: first download from {_gh_source_label()}", "info")
@@ -5043,26 +5135,61 @@ def _gh_local_files (category ,glob ):
         out .append ((n ,ver ,_version_sort_key (ver ),full ))
     return out 
 
+def _gh_version_cache_load ():
+    if _gh_version_cache_loaded [0 ]:
+        return
+    _gh_version_cache_loaded [0 ]=True 
+    try :
+        with open (GH_VERSION_CACHE_PATH )as fh :
+            data =json .load (fh )
+    except (OSError ,ValueError ):
+        return
+    if not isinstance (data ,dict ):
+        return
+    for blob ,ver in data .items ():
+        if isinstance (blob ,str )and _GH_SHA1_RE .match (blob )and (ver is None or isinstance (ver ,str )):
+            _gh_version_cache [blob ]=ver 
+
+def _gh_version_cache_save ():
+    try :
+        os .makedirs (CONFIG_DIR ,exist_ok =True )
+        tmp =f"{GH_VERSION_CACHE_PATH }.{os .getpid ()}.tmp"
+        with open (tmp ,"w")as fh :
+            json .dump (dict (_gh_version_cache ),fh )
+        os .replace (tmp ,GH_VERSION_CACHE_PATH )
+    except OSError as exc :
+        log_event (f"GitHub: could not save the version cache: {exc }","warn")
+
+def _gh_version_head (text ):
+    m =re .search (r'^\s*VERSION\s*=\s*"([^"]+)"',text ,re .MULTILINE )
+    return m .group (1 )if m else None 
+
 def _gh_version_of (cand ,local ):
     for _n ,ver ,_key ,full in local :
         if ver and _gh_local_blob_id (full )==cand ["blob"]:
             return ver 
+    _gh_version_cache_load ()
     if cand ["blob"]in _gh_version_cache :
         cached =_gh_version_cache [cand ["blob"]]
         if cached is None :
             raise GhRejected ("no version line found in the file")
         return cached 
-    data =_gh_fetch_impl (_gh_entry_url (cand ),GITHUB_FILE_MAX_BYTES )
-    if _git_blob_id (data )!=cand ["blob"]:
-        raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
-    try :
-        text =data .decode ("utf-8")
-    except UnicodeDecodeError :
-        raise GhRejected ("not UTF-8 text")
-    ver ,_si ,_su =_scan_header_text (text )
+    url =_gh_entry_url (cand )
+    head =_gh_fetch_https (url ,GH_PROBE_BYTES ,head_bytes =GH_PROBE_BYTES ).decode ("utf-8","replace")
+    ver =_gh_version_head (head )
+    if ver is None :
+        data =_gh_fetch_impl (url ,GITHUB_FILE_MAX_BYTES )
+        if _git_blob_id (data )!=cand ["blob"]:
+            raise GhRejected ("the download did not match GitHub's file list (changed mid-check?)")
+        try :
+            text =data .decode ("utf-8")
+        except UnicodeDecodeError :
+            raise GhRejected ("not UTF-8 text")
+        ver ,_si ,_su =_scan_header_text (text )
     if len (_gh_version_cache )>=_GH_VERSION_CACHE_MAX :
         _gh_version_cache .clear ()
     _gh_version_cache [cand ["blob"]]=ver or None 
+    _gh_version_cache_save ()
     if not ver :
         raise GhRejected ("no version line found in the file")
     return ver 
@@ -5212,11 +5339,22 @@ def _gh_check_timeout (gen ):
         if not _gh_check_current (gen ):
             return 
         _gh_state ["gen"]+=1 
-        msg =(f"GitHub did not finish answering within {GH_CHECK_LIMIT_SEC //60 } min -- "
+        msg =(f"GitHub stopped answering for {GH_CHECK_LIMIT_SEC //60 } min -- "
         "check this node's internet connection, then press Check GitHub again")
         _gh_state .update (phase ="error",error =msg ,entries =[],started_at =None ,
         checked_at =datetime .now ().strftime ("%Y-%m-%d %H:%M"))
     _gh_event (f"GitHub check failed: {msg }","err")
+
+def _gh_check_watch (gen ):
+    while True :
+        time .sleep (GH_CHECK_WATCH_SEC )
+        with _gh_lock :
+            current =_gh_check_current (gen )
+        if not current :
+            return 
+        if time .monotonic ()-_gh_idle_mark [0 ]>GH_CHECK_LIMIT_SEC :
+            _gh_check_timeout (gen )
+            return 
 
 def gh_start_check ():
     with _gh_lock :
@@ -5230,9 +5368,8 @@ def gh_start_check ():
         _gh_state ["error"]=None 
         _gh_state ["started_at"]=time .monotonic ()
     log_event (f"GitHub check started ({_gh_source_label ()})","info")
-    timer =threading .Timer (GH_CHECK_LIMIT_SEC ,_gh_check_timeout ,args =(gen ,))
-    timer .daemon =True 
-    timer .start ()
+    _gh_idle_mark [0 ]=time .monotonic ()
+    threading .Thread (target =_gh_check_watch ,args =(gen ,),daemon =True ).start ()
     threading .Thread (target =_gh_check_bg ,args =(gen ,),daemon =True ).start ()
     return True ,"Checking GitHub -- results appear in each library group."
 
@@ -5379,7 +5516,25 @@ def _gh_group_html (category ):
         f'{action }</div>')
     return '<div class="gh-rows">'+"".join (rows )+"</div>"
 
+def _gh_live_html ():
+    lines =[]
+    active =list (_gh_transfers .values ())
+    if active :
+        t =active [-1 ]
+        elapsed =max (time .monotonic ()-t ["started"],0.1 )
+        size =f" of {t ['total']//1024 } KB"if t ["total"]else ""
+        lines .append (f"Fetching {esc (t ['name'])}: {t ['done']//1024 } KB{size }, "
+                       f"{t ['done']/elapsed/1024 :.1f} KB/s")
+    if link_is_slow ():
+        lines .append (f'<span style="color:var(--amber)">Slow link (about {link_rate_bps ()/1024 :.0f} KB/s from GitHub). '
+                       "Downloads of the manuals and Node Talker Mobile are not automatic: press Get from GitHub "
+                       "on the Manuals card, or Check on the Node Talker Mobile row.</span>")
+    return "".join (f'<div class="small">{l }</div>'for l in lines )
+
 def _gh_summary_html ():
+    return _gh_summary_core ()+_gh_live_html ()
+
+def _gh_summary_core ():
     with _gh_lock :
         phase =_gh_state ["phase"]
         err =_gh_state ["error"]
