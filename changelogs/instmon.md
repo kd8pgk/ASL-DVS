@@ -1,6 +1,28 @@
 # instmon changelog
 
-Current file: `instmon_v2_73_0_20261021.py`. Newest entries first.
+Current file: `instmon_v2_74_0_20261025.py`. Newest entries first.
+
+## 2.74.0 (2026-10-25)
+
+- **Node Talker Mobile (the Android app) is a row in Components.** instmon
+  downloads the newest `android-v…` release's APK from GitHub into the library
+  (`/etc/asl_dvs/instmon_library/apps/`) and serves it to phones. Nothing is
+  installed on the Pi, and the app is not part of Full Update or the stable and
+  testing channels.
+  - It is fetched once on its own a few minutes after instmon starts
+    (pre-releases count, as every build is one today); after that, **Check
+    GitHub** on the row looks for a newer one and downloads it. Only the newest
+    APK is kept. **Delete** removes it, and it stays gone until you press Check.
+  - Every download is checked before it is saved: GitHub's size and checksum,
+    that it is a zip with a manifest and code, and that the manifest names
+    Node Talker Mobile's package.
+  - **Download APK** on the row sends the file as an Android package (behind the
+    same login as the rest of the page). On the phone, open this page, log in,
+    tap it, and Android installs it (the browser asks once to allow installs).
+    Updates install over the old app.
+  - The apps folder is left out of the full backup.
+- instmon is a common tool: the same file serves the full and the Pi Zero 2 W
+  builds.
 
 ## 2.73.0 (2026-10-21)
 
