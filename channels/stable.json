@@ -47,13 +47,13 @@
    "version": "9.3.90-pi02w"
   },
   "nodetalker": {
-   "blob": "81e38d9e4adac396d308938b315277227d589ebb",
-   "commit": "bbe31ca4aced1131a10c4e555b327f37b4a0425c",
-   "file": "nodetalker_v0_6_8_20261021.py",
-   "landed": "2026-10-21T12:24:04Z",
-   "promoted": "2026-10-24T12:24:04Z",
+   "blob": "092dc0529c60f248e77e9c04690f46172f916cce",
+   "commit": "ab7a4312bc55ccec0a3a84d5030d671ad29da4d6",
+   "file": "nodetalker_v0_6_9_20261021.py",
+   "landed": "2026-10-21T13:04:54Z",
+   "promoted": "2026-10-25T20:09:30Z",
    "reason": "count",
-   "version": "0.6.8"
+   "version": "0.6.9"
   },
   "sysmon": {
    "blob": "b5779da88142f12b28ce06895f14fe506406f54e",
@@ -72,6 +72,15 @@
    "promoted": "2026-10-21T12:02:32Z",
    "reason": "count",
    "version": "6.13.72-pi02w"
+  },
+  "wifi_menu": {
+   "blob": "2db1975c837b94b80fa52dd7016b52c3ea943ad3",
+   "commit": "3aed893c7527fedded46d3e6c32db9b5a2df2dee",
+   "file": "wifi_menu_v3_1_20261011.sh",
+   "landed": "2026-10-11T20:02:25Z",
+   "promoted": "2026-10-25T20:02:25Z",
+   "reason": "age",
+   "version": "3.1"
   },
   "wifimon": {
    "blob": "26fe2ed0c2821c6b7097f3bd887e610177ab5de2",
