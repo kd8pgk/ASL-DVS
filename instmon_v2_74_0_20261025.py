@@ -6,6 +6,7 @@ import fcntl
 import fnmatch
 import hashlib
 import hmac 
+import io
 import html 
 import http .client 
 import http .server 
@@ -35,8 +36,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.73.0"
-DATE_STR ="2026-10-21"
+VERSION ="2.74.0"
+DATE_STR ="2026-10-25"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -132,6 +133,7 @@ WantedBy=multi-user.target
 LIBRARY_DIR =os .environ .get ("INSTMON_LIBRARY_DIR","/etc/asl_dvs/instmon_library")
 CONFIG_DIR =os .environ .get ("INSTMON_CONFIG_DIR","/etc/asl_dvs")
 DOCS_DIR = os.path.join(LIBRARY_DIR, "docs")
+APP_DIR = os.path.join(LIBRARY_DIR, "apps")
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
 NODELISTEN_CONFIGS =(("nodetalker_favorites*.conf","nodetalker_favorites.conf"),("nodelisten_favorites*.conf","nodetalker_favorites.conf"),
 ("nodetalker*.conf","nodetalker.conf"),("nodelisten*.conf","nodetalker.conf"))
@@ -4288,6 +4290,7 @@ def build_status ():
     return {
     "components":components ,
     "library":scan_library (),
+    "app":app_status (),
     "config":{
     "name":CONFIG_NAME ,
     "installed":os .path .isfile (os .path .join (CONFIG_DIR ,CONFIG_NAME )),
@@ -4781,6 +4784,202 @@ def docs_status():
         state = dict(_docs_state)
     state["docs"] = docs_list()
     return state
+
+GITHUB_API_RELEASES_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases?per_page=15"
+APP_MAX_BYTES = 32 * 1024 * 1024
+APP_LIST_MAX_BYTES = 2 * 1024 * 1024
+APP_PACKAGE = "io.github.kd8pgk.nodetalker"
+_APP_TAG_RE = re.compile(r'^android-v(\d{1,3})\.(\d{1,3})\.(\d{1,4})$')
+_APP_NAME_RE = re.compile(r'^NodeTalker-(\d{1,3}\.\d{1,3}\.\d{1,4})(-debug)?\.apk$')
+_app_lock = threading.Lock()
+_app_state = {"phase": "idle", "error": None, "msg": "", "checked_at": None, "latest": None}
+_APP_FETCHED_PATH = os.path.join(CONFIG_DIR, "instmon_app_fetched")
+_APP_FIRST_FETCH_DELAYS = (20, 90, 180, 360)
+
+def _app_vkey(version):
+    return tuple(int(x) for x in version.split("."))
+
+def _app_parse_releases(raw):
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise GhRejected(f"GitHub's release list could not be read ({exc})")
+    if not isinstance(data, list):
+        raise GhRejected("GitHub did not return a release list")
+    best = None
+    for rel in data[:GITHUB_MAX_ENTRIES]:
+        if not isinstance(rel, dict) or rel.get("draft"):
+            continue
+        tag = rel.get("tag_name")
+        tm = _APP_TAG_RE.match(tag) if isinstance(tag, str) else None
+        if not tm:
+            continue
+        version = ".".join(tm.groups())
+        for asset in rel.get("assets") or []:
+            if not isinstance(asset, dict):
+                continue
+            name, size = asset.get("name"), asset.get("size")
+            nm = _APP_NAME_RE.match(name) if isinstance(name, str) else None
+            if not nm or nm.group(1) != version:
+                continue
+            if not isinstance(size, int) or size <= 0 or size > APP_MAX_BYTES:
+                continue
+            digest = asset.get("digest")
+            sha = None
+            if isinstance(digest, str) and digest.startswith("sha256:") and re.fullmatch(r"[0-9a-fA-F]{64}", digest[7:]):
+                sha = digest[7:].lower()
+            if best is None or _app_vkey(version) > _app_vkey(best["version"]):
+                best = {"version": version, "tag": tag, "name": name, "size": size, "sha256": sha,
+                        "url": f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/{urllib.parse.quote(name)}"}
+            break
+    return best
+
+def _app_check_apk(data):
+    if not data.startswith(b"PK\x03\x04"):
+        raise GhRejected("not an APK file")
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as zf:
+            names = set(zf.namelist())
+            if "AndroidManifest.xml" not in names or "classes.dex" not in names:
+                raise GhRejected("not an APK file (no manifest or code)")
+            manifest = zf.read("AndroidManifest.xml")
+    except zipfile.BadZipFile:
+        raise GhRejected("the download is not a valid APK file")
+    if APP_PACKAGE.encode("utf-16-le") not in manifest and APP_PACKAGE.encode("ascii") not in manifest:
+        raise GhRejected("the APK is not Node Talker Mobile")
+
+def app_list():
+    out = []
+    try:
+        names = os.listdir(APP_DIR)
+    except OSError:
+        return out
+    for n in names:
+        m = _APP_NAME_RE.match(n)
+        full = os.path.join(APP_DIR, n)
+        if not m or not os.path.isfile(full) or os.path.islink(full):
+            continue
+        st = os.stat(full)
+        out.append({"name": n, "version": m.group(1), "size": st.st_size,
+                    "date": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")})
+    out.sort(key=lambda e: _app_vkey(e["version"]), reverse=True)
+    return out
+
+def app_path(name):
+    if not isinstance(name, str) or not _APP_NAME_RE.match(name):
+        return None
+    full = safe_join(APP_DIR, name)
+    if full is None or not os.path.isfile(full) or os.path.islink(full):
+        return None
+    return full
+
+def _app_mark_fetched():
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(_APP_FETCHED_PATH, "w") as fh:
+            fh.write(datetime.now().strftime("%Y-%m-%d %H:%M") + "\n")
+    except OSError as exc:
+        log_event(f"Node Talker Mobile: could not write {_APP_FETCHED_PATH}: {exc}", "warn")
+
+def _app_fetch(say=log_event):
+    rel = _app_parse_releases(_gh_fetch_impl(GITHUB_API_RELEASES_URL, APP_LIST_MAX_BYTES))
+    with _app_lock:
+        _app_state["latest"] = None if rel is None else {"version": rel["version"], "name": rel["name"]}
+    if rel is None:
+        raise GhRejected("GitHub has no Node Talker Mobile release yet")
+    os.makedirs(APP_DIR, exist_ok=True)
+    dest = safe_join(APP_DIR, rel["name"])
+    if dest is None:
+        raise GhRejected("the release file name is not allowed")
+    if os.path.isfile(dest) and os.path.getsize(dest) == rel["size"]:
+        _app_mark_fetched()
+        return rel, False
+    data = _gh_fetch_impl(rel["url"], APP_MAX_BYTES)
+    if len(data) != rel["size"]:
+        raise GhRejected("the download does not match GitHub's release size")
+    if rel["sha256"] and hashlib.sha256(data).hexdigest() != rel["sha256"]:
+        raise GhRejected("the download does not match GitHub's checksum")
+    _app_check_apk(data)
+    tmp = f"{dest}.{os.getpid()}.tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(data)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, dest)
+    for old in app_list():
+        if old["name"] != rel["name"]:
+            try:
+                os.remove(os.path.join(APP_DIR, old["name"]))
+            except OSError:
+                pass
+    _app_mark_fetched()
+    say(f"Node Talker Mobile: saved {rel['name']} ({len(data) // 1024} KB)", "ok")
+    return rel, True
+
+def _app_claim():
+    with _app_lock:
+        if _app_state["phase"] == "fetching":
+            return False
+        _app_state.update(phase="fetching", error=None, msg="")
+        return True
+
+def _app_fetch_bg():
+    try:
+        rel, got = _app_fetch()
+    except Exception as exc:
+        msg = str(exc) if isinstance(exc, GhRejected) else f"unexpected error: {exc}"
+        with _app_lock:
+            _app_state.update(phase="error", error=msg, msg="",
+                              checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+        log_event(f"Node Talker Mobile: GitHub fetch failed: {msg}", "err")
+        return None
+    msg = (f"Downloaded {rel['name']}." if got else f"{rel['name']} is already the newest.")
+    with _app_lock:
+        _app_state.update(phase="done", error=None, msg=msg,
+                          checked_at=datetime.now().strftime("%Y-%m-%d %H:%M"))
+    log_event("Node Talker Mobile: " + msg, "ok")
+    return rel
+
+def app_start_fetch():
+    if not _app_claim():
+        return False, "Node Talker Mobile is already being fetched."
+    log_event(f"Node Talker Mobile: checking {_gh_source_label()} for the newest release", "info")
+    threading.Thread(target=_app_fetch_bg, daemon=True).start()
+    return True, "Getting Node Talker Mobile from GitHub..."
+
+def app_delete(name):
+    full = app_path(name)
+    if full is None:
+        return 404, {"error": "No such app file"}
+    try:
+        os.remove(full)
+    except OSError as exc:
+        return 500, {"error": f"Could not delete {name}: {exc}"}
+    log_event(f"Node Talker Mobile: deleted {name}", "info")
+    return 200, {"ok": True, "message": f"Deleted {name}.", "level": "info"}
+
+def app_status():
+    with _app_lock:
+        state = dict(_app_state)
+    state["files"] = app_list()
+    return state
+
+def _app_first_fetch_loop():
+    for delay in _APP_FIRST_FETCH_DELAYS:
+        time.sleep(delay)
+        if os.path.exists(_APP_FETCHED_PATH):
+            return
+        if not _app_claim():
+            continue
+        log_event(f"Node Talker Mobile: first download from {_gh_source_label()}", "info")
+        if _app_fetch_bg() is not None:
+            return
+    log_event("Node Talker Mobile: could not reach GitHub -- press Check on its row in Components "
+              "once the node is online", "warn")
+
+def app_start_first_fetch():
+    if os.path.exists(_APP_FETCHED_PATH):
+        return
+    threading.Thread(target=_app_first_fetch_loop, daemon=True).start()
 
 def _gh_parse_listing (raw ):
     try :
@@ -6254,7 +6453,58 @@ def esc (s ):
 
     return html .escape (str (s ),quote =True )
 
-def render_components_html (components ,library =None ):
+def render_app_card_html (app ):
+    if not app :
+        return ""
+    files =app .get ("files")or []
+    latest =app .get ("latest")or {}
+    cur =files [0 ]if files else None 
+    busy =app .get ("phase")=="fetching"
+    if cur is None :
+        badge ,bcls ="NOT DOWNLOADED","b-src"
+    elif latest .get ("version")and _app_vkey (latest ["version"])>_app_vkey (cur ["version"]):
+        badge ,bcls =f"NEWER ON GITHUB: {latest ['version']}","b-src"
+    else :
+        badge ,bcls ="IN LIBRARY","b-inst"
+    if busy :
+        note ="Getting Node Talker Mobile from GitHub..."
+    elif app .get ("phase")=="error":
+        note ="Last fetch failed: "+str (app .get ("error")or "?")
+    elif app .get ("msg"):
+        note =(f"{app ['checked_at']}: "if app .get ("checked_at")else "")+app ["msg"]
+    elif cur is None :
+        note ="No app file yet. It downloads when instmon can reach GitHub -- press Check to try now."
+    else :
+        note =""
+    ver =f'<span class="ver">v{esc (cur ["version"])}</span>'if cur else ""
+    dis =" disabled"if busy else ""
+    dl_btn =""
+    del_btn =""
+    if cur :
+        name =esc (cur ["name"])
+        dl_btn =(f'<a class="btn b-go" href="/api/app/file?name={urllib .parse .quote (cur ["name"])}&amp;download=1" '
+        f'download="{name }">Download APK</a>')
+        del_btn =f'<button class="b-del" data-action="app_delete" data-name="{name }"{dis }>Delete</button>'
+    size =f' &middot; {human_size (cur ["size"])}'if cur else ""
+    return f"""
+  <div class="card" id="app-card">
+    <div class="row comp-row">
+      <b>Node Talker Mobile</b>
+      {ver }
+      <span class="badge {bcls }">{esc (badge )}</span>
+      <span class="muted small">Android app{size } &middot; kept in the library, not installed on the Pi</span>
+    </div>
+    <div class="row btn-row">
+      {dl_btn }
+      <button data-action="app_fetch"{dis }>Check GitHub</button>
+      {del_btn }
+    </div>
+    <div class="small muted">{esc (note )}</div>
+    <div class="small muted">On the phone: open this page, log in and tap Download APK. Android asks once to allow
+    installs from the browser, then installs the app. Updates install over the old one.</div>
+  </div>"""
+
+def render_components_html (components ,library =None ,app =None ):
     cards =[]
     for c in components :
         if c ["category"]in NO_CARD_CATEGORIES :
@@ -6312,6 +6562,7 @@ def render_components_html (components ,library =None ):
     </div>
     {nested_lib_html }
   </div>""")
+    cards .append (render_app_card_html (app ))
     return "".join (cards )
 
 def render_library_group_html (title ,category ,entries ,action_label ,nested =False ):
@@ -8595,6 +8846,11 @@ _JS_ACTIONS = """function wireButtons() {
         } else if (action === 'rpiclone_install') {
           if (!confirm('Install rpi-clone? This installs any missing packages it needs (rsync, parted, fdisk, dosfstools ...) with apt, then downloads a fixed, checksum-checked rpi-clone from GitHub into /usr/local/sbin. No prompts -- output goes to the Execution Log.')) { btn.disabled = false; return; }
           await postAction({action: 'rpiclone_install', confirm: true});
+        } else if (action === 'app_fetch') {
+          await postAction({action: 'app_fetch'});
+        } else if (action === 'app_delete') {
+          if (!confirm(`Delete ${btn.dataset.name} from the library?`)) { btn.disabled = false; return; }
+          await postAction({action: 'app_delete', name: btn.dataset.name});
         } else if (action === 'edit') {
           await openEditor(btn.dataset.category, btn.dataset.name);
         } else if (action === 'download') {  // [PHASE 3]
@@ -9299,7 +9555,7 @@ _JS = (
 def render_page ():
     status =build_status ()
     quicklinks_html =render_quicklinks_html ()
-    components_html =render_components_html (status ["components"],status ["library"])
+    components_html =render_components_html (status ["components"],status ["library"],status ["app"])
     library_html =render_library_html (status ["library"])
     log_html ="-- System ready --\n"+f"instmon v{VERSION } ({DATE_STR }) backend online, {len (status ['components'])} component(s) tracked."
     return HTML_TEMPLATE .format (
@@ -9830,6 +10086,8 @@ _ACTION_HANDLERS ={
 "fu_stop":lambda self ,body :self ._action_fu_stop (body ),
 "build_pref":lambda self ,body :self ._action_build_pref (body ),
 "gh_channel":lambda self ,body :self ._action_gh_channel (body ),
+"app_fetch":lambda self ,body :self ._action_app_fetch (body ),
+"app_delete":lambda self ,body :self ._action_app_delete (body ),
 }
 
 _ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss", "fu_stop")
@@ -9847,6 +10105,7 @@ _GET_ROUTES ={
 "/api/usbimport/drives":lambda self :self ._route_usbimport_drives (),
 "/api/docs":lambda self :self ._send_json (200 ,docs_status (),extra_headers =[("Cache-Control","no-store")]),
 "/api/docs/file":lambda self :self ._route_docs_file (),
+"/api/app/file":lambda self :self ._route_app_file (),
 "/api/usbimport/browse":lambda self :self ._route_usbimport_browse (),
 "/api/diskimg/drives":lambda self :self ._route_diskimg_drives (),
 "/api/diskimg/job":lambda self :self ._route_diskimg_job (),
@@ -9964,7 +10223,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     def _route_status (self ):
         status =build_status ()
         self ._send_json (200 ,{
-        "components_html":render_components_html (status ["components"],status ["library"]),
+        "components_html":render_components_html (status ["components"],status ["library"],status ["app"]),
         "library_html":render_library_html (status ["library"]),
         **_gh_status_payload (),
         **_fu_status_payload (),
@@ -10927,7 +11186,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
             with zipfile .ZipFile (tmp_path ,'w',zipfile .ZIP_DEFLATED )as zf :
                 for root ,dirs ,files in os .walk (LIBRARY_DIR ):
-                    dirs [:]=[d for d in dirs if os .path .join (root ,d )!=DOCS_DIR ]
+                    dirs [:]=[d for d in dirs if os .path .join (root ,d )not in (DOCS_DIR ,APP_DIR )]
                     for file in files :
                         full_path =os .path .join (root ,file )
                         rel_path =os .path .relpath (full_path ,LIBRARY_DIR )
@@ -11461,6 +11720,43 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         thread .start ()
         self ._send_json (200 ,{"started":name ,"message":f"Running {name } -- watch the log below for output.","level":"info"})
 
+    def _action_app_fetch (self ,body ):
+        ok ,msg =app_start_fetch ()
+        self ._send_json (200 if ok else 409 ,{"message":msg ,"level":"info"if ok else "warn"})
+
+    def _action_app_delete (self ,body ):
+        status ,payload =app_delete (body .get ("name"))
+        if status !=200 :
+            self ._error_json (status ,payload ["error"])
+            return 
+        self ._send_json (200 ,payload )
+
+    def _route_app_file (self ):
+        query =urllib .parse .parse_qs (urllib .parse .urlparse (self .path ).query )
+        name =query .get ("name",[""])[0 ]
+        full =app_path (name )
+        if full is None :
+            self ._error_json (404 ,"No such app file")
+            return 
+        try :
+            size =os .path .getsize (full )
+            fh =open (full ,"rb")
+        except OSError as exc :
+            self ._error_json (500 ,f"Could not read {name }: {exc }")
+            return 
+        with fh :
+            self .send_response (200 )
+            self .send_header ("Content-Type","application/vnd.android.package-archive")
+            self .send_header ("Content-Length",str (size ))
+            self .send_header ("Content-Disposition",f'attachment; filename="{name }"')
+            self .send_header ("Cache-Control","private, no-cache")
+            self .end_headers ()
+            try :
+                shutil .copyfileobj (fh ,self .wfile ,65536 )
+            except (BrokenPipeError ,ConnectionResetError ):
+                pass 
+        log_event (f"Downloaded app: {name }","info")
+
     def _action_gh_check (self ,body ):
         ok ,msg =gh_start_check ()
         self ._send_json (200 if ok else 409 ,{"message":msg ,"level":"info"if ok else "warn"})
@@ -11806,6 +12102,7 @@ def run ():
     _diskimg_lastjob_recover ()
     full_update_resume_at_startup ()
     docs_start_first_fetch()
+    app_start_first_fetch()
 
     if HOME_SCAN_ENABLED :
         moved =scan_home_for_new_code ()

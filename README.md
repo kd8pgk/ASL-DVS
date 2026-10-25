@@ -42,7 +42,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_76_20261020.py` | `instmon_v2_73_0_20261021.py` |
+| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_76_20261020.py` | `instmon_v2_74_0_20261025.py` |
 | `VERSION` | `6.13.88` | `6.13.75-pi02w` | `2.73.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -85,7 +85,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_73_0_20261021.py --install
+   sudo python3 instmon_v2_74_0_20261025.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -326,6 +326,12 @@ installs over the old one and keeps your nodes; going from 0.3.0 or older to
 0.3.1 needs one uninstall first. When signed release builds start, uninstall
 the test build once more.
 
+**From the node itself (instmon 2.74.0 and later):** instmon downloads the
+newest APK from GitHub into its library and lists **Node Talker Mobile** in
+Components. On the phone, open instmon's page, log in and tap **Download APK**;
+Android installs it. **Check GitHub** on the row fetches a newer one. Nothing
+is installed on the Pi, and the app is not part of Full Update.
+
 **Add a node:** the Pi's address (for example `192.168.1.50`), port `8993`,
 and HTTPS if Node Talker uses it (needed for the microphone in page
 audio). The first HTTPS connection shows the certificate's fingerprint;
@@ -479,7 +485,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_94_20261020.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_88_20261019.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_76_20261020.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_73_0_20261021.py` | common |
+| `instmon_v2_74_0_20261025.py` | common |
 | `wifimon_v5_39_0_1_20261019.py` | common |
 | `44helper_v0_0_216_20261019.py` | common |
 | `nodetalker_v0_9_22_20261025.py` | common |
