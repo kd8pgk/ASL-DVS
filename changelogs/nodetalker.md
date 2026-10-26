@@ -1,6 +1,17 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_30_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_31_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.31 (2026-10-26)
+
+- **The kerchunk test counts only what you mark.** 0.9.30 recorded every burst
+  on the node during a test, so a test sample could be other stations' traffic.
+  Now press **Mark kerchunk** after each key-up you make. Only marked bursts are
+  counted in the test, and each one is labelled Kerchunk in the log, which
+  feeds the learned cut-off. The button is enabled only while a test runs.
+- A mark applies to the burst that just ended (within 5 s), or to the next burst
+  if one is still going. Marks are refused when no test is running.
+- The test summary and the copied JSON count marked bursts only.
 
 ## 0.9.30 (2026-10-26)
 
