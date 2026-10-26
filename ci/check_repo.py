@@ -23,6 +23,11 @@ ANDROID_DIR = "android/"
 ANDROID_GRADLE = "android/app/build.gradle.kts"
 ANDROID_LOG = "changelogs/nodetalker_android.md"
 ANDROID_VERSION_RE = re.compile(r'^val appVersion = "([^"]+)"', re.M)
+COLORS_XML = "android/app/src/main/res/values/colors.xml"
+CSS_ROOT_RE = re.compile(r":root\{(--bg:[^}]*)\}")
+CSS_COLOR_RE = re.compile(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})")
+CSS_NAV_RE = re.compile(r"nav\.tabs\{[^}]*?background:(#[0-9a-fA-F]{6})")
+XML_COLOR_RE = re.compile(r'<color name="([a-z0-9_]+)">(#[0-9a-fA-F]{6})</color>')
 
 errors = []
 notes = []
@@ -247,6 +252,38 @@ def check_android(base, paths):
         fail(f"{ANDROID_LOG}: the top entry is '{head}', not {version}")
 
 
+def current_nodetalker():
+    found = []
+    for name in os.listdir("."):
+        t = parse_tool(name)
+        if t and t[0] == "nodetalker" and t[2] == "py":
+            found.append((t[1], name))
+    return max(found)[1] if found else None
+
+
+def check_design(paths):
+    page = current_nodetalker()
+    if not os.path.isfile(COLORS_XML) or page is None:
+        return
+    if COLORS_XML not in paths and not any((parse_tool(p) or ("",))[0] == "nodetalker" for p in paths):
+        return
+    text = read(page)
+    root = CSS_ROOT_RE.search(text)
+    if not root:
+        fail(f"{page}: no :root block starting with --bg found, so the app colors cannot be checked")
+        return
+    want = {k.replace("-", "_"): (f"--{k}", v) for k, v in CSS_COLOR_RE.findall(root.group(1))}
+    nav = CSS_NAV_RE.search(text)
+    if nav:
+        want["bar"] = ("the tab bar background", nav.group(1))
+    have = dict(XML_COLOR_RE.findall(read(COLORS_XML)))
+    for name, (label, value) in sorted(want.items()):
+        if name not in have:
+            fail(f'{COLORS_XML}: no <color name="{name}"> for the page\'s {label} ({value})')
+        elif have[name].lower() != value.lower():
+            fail(f"{COLORS_XML}: {name} is {have[name]} but the page's {label} is {value}")
+
+
 def check_launchers():
     texts = {}
     for name in sorted(os.listdir(".")):
@@ -401,6 +438,7 @@ def main():
 
     check_launchers()
     check_android(base, added + modified + deleted)
+    check_design(added + modified + deleted)
 
     for n in notes:
         print(f"note: {n}")

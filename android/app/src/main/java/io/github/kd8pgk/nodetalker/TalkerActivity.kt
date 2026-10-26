@@ -33,6 +33,7 @@ class TalkerActivity : Activity() {
     private lateinit var node: Node
     private lateinit var web: WebView
     private lateinit var error: View
+    private lateinit var tabs: TabBar
     private var micRequest: PermissionRequest? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingDownload: String? = null
@@ -54,6 +55,7 @@ class TalkerActivity : Activity() {
         if (NodeStore.keepScreenOn(this)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         web = findViewById(R.id.web)
         error = findViewById(R.id.error)
+        tabs = TabBar(findViewById(R.id.tabbar)) { name -> web.evaluateJavascript(TabBar.clickJs(name), null) }
         findViewById<Button>(R.id.retry).setOnClickListener { load() }
         findViewById<Button>(R.id.back).setOnClickListener { finish() }
         setup()
@@ -163,6 +165,11 @@ class TalkerActivity : Activity() {
             if (Talk.nodeId == null || Talk.nodeId == node.id) Talk.json() else "{\"open\":false,\"talking\":false}"
 
         @JavascriptInterface
+        fun tabChanged(name: String) {
+            runOnUiThread { tabs.select(if (name in TabBar.NAMES) name else "") }
+        }
+
+        @JavascriptInterface
         fun rxMute(on: Boolean) {
             Listen.muted = on
         }
@@ -196,10 +203,24 @@ class TalkerActivity : Activity() {
 
     private fun load() {
         error.visibility = View.GONE
+        tabs.select("")
         web.loadUrl(node.origin + "/")
     }
 
+    private fun handshake() {
+        val n = node
+        Thread {
+            val v = try {
+                NodeApi(n).health().optString("version")
+            } catch (e: IOException) {
+                return@Thread
+            }
+            Compat.remember(n.id, v)
+        }.start()
+    }
+
     private fun showError(text: String) {
+        tabs.select("")
         findViewById<TextView>(R.id.error_text).text = getString(R.string.load_failed, node.origin, text)
         error.visibility = View.VISIBLE
     }
@@ -236,7 +257,9 @@ class TalkerActivity : Activity() {
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
+                view.evaluateJavascript(TabBar.HIDE_PAGE_NAV_JS, null)
                 sendState()
+                handshake()
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, err: WebResourceError) {

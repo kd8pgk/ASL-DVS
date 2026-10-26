@@ -3,10 +3,17 @@
     <color name="bg">#0e141b</color>
     <color name="bar">#111922</color>
     <color name="card">#161f29</color>
+    <color name="card2">#121a23</color>
     <color name="line">#243140</color>
+    <color name="line2">#2a3846</color>
     <color name="text">#e6edf3</color>
     <color name="muted">#9fb0bf</color>
+    <color name="soft">#c9d4de</color>
     <color name="accent">#22c3a6</color>
     <color name="accent_ink">#06231e</color>
+    <color name="accent_dim">#123a35</color>
     <color name="amber">#f4c04e</color>
+    <color name="amber_bg">#3a2a07</color>
+    <color name="red">#ff8a8f</color>
+    <color name="red_line">#f2545b</color>
 </resources>

@@ -1,6 +1,31 @@
 # Node Talker Mobile changelog
 
-Current version: `0.3.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.4.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.4.0 (2026-10-26)
+
+- **Phase 1 of the native tabs: the foundation.** Nothing changes on the
+  Connect, Listen and Setup tabs yet; they are still the node's own page. The
+  app can now read the node itself, which the native Listen and Connect tabs
+  in the next versions build on.
+- **A tab bar of the app's own** (Connect, Listen, Setup) replaces the page's
+  bottom bar inside the app. It follows the page: tapping a tab switches the
+  page's tab, and it stays hidden on the login screen. The page and the other
+  tools are unchanged, so any node still works.
+- **Node client** (`NodeApi`): reads `/api/health`, `/api/whoami` and
+  `/api/status` and posts to the node's other endpoints with the node's pinned
+  certificate. It uses the login the page already made, so no password is
+  stored in the app, and it sends the `X-Requested-With` header the node
+  requires on every POST.
+- **Version check** (`Compat`): when a node's page has loaded, the app asks
+  which Node Talker version it runs, and the node list shows it under the
+  address. A native tab will be used only when the node runs a version the app
+  was checked against; on any other version the tab stays the node's page, so a
+  native screen is never out of date.
+- **Colors match the page.** `colors.xml` holds every color of the page's
+  `:root` block, and `ci/check_repo.py` now fails when they differ.
+- The status poll starts with the first native tab (0.5.0), the first screen
+  that needs it.
 
 ## 0.3.1 (2026-10-21)
 

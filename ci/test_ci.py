@@ -305,6 +305,37 @@ class CheckTests(unittest.TestCase):
         self.r.commit("a", T0 + DAY)
         self.assertCheck(False, "must be X.Y.Z")
 
+    def design(self, css_bg="#0e141b", xml_bg="#0e141b", xml_accent="#22c3a6", with_accent=True):
+        self.android("0.1.0")
+        name = self.r.build("nodetalker", "1.0.0", None)
+        css = ('\n_CSS = r"""' + ":root{--bg:" + css_bg + ";--accent:#22c3a6}\nnav.tabs{background:#111922}" + '"""\n')
+        self.r.write(name, tool_text("1.0.0") + css)
+        accent = f'<color name="accent">{xml_accent}</color>\n' if with_accent else ""
+        self.r.write("android/app/src/main/res/values/colors.xml",
+                     '<resources>\n<color name="bg">' + xml_bg + '</color>\n' + accent
+                     + '<color name="bar">#111922</color>\n</resources>\n')
+        self.r.commit("d", T0 + DAY)
+
+    def test_design_matches(self):
+        self.design()
+        self.assertCheck(True)
+
+    def test_design_color_differs(self):
+        self.design(xml_bg="#0e141c")
+        self.assertCheck(False, "bg is #0e141c but the page's --bg is #0e141b")
+
+    def test_design_color_missing(self):
+        self.design(with_accent=False)
+        self.assertCheck(False, 'no <color name="accent">')
+
+    def test_design_bar_differs(self):
+        self.design()
+        self.r.write("android/app/src/main/res/values/colors.xml",
+                     '<resources>\n<color name="bg">#0e141b</color>\n<color name="accent">#22c3a6</color>\n'
+                     '<color name="bar">#111923</color>\n</resources>\n')
+        self.r.commit("e", T0 + 2 * DAY)
+        self.assertCheck(False, "bar is #111923 but the page's the tab bar background is #111922")
+
 
 if __name__ == "__main__":
     unittest.main()

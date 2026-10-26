@@ -6,6 +6,10 @@
     <string name="add_node">Add node</string>
     <string name="keep_screen_on">Keep the screen on while a node is open</string>
     <string name="app_version">App %1$s</string>
+    <string name="tab_connect">Connect</string>
+    <string name="tab_listen">Listen</string>
+    <string name="tab_setup">Setup</string>
+    <string name="node_pages">Node Talker %1$s · pages from the node</string>
     <string name="edit_title_add">Add node</string>
     <string name="edit_title_edit">Edit node</string>
     <string name="field_name">Name (optional)</string>

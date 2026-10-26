@@ -86,6 +86,11 @@ class NodesActivity : Activity() {
             val n = nodes[position]
             v.findViewById<TextView>(R.id.name).text = n.title
             v.findViewById<TextView>(R.id.url).text = n.origin
+            val seen = Compat.seen(n.id)
+            v.findViewById<TextView>(R.id.info).apply {
+                visibility = if (seen == null) View.GONE else View.VISIBLE
+                text = if (seen == null) "" else getString(R.string.node_pages, seen)
+            }
             return v
         }
     }
