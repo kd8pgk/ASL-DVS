@@ -1,6 +1,12 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_39_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_39_1_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.39.1 (2026-10-26)
+
+- **Links card follows the Setup text size.** The table on the Setup tab's
+  Links card (and its "No links" line) now grows and shrinks with the Setup
+  tab's Text slider. At the default 15 px it looks as before.
 
 ## 0.9.39 (2026-10-26)
 

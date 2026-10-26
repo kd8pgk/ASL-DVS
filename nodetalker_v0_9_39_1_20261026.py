@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.39"
+VERSION = "0.9.39.1"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -5490,7 +5490,8 @@ label{color:var(--soft)}
 .msg.ok{color:var(--accent)}.msg.err{color:var(--red)}.msg.warn{color:var(--amber)}
 table{width:100%;border-collapse:collapse;font-size:14px}
 td,th{text-align:left;padding:6px 6px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
-table.links{font-size:clamp(10.5px,3.1vw,14px);font-variant-numeric:tabular-nums}
+table.links{font-size:calc(clamp(10.5px,3.1vw,14px) + var(--sett-font) - 15px);font-variant-numeric:tabular-nums}
+#cd-links .small{font-size:calc(13px + var(--sett-font) - 15px)}
 table.links td,table.links th{padding:6px 3px;white-space:nowrap;overflow-wrap:normal}
 table.links td:nth-child(2){width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .listen-row{flex-wrap:nowrap}
