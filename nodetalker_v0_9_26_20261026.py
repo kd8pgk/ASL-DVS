@@ -30,8 +30,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.25"
-DATE_STR = "2026-10-25"
+VERSION = "0.9.26"
+DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -145,6 +145,7 @@ IN_QUEUE_TRIM = 10
 LISTENER_QUEUE_MAX = 150
 ACTIVE_DB = -50.0
 ACTIVE_HOLD_SEC = 0.6
+KERCHUNK_MAX_SEC = 0.4
 
 _START_TIME = time.time()
 
@@ -1004,6 +1005,8 @@ class Hub:
         self.level_db = -120.0
         self.peak_db = -120.0
         self.last_active = 0.0
+        self.burst_start = -1e9
+        self.burst_last = -1e9
         self.pump_beat = time.monotonic()
         self.rate_window = deque(maxlen=60)
         self.udp_error = ""
@@ -1063,7 +1066,11 @@ class Hub:
             self.level_db = db
             self.peak_db = max(db, self.peak_db - 1.0)
             if db > ACTIVE_DB:
-                self.last_active = now
+                if now - self.burst_last > ACTIVE_HOLD_SEC:
+                    self.burst_start = now
+                self.burst_last = now
+                if now - self.burst_start >= KERCHUNK_MAX_SEC:
+                    self.last_active = now
         else:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)

@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_25_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_26_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.26 (2026-10-26)
+
+- **Kerchunks no longer make the node look busy.** A kerchunk is a brief key-up
+  with no speech. Node Talker treated any short burst of audio above the activity
+  level as activity, so a kerchunk on the node blocked Talk (Don't transmit while
+  the node is busy) and showed the channel as active. A burst now counts as
+  activity only after it has lasted 0.4 s (`KERCHUNK_MAX_SEC`). Shorter bursts are
+  ignored for busy and activity; the audio still goes to Listen. Bursts with gaps
+  under 0.6 s stay one burst.
 
 ## 0.9.25 (2026-10-26)
 
