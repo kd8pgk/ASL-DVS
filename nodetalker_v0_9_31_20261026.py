@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.30"
+VERSION = "0.9.31"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -1014,7 +1014,9 @@ KERCHUNK_TEST_MAX = 60
 _KC_HEAD = "id,secs,peak_db,kerchunk,label\n"
 _kc_lock = threading.Lock()
 _kc_state = {"threshold": KERCHUNK_MAX_SEC, "learned": False, "labels": 0}
-_kc_test = {"on": False, "started": 0.0, "ends": 0.0, "minutes": KERCHUNK_TEST_MIN, "rows": []}
+_kc_test = {"on": False, "started": 0.0, "ends": 0.0, "minutes": KERCHUNK_TEST_MIN, "rows": [], "pending": False}
+_kc_last = {"row": None, "at": 0.0, "marked": False}
+KERCHUNK_MARK_SEC = 5.0
 _kc_last_id = 0
 
 
@@ -1078,10 +1080,6 @@ def _kc_add(secs, peak):
     _kc_last_id = max(int(time.time() * 1000), _kc_last_id + 1)
     row = {"id": str(_kc_last_id), "secs": secs, "peak": round(peak, 1), "kerchunk": kerchunk, "label": ""}
     with _kc_lock:
-        _kc_test_check(time.time())
-        if _kc_test["on"]:
-            _kc_test["rows"].append({"id": row["id"], "secs": round(secs, 2), "peak": row["peak"], "kerchunk": kerchunk})
-    with _kc_lock:
         try:
             if os.path.exists(KERCHUNK_LOG_PATH) and os.path.getsize(KERCHUNK_LOG_PATH) > KERCHUNK_LOG_BYTES:
                 _atomic_write(KERCHUNK_LOG_PATH, _kc_text(_kc_rows()), 0o644)
@@ -1092,6 +1090,30 @@ def _kc_add(secs, peak):
             log_event(f"Could not record a burst in {KERCHUNK_LOG_PATH}: {exc}", "err")
     if kerchunk:
         log_event(f"Kerchunk: {secs:.1f} s at {peak:.0f} dBFS, not treated as activity", "info")
+    return row
+
+
+def _kc_set_label(bid, label):
+    with _kc_lock:
+        rows = _kc_rows()
+        hit = [r for r in rows if r["id"] == bid]
+        if not hit:
+            return False
+        hit[0]["label"] = label
+        try:
+            _atomic_write(KERCHUNK_LOG_PATH, _kc_text(rows), 0o644)
+        except OSError as exc:
+            log_event(f"Could not save the label in {KERCHUNK_LOG_PATH}: {exc}", "err")
+            return False
+    _kc_refresh()
+    return True
+
+
+def _kc_test_take(row):
+    _kc_set_label(row["id"], "kerchunk")
+    with _kc_lock:
+        _kc_test["rows"].append({"id": row["id"], "secs": round(row["secs"], 2), "peak": row["peak"],
+                                 "kerchunk": row["kerchunk"]})
 
 
 def _kc_report(rows):
@@ -1115,6 +1137,23 @@ def _kc_test_summary():
     return {"on": _kc_test["on"], "started": _kc_test["started"], "ends": _kc_test["ends"],
             "minutes": _kc_test["minutes"], "bursts": len(rows),
             "kerchunks": sum(r["kerchunk"] for r in rows), "rows": rows[-300:]}
+
+
+def kerchunk_mark(_body=None):
+    with _kc_lock:
+        _kc_test_check(time.time())
+        if not _kc_test["on"]:
+            return {"ok": False, "error": "Start a test first, then mark each key-up you make."}
+        last = _kc_last["row"]
+        recent = last is not None and not _kc_last["marked"] and time.time() - _kc_last["at"] <= KERCHUNK_MARK_SEC
+        if recent:
+            _kc_last["marked"] = True
+        else:
+            _kc_test["pending"] = True
+    if recent:
+        _kc_test_take(last)
+        return {"ok": True, "message": f"Marked the burst that just ended ({last['secs']:.1f} s) as a kerchunk."}
+    return {"ok": True, "message": "Marked. The next burst is kept as a kerchunk."}
 
 
 def kerchunk_status(_body=None):
@@ -1144,7 +1183,8 @@ def kerchunk_test_start(body):
         if _kc_test["on"]:
             return {"ok": False, "error": "A kerchunk test is already running."}
         now = time.time()
-        _kc_test.update(on=True, started=now, ends=now + minutes * 60, minutes=minutes, rows=[])
+        _kc_test.update(on=True, started=now, ends=now + minutes * 60, minutes=minutes, rows=[], pending=False)
+        _kc_last["marked"] = True
     log_event(f"Kerchunk test started for {minutes} min: key up the node as you normally would", "ok")
     return {"ok": True, "message": f"Test started for {minutes} minutes."}
 
@@ -1160,7 +1200,7 @@ def kerchunk_test_stop(_body=None):
 
 def kerchunk_reset(_body=None):
     with _kc_lock:
-        _kc_test.update(on=False, rows=[])
+        _kc_test.update(on=False, rows=[], pending=False)
         if os.path.exists(KERCHUNK_LOG_PATH):
             backup = f"{KERCHUNK_LOG_PATH}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
             try:
@@ -1253,7 +1293,16 @@ class Hub:
         peak = self.burst_peak
         self.burst_last = -1e9
         if secs >= KERCHUNK_MIN_SEC:
-            _kc_add(secs, peak)
+            row = _kc_add(secs, peak)
+            take = False
+            with _kc_lock:
+                _kc_last.update(row=row, at=time.time(), marked=False)
+                if _kc_test["on"] and _kc_test["pending"]:
+                    _kc_test["pending"] = False
+                    _kc_last["marked"] = True
+                    take = True
+            if take:
+                _kc_test_take(row)
         if secs < _kc_state["threshold"]:
             self.kc_seqs.append(self.burst_seq)
 
@@ -5562,8 +5611,8 @@ function kcLeft(ms) {
 }
 function kcTestLine(t) {
   if (!t) return '';
-  if (t.on) return 'Test running: ' + kcLeft(t.ends * 1000 - Date.now()) + ' left. ' + t.bursts + ' bursts, ' + t.kerchunks + ' kerchunks so far.';
-  return t.bursts ? 'Last test: ' + t.bursts + ' bursts, ' + t.kerchunks + ' kerchunks.' : 'No test run yet.';
+  if (t.on) return 'Test running: ' + kcLeft(t.ends * 1000 - Date.now()) + ' left. ' + t.bursts + ' marked as kerchunks so far. Only bursts you mark are counted.';
+  return t.bursts ? 'Last test: ' + t.bursts + ' marked as kerchunks.' : 'No test run yet. Start a test, then press Mark kerchunk after each key-up you make.';
 }
 async function kcRefresh() {
   const d = await api('/api/kerchunks');
@@ -5578,6 +5627,7 @@ async function kcRefresh() {
     + ', shortest real label ' + (r.shortest_real_label == null ? '-' : r.shortest_real_label + ' s')
     + (r.overlap ? ' (they overlap)' : '') + '. Wrong at this cut-off: ' + r.wrong_at_cutoff + '.';
   $('kc-test').textContent = d.test.on ? 'Stop test' : 'Start test';
+  $('kc-mark').disabled = !d.test.on;
   $('kc-test-state').textContent = kcTestLine(d.test);
   kcDraw(d.bursts, d.threshold);
   kcList(d.bursts);
@@ -5601,6 +5651,11 @@ async function kcReset() {
   if (!confirm('Reset the kerchunk log?\n\nThe current log is kept as a backup file. The cut-off goes back to 0.4 s, and a running test stops.')) return;
   const d = await post('/api/kerchunks/reset', {});
   $('kc-state').textContent = d.ok ? d.message : (d.error || 'Could not reset the log.');
+  kcRefresh();
+}
+async function kcMark() {
+  const d = await post('/api/kerchunks/test/mark', {});
+  $('kc-state').textContent = d.ok ? d.message : (d.error || 'Could not mark the burst.');
   kcRefresh();
 }
 async function kcTestToggle() {
@@ -9235,6 +9290,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('kc-copy').addEventListener('click', kcCopy);
   $('kc-reset').addEventListener('click', kcReset);
   $('kc-test').addEventListener('click', kcTestToggle);
+  $('kc-mark').addEventListener('click', kcMark);
 });
 """
 
@@ -9680,6 +9736,7 @@ for a report with averages and what to change. Only numbers are kept, never audi
 <button class="btn" type="button" id="kc-reset">Reset</button>
 <label class="small">Minutes <input type="number" id="kc-min" class="kc-min" min="1" max="60" value="15"></label>
 <button class="btn" type="button" id="kc-test">Start test</button>
+<button class="btn" type="button" id="kc-mark" disabled>Mark kerchunk</button>
 </div>
 <p class="muted small" id="kc-test-state"></p>
 <textarea id="kc-json" class="kc-json hidden" readonly aria-label="Kerchunk report as JSON"></textarea>
@@ -9753,6 +9810,7 @@ _POST_ACTIONS = {
     "/api/kerchunks/test/start": (kerchunk_test_start, ()),
     "/api/kerchunks/test/stop": (kerchunk_test_stop, ()),
     "/api/kerchunks/reset": (kerchunk_reset, ()),
+    "/api/kerchunks/test/mark": (kerchunk_mark, ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
