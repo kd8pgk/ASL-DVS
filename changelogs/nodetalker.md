@@ -1,6 +1,15 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_39_1_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_40_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.40 (2026-10-26)
+
+- **Text sliders go down to 10 px** on the Tune, Listen and Setup size
+  sections (they stopped at 12 px).
+- **Text first.** The Tune card's sliders are now Text, then Height.
+- **No Gap slider.** The Gap slider did nothing on the Connect tab (a fixed
+  6 px rule overrode it), so it is gone. The Tune card's gap is now 2 px. A gap
+  saved by an older version is ignored.
 
 ## 0.9.39.1 (2026-10-26)
 
