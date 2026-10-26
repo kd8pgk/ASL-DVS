@@ -1,6 +1,22 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_27_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_28_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.28 (2026-10-26)
+
+- **Drop kerchunks from Listen** (Setup tab, under "Don't transmit while the
+  node is busy"). Off, or a delay of 0.1 s to 1.0 s. Listen waits that long
+  before it plays audio. A burst that has ended before its audio would play is
+  a kerchunk under the learned cut-off, and its audio is not played. Every
+  delay adds the same lag to Listen. A kerchunk is known to be over only after
+  its length plus 0.6 s, so a short delay drops only the shortest kerchunks.
+  At 1.0 s, kerchunks up to 0.4 s are dropped in full. Default: off.
+- The listen feed to every listener now goes through that delay queue (it is
+  empty when the setting is off, so the feed is unchanged).
+- Fix: the RX level calculation could raise a math-domain error when the filter
+  output decayed to denormal values after a loud burst. The level is now floored
+  at -300 dB, which fits the existing -120 dB floor, so the pump keeps running.
+- `kerchunk_delay_ms` added to the config.
 
 ## 0.9.27 (2026-10-26)
 

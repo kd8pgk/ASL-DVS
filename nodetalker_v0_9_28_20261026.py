@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.27"
+VERSION = "0.9.28"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -177,6 +177,7 @@ DEFAULT_CONFIG = {
     "https": True,
     "tot_sec": 120,
     "busy_lockout": True,
+    "kerchunk_delay_ms": 0,
     "tune_enabled": False,
     "tx_gain_db": 0,
     "rx_gain_db": 0,
@@ -212,6 +213,13 @@ _norm_listeners = _norm_int(1, 10, "max_listeners must be 1-10")
 _norm_tot = _norm_int(30, 600, "tot_sec must be 30-600")
 _norm_txbuf = _norm_int(40, 400, "tx_buffer_ms must be 40-400")
 _norm_jitter = _norm_int(100, 1500, "jitter_ms must be 100-1500")
+
+
+def _norm_kc_delay(value):
+    v = int(str(value).strip())
+    if v != 0 and not 100 <= v <= 1000:
+        raise ValueError("kerchunk_delay_ms must be 0 (off) or 100-1000")
+    return v
 
 
 PTT_GUARDS = (30, 60, 90, 120, 180)
@@ -254,6 +262,7 @@ _NORMALIZERS = {
     "https": _parse_bool,
     "tot_sec": _norm_tot,
     "busy_lockout": _parse_bool,
+    "kerchunk_delay_ms": _norm_kc_delay,
     "tune_enabled": _parse_bool,
     "tx_gain_db": _norm_gain,
     "rx_gain_db": _norm_gain,
@@ -813,7 +822,7 @@ class RxClean:
         ss = _dot(ys, ys)
         r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
         self.r2 = _dot(ys[2:], ys[:-2]) / ss if ss > 0 else 1.0
-        db = 10.0 * math.log10(ss / n / 1073741824.0) if ss > 0 else -120.0
+        db = 10.0 * math.log10(max(ss / n / 1073741824.0, 1e-30)) if ss > 0 else -120.0
         return ys, db, r1
 
     def _agc(self, db, speechy):
@@ -1118,6 +1127,9 @@ class Hub:
         self.burst_start = -1e9
         self.burst_last = -1e9
         self.burst_peak = -120.0
+        self.burst_seq = 0
+        self.kc_seqs = deque(maxlen=64)
+        self.delayed = deque()
         self.pump_beat = time.monotonic()
         self.rate_window = deque(maxlen=60)
         self.udp_error = ""
@@ -1162,6 +1174,8 @@ class Hub:
         self.burst_last = -1e9
         if secs >= KERCHUNK_MIN_SEC:
             _kc_add(secs, peak)
+        if secs < _kc_state["threshold"]:
+            self.kc_seqs.append(self.burst_seq)
 
     def wait_chunk(self, lst, timeout=5.0):
         with self.cond:
@@ -1188,6 +1202,7 @@ class Hub:
             if db > ACTIVE_DB:
                 if now - self.burst_last > ACTIVE_HOLD_SEC:
                     self._close_burst()
+                    self.burst_seq += 1
                     self.burst_start = now
                     self.burst_peak = -120.0
                 self.burst_last = now
@@ -1197,6 +1212,7 @@ class Hub:
         else:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
+        seq = self.burst_seq if self.burst_last > 0 else None
         if now - self.burst_last > ACTIVE_HOLD_SEC:
             self._close_burst()
         if TONE.recording:
@@ -1209,8 +1225,19 @@ class Hub:
                 pcm = PCM_SILENCE
             if TONE.recording:
                 TONE.tap_proc(pcm)
-            enc = None
-            with self.cond:
+            self.delayed.append((now, seq, pcm))
+        self._release(now)
+        self.pump_beat = now
+
+    def _release(self, now):
+        delay = _cfg_get("kerchunk_delay_ms") / 1000.0
+        with self.cond:
+            sent = False
+            while self.delayed and now - self.delayed[0][0] >= delay:
+                _, seq, pcm = self.delayed.popleft()
+                if delay > 0 and seq in self.kc_seqs:
+                    continue
+                enc = None
                 for lst in self.listeners:
                     if lst.pcm:
                         lst.q.append(pcm)
@@ -1218,8 +1245,9 @@ class Hub:
                         if enc is None:
                             enc = ULAW_SILENCE if pcm == PCM_SILENCE else ulaw_encode(pcm)
                         lst.q.append(enc)
+                sent = True
+            if sent:
                 self.cond.notify_all()
-        self.pump_beat = now
 
     def pump_loop(self):
         rate = {"t": time.monotonic(), "packets": 0}
@@ -8840,7 +8868,7 @@ async function ffUpload() {
   if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
 }
 
-const CFG_NUM = ['port', 'udp_port', 'max_listeners', 'tot_sec'], CFG_BOOL = ['public_listen', 'https', 'busy_lockout'];
+const CFG_NUM = ['port', 'udp_port', 'max_listeners', 'tot_sec', 'kerchunk_delay_ms'], CFG_BOOL = ['public_listen', 'https', 'busy_lockout'];
 
 async function loadConfig() {
   const d = await api('/api/config');
@@ -9153,6 +9181,8 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <label>TX time-out (s) <input type="number" id="cfg-tot_sec" min="30" max="600"></label></div>
 <div class="row"><label><input type="checkbox" id="cfg-https"> HTTPS (needed for the microphone)</label></div>
 <div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
+<div class="row"><label>Drop kerchunks from Listen <select id="cfg-kerchunk_delay_ms"><option value="0">Off</option><option value="100">0.1 s</option><option value="200">0.2 s</option><option value="300">0.3 s</option><option value="400">0.4 s</option><option value="500">0.5 s</option><option value="600">0.6 s</option><option value="700">0.7 s</option><option value="800">0.8 s</option><option value="900">0.9 s</option><option value="1000">1.0 s</option></select></label></div>
+<p class="muted small">Listen waits this long before it plays audio, so every delay adds the same lag to Listen. A kerchunk is dropped only if it has ended before its audio would play. A kerchunk needs its length plus 0.6 s to be known to be over, so a short wait drops only the shortest kerchunks. Off plays everything.</p>
 <div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div id="cfg-msg" class="msg"></div>
