@@ -1,6 +1,12 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_31_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_31_1_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.31.1 (2026-10-26)
+
+- **Burst list in a sub-card.** The list of bursts on the Kerchunks card is in
+  its own sub-card, hidden by default, with a Show / Hide button and a count of
+  bursts. Layout only: nothing else changes. Cosmetic build, not for stable.
 
 ## 0.9.31 (2026-10-26)
 

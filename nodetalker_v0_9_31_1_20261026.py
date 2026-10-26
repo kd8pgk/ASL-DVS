@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.31"
+VERSION = "0.9.31.1"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -5213,6 +5213,8 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;paddin
 .kc-row span{flex:1;min-width:200px}
 .kc-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
 .kc-min{width:64px}
+.kc-sub{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px}
+.kc-sub-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 .kc-json{width:100%;min-height:160px;font:11px ui-monospace,Menlo,Consolas,monospace;background:#0a1016;color:var(--text);border:1px solid var(--line);border-radius:6px;margin:8px 0}
 .fold-body{padding:6px 0 10px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
@@ -5687,9 +5689,16 @@ function kcDraw(bursts, thr) {
   });
   g.globalAlpha = 1;
 }
+function kcToggleList() {
+  const box = $('kc-list'), open = box.classList.contains('hidden');
+  box.classList.toggle('hidden', !open);
+  $('kc-show').textContent = open ? 'Hide' : 'Show';
+  $('kc-show').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
 function kcList(bursts) {
   const box = $('kc-list');
   box.textContent = '';
+  $('kc-count').textContent = bursts.length;
   if (!bursts.length) {
     const p = document.createElement('p');
     p.className = 'muted small';
@@ -9291,6 +9300,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('kc-reset').addEventListener('click', kcReset);
   $('kc-test').addEventListener('click', kcTestToggle);
   $('kc-mark').addEventListener('click', kcMark);
+  $('kc-show').addEventListener('click', kcToggleList);
 });
 """
 
@@ -9742,7 +9752,10 @@ for a report with averages and what to change. Only numbers are kept, never audi
 <textarea id="kc-json" class="kc-json hidden" readonly aria-label="Kerchunk report as JSON"></textarea>
 <canvas id="kc-graph" class="kc-graph" role="img" aria-label="Recent bursts of audio from the node. Height is how long each lasted; the dashed line is the cut-off."></canvas>
 <p class="muted small">Each bar is one burst of audio from the node, and its height is how long it lasted. Bars below the dashed cut-off are kerchunks, and they don't count as activity. Label a few bursts (Kerchunk or Real). Once there are six of each kind, the cut-off is learned from them.</p>
-<div id="kc-list"></div>
+<div class="kc-sub">
+<div class="kc-sub-head"><span>Bursts (<span id="kc-count">0</span>)</span><button class="btn" type="button" id="kc-show" aria-expanded="false" aria-controls="kc-list">Show</button></div>
+<div id="kc-list" class="hidden"></div>
+</div>
 </div>
 </div>
 
