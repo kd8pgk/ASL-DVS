@@ -1,6 +1,32 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_32_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_33_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.33 (2026-10-26)
+
+- **Kerchunks from Asterisk's key-up state.** Node Talker logs in to the
+  Asterisk manager (AMI) with the node's login from `/etc/allmon3/allmon3.ini`
+  (the `[node]` stanza: host, port, user, pass) and asks for the node's state
+  (`RptStatus` / `XStat`) four times a second. A key-up is the local receiver
+  (`RPT_RXKEYED`) or a linked node keying (`RPT_ALINKS`); Node Talker's own TX
+  node is left out.
+- **New kerchunk rule with key-ups:** a key-up shorter than 3 s with less audio
+  than the cut-off. Carrier-only key-ups, which pass little or no audio, are now
+  caught. Courtesy tones, IDs and telemetry fall outside key-ups and are not
+  logged. Each row records the source, the keyed time, the audio time and who
+  keyed (`local` or the node number), and the report counts kerchunks by node.
+- **Busy follows key-ups.** With key-ups, "Don't transmit while the node is
+  busy" and the activity light follow the keyed state (plus the 0.6 s hold), so
+  busy starts at the key-up, with no 0.4 s wait.
+- **Fallback.** Without `allmon3.ini`, a login, or a manager that answers,
+  Node Talker uses audio as before. The Kerchunks card says which source it is
+  using and why key-ups are not available. The log says when key-ups start and
+  stop.
+- **Card.** Bars are sized by keyed time when the source is key-ups; the dashed
+  cut-off is drawn only for the audio source. List rows show who keyed and for
+  how long.
+- The burst log gains three columns (`source`, `keyed_secs`, `who`). Older
+  five-column logs still read.
 
 ## 0.9.32 (2026-10-26)
 

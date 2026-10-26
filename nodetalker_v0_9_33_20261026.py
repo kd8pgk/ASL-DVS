@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.32"
+VERSION = "0.9.33"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -1012,7 +1012,7 @@ KERCHUNK_LEARN_HI = 0.8
 KERCHUNK_TEST_MIN = 15
 KERCHUNK_TEST_MIN_LO = 1
 KERCHUNK_TEST_MAX = 60
-_KC_HEAD = "id,secs,peak_db,kerchunk,label\n"
+_KC_HEAD = "id,secs,peak_db,kerchunk,label,source,keyed_secs,who\n"
 _kc_lock = threading.Lock()
 _kc_state = {"threshold": KERCHUNK_MAX_SEC, "learned": False, "labels": 0}
 _kc_test = {"on": False, "started": 0.0, "ends": 0.0, "minutes": KERCHUNK_TEST_MIN, "rows": [], "pending": False}
@@ -1024,7 +1024,9 @@ _kc_last_id = 0
 
 
 def _kc_line(row):
-    return f"{row['id']},{row['secs']:.2f},{row['peak']:.1f},{1 if row['kerchunk'] else 0},{row['label']}\n"
+    keyed = "" if row.get("keyed_secs") is None else f"{row['keyed_secs']:.2f}"
+    return (f"{row['id']},{row['secs']:.2f},{row['peak']:.1f},{1 if row['kerchunk'] else 0},{row['label']},"
+            f"{row.get('source', 'audio')},{keyed},{row.get('who', '')}\n")
 
 
 def _kc_text(rows):
@@ -1040,10 +1042,14 @@ def _kc_rows():
     rows = []
     for ln in lines:
         p = ln.split(",")
-        if len(p) != 5:
+        if len(p) not in (5, 8):
             continue
         try:
-            rows.append({"id": p[0], "secs": float(p[1]), "peak": float(p[2]), "kerchunk": p[3] == "1", "label": p[4]})
+            row = {"id": p[0], "secs": float(p[1]), "peak": float(p[2]), "kerchunk": p[3] == "1", "label": p[4],
+                   "source": "audio", "keyed_secs": None, "who": ""}
+            if len(p) == 8:
+                row.update(source=p[5] or "audio", keyed_secs=float(p[6]) if p[6] else None, who=p[7])
+            rows.append(row)
         except ValueError:
             continue
     return rows
@@ -1077,15 +1083,32 @@ def _kc_test_check(now):
         log_event("Kerchunk test ended: time is up", "ok")
 
 
-def _kc_add(secs, peak):
+def _kc_add(secs, peak, source="audio", keyed_secs=None, who="", kerchunk=None):
     global _kc_last_id
-    kerchunk = secs < _kc_state["threshold"]
+    if kerchunk is None:
+        kerchunk = secs < _kc_state["threshold"]
     _kc_last_id = max(int(time.time() * 1000), _kc_last_id + 1)
-    row = {"id": str(_kc_last_id), "secs": secs, "peak": round(peak, 1), "kerchunk": kerchunk, "label": ""}
+    row = {"id": str(_kc_last_id), "secs": secs, "peak": round(peak, 1), "kerchunk": kerchunk, "label": "",
+           "source": source, "keyed_secs": keyed_secs, "who": re.sub(r"[^0-9A-Za-z]", "", who or "")}
     _kc_put("add", row)
     if kerchunk:
-        log_event(f"Kerchunk: {secs:.1f} s at {peak:.0f} dBFS, not treated as activity", "info")
+        if source == "keyed":
+            log_event(f"Kerchunk: keyed {keyed_secs:.1f} s by {row['who'] or 'unknown'}, {secs:.1f} s of audio", "info")
+        else:
+            log_event(f"Kerchunk: {secs:.1f} s at {peak:.0f} dBFS, not treated as activity", "info")
     return row
+
+
+def _kc_closed(row):
+    take = False
+    with _kc_lock:
+        _kc_last.update(row=row, at=time.time(), marked=False)
+        if _kc_test["on"] and _kc_test["pending"]:
+            _kc_test["pending"] = False
+            _kc_last["marked"] = True
+            take = True
+    if take:
+        _kc_test_take(row)
 
 
 def _kc_set_label(bid, label):
@@ -1142,7 +1165,8 @@ def _kc_test_take(row):
     _kc_put("label", row["id"])
     with _kc_lock:
         _kc_test["rows"].append({"id": row["id"], "secs": round(row["secs"], 2), "peak": row["peak"],
-                                 "kerchunk": row["kerchunk"]})
+                                 "kerchunk": row["kerchunk"], "source": row.get("source", "audio"),
+                                 "keyed_secs": row.get("keyed_secs"), "who": row.get("who", "")})
 
 
 def _kc_report(rows):
@@ -1157,8 +1181,17 @@ def _kc_report(rows):
             "shortest_real_label": round(lab_r[0], 2) if lab_r else None,
             "overlap": bool(lab_k and lab_r and lab_k[-1] >= lab_r[0]),
             "wrong_at_cutoff": sum(1 for s, k in lab if (s < thr) != k),
+            "kerchunks_by_node": _kc_by_node(rows),
             "kerchunk_label_secs": [round(s, 2) for s in lab_k],
             "real_label_secs": [round(s, 2) for s in lab_r]}
+
+
+def _kc_by_node(rows):
+    out = {}
+    for r in rows:
+        if r["kerchunk"] and r.get("source") == "keyed":
+            out[r.get("who") or "unknown"] = out.get(r.get("who") or "unknown", 0) + 1
+    return out
 
 
 def _kc_test_summary():
@@ -1196,7 +1229,10 @@ def kerchunk_status(_body=None):
             "threshold": _kc_state["threshold"], "learned": _kc_state["learned"], "labels": _kc_state["labels"],
             "learn_min": KERCHUNK_LEARN_MIN,
             "bursts": [{"id": r["id"], "secs": round(r["secs"], 2), "peak": r["peak"], "kerchunk": r["kerchunk"],
-                        "label": r["label"]} for r in rows[-300:][::-1]],
+                        "label": r["label"], "source": r.get("source", "audio"),
+                        "keyed_secs": None if r.get("keyed_secs") is None else round(r["keyed_secs"], 2),
+                        "who": r.get("who", "")} for r in rows[-300:][::-1]],
+            "source": "keyed" if KEYED.ok else "audio", "keyed": KEYED.state(),
             "report": _kc_report(rows), "test": _kc_test_summary()}
 
 
@@ -1260,6 +1296,176 @@ def kerchunk_label(body):
     return {"ok": True, "message": "Saved."}
 
 
+ALLMON3_INI = os.environ.get("NODETALKER_ALLMON3", "/etc/allmon3/allmon3.ini")
+AMI_POLL_SEC = 0.25
+AMI_RETRY_SEC = 10.0
+KERCHUNK_KEYED_MAX_SEC = 3.0
+
+
+def _ami_login_info(node):
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        with open(ALLMON3_INI, encoding="utf-8") as fh:
+            cp.read_file(fh)
+    except (OSError, configparser.Error) as exc:
+        return None, f"cannot read {ALLMON3_INI}: {exc}"
+    if not node or not cp.has_section(str(node)):
+        return None, f"no [{node}] stanza in {ALLMON3_INI}"
+    sec = cp[str(node)]
+    host = sec.get("host", "127.0.0.1").strip() or "127.0.0.1"
+    port = sec.get("port", "").strip()
+    if ":" in host and not port:
+        host, port = host.rsplit(":", 1)
+    user, pw = sec.get("user", "").strip(), sec.get("pass", "").strip()
+    if not user:
+        return None, f"no AMI user in [{node}] of {ALLMON3_INI}"
+    try:
+        port = int(port or 5038)
+    except ValueError:
+        return None, f"bad AMI port in [{node}] of {ALLMON3_INI}"
+    return {"host": host, "port": port, "user": user, "pass": pw}, ""
+
+
+def _ami_msg(**fields):
+    return ("".join(f"{k}: {v}\r\n" for k, v in fields.items()) + "\r\n").encode("utf-8")
+
+
+def _ami_read(fh):
+    lines = []
+    while True:
+        raw = fh.readline()
+        if not raw:
+            raise OSError("AMI closed the connection")
+        ln = raw.decode("utf-8", "replace").rstrip("\r\n")
+        if not ln:
+            if lines:
+                return lines
+            continue
+        lines.append(ln)
+
+
+def _ami_read_for(fh, action_id):
+    while True:
+        lines = _ami_read(fh)
+        if f"ActionID: {action_id}" in lines:
+            return lines
+
+
+def _ami_parse_keyed(lines):
+    rx, links = False, []
+    for ln in lines:
+        if ln.startswith("Var: RPT_RXKEYED="):
+            rx = ln.split("=", 1)[1].strip() == "1"
+        elif ln.startswith("Var: RPT_ALINKS="):
+            for item in ln.split("=", 1)[1].strip().split(",")[1:]:
+                item = item.strip()
+                if len(item) >= 3 and item[-1] == "K" and item[:-2] != TX_NODE:
+                    links.append(item[:-2])
+    return rx or bool(links), ("local" if rx else (links[0] if links else ""))
+
+
+class KeyedWatch:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.ok = False
+        self.error = "not started"
+        self.keyed = False
+        self.who = ""
+        self.key_at = 0.0
+        self.unkey_at = -1e9
+        self.audio_frames = 0
+        self.audio_peak = -120.0
+        self.own = False
+
+    def state(self):
+        with self.lock:
+            return {"ok": self.ok, "error": "" if self.ok else self.error, "keyed": self.keyed,
+                    "who": self.who if self.keyed else ""}
+
+    def note_frame(self, db):
+        if not (self.ok and self.keyed):
+            return
+        if db > ACTIVE_DB:
+            self.audio_frames += 1
+            self.audio_peak = max(self.audio_peak, db)
+        if TALKER.keyed or TONE.running:
+            self.own = True
+
+    def update(self, keyed, who, now):
+        done = None
+        with self.lock:
+            if keyed and not self.keyed:
+                self.keyed, self.who, self.key_at = True, who, now
+                self.audio_frames, self.audio_peak = 0, -120.0
+                self.own = TALKER.keyed or TONE.running
+            elif not keyed and self.keyed:
+                self.keyed, self.unkey_at = False, now
+                done = (now - self.key_at, self.audio_frames * FRAME_SEC, self.audio_peak, self.who, self.own)
+        if done:
+            self._finish(*done)
+
+    def _finish(self, keyed_secs, audio_secs, peak, who, own):
+        if own or TALKER.keyed or TONE.running:
+            return
+        kerchunk = keyed_secs < KERCHUNK_KEYED_MAX_SEC and audio_secs < _kc_state["threshold"]
+        _kc_closed(_kc_add(audio_secs, peak, source="keyed", keyed_secs=keyed_secs, who=who, kerchunk=kerchunk))
+
+    def _down(self, error):
+        with self.lock:
+            was = self.ok
+            self.ok, self.error, self.keyed = False, error, False
+        if was:
+            log_event(f"Key-up state from Asterisk lost ({error}); kerchunks and busy use audio again", "warn")
+
+    def _session(self, info, node):
+        sock = socket.create_connection((info["host"], info["port"]), timeout=5)
+        try:
+            fh = sock.makefile("rb")
+            if not fh.readline().startswith(b"Asterisk Call Manager"):
+                raise ValueError("that port is not the Asterisk manager")
+            sock.sendall(_ami_msg(Action="Login", Username=info["user"], Secret=info["pass"], Events="off",
+                                  ActionID="ntlogin"))
+            if "Response: Success" not in _ami_read_for(fh, "ntlogin"):
+                raise ValueError("the manager refused the login")
+            n = 0
+            while True:
+                n += 1
+                if n % 20 == 0 and node != main_node():
+                    return
+                aid = f"nt{n}"
+                sock.sendall(_ami_msg(Action="RptStatus", Command="XStat", Node=node, ActionID=aid))
+                lines = _ami_read_for(fh, aid)
+                if not any(ln.startswith("Var: RPT_RXKEYED=") for ln in lines):
+                    raise ValueError(f"XStat for node {node} did not report RPT_RXKEYED")
+                keyed, who = _ami_parse_keyed(lines)
+                with self.lock:
+                    first = not self.ok
+                    self.ok, self.error = True, ""
+                if first:
+                    log_event(f"Key-up state from Asterisk (AMI {info['host']}:{info['port']}): kerchunks and busy follow key-ups", "ok")
+                self.update(keyed, who, time.monotonic())
+                time.sleep(AMI_POLL_SEC)
+        finally:
+            sock.close()
+
+    def loop(self):
+        while True:
+            node = main_node()
+            info, err = _ami_login_info(node)
+            if info is None:
+                self._down(err)
+            else:
+                try:
+                    self._session(info, node)
+                    continue
+                except (OSError, ValueError) as exc:
+                    self._down(f"AMI {info['host']}:{info['port']}: {exc}")
+            time.sleep(AMI_RETRY_SEC)
+
+
+KEYED = KeyedWatch()
+
+
 class Hub:
     def __init__(self):
         self.lock = threading.Lock()
@@ -1314,6 +1520,8 @@ class Hub:
         log_event(f"Listener from {lst.ip} left after {int(time.time() - lst.since)}s")
 
     def audio_active(self):
+        if KEYED.ok:
+            return KEYED.keyed or time.monotonic() - KEYED.unkey_at < ACTIVE_HOLD_SEC
         return time.monotonic() - self.last_active < ACTIVE_HOLD_SEC
 
     def _close_burst(self):
@@ -1324,17 +1532,8 @@ class Hub:
         self.burst_last = -1e9
         if self.burst_own:
             return
-        if secs >= KERCHUNK_MIN_SEC:
-            row = _kc_add(secs, peak)
-            take = False
-            with _kc_lock:
-                _kc_last.update(row=row, at=time.time(), marked=False)
-                if _kc_test["on"] and _kc_test["pending"]:
-                    _kc_test["pending"] = False
-                    _kc_last["marked"] = True
-                    take = True
-            if take:
-                _kc_test_take(row)
+        if secs >= KERCHUNK_MIN_SEC and not KEYED.ok:
+            _kc_closed(_kc_add(secs, peak))
         if secs < _kc_state["threshold"]:
             self.kc_seqs.append(self.burst_seq)
 
@@ -1358,6 +1557,7 @@ class Hub:
             have_listeners = bool(self.listeners)
         if frame is not None:
             db = frame_db(frame)
+            KEYED.note_frame(db)
             self.level_db = db
             self.peak_db = max(db, self.peak_db - 1.0)
             if db > ACTIVE_DB:
@@ -5658,15 +5858,19 @@ async function kcRefresh() {
   $('sum-kc').textContent = d.kerchunks_today ? d.kerchunks_today + ' today' : '';
   const how = d.learned ? 'learned from ' + d.labels + ' labelled bursts' : 'default, until ' + d.learn_min + ' labels of each kind';
   const r = d.report;
-  $('kc-state').textContent = 'Cut-off ' + d.threshold.toFixed(2) + ' s (' + how + '). Kerchunks today: '
+  const src = d.source === 'keyed' ? 'Source: key-ups from Asterisk. '
+    : 'Source: audio' + (d.keyed && d.keyed.error ? ' (key-ups unavailable: ' + d.keyed.error + ')' : '') + '. ';
+  const by = Object.entries(r.kerchunks_by_node || {}).map((e) => e[0] + ' ' + e[1]).join(', ');
+  $('kc-state').textContent = src + 'Cut-off ' + d.threshold.toFixed(2) + ' s (' + how + '). Kerchunks today: '
     + d.kerchunks_today + '. Logged: ' + d.kerchunks_total + '. Labels: ' + r.labels.kerchunk + ' kerchunk, '
     + r.labels.real + ' real. Longest kerchunk label ' + (r.longest_kerchunk_label == null ? '-' : r.longest_kerchunk_label + ' s')
     + ', shortest real label ' + (r.shortest_real_label == null ? '-' : r.shortest_real_label + ' s')
-    + (r.overlap ? ' (they overlap)' : '') + '. Wrong at this cut-off: ' + r.wrong_at_cutoff + '.';
+    + (r.overlap ? ' (they overlap)' : '') + '. Wrong at this cut-off: ' + r.wrong_at_cutoff + '.'
+    + (by ? ' Kerchunks by node: ' + by + '.' : '');
   $('kc-test').textContent = d.test.on ? 'Stop test' : 'Start test';
   $('kc-mark').disabled = !d.test.on;
   $('kc-test-state').textContent = kcTestLine(d.test);
-  kcDraw(d.bursts, d.threshold);
+  kcDraw(d.bursts, d.threshold, d.source !== 'keyed');
   kcList(d.bursts);
 }
 async function kcCopy() {
@@ -5701,7 +5905,8 @@ async function kcTestToggle() {
   if (!d.ok) $('kc-state').textContent = d.error || 'Could not change the test.';
   kcRefresh();
 }
-function kcDraw(bursts, thr) {
+function kcLen(b) { return b.keyed_secs != null ? b.keyed_secs : b.secs; }
+function kcDraw(bursts, thr, showCut) {
   const c = $('kc-graph'), dpr = window.devicePixelRatio || 1;
   const w = c.clientWidth || 300, h = 120;
   c.width = w * dpr; c.height = h * dpr;
@@ -5709,18 +5914,20 @@ function kcDraw(bursts, thr) {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, w, h);
   const list = bursts.slice().reverse();
-  const top = Math.max(1.5, thr, ...list.map((b) => b.secs));
+  const top = Math.max(1.5, thr, ...list.map(kcLen));
   const slot = Math.max(3, (w - 4) / Math.max(list.length, 60));
   const y = (s) => h - 4 - (s / top) * (h - 8);
-  g.strokeStyle = kcColor('--muted');
-  g.setLineDash([4, 4]);
-  g.beginPath(); g.moveTo(0, y(thr)); g.lineTo(w, y(thr)); g.stroke();
-  g.setLineDash([]);
+  if (showCut) {
+    g.strokeStyle = kcColor('--muted');
+    g.setLineDash([4, 4]);
+    g.beginPath(); g.moveTo(0, y(thr)); g.lineTo(w, y(thr)); g.stroke();
+    g.setLineDash([]);
+  }
   list.forEach((b, i) => {
     const kind = b.label || (b.kerchunk ? 'kerchunk' : 'real');
     g.fillStyle = kind === 'kerchunk' ? kcColor('--amber') : kcColor('--accent');
     g.globalAlpha = b.label ? 1 : 0.5;
-    g.fillRect(2 + i * slot, y(b.secs), Math.max(1, slot - 1), h - 4 - y(b.secs));
+    g.fillRect(2 + i * slot, y(kcLen(b)), Math.max(1, slot - 1), h - 4 - y(kcLen(b)));
   });
   g.globalAlpha = 1;
 }
@@ -5745,8 +5952,9 @@ function kcList(bursts) {
     const row = document.createElement('div');
     row.className = 'kc-row';
     const t = document.createElement('span');
-    t.textContent = new Date(Number(b.id)).toLocaleTimeString() + '  ' + b.secs.toFixed(2) + ' s  '
-      + b.peak.toFixed(0) + ' dBFS  ' + (b.kerchunk ? 'kerchunk?' : 'speech?');
+    t.textContent = new Date(Number(b.id)).toLocaleTimeString() + '  '
+      + (b.keyed_secs != null ? 'keyed ' + b.keyed_secs.toFixed(2) + ' s by ' + (b.who || '?') + ', audio ' : '')
+      + b.secs.toFixed(2) + ' s  ' + b.peak.toFixed(0) + ' dBFS  ' + (b.kerchunk ? 'kerchunk?' : 'speech?');
     row.appendChild(t);
     ['kerchunk', 'real'].forEach((kind) => {
       const btn = document.createElement('button');
@@ -9786,7 +9994,7 @@ for a report with averages and what to change. Only numbers are kept, never audi
 <p class="muted small" id="kc-test-state"></p>
 <textarea id="kc-json" class="kc-json hidden" readonly aria-label="Kerchunk report as JSON"></textarea>
 <canvas id="kc-graph" class="kc-graph" role="img" aria-label="Recent bursts of audio from the node. Height is how long each lasted; the dashed line is the cut-off."></canvas>
-<p class="muted small">Each bar is one burst of audio from the node, and its height is how long it lasted. Bars below the dashed cut-off are kerchunks, and they don't count as activity. Label a few bursts (Kerchunk or Real). Once there are six of each kind, the cut-off is learned from them.</p>
+<p class="muted small">Each bar is one key-up (when Asterisk reports key-ups) or one burst of audio (when it doesn't), and its height is how long it lasted. Amber bars are kerchunks. With key-ups, a kerchunk is a key-up under 3 s with less audio than the cut-off. With audio only, bars below the dashed cut-off are kerchunks. Label a few (Kerchunk or Real). Once there are six of each kind, the cut-off is learned from them.</p>
 <div class="kc-sub">
 <div class="kc-sub-head"><span>Bursts (<span id="kc-count">0</span>)</span><button class="btn" type="button" id="kc-show" aria-expanded="false" aria-controls="kc-list">Show</button></div>
 <div id="kc-list" class="hidden"></div>
@@ -10254,6 +10462,7 @@ def run_server():
     _solo_load()
     fav_doc()
     _kc_refresh()
+    threading.Thread(target=KEYED.loop, name="ami-keyed", daemon=True).start()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=pi_loop, name="pi-health", daemon=True).start()
     threading.Thread(target=udp_loop, args=(_cfg_get("udp_port"),), name="udp", daemon=True).start()
