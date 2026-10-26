@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.23"
+VERSION = "0.9.24"
 DATE_STR = "2026-10-25"
 APP_NAME = "Node Talker"
 
@@ -5213,7 +5213,7 @@ function sendOp(op) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op}));
 }
 
-const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'chk', 'phone', 'log'];
+const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'exp', 'chk', 'phone', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 

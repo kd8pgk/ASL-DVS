@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_23_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_24_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.24 (2026-10-26)
+
+- **The Expanded test card opens.** In 0.9.23 its header showed on the Setup
+  tab, but tapping it did nothing, so the test, its options and Start could not
+  be reached. The card was missing from the page's list of fold-out cards. It
+  now opens and closes like the others.
 
 ## 0.9.23 (2026-10-26)
 
