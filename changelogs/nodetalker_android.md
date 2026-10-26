@@ -34,6 +34,10 @@ Current version: `0.5.0`. The app is in `android/`; its version is `appVersion` 
 - **No more crash when the page's display process dies.** If the phone runs low
   on memory and Android stops the page's WebView, the app shows "The page
   stopped" with Retry instead of closing.
+- **The page and the app are checked against each other.** `ci/check_repo.py`
+  now also fails when the app's spectrum scale and palette stops, or its
+  push-to-talk timings (wait after receive, tap guard, warning time) and guard
+  choices, differ from the page's.
 - **Not on the native tab yet:** the audio-check badge and the headset-button
   setting. They stay on the page (Page audio, or another Node Talker version).
 

@@ -336,6 +336,46 @@ class CheckTests(unittest.TestCase):
         self.r.commit("e", T0 + 2 * DAY)
         self.assertCheck(False, "bar is #111923 but the page's the tab bar background is #111922")
 
+    def native(self, gap="4000L", stop="255, 255, 92, 92", guards="30, 60, 90, 120, 180", lo="-100.0"):
+        self.android("0.1.0")
+        name = self.r.build("nodetalker", "1.0.0", None)
+        js = (
+            '\n_NOTE = r"""const SPEC_DB_LO = -100, SPEC_DB_HI = -25;\n'
+            'const PTT_GUARDS = [30, 60, 90, 120, 180], TAP_IGNORE_MS = 500, GUARD_WARN_SEC = 10;\n'
+            'const RX_GAP_MS = 4000, RX_QUIET_MS = 300, RX_ACTIVE_DB = -50, OWN_TX_IGNORE_MS = 2500,'
+            ' RX_LOCAL_TRUST_MS = 2000, RX_HOLD_MS = 600;\n'
+            'const stops = [[0, 10, 16, 22], [255, 255, 92, 92]];"""\n'
+        )
+        self.r.write(name, tool_text("1.0.0") + js)
+        d = "android/app/src/main/java/io/github/kd8pgk/nodetalker/"
+        self.r.write(d + "Spectrum.kt", "object S {\n    const val DB_LO = " + lo + "\n    const val DB_HI = -25.0\n"
+                     "    private val STOPS = arrayOf(\n        intArrayOf(0, 10, 16, 22), intArrayOf(" + stop + "),\n    )\n\n"
+                     "    val PALETTE = 1\n}\n")
+        self.r.write(d + "Ptt.kt", "object P {\n    val GUARDS = setOf(" + guards + ")\n    const val TAP_IGNORE_MS = 500L\n"
+                     "    const val GUARD_WARN_SEC = 10\n    const val RX_GAP_MS = " + gap + "\n    const val RX_QUIET_MS = 300L\n"
+                     "    const val OWN_TX_IGNORE_MS = 2500L\n    const val RX_LOCAL_TRUST_MS = 2000L\n    const val RX_HOLD_MS = 600L\n}\n")
+        self.r.commit("n", T0 + DAY)
+
+    def test_native_matches(self):
+        self.native()
+        self.assertCheck(True)
+
+    def test_native_number_differs(self):
+        self.native(gap="3000L")
+        self.assertCheck(False, "RX_GAP_MS is 3000 but the page's RX_GAP_MS is 4000")
+
+    def test_native_scale_differs(self):
+        self.native(lo="-90.0")
+        self.assertCheck(False, "DB_LO is -90.0 but the page's SPEC_DB_LO is -100")
+
+    def test_native_palette_differs(self):
+        self.native(stop="255, 255, 92, 93")
+        self.assertCheck(False, "STOPS")
+
+    def test_native_guards_differ(self):
+        self.native(guards="30, 60, 90, 120")
+        self.assertCheck(False, "GUARDS")
+
 
 if __name__ == "__main__":
     unittest.main()

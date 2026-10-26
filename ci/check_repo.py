@@ -28,6 +28,14 @@ CSS_ROOT_RE = re.compile(r":root\{(--bg:[^}]*)\}")
 CSS_COLOR_RE = re.compile(r"--([a-z0-9-]+):\s*(#[0-9a-fA-F]{6})")
 CSS_NAV_RE = re.compile(r"nav\.tabs\{[^}]*?background:(#[0-9a-fA-F]{6})")
 XML_COLOR_RE = re.compile(r'<color name="([a-z0-9_]+)">(#[0-9a-fA-F]{6})</color>')
+KT_DIR = "android/app/src/main/java/io/github/kd8pgk/nodetalker/"
+NATIVE_NUMBERS = (
+    ("SPEC_DB_LO", "Spectrum.kt", "DB_LO"), ("SPEC_DB_HI", "Spectrum.kt", "DB_HI"),
+    ("TAP_IGNORE_MS", "Ptt.kt", "TAP_IGNORE_MS"), ("GUARD_WARN_SEC", "Ptt.kt", "GUARD_WARN_SEC"),
+    ("RX_GAP_MS", "Ptt.kt", "RX_GAP_MS"), ("RX_QUIET_MS", "Ptt.kt", "RX_QUIET_MS"),
+    ("OWN_TX_IGNORE_MS", "Ptt.kt", "OWN_TX_IGNORE_MS"), ("RX_LOCAL_TRUST_MS", "Ptt.kt", "RX_LOCAL_TRUST_MS"),
+    ("RX_HOLD_MS", "Ptt.kt", "RX_HOLD_MS"),
+)
 
 errors = []
 notes = []
@@ -284,6 +292,43 @@ def check_design(paths):
             fail(f"{COLORS_XML}: {name} is {have[name]} but the page's {label} is {value}")
 
 
+def _ints(text):
+    return [int(x) for x in re.findall(r"-?\d+", text)]
+
+
+def check_native_constants(paths):
+    page = current_nodetalker()
+    files = {n: KT_DIR + n for n in ("Spectrum.kt", "Ptt.kt")}
+    if page is None or not all(os.path.isfile(f) for f in files.values()):
+        return
+    if not any(p in files.values() or (parse_tool(p) or ("",))[0] == "nodetalker" for p in paths):
+        return
+    text = read(page)
+    kt = {n: read(f) for n, f in files.items()}
+    for js, kfile, kname in NATIVE_NUMBERS:
+        m = re.search(r"\b" + js + r"\s*=\s*(-?\d+(?:\.\d+)?)", text)
+        k = re.search(r"const val " + kname + r"\s*=\s*(-?\d+(?:\.\d+)?)", kt[kfile])
+        if not m or not k:
+            fail(f"{KT_DIR}{kfile}: cannot compare {kname} with the page's {js} (one of them is missing)")
+        elif float(m.group(1)) != float(k.group(1)):
+            fail(f"{KT_DIR}{kfile}: {kname} is {k.group(1)} but the page's {js} is {m.group(1)}")
+    g = re.search(r"PTT_GUARDS\s*=\s*\[([^\]]*)\]", text)
+    kg = re.search(r"GUARDS\s*=\s*setOf\(([^)]*)\)", kt["Ptt.kt"])
+    if not g or not kg:
+        fail(f"{KT_DIR}Ptt.kt: cannot compare GUARDS with the page's PTT_GUARDS")
+    elif sorted(_ints(g.group(1))) != sorted(_ints(kg.group(1))):
+        fail(f"{KT_DIR}Ptt.kt: GUARDS {_ints(kg.group(1))} differs from the page's PTT_GUARDS {_ints(g.group(1))}")
+    ps = re.search(r"const stops = (\[\[.*?\]\]);", text, re.S)
+    ks = re.search(r"STOPS = arrayOf\((.*?)\n\s*val PALETTE", kt["Spectrum.kt"], re.S)
+    if not ps or not ks:
+        fail(f"{KT_DIR}Spectrum.kt: cannot compare STOPS with the page's spectrum palette stops")
+    else:
+        want = [_ints(x) for x in re.findall(r"\[([^\[\]]*)\]", ps.group(1))]
+        have = [_ints(x) for x in re.findall(r"intArrayOf\(([^)]*)\)", ks.group(1))]
+        if want != have:
+            fail(f"{KT_DIR}Spectrum.kt: STOPS {have} differs from the page's spectrum palette stops {want}")
+
+
 def check_launchers():
     texts = {}
     for name in sorted(os.listdir(".")):
@@ -439,6 +484,7 @@ def main():
     check_launchers()
     check_android(base, added + modified + deleted)
     check_design(added + modified + deleted)
+    check_native_constants(added + modified + deleted)
 
     for n in notes:
         print(f"note: {n}")
