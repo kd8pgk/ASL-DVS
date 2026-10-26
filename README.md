@@ -17,7 +17,7 @@ By KD8PGK, written with Claude (Anthropic).
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
-| Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
+| Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): shows the node's Node Talker page with a tab bar of its own and, on a Node Talker version it was checked against, its own Listen tab; remembers the node's certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 
 Scripts:
 
@@ -300,10 +300,12 @@ node 1921:
 
 ## Node Talker Mobile
 
-An optional Android app (Android 8.0 and newer) that opens only a Node
-Talker page. Node Talker works the same in a browser; the app is for
-phones that should keep receiving and transmitting with the screen locked.
-It comes in phases:
+An optional Android app (Android 8.0 and newer) that shows a Node Talker
+page, with a tab bar of its own, and from 0.5.0 its own Listen tab when the
+node runs a Node Talker version the app was checked against (any other
+version keeps the page's Listen tab). Node Talker works the same in a
+browser; the app is for phones that should keep receiving and transmitting
+with the screen locked. It comes in phases:
 
 1. **Shell (0.1.0):** a list of your nodes; the page opens with nothing
    else around it; Node Talker's own HTTPS certificate is trusted once, by
@@ -315,7 +317,11 @@ It comes in phases:
 3. **Transmit in the app (0.3.0; needs Node Talker 0.6.11):** the page's
    push-to-talk keys through the app, works on plain HTTP too, and a
    tap-to-talk transmission keeps going with the screen locked.
-4. PTT on the screen button or a volume key.
+4. **Native tabs (0.4.0 and 0.5.0):** the app's own tab bar and a client
+   for the node (0.4.0); a native Listen tab with the spectrum, level meter,
+   push-to-talk and the kerchunk mark button (0.5.0). Connect is next; Setup
+   stays the node's page.
+5. PTT on the screen button or a volume key.
 
 **Install a test build:** on the phone, open the repository's
 [Releases](https://github.com/kd8pgk/ASL-DVS/releases), pick the newest

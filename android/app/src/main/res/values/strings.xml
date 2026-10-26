@@ -66,4 +66,14 @@
     <string name="battery">Battery: let Node Talker Mobile run in the background</string>
     <string name="battery_warn">Battery saver can stop Node Talker Mobile when the screen is off. Tap Battery, find Node Talker Mobile and choose \"Unrestricted\" or \"Don\'t optimize\".</string>
     <string name="battery_ok">Battery: Node Talker Mobile may run in the background.</string>
+    <string name="listen_connect">Connect\nfeed</string>
+    <string name="listen_disconnect">Disconnect\nfeed</string>
+    <string name="listen_volume">Volume</string>
+    <string name="listen_rx">RX</string>
+    <string name="listen_tx">TX</string>
+    <string name="ptt_hold">Hold to talk</string>
+    <string name="ptt_mark">Mark kerchunk</string>
+    <string name="ptt_description">Push to talk</string>
+    <string name="spectrum_description">Audio spectrum</string>
+    <string name="page_stopped">The page stopped (the phone ran low on memory, or its display process was closed). Tap Retry to open it again.</string>
 </resources>

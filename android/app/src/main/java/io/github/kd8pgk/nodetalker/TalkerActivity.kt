@@ -16,6 +16,7 @@ import android.os.Build
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -34,6 +35,9 @@ class TalkerActivity : Activity() {
     private lateinit var web: WebView
     private lateinit var error: View
     private lateinit var tabs: TabBar
+    private var listenTab: ListenTab? = null
+    private lateinit var router: TabRouter
+    private var renderGone = false
     private var micRequest: PermissionRequest? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingDownload: String? = null
@@ -55,8 +59,40 @@ class TalkerActivity : Activity() {
         if (NodeStore.keepScreenOn(this)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         web = findViewById(R.id.web)
         error = findViewById(R.id.error)
-        tabs = TabBar(findViewById(R.id.tabbar)) { name -> web.evaluateJavascript(TabBar.clickJs(name), null) }
-        findViewById<Button>(R.id.retry).setOnClickListener { load() }
+        router = TabRouter(object : TabRouter.Io {
+            override fun clickPage(name: String) {
+                web.evaluateJavascript(TabBar.clickJs(name), null)
+            }
+
+            override fun select(name: String) {
+                tabs.select(name)
+            }
+
+            override fun showNative() {
+                listenTab?.show()
+            }
+
+            override fun hideNative() {
+                listenTab?.hide()
+            }
+
+            override fun nativeAllowed(): Boolean =
+                Compat.useNative("listen", Compat.seen(node.id)) && NodeStore.audio(this@TalkerActivity).app
+        })
+        tabs = TabBar(findViewById(R.id.tabbar)) { name -> router.pick(name) }
+        listenTab = ListenTab(this, findViewById(R.id.listen_view), object : ListenTab.Host {
+            override val node: Node
+                get() = this@TalkerActivity.node
+
+            override fun readPage(js: String, done: (String?) -> Unit) {
+                web.evaluateJavascript(js) { done(it) }
+            }
+
+            override fun openTalk(): Boolean = openTalkChannel()
+
+            override fun startListen(): Boolean = startListening()
+        })
+        findViewById<Button>(R.id.retry).setOnClickListener { if (renderGone) reopen() else load() }
         findViewById<Button>(R.id.back).setOnClickListener { finish() }
         setup()
         if (savedInstanceState == null || web.restoreState(savedInstanceState) == null) load()
@@ -69,17 +105,20 @@ class TalkerActivity : Activity() {
         setIntent(intent)
         node = n
         title = node.title
+        listenTab?.reset()
         load()
     }
 
     override fun onResume() {
         super.onResume()
+        listenTab?.resume()
         Listen.listeners.add(pushState)
         Talk.listeners.add(pushTalk)
         sendState()
     }
 
     override fun onPause() {
+        listenTab?.pause()
         Listen.listeners.remove(pushState)
         Talk.listeners.remove(pushTalk)
         super.onPause()
@@ -104,18 +143,7 @@ class TalkerActivity : Activity() {
         fun audioMode(): String = NodeStore.audio(this@TalkerActivity).mode
 
         @JavascriptInterface
-        fun listenStart(): Boolean {
-            val n = node
-            askNotifications()
-            return try {
-                Listen.start(this@TalkerActivity, n)
-                true
-            } catch (e: IllegalStateException) {
-                false
-            } catch (e: SecurityException) {
-                false
-            }
-        }
+        fun listenStart(): Boolean = startListening()
 
         @JavascriptInterface
         fun listenStop() = Listen.stop(this@TalkerActivity)
@@ -125,24 +153,7 @@ class TalkerActivity : Activity() {
             if (Listen.nodeId == null || Listen.nodeId == node.id) Listen.json() else "{\"state\":\"off\"}"
 
         @JavascriptInterface
-        fun talkOpen(): Boolean {
-            if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
-                runOnUiThread {
-                    Toast.makeText(this@TalkerActivity, R.string.mic_needed, Toast.LENGTH_LONG).show()
-                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_TALK_MIC)
-                }
-                return false
-            }
-            askNotifications()
-            return try {
-                Talk.open(this@TalkerActivity, node)
-                true
-            } catch (e: IllegalStateException) {
-                false
-            } catch (e: SecurityException) {
-                false
-            }
-        }
+        fun talkOpen(): Boolean = openTalkChannel()
 
         @JavascriptInterface
         fun talkKey(opts: String): Boolean {
@@ -166,7 +177,7 @@ class TalkerActivity : Activity() {
 
         @JavascriptInterface
         fun tabChanged(name: String) {
-            runOnUiThread { tabs.select(if (name in TabBar.NAMES) name else "") }
+            runOnUiThread { router.onPage(if (name in TabBar.NAMES) name else "") }
         }
 
         @JavascriptInterface
@@ -177,6 +188,38 @@ class TalkerActivity : Activity() {
         @JavascriptInterface
         fun setVolume(v: Double) {
             Listen.volume = v.toFloat().coerceIn(0f, 1f)
+        }
+    }
+
+    private fun startListening(): Boolean {
+        val n = node
+        askNotifications()
+        return try {
+            Listen.start(this, n)
+            true
+        } catch (e: IllegalStateException) {
+            false
+        } catch (e: SecurityException) {
+            false
+        }
+    }
+
+    private fun openTalkChannel(): Boolean {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            runOnUiThread {
+                Toast.makeText(this, R.string.mic_needed, Toast.LENGTH_LONG).show()
+                requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQ_TALK_MIC)
+            }
+            return false
+        }
+        askNotifications()
+        return try {
+            Talk.open(this, node)
+            true
+        } catch (e: IllegalStateException) {
+            false
+        } catch (e: SecurityException) {
+            false
         }
     }
 
@@ -192,6 +235,7 @@ class TalkerActivity : Activity() {
     }
 
     override fun onDestroy() {
+        listenTab?.hide()
         certDialog?.dismiss()
         if (isFinishing && ::node.isInitialized && Talk.nodeId == node.id) Talk.close(this)
         if (::web.isInitialized) {
@@ -203,8 +247,14 @@ class TalkerActivity : Activity() {
 
     private fun load() {
         error.visibility = View.GONE
-        tabs.select("")
+        router.reset()
         web.loadUrl(node.origin + "/")
+    }
+
+    private fun reopen() {
+        val again = Intent(this, TalkerActivity::class.java).putExtra(EXTRA_NODE, node.id)
+        finish()
+        startActivity(again)
     }
 
     private fun handshake() {
@@ -216,11 +266,12 @@ class TalkerActivity : Activity() {
                 return@Thread
             }
             Compat.remember(n.id, v)
+            runOnUiThread { router.reevaluate() }
         }.start()
     }
 
     private fun showError(text: String) {
-        tabs.select("")
+        router.reset()
         findViewById<TextView>(R.id.error_text).text = getString(R.string.load_failed, node.origin, text)
         error.visibility = View.VISIBLE
     }
@@ -260,6 +311,12 @@ class TalkerActivity : Activity() {
                 view.evaluateJavascript(TabBar.HIDE_PAGE_NAV_JS, null)
                 sendState()
                 handshake()
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                renderGone = true
+                showError(getString(R.string.page_stopped))
+                return true
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, err: WebResourceError) {
@@ -363,6 +420,7 @@ class TalkerActivity : Activity() {
         if (requestCode == REQ_TALK_MIC) {
             if (grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
                 web.evaluateJavascript("window.ntAppTalk && window.ntAppTalk({ev:'retry'})", null)
+                listenTab?.micGranted()
             }
             return
         }

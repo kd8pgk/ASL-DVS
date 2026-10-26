@@ -30,6 +30,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.min
 
 object Listen {
     const val OFF = "off"
@@ -44,6 +45,7 @@ object Listen {
     @Volatile var level: Double = -120.0
     @Volatile var muted = false
     @Volatile var volume = 1f
+    val spectrum = Spectrum()
 
     val listeners = CopyOnWriteArrayList<() -> Unit>()
 
@@ -357,6 +359,7 @@ class ListenService : Service() {
 
     private fun set(state: String, err: String = Listen.error) {
         val changed = state != Listen.state || err != Listen.error
+        if (state == Listen.OFF) Listen.spectrum.clear()
         Listen.state = state
         Listen.error = err
         if (changed) {
@@ -499,6 +502,7 @@ class ListenService : Service() {
         var filling = true
         var peak = 0
         var n = 0
+        val scratch = ShortArray(FRAME)
         try {
             track.play()
             while (live(g) && !Thread.currentThread().isInterrupted) {
@@ -515,9 +519,11 @@ class ListenService : Service() {
                     filling = true
                     continue
                 }
-                track.setVolume(Listen.volume)
+                Listen.spectrum.feed(f)
+                val gain = Listen.volume
+                track.setVolume(min(gain, 1f))
                 val quiet = Listen.muted || focusLost
-                track.write(if (quiet) silence else f, 0, FRAME)
+                track.write(if (quiet) silence else if (gain > 1f) boost(f, gain, scratch) else f, 0, FRAME)
                 for (v in f) peak = max(peak, abs(v.toInt()))
                 if (++n >= LEVEL_FRAMES) {
                     Listen.level = if (peak == 0) -120.0 else 20 * log10(peak / 32768.0)
@@ -534,6 +540,11 @@ class ListenService : Service() {
             track.flush()
             track.release()
         }
+    }
+
+    private fun boost(src: ShortArray, gain: Float, out: ShortArray): ShortArray {
+        for (i in src.indices) out[i] = (src[i] * gain).toInt().coerceIn(-32768, 32767).toShort()
+        return out
     }
 
     private fun requestFocus() {

@@ -16,4 +16,13 @@
     <color name="amber_bg">#3a2a07</color>
     <color name="red">#ff8a8f</color>
     <color name="red_line">#f2545b</color>
+    <color name="spec_bg">#0a1016</color>
+    <color name="meter_bg">#1b2530</color>
+    <color name="dot_off">#33404d</color>
+    <color name="go">#1fae63</color>
+    <color name="go_ink">#04210f</color>
+    <color name="stop">#d93a44</color>
+    <color name="key_bg">#1b2633</color>
+    <color name="key_talk_bg">#4a1418</color>
+    <color name="badge">#7fd8c6</color>
 </resources>

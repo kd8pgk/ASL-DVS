@@ -1,6 +1,41 @@
 # Node Talker Mobile changelog
 
-Current version: `0.4.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.5.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.5.0 (2026-10-26)
+
+- **Phase 2 of the native tabs: the Listen tab is the app's own.** When the
+  node runs Node Talker 0.9.35, 0.9.39 or 0.9.40 (the versions the tab was
+  checked against), the audio mode is App audio and you are logged in, the
+  Listen tab is drawn by the app instead of the page. On any other Node Talker
+  version, or with Page audio, it stays the node's page, as before. Connect and
+  Setup are still the page.
+- **Same screen as the page:** Connect/Disconnect feed and a volume slider; the
+  status row (node, feed, RX, TX, listeners); the spectrum with the page's
+  colors and scale, the level meter with its peak hold and clip line, and the
+  meter bar; Hold to talk (or Tap to talk) with the wait after receive and its
+  countdown, the busy and time-out messages, and the guard timer with its
+  10 s warning beeps; the link line under the button; and **Mark kerchunk**
+  beside push-to-talk while a kerchunk test runs.
+- **It reads your Setup choices from the page:** hold or tap, the guard time,
+  the wait after receive, mic gain, Spectrum on/off, Auto start, and the
+  Listen tab's Text and Height sizes. Change them on the Setup tab and they
+  apply when you come back to Listen.
+- **The spectrum works in the app.** The page cannot draw one while the app
+  plays the audio (its analyser is not running), so the page's Listen tab shows
+  an empty box there. The native tab computes it from the audio it plays.
+- **Volume goes to 200 %.** Above 100 % the app amplifies the audio (the page's
+  volume slider stopped at 100 % in the app).
+- **Text size** scales all the text on the tab. (On the page, the Listen Text
+  slider changes almost nothing, because most of the tab's text has a fixed
+  size.)
+- **Vibration** on key-up, un-key, the guard warning and a refused press, like
+  the page in a browser (adds the Vibrate permission).
+- **No more crash when the page's display process dies.** If the phone runs low
+  on memory and Android stops the page's WebView, the app shows "The page
+  stopped" with Retry instead of closing.
+- **Not on the native tab yet:** the audio-check badge and the headset-button
+  setting. They stay on the page (Page audio, or another Node Talker version).
 
 ## 0.4.0 (2026-10-26)
 
