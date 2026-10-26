@@ -30,8 +30,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.25"
-DATE_STR = "2026-10-25"
+VERSION = "0.9.27"
+DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -145,6 +145,7 @@ IN_QUEUE_TRIM = 10
 LISTENER_QUEUE_MAX = 150
 ACTIVE_DB = -50.0
 ACTIVE_HOLD_SEC = 0.6
+KERCHUNK_MAX_SEC = 0.4
 
 _START_TIME = time.time()
 
@@ -991,6 +992,116 @@ class _Listener:
         self.pcm = pcm
 
 
+KERCHUNK_LOG_PATH = os.path.join(CONFIG_DIR, "nodetalker_bursts.csv")
+KERCHUNK_MIN_SEC = 0.1
+KERCHUNK_LOG_MAX = 2000
+KERCHUNK_LOG_BYTES = 200000
+KERCHUNK_LEARN_MIN = 6
+KERCHUNK_LEARN_LO = 0.15
+KERCHUNK_LEARN_HI = 1.5
+_KC_HEAD = "id,secs,peak_db,kerchunk,label\n"
+_kc_lock = threading.Lock()
+_kc_state = {"threshold": KERCHUNK_MAX_SEC, "learned": False, "labels": 0}
+_kc_last_id = 0
+
+
+def _kc_line(row):
+    return f"{row['id']},{row['secs']:.2f},{row['peak']:.1f},{1 if row['kerchunk'] else 0},{row['label']}\n"
+
+
+def _kc_text(rows):
+    return _KC_HEAD + "".join(_kc_line(r) for r in rows[-KERCHUNK_LOG_MAX:])
+
+
+def _kc_rows():
+    try:
+        with open(KERCHUNK_LOG_PATH, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()[1:]
+    except FileNotFoundError:
+        return []
+    rows = []
+    for ln in lines:
+        p = ln.split(",")
+        if len(p) != 5:
+            continue
+        try:
+            rows.append({"id": p[0], "secs": float(p[1]), "peak": float(p[2]), "kerchunk": p[3] == "1", "label": p[4]})
+        except ValueError:
+            continue
+    return rows
+
+
+def _kc_learn(rows):
+    pts = sorted((r["secs"], r["label"] == "kerchunk") for r in rows if r["label"] in ("kerchunk", "real"))
+    if len(pts) < KERCHUNK_LEARN_MIN or len({k for _, k in pts}) < 2:
+        return KERCHUNK_MAX_SEC, False, len(pts)
+    best = None
+    for (a, _), (b, _) in zip(pts, pts[1:]):
+        if a == b:
+            continue
+        t = (a + b) / 2
+        err = sum(1 for s, k in pts if (s < t) != k)
+        if best is None or err < best[0]:
+            best = (err, t)
+    if best is None or best[0] > len(pts) // 3:
+        return KERCHUNK_MAX_SEC, False, len(pts)
+    return round(min(max(best[1], KERCHUNK_LEARN_LO), KERCHUNK_LEARN_HI), 3), True, len(pts)
+
+
+def _kc_refresh():
+    thr, learned, n = _kc_learn(_kc_rows())
+    _kc_state.update(threshold=thr, learned=learned, labels=n)
+
+
+def _kc_add(secs, peak):
+    global _kc_last_id
+    kerchunk = secs < _kc_state["threshold"]
+    _kc_last_id = max(int(time.time() * 1000), _kc_last_id + 1)
+    row = {"id": str(_kc_last_id), "secs": secs, "peak": round(peak, 1), "kerchunk": kerchunk, "label": ""}
+    with _kc_lock:
+        try:
+            if os.path.exists(KERCHUNK_LOG_PATH) and os.path.getsize(KERCHUNK_LOG_PATH) > KERCHUNK_LOG_BYTES:
+                _atomic_write(KERCHUNK_LOG_PATH, _kc_text(_kc_rows()), 0o644)
+            fresh = not os.path.exists(KERCHUNK_LOG_PATH) or os.path.getsize(KERCHUNK_LOG_PATH) == 0
+            with open(KERCHUNK_LOG_PATH, "a", encoding="utf-8") as fh:
+                fh.write((_KC_HEAD if fresh else "") + _kc_line(row))
+        except OSError as exc:
+            log_event(f"Could not record a burst in {KERCHUNK_LOG_PATH}: {exc}", "err")
+    if kerchunk:
+        log_event(f"Kerchunk: {secs:.1f} s at {peak:.0f} dBFS, not treated as activity", "info")
+
+
+def kerchunk_status(_body=None):
+    rows = _kc_rows()
+    day0 = time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d")) * 1000
+    today = [r for r in rows if int(r["id"]) >= day0]
+    return {"ok": True, "kerchunks_today": sum(r["kerchunk"] for r in today),
+            "kerchunks_total": sum(r["kerchunk"] for r in rows), "bursts_today": len(today),
+            "threshold": _kc_state["threshold"], "learned": _kc_state["learned"], "labels": _kc_state["labels"],
+            "learn_min": KERCHUNK_LEARN_MIN,
+            "bursts": [{"id": r["id"], "secs": round(r["secs"], 2), "peak": r["peak"], "kerchunk": r["kerchunk"],
+                        "label": r["label"]} for r in rows[-100:][::-1]]}
+
+
+def kerchunk_label(body):
+    bid = str(body.get("id", ""))
+    label = body.get("label") or ""
+    if label not in ("", "kerchunk", "real"):
+        return {"ok": False, "error": "The label must be Kerchunk, Real, or none."}
+    with _kc_lock:
+        rows = _kc_rows()
+        hit = [r for r in rows if r["id"] == bid]
+        if not hit:
+            return {"ok": False, "error": "That burst is no longer in the log."}
+        hit[0]["label"] = label
+        try:
+            _atomic_write(KERCHUNK_LOG_PATH, _kc_text(rows), 0o644)
+        except OSError as exc:
+            return {"ok": False, "error": f"could not save {KERCHUNK_LOG_PATH}: {exc}"}
+    _kc_refresh()
+    return {"ok": True, "message": "Saved."}
+
+
 class Hub:
     def __init__(self):
         self.lock = threading.Lock()
@@ -1004,6 +1115,9 @@ class Hub:
         self.level_db = -120.0
         self.peak_db = -120.0
         self.last_active = 0.0
+        self.burst_start = -1e9
+        self.burst_last = -1e9
+        self.burst_peak = -120.0
         self.pump_beat = time.monotonic()
         self.rate_window = deque(maxlen=60)
         self.udp_error = ""
@@ -1040,6 +1154,15 @@ class Hub:
     def audio_active(self):
         return time.monotonic() - self.last_active < ACTIVE_HOLD_SEC
 
+    def _close_burst(self):
+        if self.burst_last < 0:
+            return
+        secs = self.burst_last - self.burst_start
+        peak = self.burst_peak
+        self.burst_last = -1e9
+        if secs >= KERCHUNK_MIN_SEC:
+            _kc_add(secs, peak)
+
     def wait_chunk(self, lst, timeout=5.0):
         with self.cond:
             if not lst.q and not lst.closed:
@@ -1063,10 +1186,19 @@ class Hub:
             self.level_db = db
             self.peak_db = max(db, self.peak_db - 1.0)
             if db > ACTIVE_DB:
-                self.last_active = now
+                if now - self.burst_last > ACTIVE_HOLD_SEC:
+                    self._close_burst()
+                    self.burst_start = now
+                    self.burst_peak = -120.0
+                self.burst_last = now
+                self.burst_peak = max(self.burst_peak, db)
+                if now - self.burst_start >= _kc_state["threshold"]:
+                    self.last_active = now
         else:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
+        if now - self.burst_last > ACTIVE_HOLD_SEC:
+            self._close_burst()
         if TONE.recording:
             TONE.tap_raw(frame)
         if have_listeners or TONE.recording:
@@ -4919,6 +5051,9 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;paddin
 .fold-t{flex:none}
 .fold-sum{flex:1;min-width:0;color:var(--muted);font-size:13px;font-weight:400;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .fold-i{flex:none;width:14px;color:var(--muted);text-align:center}
+.kc-graph{width:100%;height:120px;display:block;margin:8px 0}
+.kc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 0;border-top:1px solid var(--line)}
+.kc-row span{flex:1;min-width:200px}
 .fold-body{padding:6px 0 10px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
 button{font:inherit;color:var(--text)}
@@ -5308,6 +5443,74 @@ async function api(url, opts) {
 }
 
 const post = (url, body) => api(url, {method: 'POST', body: body});
+function kcColor(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+async function kcRefresh() {
+  const d = await api('/api/kerchunks');
+  if (!d.ok) { $('kc-state').textContent = d.error || 'Could not read the burst log.'; return; }
+  $('sum-kc').textContent = d.kerchunks_today ? d.kerchunks_today + ' today' : '';
+  const how = d.learned ? 'learned from ' + d.labels + ' labelled bursts' : 'default, until ' + d.learn_min + ' labels of each kind';
+  $('kc-state').textContent = 'Cut-off ' + d.threshold.toFixed(2) + ' s (' + how + '). Kerchunks today: '
+    + d.kerchunks_today + '. Logged: ' + d.kerchunks_total + '.';
+  kcDraw(d.bursts, d.threshold);
+  kcList(d.bursts);
+}
+function kcDraw(bursts, thr) {
+  const c = $('kc-graph'), dpr = window.devicePixelRatio || 1;
+  const w = c.clientWidth || 300, h = 120;
+  c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const list = bursts.slice().reverse();
+  const top = Math.max(1.5, thr, ...list.map((b) => b.secs));
+  const slot = Math.max(3, (w - 4) / Math.max(list.length, 60));
+  const y = (s) => h - 4 - (s / top) * (h - 8);
+  g.strokeStyle = kcColor('--muted');
+  g.setLineDash([4, 4]);
+  g.beginPath(); g.moveTo(0, y(thr)); g.lineTo(w, y(thr)); g.stroke();
+  g.setLineDash([]);
+  list.forEach((b, i) => {
+    const kind = b.label || (b.kerchunk ? 'kerchunk' : 'real');
+    g.fillStyle = kind === 'kerchunk' ? kcColor('--amber') : kcColor('--accent');
+    g.globalAlpha = b.label ? 1 : 0.5;
+    g.fillRect(2 + i * slot, y(b.secs), Math.max(1, slot - 1), h - 4 - y(b.secs));
+  });
+  g.globalAlpha = 1;
+}
+function kcList(bursts) {
+  const box = $('kc-list');
+  box.textContent = '';
+  if (!bursts.length) {
+    const p = document.createElement('p');
+    p.className = 'muted small';
+    p.textContent = 'No bursts logged yet.';
+    box.appendChild(p);
+    return;
+  }
+  bursts.forEach((b) => {
+    const row = document.createElement('div');
+    row.className = 'kc-row';
+    const t = document.createElement('span');
+    t.textContent = new Date(Number(b.id)).toLocaleTimeString() + '  ' + b.secs.toFixed(2) + ' s  '
+      + b.peak.toFixed(0) + ' dBFS  ' + (b.kerchunk ? 'kerchunk?' : 'speech?');
+    row.appendChild(t);
+    ['kerchunk', 'real'].forEach((kind) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn';
+      btn.type = 'button';
+      btn.textContent = kind === 'kerchunk' ? 'Kerchunk' : 'Real';
+      btn.setAttribute('aria-pressed', b.label === kind ? 'true' : 'false');
+      btn.addEventListener('click', () => kcLabel(b.id, b.label === kind ? '' : kind));
+      row.appendChild(btn);
+    });
+    box.appendChild(row);
+  });
+}
+async function kcLabel(id, label) {
+  const d = await post('/api/kerchunks/label', {id: id, label: label});
+  if (!d.ok) { $('kc-state').textContent = d.error || 'Could not save the label.'; return; }
+  kcRefresh();
+}
 const TABS = ['connect', 'listen', 'setup'];
 
 function note(id, cls, text) {
@@ -5336,7 +5539,7 @@ function sendOp(op) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op}));
 }
 
-const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'exp', 'chk', 'phone', 'log'];
+const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'exp', 'chk', 'phone', 'kc', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -8791,6 +8994,7 @@ document.addEventListener('DOMContentLoaded', () => {
   FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => {
     foldSet(k, !foldOpen(k));
     if (k === 'phone' && foldOpen('phone')) phoneRefresh();
+    if (k === 'kc' && foldOpen('kc')) kcRefresh();
   }));
   $('phone-refresh').addEventListener('click', phoneRefresh);
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
@@ -8811,6 +9015,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(pollStatus, 1500);
   setInterval(gapTick, 100);
   setInterval(pollLog, 3000);
+  setInterval(() => { if (authed && foldOpen('kc')) kcRefresh(); }, 10000);
 });
 """
 
@@ -9245,6 +9450,16 @@ for a report with averages and what to change. Only numbers are kept, never audi
 </div>
 </div>
 
+<div class="card fold" id="cd-kc">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-kc"><span class="fold-t">Kerchunks</span><span class="fold-sum" id="sum-kc"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-kc">
+<p class="muted small" id="kc-state">Open this card to read the burst log.</p>
+<canvas id="kc-graph" class="kc-graph" role="img" aria-label="Recent bursts of audio from the node. Height is how long each lasted; the dashed line is the cut-off."></canvas>
+<p class="muted small">Each bar is one burst of audio from the node, and its height is how long it lasted. Bars below the dashed cut-off are kerchunks, and they don't count as activity. Label a few bursts (Kerchunk or Real). Once there are six of each kind, the cut-off is learned from them.</p>
+<div id="kc-list"></div>
+</div>
+</div>
+
 <div class="card fold" id="cd-log">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-log"><span class="fold-t">Log</span><span class="fold-sum" id="sum-log"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-log">
@@ -9305,6 +9520,7 @@ _POST_ACTIONS = {
     "/api/balance/snapshot": (balance_snapshot, ()),
     "/api/balance/restore": (balance_restore, ()),
     "/api/balance/keep": (balance_keep, ()),
+    "/api/kerchunks/label": (kerchunk_label, ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
@@ -9447,6 +9663,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, TONE.status())
             elif path == "/api/disconnect-all/status":
                 self._json(200, disconnect_all_status())
+            elif path == "/api/kerchunks":
+                self._json(200, kerchunk_status())
             elif path == "/api/load":
                 self._json(200, dict(GUARD.sample(), ok=True))
             elif path == "/api/balance":
@@ -9697,6 +9915,7 @@ def run_server():
                          "is sent in plain text. See the Node Talker log.")
     _solo_load()
     fav_doc()
+    _kc_refresh()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=pi_loop, name="pi-health", daemon=True).start()
     threading.Thread(target=udp_loop, args=(_cfg_get("udp_port"),), name="udp", daemon=True).start()
