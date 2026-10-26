@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.24"
+VERSION = "0.9.25"
 DATE_STR = "2026-10-25"
 APP_NAME = "Node Talker"
 
@@ -1362,6 +1362,123 @@ def restart_asterisk():
         return {"ok": False, "error": (r.stderr or r.stdout).strip() or f"exit {r.returncode}"}
     log_event("Asterisk restarted from Node Talker", "ok")
     return {"ok": True, "message": "Asterisk restarted. Audio should arrive within a few seconds of the node hearing anything."}
+
+
+RESET_UNITS = (("md380-emu", "md380-emu"), ("Analog_Bridge", "analog_bridge"), ("MMDVM_Bridge", "mmdvm_bridge"),
+               ("USRP2M17", "usrp2m17"), ("Asterisk", "asterisk"))
+RESET_DISCONNECT_SEC = 5.0
+RESET_UNIT_SEC = 90
+_reset_lock = threading.Lock()
+_reset = {"running": False, "steps": [], "message": "", "level": "", "started": 0.0, "finished": 0.0}
+
+
+def _reset_installed():
+    states = service_states([u + ".service" for _l, u in RESET_UNITS])
+    return [label for label, u in RESET_UNITS if states.get(u + ".service") != "missing"]
+
+
+def disconnect_all_status(_body=None):
+    with _reset_lock:
+        d = {k: _reset[k] for k in ("running", "message", "level", "started", "finished")}
+        d["steps"] = [dict(x) for x in _reset["steps"]]
+    d.update(ok=True, installed=_reset_installed())
+    return d
+
+
+def _reset_step(i, **kw):
+    with _reset_lock:
+        _reset["steps"][i].update(kw)
+
+
+def _reset_run():
+    _reset_step(0, state="running")
+    stopped = []
+    if TONE.status().get("running"):
+        TONE.stop()
+        stopped.append("tone test")
+    if TALKER.state()["keyed"]:
+        try:
+            TALKER._unkey("reset")
+        except OSError:
+            pass
+        stopped.append("transmission")
+    _reset_step(0, state="ok", note=("stopped the " + " and the ".join(stopped)) if stopped else "nothing was running")
+    _reset_step(1, state="running")
+    box = {}
+
+    def drop():
+        try:
+            box["r"] = tune_disconnect()
+        except Exception as exc:
+            box["r"] = {"ok": False, "error": str(exc)}
+
+    t = threading.Thread(target=drop, daemon=True)
+    t.start()
+    t.join(RESET_DISCONNECT_SEC)
+    if t.is_alive():
+        _reset_step(1, state="warn", note=f"no answer within {RESET_DISCONNECT_SEC:.0f} s -- restarting anyway")
+    else:
+        r = box.get("r") or {}
+        _reset_step(1, state="ok" if r.get("ok") else "warn",
+                    note=r.get("message") or r.get("error") or ("done" if r.get("ok") else "failed -- restarting anyway"))
+    if _solo["target"]:
+        _solo_set()
+    states = service_states([u + ".service" for _l, u in RESET_UNITS])
+    done, failed, missing = [], [], []
+    for i, (label, unit) in enumerate(RESET_UNITS, 2):
+        if states.get(unit + ".service") == "missing":
+            _reset_step(i, state="skipped", note="not installed")
+            missing.append(label)
+            continue
+        _reset_step(i, state="running")
+        r = _systemctl("restart", unit + ".service", timeout=RESET_UNIT_SEC)
+        if r.returncode == 0:
+            _reset_step(i, state="ok", note="restarted")
+            done.append(label)
+            log_event(f"Disconnect All: {label} restarted", "ok")
+        else:
+            why = (r.stderr or r.stdout).strip() or f"exit {r.returncode}"
+            _reset_step(i, state="failed", note=why)
+            failed.append(label)
+            log_event(f"Disconnect All: {label} did not restart: {why}", "err")
+    _lstats_invalidate()
+    _links_cache["t"] = -1e9
+    parts = []
+    if done:
+        parts.append("restarted " + ", ".join(done))
+    if failed:
+        parts.append("FAILED: " + ", ".join(failed))
+    if missing:
+        parts.append("not installed: " + ", ".join(missing))
+    return "Disconnect All finished: " + ("; ".join(parts) or "nothing to restart") + ".", "err" if failed else "ok"
+
+
+def _reset_bg():
+    try:
+        message, level = _reset_run()
+    except Exception as exc:
+        message, level = f"Disconnect All stopped on an error: {exc}", "err"
+    log_event(message, "warn" if level == "err" else "ok")
+    with _reset_lock:
+        for x in _reset["steps"]:
+            if x["state"] in ("pending", "running"):
+                x["state"] = "failed" if x["state"] == "running" else "skipped"
+        _reset.update(running=False, message=message, level=level, finished=time.time())
+
+
+def disconnect_all(_body=None):
+    if os.geteuid() != 0:
+        return {"ok": False, "error": "root required to restart the services"}
+    with _reset_lock:
+        if _reset["running"]:
+            return {"ok": False, "error": "Disconnect All is already running."}
+        steps = [{"name": "Stop TX and tests", "state": "pending", "note": ""},
+                 {"name": "Disconnect", "state": "pending", "note": ""}]
+        steps += [{"name": label, "state": "pending", "note": ""} for label, _u in RESET_UNITS]
+        _reset.update(running=True, steps=steps, message="", level="", started=time.time(), finished=0.0)
+    log_event("Disconnect All: emergency reset requested from Node Talker", "warn")
+    threading.Thread(target=_reset_bg, daemon=True).start()
+    return {"ok": True, "message": "Disconnect All started."}
 
 
 def page_answers(path, port=80, timeout=0.5):
@@ -4880,6 +4997,12 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #tab-connect .tn-foot{margin-top:2px}
 #tab-connect .tn-bar .btn-last{min-height:40px}
 #tab-connect #cd-tune .tn-msg{min-height:0}
+#da-wrap{margin:0 0 8px}
+#da-btn{width:100%;min-height:clamp(44px,8vh,64px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:4px 12px;border-width:2px}
+#da-btn .da-t{font-size:clamp(14px,calc(1.6vh + 1vw),18px);font-weight:700;letter-spacing:.04em;line-height:1.15}
+#da-btn .da-s{font-size:clamp(10px,calc(.9vh + .5vw),12px);font-weight:500;color:var(--muted);line-height:1.2;max-width:100%;overflow-wrap:anywhere}
+#da-btn:disabled{opacity:.55;cursor:default}
+#da-wrap .msg:empty{display:none}
 #tab-listen .lpanel{padding:8px 10px}
 @media (max-width:560px){#t-mode,#t-net,#t-mod{flex:1 1 40%;width:auto}#t-find{flex:1 1 100%;max-width:none}#t-pick{flex:1 1 100%}.tn-bar .btn.primary{flex:1 1 auto}}
 #login-screen{display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;
@@ -8092,6 +8215,7 @@ function connectTabEnter() {
   }
   if (tnLast && tnLinkedB(tnLast.b)) tnSetSel(tnLast.snap);
   else tnSetSel(defaultSel());
+  if (!daPoll) daStatus();
 }
 
 function tnRow() {
@@ -8217,6 +8341,47 @@ async function tnSaveFav() {
 }
 
 function tnToggle() { return tnLinked() ? tnOff() : tnConnect(); }
+
+let daPoll = null, daMine = false, daList = 'md380-emu, Analog_Bridge, MMDVM_Bridge, USRP2M17 and Asterisk';
+
+function daShow(d) {
+  if (!d || !d.ok) return;
+  if (d.installed) {
+    daList = d.installed.length ? d.installed.join(', ') : '';
+    $('da-sub').textContent = d.installed.length ? 'Restarts ' + d.installed.join(' · ') : 'Nothing to restart on this node';
+  }
+  $('da-btn').disabled = !!d.running;
+  const steps = d.steps || [];
+  if (d.running) {
+    const i = steps.findIndex((x) => x.state === 'running');
+    note('da-msg', 'warn', i >= 0 ? steps[i].name + '... (' + (i + 1) + ' of ' + steps.length + ')' : 'Working...');
+  } else if (daMine && d.message) {
+    const bad = steps.filter((x) => x.state === 'failed' || x.state === 'warn').map((x) => x.name + ': ' + x.note);
+    note('da-msg', d.level === 'err' ? 'err' : (bad.length ? 'warn' : 'ok'), d.message + (bad.length ? ' ' + bad.join('; ') + '.' : ''));
+  }
+}
+
+async function daStatus() {
+  daPoll = null;
+  const d = await api('/api/disconnect-all/status');
+  daShow(d);
+  if (d.ok && d.running) { daPoll = setTimeout(daStatus, 1000); return; }
+  if (d.ok && daMine && d.finished) { tnLast = null; tnButtons(); pollStatus(); }
+}
+
+async function daGo() {
+  if (!confirm('Disconnect All?\n\nStops any transmission or test, drops every link and restarts ' + (daList || 'the node services') +
+               '. The node is off the air until they are back up, up to a minute or two.')) return;
+  if (exp) await expStop(); else if (chk && chk.running) await chkStop();
+  $('da-btn').disabled = true;
+  const d = await post('/api/disconnect-all', {});
+  if (!d.ok) { $('da-btn').disabled = false; note('da-msg', 'err', d.error || 'Could not start Disconnect All.'); return; }
+  daMine = true;
+  tnLast = null;
+  note('da-msg', 'warn', d.message || 'Disconnect All started.');
+  if (daPoll) clearTimeout(daPoll);
+  daStatus();
+}
 
 async function tnOff() {
   tnLast = null;
@@ -8622,6 +8787,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('sys-shutdown').addEventListener('click', doShutdown);
   setInterval(pollHostLinks, 30000);
   $('tune-reset').addEventListener('click', tuneReset);
+  $('da-btn').addEventListener('click', daGo);
   FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => {
     foldSet(k, !foldOpen(k));
     if (k === 'phone' && foldOpen('phone')) phoneRefresh();
@@ -8720,6 +8886,10 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <button id="t-net-no" class="btn" type="button">Cancel</button></div>
 </div>
 <div class="tn-foot"><span id="t-now" class="muted small"></span></div>
+</div>
+<div id="da-wrap">
+<button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span><span class="da-s" id="da-sub">Restarts md380-emu · Analog_Bridge · MMDVM_Bridge · USRP2M17 · Asterisk</span></button>
+<div id="da-msg" class="msg"></div>
 </div>
 </section>
 
@@ -9123,6 +9293,7 @@ _POST_ACTIONS = {
     "/api/tune/save": (tune_save, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
+    "/api/disconnect-all": (disconnect_all, ()),
     "/api/system/reboot": (lambda b: system_power("reboot"), ()),
     "/api/system/shutdown": (lambda b: system_power("shutdown"), ()),
     "/api/digital": (digital_save, ()),
@@ -9274,6 +9445,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, node_counters())
             elif path == "/api/tonetest/status":
                 self._json(200, TONE.status())
+            elif path == "/api/disconnect-all/status":
+                self._json(200, disconnect_all_status())
             elif path == "/api/load":
                 self._json(200, dict(GUARD.sample(), ok=True))
             elif path == "/api/balance":

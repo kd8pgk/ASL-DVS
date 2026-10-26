@@ -1,6 +1,26 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_24_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_25_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.25 (2026-10-26)
+
+- **Disconnect All** (Connect tab, under the Tune card). An emergency general
+  reset. After one confirm it:
+  1. stops a transmission from Node Talker, a tone test, and an expanded test
+     or audio check on this page;
+  2. drops what is tuned, the same as Disconnect on the Tune card (through Node
+     Controller when it runs). It waits at most 5 s for this, and if Asterisk
+     doesn't answer it goes on;
+  3. restarts md380-emu, Analog_Bridge, MMDVM_Bridge, USRP2M17 and Asterisk,
+     one at a time in that order. A service that isn't installed is skipped,
+     and one that fails doesn't stop the rest.
+- The button shows each step as it runs ("MMDVM_Bridge... (5 of 7)"), then what
+  was restarted, what failed and what isn't installed. Each step goes to the log.
+  Under its label it lists the services this node has. It needs the login, like
+  Restart Asterisk, and refuses while a reset is already running.
+- It fills the width of the screen. Its height (44-64 px) and text size follow
+  the screen size, from a small phone in landscape to a desktop.
+- `/api/disconnect-all` and `/api/disconnect-all/status` added.
 
 ## 0.9.24 (2026-10-26)
 
