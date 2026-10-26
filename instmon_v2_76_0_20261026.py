@@ -36,7 +36,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.75.0"
+VERSION ="2.76.0"
 DATE_STR ="2026-10-26"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -4316,6 +4316,8 @@ GITHUB_RAW_BASE =f"https://raw.githubusercontent.com/{GITHUB_REPO }/{GITHUB_BRAN
 GITHUB_API_LIST_URL =(f"https://api.github.com/repos/{GITHUB_REPO }/contents"
 f"?ref={urllib .parse .quote (GITHUB_BRANCH ,safe ='')}")
 GITHUB_TIMEOUT_SEC =int (os .environ .get ("INSTMON_GITHUB_TIMEOUT_SEC","15"))
+GITHUB_RETRIES = max(0, int(os.environ.get("INSTMON_GITHUB_RETRIES", "2")))
+GITHUB_MAX_DOWNLOAD_SEC = int(os.environ.get("INSTMON_GITHUB_MAX_DOWNLOAD_SEC", "1800"))
 GITHUB_LIST_MAX_BYTES =1024 *1024 
 GITHUB_FILE_MAX_BYTES =MAX_UPLOAD_BYTES 
 GITHUB_MAX_ENTRIES =1000 
@@ -4469,57 +4471,94 @@ def _gh_stable_cands ():
         "url":f"https://raw.githubusercontent.com/{GITHUB_REPO }/{commit }/{urllib .parse .quote (name )}"})
     return out ,skipped 
 
-def _gh_fetch_https (url ,max_bytes ):
-    if not url .lower ().startswith ("https://"):
-        raise GhRejected ("the GitHub address must start with https://")
-    if not _GH_REPO_RE .match (GITHUB_REPO ):
-        raise GhRejected (f"'{GITHUB_REPO }' is not an owner/repo name")
-    shown =url .split ("?",1 )[0 ].rsplit ("/",1 )[-1 ]or url 
-    req =urllib .request .Request (url ,headers ={
-    "User-Agent":f"instmon/{VERSION }",
-    "Accept":"application/vnd.github+json"if "api.github.com"in url else "*/*",
-    "Cache-Control":"no-cache",
-    })
-    ctx =ssl .create_default_context ()
-    deadline =time .monotonic ()+GITHUB_TIMEOUT_SEC *4 
-    try :
-        with urllib .request .urlopen (req ,timeout =GITHUB_TIMEOUT_SEC ,context =ctx )as resp :
-            if not resp .geturl ().lower ().startswith ("https://"):
-                raise GhRejected ("GitHub redirected the download off HTTPS")
-            length =resp .headers .get ("Content-Length")
-            if length and length .isdigit ()and int (length )>max_bytes :
-                raise GhRejected (f"{shown } is larger than the {max_bytes //1024 } KB limit")
-            chunks =[]
-            total =0 
-            while True :
-                if time .monotonic ()>deadline :
-                    raise GhRejected (f"download of {shown } took too long")
-                chunk =resp .read (65536 )
-                if not chunk :
-                    break 
-                total +=len (chunk )
-                if total >max_bytes :
-                    raise GhRejected (f"{shown } is larger than the {max_bytes //1024 } KB limit")
-                chunks .append (chunk )
-            return b"".join (chunks )
-    except GhRejected :
-        raise 
-    except urllib .error .HTTPError as exc :
-        if exc .code ==404 :
-            raise GhRejected (f"{shown } was not found on GitHub (HTTP 404) -- check the repo name and branch")
-        if exc .code in (403 ,429 ):
-            raise GhRejected ("GitHub's hourly limit for this node was reached -- try again later "
-            f"(HTTP {exc .code })")
-        raise GhRejected (f"GitHub answered HTTP {exc .code } for {shown }")
-    except urllib .error .URLError as exc :
-        reason =getattr (exc ,"reason",exc )
-        if isinstance (reason ,ssl .SSLError ):
-            raise GhRejected (f"GitHub's certificate could not be verified ({reason })")
-        raise GhRejected (f"cannot reach GitHub -- is this node online? ({reason })")
-    except (socket .timeout ,TimeoutError ):
-        raise GhRejected (f"GitHub did not answer within {GITHUB_TIMEOUT_SEC }s")
-    except (OSError ,http .client .HTTPException ,ValueError )as exc :
-        raise GhRejected (f"download of {shown } failed: {exc }")
+class _GhRetry(Exception):
+    pass
+
+def _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total):
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req, timeout=GITHUB_TIMEOUT_SEC, context=ctx) as resp:
+        if not resp.geturl().lower().startswith("https://"):
+            raise GhRejected("GitHub redirected the download off HTTPS")
+        if total and resp.getcode() != 206:
+            chunks.clear()
+            total = 0
+        length = resp.headers.get("Content-Length")
+        expect = int(length) if length and length.isdigit() else None
+        if expect is not None and total + expect > max_bytes:
+            raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
+        got = 0
+        while True:
+            if time.monotonic() > deadline:
+                raise GhRejected(f"download of {shown} took longer than {GITHUB_MAX_DOWNLOAD_SEC // 60} minutes "
+                                 "-- the connection to GitHub is too slow")
+            chunk = resp.read(65536)
+            if not chunk:
+                break
+            got += len(chunk)
+            total += len(chunk)
+            if total > max_bytes:
+                raise GhRejected(f"{shown} is larger than the {max_bytes // 1024} KB limit")
+            chunks.append(chunk)
+        if expect is not None and got < expect:
+            raise _GhRetry(f"the connection to GitHub dropped during {shown} ({total // 1024} KB received)")
+    return total
+
+def _gh_fetch_https(url, max_bytes):
+    if not url.lower().startswith("https://"):
+        raise GhRejected("the GitHub address must start with https://")
+    if not _GH_REPO_RE.match(GITHUB_REPO):
+        raise GhRejected(f"'{GITHUB_REPO}' is not an owner/repo name")
+    shown = url.split("?", 1)[0].rsplit("/", 1)[-1] or url
+    ctx = ssl.create_default_context()
+    deadline = time.monotonic() + GITHUB_MAX_DOWNLOAD_SEC
+    chunks, total, last = [], 0, ""
+    tries = GITHUB_RETRIES + 1
+    for attempt in range(tries):
+        if attempt:
+            time.sleep(2 * attempt)
+        headers = {
+            "User-Agent": f"instmon/{VERSION}",
+            "Accept": "application/vnd.github+json" if "api.github.com" in url else "*/*",
+            "Cache-Control": "no-cache",
+        }
+        if total:
+            headers["Range"] = f"bytes={total}-"
+        try:
+            _gh_fetch_once(url, headers, ctx, deadline, shown, max_bytes, chunks, total)
+            return b"".join(chunks)
+        except GhRejected:
+            raise
+        except _GhRetry as exc:
+            last = str(exc)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 416 and total:
+                chunks.clear()
+                last = f"GitHub refused to resume {shown}"
+            elif exc.code == 404:
+                raise GhRejected(f"{shown} was not found on GitHub (HTTP 404) -- check the repo name and branch")
+            elif exc.code in (403, 429):
+                raise GhRejected("GitHub's hourly limit for this node was reached -- try again later "
+                                 f"(HTTP {exc.code})")
+            elif exc.code >= 500:
+                last = f"GitHub answered HTTP {exc.code} for {shown}"
+            else:
+                raise GhRejected(f"GitHub answered HTTP {exc.code} for {shown}")
+        except urllib.error.URLError as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(reason, ssl.SSLCertVerificationError):
+                raise GhRejected(f"GitHub's certificate could not be verified ({reason})")
+            if isinstance(reason, (socket.timeout, TimeoutError)):
+                last = f"GitHub did not answer within {GITHUB_TIMEOUT_SEC}s"
+            else:
+                last = f"cannot reach GitHub -- is this node online? ({reason})"
+        except (socket.timeout, TimeoutError):
+            last = f"GitHub stopped sending {shown} -- nothing arrived for {GITHUB_TIMEOUT_SEC}s"
+        except (OSError, http.client.HTTPException) as exc:
+            last = f"the connection to GitHub dropped during {shown} ({exc})"
+        except ValueError as exc:
+            raise GhRejected(f"download of {shown} failed: {exc}")
+        total = sum(len(c) for c in chunks)
+    raise GhRejected(f"{last} (tried {tries} times)")
 
 _gh_fetch_impl =_gh_fetch_https 
 
@@ -5155,7 +5194,8 @@ def _gh_collect_full (gen =None ):
 
 def _gh_is_network_error(exc):
     text = str(exc)
-    return "reach GitHub" in text or "hourly limit" in text or "did not answer" in text
+    return any(s in text for s in ("reach GitHub", "hourly limit", "did not answer",
+                                   "stopped sending", "connection to GitHub", "refused to resume"))
 
 def _gh_check_current (gen ):
     return _gh_state ["gen"]==gen and _gh_state ["phase"]=="checking"
