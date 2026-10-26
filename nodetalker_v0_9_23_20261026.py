@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.22"
+VERSION = "0.9.23"
 DATE_STR = "2026-10-25"
 APP_NAME = "Node Talker"
 
@@ -4056,7 +4056,7 @@ TONE_GAP_FRAMES = 10
 TONE_TAIL_FRAMES = 10
 TONE_TRIM_FRAMES = 5
 TONE_RETURN_SEC = 1.5
-TONE_MAX_SEC = 60.0
+TONE_MAX_SEC = 120.0
 TONE_CLEAR_SEC = 3.0
 TONE_MAX_COUNT = 12
 TONE_HZ_MIN, TONE_HZ_MAX = 100, 3800
@@ -4298,6 +4298,106 @@ def _tone_keyed(owner):
         return TALKER.keyed and TALKER.owner is owner
 
 
+LOAD_CPU_PCT = 90.0
+LOAD_CPU_SEC = 10.0
+LOAD_TEMP_C = 80.0
+LOAD_MEM_FLOOR_MB = 40.0
+LOAD_MEM_FRAC = 0.10
+LINK_WATCH_SEC = 5.0
+
+
+def _read_cpu_times():
+    try:
+        with open("/proc/stat", encoding="ascii") as fh:
+            vals = [int(x) for x in fh.readline().split()[1:9]]
+    except (OSError, ValueError):
+        return None
+    if len(vals) < 5:
+        return None
+    return sum(vals), vals[3] + vals[4]
+
+
+def _read_mem_mb():
+    found = {}
+    try:
+        with open("/proc/meminfo", encoding="ascii") as fh:
+            for line in fh:
+                key, _, rest = line.partition(":")
+                if key in ("MemTotal", "MemAvailable"):
+                    found[key] = int(rest.split()[0]) / 1024.0
+    except (OSError, ValueError, IndexError):
+        return None
+    if "MemTotal" not in found or "MemAvailable" not in found:
+        return None
+    return found["MemTotal"], found["MemAvailable"]
+
+
+class LoadGuard:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.prev = None
+        self.cpu_pct = None
+        self.over_since = None
+        self.cores = os.cpu_count() or 1
+
+    def _breach(self, now, mem, pi):
+        if mem:
+            total, avail = mem
+            floor = max(LOAD_MEM_FLOOR_MB, LOAD_MEM_FRAC * total)
+            if avail < floor:
+                return f"memory is down to {avail:.0f} MB free (the limit is {floor:.0f} MB)"
+        if pi.get("now"):
+            return "the Pi is throttling (" + ", ".join(pi["now"]) + ")"
+        if pi.get("temp_c") is not None and pi["temp_c"] >= LOAD_TEMP_C:
+            return f"the Pi is at {pi['temp_c']:.0f} C (the limit is {LOAD_TEMP_C:.0f} C)"
+        if self.cpu_pct is not None and self.cpu_pct > LOAD_CPU_PCT:
+            if self.over_since is None:
+                self.over_since = now
+            elif now - self.over_since >= LOAD_CPU_SEC:
+                return f"the CPU has been above {LOAD_CPU_PCT:.0f} % for {LOAD_CPU_SEC:.0f} s"
+        else:
+            self.over_since = None
+        return ""
+
+    def sample(self):
+        now = time.monotonic()
+        cpu = _read_cpu_times()
+        mem = _read_mem_mb()
+        pi = pi_snapshot()
+        with self.lock:
+            if cpu and self.prev and cpu[0] > self.prev[0]:
+                busy = 100.0 * (1.0 - (cpu[1] - self.prev[1]) / float(cpu[0] - self.prev[0]))
+                self.cpu_pct = round(min(100.0, max(0.0, busy)), 1)
+            if cpu:
+                self.prev = cpu
+            breach = self._breach(now, mem, pi)
+            return {"cpu_pct": self.cpu_pct, "cores": self.cores,
+                    "mem_total_mb": round(mem[0]) if mem else None,
+                    "mem_avail_mb": round(mem[1]) if mem else None,
+                    "mem_floor_mb": round(max(LOAD_MEM_FLOOR_MB, LOAD_MEM_FRAC * mem[0])) if mem else None,
+                    "temp_c": pi.get("temp_c"), "cpu_limit_pct": LOAD_CPU_PCT,
+                    "breach": breach}
+
+
+GUARD = LoadGuard()
+
+
+def tone_link_block():
+    node = main_node()
+    ok, links = rpt_links(node, max_age=0.5)
+    if not ok:
+        return "The node's link list could not be read, so no tones are sent. Check that Asterisk is running."
+    other = sorted({x["node"] for x in links} - {TX_NODE})
+    if other:
+        bridges = bridge_nodes()
+        names = [f"{n} (bridge)" if n in (bridges.get("digital"), bridges.get("m17")) else n for n in other]
+        return "The node is linked to " + ", ".join(names) + ". Disconnect the links before a tone test."
+    now = tuned_now(nc_running(cached=True))
+    if now:
+        return "Something is tuned (" + now + "). Untune it before a tone test."
+    return ""
+
+
 class ToneTest:
     def __init__(self):
         self.lock = threading.Lock()
@@ -4310,6 +4410,34 @@ class ToneTest:
         self.report = None
         self.raw = []
         self.proc = []
+        self.peak = {"cpu_pct": None, "mem_avail_mb": None}
+        self.watch_err = ""
+
+    def _check_load(self):
+        load = GUARD.sample()
+        with self.lock:
+            if load["cpu_pct"] is not None:
+                self.peak["cpu_pct"] = max(self.peak["cpu_pct"] or 0.0, load["cpu_pct"])
+            if load["mem_avail_mb"] is not None:
+                low = self.peak["mem_avail_mb"]
+                self.peak["mem_avail_mb"] = load["mem_avail_mb"] if low is None else min(low, load["mem_avail_mb"])
+        return "Stopped to protect the Pi: " + load["breach"] + "." if load["breach"] else ""
+
+    def _watch_loop(self, stop):
+        last_link = time.monotonic()
+        while not stop.wait(1.0):
+            try:
+                why = self._check_load()
+                if not why and time.monotonic() - last_link >= LINK_WATCH_SEC:
+                    last_link = time.monotonic()
+                    block = tone_link_block()
+                    why = "Stopped: " + block if block else ""
+            except Exception as exc:
+                why = ""
+                log_event(f"Tone test watch: {exc}", "warn")
+            if why:
+                self.watch_err = why
+                return
 
 
     def tap_raw(self, frame):
@@ -4340,6 +4468,9 @@ class ToneTest:
         call, _src = callsign_now()
         if not call:
             return {"ok": False, "error": "Set your callsign in Setup first: the test identifies itself on air."}
+        block = tone_link_block()
+        if block:
+            return {"ok": False, "error": block}
         frames, plan = _tone_plan(hz, sec, call)
         total = len(frames) * FRAME_SEC
         limit = min(TONE_MAX_SEC, float(_cfg_get("tot_sec")) - 5.0)
@@ -4375,6 +4506,10 @@ class ToneTest:
 
     def _run(self, owner, frames, plan, meta):
         err = ""
+        self.peak = {"cpu_pct": None, "mem_avail_mb": None}
+        self.watch_err = ""
+        stop = threading.Event()
+        threading.Thread(target=self._watch_loop, args=(stop,), daemon=True, name="tone-watch").start()
         try:
             self.recording = True
             self._set(stage="sending")
@@ -4382,6 +4517,9 @@ class ToneTest:
             for i, fr in enumerate(frames):
                 if self.abort:
                     err = "Stopped."
+                    break
+                if self.watch_err:
+                    err = self.watch_err
                     break
                 if not _tone_keyed(owner):
                     err = "The transmitter dropped out."
@@ -4397,6 +4535,7 @@ class ToneTest:
         except Exception as exc:
             err = f"Test error: {exc}"
         finally:
+            stop.set()
             self.recording = False
             TALKER.release(owner)
         if err:
@@ -4406,6 +4545,7 @@ class ToneTest:
         self._set(stage="analysing")
         try:
             report = _tone_analyse(list(self.raw), list(self.proc), plan, meta)
+            report["load"] = dict(self.peak)
         except Exception as exc:
             self._set(running=False, stage="failed", error=f"Analysis error: {exc}")
             log_event(f"Tone test analysis failed: {exc}", "err")
@@ -4415,6 +4555,63 @@ class ToneTest:
 
 
 TONE = ToneTest()
+
+
+BALANCE_PATH = os.path.join(CONFIG_DIR, "nodetalker_balance.json")
+BALANCE_KEYS = ("rx_agc", "rx_gain_db", "tx_gain_db", "rx_gate", "rx_hpf", "jitter_ms", "tx_buffer_ms", "tune_enabled")
+
+
+def _balance_load():
+    try:
+        with open(BALANCE_PATH, encoding="utf-8") as fh:
+            data = json.load(fh)
+        settings = data["settings"]
+        return {"at": float(data.get("at", 0)), "settings": {k: settings[k] for k in BALANCE_KEYS}}
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        raise ValueError(f"the saved balance settings are unreadable ({exc})")
+
+
+def balance_get(_body=None):
+    try:
+        return {"ok": True, "snapshot": _balance_load()}
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def balance_snapshot(_body=None):
+    if os.path.exists(BALANCE_PATH):
+        return {"ok": False, "error": "An earlier balance run is still open. Restore or keep its changes first."}
+    with _config_lock:
+        settings = {k: _config[k] for k in BALANCE_KEYS}
+    try:
+        _atomic_write(BALANCE_PATH, json.dumps({"at": time.time(), "settings": settings}) + "\n", 0o644)
+    except OSError as exc:
+        return {"ok": False, "error": f"could not save {BALANCE_PATH}: {exc}"}
+    log_event("Balance run started: the current settings are saved for Restore", "ok")
+    return {"ok": True, "message": "Settings saved."}
+
+
+def balance_restore(_body=None):
+    try:
+        snap = _balance_load()
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    if snap is None:
+        return {"ok": True, "message": "Nothing to restore."}
+    res = config_update(snap["settings"])
+    if not res.get("ok"):
+        return res
+    _remove_quiet(BALANCE_PATH)
+    log_event("Balance run restored: the original settings are back", "ok")
+    return {"ok": True, "message": "Original settings put back."}
+
+
+def balance_keep(_body=None):
+    _remove_quiet(BALANCE_PATH)
+    log_event("Balance run kept: the changed settings stay", "ok")
+    return {"ok": True, "message": "Changes kept."}
 
 
 def usrp_drain_loop():
@@ -5634,8 +5831,8 @@ function chkPromptText(e) {
   return (e - 30) % 120 < 20 ? ' TALK NOW for 20 s at your normal voice: "' + CHK_PHRASE + '"' : '';
 }
 
-function chkStart() {
-  chk = chkNew(Number($('chk-mins').value) || 5);
+function chkStart(mins) {
+  chk = chkNew(typeof mins === 'number' ? mins : (Number($('chk-mins').value) || 5));
   chk.guide = $('chk-guide').checked;
   chkWakeOn();
   chk.nodeStart = null;
@@ -5676,6 +5873,7 @@ async function chkStop() {
     localStorage.setItem('nlCheckLast', JSON.stringify(r));
   } catch (e) {}
   await chkShow(r);
+  if (exp && exp.liveDone) { const done = exp.liveDone; exp.liveDone = null; done(r); }
 }
 
 const db0 = (x) => (x == null || x <= -119 ? '-' : Math.round(x) + ' dBFS');
@@ -5904,6 +6102,8 @@ function toneShow(r) {
     'node ' + r.node + ', ID ' + r.callsign,
     'TX gain ' + fmtGain(r.tx_gain_db) + ', RX gain ' + fmtGain(r.rx_gain_db),
     r.rx_detected ? 'raw noise floor ' + r.noise_raw_db + ' dBFS' : null,
+    r.load && r.load.cpu_pct != null ? 'CPU peak ' + Math.round(r.load.cpu_pct) + ' %' : null,
+    r.load && r.load.mem_avail_mb != null ? 'lowest free memory ' + r.load.mem_avail_mb + ' MB' : null,
   ].filter(Boolean);
   $('tone-sum').textContent = head.join('. ') + '.';
   const tb = $('tone-rows');
@@ -5983,6 +6183,286 @@ function chkMinutes(slots) {
       box.appendChild(chkBarCell(text, pct));
     }
   });
+}
+
+// ---- Expanded test (v0.9.23): live check and node tone test, one after the other, optionally balanced ----
+// Balancing changes one setting at a time between runs and keeps the change only if the score does not get worse.
+const BAL_TONE_TARGET = -16, BAL_LIVE_TARGET = -19, BAL_KEEP_MARGIN = 0.5, BAL_TONE_STEP_MAX = 6, BAL_TONE_TOL = 1.5;
+const BAL_TONE_ROUNDS = 3, BAL_LIVE_ROUNDS = 3, BAL_QUIET_MS = 5000, BAL_QUIET_MAX_MS = 120000, BAL_WATCH_MS = 3000;
+let exp = null, expWatch = null;
+
+function balToneRow(r) {
+  const rows = (r.rows || []).filter((x) => x.proc_db != null);
+  return rows.find((x) => x.hz === 1000) || rows.sort((a, b) => b.proc_db - a.proc_db)[0] || null;
+}
+
+function balToneDiff(r) {
+  const row = balToneRow(r);
+  return row ? BAL_TONE_TARGET - row.proc_db : null;
+}
+
+function balToneScore(r) {
+  const d = balToneDiff(r);
+  return d == null ? null : Math.abs(d) + 0.5 * (r.dropouts || 0);
+}
+
+function balToneStep(r, rxGain) {
+  const d = balToneDiff(r), cur = Math.round(Number(rxGain) || 0);
+  if (d == null || Math.abs(d) <= BAL_TONE_TOL) return null;
+  const step = Math.max(-BAL_TONE_STEP_MAX, Math.min(BAL_TONE_STEP_MAX, Math.round(d)));
+  const next = Math.max(-12, Math.min(12, cur + step));
+  return next === cur ? null : next;
+}
+
+function balLiveScore(r) {
+  const R = r.rx, T = r.tx;
+  let s = R.clipPct * 3 + R.dropsMin * 2 + (R.resets || 0) + (R.tails || 0) * 0.5;
+  if (R.actSecs >= CHK_MIN_SPEECH && R.speech != null) s += Math.abs(BAL_LIVE_TARGET - R.speech);
+  if (T.actSecs >= CHK_MIN_SPEECH && T.speech != null) s += Math.abs(-18 - T.speech) * 0.5 + T.clipPct * 3;
+  return s;
+}
+
+function balLiveChange(r, cfg) {
+  return chkSuggest(r, cfg || {}).find((x) => x.change && !x.change.mic) || null;
+}
+
+// Turning on Adjust audio levels makes every level setting take effect. The ones the change does not set
+// are pinned to the values that were in effect while it was off, so only the change itself is heard.
+const BAL_TUNE_OFF = {rx_gain_db: 0, tx_gain_db: 0, jitter_ms: 250, tx_buffer_ms: 120};
+
+function balBody(change, cfg) {
+  const body = {};
+  if (change.tune_enabled && !cfg.tune_enabled) Object.assign(body, BAL_TUNE_OFF);
+  Object.keys(change).filter((k) => k !== 'node').forEach((k) => { body[k] = change[k]; });
+  return body;
+}
+
+async function balApply(change) {
+  const cur = await api('/api/config');
+  if (!cur.config) return {ok: false, error: cur.error || 'Could not read the settings.'};
+  const body = balBody(change, cur.config), undo = {};
+  Object.keys(body).forEach((k) => { undo[k] = cur.config[k]; });
+  const res = await post('/api/config', body);
+  if (!res.ok) return {ok: false, error: res.error || 'Could not save.'};
+  loadConfig();
+  return {ok: true, undo: undo};
+}
+
+// Quiet means no audio on the channel and no transmission, read from the Pi, for BAL_QUIET_MS.
+async function balQuiet() {
+  const start = Date.now();
+  let since = start;
+  while (exp && !exp.stopped) {
+    const s = await api('/api/status');
+    if (keyed || testing || s.ok === false || s.audio_active || (s.tx && s.tx.keyed)) since = Date.now();
+    if (Date.now() - since >= BAL_QUIET_MS) return true;
+    if (Date.now() - start >= BAL_QUIET_MAX_MS) return false;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return false;
+}
+
+function expStage(text) {
+  $('exp-run').textContent = text;
+  $('exp-run').classList.toggle('hidden', !text);
+}
+
+function expFail(msg) {
+  if (exp) { exp.stopped = true; if (/protect the Pi/.test(msg)) exp.aborted = msg; }
+  note('exp-msg', 'err', msg);
+  return null;
+}
+
+function expUi(running) {
+  $('exp-start').classList.toggle('hidden', running);
+  $('exp-stop').classList.toggle('hidden', !running);
+  ['exp-live', 'exp-tone', 'exp-bal', 'exp-mins'].forEach((id) => { $(id).disabled = running; });
+  if (!running) expStage('');
+}
+
+function expLive(mins) {
+  return new Promise((resolve) => {
+    exp.liveDone = resolve;
+    chkStart(mins);
+  });
+}
+
+async function expTone() {
+  const raw = $('tone-hz').value.trim();
+  const tones = raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null;
+  const d = await post('/api/tonetest/start', {tones: tones, tone_sec: Number($('tone-sec').value)});
+  if (!d.ok) return expFail(d.error || 'The tone test did not start.');
+  toneUi(true);
+  let misses = 0;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    const s = await api('/api/tonetest/status');
+    if (!s.ok) {
+      if (++misses < 4) continue;
+      return expFail(s.error || 'Node Talker is not answering.');
+    }
+    misses = 0;
+    if (s.running) { expStage((TONE_STAGE[s.stage] || 'Working') + ' ' + Math.round(s.progress * 100) + ' %'); continue; }
+    toneUi(false);
+    if (s.report) toneShow(s.report);
+    if (s.stage !== 'done' || !s.report) return expFail(s.error || 'The tone test failed.');
+    return s.report;
+  }
+}
+
+async function expToneRounds() {
+  const rounds = exp.balance ? BAL_TONE_ROUNDS : 1;
+  let prev = null;
+  for (let i = 0; i < rounds && !exp.stopped; i++) {
+    expStage('Node tone test ' + (i + 1) + ' of ' + rounds);
+    const r = await expTone();
+    if (!r || exp.stopped || !exp.balance) return;
+    const score = balToneScore(r);
+    if (score == null) { exp.balance = false; note('exp-msg', 'warn', 'No tone came back from the node, so there is nothing to balance. Balancing stopped.'); return; }
+    if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.lastTone) {
+      await post('/api/config', exp.lastTone);
+      loadConfig();
+      exp.balance = false;
+      note('exp-msg', 'warn', 'The last RX gain change made the tones worse, so it was put back. Balancing stopped.');
+      return;
+    }
+    prev = score;
+    if (i === rounds - 1) break;
+    const cur = await api('/api/config');
+    if (!cur.config) return expFail(cur.error || 'Could not read the settings.');
+    const before = cur.config.tune_enabled ? Math.round(Number(cur.config.rx_gain_db) || 0) : 0;
+    const next = balToneStep(r, before);
+    if (next == null) { note('exp-msg', 'ok', 'Tone levels are within 1.5 dB of the target. Nothing to change.'); return; }
+    const res = await balApply({tune_enabled: true, rx_gain_db: next});
+    if (!res.ok) return expFail(res.error || 'Could not save RX gain.');
+    exp.lastTone = res.undo;
+    note('exp-msg', '', 'RX gain set to ' + fmtGain(next) + ' (was ' + fmtGain(before) + ').');
+  }
+}
+
+async function expLiveRounds() {
+  const rounds = exp.balance ? BAL_LIVE_ROUNDS : 1;
+  let prev = null;
+  for (let i = 0; i < rounds && !exp.stopped; i++) {
+    expStage('Live check ' + (i + 1) + ' of ' + rounds + '. Use the Listen tab as usual.');
+    const r = await expLive(exp.mins);
+    if (!r || exp.stopped || !exp.balance) return;
+    const score = balLiveScore(r);
+    if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.undo) {
+      await post('/api/config', exp.undo);
+      loadConfig();
+      exp.balance = false;
+      note('exp-msg', 'warn', 'The last change made the audio worse, so it was put back. Balancing stopped.');
+      return;
+    }
+    prev = score;
+    if (i === rounds - 1) break;
+    const cur = await api('/api/config');
+    const hit = balLiveChange(r, cur.config || {});
+    if (!hit) { note('exp-msg', 'ok', 'Nothing left to change in range.'); return; }
+    expStage('Waiting for a quiet channel before changing a setting.');
+    if (!(await balQuiet())) {
+      if (!exp.stopped) note('exp-msg', 'warn', 'The channel stayed busy, so balancing stopped.');
+      exp.balance = false;
+      return;
+    }
+    const res = await balApply(hit.change);
+    if (!res.ok) return expFail(res.error);
+    exp.undo = res.undo;
+    note('exp-msg', '', 'Changed live: ' + hit.text);
+  }
+}
+
+async function expLoadCheck() {
+  if (!exp || exp.aborted) return;
+  const d = await api('/api/load');
+  if (!exp || exp.aborted || !d.ok || !d.breach) return;
+  exp.aborted = 'Stopped to protect the Pi: ' + d.breach + '.';
+  exp.stopped = true;
+  if (chk && chk.running) chkStop();
+  const done = exp.liveDone;
+  exp.liveDone = null;
+  if (done) done(null);
+  if (exp.tone) await post('/api/tonetest/stop', {});
+}
+
+async function expStop() {
+  if (!exp) return;
+  exp.stopped = true;
+  if (chk && chk.running) chkStop();
+  const done = exp.liveDone;
+  exp.liveDone = null;
+  if (done) done(null);
+  if (exp.tone) await post('/api/tonetest/stop', {});
+  note('exp-msg', 'warn', 'Stopped.');
+}
+
+async function expEnd() {
+  const e = exp || {};
+  if (e.aborted && e.snap) {
+    const r = await post('/api/balance/restore', {});
+    loadConfig();
+    note('exp-msg', 'err', e.aborted + ' ' + (r.ok ? 'Original settings put back.' : (r.error || 'Could not put the settings back: use Restore.')));
+  }
+  exp = null;
+  expUi(false);
+  expRefreshSnap();
+}
+
+async function expRun(o) {
+  exp = {stopped: false, aborted: '', balance: o.balance, live: o.live, tone: o.tone, mins: o.mins, snap: false,
+    undo: null, lastTone: null, liveDone: null};
+  expUi(true);
+  if (exp.balance) {
+    const s = await post('/api/balance/snapshot', {});
+    if (!s.ok) { expFail(s.error || 'Could not save the settings.'); return expEnd(); }
+    exp.snap = true;
+  }
+  expWatch = setInterval(expLoadCheck, BAL_WATCH_MS);
+  try {
+    if (exp.tone) await expToneRounds();
+    if (exp.live && !exp.stopped) await expLiveRounds();
+  } finally {
+    clearInterval(expWatch);
+    expWatch = null;
+  }
+  return expEnd();
+}
+
+function expStart() {
+  if (exp) return;
+  const live = $('exp-live').checked, tone = $('exp-tone').checked, balance = $('exp-bal').checked;
+  if (!live && !tone) { note('exp-msg', 'err', 'Tick the live audio check, the node tone test, or both.'); return; }
+  if (live && appAudio()) { note('exp-msg', 'err', 'The live check measures page audio: switch the app to Page audio in its Audio settings first.'); return; }
+  if (live && chk && chk.running) { note('exp-msg', 'err', 'A check is already running.'); return; }
+  note('exp-msg', '', '');
+  expRun({live: live, tone: tone, balance: balance, mins: Number($('exp-mins').value) || 5});
+}
+
+async function expRefreshSnap() {
+  if (!authed) return;
+  const d = await api('/api/balance');
+  const open = !!(d.ok && d.snapshot);
+  $('exp-open').classList.toggle('hidden', !open);
+  if (open) $('exp-open-msg').textContent = 'A balance run changed settings (saved ' + new Date(d.snapshot.at * 1000).toLocaleString() + '). Restore the original settings, or keep the changes.';
+}
+
+function expInit() {
+  $('exp-start').addEventListener('click', expStart);
+  $('exp-stop').addEventListener('click', expStop);
+  $('cd-exp').querySelector('.fold-btn').addEventListener('click', expRefreshSnap);
+  $('exp-restore').addEventListener('click', async () => {
+    const d = await post('/api/balance/restore', {});
+    loadConfig();
+    note('exp-msg', d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Put back.') : (d.error || 'Could not restore.'));
+    expRefreshSnap();
+  });
+  $('exp-keep').addEventListener('click', async () => {
+    await post('/api/balance/keep', {});
+    note('exp-msg', 'ok', 'Changes kept.');
+    expRefreshSnap();
+  });
+  expRefreshSnap();
 }
 
 // Export and import (v0.9.7). A report is downloaded to this phone as a file. Nothing is stored
@@ -6271,6 +6751,7 @@ function chkInit() {
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
   $('chk-cmp').addEventListener('click', () => { chkCmp = !chkCmp; $('chk-cmp').textContent = chkCmp ? 'Hide last check' : 'Compare with last check'; chkShow(chkShown); });
   $('chk-badge').addEventListener('click', () => { showTab('setup'); foldSet('chk', true); });
+  expInit();
 }
 
 function pushSample(v) {
@@ -8521,6 +9002,23 @@ mic volume, so the gain here is applied in the page.</p>
 </div>
 </div>
 
+<div class="card fold" id="cd-exp">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-exp"><span class="fold-t">Expanded test</span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-exp">
+<p class="muted small">Runs the live audio check and the node tone test one after the other. The tone test keys the node, so it is off unless you tick it. Tone length and tones come from the Tone test below. Tones are never sent while the node is linked or something is tuned, and the test stops if the Pi runs out of memory or its CPU stays high.</p>
+<div class="row"><label class="small"><input type="checkbox" id="exp-live" checked> Live audio check (listen and talk)</label>
+<label class="small"><input type="checkbox" id="exp-tone"> Node tone test (2 min max)</label></div>
+<div class="row"><label for="exp-mins" style="min-width:90px">Live length</label>
+<select id="exp-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select></div>
+<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs, put back if a change makes things worse</label></div>
+<div class="row"><button id="exp-start" class="btn primary" type="button">Start expanded test</button><button id="exp-stop" class="btn hidden" type="button">Stop</button></div>
+<div id="exp-run" class="chk-run hidden"></div>
+<div id="exp-open" class="hidden"><div class="msg warn" id="exp-open-msg"></div>
+<div class="row"><button id="exp-restore" class="btn" type="button">Restore original settings</button><button id="exp-keep" class="btn" type="button">Keep changes</button></div></div>
+<div id="exp-msg" class="msg"></div>
+</div>
+</div>
+
 <div class="card fold" id="cd-chk">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Audio check</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-chk">
@@ -8633,6 +9131,9 @@ _POST_ACTIONS = {
     "/api/favorites-file": (lambda b: fav_file_put(b.get("text")), ()),
     "/api/tonetest/start": (lambda b: TONE.start(b), (ValueError,)),
     "/api/tonetest/stop": (lambda b: TONE.stop(), ()),
+    "/api/balance/snapshot": (balance_snapshot, ()),
+    "/api/balance/restore": (balance_restore, ()),
+    "/api/balance/keep": (balance_keep, ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
@@ -8773,6 +9274,10 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, node_counters())
             elif path == "/api/tonetest/status":
                 self._json(200, TONE.status())
+            elif path == "/api/load":
+                self._json(200, dict(GUARD.sample(), ok=True))
+            elif path == "/api/balance":
+                self._json(200, balance_get())
             elif path == "/api/tx":
                 self._json(200, dict(tx_state(), ok=True))
             elif path == "/api/favorites":

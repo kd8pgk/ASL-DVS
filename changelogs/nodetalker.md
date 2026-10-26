@@ -1,6 +1,17 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_22_20261025.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_23_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.23 (2026-10-26)
+
+- **Expanded test** (Setup tab, new card above the Audio check). Tick the live audio check, the node tone test, or both; they run one after the other, tone first. Live length is 2, 5, 10 or 15 min.
+- **Balance automatically** (optional). Between runs it changes one setting at a time, applied live. Live check: it takes the highest-ranked Audio check suggestion that has an Apply change (the same ones the Apply buttons offer) and applies it only after the channel has been quiet for 5 s (no audio and no transmission, as the Pi sees it); if the channel stays busy for 2 min, balancing stops without a change. Node tones: it changes RX gain toward a 1 kHz return level (about -19 dBFS RMS), starting from the gain in effect. Each run is scored; a change that makes the score worse is put back and balancing stops. Phone-side mic changes are never balanced automatically. At most three runs per path.
+- **Adjust audio levels** is turned on when a balance change needs it (RX gain, TX gain, Listen buffer, TX buffer), and the level settings the change does not set are written with the values that were in effect while it was off, so only the change itself is heard.
+- **Restore and Keep.** The settings are saved to `nodetalker_balance.json` in the config folder before the first change. Restore original settings puts them back (also after a restart); Keep changes drops the saved copy. The card shows Restore and Keep while a saved copy exists, checked again each time the card is opened.
+- **Tone test limit raised to 2 min** (was 60 s). The tone set itself stays well under it: 12 tones of 2 s with both station IDs come to about 40 s.
+- **Tone test refuses to key while the node is linked or something is tuned.** The link to the TX node (1921) is expected; any other link, a DVSwitch or M17 bridge included, or a tuned talkgroup or reflector, refuses the test. It checks before starting and every 5 s during the test, and stops if a link appears. The checks run beside the transmission, so a slow answer from Asterisk or Node Controller never holds up the tones.
+- **Load guard** for both paths: CPU, memory, throttling and temperature are checked every second during a tone test and every 3 s during the expanded test. Limits: CPU above 90 % of all cores for 10 s; free memory below the larger of 40 MB or 10 % of RAM; Pi throttling or temperature at 80 C (Pi readings only where the Pi reports them). A breach stops the test, puts the original settings back, and says why. The tone test report shows the CPU and memory peaks.
+- `/api/load`, `/api/balance`, `/api/balance/snapshot`, `/api/balance/restore` and `/api/balance/keep` added.
 
 ## 0.9.22 (2026-10-25)
 
