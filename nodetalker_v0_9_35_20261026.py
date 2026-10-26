@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.34"
+VERSION = "0.9.35"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -2181,6 +2181,9 @@ def build_status(full):
         st["default_mode"] = _default_tune_mode(nc)
         tx = tx_state(node)
         tx.update(TALKER.state())
+        with _kc_lock:
+            _kc_test_check(time.time())
+            st["kc_test"] = _kc_test["on"]
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
                                             "peak_db", "last_peak_db", "gaps", "last_gaps")}
     else:
@@ -5624,6 +5627,10 @@ table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 .st-ok{color:var(--accent)}.st-warn{color:var(--amber)}.st-bad{color:var(--red)}
 .spec-meter .meter{height:6px;min-width:0}
 #ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
+.ptt-row{display:flex;gap:8px}
+.ptt-row #ptt{flex:1;min-width:0}
+#ptt-mark{flex:0 0 38%;height:64px;border-radius:16px;border:3px solid var(--amber);background:var(--amber-bg);color:var(--amber);font-size:15px;font-weight:700;cursor:pointer;padding:0 8px}
+#ptt-mark:active{filter:brightness(1.3)}
 #ptt{width:100%;height:64px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
 touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
 #ptt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -5895,6 +5902,14 @@ async function kcReset() {
   const d = await post('/api/kerchunks/reset', {});
   $('kc-state').textContent = d.ok ? d.message : (d.error || 'Could not reset the log.');
   kcRefresh();
+}
+async function pttMark() {
+  const d = await post('/api/kerchunks/test/mark', {});
+  const msg = $('ptt-msg'), text = d.ok ? d.message : (d.error || 'Could not mark the key-up.');
+  msg.className = 'msg ' + (d.ok ? 'ok' : 'err');
+  msg.textContent = text;
+  setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 4000);
+  if (foldOpen('kc')) kcRefresh();
 }
 async function kcMark() {
   const d = await post('/api/kerchunks/test/mark', {});
@@ -6186,6 +6201,7 @@ async function pollStatus() {
   const d = await api('/api/status');
   if (!d || d.ok === false) return;
   lastStatus = d;
+  $('ptt-mark').classList.toggle('hidden', !(authed && d.kc_test));
   $('st-node').textContent = d.node || '(not set)';
   if ((d.node || '') !== nodeLabel) { nodeLabel = d.node || ''; setMediaInfo(); }
   $('st-listeners').textContent = d.listeners + ' / ' + d.max_listeners;
@@ -9545,6 +9561,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('kc-reset').addEventListener('click', kcReset);
   $('kc-test').addEventListener('click', kcTestToggle);
   $('kc-mark').addEventListener('click', kcMark);
+  $('ptt-mark').addEventListener('click', pttMark);
   $('kc-show').addEventListener('click', kcToggleList);
 });
 """
@@ -9648,7 +9665,10 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <audio id="player" playsinline class="hidden"></audio>
 <div id="listen-msg" class="msg"></div>
 <div id="ptt-card">
+<div class="ptt-row">
 <button id="ptt" type="button" disabled aria-label="Push to talk: hold to transmit"><span id="ptt-label">Hold to talk</span><span id="ptt-time"></span></button>
+<button id="ptt-mark" type="button" class="hidden" aria-label="Mark the key-up that just ended as a kerchunk">Mark kerchunk</button>
+</div>
 <div class="ptt-line"><span id="ptt-msg" class="msg"></span><span id="ptt-info" class="muted">-</span></div>
 </div>
 </div>

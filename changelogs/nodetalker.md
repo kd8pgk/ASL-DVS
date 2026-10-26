@@ -1,6 +1,17 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_34_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_35_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.35 (2026-10-26)
+
+- **Mark kerchunk on the Listen tab.** While a kerchunk test runs (and you are
+  logged in), the push-to-talk button splits into **Hold to talk** and an amber
+  **Mark kerchunk** button beside it, so you can mark a key-up without leaving
+  Listen. It works like the button on the Kerchunks card: it marks the key-up
+  that just ended (within 5 s), or the next one if one is still going. The
+  result shows under the button for 4 s. When no test runs, push-to-talk uses
+  the full width as before.
+- The status the Listen tab polls says whether a test is running (`kc_test`).
 
 ## 0.9.34 (2026-10-26)
 
