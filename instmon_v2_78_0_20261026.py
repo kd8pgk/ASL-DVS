@@ -14,6 +14,7 @@ import ipaddress
 import json 
 import os 
 import py_compile 
+import pwd
 import re
 import secrets
 import shlex
@@ -36,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.77.0"
+VERSION ="2.78.0"
 DATE_STR ="2026-10-26"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -165,7 +166,9 @@ def config_dest_name (name ):
 
 HOME_SCAN_DIR =os .environ .get ("INSTMON_HOME_SCAN_DIR",os .path .expanduser ("~"))
 HOME_SCAN_ENABLED =os .environ .get ("INSTMON_HOME_SCAN_ENABLED","1")!="0"
-WIFI_MENU_HOME_DIR = os.environ.get("INSTMON_WIFI_MENU_HOME", "/home/pi")
+WIFI_MENU_HOME_DIR = os.environ.get("INSTMON_WIFI_MENU_HOME", "")
+WIFI_MENU_HOME_NAME = "wifi_menu.sh"
+WIFI_MENU_OLD_DIRS = ("/home/pi",)
 
 _AUTH_ACCOUNT = "root"
 
@@ -6052,6 +6055,26 @@ def _fu_manuals(skipped):
         log_event(f"Full Update: manuals: {_docs_summary(got, _same, failed)}", "warn" if failed else "ok")
     _fu_set(skipped=list(skipped))
 
+def _wifi_menu_homes():
+    if WIFI_MENU_HOME_DIR:
+        try:
+            st = os.stat(WIFI_MENU_HOME_DIR)
+        except OSError:
+            return []
+        return [(os.path.realpath(WIFI_MENU_HOME_DIR), st.st_uid, st.st_gid)]
+    out, seen = [], set()
+    for p in pwd.getpwall():
+        if not 1000 <= p.pw_uid < 60000:
+            continue
+        if os.path.basename(p.pw_shell or "") in ("", "nologin", "false"):
+            continue
+        home = os.path.realpath(p.pw_dir or "/")
+        if home == "/" or home in seen or not os.path.isdir(home):
+            continue
+        seen.add(home)
+        out.append((home, p.pw_uid, p.pw_gid))
+    return out
+
 def _fu_wifi_menu_home(entries):
     entry = next((e for e in entries if e["category"] == "scripts"
                   and is_interactive_only_script(e["name"])
@@ -6059,39 +6082,66 @@ def _fu_wifi_menu_home(entries):
     if entry is None:
         return
     name = entry["name"]
-    if not os.path.isdir(WIFI_MENU_HOME_DIR):
-        log_event(f"Full Update: {name}: {WIFI_MENU_HOME_DIR} does not exist -- no copy made there", "info")
-        return
     lib_path = safe_join(LIB_SUBDIRS["scripts"], name)
     if lib_path is None or _gh_local_blob_id(lib_path) != entry["blob"]:
-        log_event(f"Full Update: {name}: the library copy is not the current file -- not copied to {WIFI_MENU_HOME_DIR}", "warn")
+        log_event(f"Full Update: {name}: the library copy is not the current file -- no copy put in the home folders", "warn")
         return
     stock = {entry["blob"]} | {_gh_local_blob_id(full) for _n, _v, _k, full in _gh_local_files("scripts", entry["glob"])}
     stock.discard(None)
-    dest = os.path.join(WIFI_MENU_HOME_DIR, name)
     try:
-        dest_blob = _gh_local_blob_id(dest)
-        if dest_blob is not None and dest_blob not in stock:
-            log_event(f"Full Update: {name}: your copy in {WIFI_MENU_HOME_DIR} has been changed -- left alone", "warn")
-            return
         with open(lib_path, "rb") as f:
             data = f.read()
-        owner = os.stat(WIFI_MENU_HOME_DIR)
-        tmp = dest + ".tmp"
-        with open(tmp, "wb") as f:
-            f.write(data)
-        os.chmod(tmp, 0o755)
-        if os.geteuid() == 0:
-            os.chown(tmp, owner.st_uid, owner.st_gid)
-        os.replace(tmp, dest)
-        for other in os.listdir(WIFI_MENU_HOME_DIR):
-            path = os.path.join(WIFI_MENU_HOME_DIR, other)
-            if other == name or not is_interactive_only_script(other):
+    except OSError as exc:
+        log_event(f"Full Update: {name}: couldn't read the library copy: {exc}", "warn")
+        return
+    scan_dir = os.path.realpath(HOME_SCAN_DIR)
+    homes = _wifi_menu_homes()
+    if not homes:
+        where = WIFI_MENU_HOME_DIR or "a login account's home folder"
+        log_event(f"Full Update: {name}: no {where} found -- no {WIFI_MENU_HOME_NAME} copy made", "info")
+    done, failed = set(), set()
+    for home, uid, gid in homes:
+        if home == scan_dir:
+            log_event(f"Full Update: {name}: {home} is the folder instmon scans for new files -- "
+                      f"no {WIFI_MENU_HOME_NAME} copy made there", "info")
+            continue
+        dest = os.path.join(home, WIFI_MENU_HOME_NAME)
+        try:
+            dest_blob = _gh_local_blob_id(dest)
+            if dest_blob is not None and dest_blob not in stock:
+                log_event(f"Full Update: {name}: {dest} has been changed by hand -- left alone", "warn")
+                done.add(home)
+                continue
+            tmp = dest + ".tmp"
+            with open(tmp, "wb") as f:
+                f.write(data)
+            os.chmod(tmp, 0o755)
+            if os.geteuid() == 0:
+                os.chown(tmp, uid, gid)
+            os.replace(tmp, dest)
+            done.add(home)
+        except OSError as exc:
+            failed.add(home)
+            log_event(f"Full Update: {name}: couldn't put {WIFI_MENU_HOME_NAME} in {home}: {exc}", "warn")
+            try:
+                os.unlink(dest + ".tmp")
+            except OSError:
+                pass
+    old_dirs = {scan_dir} | {os.path.realpath(d) for d in WIFI_MENU_OLD_DIRS}
+    for d in sorted((done | old_dirs) - failed):
+        try:
+            names = os.listdir(d)
+        except OSError:
+            continue
+        for other in names:
+            path = os.path.join(d, other)
+            if other == WIFI_MENU_HOME_NAME or not is_interactive_only_script(other):
                 continue
             if os.path.isfile(path) and not os.path.islink(path) and _gh_local_blob_id(path) in stock:
-                os.remove(path)
-    except OSError as exc:
-        log_event(f"Full Update: {name}: couldn't copy it to {WIFI_MENU_HOME_DIR}: {exc}", "warn")
+                try:
+                    os.remove(path)
+                except OSError as exc:
+                    log_event(f"Full Update: {name}: couldn't remove the old copy {path}: {exc}", "warn")
 
 def _fu_run():
     _fu_set(phase="checking", current="reading GitHub's file list")

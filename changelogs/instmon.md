@@ -1,6 +1,26 @@
 # instmon changelog
 
-Current file: `instmon_v2_77_0_20261026.py`. Newest entries first.
+Current file: `instmon_v2_78_0_20261026.py`. Newest entries first.
+
+## 2.78.0 (2026-10-26)
+
+- **The wifi menu is in the home folder of whoever logs in.** Full Update now
+  puts `wifi_menu.sh` (always that name, with no version in it) in the home
+  folder of every login account. A login account has a user ID of 1000 or more,
+  a login shell and an existing home folder. That is normally the user made when
+  the Pi was set up, whatever its name. Right after logging in, `ls` shows it and
+  `sudo ./wifi_menu.sh` runs it. The copy is `0755` and owned by that user. The
+  version is in the file's title line.
+  - `/root` gets no copy. Root logins are off by default, and it is the folder
+    instmon scans for new files.
+  - `INSTMON_WIFI_MENU_HOME` still puts the copy in one folder of your choice
+    instead.
+  - A `wifi_menu.sh` that was changed by hand is left alone, and the log says so.
+- **Old copies are removed.** Versioned copies (`wifi_menu_v…sh`) are removed
+  from the login accounts' home folders, from `/root` and from `/home/pi`. Only
+  copies that match a version in the library are removed, so a copy changed by
+  hand stays. This covers the copies left by 2.75.0 to 2.77.0. A home folder
+  where the new copy could not be written keeps its old copy.
 
 ## 2.77.0 (2026-10-26)
 
