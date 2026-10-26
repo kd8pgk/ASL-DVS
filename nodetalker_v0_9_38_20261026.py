@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.37.1"
+VERSION = "0.9.38"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 

@@ -1,8 +1,8 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_37_1_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_38_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
-## 0.9.37.1 (2026-10-26)
+## 0.9.38 (2026-10-26)
 
 - **Setup headings back to their spacing.** The Setup card's headings have
   their 0.9.35 margins again. 0.9.36 had dropped them for the default spacing.
