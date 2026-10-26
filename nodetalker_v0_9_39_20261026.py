@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.38"
+VERSION = "0.9.39"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -8780,9 +8780,10 @@ const TN_TYPED = {ASL: /^\d{1,7}$/, EchoLink: /^\d{1,6}$/, DMR: /^\d{1,8}$/, STF
   YSF: /^(\d{1,5}|[A-Za-z0-9.-]+:\d{1,5})$/,
   DSTAR: /^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
   M17: /^[A-Z0-9]+-[A-Z0-9-]{1,14}(?:\s+(?:[A-Z]|@ALL))?$/i};
-const TN_SIZE = {gap: 8, h: 40, font: 14};
-const LT_SIZE = {font: 15, h: 64};
-const SETT_SIZE = {font: 15, h: 44};
+const SIZE_SETS = {
+  tn: {store: 'nlTuneSize', def: {gap: 8, h: 40, font: 14}},
+  lt: {store: 'nlListenSize', def: {font: 15, h: 64}},
+  sett: {store: 'nlSetupSize', def: {font: 15, h: 44}}};
 const tnLists = {};
 let favNetLinks = {}, tnWin = null, tnTimer = 0, tnState = {};
 
@@ -8791,82 +8792,38 @@ function tnRemember() {
     find: $('t-find').value, pick: $('t-pick').value};
 }
 
-function tnSizeLoad() {
+function sizeLoad(p) {
   let v = {};
-  try { v = JSON.parse(localStorage.getItem('nlTuneSize') || '{}') || {}; } catch (e) {}
-  Object.keys(TN_SIZE).forEach((k) => {
-    const n = Number(v[k]), r = $('tn-' + k);
-    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : TN_SIZE[k];
+  try { v = JSON.parse(localStorage.getItem(SIZE_SETS[p].store) || '{}') || {}; } catch (e) {}
+  const def = SIZE_SETS[p].def;
+  Object.keys(def).forEach((k) => {
+    const n = Number(v[k]), r = $(p + '-' + k);
+    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : def[k];
   });
-  tnSizeApply(false);
+  sizeApply(p, false);
 }
 
-function tnSizeApply(save) {
+function sizeApply(p, save) {
   const v = {};
-  Object.keys(TN_SIZE).forEach((k) => {
-    v[k] = Number($('tn-' + k).value);
-    document.documentElement.style.setProperty('--tn-' + k, v[k] + 'px');
-    $('tn-' + k + '-v').textContent = v[k] + ' px';
+  Object.keys(SIZE_SETS[p].def).forEach((k) => {
+    v[k] = Number($(p + '-' + k).value);
+    document.documentElement.style.setProperty('--' + p + '-' + k, v[k] + 'px');
+    $(p + '-' + k + '-v').textContent = v[k] + ' px';
   });
-  if (save) { try { localStorage.setItem('nlTuneSize', JSON.stringify(v)); } catch (e) {} }
+  if (save) { try { localStorage.setItem(SIZE_SETS[p].store, JSON.stringify(v)); } catch (e) {} }
 }
 
-function tnSizeReset() {
-  Object.keys(TN_SIZE).forEach((k) => { $('tn-' + k).value = TN_SIZE[k]; });
-  tnSizeApply(false);
-  try { localStorage.removeItem('nlTuneSize'); } catch (e) {}
+function sizeReset(p) {
+  const def = SIZE_SETS[p].def;
+  Object.keys(def).forEach((k) => { $(p + '-' + k).value = def[k]; });
+  sizeApply(p, false);
+  try { localStorage.removeItem(SIZE_SETS[p].store); } catch (e) {}
 }
 
-function ltSizeLoad() {
-  let v = {};
-  try { v = JSON.parse(localStorage.getItem('nlListenSize') || '{}') || {}; } catch (e) {}
-  Object.keys(LT_SIZE).forEach((k) => {
-    const n = Number(v[k]), r = $('lt-' + k);
-    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : LT_SIZE[k];
-  });
-  ltSizeApply(false);
-}
-
-function ltSizeApply(save) {
-  const v = {};
-  Object.keys(LT_SIZE).forEach((k) => {
-    v[k] = Number($('lt-' + k).value);
-    document.documentElement.style.setProperty('--lt-' + k, v[k] + 'px');
-    $('lt-' + k + '-v').textContent = v[k] + ' px';
-  });
-  if (save) { try { localStorage.setItem('nlListenSize', JSON.stringify(v)); } catch (e) {} }
-}
-
-function ltSizeReset() {
-  Object.keys(LT_SIZE).forEach((k) => { $('lt-' + k).value = LT_SIZE[k]; });
-  ltSizeApply(false);
-  try { localStorage.removeItem('nlListenSize'); } catch (e) {}
-}
-
-function settSizeLoad() {
-  let v = {};
-  try { v = JSON.parse(localStorage.getItem('nlSetupSize') || '{}') || {}; } catch (e) {}
-  Object.keys(SETT_SIZE).forEach((k) => {
-    const n = Number(v[k]), r = $('sett-' + k);
-    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : SETT_SIZE[k];
-  });
-  settSizeApply(false);
-}
-
-function settSizeApply(save) {
-  const v = {};
-  Object.keys(SETT_SIZE).forEach((k) => {
-    v[k] = Number($('sett-' + k).value);
-    document.documentElement.style.setProperty('--sett-' + k, v[k] + 'px');
-    $('sett-' + k + '-v').textContent = v[k] + ' px';
-  });
-  if (save) { try { localStorage.setItem('nlSetupSize', JSON.stringify(v)); } catch (e) {} }
-}
-
-function settSizeReset() {
-  Object.keys(SETT_SIZE).forEach((k) => { $('sett-' + k).value = SETT_SIZE[k]; });
-  settSizeApply(false);
-  try { localStorage.removeItem('nlSetupSize'); } catch (e) {}
+function sizeInit(p) {
+  Object.keys(SIZE_SETS[p].def).forEach((k) => $(p + '-' + k).addEventListener('input', () => sizeApply(p, true)));
+  $(p + '-reset').addEventListener('click', () => sizeReset(p));
+  sizeLoad(p);
 }
 
 function tnInit() {
@@ -8888,9 +8845,7 @@ function tnInit() {
   $('t-go').addEventListener('click', tnToggle);
   $('t-lh').addEventListener('click', tnOpenLink);
   $('t-save').addEventListener('click', tnSaveFav);
-  ['gap', 'h', 'font'].forEach((k) => $('tn-' + k).addEventListener('input', () => tnSizeApply(true)));
-  $('tn-reset').addEventListener('click', tnSizeReset);
-  tnSizeLoad();
+  sizeInit('tn');
   tnMode(true);
 }
 
@@ -9559,12 +9514,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('c-fav').addEventListener('change', netHide);
   tnInit();
-  ['font', 'h'].forEach((k) => $('lt-' + k).addEventListener('input', () => ltSizeApply(true)));
-  $('lt-reset').addEventListener('click', ltSizeReset);
-  ltSizeLoad();
-  ['font', 'h'].forEach((k) => $('sett-' + k).addEventListener('input', () => settSizeApply(true)));
-  $('sett-reset').addEventListener('click', settSizeReset);
-  settSizeLoad();
+  sizeInit('lt');
+  sizeInit('sett');
   $('nw-import').addEventListener('click', nwImport);
   $('ff-up').addEventListener('change', ffUpload);
   $('setup-save').addEventListener('click', setupSave);

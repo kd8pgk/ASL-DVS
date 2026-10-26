@@ -1,6 +1,12 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_38_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_39_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.39 (2026-10-26)
+
+- **One set of size functions.** The Tune, Listen and Setup size sliders now run
+  on the same load, apply, reset and wiring code, driven by one table. What the
+  sliders do, their saved values and their ids are unchanged.
 
 ## 0.9.38 (2026-10-26)
 
