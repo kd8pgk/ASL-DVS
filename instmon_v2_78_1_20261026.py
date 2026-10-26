@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.78.0"
+VERSION ="2.78.1"
 DATE_STR ="2026-10-26"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -6780,7 +6780,7 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
             +'</div>')
     card_cls ="card libgrp libgrp-nested collapsed"if nested else "card libgrp collapsed"
     upload_html =f"""
-    <div class="librow libgrp-upload">
+    <div class="librow libgrp-upload libgrp-upload-top">
       <input type="file" id="file-{category}" data-category="{category}">
       <button data-action="upload" data-category="{category}">Upload &amp; stage</button>
       <span id="upmsg-{category}" class="small muted"></span>
@@ -6793,8 +6793,8 @@ def render_library_group_html (title ,category ,entries ,action_label ,nested =F
     </div>
     {_gh_group_html (category )}
     <div class="librows">
-    {''.join (rows )}
     {upload_html }
+    {''.join (rows )}
     </div>
   </div>"""
 
@@ -7090,6 +7090,7 @@ input[type=file]{color:var(--muted);font-size:.78rem;max-width:100%}
 .libgrp-upload{flex-direction:row;flex-wrap:wrap;align-items:center;gap:.5rem;
   border-top:1px dashed var(--border2);border-bottom:none;padding-top:.6rem}
 .libgrp-upload input[type=file]{flex:1;min-width:8rem}
+.libgrp-upload-top{border-top:none;border-bottom:1px dashed var(--border2);padding-top:.55rem;padding-bottom:.6rem}
 /* GitHub status rows: sit between a library group's header and its
    rows so they stay visible while the group is collapsed. */
 .gh-rows{display:flex;flex-direction:column;gap:.3rem;margin:.1rem 0 .4rem}

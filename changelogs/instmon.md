@@ -1,6 +1,15 @@
 # instmon changelog
 
-Current file: `instmon_v2_78_0_20261026.py`. Newest entries first.
+Current file: `instmon_v2_78_1_20261026.py`. Newest entries first.
+
+## 2.78.1 (2026-10-26)
+
+- **The upload line is at the top of each library card.** In every library
+  card (Dashboard, SysMon, wifimon, 44helper, Node Talker, Watchdog, instmon,
+  Scripts and Configuration), Choose File and Upload & stage now sit above the
+  list of files instead of below it, with the dashed line under them. What
+  upload does is unchanged. The Configuration card's "Copy the
+  active config into the library" line stays at the bottom.
 
 ## 2.78.0 (2026-10-26)
 
