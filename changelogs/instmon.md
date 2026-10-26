@@ -1,6 +1,16 @@
 # instmon changelog
 
-Current file: `instmon_v2_76_0_20261026.py`. Newest entries first.
+Current file: `instmon_v2_77_0_20261026.py`. Newest entries first.
+
+## 2.77.0 (2026-10-26)
+
+- **The wifi menu copy goes to `/home/pi`.** Full Update now writes its
+  ready-to-run copy of `wifi_menu_vX_Y_YYYYMMDD.sh` to `/home/pi`, owned by the
+  `pi` user, instead of instmon's own home folder (`/root` when it runs as
+  root). Another folder can be set with `INSTMON_WIFI_MENU_HOME`. If the folder
+  doesn't exist (no `pi` user on this node), no copy is made and the log says
+  so. Nothing else about the copy changes.
+- A copy left in `/root` by 2.75.0 or 2.76.0 is not removed.
 
 ## 2.76.0 (2026-10-26)
 
