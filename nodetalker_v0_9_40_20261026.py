@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.39"
+VERSION = "0.9.40"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -5490,7 +5490,8 @@ label{color:var(--soft)}
 .msg.ok{color:var(--accent)}.msg.err{color:var(--red)}.msg.warn{color:var(--amber)}
 table{width:100%;border-collapse:collapse;font-size:14px}
 td,th{text-align:left;padding:6px 6px;border-bottom:1px solid var(--line);vertical-align:top;overflow-wrap:anywhere}
-table.links{font-size:clamp(10.5px,3.1vw,14px);font-variant-numeric:tabular-nums}
+table.links{font-size:calc(clamp(10.5px,3.1vw,14px) + var(--sett-font) - 15px);font-variant-numeric:tabular-nums}
+#cd-links .small{font-size:calc(13px + var(--sett-font) - 15px)}
 table.links td,table.links th{padding:6px 3px;white-space:nowrap;overflow-wrap:normal}
 table.links td:nth-child(2){width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
 .listen-row{flex-wrap:nowrap}
@@ -5505,7 +5506,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .na{opacity:.45}
 .na,.na *{cursor:not-allowed}
 .why{margin:4px 0 8px}
-:root{--tn-gap:8px;--tn-h:40px;--tn-font:14px;--lt-font:15px;--lt-h:64px;--sett-font:15px;--sett-h:44px}
+:root{--tn-gap:2px;--tn-h:40px;--tn-font:14px;--lt-font:15px;--lt-h:64px;--sett-font:15px;--sett-h:44px}
 .tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
 .tn-bar select,.tn-bar input{min-height:var(--tn-h);font-size:var(--tn-font)}
 #t-mode{flex:0 0 auto;width:7rem}
@@ -5526,7 +5527,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #tab-connect .sel-card{margin-top:4px;padding:6px 8px;gap:3px}
 #tab-connect .big-num{font-size:18px}
 #tab-connect .btn.big{min-height:40px;font-size:14px;min-width:0}
-#tab-connect .tn-bar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+#tab-connect .tn-bar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--tn-gap)}
 #tab-connect .tn-bar>*{width:100%!important;flex:none!important;max-width:none!important;min-width:0}
 #tab-connect #t-find,#tab-connect #t-pick{grid-column:span 2}
 #tab-connect #t-go{grid-column:1 / -1;min-height:44px;font-size:15px}
@@ -8781,7 +8782,7 @@ const TN_TYPED = {ASL: /^\d{1,7}$/, EchoLink: /^\d{1,6}$/, DMR: /^\d{1,8}$/, STF
   DSTAR: /^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
   M17: /^[A-Z0-9]+-[A-Z0-9-]{1,14}(?:\s+(?:[A-Z]|@ALL))?$/i};
 const SIZE_SETS = {
-  tn: {store: 'nlTuneSize', def: {gap: 8, h: 40, font: 14}},
+  tn: {store: 'nlTuneSize', def: {h: 40, font: 14}},
   lt: {store: 'nlListenSize', def: {font: 15, h: 64}},
   sett: {store: 'nlSetupSize', def: {font: 15, h: 44}}};
 const tnLists = {};
@@ -9719,16 +9720,15 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div id="cfg-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">Tune card on this phone</h3>
-<div class="row"><label>Gap <input type="range" id="tn-gap" min="2" max="20" step="1"> <span id="tn-gap-v" class="mono small"></span></label></div>
+<div class="row"><label>Text <input type="range" id="tn-font" min="10" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
 <div class="row"><label>Height <input type="range" id="tn-h" min="32" max="56" step="1"> <span id="tn-h-v" class="mono small"></span></label></div>
-<div class="row"><label>Text <input type="range" id="tn-font" min="12" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
 <div class="row"><button id="tn-reset" class="btn" type="button">Default spacing</button></div>
 <h3>Listen tab on this phone</h3>
-<div class="row"><label>Text <input type="range" id="lt-font" min="12" max="20" step="0.5"> <span id="lt-font-v" class="mono small"></span></label></div>
+<div class="row"><label>Text <input type="range" id="lt-font" min="10" max="20" step="0.5"> <span id="lt-font-v" class="mono small"></span></label></div>
 <div class="row"><label>Height (push to talk) <input type="range" id="lt-h" min="48" max="96" step="2"> <span id="lt-h-v" class="mono small"></span></label></div>
 <div class="row"><button id="lt-reset" class="btn" type="button">Default size</button></div>
 <h3>Setup tab on this phone</h3>
-<div class="row"><label>Text <input type="range" id="sett-font" min="12" max="20" step="0.5"> <span id="sett-font-v" class="mono small"></span></label></div>
+<div class="row"><label>Text <input type="range" id="sett-font" min="10" max="20" step="0.5"> <span id="sett-font-v" class="mono small"></span></label></div>
 <div class="row"><label>Height (buttons) <input type="range" id="sett-h" min="36" max="64" step="1"> <span id="sett-h-v" class="mono small"></span></label></div>
 <div class="row"><button id="sett-reset" class="btn" type="button">Default size</button></div>
 </div>
