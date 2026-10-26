@@ -1,6 +1,21 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_28_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_29_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.29 (2026-10-26)
+
+- **Spectrum has a dB axis and a level meter.** The left axis labels the
+  spectrum from -100 to -40 dB (the analyser's own range). A meter on the right
+  shows the peak level in dBFS from 0 to -60, with a peak hold that stays for
+  1 s. The meter's red line is at -1 dBFS.
+- **Clip line across the spectrum.** A solid red line at the top of the bars
+  marks where clipping begins: the analyser saturates there, at -25 dB.
+- **Clip line across the Audio check strips.** The RX strip (and the sent and
+  your-level strips) has a solid red line at -1 dBFS, drawn over the bars, and
+  dBFS labels on the right. The bars are coloured by level on the spectrum's
+  colour ramp, no longer one teal colour. The old red band behind the bars is
+  gone, since the line replaces it.
+- Client-side only (the page script and CSS). The server is not changed.
 
 ## 0.9.28 (2026-10-26)
 

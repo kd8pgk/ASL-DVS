@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.28"
+VERSION = "0.9.29"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -5929,12 +5929,25 @@ function stripDraw(cv, fr, len) {
   const g = cv.getContext('2d'), y = (db) => h - vuPct(db) / 100 * h, n = Math.max(len || fr.length, 1);
   g.fillStyle = '#0a1016'; g.fillRect(0, 0, w, h);
   g.fillStyle = 'rgba(34,195,166,.16)'; g.fillRect(0, y(-3), w, y(-6) - y(-3));
-  g.fillStyle = 'rgba(242,84,91,.18)'; g.fillRect(0, 0, w, y(-1));
-  g.fillStyle = 'rgba(34,195,166,.75)';
-  fr.forEach((f, i) => { const x = i / n * w; g.fillRect(x, y(f.db), Math.max(1, w / n), h - y(f.db)); });
+  g.fillStyle = '#243140';
+  [-6, -12, -24, -36, -48].forEach((db) => g.fillRect(0, Math.round(y(db)), w, Math.max(1, r)));
+  const bw = Math.max(1, w / n);
+  fr.forEach((f, i) => {
+    const x = i / n * w, v = Math.round(vuPct(f.db) / 100 * 255);
+    g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
+    g.fillRect(x, y(f.db), bw, h - y(f.db));
+  });
   g.strokeStyle = '#f4c04e'; g.lineWidth = Math.max(1, r); g.beginPath();
   fr.forEach((f, i) => { const x = i / n * w; if (i) g.lineTo(x, y(f.pk)); else g.moveTo(x, y(f.pk)); });
   g.stroke();
+  g.fillStyle = '#f2545b'; g.fillRect(0, Math.round(y(-1)) - r, w, 2 * r);
+  g.font = Math.round(9 * r) + 'px ui-monospace,Menlo,Consolas,monospace';
+  g.textAlign = 'right'; g.textBaseline = 'middle';
+  [-6, -12, -24, -36, -48].forEach((db) => {
+    const label = String(db), tw = g.measureText(label).width + 4 * r, ty = y(db);
+    g.fillStyle = 'rgba(10,16,22,.75)'; g.fillRect(w - tw - 2 * r, ty - 6 * r, tw, 12 * r);
+    g.fillStyle = '#9fb0bf'; g.fillText(label, w - 4 * r, ty);
+  });
 }
 
 function playhead(strip, src, ac, secs) {
@@ -7171,25 +7184,72 @@ function specClear() {
   g.fillRect(0, 0, cv.width, cv.height);
 }
 
-function specDraw() {
-  const cv = $('spec'), g = cv.getContext('2d'), w = cv.width, h = cv.height;
+const SPEC_DB_LO = -100, SPEC_DB_HI = -25;
+let specWave = null, specPk = {level: -120, hold: -120, holdAt: 0};
+
+function specMeter(now) {
+  if (!specWave) specWave = new Float32Array(analyser.fftSize);
+  analyser.getFloatTimeDomainData(specWave);
+  let pk = 0;
+  for (let i = 0; i < specWave.length; i++) pk = Math.max(pk, Math.abs(specWave[i]));
+  const db = pk > 0 ? Math.max(-120, 20 * Math.log10(pk)) : -120;
+  specPk.level = Math.max(db, specPk.level - 1.5);
+  if (specPk.level >= specPk.hold || now - specPk.holdAt > 1000) { specPk.hold = specPk.level; specPk.holdAt = now; }
+}
+
+function specDraw(now) {
+  const cv = $('spec'), g = cv.getContext('2d'), w = cv.width, h = cv.height, r = window.devicePixelRatio || 1;
+  const gl = Math.round(40 * r), gr = Math.round(52 * r), bx = gl, bw = w - gl - gr;
   analyser.getByteFrequencyData(specBins);
+  specMeter(now || performance.now());
   const top = Math.min(specBins.length, Math.ceil(SPEC_HZ / (ctx.sampleRate / 2) * specBins.length));
-  const at = (x) => specBins[Math.min(top - 1, Math.floor(x / w * top))];
+  const at = (x) => specBins[Math.min(top - 1, Math.floor((x - bx) / bw * top))];
+  const yDb = (db) => h - (db - SPEC_DB_LO) / (SPEC_DB_HI - SPEC_DB_LO) * h;
   g.fillStyle = '#0a1016';
   g.fillRect(0, 0, w, h);
-  const step = Math.max(2, Math.floor(w / 96));
-  for (let x = 0; x < w; x += step) {
+  g.font = Math.round(9 * r) + 'px ui-monospace,Menlo,Consolas,monospace';
+  g.textBaseline = 'middle';
+  g.fillStyle = '#243140';
+  for (let db = -100; db <= -40; db += 10) g.fillRect(bx, Math.round(yDb(db)), bw, Math.max(1, r));
+  g.fillStyle = '#9fb0bf';
+  g.textAlign = 'right';
+  for (let db = -100; db <= -40; db += 10) g.fillText(String(db), bx - 4 * r, yDb(db));
+  g.textBaseline = 'top';
+  g.fillText('dB', bx - 4 * r, 2 * r);
+  const step = Math.max(2, Math.floor(bw / 96));
+  for (let x = bx; x < bx + bw; x += step) {
     const v = at(x), bh = v / 255 * h;
     g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
     g.fillRect(x, h - bh, step - 1, bh);
   }
+  g.fillStyle = '#f2545b';
+  g.fillRect(bx, 0, bw, Math.max(2, Math.round(2 * r)));
+  g.textAlign = 'right';
+  g.fillText('clip begins', bx + bw - 4 * r, 4 * r);
+  const mx = w - gr + 10 * r, mw = 16 * r;
+  const yF = (db) => (0 - db) / 60 * h;
+  g.fillStyle = '#0a1016';
+  g.fillRect(mx, 0, mw, h);
+  const grad = g.createLinearGradient(0, 0, 0, h);
+  grad.addColorStop(0, '#ff5c5c');
+  grad.addColorStop(0.1, '#f4c04e');
+  grad.addColorStop(0.5, '#22c3a6');
+  grad.addColorStop(1, '#123460');
+  g.fillStyle = grad;
+  g.fillRect(mx, yF(specPk.level), mw, h - yF(specPk.level));
+  g.fillStyle = '#f4c04e';
+  g.fillRect(mx - 3 * r, Math.round(yF(specPk.hold)), mw + 6 * r, Math.max(2, Math.round(2 * r)));
+  g.fillStyle = '#f2545b';
+  g.fillRect(mx - 4 * r, Math.round(yF(-1)) - r, mw + 8 * r, 2 * r);
+  g.textAlign = 'left';
+  g.fillStyle = '#9fb0bf';
+  [0, -6, -12, -18, -24, -36, -48, -60].forEach((db) => g.fillText(String(db), mx + mw + 4 * r, Math.max(6 * r, Math.min(h - 6 * r, yF(db)))));
 }
 
 function specLoop(t) {
   specRaf = 0;
   if (!specOn() || !specFit()) return;
-  if (t - specLast >= 1000 / SPEC_FPS) { specLast = t; specDraw(); }
+  if (t - specLast >= 1000 / SPEC_FPS) { specLast = t; specDraw(t); }
   specRaf = requestAnimationFrame(specLoop);
 }
 
