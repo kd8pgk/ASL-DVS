@@ -13,6 +13,7 @@ import json
 import math
 import operator
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -30,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.31.1"
+VERSION = "0.9.32"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -1017,6 +1018,8 @@ _kc_state = {"threshold": KERCHUNK_MAX_SEC, "learned": False, "labels": 0}
 _kc_test = {"on": False, "started": 0.0, "ends": 0.0, "minutes": KERCHUNK_TEST_MIN, "rows": [], "pending": False}
 _kc_last = {"row": None, "at": 0.0, "marked": False}
 KERCHUNK_MARK_SEC = 5.0
+_kc_q = queue.Queue()
+_kc_writer = None
 _kc_last_id = 0
 
 
@@ -1079,15 +1082,7 @@ def _kc_add(secs, peak):
     kerchunk = secs < _kc_state["threshold"]
     _kc_last_id = max(int(time.time() * 1000), _kc_last_id + 1)
     row = {"id": str(_kc_last_id), "secs": secs, "peak": round(peak, 1), "kerchunk": kerchunk, "label": ""}
-    with _kc_lock:
-        try:
-            if os.path.exists(KERCHUNK_LOG_PATH) and os.path.getsize(KERCHUNK_LOG_PATH) > KERCHUNK_LOG_BYTES:
-                _atomic_write(KERCHUNK_LOG_PATH, _kc_text(_kc_rows()), 0o644)
-            fresh = not os.path.exists(KERCHUNK_LOG_PATH) or os.path.getsize(KERCHUNK_LOG_PATH) == 0
-            with open(KERCHUNK_LOG_PATH, "a", encoding="utf-8") as fh:
-                fh.write((_KC_HEAD if fresh else "") + _kc_line(row))
-        except OSError as exc:
-            log_event(f"Could not record a burst in {KERCHUNK_LOG_PATH}: {exc}", "err")
+    _kc_put("add", row)
     if kerchunk:
         log_event(f"Kerchunk: {secs:.1f} s at {peak:.0f} dBFS, not treated as activity", "info")
     return row
@@ -1109,8 +1104,42 @@ def _kc_set_label(bid, label):
     return True
 
 
+def _kc_write_row(row):
+    with _kc_lock:
+        try:
+            if os.path.exists(KERCHUNK_LOG_PATH) and os.path.getsize(KERCHUNK_LOG_PATH) > KERCHUNK_LOG_BYTES:
+                _atomic_write(KERCHUNK_LOG_PATH, _kc_text(_kc_rows()), 0o644)
+            fresh = not os.path.exists(KERCHUNK_LOG_PATH) or os.path.getsize(KERCHUNK_LOG_PATH) == 0
+            with open(KERCHUNK_LOG_PATH, "a", encoding="utf-8") as fh:
+                fh.write((_KC_HEAD if fresh else "") + _kc_line(row))
+        except OSError as exc:
+            log_event(f"Could not record a burst in {KERCHUNK_LOG_PATH}: {exc}", "err")
+
+
+def _kc_write_loop():
+    while True:
+        kind, arg = _kc_q.get()
+        try:
+            if kind == "add":
+                _kc_write_row(arg)
+            elif kind == "label":
+                _kc_set_label(arg, "kerchunk")
+        except Exception as exc:
+            log_event(f"Burst log writer: {exc}", "err")
+        finally:
+            _kc_q.task_done()
+
+
+def _kc_put(kind, arg):
+    global _kc_writer
+    if _kc_writer is None:
+        _kc_writer = threading.Thread(target=_kc_write_loop, name="kc-writer", daemon=True)
+        _kc_writer.start()
+    _kc_q.put((kind, arg))
+
+
 def _kc_test_take(row):
-    _kc_set_label(row["id"], "kerchunk")
+    _kc_put("label", row["id"])
     with _kc_lock:
         _kc_test["rows"].append({"id": row["id"], "secs": round(row["secs"], 2), "peak": row["peak"],
                                  "kerchunk": row["kerchunk"]})
@@ -1247,6 +1276,7 @@ class Hub:
         self.burst_start = -1e9
         self.burst_last = -1e9
         self.burst_peak = -120.0
+        self.burst_own = False
         self.burst_seq = 0
         self.kc_seqs = deque(maxlen=64)
         self.delayed = deque()
@@ -1292,6 +1322,8 @@ class Hub:
         secs = self.burst_last - self.burst_start
         peak = self.burst_peak
         self.burst_last = -1e9
+        if self.burst_own:
+            return
         if secs >= KERCHUNK_MIN_SEC:
             row = _kc_add(secs, peak)
             take = False
@@ -1334,8 +1366,11 @@ class Hub:
                     self.burst_seq += 1
                     self.burst_start = now
                     self.burst_peak = -120.0
+                    self.burst_own = False
                 self.burst_last = now
                 self.burst_peak = max(self.burst_peak, db)
+                if TALKER.keyed or TONE.running or now - TALKER.last_unkey < TX_BUSY_GRACE_SEC:
+                    self.burst_own = True
                 if now - self.burst_start >= KERCHUNK_MAX_SEC:
                     self.last_active = now
         else:
@@ -6027,7 +6062,7 @@ function flush() {
   peakLocal = 0;
 }
 
-const VU_MIN = -60;
+const VU_MIN = -60, CLIP_DB = -0.5;
 let micTaps = [], vuMic = null, vuHold = {db: -120, t: 0};
 
 function micFrame(st) {
@@ -6131,7 +6166,7 @@ function stripDraw(cv, fr, len) {
   g.strokeStyle = '#f4c04e'; g.lineWidth = Math.max(1, r); g.beginPath();
   fr.forEach((f, i) => { const x = i / n * w; if (i) g.lineTo(x, y(f.pk)); else g.moveTo(x, y(f.pk)); });
   g.stroke();
-  g.fillStyle = '#f2545b'; g.fillRect(0, Math.round(y(-1)) - r, w, 2 * r);
+  g.fillStyle = '#f2545b'; g.fillRect(0, Math.max(0, Math.round(y(CLIP_DB)) - r), w, 2 * r);
   g.font = Math.round(9 * r) + 'px ui-monospace,Menlo,Consolas,monospace';
   g.textAlign = 'right'; g.textBaseline = 'middle';
   [-6, -12, -24, -36, -48].forEach((db) => {
@@ -6171,7 +6206,7 @@ function accAdd(a, st) {
   a.n++;
   a.hist[Math.max(0, Math.min(120, Math.round(st.db) + 120))]++;
   if (st.pk > a.pk) a.pk = st.pk;
-  if (st.pk >= -0.5) a.clip++;
+  if (st.pk >= CLIP_DB) a.clip++;
   if (st.db > -45) {
     a.act++; a.pw += Math.pow(10, st.db / 10);
     if (st.lim >= 0.5) a.lim++;
@@ -7416,7 +7451,7 @@ function specDraw(now) {
   g.fillStyle = '#f2545b';
   g.fillRect(bx, 0, bw, Math.max(2, Math.round(2 * r)));
   g.textAlign = 'right';
-  g.fillText('clip begins', bx + bw - 4 * r, 4 * r);
+  g.fillText('display max', bx + bw - 4 * r, 4 * r);
   const mx = w - gr + 10 * r, mw = 16 * r;
   const yF = (db) => (0 - db) / 60 * h;
   g.fillStyle = '#0a1016';
@@ -7431,7 +7466,7 @@ function specDraw(now) {
   g.fillStyle = '#f4c04e';
   g.fillRect(mx - 3 * r, Math.round(yF(specPk.hold)), mw + 6 * r, Math.max(2, Math.round(2 * r)));
   g.fillStyle = '#f2545b';
-  g.fillRect(mx - 4 * r, Math.round(yF(-1)) - r, mw + 8 * r, 2 * r);
+  g.fillRect(mx - 4 * r, Math.max(0, Math.round(yF(CLIP_DB)) - r), mw + 8 * r, 2 * r);
   g.textAlign = 'left';
   g.fillStyle = '#9fb0bf';
   [0, -6, -12, -18, -24, -36, -48, -60].forEach((db) => g.fillText(String(db), mx + mw + 4 * r, Math.max(6 * r, Math.min(h - 6 * r, yF(db)))));

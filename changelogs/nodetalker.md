@@ -1,6 +1,22 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_31_1_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_32_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.32 (2026-10-26)
+
+- **Our own transmissions are not logged as bursts.** Audio heard while Node
+  Talker is keyed, within 1 s after it unkeys, or while the tone test runs is
+  left out of the burst log, the kerchunk count, the test and the Listen drop.
+- **The burst log is written off the audio thread.** Appending a burst, the
+  200 KB trim and labels from Mark kerchunk now go through a writer thread, so a
+  slow SD card write can no longer hold up the audio pump (and Listen).
+- **One clip level everywhere.** The red line on the Audio check strips, the red
+  line on the spectrum's level meter and the report's "Samples at full scale"
+  count all use -0.5 dBFS (the strips and meter drew -1 dBFS before). The lines
+  stay inside the graph at the top edge.
+- **Spectrum label.** The red line at the top of the spectrum is labelled
+  "display max": it is the top of the analyser's range (-25 dB per bin), not
+  clipping.
 
 ## 0.9.31.1 (2026-10-26)
 
