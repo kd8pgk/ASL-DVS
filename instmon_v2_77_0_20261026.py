@@ -36,7 +36,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.76.0"
+VERSION ="2.77.0"
 DATE_STR ="2026-10-26"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -165,6 +165,7 @@ def config_dest_name (name ):
 
 HOME_SCAN_DIR =os .environ .get ("INSTMON_HOME_SCAN_DIR",os .path .expanduser ("~"))
 HOME_SCAN_ENABLED =os .environ .get ("INSTMON_HOME_SCAN_ENABLED","1")!="0"
+WIFI_MENU_HOME_DIR = os.environ.get("INSTMON_WIFI_MENU_HOME", "/home/pi")
 
 _AUTH_ACCOUNT = "root"
 
@@ -6058,21 +6059,24 @@ def _fu_wifi_menu_home(entries):
     if entry is None:
         return
     name = entry["name"]
+    if not os.path.isdir(WIFI_MENU_HOME_DIR):
+        log_event(f"Full Update: {name}: {WIFI_MENU_HOME_DIR} does not exist -- no copy made there", "info")
+        return
     lib_path = safe_join(LIB_SUBDIRS["scripts"], name)
     if lib_path is None or _gh_local_blob_id(lib_path) != entry["blob"]:
-        log_event(f"Full Update: {name}: the library copy is not the current file -- not copied to {HOME_SCAN_DIR}", "warn")
+        log_event(f"Full Update: {name}: the library copy is not the current file -- not copied to {WIFI_MENU_HOME_DIR}", "warn")
         return
     stock = {entry["blob"]} | {_gh_local_blob_id(full) for _n, _v, _k, full in _gh_local_files("scripts", entry["glob"])}
     stock.discard(None)
-    dest = os.path.join(HOME_SCAN_DIR, name)
+    dest = os.path.join(WIFI_MENU_HOME_DIR, name)
     try:
         dest_blob = _gh_local_blob_id(dest)
         if dest_blob is not None and dest_blob not in stock:
-            log_event(f"Full Update: {name}: your copy in {HOME_SCAN_DIR} has been changed -- left alone", "warn")
+            log_event(f"Full Update: {name}: your copy in {WIFI_MENU_HOME_DIR} has been changed -- left alone", "warn")
             return
         with open(lib_path, "rb") as f:
             data = f.read()
-        owner = os.stat(HOME_SCAN_DIR)
+        owner = os.stat(WIFI_MENU_HOME_DIR)
         tmp = dest + ".tmp"
         with open(tmp, "wb") as f:
             f.write(data)
@@ -6080,14 +6084,14 @@ def _fu_wifi_menu_home(entries):
         if os.geteuid() == 0:
             os.chown(tmp, owner.st_uid, owner.st_gid)
         os.replace(tmp, dest)
-        for other in os.listdir(HOME_SCAN_DIR):
-            path = os.path.join(HOME_SCAN_DIR, other)
+        for other in os.listdir(WIFI_MENU_HOME_DIR):
+            path = os.path.join(WIFI_MENU_HOME_DIR, other)
             if other == name or not is_interactive_only_script(other):
                 continue
             if os.path.isfile(path) and not os.path.islink(path) and _gh_local_blob_id(path) in stock:
                 os.remove(path)
     except OSError as exc:
-        log_event(f"Full Update: {name}: couldn't copy it to {HOME_SCAN_DIR}: {exc}", "warn")
+        log_event(f"Full Update: {name}: couldn't copy it to {WIFI_MENU_HOME_DIR}: {exc}", "warn")
 
 def _fu_run():
     _fu_set(phase="checking", current="reading GitHub's file list")
