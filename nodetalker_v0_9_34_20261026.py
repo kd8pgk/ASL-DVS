@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.33"
+VERSION = "0.9.34"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -1520,9 +1520,11 @@ class Hub:
         log_event(f"Listener from {lst.ip} left after {int(time.time() - lst.since)}s")
 
     def audio_active(self):
+        now = time.monotonic()
+        heard = now - self.last_active < ACTIVE_HOLD_SEC
         if KEYED.ok:
-            return KEYED.keyed or time.monotonic() - KEYED.unkey_at < ACTIVE_HOLD_SEC
-        return time.monotonic() - self.last_active < ACTIVE_HOLD_SEC
+            return heard or KEYED.keyed or now - KEYED.unkey_at < ACTIVE_HOLD_SEC
+        return heard
 
     def _close_burst(self):
         if self.burst_last < 0:
