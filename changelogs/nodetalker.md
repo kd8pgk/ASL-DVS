@@ -1,6 +1,46 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_35_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_39_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.39 (2026-10-26)
+
+- **One set of size functions.** The Tune, Listen and Setup size sliders now run
+  on the same load, apply, reset and wiring code, driven by one table. What the
+  sliders do, their saved values and their ids are unchanged.
+
+## 0.9.38 (2026-10-26)
+
+- **Setup headings back to their spacing.** The Setup card's headings have
+  their 0.9.35 margins again. 0.9.36 had dropped them for the default spacing.
+- **Spelling on screen.** Three words are spelled the US way like the rest of
+  the page: "labeled bursts" (Kerchunks), "recognizes" (Listen's keyup message)
+  and "Analyzing" (tone test stage).
+
+## 0.9.37 (2026-10-26)
+
+- **Size sliders for the Listen and Setup tabs.** The Setup card has a
+  "Listen tab on this phone" and a "Setup tab on this phone" section, like the
+  Tune card's. Each has **Text** (the tab's text size) and **Height**: on Listen
+  the height of the push-to-talk and Mark kerchunk buttons, on Setup the height
+  of its buttons. **Default size** puts a tab back to 15 px text and the default
+  heights. Each tab's size is saved in its own browser entry (`nlListenSize`,
+  `nlSetupSize`), so the Tune card's sizes are not changed.
+
+## 0.9.36 (2026-10-26)
+
+- **Connect.** The Disconnect All button shows its title only; the list of
+  services under it is gone (the confirmation still names them). The line under
+  the Tune card (`Tuned: ...`) is centred.
+- **Listen.** The red "display max" line across the top of the spectrum is
+  removed. The clip line on the level meter stays.
+- **Setup.** The System card's buttons (Reboot, Shutdown) are centred, and the
+  card has no Copy all button. The headings in the Setup card use the default
+  heading spacing instead of their own margins.
+- **Favorites.** The RX dB and TX dB gain fields open the full keyboard, so a
+  minus sign can be typed (gains run from -12 to +12 dB). Numeric keypads have
+  no minus key.
+- **Expanded test.** The show/hide arrow on the card heading sits at the right
+  edge.
 
 ## 0.9.35 (2026-10-26)
 

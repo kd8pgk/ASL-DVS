@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.35"
+VERSION = "0.9.39"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -5447,7 +5447,7 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;paddin
 .fold-btn{width:100%;min-height:44px;display:flex;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:var(--text);font:inherit;font-size:15px;font-weight:700;text-align:left;cursor:pointer}
 .fold-t{flex:none}
 .fold-sum{flex:1;min-width:0;color:var(--muted);font-size:13px;font-weight:400;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fold-i{flex:none;width:14px;color:var(--muted);text-align:center}
+.fold-i{flex:none;width:14px;margin-left:auto;color:var(--muted);text-align:center}
 .kc-graph{width:100%;height:120px;display:block;margin:8px 0}
 .kc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 0;border-top:1px solid var(--line)}
 .kc-row span{flex:1;min-width:200px}
@@ -5505,7 +5505,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .na{opacity:.45}
 .na,.na *{cursor:not-allowed}
 .why{margin:4px 0 8px}
-:root{--tn-gap:8px;--tn-h:40px;--tn-font:14px}
+:root{--tn-gap:8px;--tn-h:40px;--tn-font:14px;--lt-font:15px;--lt-h:64px;--sett-font:15px;--sett-h:44px}
 .tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
 .tn-bar select,.tn-bar input{min-height:var(--tn-h);font-size:var(--tn-font)}
 #t-mode{flex:0 0 auto;width:7rem}
@@ -5518,7 +5518,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .btn-last.lh-off{opacity:.4;color:var(--muted);border-color:var(--muted);background:transparent;cursor:default}
 .tn-msg{margin-top:8px;font-size:13px;color:var(--muted);min-height:1em}
 .tn-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
-#t-now{flex:1;min-width:0;overflow-wrap:anywhere}
+#t-now{flex:1;min-width:0;overflow-wrap:anywhere;text-align:center}
 .tn-bar #t-go{flex:1 1 100%;min-height:56px;font-size:17px}
 #tab-connect{min-height:100%;display:flex;flex-direction:column}
 #tab-connect .card{padding:8px 10px;margin-bottom:8px}
@@ -5532,6 +5532,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #tab-connect #t-go{grid-column:1 / -1;min-height:44px;font-size:15px}
 #tab-connect .tn-msg,#tab-connect .msg,#tab-connect .small{font-size:12px;margin-top:2px}
 #tab-connect .tn-foot{margin-top:2px}
+#cd-sys .row{justify-content:center}
 #tab-connect .tn-bar .btn-last{min-height:40px}
 #tab-connect #cd-tune .tn-msg{min-height:0}
 #da-wrap{margin:0 0 8px}
@@ -5564,7 +5565,10 @@ nav.tabs button{background:transparent;border:0;min-height:52px;color:var(--mute
 nav.tabs button[aria-current=page]{color:var(--accent);font-weight:700}
 nav.tabs svg{width:22px;height:22px}
 main.fit{padding-top:10px;padding-bottom:12px}
-#tab-listen{min-height:100%;display:flex;flex-direction:column}
+#tab-listen{min-height:100%;display:flex;flex-direction:column;font-size:var(--lt-font)}
+#tab-setup{font-size:var(--sett-font)}
+#tab-setup .btn{min-height:var(--sett-h)}
+#tab-setup .fav-row button{min-height:40px}
 .lpanel{flex:1 0 auto;display:flex;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
 .lpanel>*{flex:none}
 .lpanel .row{margin:0}
@@ -5629,9 +5633,9 @@ table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 #ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
 .ptt-row{display:flex;gap:8px}
 .ptt-row #ptt{flex:1;min-width:0}
-#ptt-mark{flex:0 0 38%;height:64px;border-radius:16px;border:3px solid var(--amber);background:var(--amber-bg);color:var(--amber);font-size:15px;font-weight:700;cursor:pointer;padding:0 8px}
+#ptt-mark{flex:0 0 38%;height:var(--lt-h);border-radius:16px;border:3px solid var(--amber);background:var(--amber-bg);color:var(--amber);font-size:15px;font-weight:700;cursor:pointer;padding:0 8px}
 #ptt-mark:active{filter:brightness(1.3)}
-#ptt{width:100%;height:64px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
+#ptt{width:100%;height:var(--lt-h);border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
 touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
 #ptt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ptt.ready{border-color:var(--accent)}
@@ -5865,7 +5869,7 @@ async function kcRefresh() {
   if (!d.ok) { $('kc-state').textContent = d.error || 'Could not read the burst log.'; return; }
   kcLast = d;
   $('sum-kc').textContent = d.kerchunks_today ? d.kerchunks_today + ' today' : '';
-  const how = d.learned ? 'learned from ' + d.labels + ' labelled bursts' : 'default, until ' + d.learn_min + ' labels of each kind';
+  const how = d.learned ? 'learned from ' + d.labels + ' labeled bursts' : 'default, until ' + d.learn_min + ' labels of each kind';
   const r = d.report;
   const src = d.source === 'keyed' ? 'Source: key-ups from Asterisk. '
     : 'Source: audio' + (d.keyed && d.keyed.error ? ' (key-ups unavailable: ' + d.keyed.error + ')' : '') + '. ';
@@ -6504,7 +6508,7 @@ function chkMed(a) {
 function chkNodeCheck(c) {
   const a = c.nodeStart, b = c.nodeEnd;
   if (!a || !b || !a.ok || !b.ok) return {available: false, why: 'Asterisk did not answer, so the keyups could not be read.', raw: []};
-  if (a.keyups == null || b.keyups == null) return {available: false, why: 'rpt stats did not show a keyup count Node Talker recognises.', raw: b.raw || []};
+  if (a.keyups == null || b.keyups == null) return {available: false, why: 'rpt stats did not show a keyup count Node Talker recognizes.', raw: b.raw || []};
   const delta = b.keyups - a.keyups;
   if (delta < 0) return {available: false, why: 'The keyup count went down during the check, so Asterisk probably restarted.', raw: []};
   const phone = c.txN || 0;
@@ -6864,7 +6868,7 @@ let chkShown = null, chkCmp = false;
 
 // ---- Tone test (Pi side, v0.9.3): start, poll, show the report ----
 let toneTimer = null, toneWasRunning = false;
-const TONE_STAGE = {keying: 'Keying the node', sending: 'Transmitting', analysing: 'Analysing'};
+const TONE_STAGE = {keying: 'Keying the node', sending: 'Transmitting', analysing: 'Analyzing'};
 const toneFmt = (v, digits, signed) => (v == null ? '-' : ((signed && v > 0) ? '+' : '') + Number(v).toFixed(digits == null ? 1 : digits));
 
 function toneUi(running) {
@@ -7522,7 +7526,7 @@ async function copyCard(card, msg) {
 
 // Adds a Copy all row to the foot of every Settings card that doesn't have one already.
 function addCopyAll() {
-  document.querySelectorAll('#tab-setup > .card').forEach((card) => {
+  document.querySelectorAll('#tab-setup > .card:not(#cd-sys)').forEach((card) => {
     const own = card.querySelector('#chk-copy-card');  // Audio check keeps its button in the Start row
     if (own) {
       const msg = document.createElement('span');
@@ -7674,10 +7678,6 @@ function specDraw(now) {
     g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
     g.fillRect(x, h - bh, step - 1, bh);
   }
-  g.fillStyle = '#f2545b';
-  g.fillRect(bx, 0, bw, Math.max(2, Math.round(2 * r)));
-  g.textAlign = 'right';
-  g.fillText('display max', bx + bw - 4 * r, 4 * r);
   const mx = w - gr + 10 * r, mw = 16 * r;
   const yF = (db) => (0 - db) / 60 * h;
   g.fillStyle = '#0a1016';
@@ -8780,7 +8780,10 @@ const TN_TYPED = {ASL: /^\d{1,7}$/, EchoLink: /^\d{1,6}$/, DMR: /^\d{1,8}$/, STF
   YSF: /^(\d{1,5}|[A-Za-z0-9.-]+:\d{1,5})$/,
   DSTAR: /^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
   M17: /^[A-Z0-9]+-[A-Z0-9-]{1,14}(?:\s+(?:[A-Z]|@ALL))?$/i};
-const TN_SIZE = {gap: 8, h: 40, font: 14};
+const SIZE_SETS = {
+  tn: {store: 'nlTuneSize', def: {gap: 8, h: 40, font: 14}},
+  lt: {store: 'nlListenSize', def: {font: 15, h: 64}},
+  sett: {store: 'nlSetupSize', def: {font: 15, h: 44}}};
 const tnLists = {};
 let favNetLinks = {}, tnWin = null, tnTimer = 0, tnState = {};
 
@@ -8789,30 +8792,38 @@ function tnRemember() {
     find: $('t-find').value, pick: $('t-pick').value};
 }
 
-function tnSizeLoad() {
+function sizeLoad(p) {
   let v = {};
-  try { v = JSON.parse(localStorage.getItem('nlTuneSize') || '{}') || {}; } catch (e) {}
-  Object.keys(TN_SIZE).forEach((k) => {
-    const n = Number(v[k]), r = $('tn-' + k);
-    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : TN_SIZE[k];
+  try { v = JSON.parse(localStorage.getItem(SIZE_SETS[p].store) || '{}') || {}; } catch (e) {}
+  const def = SIZE_SETS[p].def;
+  Object.keys(def).forEach((k) => {
+    const n = Number(v[k]), r = $(p + '-' + k);
+    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : def[k];
   });
-  tnSizeApply(false);
+  sizeApply(p, false);
 }
 
-function tnSizeApply(save) {
+function sizeApply(p, save) {
   const v = {};
-  Object.keys(TN_SIZE).forEach((k) => {
-    v[k] = Number($('tn-' + k).value);
-    document.documentElement.style.setProperty('--tn-' + k, v[k] + 'px');
-    $('tn-' + k + '-v').textContent = v[k] + ' px';
+  Object.keys(SIZE_SETS[p].def).forEach((k) => {
+    v[k] = Number($(p + '-' + k).value);
+    document.documentElement.style.setProperty('--' + p + '-' + k, v[k] + 'px');
+    $(p + '-' + k + '-v').textContent = v[k] + ' px';
   });
-  if (save) { try { localStorage.setItem('nlTuneSize', JSON.stringify(v)); } catch (e) {} }
+  if (save) { try { localStorage.setItem(SIZE_SETS[p].store, JSON.stringify(v)); } catch (e) {} }
 }
 
-function tnSizeReset() {
-  Object.keys(TN_SIZE).forEach((k) => { $('tn-' + k).value = TN_SIZE[k]; });
-  tnSizeApply(false);
-  try { localStorage.removeItem('nlTuneSize'); } catch (e) {}
+function sizeReset(p) {
+  const def = SIZE_SETS[p].def;
+  Object.keys(def).forEach((k) => { $(p + '-' + k).value = def[k]; });
+  sizeApply(p, false);
+  try { localStorage.removeItem(SIZE_SETS[p].store); } catch (e) {}
+}
+
+function sizeInit(p) {
+  Object.keys(SIZE_SETS[p].def).forEach((k) => $(p + '-' + k).addEventListener('input', () => sizeApply(p, true)));
+  $(p + '-reset').addEventListener('click', () => sizeReset(p));
+  sizeLoad(p);
 }
 
 function tnInit() {
@@ -8834,9 +8845,7 @@ function tnInit() {
   $('t-go').addEventListener('click', tnToggle);
   $('t-lh').addEventListener('click', tnOpenLink);
   $('t-save').addEventListener('click', tnSaveFav);
-  ['gap', 'h', 'font'].forEach((k) => $('tn-' + k).addEventListener('input', () => tnSizeApply(true)));
-  $('tn-reset').addEventListener('click', tnSizeReset);
-  tnSizeLoad();
+  sizeInit('tn');
   tnMode(true);
 }
 
@@ -9091,7 +9100,6 @@ function daShow(d) {
   if (!d || !d.ok) return;
   if (d.installed) {
     daList = d.installed.length ? d.installed.join(', ') : '';
-    $('da-sub').textContent = d.installed.length ? 'Restarts ' + d.installed.join(' · ') : 'Nothing to restart on this node';
   }
   $('da-btn').disabled = !!d.running;
   const steps = d.steps || [];
@@ -9259,7 +9267,7 @@ function drawFavEditor() {
     x.onclick = () => { favEdit.splice(i, 1); drawFavEditor(); };
     const g = document.createElement('div'); g.className = 'fav-gain';
     const gain = (key, lab) => {
-      const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'numeric'; inp.maxLength = 4;
+      const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'text'; inp.maxLength = 4;
       inp.placeholder = lab; inp.value = f[key] == null ? '' : String(f[key]);
       inp.setAttribute('aria-label', lab + ' gain ' + (i + 1) + ' (blank = global)');
       inp.oninput = () => { const v = inp.value.trim(); if (v === '') delete f[key]; else f[key] = v; };
@@ -9506,6 +9514,8 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('c-fav').addEventListener('change', netHide);
   tnInit();
+  sizeInit('lt');
+  sizeInit('sett');
   $('nw-import').addEventListener('click', nwImport);
   $('ff-up').addEventListener('change', ffUpload);
   $('setup-save').addEventListener('click', setupSave);
@@ -9640,7 +9650,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="tn-foot"><span id="t-now" class="muted small"></span></div>
 </div>
 <div id="da-wrap">
-<button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span><span class="da-s" id="da-sub">Restarts md380-emu · Analog_Bridge · MMDVM_Bridge · USRP2M17 · Asterisk</span></button>
+<button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span></button>
 <div id="da-msg" class="msg"></div>
 </div>
 </section>
@@ -9713,6 +9723,14 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="row"><label>Height <input type="range" id="tn-h" min="32" max="56" step="1"> <span id="tn-h-v" class="mono small"></span></label></div>
 <div class="row"><label>Text <input type="range" id="tn-font" min="12" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
 <div class="row"><button id="tn-reset" class="btn" type="button">Default spacing</button></div>
+<h3>Listen tab on this phone</h3>
+<div class="row"><label>Text <input type="range" id="lt-font" min="12" max="20" step="0.5"> <span id="lt-font-v" class="mono small"></span></label></div>
+<div class="row"><label>Height (push to talk) <input type="range" id="lt-h" min="48" max="96" step="2"> <span id="lt-h-v" class="mono small"></span></label></div>
+<div class="row"><button id="lt-reset" class="btn" type="button">Default size</button></div>
+<h3>Setup tab on this phone</h3>
+<div class="row"><label>Text <input type="range" id="sett-font" min="12" max="20" step="0.5"> <span id="sett-font-v" class="mono small"></span></label></div>
+<div class="row"><label>Height (buttons) <input type="range" id="sett-h" min="36" max="64" step="1"> <span id="sett-h-v" class="mono small"></span></label></div>
+<div class="row"><button id="sett-reset" class="btn" type="button">Default size</button></div>
 </div>
 <div class="row"><button id="setup-save" class="btn primary" type="button">Save</button>
 <button id="setup-restart" class="btn danger" type="button">Restart Asterisk</button></div>
