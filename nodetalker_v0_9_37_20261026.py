@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.36"
+VERSION = "0.9.37"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -5505,7 +5505,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .na{opacity:.45}
 .na,.na *{cursor:not-allowed}
 .why{margin:4px 0 8px}
-:root{--tn-gap:8px;--tn-h:40px;--tn-font:14px}
+:root{--tn-gap:8px;--tn-h:40px;--tn-font:14px;--lt-font:15px;--lt-h:64px;--sett-font:15px;--sett-h:44px}
 .tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
 .tn-bar select,.tn-bar input{min-height:var(--tn-h);font-size:var(--tn-font)}
 #t-mode{flex:0 0 auto;width:7rem}
@@ -5565,7 +5565,10 @@ nav.tabs button{background:transparent;border:0;min-height:52px;color:var(--mute
 nav.tabs button[aria-current=page]{color:var(--accent);font-weight:700}
 nav.tabs svg{width:22px;height:22px}
 main.fit{padding-top:10px;padding-bottom:12px}
-#tab-listen{min-height:100%;display:flex;flex-direction:column}
+#tab-listen{min-height:100%;display:flex;flex-direction:column;font-size:var(--lt-font)}
+#tab-setup{font-size:var(--sett-font)}
+#tab-setup .btn{min-height:var(--sett-h)}
+#tab-setup .fav-row button{min-height:40px}
 .lpanel{flex:1 0 auto;display:flex;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
 .lpanel>*{flex:none}
 .lpanel .row{margin:0}
@@ -5630,9 +5633,9 @@ table.chk-t td{font-family:ui-monospace,Menlo,Consolas,monospace}
 #ptt-card{display:flex;flex-direction:column;gap:4px;margin-bottom:2px}
 .ptt-row{display:flex;gap:8px}
 .ptt-row #ptt{flex:1;min-width:0}
-#ptt-mark{flex:0 0 38%;height:64px;border-radius:16px;border:3px solid var(--amber);background:var(--amber-bg);color:var(--amber);font-size:15px;font-weight:700;cursor:pointer;padding:0 8px}
+#ptt-mark{flex:0 0 38%;height:var(--lt-h);border-radius:16px;border:3px solid var(--amber);background:var(--amber-bg);color:var(--amber);font-size:15px;font-weight:700;cursor:pointer;padding:0 8px}
 #ptt-mark:active{filter:brightness(1.3)}
-#ptt{width:100%;height:64px;border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
+#ptt{width:100%;height:var(--lt-h);border-radius:16px;border:3px solid var(--line2);background:#1b2633;color:var(--text);font-size:17px;font-weight:700;cursor:pointer;padding:0 20px;
 touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callout:none;display:flex;align-items:center;justify-content:space-between;gap:10px;overflow:hidden}
 #ptt-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #ptt.ready{border-color:var(--accent)}
@@ -8778,6 +8781,8 @@ const TN_TYPED = {ASL: /^\d{1,7}$/, EchoLink: /^\d{1,6}$/, DMR: /^\d{1,8}$/, STF
   DSTAR: /^(?:(?:REF|XRF|DCS)\d{3}|[A-Z0-9]{1,3}\d[A-Z]{1,4})(?:\s+[A-Z])?$/i,
   M17: /^[A-Z0-9]+-[A-Z0-9-]{1,14}(?:\s+(?:[A-Z]|@ALL))?$/i};
 const TN_SIZE = {gap: 8, h: 40, font: 14};
+const LT_SIZE = {font: 15, h: 64};
+const SETT_SIZE = {font: 15, h: 44};
 const tnLists = {};
 let favNetLinks = {}, tnWin = null, tnTimer = 0, tnState = {};
 
@@ -8810,6 +8815,58 @@ function tnSizeReset() {
   Object.keys(TN_SIZE).forEach((k) => { $('tn-' + k).value = TN_SIZE[k]; });
   tnSizeApply(false);
   try { localStorage.removeItem('nlTuneSize'); } catch (e) {}
+}
+
+function ltSizeLoad() {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem('nlListenSize') || '{}') || {}; } catch (e) {}
+  Object.keys(LT_SIZE).forEach((k) => {
+    const n = Number(v[k]), r = $('lt-' + k);
+    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : LT_SIZE[k];
+  });
+  ltSizeApply(false);
+}
+
+function ltSizeApply(save) {
+  const v = {};
+  Object.keys(LT_SIZE).forEach((k) => {
+    v[k] = Number($('lt-' + k).value);
+    document.documentElement.style.setProperty('--lt-' + k, v[k] + 'px');
+    $('lt-' + k + '-v').textContent = v[k] + ' px';
+  });
+  if (save) { try { localStorage.setItem('nlListenSize', JSON.stringify(v)); } catch (e) {} }
+}
+
+function ltSizeReset() {
+  Object.keys(LT_SIZE).forEach((k) => { $('lt-' + k).value = LT_SIZE[k]; });
+  ltSizeApply(false);
+  try { localStorage.removeItem('nlListenSize'); } catch (e) {}
+}
+
+function settSizeLoad() {
+  let v = {};
+  try { v = JSON.parse(localStorage.getItem('nlSetupSize') || '{}') || {}; } catch (e) {}
+  Object.keys(SETT_SIZE).forEach((k) => {
+    const n = Number(v[k]), r = $('sett-' + k);
+    r.value = Number.isFinite(n) && n >= Number(r.min) && n <= Number(r.max) ? n : SETT_SIZE[k];
+  });
+  settSizeApply(false);
+}
+
+function settSizeApply(save) {
+  const v = {};
+  Object.keys(SETT_SIZE).forEach((k) => {
+    v[k] = Number($('sett-' + k).value);
+    document.documentElement.style.setProperty('--sett-' + k, v[k] + 'px');
+    $('sett-' + k + '-v').textContent = v[k] + ' px';
+  });
+  if (save) { try { localStorage.setItem('nlSetupSize', JSON.stringify(v)); } catch (e) {} }
+}
+
+function settSizeReset() {
+  Object.keys(SETT_SIZE).forEach((k) => { $('sett-' + k).value = SETT_SIZE[k]; });
+  settSizeApply(false);
+  try { localStorage.removeItem('nlSetupSize'); } catch (e) {}
 }
 
 function tnInit() {
@@ -9502,6 +9559,12 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('c-fav').addEventListener('change', netHide);
   tnInit();
+  ['font', 'h'].forEach((k) => $('lt-' + k).addEventListener('input', () => ltSizeApply(true)));
+  $('lt-reset').addEventListener('click', ltSizeReset);
+  ltSizeLoad();
+  ['font', 'h'].forEach((k) => $('sett-' + k).addEventListener('input', () => settSizeApply(true)));
+  $('sett-reset').addEventListener('click', settSizeReset);
+  settSizeLoad();
   $('nw-import').addEventListener('click', nwImport);
   $('ff-up').addEventListener('change', ffUpload);
   $('setup-save').addEventListener('click', setupSave);
@@ -9709,6 +9772,14 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="row"><label>Height <input type="range" id="tn-h" min="32" max="56" step="1"> <span id="tn-h-v" class="mono small"></span></label></div>
 <div class="row"><label>Text <input type="range" id="tn-font" min="12" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
 <div class="row"><button id="tn-reset" class="btn" type="button">Default spacing</button></div>
+<h3>Listen tab on this phone</h3>
+<div class="row"><label>Text <input type="range" id="lt-font" min="12" max="20" step="0.5"> <span id="lt-font-v" class="mono small"></span></label></div>
+<div class="row"><label>Height (push to talk) <input type="range" id="lt-h" min="48" max="96" step="2"> <span id="lt-h-v" class="mono small"></span></label></div>
+<div class="row"><button id="lt-reset" class="btn" type="button">Default size</button></div>
+<h3>Setup tab on this phone</h3>
+<div class="row"><label>Text <input type="range" id="sett-font" min="12" max="20" step="0.5"> <span id="sett-font-v" class="mono small"></span></label></div>
+<div class="row"><label>Height (buttons) <input type="range" id="sett-h" min="36" max="64" step="1"> <span id="sett-h-v" class="mono small"></span></label></div>
+<div class="row"><button id="sett-reset" class="btn" type="button">Default size</button></div>
 </div>
 <div class="row"><button id="setup-save" class="btn primary" type="button">Save</button>
 <button id="setup-restart" class="btn danger" type="button">Restart Asterisk</button></div>
