@@ -1,6 +1,22 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_35_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_36_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.36 (2026-10-26)
+
+- **Connect.** The Disconnect All button shows its title only; the list of
+  services under it is gone (the confirmation still names them). The line under
+  the Tune card (`Tuned: ...`) is centred.
+- **Listen.** The red "display max" line across the top of the spectrum is
+  removed. The clip line on the level meter stays.
+- **Setup.** The System card's buttons (Reboot, Shutdown) are centred, and the
+  card has no Copy all button. The headings in the Setup card use the default
+  heading spacing instead of their own margins.
+- **Favorites.** The RX dB and TX dB gain fields open the full keyboard, so a
+  minus sign can be typed (gains run from -12 to +12 dB). Numeric keypads have
+  no minus key.
+- **Expanded test.** The show/hide arrow on the card heading sits at the right
+  edge.
 
 ## 0.9.35 (2026-10-26)
 

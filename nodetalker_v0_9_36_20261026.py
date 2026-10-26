@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.35"
+VERSION = "0.9.36"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -5447,7 +5447,7 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;paddin
 .fold-btn{width:100%;min-height:44px;display:flex;align-items:center;gap:8px;padding:0;border:0;background:transparent;color:var(--text);font:inherit;font-size:15px;font-weight:700;text-align:left;cursor:pointer}
 .fold-t{flex:none}
 .fold-sum{flex:1;min-width:0;color:var(--muted);font-size:13px;font-weight:400;text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fold-i{flex:none;width:14px;color:var(--muted);text-align:center}
+.fold-i{flex:none;width:14px;margin-left:auto;color:var(--muted);text-align:center}
 .kc-graph{width:100%;height:120px;display:block;margin:8px 0}
 .kc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 0;border-top:1px solid var(--line)}
 .kc-row span{flex:1;min-width:200px}
@@ -5518,7 +5518,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .btn-last.lh-off{opacity:.4;color:var(--muted);border-color:var(--muted);background:transparent;cursor:default}
 .tn-msg{margin-top:8px;font-size:13px;color:var(--muted);min-height:1em}
 .tn-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
-#t-now{flex:1;min-width:0;overflow-wrap:anywhere}
+#t-now{flex:1;min-width:0;overflow-wrap:anywhere;text-align:center}
 .tn-bar #t-go{flex:1 1 100%;min-height:56px;font-size:17px}
 #tab-connect{min-height:100%;display:flex;flex-direction:column}
 #tab-connect .card{padding:8px 10px;margin-bottom:8px}
@@ -5532,6 +5532,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #tab-connect #t-go{grid-column:1 / -1;min-height:44px;font-size:15px}
 #tab-connect .tn-msg,#tab-connect .msg,#tab-connect .small{font-size:12px;margin-top:2px}
 #tab-connect .tn-foot{margin-top:2px}
+#cd-sys .row{justify-content:center}
 #tab-connect .tn-bar .btn-last{min-height:40px}
 #tab-connect #cd-tune .tn-msg{min-height:0}
 #da-wrap{margin:0 0 8px}
@@ -7522,7 +7523,7 @@ async function copyCard(card, msg) {
 
 // Adds a Copy all row to the foot of every Settings card that doesn't have one already.
 function addCopyAll() {
-  document.querySelectorAll('#tab-setup > .card').forEach((card) => {
+  document.querySelectorAll('#tab-setup > .card:not(#cd-sys)').forEach((card) => {
     const own = card.querySelector('#chk-copy-card');  // Audio check keeps its button in the Start row
     if (own) {
       const msg = document.createElement('span');
@@ -7674,10 +7675,6 @@ function specDraw(now) {
     g.fillStyle = 'rgb(' + SPEC_PAL[v * 3] + ',' + SPEC_PAL[v * 3 + 1] + ',' + SPEC_PAL[v * 3 + 2] + ')';
     g.fillRect(x, h - bh, step - 1, bh);
   }
-  g.fillStyle = '#f2545b';
-  g.fillRect(bx, 0, bw, Math.max(2, Math.round(2 * r)));
-  g.textAlign = 'right';
-  g.fillText('display max', bx + bw - 4 * r, 4 * r);
   const mx = w - gr + 10 * r, mw = 16 * r;
   const yF = (db) => (0 - db) / 60 * h;
   g.fillStyle = '#0a1016';
@@ -9091,7 +9088,6 @@ function daShow(d) {
   if (!d || !d.ok) return;
   if (d.installed) {
     daList = d.installed.length ? d.installed.join(', ') : '';
-    $('da-sub').textContent = d.installed.length ? 'Restarts ' + d.installed.join(' · ') : 'Nothing to restart on this node';
   }
   $('da-btn').disabled = !!d.running;
   const steps = d.steps || [];
@@ -9259,7 +9255,7 @@ function drawFavEditor() {
     x.onclick = () => { favEdit.splice(i, 1); drawFavEditor(); };
     const g = document.createElement('div'); g.className = 'fav-gain';
     const gain = (key, lab) => {
-      const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'numeric'; inp.maxLength = 4;
+      const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'text'; inp.maxLength = 4;
       inp.placeholder = lab; inp.value = f[key] == null ? '' : String(f[key]);
       inp.setAttribute('aria-label', lab + ' gain ' + (i + 1) + ' (blank = global)');
       inp.oninput = () => { const v = inp.value.trim(); if (v === '') delete f[key]; else f[key] = v; };
@@ -9640,7 +9636,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="tn-foot"><span id="t-now" class="muted small"></span></div>
 </div>
 <div id="da-wrap">
-<button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span><span class="da-s" id="da-sub">Restarts md380-emu · Analog_Bridge · MMDVM_Bridge · USRP2M17 · Asterisk</span></button>
+<button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span></button>
 <div id="da-msg" class="msg"></div>
 </div>
 </section>
@@ -9695,7 +9691,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="card fold" id="cd-setup">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-setup"><span class="fold-t">Setup</span><span class="fold-sum" id="sum-setup"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-setup">
-<h3 style="margin:6px 0 4px">1. Node Talker settings</h3>
+<h3>1. Node Talker settings</h3>
 <div id="cb-cfg">
 <div class="row"><label>Web port <input type="number" id="cfg-port" min="1024" max="65535"></label>
 <label>UDP port <input type="number" id="cfg-udp_port" min="1024" max="65535"></label>
@@ -9708,7 +9704,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div id="cfg-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Tune card on this phone</h3>
+<h3>Tune card on this phone</h3>
 <div class="row"><label>Gap <input type="range" id="tn-gap" min="2" max="20" step="1"> <span id="tn-gap-v" class="mono small"></span></label></div>
 <div class="row"><label>Height <input type="range" id="tn-h" min="32" max="56" step="1"> <span id="tn-h-v" class="mono small"></span></label></div>
 <div class="row"><label>Text <input type="range" id="tn-font" min="12" max="18" step="0.5"> <span id="tn-font-v" class="mono small"></span></label></div>
@@ -9731,7 +9727,7 @@ while Node Controller runs, it does that instead.</p>
 <div class="row"><span id="fe-count" class="muted small"></span><button id="fe-add" class="btn" type="button">Add row</button>
 <select id="fe-dash" aria-label="Dashboard favorites"></select><button id="fe-dash-add" class="btn" type="button">Add</button></div>
 <div id="fe-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Favorites file</h3>
+<h3>Favorites file</h3>
 <p class="muted small"><code id="dg-file">nodetalker_favorites.conf</code> holds the favorites, the DMR networks and these
 settings in Node Controller's format. It holds the DMR passwords too.</p>
 <div class="row"><a id="ff-down" class="btn" href="/api/favorites-file" download="nodetalker_favorites.conf" style="display:inline-flex;align-items:center;text-decoration:none">Download</a>
@@ -9757,7 +9753,7 @@ A DMR network Node Controller doesn't have can be added to it, or used for one t
 <label>Callsign <input type="text" id="dg-call" maxlength="10" style="width:110px;text-transform:uppercase"></label></div>
 <p class="muted small" id="dg-auto"></p>
 <div id="dg-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">DMR networks</h3>
+<h3>DMR networks</h3>
 <p class="muted small">Each DMR favorite joins its network with <code>password@address:port</code> before it tunes the
 talkgroup, as Node Controller does. Leave a password empty to keep the saved one.</p>
 <div id="nw-rows"></div>
@@ -9770,7 +9766,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="card fold" id="cd-rx">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-rx"><span class="fold-t">RX</span><span class="fold-sum" id="sum-rx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-rx">
-<h3 style="margin:6px 0 4px">Node receive</h3>
+<h3>Node receive</h3>
 <p class="muted small">Asterisk sends a node's audio here through one <code>outstreamcmd</code> line in <code id="nd-path">rpt.conf</code>.</p>
 <table><thead><tr><th>Node</th><th>outstreamcmd</th></tr></thead><tbody id="nd-rows"></tbody></table>
 <div class="row"><label>Node <select id="nd-select"></select></label>
@@ -9783,7 +9779,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <tr><th>Feeder</th><td id="nd-feeder">-</td></tr>
 <tr><th>UDP input</th><td id="nd-udp">-</td></tr>
 </table>
-<h3 style="margin:14px 0 4px">Playback</h3>
+<h3>Playback</h3>
 <div id="cb-play">
 <p class="muted small">Saved in this browser only; each phone keeps its own.</p>
 <p class="muted small why hidden" id="why-play"></p>
@@ -9793,7 +9789,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
 <div class="row"><label><input type="checkbox" id="play-smooth"> Smooth playback (filtered upsampling, no sizzle)</label></div>
 </div>
-<h3 style="margin:14px 0 4px">Audio levels</h3>
+<h3>Audio levels</h3>
 <div id="tune-body-rx">
 <div class="row"><label for="tune-rx" style="min-width:130px">Node to phone (RX)</label>
 <input type="range" id="tune-rx" min="-12" max="12" step="1" style="flex:1"><span id="tune-rx-v" class="mono small">0 dB</span></div>
@@ -9802,7 +9798,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <option value="500">0.5 s</option><option value="1000">1 s (weak signal)</option></select></div>
 <table><tr><th>RX level</th><td id="tune-rxpk" class="mono">-</td></tr></table>
 </div>
-<h3 style="margin:14px 0 4px">RX cleanup: what listeners hear (always applies; not affected by Adjust audio levels)</h3>
+<h3>RX cleanup: what listeners hear (always applies; not affected by Adjust audio levels)</h3>
 <p class="muted small">Done once on the Pi for every listener; the node and other links are not changed.</p>
 <div class="row"><label><input type="checkbox" id="rx-hpf"> Cut below 300 Hz (removes CTCSS tones and hum; tone-squelch listeners may lose audio)</label></div>
 <div class="row"><label><input type="checkbox" id="rx-agc"> Automatic level (brings quiet stations up, loud ones down a little)</label></div>
@@ -9819,7 +9815,7 @@ use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.
 <div class="card fold" id="cd-tx">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-tx"><span class="fold-t">TX: node <span id="tx-node">1921</span></span><span class="fold-sum" id="sum-tx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-tx">
-<h3 style="margin:6px 0 4px">Transmit node</h3>
+<h3>Transmit node</h3>
 <p class="muted small">Push-to-talk sends your voice to private node 1921, which stays linked to the main node.
 Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a backup) and relinks it if it drops.</p>
 <table>
@@ -9831,7 +9827,7 @@ Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <button id="tx-remove" class="btn" type="button">Remove</button>
 </div>
 <div id="tx-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Audio levels</h3>
+<h3>Audio levels</h3>
 <div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
 <p class="muted small">Off: the gains and buffers below aren't used. These change only this page's path,
 not the node, the radio or DVSwitch.</p>
@@ -9850,7 +9846,7 @@ not the node, the radio or DVSwitch.</p>
 <div class="row"><button id="tune-save" class="btn primary" type="button">Save</button>
 <button id="tune-reset" class="btn" type="button">Reset gains and buffers to defaults</button></div>
 <div id="tune-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Push-to-talk on this phone</h3>
+<h3>Push-to-talk on this phone</h3>
 <div class="row"><label><input type="radio" name="ptt-mode" id="ptt-hold" value="hold"> Hold to talk</label>
 <label><input type="radio" name="ptt-mode" id="ptt-tap" value="tap"> Tap to talk, tap to stop</label></div>
 <div class="row"><label>Guard timer <select id="ptt-guard"><option value="30">30 s</option><option value="60">60 s</option>
@@ -9864,7 +9860,7 @@ unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></s
 <div class="row"><button id="ptt-save" class="btn primary" type="button">Save on this phone</button>
 <button id="ptt-restore" class="btn" type="button">Restore from the Pi</button></div>
 <div id="ptt-set-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Microphone</h3>
+<h3>Microphone</h3>
 <div id="cb-mic">
 <p class="muted small">Saved in this browser only; each phone keeps its own. Browsers can't change the phone's own
 mic volume, so the gain here is applied in the page.</p>
@@ -9905,7 +9901,7 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="rep-v" id="rep-node-v"></div>
 </div>
 </div>
-<h3 style="margin:14px 0 4px">Headset / audio output</h3>
+<h3>Headset / audio output</h3>
 <div id="cb-hs">
 <p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
 <p class="muted small why hidden" id="why-hs"></p>
