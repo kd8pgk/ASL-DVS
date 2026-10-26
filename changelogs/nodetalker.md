@@ -1,6 +1,24 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_26_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_27_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.27 (2026-10-26)
+
+- **Kerchunks are tracked.** Every burst of node audio of 0.1 s or more is
+  logged to `nodetalker_bursts.csv` in the config folder (time, length, peak
+  level, kerchunk or not, your label). The file is trimmed to the last 2000
+  bursts, and it is rewritten at 200 KB. A kerchunk is written to the log, too.
+- **Kerchunks card** (Kerchunks, between Phone and Log). A bar graph of the last
+  100 bursts: each bar's height is its length, the dashed line is the cut-off,
+  and labelled bursts are drawn in full colour. Below it is the list, with
+  Kerchunk and Real buttons to label each burst (press again to clear it), and
+  today's and total kerchunk counts.
+- **Kerchunks are learned from the labels.** The cut-off starts at 0.4 s. Once
+  there are six labels with both kinds present, Node Talker fits the cut-off
+  between them (one length threshold, limited to 0.15 to 1.5 s). If the best cut
+  still gets more than a third of the labels wrong, the 0.4 s default stays.
+  Activity uses the learned cut-off from then on.
+- `/api/kerchunks` and `/api/kerchunks/label` added.
 
 ## 0.9.26 (2026-10-26)
 
