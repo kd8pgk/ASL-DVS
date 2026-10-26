@@ -30,7 +30,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.29"
+VERSION = "0.9.30"
 DATE_STR = "2026-10-26"
 APP_NAME = "Node Talker"
 
@@ -1007,10 +1007,14 @@ KERCHUNK_LOG_MAX = 2000
 KERCHUNK_LOG_BYTES = 200000
 KERCHUNK_LEARN_MIN = 6
 KERCHUNK_LEARN_LO = 0.15
-KERCHUNK_LEARN_HI = 1.5
+KERCHUNK_LEARN_HI = 0.8
+KERCHUNK_TEST_MIN = 15
+KERCHUNK_TEST_MIN_LO = 1
+KERCHUNK_TEST_MAX = 60
 _KC_HEAD = "id,secs,peak_db,kerchunk,label\n"
 _kc_lock = threading.Lock()
 _kc_state = {"threshold": KERCHUNK_MAX_SEC, "learned": False, "labels": 0}
+_kc_test = {"on": False, "started": 0.0, "ends": 0.0, "minutes": KERCHUNK_TEST_MIN, "rows": []}
 _kc_last_id = 0
 
 
@@ -1052,7 +1056,7 @@ def _kc_learn(rows):
         err = sum(1 for s, k in pts if (s < t) != k)
         if best is None or err < best[0]:
             best = (err, t)
-    if best is None or best[0] > len(pts) // 3:
+    if best is None or best[0] > len(pts) // 3 or best[1] > KERCHUNK_LEARN_HI:
         return KERCHUNK_MAX_SEC, False, len(pts)
     return round(min(max(best[1], KERCHUNK_LEARN_LO), KERCHUNK_LEARN_HI), 3), True, len(pts)
 
@@ -1062,11 +1066,21 @@ def _kc_refresh():
     _kc_state.update(threshold=thr, learned=learned, labels=n)
 
 
+def _kc_test_check(now):
+    if _kc_test["on"] and now >= _kc_test["ends"]:
+        _kc_test["on"] = False
+        log_event("Kerchunk test ended: time is up", "ok")
+
+
 def _kc_add(secs, peak):
     global _kc_last_id
     kerchunk = secs < _kc_state["threshold"]
     _kc_last_id = max(int(time.time() * 1000), _kc_last_id + 1)
     row = {"id": str(_kc_last_id), "secs": secs, "peak": round(peak, 1), "kerchunk": kerchunk, "label": ""}
+    with _kc_lock:
+        _kc_test_check(time.time())
+        if _kc_test["on"]:
+            _kc_test["rows"].append({"id": row["id"], "secs": round(secs, 2), "peak": row["peak"], "kerchunk": kerchunk})
     with _kc_lock:
         try:
             if os.path.exists(KERCHUNK_LOG_PATH) and os.path.getsize(KERCHUNK_LOG_PATH) > KERCHUNK_LOG_BYTES:
@@ -1080,7 +1094,32 @@ def _kc_add(secs, peak):
         log_event(f"Kerchunk: {secs:.1f} s at {peak:.0f} dBFS, not treated as activity", "info")
 
 
+def _kc_report(rows):
+    thr = _kc_state["threshold"]
+    lab = [(r["secs"], r["label"] == "kerchunk") for r in rows if r["label"] in ("kerchunk", "real")]
+    lab_k = sorted(s for s, k in lab if k)
+    lab_r = sorted(s for s, k in lab if not k)
+    return {"cutoff": thr, "learned": _kc_state["learned"], "bursts": len(rows),
+            "kerchunk_flagged": sum(r["kerchunk"] for r in rows),
+            "labels": {"kerchunk": len(lab_k), "real": len(lab_r)},
+            "longest_kerchunk_label": round(lab_k[-1], 2) if lab_k else None,
+            "shortest_real_label": round(lab_r[0], 2) if lab_r else None,
+            "overlap": bool(lab_k and lab_r and lab_k[-1] >= lab_r[0]),
+            "wrong_at_cutoff": sum(1 for s, k in lab if (s < thr) != k),
+            "kerchunk_label_secs": [round(s, 2) for s in lab_k],
+            "real_label_secs": [round(s, 2) for s in lab_r]}
+
+
+def _kc_test_summary():
+    rows = _kc_test["rows"]
+    return {"on": _kc_test["on"], "started": _kc_test["started"], "ends": _kc_test["ends"],
+            "minutes": _kc_test["minutes"], "bursts": len(rows),
+            "kerchunks": sum(r["kerchunk"] for r in rows), "rows": rows[-300:]}
+
+
 def kerchunk_status(_body=None):
+    with _kc_lock:
+        _kc_test_check(time.time())
     rows = _kc_rows()
     day0 = time.mktime(time.strptime(time.strftime("%Y-%m-%d"), "%Y-%m-%d")) * 1000
     today = [r for r in rows if int(r["id"]) >= day0]
@@ -1089,7 +1128,48 @@ def kerchunk_status(_body=None):
             "threshold": _kc_state["threshold"], "learned": _kc_state["learned"], "labels": _kc_state["labels"],
             "learn_min": KERCHUNK_LEARN_MIN,
             "bursts": [{"id": r["id"], "secs": round(r["secs"], 2), "peak": r["peak"], "kerchunk": r["kerchunk"],
-                        "label": r["label"]} for r in rows[-100:][::-1]]}
+                        "label": r["label"]} for r in rows[-300:][::-1]],
+            "report": _kc_report(rows), "test": _kc_test_summary()}
+
+
+def kerchunk_test_start(body):
+    try:
+        minutes = int(body.get("minutes", KERCHUNK_TEST_MIN))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "The test length must be a whole number of minutes."}
+    if not KERCHUNK_TEST_MIN_LO <= minutes <= KERCHUNK_TEST_MAX:
+        return {"ok": False, "error": f"The test runs for {KERCHUNK_TEST_MIN_LO} to {KERCHUNK_TEST_MAX} minutes."}
+    with _kc_lock:
+        _kc_test_check(time.time())
+        if _kc_test["on"]:
+            return {"ok": False, "error": "A kerchunk test is already running."}
+        now = time.time()
+        _kc_test.update(on=True, started=now, ends=now + minutes * 60, minutes=minutes, rows=[])
+    log_event(f"Kerchunk test started for {minutes} min: key up the node as you normally would", "ok")
+    return {"ok": True, "message": f"Test started for {minutes} minutes."}
+
+
+def kerchunk_test_stop(_body=None):
+    with _kc_lock:
+        if not _kc_test["on"]:
+            return {"ok": False, "error": "No kerchunk test is running."}
+        _kc_test["on"] = False
+    log_event("Kerchunk test stopped", "ok")
+    return {"ok": True, "message": "Test stopped."}
+
+
+def kerchunk_reset(_body=None):
+    with _kc_lock:
+        _kc_test.update(on=False, rows=[])
+        if os.path.exists(KERCHUNK_LOG_PATH):
+            backup = f"{KERCHUNK_LOG_PATH}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
+            try:
+                os.replace(KERCHUNK_LOG_PATH, backup)
+            except OSError as exc:
+                return {"ok": False, "error": f"could not back up {KERCHUNK_LOG_PATH}: {exc}"}
+    _kc_refresh()
+    log_event("Kerchunk log reset: the old log is kept as a .bak file, and the cut-off is back to the default", "warn")
+    return {"ok": True, "message": "Reset. The old log is kept as a backup file."}
 
 
 def kerchunk_label(body):
@@ -1207,7 +1287,7 @@ class Hub:
                     self.burst_peak = -120.0
                 self.burst_last = now
                 self.burst_peak = max(self.burst_peak, db)
-                if now - self.burst_start >= _kc_state["threshold"]:
+                if now - self.burst_start >= KERCHUNK_MAX_SEC:
                     self.last_active = now
         else:
             self.level_db = -120.0
@@ -5082,6 +5162,9 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;paddin
 .kc-graph{width:100%;height:120px;display:block;margin:8px 0}
 .kc-row{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:4px 0;border-top:1px solid var(--line)}
 .kc-row span{flex:1;min-width:200px}
+.kc-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0}
+.kc-min{width:64px}
+.kc-json{width:100%;min-height:160px;font:11px ui-monospace,Menlo,Consolas,monospace;background:#0a1016;color:var(--text);border:1px solid var(--line);border-radius:6px;margin:8px 0}
 .fold-body{padding:6px 0 10px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
 button{font:inherit;color:var(--text)}
@@ -5472,15 +5555,59 @@ async function api(url, opts) {
 
 const post = (url, body) => api(url, {method: 'POST', body: body});
 function kcColor(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+let kcLast = null;
+function kcLeft(ms) {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+}
+function kcTestLine(t) {
+  if (!t) return '';
+  if (t.on) return 'Test running: ' + kcLeft(t.ends * 1000 - Date.now()) + ' left. ' + t.bursts + ' bursts, ' + t.kerchunks + ' kerchunks so far.';
+  return t.bursts ? 'Last test: ' + t.bursts + ' bursts, ' + t.kerchunks + ' kerchunks.' : 'No test run yet.';
+}
 async function kcRefresh() {
   const d = await api('/api/kerchunks');
   if (!d.ok) { $('kc-state').textContent = d.error || 'Could not read the burst log.'; return; }
+  kcLast = d;
   $('sum-kc').textContent = d.kerchunks_today ? d.kerchunks_today + ' today' : '';
   const how = d.learned ? 'learned from ' + d.labels + ' labelled bursts' : 'default, until ' + d.learn_min + ' labels of each kind';
+  const r = d.report;
   $('kc-state').textContent = 'Cut-off ' + d.threshold.toFixed(2) + ' s (' + how + '). Kerchunks today: '
-    + d.kerchunks_today + '. Logged: ' + d.kerchunks_total + '.';
+    + d.kerchunks_today + '. Logged: ' + d.kerchunks_total + '. Labels: ' + r.labels.kerchunk + ' kerchunk, '
+    + r.labels.real + ' real. Longest kerchunk label ' + (r.longest_kerchunk_label == null ? '-' : r.longest_kerchunk_label + ' s')
+    + ', shortest real label ' + (r.shortest_real_label == null ? '-' : r.shortest_real_label + ' s')
+    + (r.overlap ? ' (they overlap)' : '') + '. Wrong at this cut-off: ' + r.wrong_at_cutoff + '.';
+  $('kc-test').textContent = d.test.on ? 'Stop test' : 'Start test';
+  $('kc-test-state').textContent = kcTestLine(d.test);
   kcDraw(d.bursts, d.threshold);
   kcList(d.bursts);
+}
+async function kcCopy() {
+  if (!kcLast) return;
+  const text = JSON.stringify(kcLast, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    $('kc-state').textContent = 'Copied the kerchunk report as JSON.';
+  } catch (e) {
+    const box = $('kc-json');
+    box.value = text;
+    box.classList.remove('hidden');
+    box.focus();
+    box.select();
+    $('kc-state').textContent = 'The clipboard refused. The JSON is selected below: press Ctrl+C to copy it.';
+  }
+}
+async function kcReset() {
+  if (!confirm('Reset the kerchunk log?\n\nThe current log is kept as a backup file. The cut-off goes back to 0.4 s, and a running test stops.')) return;
+  const d = await post('/api/kerchunks/reset', {});
+  $('kc-state').textContent = d.ok ? d.message : (d.error || 'Could not reset the log.');
+  kcRefresh();
+}
+async function kcTestToggle() {
+  const on = !!(kcLast && kcLast.test && kcLast.test.on);
+  const d = on ? await post('/api/kerchunks/test/stop', {}) : await post('/api/kerchunks/test/start', {minutes: Number($('kc-min').value)});
+  if (!d.ok) $('kc-state').textContent = d.error || 'Could not change the test.';
+  kcRefresh();
 }
 function kcDraw(bursts, thr) {
   const c = $('kc-graph'), dpr = window.devicePixelRatio || 1;
@@ -9104,6 +9231,10 @@ document.addEventListener('DOMContentLoaded', () => {
   setInterval(gapTick, 100);
   setInterval(pollLog, 3000);
   setInterval(() => { if (authed && foldOpen('kc')) kcRefresh(); }, 10000);
+  setInterval(() => { if (authed && foldOpen('kc') && kcLast && kcLast.test && kcLast.test.on) $('kc-test-state').textContent = kcTestLine(kcLast.test); }, 1000);
+  $('kc-copy').addEventListener('click', kcCopy);
+  $('kc-reset').addEventListener('click', kcReset);
+  $('kc-test').addEventListener('click', kcTestToggle);
 });
 """
 
@@ -9544,6 +9675,14 @@ for a report with averages and what to change. Only numbers are kept, never audi
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-kc"><span class="fold-t">Kerchunks</span><span class="fold-sum" id="sum-kc"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-kc">
 <p class="muted small" id="kc-state">Open this card to read the burst log.</p>
+<div class="kc-actions">
+<button class="btn" type="button" id="kc-copy">Copy JSON</button>
+<button class="btn" type="button" id="kc-reset">Reset</button>
+<label class="small">Minutes <input type="number" id="kc-min" class="kc-min" min="1" max="60" value="15"></label>
+<button class="btn" type="button" id="kc-test">Start test</button>
+</div>
+<p class="muted small" id="kc-test-state"></p>
+<textarea id="kc-json" class="kc-json hidden" readonly aria-label="Kerchunk report as JSON"></textarea>
 <canvas id="kc-graph" class="kc-graph" role="img" aria-label="Recent bursts of audio from the node. Height is how long each lasted; the dashed line is the cut-off."></canvas>
 <p class="muted small">Each bar is one burst of audio from the node, and its height is how long it lasted. Bars below the dashed cut-off are kerchunks, and they don't count as activity. Label a few bursts (Kerchunk or Real). Once there are six of each kind, the cut-off is learned from them.</p>
 <div id="kc-list"></div>
@@ -9611,6 +9750,9 @@ _POST_ACTIONS = {
     "/api/balance/restore": (balance_restore, ()),
     "/api/balance/keep": (balance_keep, ()),
     "/api/kerchunks/label": (kerchunk_label, ()),
+    "/api/kerchunks/test/start": (kerchunk_test_start, ()),
+    "/api/kerchunks/test/stop": (kerchunk_test_stop, ()),
+    "/api/kerchunks/reset": (kerchunk_reset, ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")

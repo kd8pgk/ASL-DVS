@@ -1,6 +1,27 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_29_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_30_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.30 (2026-10-26)
+
+- **Busy and activity use the fixed 0.4 s again.** 0.9.27 to 0.9.29 used the
+  learned cut-off here, so a learned 1.5 s stopped real short transmissions from
+  setting busy, and Talk was not blocked. The learned cut-off now only sets the
+  kerchunk flag, the card and the Listen drop.
+- **Learning is capped at 0.8 s.** A split above that is not used, and the card
+  says so (the default stays).
+- **Copy JSON** (Kerchunks card) copies the whole report: cut-off, label counts,
+  the longest kerchunk label and the shortest real label, whether they overlap,
+  how many labels the cut-off gets wrong, every labelled length, and the last
+  300 bursts. If the clipboard refuses, the JSON is selected in a box below.
+- **Reset** (Kerchunks card, after a confirm) moves the log to a timestamped
+  `.bak` file, clears the labels, puts the cut-off back to 0.4 s and stops a test.
+- **Kerchunk test** (Start test / Stop test, with minutes, 15 by default, 1 to
+  60). While it runs the card shows a countdown and the bursts and kerchunks so
+  far. It stops by itself when the time is up. Its bursts appear in the report
+  and the copied JSON.
+- `/api/kerchunks/test/start`, `/api/kerchunks/test/stop` and
+  `/api/kerchunks/reset` added. `/api/kerchunks` returns the report and the test.
 
 ## 0.9.29 (2026-10-26)
 
