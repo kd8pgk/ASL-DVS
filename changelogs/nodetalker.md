@@ -1,6 +1,14 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_33_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_34_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.34 (2026-10-26)
+
+- **Busy is fail-safe with key-ups.** When Node Talker reads key-ups from
+  Asterisk, busy (and the activity light) now come on if Asterisk reports a
+  key-up *or* audio is heard (a burst over 0.4 s). In 0.9.33 busy followed
+  key-ups only, so if Asterisk did not report a linked node keying, net traffic
+  would not block Talk. Kerchunk logging still uses key-ups only.
 
 ## 0.9.33 (2026-10-26)
 
