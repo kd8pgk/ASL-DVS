@@ -1,6 +1,44 @@
 # instmon changelog
 
-Current file: `instmon_v2_74_0_20261025.py`. Newest entries first.
+Current file: `instmon_v2_76_0_20261026.py`. Newest entries first.
+
+## 2.76.0 (2026-10-26)
+
+- **Downloads from GitHub work on slow WiFi.** Before, every download (tools,
+  manuals, the Node Talker Mobile APK and GitHub's file lists) had to finish in
+  60 seconds. Anything slower than about 25 KB/s for SysMon, or 45 KB/s for the
+  user manual, failed with "took too long". Now a download fails only when
+  nothing arrives for 15 seconds (`INSTMON_GITHUB_TIMEOUT_SEC`). A download
+  that is still arriving can take up to 30 minutes
+  (`INSTMON_GITHUB_MAX_DOWNLOAD_SEC`).
+- **A dropped or stalled download is tried again.** It is retried twice
+  (`INSTMON_GITHUB_RETRIES`), 2 and 4 seconds apart, and picks up where it left
+  off. If GitHub won't resume it, it starts again from the beginning. A
+  connection timeout or an HTTP 5xx error is retried the same way. A 404, the
+  hourly limit and a certificate failure are not retried.
+- **A bad connection is reported as one.** A download that stalls or keeps
+  dropping after its retries now stops Check GitHub, the Full Update plan and
+  the manuals with a connection message, the same as when GitHub can't be
+  reached. Before, each file was skipped on its own, and the next file was then
+  tried on the same bad connection.
+- A connection timeout now says "GitHub did not answer within 15s" instead of
+  "cannot reach GitHub -- is this node online?".
+
+## 2.75.0 (2026-10-26)
+
+- **Full Update keeps a ready-to-run copy of the wifi menu in the home folder.**
+  `wifi_menu_vX_Y_YYYYMMDD.sh` is checked on every Full Update, whether or not
+  anything else is out of date. Once the library copy matches the current file on
+  GitHub, a copy with the same name is written to the home folder
+  (`INSTMON_HOME_SCAN_DIR`, the same folder the home-folder scan reads), made
+  executable (`0755`) and owned by that folder's owner. Nothing is printed on
+  success.
+  - An older stock copy of the wifi menu in the home folder is removed when the
+    new one is written. A copy whose content was changed by hand is left alone,
+    and the log says so.
+  - The copy is written only when the library copy is current. Otherwise the
+    home-folder scan at startup would move it into the library on every restart.
+  - Problems are written to the log as warnings.
 
 ## 2.74.0 (2026-10-25)
 
