@@ -36,8 +36,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.74.0"
-DATE_STR ="2026-10-25"
+VERSION ="2.75.0"
+DATE_STR ="2026-10-26"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -6011,6 +6011,44 @@ def _fu_manuals(skipped):
         log_event(f"Full Update: manuals: {_docs_summary(got, _same, failed)}", "warn" if failed else "ok")
     _fu_set(skipped=list(skipped))
 
+def _fu_wifi_menu_home(entries):
+    entry = next((e for e in entries if e["category"] == "scripts"
+                  and is_interactive_only_script(e["name"])
+                  and e.get("blob") and e.get("status") != "error"), None)
+    if entry is None:
+        return
+    name = entry["name"]
+    lib_path = safe_join(LIB_SUBDIRS["scripts"], name)
+    if lib_path is None or _gh_local_blob_id(lib_path) != entry["blob"]:
+        log_event(f"Full Update: {name}: the library copy is not the current file -- not copied to {HOME_SCAN_DIR}", "warn")
+        return
+    stock = {entry["blob"]} | {_gh_local_blob_id(full) for _n, _v, _k, full in _gh_local_files("scripts", entry["glob"])}
+    stock.discard(None)
+    dest = os.path.join(HOME_SCAN_DIR, name)
+    try:
+        dest_blob = _gh_local_blob_id(dest)
+        if dest_blob is not None and dest_blob not in stock:
+            log_event(f"Full Update: {name}: your copy in {HOME_SCAN_DIR} has been changed -- left alone", "warn")
+            return
+        with open(lib_path, "rb") as f:
+            data = f.read()
+        owner = os.stat(HOME_SCAN_DIR)
+        tmp = dest + ".tmp"
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.chmod(tmp, 0o755)
+        if os.geteuid() == 0:
+            os.chown(tmp, owner.st_uid, owner.st_gid)
+        os.replace(tmp, dest)
+        for other in os.listdir(HOME_SCAN_DIR):
+            path = os.path.join(HOME_SCAN_DIR, other)
+            if other == name or not is_interactive_only_script(other):
+                continue
+            if os.path.isfile(path) and not os.path.islink(path) and _gh_local_blob_id(path) in stock:
+                os.remove(path)
+    except OSError as exc:
+        log_event(f"Full Update: {name}: couldn't copy it to {HOME_SCAN_DIR}: {exc}", "warn")
+
 def _fu_run():
     _fu_set(phase="checking", current="reading GitHub's file list")
     log_event(f"Full Update started ({_gh_source_label()})", "info")
@@ -6030,6 +6068,7 @@ def _fu_run():
     _fu_set(skipped=list(skipped))
     if not plan and not scripts:
         log_event("Full Update: every tool is already current", "ok")
+        _fu_wifi_menu_home(entries)
         _fu_manuals(skipped)
         _fu_finish()
         return
@@ -6063,6 +6102,7 @@ def _fu_run():
     with _gh_lock:
         _gh_state["entries"] = [_gh_compare(dict(e)) for e in _gh_state["entries"]]
     _fu_set(skipped=list(skipped), scripts=done_scripts)
+    _fu_wifi_menu_home(entries)
     if not _fu_stop_ev.is_set():
         _fu_manuals(skipped)
     if not staged or _fu_stop_ev.is_set():

@@ -1,6 +1,22 @@
 # instmon changelog
 
-Current file: `instmon_v2_74_0_20261025.py`. Newest entries first.
+Current file: `instmon_v2_75_0_20261026.py`. Newest entries first.
+
+## 2.75.0 (2026-10-26)
+
+- **Full Update keeps a ready-to-run copy of the wifi menu in the home folder.**
+  `wifi_menu_vX_Y_YYYYMMDD.sh` is checked on every Full Update, whether or not
+  anything else is out of date. Once the library copy matches the current file on
+  GitHub, a copy with the same name is written to the home folder
+  (`INSTMON_HOME_SCAN_DIR`, the same folder the home-folder scan reads), made
+  executable (`0755`) and owned by that folder's owner. Nothing is printed on
+  success.
+  - An older stock copy of the wifi menu in the home folder is removed when the
+    new one is written. A copy whose content was changed by hand is left alone,
+    and the log says so.
+  - The copy is written only when the library copy is current. Otherwise the
+    home-folder scan at startup would move it into the library on every restart.
+  - Problems are written to the log as warnings.
 
 ## 2.74.0 (2026-10-25)
 
