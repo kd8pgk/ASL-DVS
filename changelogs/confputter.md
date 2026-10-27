@@ -1,0 +1,12 @@
+# Config putter (confputter) changelog
+
+Current file: `confputter_v1_0_0_20261027.py`. Newest entries first.
+
+## 1.0.0 (2026-10-27)
+
+- **New tool.** `confputter.py` is the reverse of confgetter: it puts the files of a snapshot back on the node. Use it to undo a bad edit, to apply a copy that you or Claude corrected, or to rebuild a wiped node. `--preview` shows what would change and writes nothing; `--apply` writes the files you choose; `--undo` puts back the files the last restore replaced; `--list-backups` lists the saved copies.
+- **Edited and comment-stripped copies work.** The manifest hashes are not checked, so a corrected snapshot is fine. When a copy has no whole-line `;` comments, blank lines or comment lines the node has are kept and only the real setting changes are merged in. A file that differs only in comments or blank lines shows as "same" (or "comments" with `--no-keep-comments`). JSON files are compared by content, not formatting.
+- **Secrets.** A snapshot holds `<redacted:...>` tags, never passwords. Each tag keeps the value the node has now (matched by section and line, or by JSON path). A value the node lacks can be given with `--secrets-file` (a JSON object of tag to value, one value per tag; the card types them in) or is written empty and listed. Values with a line break, or not for a known tag, are refused.
+- **Only app config is restored:** ASL3 / Asterisk, Allmon3, DVSwitch and its gateways, USRP2M17, SvxLink, the Node Controller tools' config, and (marked CAREFUL, unticked by default) firewalld, fail2ban, the 44helper sysctl file and WireGuard. System files (network, hosts, ssh, Wi-Fi, os-release), key files, instmon's state files and `.md` documents are never restored. A file the snapshot holds only the first part of (trimmed) is refused. A path with `..`, or outside these folders, is refused. A folder that is not on the node (system not installed) is skipped.
+- **Safe writes.** Every file is written with the shared atomic write (private temp file, fsync, rename), with the owner and mode the snapshot recorded. The files it replaces are copied first to `/var/lib/confputter/backups/<time>/` (mode 0700; real values, so never share them); the newest 10 are kept. A failed write stops the rest and says so.
+- **The preview never shows secret values:** changed lines are shown with every kept or typed secret, and every password-like value, replaced by `<hidden>`.

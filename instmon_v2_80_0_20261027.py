@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.79.1"
+VERSION ="2.80.0"
 DATE_STR ="2026-10-27"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -138,6 +138,11 @@ APP_DIR = os.path.join(LIBRARY_DIR, "apps")
 SNAP_DIR = os.path.join(LIBRARY_DIR, "snapshots")
 CONFGETTER_BIN = "/usr/local/bin/confgetter.sh"
 CONFGETTER_KEEP = 10
+CONFPUTTER_BIN = "/usr/local/bin/confputter.py"
+PUT_BACKUP_DIR = "/var/lib/confputter/backups"
+EDITED_DIR = os.path.join(SNAP_DIR, "edited")
+CP_MAX_UPLOAD = 3000000
+CP_TIMEOUT_SEC = 180
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
 NODELISTEN_CONFIGS =(("nodetalker_favorites*.conf","nodetalker_favorites.conf"),("nodelisten_favorites*.conf","nodetalker_favorites.conf"),
 ("nodetalker*.conf","nodetalker.conf"),("nodelisten*.conf","nodetalker.conf"))
@@ -2819,6 +2824,7 @@ LIB_SUBDIRS ={
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
 "config":os .path .join (LIBRARY_DIR ,"config"),
 "confgetter":os .path .join (LIBRARY_DIR ,"confgetter"),
+"confputter":os .path .join (LIBRARY_DIR ,"confputter"),
 }
 
 ALLOWED_EXT ={
@@ -2832,6 +2838,7 @@ ALLOWED_EXT ={
 "scripts":(".sh",),
 "config":(".conf",),
 "confgetter":(".sh",),
+"confputter":(".py",),
 }
 
 COMPONENTS =[
@@ -2910,6 +2917,7 @@ HOME_SCAN_PATTERN_MAP =[
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodetalker*.conf","nodelisten*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
 ("confgetter",["confgetter*.sh"]),
+("confputter",["confputter*.py"]),
 ]
 
 _NAME_GLOB_ALIASES ={
@@ -4266,9 +4274,10 @@ def scan_library ():
                     entry ["installed"]=(file_sha256 (full )==file_sha256 (resolve_installed_target (comp )))
                 else :
                     entry ["installed"]=False 
-            elif cat =="confgetter":
+            elif cat in ("confgetter","confputter"):
                 entry ["version"]=read_installed_version (full )or "?"
-                entry ["installed"]=(file_sha256 (full )==file_sha256 (CONFGETTER_BIN ))
+                target =CONFGETTER_BIN if cat =="confgetter" else CONFPUTTER_BIN
+                entry ["installed"]=(file_sha256 (full )==file_sha256 (target ))
             elif cat =="config":
                 live_cfg =os .path .join (CONFIG_DIR ,config_dest_name (name ))
                 entry ["installed"]=(file_sha256 (full )==file_sha256 (live_cfg ))
@@ -4277,7 +4286,7 @@ def scan_library ():
                 entry ["installed"]=None 
                 entry ["version"]="script"
             out [cat ].append (entry )
-        if cat in INSTALLABLE_CATEGORIES or cat =="confgetter":
+        if cat in INSTALLABLE_CATEGORIES or cat in ("confgetter","confputter"):
             out [cat ].sort (key =lambda e :_version_sort_key (e ["version"]),reverse =True )
         else :
             out [cat ].sort (key =lambda e :e ["mtime_epoch"],reverse =True )
@@ -4305,6 +4314,7 @@ def build_status ():
     "library":scan_library (),
     "app":app_status (),
     "confgetter":confgetter_status (),
+    "confputter":confputter_status (),
     "config":{
     "name":CONFIG_NAME ,
     "installed":os .path .isfile (os .path .join (CONFIG_DIR ,CONFIG_NAME )),
@@ -6611,6 +6621,262 @@ def cg_start_run ():
         return 500 ,{"error":f"Could not start Config getter: {exc }"}
     return 200 ,{"message":"Config getter started -- the Execution Log shows its progress.","level":"info"}
 
+_CP_EDITED_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\.md$")
+_CP_TAG_RE = re.compile(r"^<redacted:[0-9a-f]{8}>$")
+_CP_BACKUP_RE = re.compile(r"^\d{8}-\d{6}(-\d+)?$")
+_cp_lock = threading.Lock()
+
+def cp_edited_path(name):
+    if not isinstance(name, str) or not _CP_EDITED_RE.match(name):
+        return None
+    full = safe_join(EDITED_DIR, name)
+    if full is None or os.path.islink(os.path.join(EDITED_DIR, name)) or not os.path.isfile(full):
+        return None
+    return full
+
+def cp_edited_list():
+    try:
+        names = os.listdir(EDITED_DIR)
+    except OSError:
+        return []
+    out = []
+    for name in names:
+        full = cp_edited_path(name)
+        if full is None:
+            continue
+        try:
+            st = os.stat(full)
+        except OSError:
+            continue
+        out.append({"name": name, "size": st.st_size,
+                    "mtime": datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                    "mtime_epoch": st.st_mtime})
+    out.sort(key=lambda e: e["mtime_epoch"], reverse=True)
+    return out
+
+def cp_resolve(sel):
+    if not isinstance(sel, str) or ":" not in sel:
+        return None, ""
+    kind, name = sel.split(":", 1)
+    if kind == "snapshot":
+        return cg_snap_path(name), name
+    if kind == "edited":
+        return cp_edited_path(name), name
+    return None, ""
+
+def cp_last_backup():
+    try:
+        ids = sorted(n for n in os.listdir(PUT_BACKUP_DIR) if _CP_BACKUP_RE.match(n))
+    except OSError:
+        return None
+    for bid in reversed(ids):
+        try:
+            with open(os.path.join(PUT_BACKUP_DIR, bid, "manifest.json"), encoding="utf-8") as fh:
+                m = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        return {"id": bid, "created": m.get("created", ""), "files": len(m.get("files", {})),
+                "undone": bool(m.get("undone"))}
+    return None
+
+def confputter_status():
+    installed = os.path.isfile(CONFPUTTER_BIN)
+    return {"installed": installed,
+            "version": (read_installed_version(CONFPUTTER_BIN) or "?") if installed else None,
+            "running": _cp_lock.locked(),
+            "snapshots": cg_snapshots()[:15],
+            "edited": cp_edited_list(),
+            "last_backup": cp_last_backup()}
+
+def cp_install(name):
+    src = safe_join(LIB_SUBDIRS["confputter"], name or "")
+    if src is None or not os.path.isfile(src):
+        return 404, {"error": f"Not in the Config putter library: {name}"}
+    try:
+        with open(src, "rb") as fh:
+            data = fh.read()
+    except OSError as exc:
+        return 500, {"error": f"Could not read {name}: {exc}"}
+    first = data.split(b"\n", 1)[0]
+    if not first.startswith(b"#!") or b"python" not in first:
+        return 400, {"error": f"{name} does not start with a python #! line"}
+    if not read_installed_version(src):
+        return 400, {"error": f"{name} has no VERSION line"}
+    err = check_python_syntax(src)
+    if err:
+        return 400, {"error": f"{name} failed the syntax check: {err}"}
+    folder = os.path.dirname(CONFPUTTER_BIN)
+    try:
+        os.makedirs(folder, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(prefix=".confputter.", suffix=".tmp", dir=folder)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+                fh.flush()
+                os.fchmod(fh.fileno(), 0o755)
+                os.fsync(fh.fileno())
+            os.replace(tmp, CONFPUTTER_BIN)
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        return 500, {"error": f"Could not install {name}: {exc}"}
+    with _file_meta_cache_lock:
+        _file_meta_cache.clear()
+    ver = read_installed_version(CONFPUTTER_BIN) or "?"
+    log_event(f"Config putter: installed {name} (v{ver}) as {CONFPUTTER_BIN}", "ok")
+    return 200, {"message": f"Installed {name} (v{ver}). Pick a snapshot and press Preview.", "level": "ok"}
+
+def cp_uninstall():
+    if _cp_lock.locked():
+        return 409, {"error": "Config putter is running -- wait for it to finish."}
+    if not os.path.lexists(CONFPUTTER_BIN):
+        return 404, {"error": "Config putter is not installed."}
+    try:
+        os.remove(CONFPUTTER_BIN)
+    except OSError as exc:
+        return 500, {"error": f"Could not remove {CONFPUTTER_BIN}: {exc}"}
+    log_event(f"Config putter: removed {CONFPUTTER_BIN} (snapshots and backups kept)", "info")
+    return 200, {"message": "Config putter uninstalled. Snapshots, uploaded copies and backups are kept.", "level": "info"}
+
+def cp_run(args, secrets=None):
+    if not os.path.isfile(CONFPUTTER_BIN):
+        return 409, {"error": "Config putter is not installed -- press Install on it in its library first."}
+    if not _cp_lock.acquire(blocking=False):
+        return 409, {"error": "Config putter is already running."}
+    sec_path = None
+    try:
+        cmd = ["python3", CONFPUTTER_BIN, "--json"] + args
+        if secrets:
+            fd, sec_path = tempfile.mkstemp(prefix="confputter_", suffix=".json")
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(secrets, fh)
+            cmd += ["--secrets-file", sec_path]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=CP_TIMEOUT_SEC)
+        except subprocess.TimeoutExpired:
+            return 504, {"error": "Config putter took too long and was stopped."}
+        except OSError as exc:
+            return 500, {"error": f"Could not run Config putter: {exc}"}
+        try:
+            res = json.loads(proc.stdout)
+        except ValueError:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+            return 500, {"error": "Config putter gave no result: " + " | ".join(tail)}
+        return 200, res
+    finally:
+        if sec_path:
+            try:
+                os.unlink(sec_path)
+            except OSError:
+                pass
+        _cp_lock.release()
+
+def cp_preview(body):
+    path, name = cp_resolve(body.get("snapshot"))
+    if path is None:
+        return 404, {"error": "No such snapshot"}
+    args = ["--preview", "--snapshot", path]
+    if body.get("keep_comments") is False:
+        args.append("--no-keep-comments")
+    status, res = cp_run(args)
+    if status != 200:
+        return status, res
+    if not res.get("ok"):
+        return 400, {"error": res.get("error", "The snapshot could not be read.")}
+    log_event(f"Config putter: previewed {name}", "info")
+    return 200, {"plan": res, "message": "Preview ready -- nothing was changed.", "level": "info"}
+
+def cp_apply(body):
+    if body.get("confirm") is not True:
+        return 400, {"error": "This action requires confirm:true in the request body"}
+    path, name = cp_resolve(body.get("snapshot"))
+    if path is None:
+        return 404, {"error": "No such snapshot"}
+    only = body.get("only")
+    if (not isinstance(only, list) or not 1 <= len(only) <= 400
+            or not all(isinstance(p, str) and p.startswith("/") and len(p) < 300 for p in only)):
+        return 400, {"error": "Tick at least one file."}
+    secrets = body.get("secrets") or {}
+    if not isinstance(secrets, dict) or len(secrets) > 200:
+        return 400, {"error": "The secret values are not valid."}
+    for tag, value in secrets.items():
+        if (not isinstance(tag, str) or not _CP_TAG_RE.match(tag) or not isinstance(value, str)
+                or len(value) > 500 or any(c in value for c in "\r\n\0")):
+            return 400, {"error": "A secret value is too long, has a line break in it, or is not for a known tag."}
+    args = ["--apply", "--snapshot", path]
+    for p in only:
+        args += ["--only", p]
+    if body.get("keep_comments") is False:
+        args.append("--no-keep-comments")
+    status, res = cp_run(args, secrets or None)
+    if status != 200:
+        return status, res
+    if res.get("error") and not res.get("written"):
+        return 400, {"error": res["error"]}
+    level = "ok" if res.get("ok") else "err"
+    log_event(f"Config putter: wrote {len(res.get('written', []))} file(s) from {name}; backup {res.get('backup', '-')}", level)
+    for bad in res.get("failed", []):
+        log_event(f"Config putter: could not write {bad.get('path')}: {bad.get('error')}", "err")
+    return 200, {"result": res, "message": res.get("message") or "Done.", "level": level}
+
+def cp_undo(body):
+    if body.get("confirm") is not True:
+        return 400, {"error": "This action requires confirm:true in the request body"}
+    status, res = cp_run(["--undo"])
+    if status != 200:
+        return status, res
+    if not res.get("ok"):
+        return 400, {"error": res.get("error", "Nothing to undo.")}
+    log_event(f"Config putter: undid backup {res.get('backup')} ({len(res.get('restored', []))} file(s) put back)", "ok")
+    return 200, {"result": res, "message": f"Undid backup {res.get('backup')}.", "level": "ok"}
+
+def cp_delete_edited(name):
+    full = cp_edited_path(name)
+    if full is None:
+        return 404, {"error": "No such uploaded copy"}
+    try:
+        os.remove(full)
+    except OSError as exc:
+        return 500, {"error": f"Could not delete {name}: {exc}"}
+    log_event(f"Config putter: deleted uploaded copy {name}", "info")
+    return 200, {"message": f"Deleted {name}.", "level": "info"}
+
+def cp_save_upload(name, data):
+    name = os.path.basename(name or "")
+    if not _CP_EDITED_RE.match(name):
+        return 400, {"error": "The file name may use letters, digits, . _ - and must end in .md"}
+    if not data or len(data) > CP_MAX_UPLOAD:
+        return 400, {"error": f"The file is empty or larger than {CP_MAX_UPLOAD // 1000000} MB"}
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return 400, {"error": "The file is not text"}
+    if not any(ln.startswith("# Node config snapshot:") for ln in text.split("\n", 40)[:40]):
+        return 400, {"error": "This is not a Config getter snapshot (no '# Node config snapshot:' heading)."}
+    try:
+        os.makedirs(EDITED_DIR, mode=0o700, exist_ok=True)
+        os.chmod(EDITED_DIR, 0o700)
+        fd, tmp = tempfile.mkstemp(prefix=".up.", suffix=".tmp", dir=EDITED_DIR)
+        try:
+            with os.fdopen(fd, "wb") as fh:
+                fh.write(data)
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, os.path.join(EDITED_DIR, name))
+        except BaseException:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except OSError as exc:
+        return 500, {"error": f"Could not save {name}: {exc}"}
+    log_event(f"Config putter: uploaded copy {name} ({human_size(len(data))})", "ok")
+    return 200, {"name": name, "message": f"Uploaded {name}. Pick it in the list and press Preview.", "level": "ok"}
+
 def run_script_bg (script_path ,script_name ,env_overrides =None ):
 
     if env_overrides :
@@ -7025,6 +7291,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("Scripts (.sh)","scripts","run_script"),
     ("Configuration","config","install_config"),
     ("Config getter","confgetter","install_confgetter"),
+    ("Config putter","confputter","install_confputter"),
 ]
 
 _LIBRARY_GROUPS_BY_CATEGORY: dict [str ,tuple [str ,str ,str ]]={
@@ -7808,6 +8075,7 @@ async function refreshStatus() {
     const data = await r.json();
     document.getElementById('components').innerHTML = data.components_html;
     document.getElementById('library').innerHTML = data.library_html;
+    if (typeof cpUpdateStatus === 'function') cpUpdateStatus(data.confputter);
     const ghEl = document.getElementById('gh-summary');
     if (ghEl && typeof data.gh_summary_html === 'string') ghEl.innerHTML = data.gh_summary_html;
     if (typeof data.gh_event_seq === 'number') {
@@ -8871,6 +9139,234 @@ async function postAction(body) {
 
 """
 
+_JS_CONFPUTTER = r"""
+var CP_STATE = null;
+var CP_PLAN = null;
+var CP_SNAP = '';
+var CP_SIG = '';
+var CP_SECRETS = {};
+var CP_CHECKED = {};
+
+function cpEsc(s) {
+  return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function cpMsg(text, ok) {
+  var el = document.getElementById('cp-msg');
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.color = ok === true ? 'var(--grn)' : ok === false ? 'var(--red)' : '';
+}
+
+async function cpCall(body) {
+  var r = await fetch('/api/action', {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}, body: JSON.stringify(body)});
+  var data = {};
+  try { data = await r.json(); } catch (e) {}
+  data._ok = r.ok;
+  return data;
+}
+
+function cpUpdateStatus(st) {
+  if (!st) return;
+  CP_STATE = st;
+  var badge = document.getElementById('cp-badge');
+  var ver = document.getElementById('cp-ver');
+  var sel = document.getElementById('cp-snap');
+  if (!badge || !ver || !sel) return;
+  badge.textContent = st.running ? 'RUNNING' : (st.installed ? 'INSTALLED' : 'NOT INSTALLED');
+  badge.className = 'badge ' + (st.installed ? 'b-inst' : 'b-src');
+  ver.textContent = st.installed ? 'v' + st.version : '';
+  var items = [];
+  (st.snapshots || []).forEach(function(s) { items.push({value: 'snapshot:' + s.name, label: s.name + ' (' + s.mtime + ')'}); });
+  (st.edited || []).forEach(function(s) { items.push({value: 'edited:' + s.name, label: 'uploaded: ' + s.name + ' (' + s.mtime + ')'}); });
+  var sig = items.map(function(i) { return i.value + '|' + i.label; }).join(';');
+  if (sig !== CP_SIG) {
+    var keep = sel.value;
+    CP_SIG = sig;
+    sel.innerHTML = items.length ? items.map(function(i) { return '<option value="' + cpEsc(i.value) + '">' + cpEsc(i.label) + '</option>'; }).join('') : '<option value="">-- no snapshots yet --</option>';
+    if (keep && items.some(function(i) { return i.value === keep; })) sel.value = keep;
+  }
+  var busy = !st.installed || st.running;
+  var pb = document.getElementById('cp-preview-btn');
+  if (pb) pb.disabled = busy || !sel.value;
+  var undo = document.getElementById('cp-undo-btn');
+  if (undo) {
+    var lb = st.last_backup;
+    undo.style.display = lb && !lb.undone ? '' : 'none';
+    undo.textContent = lb ? 'Undo last restore (' + lb.created + ')' : 'Undo last restore';
+    undo.disabled = busy;
+  }
+  var un = document.getElementById('cp-uninstall-btn');
+  if (un) un.style.display = st.installed ? '' : 'none';
+  cpOnSelect();
+}
+
+function cpOnSelect() {
+  var sel = document.getElementById('cp-snap');
+  var del = document.getElementById('cp-del-edited');
+  if (del && sel) del.style.display = sel.value.indexOf('edited:') === 0 ? '' : 'none';
+}
+
+function cpCount() {
+  var n = Object.keys(CP_CHECKED).filter(function(p) { return CP_CHECKED[p]; }).length;
+  var el = document.getElementById('cp-count');
+  if (el) el.textContent = n + ' file(s) ticked';
+}
+
+function cpRenderPlan() {
+  var box = document.getElementById('cp-plan');
+  if (!box) return;
+  var p = CP_PLAN;
+  if (!p) { box.innerHTML = ''; return; }
+  var nl = String.fromCharCode(10);
+  var s = p.snapshot || {};
+  var h = '<div class="small muted">Snapshot from <b>' + cpEsc(s.host) + '</b>, taken ' + cpEsc(s.taken) + ' by ' + cpEsc(s.made_by) + '</div>';
+  (p.warnings || []).forEach(function(w) { h += '<div class="small" style="color:var(--yel)">' + cpEsc(w) + '</div>'; });
+  var files = p.files || [];
+  var act = files.filter(function(f) { return f.status !== 'skipped'; });
+  var skipped = files.filter(function(f) { return f.status === 'skipped'; });
+  h += '<div style="margin:.4rem 0">';
+  act.forEach(function(f) {
+    h += '<div class="librow"><div class="librow-top"><label><input type="checkbox" class="cp-chk" data-path="' + cpEsc(f.path) + '"' +
+      (CP_CHECKED[f.path] ? ' checked' : '') + (f.status === 'same' ? ' disabled' : '') + '> ' + cpEsc(f.path) + '</label>' +
+      '<span class="badge ' + (f.status === 'same' ? 'b-inst' : 'b-src') + '">' + cpEsc(f.status.toUpperCase()) + '</span>' +
+      (f.careful ? '<span class="badge b-src" style="color:var(--yel)">CAREFUL</span>' : '') + '</div>' +
+      '<div class="librow-bot small muted"><span>' + cpEsc(f.group) + '</span><span>&middot;</span><span>' + cpEsc(f.note) + '</span>' +
+      (f.status !== 'same' ? '<span>&middot;</span><span>+' + f.added + ' -' + f.removed + ' lines</span>' : '') + '</div>';
+    if (f.diff && f.diff.length) h += '<details class="small"><summary>Show changes</summary><pre style="white-space:pre-wrap;margin:.3rem 0">' + cpEsc(f.diff.join(nl)) + '</pre></details>';
+    h += '</div>';
+  });
+  if (!act.length) h += '<div class="small muted">Nothing in this snapshot can be restored here.</div>';
+  h += '</div>';
+  if (skipped.length) {
+    h += '<details class="small muted"><summary>' + skipped.length + ' file(s) not restored</summary>' +
+      skipped.map(function(f) { return '<div>' + cpEsc(f.path) + ': ' + cpEsc(f.note) + '</div>'; }).join('') + '</details>';
+  }
+  var secs = p.secrets || [];
+  if (secs.length) {
+    h += '<div class="small" style="margin:.5rem 0 .2rem">This node does not have these passwords or keys. Type them, or leave a box empty to write it empty and set it by hand. ' +
+      'They travel over plain HTTP: type them only on a trusted LAN or VPN.</div>';
+    secs.forEach(function(x, i) {
+      h += '<div class="librow"><div class="small muted">' + x.where.map(cpEsc).join('<br>') + (x.count > x.where.length ? '<br>and ' + (x.count - x.where.length) + ' more' : '') + '</div>' +
+        '<input type="password" class="cp-sec" data-tag="' + cpEsc(x.tag) + '" autocomplete="new-password" placeholder="value" style="max-width:100%"></div>';
+    });
+  }
+  if ((p.restart || []).length) h += '<div class="small muted">After a restore, restart: ' + p.restart.map(cpEsc).join(', ') + ' (the Restart comms button above covers the radio services).</div>';
+  h += '<div class="row btn-row"><button class="b-go" onclick="cpApply()">Restore ticked files</button><span class="small muted" id="cp-count"></span></div>';
+  box.innerHTML = h;
+  box.querySelectorAll('.cp-chk').forEach(function(el) {
+    el.addEventListener('change', function() { CP_CHECKED[el.dataset.path] = el.checked; cpCount(); });
+  });
+  box.querySelectorAll('.cp-sec').forEach(function(el) {
+    el.addEventListener('input', function() { CP_SECRETS[el.dataset.tag] = el.value; });
+  });
+  cpCount();
+}
+
+function cpShowResult(r) {
+  var box = document.getElementById('cp-plan');
+  if (!box) return;
+  var h = '<div style="margin:.4rem 0">';
+  (r.written || r.restored || []).forEach(function(p) { h += '<div class="small">' + (r.restored ? 'put back ' : 'wrote ') + cpEsc(p) + '</div>'; });
+  (r.removed || []).forEach(function(p) { h += '<div class="small">removed ' + cpEsc(p) + '</div>'; });
+  (r.kept || []).forEach(function(p) { h += '<div class="small" style="color:var(--yel)">left alone (changed since): ' + cpEsc(p) + '</div>'; });
+  (r.failed || []).forEach(function(f) { h += '<div class="small" style="color:var(--red)">FAILED ' + cpEsc(f.path) + ': ' + cpEsc(f.error) + '</div>'; });
+  if ((r.unresolved || []).length) {
+    h += '<div class="small" style="color:var(--yel)">Written with an empty secret: set these by hand:</div>' +
+      r.unresolved.map(function(u) { return '<div class="small">' + cpEsc(u.path) + ': ' + cpEsc(u.key) + '</div>'; }).join('');
+  }
+  if ((r.restart || []).length) h += '<div class="small muted">Restart: ' + r.restart.map(cpEsc).join(', ') + '</div>';
+  h += '</div>';
+  box.innerHTML = h;
+}
+
+async function cpPreview() {
+  var sel = document.getElementById('cp-snap');
+  if (!sel || !sel.value) { cpMsg('Pick a snapshot first.', false); return; }
+  cpMsg('Reading the snapshot...');
+  var r = await cpCall({action: 'cp_preview', snapshot: sel.value, keep_comments: document.getElementById('cp-keep').checked});
+  if (!r.plan) { cpMsg(r.message || r.error || 'Preview failed.', false); return; }
+  CP_PLAN = r.plan;
+  CP_SNAP = sel.value;
+  CP_SECRETS = {};
+  CP_CHECKED = {};
+  (r.plan.files || []).forEach(function(f) { CP_CHECKED[f.path] = !!f.checked; });
+  cpMsg('Preview ready. Nothing was changed.', true);
+  cpRenderPlan();
+}
+
+async function cpApply() {
+  if (!CP_PLAN) return;
+  var only = Object.keys(CP_CHECKED).filter(function(p) { return CP_CHECKED[p]; });
+  if (!only.length) { cpMsg('Tick at least one file.', false); return; }
+  var typed = {};
+  Object.keys(CP_SECRETS).forEach(function(t) { if (CP_SECRETS[t]) typed[t] = CP_SECRETS[t]; });
+  var missing = (CP_PLAN.secrets || []).filter(function(x) { return !typed[x.tag]; }).length;
+  var nl = String.fromCharCode(10);
+  var text = 'Restore ' + only.length + ' file(s) from ' + CP_SNAP.split(':')[1] + '?' + nl + nl +
+    'The files they replace are saved first (Undo last restore).' +
+    (missing ? nl + missing + ' secret value(s) are not given: those are written empty.' : '') +
+    ((CP_PLAN.restart || []).length ? nl + 'Restart afterwards: ' + CP_PLAN.restart.join(', ') : '');
+  if (!confirm(text)) return;
+  cpMsg('Restoring...');
+  var r = await cpCall({action: 'cp_apply', snapshot: CP_SNAP, only: only, secrets: typed, keep_comments: document.getElementById('cp-keep').checked, confirm: true});
+  CP_SECRETS = {};
+  if (!r.result) { cpMsg(r.message || r.error || 'Restore failed.', false); return; }
+  cpMsg(r.message, r.result.ok);
+  CP_PLAN = null;
+  cpShowResult(r.result);
+  refreshStatus();
+}
+
+async function cpUndo() {
+  var lb = CP_STATE && CP_STATE.last_backup;
+  if (!lb) return;
+  if (!confirm('Put back the files saved before the restore of ' + lb.created + ' (' + lb.files + ' file(s))? Files changed since then are left alone.')) return;
+  cpMsg('Undoing...');
+  var r = await cpCall({action: 'cp_undo', confirm: true});
+  if (!r.result) { cpMsg(r.message || r.error || 'Undo failed.', false); return; }
+  cpMsg(r.message, true);
+  CP_PLAN = null;
+  cpShowResult(r.result);
+  refreshStatus();
+}
+
+async function cpUninstall() {
+  if (!confirm('Uninstall Config putter? Removes /usr/local/bin/confputter.py. Snapshots, uploaded copies and backups are kept.')) return;
+  var r = await cpCall({action: 'cp_uninstall', confirm: true});
+  cpMsg(r.message || r.error, r._ok);
+  refreshStatus();
+}
+
+async function cpDeleteEdited() {
+  var sel = document.getElementById('cp-snap');
+  if (!sel || sel.value.indexOf('edited:') !== 0) return;
+  var name = sel.value.slice(7);
+  if (!confirm('Delete the uploaded copy ' + name + '?')) return;
+  var r = await cpCall({action: 'cp_delete_edited', name: name});
+  cpMsg(r.message || r.error, r._ok);
+  refreshStatus();
+}
+
+async function cpUpload() {
+  var inp = document.getElementById('cp-file');
+  if (!inp || !inp.files || !inp.files[0]) { cpMsg('Choose a .md file first.', false); return; }
+  var fd = new FormData();
+  fd.append('file', inp.files[0]);
+  var r = await fetch('/api/confputter/upload', {method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}, body: fd});
+  var data = {};
+  try { data = await r.json(); } catch (e) {}
+  cpMsg(data.message || data.error || (r.ok ? 'Uploaded.' : 'Upload failed.'), r.ok);
+  if (r.ok) {
+    inp.value = '';
+    await refreshStatus();
+    var sel = document.getElementById('cp-snap');
+    if (sel && data.name) sel.value = 'edited:' + data.name;
+    cpOnSelect();
+  }
+}
+"""
+
 _JS_EDITOR = """// Editor functions
 // Editor overlay JS (Stage 8/9, Library Card Rework Plan). _editCategory
 // and _editName track which library file is open, since uf-overlay's
@@ -9216,6 +9712,9 @@ _JS_ACTIONS = """function wireButtons() {
         } else if (action === 'install_confgetter') {
           if (!confirm(`Install ${btn.dataset.name} as /usr/local/bin/confgetter.sh? It only reads config files when you press Run.`)) { btn.disabled = false; return; }
           await postAction({action: 'install_confgetter', name: btn.dataset.name, confirm: true});
+        } else if (action === 'install_confputter') {
+          if (!confirm(`Install ${btn.dataset.name} as /usr/local/bin/confputter.py? It only writes config files when you choose files and press Restore on the Config putter card.`)) { btn.disabled = false; return; }
+          await postAction({action: 'install_confputter', name: btn.dataset.name, confirm: true});
         } else if (action === 'cg_run') {
           await postAction({action: 'cg_run'});
         } else if (action === 'cg_uninstall') {
@@ -9926,6 +10425,7 @@ _JS = (
     + _JS_ACTIONS
     + _JS_USBIMPORT
     + _JS_DOCS
+    + _JS_CONFPUTTER
     + _JS_AUTH
     + _JS_INIT
 )
@@ -10022,6 +10522,34 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div id="components">{components_html}
 </div>
 
+<div class="card" id="cp-card">
+  <div class="row comp-row">
+    <b>Config putter</b>
+    <span class="ver" id="cp-ver"></span>
+    <span class="badge b-src" id="cp-badge">NOT INSTALLED</span>
+    <span class="muted small">confputter.py &middot; runs on demand, no service</span>
+  </div>
+  <div class="small muted">Puts the files of a Config getter snapshot back on this node: to undo a bad edit, to apply a copy
+  you or Claude corrected, or to rebuild a wiped node. Pick a snapshot and press Preview: nothing is written until you
+  tick files and press Restore. The files it replaces are saved first (Undo last restore). Passwords and keys are not in a
+  snapshot: each one keeps the value this node has now, and you type any it does not have. Firewall and WireGuard files
+  are marked CAREFUL and left unticked. System files (network, hosts, ssh, Wi-Fi) are never restored.</div>
+  <div class="row btn-row">
+    <select id="cp-snap" title="Snapshot to restore from" onchange="cpOnSelect()" style="max-width:100%;min-width:0"><option value="">Loading&hellip;</option></select>
+    <button id="cp-preview-btn" onclick="cpPreview()" disabled>Preview</button>
+    <button class="b-del" id="cp-undo-btn" onclick="cpUndo()" style="display:none">Undo last restore</button>
+    <button class="b-del" id="cp-uninstall-btn" onclick="cpUninstall()" style="display:none">Uninstall</button>
+  </div>
+  <label class="small muted"><input type="checkbox" id="cp-keep" checked> Keep this node's comment lines when the copy has none (a copy with the comments stripped)</label>
+  <div class="row">
+    <input type="file" id="cp-file" accept=".md">
+    <button onclick="cpUpload()">Upload corrected copy</button>
+    <button class="b-del" id="cp-del-edited" onclick="cpDeleteEdited()" style="display:none">Delete uploaded copy</button>
+  </div>
+  <div class="small muted" id="cp-msg"></div>
+  <div id="cp-plan"></div>
+</div>
+
 <div class="card" id="usbimp-card">
   <div style="font-weight:700;color:var(--text-bright);margin-bottom:.3rem">Import from USB Drive</div>
   <div class="small muted" style="margin-bottom:.4rem">
@@ -10041,6 +10569,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="watchdog">Watchdog (.sh)</option>
       <option value="instmon">InstMon (.py)</option>
       <option value="confgetter">Config getter (.sh)</option>
+      <option value="confputter">Config putter (.py)</option>
     </select>
     <button id="usbimp-refresh">Refresh</button>
     <button id="usbimp-up" disabled>Up</button>
@@ -10473,6 +11002,12 @@ _ACTION_HANDLERS ={
 "cg_run":lambda self ,body :self ._action_cg (body ,"run"),
 "cg_uninstall":lambda self ,body :self ._action_cg (body ,"uninstall"),
 "cg_delete":lambda self ,body :self ._action_cg (body ,"delete"),
+"install_confputter":lambda self ,body :self ._action_cp (body ,"install"),
+"cp_uninstall":lambda self ,body :self ._action_cp (body ,"uninstall"),
+"cp_preview":lambda self ,body :self ._action_cp (body ,"preview"),
+"cp_apply":lambda self ,body :self ._action_cp (body ,"apply"),
+"cp_undo":lambda self ,body :self ._action_cp (body ,"undo"),
+"cp_delete_edited":lambda self ,body :self ._action_cp (body ,"delete_edited"),
 }
 
 _ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss", "fu_stop")
@@ -10502,6 +11037,7 @@ _GET_ROUTES ={
 
 _POST_ROUTES ={
 "/api/upload":lambda self :self .handle_upload (),
+"/api/confputter/upload":lambda self :self ._route_cp_upload (),
 "/api/usbimport/import":lambda self :self .handle_usbimport_import (),
 "/api/docs/fetch":lambda self :self .handle_docs_fetch (),
 "/api/docs/delete":lambda self :self .handle_docs_delete (),
@@ -12159,6 +12695,45 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             except (BrokenPipeError ,ConnectionResetError ):
                 pass
         log_event (f"Config getter: downloaded {name }","info")
+
+    def _action_cp (self ,body ,op ):
+        if op in ("install","uninstall")and not body .get ("confirm"):
+            self ._error_json (400 ,"This action requires confirm:true in the request body")
+            return
+        if op =="install":
+            status ,payload =cp_install (body .get ("name"))
+        elif op =="uninstall":
+            status ,payload =cp_uninstall ()
+        elif op =="preview":
+            status ,payload =cp_preview (body )
+        elif op =="apply":
+            status ,payload =cp_apply (body )
+        elif op =="undo":
+            status ,payload =cp_undo (body )
+        else :
+            status ,payload =cp_delete_edited (body .get ("name"))
+        if status !=200 :
+            self ._send_json (status ,{"error":payload ["error"],"message":payload ["error"],"level":"warn"if status ==409 else "err"})
+            return
+        self ._send_json (200 ,payload )
+
+    def _route_cp_upload (self ):
+        content_type =self .headers .get ("Content-Type","")
+        m =re .search (r'boundary=([^;]+)',content_type )
+        if not m or "multipart/form-data"not in content_type :
+            self ._error_json (400 ,"Expected multipart/form-data upload")
+            return
+        length =int (self .headers .get ("Content-Length",0 ))
+        if length <=0 or length >CP_MAX_UPLOAD +65536 :
+            self ._error_json (400 ,"Upload missing or too large")
+            return
+        fields =parse_multipart (self .rfile .read (length ),m .group (1 ).strip ('"'))
+        filename ,filedata =fields .get ("file",(None ,None ))
+        status ,payload =cp_save_upload (filename ,filedata )
+        if status !=200 :
+            self ._error_json (status ,payload ["error"])
+            return
+        self ._send_json (200 ,payload )
 
     def _route_app_file (self ):
         query =urllib .parse .parse_qs (urllib .parse .urlparse (self .path ).query )

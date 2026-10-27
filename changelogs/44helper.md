@@ -1,6 +1,11 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_220_20261027.py`. Newest entries first.
+Current file: `44helper_v0_0_221_20261027.py`. Newest entries first.
+
+## 0.0.221 (2026-10-27)
+
+- **Full config replacement card note.** It now says to paste this node's own WireGuard config (from 44Net Connect) on the Split Tunnel tab and run its steps for the split tunnel; each node needs its own config, and this card does not touch the firewall or WireGuard.
+- **Shared secret resolver.** The card keeps the node's passwords with `fill_secrets` from `shared/confio.py`, the same function confputter uses (kept identical in both and checked by the repo check). JSON files and typed values are supported there; behaviour for the bundle is unchanged.
 
 ## 0.0.220 (2026-10-27)
 
