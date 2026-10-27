@@ -1,6 +1,12 @@
 # Node Talker Mobile changelog
 
-Current version: `0.3.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.3.4`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.3.4 (2026-10-27)
+
+- **The node list now names the repository's license, CC BY-NC 4.0**
+  (Attribution-NonCommercial), the same as the `LICENSE` file. 0.3.3 said
+  CC BY 4.0 by mistake. Tapping it opens the CC BY-NC 4.0 license.
 
 ## 0.3.3 (2026-10-27)
 
