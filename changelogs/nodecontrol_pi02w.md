@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_96_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_97_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.97-pi02w (2026-10-27)
+
+- **Fix: the M17 network config keeps the node's callsign.** The 9.3.96 build wrote KD8PGK into the M17 network's Callsign line for every node. It writes the node's own callsign again, as before. Only the splash shows KD8PGK.
 
 ## 9.3.96-pi02w (2026-10-27)
 
