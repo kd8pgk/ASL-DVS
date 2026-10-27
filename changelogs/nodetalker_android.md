@@ -1,6 +1,26 @@
 # Node Talker Mobile changelog
 
-Current version: `0.3.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.3.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.3.2 (2026-10-27)
+
+- **No more debug build.** The APK is now a release build, named
+  `NodeTalker-0.3.2.apk` (no `-debug`), and the app is no longer debuggable.
+  It is signed with the same key as 0.3.1, so it installs over it and keeps
+  your nodes and settings.
+- Fixes from a code audit:
+  - **The page closing no longer closes the app.** If the phone ran low on
+    memory or the page's display process stopped, the whole app closed; it
+    now shows "The page stopped" with Retry.
+  - **Opening the talk channel for another node stops the old node's
+    receive cleanly**; before, it stopped but still showed as playing.
+  - **The talk channel can't be left open by a race** when it is closed just
+    as it finishes connecting.
+  - **Stopping receive no longer closes the audio stream on the main
+    thread**, which some Android versions refuse.
+  - **A microphone that stops working no longer spins the CPU.**
+  - **Saving a download** shows an error instead of closing the app if
+    Android refuses the chosen file.
 
 ## 0.3.1 (2026-10-21)
 

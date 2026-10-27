@@ -319,7 +319,8 @@ It comes in phases:
 
 **Install a test build:** on the phone, open the repository's
 [Releases](https://github.com/kd8pgk/ASL-DVS/releases), pick the newest
-`android-v…` release and download `NodeTalker-…-debug.apk`. Android asks to
+`android-v…` release and download `NodeTalker-….apk` (`NodeTalker-…-debug.apk`
+before 0.3.2). Android asks to
 allow installs from the browser once. From 0.3.1 every test build is signed
 with the same debug key (`android/app/debug.keystore`), so a new build
 installs over the old one and keeps your nodes; going from 0.3.0 or older to
