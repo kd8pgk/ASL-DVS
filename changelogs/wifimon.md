@@ -1,6 +1,27 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_39_0_1_20261019.py`. Newest entries first.
+Current file: `wifimon_v5_39_3_20261027.py`. Newest entries first.
+
+## 5.39.3 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK WiFi Monitor" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
+
+## 5.39.2 (2026-10-27)
+
+- **Log Out in the header.** The header has a Log Out button, the same as the Service card's, and it signs out the same way.
+
+## 5.39.1 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK WiFi Monitor" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
+
+## 5.39.0.3 (2026-10-27)
+
+- **Header and page names.** The header, the login card and the page title read "WiFi Monitor". Cosmetic only; no change in behaviour.
+- The header sub-line drops "Node Control".
+
+## 5.39.0.2 (2026-10-27)
+
+- **The Node Control look.** wifimon now uses the Node Control colours, with amber, blue, green and red matched to the other tools. The text is Readex Pro (built into the page), not the system font. The header has the Node Control logo and sub-line, buttons are uppercase on the shared size scale, and cards have the same corners. The login page follows the same look. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 5.39.0.1 (2026-10-19)
 

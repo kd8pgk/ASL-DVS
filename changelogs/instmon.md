@@ -1,6 +1,23 @@
 # instmon changelog
 
-Current file: `instmon_v2_78_1_20261026.py`. Newest entries first.
+Current file: `instmon_v2_78_3_20261027.py`. Newest entries first.
+
+## 2.78.3 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK Install Monitor" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
+
+## 2.78.2 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK Install Monitor" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
+
+## 2.78.1.2 (2026-10-27)
+
+- **Header and page names.** The header, the login card and the page title read "Install Monitor". Cosmetic only; no change in behaviour.
+- The sub-line drops "Node Control" and reads "Installer & Component Manager".
+
+## 2.78.1.1 (2026-10-27)
+
+- **The look of Node Control.** The text is set in Readex Pro (built into the page), with the same header as Node Control: the logo and sub-line match, and the sub-line now starts with "Node Control". Buttons and text use one size scale. The log box stays monospace. A stray line after the header rule, which browsers ignored, is removed. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 2.78.1 (2026-10-26)
 

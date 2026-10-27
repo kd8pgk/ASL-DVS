@@ -1,6 +1,28 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_88_20261019.py`. Newest entries first.
+Current file: `sysmon_v6_13_91_20261027.py`. Newest entries first.
+
+## 6.13.91 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK System Monitor" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
+
+## 6.13.90 (2026-10-27)
+
+- **Log Out in the header.** A Log Out button sits beside the uptime, as in Node Controller. It signs out the same way as the Logout button on the command bar.
+- **Node Controller.** The nav button that opens Node Controller reads "Node Controller" (was "Node Control").
+
+## 6.13.89 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK System Monitor" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
+
+## 6.13.88.2 (2026-10-27)
+
+- **Header and page names.** The header, the login card and the page title read "System Monitor". Cosmetic only; no change in behaviour.
+- The header sub-line drops "Node Control". The ASL-DVS tab keeps its name.
+
+## 6.13.88.1 (2026-10-27)
+
+- **Smaller type and the shared look.** The text is set in Readex Pro (built into the page), with one size scale for the whole page, so the tabs, buttons and cards fit more on screen. The header matches Node Control: the sub-line now starts with "Node Control". The Global Actions bar wraps on a phone instead of running off the right edge. The ASL-DVS tab keeps its name. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 6.13.88 (2026-10-19)
 

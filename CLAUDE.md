@@ -35,10 +35,11 @@
   stays as it is.
 - **A changelog per tool** in `changelogs/<tool>.md`. Every new version adds
   an entry at the top and updates the "Current file" line.
-- **Every change gets a new version.** Rename the file
-  (`<tool>_vX_Y_Z_YYYYMMDD.py`), update `VERSION` / `APP_VERSION` /
-  `SCRIPT_VERSION`, and update the README file list. A pi02w version ends in
-  `-pi02w`.
+- **Every change gets a new version.** A release renames the file
+  (`<tool>_vX_Y_Z_YYYYMMDD.py`) and updates the README file list. A cosmetic
+  build (`N`, below) keeps the file name and only moves `VERSION` /
+  `APP_VERSION` / `SCRIPT_VERSION` to the next four-part number. A pi02w
+  version ends in `-pi02w`.
 - **Versions are `X.Y.Z` or `X.Y.Z.N`.** `Z` is a release: any change in
   behaviour (for example `5.31.0`, `9.3.74-pi02w`). `N` is a cosmetic fix
   only: text, wording, colors or layout, with no change in what the code does

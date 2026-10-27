@@ -42,12 +42,13 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_88_20261019.py` | `sysmon_pi02w_v6_13_76_20261020.py` | `instmon_v2_78_1_20261026.py` |
-| `VERSION` | `6.13.88` | `6.13.75-pi02w` | `2.78.1` |
+| File name | `sysmon_v6_13_91_20261027.py` | `sysmon_pi02w_v6_13_79_20261027.py` | `instmon_v2_78_3_20261027.py` |
+| `VERSION` | `6.13.91` | `6.13.79-pi02w` | `2.78.3` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
-read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py`. A version
-number is never reused: every change gets a new version.
+read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py` and change
+only with a release; a cosmetic build keeps its file name and moves `VERSION`.
+A version number is never reused: every change gets a new version.
 
 ### Which build a node gets
 
@@ -85,7 +86,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_78_1_20261026.py --install
+   sudo python3 instmon_v2_78_3_20261027.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -482,13 +483,13 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_89_20261019.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_94_20261020.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_88_20261019.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_76_20261020.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_78_1_20261026.py` | common |
-| `wifimon_v5_39_0_1_20261019.py` | common |
-| `44helper_v0_0_216_20261019.py` | common |
+| `nodecontrol_v9_3_92_20261027.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_97_20261027.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_91_20261027.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_79_20261027.py` | SysMon, Pi Zero 2 W (current) |
+| `instmon_v2_78_3_20261027.py` | common |
+| `wifimon_v5_39_3_20261027.py` | common |
+| `44helper_v0_0_218_20261027.py` | common |
 | `nodetalker_v0_9_43_20261027.py` | common |
 | `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |

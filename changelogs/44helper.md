@@ -1,6 +1,23 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_216_20261019.py`. Newest entries first.
+Current file: `44helper_v0_0_218_20261027.py`. Newest entries first.
+
+## 0.0.218 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK 44 Helper" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
+
+## 0.0.217 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK 44 Helper" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
+
+## 0.0.216.2 (2026-10-27)
+
+- **Header and page names.** The header, the login card and the page title read "44 Helper". Cosmetic only; no change in behaviour.
+- The header's Log out button reads "Log Out". The sub-line drops "Node Control".
+
+## 0.0.216.1 (2026-10-27)
+
+- **Readex Pro and the Node Control look.** The text is set in Readex Pro (built into the page). The header sub-line starts with "Node Control". Text boxes and labels use the same font; the command line, config and log boxes stay monospace. Buttons and text use one size scale. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 0.0.216 (2026-10-19)
 

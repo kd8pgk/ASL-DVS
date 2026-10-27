@@ -1,13 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:background="@color/bg">
+    android:background="@color/bg"
+    android:gravity="center"
+    android:orientation="vertical"
+    android:paddingHorizontal="24dp">
+
+    <TextView
+        android:id="@+id/welcome"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginBottom="28dp"
+        android:gravity="center"
+        android:textColor="@color/text"
+        android:textSize="18sp"
+        android:textStyle="bold" />
 
     <ImageView
         android:layout_width="160dp"
         android:layout_height="160dp"
-        android:layout_gravity="center"
         android:contentDescription="@string/app_name"
         android:src="@drawable/splash_icon" />
-</FrameLayout>
+
+    <TextView
+        android:id="@+id/license"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="28dp"
+        android:gravity="center"
+        android:minHeight="32dp"
+        android:text="@string/license"
+        android:textColor="@color/accent"
+        android:textSize="12sp" />
+</LinearLayout>

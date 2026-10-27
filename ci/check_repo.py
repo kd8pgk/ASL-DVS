@@ -204,6 +204,32 @@ def check_shell(path):
         fail(f"{path}: bash -n:\n{r.stderr.strip()}")
 
 
+SHARED_LOOK_TOOLS = {"nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "instmon", "44helper", "wifimon"}
+SHARED_LOOK_LINES = (
+    '@font-face{font-family:"Readex Pro";',
+    '--sans:"Readex Pro",Arial,Helvetica,sans-serif;',
+    '--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;',
+    "--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;",
+    "--amber:#ffd040;--amber-dim:#6b4800;",
+    "textarea,pre,code{font-family:var(--mono)!important}",
+)
+
+
+def check_shared_look(path, text):
+    missing = [s for s in SHARED_LOOK_LINES if s not in text]
+    if missing:
+        fail(f"{path}: not on the shared Node Control look (missing {missing[0]!r}"
+             f"{f' and {len(missing) - 1} more' if len(missing) > 1 else ''})")
+
+
+def cosmetic_after(vt, prev):
+    return len(vt) == 4 and vt[:3] == prev[:3] and vt[3] > (prev[3] if len(prev) == 4 else 0)
+
+
+def cosmetic_next(vt, prev):
+    return len(vt) == 4 and vt[:3] == prev[:3] and vt[3] == (prev[3] + 1 if len(prev) == 4 else 1)
+
+
 def check_changelog(stem, name, version):
     path = f"changelogs/{stem}.md"
     if not os.path.isfile(path):
@@ -323,6 +349,11 @@ def main():
         if len(files) > 1:
             fail(f"more than one file for tool '{stem}': {', '.join(sorted(files))}")
 
+    for files in head_tools.values():
+        for path in files:
+            if parse_tool(path)[0] in SHARED_LOOK_TOOLS:
+                check_shared_look(path, show(args.head, path))
+
     readme = read("README.md") if os.path.isfile("README.md") else ""
     changed = [p for p in added + modified if os.path.isfile(p)]
 
@@ -340,8 +371,31 @@ def main():
                 check_channel_json(path)
 
     for path in modified:
-        if parse_tool(path):
-            fail(f"{path}: changed in place; every change needs a new version and file name")
+        t = parse_tool(path)
+        if not t:
+            continue
+        ext = t[2]
+        text = read(path)
+        old = show(base, path)
+        version = file_version(text, ext)
+        old_version = file_version(old, ext)
+        vt, suffix = split_version(version or "")
+        ovt, _ = split_version(old_version or "")
+        if not vt or not ovt or not cosmetic_next(vt, ovt):
+            fail(f"{path}: changed in place; only a cosmetic build may keep its file name, and its version "
+                 f"must be the next four-part number after {old_version}; a release needs a new file name")
+            continue
+        if suffix != ("pi02w" if t[0].endswith("_pi02w") else ""):
+            fail(f"{path}: version '{version}' has the wrong suffix for this tool")
+        try:
+            same = (py_shape(old) == py_shape(text)) if ext == "py" else (sh_shape(old) == sh_shape(text))
+        except SyntaxError:
+            same = False
+        if not same:
+            fail(f"{path}: changed in place but the code changed, not just text; make it a release with a new file name")
+            continue
+        check_changelog(t[0], path, version)
+        notes.append(f"{path}: cosmetic build {version} (file name kept, only strings changed)")
 
     for path in added:
         t = parse_tool(path)
@@ -358,7 +412,7 @@ def main():
         if vt is None:
             fail(f"{path}: version '{version}' is not numeric")
             continue
-        if vt != name_ver:
+        if vt != name_ver and not cosmetic_after(vt, name_ver):
             fail(f"{path}: file name says {'.'.join(map(str, name_ver))}, the file says {version}")
         want_suffix = "pi02w" if stem.endswith("_pi02w") else ""
         if suffix != want_suffix:
@@ -380,7 +434,7 @@ def main():
             if not prev:
                 fail(f"{path}: a cosmetic version (four parts) needs the previous file of the same tool")
                 continue
-            if vt[:3] != prev_ver[:3] or vt[3] != (prev_ver[3] + 1 if len(prev_ver) == 4 else 1):
+            if not cosmetic_next(vt, prev_ver):
                 fail(f"{path}: cosmetic {version} must follow {'.'.join(map(str, prev_ver))} "
                      f"as {'.'.join(map(str, prev_ver[:3]))}.{prev_ver[3] + 1 if len(prev_ver) == 4 else 1}")
             old = show(base, prev[0])

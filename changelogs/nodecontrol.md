@@ -1,6 +1,26 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_89_20261019.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_92_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.92 (2026-10-27)
+
+- **Fix: the M17 network config keeps the node's callsign.** The 9.3.96 build wrote KD8PGK into the M17 network's Callsign line for every node. It writes the node's own callsign again, as before. Only the splash shows KD8PGK.
+
+## 9.3.91 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK Node Controller" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
+
+## 9.3.90 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK Node Controller" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
+
+## 9.3.89.2 (2026-10-27)
+
+- **Header and page names.** The logo, the login card and the page title read "Node Controller". Cosmetic only; no change in behaviour.
+
+## 9.3.89.1 (2026-10-27)
+
+- **Readex Pro for the page text.** Text on the page is now set in Readex Pro, a Latin subset built into the page, so no internet is needed. Monospace is kept only for log, config and code boxes. Font and sizes only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 9.3.89 (2026-10-19)
 

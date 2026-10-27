@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersion = "0.3.4"
+val appVersion = "0.4.0"
 
 android {
     namespace = "io.github.kd8pgk.nodetalker"

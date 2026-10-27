@@ -219,6 +219,23 @@ class CheckTests(unittest.TestCase):
         self.r.build("foo", "1.0.0.2", T0 + DAY, self.prev, text="x")
         self.assertCheck(False, "must follow")
 
+    def in_place(self, ver, text="hello", code="1"):
+        self.r.write(self.prev, tool_text(ver, text, code))
+        self.r.write("changelogs/foo.md", f"# log\n\nCurrent file: `{self.prev}`. Newest first.\n\n## {ver} (2026-10-02)\n\n- x\n")
+        self.r.commit("in place", T0 + DAY)
+
+    def test_cosmetic_in_place(self):
+        self.in_place("1.0.0.1", text="hi there")
+        self.assertCheck(True, "file name kept")
+
+    def test_cosmetic_in_place_skips_number(self):
+        self.in_place("1.0.0.2", text="hi there")
+        self.assertCheck(False, "next four-part number")
+
+    def test_cosmetic_in_place_code_change(self):
+        self.in_place("1.0.0.1", code="2")
+        self.assertCheck(False, "make it a release")
+
     def test_not_newer(self):
         self.r.build("foo", "0.9.0", T0 + DAY, self.prev)
         self.assertCheck(False, "not newer")

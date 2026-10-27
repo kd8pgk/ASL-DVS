@@ -1,6 +1,14 @@
 # Node Talker Mobile changelog
 
-Current version: `0.3.4`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.4.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.4.0 (2026-10-27)
+
+- **The splash welcomes KD8PGK.** It opens with "Welcome to the KD8PGK Node
+  Talker Mobile" above the icon, and "Licensed under CC BY-NC 4.0" below it.
+  Tapping the license line opens the license page.
+- **The name stays on one line.** Every "Node Talker Mobile" in the app's
+  text is joined with non-breaking spaces, so it never wraps.
 
 ## 0.3.4 (2026-10-27)
 
