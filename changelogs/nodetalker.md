@@ -1,6 +1,22 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_41_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_42_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.42 (2026-10-27)
+
+Fixes from an audit of the page's JavaScript:
+
+- **A failed connect no longer wipes the Tune card.** When Connect on the
+  Tune card failed, the page went back to the Connect tab and reset the card:
+  the error disappeared at once and the node, talkgroup or reflector you had
+  typed or picked was cleared (with the DMR "add the network" question, its
+  explanation went too). The error and your choice now stay. A favorite that
+  fails to connect also stays selected instead of jumping back to the first.
+- **The microphone can't be left open after push-to-talk.** Letting go while
+  the microphone was still opening (most likely the first time, or while the
+  phone asks for the microphone), or pressing again straight away, could
+  leave the microphone on in the background until the next transmission. It
+  is now closed.
 
 ## 0.9.41 (2026-10-27)
 
