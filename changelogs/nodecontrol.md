@@ -1,6 +1,11 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_92_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_93_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.93 (2026-10-27)
+
+- **Config files are written the same safe way in every tool.** Every write goes through one shared function (`atomic_write`, kept identical in each tool and checked by the repo check): a private temp file with a random name in the same folder, fsync, then a rename. An edited file keeps its owner and mode. A symlink at the path is replaced, not followed.
+- **Asterisk files keep their owner and mode.** The phone setup's edits to `rpt.conf`, `pjsip.conf`, `extensions.conf`, `modules.conf` and `iax.conf` used to leave them mode 0600, owned by root. `USRP2M17.ini` is written the same safe way.
 
 ## 9.3.92 (2026-10-27)
 

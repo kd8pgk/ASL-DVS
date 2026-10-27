@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.43"
+VERSION = "0.9.44"
 DATE_STR = "2026-10-27"
 APP_NAME = "Node Talker"
 
@@ -115,6 +115,69 @@ else:
     sys.modules["__main__"] = main
     spec.loader.exec_module(main)
 '''
+
+def atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False):
+    import os
+    import secrets
+    import stat
+    path = os.fspath(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    folder = os.path.dirname(path) or "."
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        st = None
+    if skip_same and st is not None:
+        try:
+            with open(path, "rb") as fh:
+                if fh.read() == data:
+                    return False
+        except OSError:
+            pass
+    tmp = os.path.join(folder, ".%s.%s.tmp" % (os.path.basename(path), secrets.token_hex(6)))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        if st is not None and os.geteuid() == 0:
+            os.fchown(fd, st.st_uid, st.st_gid)
+        if mode is not None:
+            os.fchmod(fd, mode)
+        elif st is not None:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode))
+        else:
+            os.fchmod(fd, new_mode)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+    return True
+
 
 def service_content(run_path):
     return f"""[Unit]
@@ -319,34 +382,11 @@ def _remove_quiet(path):
 
 
 def _atomic_write(path, data, mode=0o644, like=None):
-    d = os.path.dirname(path) or "."
-    os.makedirs(d, exist_ok=True)
-    tmp = os.path.join(d, f".{os.path.basename(path)}.{secrets.token_hex(4)}.tmp")
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(data)
-        fh.flush()
-        os.fsync(fh.fileno())
-    try:
-        if like is not None:
-            os.chmod(tmp, like.st_mode & 0o7777)
-            try:
-                os.chown(tmp, like.st_uid, like.st_gid)
-            except OSError:
-                pass
-        else:
-            os.chmod(tmp, mode)
-        os.replace(tmp, path)
-    except Exception:
-        _remove_quiet(tmp)
-        raise
-    try:
-        fd = os.open(d, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    except OSError:
-        pass
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    if like is not None:
+        atomic_write(path, data, new_mode=like.st_mode & 0o7777)
+    else:
+        atomic_write(path, data, mode=mode)
 
 
 def save_config(cfg):

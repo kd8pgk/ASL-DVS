@@ -42,8 +42,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_91_20261027.py` | `sysmon_pi02w_v6_13_79_20261027.py` | `instmon_v2_78_3_20261027.py` |
-| `VERSION` | `6.13.91` | `6.13.79-pi02w` | `2.78.3` |
+| File name | `sysmon_v6_13_92_20261027.py` | `sysmon_pi02w_v6_13_80_20261027.py` | `instmon_v2_78_3_20261027.py` |
+| `VERSION` | `6.13.92` | `6.13.80-pi02w` | `2.78.3` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py` and change
@@ -133,7 +133,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_9_43_20261027.py --install
+  sudo python3 nodetalker_v0_9_44_20261027.py --install
   ```
 
 Then:
@@ -271,7 +271,7 @@ Talker for a node that runs the
   or use it.
 
 ```
-sudo python3 amp_nodetalker_v0_3_0_20261020.py --install
+sudo python3 amp_nodetalker_v0_3_1_20261027.py --install
 ```
 
 1. Open `http://<pi-address>:8993`. It moves you to `https://`.
@@ -483,15 +483,15 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_92_20261027.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_97_20261027.py` | Dashboard, Pi Zero 2 W (current) |
-| `sysmon_v6_13_91_20261027.py` | SysMon, full (current) |
-| `sysmon_pi02w_v6_13_79_20261027.py` | SysMon, Pi Zero 2 W (current) |
+| `nodecontrol_v9_3_93_20261027.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_98_20261027.py` | Dashboard, Pi Zero 2 W (current) |
+| `sysmon_v6_13_92_20261027.py` | SysMon, full (current) |
+| `sysmon_pi02w_v6_13_80_20261027.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_78_3_20261027.py` | common |
-| `wifimon_v5_39_3_20261027.py` | common |
-| `44helper_v0_0_218_20261027.py` | common |
-| `nodetalker_v0_9_43_20261027.py` | common |
-| `amp_nodetalker_v0_3_0_20261020.py` | AMP nodes only (stands alone) |
+| `wifimon_v5_39_4_20261027.py` | common |
+| `44helper_v0_0_219_20261027.py` | common |
+| `nodetalker_v0_9_44_20261027.py` | common |
+| `amp_nodetalker_v0_3_1_20261027.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_7_0_20261020.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |

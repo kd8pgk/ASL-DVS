@@ -322,6 +322,119 @@ class CheckTests(unittest.TestCase):
         self.r.commit("a", T0 + DAY)
         self.assertCheck(False, "must be X.Y.Z")
 
+    def shared(self, tool_def):
+        self.r.write("shared/confio.py", SHARED_REF)
+        name = self.r.build("foo", "1.0.1", None, self.prev)
+        self.r.write(name, tool_text("1.0.1") + tool_def)
+        self.r.commit("shared", T0 + DAY)
+
+    def test_shared_copy_matches(self):
+        self.shared("\n\ndef helper():\n    return 1\n")
+        self.assertCheck(True)
+
+    def test_shared_copy_drift(self):
+        self.shared("\n\ndef helper():\n    return 2\n")
+        self.assertCheck(False, "differs from shared/confio.py")
+
+    def test_shared_copy_missing(self):
+        self.shared("")
+        self.assertCheck(False, "must carry helper")
+
+
+SHARED_REF = 'USED_BY = {"helper": ("foo",)}\n\n\ndef helper():\n    return 1\n'
+
+
+def load_confio():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("confio", os.path.join(HERE, "..", "shared", "confio.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class AtomicWriteTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+        self.path = os.path.join(self.dir, "x.conf")
+        self.aw = load_confio().atomic_write
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def mode(self):
+        return os.stat(self.path).st_mode & 0o7777
+
+    def leftovers(self):
+        return [f for f in os.listdir(self.dir) if f.endswith(".tmp")]
+
+    def read(self):
+        with open(self.path, "rb") as f:
+            return f.read()
+
+    def test_new_file_private(self):
+        self.assertTrue(self.aw(self.path, "a=1\n"))
+        self.assertEqual(self.read(), b"a=1\n")
+        self.assertEqual(self.mode(), 0o600)
+        self.assertEqual(self.leftovers(), [])
+
+    def test_new_file_mode(self):
+        self.aw(self.path, b"a", new_mode=0o644)
+        self.assertEqual(self.mode(), 0o644)
+
+    def test_keeps_existing_mode(self):
+        self.aw(self.path, "a", new_mode=0o640)
+        os.chmod(self.path, 0o640)
+        self.aw(self.path, "b")
+        self.assertEqual(self.read(), b"b")
+        self.assertEqual(self.mode(), 0o640)
+
+    def test_mode_forces(self):
+        self.aw(self.path, "a", new_mode=0o644)
+        self.aw(self.path, "b", mode=0o600)
+        self.assertEqual(self.mode(), 0o600)
+
+    def test_skip_same(self):
+        self.aw(self.path, "a")
+        os.utime(self.path, (1000, 1000))
+        self.assertFalse(self.aw(self.path, "a", skip_same=True))
+        self.assertEqual(os.stat(self.path).st_mtime, 1000)
+        self.assertTrue(self.aw(self.path, "b", skip_same=True))
+        self.assertEqual(self.read(), b"b")
+
+    def test_symlink_not_followed(self):
+        target = os.path.join(self.dir, "target")
+        with open(target, "w") as f:
+            f.write("keep")
+        os.symlink(target, self.path)
+        self.aw(self.path, "new")
+        self.assertFalse(os.path.islink(self.path))
+        self.assertEqual(self.read(), b"new")
+        with open(target) as f:
+            self.assertEqual(f.read(), "keep")
+
+    def test_bad_data_leaves_file(self):
+        self.aw(self.path, "old")
+        with self.assertRaises(TypeError):
+            self.aw(self.path, 12345)
+        self.assertEqual(self.read(), b"old")
+        self.assertEqual(self.leftovers(), [])
+
+    def test_failed_replace_leaves_file(self):
+        self.aw(self.path, "old")
+        real = os.replace
+
+        def boom(*a, **k):
+            raise OSError("disk gone")
+        os.replace = boom
+        try:
+            with self.assertRaises(OSError):
+                self.aw(self.path, "new")
+        finally:
+            os.replace = real
+        self.assertEqual(self.read(), b"old")
+        self.assertEqual(self.leftovers(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

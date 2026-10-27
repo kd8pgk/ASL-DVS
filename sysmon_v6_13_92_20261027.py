@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.91"
+VERSION      = "6.13.92"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -123,6 +123,69 @@ _log_buf: deque = deque(maxlen=LOG_MAXLEN)
 _log_idx: int   = 0
 _log_lock       = threading.Lock()
 
+def atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False):
+    import os
+    import secrets
+    import stat
+    path = os.fspath(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    folder = os.path.dirname(path) or "."
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        st = None
+    if skip_same and st is not None:
+        try:
+            with open(path, "rb") as fh:
+                if fh.read() == data:
+                    return False
+        except OSError:
+            pass
+    tmp = os.path.join(folder, ".%s.%s.tmp" % (os.path.basename(path), secrets.token_hex(6)))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        if st is not None and os.geteuid() == 0:
+            os.fchown(fd, st.st_uid, st.st_gid)
+        if mode is not None:
+            os.fchmod(fd, mode)
+        elif st is not None:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode))
+        else:
+            os.fchmod(fd, new_mode)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+    return True
+
+
 def _log(msg: str, stderr: bool = False) -> None:
     global _log_idx
     ts   = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -175,29 +238,7 @@ def _process_umask() -> int:
     return 0o022
 
 def _atomic_write(path: Path, content: str) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    try:
-        st = os.stat(path)
-        mode, owner = st.st_mode & 0o7777, (st.st_uid, st.st_gid)
-    except FileNotFoundError:
-        mode, owner = 0o666 & ~_process_umask(), None
-    try:
-        tmp.unlink(missing_ok=True)
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(content)
-            fh.flush()
-            if owner is not None and os.geteuid() == 0:
-                os.fchown(fh.fileno(), *owner)
-            os.fchmod(fh.fileno(), mode)
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        try:
-            tmp.unlink(missing_ok=True)
-        except OSError as e:
-            log.debug("_atomic_write cleanup: %s", e)
-        raise
+    atomic_write(path, content, new_mode=0o644)
 
 _DASH_UNITS = ("nodecontrol.service", "asl_dvs_dashboard.service")
 

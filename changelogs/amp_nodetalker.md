@@ -1,6 +1,10 @@
 # Node Talker for AMP changelog
 
-Current file: `amp_nodetalker_v0_3_0_20261020.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+Current file: `amp_nodetalker_v0_3_1_20261027.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+
+## 0.3.1 (2026-10-27)
+
+- **Config files are written the same safe way in every tool.** Every write goes through one shared function (`atomic_write`, kept identical in each tool and checked by the repo check): a private temp file with a random name in the same folder, fsync, then a rename. An edited file keeps its owner and mode. A symlink at the path is replaced, not followed.
 
 ## 0.3.0 (2026-10-20)
 

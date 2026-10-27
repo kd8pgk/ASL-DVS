@@ -3,7 +3,6 @@
 import argparse
 import codecs
 import contextlib
-import errno
 import fcntl
 import functools
 import gzip
@@ -39,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.92"
+VERSION      = "9.3.93"
 BUILD_DATE   = "2026-10-19"
 
 ASL_NODE        = "652702"
@@ -119,6 +118,69 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 """
+
+def atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False):
+    import os
+    import secrets
+    import stat
+    path = os.fspath(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    folder = os.path.dirname(path) or "."
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        st = None
+    if skip_same and st is not None:
+        try:
+            with open(path, "rb") as fh:
+                if fh.read() == data:
+                    return False
+        except OSError:
+            pass
+    tmp = os.path.join(folder, ".%s.%s.tmp" % (os.path.basename(path), secrets.token_hex(6)))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        if st is not None and os.geteuid() == 0:
+            os.fchown(fd, st.st_uid, st.st_gid)
+        if mode is not None:
+            os.fchmod(fd, mode)
+        elif st is not None:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode))
+        else:
+            os.fchmod(fd, new_mode)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+    return True
+
 
 def _sd_notify(state: str) -> None:
     addr = os.environ.get("NOTIFY_SOCKET")
@@ -853,36 +915,7 @@ def _server_key(name: str) -> str:
     return name.upper().replace(" ", "_").replace("+", "PLUS")
 
 def _atomic_write(path: Path, data: str) -> None:
-    tmp = path.with_name(path.name + ".tmp")
-    open_flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
-    try:
-        fd = os.open(str(tmp), open_flags, 0o600)
-    except OSError as e:
-        if e.errno != errno.ELOOP:
-            raise
-        log.warning("_atomic_write: %s is a symlink — removing and retrying", tmp)
-        tmp.unlink(missing_ok=True)
-        fd = os.open(str(tmp), open_flags, 0o600)
-    try:
-        with os.fdopen(fd, "w") as f:
-            f.write(data)
-            f.flush()
-            os.fsync(f.fileno())
-    except Exception:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-        raise
-    os.replace(tmp, path)
-    try:
-        dir_fd = os.open(str(path.parent), os.O_RDONLY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
-    except Exception as exc:
-        log.warning("_atomic_write: directory fsync failed for %s: %s", path.parent, exc)
+    atomic_write(path, data)
 
 PHONE_CONF       = "/etc/asl_dvs/phone.json"
 PHONE_MAX_NETS   = 6
@@ -7005,12 +7038,7 @@ def _write_m17_ini(content: str) -> Tuple[bool, str]:
     try:
         p = Path(M17_INI_PATH)
         p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + ".tmp")
-        with open(tmp, "w") as f:
-            f.write(content)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, p)
+        atomic_write(p, content, new_mode=0o644)
         return True, ""
     except Exception as e:
         return False, str(e)

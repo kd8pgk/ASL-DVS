@@ -1,6 +1,12 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_218_20261027.py`. Newest entries first.
+Current file: `44helper_v0_0_219_20261027.py`. Newest entries first.
+
+## 0.0.219 (2026-10-27)
+
+- **Install and update steps run only their own command.** The server builds each step's command from its own step table and refuses one that was changed on the page; run a changed command from the Custom box. Typed values (callsign, DMR ID, password, user name, port, branch) are checked before they go into a command, so a quote or a ; can no longer change it. The step command boxes are read-only.
+- **44 Helper's own config is written atomically,** instead of being rewritten in place.
+- **Config files are written the same safe way in every tool.** Every write goes through one shared function (`atomic_write`, kept identical in each tool and checked by the repo check): a private temp file with a random name in the same folder, fsync, then a rename. An edited file keeps its owner and mode. A symlink at the path is replaced, not followed.
 
 ## 0.0.218 (2026-10-27)
 
