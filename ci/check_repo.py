@@ -226,6 +226,10 @@ def cosmetic_after(vt, prev):
     return len(vt) == 4 and vt[:3] == prev[:3] and vt[3] > (prev[3] if len(prev) == 4 else 0)
 
 
+def cosmetic_next(vt, prev):
+    return len(vt) == 4 and vt[:3] == prev[:3] and vt[3] == (prev[3] + 1 if len(prev) == 4 else 1)
+
+
 def check_changelog(stem, name, version):
     path = f"changelogs/{stem}.md"
     if not os.path.isfile(path):
@@ -377,7 +381,7 @@ def main():
         old_version = file_version(old, ext)
         vt, suffix = split_version(version or "")
         ovt, _ = split_version(old_version or "")
-        if not vt or not ovt or not cosmetic_after(vt, ovt):
+        if not vt or not ovt or not cosmetic_next(vt, ovt):
             fail(f"{path}: changed in place; only a cosmetic build may keep its file name, and its version "
                  f"must be the next four-part number after {old_version}; a release needs a new file name")
             continue
@@ -430,7 +434,7 @@ def main():
             if not prev:
                 fail(f"{path}: a cosmetic version (four parts) needs the previous file of the same tool")
                 continue
-            if not cosmetic_after(vt, prev_ver):
+            if not cosmetic_next(vt, prev_ver):
                 fail(f"{path}: cosmetic {version} must follow {'.'.join(map(str, prev_ver))} "
                      f"as {'.'.join(map(str, prev_ver[:3]))}.{prev_ver[3] + 1 if len(prev_ver) == 4 else 1}")
             old = show(base, prev[0])
