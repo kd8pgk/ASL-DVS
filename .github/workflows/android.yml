@@ -36,22 +36,22 @@ jobs:
           gradle-version: "8.14.3"
       - name: Build and lint
         working-directory: android
-        run: gradle --no-daemon assembleDebug lintDebug
+        run: gradle --no-daemon assembleRelease lintRelease
       - name: Name the APK
         id: apk
         run: |
           v=$(sed -n 's/^val appVersion = "\(.*\)"/\1/p' android/app/build.gradle.kts)
           echo "version=$v" >> "$GITHUB_OUTPUT"
-          cp android/app/build/outputs/apk/debug/app-debug.apk "NodeTalker-$v-debug.apk"
+          cp android/app/build/outputs/apk/release/app-release.apk "NodeTalker-$v.apk"
       - uses: actions/upload-artifact@v4
         with:
-          name: NodeTalker-${{ steps.apk.outputs.version }}-debug
-          path: NodeTalker-${{ steps.apk.outputs.version }}-debug.apk
+          name: NodeTalker-${{ steps.apk.outputs.version }}
+          path: NodeTalker-${{ steps.apk.outputs.version }}.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: lint-report
-          path: android/app/build/reports/lint-results-debug.html
+          path: android/app/build/reports/lint-results-release.html
       - name: Publish the test build
         if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         env:
@@ -60,9 +60,9 @@ jobs:
         run: |
           tag="android-v$V"
           if gh release view "$tag" > /dev/null 2>&1; then
-            gh release upload "$tag" "NodeTalker-$V-debug.apk" --clobber
+            gh release upload "$tag" "NodeTalker-$V.apk" --clobber
           else
-            gh release create "$tag" "NodeTalker-$V-debug.apk" --prerelease --target "$GITHUB_SHA" \
+            gh release create "$tag" "NodeTalker-$V.apk" --prerelease --target "$GITHUB_SHA" \
               --title "Node Talker Mobile $V (test build)" \
-              --notes "Test build signed with a debug key, for sideloading. See changelogs/nodetalker_android.md."
+              --notes "Test build for sideloading, signed with the repository's shared key (android/app/debug.keystore). See changelogs/nodetalker_android.md."
           fi
