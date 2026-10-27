@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.41"
+VERSION = "0.9.42"
 DATE_STR = "2026-10-27"
 APP_NAME = "Node Talker"
 
@@ -8196,8 +8196,10 @@ function feedMic(f32) {
   r.pos = pos - keepFrom;
 }
 
+let micSeq = 0;
 async function startMic(sink) {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser blocks the microphone here (use the https:// page).');
+  const mine = ++micSeq, live = () => mine === micSeq && (talking || testing);
   if (!capCtx) capCtx = newAudioCtx();
   await capCtx.resume();
   const base = {echoCancellation: !!mic.ec, noiseSuppression: !!mic.ns, autoGainControl: !!mic.agc, channelCount: 1};
@@ -8207,7 +8209,14 @@ async function startMic(sink) {
     if (!hs.mic || !/Overconstrained|NotFound/.test(e.name)) throw e;
     stream = await navigator.mediaDevices.getUserMedia({audio: base});
   }
-  if (!talking && !testing) { stream.getTracks().forEach((t) => t.stop()); return; }
+  if (!live()) { stream.getTracks().forEach((t) => t.stop()); return; }
+  const worklet = !!(capCtx.audioWorklet && window.AudioWorkletNode);
+  if (worklet && !workletReady) {
+    const url = URL.createObjectURL(new Blob([WORKLET_SRC], {type: 'application/javascript'}));
+    await capCtx.audioWorklet.addModule(url);
+    workletReady = true;
+    if (!live()) { stream.getTracks().forEach((t) => t.stop()); return; }
+  }
   micStream = stream;
   frameSink = sink;
   rs = makeResampler(capCtx.sampleRate);
@@ -8215,12 +8224,7 @@ async function startMic(sink) {
   capSink = capCtx.createGain();
   capSink.gain.value = 0;
   capSink.connect(capCtx.destination);
-  if (capCtx.audioWorklet && window.AudioWorkletNode) {
-    if (!workletReady) {
-      const url = URL.createObjectURL(new Blob([WORKLET_SRC], {type: 'application/javascript'}));
-      await capCtx.audioWorklet.addModule(url);
-      workletReady = true;
-    }
+  if (worklet) {
     capNode = new AudioWorkletNode(capCtx, 'nl-tap');
     capNode.port.onmessage = (e) => feedMic(e.data);
   } else {
@@ -8444,6 +8448,7 @@ async function micTest() {
 }
 
 function stopMic() {
+  micSeq++;
   try { if (capSrc) capSrc.disconnect(); } catch (e) {}
   try { if (capNode) capNode.disconnect(); } catch (e) {}
   try { if (capSink) capSink.disconnect(); } catch (e) {}
@@ -8733,7 +8738,7 @@ async function favConnect() {
   setTimeout(pollStatus, 1000);
 }
 
-let connMsgTimer = null, connBusy = false;
+let connMsgTimer = null, connBusy = false, connBack = false;
 async function connectFlow(body, listenText, connectText, url, box) {
   url = url || '/api/connect';
   box = box || {msg: 'c-msg', btn: 'c-connect', ask: 'c-net'};
@@ -8753,7 +8758,7 @@ async function connectFlow(body, listenText, connectText, url, box) {
     connMsgTimer = setTimeout(() => { if ($('ptt-msg').textContent === shown) note('ptt-msg', '', ''); }, 8000);
   } else {
     if ($('ptt-msg').textContent === listenText) note('ptt-msg', '', '');
-    if (tab === 'listen') showTab('connect');
+    if (tab === 'listen') { connBack = true; showTab('connect'); connBack = false; }
     if (d.need_net) { netAsk = {url: url, body: body, box: box, label: listenText}; $(box.ask).classList.remove('hidden'); }
   }
   pollStatus();
@@ -8966,6 +8971,7 @@ function tnSetSel(s) {
 }
 
 function connectTabEnter() {
+  if (connBack) { if (!daPoll) daStatus(); return; }
   if (favs.length) {
     const i = tuneDone && favSel !== null && favSel < favs.length ? favSel : 0;
     $('c-fav').value = String(i);
