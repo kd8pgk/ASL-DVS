@@ -1,6 +1,7 @@
 USED_BY = {
     "atomic_write": ("nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "nodetalker",
                      "amp_nodetalker", "44helper", "wifimon"),
+    "http_get": ("44helper",),
 }
 
 
@@ -65,3 +66,15 @@ def atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False):
     except OSError:
         pass
     return True
+
+
+def http_get(url, max_bytes, timeout=20):
+    import urllib.request
+    if not url.startswith("https://"):
+        raise ValueError("only https addresses are fetched")
+    req = urllib.request.Request(url, headers={"User-Agent": "asl-dvs"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("the download is larger than %d bytes" % max_bytes)
+    return data

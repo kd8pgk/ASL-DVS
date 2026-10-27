@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_219_20261027.py`. Newest entries first.
+Current file: `44helper_v0_0_220_20261027.py`. Newest entries first.
+
+## 0.0.220 (2026-10-27)
+
+- **Full config replacement card (Config tab).** For a Pi Zero 2 W: **Get bundle from GitHub** downloads the standard config from `configs/pi02w/` in the repo (every file is checked against the list's sha256 and size before anything is saved; one bad file saves nothing). You fill in the callsign, ASL node number, DMR ID and NXDN ID; **Preview** shows which files would change and writes nothing; **Replace config** saves an automatic restore point of the current files, then writes the bundle's files with the same safe write the restore uses, and offers the Restart buttons. Config only: install ASL3, DVSwitch and USRP2M17 from their tabs and the split tunnel from the Split Tunnel tab first.
+- **Systems that are not installed are skipped.** The card asks the same detection the Overview tab uses (ASL3, DVSwitch, USRP2M17) and leaves a system alone when it is not installed.
+- **Passwords and keys are not in the bundle.** Each one keeps the value the node has now (matched by section and line); a value the node does not have yet is written empty and listed so you can set it by hand. The Phone tab's blocks in rpt.conf are kept as they are.
+- **Version name is checked.** The branch or tag to fetch may only be letters, digits, `.`, `_`, `-` and `/`, never `..`.
+- **Download helper in the shared file.** `http_get` (https only, size limit, timeout) lives in `shared/confio.py` and is checked for 44helper like `atomic_write`.
 
 ## 0.0.219 (2026-10-27)
 
