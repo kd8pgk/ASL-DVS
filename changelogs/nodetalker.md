@@ -1,6 +1,15 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_42_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_43_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.43 (2026-10-27)
+
+Fixes for the listen graphs:
+
+- **The spectrum graph starts again when the page comes back.** When the
+  browser was minimized or the tab was hidden, the spectrum stopped drawing
+  while the sound kept playing, and it stayed frozen until you relinked. The
+  page now restarts the graph whenever it becomes visible again.
 
 ## 0.9.42 (2026-10-27)
 
