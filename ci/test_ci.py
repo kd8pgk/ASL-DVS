@@ -436,5 +436,105 @@ class AtomicWriteTests(unittest.TestCase):
         self.assertEqual(self.leftovers(), [])
 
 
+SECRETS = ["abc123", "mypass", "amipass", "sippass", "elpass", "urlpass", "commented", "bmpass", "WGPRIV",
+           "WGPSK", "allpass", "jsonpass", "wifipass", "varpass", "eyJTOKEN", "SHADOWLINE", "KEYFILE"]
+
+
+class ConfgetterTests(unittest.TestCase):
+    def setUp(self):
+        import glob
+        import hashlib
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.join(self.tmp.name, "node")
+        self.out = os.path.join(self.tmp.name, "snaps")
+        self.script = sorted(glob.glob(os.path.join(HERE, "..", "confgetter_v*.sh")))[-1]
+        stock = "[general]\nfoo=1\n"
+        files = {
+            "etc/asterisk/iax.conf": "[general]\nsecret = abc123\nregister => 1999:mypass@register.allstarlink.org\n",
+            "etc/asterisk/manager.conf": "[admin]\nsecret=amipass\n",
+            "etc/asterisk/dup.conf": "[x]\nsecret = abc123\n",
+            "etc/asterisk/pjsip.conf": "[u]\npassword=sippass\n",
+            "etc/asterisk/echolink.conf": "[el0]\npwd = elpass\ncall = KD8PGK-L\n",
+            "etc/asterisk/rpt.conf": "[1999]\nstatpost_url=http://s/?node=1999&pass=urlpass\n;secret = commented\n",
+            "etc/asterisk/stock.conf": stock,
+            "etc/asterisk/stock2.conf": stock + "bar=2\n",
+            "opt/MMDVM_Bridge/MMDVM_Bridge.ini": "[DMR Network]\nPassword=bmpass\nCallsign=KD8PGK\n",
+            "etc/wireguard/wg0.conf": "[Interface]\nPrivateKey = WGPRIV\n[Peer]\nPublicKey = WGPUB\nPresharedKey = WGPSK\n",
+            "etc/allmon3/allmon3.ini": "[1999]\nuser=admin\npass=allpass\n",
+            "etc/asl_dvs/phone.json": json.dumps({"sip": {"secret": "jsonpass", "user": "u"}}),
+            "etc/NetworkManager/system-connections/home.nmconnection": "[wifi-security]\npsk=wifipass\n",
+            "var/lib/dvswitch/dvs/var.txt": "bm_password=varpass\ncall_sign=KD8PGK\n",
+            "etc/dvswitch/auth.key": "KEYFILE\n",
+            "etc/dvswitch/big.ini": "x" * 250000,
+            "etc/shadow": "root:SHADOWLINE:1:0\n",
+            "etc/systemd/system/cloudflared.service": "[Service]\nExecStart=/usr/bin/cloudflared --token eyJTOKEN run\n",
+            "var/lib/dpkg/status": ("Package: asl3\nConffiles:\n /etc/asterisk/stock.conf %s\n /etc/asterisk/stock2.conf %s\n\n"
+                                    % (hashlib.md5(stock.encode()).hexdigest(), hashlib.md5(stock.encode()).hexdigest())),
+        }
+        for rel, text in files.items():
+            p = os.path.join(self.root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(text)
+        with open(os.path.join(self.root, "etc/dvswitch/blob.ini"), "wb") as f:
+            f.write(b"abc\0def")
+        os.symlink(os.path.join(self.root, "etc/shadow"), os.path.join(self.root, "etc/dvswitch/evil.ini"))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_it(self, *args):
+        env = dict(os.environ, CONFGETTER_ROOT=self.root)
+        r = subprocess.run(["bash", self.script, "--out", self.out, *args], capture_output=True, text=True, env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        snaps = sorted(f for f in os.listdir(self.out) if f.startswith("confgetter_") and f.endswith(".md"))
+        with open(os.path.join(self.out, snaps[-1])) as f:
+            return f.read(), snaps
+
+    def test_secrets_redacted(self):
+        text, _ = self.run_it()
+        for s in SECRETS:
+            self.assertNotIn(s, text, s)
+        self.assertIn("WGPUB", text)
+        self.assertIn("KD8PGK", text)
+        self.assertIn("<redacted:", text)
+
+    def test_redaction_count_and_same_tag(self):
+        import re
+        text, _ = self.run_it()
+        body = text.split("## Manifest", 1)[1]
+        header = int(re.search(r"Secrets: (\d+) values replaced", text).group(1))
+        self.assertEqual(header, len(re.findall(r"<redacted:[0-9a-f]{8}>", body)))
+        iax = re.search(r"### /etc/asterisk/iax.conf\n\n```\n\[general\]\nsecret = (<redacted:[0-9a-f]{8}>)", text).group(1)
+        dup = re.search(r"### /etc/asterisk/dup.conf\n\n```\n\[x\]\nsecret = (<redacted:[0-9a-f]{8}>)", text).group(1)
+        self.assertEqual(iax, dup)
+
+    def test_files_and_skips(self):
+        text, _ = self.run_it()
+        self.assertIn("### /etc/asterisk/rpt.conf", text)
+        self.assertIn("### /etc/asterisk/stock2.conf", text)
+        self.assertNotIn("### /etc/asterisk/stock.conf", text)
+        self.assertIn("| /etc/asterisk/stock.conf | same as the package default |", text)
+        self.assertIn("| /etc/dvswitch/auth.key | secret or backup file, never copied |", text)
+        self.assertIn("| /etc/dvswitch/blob.ini | binary file |", text)
+        self.assertIn("| /etc/dvswitch/evil.ini | points outside the config folders, never copied |", text)
+        self.assertIn("trimmed to 200000 bytes", text)
+        self.assertIn("unit file /etc/systemd/system/cloudflared.service", text)
+
+    def test_private_and_retention(self):
+        os.makedirs(self.out)
+        for i in range(3):
+            p = os.path.join(self.out, "confgetter_old_2026010%d-000000.md" % i)
+            with open(p, "w") as f:
+                f.write("old")
+            os.utime(p, (1000 + i, 1000 + i))
+        _, snaps = self.run_it("--keep", "2")
+        self.assertEqual(len(snaps), 2)
+        self.assertIn("confgetter_old_20260102-000000.md", snaps)
+        newest = [s for s in snaps if "old" not in s][0]
+        self.assertEqual(os.stat(os.path.join(self.out, newest)).st_mode & 0o777, 0o600)
+        self.assertEqual([f for f in os.listdir(self.out) if f.endswith(".tmp")], [])
+
+
 if __name__ == "__main__":
     unittest.main()

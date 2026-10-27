@@ -37,8 +37,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.78.3"
-DATE_STR ="2026-10-26"
+VERSION ="2.79.0"
+DATE_STR ="2026-10-27"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -135,6 +135,9 @@ LIBRARY_DIR =os .environ .get ("INSTMON_LIBRARY_DIR","/etc/asl_dvs/instmon_libra
 CONFIG_DIR =os .environ .get ("INSTMON_CONFIG_DIR","/etc/asl_dvs")
 DOCS_DIR = os.path.join(LIBRARY_DIR, "docs")
 APP_DIR = os.path.join(LIBRARY_DIR, "apps")
+SNAP_DIR = os.path.join(LIBRARY_DIR, "snapshots")
+CONFGETTER_BIN = "/usr/local/bin/confgetter.sh"
+CONFGETTER_KEEP = 10
 CONFIG_NAME =os .environ .get ("INSTMON_CONFIG_NAME","asl_dvs.conf")
 NODELISTEN_CONFIGS =(("nodetalker_favorites*.conf","nodetalker_favorites.conf"),("nodelisten_favorites*.conf","nodetalker_favorites.conf"),
 ("nodetalker*.conf","nodetalker.conf"),("nodelisten*.conf","nodetalker.conf"))
@@ -2815,6 +2818,7 @@ LIB_SUBDIRS ={
 "instmon":os .path .join (LIBRARY_DIR ,"instmon"),
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
 "config":os .path .join (LIBRARY_DIR ,"config"),
+"confgetter":os .path .join (LIBRARY_DIR ,"confgetter"),
 }
 
 ALLOWED_EXT ={
@@ -2827,6 +2831,7 @@ ALLOWED_EXT ={
 "instmon":(".py",),
 "scripts":(".sh",),
 "config":(".conf",),
+"confgetter":(".sh",),
 }
 
 COMPONENTS =[
@@ -2904,6 +2909,7 @@ HOME_SCAN_PATTERN_MAP =[
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodetalker*.conf","nodelisten*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
+("confgetter",["confgetter*.sh"]),
 ]
 
 _NAME_GLOB_ALIASES ={
@@ -4260,6 +4266,9 @@ def scan_library ():
                     entry ["installed"]=(file_sha256 (full )==file_sha256 (resolve_installed_target (comp )))
                 else :
                     entry ["installed"]=False 
+            elif cat =="confgetter":
+                entry ["version"]=read_installed_version (full )or "?"
+                entry ["installed"]=(file_sha256 (full )==file_sha256 (CONFGETTER_BIN ))
             elif cat =="config":
                 live_cfg =os .path .join (CONFIG_DIR ,config_dest_name (name ))
                 entry ["installed"]=(file_sha256 (full )==file_sha256 (live_cfg ))
@@ -4268,7 +4277,7 @@ def scan_library ():
                 entry ["installed"]=None 
                 entry ["version"]="script"
             out [cat ].append (entry )
-        if cat in INSTALLABLE_CATEGORIES :
+        if cat in INSTALLABLE_CATEGORIES or cat =="confgetter":
             out [cat ].sort (key =lambda e :_version_sort_key (e ["version"]),reverse =True )
         else :
             out [cat ].sort (key =lambda e :e ["mtime_epoch"],reverse =True )
@@ -4295,6 +4304,7 @@ def build_status ():
     "components":components ,
     "library":scan_library (),
     "app":app_status (),
+    "confgetter":confgetter_status (),
     "config":{
     "name":CONFIG_NAME ,
     "installed":os .path .isfile (os .path .join (CONFIG_DIR ,CONFIG_NAME )),
@@ -6453,6 +6463,154 @@ def _fu_status_payload():
     return {"quiet": quiet_status(), "full_update": snap, "build": build_choice_status(),
             "channel": channel_status()}
 
+_CG_SNAP_RE =re .compile (r'^confgetter_[A-Za-z0-9_.-]+_\d{8}-\d{6}\.md$')
+_cg_lock =threading .Lock ()
+_cg_state ={"running":False ,"started_at":None }
+
+def cg_snapshots ():
+    try :
+        names =os .listdir (SNAP_DIR )
+    except OSError :
+        return []
+    out =[]
+    for name in names :
+        full =cg_snap_path (name )
+        if full is None :
+            continue
+        try :
+            st =os .stat (full )
+        except OSError :
+            continue
+        out .append ({
+        "name":name ,
+        "size":st .st_size ,
+        "mtime":datetime .fromtimestamp (st .st_mtime ).strftime ("%Y-%m-%d %H:%M"),
+        "mtime_epoch":st .st_mtime ,
+        })
+    out .sort (key =lambda e :e ["mtime_epoch"],reverse =True )
+    return out
+
+def cg_snap_path (name ):
+    if not isinstance (name ,str )or not _CG_SNAP_RE .match (name ):
+        return None
+    full =safe_join (SNAP_DIR ,name )
+    if full is None or os .path .islink (os .path .join (SNAP_DIR ,name ))or not os .path .isfile (full ):
+        return None
+    return full
+
+def confgetter_status ():
+    with _cg_lock :
+        state =dict (_cg_state )
+    installed =os .path .isfile (CONFGETTER_BIN )
+    state ["installed"]=installed
+    state ["version"]=(read_installed_version (CONFGETTER_BIN )or "?")if installed else None
+    state ["snapshots"]=cg_snapshots ()
+    return state
+
+def cg_install (name ):
+    src =safe_join (LIB_SUBDIRS ["confgetter"],name or "")
+    if src is None or not os .path .isfile (src ):
+        return 404 ,{"error":f"Not in the Config getter library: {name }"}
+    try :
+        with open (src ,"rb")as fh :
+            data =fh .read ()
+    except OSError as exc :
+        return 500 ,{"error":f"Could not read {name }: {exc }"}
+    if not data .startswith (b"#!")or b"bash"not in data .split (b"\n",1 )[0 ]:
+        return 400 ,{"error":f"{name } does not start with a bash #! line"}
+    err =check_bash_syntax (src )
+    if err :
+        return 400 ,{"error":f"{name } failed the syntax check: {err }"}
+    folder =os .path .dirname (CONFGETTER_BIN )
+    try :
+        os .makedirs (folder ,exist_ok =True )
+        fd ,tmp =tempfile .mkstemp (prefix =".confgetter.",suffix =".tmp",dir =folder )
+        try :
+            with os .fdopen (fd ,"wb")as fh :
+                fh .write (data )
+                fh .flush ()
+                os .fchmod (fh .fileno (),0o755 )
+                os .fsync (fh .fileno ())
+            os .replace (tmp ,CONFGETTER_BIN )
+        except BaseException :
+            try :
+                os .unlink (tmp )
+            except OSError :
+                pass
+            raise
+    except OSError as exc :
+        return 500 ,{"error":f"Could not install {name }: {exc }"}
+    with _file_meta_cache_lock :
+        _file_meta_cache .clear ()
+    ver =read_installed_version (CONFGETTER_BIN )or "?"
+    log_event (f"Config getter: installed {name } (v{ver }) as {CONFGETTER_BIN }","ok")
+    return 200 ,{"message":f"Installed {name } (v{ver }). Press Run to take a snapshot.","level":"ok"}
+
+def cg_uninstall ():
+    with _cg_lock :
+        if _cg_state ["running"]:
+            return 409 ,{"error":"Config getter is running -- wait for it to finish."}
+    if not os .path .lexists (CONFGETTER_BIN ):
+        return 404 ,{"error":"Config getter is not installed."}
+    try :
+        os .remove (CONFGETTER_BIN )
+    except OSError as exc :
+        return 500 ,{"error":f"Could not remove {CONFGETTER_BIN }: {exc }"}
+    log_event (f"Config getter: removed {CONFGETTER_BIN } (snapshots and library files kept)","info")
+    return 200 ,{"message":"Config getter uninstalled. Its snapshots and library files are kept.","level":"info"}
+
+def cg_delete (name ):
+    full =cg_snap_path (name )
+    if full is None :
+        return 404 ,{"error":"No such snapshot"}
+    try :
+        os .remove (full )
+    except OSError as exc :
+        return 500 ,{"error":f"Could not delete {name }: {exc }"}
+    log_event (f"Config getter: deleted snapshot {name }","info")
+    return 200 ,{"message":f"Deleted {name }.","level":"info"}
+
+def _cg_run_bg ():
+    log_event ("Config getter: taking a config snapshot","info")
+    try :
+        proc =subprocess .Popen (
+        ["bash",CONFGETTER_BIN ,"--out",SNAP_DIR ,"--keep",str (CONFGETTER_KEEP )],
+        stdout =subprocess .PIPE ,stderr =subprocess .STDOUT ,
+        text =True ,bufsize =1 ,
+        )
+        for line in proc .stdout :
+            log_event (line .rstrip ("\n"),"info")
+        proc .wait (timeout =SCRIPT_TIMEOUT_SEC )
+        if proc .returncode ==0 :
+            log_event ("Config getter: snapshot done -- download it from the Config getter card","ok")
+        else :
+            log_event (f"Config getter: exited {proc .returncode }","err")
+    except subprocess .TimeoutExpired :
+        proc .kill ()
+        log_event (f"Config getter: timed out after {SCRIPT_TIMEOUT_SEC }s","err")
+    except Exception as exc :
+        log_event (f"Config getter failed: {exc }","err")
+    finally :
+        with _cg_lock :
+            _cg_state ["running"]=False
+
+def cg_start_run ():
+    if not os .path .isfile (CONFGETTER_BIN ):
+        return 409 ,{"error":"Config getter is not installed -- press Install on it in its library first."}
+    with _cg_lock :
+        if _cg_state ["running"]:
+            return 409 ,{"error":"Config getter is already running."}
+        _cg_state ["running"]=True
+        _cg_state ["started_at"]=datetime .now ().strftime ("%Y-%m-%d %H:%M")
+    try :
+        os .makedirs (SNAP_DIR ,mode =0o700 ,exist_ok =True )
+        threading .Thread (target =_cg_run_bg ,daemon =True ).start ()
+    except Exception as exc :
+        with _cg_lock :
+            _cg_state ["running"]=False
+        return 500 ,{"error":f"Could not start Config getter: {exc }"}
+    return 200 ,{"message":"Config getter started -- the Execution Log shows its progress.","level":"info"}
+
 def run_script_bg (script_path ,script_name ,env_overrides =None ):
 
     if env_overrides :
@@ -6638,7 +6796,64 @@ def render_app_card_html (app ):
     installs from the browser, then installs the app. Updates install over the old one.</div>
   </div>"""
 
-def render_components_html (components ,library =None ,app =None ):
+def render_confgetter_card_html (cg ,library =None ):
+    if cg is None :
+        return ""
+    running =cg .get ("running")
+    installed =cg .get ("installed")
+    if running :
+        badge ,bcls ="RUNNING","b-inst"
+    elif installed :
+        badge ,bcls ="INSTALLED","b-inst"
+    else :
+        badge ,bcls ="NOT INSTALLED","b-src"
+    ver =f'<span class="ver">v{esc (cg ["version"])}</span>'if installed else ""
+    run_dis =""if installed and not running else " disabled"
+    run_title =(' title="Install it from its library below first"'if not installed else
+    (' title="Already running"'if running else ""))
+    un_btn =(f'<button class="b-del" data-action="cg_uninstall"{" disabled"if running else ""}>Uninstall</button>'
+    if installed else "")
+    snaps =cg .get ("snapshots")or []
+    rows =[]
+    for sn in snaps :
+        name =esc (sn ["name"])
+        rows .append (f"""
+    <div class="librow">
+      <div class="librow-top"><span>{name }</span></div>
+      <div class="librow-actions">
+        <a class="btn b-go" href="/api/confgetter/file?name={urllib .parse .quote (sn ["name"])}" download="{name }">Download</a>
+        <button class="b-del" data-action="cg_delete" data-name="{name }">Delete</button>
+      </div>
+      <div class="librow-bot small muted"><span>{esc (sn ['mtime'])}</span><span>&middot;</span><span>{esc (human_size (sn ['size']))}</span></div>
+    </div>""")
+    if not rows :
+        rows .append ('<div class="small muted" style="padding:.4rem .2rem">-- no snapshots yet --</div>')
+    nested =""
+    if library is not None :
+        nested =render_library_group_html ("Library","confgetter",library .get ("confgetter",[]),"install_confgetter",nested =True )
+    return f"""
+  <div class="card" id="cg-card">
+    <div class="row comp-row">
+      <b>Config getter</b>
+      {ver }
+      <span class="badge {bcls }">{badge }</span>
+      <span class="muted small">confgetter.sh &middot; runs on demand, no service</span>
+    </div>
+    <div class="row btn-row">
+      <button class="b-start" data-action="cg_run"{run_dis }{run_title }>Run</button>
+      {un_btn }
+    </div>
+    <div class="small muted">Copies the node's config files (ASL3, DVSwitch, USRP2M17, firewall, 44Net Connect) into one Markdown
+    file for Claude. Passwords, keys and tokens are replaced with &lt;redacted:...&gt; on the node; secret files are never copied.
+    The newest {CONFGETTER_KEEP } snapshots are kept.</div>
+    <div class="card libgrp libgrp-nested" data-libcat="cg-snaps">
+      <div class="libgrp-hdr"><b>Snapshots ({len (snaps )})</b></div>
+      <div class="librows">{''.join (rows )}</div>
+    </div>
+    {nested }
+  </div>"""
+
+def render_components_html (components ,library =None ,app =None ,cg =None ):
     cards =[]
     for c in components :
         if c ["category"]in NO_CARD_CATEGORIES :
@@ -6697,6 +6912,7 @@ def render_components_html (components ,library =None ,app =None ):
     {nested_lib_html }
   </div>""")
     cards .append (render_app_card_html (app ))
+    cards .append (render_confgetter_card_html (cg ,library ))
     return "".join (cards )
 
 def render_library_group_html (title ,category ,entries ,action_label ,nested =False ):
@@ -6808,6 +7024,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
     ("Configuration","config","install_config"),
+    ("Config getter","confgetter","install_confgetter"),
 ]
 
 _LIBRARY_GROUPS_BY_CATEGORY: dict [str ,tuple [str ,str ,str ]]={
@@ -6819,7 +7036,7 @@ _LIBRARY_GROUPS_BY_CATEGORY: dict [str ,tuple [str ,str ,str ]]={
 _ORPHAN_LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     (title ,category ,action_label )
     for title ,category ,action_label in _LIBRARY_GROUPS
-    if category not in INSTALLABLE_CATEGORIES or category in NO_CARD_CATEGORIES 
+    if (category not in INSTALLABLE_CATEGORIES or category in NO_CARD_CATEGORIES )and category !="confgetter"
 ]
 
 _RTF_UP =0x0001
@@ -8996,6 +9213,17 @@ _JS_ACTIONS = """function wireButtons() {
         } else if (action === 'rpiclone_install') {
           if (!confirm('Install rpi-clone? This installs any missing packages it needs (rsync, parted, fdisk, dosfstools ...) with apt, then downloads a fixed, checksum-checked rpi-clone from GitHub into /usr/local/sbin. No prompts -- output goes to the Execution Log.')) { btn.disabled = false; return; }
           await postAction({action: 'rpiclone_install', confirm: true});
+        } else if (action === 'install_confgetter') {
+          if (!confirm(`Install ${btn.dataset.name} as /usr/local/bin/confgetter.sh? It only reads config files when you press Run.`)) { btn.disabled = false; return; }
+          await postAction({action: 'install_confgetter', name: btn.dataset.name, confirm: true});
+        } else if (action === 'cg_run') {
+          await postAction({action: 'cg_run'});
+        } else if (action === 'cg_uninstall') {
+          if (!confirm('Uninstall Config getter? Removes /usr/local/bin/confgetter.sh. Its snapshots and library files are kept.')) { btn.disabled = false; return; }
+          await postAction({action: 'cg_uninstall', confirm: true});
+        } else if (action === 'cg_delete') {
+          if (!confirm(`Delete snapshot ${btn.dataset.name}?`)) { btn.disabled = false; return; }
+          await postAction({action: 'cg_delete', name: btn.dataset.name});
         } else if (action === 'app_fetch') {
           await postAction({action: 'app_fetch'});
         } else if (action === 'app_delete') {
@@ -9705,7 +9933,7 @@ _JS = (
 def render_page ():
     status =build_status ()
     quicklinks_html =render_quicklinks_html ()
-    components_html =render_components_html (status ["components"],status ["library"],status ["app"])
+    components_html =render_components_html (status ["components"],status ["library"],status ["app"],status ["confgetter"])
     library_html =render_library_html (status ["library"])
     log_html ="-- System ready --\n"+f"instmon v{VERSION } ({DATE_STR }) backend online, {len (status ['components'])} component(s) tracked."
     return HTML_TEMPLATE .format (
@@ -9812,6 +10040,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="nodelisten">Node Talker (.py)</option>
       <option value="watchdog">Watchdog (.sh)</option>
       <option value="instmon">InstMon (.py)</option>
+      <option value="confgetter">Config getter (.sh)</option>
     </select>
     <button id="usbimp-refresh">Refresh</button>
     <button id="usbimp-up" disabled>Up</button>
@@ -10240,6 +10469,10 @@ _ACTION_HANDLERS ={
 "gh_channel":lambda self ,body :self ._action_gh_channel (body ),
 "app_fetch":lambda self ,body :self ._action_app_fetch (body ),
 "app_delete":lambda self ,body :self ._action_app_delete (body ),
+"install_confgetter":lambda self ,body :self ._action_cg (body ,"install"),
+"cg_run":lambda self ,body :self ._action_cg (body ,"run"),
+"cg_uninstall":lambda self ,body :self ._action_cg (body ,"uninstall"),
+"cg_delete":lambda self ,body :self ._action_cg (body ,"delete"),
 }
 
 _ACTIONS_DURING_FULL_UPDATE = ("fu_dismiss", "fu_stop")
@@ -10258,6 +10491,7 @@ _GET_ROUTES ={
 "/api/docs":lambda self :self ._send_json (200 ,docs_status (),extra_headers =[("Cache-Control","no-store")]),
 "/api/docs/file":lambda self :self ._route_docs_file (),
 "/api/app/file":lambda self :self ._route_app_file (),
+"/api/confgetter/file":lambda self :self ._route_cg_file (),
 "/api/usbimport/browse":lambda self :self ._route_usbimport_browse (),
 "/api/diskimg/drives":lambda self :self ._route_diskimg_drives (),
 "/api/diskimg/job":lambda self :self ._route_diskimg_job (),
@@ -10375,7 +10609,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
     def _route_status (self ):
         status =build_status ()
         self ._send_json (200 ,{
-        "components_html":render_components_html (status ["components"],status ["library"],status ["app"]),
+        "components_html":render_components_html (status ["components"],status ["library"],status ["app"],status ["confgetter"]),
         "library_html":render_library_html (status ["library"]),
         **_gh_status_payload (),
         **_fu_status_payload (),
@@ -11338,7 +11572,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
             with zipfile .ZipFile (tmp_path ,'w',zipfile .ZIP_DEFLATED )as zf :
                 for root ,dirs ,files in os .walk (LIBRARY_DIR ):
-                    dirs [:]=[d for d in dirs if os .path .join (root ,d )not in (DOCS_DIR ,APP_DIR )]
+                    dirs [:]=[d for d in dirs if os .path .join (root ,d )not in (DOCS_DIR ,APP_DIR ,SNAP_DIR )]
                     for file in files :
                         full_path =os .path .join (root ,file )
                         rel_path =os .path .relpath (full_path ,LIBRARY_DIR )
@@ -11882,6 +12116,49 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self ._error_json (status ,payload ["error"])
             return 
         self ._send_json (200 ,payload )
+
+    def _action_cg (self ,body ,op ):
+        if op in ("install","uninstall")and not body .get ("confirm"):
+            self ._error_json (400 ,"This action requires confirm:true in the request body")
+            return
+        if op =="install":
+            status ,payload =cg_install (body .get ("name"))
+        elif op =="run":
+            status ,payload =cg_start_run ()
+        elif op =="uninstall":
+            status ,payload =cg_uninstall ()
+        else :
+            status ,payload =cg_delete (body .get ("name"))
+        if status !=200 :
+            self ._send_json (status ,{"error":payload ["error"],"message":payload ["error"],"level":"warn"if status ==409 else "err"})
+            return
+        self ._send_json (200 ,payload )
+
+    def _route_cg_file (self ):
+        query =urllib .parse .parse_qs (urllib .parse .urlparse (self .path ).query )
+        name =query .get ("name",[""])[0 ]
+        full =cg_snap_path (name )
+        if full is None :
+            self ._error_json (404 ,"No such snapshot")
+            return
+        try :
+            size =os .path .getsize (full )
+            fh =open (full ,"rb")
+        except OSError as exc :
+            self ._error_json (500 ,f"Could not read {name }: {exc }")
+            return
+        with fh :
+            self .send_response (200 )
+            self .send_header ("Content-Type","text/markdown; charset=utf-8")
+            self .send_header ("Content-Length",str (size ))
+            self .send_header ("Content-Disposition",f'attachment; filename="{name }"')
+            self .send_header ("Cache-Control","private, no-store")
+            self .end_headers ()
+            try :
+                shutil .copyfileobj (fh ,self .wfile ,65536 )
+            except (BrokenPipeError ,ConnectionResetError ):
+                pass
+        log_event (f"Config getter: downloaded {name }","info")
 
     def _route_app_file (self ):
         query =urllib .parse .parse_qs (urllib .parse .urlparse (self .path ).query )
