@@ -59,7 +59,7 @@
 
 ## Android app (`android/`)
 
-- **Node Talker Mobile** (was Node Talker for Android) is a Kotlin/Gradle
+- **Node Talker 2** (was Node Talker Mobile, before that Node Talker for Android) is a Kotlin/Gradle
   project in `android/`. Its file, package, tag and APK names keep
   `nodetalker` / `NodeTalker`. The tool-file rules (one file per version,
   renamed each version) do not apply to it.
@@ -71,7 +71,7 @@
 - **Kotlin and Gradle files carry no comments**, like the scripts.
 - **No libraries** beyond the Kotlin standard library unless a phase needs
   one.
-- **Package name** `io.github.kd8pgk.nodetalker` never changes (the Play
+- **Application ID** `io.github.kd8pgk.nodetalker2` never changes (the Play
   Store ties the app to it).
 - The `android` workflow builds and lints every change; on `main` it
   publishes the debug APK as a pre-release `android-vX.Y.Z`. Release signing

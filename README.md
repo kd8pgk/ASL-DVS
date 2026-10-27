@@ -17,7 +17,7 @@ By KD8PGK, written with Claude (Anthropic).
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
-| Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): shows the node's Node Talker page with a tab bar of its own and, on a Node Talker version it was checked against, its own Listen tab; remembers the node's certificate, and runs receive and transmit in the background. Sideload test builds for now. |
+| Node Talker 2 | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): shows the node's Node Talker page with a tab bar of its own and, on a Node Talker version it was checked against, its own Listen tab; remembers the node's certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 
 Scripts:
 
@@ -298,7 +298,7 @@ node 1921:
 - Favorites are AllStar node numbers, or a direct address
   (`iax:user@host:port/node,password`) for a private node.
 
-## Node Talker Mobile
+## Node Talker 2
 
 An optional Android app (Android 8.0 and newer) that shows a Node Talker
 page, with a tab bar of its own, and from 0.5.0 its own Listen tab (from 0.6.0
@@ -337,7 +337,7 @@ installs over the old one and keeps your nodes; going from 0.3.0 or older to
 the test build once more.
 
 **From the node itself (instmon 2.74.0 and later):** instmon downloads the
-newest APK from GitHub into its library and lists **Node Talker Mobile** in
+newest APK from GitHub into its library and lists **Node Talker 2** in
 Components. On the phone, open instmon's page, log in and tap **Download APK**;
 Android installs it. **Check GitHub** on the row fetches a newer one. Nothing
 is installed on the Pi, and the app is not part of Full Update.
@@ -535,7 +535,7 @@ per tool and build:
 | [`44helper.md`](changelogs/44helper.md) | `44helper_v*.py` |
 | [`nodetalker.md`](changelogs/nodetalker.md) | `nodetalker_v*.py` (was `nodelisten_v*.py`) |
 | [`amp_nodetalker.md`](changelogs/amp_nodetalker.md) | `amp_nodetalker_v*.py` (was `amp_nodelisten_v*.py`) |
-| [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker Mobile) |
+| [`nodetalker_android.md`](changelogs/nodetalker_android.md) | `android/` (Node Talker 2) |
 | [`install_all.md`](changelogs/install_all.md) | `install_all_v*.sh` |
 | [`uninstall_all.md`](changelogs/uninstall_all.md) | `uninstall_all_v*.sh` |
 | [`wifi_menu.md`](changelogs/wifi_menu.md) | `wifi_menu_v3_1_20261011.sh` |

@@ -5,14 +5,14 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersion = "0.6.0"
+val appVersion = "0.7.0"
 
 android {
     namespace = "io.github.kd8pgk.nodetalker"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "io.github.kd8pgk.nodetalker"
+        applicationId = "io.github.kd8pgk.nodetalker2"
         minSdk = 26
         targetSdk = 36
         versionName = appVersion

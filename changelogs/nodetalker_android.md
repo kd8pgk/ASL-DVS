@@ -1,6 +1,15 @@
-# Node Talker Mobile changelog
+# Node Talker 2 changelog
 
-Current version: `0.6.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.7.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.7.0 (2026-10-27)
+
+- **Renamed Node Talker 2, and it installs next to the old app.** The
+  application ID changed from `io.github.kd8pgk.nodetalker` to
+  `io.github.kd8pgk.nodetalker2`, so Android treats it as a separate app: the
+  earlier Node Talker Mobile (0.6.0 and older) and Node Talker 2 can both be
+  installed and run. Node Talker 2 starts with an empty node list and its own
+  settings; add your nodes again. Code, file and APK names keep `nodetalker`.
 
 ## 0.6.0 (2026-10-27)
 
