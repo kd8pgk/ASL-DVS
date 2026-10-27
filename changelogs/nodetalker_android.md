@@ -1,6 +1,15 @@
 # Node Talker Mobile changelog
 
-Current version: `0.3.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.3.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.3.3 (2026-10-27)
+
+- **Splash screen:** the app opens on its icon, centered on the app's dark
+  background, for three seconds, then shows the node list. Opening the app
+  from its notification goes straight to the node page, as before.
+- **Credits and license on the node list:** "By KD8PGK · Built with Claude AI
+  (Anthropic)" and "Licensed under CC BY 4.0" under the app version. Tap the
+  license to open it on creativecommons.org.
 
 ## 0.3.2 (2026-10-27)
 

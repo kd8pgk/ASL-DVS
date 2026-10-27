@@ -92,5 +92,24 @@
             android:layout_height="wrap_content"
             android:textColor="@color/muted"
             android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/credit"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/credit"
+            android:textColor="@color/muted"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/license"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="32dp"
+            android:gravity="center_vertical"
+            android:text="@string/license"
+            android:textColor="@color/accent"
+            android:textSize="12sp" />
     </LinearLayout>
 </LinearLayout>
