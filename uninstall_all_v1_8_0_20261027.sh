@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_all.sh  v1.7.0  (2026-10-20)
+# uninstall_all.sh  v1.8.0  (2026-10-27)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -49,6 +49,18 @@ for entry in "${COMPONENTS[@]}"; do
     fi
     echo
 done
+
+echo "-- confgetter --"
+if [[ -e /usr/local/bin/confgetter.sh || -L /usr/local/bin/confgetter.sh ]]; then
+    if rm -f /usr/local/bin/confgetter.sh; then
+        ok "Removed /usr/local/bin/confgetter.sh (its snapshots stay in the instmon library)"
+    else
+        warn "Could not remove /usr/local/bin/confgetter.sh — check manually"
+    fi
+else
+    info "Not installed at /usr/local/bin/confgetter.sh, skipping"
+fi
+echo
 
 BOOT_CFG=/boot/firmware/config.txt
 echo "-- config.txt (HDMI/video driver, GPU memory) --"

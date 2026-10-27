@@ -1,6 +1,11 @@
 # Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_all_v1_7_0_20261020.sh`. Newest entries first.
+Current file: `uninstall_all_v1_8_0_20261027.sh`. Newest entries first.
+
+## 1.8.0 (2026-10-27)
+
+- **Config getter:** removes `/usr/local/bin/confgetter.sh`. Its snapshots
+  stay in the instmon library.
 
 ## 1.7.0 (2026-10-20)
 

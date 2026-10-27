@@ -1,6 +1,22 @@
 # instmon changelog
 
-Current file: `instmon_v2_78_3_20261027.py`. Newest entries first.
+Current file: `instmon_v2_79_0_20261027.py`. Newest entries first.
+
+## 2.79.0 (2026-10-27)
+
+- **Config getter card.** A new card after Node Talker Mobile runs
+  `confgetter.sh`, which copies the node's config into one Markdown file for
+  Claude, with passwords, keys and tokens redacted on the node. **Run** takes
+  a snapshot in the background (its output goes to the Execution Log),
+  **Uninstall** removes `/usr/local/bin/confgetter.sh`. The card lists the
+  snapshots with **Download** (to a phone or PC, behind the instmon login)
+  and **Delete**; the newest 10 are kept.
+- **Config getter library.** The card holds its own library group
+  (`confgetter*.sh`) with Upload, Edit, Download, Delete, Lock and
+  **Install**, which checks the script with `bash -n` and copies it to
+  `/usr/local/bin/confgetter.sh` (mode 0755). Check GitHub and USB import
+  know the new group.
+- **Backup** leaves the snapshots out of the library zip.
 
 ## 2.78.3 (2026-10-27)
 
