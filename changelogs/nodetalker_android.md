@@ -1,6 +1,27 @@
 # Node Talker Mobile changelog
 
-Current version: `0.5.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.0 (2026-10-27)
+
+- **Phase 3 of the native tabs: the Connect tab is the app's own.** On the
+  same Node Talker versions and conditions as the Listen tab (0.9.35, 0.9.39,
+  0.9.40, logged in), the Connect tab is drawn by the app. Setup is still the
+  node's page, and any other Node Talker version keeps the page's Connect tab.
+- **Same screen as the page:** the Favorites card (picker, mode and number,
+  label, Connect/Disconnect), the Tune card (mode, DMR network, D-STAR and
+  M17 module, find box, pick list, LH, Save, Connect/Disconnect), the
+  "Tuned:" line, and Disconnect All with its confirmation and progress.
+- **Same rules as the page:** the pick lists load and search through the
+  node's own `/api/tune-list` and `/api/tune-search` (cached for 5 minutes,
+  search after 300 ms for AllStar and EchoLink); the typed-number checks, the
+  hints, the button states and the "add the network to Node Controller" question
+  are the page's; connecting hops to the Listen tab and shows the result there
+  for 8 seconds, and returns to Connect if it fails.
+- **Tune sizes** (Text and Height on the Setup tab) apply to the Tune card.
+- **One status poll for both tabs** (every 1.5 s while one is showing).
+- The router now handles several native tabs; the page is parked on Setup
+  while a native tab is showing.
 
 ## 0.5.0 (2026-10-26)
 

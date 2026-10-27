@@ -36,6 +36,8 @@ class TalkerActivity : Activity() {
     private lateinit var error: View
     private lateinit var tabs: TabBar
     private var listenTab: ListenTab? = null
+    private var connectTab: ConnectTab? = null
+    private lateinit var feed: StatusFeed
     private lateinit var router: TabRouter
     private var renderGone = false
     private var micRequest: PermissionRequest? = null
@@ -59,6 +61,7 @@ class TalkerActivity : Activity() {
         if (NodeStore.keepScreenOn(this)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         web = findViewById(R.id.web)
         error = findViewById(R.id.error)
+        feed = StatusFeed(android.os.Handler(mainLooper)) { node }
         router = TabRouter(object : TabRouter.Io {
             override fun clickPage(name: String) {
                 web.evaluateJavascript(TabBar.clickJs(name), null)
@@ -68,21 +71,24 @@ class TalkerActivity : Activity() {
                 tabs.select(name)
             }
 
-            override fun showNative() {
-                listenTab?.show()
+            override fun show(name: String) {
+                if (name == "listen") listenTab?.show() else connectTab?.show()
             }
 
-            override fun hideNative() {
-                listenTab?.hide()
+            override fun hide(name: String) {
+                if (name == "listen") listenTab?.hide() else connectTab?.hide()
             }
 
-            override fun nativeAllowed(): Boolean =
-                Compat.useNative("listen", Compat.seen(node.id)) && NodeStore.audio(this@TalkerActivity).app
+            override fun nativeAllowed(name: String): Boolean =
+                Compat.useNative(name, Compat.seen(node.id)) && (name != "listen" || NodeStore.audio(this@TalkerActivity).app)
         })
         tabs = TabBar(findViewById(R.id.tabbar)) { name -> router.pick(name) }
         listenTab = ListenTab(this, findViewById(R.id.listen_view), object : ListenTab.Host {
             override val node: Node
                 get() = this@TalkerActivity.node
+
+            override val feed: StatusFeed
+                get() = this@TalkerActivity.feed
 
             override fun readPage(js: String, done: (String?) -> Unit) {
                 web.evaluateJavascript(js) { done(it) }
@@ -91,6 +97,45 @@ class TalkerActivity : Activity() {
             override fun openTalk(): Boolean = openTalkChannel()
 
             override fun startListen(): Boolean = startListening()
+        })
+        connectTab = ConnectTab(this, findViewById(R.id.connect_view), object : ConnectTab.Host {
+            override val node: Node
+                get() = this@TalkerActivity.node
+
+            override val feed: StatusFeed
+                get() = this@TalkerActivity.feed
+
+            override fun readPage(js: String, done: (String?) -> Unit) {
+                web.evaluateJavascript(js) { done(it) }
+            }
+
+            override fun pickTab(name: String) {
+                router.pick(name)
+            }
+
+            override fun flashListen(color: Int, text: String) {
+                val l = listenTab
+                if (l != null && router.native == "listen") {
+                    l.flash(color, text)
+                } else {
+                    web.evaluateJavascript("(function(){var e=document.getElementById('ptt-msg');if(e){e.className='msg';e.textContent=" +
+                        org.json.JSONObject.quote(text) + "}})()", null)
+                }
+            }
+
+            override fun listenFlashIs(text: String): Boolean {
+                val l = listenTab
+                return l != null && router.native == "listen" && l.flashIs(text)
+            }
+
+            override fun stopPageTests() {
+                web.evaluateJavascript("(function(){try{if(typeof exp!=='undefined'&&exp)expStop();" +
+                    "else if(typeof chk!=='undefined'&&chk&&chk.running)chkStop()}catch(e){}})()", null)
+            }
+
+            override fun openLink(uri: Uri) {
+                openExternal(uri)
+            }
         })
         findViewById<Button>(R.id.retry).setOnClickListener { if (renderGone) reopen() else load() }
         findViewById<Button>(R.id.back).setOnClickListener { finish() }
@@ -106,11 +151,13 @@ class TalkerActivity : Activity() {
         node = n
         title = node.title
         listenTab?.reset()
+        connectTab?.reset()
         load()
     }
 
     override fun onResume() {
         super.onResume()
+        feed.setResumed(true)
         listenTab?.resume()
         Listen.listeners.add(pushState)
         Talk.listeners.add(pushTalk)
@@ -119,6 +166,7 @@ class TalkerActivity : Activity() {
 
     override fun onPause() {
         listenTab?.pause()
+        feed.setResumed(false)
         Listen.listeners.remove(pushState)
         Talk.listeners.remove(pushTalk)
         super.onPause()
@@ -236,6 +284,7 @@ class TalkerActivity : Activity() {
 
     override fun onDestroy() {
         listenTab?.hide()
+        connectTab?.hide()
         certDialog?.dismiss()
         if (isFinishing && ::node.isInitialized && Talk.nodeId == node.id) Talk.close(this)
         if (::web.isInitialized) {

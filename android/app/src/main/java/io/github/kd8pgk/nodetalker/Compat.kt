@@ -4,7 +4,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 object Compat {
     val MATCHES: Set<String> = setOf("0.9.35", "0.9.39", "0.9.40")
-    val NATIVE_TABS: Set<String> = setOf("listen")
+    val NATIVE_TABS: Set<String> = setOf("connect", "listen")
 
     private val seen = ConcurrentHashMap<String, String>()
 

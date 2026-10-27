@@ -205,7 +205,7 @@ class DotView(context: Context, attrs: AttributeSet? = null) : View(context, att
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { maskFilter = BlurMaskFilter(4 * d, BlurMaskFilter.Blur.NORMAL) }
 
-    var level = ListenStatus.DOT_OFF
+    var level = NodeStatus.DOT_OFF
         set(v) {
             if (field == v) return
             field = v
@@ -218,15 +218,15 @@ class DotView(context: Context, attrs: AttributeSet? = null) : View(context, att
 
     override fun onDraw(c: Canvas) {
         val color = when (level) {
-            ListenStatus.DOT_ON -> context.getColor(R.color.accent)
-            ListenStatus.DOT_RX -> context.getColor(R.color.amber)
-            ListenStatus.DOT_TX, ListenStatus.DOT_ERR -> context.getColor(R.color.red_line)
-            ListenStatus.DOT_WARN -> Color.parseColor("#e3a008")
+            NodeStatus.DOT_ON -> context.getColor(R.color.accent)
+            NodeStatus.DOT_RX -> context.getColor(R.color.amber)
+            NodeStatus.DOT_TX, NodeStatus.DOT_ERR -> context.getColor(R.color.red_line)
+            NodeStatus.DOT_WARN -> Color.parseColor("#e3a008")
             else -> context.getColor(R.color.dot_off)
         }
         val cx = width / 2f
         val cy = height / 2f
-        if (level == ListenStatus.DOT_ON || level == ListenStatus.DOT_RX || level == ListenStatus.DOT_TX) {
+        if (level == NodeStatus.DOT_ON || level == NodeStatus.DOT_RX || level == NodeStatus.DOT_TX) {
             glow.color = color
             c.drawCircle(cx, cy, 5.5f * d, glow)
         }

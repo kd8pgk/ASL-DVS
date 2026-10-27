@@ -34,9 +34,10 @@ import kotlin.math.ceil
 import kotlin.math.min
 import kotlin.math.sin
 
-class ListenTab(private val act: Activity, private val root: View, private val host: Host) {
+class ListenTab(private val act: Activity, private val root: View, private val host: Host) : StatusFeed.Listener {
     interface Host {
         val node: Node
+        val feed: StatusFeed
         fun readPage(js: String, done: (String?) -> Unit)
         fun openTalk(): Boolean
         fun startListen(): Boolean
@@ -71,7 +72,7 @@ class ListenTab(private val act: Activity, private val root: View, private val h
     )
 
     private var settings = PageSettings()
-    private var status: ListenStatus? = null
+    private var status: NodeStatus? = null
     private var pttState = PttState.OFF
     private var shown = false
     private var resumed = false
@@ -82,8 +83,6 @@ class ListenTab(private val act: Activity, private val root: View, private val h
     private var shownLabel = ""
     private var shownDigit = ""
     private var markShown = ""
-    @Volatile private var polling = false
-    private var poller: Thread? = null
 
     private val onListen: () -> Unit = { ui.post { listenChanged() } }
     private val onTalk: (String) -> Unit = { ev -> ui.post { talkEvent(ev) } }
@@ -132,6 +131,7 @@ class ListenTab(private val act: Activity, private val root: View, private val h
         root.visibility = View.VISIBLE
         Listen.listeners.add(onListen)
         Talk.listeners.add(onTalk)
+        host.feed.add(this)
         host.readPage(PageSettings.READ_JS) { raw ->
             if (!shown) return@readPage
             settings = PageSettings.parse(raw)
@@ -153,7 +153,7 @@ class ListenTab(private val act: Activity, private val root: View, private val h
         root.visibility = View.GONE
         Listen.listeners.remove(onListen)
         Talk.listeners.remove(onTalk)
-        stopPoll()
+        host.feed.remove(this)
         ui.removeCallbacks(frame)
     }
 
@@ -164,7 +164,6 @@ class ListenTab(private val act: Activity, private val root: View, private val h
 
     fun pause() {
         resumed = false
-        stopPoll()
         ui.removeCallbacks(frame)
     }
 
@@ -172,6 +171,12 @@ class ListenTab(private val act: Activity, private val root: View, private val h
         autoDone = false
         status = null
     }
+
+    fun flash(color: Int, text: String) {
+        setPttMsg(color, text)
+    }
+
+    fun flashIs(text: String): Boolean = pttMsg.text.toString() == text
 
     fun micGranted() {
         if (shown) openTalk()
@@ -181,7 +186,6 @@ class ListenTab(private val act: Activity, private val root: View, private val h
         if (!active()) return
         listenChanged()
         syncTalk()
-        startPoll()
         ui.removeCallbacks(frame)
         ui.post(frame)
     }
@@ -214,46 +218,18 @@ class ListenTab(private val act: Activity, private val root: View, private val h
         listenBtn.setTextColor(if (on) Color.WHITE else act.getColor(R.color.go_ink))
     }
 
-    private fun startPoll() {
-        if (polling) return
-        polling = true
-        val n = host.node
-        poller = Thread({
-            val api = NodeApi(n)
-            while (polling) {
-                try {
-                    val s = ListenStatus.parse(api.status())
-                    ui.post { onStatus(s) }
-                } catch (e: IOException) {
-                    ui.post { onStatusLost() }
-                }
-                try {
-                    Thread.sleep(POLL_MS)
-                } catch (e: InterruptedException) {
-                    return@Thread
-                }
-            }
-        }, "nt-listen-status").also { it.start() }
+    override fun onLost() {
+        dotFeed.level = NodeStatus.DOT_ERR
     }
 
-    private fun stopPoll() {
-        polling = false
-        poller?.interrupt()
-        poller = null
-    }
-
-    private fun onStatusLost() {
-        dotFeed.level = ListenStatus.DOT_ERR
-    }
-
-    private fun onStatus(s: ListenStatus) {
+    override fun onStatus(s: NodeStatus) {
         status = s
         stNode.text = s.node.ifEmpty { "(not set)" }
         stListeners.text = "${s.listeners} / ${s.maxListeners}"
         dotFeed.level = s.feedLevel
         stFeed.text = s.feedText
-        dotRx.level = if (s.audioActive) ListenStatus.DOT_RX else ListenStatus.DOT_OFF
-        dotTx.level = if (s.tx?.keyed == true) ListenStatus.DOT_TX else ListenStatus.DOT_OFF
+        dotRx.level = if (s.audioActive) NodeStatus.DOT_RX else NodeStatus.DOT_OFF
+        dotTx.level = if (s.tx?.keyed == true) NodeStatus.DOT_TX else NodeStatus.DOT_OFF
         if (!rules.talking) {
             stLevel.text = Spectrum.fmtDb(s.peakDb)
             if (!ownListen()) meter.percent = Spectrum.dbPct(s.peakDb)

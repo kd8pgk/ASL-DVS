@@ -76,4 +76,17 @@
     <string name="ptt_description">Push to talk</string>
     <string name="spectrum_description">Audio spectrum</string>
     <string name="page_stopped">The page stopped (the phone ran low on memory, or its display process was closed). Tap Retry to open it again.</string>
+    <string name="card_connect">Connect</string>
+    <string name="card_tune">Tune</string>
+    <string name="connect_empty">No favorites yet. Add up to 15 on the Setup tab.</string>
+    <string name="connect_favorite">Favorite</string>
+    <string name="connect_go">Connect</string>
+    <string name="net_add">Add it to Node Controller and tune</string>
+    <string name="net_once">Tune this once</string>
+    <string name="net_cancel">Cancel</string>
+    <string name="disconnect_all">Disconnect All</string>
+    <string name="connect_off">Disconnect</string>
+    <string name="tune_lh">LH</string>
+    <string name="tune_save">Save</string>
+    <string name="ok">OK</string>
 </resources>

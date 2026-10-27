@@ -20,7 +20,11 @@ class NodeApi(private val node: Node, private val cookie: () -> String? = { webV
 
     fun post(path: String, body: JSONObject = JSONObject()): JSONObject = request("POST", path, body, true)
 
-    private fun request(method: String, path: String, body: JSONObject?, withSession: Boolean): JSONObject {
+    fun getLoose(path: String): JSONObject = request("GET", path, null, true, true)
+
+    fun postLoose(path: String, body: JSONObject = JSONObject()): JSONObject = request("POST", path, body, true, true)
+
+    private fun request(method: String, path: String, body: JSONObject?, withSession: Boolean, loose: Boolean = false): JSONObject {
         val c = NodeHttp.open(node, path, if (withSession) cookie() else null)
         try {
             c.requestMethod = method
@@ -40,6 +44,7 @@ class NodeApi(private val node: Node, private val cookie: () -> String? = { webV
                 null
             }
             if (code == 401) throw NotLoggedIn()
+            if (!ok && loose) return json ?: JSONObject().put("ok", false).put("error", "HTTP $code")
             if (!ok) throw ApiException(code, json?.optString("error").orEmpty().ifEmpty { "HTTP $code" })
             return json ?: throw IOException("The node did not answer with JSON")
         } finally {

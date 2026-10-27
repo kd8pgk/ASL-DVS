@@ -377,5 +377,39 @@ class CheckTests(unittest.TestCase):
         self.assertCheck(False, "GUARDS")
 
 
+    def connect(self, modes='"ASL", "DMR"', hint='"ASL" to "Node #"', letters="ABC"):
+        self.android("0.1.0")
+        name = self.r.build("nodetalker", "1.0.0", None)
+        js = (
+            "\n_NOTE = r\"\"\"const TN_MODES = ['ASL', 'DMR'];\n"
+            "const TN_SEARCH = ['ASL'];\n"
+            "const TN_HINT = {ASL: 'Node #'};\n"
+            "const TN_NOUN = {ASL: 'nodes'};\n"
+            "const TN_LETTERS = 'ABC';\"\"\"\n"
+        )
+        self.r.write(name, tool_text("1.0.0") + js)
+        d = "android/app/src/main/java/io/github/kd8pgk/nodetalker/"
+        self.r.write(d + "ConnectModel.kt", "object Tn {\n    val MODES = listOf(" + modes + ")\n    val SEARCH = listOf(\"ASL\")\n"
+                     "    val HINT = mapOf(\n        " + hint + ",\n    )\n    val NOUN = mapOf(\n        \"ASL\" to \"nodes\",\n    )\n"
+                     "    const val LETTERS = \"" + letters + "\"\n}\n")
+        self.r.commit("c", T0 + DAY)
+
+    def test_connect_matches(self):
+        self.connect()
+        self.assertCheck(True)
+
+    def test_connect_modes_differ(self):
+        self.connect(modes='"ASL", "EchoLink"')
+        self.assertCheck(False, "MODES")
+
+    def test_connect_hint_differs(self):
+        self.connect(hint='"ASL" to "Node number"')
+        self.assertCheck(False, "HINT")
+
+    def test_connect_letters_differ(self):
+        self.connect(letters="ABD")
+        self.assertCheck(False, "LETTERS")
+
+
 if __name__ == "__main__":
     unittest.main()

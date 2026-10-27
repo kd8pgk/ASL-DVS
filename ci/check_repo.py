@@ -329,6 +329,45 @@ def check_native_constants(paths):
             fail(f"{KT_DIR}Spectrum.kt: STOPS {have} differs from the page's spectrum palette stops {want}")
 
 
+def _quoted(text):
+    return re.findall(r"""['"]([^'"]*)['"]""", text)
+
+
+def _pairs(text):
+    return dict(re.findall(r"""['"]?(\w+)['"]?\s*(?::|\bto\b)\s*['"]([^'"]*)['"]""", text))
+
+
+def check_connect_constants(paths):
+    page = current_nodetalker()
+    kfile = KT_DIR + "ConnectModel.kt"
+    if page is None or not os.path.isfile(kfile):
+        return
+    if not any(p == kfile or (parse_tool(p) or ("",))[0] == "nodetalker" for p in paths):
+        return
+    text, kt = read(page), read(kfile)
+    lists = (("TN_MODES", "MODES"), ("TN_SEARCH", "SEARCH"))
+    for js, kn in lists:
+        m = re.search(r"const " + js + r"\s*=\s*\[([^\]]*)\]", text)
+        k = re.search(r"val " + kn + r"\s*=\s*listOf\(([^)]*)\)", kt)
+        if not m or not k:
+            fail(f"{kfile}: cannot compare {kn} with the page's {js}")
+        elif _quoted(m.group(1)) != _quoted(k.group(1)):
+            fail(f"{kfile}: {kn} {_quoted(k.group(1))} differs from the page's {js} {_quoted(m.group(1))}")
+    for js, kn in (("TN_HINT", "HINT"), ("TN_NOUN", "NOUN")):
+        m = re.search(r"const " + js + r"\s*=\s*\{([^}]*)\}", text)
+        k = re.search(r"val " + kn + r"\s*=\s*mapOf\((.*?)\n    \)", kt, re.S)
+        if not m or not k:
+            fail(f"{kfile}: cannot compare {kn} with the page's {js}")
+        elif _pairs(m.group(1)) != _pairs(k.group(1)):
+            fail(f"{kfile}: {kn} differs from the page's {js}")
+    m = re.search(r"const TN_LETTERS\s*=\s*'([A-Z]+)'", text)
+    k = re.search(r"const val LETTERS\s*=\s*\"([A-Z]+)\"", kt)
+    if not m or not k:
+        fail(f"{kfile}: cannot compare LETTERS with the page's TN_LETTERS")
+    elif m.group(1) != k.group(1):
+        fail(f"{kfile}: LETTERS is {k.group(1)} but the page's TN_LETTERS is {m.group(1)}")
+
+
 def check_launchers():
     texts = {}
     for name in sorted(os.listdir(".")):
@@ -485,6 +524,7 @@ def main():
     check_android(base, added + modified + deleted)
     check_design(added + modified + deleted)
     check_native_constants(added + modified + deleted)
+    check_connect_constants(added + modified + deleted)
 
     for n in notes:
         print(f"note: {n}")

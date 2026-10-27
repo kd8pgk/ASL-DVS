@@ -301,8 +301,8 @@ node 1921:
 ## Node Talker Mobile
 
 An optional Android app (Android 8.0 and newer) that shows a Node Talker
-page, with a tab bar of its own, and from 0.5.0 its own Listen tab when the
-node runs a Node Talker version the app was checked against (any other
+page, with a tab bar of its own, and from 0.5.0 its own Listen tab (from 0.6.0
+also Connect) when the node runs a Node Talker version the app was checked against (any other
 version keeps the page's Listen tab). Node Talker works the same in a
 browser; the app is for phones that should keep receiving and transmitting
 with the screen locked. It comes in phases:
@@ -317,10 +317,10 @@ with the screen locked. It comes in phases:
 3. **Transmit in the app (0.3.0; needs Node Talker 0.6.11):** the page's
    push-to-talk keys through the app, works on plain HTTP too, and a
    tap-to-talk transmission keeps going with the screen locked.
-4. **Native tabs (0.4.0 and 0.5.0):** the app's own tab bar and a client
+4. **Native tabs (0.4.0 to 0.6.0):** the app's own tab bar and a client
    for the node (0.4.0); a native Listen tab with the spectrum, level meter,
-   push-to-talk and the kerchunk mark button (0.5.0). Connect is next; Setup
-   stays the node's page.
+   push-to-talk and the kerchunk mark button (0.5.0); a native Connect tab
+   with Favorites, Tune and Disconnect All (0.6.0). Setup stays the node's page.
 5. PTT on the screen button or a volume key.
 
 **Install a test build:** on the phone, open the repository's

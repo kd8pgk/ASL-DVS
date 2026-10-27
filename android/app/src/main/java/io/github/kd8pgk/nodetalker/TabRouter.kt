@@ -4,25 +4,25 @@ class TabRouter(private val io: Io) {
     interface Io {
         fun clickPage(name: String)
         fun select(name: String)
-        fun showNative()
-        fun hideNative()
-        fun nativeAllowed(): Boolean
+        fun show(name: String)
+        fun hide(name: String)
+        fun nativeAllowed(name: String): Boolean
     }
 
     var pageTab = ""
         private set
 
-    var nativeOn = false
+    var native: String? = null
         private set
 
     private var parking = false
 
-    private fun nativeOk() = pageTab.isNotEmpty() && io.nativeAllowed()
+    private fun nativeOk(name: String) = pageTab.isNotEmpty() && name in NATIVE && io.nativeAllowed(name)
 
     fun pick(name: String) {
         parking = false
-        if (name == "listen" && nativeOk()) {
-            activate()
+        if (nativeOk(name)) {
+            activate(name)
             return
         }
         deactivate()
@@ -32,7 +32,7 @@ class TabRouter(private val io: Io) {
     }
 
     fun onPage(name: String) {
-        if (parking && name == "connect") {
+        if (parking && name == PARK) {
             parking = false
             return
         }
@@ -42,8 +42,8 @@ class TabRouter(private val io: Io) {
             io.select("")
             return
         }
-        if (name == "listen" && nativeOk()) {
-            activate()
+        if (nativeOk(name)) {
+            activate(name)
             return
         }
         deactivate()
@@ -51,11 +51,12 @@ class TabRouter(private val io: Io) {
     }
 
     fun reevaluate() {
-        if (!nativeOn && pageTab == "listen" && nativeOk()) {
-            activate()
-        } else if (nativeOn && !nativeOk()) {
+        val on = native
+        if (on == null) {
+            if (nativeOk(pageTab)) activate(pageTab)
+        } else if (!nativeOk(on)) {
             deactivate()
-            pick("listen")
+            pick(on)
         }
     }
 
@@ -66,22 +67,30 @@ class TabRouter(private val io: Io) {
         io.select("")
     }
 
-    private fun activate() {
-        if (nativeOn) return
-        nativeOn = true
-        if (pageTab == "listen") {
+    private fun activate(name: String) {
+        if (native == name) return
+        val was = native
+        if (was != null) {
+            io.hide(was)
+        } else if (pageTab != PARK) {
             parking = true
-            pageTab = "connect"
-            io.clickPage("connect")
+            pageTab = PARK
+            io.clickPage(PARK)
         }
-        io.showNative()
-        io.select("listen")
+        native = name
+        io.show(name)
+        io.select(name)
     }
 
     private fun deactivate() {
         parking = false
-        if (!nativeOn) return
-        nativeOn = false
-        io.hideNative()
+        val was = native ?: return
+        native = null
+        io.hide(was)
+    }
+
+    companion object {
+        const val PARK = "setup"
+        val NATIVE = setOf("connect", "listen")
     }
 }
