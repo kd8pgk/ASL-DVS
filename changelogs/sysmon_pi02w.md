@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_84_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_85_20261027.py`. Newest entries first.
+
+## 6.13.85-pi02w (2026-10-27)
+
+- **File editor on top of everything.** The file editor now opens above the offline bar and the other panels, so its header, Find and Save are always in front. Toast messages still show above it, so save results stay visible.
 
 ## 6.13.84-pi02w (2026-10-27)
 
