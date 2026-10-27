@@ -64,14 +64,7 @@
     <string name="battery_ok">Battery: Node\u00A0Talker\u00A0Mobile may run in the background.</string>
     <string name="page_stopped">The page stopped (the phone ran low on memory, or its display process was closed). Tap Retry to open it again.</string>
     <string name="credit">By KD8PGK · Built with Claude AI (Anthropic)</string>
-    <string name="app_name_nb" translatable="false">Node\u00A0Talker\u00A0Mobile</string>
-    <string name="welcome_call">Welcome to the %1$s %2$s</string>
-    <string name="welcome_plain">Welcome to %1$s</string>
-    <string name="callsign_button">Callsign: %1$s</string>
-    <string name="callsign_none">not set</string>
-    <string name="callsign_title">Your callsign</string>
-    <string name="callsign_hint">For example KD8PGK</string>
-    <string name="callsign_help">Shown on the splash screen before the app opens. Letters, digits, / and - only, up to 16 characters. Leave it empty to show no callsign.</string>
+    <string name="welcome">Welcome to the KD8PGK Node\u00A0Talker\u00A0Mobile</string>
     <string name="license">Licensed under CC BY-NC 4.0</string>
     <string name="license_url" translatable="false">https://creativecommons.org/licenses/by-nc/4.0/</string>
 </resources>

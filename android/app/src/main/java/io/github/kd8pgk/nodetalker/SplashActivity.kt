@@ -24,10 +24,7 @@ class SplashActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_splash)
-        val call = NodeStore.callsign(this)
-        val name = getString(R.string.app_name_nb)
-        findViewById<TextView>(R.id.welcome).text =
-            if (call.isEmpty()) getString(R.string.welcome_plain, name) else getString(R.string.welcome_call, call, name)
+        findViewById<TextView>(R.id.welcome).text = getString(R.string.welcome)
         findViewById<TextView>(R.id.license).apply {
             paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
             setOnClickListener { openLicense() }

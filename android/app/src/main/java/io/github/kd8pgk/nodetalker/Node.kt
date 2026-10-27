@@ -87,7 +87,6 @@ object NodeStore {
     private const val KEY_BUFFER = "rx_buffer_ms"
     private const val KEY_EARPIECE = "earpiece"
     private const val KEY_VOICE_MIC = "voice_mic"
-    private const val KEY_CALLSIGN = "callsign"
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -134,10 +133,6 @@ object NodeStore {
         .putBoolean(KEY_VOICE_MIC, a.voiceMic).apply()
 
     fun setKeepScreenOn(c: Context, on: Boolean) = prefs(c).edit().putBoolean(KEY_KEEP_ON, on).apply()
-
-    fun callsign(c: Context) = prefs(c).getString(KEY_CALLSIGN, "").orEmpty()
-
-    fun setCallsign(c: Context, value: String) = prefs(c).edit().putString(KEY_CALLSIGN, value).apply()
 }
 
 object Certs {

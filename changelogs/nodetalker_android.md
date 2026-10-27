@@ -4,13 +4,9 @@ Current version: `0.4.0`. The app is in `android/`; its version is `appVersion` 
 
 ## 0.4.0 (2026-10-27)
 
-- **The splash welcomes the node's owner.** It opens with "Welcome to the
-  *callsign* Node Talker Mobile" above the icon, and "Licensed under CC BY-NC
-  4.0" below it. Tapping the license line opens the license page. With no
-  callsign set, the line reads "Welcome to Node Talker Mobile".
-- **A Callsign button on the node list.** It sets the callsign shown on the
-  splash. It is saved on the device, is up to 16 letters, digits, / or -, and
-  can be left empty.
+- **The splash welcomes KD8PGK.** It opens with "Welcome to the KD8PGK Node
+  Talker Mobile" above the icon, and "Licensed under CC BY-NC 4.0" below it.
+  Tapping the license line opens the license page.
 - **The name stays on one line.** Every "Node Talker Mobile" in the app's
   text is joined with non-breaking spaces, so it never wraps.
 
