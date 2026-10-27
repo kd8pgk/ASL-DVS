@@ -532,6 +532,8 @@ class TalkerActivity : Activity() {
                 getString(R.string.saved_file, dest.lastPathSegment ?: "")
             } catch (e: IOException) {
                 getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
+            } catch (e: RuntimeException) {
+                getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
             }
             runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
         }.start()

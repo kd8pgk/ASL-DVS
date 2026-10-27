@@ -153,6 +153,9 @@ class ListenService : Service() {
         if (node != null && node?.id != n.id) {
             talkClose()
             stopWorkers()
+            Listen.nodeId = null
+            Listen.level = -120.0
+            set(Listen.OFF, "")
         }
         node = n
         startInForeground(n)
@@ -228,6 +231,11 @@ class ListenService : Service() {
                     return
                 }
                 ws = c
+                if (!(talkWanted && g == talkGen)) {
+                    ws = null
+                    c.close()
+                    return
+                }
                 Talk.open = true
                 Talk.error = ""
                 delayMs = 2000L
@@ -386,11 +394,17 @@ class ListenService : Service() {
     private fun stopWorkers() {
         running = false
         gen++
-        try {
-            stream?.close()
-        } catch (e: IOException) {
-            Listen.error = ""
-        }
+        val s = stream
+        stream = null
+        if (s != null) Thread({
+            try {
+                s.close()
+            } catch (e: IOException) {
+                return@Thread
+            } catch (e: RuntimeException) {
+                return@Thread
+            }
+        }, "nt-listen-close").start()
         net?.interrupt()
         player?.interrupt()
         net?.join(2000)

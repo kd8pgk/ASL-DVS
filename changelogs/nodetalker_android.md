@@ -1,6 +1,26 @@
 # Node Talker 2 changelog
 
-Current version: `0.7.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.7.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.7.2 (2026-10-27)
+
+Fixes from the rest of the code audit (receive, transmit and Listen tab):
+
+- **Opening the talk channel for another node now stops the old node's
+  receive cleanly.** Before, the old receive stopped but the app still showed
+  it as playing.
+- **The talk channel can't be left open by a race.** If it was closed just as
+  it finished connecting, the new connection could stay open in the
+  background; it is now closed.
+- **Stopping receive no longer closes the audio stream on the main thread**,
+  where some Android versions refuse network work and could close the app.
+- **A microphone that stops working no longer spins the CPU.** The mic loop
+  now ends on a read error instead of retrying at full speed.
+- **Coming back to Listen during a tap-to-talk transmission** keeps showing
+  it as transmitting, instead of switching the button to ready while still on
+  the air. A late "keyed" answer after you let go no longer shows TALKING.
+- **Saving a download** can't close the app if Android refuses the chosen
+  file; it shows the error instead.
 
 ## 0.7.1 (2026-10-27)
 

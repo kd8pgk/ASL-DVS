@@ -60,7 +60,8 @@ class Mic(private val voice: Boolean, gainDb: Double, private val sink: (ByteArr
             rec.startRecording()
             while (running) {
                 val got = rec.read(buf, 0, buf.size)
-                if (got <= 0) continue
+                if (got < 0) break
+                if (got == 0) continue
                 for (k in 0 until got) {
                     acc += buf[k]
                     if (++cnt < step) continue

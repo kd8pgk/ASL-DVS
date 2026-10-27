@@ -385,6 +385,10 @@ class ListenTab(private val act: Activity, private val root: View, private val h
     }
 
     private fun openTalk() {
+        if (rules.talking) {
+            renderPtt()
+            return
+        }
         if (talkReady()) {
             pttUi(PttState.READY, "")
             return
@@ -499,7 +503,7 @@ class ListenTab(private val act: Activity, private val root: View, private val h
                 endTalk()
                 pttUi(if (talkReady()) PttState.READY else PttState.OFF, guardStop, R.color.amber)
             }
-            "keyed" -> {
+            "keyed" -> if (rules.talking) {
                 rules.keyed = true
                 rules.keyedAt = SystemClock.elapsedRealtime()
                 val tot = m.optDouble("tot", 0.0)
