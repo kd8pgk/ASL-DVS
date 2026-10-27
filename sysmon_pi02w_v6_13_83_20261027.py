@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.82-pi02w"
+VERSION      = "6.13.83-pi02w"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -10094,10 +10094,33 @@ function findShow(p, hits, q) {
   cnt.textContent = none ? (q ? "No matches" : "") : `${idx + 1} of ${n}`;
   if (none) return;
   const start = hits[idx];
-  const line  = ta.value.slice(0, start).split("\n").length - 1;
-  const lh    = parseFloat(getComputedStyle(ta).lineHeight) || 20;
   ta.setSelectionRange(start, start + q.length);
-  ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 3);
+  findScrollTo(ta, start);
+}
+
+function findScrollTo(ta, pos) {
+  const cs = getComputedStyle(ta);
+  const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const m = document.createElement("div");
+  for (const k of ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing",
+                   "tabSize", "whiteSpace", "overflowWrap", "wordBreak",
+                   "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]) {
+    m.style[k] = cs[k];
+  }
+  m.style.position = "absolute";
+  m.style.visibility = "hidden";
+  m.style.left = "-10000px";
+  m.style.top = "0";
+  m.style.boxSizing = "content-box";
+  m.style.width = (ta.clientWidth - pad) + "px";
+  m.textContent = ta.value.slice(0, pos);
+  const mark = document.createElement("span");
+  mark.textContent = "​";
+  m.appendChild(mark);
+  document.body.appendChild(m);
+  const y = mark.offsetTop;
+  m.remove();
+  ta.scrollTop = Math.max(0, y - ta.clientHeight / 3);
 }
 
 function findStart(p) {

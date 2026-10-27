@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_82_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_83_20261027.py`. Newest entries first.
+
+## 6.13.83-pi02w (2026-10-27)
+
+- **Find scrolls to the match.** Searching in the file editor, the Pinned Services box or the All Visible Config Files view now scrolls the first match into view, and Next and Prev (or Enter and Shift+Enter) bring each following match into view. The position is measured from the text, so wrapped lines and the padding above the file text no longer put the match off screen.
 
 ## 6.13.82-pi02w (2026-10-27)
 
