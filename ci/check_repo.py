@@ -204,6 +204,24 @@ def check_shell(path):
         fail(f"{path}: bash -n:\n{r.stderr.strip()}")
 
 
+SHARED_LOOK_TOOLS = {"nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "instmon", "44helper", "wifimon"}
+SHARED_LOOK_LINES = (
+    '@font-face{font-family:"Readex Pro";',
+    '--sans:"Readex Pro",Arial,Helvetica,sans-serif;',
+    '--mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;',
+    "--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;",
+    "--amber:#ffd040;--amber-dim:#6b4800;",
+    "textarea,pre,code{font-family:var(--mono)!important}",
+)
+
+
+def check_shared_look(path, text):
+    missing = [s for s in SHARED_LOOK_LINES if s not in text]
+    if missing:
+        fail(f"{path}: not on the shared Node Control look (missing {missing[0]!r}"
+             f"{f' and {len(missing) - 1} more' if len(missing) > 1 else ''})")
+
+
 def check_changelog(stem, name, version):
     path = f"changelogs/{stem}.md"
     if not os.path.isfile(path):
@@ -322,6 +340,11 @@ def main():
     for stem, files in head_tools.items():
         if len(files) > 1:
             fail(f"more than one file for tool '{stem}': {', '.join(sorted(files))}")
+
+    for files in head_tools.values():
+        for path in files:
+            if parse_tool(path)[0] in SHARED_LOOK_TOOLS:
+                check_shared_look(path, show(args.head, path))
 
     readme = read("README.md") if os.path.isfile("README.md") else ""
     changed = [p for p in added + modified if os.path.isfile(p)]
