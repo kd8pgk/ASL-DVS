@@ -43,11 +43,23 @@ class NodesActivity : Activity() {
         keep.isChecked = NodeStore.keepScreenOn(this)
         keep.setOnCheckedChangeListener { _, on -> NodeStore.setKeepScreenOn(this, on) }
         findViewById<TextView>(R.id.version).text = getString(R.string.app_version, BuildConfig.VERSION_NAME)
+        findViewById<TextView>(R.id.license).apply {
+            paintFlags = paintFlags or android.graphics.Paint.UNDERLINE_TEXT_FLAG
+            setOnClickListener { openLicense() }
+        }
     }
 
     override fun onResume() {
         super.onResume()
         refresh()
+    }
+
+    private fun openLicense() {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(getString(R.string.license_url))))
+        } catch (e: android.content.ActivityNotFoundException) {
+            Toast.makeText(this, getString(R.string.license_url), Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun batteryFree() = (getSystemService(POWER_SERVICE) as PowerManager).isIgnoringBatteryOptimizations(packageName)

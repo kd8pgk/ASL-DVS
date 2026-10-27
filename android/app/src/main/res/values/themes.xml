@@ -10,4 +10,6 @@
         <item name="android:navigationBarColor">@color/bar</item>
         <item name="android:statusBarColor">@color/bar</item>
     </style>
+
+    <style name="Theme.NodeTalker.Splash" parent="Theme.NodeTalker" />
 </resources>
