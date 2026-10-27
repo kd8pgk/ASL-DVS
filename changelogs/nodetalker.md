@@ -1,6 +1,23 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_40_20261026.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_41_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.41 (2026-10-27)
+
+Fixes from a code audit:
+
+- **Favorites whose label starts with `[`, `#` or `;` are no longer lost.**
+  The favorites file read a label like `[Club] repeater` as a section header,
+  so it and the favorites after it disappeared, and one like `#1 hub` as a
+  comment. A line with a `|` is now always a favorite, and a label can no
+  longer start with `#` or `;` (they are dropped when you save). Files
+  already saved with a `[` label read correctly again.
+- **A favorite's number must be 0 or more.** `-1` picked the last favorite
+  (Connect, Disconnect); it now asks you to pick a favorite.
+- **A gain of `inf` in the settings** now gets the usual "-12 to +12 dB"
+  error instead of an error page.
+- **A hand-edited burst log** with a bad row no longer breaks the Kerchunks
+  card; the row is skipped.
 
 ## 0.9.40 (2026-10-26)
 

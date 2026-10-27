@@ -31,8 +31,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.40"
-DATE_STR = "2026-10-26"
+VERSION = "0.9.41"
+DATE_STR = "2026-10-27"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -248,7 +248,10 @@ def _norm_node(value):
 
 
 def _norm_gain(value):
-    v = int(round(float(str(value).strip())))
+    try:
+        v = int(round(float(str(value).strip())))
+    except OverflowError:
+        raise ValueError("gains must be -12 to +12 dB")
     if not -12 <= v <= 12:
         raise ValueError("gains must be -12 to +12 dB")
     return v
@@ -1042,7 +1045,7 @@ def _kc_rows():
     rows = []
     for ln in lines:
         p = ln.split(",")
-        if len(p) not in (5, 8):
+        if len(p) not in (5, 8) or not p[0].isdigit():
             continue
         try:
             row = {"id": p[0], "secs": float(p[1]), "peak": float(p[2]), "kerchunk": p[3] == "1", "label": p[4],
@@ -2348,7 +2351,7 @@ def _file_key(path):
 
 
 def _label(value, fallback):
-    s = _CALL_TRIM.sub(" ", str(value or "")).replace("|", "/").strip()[:40]
+    s = _CALL_TRIM.sub(" ", str(value or "")).replace("|", "/").strip().lstrip("#;").strip()[:40]
     return s or fallback
 
 
@@ -2526,7 +2529,7 @@ def parse_fav_conf(text, fav_limit=FAV_MAX, net_limit=DMR_NET_MAX):
         line = raw.strip()
         if not line or line.startswith("#") or line.startswith(";"):
             continue
-        if line.startswith("[") and "]" in line:
+        if line.startswith("[") and "]" in line and "|" not in line:
             section = line[1:line.index("]")].strip().upper()
             continue
         if section == "CONFIG":
@@ -3748,20 +3751,23 @@ def _clear_active(target, r):
     return r
 
 
+def _fav_at(favs, index):
+    try:
+        i = int(index)
+    except (ValueError, TypeError, OverflowError):
+        return None
+    return favs[i] if 0 <= i < len(favs) else None
+
+
 def fav_connect(index, net_action=None):
     r = _fav_connect_impl(index, net_action)
-    try:
-        f = fav_load()[int(index)]
-    except (ValueError, TypeError, IndexError):
-        return r
-    return _set_active(f, r)
+    f = _fav_at(fav_load(), index)
+    return r if f is None else _set_active(f, r)
 
 
 def _fav_connect_impl(index, net_action=None):
-    favs = fav_load()
-    try:
-        f = favs[int(index)]
-    except (ValueError, TypeError, IndexError):
+    f = _fav_at(fav_load(), index)
+    if f is None:
         return {"ok": False, "error": "Pick a favorite."}
     node, err = _connect_node()
     if not node:
@@ -3804,11 +3810,10 @@ def node_connect(f, node):
 def fav_disconnect(index=None):
     if index is None:
         return _clear_active(None, _fav_disconnect_impl(index))
-    try:
-        target = fav_target(fav_load()[int(index)])
-    except (ValueError, TypeError, IndexError):
+    f = _fav_at(fav_load(), index)
+    if f is None:
         return _fav_disconnect_impl(index)
-    return _clear_active(target, _fav_disconnect_impl(index))
+    return _clear_active(fav_target(f), _fav_disconnect_impl(index))
 
 
 def _fav_disconnect_impl(index=None):
@@ -3817,10 +3822,10 @@ def _fav_disconnect_impl(index=None):
         return {"ok": False, "error": err}
     favs = fav_load()
     if index is not None:
-        try:
-            favs = [favs[int(index)]]
-        except (ValueError, TypeError, IndexError):
+        f = _fav_at(favs, index)
+        if f is None:
             return {"ok": False, "error": "Pick a favorite."}
+        favs = [f]
     targets = {fav_target(f): f for f in favs}
     _, links = rpt_links(node, max_age=0)
     hit = [l["node"] for l in links if l["node"] in targets]
