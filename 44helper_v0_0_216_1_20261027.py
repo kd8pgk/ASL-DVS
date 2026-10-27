@@ -43,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.216.1"
+APP_VERSION = "0.0.216.2"
 APP_STAGE = "v0.0.215: firewall-cmd gets 60 s to answer; the Overview reads the firewall zone from a cache; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -24742,12 +24742,12 @@ def render_page(cfg: configparser.ConfigParser) -> str:
 <header>
   <div class="hdr-left">
     <div class="logo">{APP_HEADER}</div>
-    <div class="logo-sub">Node Control · {identity_line}</div>
+    <div class="logo-sub">{identity_line}</div>
   </div>
   <div class="hdr-right">
     <span id="hdr-uptime">v{APP_VERSION}</span>
     <span id="hdr-logout-all" onclick="doLogoutAll()" title="End every login to this helper, on every browser and device">Log out all devices</span>
-    <span id="hdr-logout" onclick="doLogout()" title="Log out of this session">Log out</span>
+    <span id="hdr-logout" onclick="doLogout()" title="Log out of this session">Log Out</span>
   </div>
 </header>
 <div id="qm-banner" class="qm-banner"></div>

@@ -2,6 +2,11 @@
 
 Current file: `instmon_v2_78_1_1_20261027.py`. Newest entries first.
 
+## 2.78.1.2 (2026-10-27)
+
+- **Header and page names.** The header, the login card and the page title read "Install Monitor". Cosmetic only; no change in behaviour.
+- The sub-line drops "Node Control" and reads "Installer & Component Manager".
+
 ## 2.78.1.1 (2026-10-27)
 
 - **The look of Node Control.** The text is set in Readex Pro (built into the page), with the same header as Node Control: the logo and sub-line match, and the sub-line now starts with "Node Control". Buttons and text use one size scale. The log box stays monospace. A stray line after the header rule, which browsers ignored, is removed. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.

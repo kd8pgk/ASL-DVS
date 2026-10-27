@@ -2,6 +2,11 @@
 
 Current file: `sysmon_pi02w_v6_13_76_1_20261027.py`. Newest entries first.
 
+## 6.13.76.2-pi02w (2026-10-27)
+
+- **Header and page names.** The header, the login card and the page title read "System Monitor". Cosmetic only; no change in behaviour.
+- The header sub-line drops "Node Control". The ASL-DVS tab keeps its name.
+
 ## 6.13.76.1-pi02w (2026-10-27)
 
 - **Smaller type and the shared look.** The text is set in Readex Pro (built into the page), with one size scale for the whole page, so the tabs, buttons and cards fit more on screen. The header matches Node Control: the sub-line now starts with "Node Control". The Global Actions bar wraps on a phone instead of running off the right edge. The ASL-DVS tab keeps its name. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.

@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.78.1.1"
+VERSION ="2.78.1.2"
 DATE_STR ="2026-10-26"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -9721,7 +9721,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Install Monitor &mdash; instmon</title>
+<title>Install Monitor</title>
 <style>
 {css}</style>
 </head>
@@ -9729,7 +9729,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <header>
   <div class="hdr-left">
     <div class="logo">Install Monitor</div>
-    <div class="logo-sub">Node Control &middot; Installer &amp; Component Manager</div>
+    <div class="logo-sub">Installer &amp; Component Manager</div>
   </div>
   <div class="hdr-right">
     <span id="hdr-version">v{version}</span>
@@ -9739,7 +9739,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 </header>
 <div id="login-screen">
   <div id="login-card">
-    <h2>instmon Login</h2>
+    <h2>Install Monitor</h2>
     <form onsubmit="_doLogin(event)">
       <input id="login-pw" type="password" autocomplete="current-password" placeholder="Root password" required>
       <button id="login-btn" type="submit">Log In</button>
