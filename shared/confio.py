@@ -3,6 +3,12 @@ USED_BY = {
                      "amp_nodetalker", "44helper", "wifimon", "confputter"),
     "http_get": ("44helper",),
     "fill_secrets": ("44helper", "confputter"),
+    "firewall_backend": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
+                         "nodetalker", "amp_nodetalker"),
+    "open_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
+                           "nodetalker", "amp_nodetalker"),
+    "close_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
+                            "nodetalker", "amp_nodetalker"),
 }
 
 
@@ -177,3 +183,86 @@ def fill_secrets(text, current, supplied=None, is_json=False):
             new += v + parts[i + 1]
         out.append(new)
     return "\n".join(out), resolved, unresolved
+
+
+def firewall_backend():
+    import shutil
+    import subprocess
+    try:
+        if shutil.which("firewall-cmd") and subprocess.run(
+                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=10).stdout.strip() == "running":
+            return "firewalld"
+        if shutil.which("ufw") and "Status: active" in subprocess.run(
+                ["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout:
+            return "ufw"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "none"
+
+
+def open_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        target = subprocess.run(["firewall-cmd", "--zone=" + zone, "--get-target"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if target == "ACCEPT" or subprocess.run(check, capture_output=True, text=True,
+                                                timeout=10).stdout.strip() == "yes":
+            return "=", "%s is already open in firewalld zone %s" % (spec, zone)
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "+", "opened %s in firewalld zone %s (now and after a reboot)" % (spec, zone)
+        return "!", "could not open %s in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if "Default: allow (incoming)" in status or re.search(allow, status, re.M):
+            return "=", "%s is already open in ufw" % spec
+        subprocess.run(["ufw", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "+", "opened %s in ufw" % spec
+        return "!", "could not open %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so %s is not blocked" % spec
+
+
+def close_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        was_open = subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes"
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "!", "could not close %s in firewalld zone %s" % (spec, zone)
+        if was_open:
+            return "-", "closed %s in firewalld zone %s" % (spec, zone)
+        return "=", "%s was not open in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if not re.search(allow, status, re.M):
+            return "=", "%s was not open in ufw" % spec
+        subprocess.run(["ufw", "--force", "delete", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "!", "could not close %s in ufw" % spec
+        if "Default: allow (incoming)" in status:
+            return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
+        return "-", "closed %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec

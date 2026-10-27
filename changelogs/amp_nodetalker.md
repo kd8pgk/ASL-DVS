@@ -1,6 +1,10 @@
 # Node Talker for AMP changelog
 
-Current file: `amp_nodetalker_v0_3_1_20261027.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+Current file: `amp_nodetalker_v0_3_2_20261027.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+
+## 0.3.2 (2026-10-27)
+
+- **The port opens on install and closes on uninstall.** Install checks that Node Talker for AMP's port (8993, or the port in its config) is open in the firewall (ufw or firewalld) and opens it if it is not. With no active firewall nothing changes. Uninstall removes the service first and closes the port last. The check is shared through `firewall_backend`, `open_firewall_port` and `close_firewall_port` in `shared/confio.py`, kept identical in each tool and checked by the repo check.
 
 ## 0.3.1 (2026-10-27)
 

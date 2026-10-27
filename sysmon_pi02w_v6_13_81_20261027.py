@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.80-pi02w"
+VERSION      = "6.13.81-pi02w"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -22349,6 +22349,87 @@ def _remove_launcher_if_unused() -> None:
         return
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
+def firewall_backend():
+    import shutil
+    import subprocess
+    try:
+        if shutil.which("firewall-cmd") and subprocess.run(
+                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=10).stdout.strip() == "running":
+            return "firewalld"
+        if shutil.which("ufw") and "Status: active" in subprocess.run(
+                ["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout:
+            return "ufw"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "none"
+
+def open_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        target = subprocess.run(["firewall-cmd", "--zone=" + zone, "--get-target"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if target == "ACCEPT" or subprocess.run(check, capture_output=True, text=True,
+                                                timeout=10).stdout.strip() == "yes":
+            return "=", "%s is already open in firewalld zone %s" % (spec, zone)
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "+", "opened %s in firewalld zone %s (now and after a reboot)" % (spec, zone)
+        return "!", "could not open %s in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if "Default: allow (incoming)" in status or re.search(allow, status, re.M):
+            return "=", "%s is already open in ufw" % spec
+        subprocess.run(["ufw", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "+", "opened %s in ufw" % spec
+        return "!", "could not open %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so %s is not blocked" % spec
+
+def close_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        was_open = subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes"
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "!", "could not close %s in firewalld zone %s" % (spec, zone)
+        if was_open:
+            return "-", "closed %s in firewalld zone %s" % (spec, zone)
+        return "=", "%s was not open in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if not re.search(allow, status, re.M):
+            return "=", "%s was not open in ufw" % spec
+        subprocess.run(["ufw", "--force", "delete", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "!", "could not close %s in ufw" % spec
+        if "Default: allow (incoming)" in status:
+            return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
+        return "-", "closed %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
+
+
 def install_service() -> None:
     if os.geteuid() != 0:
         print("ERROR: install requires root  →  sudo python3 sysmon.py --install",
@@ -22413,6 +22494,10 @@ def install_service() -> None:
         f.write(_SERVICE_CONTENT)
     print(f"  [+] Wrote service file at {_SERVICE_PATH}")
 
+    port = int(_cfg.get("server", "port", fallback=str(DEFAULT_PORT)))
+    mark, msg = open_firewall_port(port)
+    print(f"  [{mark}] {msg}")
+    
     subprocess.run(["systemctl", "daemon-reload"], check=True)
     subprocess.run(["systemctl", "enable", "sysmon.service"], check=True)
     
@@ -22470,6 +22555,9 @@ def uninstall_service() -> None:
     except OSError as e:
         print(f"  [!] Could not restore {BOOT_CONFIG}: {e}")
 
+    port = int(_cfg.get("server", "port", fallback=str(DEFAULT_PORT)))
+    mark, msg = close_firewall_port(port)
+    print(f"  [{mark}] {msg}")
     print(f"\nUninstall complete. {CONFIG_FILE} was not touched.")
 
 def main() -> None:

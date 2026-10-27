@@ -1,6 +1,10 @@
 # instmon changelog
 
-Current file: `instmon_v2_80_0_20261027.py`. Newest entries first.
+Current file: `instmon_v2_81_0_20261027.py`. Newest entries first.
+
+## 2.81.0 (2026-10-27)
+
+- **The port opens on install and closes on uninstall.** Install checks that instmon's port (8990) is open in the firewall (ufw or firewalld) and opens it if it is not. With no active firewall nothing changes. Uninstall removes the service first and closes the port last. The check is shared through `firewall_backend`, `open_firewall_port` and `close_firewall_port` in `shared/confio.py`, kept identical in each tool and checked by the repo check.
 
 ## 2.80.0 (2026-10-27)
 
