@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_216_20261019.py`. Newest entries first.
+Current file: `44helper_v0_0_216_1_20261027.py`. Newest entries first.
+
+## 0.0.216.1 (2026-10-27)
+
+- **Readex Pro and the Node Control look.** The text is set in Readex Pro (built into the page). The header sub-line starts with "Node Control". Text boxes and labels use the same font; the command line, config and log boxes stay monospace. Buttons and text use one size scale. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 0.0.216 (2026-10-19)
 
