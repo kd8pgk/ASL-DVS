@@ -1,6 +1,13 @@
 # instmon changelog
 
-Current file: `instmon_v2_79_1_20261027.py`. Newest entries first.
+Current file: `instmon_v2_80_0_20261027.py`. Newest entries first.
+
+## 2.80.0 (2026-10-27)
+
+- **Config putter card, below Config getter.** Puts the files of a Config getter snapshot back on the node with `confputter.py`. Pick a snapshot (or an uploaded corrected copy), **Preview** (nothing is written; each file shows as new, changed, same or comments only, with a masked diff), tick files (firewall and WireGuard files are marked CAREFUL and start unticked), type any password the node does not have, and **Restore ticked files**. **Undo last restore** puts the replaced files back. A system the snapshot has but the node does not (folder missing) is skipped.
+- **Upload corrected copy.** A snapshot edited elsewhere (for example by Claude, or with the comment lines stripped) can be uploaded as a `.md` file; it is checked for the snapshot heading and kept in `snapshots/edited/` (mode 0600), and can be deleted again.
+- **Config putter library group** (Upload, Edit, Download, Delete, Lock, **Install**): Install checks the script (`#!` python line, VERSION, syntax) and copies it to `/usr/local/bin/confputter.py` (mode 0755). Check GitHub and USB import know the new group.
+- **Typed secrets stay private:** they go to confputter in a mode 0600 temp file that is deleted right after, are never logged, and the card clears them after each restore.
 
 ## 2.79.1 (2026-10-27)
 

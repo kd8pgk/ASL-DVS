@@ -1,6 +1,10 @@
 # Uninstaller (uninstall_all) changelog
 
-Current file: `uninstall_all_v1_8_0_20261027.sh`. Newest entries first.
+Current file: `uninstall_all_v1_9_0_20261027.sh`. Newest entries first.
+
+## 1.9.0 (2026-10-27)
+
+- **Config putter:** removes `/usr/local/bin/confputter.py`. Its backups stay in `/var/lib/confputter/backups` (they hold real config values).
 
 ## 1.8.0 (2026-10-27)
 

@@ -44,8 +44,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.220"
-APP_STAGE = "v0.0.220: Config tab gets a Full config replacement card (Pi Zero 2 W bundle from GitHub); history in changelogs/44helper.md"
+APP_VERSION = "0.0.221"
+APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -165,6 +165,104 @@ def http_get(url, max_bytes, timeout=20):
     if len(data) > max_bytes:
         raise ValueError("the download is larger than %d bytes" % max_bytes)
     return data
+
+
+def fill_secrets(text, current, supplied=None, is_json=False):
+    import json
+    import re
+    tag_re = re.compile(r"<redacted:[0-9a-f]{8}>")
+    hdr_re = re.compile(r"^\s*\[([^\]]+)\]")
+    supplied = supplied or {}
+    if is_json:
+        try:
+            data = json.loads(text)
+            cur = json.loads(current) if current is not None else None
+        except ValueError:
+            data = None
+            cur = None
+        if data is not None:
+            resolved = [0]
+            unresolved = []
+
+            def walk(node, cnode, path):
+                if isinstance(node, dict):
+                    return {k: walk(v, cnode.get(k) if isinstance(cnode, dict) else None, path + [str(k)])
+                            for k, v in node.items()}
+                if isinstance(node, list):
+                    return [walk(v, cnode[i] if isinstance(cnode, list) and i < len(cnode) else None,
+                                 path + [str(i)]) for i, v in enumerate(node)]
+                if isinstance(node, str) and tag_re.fullmatch(node):
+                    if node in supplied:
+                        resolved[0] += 1
+                        return supplied[node]
+                    if cnode is not None and not (isinstance(cnode, str) and tag_re.fullmatch(cnode)):
+                        resolved[0] += 1
+                        return cnode
+                    unresolved.append({"line": 0, "key": ".".join(path), "tag": node})
+                    return ""
+                return node
+            out = walk(data, cur, [])
+            return json.dumps(out, indent=1, sort_keys=True) + "\n", resolved[0], unresolved
+    by_sec = {}
+    if current is not None:
+        sec = ""
+        for line in current.split("\n"):
+            hm = hdr_re.match(line)
+            if hm:
+                sec = hm.group(1)
+            by_sec.setdefault(sec, []).append(line)
+    out = []
+    unresolved = []
+    resolved = 0
+    seen = {}
+    sec = ""
+    for n, line in enumerate(text.split("\n"), 1):
+        hm = hdr_re.match(line)
+        if hm:
+            sec = hm.group(1)
+        body = line.lstrip()
+        tags = tag_re.findall(body)
+        if not tags:
+            out.append(line)
+            continue
+        indent = line[:len(line) - len(body)]
+        parts = tag_re.split(body)
+        shape = tag_re.sub("\x00", body)
+        k = seen.get((sec, shape), 0)
+        seen[(sec, shape)] = k + 1
+        got = None
+        if not all(t in supplied for t in tags):
+            pats = [re.escape(p).replace("\\ ", r"\s*") for p in parts]
+            rx = "^" + "".join(pats[i] + ("(.*?)" if i < len(pats) - 1 else "") for i in range(len(pats))) + "$"
+            try:
+                pat = re.compile(rx)
+            except re.error:
+                pat = None
+            if pat is not None:
+                hits = []
+                for cur_line in by_sec.get(sec, []):
+                    cm = pat.match(cur_line.lstrip())
+                    if cm:
+                        hits.append(cm)
+                if k < len(hits):
+                    got = hits[k].groups()
+        vals = []
+        for i, t in enumerate(tags):
+            if t in supplied:
+                vals.append(supplied[t])
+                resolved += 1
+            elif got is not None:
+                vals.append(got[i])
+                resolved += 1
+            else:
+                vals.append("")
+                if not body.startswith((";", "#")):
+                    unresolved.append({"line": n, "key": parts[0].strip()[:40], "tag": t})
+        new = indent + parts[0]
+        for i, v in enumerate(vals):
+            new += v + parts[i + 1]
+        out.append(new)
+    return "\n".join(out), resolved, unresolved
 
 
 def _read_shadow_hash(account: str):
@@ -16010,7 +16108,6 @@ _FCR_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}(/[A-Za-z0-9][A-Za-z0
 _FCR_REL_RE = re.compile(r"^files/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
 _FCR_TOKEN_RE = re.compile(r"^@@[A-Z0-9_]{1,24}@@$")
 _FCR_ANY_TOKEN_RE = re.compile(r"@@[A-Z0-9_]{1,24}@@")
-_FCR_TAG_RE = re.compile(r"<redacted:[0-9a-f]{8}>")
 _FCR_ID_RE = re.compile(r"^[a-z0-9_]{1,16}$")
 
 def _fcr_manifest_error(m) -> str | None:
@@ -16155,61 +16252,6 @@ def _fcr_render(data: bytes, tokens: dict) -> tuple[str | None, str]:
         return None, "unfilled " + ", ".join(left)
     return text, ""
 
-def _fcr_fill_secrets(text: str, current: str | None) -> tuple[str, int, list[str]]:
-    by_sec: dict[str, list[str]] = {}
-    if current is not None:
-        sec = ""
-        for line in current.split("\n"):
-            hm = _CFGR_HDR_RE.match(line)
-            if hm:
-                sec = hm.group(1)
-            by_sec.setdefault(sec, []).append(line)
-    out: list[str] = []
-    unresolved: list[str] = []
-    resolved = 0
-    seen: dict[tuple[str, str], int] = {}
-    sec = ""
-    for n, line in enumerate(text.split("\n"), 1):
-        hm = _CFGR_HDR_RE.match(line)
-        if hm:
-            sec = hm.group(1)
-        body = line.lstrip()
-        parts = _FCR_TAG_RE.split(body)
-        if len(parts) == 1:
-            out.append(line)
-            continue
-        indent = line[:len(line) - len(body)]
-        shape = _FCR_TAG_RE.sub("\x00", body)
-        k = seen.get((sec, shape), 0)
-        seen[(sec, shape)] = k + 1
-        pats = [re.escape(p).replace("\\ ", r"\s*") for p in parts]
-        rx = "^" + "".join(pats[i] + ("(.*?)" if i < len(pats) - 1 else "") for i in range(len(pats))) + "$"
-        got = None
-        try:
-            pat = re.compile(rx)
-        except re.error:
-            pat = None
-        if pat is not None:
-            hits = []
-            for cur_line in by_sec.get(sec, []):
-                cm = pat.match(cur_line.lstrip())
-                if cm:
-                    hits.append(cm)
-            if k < len(hits):
-                got = hits[k].groups()
-        if got is None:
-            vals = [""] * (len(parts) - 1)
-            if not body.startswith((";", "#")):
-                unresolved.append(f"line {n}: {parts[0].strip()[:40]}")
-        else:
-            vals = list(got)
-            resolved += len(vals)
-        new = indent + parts[0]
-        for i, v in enumerate(vals):
-            new += v + parts[i + 1]
-        out.append(new)
-    return "\n".join(out), resolved, unresolved
-
 def _fcr_group_state(force: bool = True) -> dict[str, tuple[bool, str]]:
     prods = {p["key"]: p for p in _detect_installed_products(force=force)}
     out: dict[str, tuple[bool, str]] = {}
@@ -16238,7 +16280,8 @@ def _fcr_plan(m: dict, tokens: dict, state: dict) -> tuple[list[dict], list[str]
             errors.append(f"{path}: {err}")
             continue
         cur = _cfgr_read(path)
-        text, resolved, unresolved = _fcr_fill_secrets(text, None if cur is None else cur.decode("utf-8", "replace"))
+        text, resolved, unresolved = fill_secrets(text, None if cur is None else cur.decode("utf-8", "replace"),
+                                                  None, path.endswith(".json"))
         data, _kept = _cfgr_keep_managed(text.encode("utf-8"), cur)
         status = "new" if cur is None else ("unchanged" if cur == data else "changed")
         rows.append({"path": path, "group": g, "status": status, "data": data, "resolved": resolved,
@@ -16259,7 +16302,7 @@ def _fcr_report(m: dict, meta: dict, state: dict, rows: list[dict]) -> list[str]
         else:
             extra = f", {r['resolved']} secret value(s) kept from this node" if r["resolved"] else ""
             lines.append(f"  {r['path']}: {r['status']}{extra}")
-    missing = [f"{r['path']} {u}" for r in rows for u in r.get("unresolved", [])]
+    missing = [f"{r['path']} line {u['line']}: {u['key']}" for r in rows for u in r.get("unresolved", [])]
     if missing:
         lines += ["", "Secrets this node does not have yet. They are written empty; set them by hand:"]
         lines += [f"  {x}" for x in missing[:40]]
@@ -17068,8 +17111,9 @@ def _render_config_panel() -> str:
   <div class="step-card" id="cfg-bundle">
     <div class="step-head"><div class="step-title">Full config replacement</div></div>
     <div class="step-body"><b>For a Pi Zero 2 W.</b> Replaces the config files of the systems installed on this node
-      with the standard set from GitHub. Config only: install ASL3, DVSwitch and USRP2M17 from their tabs, and the split
-      tunnel from the Split Tunnel tab, first. A system that is not installed is skipped. Passwords and keys are not in
+      with the standard set from GitHub. Config only: install ASL3, DVSwitch and USRP2M17 from their tabs first. A system that is not
+      installed is skipped. This card does not touch the firewall or WireGuard: for the split tunnel, paste this node's
+      own WireGuard config (from 44Net Connect) on the Split Tunnel tab and run its steps. Passwords and keys are not in
       the bundle: each one keeps the value this node has now. The current files are saved first as an automatic
       restore point.</div>
     <label style="font-family:var(--sans);font-size:var(--fs-base);color:var(--muted)">Version (GitHub branch or tag)

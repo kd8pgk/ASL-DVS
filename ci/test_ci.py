@@ -546,7 +546,7 @@ class BundleTests(unittest.TestCase):
         self.assertIsNone(self.h._fcr_tokens(m, {})[0])
 
     def test_secrets_kept_from_current_file(self):
-        fill = self.h._fcr_fill_secrets
+        fill = self.h.fill_secrets
         bundle = ("[general]\nsecret = <redacted:aaaaaaaa>\nregister => 1:<redacted:bbbbbbbb>@host.org\n"
                   "[DMR Network]\nPassword=<redacted:cccccccc>\n[Other]\nPassword=<redacted:dddddddd>\n"
                   ";secret = <redacted:eeeeeeee>\n")
@@ -562,6 +562,7 @@ class BundleTests(unittest.TestCase):
         text, resolved, unresolved = fill(bundle, None)
         self.assertNotIn("<redacted:", text)
         self.assertEqual(len(unresolved), 4)
+        self.assertEqual(sorted(u["tag"] for u in unresolved)[:2], ["<redacted:aaaaaaaa>", "<redacted:bbbbbbbb>"])
         self.assertEqual(resolved, 0)
         text, _r, unresolved = fill("[a]\nx=<redacted:11111111>\nx=<redacted:22222222>\n", "[a]\nx=first\nx=second\n")
         self.assertIn("x=first\nx=second", text)
@@ -619,6 +620,388 @@ class BundleTests(unittest.TestCase):
         self.assertTrue(res["success"], res["output"])
         self.assertIn("Nothing was changed", res["output"])
         self.assertEqual(written, {})
+
+
+class ConfputterTests(unittest.TestCase):
+    FILES = {
+        "etc/asterisk/rpt.conf": "; node comment\n[general]\nsecret = s3cr3t\n\n; another comment\nnode = 1234\n",
+        "etc/asterisk/iax.conf": "[general]\nregister => 1999:regpw@register.example.org\n",
+        "opt/MMDVM_Bridge/MMDVM_Bridge.ini": "[DMR Network]\nPassword=bmpw\nAddress=host.example.org\n",
+        "etc/asl_dvs/phone.json": json.dumps({"password": "phonepw", "email": "me@example.org", "x": 1}),
+        "etc/asl_dvs/favs.conf": "[DMR_SERVERS]\nTGIF|tgifpw|tgif.network:62031|https://t.example.org\n",
+        "etc/firewalld/zones/z.xml": "<zone/>\n",
+        "etc/hosts": "127.0.0.1 localhost\n",
+        "etc/asl_dvs/instmon_locks.json": "{}",
+    }
+
+    def setUp(self):
+        import glob
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = os.path.join(self.tmp.name, "node")
+        self.out = os.path.join(self.tmp.name, "snaps")
+        self.backups = os.path.join(self.tmp.name, "backups")
+        self.getter = sorted(glob.glob(os.path.join(HERE, "..", "confgetter_v*.sh")))[-1]
+        self.putter = sorted(glob.glob(os.path.join(HERE, "..", "confputter_v*.py")))[-1]
+        self.write_tree(self.FILES)
+        r = subprocess.run(["bash", self.getter, "--out", self.out], capture_output=True, text=True,
+                           env=dict(os.environ, CONFGETTER_ROOT=self.root))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        snaps = [f for f in os.listdir(self.out) if f.endswith(".md")]
+        self.snap = os.path.join(self.out, snaps[0])
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def write_tree(self, files):
+        for rel, text in files.items():
+            p = os.path.join(self.root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(text)
+
+    def read(self, rel):
+        with open(os.path.join(self.root, rel)) as f:
+            return f.read()
+
+    def run_put(self, *args, snap=None, ok=True):
+        env = dict(os.environ, CONFPUTTER_ROOT=self.root, CONFPUTTER_BACKUPS=self.backups)
+        r = subprocess.run([sys.executable, self.putter, "--json", *args] + (["--snapshot", snap or self.snap]
+                           if "--undo" not in args and "--list-backups" not in args else []),
+                           capture_output=True, text=True, env=env)
+        if ok:
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return json.loads(r.stdout)
+
+    def status(self, res):
+        return {f["path"]: f["status"] for f in res["files"]}
+
+    def test_unchanged_node_is_all_same(self):
+        res = self.run_put("--preview")
+        st = self.status(res)
+        for p in ("/etc/asterisk/rpt.conf", "/etc/asterisk/iax.conf", "/opt/MMDVM_Bridge/MMDVM_Bridge.ini",
+                  "/etc/asl_dvs/phone.json", "/etc/asl_dvs/favs.conf", "/etc/firewalld/zones/z.xml"):
+            self.assertEqual(st[p], "same", p)
+        self.assertEqual(st["/etc/hosts"], "skipped")
+        self.assertEqual(st["/etc/asl_dvs/instmon_locks.json"], "skipped")
+        self.assertEqual(res["secrets"], [])
+        self.assertTrue(res["snapshot"]["host_match"])
+
+    def test_same_node_fix_keeps_secrets_and_undoes(self):
+        self.write_tree({"etc/asterisk/rpt.conf": "; node comment\n[general]\nsecret = newer\n\n; another comment\nnode = 9999\n",
+                         "opt/MMDVM_Bridge/MMDVM_Bridge.ini": "[DMR Network]\nPassword=changed\nAddress=wrong\n"})
+        res = self.run_put("--preview")
+        self.assertEqual(self.status(res)["/etc/asterisk/rpt.conf"], "changed")
+        self.assertEqual(res["secrets"], [])
+        before = {p: self.read(p) for p in self.FILES}
+        done = self.run_put("--apply")
+        self.assertEqual(sorted(done["written"]), ["/etc/asterisk/rpt.conf", "/opt/MMDVM_Bridge/MMDVM_Bridge.ini"])
+        self.assertIn("node = 1234", self.read("etc/asterisk/rpt.conf"))
+        self.assertIn("secret = newer", self.read("etc/asterisk/rpt.conf"))
+        self.assertIn("Password=changed", self.read("opt/MMDVM_Bridge/MMDVM_Bridge.ini"))
+        self.assertIn("Address=host.example.org", self.read("opt/MMDVM_Bridge/MMDVM_Bridge.ini"))
+        again = self.status(self.run_put("--preview"))
+        self.assertEqual(again["/etc/asterisk/rpt.conf"], "same")
+        self.assertEqual(again["/opt/MMDVM_Bridge/MMDVM_Bridge.ini"], "same")
+        undo = self.run_put("--undo")
+        self.assertEqual(sorted(undo["restored"]), sorted(done["written"]))
+        for p, text in before.items():
+            self.assertEqual(self.read(p), text, p)
+        self.assertFalse(self.run_put("--undo", ok=False)["ok"])
+
+    def test_wiped_node_needs_typed_secrets(self):
+        for rel in self.FILES:
+            os.unlink(os.path.join(self.root, rel))
+        res = self.run_put("--preview")
+        self.assertEqual(self.status(res)["/etc/asterisk/rpt.conf"], "new")
+        self.assertGreaterEqual(len(res["secrets"]), 5)
+        values = {x["tag"]: "typed-" + x["tag"][10:14] for x in res["secrets"]}
+        sf = os.path.join(self.tmp.name, "secrets.json")
+        with open(sf, "w") as f:
+            json.dump(values, f)
+        done = self.run_put("--apply", "--secrets-file", sf)
+        self.assertFalse(done["unresolved"])
+        text = self.read("etc/asterisk/rpt.conf")
+        self.assertIn("node = 1234", text)
+        self.assertNotIn("<redacted:", text)
+        self.assertIn("secret = typed-", text)
+        self.assertIn("register => 1999:typed-", self.read("etc/asterisk/iax.conf"))
+        phone = json.loads(self.read("etc/asl_dvs/phone.json"))
+        self.assertEqual(phone["x"], 1)
+        self.assertTrue(phone["password"].startswith("typed-"))
+        self.assertEqual(os.stat(os.path.join(self.root, "etc/asterisk/rpt.conf")).st_mode & 0o777, 0o644)
+
+    def test_unfilled_secrets_are_written_empty_and_listed(self):
+        os.unlink(os.path.join(self.root, "etc/asterisk/iax.conf"))
+        done = self.run_put("--apply", "--only", "/etc/asterisk/iax.conf")
+        self.assertEqual([u["path"] for u in done["unresolved"]], ["/etc/asterisk/iax.conf"])
+        self.assertEqual(self.read("etc/asterisk/iax.conf"), "[general]\nregister => 1999:@register.example.org\n")
+
+    def test_stripped_copy_keeps_node_comments(self):
+        with open(self.snap, encoding="utf-8") as f:
+            text = f.read()
+        stripped = "\n".join(ln for ln in text.split("\n") if not ln.lstrip().startswith(";"))
+        stripped = "> Test copy: whole-line comments removed.\n\n" + stripped
+        copy = os.path.join(self.tmp.name, "stripped.md")
+        with open(copy, "w", encoding="utf-8") as f:
+            f.write(stripped)
+        res = self.run_put("--preview", snap=copy)
+        self.assertEqual(self.status(res)["/etc/asterisk/rpt.conf"], "same")
+        self.assertTrue(any("Edited copy" in w for w in res["warnings"]))
+        edited = stripped.replace("node = 1234", "node = 4321")
+        with open(copy, "w", encoding="utf-8") as f:
+            f.write(edited)
+        self.run_put("--apply", "--only", "/etc/asterisk/rpt.conf", snap=copy)
+        self.assertEqual(self.read("etc/asterisk/rpt.conf"),
+                         "; node comment\n[general]\nsecret = s3cr3t\n\n; another comment\nnode = 4321\n")
+        flat = self.run_put("--preview", "--no-keep-comments", snap=copy)
+        self.assertEqual(self.status(flat)["/etc/asterisk/rpt.conf"], "comments")
+
+    def test_policy_refuses_unsafe_paths(self):
+        with open(self.snap, encoding="utf-8") as f:
+            text = f.read()
+        evil = text.replace("### /etc/hosts", "### /etc/shadow").replace("### /etc/firewalld/zones/z.xml", "### /etc/asterisk/../shadow")
+        evil += "\n### /etc/asterisk/custom/README.md\n\n```\nhello\n```\n"
+        copy = os.path.join(self.tmp.name, "evil.md")
+        with open(copy, "w", encoding="utf-8") as f:
+            f.write(evil)
+        res = self.run_put("--preview", snap=copy)
+        st = self.status(res)
+        self.assertEqual(st["/etc/shadow"], "skipped")
+        self.assertEqual(st["/etc/asterisk/../shadow"], "skipped")
+        self.assertEqual(st["/etc/asterisk/custom/README.md"], "skipped")
+        done = self.run_put("--apply", "--only", "/etc/shadow", snap=copy, ok=False)
+        self.assertEqual(done["written"], [])
+
+    def test_trimmed_file_is_refused(self):
+        with open(self.snap, encoding="utf-8") as f:
+            text = f.read()
+        marked = text.replace("| /etc/asterisk/rpt.conf |", "| /etc/asterisk/rpt.conf |", 1)
+        lines = marked.split("\n")
+        for i, ln in enumerate(lines):
+            if ln.startswith("| /etc/asterisk/rpt.conf |"):
+                cols = ln.strip().strip("|").split("|")
+                cols[7] = " trimmed to 200000 bytes "
+                lines[i] = "|" + "|".join(cols) + "|"
+        copy = os.path.join(self.tmp.name, "trim.md")
+        with open(copy, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        res = self.run_put("--preview", snap=copy)
+        self.assertEqual(self.status(res)["/etc/asterisk/rpt.conf"], "skipped")
+
+    def test_bad_input_is_refused(self):
+        bad = os.path.join(self.tmp.name, "notasnapshot.md")
+        with open(bad, "w") as f:
+            f.write("# just a note\n")
+        self.assertFalse(self.run_put("--preview", snap=bad, ok=False)["ok"])
+        sf = os.path.join(self.tmp.name, "s.json")
+        with open(sf, "w") as f:
+            json.dump({"<redacted:aaaaaaaa>": "line\nbreak"}, f)
+        self.assertFalse(self.run_put("--apply", "--secrets-file", sf, ok=False)["ok"])
+        with open(sf, "w") as f:
+            json.dump({"not a tag": "x"}, f)
+        self.assertFalse(self.run_put("--apply", "--secrets-file", sf, ok=False)["ok"])
+
+    def test_backups_are_private_and_kept_to_ten(self):
+        for i in range(12):
+            self.write_tree({"etc/asterisk/rpt.conf": "[general]\nnode = %d\n" % i})
+            self.run_put("--apply", "--only", "/etc/asterisk/rpt.conf")
+        ids = sorted(os.listdir(self.backups))
+        self.assertEqual(len(ids), 10)
+        self.assertEqual(os.stat(self.backups).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(os.path.join(self.backups, ids[-1])).st_mode & 0o777, 0o700)
+        self.assertEqual(os.stat(os.path.join(self.backups, ids[-1], "manifest.json")).st_mode & 0o777, 0o600)
+        self.assertEqual(len(self.run_put("--list-backups")["backups"]), 10)
+
+    def test_diff_does_not_show_secrets(self):
+        self.write_tree({"etc/asterisk/rpt.conf": "[general]\nsecret = reallysecret\nnode = 7\n",
+                         "etc/asl_dvs/phone.json": json.dumps({"password": "phonepw2", "email": "me@example.org", "x": 2})})
+        res = self.run_put("--preview")
+        text = json.dumps(res)
+        for word in ("reallysecret", "phonepw2", "me@example.org"):
+            self.assertNotIn(word, text)
+
+
+def load_instmon(env):
+    import glob
+    import importlib.util
+    for k, v in env.items():
+        os.environ[k] = v
+    path = sorted(glob.glob(os.path.join(HERE, "..", "instmon_v*.py")))[-1]
+    spec = importlib.util.spec_from_file_location("instmon_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["instmon_under_test"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class InstmonConfputterTests(unittest.TestCase):
+    def setUp(self):
+        import glob
+        import shutil
+        self.tmp = tempfile.TemporaryDirectory()
+        t = self.tmp.name
+        self.root = os.path.join(t, "node")
+        self.envkeys = ("INSTMON_LIBRARY_DIR", "INSTMON_CONFIG_DIR", "CONFPUTTER_ROOT", "CONFPUTTER_BACKUPS",
+                        "CONFGETTER_ROOT")
+        self.saved_env = {k: os.environ.get(k) for k in self.envkeys}
+        self.m = load_instmon({"INSTMON_LIBRARY_DIR": os.path.join(t, "lib"), "INSTMON_CONFIG_DIR": os.path.join(t, "cfg"),
+                               "CONFPUTTER_ROOT": self.root, "CONFPUTTER_BACKUPS": os.path.join(t, "bk")})
+        self.m.CONFPUTTER_BIN = os.path.join(t, "bin", "confputter.py")
+        self.m.PUT_BACKUP_DIR = os.path.join(t, "bk")
+        self.m.ensure_dirs()
+        os.makedirs(os.path.join(self.root, "etc/asterisk"))
+        with open(os.path.join(self.root, "etc/asterisk/rpt.conf"), "w") as f:
+            f.write("; comment\n[general]\nsecret = pw1\nnode = 1234\n")
+        r = subprocess.run(["bash", sorted(glob.glob(os.path.join(HERE, "..", "confgetter_v*.sh")))[-1], "--out",
+                            self.m.SNAP_DIR], capture_output=True, text=True,
+                           env=dict(os.environ, CONFGETTER_ROOT=self.root))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.name = [f for f in os.listdir(self.m.SNAP_DIR) if f.endswith(".md")][0]
+        self.putter = sorted(glob.glob(os.path.join(HERE, "..", "confputter_v*.py")))[-1]
+        shutil.copy(self.putter, self.m.LIB_SUBDIRS["confputter"])
+        self.libname = os.path.basename(self.putter)
+
+    def tearDown(self):
+        for k, v in self.saved_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        self.tmp.cleanup()
+
+    def rpt(self):
+        with open(os.path.join(self.root, "etc/asterisk/rpt.conf")) as f:
+            return f.read()
+
+    def install(self):
+        code, _ = self.m.cp_install(self.libname)
+        self.assertEqual(code, 200)
+
+    def test_install_run_and_uninstall(self):
+        self.assertFalse(self.m.confputter_status()["installed"])
+        self.assertEqual(self.m.cp_preview({"snapshot": "snapshot:" + self.name})[0], 409)
+        self.assertEqual(self.m.cp_install("../../etc/passwd")[0], 404)
+        self.install()
+        self.assertEqual(os.stat(self.m.CONFPUTTER_BIN).st_mode & 0o777, 0o755)
+        st = self.m.confputter_status()
+        self.assertTrue(st["installed"])
+        self.assertEqual(st["version"], "1.0.0")
+        self.assertEqual([x["name"] for x in st["snapshots"]], [self.name])
+        self.assertEqual(self.m.scan_library()["confputter"][0]["installed"], True)
+        self.assertEqual(self.m.cp_uninstall()[0], 200)
+        self.assertFalse(os.path.exists(self.m.CONFPUTTER_BIN))
+        self.assertEqual(self.m.cp_uninstall()[0], 404)
+
+    def test_install_refuses_bad_files(self):
+        lib = self.m.LIB_SUBDIRS["confputter"]
+        with open(os.path.join(lib, "confputter_bad.py"), "w") as f:
+            f.write("#!/usr/bin/env python3\nVERSION = '1'\nif x y:\n")
+        with open(os.path.join(lib, "confputter_notpy.py"), "w") as f:
+            f.write("#!/bin/bash\nVERSION = '1'\n")
+        self.assertEqual(self.m.cp_install("confputter_bad.py")[0], 400)
+        self.assertEqual(self.m.cp_install("confputter_notpy.py")[0], 400)
+
+    def test_preview_apply_undo(self):
+        self.install()
+        code, body = self.m.cp_preview({"snapshot": "snapshot:" + self.name})
+        self.assertEqual(code, 200)
+        st = {f["path"]: f["status"] for f in body["plan"]["files"]}
+        self.assertEqual(st["/etc/asterisk/rpt.conf"], "same")
+        with open(os.path.join(self.root, "etc/asterisk/rpt.conf"), "w") as f:
+            f.write("; comment\n[general]\nsecret = pw2\nnode = 9\n")
+        self.assertEqual(self.m.cp_apply({"snapshot": "snapshot:" + self.name, "only": ["/etc/asterisk/rpt.conf"]})[0], 400)
+        code, body = self.m.cp_apply({"snapshot": "snapshot:" + self.name, "only": ["/etc/asterisk/rpt.conf"],
+                                      "confirm": True})
+        self.assertEqual(code, 200, body)
+        self.assertTrue(body["result"]["ok"])
+        self.assertEqual(self.rpt(), "; comment\n[general]\nsecret = pw2\nnode = 1234\n")
+        last = self.m.confputter_status()["last_backup"]
+        self.assertEqual(last["files"], 1)
+        self.assertFalse(last["undone"])
+        self.assertEqual(self.m.cp_undo({})[0], 400)
+        code, body = self.m.cp_undo({"confirm": True})
+        self.assertEqual(code, 200, body)
+        self.assertEqual(self.rpt(), "; comment\n[general]\nsecret = pw2\nnode = 9\n")
+        self.assertTrue(self.m.confputter_status()["last_backup"]["undone"])
+
+    def test_apply_checks_its_input(self):
+        self.install()
+        snap = "snapshot:" + self.name
+        good = {"snapshot": snap, "only": ["/etc/asterisk/rpt.conf"], "confirm": True}
+        self.assertEqual(self.m.cp_apply(dict(good, snapshot="snapshot:../x"))[0], 404)
+        self.assertEqual(self.m.cp_apply(dict(good, snapshot="other:" + self.name))[0], 404)
+        self.assertEqual(self.m.cp_apply(dict(good, only=[]))[0], 400)
+        self.assertEqual(self.m.cp_apply(dict(good, only=["etc/relative"]))[0], 400)
+        self.assertEqual(self.m.cp_apply(dict(good, secrets={"not a tag": "x"}))[0], 400)
+        self.assertEqual(self.m.cp_apply(dict(good, secrets={"<redacted:aaaaaaaa>": "a\nb"}))[0], 400)
+        self.assertEqual(self.m.cp_apply(dict(good, secrets={"<redacted:aaaaaaaa>": "x" * 501}))[0], 400)
+        code, _ = self.m.cp_apply(dict(good, only=["/etc/shadow"]))
+        self.assertEqual(code, 400)
+
+    def test_secret_file_is_private_and_removed(self):
+        self.install()
+        seen = []
+        real = subprocess.run
+
+        def spy(cmd, **kw):
+            path = cmd[cmd.index("--secrets-file") + 1]
+            seen.append((path, os.stat(path).st_mode & 0o777))
+            return real(cmd, **kw)
+        self.m.subprocess = type("S", (), {"run": staticmethod(spy), "TimeoutExpired": subprocess.TimeoutExpired,
+                                           "Popen": subprocess.Popen, "PIPE": subprocess.PIPE,
+                                           "STDOUT": subprocess.STDOUT})
+        code, _ = self.m.cp_apply({"snapshot": "snapshot:" + self.name, "only": ["/etc/asterisk/rpt.conf"],
+                                   "secrets": {"<redacted:aaaaaaaa>": "typed"}, "confirm": True})
+        self.assertEqual(code, 200)
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0][1], 0o600)
+        self.assertFalse(os.path.exists(seen[0][0]))
+
+    def test_busy_is_refused(self):
+        self.install()
+        self.m._cp_lock.acquire()
+        try:
+            self.assertTrue(self.m.confputter_status()["running"])
+            self.assertEqual(self.m.cp_preview({"snapshot": "snapshot:" + self.name})[0], 409)
+            self.assertEqual(self.m.cp_uninstall()[0], 409)
+        finally:
+            self.m._cp_lock.release()
+
+    def test_upload_of_an_edited_copy(self):
+        self.install()
+        with open(os.path.join(self.m.SNAP_DIR, self.name), "rb") as f:
+            data = f.read()
+        code, body = self.m.cp_save_upload("../evil.md", data)
+        self.assertEqual((code, body["name"]), (200, "evil.md"))
+        self.assertTrue(os.path.isfile(os.path.join(self.m.EDITED_DIR, "evil.md")))
+        self.assertFalse(os.path.exists(os.path.join(os.path.dirname(self.m.EDITED_DIR), "evil.md")))
+        self.assertEqual(self.m.cp_delete_edited("evil.md")[0], 200)
+        self.assertEqual(self.m.cp_save_upload("notes.txt", data)[0], 400)
+        self.assertEqual(self.m.cp_save_upload("edited.md", b"# just a note\n")[0], 400)
+        self.assertEqual(self.m.cp_save_upload("edited.md", b"")[0], 400)
+        self.assertEqual(self.m.cp_save_upload("edited.md", b"\xff\xfe")[0], 400)
+        self.assertEqual(self.m.cp_save_upload("edited.md", b"x" * (self.m.CP_MAX_UPLOAD + 1))[0], 400)
+        code, body = self.m.cp_save_upload("edited.md", data)
+        self.assertEqual(code, 200, body)
+        full = os.path.join(self.m.EDITED_DIR, "edited.md")
+        self.assertEqual(os.stat(full).st_mode & 0o777, 0o600)
+        self.assertEqual(os.stat(self.m.EDITED_DIR).st_mode & 0o777, 0o700)
+        self.assertEqual([e["name"] for e in self.m.confputter_status()["edited"]], ["edited.md"])
+        self.assertEqual(self.m.cp_preview({"snapshot": "edited:edited.md"})[0], 200)
+        os.symlink(full, os.path.join(self.m.EDITED_DIR, "link.md"))
+        self.assertIsNone(self.m.cp_edited_path("link.md"))
+        self.assertEqual(self.m.cp_delete_edited("../x")[0], 404)
+        self.assertEqual(self.m.cp_delete_edited("edited.md")[0], 200)
+        self.assertEqual(self.m.cp_delete_edited("edited.md")[0], 404)
+
+    def test_card_is_on_the_page_below_config_getter(self):
+        html = self.m.render_page()
+        self.assertIn('id="cp-card"', html)
+        self.assertLess(html.index('id="cg-card"') if 'id="cg-card"' in html else html.index('id="components"'),
+                        html.index('id="cp-card"'))
+        self.assertLess(html.index('id="cp-card"'), html.index('id="usbimp-card"'))
+        self.assertIn("function cpApply", html)
+        self.assertIn("Config putter", self.m.render_library_html(self.m.scan_library()))
 
 
 class ConfgetterFixtureTests(unittest.TestCase):

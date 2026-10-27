@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# uninstall_all.sh  v1.8.0  (2026-10-27)
+# uninstall_all.sh  v1.9.0  (2026-10-27)
 set -u
 
 RED=$'\033[0;31m'; GRN=$'\033[0;32m'; YEL=$'\033[0;33m'; CYN=$'\033[0;36m'; RST=$'\033[0m'
@@ -59,6 +59,18 @@ if [[ -e /usr/local/bin/confgetter.sh || -L /usr/local/bin/confgetter.sh ]]; the
     fi
 else
     info "Not installed at /usr/local/bin/confgetter.sh, skipping"
+fi
+echo
+
+echo "-- confputter --"
+if [[ -e /usr/local/bin/confputter.py || -L /usr/local/bin/confputter.py ]]; then
+    if rm -f /usr/local/bin/confputter.py; then
+        ok "Removed /usr/local/bin/confputter.py (its backups stay in /var/lib/confputter/backups)"
+    else
+        warn "Could not remove /usr/local/bin/confputter.py — check manually"
+    fi
+else
+    info "Not installed at /usr/local/bin/confputter.py, skipping"
 fi
 echo
 
