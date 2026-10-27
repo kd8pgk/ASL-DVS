@@ -68,15 +68,14 @@ class TabRouter(private val io: Io) {
     }
 
     private fun activate(name: String) {
-        if (native == name) return
         val was = native
-        if (was != null) {
-            io.hide(was)
-        } else if (pageTab != PARK) {
+        if (pageTab != PARK) {
             parking = true
             pageTab = PARK
             io.clickPage(PARK)
         }
+        if (was == name) return
+        if (was != null) io.hide(was)
         native = name
         io.show(name)
         io.select(name)

@@ -42,6 +42,8 @@ data class NodeStatus(
         const val DOT_WARN = 4
         const val DOT_ERR = 5
 
+        private fun JSONObject.text(key: String): String = if (isNull(key)) "" else optString(key)
+
         fun parse(j: JSONObject): NodeStatus {
             val t = j.optJSONObject("tx")
             val l = j.optJSONObject("link")
@@ -61,10 +63,10 @@ data class NodeStatus(
                 },
                 link = l?.let { LinkInfo(it.optString("state"), it.optString("label"), it.optString("mode"), it.optString("tag")) },
                 links = if (la == null) emptyList() else (0 until la.length()).mapNotNull { la.optJSONObject(it)?.optString("node")?.takeIf { n -> n.isNotEmpty() } },
-                m17 = j.optString("m17"),
-                tuned = j.optString("tuned"),
-                tunedNow = j.optString("tuned_now"),
-                defaultMode = j.optString("default_mode"),
+                m17 = j.text("m17"),
+                tuned = j.text("tuned"),
+                tunedNow = j.text("tuned_now"),
+                defaultMode = j.text("default_mode"),
             )
         }
     }

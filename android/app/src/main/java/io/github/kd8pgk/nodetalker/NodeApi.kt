@@ -22,10 +22,12 @@ class NodeApi(private val node: Node, private val cookie: () -> String? = { webV
 
     fun getLoose(path: String): JSONObject = request("GET", path, null, true, true)
 
-    fun postLoose(path: String, body: JSONObject = JSONObject()): JSONObject = request("POST", path, body, true, true)
+    fun postLoose(path: String, body: JSONObject = JSONObject(), readMs: Int = 0): JSONObject =
+        request("POST", path, body, true, true, readMs)
 
-    private fun request(method: String, path: String, body: JSONObject?, withSession: Boolean, loose: Boolean = false): JSONObject {
+    private fun request(method: String, path: String, body: JSONObject?, withSession: Boolean, loose: Boolean = false, readMs: Int = 0): JSONObject {
         val c = NodeHttp.open(node, path, if (withSession) cookie() else null)
+        if (readMs > 0) c.readTimeout = readMs
         try {
             c.requestMethod = method
             c.setRequestProperty("X-Requested-With", "XMLHttpRequest")

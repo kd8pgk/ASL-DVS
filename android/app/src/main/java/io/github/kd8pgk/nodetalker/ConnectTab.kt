@@ -32,7 +32,7 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         fun readPage(js: String, done: (String?) -> Unit)
         fun pickTab(name: String)
         fun flashListen(color: Int, text: String)
-        fun listenFlashIs(text: String): Boolean
+        fun clearListen(text: String)
         fun stopPageTests()
         fun openLink(uri: Uri)
     }
@@ -41,12 +41,13 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
 
     private class NetAsk(val url: String, val body: TuneBody?, val favIndex: Int, val label: String, val onTune: Boolean)
 
-    private class Size(val h: Int = 40, val font: Int = 14)
+    private class Size(val h: Double = 40.0, val font: Double = 14.0)
 
     private var favIndexSet = 0
     private var pickValues: List<String> = emptyList()
-    private var favsLoaded = false
     private var netAskBody: JSONObject? = null
+    private var gen = 0
+    private var daGen = 0
     private val ui = Handler(Looper.getMainLooper())
     private val io = Executors.newCachedThreadPool { r -> Thread(r, "nt-connect").also { it.isDaemon = true } }
     private val model = ConnectModel()
@@ -60,7 +61,7 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
     private var connBusy = false
     private var daPoll = false
     private var daMine = false
-    private var daList = "md380-emu, Analog_Bridge, MMDVM_Bridge, USRP2M17 and Asterisk"
+    private var daList = DA_LIST
     private var size = Size()
     private var seq = 0
     private var suppress = false
@@ -102,9 +103,9 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         cell(tMod, 1)
         cell(tFind, 2)
         cell(tPick, 2)
-        cell(tLh, 1)
+        cell(tLh, 1, dp(40))
         cell(tSave, 1)
-        cell(tGo, 3)
+        cell(tGo, 3, dp(44))
         for (s in listOf(tMode, tNet, tMod, tPick)) s.background = act.getDrawable(R.drawable.bg_spinner)
         tFind.background = act.getDrawable(R.drawable.bg_field)
         tFind.setTextColor(act.getColor(R.color.text))
@@ -119,10 +120,17 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
             b.isAllCaps = false
             b.setPadding(dp(4), 0, dp(4), 0)
         }
+        for (v in listOf(tMode, tNet, tMod, tFind, tPick, tLh, tSave, tGo)) {
+            v.minimumWidth = 0
+            v.minimumHeight = 0
+            if (v is TextView) {
+                v.minWidth = 0
+                v.minHeight = 0
+            }
+        }
         tGo.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15f)
-        tGo.minimumHeight = dp(44)
         tGo.typeface = android.graphics.Typeface.DEFAULT_BOLD
-        tLh.minimumHeight = dp(40)
+        tGo.minHeight = dp(44)
         tLh.minHeight = dp(40)
         tSave.setBackgroundResource(R.drawable.btn_plain)
         tLh.setBackgroundResource(R.drawable.btn_plain)
@@ -208,6 +216,8 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         root.findViewById<View>(R.id.t_net_add).setOnClickListener { netAnswer("add") }
         root.findViewById<View>(R.id.t_net_once).setOnClickListener { netAnswer("once") }
         root.findViewById<View>(R.id.t_net_no).setOnClickListener { netAnswer("") }
+        for (id in listOf(R.id.c_net_add, R.id.t_net_add)) style(root.findViewById(id), false)
+        for (id in listOf(R.id.c_net_once, R.id.c_net_no, R.id.t_net_once, R.id.t_net_no)) plain(root.findViewById(id))
         daBtn.setBackgroundResource(R.drawable.btn_danger)
         daBtn.setTextColor(act.getColor(R.color.red))
         daBtn.setOnClickListener { disconnectAll() }
@@ -222,10 +232,12 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
 
     private fun dp(v: Int) = (v * act.resources.displayMetrics.density).toInt()
 
-    private fun cell(v: View, span: Int) {
-        val lp = GridLayout.LayoutParams(GridLayout.spec(GridLayout.UNDEFINED), GridLayout.spec(GridLayout.UNDEFINED, span, 1f))
+    private fun dpf(v: Double) = (v * act.resources.displayMetrics.density).toInt()
+
+    private fun cell(v: View, span: Int, wrapMin: Int = 0) {
+        val lp = GridLayout.LayoutParams(GridLayout.spec(GridLayout.UNDEFINED, GridLayout.FILL), GridLayout.spec(GridLayout.UNDEFINED, span, 1f))
         lp.width = 0
-        lp.height = dp(size.h)
+        lp.height = if (wrapMin > 0) ViewGroup.LayoutParams.WRAP_CONTENT else dpf(size.h)
         lp.setMargins(gap, gap, gap, gap)
         grid.addView(v, lp)
     }
@@ -250,6 +262,11 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         b.setBackgroundResource(if (danger) R.drawable.btn_danger else R.drawable.btn_primary)
         b.setTextColor(act.getColor(if (danger) R.color.red else R.color.accent_ink))
         b.typeface = android.graphics.Typeface.DEFAULT_BOLD
+    }
+
+    private fun plain(b: Button) {
+        b.setBackgroundResource(R.drawable.btn_plain)
+        b.setTextColor(act.getColor(R.color.text))
     }
 
     private fun msg(tv: TextView, kind: Int, text: String) {
@@ -280,16 +297,20 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
 
     private fun api() = NodeApi(host.node)
 
-    private fun call(post: Boolean, path: String, body: JSONObject = JSONObject(), done: (JSONObject) -> Unit) {
+    private fun call(post: Boolean, path: String, body: JSONObject = JSONObject(), readMs: Int = 0, done: (JSONObject) -> Unit) {
+        val mine = gen
+        val a = api()
         io.execute {
             val d = try {
-                if (post) api().postLoose(path, body) else api().getLoose(path)
+                if (post) a.postLoose(path, body, readMs) else a.getLoose(path)
             } catch (e: NodeApi.NotLoggedIn) {
                 JSONObject().put("ok", false).put("error", "Log in on the Setup tab first.")
             } catch (e: IOException) {
                 JSONObject().put("ok", false).put("error", "Node Talker is not answering.")
+            } catch (e: RuntimeException) {
+                JSONObject().put("ok", false).put("error", "Node Talker is not answering.")
             }
-            ui.post { done(d) }
+            ui.post { if (mine == gen) done(d) }
         }
     }
 
@@ -315,20 +336,49 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
 
     fun reset() {
         hide()
+        gen++
+        daGen++
         authed = false
         primed = false
         tuneDone = false
         favSel = null
         last = null
-        netAsk = null
+        connBusy = false
+        daPoll = false
+        daMine = false
+        daList = DA_LIST
+        favIndexSet = 0
+        findTimer?.let { ui.removeCallbacks(it) }
+        connMsgTimer?.let { ui.removeCallbacks(it) }
+        timers.values.forEach { ui.removeCallbacks(it) }
+        timers.clear()
+        netHide()
         model.lists.clear()
         model.remembered = ConnectModel.Remembered()
         model.favs = emptyList()
-        favsLoaded = false
+        model.favNets = emptyList()
+        model.favNetLinks = emptyMap()
+        model.linkedTargets = emptySet()
+        model.tunedNow = ""
+        model.defaultMode = ""
+        model.net = ""
+        model.mod = ""
+        model.pick = ""
+        model.mode = "ASL"
+        fav.adapter = adapter(emptyList(), 14f)
+        favEmpty.visibility = View.GONE
+        favBox.visibility = View.VISIBLE
+        for (tv in listOf(cMsg, tMsg, daMsg, tNow)) msg(tv, 0, "")
+        cGo.isEnabled = true
+        daBtn.isEnabled = true
+        setFind("")
+        applyVisibility()
+        showSelected()
+        applySize()
     }
 
     private fun enter() {
-        if (!favsLoaded) loadFavs()
+        loadFavs()
         connectTabEnter()
     }
 
@@ -351,7 +401,6 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
     private fun loadFavs() {
         call(false, "/api/favorites") { d ->
             if (!d.optBoolean("ok")) return@call
-            favsLoaded = true
             authed = true
             val f = Favorites.parse(d)
             model.favs = f.favs
@@ -391,18 +440,17 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         netHide()
         if (!off) {
             val tune = f.mode == "M17" || Tn.DVS.contains(f.mode)
-            val name = f.label.ifEmpty { "the favorite" }
             connectFlow(
                 "/api/connect", JSONObject().put("index", i),
-                (if (tune) "Tuning " else "Connecting to ") + name + "...",
+                (if (tune) "Tuning " else "Connecting to ") + f.label + "...",
                 if (tune) "Tuning..." else "Connecting... (checking the link for up to 15 s)",
                 true, null, i,
-            ) { ok -> if (ok) { tuneDone = true; favSel = i } }
+            ) { good -> if (good) { tuneDone = true; favSel = i } }
             return
         }
         cGo.isEnabled = false
         msg(cMsg, 0, "Disconnecting...")
-        call(true, "/api/disconnect", JSONObject().put("index", i)) { d ->
+        call(true, "/api/disconnect", JSONObject().put("index", i), LONG_MS) { d ->
             cGo.isEnabled = true
             result(cMsg, d)
             host.feed.pokeAfter(1000)
@@ -423,18 +471,18 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         connMsgTimer?.let { ui.removeCallbacks(it) }
         connMsgTimer = null
         host.flashListen(R.color.text, listenText)
-        call(true, url, body) { d ->
+        call(true, url, body, LONG_MS) { d ->
             btn.isEnabled = true
             connBusy = false
             result(box, d)
             if (d.optBoolean("ok")) {
                 val text = d.optString("message").ifEmpty { "Done." }
                 host.flashListen(if (d.optBoolean("warn")) R.color.amber else R.color.accent, text)
-                val t = Runnable { if (host.listenFlashIs(text)) host.flashListen(R.color.text, "") }
+                val t = Runnable { host.clearListen(text) }
                 connMsgTimer = t
                 ui.postDelayed(t, 8000)
             } else {
-                if (host.listenFlashIs(listenText)) host.flashListen(R.color.text, "")
+                host.clearListen(listenText)
                 host.pickTab("connect")
                 if (d.optBoolean("need_net")) {
                     netAsk = NetAsk(url, tb, favIndex, listenText, !onFav)
@@ -445,7 +493,7 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
             buttons()
             connectLabel()
             host.feed.poke()
-            done(d.optBoolean("ok"))
+            done(d.optBoolean("ok") && !d.optBoolean("warn"))
         }
     }
 
@@ -467,9 +515,9 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         }
         val text = if (action == "add") "Adding the network to Node Controller and tuning..." else "Tuning..."
         val again = JSONObject(body.toString()).put("net_action", action)
-        connectFlow(a.url, again, a.label, text, !a.onTune, a.body, a.favIndex) { ok ->
-            if (ok && a.onTune && a.body != null) afterTune(a.body)
-            if (ok && !a.onTune) { tuneDone = true; favSel = a.favIndex }
+        connectFlow(a.url, again, a.label, text, !a.onTune, a.body, a.favIndex) { good ->
+            if (good && a.onTune && a.body != null) afterTune(a.body)
+            if (good && !a.onTune) { tuneDone = true; favSel = a.favIndex }
         }
     }
 
@@ -618,7 +666,7 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         connectFlow(
             "/api/tune", b.toJson(), (if (link) "Connecting to " else "Tuning ") + b.name + "...",
             if (link) "Connecting... (checking the link for up to 15 s)" else "Tuning...", false, b, -1,
-        ) { ok -> if (ok) afterTune(b) }
+        ) { good -> if (good) afterTune(b) }
     }
 
     private fun afterTune(b: TuneBody) {
@@ -646,7 +694,7 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
             msg(tMsg, 2, "Pick or type the node to disconnect.")
             return
         }
-        call(true, "/api/tune/disconnect", b?.toJson() ?: JSONObject()) { d ->
+        call(true, "/api/tune/disconnect", b?.toJson() ?: JSONObject(), LONG_MS) { d ->
             result(tMsg, d)
             buttons()
             host.feed.pokeAfter(1000)
@@ -667,7 +715,7 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
     private fun startDisconnectAll() {
         host.stopPageTests()
         daBtn.isEnabled = false
-        call(true, "/api/disconnect-all") { d ->
+        call(true, "/api/disconnect-all", JSONObject(), LONG_MS) { d ->
             if (!d.optBoolean("ok")) {
                 daBtn.isEnabled = true
                 msg(daMsg, 3, d.optString("error").ifEmpty { "Could not start Disconnect All." })
@@ -681,14 +729,16 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
     }
 
     private fun daStatus() {
+        val mine = ++daGen
         daPoll = true
         call(false, "/api/disconnect-all/status") { d ->
+            if (mine != daGen) return@call
             daPoll = false
             daShow(d)
             if (d.optBoolean("ok") && d.optBoolean("running")) {
                 if (shown) {
                     daPoll = true
-                    ui.postDelayed({ daPoll = false; if (shown) daStatus() }, 1000)
+                    ui.postDelayed({ if (mine == daGen) { daPoll = false; if (shown) daStatus() } }, 1000)
                 }
                 return@call
             }
@@ -710,12 +760,12 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
         val n = steps?.length() ?: 0
         if (d.optBoolean("running")) {
             var i = -1
-            for (k in 0 until n) if (steps!!.getJSONObject(k).optString("state") == "running") { i = k; break }
-            msg(daMsg, 2, if (i >= 0) steps!!.getJSONObject(i).optString("name") + "... (" + (i + 1) + " of " + n + ")" else "Working...")
+            for (k in 0 until n) if (steps?.optJSONObject(k)?.optString("state") == "running") { i = k; break }
+            msg(daMsg, 2, if (i >= 0) steps?.optJSONObject(i)?.optString("name").orEmpty() + "... (" + (i + 1) + " of " + n + ")" else "Working...")
         } else if (daMine && d.optString("message").isNotEmpty()) {
             val bad = ArrayList<String>()
             for (k in 0 until n) {
-                val s = steps!!.getJSONObject(k)
+                val s = steps?.optJSONObject(k) ?: continue
                 val st = s.optString("state")
                 if (st == "failed" || st == "warn") bad.add(s.optString("name") + ": " + s.optString("note"))
             }
@@ -745,7 +795,7 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
 
     private fun applySize() {
         for (v in listOf(tMode, tNet, tMod, tFind, tPick, tSave)) {
-            v.layoutParams = (v.layoutParams as GridLayout.LayoutParams).also { it.height = dp(size.h) }
+            v.layoutParams = (v.layoutParams as GridLayout.LayoutParams).also { it.height = dpf(size.h) }
         }
         tFind.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, size.font.toFloat())
         tSave.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, size.font.toFloat())
@@ -772,6 +822,9 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
     }
 
     companion object {
+        private const val LONG_MS = 130000
+        private const val DA_LIST = "md380-emu, Analog_Bridge, MMDVM_Bridge, USRP2M17 and Asterisk"
+
         const val SIZE_JS = "(function(){try{var s=localStorage.getItem('nlTuneSize');return s?s:null}catch(e){return null}})()"
 
         private fun parseSize(raw: String?): Size {
@@ -779,8 +832,8 @@ class ConnectTab(private val act: Activity, private val root: View, private val 
             return try {
                 val text = org.json.JSONTokener(raw).nextValue() as? String ?: return Size()
                 val o = JSONObject(text)
-                val h = o.optInt("h", 40).takeIf { it in 28..72 } ?: 40
-                val f = o.optInt("font", 14).takeIf { it in 10..22 } ?: 14
+                val h = o.optDouble("h", 40.0).takeIf { it in 32.0..56.0 } ?: 40.0
+                val f = o.optDouble("font", 14.0).takeIf { it in 10.0..18.0 } ?: 14.0
                 Size(h, f)
             } catch (e: org.json.JSONException) {
                 Size()

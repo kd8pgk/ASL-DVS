@@ -118,14 +118,25 @@ class TalkerActivity : Activity() {
                 if (l != null && router.native == "listen") {
                     l.flash(color, text)
                 } else {
-                    web.evaluateJavascript("(function(){var e=document.getElementById('ptt-msg');if(e){e.className='msg';e.textContent=" +
-                        org.json.JSONObject.quote(text) + "}})()", null)
+                    val cls = when (color) {
+                        R.color.accent -> "msg ok"
+                        R.color.amber -> "msg warn"
+                        R.color.red -> "msg err"
+                        else -> "msg"
+                    }
+                    web.evaluateJavascript("(function(){var e=document.getElementById('ptt-msg');if(e){e.className='" + cls +
+                        "';e.textContent=" + org.json.JSONObject.quote(text) + "}})()", null)
                 }
             }
 
-            override fun listenFlashIs(text: String): Boolean {
+            override fun clearListen(text: String) {
                 val l = listenTab
-                return l != null && router.native == "listen" && l.flashIs(text)
+                if (l != null && router.native == "listen") {
+                    if (l.flashIs(text)) l.flash(R.color.text, "")
+                } else {
+                    web.evaluateJavascript("(function(){var e=document.getElementById('ptt-msg');if(e&&e.textContent===" +
+                        org.json.JSONObject.quote(text) + "){e.className='msg';e.textContent=''}})()", null)
+                }
             }
 
             override fun stopPageTests() {
@@ -312,6 +323,8 @@ class TalkerActivity : Activity() {
             val v = try {
                 NodeApi(n).health().optString("version")
             } catch (e: IOException) {
+                return@Thread
+            } catch (e: RuntimeException) {
                 return@Thread
             }
             Compat.remember(n.id, v)

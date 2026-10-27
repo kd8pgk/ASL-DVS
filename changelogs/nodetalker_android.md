@@ -1,6 +1,39 @@
 # Node Talker 2 changelog
 
-Current version: `0.7.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.7.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.7.1 (2026-10-27)
+
+Fixes from a code audit:
+
+- **Switching nodes no longer keeps polling the old one.** A status poll that
+  was in the middle of a request when you switched could carry on next to the
+  new one; each poll now stops for good and late answers are dropped. The
+  Connect tab also clears everything from the old node (favorites, DMR
+  networks, links, messages) and drops its late answers.
+- **Favorites reload every time you open Connect**, as the page does, so
+  favorites edited on the Setup tab show up straight away.
+- **Long tunes and links no longer report "not answering".** Connect, Tune,
+  Disconnect and Disconnect All now wait up to 130 s for the node (a DVSwitch
+  tune can take up to 100 s) instead of 20 s.
+- **Unexpected answers can't crash the app:** a malformed Disconnect All
+  step, or an error other than a network one in a background request, now
+  shows as a failed request.
+- **Tune card layout:** Connect is at least 44 dp and LH at least 40 dp tall,
+  as on the page, and Android's default button sizes no longer widen the cells
+  or break the three columns; LH fills its row. The network question's
+  buttons look like the page's.
+- **Tune Text sizes in half steps** (14.5 px) are read, and sizes outside the
+  page's sliders fall back to the defaults.
+- **With page audio**, the Listen tab's connect message now gets its color and
+  is cleared after 8 s (or when the connect fails), as in the app's own tab.
+- A favorite or tune that succeeds with a warning no longer counts as the
+  remembered choice, as on the page.
+- **Mark kerchunk** shows the node's error in red when it refuses the mark.
+- If the page moves itself to Connect or Listen while the other is showing,
+  the page is parked on Setup again.
+- A null `tuned`, `m17` or `tuned_now` from the node is read as empty, not as
+  the text "null".
 
 ## 0.7.0 (2026-10-27)
 

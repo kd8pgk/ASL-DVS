@@ -16,6 +16,7 @@ class StatusFeed(private val ui: Handler, private val node: () -> Node) {
     private var kick = false
     private var resumed = false
     @Volatile private var active = false
+    @Volatile private var gen = 0
     private var thread: Thread? = null
 
     fun add(l: Listener) {
@@ -49,23 +50,27 @@ class StatusFeed(private val ui: Handler, private val node: () -> Node) {
         if (want && !active) {
             active = true
             val n = node()
-            thread = Thread({ loop(n) }, "nt-status").also { it.start() }
+            val mine = ++gen
+            thread = Thread({ loop(n, mine) }, "nt-status").also { it.start() }
         } else if (!want && active) {
             active = false
+            gen++
             synchronized(lock) { lock.notifyAll() }
             thread?.interrupt()
             thread = null
         }
     }
 
-    private fun loop(n: Node) {
+    private fun loop(n: Node, mine: Int) {
         val api = NodeApi(n)
-        while (active) {
+        while (active && gen == mine) {
             try {
                 val s = NodeStatus.parse(api.status())
-                ui.post { listeners.forEach { it.onStatus(s) } }
+                ui.post { if (gen == mine) listeners.forEach { it.onStatus(s) } }
             } catch (e: IOException) {
-                ui.post { listeners.forEach { it.onLost() } }
+                ui.post { if (gen == mine) listeners.forEach { it.onLost() } }
+            } catch (e: RuntimeException) {
+                ui.post { if (gen == mine) listeners.forEach { it.onLost() } }
             }
             try {
                 synchronized(lock) {

@@ -538,9 +538,12 @@ class ListenTab(private val act: Activity, private val root: View, private val h
         Thread {
             val result = try {
                 val r = NodeApi(n).post("/api/kerchunks/test/mark")
-                Pair(true, r.optString("message"))
+                val ok = r.optBoolean("ok", true)
+                Pair(ok, r.optString(if (ok) "message" else "error"))
             } catch (e: IOException) {
                 Pair(false, e.message ?: "Could not mark the key-up.")
+            } catch (e: RuntimeException) {
+                Pair(false, "Could not mark the key-up.")
             }
             ui.post {
                 val text = result.second.ifEmpty { "Could not mark the key-up." }
