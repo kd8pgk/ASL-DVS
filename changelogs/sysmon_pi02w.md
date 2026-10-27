@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_81_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_82_20261027.py`. Newest entries first.
+
+## 6.13.82-pi02w (2026-10-27)
+
+- **Find in every file the ASL-DVS tab opens.** The file editor (Asterisk, Allmon3, DVSwitch and app config files, and unit files) has a Find bar in its header, next to Save. The All Visible Config Files view (ASL and DVS AllConf) has one next to Copy All. Both work as the Pinned Services find bar does: type to search, Enter and Shift+Enter (or Prev and Next) step through matches, the count shows "2 of 5" or "No matches", and Escape clears it. The bar clears each time a file opens.
 
 ## 6.13.81-pi02w (2026-10-27)
 
