@@ -1,6 +1,18 @@
 # Config getter (confgetter) changelog
 
-Current file: `confgetter_v1_0_0_20261027.sh`. Newest entries first.
+Current file: `confgetter_v1_0_1_20261027.sh`. Newest entries first.
+
+## 1.0.1 (2026-10-27)
+
+- **Passwords in pipe-separated lists are redacted.** The DMR server lists
+  (`name|password|address:port|url`) in the Node Talker and DVSwitch files
+  kept their passwords in 1.0.0. The password column is now replaced under
+  the list's header line; the rest of the line is kept.
+- **Email addresses are redacted** wherever they appear, including the
+  `"email"` key in the Node Talker JSON files.
+- **MAC addresses are partly masked:** the first three octets stay (the
+  vendor part), the last three become `xx:xx:xx`.
+- The check count in the snapshot header counts these too.
 
 ## 1.0.0 (2026-10-27)
 

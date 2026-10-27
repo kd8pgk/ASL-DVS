@@ -494,7 +494,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `amp_nodetalker_v0_3_1_20261027.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_8_0_20261027.sh` | common |
-| `confgetter_v1_0_0_20261027.sh` | common |
+| `confgetter_v1_0_1_20261027.sh` | common |
 | `wifi_menu_v3_1_20261011.sh` | common |
 
 When there is more than one version of a tool, instmon and the installer
