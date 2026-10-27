@@ -76,6 +76,12 @@
 - The `android` workflow builds and lints every change; on `main` it
   publishes the debug APK as a pre-release `android-vX.Y.Z`. Release signing
   waits until the keystore secrets exist.
+- **Node Talker and the app stay in step.** The app draws the Connect and
+  Listen tabs itself, so a new Node Talker version fails `ci/check_repo.py`
+  until `Compat.MATCHES` lists it. Check the two tabs against the page
+  first (the checks cover numbers, lists, hints and on-screen text, not
+  layout), then add the version and raise `appVersion`. Until then the app
+  shows the node's own page for those tabs.
 - The app is not on the stable/testing channels: those update node tools.
 - **After an Android build is merged, always post its APK download link**:
   `https://github.com/kd8pgk/ASL-DVS/releases/download/android-vX.Y.Z/NodeTalker-X.Y.Z-debug.apk`

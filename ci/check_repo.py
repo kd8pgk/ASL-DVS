@@ -368,6 +368,70 @@ def check_connect_constants(paths):
         fail(f"{kfile}: LETTERS is {k.group(1)} but the page's TN_LETTERS is {m.group(1)}")
 
 
+NATIVE_TEXT_FILES = ("ConnectTab.kt", "ConnectModel.kt", "ListenTab.kt", "Ptt.kt")
+NATIVE_TEXT_ALLOWED = ("Log in on the Setup tab first.",)
+
+
+def _kotlin_literals(src):
+    out, i, n = [], 0, len(src)
+    while i < n:
+        c = src[i]
+        if c == "'":
+            j = i + 1
+            if src[j] == "\\":
+                j += 1
+            i = src.find("'", j) + 1
+            continue
+        if c == '"':
+            j, buf = i + 1, []
+            while src[j] != '"':
+                if src[j] == "\\":
+                    buf.append(src[j:j + 2])
+                    j += 2
+                else:
+                    buf.append(src[j])
+                    j += 1
+            out.append("".join(buf))
+            i = j + 1
+            continue
+        i += 1
+    return out
+
+
+def check_native_text(paths):
+    page = current_nodetalker()
+    files = [KT_DIR + n for n in NATIVE_TEXT_FILES]
+    if page is None or not all(os.path.isfile(f) for f in files):
+        return
+    if not any(p in files or (parse_tool(p) or ("",))[0] == "nodetalker" for p in paths):
+        return
+    text = read(page)
+    for f in files:
+        for lit in sorted(set(_kotlin_literals(read(f)))):
+            if len(lit) < 6 or " " not in lit or "$" in lit or lit.startswith("(function"):
+                continue
+            if lit not in text and lit not in NATIVE_TEXT_ALLOWED:
+                fail(f"{f}: the text \"{lit}\" is not in the page (the app's screen must say what the page says)")
+
+
+def check_native_compat(paths):
+    page = current_nodetalker()
+    kfile = KT_DIR + "Compat.kt"
+    if page is None or not os.path.isfile(kfile):
+        return
+    if not any(p == kfile or (parse_tool(p) or ("",))[0] == "nodetalker" for p in paths):
+        return
+    version = parse_tool(page)[1]
+    m = re.search(r"MATCHES[^=]*=\s*setOf\(([^)]*)\)", read(kfile))
+    if not m:
+        fail(f"{kfile}: cannot read MATCHES")
+        return
+    shown = ".".join(str(x) for x in version)
+    if shown not in re.findall(r'"([^"]*)"', m.group(1)):
+        fail(f"{kfile}: MATCHES does not list Node Talker {shown}; check the Connect and Listen tabs against the page, "
+             f"then add it (and raise the app version)")
+
+
 def check_launchers():
     texts = {}
     for name in sorted(os.listdir(".")):
@@ -525,6 +589,8 @@ def main():
     check_design(added + modified + deleted)
     check_native_constants(added + modified + deleted)
     check_connect_constants(added + modified + deleted)
+    check_native_text(added + modified + deleted)
+    check_native_compat(added + modified + deleted)
 
     for n in notes:
         print(f"note: {n}")

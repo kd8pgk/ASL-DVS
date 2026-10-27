@@ -321,7 +321,11 @@ with the screen locked. It comes in phases:
    for the node (0.4.0); a native Listen tab with the spectrum, level meter,
    push-to-talk and the kerchunk mark button (0.5.0); a native Connect tab
    with Favorites, Tune and Disconnect All (0.6.0). Setup stays the node's page.
-5. PTT on the screen button or a volume key.
+5. **Match check (CI):** the repository's checks compare the app's numbers,
+   pick lists, hints and on-screen text with the Node Talker page, and fail
+   a new Node Talker version until the app lists it as checked. An unchecked
+   node version keeps the page's own tabs.
+6. PTT on the screen button or a volume key.
 
 **Install a test build:** on the phone, open the repository's
 [Releases](https://github.com/kd8pgk/ASL-DVS/releases), pick the newest

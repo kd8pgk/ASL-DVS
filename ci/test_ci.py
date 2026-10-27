@@ -411,5 +411,34 @@ class CheckTests(unittest.TestCase):
         self.assertCheck(False, "LETTERS")
 
 
+    def text(self, lit="Tuning...", matches='"1.0.0"'):
+        self.android("0.1.0")
+        name = self.r.build("nodetalker", "1.0.0", None)
+        self.r.write(name, tool_text("1.0.0") + '\n_NOTE = r"""Tuning... and Connecting to\n'
+                     "const TN_MODES = ['ASL'];\\nconst TN_SEARCH = ['ASL'];\\nconst TN_HINT = {ASL: 'Node #'};\\n"
+                     "const TN_NOUN = {ASL: 'nodes'};\\nconst TN_LETTERS = 'ABC';" + '"""\n')
+        d = "android/app/src/main/java/io/github/kd8pgk/nodetalker/"
+        self.r.write(d + "ConnectModel.kt", "object Tn {\n    val MODES = listOf(\"ASL\")\n    val SEARCH = listOf(\"ASL\")\n"
+                     "    val HINT = mapOf(\n        \"ASL\" to \"Node #\",\n    )\n    val NOUN = mapOf(\n        \"ASL\" to \"nodes\",\n    )\n"
+                     "    const val LETTERS = \"ABC\"\n}\n")
+        for f in ("ListenTab.kt", "Ptt.kt"):
+            self.r.write(d + f, "object X {\n    val A = \"Connecting to\"\n}\n")
+        self.r.write(d + "ConnectTab.kt", "object X {\n    val A = \"" + lit + "\"\n    val B = \"abc $x\"\n}\n")
+        self.r.write(d + "Compat.kt", "object Compat {\n    val MATCHES: Set<String> = setOf(" + matches + ")\n}\n")
+        self.r.commit("t", T0 + DAY)
+
+    def test_text_in_page(self):
+        self.text()
+        self.assertCheck(True)
+
+    def test_text_not_in_page(self):
+        self.text(lit="Linking up now")
+        self.assertCheck(False, "Linking up now")
+
+    def test_compat_missing(self):
+        self.text(matches='"0.9.40"')
+        self.assertCheck(False, "MATCHES does not list Node Talker 1.0.0")
+
+
 if __name__ == "__main__":
     unittest.main()
