@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.83-pi02w"
+VERSION      = "6.13.84-pi02w"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2475,7 +2475,7 @@ body.tab-edit #zone-content{
 #uf-overlay{display:none;position:fixed;inset:0;
   background:rgba(0,0,0,.8);backdrop-filter:blur(4px);
   z-index:500;align-items:center;justify-content:center;
-  padding:0}
+  padding:0;overflow:hidden;overscroll-behavior:none}
 #uf-overlay.open{display:flex}
 
 #uf-box{background:var(--surface);border:1px solid var(--border2);
@@ -2487,7 +2487,7 @@ body.tab-edit #zone-content{
   border-bottom:2px solid var(--teal);padding:.55rem 1rem;
   display:flex;align-items:center;justify-content:space-between;
   flex-shrink:0;box-shadow:0 2px 0 rgba(0,255,229,.15);
-  position:sticky;top:0;z-index:501}
+  position:sticky;top:0;z-index:1000}
 #uf-title{font-family:var(--sans);font-size:var(--fs-base);
   color:var(--teal);letter-spacing:.08em;
   text-shadow:0 0 8px rgba(0,255,229,.4)}

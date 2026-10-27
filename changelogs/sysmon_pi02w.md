@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_83_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_84_20261027.py`. Newest entries first.
+
+## 6.13.84-pi02w (2026-10-27)
+
+- **File editor header stays on top.** The header with the file name, Find, Save and Copy stays pinned at the top of the editor and sits above the path bar and the file text. The editor no longer scrolls as a whole, so on a phone opening the keyboard for Find cannot push the header off the top of the screen.
 
 ## 6.13.83-pi02w (2026-10-27)
 
