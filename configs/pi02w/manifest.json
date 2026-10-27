@@ -1,0 +1,168 @@
+{
+ "profile": "pi02w",
+ "name": "Pi Zero 2 W standard config",
+ "version": "1.0.0",
+ "note": "For a Pi Zero 2 W. Secrets are not in this bundle: each one keeps the value the node has now.",
+ "fields": [
+  {
+   "id": "callsign",
+   "token": "@@CALLSIGN@@",
+   "label": "Callsign",
+   "pattern": "^[A-Za-z0-9]{3,10}$",
+   "upper": true
+  },
+  {
+   "id": "node",
+   "token": "@@NODE@@",
+   "label": "ASL node number",
+   "pattern": "^[0-9]{4,7}$"
+  },
+  {
+   "id": "dmr_id",
+   "token": "@@DMR_ID@@",
+   "label": "DMR ID (7 digits)",
+   "pattern": "^[0-9]{7}$"
+  },
+  {
+   "id": "nxdn_id",
+   "token": "@@NXDN_ID@@",
+   "label": "NXDN ID",
+   "pattern": "^[0-9]{1,5}$"
+  }
+ ],
+ "derived": [
+  {
+   "token": "@@NODE_2@@",
+   "from": "node",
+   "add": 1
+  }
+ ],
+ "files": [
+  {
+   "path": "/etc/asterisk/rpt.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/rpt.conf",
+   "sha256": "a1fceb2f7b6e1f3ba0ec53649e52b3df1732eb89e719b891143d9640fc5832c7",
+   "size": 37982
+  },
+  {
+   "path": "/etc/asterisk/iax.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/iax.conf",
+   "sha256": "b43940da57a13be79a76c295934c0e367e7b327d325cf6bcb55726d6b0cb2c9d",
+   "size": 5359
+  },
+  {
+   "path": "/etc/asterisk/extensions.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/extensions.conf",
+   "sha256": "ffc0cc10ad09ced67cc4bdb71ff2bb5f9877efd3aa6e6084dc92ef86ddffece8",
+   "size": 9076
+  },
+  {
+   "path": "/etc/asterisk/modules.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/modules.conf",
+   "sha256": "a15557fbdec73359a9380cc0f718cd6836a532592e7a51ff04f12db3810ed8d5",
+   "size": 12736
+  },
+  {
+   "path": "/etc/asterisk/manager.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/manager.conf",
+   "sha256": "93b0ce7f5b5e01c9ba78d42682148449a61de6c7025d647ab60ed0780b69ff0e",
+   "size": 486
+  },
+  {
+   "path": "/etc/allmon3/allmon3.ini",
+   "group": "asl3",
+   "file": "files/etc/allmon3/allmon3.ini",
+   "sha256": "8c2f981d15a0118143286830f5655953f4723fef3e3cc2c184aa4fcb72d42528",
+   "size": 2425
+  },
+  {
+   "path": "/etc/asterisk/echolink.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/echolink.conf",
+   "sha256": "946ecccf2f6bc4318536fa84b243c9f8b1f1a45087517d96484b88f9772a01b0",
+   "size": 2069
+  },
+  {
+   "path": "/etc/asterisk/rpt_http_registrations.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/rpt_http_registrations.conf",
+   "sha256": "85833876621ad88a4681e8affcea475a5850387d753c3b075c7381880ab809b2",
+   "size": 135
+  },
+  {
+   "path": "/etc/asterisk/savenode.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/savenode.conf",
+   "sha256": "ce8dfab0b67a84c2cff8a9f9ee7c065588c0361d5faeb98256bcdf6230dc6677",
+   "size": 89
+  },
+  {
+   "path": "/etc/asterisk/simpleusb.conf",
+   "group": "asl3",
+   "file": "files/etc/asterisk/simpleusb.conf",
+   "sha256": "4cdaff30efc15c81f6359b3db155f161ff88a8b205e1dd4a1d46228b53735167",
+   "size": 8986
+  },
+  {
+   "path": "/opt/MMDVM_Bridge/MMDVM_Bridge.ini",
+   "group": "dvs",
+   "file": "files/opt/MMDVM_Bridge/MMDVM_Bridge.ini",
+   "sha256": "e9b8d03662048f39436c0b6c13761de68bff91b7ad98811b5959a6fafb6953f5",
+   "size": 1507
+  },
+  {
+   "path": "/opt/MMDVM_Bridge/DVSwitch.ini",
+   "group": "dvs",
+   "file": "files/opt/MMDVM_Bridge/DVSwitch.ini",
+   "sha256": "4ad7c74da8c01d2d78691d1fd4ff9cf8d2f87ca0fd3adf32f4243e9511a7dfa0",
+   "size": 4963
+  },
+  {
+   "path": "/opt/Analog_Bridge/Analog_Bridge.ini",
+   "group": "dvs",
+   "file": "files/opt/Analog_Bridge/Analog_Bridge.ini",
+   "sha256": "2f051869146287adcdea2f4228430eebd6cfa876b9f65f8c9ebbaea11a4cb351",
+   "size": 5216
+  },
+  {
+   "path": "/var/lib/dvswitch/dvs/var.txt",
+   "group": "dvs",
+   "file": "files/var/lib/dvswitch/dvs/var.txt",
+   "sha256": "5126d3ad8449a6cc08a6e676ab66afdc4bdf5aad399cc61a500de851c7ae8fe7",
+   "size": 1088
+  },
+  {
+   "path": "/opt/YSFGateway/YSFGateway.ini",
+   "group": "dvs",
+   "file": "files/opt/YSFGateway/YSFGateway.ini",
+   "sha256": "13b151173f8564dd08ca2ee3c9d737bdec21b3a23e2fcfccffeade7c52754b7e",
+   "size": 1197
+  },
+  {
+   "path": "/opt/P25Gateway/P25Gateway.ini",
+   "group": "dvs",
+   "file": "files/opt/P25Gateway/P25Gateway.ini",
+   "sha256": "a02aab0f122d2ba3c2d387ad1afb2a7af175f535803b9442f744a8aeb70e0d97",
+   "size": 644
+  },
+  {
+   "path": "/opt/NXDNGateway/NXDNGateway.ini",
+   "group": "dvs",
+   "file": "files/opt/NXDNGateway/NXDNGateway.ini",
+   "sha256": "40ae69ae07ddca3248da3f2329e5ec17eb7169eb1337198a373505d7b00c89ee",
+   "size": 1347
+  },
+  {
+   "path": "/opt/USRP2M17/USRP2M17.ini",
+   "group": "m17",
+   "file": "files/opt/USRP2M17/USRP2M17.ini",
+   "sha256": "814ff66a3185a9d514ff45d4874a4c49b33ec350bfc1e982f4120466d8c59943",
+   "size": 296
+  }
+ ]
+}

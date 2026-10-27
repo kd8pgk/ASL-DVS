@@ -14,7 +14,7 @@ By KD8PGK, written with Claude (Anthropic).
 | SysMon | `sysmon_v*.py` | 9999 | System monitor and health checks for the node, DVSwitch and its config files. |
 | instmon | `instmon_v*.py` | 8990 | Installer and manager. Install, update, start and stop the other tools, update from GitHub, Quiet System, disk images, and the manuals and any other PDF to upload, open or download. |
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Powers off on sustained low voltage; reboots (or powers off) on a lost network. Hardware watchdog, and alerts by ntfy or webhook. |
-| 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points and presets (Config tab); boot timeline, logs and saved copies (Boot tab). |
+| 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points, presets and a Pi Zero 2 W full config replacement from `configs/pi02w/` (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
@@ -489,7 +489,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_pi02w_v6_13_80_20261027.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_79_1_20261027.py` | common |
 | `wifimon_v5_39_4_20261027.py` | common |
-| `44helper_v0_0_219_20261027.py` | common |
+| `44helper_v0_0_220_20261027.py` | common |
 | `nodetalker_v0_9_44_20261027.py` | common |
 | `amp_nodetalker_v0_3_1_20261027.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |

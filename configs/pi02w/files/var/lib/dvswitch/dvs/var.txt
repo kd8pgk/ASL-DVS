@@ -1,0 +1,77 @@
+
+source /var/lib/dvswitch/dvs/func.txt
+source /var/lib/dvswitch/dvs/lan/language.txt
+
+#VARIABLES
+startup_lan=73
+first_time_instl=73
+
+# ${DVS}init_config.sh
+call_sign=@@CALLSIGN@@
+dmr_id=@@DMR_ID@@
+rpt_id=@@DMR_ID@@11
+rpt_id_2=@@DMR_ID@@21
+rpt_id_3=@@DMR_ID@@31
+rpt_id_now=
+module=B
+nxdn_id=@@NXDN_ID@@
+usrp_port=
+
+default_dmr_server=Brandmeister
+
+bm_name=Brandmeister
+bm_master=
+bm_address=3104.master.brandmeister.network
+bm_password=<redacted:2d04a347>
+bm_port=62031
+
+dmrplus_name=DMRPlus
+dmrplus_address=
+dmrplus_password=
+dmrplus_port=
+
+tgif_name=TGIF
+tgif_address=tgif.network
+tgif_password=<redacted:1d148b56>
+tgif_port=62031
+
+other1_name=
+other1_address=
+other1_password=
+other1_port=
+
+other2_name=
+other2_address=
+other2_password=
+other2_port=
+
+# AMBE
+ambe_server=192.168.0.100
+ambe_rxport=2460
+ambe_baud=460800
+ambe_option=2
+
+# ${adv}dvsm.sh
+txgain_dmr=0.25
+txgain_dstar=2.00
+txgain_nxdn=0.35
+txgain_p25=0.35
+txgain_ysf=0.35
+
+usrpGain=4.00
+txgain_dmr_default=0.35
+usrpGain_default=1.10
+
+# MMDVM_Bridge Info
+rx_freq=
+tx_freq=
+pwr=
+lat=
+lon=
+hgt=
+lctn=
+desc=
+url=
+
+# ETC
+cpu_temp=

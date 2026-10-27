@@ -44,8 +44,8 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.219"
-APP_STAGE = "v0.0.215: firewall-cmd gets 60 s to answer; the Overview reads the firewall zone from a cache; history in changelogs/44helper.md"
+APP_VERSION = "0.0.220"
+APP_STAGE = "v0.0.220: Config tab gets a Full config replacement card (Pi Zero 2 W bundle from GitHub); history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
 
@@ -153,6 +153,18 @@ def atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False):
     except OSError:
         pass
     return True
+
+
+def http_get(url, max_bytes, timeout=20):
+    import urllib.request
+    if not url.startswith("https://"):
+        raise ValueError("only https addresses are fetched")
+    req = urllib.request.Request(url, headers={"User-Agent": "asl-dvs"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError("the download is larger than %d bytes" % max_bytes)
+    return data
 
 
 def _read_shadow_hash(account: str):
@@ -13909,6 +13921,7 @@ def build_config_status() -> dict:
         "sysmon_installed": os.path.exists(_CFGR_SYSMON_BIN),
         "gateways": _cfgr_gateway_states(),
         "reinstall": _cfgr_ri_status(),
+        "bundle": _fcr_status(),
         "checked_at": _cfgr_now(),
     }
 
@@ -15457,7 +15470,8 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     return new, None, True
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "gateways_apply", "gateways_revert", "id_set_callsign"})
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "gateways_apply", "gateways_revert", "id_set_callsign",
+                               "bundle_apply"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
 import os
@@ -15984,6 +15998,347 @@ def _cfgr_act_reinstall_dismiss(payload: dict) -> dict:
 def _route_config_reinstall(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_cfgr_ri_status()).encode("utf-8")
 
+_FCR_REPO = "kd8pgk/ASL-DVS"
+_FCR_PROFILE = "pi02w"
+_FCR_DIR = os.path.join(_CFGR_DIR, "bundle", _FCR_PROFILE)
+_FCR_MAX_MANIFEST = 200000
+_FCR_MAX_FILE = 400000
+_FCR_MAX_FILES = 60
+_FCR_DEADLINE = 120
+_FCR_GROUP_PRODUCT = {"asl3": "asl3", "dvs": "dvs", "m17": "usrp2m17"}
+_FCR_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,59}(/[A-Za-z0-9][A-Za-z0-9._-]{0,59}){0,3}$")
+_FCR_REL_RE = re.compile(r"^files/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
+_FCR_TOKEN_RE = re.compile(r"^@@[A-Z0-9_]{1,24}@@$")
+_FCR_ANY_TOKEN_RE = re.compile(r"@@[A-Z0-9_]{1,24}@@")
+_FCR_TAG_RE = re.compile(r"<redacted:[0-9a-f]{8}>")
+_FCR_ID_RE = re.compile(r"^[a-z0-9_]{1,16}$")
+
+def _fcr_manifest_error(m) -> str | None:
+    if not isinstance(m, dict) or m.get("profile") != _FCR_PROFILE:
+        return "The bundle is not the Pi Zero 2 W profile."
+    files = m.get("files")
+    if not isinstance(files, list) or not files or len(files) > _FCR_MAX_FILES:
+        return "The bundle lists no files, or too many."
+    seen = set()
+    for e in files:
+        if not isinstance(e, dict):
+            return "A file entry in the bundle is not valid."
+        path, group, rel = e.get("path"), e.get("group"), e.get("file")
+        sha, size = e.get("sha256"), e.get("size")
+        if group not in _FCR_GROUP_PRODUCT or not isinstance(path, str) or not _cfgr_path_allowed(group, path):
+            return f"{path}: not a file this card may change."
+        if path in seen:
+            return f"{path}: listed twice in the bundle."
+        if not isinstance(rel, str) or not _FCR_REL_RE.match(rel) or ".." in rel.split("/"):
+            return f"{path}: bad file name in the bundle."
+        if (not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha) or not isinstance(size, int)
+                or isinstance(size, bool) or not 0 < size <= _FCR_MAX_FILE):
+            return f"{path}: bad checksum or size in the bundle."
+        seen.add(path)
+    fields = m.get("fields")
+    if not isinstance(fields, list) or not fields:
+        return "The bundle has no fields to fill in."
+    ids = set()
+    for fl in fields:
+        if not isinstance(fl, dict) or not _FCR_ID_RE.match(str(fl.get("id", ""))) or fl["id"] in ids:
+            return "A field in the bundle is not valid."
+        if not _FCR_TOKEN_RE.match(str(fl.get("token", ""))) or not isinstance(fl.get("label"), str):
+            return f"Field {fl['id']}: bad token or label."
+        try:
+            re.compile(str(fl.get("pattern", "")))
+        except re.error:
+            return f"Field {fl['id']}: bad pattern."
+        ids.add(fl["id"])
+    for d in m.get("derived") or []:
+        if (not isinstance(d, dict) or not _FCR_TOKEN_RE.match(str(d.get("token", ""))) or d.get("from") not in ids
+                or not isinstance(d.get("add"), int)):
+            return "A derived value in the bundle is not valid."
+    return None
+
+def _fcr_fetch(ref: str) -> dict:
+    if not _FCR_REF_RE.match(ref) or ".." in ref:
+        return {"success": False, "output": "That version name is not valid."}
+    base = f"https://raw.githubusercontent.com/{_FCR_REPO}/{ref}/configs/{_FCR_PROFILE}/"
+    deadline = time.monotonic() + _FCR_DEADLINE
+    try:
+        raw = http_get(base + "manifest.json", _FCR_MAX_MANIFEST)
+        m = json.loads(raw)
+    except (OSError, ValueError) as exc:
+        return {"success": False, "output": f"Could not get the bundle list from GitHub: {exc}"}
+    err = _fcr_manifest_error(m)
+    if err:
+        return {"success": False, "output": f"The bundle list is not usable: {err} Nothing was saved."}
+    blobs: dict[str, bytes] = {}
+    for e in m["files"]:
+        if time.monotonic() > deadline:
+            return {"success": False, "output": "GitHub took too long. Nothing was saved."}
+        try:
+            data = http_get(base + e["file"], _FCR_MAX_FILE)
+        except (OSError, ValueError) as exc:
+            return {"success": False, "output": f"Could not get {e['path']}: {exc}. Nothing was saved."}
+        if len(data) != e["size"] or hashlib.sha256(data).hexdigest() != e["sha256"]:
+            return {"success": False, "output": f"{e['path']} did not match its checksum. Nothing was saved."}
+        blobs[e["file"]] = data
+    _cfgr_ensure_root_dir()
+    parent = os.path.dirname(_FCR_DIR)
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    tmp = _FCR_DIR + ".new"
+    shutil.rmtree(tmp, ignore_errors=True)
+    os.makedirs(tmp, mode=0o700)
+    for rel, data in blobs.items():
+        dest = os.path.join(tmp, rel)
+        os.makedirs(os.path.dirname(dest), mode=0o700, exist_ok=True)
+        with open(dest, "wb") as fh:
+            fh.write(data)
+    with open(os.path.join(tmp, "manifest.json"), "wb") as fh:
+        fh.write(raw)
+    with open(os.path.join(tmp, "meta.json"), "w") as fh:
+        json.dump({"ref": ref, "repo": _FCR_REPO, "fetched_at": _cfgr_now()}, fh)
+    shutil.rmtree(_FCR_DIR, ignore_errors=True)
+    os.rename(tmp, _FCR_DIR)
+    log(f"OK: CONFIG bundle {_FCR_PROFILE} {m.get('version', '?')} fetched from {ref}: {len(blobs)} files")
+    return {"success": True,
+            "output": f"Got {m.get('name', 'the bundle')} {m.get('version', '')} from GitHub ({ref}): "
+                      f"{len(blobs)} files, every checksum matched. Nothing on this node was changed."}
+
+def _fcr_load() -> tuple[dict | None, dict | None]:
+    try:
+        with open(os.path.join(_FCR_DIR, "manifest.json"), "rb") as fh:
+            m = json.loads(fh.read())
+        with open(os.path.join(_FCR_DIR, "meta.json"), "r") as fh:
+            meta = json.load(fh)
+    except (OSError, ValueError):
+        return None, None
+    if _fcr_manifest_error(m) or not isinstance(meta, dict):
+        return None, None
+    return m, meta
+
+def _fcr_blob(entry: dict) -> bytes | None:
+    try:
+        with open(os.path.join(_FCR_DIR, entry["file"]), "rb") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    if len(data) != entry["size"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
+        return None
+    return data
+
+def _fcr_tokens(m: dict, payload: dict) -> tuple[dict | None, str]:
+    given = payload.get("values")
+    if not isinstance(given, dict):
+        return None, "Fill in the fields first."
+    values: dict[str, str] = {}
+    for fl in m["fields"]:
+        v = str(given.get(fl["id"], "")).strip()
+        if fl.get("upper"):
+            v = v.upper()
+        if not re.fullmatch(fl["pattern"], v):
+            return None, f"{fl['label']} is missing or not valid."
+        values[fl["id"]] = v
+    tokens = {fl["token"]: values[fl["id"]] for fl in m["fields"]}
+    for d in m.get("derived") or []:
+        try:
+            tokens[d["token"]] = str(int(values[d["from"]]) + d["add"])
+        except (KeyError, ValueError):
+            return None, "A derived value could not be worked out."
+    return tokens, ""
+
+def _fcr_render(data: bytes, tokens: dict) -> tuple[str | None, str]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return None, "not text"
+    for tok, val in tokens.items():
+        text = text.replace(tok, val)
+    left = sorted(set(_FCR_ANY_TOKEN_RE.findall(text)))
+    if left:
+        return None, "unfilled " + ", ".join(left)
+    return text, ""
+
+def _fcr_fill_secrets(text: str, current: str | None) -> tuple[str, int, list[str]]:
+    by_sec: dict[str, list[str]] = {}
+    if current is not None:
+        sec = ""
+        for line in current.split("\n"):
+            hm = _CFGR_HDR_RE.match(line)
+            if hm:
+                sec = hm.group(1)
+            by_sec.setdefault(sec, []).append(line)
+    out: list[str] = []
+    unresolved: list[str] = []
+    resolved = 0
+    seen: dict[tuple[str, str], int] = {}
+    sec = ""
+    for n, line in enumerate(text.split("\n"), 1):
+        hm = _CFGR_HDR_RE.match(line)
+        if hm:
+            sec = hm.group(1)
+        body = line.lstrip()
+        parts = _FCR_TAG_RE.split(body)
+        if len(parts) == 1:
+            out.append(line)
+            continue
+        indent = line[:len(line) - len(body)]
+        shape = _FCR_TAG_RE.sub("\x00", body)
+        k = seen.get((sec, shape), 0)
+        seen[(sec, shape)] = k + 1
+        pats = [re.escape(p).replace("\\ ", r"\s*") for p in parts]
+        rx = "^" + "".join(pats[i] + ("(.*?)" if i < len(pats) - 1 else "") for i in range(len(pats))) + "$"
+        got = None
+        try:
+            pat = re.compile(rx)
+        except re.error:
+            pat = None
+        if pat is not None:
+            hits = []
+            for cur_line in by_sec.get(sec, []):
+                cm = pat.match(cur_line.lstrip())
+                if cm:
+                    hits.append(cm)
+            if k < len(hits):
+                got = hits[k].groups()
+        if got is None:
+            vals = [""] * (len(parts) - 1)
+            if not body.startswith((";", "#")):
+                unresolved.append(f"line {n}: {parts[0].strip()[:40]}")
+        else:
+            vals = list(got)
+            resolved += len(vals)
+        new = indent + parts[0]
+        for i, v in enumerate(vals):
+            new += v + parts[i + 1]
+        out.append(new)
+    return "\n".join(out), resolved, unresolved
+
+def _fcr_group_state(force: bool = True) -> dict[str, tuple[bool, str]]:
+    prods = {p["key"]: p for p in _detect_installed_products(force=force)}
+    out: dict[str, tuple[bool, str]] = {}
+    for g, key in _FCR_GROUP_PRODUCT.items():
+        p = prods.get(key)
+        if p is not None and p["state"] == "installed":
+            out[g] = (True, "installed")
+        else:
+            out[g] = (False, "not installed" if p is None or p["state"] == "absent" else str(p["state"]))
+    return out
+
+def _fcr_plan(m: dict, tokens: dict, state: dict) -> tuple[list[dict], list[str]]:
+    rows: list[dict] = []
+    errors: list[str] = []
+    for e in m["files"]:
+        g, path = e["group"], e["path"]
+        if not state[g][0]:
+            rows.append({"path": path, "group": g, "status": "skipped", "note": state[g][1]})
+            continue
+        blob = _fcr_blob(e)
+        if blob is None:
+            errors.append(f"{path}: the saved bundle file is missing or damaged -- get the bundle again")
+            continue
+        text, err = _fcr_render(blob, tokens)
+        if text is None:
+            errors.append(f"{path}: {err}")
+            continue
+        cur = _cfgr_read(path)
+        text, resolved, unresolved = _fcr_fill_secrets(text, None if cur is None else cur.decode("utf-8", "replace"))
+        data, _kept = _cfgr_keep_managed(text.encode("utf-8"), cur)
+        status = "new" if cur is None else ("unchanged" if cur == data else "changed")
+        rows.append({"path": path, "group": g, "status": status, "data": data, "resolved": resolved,
+                     "unresolved": unresolved})
+    return rows, errors
+
+def _fcr_report(m: dict, meta: dict, state: dict, rows: list[dict]) -> list[str]:
+    lines = [f"{m.get('name', 'Bundle')} {m.get('version', '')} (from {meta.get('ref', '?')}, "
+             f"fetched {meta.get('fetched_at', '?')})", ""]
+    for g in _FCR_GROUP_PRODUCT:
+        if any(r["group"] == g for r in rows):
+            lines.append(f"{_CFGR_GROUPS[g]['label']}: " + ("will be replaced" if state[g][0]
+                                                           else f"skipped, {state[g][1]}"))
+    lines.append("")
+    for r in rows:
+        if r["status"] == "skipped":
+            lines.append(f"  {r['path']}: skipped ({r['note']})")
+        else:
+            extra = f", {r['resolved']} secret value(s) kept from this node" if r["resolved"] else ""
+            lines.append(f"  {r['path']}: {r['status']}{extra}")
+    missing = [f"{r['path']} {u}" for r in rows for u in r.get("unresolved", [])]
+    if missing:
+        lines += ["", "Secrets this node does not have yet. They are written empty; set them by hand:"]
+        lines += [f"  {x}" for x in missing[:40]]
+        if len(missing) > 40:
+            lines.append(f"  ... and {len(missing) - 40} more")
+    return lines
+
+def _fcr_ready(payload: dict):
+    m, meta = _fcr_load()
+    if m is None:
+        return None, None, None, None, "Get the bundle first."
+    tokens, err = _fcr_tokens(m, payload)
+    if tokens is None:
+        return None, None, None, None, err
+    state = _fcr_group_state()
+    rows, errors = _fcr_plan(m, tokens, state)
+    if errors:
+        return None, None, None, None, "Nothing can be written:\n" + "\n".join(errors)
+    return m, meta, state, rows, ""
+
+def _fcr_act_fetch(payload: dict) -> dict:
+    return _fcr_fetch(str(payload.get("ref") or "main").strip())
+
+def _fcr_act_preview(payload: dict) -> dict:
+    m, meta, state, rows, err = _fcr_ready(payload)
+    if m is None:
+        return {"success": False, "output": err}
+    lines = _fcr_report(m, meta, state, rows)
+    todo = sum(1 for r in rows if r["status"] in ("new", "changed"))
+    lines += ["", f"{todo} file(s) would be written. Nothing was changed (preview only)."]
+    return {"success": True, "output": "\n".join(lines)}
+
+def _fcr_act_apply(payload: dict) -> dict:
+    if payload.get("confirm") is not True:
+        return {"success": False, "output": "Confirmation is required to replace the config."}
+    m, meta, state, rows, err = _fcr_ready(payload)
+    if m is None:
+        return {"success": False, "output": err}
+    targets = [r for r in rows if r["status"] in ("new", "changed")]
+    lines = _fcr_report(m, meta, state, rows)
+    if not targets:
+        return {"success": True, "output": "\n".join(lines + ["", "Every file is already as the bundle says."])}
+    groups = [g for g in _FCR_GROUP_PRODUCT if any(r["group"] == g for r in targets)]
+    auto_id, removed = _cfgr_auto_point("full config replacement", groups)
+    lines += ["", f"Current files saved first as automatic copy {auto_id}.", "Writing:"]
+    ok = True
+    for r in targets:
+        uid, gid, mode = _cfgr_meta_of(r["path"])
+        try:
+            res = _cfgr_write_file(r["path"], r["data"], uid, gid, mode)
+        except OSError as exc:
+            lines.append(f"  {r['path']}: FAILED: {exc}")
+            lines.append("Stopped. Restore the automatic copy from the list above if the node is not working.")
+            ok = False
+            break
+        if res.startswith("NOT"):
+            ok = False
+        lines.append(f"  {r['path']}: {res}")
+    if removed:
+        lines.append("Oldest automatic copies dropped: " + ", ".join(removed))
+    lines.append("Services were NOT restarted. Use the Restart buttons below when ready.")
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG full replacement applied to {', '.join(groups)} from {meta.get('ref', '?')}")
+    return {"success": ok, "output": "\n".join(lines), "restart_groups": groups}
+
+def _fcr_status() -> dict:
+    m, meta = _fcr_load()
+    out: dict = {"profile": _FCR_PROFILE, "staged": m is not None, "ref": "main"}
+    if m is None:
+        return out
+    state = _fcr_group_state(False)
+    out.update({
+        "name": m.get("name", ""), "version": m.get("version", ""), "note": m.get("note", ""),
+        "ref": meta.get("ref", "main"), "fetched_at": meta.get("fetched_at", ""),
+        "fields": [{"id": fl["id"], "label": fl["label"], "upper": bool(fl.get("upper"))} for fl in m["fields"]],
+        "groups": [{"group": g, "label": _CFGR_GROUPS[g]["label"], "installed": state[g][0], "state": state[g][1],
+                    "files": sum(1 for e in m["files"] if e["group"] == g)} for g in _FCR_GROUP_PRODUCT],
+    })
+    return out
+
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "save_restore": _cfgr_act_save_restore,
     "retake_restore": _cfgr_act_retake_restore,
@@ -16004,6 +16359,9 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "id_set_callsign_preview": lambda p: _cfgr_act_id_set_callsign(p, False),
     "id_set_callsign": lambda p: _cfgr_act_id_set_callsign(p, True),
     "usrp_verify": _cfgr_act_usrp_verify,
+    "bundle_fetch": _fcr_act_fetch,
+    "bundle_preview": _fcr_act_preview,
+    "bundle_apply": _fcr_act_apply,
 }
 
 def _dispatch_config_action(payload: dict) -> dict:
@@ -16606,12 +16964,72 @@ function cfgIdHide() {
     .finally(function() { cfgIdLoad(); });
 }
 
+var CFG_BUNDLE_SIG = '';
+
+function cfgBundleRender(d) {
+  var b = d.bundle || {};
+  var st = document.getElementById('cfg-bundle-status');
+  var fl = document.getElementById('cfg-bundle-fields');
+  var ac = document.getElementById('cfg-bundle-actions');
+  if (!st || !fl || !ac) return;
+  if (!b.staged) {
+    st.innerHTML = '<div class="step-body">No bundle on this node yet. Press Get bundle.</div>';
+    fl.style.display = 'none';
+    ac.style.display = 'none';
+    CFG_BUNDLE_SIG = '';
+    return;
+  }
+  var rows = (b.groups || []).map(function(g) {
+    return '<div style="font-family:var(--sans);font-size:var(--fs-base)">' + cfgEsc(g.label) + ': ' +
+      (g.installed ? 'will be replaced (' + g.files + ' files)' : 'skipped, ' + cfgEsc(g.state)) + '</div>';
+  }).join('');
+  st.innerHTML = '<div class="step-body">' + cfgEsc(b.name) + ' ' + cfgEsc(b.version) + ' &middot; ' + cfgEsc(b.ref) +
+    ' &middot; fetched ' + cfgEsc(b.fetched_at) + '</div>' + rows;
+  var sig = (b.fields || []).map(function(f) { return f.id; }).join(',');
+  if (sig !== CFG_BUNDLE_SIG) {
+    CFG_BUNDLE_SIG = sig;
+    fl.innerHTML = (b.fields || []).map(function(f) {
+      return '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin:.25rem 0">' +
+        cfgEsc(f.label) + '<br><input type="text" class="asl3-cmd-input" id="cfg-bf-' + cfgEsc(f.id) +
+        '" maxlength="12" autocomplete="off"' + (f.upper ? ' style="text-transform:uppercase"' : '') + '></label>';
+    }).join('');
+  }
+  fl.style.display = '';
+  ac.style.display = '';
+}
+
+function cfgBundleValues() {
+  var b = (CFG_STATE && CFG_STATE.bundle) || {};
+  var v = {};
+  (b.fields || []).forEach(function(f) {
+    var el = document.getElementById('cfg-bf-' + f.id);
+    v[f.id] = el ? el.value.trim() : '';
+  });
+  return v;
+}
+
+function cfgBundleFetch(btn) {
+  var el = document.getElementById('cfg-bundle-ref');
+  var ref = el && el.value.trim() ? el.value.trim() : 'main';
+  cfgPost({action: 'bundle_fetch', ref: ref}, 'cfg-bundle-out', btn);
+}
+
+function cfgBundlePreview(btn) {
+  cfgPost({action: 'bundle_preview', values: cfgBundleValues()}, 'cfg-bundle-out', btn);
+}
+
+function cfgBundleApply(btn) {
+  if (!confirm('Replace the config files of the installed systems with the Pi Zero 2 W bundle?\n\nAn automatic copy of the current files is saved first and can be restored from the Restore list. Secrets stay as they are on this node. Systems that are not installed are skipped.')) return;
+  cfgPost({action: 'bundle_apply', values: cfgBundleValues(), confirm: true}, 'cfg-bundle-out', btn);
+}
+
 function refreshConfig() {
   cfgIdLoad();
   return fetch('/api/config/status').then(function(r) { return r.json(); }).then(function(d) {
     CFG_STATE = d;
     cfgRender(d);
     cfgRenderReinstall(d.reinstall || {});
+    cfgBundleRender(d);
   });
 }
 """
@@ -16645,6 +17063,28 @@ def _render_config_panel() -> str:
       <button class="btn-purge" id="cfg-delete-btn" style="display:none" onclick="cfgDelete(this)">Delete</button>
     </div>
     <div class="asl3-console shown placeholder" id="cfg-restore-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card" id="cfg-bundle">
+    <div class="step-head"><div class="step-title">Full config replacement</div></div>
+    <div class="step-body"><b>For a Pi Zero 2 W.</b> Replaces the config files of the systems installed on this node
+      with the standard set from GitHub. Config only: install ASL3, DVSwitch and USRP2M17 from their tabs, and the split
+      tunnel from the Split Tunnel tab, first. A system that is not installed is skipped. Passwords and keys are not in
+      the bundle: each one keeps the value this node has now. The current files are saved first as an automatic
+      restore point.</div>
+    <label style="font-family:var(--sans);font-size:var(--fs-base);color:var(--muted)">Version (GitHub branch or tag)
+      <input type="text" class="asl3-cmd-input" id="cfg-bundle-ref" value="main" maxlength="40" autocomplete="off">
+    </label>
+    <div class="step-actions">
+      <button class="btn-run" onclick="cfgBundleFetch(this)">Get bundle from GitHub</button>
+    </div>
+    <div id="cfg-bundle-status"></div>
+    <div id="cfg-bundle-fields" style="display:none;margin:.5rem 0"></div>
+    <div class="step-actions" id="cfg-bundle-actions" style="display:none">
+      <button class="btn-recheck" onclick="cfgBundlePreview(this)">Preview</button>
+      <button class="btn-purge" onclick="cfgBundleApply(this)">Replace config</button>
+    </div>
+    <div class="asl3-console shown placeholder" id="cfg-bundle-out">(nothing run yet)</div>
   </div>
 
   <div class="step-card" id="cfg-restart" style="display:none">

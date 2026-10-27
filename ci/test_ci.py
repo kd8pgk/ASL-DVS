@@ -441,6 +441,213 @@ SECRETS = ["abc123", "mypass", "amipass", "sippass", "elpass", "urlpass", "comme
            "someone@example.com", "61:20:3d"]
 
 
+def load_helper44():
+    import glob
+    import importlib.util
+    path = sorted(glob.glob(os.path.join(HERE, "..", "44helper_v*.py")))[-1]
+    spec = importlib.util.spec_from_file_location("helper44_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules["helper44_under_test"] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+BUNDLE_DIR = os.path.join(HERE, "..", "configs", "pi02w")
+VALUES = {"callsign": "w1test", "node": "654321", "dmr_id": "3123456", "nxdn_id": "12345"}
+
+
+class BundleTests(unittest.TestCase):
+    def setUp(self):
+        import hashlib
+        self.h = load_helper44()
+        self.tmp = tempfile.TemporaryDirectory()
+        self.saved = {}
+        for name, val in (("_CFGR_DIR", os.path.join(self.tmp.name, "lib")),
+                          ("_FCR_DIR", os.path.join(self.tmp.name, "lib", "bundle", "pi02w"))):
+            self.saved[name] = getattr(self.h, name)
+            setattr(self.h, name, val)
+        self.served = {}
+        for root, _dirs, files in os.walk(BUNDLE_DIR):
+            for n in files:
+                full = os.path.join(root, n)
+                with open(full, "rb") as f:
+                    self.served[os.path.relpath(full, BUNDLE_DIR)] = f.read()
+        self.sha = hashlib.sha256
+        self.fetched_urls = []
+
+        def fake_get(url, max_bytes, timeout=20):
+            self.fetched_urls.append(url)
+            rel = url.split("/configs/pi02w/", 1)[1]
+            if rel not in self.served:
+                raise OSError("404")
+            return self.served[rel]
+        self.patch("http_get", fake_get)
+
+    def patch(self, name, val):
+        self.saved.setdefault(name, getattr(self.h, name))
+        setattr(self.h, name, val)
+
+    def tearDown(self):
+        for name, val in self.saved.items():
+            setattr(self.h, name, val)
+        self.tmp.cleanup()
+
+    def products(self, installed):
+        def fake(force=False):
+            return [{"key": k, "state": "installed" if k in installed else "absent"} for k in ("asl3", "dvs", "usrp2m17")]
+        self.patch("_detect_installed_products", fake)
+
+    def test_repo_bundle_is_valid(self):
+        import re
+        m = json.loads(self.served["manifest.json"])
+        self.assertIsNone(self.h._fcr_manifest_error(m))
+        tokens = {f["token"] for f in m["fields"]} | {d["token"] for d in m["derived"]}
+        for e in m["files"]:
+            data = self.served[e["file"]]
+            self.assertEqual(self.sha(data).hexdigest(), e["sha256"], e["path"])
+            self.assertEqual(len(data), e["size"], e["path"])
+            text = data.decode()
+            self.assertFalse(set(re.findall(r"@@[A-Z0-9_]+@@", text)) - tokens, e["path"])
+            for word in ("KD8PGK", "652701", "3214544", "11738", "Jim "):
+                self.assertNotIn(word, text, e["path"] + " " + word)
+
+    def test_fetch_stages_and_rejects_tampering(self):
+        res = self.h._fcr_fetch("main")
+        self.assertTrue(res["success"], res["output"])
+        self.assertIsNotNone(self.h._fcr_load()[0])
+        self.assertTrue(all(u.startswith("https://raw.githubusercontent.com/kd8pgk/ASL-DVS/main/configs/pi02w/")
+                            for u in self.fetched_urls))
+        first = json.loads(self.served["manifest.json"])["files"][0]
+        self.served[first["file"]] = self.served[first["file"]] + b"x"
+        res = self.h._fcr_fetch("main")
+        self.assertFalse(res["success"])
+        self.assertIn("checksum", res["output"])
+        self.assertIsNotNone(self.h._fcr_load()[0])
+
+    def test_fetch_rejects_bad_ref_and_bad_manifest(self):
+        self.assertFalse(self.h._fcr_fetch("../x")["success"])
+        m = json.loads(self.served["manifest.json"])
+        m["files"][0]["path"] = "/etc/shadow"
+        self.served["manifest.json"] = json.dumps(m).encode()
+        res = self.h._fcr_fetch("main")
+        self.assertFalse(res["success"])
+        self.assertIn("not a file this card may change", res["output"])
+        self.assertIsNone(self.h._fcr_load()[0])
+
+    def test_values_are_checked(self):
+        m = json.loads(self.served["manifest.json"])
+        tokens, err = self.h._fcr_tokens(m, {"values": VALUES})
+        self.assertEqual(err, "")
+        self.assertEqual(tokens["@@CALLSIGN@@"], "W1TEST")
+        self.assertEqual(tokens["@@NODE_2@@"], "654322")
+        bad = dict(VALUES, callsign="no way")
+        self.assertIsNone(self.h._fcr_tokens(m, {"values": bad})[0])
+        self.assertIsNone(self.h._fcr_tokens(m, {"values": dict(VALUES, node="12")})[0])
+        self.assertIsNone(self.h._fcr_tokens(m, {})[0])
+
+    def test_secrets_kept_from_current_file(self):
+        fill = self.h._fcr_fill_secrets
+        bundle = ("[general]\nsecret = <redacted:aaaaaaaa>\nregister => 1:<redacted:bbbbbbbb>@host.org\n"
+                  "[DMR Network]\nPassword=<redacted:cccccccc>\n[Other]\nPassword=<redacted:dddddddd>\n"
+                  ";secret = <redacted:eeeeeeee>\n")
+        current = ("[general]\nsecret=abc\nregister => 1:pw1@host.org\n[DMR Network]\nPassword=one\n"
+                   "[Other]\nPassword=two\n")
+        text, resolved, unresolved = fill(bundle, current)
+        self.assertIn("secret = abc", text)
+        self.assertIn("register => 1:pw1@host.org", text)
+        self.assertIn("[DMR Network]\nPassword=one", text)
+        self.assertIn("[Other]\nPassword=two", text)
+        self.assertNotIn("<redacted:", text)
+        self.assertEqual(unresolved, [])
+        text, resolved, unresolved = fill(bundle, None)
+        self.assertNotIn("<redacted:", text)
+        self.assertEqual(len(unresolved), 4)
+        self.assertEqual(resolved, 0)
+        text, _r, unresolved = fill("[a]\nx=<redacted:11111111>\nx=<redacted:22222222>\n", "[a]\nx=first\nx=second\n")
+        self.assertIn("x=first\nx=second", text)
+
+    def staged_apply(self, installed, current):
+        self.products(installed)
+        self.assertTrue(self.h._fcr_fetch("main")["success"])
+        written = {}
+        self.patch("_cfgr_read", lambda path: current.get(path))
+        self.patch("_cfgr_meta_of", lambda path: (None, None, 0o644))
+        self.patch("_cfgr_auto_point", lambda reason, groups: ("auto1", []))
+
+        def fake_write(path, data, uid, gid, mode):
+            written[path] = data
+            return "written"
+        self.patch("_cfgr_write_file", fake_write)
+        return written
+
+    def test_apply_needs_confirm(self):
+        written = self.staged_apply({"asl3", "dvs", "usrp2m17"}, {})
+        res = self.h._fcr_act_apply({"values": VALUES})
+        self.assertFalse(res["success"])
+        self.assertEqual(written, {})
+
+    def test_apply_fills_identity_and_keeps_secrets(self):
+        current = {"/opt/MMDVM_Bridge/MMDVM_Bridge.ini": b"[DMR Network]\nPassword=sekrit\n"}
+        written = self.staged_apply({"asl3", "dvs", "usrp2m17"}, current)
+        res = self.h._fcr_act_apply({"values": VALUES, "confirm": True})
+        self.assertTrue(res["success"], res["output"])
+        self.assertEqual(sorted(res["restart_groups"]), ["asl3", "dvs", "m17"])
+        m = json.loads(self.served["manifest.json"])
+        self.assertEqual(sorted(written), sorted(e["path"] for e in m["files"]))
+        for path, data in written.items():
+            text = data.decode()
+            self.assertNotIn("@@", text, path)
+            self.assertNotIn("<redacted:", text, path)
+        self.assertIn("[654321](node-main)", written["/etc/asterisk/rpt.conf"].decode())
+        self.assertIn("654322", written["/etc/asterisk/rpt.conf"].decode())
+        self.assertIn("Callsign=W1TEST", written["/opt/MMDVM_Bridge/MMDVM_Bridge.ini"].decode())
+        self.assertIn("Password=sekrit", written["/opt/MMDVM_Bridge/MMDVM_Bridge.ini"].decode())
+        self.assertIn("set them by hand", res["output"])
+
+    def test_groups_not_installed_are_skipped(self):
+        written = self.staged_apply({"asl3"}, {})
+        res = self.h._fcr_act_apply({"values": VALUES, "confirm": True})
+        self.assertTrue(res["success"], res["output"])
+        self.assertEqual(res["restart_groups"], ["asl3"])
+        self.assertTrue(all(p.startswith("/etc/") for p in written))
+        self.assertIn("/opt/USRP2M17/USRP2M17.ini: skipped (not installed)", res["output"])
+        self.assertTrue(self.h._fcr_status()["staged"])
+
+    def test_preview_changes_nothing(self):
+        written = self.staged_apply({"asl3", "dvs", "usrp2m17"}, {})
+        res = self.h._fcr_act_preview({"values": VALUES})
+        self.assertTrue(res["success"], res["output"])
+        self.assertIn("Nothing was changed", res["output"])
+        self.assertEqual(written, {})
+
+
+class ConfgetterFixtureTests(unittest.TestCase):
+    PATH = os.path.join(HERE, "fixtures", "confgetter_sample.md")
+
+    def setUp(self):
+        with open(self.PATH, encoding="utf-8") as f:
+            self.text = f.read()
+
+    def test_is_a_snapshot(self):
+        self.assertIn("# Node config snapshot:", self.text)
+        self.assertIn("## Manifest", self.text)
+        self.assertIn("<redacted:", self.text)
+
+    def test_no_identifiers(self):
+        import re
+        for word in ("KD8PGK", "magicbox", "652701", "400353", "2376", "450008", "41.7333", "321454", "utz3A2vW",
+                     "SJUy5ALC", "Jim "):
+            self.assertNotIn(word, self.text, word)
+        emails = [m for m in re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[a-z]{2,}", self.text)
+                  if not m.startswith("wg-quick@")]
+        self.assertEqual(emails, [])
+        macs = [m for m in re.findall(r"\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b", self.text) if m != "00:00:00:00:00:00"]
+        self.assertEqual(macs, [])
+        ips = set(re.findall(r"(?<![0-9.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?![0-9.])", self.text))
+        allowed = ("127.", "0.0.0.0", "255.255.255.255", "224.0.0.251", "198.51.100.")
+        self.assertEqual(sorted(i for i in ips if not i.startswith(allowed)), [])
+
+
 class ConfgetterTests(unittest.TestCase):
     def setUp(self):
         import glob
