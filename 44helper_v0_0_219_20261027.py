@@ -11,6 +11,7 @@ import gzip
 import hashlib
 import hmac
 import ipaddress
+import io
 import json
 import os
 import pwd
@@ -43,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.218"
+APP_VERSION = "0.0.219"
 APP_STAGE = "v0.0.215: firewall-cmd gets 60 s to answer; the Overview reads the firewall zone from a cache; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -90,6 +91,69 @@ _auth_lock = threading.Lock()
 _auth_sessions: dict[str, float] = {}
 _auth_failures: dict[str, list[float]] = {}
 _auth_locked: dict[str, float] = {}
+
+def atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False):
+    import os
+    import secrets
+    import stat
+    path = os.fspath(path)
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    folder = os.path.dirname(path) or "."
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        st = None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        st = None
+    if skip_same and st is not None:
+        try:
+            with open(path, "rb") as fh:
+                if fh.read() == data:
+                    return False
+        except OSError:
+            pass
+    tmp = os.path.join(folder, ".%s.%s.tmp" % (os.path.basename(path), secrets.token_hex(6)))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        view = memoryview(data)
+        while view:
+            view = view[os.write(fd, view):]
+        if st is not None and os.geteuid() == 0:
+            os.fchown(fd, st.st_uid, st.st_gid)
+        if mode is not None:
+            os.fchmod(fd, mode)
+        elif st is not None:
+            os.fchmod(fd, stat.S_IMODE(st.st_mode))
+        else:
+            os.fchmod(fd, new_mode)
+        os.fsync(fd)
+    except BaseException:
+        os.close(fd)
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    os.close(fd)
+    try:
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        dfd = os.open(folder, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError:
+        pass
+    return True
+
 
 def _read_shadow_hash(account: str):
     try:
@@ -269,9 +333,9 @@ def load_config() -> configparser.ConfigParser:
     else:
         try:
             CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-            with open(CONFIG_FILE, "w") as f:
-                cfg.write(f)
-            os.chmod(CONFIG_FILE, 0o600)
+            buf = io.StringIO()
+            cfg.write(buf)
+            atomic_write(CONFIG_FILE, buf.getvalue(), mode=0o600)
             log(f"Created default config at {CONFIG_FILE}")
         except OSError as e:
             log(f"WARNING: could not write {CONFIG_FILE}: {e}")
@@ -281,9 +345,9 @@ def load_config() -> configparser.ConfigParser:
 def save_config(cfg: configparser.ConfigParser) -> None:
     try:
         CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        with open(CONFIG_FILE, "w") as f:
-            cfg.write(f)
-        os.chmod(CONFIG_FILE, 0o600)
+        buf = io.StringIO()
+        cfg.write(buf)
+        atomic_write(CONFIG_FILE, buf.getvalue(), mode=0o600)
     except OSError as e:
         log(f"WARNING: could not save {CONFIG_FILE}: {e}")
 
@@ -3273,6 +3337,38 @@ def _dispatch_guard_action(payload: dict) -> dict:
         return _guard_turn_on(tab, str(payload.get("unit", "")))
     return {"success": False, "output": f"Unknown guard action: {action}"}
 
+_STEP_FIELD_RULES = {
+    "callsign": (re.compile(r"[A-Za-z0-9-]{3,16}"), "use 3 to 16 letters, digits or -"),
+    "dmrid": (re.compile(r"[0-9]{6,9}"), "use 6 to 9 digits"),
+    "port": (re.compile(r"[0-9]{1,5}"), "use a number from 1 to 65535"),
+    "branch": (re.compile(r"[A-Za-z0-9._/-]{1,100}"), "use letters, digits and . _ / -"),
+    "username": (re.compile(r"[A-Za-z0-9._-]{1,32}"), "use 1 to 32 letters, digits and . _ -"),
+    "password": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{1,64}"),
+                 "use up to 64 letters, digits and . _ + = @ % ^ ~ , : - (no spaces, quotes, / or &). "
+                 "Set any other password from the Custom box"),
+}
+
+def _step_command(step: dict, fields) -> tuple[str, str]:
+    tmpl = step.get("cmd_template")
+    if not tmpl or not step.get("fields"):
+        return (step.get("cmd") or "").strip(), ""
+    if not isinstance(fields, dict):
+        fields = {}
+    cmd = tmpl
+    for f in step["fields"]:
+        fid = f["id"]
+        rule = _STEP_FIELD_RULES.get(fid)
+        if rule is None:
+            return "", f"{f.get('label', fid)} has no input rule, so this step can't run from here."
+        value = fields.get(fid)
+        if not isinstance(value, str) or not rule[0].fullmatch(value):
+            return "", f"{f.get('label', fid)}: {rule[1]}."
+        cmd = cmd.replace("{{" + fid + "}}", value)
+    return cmd.strip(), ""
+
+_STEP_CHANGED_MSG = ("This step's command was changed on the page, so it was not run. "
+                     "Run a changed command from the Custom box instead.")
+
 def _dispatch_tab_action(payload: dict, lookup_fn: Callable[[str, str, str], dict | None],
                           tab_prefix: str, valid_distros: tuple[str, ...] = ("bookworm", "trixie")) -> dict:
     mode = payload.get("mode", "")
@@ -3289,6 +3385,11 @@ def _dispatch_tab_action(payload: dict, lookup_fn: Callable[[str, str, str], dic
         step = lookup_fn(mode, distro, step_id)
         if step is None:
             return {"success": False, "output": f"Unknown step_id for {mode}/{distro}: {step_id}", "status": "done"}
+        expected, why = _step_command(step, payload.get("fields"))
+        if why:
+            return {"success": False, "output": why, "status": "done"}
+        if command_text != expected:
+            return {"success": False, "output": _STEP_CHANGED_MSG, "status": "done"}
         timeout = step.get("timeout", 900)
         job_key = f"{tab_prefix}_{mode}_{distro}_{step_id}"
     elif mode == "custom":
@@ -4988,6 +5089,8 @@ def _dispatch_update_action(payload: dict) -> dict:
     step = _update_lookup_step(step_id)
     if step is None:
         return {"success": False, "output": f"Unknown step_id for update: {step_id}", "status": "done"}
+    if command_text != (step.get("cmd") or "").strip():
+        return {"success": False, "output": _STEP_CHANGED_MSG, "status": "done"}
     err = _require_root()
     if err:
         err["status"] = "done"
@@ -5479,16 +5582,8 @@ def _write_conf_atomic(path: str, content: str, mode: int = 0o644) -> tuple[bool
     parent = os.path.dirname(path)
     if parent:
         os.makedirs(parent, mode=0o755, exist_ok=True)
-    data = content.encode("utf-8")
-    if os.path.isfile(path):
-        with open(path, "rb") as f:
-            if f.read() == data:
-                return False, "unchanged (skipped write)"
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "wb") as f:
-        f.write(data)
-    os.chmod(tmp_path, mode)
-    os.replace(tmp_path, path)
+    if not atomic_write(path, content, mode=mode, skip_same=True):
+        return False, "unchanged (skipped write)"
     return True, "written"
 
 def _restart_journald() -> dict:
@@ -20078,7 +20173,7 @@ function asl3RenderStepList(mode, distro) {
           '<input type="' + asl3EscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="asl3-field-' + f.id + '-' + stateKey + '" value="' + asl3EscapeAttr(f.default || '') + '" autocomplete="off"></label>';
       });
     } else {
-      html += '<input type="text" class="asl3-cmd-input" id="asl3-cmd-' + stateKey + '" value="' + asl3EscapeAttr(step.cmd) + '">';
+      html += '<input type="text" class="asl3-cmd-input" id="asl3-cmd-' + stateKey + '" readonly value="' + asl3EscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="asl3-btn-' + stateKey + '" onclick="asl3RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="asl3CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
     html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="asl3-out-' + stateKey + '">' + (st.output ? asl3EscapeAttr(st.output) : '(not run yet)') + '</div>';
@@ -20176,7 +20271,7 @@ function asl3PollJob(jobKey, stateKey, pill, btn) {
   });
 }
 
-function asl3ExecuteStep(mode, distro, stepId, cmd, btn) {
+function asl3ExecuteStep(mode, distro, stepId, cmd, btn, values) {
   var stateKey = mode + '_' + distro + '_' + stepId;
   window._asl3State = window._asl3State || {};
   window._asl3State[stateKey] = {status: 'attempted', output: ''};
@@ -20188,7 +20283,7 @@ function asl3ExecuteStep(mode, distro, stepId, cmd, btn) {
   return fetch('/api/asl3/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd})
+    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd, fields: values || {}})
   }).then(function(r) { return r.json(); }).then(function(startResult) {
     if (startResult.status === 'done') {
       return asl3FinishStep(stateKey, startResult, pill, btn);
@@ -20245,7 +20340,7 @@ function asl3ResolveCommand(mode, distro, stepId) {
       var masked = (k === 'password') ? '\u2022'.repeat(values[k].length || 6) : values[k];
       maskedCmd = maskedCmd.split('{{' + k + '}}').join(masked);
     });
-    return {cmd: cmd, confirmText: maskedCmd};
+    return {cmd: cmd, confirmText: maskedCmd, values: values};
   } else {
     var inputEl = document.getElementById('asl3-cmd-' + stateKey);
     var cmd2 = inputEl ? inputEl.value : (step ? step.cmd : '');
@@ -20260,7 +20355,7 @@ function asl3RunStep(btn, mode, distro, stepId) {
   var _cst = asl3FindStep(mode, distro, stepId);
   if (_cst && _cst.confirm_text && !confirm(_cst.confirm_text)) return;
   if (!confirm('Run this on the node?\\n\\n' + resolved.confirmText)) return;
-  asl3ExecuteStep(mode, distro, stepId, resolved.cmd, btn);
+  asl3ExecuteStep(mode, distro, stepId, resolved.cmd, btn, resolved.values);
 }
 
 function asl3CopyStep(btn, mode, distro, stepId) {
@@ -20410,7 +20505,7 @@ function dvRenderStepList(mode, distro) {
           '<input type="' + dvEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="dv-field-' + f.id + '-' + stateKey + '" value="' + dvEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
       });
     } else {
-      html += '<input type="text" class="asl3-cmd-input" id="dv-cmd-' + stateKey + '" value="' + dvEscapeAttr(step.cmd) + '">';
+      html += '<input type="text" class="asl3-cmd-input" id="dv-cmd-' + stateKey + '" readonly value="' + dvEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="dv-btn-' + stateKey + '" onclick="dvRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="dvCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
     html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="dv-out-' + stateKey + '">' + (st.output ? dvEscapeAttr(st.output) : '(not run yet)') + '</div>';
@@ -20508,7 +20603,7 @@ function dvPollJob(jobKey, stateKey, pill, btn) {
   });
 }
 
-function dvExecuteStep(mode, distro, stepId, cmd, btn) {
+function dvExecuteStep(mode, distro, stepId, cmd, btn, values) {
   var stateKey = mode + '_' + distro + '_' + stepId;
   window._dvState = window._dvState || {};
   window._dvState[stateKey] = {status: 'attempted', output: ''};
@@ -20532,7 +20627,7 @@ function dvExecuteStep(mode, distro, stepId, cmd, btn) {
   return fetch('/api/dvswitch/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd})
+    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd, fields: values || {}})
   }).then(function(r) { return r.json(); }).then(function(startResult) {
     if (startResult.status === 'done') {
       return dvFinishStep(stateKey, startResult, pill, btn);
@@ -20589,7 +20684,7 @@ function dvResolveCommand(mode, distro, stepId) {
       var masked = (k === 'password') ? '\u2022'.repeat(values[k].length || 6) : values[k];
       maskedCmd = maskedCmd.split('{{' + k + '}}').join(masked);
     });
-    return {cmd: cmd, confirmText: maskedCmd};
+    return {cmd: cmd, confirmText: maskedCmd, values: values};
   } else {
     var inputEl = document.getElementById('dv-cmd-' + stateKey);
     var cmd2 = inputEl ? inputEl.value : (step ? step.cmd : '');
@@ -20610,7 +20705,7 @@ function dvRunStep(btn, mode, distro, stepId) {
   var _cst = dvFindStep(mode, distro, stepId);
   if (_cst && _cst.confirm_text && !confirm(_cst.confirm_text)) return;
   if (!confirm('Run this on the node?\\n\\n' + resolved.confirmText)) return;
-  dvExecuteStep(mode, distro, stepId, resolved.cmd, btn);
+  dvExecuteStep(mode, distro, stepId, resolved.cmd, btn, resolved.values);
 }
 
 function dvCopyStep(btn, mode, distro, stepId) {
@@ -20755,7 +20850,7 @@ function svxRenderStepList(mode, distro) {
           '<input type="' + svxEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="svx-field-' + f.id + '-' + stateKey + '" value="' + svxEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
       });
     } else {
-      html += '<input type="text" class="asl3-cmd-input" id="svx-cmd-' + stateKey + '" value="' + svxEscapeAttr(step.cmd) + '">';
+      html += '<input type="text" class="asl3-cmd-input" id="svx-cmd-' + stateKey + '" readonly value="' + svxEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="svx-btn-' + stateKey + '" onclick="svxRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="svxCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
     html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="svx-out-' + stateKey + '">' + (st.output ? svxEscapeAttr(st.output) : '(not run yet)') + '</div>';
@@ -20853,7 +20948,7 @@ function svxPollJob(jobKey, stateKey, pill, btn) {
   });
 }
 
-function svxExecuteStep(mode, distro, stepId, cmd, btn) {
+function svxExecuteStep(mode, distro, stepId, cmd, btn, values) {
   var stateKey = mode + '_' + distro + '_' + stepId;
   window._svxState = window._svxState || {};
   window._svxState[stateKey] = {status: 'attempted', output: ''};
@@ -20865,7 +20960,7 @@ function svxExecuteStep(mode, distro, stepId, cmd, btn) {
   return fetch('/api/svxlink/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd})
+    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd, fields: values || {}})
   }).then(function(r) { return r.json(); }).then(function(startResult) {
     if (startResult.status === 'done') {
       return svxFinishStep(stateKey, startResult, pill, btn);
@@ -20922,7 +21017,7 @@ function svxResolveCommand(mode, distro, stepId) {
       var masked = (k === 'password') ? '\u2022'.repeat(values[k].length || 6) : values[k];
       maskedCmd = maskedCmd.split('{{' + k + '}}').join(masked);
     });
-    return {cmd: cmd, confirmText: maskedCmd};
+    return {cmd: cmd, confirmText: maskedCmd, values: values};
   } else {
     var inputEl = document.getElementById('svx-cmd-' + stateKey);
     var cmd2 = inputEl ? inputEl.value : (step ? step.cmd : '');
@@ -20937,7 +21032,7 @@ function svxRunStep(btn, mode, distro, stepId) {
   var _cst = svxFindStep(mode, distro, stepId);
   if (_cst && _cst.confirm_text && !confirm(_cst.confirm_text)) return;
   if (!confirm('Run this on the node?\\n\\n' + resolved.confirmText)) return;
-  svxExecuteStep(mode, distro, stepId, resolved.cmd, btn);
+  svxExecuteStep(mode, distro, stepId, resolved.cmd, btn, resolved.values);
 }
 
 function svxCopyStep(btn, mode, distro, stepId) {
@@ -21100,7 +21195,7 @@ function m17RenderStepList(mode, distro) {
           '<input type="' + m17EscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="m17-field-' + f.id + '-' + stateKey + '" value="' + m17EscapeAttr(f.default || '') + '" autocomplete="off"></label>';
       });
     } else {
-      html += '<input type="text" class="asl3-cmd-input" id="m17-cmd-' + stateKey + '" value="' + m17EscapeAttr(step.cmd) + '">';
+      html += '<input type="text" class="asl3-cmd-input" id="m17-cmd-' + stateKey + '" readonly value="' + m17EscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="m17-btn-' + stateKey + '" onclick="m17RunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="m17CopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
     html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="m17-out-' + stateKey + '">' + (st.output ? m17EscapeAttr(st.output) : '(not run yet)') + '</div>';
@@ -21198,7 +21293,7 @@ function m17PollJob(jobKey, stateKey, pill, btn) {
   });
 }
 
-function m17ExecuteStep(mode, distro, stepId, cmd, btn) {
+function m17ExecuteStep(mode, distro, stepId, cmd, btn, values) {
   var stateKey = mode + '_' + distro + '_' + stepId;
   window._m17State = window._m17State || {};
   window._m17State[stateKey] = {status: 'attempted', output: ''};
@@ -21210,7 +21305,7 @@ function m17ExecuteStep(mode, distro, stepId, cmd, btn) {
   return fetch('/api/m17/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd})
+    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd, fields: values || {}})
   }).then(function(r) { return r.json(); }).then(function(startResult) {
     if (startResult.status === 'done') {
       return m17FinishStep(stateKey, startResult, pill, btn);
@@ -21267,7 +21362,7 @@ function m17ResolveCommand(mode, distro, stepId) {
       var masked = (k === 'password') ? '\u2022'.repeat(values[k].length || 6) : values[k];
       maskedCmd = maskedCmd.split('{{' + k + '}}').join(masked);
     });
-    return {cmd: cmd, confirmText: maskedCmd};
+    return {cmd: cmd, confirmText: maskedCmd, values: values};
   } else {
     var inputEl = document.getElementById('m17-cmd-' + stateKey);
     var cmd2 = inputEl ? inputEl.value : (step ? step.cmd : '');
@@ -21282,7 +21377,7 @@ function m17RunStep(btn, mode, distro, stepId) {
   var _cst = m17FindStep(mode, distro, stepId);
   if (_cst && _cst.confirm_text && !confirm(_cst.confirm_text)) return;
   if (!confirm('Run this on the node?\\n\\n' + resolved.confirmText)) return;
-  m17ExecuteStep(mode, distro, stepId, resolved.cmd, btn);
+  m17ExecuteStep(mode, distro, stepId, resolved.cmd, btn, resolved.values);
 }
 
 function m17CopyStep(btn, mode, distro, stepId) {
@@ -21437,7 +21532,7 @@ function ampRenderStepList(mode, distro) {
           '<input type="' + ampEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="amp-field-' + f.id + '-' + stateKey + '" value="' + ampEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
       });
     } else {
-      html += '<input type="text" class="asl3-cmd-input" id="amp-cmd-' + stateKey + '" value="' + ampEscapeAttr(step.cmd) + '">';
+      html += '<input type="text" class="asl3-cmd-input" id="amp-cmd-' + stateKey + '" readonly value="' + ampEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="amp-btn-' + stateKey + '" onclick="ampRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="ampCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
     html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="amp-out-' + stateKey + '">' + (st.output ? ampEscapeAttr(st.output) : '(not run yet)') + '</div>';
@@ -21525,7 +21620,7 @@ function ampPollJob(jobKey, stateKey, pill, btn) {
   });
 }
 
-function ampExecuteStep(mode, distro, stepId, cmd, btn) {
+function ampExecuteStep(mode, distro, stepId, cmd, btn, values) {
   var stateKey = mode + '_' + distro + '_' + stepId;
   window._ampState = window._ampState || {};
   window._ampState[stateKey] = {status: 'attempted', output: ''};
@@ -21537,7 +21632,7 @@ function ampExecuteStep(mode, distro, stepId, cmd, btn) {
   return fetch('/api/amp/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd})
+    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd, fields: values || {}})
   }).then(function(r) { return r.json(); }).then(function(startResult) {
     if (startResult.status === 'done') {
       return ampFinishStep(stateKey, startResult, pill, btn);
@@ -21594,7 +21689,7 @@ function ampResolveCommand(mode, distro, stepId) {
       var masked = (k === 'password') ? '\u2022'.repeat(values[k].length || 6) : values[k];
       maskedCmd = maskedCmd.split('{{' + k + '}}').join(masked);
     });
-    return {cmd: cmd, confirmText: maskedCmd};
+    return {cmd: cmd, confirmText: maskedCmd, values: values};
   } else {
     var inputEl = document.getElementById('amp-cmd-' + stateKey);
     var cmd2 = inputEl ? inputEl.value : (step ? step.cmd : '');
@@ -21609,7 +21704,7 @@ function ampRunStep(btn, mode, distro, stepId) {
   var _cst = ampFindStep(mode, distro, stepId);
   if (_cst && _cst.confirm_text && !confirm(_cst.confirm_text)) return;
   if (!confirm('Run this on the node?\\n\\n' + resolved.confirmText)) return;
-  ampExecuteStep(mode, distro, stepId, resolved.cmd, btn);
+  ampExecuteStep(mode, distro, stepId, resolved.cmd, btn, resolved.values);
 }
 
 function ampCopyStep(btn, mode, distro, stepId) {
@@ -21743,7 +21838,7 @@ function cfRenderStepList(mode, distro) {
           '<input type="' + cfEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="cf-field-' + f.id + '-' + stateKey + '" value="' + cfEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
       });
     } else {
-      html += '<input type="text" class="asl3-cmd-input" id="cf-cmd-' + stateKey + '" value="' + cfEscapeAttr(step.cmd) + '">';
+      html += '<input type="text" class="asl3-cmd-input" id="cf-cmd-' + stateKey + '" readonly value="' + cfEscapeAttr(step.cmd) + '">';
     }
     html += '<div class="step-actions"><button class="btn-run" id="cf-btn-' + stateKey + '" onclick="cfRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="cfCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
     html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cf-out-' + stateKey + '">' + (st.output ? cfEscapeAttr(st.output) : '(not run yet)') + '</div>';
@@ -21831,7 +21926,7 @@ function cfPollJob(jobKey, stateKey, pill, btn) {
   });
 }
 
-function cfExecuteStep(mode, distro, stepId, cmd, btn) {
+function cfExecuteStep(mode, distro, stepId, cmd, btn, values) {
   var stateKey = mode + '_' + distro + '_' + stepId;
   window._cfState = window._cfState || {};
   window._cfState[stateKey] = {status: 'attempted', output: ''};
@@ -21843,7 +21938,7 @@ function cfExecuteStep(mode, distro, stepId, cmd, btn) {
   return fetch('/api/cf/action', {
     method: 'POST',
     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd})
+    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd, fields: values || {}})
   }).then(function(r) { return r.json(); }).then(function(startResult) {
     if (startResult.status === 'done') {
       return cfFinishStep(stateKey, startResult, pill, btn);
@@ -21900,7 +21995,7 @@ function cfResolveCommand(mode, distro, stepId) {
       var masked = (k === 'password') ? '\u2022'.repeat(values[k].length || 6) : values[k];
       maskedCmd = maskedCmd.split('{{' + k + '}}').join(masked);
     });
-    return {cmd: cmd, confirmText: maskedCmd};
+    return {cmd: cmd, confirmText: maskedCmd, values: values};
   } else {
     var inputEl = document.getElementById('cf-cmd-' + stateKey);
     var cmd2 = inputEl ? inputEl.value : (step ? step.cmd : '');
@@ -21915,7 +22010,7 @@ function cfRunStep(btn, mode, distro, stepId) {
   var _cst = cfFindStep(mode, distro, stepId);
   if (_cst && _cst.confirm_text && !confirm(_cst.confirm_text)) return;
   if (!confirm('Run this on the node?\\n\\n' + resolved.confirmText)) return;
-  cfExecuteStep(mode, distro, stepId, resolved.cmd, btn);
+  cfExecuteStep(mode, distro, stepId, resolved.cmd, btn, resolved.values);
 }
 
 function cfCopyStep(btn, mode, distro, stepId) {
@@ -22018,7 +22113,7 @@ function updStepCardHtml(step, isAlt) {
   html += updEscapeAttr(step.title) + '</div>';
   html += '<span class="step-pill ' + pillClass + '" id="upd-pill-' + stateKey + '">' + pillLabel + '</span></div>';
   if (step.warning) html += renderStepWarn(updEscapeAttr(step.warning));
-  html += '<input type="text" class="asl3-cmd-input" id="upd-cmd-' + stateKey + '" value="' + updEscapeAttr(step.cmd) + '">';
+  html += '<input type="text" class="asl3-cmd-input" id="upd-cmd-' + stateKey + '" readonly value="' + updEscapeAttr(step.cmd) + '">';
   if (step.quiet_eligible) {
     html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-sm);color:var(--amber);margin-top:.4rem">' +
       '<input type="checkbox" id="upd-quiet-' + stateKey + '" checked> Run in quiet mode (pauses node services, low priority, keeps running if 44helper restarts)</label>';

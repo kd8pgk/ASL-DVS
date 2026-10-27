@@ -1,6 +1,11 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_39_3_20261027.py`. Newest entries first.
+Current file: `wifimon_v5_39_4_20261027.py`. Newest entries first.
+
+## 5.39.4 (2026-10-27)
+
+- **Config files are written the same safe way in every tool.** Every write goes through one shared function (`atomic_write`, kept identical in each tool and checked by the repo check): a private temp file with a random name in the same folder, fsync, then a rename. An edited file keeps its owner and mode. A symlink at the path is replaced, not followed.
+- **WiFi Monitor's config is written atomically**, fsynced, with a random temp name.
 
 ## 5.39.3 (2026-10-27)
 

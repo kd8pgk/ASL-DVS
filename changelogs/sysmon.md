@@ -1,6 +1,10 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_91_20261027.py`. Newest entries first.
+Current file: `sysmon_v6_13_92_20261027.py`. Newest entries first.
+
+## 6.13.92 (2026-10-27)
+
+- **Config files are written the same safe way in every tool.** Every write goes through one shared function (`atomic_write`, kept identical in each tool and checked by the repo check): a private temp file with a random name in the same folder, fsync, then a rename. An edited file keeps its owner and mode. A symlink at the path is replaced, not followed.
 
 ## 6.13.91 (2026-10-27)
 

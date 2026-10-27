@@ -52,6 +52,10 @@
   own schedule, so a node can run any mix of stable and testing versions. A
   tool that uses something only a newer version of another tool provides
   works without it when it is missing.
+- **Shared code** lives in `shared/confio.py`. Each function named in its
+  `USED_BY` is copied unchanged into every tool listed there (a tool's own
+  wrapper may call it); `ci/check_repo.py` fails a tool whose copy differs.
+  Change the reference first, then copy it into every listed tool.
 - **The shared launcher** (`/usr/local/bin/asl_dvs_launch.py`) is written by
   several files. Its text must stay identical in all of them.
 - **Manuals** (the user manual, the dialplan guide and the install manuals in

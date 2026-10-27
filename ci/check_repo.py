@@ -222,6 +222,43 @@ def check_shared_look(path, text):
              f"{f' and {len(missing) - 1} more' if len(missing) > 1 else ''})")
 
 
+SHARED_FILE = "shared/confio.py"
+
+
+def top_functions(text):
+    tree = ast.parse(text)
+    return {n.name: ast.get_source_segment(text, n) for n in tree.body if isinstance(n, ast.FunctionDef)}
+
+
+def check_shared_code(rev, head_tools):
+    ref = show(rev, SHARED_FILE)
+    if ref is None:
+        return
+    try:
+        tree = ast.parse(ref)
+        funcs = top_functions(ref)
+        used_by = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                       and any(isinstance(t, ast.Name) and t.id == "USED_BY" for t in n.targets))
+    except (SyntaxError, StopIteration, ValueError) as e:
+        fail(f"{SHARED_FILE}: cannot read USED_BY and its functions ({e})")
+        return
+    for name, stems in used_by.items():
+        if name not in funcs:
+            fail(f"{SHARED_FILE}: USED_BY names {name}, but the file does not define it")
+            continue
+        for stem in stems:
+            for path in head_tools.get(stem, []):
+                text = show(rev, path) or ""
+                try:
+                    got = top_functions(text).get(name)
+                except SyntaxError:
+                    continue
+                if got is None:
+                    fail(f"{path}: must carry {name} from {SHARED_FILE}")
+                elif got != funcs[name]:
+                    fail(f"{path}: {name} differs from {SHARED_FILE}; copy it unchanged")
+
+
 def cosmetic_after(vt, prev):
     return len(vt) == 4 and vt[:3] == prev[:3] and vt[3] > (prev[3] if len(prev) == 4 else 0)
 
@@ -353,6 +390,7 @@ def main():
         for path in files:
             if parse_tool(path)[0] in SHARED_LOOK_TOOLS:
                 check_shared_look(path, show(args.head, path))
+    check_shared_code(args.head, head_tools)
 
     readme = read("README.md") if os.path.isfile("README.md") else ""
     changed = [p for p in added + modified if os.path.isfile(p)]
