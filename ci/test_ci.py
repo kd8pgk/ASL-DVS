@@ -441,6 +441,33 @@ SECRETS = ["abc123", "mypass", "amipass", "sippass", "elpass", "urlpass", "comme
            "someone@example.com", "61:20:3d"]
 
 
+class ConfgetterFixtureTests(unittest.TestCase):
+    PATH = os.path.join(HERE, "fixtures", "confgetter_sample.md")
+
+    def setUp(self):
+        with open(self.PATH, encoding="utf-8") as f:
+            self.text = f.read()
+
+    def test_is_a_snapshot(self):
+        self.assertIn("# Node config snapshot:", self.text)
+        self.assertIn("## Manifest", self.text)
+        self.assertIn("<redacted:", self.text)
+
+    def test_no_identifiers(self):
+        import re
+        for word in ("KD8PGK", "magicbox", "652701", "400353", "2376", "450008", "41.7333", "321454", "utz3A2vW",
+                     "SJUy5ALC", "Jim "):
+            self.assertNotIn(word, self.text, word)
+        emails = [m for m in re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.[a-z]{2,}", self.text)
+                  if not m.startswith("wg-quick@")]
+        self.assertEqual(emails, [])
+        macs = [m for m in re.findall(r"\b(?:[0-9a-f]{2}:){5}[0-9a-f]{2}\b", self.text) if m != "00:00:00:00:00:00"]
+        self.assertEqual(macs, [])
+        ips = set(re.findall(r"(?<![0-9.])\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?![0-9.])", self.text))
+        allowed = ("127.", "0.0.0.0", "255.255.255.255", "224.0.0.251", "198.51.100.")
+        self.assertEqual(sorted(i for i in ips if not i.startswith(allowed)), [])
+
+
 class ConfgetterTests(unittest.TestCase):
     def setUp(self):
         import glob
