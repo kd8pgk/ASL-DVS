@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.42"
+VERSION = "0.9.43"
 DATE_STR = "2026-10-27"
 APP_NAME = "Node Talker"
 
@@ -6652,6 +6652,7 @@ function chkWakeHeld() { return !!(chkWake && !chkWake.released); }
 
 document.addEventListener('visibilitychange', () => {
   if (chk && chk.running && document.visibilityState === 'visible' && !chkWakeHeld()) chkWakeOn();
+  if (document.visibilityState === 'visible') specKick();
 });
 
 // A prompt at 0:30 and every 2 minutes after, lasting 20 s.
