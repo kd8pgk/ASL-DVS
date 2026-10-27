@@ -1,6 +1,13 @@
 # instmon changelog
 
-Current file: `instmon_v2_79_0_20261027.py`. Newest entries first.
+Current file: `instmon_v2_79_1_20261027.py`. Newest entries first.
+
+## 2.79.1 (2026-10-27)
+
+- **Config getter snapshots now show their buttons.** The snapshot list was
+  inside a library group, so the page folded it shut on load and the
+  Download and Delete buttons showed only for a moment. It is now a plain
+  block that stays open.
 
 ## 2.79.0 (2026-10-27)
 

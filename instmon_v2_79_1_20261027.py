@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.79.0"
+VERSION ="2.79.1"
 DATE_STR ="2026-10-27"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -6846,7 +6846,7 @@ def render_confgetter_card_html (cg ,library =None ):
     <div class="small muted">Copies the node's config files (ASL3, DVSwitch, USRP2M17, firewall, 44Net Connect) into one Markdown
     file for Claude. Passwords, keys and tokens are replaced with &lt;redacted:...&gt; on the node; secret files are never copied.
     The newest {CONFGETTER_KEEP } snapshots are kept.</div>
-    <div class="card libgrp libgrp-nested" data-libcat="cg-snaps">
+    <div class="card libgrp-nested">
       <div class="libgrp-hdr"><b>Snapshots ({len (snaps )})</b></div>
       <div class="librows">{''.join (rows )}</div>
     </div>

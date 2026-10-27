@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# confgetter.sh  v1.0.0  (2026-10-27)
+# confgetter.sh  v1.0.2  (2026-10-27)
 set -u
 
-CONFGETTER_VERSION="1.0.0"
+CONFGETTER_VERSION="1.0.2"
 ROOT="${CONFGETTER_ROOT:-}"
 OUT_DIR="${ROOT}/etc/asl_dvs/instmon_library/snapshots"
 KEEP=10
@@ -141,6 +141,10 @@ KV = re.compile(r"^(\s*(?:export\s+)?)([A-Za-z0-9_.\-]+)(\s*(?:=>|=|:)\s*)(.*?)(
 REGISTER = re.compile(r"(register\s*=>?\s*[^:@\s]+:)(?!<redacted:)([^@\s]+)(@)", re.I)
 URLQ = re.compile(r"([?&](?:pass|password|pwd|secret|token|key)=)(?!<redacted:)([^&\s\"']+)", re.I)
 FLAG = re.compile(r"(--(?:token|password|pass|secret)[=\s]+)(?!<redacted:)(\S+)", re.I)
+EMAIL = re.compile(r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+MAC = re.compile(r"\b([0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}):[0-9a-fA-F]{2}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\b")
+PIPE_PASS = re.compile(r"^(password|passwd|pass|pwd)$", re.I)
+PRIVATE_KEY = re.compile(r"^e_?mail$", re.I)
 ENVKV = re.compile(r"\b([A-Za-z_]*(?:PASS|SECRET|TOKEN|PSK|PRIVATE_?KEY)[A-Za-z_]*=)(?!<redacted:)([^\s\"']+)", re.I)
 counts = {"redacted": 0}
 
@@ -162,6 +166,8 @@ def redact_line(line):
     line = URLQ.sub(lambda m: m.group(1) + tag(m.group(2)), line)
     line = FLAG.sub(lambda m: m.group(1) + tag(m.group(2)), line)
     line = ENVKV.sub(lambda m: m.group(1) + tag(m.group(2)), line)
+    line = EMAIL.sub(lambda m: tag(m.group(0)), line)
+    line = MAC.sub(lambda m: m.group(1) + ":xx:xx:xx", line)
     m = KV.match(line)
     if m and SECRET_KEY.search(m.group(2)) and m.group(4) and not m.group(4).startswith("<redacted:"):
         return m.group(1) + m.group(2) + m.group(3) + tag(m.group(4)) + m.group(5)
@@ -170,11 +176,31 @@ def redact_line(line):
 
 def redact_json(obj):
     if isinstance(obj, dict):
-        return {k: (tag(json.dumps(v)) if SECRET_KEY.search(str(k)) and v not in ("", None)
+        return {k: (tag(json.dumps(v)) if (SECRET_KEY.search(str(k)) or PRIVATE_KEY.match(str(k)))
+                    and v not in ("", None)
                     else redact_json(v)) for k, v in obj.items()}
     if isinstance(obj, list):
         return [redact_json(v) for v in obj]
     return obj
+
+
+def redact_pipes(lines):
+    col = None
+    out = []
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("["):
+            col = 1 if "server" in s.lower() else None
+        elif s[:1] in ("#", ";") and "|" in s:
+            names = [f.strip() for f in s.lstrip("#;").split("|")]
+            col = next((i for i, f in enumerate(names) if PIPE_PASS.match(f)), None)
+        elif col is not None and "|" in s and s[:1] not in ("#", ";"):
+            parts = ln.split("|")
+            if len(parts) > col and parts[col].strip():
+                parts[col] = tag(parts[col].strip())
+                ln = "|".join(parts)
+        out.append(ln)
+    return out
 
 
 def redact_text(text, path=""):
@@ -183,7 +209,7 @@ def redact_text(text, path=""):
             return json.dumps(redact_json(json.loads(text)), indent=1, sort_keys=True) + "\n"
         except ValueError:
             pass
-    return "\n".join(redact_line(ln) for ln in text.split("\n"))
+    return "\n".join(redact_line(ln) for ln in redact_pipes(text.split("\n")))
 
 
 def real(rel):
