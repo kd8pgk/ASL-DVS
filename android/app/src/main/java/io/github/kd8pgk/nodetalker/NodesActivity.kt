@@ -7,6 +7,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
+import android.text.InputFilter
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
@@ -37,6 +38,7 @@ class NodesActivity : Activity() {
         list.setOnItemClickListener { _, _, pos, _ -> open(nodes[pos]) }
         list.setOnItemLongClickListener { _, _, pos, _ -> manage(nodes[pos]); true }
         findViewById<Button>(R.id.add).setOnClickListener { edit(null) }
+        findViewById<Button>(R.id.callsign).setOnClickListener { callsignSettings() }
         findViewById<Button>(R.id.audio).setOnClickListener { audioSettings() }
         findViewById<Button>(R.id.battery).setOnClickListener { batterySettings() }
         val keep = findViewById<CheckBox>(R.id.keep_on)
@@ -83,6 +85,10 @@ class NodesActivity : Activity() {
         val free = batteryFree()
         findViewById<TextView>(R.id.battery_text).text = getString(if (free) R.string.battery_ok else R.string.battery_warn)
         findViewById<TextView>(R.id.battery_text).setTextColor(getColor(if (free) R.color.muted else R.color.amber))
+        findViewById<Button>(R.id.callsign).text = getString(
+            R.string.callsign_button,
+            NodeStore.callsign(this).ifEmpty { getString(R.string.callsign_none) },
+        )
         nodes = NodeStore.all(this)
         adapter.notifyDataSetChanged()
         list.visibility = if (nodes.isEmpty()) View.GONE else View.VISIBLE
@@ -169,6 +175,30 @@ class NodesActivity : Activity() {
             }
         }
         dlg.show()
+    }
+
+    private fun callsignSettings() {
+        val field = EditText(this).apply {
+            setText(NodeStore.callsign(this@NodesActivity))
+            hint = getString(R.string.callsign_hint)
+            filters = arrayOf(
+                InputFilter.AllCaps(),
+                InputFilter.LengthFilter(16),
+                InputFilter { src, start, end, _, _, _ ->
+                    if (src.subSequence(start, end).all { it.isLetterOrDigit() || it == '/' || it == '-' }) null else ""
+                },
+            )
+        }
+        AlertDialog.Builder(this)
+            .setTitle(R.string.callsign_title)
+            .setMessage(R.string.callsign_help)
+            .setView(field)
+            .setPositiveButton(R.string.save) { _, _ ->
+                NodeStore.setCallsign(this, field.text.toString().trim())
+                refresh()
+            }
+            .setNegativeButton(R.string.cancel, null)
+            .show()
     }
 
     private fun audioSettings() {

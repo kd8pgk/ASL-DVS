@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Node Talker Mobile</string>
-    <string name="nodes_title">Node Talker Mobile</string>
-    <string name="nodes_empty">No nodes yet. Add the address of the Pi that runs Node Talker.</string>
+    <string name="app_name">Node\u00A0Talker\u00A0Mobile</string>
+    <string name="nodes_title">Node\u00A0Talker\u00A0Mobile</string>
+    <string name="nodes_empty">No nodes yet. Add the address of the Pi that runs Node\u00A0Talker.</string>
     <string name="add_node">Add node</string>
     <string name="keep_screen_on">Keep the screen on while a node is open</string>
     <string name="app_version">App %1$s</string>
@@ -24,7 +24,7 @@
     <string name="cert_first_title">Trust this node?</string>
     <string name="cert_first_body">%1$s uses its own certificate (made on the Pi), so Android can\'t vouch for it.\n\nSHA-256 fingerprint:\n%2$s\n\nTo check it on the Pi:\nopenssl x509 -noout -fingerprint -sha256 -in /etc/asl_dvs/nodetalker_tls/cert.pem\n\nTrust it only if it matches. The app remembers it and warns you if it ever changes.</string>
     <string name="cert_changed_title">Certificate changed</string>
-    <string name="cert_changed_body">%1$s now shows a different certificate than the one you trusted.\n\nIt changes if Node Talker made a new one (for example after a reinstall). If you did not expect that, someone may be in the way: cancel.\n\nNew SHA-256 fingerprint:\n%2$s</string>
+    <string name="cert_changed_body">%1$s now shows a different certificate than the one you trusted.\n\nIt changes if Node\u00A0Talker made a new one (for example after a reinstall). If you did not expect that, someone may be in the way: cancel.\n\nNew SHA-256 fingerprint:\n%2$s</string>
     <string name="trust">Trust</string>
     <string name="trust_new">Trust the new one</string>
     <string name="cert_unreadable">The node\'s certificate could not be read, so the connection was stopped.</string>
@@ -51,19 +51,27 @@
     <string name="notif_paused">Paused for a call</string>
     <string name="notif_reconnecting">Reconnecting…</string>
     <string name="stop">Stop</string>
-    <string name="listen_login">Log in on the page first (or turn on \"Listen without logging in\" in Node Talker).</string>
+    <string name="listen_login">Log in on the page first (or turn on \"Listen without logging in\" in Node\u00A0Talker).</string>
     <string name="listen_ended">the stream ended</string>
     <string name="listen_retry">Disconnected (%1$s). Retrying in %2$d s…</string>
     <string name="mic">Microphone (app audio)</string>
     <string name="voice_mic">Phone\'s echo and noise filter (turn off if your audio sounds choppy or muffled)</string>
     <string name="notif_talking">Transmitting</string>
     <string name="notif_talk_ready">Ready to talk</string>
-    <string name="mic_needed">Allow the microphone so Node Talker Mobile can transmit.</string>
-    <string name="battery">Battery: let Node Talker Mobile run in the background</string>
-    <string name="battery_warn">Battery saver can stop Node Talker Mobile when the screen is off. Tap Battery, find Node Talker Mobile and choose \"Unrestricted\" or \"Don\'t optimize\".</string>
-    <string name="battery_ok">Battery: Node Talker Mobile may run in the background.</string>
+    <string name="mic_needed">Allow the microphone so Node\u00A0Talker\u00A0Mobile can transmit.</string>
+    <string name="battery">Battery: let Node\u00A0Talker\u00A0Mobile run in the background</string>
+    <string name="battery_warn">Battery saver can stop Node\u00A0Talker\u00A0Mobile when the screen is off. Tap Battery, find Node\u00A0Talker\u00A0Mobile and choose \"Unrestricted\" or \"Don\'t optimize\".</string>
+    <string name="battery_ok">Battery: Node\u00A0Talker\u00A0Mobile may run in the background.</string>
     <string name="page_stopped">The page stopped (the phone ran low on memory, or its display process was closed). Tap Retry to open it again.</string>
     <string name="credit">By KD8PGK · Built with Claude AI (Anthropic)</string>
+    <string name="app_name_nb" translatable="false">Node\u00A0Talker\u00A0Mobile</string>
+    <string name="welcome_call">Welcome to the %1$s %2$s</string>
+    <string name="welcome_plain">Welcome to %1$s</string>
+    <string name="callsign_button">Callsign: %1$s</string>
+    <string name="callsign_none">not set</string>
+    <string name="callsign_title">Your callsign</string>
+    <string name="callsign_hint">For example KD8PGK</string>
+    <string name="callsign_help">Shown on the splash screen before the app opens. Letters, digits, / and - only, up to 16 characters. Leave it empty to show no callsign.</string>
     <string name="license">Licensed under CC BY-NC 4.0</string>
     <string name="license_url" translatable="false">https://creativecommons.org/licenses/by-nc/4.0/</string>
 </resources>

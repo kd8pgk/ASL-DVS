@@ -1,6 +1,18 @@
 # Node Talker Mobile changelog
 
-Current version: `0.3.4`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.4.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.4.0 (2026-10-27)
+
+- **The splash welcomes the node's owner.** It opens with "Welcome to the
+  *callsign* Node Talker Mobile" above the icon, and "Licensed under CC BY-NC
+  4.0" below it. Tapping the license line opens the license page. With no
+  callsign set, the line reads "Welcome to Node Talker Mobile".
+- **A Callsign button on the node list.** It sets the callsign shown on the
+  splash. It is saved on the device, is up to 16 letters, digits, / or -, and
+  can be left empty.
+- **The name stays on one line.** Every "Node Talker Mobile" in the app's
+  text is joined with non-breaking spaces, so it never wraps.
 
 ## 0.3.4 (2026-10-27)
 
