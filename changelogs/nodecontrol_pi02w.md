@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_94_20261020.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_94_1_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.94.1-pi02w (2026-10-27)
+
+- **Readex Pro for the page text.** Text on the page is now set in Readex Pro, a Latin subset built into the page, so no internet is needed. Monospace is kept only for log, config and code boxes. Font and sizes only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 9.3.94-pi02w (2026-10-20)
 
