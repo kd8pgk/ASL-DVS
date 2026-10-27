@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.80-pi02w"
+VERSION      = "6.13.81-pi02w"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2131,6 +2131,12 @@ body.offline #offline-bar{display:block}
 .ed-count{font-family:var(--sans);font-size:var(--fs-base);
   color:#fff;text-align:right;padding:.45rem .9rem;
   border-top:1px solid var(--border);background:#111828}
+.ed-find{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;margin-top:.4rem}
+.ed-find-inp{flex:1 1 10rem;min-width:0;font-family:var(--sans);font-size:var(--fs-sm);
+  padding:.35rem .5rem;background:var(--surface2);color:var(--text-bright);
+  border:1px solid var(--border2);border-radius:3px;outline:none}
+.ed-find-inp:focus{border-color:var(--amber)}
+.ed-find-count{font-family:var(--sans);font-size:var(--fs-base);color:#fff;min-width:5.5rem;text-align:center}
 
 #ed-action-bar{
   position:fixed;bottom:0;left:0;right:0;
@@ -3821,6 +3827,16 @@ body.tab-edit #zone-content{
         </div>
         <textarea class="ed-textarea" id="ed-pinned"
           spellcheck="false"></textarea>
+        <div class="ed-find">
+          <input class="ed-find-inp" id="ed-find-inp" type="text" placeholder="Find in pinned services"
+            spellcheck="false" autocomplete="off"
+            oninput="edFindStart()" onkeydown="edFindKey(event)">
+          <span class="ed-find-count" id="ed-find-count"></span>
+          <button class="btn btn-muted btn-sm" id="ed-find-prev" onclick="edFindStep(-1)"
+            title="Previous match (Shift+Enter)" disabled>▲ Prev</button>
+          <button class="btn btn-muted btn-sm" id="ed-find-next" onclick="edFindStep(1)"
+            title="Next match (Enter)" disabled>▼ Next</button>
+        </div>
         <div class="ed-count" id="ed-pinned-count">0 service entries</div>
       </div>
     </div>
@@ -10020,6 +10036,66 @@ function edToggleAslDvs() {
       body.style.maxHeight = "0";
       body.classList.add("collapsed");
     }));
+  }
+}
+
+let _edFindIdx = 0;
+
+function edFindHits(ta, needle) {
+  const hits = [];
+  if (!needle) return hits;
+  const text = ta.value.toLowerCase();
+  const q = needle.toLowerCase();
+  let i = text.indexOf(q);
+  while (i !== -1) {
+    hits.push(i);
+    i = text.indexOf(q, i + q.length);
+  }
+  return hits;
+}
+
+function edFindShow(hits, q) {
+  const ta  = document.getElementById("ed-pinned");
+  const cnt = document.getElementById("ed-find-count");
+  const prev = document.getElementById("ed-find-prev");
+  const next = document.getElementById("ed-find-next");
+  if (!ta || !cnt) return;
+  const n = hits.length;
+  const none = n === 0;
+  prev.disabled = none;
+  next.disabled = none;
+  cnt.textContent = none ? (q ? "No matches" : "") : `${_edFindIdx + 1} of ${n}`;
+  if (none) return;
+  const start = hits[_edFindIdx];
+  const line  = ta.value.slice(0, start).split("\n").length - 1;
+  const lh    = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+  ta.setSelectionRange(start, start + q.length);
+  ta.scrollTop = Math.max(0, line * lh - ta.clientHeight / 3);
+}
+
+function edFindStart() {
+  _edFindIdx = 0;
+  edFindStep(0);
+}
+
+function edFindStep(dir) {
+  const ta = document.getElementById("ed-pinned");
+  const q  = document.getElementById("ed-find-inp")?.value || "";
+  if (!ta) return;
+  const hits = edFindHits(ta, q);
+  const n = hits.length;
+  if (n) _edFindIdx = (((_edFindIdx + dir) % n) + n) % n;
+  else _edFindIdx = 0;
+  edFindShow(hits, q);
+}
+
+function edFindKey(e) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    edFindStep(e.shiftKey ? -1 : 1);
+  } else if (e.key === "Escape") {
+    e.target.value = "";
+    edFindStart();
   }
 }
 

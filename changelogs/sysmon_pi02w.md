@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_80_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_81_20261027.py`. Newest entries first.
+
+## 6.13.81-pi02w (2026-10-27)
+
+- **Find bar for Pinned Services.** The Edit tab's Pinned Services box has a find bar under it: type to search, then Next and Prev (or Enter and Shift+Enter) step through the matches. The match count shows "3 of 7" or "No matches". Escape clears the search. Matches are selected in the box and scrolled into view.
 
 ## 6.13.80-pi02w (2026-10-27)
 
