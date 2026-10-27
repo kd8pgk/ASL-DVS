@@ -1,6 +1,10 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_39_4_20261027.py`. Newest entries first.
+Current file: `wifimon_v5_40_0_20261027.py`. Newest entries first.
+
+## 5.40.0 (2026-10-27)
+
+- **The port opens on install and closes on uninstall.** Install checks that wifimon's port (8991) is open in the firewall (ufw or firewalld) and opens it if it is not. With no active firewall nothing changes. Uninstall removes the service first and closes the port last. The check is shared through `firewall_backend`, `open_firewall_port` and `close_firewall_port` in `shared/confio.py`, kept identical in each tool and checked by the repo check.
 
 ## 5.39.4 (2026-10-27)
 

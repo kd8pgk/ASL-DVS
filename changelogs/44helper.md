@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_221_20261027.py`. Newest entries first.
+Current file: `44helper_v0_0_222_20261027.py`. Newest entries first.
+
+## 0.0.222 (2026-10-27)
+
+- **The port opens on install and closes on uninstall.** Install checks that 44helper's port (9997, or the port in its config) is open in the firewall (ufw or firewalld) and opens it if it is not. With no active firewall nothing changes. Uninstall removes the service first and closes the port last. The check is shared through `firewall_backend`, `open_firewall_port` and `close_firewall_port` in `shared/confio.py`, kept identical in each tool and checked by the repo check.
 
 ## 0.0.221 (2026-10-27)
 

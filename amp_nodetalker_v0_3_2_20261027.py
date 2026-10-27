@@ -30,7 +30,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.1"
+VERSION = "0.3.2"
 DATE_STR = "2026-10-20"
 APP_NAME = "Node Talker for AMP"
 
@@ -5115,6 +5115,87 @@ def _legacy_unit_real():
     return os.path.isfile(LEGACY_SERVICE_PATH) and not os.path.islink(LEGACY_SERVICE_PATH)
 
 
+def firewall_backend():
+    import shutil
+    import subprocess
+    try:
+        if shutil.which("firewall-cmd") and subprocess.run(
+                ["firewall-cmd", "--state"], capture_output=True, text=True, timeout=10).stdout.strip() == "running":
+            return "firewalld"
+        if shutil.which("ufw") and "Status: active" in subprocess.run(
+                ["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout:
+            return "ufw"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "none"
+
+def open_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        target = subprocess.run(["firewall-cmd", "--zone=" + zone, "--get-target"],
+                                capture_output=True, text=True, timeout=10).stdout.strip()
+        if target == "ACCEPT" or subprocess.run(check, capture_output=True, text=True,
+                                                timeout=10).stdout.strip() == "yes":
+            return "=", "%s is already open in firewalld zone %s" % (spec, zone)
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--add-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "+", "opened %s in firewalld zone %s (now and after a reboot)" % (spec, zone)
+        return "!", "could not open %s in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if "Default: allow (incoming)" in status or re.search(allow, status, re.M):
+            return "=", "%s is already open in ufw" % spec
+        subprocess.run(["ufw", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "+", "opened %s in ufw" % spec
+        return "!", "could not open %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so %s is not blocked" % spec
+
+def close_firewall_port(port, proto="tcp"):
+    import re
+    import subprocess
+    spec = "%d/%s" % (port, proto)
+    backend = firewall_backend()
+    if backend == "firewalld":
+        zone = subprocess.run(["firewall-cmd", "--get-default-zone"],
+                              capture_output=True, text=True, timeout=10).stdout.strip()
+        check = ["firewall-cmd", "--zone=" + zone, "--query-port=" + spec]
+        was_open = subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes"
+        subprocess.run(["firewall-cmd", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        subprocess.run(["firewall-cmd", "--permanent", "--zone=" + zone, "--remove-port=" + spec],
+                       capture_output=True, text=True, timeout=10)
+        if subprocess.run(check, capture_output=True, text=True, timeout=10).stdout.strip() == "yes":
+            return "!", "could not close %s in firewalld zone %s" % (spec, zone)
+        if was_open:
+            return "-", "closed %s in firewalld zone %s" % (spec, zone)
+        return "=", "%s was not open in firewalld zone %s" % (spec, zone)
+    if backend == "ufw":
+        allow = r"^%d/%s\s+ALLOW" % (port, proto)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if not re.search(allow, status, re.M):
+            return "=", "%s was not open in ufw" % spec
+        subprocess.run(["ufw", "--force", "delete", "allow", spec], capture_output=True, text=True, timeout=10)
+        status = subprocess.run(["ufw", "status", "verbose"], capture_output=True, text=True, timeout=10).stdout
+        if re.search(allow, status, re.M):
+            return "!", "could not close %s in ufw" % spec
+        if "Default: allow (incoming)" in status:
+            return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
+        return "-", "closed %s in ufw" % spec
+    return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
+
+
 def install_service():
     if os.geteuid() != 0:
         print("Error: installing needs root. Run with sudo.")
@@ -5148,6 +5229,9 @@ def install_service():
         print(f"  [-] Stopped Node Listen for AMP ({LEGACY_SERVICE}); its unit is kept as {aside} until {SERVICE_NAME} runs")
     _atomic_write(SYSTEMD_SERVICE_PATH, SYSTEMD_SERVICE_CONTENT, 0o644)
     print(f"  [+] Wrote {SYSTEMD_SERVICE_PATH}")
+    mark, msg = open_firewall_port(_cfg_get("port"))
+    print(f"  [{mark}] {msg}")
+    
     for args in (("daemon-reload",), ("enable", SERVICE_NAME)):
         r = _systemctl(*args)
         if r.returncode != 0:
@@ -5214,6 +5298,11 @@ def uninstall_service():
     auth = amp_auth_state()
     if auth["ours"]:
         print(f"  Node Talker's login ({_cfg_get('amp_user')}) stays in AMP's {auth['path']}; remove that line by hand if you like.")
+    cp = configparser.ConfigParser()
+    cp.read(CONFIG_PATH)
+    sec = CONFIG_SECTION if cp.has_section(CONFIG_SECTION) else LEGACY_SECTION
+    mark, msg = close_firewall_port(cp.getint(sec, "port", fallback=DEFAULT_CONFIG["port"]))
+    print(f"  [{mark}] {msg}")
 
 
 def main():

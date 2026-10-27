@@ -1,6 +1,10 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_44_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_45_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.45 (2026-10-27)
+
+- **The port opens on install and closes on uninstall.** Install checks that Node Talker's port (8993, or the port in its config) is open in the firewall (ufw or firewalld) and opens it if it is not. With no active firewall nothing changes. Uninstall removes the service first and closes the port last. The check is shared through `firewall_backend`, `open_firewall_port` and `close_firewall_port` in `shared/confio.py`, kept identical in each tool and checked by the repo check.
 
 ## 0.9.44 (2026-10-27)
 

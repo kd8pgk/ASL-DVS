@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_80_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_81_20261027.py`. Newest entries first.
+
+## 6.13.81-pi02w (2026-10-27)
+
+- **The port opens on install and closes on uninstall.** Install checks that SysMon's port (9999, or the port in its config) is open in the firewall (ufw or firewalld) and opens it if it is not. With no active firewall nothing changes. Uninstall removes the service first and closes the port last. The check is shared through `firewall_backend`, `open_firewall_port` and `close_firewall_port` in `shared/confio.py`, kept identical in each tool and checked by the repo check.
 
 ## 6.13.80-pi02w (2026-10-27)
 
