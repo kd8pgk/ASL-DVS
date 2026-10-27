@@ -1,6 +1,11 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_77_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_78_20261027.py`. Newest entries first.
+
+## 6.13.78-pi02w (2026-10-27)
+
+- **Log Out in the header.** A Log Out button sits beside the uptime, as in Node Controller. It signs out the same way as the Logout button on the command bar.
+- **Node Controller.** The nav button that opens Node Controller reads "Node Controller" (was "Node Control").
 
 ## 6.13.77-pi02w (2026-10-27)
 

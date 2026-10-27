@@ -1,6 +1,11 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_89_20261027.py`. Newest entries first.
+Current file: `sysmon_v6_13_90_20261027.py`. Newest entries first.
+
+## 6.13.90 (2026-10-27)
+
+- **Log Out in the header.** A Log Out button sits beside the uptime, as in Node Controller. It signs out the same way as the Logout button on the command bar.
+- **Node Controller.** The nav button that opens Node Controller reads "Node Controller" (was "Node Control").
 
 ## 6.13.89 (2026-10-27)
 

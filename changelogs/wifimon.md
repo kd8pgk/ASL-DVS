@@ -1,6 +1,10 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_39_1_20261027.py`. Newest entries first.
+Current file: `wifimon_v5_39_2_20261027.py`. Newest entries first.
+
+## 5.39.2 (2026-10-27)
+
+- **Log Out in the header.** The header has a Log Out button, the same as the Service card's, and it signs out the same way.
 
 ## 5.39.1 (2026-10-27)
 

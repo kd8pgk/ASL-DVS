@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.89"
+VERSION      = "6.13.90"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2845,6 +2845,7 @@ body.tab-edit #zone-content{
 .welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
 .splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
 .splash-license a{color:var(--blue)}
+.hdr-logout{font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);background:transparent;border:1px solid var(--border2);border-radius:5px;padding:.2rem .5rem;cursor:pointer}
 </style>
 </head>
 <body>
@@ -2878,6 +2879,7 @@ body.tab-edit #zone-content{
   </div>
   <div id="hdr-right">
     <span id="hdr-uptime">UP 0:00:00</span>
+    <button class="hdr-logout" onclick="doLogout()">Log Out</button>
     <span id="hdr-version">v__VERSION__</span>
   </div>
 </header>
@@ -2894,7 +2896,7 @@ body.tab-edit #zone-content{
   <a id="lnk-wifimon" class="ql-btn" href="http://localhost:8991/" target="_blank" rel="noopener"
      title="WifiMon">WifiMon</a>
   <a id="lnk-dashboard" class="ql-btn" href="http://localhost:8989/" 
-     title="Return to ASL-DVS Dashboard" target="_self" onclick="pauseAllPolling()">Node Control</a>
+     title="Return to ASL-DVS Dashboard" target="_self" onclick="pauseAllPolling()">Node Controller</a>
 </div>
 
 <div id="zone-status">

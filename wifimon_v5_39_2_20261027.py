@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.39.1"
+APP_VERSION = "5.39.2"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -6929,6 +6929,7 @@ a.btnlink:hover{border-color:var(--blue)}
 .welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
 .splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
 .splash-license a{color:var(--blue)}
+.hdr-logout{font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);background:transparent;border:1px solid var(--border2);border-radius:5px;padding:.2rem .5rem;cursor:pointer}
 </style>
 </head>
 <body>
@@ -6954,6 +6955,7 @@ a.btnlink:hover{border-color:var(--blue)}
     <span class="grow"></span>
     <span class="badge bad" id="h-stale" hidden>Lost contact</span>
     <span class="badge" id="h-tls"></span>
+    <button type="button" class="hdr-logout" id="hdr-logout">Log Out</button>
   </header>
   <div id="banner" class="banner" role="alert" hidden></div>
   <div id="portal" class="banner pending" role="status" hidden></div>
@@ -8832,10 +8834,10 @@ a.btnlink:hover{border-color:var(--blue)}
     $("btn-undo").disabled = false;
     tick();
   });
-  $("btn-logout").addEventListener("click", async () => {
+  ["btn-logout", "hdr-logout"].forEach((id) => $(id).addEventListener("click", async () => {
     try { await api("/api/logout", {}); } catch (e) {}
     showLogin("");
-  });
+  }));
 
   // ── Start ───────────────────────────────────────────────────────────
   setDetails(detailsOpen);
