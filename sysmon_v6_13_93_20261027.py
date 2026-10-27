@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.92"
+VERSION      = "6.13.93"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -2224,6 +2224,15 @@ body.offline #offline-bar{display:block}
 .ed-count{font-family:var(--sans);font-size:var(--fs-base);
   color:#fff;text-align:right;padding:.45rem .9rem;
   border-top:1px solid var(--border);background:#111828}
+.find-bar{display:flex;align-items:center;gap:.35rem;flex-wrap:wrap;margin-top:.4rem}
+.find-inp{flex:1 1 10rem;min-width:0;font-family:var(--sans);font-size:var(--fs-sm);
+  padding:.35rem .5rem;background:var(--surface2);color:var(--text-bright);
+  border:1px solid var(--border2);border-radius:3px;outline:none}
+.find-inp:focus{border-color:var(--amber)}
+.find-count{font-family:var(--sans);font-size:var(--fs-base);color:#fff;min-width:5.5rem;text-align:center}
+#uf-hdr .find-bar,#allconf-hdr .find-bar{margin-top:0;flex-wrap:nowrap}
+#uf-hdr .find-inp,#allconf-hdr .find-inp{flex:0 1 11rem;width:11rem}
+#uf-hdr-right{flex-wrap:wrap;justify-content:flex-end}
 
 #ed-action-bar{
   position:fixed;bottom:0;left:0;right:0;
@@ -2554,8 +2563,8 @@ body.tab-edit #zone-content{
 
 #uf-overlay{display:none;position:fixed;inset:0;
   background:rgba(0,0,0,.8);backdrop-filter:blur(4px);
-  z-index:500;align-items:center;justify-content:center;
-  padding:0}
+  z-index:1100;align-items:center;justify-content:center;
+  padding:0;overflow:hidden;overscroll-behavior:none}
 #uf-overlay.open{display:flex}
 
 #uf-box{background:var(--surface);border:1px solid var(--border2);
@@ -2567,7 +2576,7 @@ body.tab-edit #zone-content{
   border-bottom:2px solid var(--teal);padding:.55rem 1rem;
   display:flex;align-items:center;justify-content:space-between;
   flex-shrink:0;box-shadow:0 2px 0 rgba(0,255,229,.15);
-  position:sticky;top:0;z-index:501}
+  position:sticky;top:0;z-index:1000}
 #uf-title{font-family:var(--sans);font-size:var(--fs-base);
   color:var(--teal);letter-spacing:.08em;
   text-shadow:0 0 8px rgba(0,255,229,.4)}
@@ -4629,6 +4638,16 @@ body.tab-edit #zone-content{
         </div>
         <textarea class="ed-textarea" id="ed-pinned"
           spellcheck="false"></textarea>
+        <div class="find-bar">
+          <input class="find-inp" id="ed-find-inp" type="text" placeholder="Find in pinned services"
+            spellcheck="false" autocomplete="off"
+            oninput="findStart('ed')" onkeydown="findKey(event, 'ed')">
+          <span class="find-count" id="ed-find-count"></span>
+          <button class="btn btn-muted btn-sm" id="ed-find-prev" onclick="findStep('ed', -1)"
+            title="Previous match (Shift+Enter)" disabled>▲ Prev</button>
+          <button class="btn btn-muted btn-sm" id="ed-find-next" onclick="findStep('ed', 1)"
+            title="Next match (Enter)" disabled>▼ Next</button>
+        </div>
         <div class="ed-count" id="ed-pinned-count">0 service entries</div>
       </div>
     </div>
@@ -4762,6 +4781,16 @@ body.tab-edit #zone-content{
       <div id="uf-hdr-right">
         <button class="btn btn-blue btn-sm" id="uf-restart-btn"
           onclick="ufRestart()">↺ Restart</button>
+        <div class="find-bar">
+          <input class="find-inp" id="uf-find-inp" type="text" placeholder="Find"
+            spellcheck="false" autocomplete="off"
+            oninput="findStart('uf')" onkeydown="findKey(event, 'uf')">
+          <span class="find-count" id="uf-find-count"></span>
+          <button class="btn btn-muted btn-sm" id="uf-find-prev" onclick="findStep('uf', -1)"
+            title="Previous match (Shift+Enter)" disabled>▲ Prev</button>
+          <button class="btn btn-muted btn-sm" id="uf-find-next" onclick="findStep('uf', 1)"
+            title="Next match (Enter)" disabled>▼ Next</button>
+        </div>
         <button class="btn btn-green btn-sm" id="uf-save-btn"
           onclick="ufSave()">Save</button>
         <button class="btn btn-muted btn-sm" id="uf-copy-btn"
@@ -4787,6 +4816,16 @@ body.tab-edit #zone-content{
     <div id="allconf-hdr">
       <span id="allconf-title">All Visible Config Files</span>
       <div style="display:flex;align-items:center;gap:.4rem">
+        <div class="find-bar">
+          <input class="find-inp" id="allconf-find-inp" type="text" placeholder="Find"
+            spellcheck="false" autocomplete="off"
+            oninput="findStart('allconf')" onkeydown="findKey(event, 'allconf')">
+          <span class="find-count" id="allconf-find-count"></span>
+          <button class="btn btn-muted btn-sm" id="allconf-find-prev" onclick="findStep('allconf', -1)"
+            title="Previous match (Shift+Enter)" disabled>▲ Prev</button>
+          <button class="btn btn-muted btn-sm" id="allconf-find-next" onclick="findStep('allconf', 1)"
+            title="Next match (Enter)" disabled>▼ Next</button>
+        </div>
         <button class="btn btn-green btn-sm" onclick="allConfCopy()">Copy All</button>
         <span id="allconf-close" onclick="closeAllConf()">✕</span>
       </div>
@@ -6321,6 +6360,7 @@ async function openUnitFileEditor(unit) {
   document.getElementById("uf-promoted-bar").classList.remove("show");
   document.getElementById("uf-save-btn").disabled    = true;
   document.getElementById("uf-restart-btn").disabled = true;
+  findReset("uf");
   document.getElementById("uf-overlay").classList.add("open");
 
   const d = await api(`/api/unit_file?unit=${encodeURIComponent(unit)}`);
@@ -6835,6 +6875,7 @@ function _ufOpenReset(unit, title, pathText) {
   document.getElementById("uf-save-btn").disabled      = true;
   document.getElementById("uf-restart-btn").disabled   = true;
   document.getElementById("uf-restart-btn").style.display = "none";
+  findReset("uf");
   document.getElementById("uf-overlay").classList.add("open");
 }
 
@@ -12119,6 +12160,98 @@ function edToggleAslDvs() {
   }
 }
 
+const FIND_TEXTAREA = { ed: "ed-pinned", uf: "uf-textarea", allconf: "allconf-textarea" };
+const _findIdx = {};
+
+function findHits(ta, needle) {
+  const hits = [];
+  if (!needle) return hits;
+  const text = ta.value.toLowerCase();
+  const q = needle.toLowerCase();
+  let i = text.indexOf(q);
+  while (i !== -1) {
+    hits.push(i);
+    i = text.indexOf(q, i + q.length);
+  }
+  return hits;
+}
+
+function findShow(p, hits, q) {
+  const ta   = document.getElementById(FIND_TEXTAREA[p]);
+  const cnt  = document.getElementById(`${p}-find-count`);
+  const prev = document.getElementById(`${p}-find-prev`);
+  const next = document.getElementById(`${p}-find-next`);
+  if (!ta || !cnt) return;
+  const idx  = _findIdx[p] || 0;
+  const n    = hits.length;
+  const none = n === 0;
+  prev.disabled = none;
+  next.disabled = none;
+  cnt.textContent = none ? (q ? "No matches" : "") : `${idx + 1} of ${n}`;
+  if (none) return;
+  const start = hits[idx];
+  ta.setSelectionRange(start, start + q.length);
+  findScrollTo(ta, start);
+}
+
+function findScrollTo(ta, pos) {
+  const cs = getComputedStyle(ta);
+  const pad = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const m = document.createElement("div");
+  for (const k of ["fontFamily", "fontSize", "fontWeight", "lineHeight", "letterSpacing",
+                   "tabSize", "whiteSpace", "overflowWrap", "wordBreak",
+                   "paddingTop", "paddingRight", "paddingBottom", "paddingLeft"]) {
+    m.style[k] = cs[k];
+  }
+  m.style.position = "absolute";
+  m.style.visibility = "hidden";
+  m.style.left = "-10000px";
+  m.style.top = "0";
+  m.style.boxSizing = "content-box";
+  m.style.width = (ta.clientWidth - pad) + "px";
+  m.textContent = ta.value.slice(0, pos);
+  const mark = document.createElement("span");
+  mark.textContent = "​";
+  m.appendChild(mark);
+  document.body.appendChild(m);
+  const y = mark.offsetTop;
+  m.remove();
+  ta.scrollTop = Math.max(0, y - ta.clientHeight / 3);
+}
+
+function findStart(p) {
+  _findIdx[p] = 0;
+  findStep(p, 0);
+}
+
+function findStep(p, dir) {
+  const ta = document.getElementById(FIND_TEXTAREA[p]);
+  const q  = document.getElementById(`${p}-find-inp`)?.value || "";
+  if (!ta) return;
+  const hits = findHits(ta, q);
+  const n = hits.length;
+  const idx = _findIdx[p] || 0;
+  _findIdx[p] = n ? (((idx + dir) % n) + n) % n : 0;
+  findShow(p, hits, q);
+}
+
+function findKey(e, p) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    findStep(p, e.shiftKey ? -1 : 1);
+  } else if (e.key === "Escape") {
+    e.target.value = "";
+    findStart(p);
+  }
+}
+
+function findReset(p) {
+  const inp = document.getElementById(`${p}-find-inp`);
+  if (inp) inp.value = "";
+  _findIdx[p] = 0;
+  findShow(p, [], "");
+}
+
 function edTogglePinned() {
   _edPinnedOpen = !_edPinnedOpen;
   const body    = document.getElementById("ed-pinned-body");
@@ -12324,6 +12457,7 @@ async function edAllConf(mode) {
       ? "DVS Config Files"
       : "ASL Config Files";
   }
+  findReset("allconf");
   overlay.classList.add("open");
 
   const sep  = n => "═".repeat(n);
