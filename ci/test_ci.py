@@ -437,7 +437,7 @@ class AtomicWriteTests(unittest.TestCase):
 
 
 SECRETS = ["abc123", "mypass", "amipass", "sippass", "elpass", "urlpass", "commented", "bmpass", "WGPRIV",
-           "WGPSK", "allpass", "jsonpass", "wifipass", "varpass", "eyJTOKEN", "SHADOWLINE", "KEYFILE", "TGIFPW",
+           "WGPSK", "allpass", "jsonpass", "wifipass", "varpass", "eyJTOKEN", "SHADOWLINE", "KEYFILE", "TGIFPW", "FREEDMRPW",
            "someone@example.com", "61:20:3d"]
 
 
@@ -468,6 +468,7 @@ class ConfgetterTests(unittest.TestCase):
             "etc/dvswitch/auth.key": "KEYFILE\n",
             "etc/asl_dvs/favorites.conf": ("[DMR_SERVERS]\n# name|password|address:port|network_url\n"
                                            "TGIF|TGIFPW|tgif.network:62031|https://tgif.network/activetg.php\n"
+                                           "\n[DMR_SERVERS]\nFreeDMR|FREEDMRPW|freedmr.org:62031|https://freedmr.org\n"
                                            "\n[ASL]\nEast Coast|45192|rx=-3\n"),
             "etc/asl_dvs/contact.json": json.dumps({"email": "someone@example.com", "callsign": "KD8PGK"}),
             "etc/asl_dvs/mac.conf": "hwaddr = 88:a2:9e:61:20:3d\n",
@@ -504,6 +505,7 @@ class ConfgetterTests(unittest.TestCase):
         self.assertIn("WGPUB", text)
         self.assertIn("KD8PGK", text)
         self.assertIn("TGIF|<redacted:", text)
+        self.assertIn("FreeDMR|<redacted:", text)
         self.assertIn("East Coast|45192|rx=-3", text)
         self.assertIn("hwaddr = 88:a2:9e:xx:xx:xx", text)
         self.assertIn("<redacted:", text)

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# confgetter.sh  v1.0.1  (2026-10-27)
+# confgetter.sh  v1.0.2  (2026-10-27)
 set -u
 
-CONFGETTER_VERSION="1.0.1"
+CONFGETTER_VERSION="1.0.2"
 ROOT="${CONFGETTER_ROOT:-}"
 OUT_DIR="${ROOT}/etc/asl_dvs/instmon_library/snapshots"
 KEEP=10
@@ -190,7 +190,7 @@ def redact_pipes(lines):
     for ln in lines:
         s = ln.strip()
         if s.startswith("["):
-            col = None
+            col = 1 if "server" in s.lower() else None
         elif s[:1] in ("#", ";") and "|" in s:
             names = [f.strip() for f in s.lstrip("#;").split("|")]
             col = next((i for i, f in enumerate(names) if PIPE_PASS.match(f)), None)

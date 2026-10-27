@@ -1,6 +1,14 @@
 # Config getter (confgetter) changelog
 
-Current file: `confgetter_v1_0_1_20261027.sh`. Newest entries first.
+Current file: `confgetter_v1_0_2_20261027.sh`. Newest entries first.
+
+## 1.0.2 (2026-10-27)
+
+- **DMR server passwords are redacted.** 1.0.1 only handled the pipe lists
+  that have a `name|password|...` header line. The `[DMR_SERVERS]` section
+  of the Node Talker and DVSwitch files has no such header, so its passwords
+  (the second column) were still in the snapshot. Any section whose name
+  contains "server" now has its second column redacted.
 
 ## 1.0.1 (2026-10-27)
 
