@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.39.0.3"
+APP_VERSION = "5.39.1"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -117,6 +117,18 @@ _DEFAULT_CONFIG = {
         "priority": "1",
     },
 }
+
+def _node_callsign() -> str:
+    try:
+        with open("/etc/asl_dvs/asl_dvs.conf", encoding="utf-8") as fh:
+            for line in fh:
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "callsign":
+                    return "".join(c for c in value.strip().upper() if c.isalnum() or c in "/-")[:16]
+    except OSError:
+        pass
+    return ""
+
 
 def _write_config_atomic(cfg: "configparser.ConfigParser") -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -6912,11 +6924,18 @@ a.btnlink:hover{border-color:var(--blue)}
 .modal .check{align-items:flex-start}
 .modal .check input{margin-top:4px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}
+.welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}
+.welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
+.splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
+.splash-license a{color:var(--blue)}
 </style>
 </head>
 <body>
 
 <div id="login" hidden>
+  <div class="welcome">Welcome to the <b>__CALLSIGN__</b> WiFi Monitor</div>
+  <div class="splash-license">WiFi Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <form id="login-form">
     <h1>WiFi Monitor</h1>
     <input id="login-pw" type="password" autocomplete="current-password" placeholder="Root password" aria-label="Root password">
@@ -8834,7 +8853,7 @@ _page_cache: Optional[bytes] = None
 def _page_bytes() -> bytes:
     global _page_cache
     if _page_cache is None:
-        _page_cache = _PAGE_HTML.replace("__APP_VERSION__", APP_VERSION).encode("utf-8")
+        _page_cache = _PAGE_HTML.replace("__APP_VERSION__", APP_VERSION).replace("__CALLSIGN__", _node_callsign()).encode("utf-8")
     return _page_cache
 
 def run() -> None:

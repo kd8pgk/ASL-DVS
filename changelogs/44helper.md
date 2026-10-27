@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_216_1_20261027.py`. Newest entries first.
+Current file: `44helper_v0_0_217_20261027.py`. Newest entries first.
+
+## 0.0.217 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK 44 Helper" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
 
 ## 0.0.216.2 (2026-10-27)
 

@@ -1,6 +1,10 @@
 # instmon changelog
 
-Current file: `instmon_v2_78_1_1_20261027.py`. Newest entries first.
+Current file: `instmon_v2_78_2_20261027.py`. Newest entries first.
+
+## 2.78.2 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK Install Monitor" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
 
 ## 2.78.1.2 (2026-10-27)
 

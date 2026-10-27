@@ -1,6 +1,10 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_89_1_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_90_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.90 (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK Node Controller" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
 
 ## 9.3.89.2 (2026-10-27)
 

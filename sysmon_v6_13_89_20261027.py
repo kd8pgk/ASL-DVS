@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.88.2"
+VERSION      = "6.13.89"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -122,6 +122,18 @@ _DEFAULT_CONFIG = {
 _log_buf: deque = deque(maxlen=LOG_MAXLEN)
 _log_idx: int   = 0
 _log_lock       = threading.Lock()
+
+def _node_callsign() -> str:
+    try:
+        with open("/etc/asl_dvs/asl_dvs.conf", encoding="utf-8") as fh:
+            for line in fh:
+                key, sep, value = line.partition("=")
+                if sep and key.strip() == "callsign":
+                    return "".join(c for c in value.strip().upper() if c.isalnum() or c in "/-")[:16]
+    except OSError:
+        pass
+    return ""
+
 
 def _log(msg: str, stderr: bool = False) -> None:
     global _log_idx
@@ -2828,11 +2840,18 @@ body.tab-edit #zone-content{
 .con-res .ph-tbl{margin-top:.35rem}.con-res-head{margin:.3rem 0 .1rem}.con-c-pass{color:var(--green)}.con-c-warn{color:var(--amber)}.con-c-fail{color:var(--red)}
 .con-res-full{font-size:.8em;cursor:pointer;opacity:.75;text-decoration:underline;margin-top:.3rem;display:inline-block}
 .con-screen{height:60vh;min-height:280px;background:#000;border-radius:4px;padding:4px;overflow:hidden}
+#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}
+.welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}
+.welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
+.splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
+.splash-license a{color:var(--blue)}
 </style>
 </head>
 <body>
 
 <div id="login-screen">
+  <div class="welcome">Welcome to the <b>__CALLSIGN__</b> System Monitor</div>
+  <div class="splash-license">System Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <div id="login-card">
     <h2>System Monitor</h2>
     <p class="sub">Sign in with this node's root password.</p>
@@ -13081,6 +13100,7 @@ _SVC_LEGEND_HTML = (
     '</div>'
 )
 _HTML_SRC   = (_HTML.replace("__VERSION__", VERSION)
+                .replace("__CALLSIGN__", _node_callsign())
                     .replace("__SVC_LEGEND__", _SVC_LEGEND_HTML))
 _HTML_BYTES = _HTML_SRC.encode("utf-8")
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)

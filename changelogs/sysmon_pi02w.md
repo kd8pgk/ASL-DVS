@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_76_1_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_77_20261027.py`. Newest entries first.
+
+## 6.13.77-pi02w (2026-10-27)
+
+- **Login splash.** The login screen opens with "Welcome to the KD8PGK System Monitor" above the login card, and the CC BY-NC 4.0 license at the bottom. The callsign comes from `/etc/asl_dvs/asl_dvs.conf` when the page is served, so the page reads it on every load.
 
 ## 6.13.76.2-pi02w (2026-10-27)
 
