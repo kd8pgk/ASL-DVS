@@ -16,6 +16,7 @@ import android.os.Build
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.PermissionRequest
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.SslErrorHandler
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
@@ -33,6 +34,7 @@ class TalkerActivity : Activity() {
     private lateinit var node: Node
     private lateinit var web: WebView
     private lateinit var error: View
+    private var renderGone = false
     private var micRequest: PermissionRequest? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingDownload: String? = null
@@ -54,7 +56,7 @@ class TalkerActivity : Activity() {
         if (NodeStore.keepScreenOn(this)) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         web = findViewById(R.id.web)
         error = findViewById(R.id.error)
-        findViewById<Button>(R.id.retry).setOnClickListener { load() }
+        findViewById<Button>(R.id.retry).setOnClickListener { if (renderGone) reopen() else load() }
         findViewById<Button>(R.id.back).setOnClickListener { finish() }
         setup()
         if (savedInstanceState == null || web.restoreState(savedInstanceState) == null) load()
@@ -199,6 +201,12 @@ class TalkerActivity : Activity() {
         web.loadUrl(node.origin + "/")
     }
 
+    private fun reopen() {
+        val again = Intent(this, TalkerActivity::class.java).putExtra(EXTRA_NODE, node.id)
+        finish()
+        startActivity(again)
+    }
+
     private fun showError(text: String) {
         findViewById<TextView>(R.id.error_text).text = getString(R.string.load_failed, node.origin, text)
         error.visibility = View.VISIBLE
@@ -237,6 +245,12 @@ class TalkerActivity : Activity() {
 
             override fun onPageFinished(view: WebView, url: String?) {
                 sendState()
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                renderGone = true
+                showError(getString(R.string.page_stopped))
+                return true
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, err: WebResourceError) {
@@ -388,6 +402,8 @@ class TalkerActivity : Activity() {
                 }
                 getString(R.string.saved_file, dest.lastPathSegment ?: "")
             } catch (e: IOException) {
+                getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
+            } catch (e: RuntimeException) {
                 getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
             }
             runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }

@@ -74,11 +74,13 @@
 - **Package name** `io.github.kd8pgk.nodetalker` never changes (the Play
   Store ties the app to it).
 - The `android` workflow builds and lints every change; on `main` it
-  publishes the debug APK as a pre-release `android-vX.Y.Z`. Release signing
-  waits until the keystore secrets exist.
+  publishes the APK as a pre-release `android-vX.Y.Z`. From 0.3.2 it is a
+  release build (not debuggable, no `-debug` in the name) signed with the
+  shared key in `android/app/debug.keystore`; a private release key waits
+  until the keystore secrets exist.
 - The app is not on the stable/testing channels: those update node tools.
 - **After an Android build is merged, always post its APK download link**:
-  `https://github.com/kd8pgk/ASL-DVS/releases/download/android-vX.Y.Z/NodeTalker-X.Y.Z-debug.apk`
+  `https://github.com/kd8pgk/ASL-DVS/releases/download/android-vX.Y.Z/NodeTalker-X.Y.Z.apk`
   (check the release exists first).
 
 ## Workflow
