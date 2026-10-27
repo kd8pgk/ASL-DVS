@@ -33,7 +33,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.39.2"
+APP_VERSION = "5.39.3"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -117,18 +117,6 @@ _DEFAULT_CONFIG = {
         "priority": "1",
     },
 }
-
-def _node_callsign() -> str:
-    try:
-        with open("/etc/asl_dvs/asl_dvs.conf", encoding="utf-8") as fh:
-            for line in fh:
-                key, sep, value = line.partition("=")
-                if sep and key.strip() == "callsign":
-                    return "".join(c for c in value.strip().upper() if c.isalnum() or c in "/-")[:16]
-    except OSError:
-        pass
-    return ""
-
 
 def _write_config_atomic(cfg: "configparser.ConfigParser") -> None:
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -6935,7 +6923,7 @@ a.btnlink:hover{border-color:var(--blue)}
 <body>
 
 <div id="login" hidden>
-  <div class="welcome">Welcome to the <b>__CALLSIGN__</b> WiFi Monitor</div>
+  <div class="welcome">Welcome to the <b>KD8PGK</b> WiFi Monitor</div>
   <div class="splash-license">WiFi Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <form id="login-form">
     <h1>WiFi Monitor</h1>
@@ -8855,7 +8843,7 @@ _page_cache: Optional[bytes] = None
 def _page_bytes() -> bytes:
     global _page_cache
     if _page_cache is None:
-        _page_cache = _PAGE_HTML.replace("__APP_VERSION__", APP_VERSION).replace("__CALLSIGN__", _node_callsign()).encode("utf-8")
+        _page_cache = _PAGE_HTML.replace("__APP_VERSION__", APP_VERSION).encode("utf-8")
     return _page_cache
 
 def run() -> None:

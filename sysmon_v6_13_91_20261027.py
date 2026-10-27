@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.90"
+VERSION      = "6.13.91"
 BUILD_DATE   = "20261019"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -122,18 +122,6 @@ _DEFAULT_CONFIG = {
 _log_buf: deque = deque(maxlen=LOG_MAXLEN)
 _log_idx: int   = 0
 _log_lock       = threading.Lock()
-
-def _node_callsign() -> str:
-    try:
-        with open("/etc/asl_dvs/asl_dvs.conf", encoding="utf-8") as fh:
-            for line in fh:
-                key, sep, value = line.partition("=")
-                if sep and key.strip() == "callsign":
-                    return "".join(c for c in value.strip().upper() if c.isalnum() or c in "/-")[:16]
-    except OSError:
-        pass
-    return ""
-
 
 def _log(msg: str, stderr: bool = False) -> None:
     global _log_idx
@@ -2851,7 +2839,7 @@ body.tab-edit #zone-content{
 <body>
 
 <div id="login-screen">
-  <div class="welcome">Welcome to the <b>__CALLSIGN__</b> System Monitor</div>
+  <div class="welcome">Welcome to the <b>KD8PGK</b> System Monitor</div>
   <div class="splash-license">System Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <div id="login-card">
     <h2>System Monitor</h2>
@@ -13102,7 +13090,6 @@ _SVC_LEGEND_HTML = (
     '</div>'
 )
 _HTML_SRC   = (_HTML.replace("__VERSION__", VERSION)
-                .replace("__CALLSIGN__", _node_callsign())
                     .replace("__SVC_LEGEND__", _SVC_LEGEND_HTML))
 _HTML_BYTES = _HTML_SRC.encode("utf-8")
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)

@@ -1,6 +1,10 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_39_2_20261027.py`. Newest entries first.
+Current file: `wifimon_v5_39_3_20261027.py`. Newest entries first.
+
+## 5.39.3 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK WiFi Monitor" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
 
 ## 5.39.2 (2026-10-27)
 

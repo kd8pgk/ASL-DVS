@@ -1,6 +1,10 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_90_20261027.py`. Newest entries first.
+Current file: `sysmon_v6_13_91_20261027.py`. Newest entries first.
+
+## 6.13.91 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK System Monitor" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
 
 ## 6.13.90 (2026-10-27)
 

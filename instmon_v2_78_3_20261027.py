@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.78.2"
+VERSION ="2.78.3"
 DATE_STR ="2026-10-26"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -140,18 +140,6 @@ NODELISTEN_CONFIGS =(("nodetalker_favorites*.conf","nodetalker_favorites.conf"),
 ("nodetalker*.conf","nodetalker.conf"),("nodelisten*.conf","nodetalker.conf"))
 LIVE_CONFIGS =(CONFIG_NAME ,"nodetalker.conf","nodetalker_favorites.conf")
 NL_LEGACY_NAMES ={"nodetalker.conf":"nodelisten.conf","nodetalker_favorites.conf":"nodelisten_favorites.conf"}
-
-def _node_callsign() -> str:
-    try:
-        with open("/etc/asl_dvs/asl_dvs.conf", encoding="utf-8") as fh:
-            for line in fh:
-                key, sep, value = line.partition("=")
-                if sep and key.strip() == "callsign":
-                    return "".join(c for c in value.strip().upper() if c.isalnum() or c in "/-")[:16]
-    except OSError:
-        pass
-    return ""
-
 
 def _nl_live_name (name ):
     old =NL_LEGACY_NAMES .get (name )
@@ -9725,7 +9713,6 @@ def render_page ():
     date =DATE_STR ,
     port =PORT ,
     css =_CSS ,
-    callsign =_node_callsign (),
     script =_JS ,
     quicklinks_html =quicklinks_html ,
     components_html =components_html ,
@@ -9756,7 +9743,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
 </header>
 <div id="login-screen">
-  <div class="welcome">Welcome to the <b>{callsign}</b> Install Monitor</div>
+  <div class="welcome">Welcome to the <b>KD8PGK</b> Install Monitor</div>
   <div class="splash-license">Install Monitor · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <div id="login-card">
     <h2>Install Monitor</h2>

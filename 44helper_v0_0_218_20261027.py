@@ -43,7 +43,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.217"
+APP_VERSION = "0.0.218"
 APP_STAGE = "v0.0.215: firewall-cmd gets 60 s to answer; the Overview reads the firewall zone from a cache; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -90,18 +90,6 @@ _auth_lock = threading.Lock()
 _auth_sessions: dict[str, float] = {}
 _auth_failures: dict[str, list[float]] = {}
 _auth_locked: dict[str, float] = {}
-
-def _node_callsign() -> str:
-    try:
-        with open("/etc/asl_dvs/asl_dvs.conf", encoding="utf-8") as fh:
-            for line in fh:
-                key, sep, value = line.partition("=")
-                if sep and key.strip() == "callsign":
-                    return "".join(c for c in value.strip().upper() if c.isalnum() or c in "/-")[:16]
-    except OSError:
-        pass
-    return ""
-
 
 def _read_shadow_hash(account: str):
     try:
@@ -24735,7 +24723,6 @@ def render_page(cfg: configparser.ConfigParser) -> str:
         for t_id, label, _cls, stage in TABS
     )
 
-    node_callsign = _node_callsign()
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -24746,7 +24733,7 @@ def render_page(cfg: configparser.ConfigParser) -> str:
 </head>
 <body>
 <div id="login-screen">
-  <div class="welcome">Welcome to the <b>{node_callsign}</b> {APP_HEADER}</div>
+  <div class="welcome">Welcome to the <b>KD8PGK</b> {APP_HEADER}</div>
   <div class="splash-license">{APP_HEADER} · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <div id="login-card">
     <h2>{APP_HEADER}</h2>

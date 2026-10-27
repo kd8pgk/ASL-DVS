@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_217_20261027.py`. Newest entries first.
+Current file: `44helper_v0_0_218_20261027.py`. Newest entries first.
+
+## 0.0.218 (2026-10-27)
+
+- **KD8PGK on every splash.** The login screen reads "Welcome to the KD8PGK 44 Helper" on every node. The callsign is no longer read from the node's config. Cosmetic in effect; the release is for the change in code.
 
 ## 0.0.217 (2026-10-27)
 

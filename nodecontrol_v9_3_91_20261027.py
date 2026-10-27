@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.90"
+VERSION      = "9.3.91"
 BUILD_DATE   = "2026-10-19"
 
 ASL_NODE        = "652702"
@@ -119,18 +119,6 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 """
-
-def _node_callsign() -> str:
-    try:
-        with open("/etc/asl_dvs/asl_dvs.conf", encoding="utf-8") as fh:
-            for line in fh:
-                key, sep, value = line.partition("=")
-                if sep and key.strip() == "callsign":
-                    return "".join(c for c in value.strip().upper() if c.isalnum() or c in "/-")[:16]
-    except OSError:
-        pass
-    return ""
-
 
 def _sd_notify(state: str) -> None:
     addr = os.environ.get("NOTIFY_SOCKET")
@@ -6982,7 +6970,7 @@ def _m17_ini_content(callsign: str, refl_name: str, ip: str, module: str) -> str
     
     return (
         "[M17 Network]\n"
-        f"Callsign={callsign}\n"
+        f"Callsign=KD8PGK\n"
         f"Address={ip}\n"
         f"Name={refl_name} {module}\n"
         f"LocalPort={_M17_NET_LOCAL_PORT}\n"
@@ -9092,7 +9080,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 </head>
 <body>
 <div id="login-screen" class="hidden">
-  <div class="welcome">Welcome to the <b>__CALLSIGN__</b> Node Controller</div>
+  <div class="welcome">Welcome to the <b>KD8PGK</b> Node Controller</div>
   <div class="splash-license">Node Controller · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <form id="login-card" onsubmit="_doLogin(event)">
     <h2>Node Controller</h2>
@@ -13522,7 +13510,6 @@ try { window.name = 'asl_dvs_dash'; } catch (_) {}
 
 _HTML_BYTES = (HTML
                .replace("__VERSION__",    VERSION)
-               .replace("__CALLSIGN__", _node_callsign())
                .replace("__BUILD_DATE__", BUILD_DATE)
                .encode())
 _HTML_GZIP  = gzip.compress(_HTML_BYTES, compresslevel=6)
