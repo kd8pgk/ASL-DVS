@@ -1,6 +1,10 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_39_0_1_20261019.py`. Newest entries first.
+Current file: `wifimon_v5_39_0_2_20261027.py`. Newest entries first.
+
+## 5.39.0.2 (2026-10-27)
+
+- **The Node Control look.** wifimon now uses the Node Control colours, with amber, blue, green and red matched to the other tools. The text is Readex Pro (built into the page), not the system font. The header has the Node Control logo and sub-line, buttons are uppercase on the shared size scale, and cards have the same corners. The login page follows the same look. Cosmetic only; no change in behaviour. Readex Pro is Copyright 2019 The Readex Pro Project Authors, under the SIL Open Font License 1.1.
 
 ## 5.39.0.1 (2026-10-19)
 
