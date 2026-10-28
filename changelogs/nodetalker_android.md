@@ -1,6 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.4.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.5.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.5.0 (2026-10-28)
+
+- **Louder listening, three ways.** All three are in the audio settings (Audio settings on the node list):
+  - **Output hints.** "Speaker / media volume" is marked louder, and "Earpiece / call volume" quieter. Keep the phone's media volume up for speaker listening.
+  - **The page's volume slider works above 100 % in the app.** The slider runs to 200 %. Before, the app stopped at 100 %, so the top half did nothing. Above 100 % now adds up to +6 dB (200 % is +6 dB, the same as in a browser).
+  - **Extra loudness (new setting, off by default).** Adds 0 to 12 dB in 1 dB steps, applied with the platform's `LoudnessEnhancer` on the playback session. It works in both speaker and earpiece mode. The slider's extra and this setting add together, capped at 18 dB. Saving the settings restarts listening so the new value applies at once.
 
 ## 0.4.0 (2026-10-27)
 

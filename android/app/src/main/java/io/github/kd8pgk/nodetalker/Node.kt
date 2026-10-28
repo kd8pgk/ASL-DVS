@@ -66,7 +66,7 @@ data class Node(
     }
 }
 
-data class AudioSettings(val mode: String, val bufferMs: Int, val earpiece: Boolean, val voiceMic: Boolean = true) {
+data class AudioSettings(val mode: String, val bufferMs: Int, val earpiece: Boolean, val voiceMic: Boolean = true, val boostDb: Int = 0) {
     val app: Boolean
         get() = mode == APP
 
@@ -76,6 +76,7 @@ data class AudioSettings(val mode: String, val bufferMs: Int, val earpiece: Bool
         const val DEFAULT_BUFFER = 300
         const val MIN_BUFFER = 100
         const val MAX_BUFFER = 1000
+        const val MAX_BOOST_DB = 12
     }
 }
 
@@ -87,6 +88,7 @@ object NodeStore {
     private const val KEY_BUFFER = "rx_buffer_ms"
     private const val KEY_EARPIECE = "earpiece"
     private const val KEY_VOICE_MIC = "voice_mic"
+    private const val KEY_BOOST = "boost_db"
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -125,12 +127,13 @@ object NodeStore {
             it.getInt(KEY_BUFFER, AudioSettings.DEFAULT_BUFFER).coerceIn(AudioSettings.MIN_BUFFER, AudioSettings.MAX_BUFFER),
             it.getBoolean(KEY_EARPIECE, false),
             it.getBoolean(KEY_VOICE_MIC, true),
+            it.getInt(KEY_BOOST, 0).coerceIn(0, AudioSettings.MAX_BOOST_DB),
         )
     }
 
     fun setAudio(c: Context, a: AudioSettings) = prefs(c).edit()
         .putString(KEY_MODE, a.mode).putInt(KEY_BUFFER, a.bufferMs).putBoolean(KEY_EARPIECE, a.earpiece)
-        .putBoolean(KEY_VOICE_MIC, a.voiceMic).apply()
+        .putBoolean(KEY_VOICE_MIC, a.voiceMic).putInt(KEY_BOOST, a.boostDb).apply()
 
     fun setKeepScreenOn(c: Context, on: Boolean) = prefs(c).edit().putBoolean(KEY_KEEP_ON, on).apply()
 }

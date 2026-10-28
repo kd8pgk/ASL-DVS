@@ -181,6 +181,19 @@ class NodesActivity : Activity() {
         val speaker = v.findViewById<RadioButton>(R.id.out_speaker)
         val ear = v.findViewById<RadioButton>(R.id.out_earpiece)
         val voice = v.findViewById<CheckBox>(R.id.voice_mic)
+        val boost = v.findViewById<SeekBar>(R.id.boost)
+        val boostText = v.findViewById<TextView>(R.id.boost_text)
+        boost.max = AudioSettings.MAX_BOOST_DB
+        boost.progress = a.boostDb
+        boostText.text = getString(R.string.boost_text, boost.progress)
+        boost.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, p: Int, user: Boolean) {
+                boostText.text = getString(R.string.boost_text, p)
+            }
+
+            override fun onStartTrackingTouch(sb: SeekBar) = Unit
+            override fun onStopTrackingTouch(sb: SeekBar) = Unit
+        })
         voice.isChecked = a.voiceMic
         app.isChecked = a.app
         page.isChecked = !a.app
@@ -203,7 +216,7 @@ class NodesActivity : Activity() {
             .setTitle(R.string.audio_settings)
             .setView(v)
             .setPositiveButton(R.string.save) { _, _ ->
-                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), ear.isChecked, voice.isChecked)
+                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), ear.isChecked, voice.isChecked, boost.progress)
                 NodeStore.setAudio(this, b)
                 if (!b.app) Listen.stop(this)
                 else Listen.nodeId?.let { id -> NodeStore.get(this, id)?.let { Listen.start(this, it) } }

@@ -171,7 +171,7 @@ class TalkerActivity : Activity() {
 
         @JavascriptInterface
         fun setVolume(v: Double) {
-            Listen.volume = v.toFloat().coerceIn(0f, 1f)
+            Listen.volume = v.toFloat().coerceIn(0f, 2f)
         }
     }
 
