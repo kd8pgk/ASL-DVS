@@ -9725,8 +9725,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <h2>Connect</h2>
 <div id="c-empty" class="muted">No favorites yet. Add up to 15 on the Setup tab.</div>
 <div id="c-pick">
-<label for="c-fav">Favorite</label>
-<select id="c-fav" style="width:100%;min-height:40px;margin-top:4px;font-size:14px"></select>
+<select id="c-fav" aria-label="Favorite" style="width:100%;min-height:40px;margin-top:4px;font-size:14px"></select>
 <div class="sel-card">
 <div class="row" style="margin:0"><span class="tag" id="c-mode"></span><span class="big-num" id="c-num"></span></div>
 <div class="muted" id="c-label"></div>

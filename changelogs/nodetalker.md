@@ -8,6 +8,7 @@ Current file: `nodetalker_v0_9_47_20261028.py`. Before 0.6.0 the tool was Node L
 - **Connect and Disconnect buttons** are outlined, as on Node Controller: Connect in the accent green, Disconnect in red.
 - The header is the Node Controller title bar: a dark gradient with an amber underline and the name in amber capitals with a glow. Tabs are Node Controller-style boxes with uppercase labels; the active tab is outlined in cyan.
 - The browser's theme colour matches the new header colour.
+- The Connect card no longer shows the word "Favorite" above the favorites list; the list keeps its name for screen readers.
 - On a phone, when the name, Node Controller and Log Out don't fit on one line, Log Out sits under the Node Controller button; both are right-justified.
 
 ## 0.9.47 (2026-10-28)
