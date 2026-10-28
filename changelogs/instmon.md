@@ -1,6 +1,11 @@
 # instmon changelog
 
-Current file: `instmon_v2_81_0_20261027.py`. Newest entries first.
+Current file: `instmon_v2_82_0_20261028.py`. Newest entries first.
+
+## 2.82.0 (2026-10-28)
+
+- **Pibrary is a component.** Pibrary, the media library dashboard (port 9000, service `pibrary`), has a card like the other components and its own library group, so its `pibrary_v….py` file can be uploaded, found in the home folder or fetched from GitHub like the other tools. Full Update visits it before the Dashboard. Quiet System and the disk-image pause stop it with the other web tools and start it again afterwards.
+- **The Watchdog component is removed.** There is no Watchdog card, library group, upload option or Full Update step. A Watchdog timer left on an older node is still stopped by Quiet System and the disk-image pause, so it cannot restart a service during a copy. Files already in the Watchdog library folder stay on disk but are no longer listed. instmon's own systemd watchdog is unchanged.
 
 ## 2.81.0 (2026-10-27)
 

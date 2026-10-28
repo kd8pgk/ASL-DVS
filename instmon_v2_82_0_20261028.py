@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.81.0"
+VERSION ="2.82.0"
 DATE_STR ="2026-10-27"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -2819,7 +2819,7 @@ LIB_SUBDIRS ={
 "wifimon":os .path .join (LIBRARY_DIR ,"wifimon"),
 "44helper":os .path .join (LIBRARY_DIR ,"44helper"),
 "nodelisten":os .path .join (LIBRARY_DIR ,"nodelisten"),
-"watchdog":os .path .join (LIBRARY_DIR ,"watchdog"),
+"pibrary":os .path .join (LIBRARY_DIR ,"pibrary"),
 "instmon":os .path .join (LIBRARY_DIR ,"instmon"),
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
 "config":os .path .join (LIBRARY_DIR ,"config"),
@@ -2833,7 +2833,7 @@ ALLOWED_EXT ={
 "wifimon":(".py",),
 "44helper":(".py",),
 "nodelisten":(".py",),
-"watchdog":(".sh",),
+"pibrary":(".py",),
 "instmon":(".py",),
 "scripts":(".sh",),
 "config":(".conf",),
@@ -2886,12 +2886,12 @@ COMPONENTS =[
 "category":"nodelisten",
 },
 {
-"name":"Watchdog",
-
-"service":"asl_dvs_watchdog.timer",
-"port":None ,
-"install_link":"/usr/local/bin/asl_dvs_watchdog.sh",
-"category":"watchdog",
+"name":"Pibrary",
+"service":"pibrary",
+"port":9000 ,
+"install_link":"/usr/local/bin/pibrary.py",
+"unit_paths":{"pibrary":("/usr/local/bin/pibrary.py","/usr/local/lib/pibrary")},
+"category":"pibrary",
 },
 {
 "name":"instmon",
@@ -2904,15 +2904,15 @@ COMPONENTS =[
 
 INSTALLABLE_CATEGORIES ={c ["category"]for c in COMPONENTS }
 
-NO_CARD_CATEGORIES =("watchdog",)
+NO_CARD_CATEGORIES =()
 
 HOME_SCAN_PATTERN_MAP =[
-("watchdog",["asl_dvs_watchdog*.sh"]),
 ("dashboard",["nodecontrol*.py","asl_dvs_dashboard*.py"]),
 ("sysmon",["sysmon*.py","asl_dvs_sysmon*.py","asl_dvs_m17_sysmon*.py","sysmon_svx*.py"]),
 ("wifimon",["wifimon*.py"]),
 ("44helper",["44helper*.py","asl_dvs_m17_44helper*.py"]),
 ("nodelisten",["nodetalker*.py","nodelisten*.py"]),
+("pibrary",["pibrary*.py"]),
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodetalker*.conf","nodelisten*.conf"]),
 ("scripts",["install_all*.sh","uninstall_all*.sh","install_asl_dvs*.sh","uninstall_asl_dvs*.sh","wifi_menu*.sh","wifi-menu*.sh","asl_dvs*.sh"]),
@@ -3372,7 +3372,7 @@ def systemctl_is_active (service ):
 
 _QUIESCE_TIER0_GLOB = "asl_dvs_watchdog*.timer"
 
-_QUIESCE_NEVER_STOP_CATEGORIES = ("instmon", "watchdog", "sysmon")
+_QUIESCE_NEVER_STOP_CATEGORIES = ("instmon", "sysmon")
 
 _QUIESCE_TIER2_EXTRA = [("SVXLink", "svxlink.service")]
 
@@ -3398,7 +3398,7 @@ _QUIESCE_UU_PIDFILE = "/run/unattended-upgrades.pid"
 _quiesce_lock = threading.Lock()
 
 QUIET_JOB_ID = "quiet-system"
-_QUIET_KEEP_CATEGORIES = ("instmon", "watchdog", "wifimon")
+_QUIET_KEEP_CATEGORIES = ("instmon", "wifimon")
 
 def _quiesce_list_timer_units(glob_pattern=_QUIESCE_TIER0_GLOB):
     try:
@@ -5604,7 +5604,7 @@ def _build_wanted_variant():
         return None
     return BUILD_PI02W_SUFFIX if build_pref_get() == "fork" else ""
 
-FU_ORDER = ("44helper", "wifimon", "nodelisten", "dashboard", "sysmon", "watchdog", "instmon")
+FU_ORDER = ("44helper", "wifimon", "nodelisten", "pibrary", "dashboard", "sysmon", "instmon")
 FU_START_TIMEOUT_SEC = int(os.environ.get("INSTMON_FU_START_TIMEOUT_SEC", "60"))
 FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
@@ -5615,7 +5615,7 @@ _FU_DEFAULT_STEM = {
     "wifimon": "wifimon",
     "44helper": "44helper",
     "nodelisten": "nodetalker",
-    "watchdog": "asl_dvs_watchdog",
+    "pibrary": "pibrary",
     "instmon": "instmon",
 }
 _FU_STEM_RE = re.compile(r"^(?P<stem>.+?)_v\d+(?:[._]\d+)*(?:_\d{8})?(?:[._-].*)?\.(?:py|sh)$", re.IGNORECASE)
@@ -7286,7 +7286,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("wifimon","wifimon","install"),
     ("44helper","44helper","install"),
     ("Node Talker","nodelisten","install"),
-    ("Watchdog","watchdog","install"),
+    ("Pibrary","pibrary","install"),
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
     ("Configuration","config","install_config"),
@@ -9652,7 +9652,7 @@ _JS_ACTIONS = """function wireButtons() {
         } else if (action === 'gh_check') {
           await postAction({action: 'gh_check'});
         } else if (action === 'quiet') {
-          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper, Node Talker and the watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
+          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper, Node Talker, Pibrary and any watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
           await postAction({action: 'quiet'});
         } else if (action === 'restore') {
           await postAction({action: 'restore'});
@@ -10513,7 +10513,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
     <button id="restore-btn" data-action="restore" disabled>Restore</button>
     <span class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
-    Node Talker and the watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
+    Node Talker, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
   </div>
 </div>
 
@@ -10566,7 +10566,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="wifimon">WiFiMon (.py)</option>
       <option value="44helper">44helper (.py)</option>
       <option value="nodelisten">Node Talker (.py)</option>
-      <option value="watchdog">Watchdog (.sh)</option>
+      <option value="pibrary">Pibrary (.py)</option>
       <option value="instmon">InstMon (.py)</option>
       <option value="confgetter">Config getter (.sh)</option>
       <option value="confputter">Config putter (.py)</option>

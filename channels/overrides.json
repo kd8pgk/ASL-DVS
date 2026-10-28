@@ -1,4 +1,11 @@
 {
  "hold": {},
- "hotfix": {}
+ "hotfix": {
+  "instmon": [
+   "2.82.0"
+  ],
+  "pibrary": [
+   "0.14.0"
+  ]
+ }
 }
