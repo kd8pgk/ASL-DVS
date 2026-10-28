@@ -12,14 +12,14 @@
         <path
             android:pathData="M4,14v-2a8,8 0,0 1,16 0v2"
             android:strokeWidth="1.8"
-            android:strokeColor="#22c3a6"
+            android:strokeColor="#00ffb0"
             android:strokeLineCap="round"
             android:strokeLineJoin="round" />
         <path
             android:pathData="M4.5,14h1a1.5,1.5 0,0 1,1.5 1.5v3a1.5,1.5 0,0 1,-1.5 1.5h-1a1.5,1.5 0,0 1,-1.5 -1.5v-3a1.5,1.5 0,0 1,1.5 -1.5z"
-            android:fillColor="#22c3a6" />
+            android:fillColor="#00ffb0" />
         <path
             android:pathData="M18.5,14h1a1.5,1.5 0,0 1,1.5 1.5v3a1.5,1.5 0,0 1,-1.5 1.5h-1a1.5,1.5 0,0 1,-1.5 -1.5v-3a1.5,1.5 0,0 1,1.5 -1.5z"
-            android:fillColor="#22c3a6" />
+            android:fillColor="#00ffb0" />
     </group>
 </vector>

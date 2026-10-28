@@ -2,6 +2,10 @@
 
 Current file: `amp_nodetalker_v0_3_3_20261028.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
 
+## 0.3.3.1 (2026-10-28)
+
+- **Node Controller look.** The page uses the Node Controller colours and Readex Pro, embedded in the page like Node Controller does. Cards, the header, the tab bar and the browser theme colour match the new palette. Layout and behaviour are unchanged.
+
 ## 0.3.3 (2026-10-28)
 
 - **The page opens on the Connect tab.** Each time Node Talker for AMP starts or the page is loaded again, it opens on Connect instead of the tab that was last open. The last tab is no longer remembered.

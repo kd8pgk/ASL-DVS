@@ -1,6 +1,10 @@
 # Node Talker Mobile changelog
 
-Current version: `0.4.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.4.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.4.1 (2026-10-28)
+
+- **Node Controller look.** The colours are the Node Controller palette (dark background, `#161e2e` bars and cards, `#2e4060` lines, green accent, amber for highlights). The text is Readex Pro, which ships in the app (SIL Open Font License) and is used for all text, with the system font as the fallback for glyphs it doesn't have (arrows and symbols). The launcher icon's accent colour follows the new green.
 
 ## 0.4.0 (2026-10-27)
 

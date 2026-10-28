@@ -9,6 +9,16 @@
         <item name="android:textColorSecondary">@color/muted</item>
         <item name="android:navigationBarColor">@color/bar</item>
         <item name="android:statusBarColor">@color/bar</item>
+        <item name="android:textViewStyle">@style/NodeTalker.TextView</item>
+        <item name="android:buttonStyle">@style/NodeTalker.Button</item>
+    </style>
+
+    <style name="NodeTalker.TextView" parent="android:Widget.Material.TextView">
+        <item name="android:fontFamily">@font/readex_pro</item>
+    </style>
+
+    <style name="NodeTalker.Button" parent="android:Widget.Material.Button">
+        <item name="android:fontFamily">@font/readex_pro</item>
     </style>
 
     <style name="Theme.NodeTalker.Splash" parent="Theme.NodeTalker" />
