@@ -1,6 +1,12 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_81_20261027.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_82_20261028.py`. Newest entries first.
+
+## 6.13.82-pi02w (2026-10-28)
+
+- **Find in every editor.** The file editor (Asterisk, Allmon3, DVSwitch and app config files, and unit files) has a Find bar in its header, next to Save. The All Visible Config Files view (ASL and DVS AllConf) has one next to Copy All. The Edit tab's Pinned Services box, the DVSwitch.ini (STFU) editor and the M17 editor have one under the text. Type to search; Enter and Shift+Enter (or ▲ Prev and ▼ Next) step through matches; the count shows "2 of 5" or "No matches"; Escape clears it. The bar clears each time a file opens.
+- **Find scrolls to the match.** The first match, and each Next or Prev match, scrolls into view. The position is measured from the text, so wrapped lines and the padding above the file text do not put the match off screen.
+- **File editor on top.** The editor does not scroll as a whole, so the header with the file name, Find, Save and Copy stays pinned above the path bar and the file text, and opens above the offline bar and the other panels. Toast messages still show above it.
 
 ## 6.13.81-pi02w (2026-10-27)
 
