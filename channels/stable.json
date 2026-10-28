@@ -56,22 +56,22 @@
    "version": "0.6.12"
   },
   "sysmon": {
-   "blob": "d0acb5c9f88cb4096864ce149813bce88e22f222",
-   "commit": "314f9ce3bdc18dc82084de1ebe648281e15172cd",
-   "file": "sysmon_v6_13_87_20261019.py",
-   "landed": "2026-10-19T15:15:24Z",
-   "promoted": "2026-10-27T22:41:35Z",
+   "blob": "576d464a8c1e02c2c4557b771b53d1c0e5446be7",
+   "commit": "f76220ac4e5b1ba777fe473c8a9116a35b5971c2",
+   "file": "sysmon_v6_13_88_20261019.py",
+   "landed": "2026-10-19T17:11:56Z",
+   "promoted": "2026-10-28T06:51:50Z",
    "reason": "count",
-   "version": "6.13.87"
+   "version": "6.13.88"
   },
   "sysmon_pi02w": {
-   "blob": "b53998d230139f623e9aad1c698348db6aa0d567",
-   "commit": "8030e44132b3c6a574a4622b90693b8fd1812d3f",
-   "file": "sysmon_pi02w_v6_13_75_20261019.py",
-   "landed": "2026-10-19T16:59:23Z",
-   "promoted": "2026-10-27T22:41:35Z",
+   "blob": "150506945d87472802414c760b6420d9228715d5",
+   "commit": "be394fc578ccc1756ffef2f1c15351e1905f43c1",
+   "file": "sysmon_pi02w_v6_13_76_20261020.py",
+   "landed": "2026-10-20T15:25:49Z",
+   "promoted": "2026-10-28T06:51:50Z",
    "reason": "count",
-   "version": "6.13.75-pi02w"
+   "version": "6.13.76-pi02w"
   },
   "uninstall_all": {
    "blob": "f75b2bfc0e96192a2574b68730ef8cbf2d634a5e",
