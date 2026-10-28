@@ -1,6 +1,18 @@
 # Node Talker Mobile changelog
 
-Current version: `0.5.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.0 (2026-10-28)
+
+- **Bluetooth audio card (read only).** The node list has a Bluetooth button that opens Bluetooth audio. It shows, as Android reports them while the app is open:
+  - the Bluetooth audio device and its profile (call headset, music, or other);
+  - whether a Bluetooth microphone is connected;
+  - the output Node Talker uses (Bluetooth, wired headset, earpiece or phone speaker);
+  - the last connect or disconnect, with its time, from the moment the app opened;
+  - the media and call volumes, each as a step of its maximum;
+  - a note that headset buttons are ignored while Listen or Talk runs.
+
+  The card updates while it is open. Nothing in it needs a Bluetooth permission; the app's permissions are unchanged.
 
 ## 0.5.3 (2026-10-28)
 

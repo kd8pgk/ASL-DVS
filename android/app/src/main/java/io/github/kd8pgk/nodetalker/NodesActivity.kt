@@ -3,6 +3,7 @@ package io.github.kd8pgk.nodetalker
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Build
 import android.os.Bundle
 import android.os.PowerManager
@@ -38,6 +39,7 @@ class NodesActivity : Activity() {
         list.setOnItemLongClickListener { _, _, pos, _ -> manage(nodes[pos]); true }
         findViewById<Button>(R.id.add).setOnClickListener { edit(null) }
         findViewById<Button>(R.id.audio).setOnClickListener { audioSettings() }
+        findViewById<Button>(R.id.bluetooth).setOnClickListener { bluetoothInfo() }
         findViewById<Button>(R.id.battery).setOnClickListener { batterySettings() }
         val keep = findViewById<CheckBox>(R.id.keep_on)
         keep.isChecked = NodeStore.keepScreenOn(this)
@@ -220,6 +222,59 @@ class NodesActivity : Activity() {
             }
             .setNegativeButton(R.string.cancel, null)
             .show()
+    }
+
+    private fun bluetoothInfo() {
+        val v = LayoutInflater.from(this).inflate(R.layout.dialog_bluetooth, null)
+        val update = { bindBluetooth(v) }
+        bindBluetooth(v)
+        AlertDialog.Builder(this)
+            .setTitle(R.string.bluetooth_title)
+            .setView(v)
+            .setPositiveButton(R.string.close, null)
+            .setOnDismissListener { Bluetooth.listeners.remove(update) }
+            .show()
+        Bluetooth.listeners.add(update)
+    }
+
+    private fun bindBluetooth(v: View) {
+        val am = getSystemService(AudioManager::class.java)
+        val outs = Bluetooth.outputs(this)
+        val first = outs.firstOrNull()
+        val device = first?.productName?.toString()?.takeIf { it.isNotBlank() }
+        v.findViewById<TextView>(R.id.bt_device).text = getString(R.string.bt_device, device ?: getString(R.string.bt_none))
+        v.findViewById<TextView>(R.id.bt_profile).text = getString(
+            R.string.bt_profile,
+            first?.let { getString(Bluetooth.profileRes(it.type)) } ?: getString(R.string.bt_none),
+        )
+        v.findViewById<TextView>(R.id.bt_mic).text = getString(
+            R.string.bt_mic,
+            getString(if (Bluetooth.micAvailable(this)) R.string.bt_yes else R.string.bt_no),
+        )
+        val route = when {
+            outs.isNotEmpty() -> R.string.bt_route_bt
+            Bluetooth.wiredConnected(this) -> R.string.bt_route_wired
+            NodeStore.audio(this).earpiece -> R.string.bt_route_earpiece
+            else -> R.string.bt_route_speaker
+        }
+        v.findViewById<TextView>(R.id.bt_route).text = getString(R.string.bt_route, getString(route))
+        val change = Bluetooth.last
+        v.findViewById<TextView>(R.id.bt_last).text = if (change == null) {
+            getString(R.string.bt_last_none)
+        } else {
+            getString(
+                if (change.connected) R.string.bt_last_connected else R.string.bt_last_disconnected,
+                change.name.ifBlank { getString(R.string.bt_none) },
+                Bluetooth.time(change.at),
+            )
+        }
+        v.findViewById<TextView>(R.id.bt_media).text = getString(
+            R.string.bt_media, am.getStreamVolume(AudioManager.STREAM_MUSIC), am.getStreamMaxVolume(AudioManager.STREAM_MUSIC),
+        )
+        v.findViewById<TextView>(R.id.bt_call).text = getString(
+            R.string.bt_call, am.getStreamVolume(AudioManager.STREAM_VOICE_CALL), am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL),
+        )
+        v.findViewById<TextView>(R.id.bt_buttons).text = getString(R.string.bt_buttons)
     }
 
     companion object {
