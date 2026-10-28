@@ -1,6 +1,10 @@
 # Node Talker Mobile changelog
 
-Current version: `0.5.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.5.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.5.3 (2026-10-28)
+
+- **Node Talker holds the phone's media session while it runs.** Android sends the resume from a Bluetooth connection to the app that holds the media session, so another player (such as VLC) no longer starts its last podcast when a speaker connects. Node Talker ignores play, pause and stop from that session, so headset buttons do nothing while the app runs. The session lasts while Listen or Talk runs; once the app has stopped, Android's resume can reach other players again.
 
 ## 0.5.2 (2026-10-28)
 

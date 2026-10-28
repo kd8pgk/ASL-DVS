@@ -16,6 +16,8 @@ import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.audiofx.LoudnessEnhancer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -97,6 +99,7 @@ class ListenService : Service() {
     @Volatile private var gen = 0
     private var playerSettings: AudioSettings? = null
     @Volatile private var focusLost = false
+    private var session: MediaSession? = null
     private val queue = ArrayBlockingQueue<ShortArray>(QUEUE_FRAMES)
     private var wake: PowerManager.WakeLock? = null
     private var wifi: WifiManager.WifiLock? = null
@@ -127,6 +130,11 @@ class ListenService : Service() {
     override fun onCreate() {
         super.onCreate()
         Talk.svc = this
+        session = MediaSession(this, "NodeTalker").apply {
+            setCallback(object : MediaSession.Callback() {})
+            setPlaybackState(PlaybackState.Builder().setState(PlaybackState.STATE_PAUSED, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f).build())
+            setActive(true)
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -185,6 +193,8 @@ class ListenService : Service() {
     override fun onDestroy() {
         shutdown()
         if (Talk.svc === this) Talk.svc = null
+        session?.release()
+        session = null
         super.onDestroy()
     }
 
@@ -369,6 +379,11 @@ class ListenService : Service() {
         val changed = state != Listen.state || err != Listen.error
         Listen.state = state
         Listen.error = err
+        session?.setPlaybackState(
+            PlaybackState.Builder()
+                .setState(if (state == Listen.PLAYING) PlaybackState.STATE_PLAYING else PlaybackState.STATE_PAUSED, PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+                .build(),
+        )
         if (changed) {
             node?.let { notifyState(it) }
             Listen.changed()
