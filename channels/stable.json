@@ -29,22 +29,22 @@
    "version": "2.82.0"
   },
   "nodecontrol": {
-   "blob": "53748f45b70408e62d38643c087aa013556911f3",
-   "commit": "01eeb2802c38c1c24727c1e769d4410d1055f944",
-   "file": "nodecontrol_v9_3_88_20261019.py",
-   "landed": "2026-10-19T23:36:43Z",
-   "promoted": "2026-10-27T22:41:35Z",
+   "blob": "40c99ce8659e04f73b153b6057bcb8561e5344b5",
+   "commit": "482f910e5a4118e1f861f6930c4df18d6f41ddcb",
+   "file": "nodecontrol_v9_3_89_20261019.py",
+   "landed": "2026-10-19T23:53:27Z",
+   "promoted": "2026-10-28T07:28:17Z",
    "reason": "count",
-   "version": "9.3.88"
+   "version": "9.3.89"
   },
   "nodecontrol_pi02w": {
-   "blob": "ed76dbf6d5db7341886fc14b3c4b84b3409ac292",
-   "commit": "3f4ac5d246398f81e949d3999c76d9867b586239",
-   "file": "nodecontrol_pi02w_v9_3_93_20261019.py",
-   "landed": "2026-10-19T23:47:47Z",
-   "promoted": "2026-10-27T22:41:35Z",
+   "blob": "2ab0370394845b9b87ee10a842c7514db9cf1300",
+   "commit": "be394fc578ccc1756ffef2f1c15351e1905f43c1",
+   "file": "nodecontrol_pi02w_v9_3_94_20261020.py",
+   "landed": "2026-10-20T15:25:49Z",
+   "promoted": "2026-10-28T07:28:17Z",
    "reason": "count",
-   "version": "9.3.93-pi02w"
+   "version": "9.3.94-pi02w"
   },
   "nodetalker": {
    "blob": "dd76fb772838af417894d7ed807415f2e963a306",
@@ -56,13 +56,13 @@
    "version": "0.6.12"
   },
   "pibrary": {
-   "blob": "807d2191db213e46effc5d6bb3584a0693477f84",
-   "commit": "0520deba82393006ff6a9ac8745302c3fbb128a7",
-   "file": "pibrary_v0_14_0_20261028.py",
-   "landed": "2026-10-28T07:14:38Z",
-   "promoted": "2026-10-28T07:14:38Z",
+   "blob": "3297c565ab64a0992f3640702d203199661d5169",
+   "commit": "22568d86f255cde585175b5efe09e470f54e4ce3",
+   "file": "pibrary_v0_15_0_20261028.py",
+   "landed": "2026-10-28T07:28:17Z",
+   "promoted": "2026-10-28T07:28:17Z",
    "reason": "hotfix",
-   "version": "0.14.0"
+   "version": "0.15.0"
   },
   "sysmon": {
    "blob": "576d464a8c1e02c2c4557b771b53d1c0e5446be7",
@@ -101,13 +101,13 @@
    "version": "3.1"
   },
   "wifimon": {
-   "blob": "30e70af8bf5ac5fcd68b80d8bc7db67a02c2d0c9",
-   "commit": "79ab7663e7df19de630985bc161af27cd2ceec76",
-   "file": "wifimon_v5_38_0_20261018.py",
-   "landed": "2026-10-18T11:24:56Z",
-   "promoted": "2026-10-27T22:41:35Z",
+   "blob": "49b82cf960912caf4b877bff6b5616cccec03a52",
+   "commit": "8030e44132b3c6a574a4622b90693b8fd1812d3f",
+   "file": "wifimon_v5_39_0_20261019.py",
+   "landed": "2026-10-19T16:59:23Z",
+   "promoted": "2026-10-28T07:28:17Z",
    "reason": "count",
-   "version": "5.38.0"
+   "version": "5.39.0"
   }
  }
 }
