@@ -5535,6 +5535,7 @@ body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidd
 header{flex:none;display:flex;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top)) 16px 12px;border-bottom:2px solid var(--amber);background:linear-gradient(90deg,#0f1a2e,#161e2e 50%,#0f1a2e);z-index:5;box-shadow:0 2px 0 rgba(255,208,64,.25),0 6px 30px rgba(0,0,0,.7)}
 header .hdr-left{display:flex;flex-direction:column;min-width:0}
 header h1{font-size:1.21rem;margin:0;white-space:nowrap;color:var(--amber);letter-spacing:.1em;text-transform:uppercase;text-shadow:0 0 10px rgba(255,208,64,.9),0 0 30px rgba(255,208,64,.5),0 0 60px rgba(255,208,64,.2)}
+header .hdr-pills{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:6px;min-width:0;margin-left:auto}
 header .logo-sub{font-size:.715rem;letter-spacing:.22em;text-transform:uppercase;color:var(--amber);margin-top:.1rem}
 
 header .ver{color:var(--muted);font-size:12px}
@@ -9701,10 +9702,10 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <style>__CSS__</style>
 </head>
 <body>
-<header><div class="hdr-left"><h1>Node Talker</h1><div class="logo-sub">Node control · web</div></div><span class="ver">v__VERSION__</span><span class="sp"></span>
-<a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
+<header><div class="hdr-left"><h1>Node Talker</h1></div><span class="ver">v__VERSION__</span><span class="sp"></span>
+<div class="hdr-pills"><a id="dash-link" class="pill hidden" href="#" aria-label="Open Node Controller">Node Controller</a>
 <button id="login-open" class="pill hidden" type="button">Log In</button>
-<button id="logout" class="pill hidden" type="button">Log Out</button></header>
+<button id="logout" class="pill hidden" type="button">Log Out</button></div></header>
 <div id="login-screen">
 <div id="login-card">
 <h2>Node Talker Login</h2>
