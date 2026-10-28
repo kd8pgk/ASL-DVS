@@ -171,7 +171,29 @@ class TalkerActivity : Activity() {
 
         @JavascriptInterface
         fun setVolume(v: Double) {
-            Listen.volume = v.toFloat().coerceIn(0f, 1f)
+            Listen.volume = v.toFloat().coerceIn(0f, 2f)
+        }
+
+        @JavascriptInterface
+        fun audioInfo(): String {
+            val a = NodeStore.audio(this@TalkerActivity)
+            return org.json.JSONObject()
+                .put("output", if (a.earpiece) "earpiece" else "speaker")
+                .put("bufferMs", a.bufferMs)
+                .put("voiceMic", a.voiceMic)
+                .toString()
+        }
+
+        @JavascriptInterface
+        fun earpiece(): Boolean = NodeStore.audio(this@TalkerActivity).earpiece
+
+        @JavascriptInterface
+        fun setEarpiece(on: Boolean): Boolean {
+            val c = this@TalkerActivity
+            val a = NodeStore.audio(c)
+            if (a.earpiece != on) NodeStore.setAudio(c, a.copy(earpiece = on))
+            if (Listen.state != Listen.OFF) Listen.nodeId?.let { id -> NodeStore.get(c, id)?.let { Listen.start(c, it) } }
+            return true
         }
     }
 

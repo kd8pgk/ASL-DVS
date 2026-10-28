@@ -15,6 +15,7 @@ import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
+import android.media.audiofx.LoudnessEnhancer
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -30,6 +31,7 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 object Listen {
     const val OFF = "off"
@@ -508,6 +510,12 @@ class ListenService : Service() {
         val min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val track = AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(fmt)
             .setBufferSizeInBytes(max(min, RATE * 2 / 5)).setTransferMode(AudioTrack.MODE_STREAM).build()
+        val enh = try {
+            LoudnessEnhancer(track.audioSessionId).apply { enabled = true }
+        } catch (e: RuntimeException) {
+            null
+        }
+        var boostMb = -1
         val target = (s.bufferMs / FRAME_MS).coerceAtLeast(2)
         val silence = ShortArray(FRAME)
         var filling = true
@@ -529,7 +537,13 @@ class ListenService : Service() {
                     filling = true
                     continue
                 }
-                track.setVolume(Listen.volume)
+                val vol = Listen.volume
+                track.setVolume(vol.coerceAtMost(1f))
+                val mb = ((s.boostDb + overDb(vol)) * 100).roundToInt().coerceIn(0, MAX_GAIN_MB)
+                if (mb != boostMb) {
+                    boostMb = mb
+                    enh?.setTargetGain(mb)
+                }
                 val quiet = Listen.muted || focusLost
                 track.write(if (quiet) silence else f, 0, FRAME)
                 for (v in f) peak = max(peak, abs(v.toInt()))
@@ -547,8 +561,11 @@ class ListenService : Service() {
             track.pause()
             track.flush()
             track.release()
+            enh?.release()
         }
     }
+
+    private fun overDb(v: Float): Double = if (v > 1f) 20 * log10(v.toDouble()) else 0.0
 
     private fun requestFocus() {
         val am = getSystemService(AUDIO_SERVICE) as AudioManager
@@ -673,6 +690,7 @@ class ListenService : Service() {
         private const val FRAME_MS = 20
         private const val QUEUE_FRAMES = 150
         private const val LEVEL_FRAMES = 10
+        private const val MAX_GAIN_MB = 1800
 
         private val ULAW = ShortArray(256) { i ->
             val u = i.inv() and 0xff

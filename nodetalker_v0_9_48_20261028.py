@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.47"
+VERSION = "0.9.48"
 DATE_STR = "2026-10-27"
 APP_NAME = "Node Talker"
 
@@ -8094,6 +8094,17 @@ function hsSummary() {
   sum('hs', b + (hs.out ? ' · output chosen' : '') + (hs.mic ? ' · mic chosen' : ''));
 }
 
+function apOutInit() {
+  const app = appAudio();
+  $('ap-out-row').classList.toggle('hidden', !app);
+  if (app) $('ap-out').value = appCall('earpiece') ? 'earpiece' : 'speaker';
+}
+
+function apOutSave() {
+  if (appCall('setEarpiece', $('ap-out').value === 'earpiece')) note('hs-msg', '', 'Saved. Listening restarts in the app with the new output.');
+  else note('hs-msg', 'warn', 'The app could not change the output.');
+}
+
 function hsSave() {
   hs = {out: $('hs-out').value, mic: $('hs-mic').value, btn: $('hs-btn').value};
   try { localStorage.setItem('nlHeadset', JSON.stringify(hs)); } catch (e) {}
@@ -8383,7 +8394,7 @@ function availUi() {
   whyNote('why-mic', Object.values(micWhy).concat([testWhy]));
 
   const hsWhy = {
-    'hs-out': app ? 'In app audio, pick earpiece or speaker in the app\'s Audio settings.' : '',
+    'hs-out': app ? 'In app audio the app picks the output: use Sound through above.' : '',
     'hs-mic': app ? 'In app audio the app uses Android\'s default microphone.' : noMic,
     'hs-btn': app ? 'The headset button only reaches the page while the page plays the audio (Page audio).' : '',
   };
@@ -9659,6 +9670,8 @@ document.addEventListener('DOMContentLoaded', () => {
   setupMediaSession();
   $('hs-btn').value = hs.btn;
   ['hs-out', 'hs-mic', 'hs-btn'].forEach((id) => $(id).addEventListener('change', hsSave));
+  apOutInit();
+  $('ap-out').addEventListener('change', apOutSave);
   $('hs-names').addEventListener('click', hsNames);
   $('player').addEventListener('pause', () => { if (playing && mediaDest && $('player').paused) hsLost(); });
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) navigator.mediaDevices.addEventListener('devicechange', hsDevChange);
@@ -10032,6 +10045,11 @@ mic volume, so the gain here is applied in the page.</p>
 <div id="cb-hs">
 <p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
 <p class="muted small why hidden" id="why-hs"></p>
+<div id="ap-out-row" class="hidden"><label for="ap-out">Sound through (app audio)</label>
+<select id="ap-out" style="width:100%;min-height:44px;margin-top:6px">
+<option value="speaker">Speaker / media volume: louder; keep the phone's media volume up</option>
+<option value="earpiece">Earpiece / call volume: quieter; the phone's call volume sets it</option>
+</select></div>
 <div id="hs-out-row"><label for="hs-out">Audio output</label>
 <select id="hs-out" style="width:100%;min-height:44px;margin-top:6px"></select></div>
 <p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Talker follows it.</p>

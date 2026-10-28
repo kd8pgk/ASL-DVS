@@ -1,6 +1,11 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_47_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_48_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.48 (2026-10-28)
+
+- **Sound through is on the Setup card.** In the Headset / audio output card, a new **Sound through (app audio)** choice sets speaker or earpiece for Node Talker Mobile. It appears only when the page plays through the app. The choice is saved on the phone, and the app restarts listening so it takes effect at once. It used to be in the app's own Audio settings, and that setting is gone; the page has the same choice now.
+- **The app's details reach the page.** The Phone card's app rows (output, receive buffer, microphone filter) now have values in the app. The app had no way to report them before, so those rows showed a dash.
 
 ## 0.9.47 (2026-10-28)
 

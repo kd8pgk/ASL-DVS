@@ -136,7 +136,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_9_47_20261028.py --install
+  sudo python3 nodetalker_v0_9_48_20261028.py --install
   ```
 
 Then:
@@ -512,7 +512,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_83_0_20261028.py` | common |
 | `wifimon_v5_41_0_20261028.py` | common |
 | `44helper_v0_0_223_20261028.py` | common |
-| `nodetalker_v0_9_47_20261028.py` | common |
+| `nodetalker_v0_9_48_20261028.py` | common |
 | `amp_nodetalker_v0_3_3_20261028.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_15_0_20261028.py` | common |
 | `install_all_v7_4_0_20261020.sh` | common |

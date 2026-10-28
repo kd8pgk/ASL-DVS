@@ -51,27 +51,19 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="@string/output"
+            android:text="@string/boost"
             android:textStyle="bold" />
 
-        <RadioGroup
+        <TextView
+            android:id="@+id/boost_text"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content">
+            android:layout_height="wrap_content" />
 
-            <RadioButton
-                android:id="@+id/out_speaker"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:text="@string/output_speaker" />
-
-            <RadioButton
-                android:id="@+id/out_earpiece"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:minHeight="48dp"
-                android:text="@string/output_earpiece" />
-        </RadioGroup>
+        <SeekBar
+            android:id="@+id/boost"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:minHeight="48dp" />
 
         <TextView
             android:layout_width="match_parent"
