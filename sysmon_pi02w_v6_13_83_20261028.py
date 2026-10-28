@@ -38,8 +38,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.82-pi02w"
-BUILD_DATE   = "20261019"
+VERSION      = "6.13.83-pi02w"
+BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -1506,6 +1506,21 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<style>
+html[data-theme="light"]{filter:invert(1) hue-rotate(180deg);--red:#ff7d8c;--red2:#ff7d8c;--red-line:#ff7d8c;--green:#44be99;--amber:#ce9e44;--blue:#59b9de;--teal:#44bcb0;--accent:#44bcb0;--fcs:#51c1af;--orange:#e89542;--cloudflare:#ed9647;--pink:#ff78d2;--purple:#d778ff;--lime:#9bab41}
+html[data-theme="light"] img,html[data-theme="light"] video,html[data-theme="light"] canvas,html[data-theme="light"] iframe,html[data-theme="light"] input[type="checkbox"],html[data-theme="light"] input[type="radio"]{filter:invert(1) hue-rotate(180deg)}
+html[data-theme="light"] *{text-shadow:none!important}
+.theme-row{grid-column:1/-1;display:flex;justify-content:flex-end;align-items:center;gap:.5rem;margin:1rem 0 .4rem;padding:0 .2rem}
+.theme-row .theme-lbl{font-size:.72rem;color:#aab8cc;letter-spacing:.04em}
+.theme-sw{display:inline-flex;border:1px solid #3a5278;border-radius:4px;overflow:hidden}
+.theme-sw>button.theme-opt{all:unset;box-sizing:border-box;cursor:pointer;padding:.28rem .75rem;font-family:inherit;font-size:.72rem;line-height:1.2;color:#aab8cc;background:transparent}
+.theme-sw>button.theme-opt+button.theme-opt{border-left:1px solid #3a5278}
+.theme-sw>button.theme-opt[aria-pressed="true"]{background:#1e2a3f;color:#ffffff}
+.theme-sw>button.theme-opt:focus-visible{outline:2px solid #22d4ff;outline-offset:-2px}
+</style>
+<script>
+(function(){var K="asl_dvs_theme",d=document.documentElement;function g(){try{return localStorage.getItem(K)==="light"?"light":"dark"}catch(e){return"dark"}}function a(t){d.setAttribute("data-theme",t);var b=document.querySelectorAll("[data-theme-set]");for(var i=0;i<b.length;i++)b[i].setAttribute("aria-pressed",String(b[i].getAttribute("data-theme-set")===t))}a(g());document.addEventListener("DOMContentLoaded",function(){a(g())});document.addEventListener("click",function(e){var b=e.target&&e.target.closest?e.target.closest("[data-theme-set]"):null;if(!b)return;var t=b.getAttribute("data-theme-set")==="light"?"light":"dark";try{localStorage.setItem(K,t)}catch(x){}a(t)});window.addEventListener("storage",function(e){if(e.key===K)a(g())})})();
+</script>
 <title>System Monitor</title>
 <style>
 
@@ -3864,6 +3879,7 @@ body.tab-edit #zone-content{
       </div>
     </div>
 
+    <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
   </div>
 
 </div>

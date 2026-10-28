@@ -1,6 +1,16 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_13_94_20261028.py`. Newest entries first.
+Current file: `sysmon_v6_13_95_20261028.py`. Newest entries first.
+
+## 6.13.95 (2026-10-28)
+
+The full-build port of the Pi Zero 2 W SysMon's upgrades that were not in the full build yet (6.13.68, 6.13.71 to 6.13.73 and 6.13.76-pi02w), and a theme switch. The full build keeps its Console, Net, Firewall, Zello and Security tabs.
+- **DV Gateway Logs card** on the Journal tab (6.13.68-pi02w): the ircDDBGateway, MMDVM_Bridge, YSFGateway, P25Gateway, NXDNGateway and USRP2M17 log files (from each `.ini`'s `[Log]` settings, under `/var/log` only), and the Analog_Bridge, STFU, netcheck and ircddbgatewayd journals, each with Open and Copy; Copy for agent and Download .txt for the last 50 lines of every log. The journal pop-up opens files too. The service panel's Status box gets Copy. New routes `/api/logs/list`, `/api/logs/read` and `/api/logs/agent` (login needed, read only).
+- **ASL field in the header** (6.13.71-pi02w), next to Pwr: `REG`, `WAIT`, `NOT REG`, `ASL DOWN` or `—`, with how long it has been in that state; hover for each node, click for the Reg tab. While not registered the background poll checks `rpt show registrations` every 10 s instead of 30 s. The Reg tab refreshes itself every 15 s while it is open, and its live rows say how long a node has not been registered.
+- **Registered as** (6.13.72 and 6.13.73-pi02w): the Reg tab shows the address and port the AllStarLink server sees each registered node at (the Perceived column), and whether that is the 44Net tunnel, your public address or a private one.
+- **Node Talker under either name** (6.13.76-pi02w): the Node Talker card finds `nodetalker` or `nodelisten` (service, program, settings, `rpt.conf` audio line, feeder process), and Restart restarts whichever is installed.
+- **Shared launcher.** The service starts through `/usr/local/bin/asl_dvs_launch.py` (as in 6.13.67.3-pi02w and the other tools), and stale `.pyc` files are cleaned up on install and uninstall.
+- **Dark and light mode.** A Dark / Light switch at the bottom of the Edit tab, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
 
 ## 6.13.94 (2026-10-28)
 

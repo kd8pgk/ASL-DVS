@@ -1,6 +1,10 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_41_0_20261028.py`. Newest entries first.
+Current file: `wifimon_v5_42_0_20261028.py`. Newest entries first.
+
+## 5.42.0 (2026-10-28)
+
+- **Dark and light mode.** A Dark / Light switch at the bottom of the page, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
 
 ## 5.41.0 (2026-10-28)
 

@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_82_20261028.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_13_83_20261028.py`. Newest entries first.
+
+## 6.13.83-pi02w (2026-10-28)
+
+- **Dark and light mode.** A Dark / Light switch at the bottom of the Edit tab, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
 
 ## 6.13.82-pi02w (2026-10-28)
 

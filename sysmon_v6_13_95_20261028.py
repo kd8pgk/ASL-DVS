@@ -43,8 +43,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.94"
-BUILD_DATE   = "20261019"
+VERSION      = "6.13.95"
+BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
 DEFAULT_PORT    = 9999
@@ -705,6 +705,8 @@ _REGISTER_RE = re.compile(
 )
 _REG_LIVE_NODE_RE  = re.compile(r'\b(\d{4,6})\b')
 _REG_LIVE_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
+_REG_LIVE_ADDR_RE = re.compile(r'\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5})\b')
+_REG_LIVE_COLS_RE = re.compile(r'^(\S+)\s+(\S+)\s+(\S+)\s+(\d+)\s+(.+?)\s*$')
 
 def get_live_registrations() -> dict:
 
@@ -717,11 +719,20 @@ def get_live_registrations() -> dict:
         }
 
     nodes: "dict[str, str]" = {}
+    perceived: "dict[str, str]" = {}
     for line in out.splitlines():
         m = _REG_LIVE_NODE_RE.search(line)
         if not m:
             continue
         node = m.group(1)
+        cols = _REG_LIVE_COLS_RE.match(line.strip())
+        if cols and _REG_LIVE_ADDR_RE.fullmatch(cols.group(3)):
+            perceived[node] = cols.group(3)
+        else:
+            addrs = _REG_LIVE_ADDR_RE.findall(line)
+            first = (line.split() or [""])[0]
+            if len(addrs) >= 2 or (addrs and addrs[0] != first):
+                perceived[node] = addrs[-1]
         low  = line.lower()
         if any(w in low for w in _REG_LIVE_BAD_WORDS):
             nodes[node] = "unregistered"
@@ -729,7 +740,18 @@ def get_live_registrations() -> dict:
             nodes[node] = "registered"
         else:
             nodes[node] = "unknown"
-    return {"ok": True, "raw": out, "error": None, "nodes": nodes}
+    return {"ok": True, "raw": out, "error": None, "nodes": nodes, "perceived": perceived}
+
+def _reg_addr_path(addr: str) -> str:
+    try:
+        ip = ipaddress.ip_address(addr.rsplit(":", 1)[0])
+    except ValueError:
+        return ""
+    if ip in ipaddress.ip_network("44.0.0.0/8"):
+        return "through the 44Net tunnel"
+    if ip.is_private:
+        return "a private address (check NAT)"
+    return "your public internet address (not the 44Net tunnel)"
 
 _SAVENODE_KV_RE = re.compile(r'^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(\S+)\s*(?:#.*)?$')
 
@@ -1347,6 +1369,7 @@ _state: dict = {
     "port_conflicts": {},
 
     "reg_live":       None,
+    "reg_summary":    None,
 
     "needs_restart":  False,
 
@@ -1463,9 +1486,12 @@ def _bg_poll_loop() -> None:
                     _update_state(port_conflicts=pc)
                 except Exception as exc:
                     _log(f"bg_poll: port_conflicts error — {exc}", stderr=True)
+
+            prev_reg = get_state_snapshot().get("reg_summary")
+            if poll_count % 3 == 0 or not prev_reg or prev_reg.get("state") != "ok":
                 try:
                     rl = get_live_registrations()
-                    _update_state(reg_live=rl)
+                    _update_state(reg_live=rl, reg_summary=_reg_live_summary(rl, prev_reg))
                 except Exception as exc:
                     _log(f"bg_poll: reg_live error — {exc}", stderr=True)
 
@@ -1490,6 +1516,21 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<style>
+html[data-theme="light"]{filter:invert(1) hue-rotate(180deg);--red:#ff7d8c;--red2:#ff7d8c;--red-line:#ff7d8c;--green:#44be99;--amber:#ce9e44;--blue:#59b9de;--teal:#44bcb0;--accent:#44bcb0;--fcs:#51c1af;--orange:#e89542;--cloudflare:#ed9647;--pink:#ff78d2;--purple:#d778ff;--lime:#9bab41}
+html[data-theme="light"] img,html[data-theme="light"] video,html[data-theme="light"] canvas,html[data-theme="light"] iframe,html[data-theme="light"] input[type="checkbox"],html[data-theme="light"] input[type="radio"]{filter:invert(1) hue-rotate(180deg)}
+html[data-theme="light"] *{text-shadow:none!important}
+.theme-row{grid-column:1/-1;display:flex;justify-content:flex-end;align-items:center;gap:.5rem;margin:1rem 0 .4rem;padding:0 .2rem}
+.theme-row .theme-lbl{font-size:.72rem;color:#aab8cc;letter-spacing:.04em}
+.theme-sw{display:inline-flex;border:1px solid #3a5278;border-radius:4px;overflow:hidden}
+.theme-sw>button.theme-opt{all:unset;box-sizing:border-box;cursor:pointer;padding:.28rem .75rem;font-family:inherit;font-size:.72rem;line-height:1.2;color:#aab8cc;background:transparent}
+.theme-sw>button.theme-opt+button.theme-opt{border-left:1px solid #3a5278}
+.theme-sw>button.theme-opt[aria-pressed="true"]{background:#1e2a3f;color:#ffffff}
+.theme-sw>button.theme-opt:focus-visible{outline:2px solid #22d4ff;outline-offset:-2px}
+</style>
+<script>
+(function(){var K="asl_dvs_theme",d=document.documentElement;function g(){try{return localStorage.getItem(K)==="light"?"light":"dark"}catch(e){return"dark"}}function a(t){d.setAttribute("data-theme",t);var b=document.querySelectorAll("[data-theme-set]");for(var i=0;i<b.length;i++)b[i].setAttribute("aria-pressed",String(b[i].getAttribute("data-theme-set")===t))}a(g());document.addEventListener("DOMContentLoaded",function(){a(g())});document.addEventListener("click",function(e){var b=e.target&&e.target.closest?e.target.closest("[data-theme-set]"):null;if(!b)return;var t=b.getAttribute("data-theme-set")==="light"?"light":"dark";try{localStorage.setItem(K,t)}catch(x){}a(t)});window.addEventListener("storage",function(e){if(e.key===K)a(g())})})();
+</script>
 <title>System Monitor</title>
 <style>
 
@@ -2141,6 +2182,20 @@ body.offline #offline-bar{display:block}
   padding:.15rem .45rem;background:transparent;cursor:pointer;
   white-space:nowrap;transition:all .14s}
 .jl-btn:hover{filter:brightness(1.6)}
+.dvl-agent{display:flex;flex-wrap:wrap;align-items:center;gap:.45rem;
+  padding:.55rem .9rem;border-bottom:1px solid var(--border)}
+.dvl-agent-note{font-family:var(--sans);font-size:var(--fs-xs);color:#fff;flex-basis:100%}
+.dvl-group{padding:.35rem .9rem;background:#131c2d;border-top:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);letter-spacing:.2em;
+  text-transform:uppercase;color:var(--purple)}
+.dvl-row{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:.45rem;
+  padding:.4rem .9rem;border-top:1px solid var(--border)}
+.dvl-name{min-width:0;font-family:var(--sans);font-size:var(--fs-md);font-weight:bold;
+  color:var(--text-bright);overflow-wrap:anywhere}
+.dvl-sub{font-family:var(--sans);font-size:var(--fs-xs);font-weight:normal;color:#fff;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dvl-note{padding:.3rem .9rem;border-top:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);color:var(--amber)}
 
 #jp-overlay{display:none;position:fixed;inset:0;
   background:rgba(0,0,0,.8);backdrop-filter:blur(4px);
@@ -2166,9 +2221,13 @@ body.offline #offline-bar{display:block}
   border-radius:3px;transition:all .14s}
 #jp-close:hover{color:var(--red);border-color:var(--red-dim)}
 
-#jp-toolbar{display:flex;align-items:center;gap:.4rem;
+#jp-toolbar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;
   padding:.35rem 1rem;background:#131c2d;
   border-bottom:1px solid var(--border);flex-shrink:0}
+#jp-info{padding:.25rem 1rem;background:#131c2d;border-bottom:1px solid var(--border);
+  font-family:var(--sans);font-size:var(--fs-xs);color:var(--amber);flex-shrink:0}
+#jp-info[hidden]{display:none}
+.dp-copy-row{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
 #jp-grep{font-family:var(--sans);font-size:var(--fs-base);padding:.25rem .5rem;
   background:var(--surface2);color:var(--text-bright);
   border:1px solid var(--border2);border-radius:3px;
@@ -2376,6 +2435,10 @@ body.tab-edit #zone-content{
 .reg-card-status.warn{color:var(--orange);border-color:var(--orange);
   text-shadow:0 0 4px rgba(255,170,34,.35)}
 .reg-card-status.info{color:#fff;border-color:var(--border2)}
+.reg-live-note{font-family:var(--sans);font-size:var(--fs-xs);color:#fff;
+  line-height:1.5;margin:0 0 .6rem}
+.reg-live-note code{color:var(--teal)}
+.sf-reg{cursor:pointer}
 
 .ph-note{padding:.6rem .9rem;font-family:var(--sans);font-size:var(--fs-sm);color:#ffffff}
 .ph-ro{padding:.4rem .9rem;font-family:var(--sans);font-size:var(--fs-xs);color:#ffffff;border-bottom:1px solid var(--border)}
@@ -2943,6 +3006,7 @@ body.tab-edit #zone-content{
   <div class="sf"><span class="sl">Mem</span><span class="sv" id="s-mem">…</span></div>
   <div class="sf sf-temp"><span class="sl">Temp</span><span class="sv" id="s-temp">—</span></div>
   <div class="sf"><span class="sl">Pwr</span><span class="sv" id="s-volt" title="Power health — vcgencmd get_throttled">—</span></div>
+  <div class="sf sf-reg" id="sf-reg" onclick="regJump()"><span class="sl">ASL</span><span class="sv" id="s-reg" title="AllStarLink registration — rpt show registrations">…</span></div>
 </div>
 
 <div id="zone-cmdbar">
@@ -3248,6 +3312,23 @@ body.tab-edit #zone-content{
   </div>
 
   <div id="panel-journal" class="tab-panel">
+    <div class="s3-card" id="dvl-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">DV Gateway Logs</span>
+        <span class="s3-card-meta">files in UTC · journal in local time</span>
+      </div>
+      <div class="dvl-agent">
+        <button class="btn btn-purple btn-sm" id="dvl-agent-btn"
+          onclick="dvlAgentCopy()">⎘ Copy for agent</button>
+        <button class="btn btn-muted btn-sm" onclick="dvlAgentDownload()">⤓ Download .txt</button>
+        <button class="btn btn-muted btn-sm" onclick="dvlLoad()">↻ Refresh</button>
+        <span class="dvl-agent-note" id="dvl-agent-note">The last 50 lines of every log below,
+          plus this boot's warnings. Copy one log at a time with its own Copy button.</span>
+      </div>
+      <div id="dvl-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
     <div class="s3-card">
       <div class="s3-card-hdr">
         <span class="s3-card-title">Running Services — click to view journal</span>
@@ -3323,7 +3404,7 @@ body.tab-edit #zone-content{
         <div style="display:flex;align-items:center;gap:.55rem">
           <div class="dvsm-accent" style="background:var(--teal)"></div>
           <div>
-            <div class="dvsm-card-title" style="color:var(--teal)">Node Listen</div>
+            <div class="dvsm-card-title" style="color:var(--teal)">Node Talker</div>
             <div class="dvsm-card-sub" id="nodelisten-sub">listen ports · connections · push-to-talk node 1921</div>
           </div>
         </div>
@@ -3335,11 +3416,11 @@ body.tab-edit #zone-content{
       <div id="nodelisten-clients"></div>
       <div id="nodelisten-actions" style="padding:.5rem .6rem;border-top:1px solid rgba(255,255,255,.06);display:flex;gap:.4rem;flex-wrap:wrap">
         <button class="btn btn-sm" style="color:var(--green);border-color:var(--green-dim)"
-          onclick="nodeListenRestart()">↺ Restart nodelisten</button>
+          onclick="nodeListenRestart()">↺ Restart Node Talker</button>
         <button class="btn btn-sm" id="nodelisten-unlink" style="color:var(--amber);border-color:var(--amber-dim)"
           onclick="nodeListenUnlink()">⨯ Unlink 1921</button>
         <a class="btn btn-sm" id="nodelisten-open" style="color:var(--teal);border-color:var(--teal-dim);text-decoration:none"
-          href="#" target="_blank" rel="noopener">↗ Open Node Listen</a>
+          href="#" target="_blank" rel="noopener">↗ Open Node Talker</a>
         <button class="btn btn-blue btn-sm" onclick="loadNodeListen()">↻ Refresh</button>
         <button class="btn btn-muted btn-sm" onclick="nodeListenCopy(this)" title="Copy this card as text">⎘ Copy</button>
       </div>
@@ -3348,6 +3429,8 @@ body.tab-edit #zone-content{
   </div>
 
   <div id="panel-reg" class="tab-panel">
+
+    <div class="reg-live-note" id="reg-live-note">Live state from <code>rpt show registrations</code>, checked every 10 s until the node registers, then every 30 s. This tab refreshes every 15 s while open.</div>
 
     <div class="s3-card">
       <div class="s3-card-hdr">
@@ -4682,6 +4765,7 @@ body.tab-edit #zone-content{
       </div>
     </div>
 
+    <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
   </div>
 
 </div>
@@ -4732,6 +4816,7 @@ body.tab-edit #zone-content{
       <button class="btn btn-muted btn-sm"
         onclick="jpRefresh()">↻ Refresh</button>
     </div>
+    <div id="jp-info" hidden></div>
     <div id="jp-body">Select a service from the Journal tab</div>
   </div>
 </div>
@@ -4917,7 +5002,8 @@ body.tab-edit #zone-content{
       
     </div>
 
-    <div class="dpzone-lbl">Status</div>
+    <div class="dp-copy-row"><div class="dpzone-lbl">Status</div>
+      <button class="btn btn-muted btn-sm" onclick="dpStatusCopy()">⎘ Copy</button></div>
     <div id="dpanel-output"><span class="dp-out-dim">Loading…</span></div>
 
   </div>
@@ -5133,6 +5219,7 @@ window.addEventListener("resize", () => conFit());
 function stopTabPolling(tab) {
   let cleared = false;
   if (tab === "ports"    && _ptRefreshTimer) { clearInterval(_ptRefreshTimer); _ptRefreshTimer = null; cleared = true; }
+  if (tab === "reg"      && _regRefreshTimer) { clearInterval(_regRefreshTimer); _regRefreshTimer = null; cleared = true; }
   if (tab === "phone"    && _phRefreshTimer) { clearInterval(_phRefreshTimer); _phRefreshTimer = null; cleared = true; }
   if (tab === "services" && _s3RefreshTimer) { clearInterval(_s3RefreshTimer); _s3RefreshTimer = null; cleared = true; }
   if (tab === "sdcard"   && _sdTestTimer)    { clearInterval(_sdTestTimer);    _sdTestTimer    = null; cleared = true; }
@@ -5251,6 +5338,7 @@ async function pollStatus() {
   }
 
   window._portConflicts = d.port_conflicts || {};
+  if ("reg_summary" in d) renderRegHeader(d.reg_summary);
 
   if (d.callsign) document.getElementById("hdr-callsign").textContent = d.callsign;
   if (d.node)     document.getElementById("hdr-node").textContent     = d.node;
@@ -5997,11 +6085,131 @@ let _fwRules = [];
 
 
 let _jpUnit  = "";
+let _jpFile  = null;
 let _jpLines = 200;
 let _jpRaw   = "";
 let _jpFilteredText = "";
 
 window.loadTab_journal = function() { loadJournalList(); };
+window.loadTab_journal = function() { loadJournalList(); dvlLoad(); };
+
+let _dvlSources = [];
+let _dvlAgent = null;
+let _dvlAgentAt = 0;
+
+function _dvlSize(n) {
+  if (n < 1024) return `${n} B`;
+  if (n < 1048576) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+function _dvlAge(t) {
+  const s = Math.max(0, Math.floor(Date.now() / 1000) - t);
+  if (s < 90) return "just now";
+  if (s < 5400) return `${Math.round(s / 60)} min ago`;
+  if (s < 129600) return `${Math.round(s / 3600)} h ago`;
+  return `${Math.round(s / 86400)} days ago`;
+}
+
+async function dvlLoad() {
+  const d = await api("/api/logs/list");
+  _dvlSources = (d && d.ok) ? (d.sources || []) : [];
+  renderDvlList(d && d.ok ? null : ((d && d.message) || "Could not read the log list"));
+  dvlAgentFetch();
+}
+
+function renderDvlList(err) {
+  const body = document.getElementById("dvl-body");
+  if (!body) return;
+  body.innerHTML = "";
+  if (err || !_dvlSources.length) {
+    body.innerHTML = `<div class="stub-panel" style="min-height:60px">${esc(err || "No DV gateway logs found on this node.")}</div>`;
+    return;
+  }
+  let group = "";
+  _dvlSources.forEach((e, i) => {
+    if (e.group !== group) {
+      group = e.group;
+      const g = document.createElement("div");
+      g.className = "dvl-group";
+      g.textContent = group;
+      body.appendChild(g);
+    }
+    if (e.kind === "none") {
+      const n = document.createElement("div");
+      n.className = "dvl-note";
+      n.textContent = e.note || "no log";
+      body.appendChild(n);
+      return;
+    }
+    const sub = e.kind === "file"
+      ? `${_dvlSize(e.size || 0)} · ${e.mtime ? _dvlAge(e.mtime) : ""}${e.size ? "" : " · empty"}`
+      : (e.note || "systemd journal");
+    const row = document.createElement("div");
+    row.className = "dvl-row";
+    row.innerHTML =
+      `<div class="dvl-name" title="${esc(e.path || e.unit || "")}">${esc(e.label)}` +
+      `<div class="dvl-sub">${esc(sub)}</div></div>` +
+      `<button class="jl-btn" onclick="dvlOpen(${i})">▤ Open</button>` +
+      `<button class="jl-btn" onclick="dvlCopy(${i})">⎘ Copy</button>`;
+    body.appendChild(row);
+  });
+}
+
+function dvlOpen(i) {
+  const e = _dvlSources[i];
+  if (!e) return;
+  if (e.kind === "journal") openJournalPopup(e.unit);
+  else openLogPopup(e.id, e.label);
+}
+
+async function _dvlReadText(e) {
+  const d = await api(`/api/logs/read?id=${encodeURIComponent(e.id)}&lines=200`);
+  if (!d || !d.ok) throw new Error((d && d.message) || "Could not read the log");
+  const shown = d.text ? d.text.split("\n").length : 0;
+  const where = e.kind === "journal" ? `journal: ${e.unit} (local time)` : `${d.path || e.label} (UTC)`;
+  const of = d.total >= 0 ? ` of ${d.total.toLocaleString()}` : "";
+  return `== ${where} · last ${shown}${of} lines ==\n${d.text || ""}\n`;
+}
+
+function dvlCopy(i) {
+  const e = _dvlSources[i];
+  if (!e) return;
+  _copyFetched(_dvlReadText(e));
+}
+
+async function dvlAgentFetch() {
+  const btn = document.getElementById("dvl-agent-btn");
+  const d = await api("/api/logs/agent");
+  if (!d || !d.ok) { _dvlAgent = null; if (btn) btn.textContent = "⎘ Copy for agent"; return null; }
+  _dvlAgent = d.text || "";
+  _dvlAgentAt = Date.now();
+  if (btn) btn.textContent = `⎘ Copy for agent · ${_dvlSize(d.bytes || _dvlAgent.length)}`;
+  return _dvlAgent;
+}
+
+function dvlAgentCopy() {
+  if (_dvlAgent && Date.now() - _dvlAgentAt < 60000) {
+    _copyWithVerify(_dvlAgent);
+    return;
+  }
+  _copyFetched(dvlAgentFetch().then(t => {
+    if (!t) throw new Error("Could not build the log bundle");
+    return t;
+  }));
+}
+
+async function dvlAgentDownload() {
+  let text = _dvlAgent && Date.now() - _dvlAgentAt < 60000 ? _dvlAgent : await dvlAgentFetch();
+  if (!text) { toast("Could not build the log bundle", "err"); return; }
+  const stamp = new Date().toISOString().replace(/[:T]/g, "-").slice(0, 19);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {type: "text/plain"}));
+  a.download = `dv-gateway-logs-${stamp}.txt`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+}
 
 async function loadJournalList() {
   const d = await api("/api/journal/list");
@@ -6037,8 +6245,38 @@ function renderJournalList(services) {
   });
 }
 
+function _jpSvcButtons(show) {
+  ["jp-restart-btn", "jp-start-btn"].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.style.display = show ? "" : "none";
+  });
+}
+
+function _jpSetInfo(text) {
+  const el = document.getElementById("jp-info");
+  if (!el) return;
+  el.textContent = text || "";
+  el.hidden = !text;
+}
+
+async function openLogPopup(id, label) {
+  _jpUnit = "";
+  _jpFile = {id, label};
+  _jpSvcButtons(false);
+  _jpSetInfo("");
+  const title = document.getElementById("jp-title");
+  if (title) title.textContent = `▤ ${label} — Log`;
+  document.getElementById("jp-overlay").classList.add("open");
+  document.getElementById("jp-grep").value = "";
+  jpSetLinesUI(_jpLines);
+  await jpRefresh();
+}
+
 async function openJournalPopup(unit) {
   _jpUnit = unit;
+  _jpFile = null;
+  _jpSvcButtons(true);
+  _jpSetInfo("");
   const title = document.getElementById("jp-title");
   if (title) title.textContent = `▤ ${unit.replace(".service","")} — Journal`;
 
@@ -6053,6 +6291,7 @@ async function openJournalPopup(unit) {
 function closeJournalPopup() {
   document.getElementById("jp-overlay").classList.remove("open");
   _jpUnit = "";
+  _jpFile = null;
 }
 
 function jpOverlayClick(e) {
@@ -6065,6 +6304,7 @@ async function jpCopy() {
 }
 
 async function jpRefresh() {
+  if (_jpFile) return jpRefreshFile();
   if (!_jpUnit) return;
   const body = document.getElementById("jp-body");
   if (body) body.textContent = "Loading…";
@@ -6084,6 +6324,29 @@ async function jpRefresh() {
   }
 
   _jpRaw = d.output || "";
+  jpApplyGrep();
+}
+
+async function jpRefreshFile() {
+  const body = document.getElementById("jp-body");
+  if (body) body.textContent = "Loading…";
+  const want = _jpLines >= 2000 ? "all" : String(_jpLines);
+  const d = await api(`/api/logs/read?id=${encodeURIComponent(_jpFile.id)}&lines=${want}`);
+  if (!d || !d.ok) {
+    if (body) body.innerHTML =
+      `<span class="jp-err">${esc((d && d.message) || "Request failed")}</span>`;
+    _jpRaw = "";
+    _jpFilteredText = "";
+    _jpSetInfo("");
+    return;
+  }
+  _jpRaw = d.text || "";
+  const shown = _jpRaw ? _jpRaw.split("\n").length : 0;
+  const tz = d.tz === "UTC" ? "Times in UTC" : "Times in local time";
+  let info = `${tz} · ${d.path || d.label}`;
+  if (d.total >= 0) info += ` · showing ${shown.toLocaleString()} of ${d.total.toLocaleString()} lines`;
+  if (want === "all" && d.truncated) info += " · cut to the last 2 MB";
+  _jpSetInfo(info);
   jpApplyGrep();
 }
 
@@ -6278,7 +6541,28 @@ async function _copyWithVerify(src) {
     document.body.removeChild(tmp);
   }
   if (!wrote) { toast("Copy failed", "err"); return; }
+  await _clipVerify(src);
+}
 
+async function _copyFetched(textPromise) {
+  textPromise.catch(() => {});
+  if (window.ClipboardItem && navigator.clipboard && navigator.clipboard.write) {
+    try {
+      const blob = textPromise.then(t => new Blob([t], {type: "text/plain"}));
+      await navigator.clipboard.write([new ClipboardItem({"text/plain": blob})]);
+      await _clipVerify(await textPromise);
+      return;
+    } catch (e) {
+      try { await textPromise; } catch (e2) { toast(e2.message || "Copy failed", "err"); return; }
+    }
+  }
+  let text = "";
+  try { text = await textPromise; } catch (e) { toast(e.message || "Copy failed", "err"); return; }
+  if (!text) { toast("Nothing to copy", "err"); return; }
+  await _copyWithVerify(text);
+}
+
+async function _clipVerify(src) {
   try {
     const check = await navigator.clipboard.readText();
     if (check === src) {
@@ -6287,7 +6571,7 @@ async function _copyWithVerify(src) {
       await alertModal(
         `⚠ Clipboard copy may be incomplete (${check.length} of ${src.length} ` +
         `characters). This can happen on some mobile browsers with large ` +
-        `files — try again, or use a desktop browser if this persists.`
+        `files — try again, use a Download button where there is one, or a desktop browser.`
       );
     }
   } catch {
@@ -6368,6 +6652,7 @@ function pauseAllPolling() {
   stopTabPolling("services");
   stopTabPolling("sdcard");
   stopTabPolling("phone");
+  stopTabPolling("reg");
   console.info("[sysmon] All polling paused (navigating to dashboard)");
 }
 
@@ -6523,7 +6808,7 @@ async function loadNodeListen() {
   if (!d.installed) {
     _dvsmSetBadge("nodelisten-badge", "info", "NOT INSTALLED");
     document.getElementById("nodelisten-body").innerHTML =
-      `<div class="stub-panel" style="min-height:40px">Node Listen is not installed on this node.</div>`;
+      `<div class="stub-panel" style="min-height:40px">Node Talker is not installed on this node.</div>`;
     if (cl) cl.innerHTML = "";
     if (acts) acts.style.display = "none";
     return;
@@ -6551,21 +6836,21 @@ async function loadNodeListen() {
           : `<div class="stub-panel" style="min-height:30px">No one is connected.</div>`);
 }
 async function nodeListenRestart() {
-  if (!await confirm("Restart nodelisten? Everyone listening is dropped and their pages reconnect.")) return;
+  if (!await confirm("Restart Node Talker? Everyone listening is dropped and their pages reconnect.")) return;
   const d = await api("/api/nodelisten", "POST", {action: "restart"});
   if (!d || !d.ok) { toast(d?.message || "Restart failed", "err"); return; }
-  toast("nodelisten restarted", "ok");
+  toast("Node Talker restarted", "ok");
   setTimeout(loadNodeListen, 2500);
 }
 async function nodeListenDisconnect(ip) {
-  if (!await confirm(`Disconnect ${ip} from Node Listen? Their page tries again in 3 s if they are still listening.`)) return;
+  if (!await confirm(`Disconnect ${ip} from Node Talker? Their page tries again in 3 s if they are still listening.`)) return;
   const d = await api("/api/nodelisten", "POST", {action: "disconnect", ip});
   if (!d || !d.ok) { toast(d?.message || "Disconnect failed", "err"); loadNodeListen(); return; }
   toast(d.message || "Disconnected", "ok");
   setTimeout(loadNodeListen, 800);
 }
 async function nodeListenUnlink() {
-  if (!await confirm("Unlink node 1921 (push-to-talk) from the node? Node Listen links it again within 20 s while it runs.")) return;
+  if (!await confirm("Unlink node 1921 (push-to-talk) from the node? Node Talker links it again within 20 s while it runs.")) return;
   const d = await api("/api/nodelisten", "POST", {action: "unlink"});
   if (!d || !d.ok) { toast(d?.message || "Unlink failed", "err"); return; }
   toast(d.message || "Unlinked", "ok");
@@ -6573,7 +6858,7 @@ async function nodeListenUnlink() {
 }
 function nodeListenCopy(btn) {
   if (!_nodeListen) return;
-  const lines = [`Node Listen (port ${_nodeListen.port || "-"}): ${_nodeListen.badge}`];
+  const lines = [`Node Talker (port ${_nodeListen.port || "-"}): ${_nodeListen.badge}`];
   (_nodeListen.checks || []).forEach(c => {
     lines.push(`[${String(c.status || "").toUpperCase()}] ${c.enables}: ${c.key}`);
     if (c.fix) lines.push(`    -> ${c.fix}`);
@@ -6582,11 +6867,15 @@ function nodeListenCopy(btn) {
   dvsmCopy(btn, lines.join("\n"));
 }
 
+let _regRefreshTimer = null;
 const _REG_HTTP_IDS = {body: "reg-http-body", meta: "reg-http-meta", status: "reg-http-status"};
 const _REG_IAX_IDS  = {body: "reg-iax-body",  meta: "reg-iax-meta",  status: "reg-iax-status"};
 
 window.loadTab_reg = async function() {
   if (!_enabledTabSet.has("reg")) return;
+  if (!_regRefreshTimer) _regRefreshTimer = setInterval(() => {
+    if (document.visibilityState === "visible" && !_pausedByNavigation) loadTab_reg();
+  }, 15000);
   const [dHttp, dIax] = await Promise.all([api("/api/reg/http"), api("/api/reg/iax")]);
 
   if (!dHttp || !dHttp.ok) { _regShowUnreachable(_REG_HTTP_IDS); }
@@ -6595,6 +6884,38 @@ window.loadTab_reg = async function() {
   if (!dIax || !dIax.ok) { _regShowUnreachable(_REG_IAX_IDS); }
   else                   { renderRegChecks(dIax.checks, dIax.status, _REG_IAX_IDS); }
 };
+
+function regJump() {
+  if (!_enabledTabSet.has("reg")) return;
+  switchTab("reg", "120,180,255");
+}
+
+function renderRegHeader(sm) {
+  const el = document.getElementById("s-reg");
+  if (!el) return;
+  if (!sm) {
+    el.textContent = "…"; el.className = "sv";
+    el.title = "AllStarLink registration — not checked yet";
+    return;
+  }
+  const age = s => s < 60 ? s + "s" : s < 3600 ? Math.floor(s / 60) + "m" : Math.floor(s / 3600) + "h";
+  const map = {
+    ok:   ["REG",      "sv ok",   "Registered"],
+    wait: ["WAIT",     "sv warn", "Waiting for registration"],
+    fail: ["NOT REG",  "sv hot",  "Not registered"],
+    down: ["ASL DOWN", "sv hot",  "Asterisk isn't answering — ASL3 not running yet"],
+    none: ["—",        "sv",      "No HTTP registration configured (see the Reg tab)"],
+  };
+  const m = map[sm.state] || ["?", "sv", sm.state];
+  el.textContent = m[0] + (sm.state === "ok" || sm.state === "none" ? "" : " " + age(sm.age_s));
+  el.className   = m[1];
+  const lines = [m[2], `In this state since ${sm.since_text}`];
+  Object.keys(sm.nodes || {}).forEach(n => lines.push(`Node ${n}: ${sm.nodes[n]}` +
+    ((sm.perceived || {})[n] ? ` as ${sm.perceived[n]}` : "")));
+  if (sm.error) lines.push(sm.error);
+  lines.push(`Checked ${sm.checked_age_s}s ago`);
+  el.title = lines.join("\n");
+}
 let _phData = {};
 
 window.phCopyCard = async function(pfx) {
@@ -11507,6 +11828,13 @@ function renderSdHealth(d) {
     `<div class="stub-panel" style="min-height:60px">No SD card data</div>`;
 }
 
+async function dpStatusCopy() {
+  const out = document.getElementById("dpanel-output");
+  const text = out ? Array.from(out.children).map(d => d.textContent).join("\n").trim() : "";
+  if (!text || text === "Loading…") { toast("Nothing to copy", "err"); return; }
+  await _copyWithVerify(text);
+}
+
 async function sdKernelLogCopy() {
   const pre = document.getElementById("sd-kernel-log-pre");
   if (!pre || !pre.textContent) { toast("Nothing to copy", "err"); return; }
@@ -13825,6 +14153,7 @@ def _route_status(h: Handler) -> None:
         "needs_restart":  snap.get("needs_restart", False),
         "zello_installed": _zello_quick_installed(),
         "wifimon_shutdown": snap.get("wifimon_shutdown") or {"active": False},
+        "reg_summary":    _reg_summary_for_page(),
     })
 
 def _route_log(h: Handler) -> None:
@@ -17294,6 +17623,293 @@ def _route_journal_fetch(h: Handler) -> None:
         return
     h.send_json({"ok": True, "unit": unit, "lines": n, "output": output})
 
+_DVLOG_ROOT        = Path("/var/log")
+_DVLOG_IRCDDB_DIR  = Path("/var/log/ircddbgateway")
+_DVLOG_DAYS        = 7
+_DVLOG_READ_MAX    = 2_000_000
+_DVLOG_COUNT_MAX   = 20_000_000
+_DVLOG_AGENT_LINES = 50
+_DVLOG_DATED_RE    = re.compile(r"-(\d{4}-\d{2}-\d{2})\.log$")
+_DVLOG_ROOT_RE     = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+
+_DVLOG_INI_PROGRAMS = (
+    ("mmdvm", "MMDVM_Bridge", "mmdvm_bridge.service",
+     (Path("/opt/MMDVM_Bridge/MMDVM_Bridge.ini"), Path("/etc/MMDVM_Bridge/MMDVM_Bridge.ini"),
+      Path("/etc/dvswitch/MMDVM_Bridge.ini"))),
+    ("ysf", "YSFGateway", "ysfgateway.service",
+     (Path("/opt/YSFGateway/YSFGateway.ini"), Path("/etc/YSFGateway/YSFGateway.ini"),
+      Path("/etc/dvswitch/YSFGateway.ini"))),
+    ("p25", "P25Gateway", "p25gateway.service",
+     (Path("/opt/P25Gateway/P25Gateway.ini"), Path("/etc/P25Gateway/P25Gateway.ini"),
+      Path("/etc/dvswitch/P25Gateway.ini"))),
+    ("nxdn", "NXDNGateway", "nxdngateway.service",
+     (Path("/opt/NXDNGateway/NXDNGateway.ini"), Path("/etc/NXDNGateway/NXDNGateway.ini"),
+      Path("/etc/dvswitch/NXDNGateway.ini"))),
+    ("m17", "USRP2M17", "usrp2m17.service", tuple(_M17_INI_CANDIDATES)),
+)
+
+_DVLOG_JOURNAL_UNITS = (
+    ("analog_bridge.service",  "Analog_Bridge"),
+    ("stfu.service",           "STFU"),
+    ("netcheck.service",       "netcheck"),
+    ("ircddbgatewayd.service", "ircDDBGateway service"),
+)
+
+def _dvlog_under_root(path: Path) -> bool:
+    try:
+        real = Path(os.path.realpath(path))
+    except OSError:
+        return False
+    root = os.path.realpath(_DVLOG_ROOT)
+    return str(real).startswith(root + os.sep) and real.is_file()
+
+def _dvlog_file_entry(src_id: str, label: str, group: str, path: Path) -> "dict | None":
+    if not _dvlog_under_root(path):
+        return None
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return {"id": src_id, "kind": "file", "group": group, "label": label,
+            "path": str(path), "size": st.st_size, "mtime": int(st.st_mtime), "tz": "UTC"}
+
+def _dvlog_dated_files(folder: Path, root: str) -> "list[Path]":
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return []
+    dated = sorted((n for n in names
+                    if n.startswith(root + "-") and _DVLOG_DATED_RE.search(n)
+                    and len(n) == len(root) + 15), reverse=True)
+    out = [folder / n for n in dated[:_DVLOG_DAYS]]
+    if (root + ".log") in names:
+        out.append(folder / (root + ".log"))
+    return out
+
+def _dvlog_unit_installed(unit: str) -> bool:
+    for d in ("/etc/systemd/system", "/lib/systemd/system", "/usr/lib/systemd/system"):
+        if os.path.exists(os.path.join(d, unit)):
+            return True
+    return False
+
+def _dvlog_ini_log_settings(candidates) -> "dict | None":
+    for cand in candidates:
+        content, err = read_path_file(cand)
+        if err:
+            continue
+        sect = _dvs_parse_sections(content).get("LOG", {})
+        return {"ini": str(cand),
+                "file_level": sect.get("FileLevel", "").strip(),
+                "file_path":  sect.get("FilePath", "").strip(),
+                "file_root":  sect.get("FileRoot", "").strip()}
+    return None
+
+def dvlog_sources() -> "list[dict]":
+    out: "list[dict]" = []
+    if _DVLOG_IRCDDB_DIR.is_dir():
+        for p in _dvlog_dated_files(_DVLOG_IRCDDB_DIR, "ircDDBGateway"):
+            m = _DVLOG_DATED_RE.search(p.name)
+            sid = "ircddb:" + (m.group(1) if m else "plain")
+            e = _dvlog_file_entry(sid, p.name, "ircDDBGateway", p)
+            if e:
+                out.append(e)
+        for name in ("Headers", "Links", "STARnet"):
+            e = _dvlog_file_entry("ircddb:" + name, name + ".log", "ircDDBGateway",
+                                  _DVLOG_IRCDDB_DIR / (name + ".log"))
+            if e:
+                out.append(e)
+    for key, prog, unit, cands in _DVLOG_INI_PROGRAMS:
+        cfg = _dvlog_ini_log_settings(cands)
+        if cfg is None:
+            continue
+        files: "list[dict]" = []
+        root = cfg["file_root"] or prog
+        folder = cfg["file_path"]
+        if folder and _DVLOG_ROOT_RE.match(root):
+            for p in _dvlog_dated_files(Path(folder), root):
+                m = _DVLOG_DATED_RE.search(p.name)
+                e = _dvlog_file_entry(f"{key}:" + (m.group(1) if m else "plain"),
+                                      p.name, prog, p)
+                if e:
+                    files.append(e)
+        off = cfg["file_level"] == "0"
+        note = ""
+        if off:
+            note = "file logging off (FileLevel=0 in " + cfg["ini"] + ")"
+        elif not folder:
+            note = "no [Log] FilePath in " + cfg["ini"]
+        elif not files:
+            note = "no log files found in " + folder
+        out.extend(files)
+        if (off or not files) and _dvlog_unit_installed(unit):
+            out.append({"id": "journal:" + unit, "kind": "journal", "group": prog,
+                        "label": unit + " (journal)", "unit": unit, "tz": "local",
+                        "note": note})
+        elif note:
+            out.append({"id": "", "kind": "none", "group": prog, "label": prog,
+                        "note": note})
+    for unit, label in _DVLOG_JOURNAL_UNITS:
+        if _dvlog_unit_installed(unit):
+            out.append({"id": "journal:" + unit, "kind": "journal", "group": label,
+                        "label": unit + " (journal)", "unit": unit, "tz": "local"})
+    return out
+
+def _dvlog_find(src_id: str) -> "dict | None":
+    if not src_id or len(src_id) > 80:
+        return None
+    for e in dvlog_sources():
+        if e.get("id") == src_id:
+            return e
+    return None
+
+def _dvlog_tail(path: Path, lines: int, max_bytes: int = 0) -> "tuple[str, bool]":
+    max_bytes = max_bytes or _DVLOG_READ_MAX
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            want = (lines + 1) if lines > 0 else None
+            buf = b""
+            pos = size
+            while pos > 0 and len(buf) < max_bytes:
+                step = min(65536, pos, max_bytes - len(buf))
+                pos -= step
+                f.seek(pos)
+                buf = f.read(step) + buf
+                if want is not None and buf.count(b"\n") >= want:
+                    break
+    except OSError as e:
+        return f"[could not read {path}: {e}]", False
+    cut = pos > 0
+    text = buf.decode("utf-8", errors="replace")
+    rows = text.splitlines()
+    if cut and rows:
+        rows = rows[1:]
+    if lines > 0 and len(rows) > lines:
+        rows = rows[-lines:]
+        cut = True
+    return "\n".join(rows), cut
+
+def _dvlog_count_lines(path: Path) -> int:
+    try:
+        if path.stat().st_size > _DVLOG_COUNT_MAX:
+            return -1
+        n = 0
+        last = b"\n"
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(65536), b""):
+                n += chunk.count(b"\n")
+                last = chunk[-1:]
+        return n + (0 if last == b"\n" else 1)
+    except OSError:
+        return -1
+
+def dvlog_read(src_id: str, lines: int) -> dict:
+    e = _dvlog_find(src_id)
+    if e is None or e["kind"] == "none":
+        return {"ok": False, "message": "Unknown log"}
+    if e["kind"] == "journal":
+        n = 2000 if lines <= 0 else max(10, min(lines, 2000))
+        text, err = fetch_journal(e["unit"], n)
+        if err:
+            return {"ok": False, "message": f"Journal fetch failed: {err}"}
+        return {"ok": True, "id": src_id, "label": e["label"], "tz": e["tz"],
+                "text": text, "truncated": False, "total": -1}
+    text, cut = _dvlog_tail(Path(e["path"]), lines)
+    return {"ok": True, "id": src_id, "label": e["label"], "tz": e["tz"],
+            "path": e["path"], "text": text, "truncated": cut,
+            "total": _dvlog_count_lines(Path(e["path"]))}
+
+def _dvlog_boot_warnings(lines: int) -> "tuple[str, str]":
+    try:
+        r = subprocess.run(["journalctl", "-b", "-p", "warning", f"-n{lines}", "--no-pager"],
+                           capture_output=True, text=True, timeout=10)
+    except FileNotFoundError:
+        return "", "journalctl not found on this system"
+    except subprocess.TimeoutExpired:
+        return "", "journalctl timed out"
+    except Exception as e:
+        return "", f"journalctl failed: {e}"
+    if r.returncode != 0 and r.stderr.strip():
+        return "", r.stderr.strip()
+    return r.stdout.strip(), ""
+
+def dvlog_agent_bundle(lines: int = _DVLOG_AGENT_LINES) -> dict:
+    srcs = dvlog_sources()
+    picked: "list[dict]" = []
+    newest_seen: "set[str]" = set()
+    for e in srcs:
+        if e["kind"] == "file":
+            dated = bool(_DVLOG_DATED_RE.search(e["label"]))
+            if dated:
+                if e["group"] in newest_seen:
+                    continue
+                newest_seen.add(e["group"])
+            picked.append(e)
+        elif e["kind"] == "journal":
+            picked.append(e)
+    now = datetime.now()
+    parts = [f"== ASL-DVS DV gateway logs · {get_hostname()} · "
+             f"{now.strftime('%Y-%m-%d %H:%M:%S')} local · last {lines} lines of each =="]
+    empty: "list[str]" = []
+    blocks = 0
+    for e in picked:
+        if e["kind"] == "file":
+            if e.get("size", 0) == 0:
+                empty.append(e["label"])
+                continue
+            text, _cut = _dvlog_tail(Path(e["path"]), lines)
+            total = _dvlog_count_lines(Path(e["path"]))
+            shown = len(text.splitlines())
+            of = f"{total:,}" if total >= 0 else "many"
+            head = f"== {e['path']} (UTC) · last {shown} of {of} lines =="
+        else:
+            text, err = fetch_journal(e["unit"], lines)
+            if err:
+                text = f"[journal fetch failed: {err}]"
+            if not text.strip() or text.strip() == "-- No entries --":
+                empty.append(e["label"])
+                continue
+            head = f"== journal: {e['unit']} (local time) · last {lines} lines =="
+        parts.append("")
+        parts.append(head)
+        parts.append(text)
+        blocks += 1
+    text, err = _dvlog_boot_warnings(lines)
+    parts.append("")
+    parts.append(f"== journal: this boot, warnings and worse (local time) · last {lines} lines ==")
+    parts.append(text if not err else f"[journal fetch failed: {err}]")
+    blocks += 1
+    for e in srcs:
+        if e["kind"] == "none":
+            empty.append(f"{e['group']}: {e['note']}")
+    if empty:
+        parts.append("")
+        parts.append("== empty or not logging: " + "; ".join(empty) + " ==")
+    out = "\n".join(parts) + "\n"
+    return {"ok": True, "text": out, "bytes": len(out.encode("utf-8")), "blocks": blocks,
+            "lines": lines}
+
+def _route_logs_list(h: Handler) -> None:
+    h.send_json({"ok": True, "sources": dvlog_sources()})
+
+def _route_logs_read(h: Handler) -> None:
+    qs = parse_qs(urlparse(h.path).query)
+    src_id = qs.get("id", [""])[0].strip()
+    raw = qs.get("lines", ["200"])[0].strip().lower()
+    if raw == "all":
+        n = 0
+    else:
+        try:
+            n = max(10, min(int(raw), 100000))
+        except ValueError:
+            n = 200
+    d = dvlog_read(src_id, n)
+    h.send_json(d, 200 if d.get("ok") else 404)
+
+def _route_logs_agent(h: Handler) -> None:
+    h.send_json(dvlog_agent_bundle())
+
 def parse_rpt_conf(content: str) -> list:
 
     sections, node_sects = _rpt_scan(content)
@@ -18614,7 +19230,11 @@ _REG_LIVE_UNREG_NOTE = {
 
 def _reg_live_checks(entries: list, label: str) -> list:
     checks = []
-    reg_live = get_state_snapshot().get("reg_live")
+    snap = get_state_snapshot()
+    reg_live = snap.get("reg_live")
+    sm = snap.get("reg_summary")
+    for_txt = (f" (for {_reg_age_text(time.time() - sm['since'])})"
+               if sm and sm.get("state") != "ok" else "")
     if reg_live is None:
         checks.append({
             "title":  "Live registration state",
@@ -18627,7 +19247,7 @@ def _reg_live_checks(entries: list, label: str) -> list:
     if not reg_live.get("ok"):
         checks.append({
             "title":  "Live registration state",
-            "value":  reg_live.get("error") or "unavailable",
+            "value":  (reg_live.get("error") or "unavailable") + for_txt,
             "status": "warn",
             "note":   "Couldn't reach the Asterisk CLI — the checks above are config-only until this clears.",
             "url":    None,
@@ -18635,6 +19255,7 @@ def _reg_live_checks(entries: list, label: str) -> list:
         return checks
 
     live_nodes = reg_live.get("nodes", {})
+    perceived = reg_live.get("perceived", {})
     configured_nodes = {n for n, _ in entries}
     for nid in sorted(configured_nodes, key=str):
         live_state = live_nodes.get(nid, "not shown")
@@ -18644,10 +19265,19 @@ def _reg_live_checks(entries: list, label: str) -> list:
                 "value":  "registered", "status": "pass",
                 "note":   None, "url": None,
             })
+            if perceived.get(nid):
+                path = _reg_addr_path(perceived[nid])
+                checks.append({
+                    "title":  f"Registered as [{nid}]",
+                    "value":  perceived[nid], "status": "pass",
+                    "note":   ("The address and port the AllStarLink server sees this node at"
+                               + (f": {path}." if path else ".")),
+                    "url":    None,
+                })
         elif live_state == "unregistered":
             checks.append({
                 "title":  f"Live registration [{nid}]",
-                "value":  "not registered",
+                "value":  "not registered" + for_txt,
                 "status": "fail",
                 "note":   _REG_LIVE_UNREG_NOTE.get(label, _REG_LIVE_UNREG_NOTE["HTTP"]),
                 "url":    None,
@@ -18655,7 +19285,7 @@ def _reg_live_checks(entries: list, label: str) -> list:
         else:
             checks.append({
                 "title":  f"Live registration [{nid}]",
-                "value":  live_state,
+                "value":  live_state + for_txt,
                 "status": "warn",
                 "note":   ("Node is configured but didn't show up clearly in "
                            "`rpt show registrations` output — worth a manual look."),
@@ -18767,6 +19397,47 @@ def _route_reg_http_get(h: Handler) -> None:
 
 def _route_reg_iax_get(h: Handler) -> None:
     h.send_json(get_iax_reg_status())
+
+def _reg_age_text(sec: float) -> str:
+    sec = max(0, int(sec))
+    if sec < 60:
+        return f"{sec} s"
+    if sec < 3600:
+        return f"{sec // 60} min"
+    return f"{sec // 3600} h {sec % 3600 // 60:02d} min"
+
+def _reg_http_configured() -> bool:
+    content, err = read_asterisk_file("rpt_http_registrations.conf")
+    return not err and bool(_scan_register_lines(content)["entries"])
+
+def _reg_live_summary(rl: dict, prev: "dict | None") -> dict:
+    nodes = dict(rl.get("nodes") or {})
+    if not rl.get("ok"):
+        state = "down"
+    elif not nodes:
+        state = "wait" if _reg_http_configured() else "none"
+    elif "unregistered" in nodes.values():
+        state = "fail"
+    elif all(v == "registered" for v in nodes.values()):
+        state = "ok"
+    else:
+        state = "wait"
+    now = time.time()
+    since = prev["since"] if prev and prev.get("state") == state else now
+    return {"state": state, "since": since, "checked": now,
+            "nodes": nodes, "perceived": dict(rl.get("perceived") or {}), "error": rl.get("error")}
+
+def _reg_summary_for_page() -> "dict | None":
+    sm = get_state_snapshot().get("reg_summary")
+    if not sm:
+        return None
+    now = time.time()
+    out = dict(sm)
+    out["age_s"] = int(now - sm["since"])
+    out["checked_age_s"] = int(now - sm["checked"])
+    out["since_text"] = time.strftime("%H:%M", time.localtime(sm["since"]))
+    return out
+
 
 _PHONE_SECTIONS: list = []
 
@@ -24809,6 +25480,17 @@ def _route_m17_post(h: Handler, data: dict) -> None:
 _IRCDDB_CONF_PATH = Path("/etc/ircddbgateway")
 _IRCDDB_SERVICE   = "ircddbgatewayd.service"
 
+def _cmd_or_problem(argv: list, timeout: int = 8) -> "tuple[str, str]":
+    if not shutil.which(argv[0]):
+        return "", f"{argv[0]} is not installed on this Pi"
+    try:
+        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return "", f"{argv[0]} took longer than {timeout} s"
+    except OSError as exc:
+        return "", f"{argv[0]} could not run: {exc}"
+    return (r.stdout or "") + (("\n" + r.stderr) if r.stderr and not r.stdout else ""), ""
+
 def _ircddb_read_conf() -> "tuple[dict, str]":
     try:
         text = _IRCDDB_CONF_PATH.read_text(errors="replace")
@@ -24952,10 +25634,17 @@ def _route_dstar_gw_post(h: Handler, data: dict) -> None:
         return
     h.send_json({"ok": False, "message": f"unknown action '{action}'"}, 400)
 
-_NL_BIN       = Path("/usr/local/bin/nodelisten.py")
-_NL_CONF      = Path("/etc/asl_dvs/nodelisten.conf")
+_NL_BINS      = (Path("/usr/local/bin/nodetalker.py"), Path("/usr/local/bin/nodelisten.py"))
+_NL_CONFS     = (Path("/etc/asl_dvs/nodetalker.conf"), Path("/etc/asl_dvs/nodelisten.conf"))
 _NL_DASH_CONF = Path("/etc/asl_dvs/asl_dvs.conf")
-_NL_SERVICE   = "nodelisten.service"
+_NL_SERVICES  = ("nodetalker.service", "nodelisten.service")
+_NL_FEED_MARKS = ("nodelisten.py,--feed,", "nodetalker.py,--feed,")
+
+def _nl_conf_path() -> Path:
+    return next((p for p in _NL_CONFS if p.exists()), _NL_CONFS[0])
+
+def _nl_service() -> str:
+    return next((s for s in _NL_SERVICES if get_service_installed(s)), _NL_SERVICES[0])
 _NL_TX_NODE   = "1921"
 _NL_TX_SEND   = 32018
 _NL_TX_LISTEN = 34018
@@ -24964,31 +25653,22 @@ _NL_DEFAULTS  = {"port": 8993, "udp_port": 6200, "node": "", "https": True, "all
 _NL_TAILNET   = ipaddress.ip_network("100.64.0.0/10")
 _NL_IP_RE     = re.compile(r"^[0-9A-Fa-f:.]{2,45}$")
 
-def _cmd_or_problem(argv: list, timeout: int = 8) -> "tuple[str, str]":
-    if not shutil.which(argv[0]):
-        return "", f"{argv[0]} is not installed on this Pi"
-    try:
-        r = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return "", f"{argv[0]} took longer than {timeout} s"
-    except OSError as exc:
-        return "", f"{argv[0]} could not run: {exc}"
-    return (r.stdout or "") + (("\n" + r.stderr) if r.stderr and not r.stdout else ""), ""
-
 def _nl_bool(v: str) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 def _nl_read_conf() -> "tuple[dict, str]":
     cfg = dict(_NL_DEFAULTS)
-    if not _NL_CONF.exists():
+    conf = _nl_conf_path()
+    if not conf.exists():
         return cfg, "missing"
     cp = configparser.ConfigParser(interpolation=None)
     try:
-        cp.read(str(_NL_CONF))
+        cp.read(str(conf))
     except (configparser.Error, OSError) as exc:
         return cfg, f"can't read it: {exc}"
-    if cp.has_section("nodelisten"):
-        sec = cp["nodelisten"]
+    name = next((s for s in ("nodetalker", "nodelisten") if cp.has_section(s)), "")
+    if name:
+        sec = cp[name]
         for k in ("port", "udp_port", "max_listeners"):
             v = sec.get(k, "").strip()
             if v.isdigit():
@@ -25039,7 +25719,8 @@ def _nl_feeder_pids() -> list:
     for d in glob.glob("/proc/[0-9]*/cmdline"):
         try:
             with open(d, "rb") as fh:
-                if b"nodelisten.py\0--feed\0" in fh.read():
+                cmd = fh.read()
+                if b"nodelisten.py\0--feed\0" in cmd or b"nodetalker.py\0--feed\0" in cmd:
                     pids.append(int(d.split("/")[2]))
         except (OSError, ValueError):
             continue
@@ -25102,24 +25783,25 @@ def _nl_lstats(node: str) -> "tuple[bool, list]":
     return True, [ln.split()[0] for ln in out.splitlines() if ln.split() and ln.split()[0].isdigit()]
 
 def _nodelisten_checks() -> dict:
-    installed = _NL_BIN.exists() or get_service_installed(_NL_SERVICE)
+    nl_service = _nl_service()
+    installed = any(p.exists() for p in _NL_BINS) or get_service_installed(nl_service)
     if not installed:
         return {"ok": True, "installed": False, "status": "info", "badge": "NOT INSTALLED", "checks": [],
                 "clients": []}
     cfg, cprob = _nl_read_conf()
-    svc = get_service_state(_NL_SERVICE)
+    svc = get_service_state(nl_service)
     rows: list = []
 
     def row(key, enables, status, fix=None):
         rows.append({"key": key, "enables": enables, "status": status, "fix": fix})
 
-    row(f"{_NL_SERVICE}: {svc}", "Node Listen service running",
+    row(f"{nl_service}: {svc}", "Node Talker service running",
         "pass" if svc == "active" else "fail",
-        None if svc == "active" else "Press Restart nodelisten below")
+        None if svc == "active" else "Press Restart Node Talker below")
     if cprob == "missing":
-        row(str(_NL_CONF), "Settings file", "info", "Not written yet -- Node Listen uses its defaults")
+        row(str(_nl_conf_path()), "Settings file", "info", "Not written yet -- Node Talker uses its defaults")
     elif cprob:
-        row(str(_NL_CONF), "Settings file", "warn", f"{cprob} -- Node Listen uses its defaults")
+        row(str(_nl_conf_path()), "Settings file", "warn", f"{cprob} -- Node Talker uses its defaults")
 
     port, uport = cfg["port"], cfg["udp_port"]
     entries = _parse_ss_entries(_ss_tlnpu_fetch())
@@ -25129,8 +25811,8 @@ def _nodelisten_checks() -> dict:
 
     def who(e):
         cmd = _pid_cmdline(e["pid"])
-        if "nodelisten" in cmd:
-            return "nodelisten"
+        if "nodelisten" in cmd or "nodetalker" in cmd:
+            return "nodetalker"
         return e["process"] or "?"
 
     def port_row(proto, p, enables, want, want_addr=None, needed=True, fix=None):
@@ -25141,13 +25823,13 @@ def _nodelisten_checks() -> dict:
             return False
         if not hs:
             row(f"{label}: not listening", enables, "fail" if needed else "info",
-                (fix or "Restart nodelisten") if needed else None)
+                (fix or "Restart Node Talker") if needed else None)
             return False
         names = sorted({who(e) for e in hs})
         addrs = sorted({e["addr"] for e in hs})
         if want not in names:
             row(f"{label}: held by {', '.join(names)}", enables, "fail",
-                f"Port conflict -- stop {', '.join(names)} or change this port in Node Listen")
+                f"Port conflict -- stop {', '.join(names)} or change this port in Node Talker")
             return False
         if want_addr and not any(a in want_addr for a in addrs):
             row(f"{label}: {want} on {', '.join(addrs)}", enables, "warn",
@@ -25156,9 +25838,9 @@ def _nodelisten_checks() -> dict:
         row(f"{label}: {want} on {', '.join(addrs)}", enables, "pass")
         return True
 
-    web_up = port_row("tcp", port, "Web page and API", "nodelisten", ("0.0.0.0", "*", "[::]"))
-    port_row("udp", uport, "Node audio in (from the Asterisk feed)", "nodelisten", ("127.0.0.1",))
-    port_row("udp", _NL_TX_LISTEN, f"Push-to-talk audio back from node {_NL_TX_NODE}", "nodelisten",
+    web_up = port_row("tcp", port, "Web page and API", "nodetalker", ("0.0.0.0", "*", "[::]"))
+    port_row("udp", uport, "Node audio in (from the Asterisk feed)", "nodetalker", ("127.0.0.1",))
+    port_row("udp", _NL_TX_LISTEN, f"Push-to-talk audio back from node {_NL_TX_NODE}", "nodetalker",
              ("127.0.0.1",))
 
     scheme, version = "", ""
@@ -25170,13 +25852,13 @@ def _nodelisten_checks() -> dict:
                 "Web page answers", "pass")
             if cfg["https"] and scheme != "https":
                 row("HTTPS on, page served on plain HTTP", "HTTPS (needed for push-to-talk)", "warn",
-                    "Node Listen couldn't load its certificate -- see its log")
+                    "Node Talker couldn't load its certificate -- see its log")
             elif not cfg["https"]:
                 row("HTTPS off", "HTTPS (needed for push-to-talk)", "info",
                     "Listening works; push-to-talk needs HTTPS on")
         else:
             row(f"127.0.0.1:{port}/api/health: no answer", "Web page answers", "fail",
-                f"{info} -- restart nodelisten")
+                f"{info} -- restart Node Talker")
 
     main = _nl_main_node(cfg)
     rpt_text, rerr = read_path_file(_RPT_CONF)
@@ -25184,26 +25866,26 @@ def _nodelisten_checks() -> dict:
     if rerr:
         row(str(_RPT_CONF), "Node audio hook", "warn", f"Can't read it: {rerr}")
     elif not main:
-        row("node: (not set)", "Node Listen's node", "warn",
-            "Set the node on the Node Listen page (Send its audio here)")
+        row("node: (not set)", "Node Talker's node", "warn",
+            "Set the node on the Node Talker page (Send its audio here)")
     else:
         nodes = _rpt_scan_full(rpt_text)["nodes"]
         outs = nodes.get(main, {}).get("outstreamcmd", "").replace(" ", "")
-        if "nodelisten.py,--feed," in outs:
+        if any(m in outs for m in _NL_FEED_MARKS):
             hp = outs.rsplit(",", 1)[-1]
             if hp == str(uport):
-                row(f"[{main}] outstreamcmd -> nodelisten UDP {hp}", "Node audio hook in rpt.conf", "pass")
+                row(f"[{main}] outstreamcmd -> Node Talker UDP {hp}", "Node audio hook in rpt.conf", "pass")
             else:
                 row(f"[{main}] outstreamcmd -> UDP {hp}", "Node audio hook in rpt.conf", "fail",
-                    f"Hook sends to UDP {hp} but Node Listen listens on {uport} -- "
-                    f"turn Send its audio here off and on in Node Listen")
+                    f"Hook sends to UDP {hp} but Node Talker listens on {uport} -- "
+                    f"turn Send its audio here off and on in Node Talker")
         elif outs:
             row(f"[{main}] outstreamcmd is another program's", "Node audio hook in rpt.conf", "warn",
-                "Node Listen gets no audio while another outstreamcmd is set")
+                "Node Talker gets no audio while another outstreamcmd is set")
         else:
             row(f"[{main}] no outstreamcmd", "Node audio hook in rpt.conf", "warn",
-                "Turn on Send its audio here on the Node Listen page")
-        if "nodelisten.py,--feed," in outs:
+                "Turn on Send its audio here on the Node Talker page")
+        if any(m in outs for m in _NL_FEED_MARKS):
             fp = _nl_feeder_pids()
             ast = get_service_state("asterisk.service")
             row(f"Feeder: {len(fp)} running" if fp else "Feeder: not running", "Audio feed from Asterisk",
@@ -25223,12 +25905,12 @@ def _nodelisten_checks() -> dict:
                 up = _NL_TX_NODE in links
                 row(f"Node {_NL_TX_NODE} " + ("linked to" if up else "not linked to") + f" {main}",
                     "Push-to-talk link", "pass" if up else "warn",
-                    None if up else "Node Listen links it again within 20 s while it runs")
+                    None if up else "Node Talker links it again within 20 s while it runs")
             else:
                 row(f"rpt lstats {main}", "Push-to-talk link", "info", "Can't check: Asterisk did not answer")
         else:
             row(f"No [{_NL_TX_NODE}] stanza", "Transmit node (push-to-talk)", "info",
-                "Push-to-talk is off (turn it on in Node Listen)")
+                "Push-to-talk is off (turn it on in Node Talker)")
 
     clients, clprob = _nl_web_clients(port)
     if clprob:
@@ -25257,13 +25939,13 @@ def _route_nodelisten_post(h: Handler, data: dict) -> None:
     action = str(data.get("action", "")).strip().lower()
     if action == "restart":
         try:
-            r = subprocess.run(["systemctl", "restart", _NL_SERVICE],
+            r = subprocess.run(["systemctl", "restart", _nl_service()],
                                capture_output=True, text=True, timeout=30)
         except Exception as exc:
             h.send_json({"ok": False, "message": str(exc)}); return
         if r.returncode != 0:
             h.send_json({"ok": False, "message": (r.stderr or r.stdout or "restart failed").strip()}); return
-        h.send_json({"ok": True, "message": "nodelisten restarted"})
+        h.send_json({"ok": True, "message": "Node Talker restarted"})
         return
     if action == "disconnect":
         ip = _nl_clean_ip(data.get("ip", ""))
@@ -25289,7 +25971,7 @@ def _route_nodelisten_post(h: Handler, data: dict) -> None:
     if action == "unlink":
         main = _nl_main_node(_nl_read_conf()[0])
         if not main:
-            h.send_json({"ok": False, "message": "Node Listen's node is not set"}); return
+            h.send_json({"ok": False, "message": "Node Talker's node is not set"}); return
         lok, links = _nl_lstats(main)
         if lok and _NL_TX_NODE not in links:
             h.send_json({"ok": True, "message": f"Node {_NL_TX_NODE} is not linked"}); return
@@ -34389,6 +35071,9 @@ _GET_ROUTES = {
     "/api/firewall":           _route_firewall_get,
     "/api/journal/list":       _route_journal_list,
     "/api/journal/fetch":      _route_journal_fetch,
+    "/api/logs/list":          _route_logs_list,
+    "/api/logs/read":          _route_logs_read,
+    "/api/logs/agent":         _route_logs_agent,
     "/api/unit_file":          _route_unit_file_get,
     "/api/asterisk/files":     _route_asterisk_list,
     "/api/asterisk/file":      _route_asterisk_get,
@@ -34500,6 +35185,64 @@ _INSTALL_DIR   = "/usr/local/lib/asl_dvs/sysmon"
 _LEGACY_INSTALL_DIR = "/usr/local/lib/asl_dvs_sysmon"
 _INSTALL_LINK  = "/usr/local/bin/sysmon.py"
 _SERVICE_PATH  = "/etc/systemd/system/sysmon.service"
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+import os
+import runpy
+import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
+if name.isidentifier():
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
+'''
 _SERVICE_CONTENT = f"""[Unit]
 Description=ASL-DVS SYSMON
 After=network.target
@@ -34507,7 +35250,7 @@ After=network.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -34517,6 +35260,52 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 """
+
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _pyc_for(src: str) -> list:
+    name = os.path.splitext(os.path.basename(src))[0]
+    return _glob_pyc(os.path.dirname(src), name)
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 def firewall_backend():
     import shutil
@@ -34637,14 +35426,11 @@ def install_service() -> None:
             if name.startswith("sysmon") and name.endswith(".py") and os.path.isfile(old):
                 os.remove(old)
                 print(f"  [-] Removed the old copy {old}")
-        pycache = os.path.join(_LEGACY_INSTALL_DIR, "__pycache__")
-        if os.path.isdir(pycache):
-            for name in os.listdir(pycache):
-                if name.startswith("sysmon") and name.endswith(".pyc"):
-                    try:
-                        os.remove(os.path.join(pycache, name))
-                    except OSError:
-                        pass
+        for pyc in _glob_pyc(_LEGACY_INSTALL_DIR, "sysmon*"):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
         for d in (os.path.join(_LEGACY_INSTALL_DIR, "__pycache__"), _LEGACY_INSTALL_DIR):
             try:
                 os.rmdir(d)
@@ -34652,6 +35438,8 @@ def install_service() -> None:
                 pass
         if not os.path.exists(_LEGACY_INSTALL_DIR):
             print(f"  [-] Removed the old folder {_LEGACY_INSTALL_DIR}")
+    _write_launcher()
+    _prune_pyc(_INSTALL_DIR)
     try:
         put_back = _bootcfg_reapply_saved(service_present)
     except Exception as e:
@@ -34703,12 +35491,18 @@ def uninstall_service() -> None:
         if target and os.path.basename(target).startswith("sysmon_") and os.path.isfile(target):
             os.remove(target)
             print(f"  [-] Removed {target}")
+        for pyc in _pyc_for(target or _INSTALL_LINK):
+            try:
+                os.remove(pyc)
+            except FileNotFoundError:
+                pass
     for d in (os.path.join(_INSTALL_DIR, "__pycache__"), _INSTALL_DIR, os.path.dirname(_INSTALL_DIR),
               os.path.join(_LEGACY_INSTALL_DIR, "__pycache__"), _LEGACY_INSTALL_DIR):
         try:
             os.rmdir(d)
         except OSError:
             pass
+    _remove_launcher_if_unused()
 
     try:
         saved_for_update = _bootcfg_save_for_update()
