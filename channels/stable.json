@@ -20,13 +20,13 @@
    "version": "7.1"
   },
   "instmon": {
-   "blob": "5b6b6968752725e8566c827e997629ff7817a226",
-   "commit": "39689275aa30d0ae9b78a458d5119bfae96d9a73",
-   "file": "instmon_v2_73_0_20261021.py",
-   "landed": "2026-10-21T10:03:00Z",
-   "promoted": "2026-10-26T07:24:04Z",
-   "reason": "count",
-   "version": "2.73.0"
+   "blob": "98cbe3366883307e565b66c2adb185bba6557d3f",
+   "commit": "0520deba82393006ff6a9ac8745302c3fbb128a7",
+   "file": "instmon_v2_82_0_20261028.py",
+   "landed": "2026-10-28T07:14:38Z",
+   "promoted": "2026-10-28T07:14:38Z",
+   "reason": "hotfix",
+   "version": "2.82.0"
   },
   "nodecontrol": {
    "blob": "53748f45b70408e62d38643c087aa013556911f3",
@@ -54,6 +54,15 @@
    "promoted": "2026-10-26T08:27:23Z",
    "reason": "count",
    "version": "0.6.12"
+  },
+  "pibrary": {
+   "blob": "807d2191db213e46effc5d6bb3584a0693477f84",
+   "commit": "0520deba82393006ff6a9ac8745302c3fbb128a7",
+   "file": "pibrary_v0_14_0_20261028.py",
+   "landed": "2026-10-28T07:14:38Z",
+   "promoted": "2026-10-28T07:14:38Z",
+   "reason": "hotfix",
+   "version": "0.14.0"
   },
   "sysmon": {
    "blob": "576d464a8c1e02c2c4557b771b53d1c0e5446be7",
