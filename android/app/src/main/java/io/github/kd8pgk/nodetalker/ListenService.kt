@@ -573,6 +573,7 @@ class ListenService : Service() {
             .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
             .setWillPauseWhenDucked(false)
+            .setAcceptsDelayedFocusGain(true)
             .setOnAudioFocusChangeListener { change ->
                 focusLost = change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT
                 if (focusLost && talking) handler.post { unkey() }

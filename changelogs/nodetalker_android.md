@@ -1,6 +1,10 @@
 # Node Talker Mobile changelog
 
-Current version: `0.5.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.5.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.5.2 (2026-10-28)
+
+- **Listening resumes when another app lets go of the audio.** If another app (a Bluetooth app, navigation, a music app) held the audio when Listen started, or took it while listening, Node Talker stayed silent until you tapped Listen again. It now asks Android to wait for the audio and starts again on its own once the other app lets go.
 
 ## 0.5.1 (2026-10-28)
 
