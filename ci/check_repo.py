@@ -204,7 +204,7 @@ def check_shell(path):
         fail(f"{path}: bash -n:\n{r.stderr.strip()}")
 
 
-SHARED_LOOK_TOOLS = {"nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "instmon", "44helper", "wifimon"}
+SHARED_LOOK_TOOLS = {"nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "instmon", "44helper", "wifimon", "pibrary"}
 SHARED_LOOK_LINES = (
     '@font-face{font-family:"Readex Pro";',
     '--sans:"Readex Pro",Arial,Helvetica,sans-serif;',
@@ -212,6 +212,14 @@ SHARED_LOOK_LINES = (
     "--fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;",
     "--amber:#ffd040;--amber-dim:#6b4800;",
     "textarea,pre,code{font-family:var(--mono)!important}",
+    "#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}",
+    ".welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}",
+    ".welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}",
+    ".splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}",
+    ".splash-license a{color:var(--blue)}",
+    '<div class="welcome">Welcome to the <b>KD8PGK</b> ',
+    '<div class="splash-license">',
+    ' · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>',
 )
 
 

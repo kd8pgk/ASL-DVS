@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_99_20261027.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_100_20261028.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.100-pi02w (2026-10-28)
+
+- **The built-in font loads.** The page's Content-Security-Policy now allows the font built into the page (`font-src 'self' data:`). Without it the browser blocked Readex Pro and showed the fallback font, so the Node Control look was not applied. Nothing else changes.
 
 ## 9.3.99-pi02w (2026-10-27)
 

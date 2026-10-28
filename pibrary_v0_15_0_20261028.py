@@ -30,7 +30,7 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 
-VERSION = "0.14.0"
+VERSION = "0.15.0"
 DATE_STR = "2026-10-28"
 APP_NAME = "Pibrary"
 
@@ -153,7 +153,7 @@ def log_event(message, level="info"):
 
 DEFAULT_CONFIG = {
     "port": 9000,
-    "auth_enabled": False,
+    "auth_enabled": True,
     "library_root": "/srv/pibrary/media",
     "extra_roots": [],
     "max_streams": 3,
@@ -4784,7 +4784,7 @@ _CSS = r"""@font-face{font-family:"Readex Pro";font-style:normal;font-weight:400
   --green:#00ffb0; --green-dim:#005538;
   --red:#ff3d5a; --red-dim:#6b0e20;
   --blue:#22d4ff; --blue-dim:#083a58;
-  --text:#ffffff; --muted:#aab8cc;
+  --text:#ffffff; --text-bright:#f0f8ff; --muted:#aab8cc;
   --sans:"Readex Pro",Arial,Helvetica,sans-serif;
   --mono:ui-monospace,Menlo,Consolas,"DejaVu Sans Mono",monospace;
   --fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;
@@ -4794,7 +4794,7 @@ html[data-theme="light"]{
   --bg:#f3f5f9; --surface:#ffffff; --surface2:#e6ebf3; --border:#c3cddd; --border2:#a6b3c9;
   --amber:#8a5a00; --amber-dim:#ecd48f; --green:#007a55; --green-dim:#b4e5d2;
   --red:#b3122f; --red-dim:#f0b8c2; --blue:#0a6a8f; --blue-dim:#bde0ef;
-  --text:#14202e; --muted:#4a5a72; --inputbg:#ffffff; --logbg:#eef1f6; --popbg:#ffffff;
+  --text:#14202e; --text-bright:#14202e; --muted:#4a5a72; --inputbg:#ffffff; --logbg:#eef1f6; --popbg:#ffffff;
   --hdr1:#e3e9f3; --hdr2:#f3f6fb;
 }
 html[data-theme="light"] .logo{text-shadow:none}
@@ -4907,6 +4907,12 @@ audio{width:100%}
 #login-screen{display:none;position:fixed;inset:0;z-index:9999;align-items:center;
   justify-content:center;background:rgba(5,8,14,.88);backdrop-filter:blur(3px)}
 #login-screen.open{display:flex}
+#login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}
+.welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}
+.welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
+.splash-license{position:absolute;left:0;right:0;bottom:14px;text-align:center;font-size:var(--fs-xs);letter-spacing:.04em;color:var(--muted)}
+.splash-license a{color:var(--blue)}
+html[data-theme="light"] #login-screen{background:rgba(243,245,249,.92)}
 #login-card{background:var(--surface);border:1px solid var(--border2);border-radius:8px;
   padding:1.4rem 1.6rem;min-width:260px;max-width:90vw;box-shadow:0 8px 40px rgba(0,0,0,.8);
   text-align:center}
@@ -8492,8 +8498,10 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
   </div>
 </header>
 <div id="login-screen">
+  <div class="welcome">Welcome to the <b>KD8PGK</b> Pibrary</div>
+  <div class="splash-license">Pibrary · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
   <div id="login-card">
-    <h2>Pibrary Login</h2>
+    <h2>Pibrary</h2>
     <form onsubmit="_doLogin(event)">
       <input id="login-pw" type="password" autocomplete="current-password" placeholder="Password" required>
       <button id="login-btn" type="submit">Log In</button>
@@ -10155,6 +10163,10 @@ def uninstall_service():
 def run(port_override=None):
     global PORT, _BOOT_CFG_PORT
     load_config()
+    if _cfg["auth_enabled"] and not _auth_backend_available():
+        log_event("Login is on, but there is no Pibrary password and no usable root password to check against, so login stays off until one is set (Config entries 1 and 2).", "warn")
+        with _cfg_lock:
+            _cfg.update(auth_enabled=False, allow_write=False, allow_update=False, auto_import=False)
     _BOOT_CFG_PORT = _cfg["port"]
     PORT = port_override or _cfg["port"]
     log_event(f"Pibrary v{VERSION} starting on port {PORT}", "info")

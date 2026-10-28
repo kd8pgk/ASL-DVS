@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_222_20261027.py`. Newest entries first.
+Current file: `44helper_v0_0_223_20261028.py`. Newest entries first.
+
+## 0.0.223 (2026-10-28)
+
+- **The built-in font loads.** The page's Content-Security-Policy now allows the font built into the page (`font-src 'self' data:`). Without it the browser blocked Readex Pro and showed the fallback font, so the Node Control look was not applied. Nothing else changes.
 
 ## 0.0.222 (2026-10-27)
 

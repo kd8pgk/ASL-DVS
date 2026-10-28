@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.82.0"
+VERSION ="2.83.0"
 DATE_STR ="2026-10-27"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -11070,7 +11070,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         self .send_header ("X-Frame-Options","DENY")
         self .send_header (
         "Content-Security-Policy",
-        "default-src 'self'; frame-ancestors 'none'; "
+        "default-src 'self'; font-src 'self' data:; frame-ancestors 'none'; "
         "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
         )
 

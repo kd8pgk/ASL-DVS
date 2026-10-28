@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.40.0"
+APP_VERSION = "5.41.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -5523,7 +5523,7 @@ _SECURITY_HEADERS = (
     ("X-Content-Type-Options", "nosniff"),
     ("Referrer-Policy", "no-referrer"),
     ("Content-Security-Policy",
-     "default-src 'self'; script-src 'self' 'unsafe-inline'; "
+     "default-src 'self'; font-src 'self' data:; script-src 'self' 'unsafe-inline'; "
      "style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; "
      "frame-ancestors 'none'; base-uri 'none'; form-action 'self'"),
 )

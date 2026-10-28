@@ -18,7 +18,7 @@ By KD8PGK, written with Claude (Anthropic).
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
-| Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Optional password login. |
+| Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Password login, on by default. |
 
 Scripts:
 
@@ -43,8 +43,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_94_20261028.py` | `sysmon_pi02w_v6_13_82_20261028.py` | `instmon_v2_82_0_20261028.py` |
-| `VERSION` | `6.13.94` | `6.13.82-pi02w` | `2.82.0` |
+| File name | `sysmon_v6_13_94_20261028.py` | `sysmon_pi02w_v6_13_82_20261028.py` | `instmon_v2_83_0_20261028.py` |
+| `VERSION` | `6.13.94` | `6.13.82-pi02w` | `2.83.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py` and change
@@ -354,12 +354,13 @@ over a USB drive or the SD card, with resume positions, played markers, a restor
 trash, a duplicate finder, drive health and an optional import from a plugged-in
 drive. It is one stdlib-only file, `pibrary_v*.py`, and a common tool.
 
-- Install: `sudo python3 pibrary_v0_14_0_20261028.py --install`, or from instmon.
+- Install: `sudo python3 pibrary_v0_15_0_20261028.py --install`, or from instmon.
   It listens on port 9000 (the port in `/etc/pibrary/pibrary.conf`). Install opens
   the port in `ufw` or `firewalld` and uninstall closes it.
-- Login is off by default. Until a password is set and Require login is turned on in
-  Config, the page only reads: changes are ignored. It serves plain HTTP, so keep it
-  on a trusted network or VPN.
+- Login is on by default: sign in with the Pibrary password, or the node's root password
+  until one is set. If the node has neither, login stays off (the log says so) and the
+  page only reads until a password is set and Require login is turned on in Config.
+  It serves plain HTTP, so keep it on a trusted network or VPN.
 - Its settings and the library stay in `/etc/pibrary` and the library folder when it
   is uninstalled. It starts through the shared launcher (see below).
 - instmon has a card and a library group for it, and Quiet System pauses it with the
@@ -504,16 +505,16 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_94_20261027.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_99_20261027.py` | Dashboard, Pi Zero 2 W (current) |
+| `nodecontrol_v9_3_95_20261028.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_100_20261028.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_94_20261028.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_82_20261028.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_82_0_20261028.py` | common |
-| `wifimon_v5_40_0_20261027.py` | common |
-| `44helper_v0_0_222_20261027.py` | common |
+| `instmon_v2_83_0_20261028.py` | common |
+| `wifimon_v5_41_0_20261028.py` | common |
+| `44helper_v0_0_223_20261028.py` | common |
 | `nodetalker_v0_9_47_20261028.py` | common |
 | `amp_nodetalker_v0_3_3_20261028.py` | AMP nodes only (stands alone) |
-| `pibrary_v0_14_0_20261028.py` | common |
+| `pibrary_v0_15_0_20261028.py` | common |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |
