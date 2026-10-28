@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.46"
+VERSION = "0.9.47"
 DATE_STR = "2026-10-27"
 APP_NAME = "Node Talker"
 
@@ -1339,34 +1339,50 @@ def kerchunk_label(body):
     return {"ok": True, "message": "Saved."}
 
 
-ALLMON3_INI = os.environ.get("NODETALKER_ALLMON3", "/etc/allmon3/allmon3.ini")
+AMI_CONF = os.environ.get("NODETALKER_AMI_CONF", "/etc/asterisk/manager.conf")
+AMI_HOST = "127.0.0.1"
+AMI_PORT = 5038
 AMI_POLL_SEC = 0.25
 AMI_RETRY_SEC = 10.0
+AMI_IDLE_SEC = 20.0
+AMI_REPLY_SEC = 5.0
+AMI_MAX_BYTES = 1000000
 KERCHUNK_KEYED_MAX_SEC = 3.0
 
 
-def _ami_login_info(node):
-    cp = configparser.ConfigParser(interpolation=None, strict=False)
+class AmiRefused(Exception):
+    pass
+
+
+def ami_credentials(conf_path, user="", secret=""):
+    if user and secret:
+        return user, secret
     try:
-        with open(ALLMON3_INI, encoding="utf-8") as fh:
-            cp.read_file(fh)
-    except (OSError, configparser.Error) as exc:
-        return None, f"cannot read {ALLMON3_INI}: {exc}"
-    if not node or not cp.has_section(str(node)):
-        return None, f"no [{node}] stanza in {ALLMON3_INI}"
-    sec = cp[str(node)]
-    host = sec.get("host", "127.0.0.1").strip() or "127.0.0.1"
-    port = sec.get("port", "").strip()
-    if ":" in host and not port:
-        host, port = host.rsplit(":", 1)
-    user, pw = sec.get("user", "").strip(), sec.get("pass", "").strip()
-    if not user:
-        return None, f"no AMI user in [{node}] of {ALLMON3_INI}"
-    try:
-        port = int(port or 5038)
-    except ValueError:
-        return None, f"bad AMI port in [{node}] of {ALLMON3_INI}"
-    return {"host": host, "port": port, "user": user, "pass": pw}, ""
+        with open(conf_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return "", ""
+    name = ""
+    word = ""
+    section = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith((";", "#")):
+            continue
+        if line.startswith("[") and "]" in line:
+            if name and word and section.lower() != "general":
+                return name, word
+            section = line[1:line.index("]")].strip()
+            name = section
+            word = ""
+            continue
+        if "=" in line:
+            k, _, v = line.partition("=")
+            if k.strip().lower() == "secret":
+                word = v.strip()
+    if name and word and section.lower() != "general":
+        return name, word
+    return "", ""
 
 
 def _ami_msg(**fields):
@@ -1375,10 +1391,14 @@ def _ami_msg(**fields):
 
 def _ami_read(fh):
     lines = []
+    size = 0
     while True:
-        raw = fh.readline()
+        raw = fh.readline(65536)
         if not raw:
             raise OSError("AMI closed the connection")
+        size += len(raw)
+        if size > AMI_MAX_BYTES:
+            raise OSError("AMI sent too much without finishing a reply")
         ln = raw.decode("utf-8", "replace").rstrip("\r\n")
         if not ln:
             if lines:
@@ -1388,10 +1408,13 @@ def _ami_read(fh):
 
 
 def _ami_read_for(fh, action_id):
+    end = time.monotonic() + AMI_REPLY_SEC
     while True:
         lines = _ami_read(fh)
         if f"ActionID: {action_id}" in lines:
             return lines
+        if time.monotonic() > end:
+            raise OSError("AMI did not answer in time")
 
 
 def _ami_parse_keyed(lines):
@@ -1410,9 +1433,14 @@ def _ami_parse_keyed(lines):
 class KeyedWatch:
     def __init__(self):
         self.lock = threading.Lock()
+        self.wake_event = threading.Event()
+        self.wake_at = -1e9
         self.ok = False
         self.error = "not started"
+        self.refused = None
         self.keyed = False
+        self.fresh = False
+        self.partial = False
         self.who = ""
         self.key_at = 0.0
         self.unkey_at = -1e9
@@ -1424,6 +1452,13 @@ class KeyedWatch:
         with self.lock:
             return {"ok": self.ok, "error": "" if self.ok else self.error, "keyed": self.keyed,
                     "who": self.who if self.keyed else ""}
+
+    def wake(self, now):
+        self.wake_at = now
+        self.wake_event.set()
+
+    def _wanted(self, now):
+        return self.keyed or now - self.wake_at < AMI_IDLE_SEC
 
     def note_frame(self, db):
         if not (self.ok and self.keyed):
@@ -1437,13 +1472,17 @@ class KeyedWatch:
     def update(self, keyed, who, now):
         done = None
         with self.lock:
+            first, self.fresh = self.fresh, False
             if keyed and not self.keyed:
                 self.keyed, self.who, self.key_at = True, who, now
                 self.audio_frames, self.audio_peak = 0, -120.0
                 self.own = TALKER.keyed or TONE.running
+                self.partial = first
             elif not keyed and self.keyed:
                 self.keyed, self.unkey_at = False, now
-                done = (now - self.key_at, self.audio_frames * FRAME_SEC, self.audio_peak, self.who, self.own)
+                if not self.partial:
+                    done = (now - self.key_at, self.audio_frames * FRAME_SEC, self.audio_peak, self.who, self.own)
+                self.partial = False
         if done:
             self._finish(*done)
 
@@ -1456,20 +1495,24 @@ class KeyedWatch:
     def _down(self, error):
         with self.lock:
             was = self.ok
-            self.ok, self.error, self.keyed = False, error, False
+            self.ok, self.error, self.keyed, self.partial = False, error, False, False
         if was:
             log_event(f"Key-up state from Asterisk lost ({error}); kerchunks and busy use audio again", "warn")
 
-    def _session(self, info, node):
-        sock = socket.create_connection((info["host"], info["port"]), timeout=5)
+    def _session(self, node, user, secret):
+        sock = socket.create_connection((AMI_HOST, AMI_PORT), timeout=5)
         try:
             fh = sock.makefile("rb")
-            if not fh.readline().startswith(b"Asterisk Call Manager"):
+            if not fh.readline(256).startswith(b"Asterisk Call Manager"):
                 raise ValueError("that port is not the Asterisk manager")
-            sock.sendall(_ami_msg(Action="Login", Username=info["user"], Secret=info["pass"], Events="off",
-                                  ActionID="ntlogin"))
-            if "Response: Success" not in _ami_read_for(fh, "ntlogin"):
-                raise ValueError("the manager refused the login")
+            sock.sendall(_ami_msg(Action="Login", Username=user, Secret=secret, Events="off", ActionID="ntlogin"))
+            reply = _ami_read_for(fh, "ntlogin")
+            if "Response: Success" not in reply:
+                if "Response: Error" in reply:
+                    raise AmiRefused("Asterisk refused the AMI login")
+                raise ValueError("the manager gave no answer to the login")
+            with self.lock:
+                self.fresh = True
             n = 0
             while True:
                 n += 1
@@ -1485,26 +1528,37 @@ class KeyedWatch:
                     first = not self.ok
                     self.ok, self.error = True, ""
                 if first:
-                    log_event(f"Key-up state from Asterisk (AMI {info['host']}:{info['port']}): kerchunks and busy follow key-ups", "ok")
+                    log_event(f"Key-up state from Asterisk (AMI {AMI_HOST}:{AMI_PORT}): kerchunks and busy follow key-ups", "ok")
                 self.update(keyed, who, time.monotonic())
+                if not self._wanted(time.monotonic()):
+                    return
                 time.sleep(AMI_POLL_SEC)
         finally:
             sock.close()
 
     def loop(self):
         while True:
+            if self.ok and not self._wanted(time.monotonic()):
+                self.wake_event.clear()
+                if not self._wanted(time.monotonic()):
+                    self.wake_event.wait()
+                continue
             node = main_node()
-            info, err = _ami_login_info(node)
-            if info is None:
-                self._down(err)
+            user, secret = ami_credentials(AMI_CONF)
+            if not user or not secret:
+                self._down(f"no AMI login found in {AMI_CONF}")
+            elif self.refused == (user, secret):
+                self._down(f"Asterisk refused the AMI login for {user} in {AMI_CONF}")
             else:
                 try:
-                    self._session(info, node)
+                    self._session(node, user, secret)
                     continue
+                except AmiRefused as exc:
+                    self.refused = (user, secret)
+                    self._down(f"{exc} for {user} in {AMI_CONF}")
                 except (OSError, ValueError) as exc:
-                    self._down(f"AMI {info['host']}:{info['port']}: {exc}")
+                    self._down(f"AMI {AMI_HOST}:{AMI_PORT}: {exc}")
             time.sleep(AMI_RETRY_SEC)
-
 
 KEYED = KeyedWatch()
 
@@ -1606,6 +1660,7 @@ class Hub:
             self.level_db = db
             self.peak_db = max(db, self.peak_db - 1.0)
             if db > ACTIVE_DB:
+                KEYED.wake(now)
                 if now - self.burst_last > ACTIVE_HOLD_SEC:
                     self._close_burst()
                     self.burst_seq += 1
@@ -4607,6 +4662,7 @@ class Talker:
             return False, "not-ready"
         if st["linked"] is False:
             return False, "not-linked"
+        KEYED.wake(time.monotonic())
         if (_cfg_get("busy_lockout") and HUB.audio_active()
                 and time.monotonic() - self.last_unkey > TX_BUSY_GRACE_SEC):
             with self.lock:

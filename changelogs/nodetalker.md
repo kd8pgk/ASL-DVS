@@ -1,6 +1,15 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_46_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_47_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.47 (2026-10-28)
+
+Key-up polling now works the way Node Controller's does:
+
+- **The AMI login comes from `/etc/asterisk/manager.conf`.** Node Talker used the user and password in `/etc/allmon3/allmon3.ini`, so a node without Allmon3 had no key-up state. It now reads the first manager user that has a secret (not `[general]`), the same way Node Controller does, through `ami_credentials` in `shared/confio.py`. It connects only to `127.0.0.1:5038`; the host and port in `allmon3.ini` are no longer used, so the password can't be sent to another machine. `NODETALKER_ALLMON3` is replaced by `NODETALKER_AMI_CONF`.
+- **Polling runs on demand.** It checks the manager once at start, then closes the connection. It polls (4 times a second) while audio is heard or a transmit is tried, and for 20 seconds after, and while someone is keyed. A key-up that was already under way when polling began is not logged, because its start time is unknown.
+- **A refused login is not retried every 10 seconds.** Node Talker tries again only when the user or password in `manager.conf` changes.
+- **Replies are capped.** A reply over 1 MB, or no answer to an action within 5 seconds, drops the connection.
 
 ## 0.9.46 (2026-10-28)
 
