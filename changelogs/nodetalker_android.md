@@ -1,6 +1,11 @@
 # Node Talker Mobile changelog
 
-Current version: `0.5.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.5.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.5.1 (2026-10-28)
+
+- **Speaker or earpiece is set on the node page.** The choice moved from the app's Audio settings to the Setup card's Headset / audio output card, as "Sound through (app audio)". The app's Audio settings no longer have the Output choice. Changing it there restarts listening at once.
+- **The page can read the app's settings.** The app reports its output, receive buffer and microphone filter, so the Phone card shows them.
 
 ## 0.5.0 (2026-10-28)
 

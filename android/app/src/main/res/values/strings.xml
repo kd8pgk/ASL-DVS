@@ -41,9 +41,6 @@
     <string name="audio_mode_app">App audio: keeps playing with the screen locked</string>
     <string name="audio_mode_page">Page audio: as in a browser; stops when the screen goes off or you switch apps (use it only if app audio sounds bad)</string>
     <string name="rx_buffer">Receive buffer: %1$d ms (raise it if audio breaks up)</string>
-    <string name="output">Output</string>
-    <string name="output_speaker">Speaker / media volume (louder: keep the phone\'s media volume up)</string>
-    <string name="output_earpiece">Earpiece / call volume (quieter: the phone\'s call volume sets it)</string>
     <string name="boost">Extra loudness</string>
     <string name="boost_text">Extra loudness: %1$d dB (0 = off). The page\'s volume slider above 100 %% adds more, up to 18 dB in all.</string>
     <string name="audio_saved">Saved. Reopen the node page to switch the audio mode.</string>
