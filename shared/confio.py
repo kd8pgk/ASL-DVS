@@ -1,15 +1,15 @@
 USED_BY = {
     "atomic_write": ("nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "nodetalker",
-                     "amp_nodetalker", "44helper", "wifimon", "confputter"),
+                     "amp_nodetalker", "44helper", "wifimon", "confputter", "pibrary"),
     "ami_credentials": ("nodetalker",),
     "http_get": ("44helper",),
     "fill_secrets": ("44helper", "confputter"),
     "firewall_backend": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
-                         "nodetalker", "amp_nodetalker"),
+                         "nodetalker", "amp_nodetalker", "pibrary"),
     "open_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
-                           "nodetalker", "amp_nodetalker"),
+                           "nodetalker", "amp_nodetalker", "pibrary"),
     "close_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
-                            "nodetalker", "amp_nodetalker"),
+                            "nodetalker", "amp_nodetalker", "pibrary"),
 }
 
 

@@ -18,6 +18,7 @@ By KD8PGK, written with Claude (Anthropic).
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
+| Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Optional password login. |
 
 Scripts:
 
@@ -42,8 +43,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_94_20261028.py` | `sysmon_pi02w_v6_13_82_20261028.py` | `instmon_v2_81_0_20261027.py` |
-| `VERSION` | `6.13.94` | `6.13.82-pi02w` | `2.81.0` |
+| File name | `sysmon_v6_13_94_20261028.py` | `sysmon_pi02w_v6_13_82_20261028.py` | `instmon_v2_82_0_20261028.py` |
+| `VERSION` | `6.13.94` | `6.13.82-pi02w` | `2.82.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py` and change
@@ -346,6 +347,24 @@ check it on the Pi with:
 The source is in `android/`; the changelog is
 [`nodetalker_android.md`](changelogs/nodetalker_android.md).
 
+## Pibrary
+
+Pibrary is a media library dashboard for a Pi Zero 2 W: Movies, Audio and PDF tabs
+over a USB drive or the SD card, with resume positions, played markers, a restorable
+trash, a duplicate finder, drive health and an optional import from a plugged-in
+drive. It is one stdlib-only file, `pibrary_v*.py`, and a common tool.
+
+- Install: `sudo python3 pibrary_v0_14_0_20261028.py --install`, or from instmon.
+  It listens on port 9000 (the port in `/etc/pibrary/pibrary.conf`). Install opens
+  the port in `ufw` or `firewalld` and uninstall closes it.
+- Login is off by default. Until a password is set and Require login is turned on in
+  Config, the page only reads: changes are ignored. It serves plain HTTP, so keep it
+  on a trusted network or VPN.
+- Its settings and the library stay in `/etc/pibrary` and the library folder when it
+  is uninstalled. It starts through the shared launcher (see below).
+- instmon has a card and a library group for it, and Quiet System pauses it with the
+  other web tools. The changelog is `changelogs/pibrary.md`.
+
 ## Updating from GitHub (instmon)
 
 The **GitHub Updates** card in instmon reads this repo's file list directly.
@@ -370,7 +389,7 @@ The **GitHub Updates** card in instmon reads this repo's file list directly.
   5. Ends with a summary.
 
   New install scripts only go to the Scripts library. Full Update never runs them.
-- **Quiet System / Restore:** pauses SysMon, the Dashboard, 44helper and the Watchdog timer before a big upload or install on a small Pi.
+- **Quiet System / Restore:** pauses SysMon, the Dashboard, 44helper, Node Talker, Pibrary and any leftover Watchdog timer before a big upload or install on a small Pi.
   - Asterisk, the bridges, Allmon3, SSH and wifimon keep running.
   - Everything comes back automatically after 30 minutes.
 
@@ -461,7 +480,7 @@ To turn a saver off for every tool, create its file and restart the services:
 
 ```
 sudo touch /etc/asl_dvs/launch_no_arena_cap
-sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper
+sudo systemctl restart sysmon nodecontrol instmon wifimon 44helper pibrary
 ```
 
 Delete the file and restart to turn it back on. With `-OO`, the first start
@@ -489,11 +508,12 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_99_20261027.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_94_20261028.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_82_20261028.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_81_0_20261027.py` | common |
+| `instmon_v2_82_0_20261028.py` | common |
 | `wifimon_v5_40_0_20261027.py` | common |
 | `44helper_v0_0_222_20261027.py` | common |
 | `nodetalker_v0_9_47_20261028.py` | common |
 | `amp_nodetalker_v0_3_3_20261028.py` | AMP nodes only (stands alone) |
+| `pibrary_v0_14_0_20261028.py` | common |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |
