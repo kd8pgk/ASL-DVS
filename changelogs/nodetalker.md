@@ -2,18 +2,14 @@
 
 Current file: `nodetalker_v0_9_47_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
-## 0.9.47.2 (2026-10-28)
-
-- **Header tidy-up.** The "Node control · web" line under the title is gone. The title and the header buttons are 10% smaller.
-- **Phone header wraps.** When the name, Node Controller and Log Out don't fit on one line, Log Out sits under the Node Controller button; both are right-justified.
-- **No "Favorite" label** above the favorites list on the Connect card. The list keeps its name for screen readers.
-
 ## 0.9.47.1 (2026-10-28)
 
 - **Node Controller look.** The page uses the Node Controller colours (dark blue-black background, `#161e2e` cards, `#2e4060` borders, green accent) and Readex Pro, embedded in the page like Node Controller does, so it works on a node with no internet. The tab bar marks the active tab with a green top line. Cards have slightly tighter corners. Layout and behaviour are unchanged.
 - **Connect and Disconnect buttons** are outlined, as on Node Controller: Connect in the accent green, Disconnect in red.
-- The header is the Node Controller title bar: a dark gradient with an amber underline and the name in amber capitals with a glow. Tabs are Node Controller-style boxes with uppercase labels; the active tab is outlined in cyan.
+- The header is the Node Controller title bar: a dark gradient with an amber underline and the name in amber capitals with a glow. The title and the header buttons are 10% smaller than first drafted. Tabs are Node Controller-style boxes with uppercase labels; the active tab is outlined in cyan.
 - The browser's theme colour matches the new header colour.
+- The Connect card no longer shows the word "Favorite" above the favorites list; the list keeps its name for screen readers.
+- On a phone, when the name, Node Controller and Log Out don't fit on one line, Log Out sits under the Node Controller button; both are right-justified.
 
 ## 0.9.47 (2026-10-28)
 
