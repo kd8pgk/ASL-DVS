@@ -1,6 +1,10 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_45_20261027.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_46_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.46 (2026-10-28)
+
+- **The page opens on the Connect tab.** Each time Node Talker starts or the page is loaded again, it opens on Connect instead of the tab that was last open. The last tab is no longer remembered.
 
 ## 0.9.45 (2026-10-27)
 

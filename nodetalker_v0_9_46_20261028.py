@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.45"
+VERSION = "0.9.46"
 DATE_STR = "2026-10-27"
 APP_NAME = "Node Talker"
 
@@ -6111,7 +6111,6 @@ function showTab(name) {
     const b = $('nav-' + t);
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  try { localStorage.setItem('nlTab', name); } catch (e) {}
   if (name === 'connect') loadFavs();
   if (name === 'setup') { loadNode(); loadTx(); loadConfig(); loadFavEditor(); loadDigital(); micSummary(); playSummary(); if (chkShown && !chk) chkShow(chkShown); tonePoll(); }
   if (name === 'listen') openTalk();
@@ -6133,9 +6132,7 @@ function render() {
   $('logout').classList.toggle('hidden', !authed);
   $('ptt-card').classList.toggle('hidden', !authed);
   if (!anyView) { TABS.forEach((t) => $('tab-' + t).classList.add('hidden')); return; }
-  let want = 'listen';
-  try { want = localStorage.getItem('nlTab') || 'listen'; } catch (e) {}
-  showTab(authed ? want : 'listen');
+  showTab(authed ? 'connect' : 'listen');
 }
 
 function openNamedTab(url, name) {

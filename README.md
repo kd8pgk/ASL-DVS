@@ -135,7 +135,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_9_45_20261027.py --install
+  sudo python3 nodetalker_v0_9_46_20261028.py --install
   ```
 
 Then:
@@ -273,7 +273,7 @@ Talker for a node that runs the
   or use it.
 
 ```
-sudo python3 amp_nodetalker_v0_3_2_20261027.py --install
+sudo python3 amp_nodetalker_v0_3_3_20261028.py --install
 ```
 
 1. Open `http://<pi-address>:8993`. It moves you to `https://`.
@@ -492,8 +492,8 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `instmon_v2_81_0_20261027.py` | common |
 | `wifimon_v5_40_0_20261027.py` | common |
 | `44helper_v0_0_222_20261027.py` | common |
-| `nodetalker_v0_9_45_20261027.py` | common |
-| `amp_nodetalker_v0_3_2_20261027.py` | AMP nodes only (stands alone) |
+| `nodetalker_v0_9_46_20261028.py` | common |
+| `amp_nodetalker_v0_3_3_20261028.py` | AMP nodes only (stands alone) |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |
