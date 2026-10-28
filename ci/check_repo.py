@@ -225,9 +225,10 @@ def check_shared_look(path, text):
 SHARED_FILE = "shared/confio.py"
 
 
-def top_functions(text):
+def top_functions(text, names=None):
     tree = ast.parse(text)
-    return {n.name: ast.get_source_segment(text, n) for n in tree.body if isinstance(n, ast.FunctionDef)}
+    return {n.name: ast.get_source_segment(text, n) for n in tree.body
+            if isinstance(n, ast.FunctionDef) and (names is None or n.name in names)}
 
 
 def check_shared_code(rev, head_tools):
@@ -242,17 +243,27 @@ def check_shared_code(rev, head_tools):
     except (SyntaxError, StopIteration, ValueError) as e:
         fail(f"{SHARED_FILE}: cannot read USED_BY and its functions ({e})")
         return
+    shared = set(used_by)
+    found = {}
+
+    def tool_functions(path):
+        if path not in found:
+            try:
+                found[path] = top_functions(show(rev, path) or "", shared)
+            except SyntaxError:
+                found[path] = None
+        return found[path]
+
     for name, stems in used_by.items():
         if name not in funcs:
             fail(f"{SHARED_FILE}: USED_BY names {name}, but the file does not define it")
             continue
         for stem in stems:
             for path in head_tools.get(stem, []):
-                text = show(rev, path) or ""
-                try:
-                    got = top_functions(text).get(name)
-                except SyntaxError:
+                have = tool_functions(path)
+                if have is None:
                     continue
+                got = have.get(name)
                 if got is None:
                     fail(f"{path}: must carry {name} from {SHARED_FILE}")
                 elif got != funcs[name]:
