@@ -13,6 +13,8 @@ object Bluetooth {
     data class Change(val connected: Boolean, val name: String, val at: Long)
 
     @Volatile var last: Change? = null
+    @Volatile private var resumePending = false
+    @Volatile private var app: Context? = null
     val listeners = CopyOnWriteArrayList<() -> Unit>()
 
     private val callback = object : AudioDeviceCallback() {
@@ -21,13 +23,38 @@ object Bluetooth {
     }
 
     fun watch(c: Context) {
+        app = c.applicationContext
         c.getSystemService(AudioManager::class.java).registerAudioDeviceCallback(callback, null)
     }
 
     private fun changed(devices: Array<out AudioDeviceInfo>, connected: Boolean) {
         val bt = devices.firstOrNull { it.isSink && isBluetooth(it.type) } ?: return
         last = Change(connected, bt.productName?.toString().orEmpty(), System.currentTimeMillis())
+        app?.let { if (connected) onConnect(it) else onDisconnect(it) }
         listeners.forEach { it() }
+    }
+
+    private fun onConnect(c: Context) {
+        val s = NodeStore.bluetooth(c)
+        val start = s.autoStart || (s.resume && resumePending)
+        resumePending = false
+        if (!start || Listen.state != Listen.OFF) return
+        val n = NodeStore.get(c, NodeStore.lastNode(c)) ?: return
+        try {
+            Listen.start(c, n)
+        } catch (e: IllegalStateException) {
+            return
+        } catch (e: SecurityException) {
+            return
+        }
+    }
+
+    private fun onDisconnect(c: Context) {
+        if (outputs(c).isNotEmpty()) return
+        val s = NodeStore.bluetooth(c)
+        if (!s.autoStop || Listen.state == Listen.OFF) return
+        resumePending = s.resume
+        Listen.stop(c)
     }
 
     fun isBluetooth(type: Int): Boolean =

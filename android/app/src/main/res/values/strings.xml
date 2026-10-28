@@ -67,8 +67,11 @@
     <string name="bt_media">Media volume: %1$d of %2$d</string>
     <string name="bt_call">Call volume: %1$d of %2$d</string>
     <string name="bt_buttons">Headset buttons: ignored while Listen or Talk runs</string>
-    <string name="close">Close</string>
-    <string name="channel_listen">Listening</string>
+    <string name="bt_settings_title">When a Bluetooth device connects or leaves</string>
+    <string name="bt_auto_start">Start Listen when a Bluetooth device connects</string>
+    <string name="bt_auto_stop">Stop Listen when the Bluetooth device disconnects</string>
+    <string name="bt_resume">Start Listen again when the device returns, if a disconnect stopped it</string>
+    <string name="bt_settings_note">These work while the app is open or Listen is running. Android may refuse to start Listen from the background; if it does, tap Listen on the node page.</string>    <string name="channel_listen">Listening</string>
     <string name="notif_connecting">Connecting…</string>
     <string name="notif_playing">Listening</string>
     <string name="notif_paused">Paused for a call</string>

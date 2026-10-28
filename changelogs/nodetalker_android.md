@@ -1,6 +1,15 @@
 # Node Talker Mobile changelog
 
-Current version: `0.6.0`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.1 (2026-10-28)
+
+- **Bluetooth settings on the Bluetooth card.** Three settings, all off by default, so nothing changes until you turn one on:
+  - **Start Listen when a Bluetooth device connects.** Starts Listen on the node you used last.
+  - **Stop Listen when the Bluetooth device disconnects.** Listen stops when no Bluetooth output is left.
+  - **Start Listen again when the device returns, if a disconnect stopped it.** Only available with the stop setting on.
+
+  These work while the app is open or Listen runs. Android may refuse to start Listen from the background; if it does, tap Listen on the node page. The settings need no Bluetooth permission.
 
 ## 0.6.0 (2026-10-28)
 

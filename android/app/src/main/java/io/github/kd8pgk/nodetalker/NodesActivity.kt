@@ -228,10 +228,22 @@ class NodesActivity : Activity() {
         val v = LayoutInflater.from(this).inflate(R.layout.dialog_bluetooth, null)
         val update = { bindBluetooth(v) }
         bindBluetooth(v)
+        val start = v.findViewById<CheckBox>(R.id.bt_auto_start)
+        val stop = v.findViewById<CheckBox>(R.id.bt_auto_stop)
+        val resume = v.findViewById<CheckBox>(R.id.bt_resume)
+        val b = NodeStore.bluetooth(this)
+        start.isChecked = b.autoStart
+        stop.isChecked = b.autoStop
+        resume.isChecked = b.resume
+        resume.isEnabled = stop.isChecked
+        stop.setOnCheckedChangeListener { _, on -> resume.isEnabled = on }
         AlertDialog.Builder(this)
             .setTitle(R.string.bluetooth_title)
             .setView(v)
-            .setPositiveButton(R.string.close, null)
+            .setPositiveButton(R.string.save) { _, _ ->
+                NodeStore.setBluetooth(this, BluetoothSettings(start.isChecked, stop.isChecked, stop.isChecked && resume.isChecked))
+            }
+            .setNegativeButton(R.string.cancel, null)
             .setOnDismissListener { Bluetooth.listeners.remove(update) }
             .show()
         Bluetooth.listeners.add(update)
