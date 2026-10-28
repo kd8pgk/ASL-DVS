@@ -57,6 +57,7 @@ object Listen {
     fun changed() = listeners.forEach { it() }
 
     fun start(c: Context, node: Node) {
+        NodeStore.setLastNode(c, node.id)
         val i = Intent(c, ListenService::class.java).setAction(ListenService.ACTION_START).putExtra(ListenService.EXTRA_NODE, node.id)
         c.startForegroundService(i)
     }

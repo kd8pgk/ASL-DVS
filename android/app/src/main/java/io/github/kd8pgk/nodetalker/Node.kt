@@ -80,6 +80,8 @@ data class AudioSettings(val mode: String, val bufferMs: Int, val earpiece: Bool
     }
 }
 
+data class BluetoothSettings(val autoStart: Boolean = false, val autoStop: Boolean = false, val resume: Boolean = false)
+
 object NodeStore {
     private const val PREFS = "nodetalker"
     private const val KEY_NODES = "nodes"
@@ -89,6 +91,10 @@ object NodeStore {
     private const val KEY_EARPIECE = "earpiece"
     private const val KEY_VOICE_MIC = "voice_mic"
     private const val KEY_BOOST = "boost_db"
+    private const val KEY_BT_START = "bt_auto_start"
+    private const val KEY_BT_STOP = "bt_auto_stop"
+    private const val KEY_BT_RESUME = "bt_resume"
+    private const val KEY_LAST_NODE = "last_node"
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -134,6 +140,17 @@ object NodeStore {
     fun setAudio(c: Context, a: AudioSettings) = prefs(c).edit()
         .putString(KEY_MODE, a.mode).putInt(KEY_BUFFER, a.bufferMs).putBoolean(KEY_EARPIECE, a.earpiece)
         .putBoolean(KEY_VOICE_MIC, a.voiceMic).putInt(KEY_BOOST, a.boostDb).apply()
+
+    fun bluetooth(c: Context) = prefs(c).let {
+        BluetoothSettings(it.getBoolean(KEY_BT_START, false), it.getBoolean(KEY_BT_STOP, false), it.getBoolean(KEY_BT_RESUME, false))
+    }
+
+    fun setBluetooth(c: Context, b: BluetoothSettings) = prefs(c).edit()
+        .putBoolean(KEY_BT_START, b.autoStart).putBoolean(KEY_BT_STOP, b.autoStop).putBoolean(KEY_BT_RESUME, b.resume).apply()
+
+    fun lastNode(c: Context): String? = prefs(c).getString(KEY_LAST_NODE, null)
+
+    fun setLastNode(c: Context, id: String) = prefs(c).edit().putString(KEY_LAST_NODE, id).apply()
 
     fun setKeepScreenOn(c: Context, on: Boolean) = prefs(c).edit().putBoolean(KEY_KEEP_ON, on).apply()
 }

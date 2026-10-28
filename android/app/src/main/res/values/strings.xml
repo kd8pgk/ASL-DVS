@@ -44,7 +44,34 @@
     <string name="boost">Extra loudness</string>
     <string name="boost_text">Extra loudness: %1$d dB (0 = off). The page\'s volume slider above 100 %% adds more, up to 18 dB in all.</string>
     <string name="audio_saved">Saved. Reopen the node page to switch the audio mode.</string>
-    <string name="channel_listen">Listening</string>
+    <string name="bluetooth_button">Bluetooth</string>
+    <string name="bluetooth_title">Bluetooth audio</string>
+    <string name="bluetooth_note">Read from Android while the app is open. Nothing here needs a Bluetooth permission.</string>
+    <string name="bt_none">none connected</string>
+    <string name="bt_device">Device: %1$s</string>
+    <string name="bt_profile">Profile: %1$s</string>
+    <string name="bt_profile_sco">call headset (SCO)</string>
+    <string name="bt_profile_a2dp">music (A2DP)</string>
+    <string name="bt_profile_other">other Bluetooth audio</string>
+    <string name="bt_mic">Bluetooth microphone: %1$s</string>
+    <string name="bt_yes">available</string>
+    <string name="bt_no">not connected</string>
+    <string name="bt_route">Output Node Talker uses: %1$s</string>
+    <string name="bt_route_bt">Bluetooth</string>
+    <string name="bt_route_wired">wired headset</string>
+    <string name="bt_route_earpiece">earpiece</string>
+    <string name="bt_route_speaker">phone speaker</string>
+    <string name="bt_last_none">No connection change since the app opened.</string>
+    <string name="bt_last_connected">Last change: %1$s connected at %2$s</string>
+    <string name="bt_last_disconnected">Last change: %1$s disconnected at %2$s</string>
+    <string name="bt_media">Media volume: %1$d of %2$d</string>
+    <string name="bt_call">Call volume: %1$d of %2$d</string>
+    <string name="bt_buttons">Headset buttons: ignored while Listen or Talk runs</string>
+    <string name="bt_settings_title">When a Bluetooth device connects or leaves</string>
+    <string name="bt_auto_start">Start Listen when a Bluetooth device connects</string>
+    <string name="bt_auto_stop">Stop Listen when the Bluetooth device disconnects</string>
+    <string name="bt_resume">Start Listen again when the device returns, if a disconnect stopped it</string>
+    <string name="bt_settings_note">These work while the app is open or Listen is running. Android may refuse to start Listen from the background; if it does, tap Listen on the node page.</string>    <string name="channel_listen">Listening</string>
     <string name="notif_connecting">Connecting…</string>
     <string name="notif_playing">Listening</string>
     <string name="notif_paused">Paused for a call</string>
