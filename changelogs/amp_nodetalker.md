@@ -1,8 +1,8 @@
 # Node Talker for AMP changelog
 
-Current file: `amp_nodetalker_v0_3_3_20261028.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+Current file: `amp_nodetalker_v0_3_4_20261028.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
 
-## 0.3.3.1 (2026-10-28)
+## 0.3.4 (2026-10-28)
 
 - **Node Controller look.** The page uses the Node Controller colours and Readex Pro, embedded in the page like Node Controller does. Cards, the header, the tab bar and the browser theme colour match the new palette. The header is the Node Controller title bar (amber underline, amber capitals with a glow), and the tabs are Node Controller-style boxes. On a phone, when the buttons do not fit on one line, Log Out sits under the other button, both right-justified. The Connect card no longer shows the word "Favorite" above the favorites list; the list keeps its name for screen readers. Layout and behaviour are unchanged.
 
