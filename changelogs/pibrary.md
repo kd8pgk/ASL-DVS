@@ -1,6 +1,11 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_14_0_20261028.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_15_0_20261028.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.15.0 (2026-10-28)
+
+- **Login is on by default.** On a first start with no saved settings, Pibrary asks for a password. Sign in with the Pibrary password if one is set, otherwise with the node's root password, the same as the other tools. If the node has neither, login stays off and the log says why, so nobody is locked out; set a password and turn on Require login in Config. A node whose saved settings already say login is off keeps that.
+- **The login screen follows Node Controller.** It shows the same welcome line and license line as the other tools, and the card title is just "Pibrary". In the light theme the screen is light. The login screen's CSS lines and welcome / license markup are now part of the shared look that the repo check requires, and Pibrary is one of the tools it checks.
 
 ## 0.14.0 (2026-10-28)
 

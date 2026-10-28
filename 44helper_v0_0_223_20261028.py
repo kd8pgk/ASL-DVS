@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.222"
+APP_VERSION = "0.0.223"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -26504,7 +26504,7 @@ class Handler(BaseHTTPRequestHandler):
             connect = f"connect-src 'self' ws://{host} wss://{host}; "
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; " + connect + "frame-ancestors 'none'; "
+            "default-src 'self'; font-src 'self' data:; " + connect + "frame-ancestors 'none'; "
             "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'",
         )
         self.send_header("Referrer-Policy", "no-referrer")

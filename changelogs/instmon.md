@@ -1,6 +1,10 @@
 # instmon changelog
 
-Current file: `instmon_v2_82_0_20261028.py`. Newest entries first.
+Current file: `instmon_v2_83_0_20261028.py`. Newest entries first.
+
+## 2.83.0 (2026-10-28)
+
+- **The built-in font loads.** The page's Content-Security-Policy now allows the font built into the page (`font-src 'self' data:`). Without it the browser blocked Readex Pro and showed the fallback font, so the Node Control look was not applied. Nothing else changes.
 
 ## 2.82.0 (2026-10-28)
 
