@@ -5566,9 +5566,9 @@ button{font:inherit;color:var(--text)}
 .btn:hover{border-color:var(--accent)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .btn.danger{background:transparent;border-color:var(--red-line);color:var(--red)}
-.btn.connect{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.btn.connect{background:transparent;border-color:var(--accent-dim);color:var(--accent)}
 .btn.connect:hover{border-color:#7fffd0}
-.btn.disconnect{background:var(--red);border-color:var(--red);color:var(--accent-ink)}
+.btn.disconnect{background:transparent;border-color:#6b0e20;color:var(--red)}
 .btn.disconnect:hover{border-color:#ff8a9a}
 .btn:disabled{opacity:.45;cursor:default}
 .btn.big{min-height:56px;font-size:17px;min-width:160px}

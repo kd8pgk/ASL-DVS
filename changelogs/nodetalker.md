@@ -5,7 +5,7 @@ Current file: `nodetalker_v0_9_47_20261028.py`. Before 0.6.0 the tool was Node L
 ## 0.9.47.1 (2026-10-28)
 
 - **Node Controller look.** The page uses the Node Controller colours (dark blue-black background, `#161e2e` cards, `#2e4060` borders, green accent) and Readex Pro, embedded in the page like Node Controller does, so it works on a node with no internet. The tab bar marks the active tab with a green top line. Cards have slightly tighter corners. Layout and behaviour are unchanged.
-- **Connect and Disconnect buttons** use the accent green and the Node Controller red.
+- **Connect and Disconnect buttons** are outlined, as on Node Controller: Connect in the accent green, Disconnect in red.
 - The browser's theme colour matches the new header colour.
 
 ## 0.9.47 (2026-10-28)
