@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.48"
+VERSION = "0.9.48.1"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker"
 
@@ -5540,7 +5540,7 @@ header .logo-sub{font-size:.715rem;letter-spacing:.22em;text-transform:uppercase
 
 header .ver{color:var(--muted);font-size:12px}
 header .sp{flex:1}
-.pill{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line2);border-radius:999px;color:var(--text);text-decoration:none;background:transparent;cursor:pointer;font:inherit;font-size:11.7px;white-space:nowrap}
+.pill{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line2);border-radius:999px;color:var(--text);text-decoration:none;background:transparent;cursor:pointer;font:inherit;font-size:10.53px;white-space:nowrap}
 .pill:hover{border-color:var(--accent)}
 .ql-row{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0 2px}
 .ql{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;text-decoration:none;white-space:nowrap;color:var(--amber);border:1px solid rgba(244,192,78,.45);background:rgba(255,61,90,.15);text-shadow:0 0 8px rgba(255,208,64,.4);border-radius:4px;padding:8px 12px;cursor:pointer;transition:all .14s}
