@@ -30,7 +30,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.3.1"
+VERSION = "0.3.3.2"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker for AMP"
 
