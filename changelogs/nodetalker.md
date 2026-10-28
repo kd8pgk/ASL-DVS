@@ -2,11 +2,9 @@
 
 Current file: `nodetalker_v0_9_48_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
-## 0.9.48.1 (2026-10-28)
-
-- **Header buttons 10% smaller.** The Node Controller, Log In and Log Out buttons in the title bar are 10% smaller than in 0.9.48. The title is unchanged.
-
 ## 0.9.48 (2026-10-28)
+
+- **Header buttons 10% smaller.** The Node Controller, Log In and Log Out buttons in the title bar are 10% smaller. The title is unchanged.
 
 - **Node Controller look.** The page uses the Node Controller colours (dark blue-black background, `#161e2e` cards, `#2e4060` borders, green accent) and Readex Pro, embedded in the page like Node Controller does, so it works on a node with no internet. The tab bar marks the active tab with a green top line. Cards have slightly tighter corners. Layout and behaviour are unchanged.
 - **Connect and Disconnect buttons** are outlined, as on Node Controller: Connect in the accent green, Disconnect in red.
