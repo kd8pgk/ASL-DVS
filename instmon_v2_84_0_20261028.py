@@ -37,8 +37,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.83.0"
-DATE_STR ="2026-10-27"
+VERSION ="2.84.0"
+DATE_STR ="2026-10-28"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -7121,6 +7121,7 @@ def render_confgetter_card_html (cg ,library =None ):
 
 def render_components_html (components ,library =None ,app =None ,cg =None ):
     cards =[]
+    app_html =render_app_card_html (app )
     for c in components :
         if c ["category"]in NO_CARD_CATEGORIES :
             continue 
@@ -7177,7 +7178,11 @@ def render_components_html (components ,library =None ,app =None ,cg =None ):
     </div>
     {nested_lib_html }
   </div>""")
-    cards .append (render_app_card_html (app ))
+        if c ["category"]=="nodelisten":
+            cards .append (app_html )
+            app_html =None
+    if app_html is not None :
+        cards .append (app_html )
     cards .append (render_confgetter_card_html (cg ,library ))
     return "".join (cards )
 
@@ -7944,6 +7949,14 @@ const _FU_STATUS = {
 };
 
 // v2.38.0 Pi Zero 2 W build choice (shown only on a Pi Zero 2 W).
+function ghNotesToggle() {
+  const box = document.getElementById('gh-notes');
+  const btn = document.getElementById('gh-notes-btn');
+  const open = box.style.display === 'none';
+  box.style.display = open ? '' : 'none';
+  btn.textContent = open ? 'Hide' : 'Show';
+}
+
 function renderChannelChoice(ch) {
   const el = document.getElementById('channel-choice');
   if (!el || !ch) return;
@@ -9166,29 +9179,48 @@ async function cpCall(body) {
   return data;
 }
 
+function cpSize(n) {
+  return n >= 1024 ? (n / 1024).toFixed(1) + ' KB' : n + ' B';
+}
+
+function cpRowHtml(kind, s, busy) {
+  var dis = busy ? ' disabled' : '';
+  var label = kind === 'edited' ? 'uploaded: ' + s.name : s.name;
+  var del = kind === 'edited' ? '<button class="b-del" data-cp-delete="' + cpEsc(s.name) + '"' + dis + '>Delete</button>' : '';
+  return '<div class="librow"><div class="librow-top"><span>' + cpEsc(label) + '</span></div>' +
+    '<div class="librow-actions"><button class="b-go" data-cp-preview="' + cpEsc(kind + ':' + s.name) + '"' + dis + '>Preview</button>' + del + '</div>' +
+    '<div class="librow-bot small muted"><span>' + cpEsc(s.mtime) + '</span><span>&middot;</span><span>' + cpEsc(cpSize(s.size)) + '</span></div></div>';
+}
+
+function cpRowClick(e) {
+  var p = e.target.closest('[data-cp-preview]');
+  if (p) { cpPreview(p.dataset.cpPreview); return; }
+  var d = e.target.closest('[data-cp-delete]');
+  if (d) cpDeleteEdited(d.dataset.cpDelete);
+}
+
 function cpUpdateStatus(st) {
   if (!st) return;
   CP_STATE = st;
   var badge = document.getElementById('cp-badge');
   var ver = document.getElementById('cp-ver');
-  var sel = document.getElementById('cp-snap');
-  if (!badge || !ver || !sel) return;
+  var rows = document.getElementById('cp-snaprows');
+  if (!badge || !ver || !rows) return;
   badge.textContent = st.running ? 'RUNNING' : (st.installed ? 'INSTALLED' : 'NOT INSTALLED');
   badge.className = 'badge ' + (st.installed ? 'b-inst' : 'b-src');
   ver.textContent = st.installed ? 'v' + st.version : '';
   var items = [];
-  (st.snapshots || []).forEach(function(s) { items.push({value: 'snapshot:' + s.name, label: s.name + ' (' + s.mtime + ')'}); });
-  (st.edited || []).forEach(function(s) { items.push({value: 'edited:' + s.name, label: 'uploaded: ' + s.name + ' (' + s.mtime + ')'}); });
-  var sig = items.map(function(i) { return i.value + '|' + i.label; }).join(';');
-  if (sig !== CP_SIG) {
-    var keep = sel.value;
-    CP_SIG = sig;
-    sel.innerHTML = items.length ? items.map(function(i) { return '<option value="' + cpEsc(i.value) + '">' + cpEsc(i.label) + '</option>'; }).join('') : '<option value="">-- no snapshots yet --</option>';
-    if (keep && items.some(function(i) { return i.value === keep; })) sel.value = keep;
-  }
+  (st.snapshots || []).forEach(function(s) { items.push({kind: 'snapshot', s: s}); });
+  (st.edited || []).forEach(function(s) { items.push({kind: 'edited', s: s}); });
   var busy = !st.installed || st.running;
-  var pb = document.getElementById('cp-preview-btn');
-  if (pb) pb.disabled = busy || !sel.value;
+  var sig = (busy ? '1' : '0') + '|' + items.map(function(i) { return i.kind + ':' + i.s.name + ':' + i.s.mtime + ':' + i.s.size; }).join(';');
+  if (sig !== CP_SIG) {
+    CP_SIG = sig;
+    rows.innerHTML = items.length ? items.map(function(i) { return cpRowHtml(i.kind, i.s, busy); }).join('') : '<div class="small muted" style="padding:.4rem .2rem">-- no snapshots yet --</div>';
+  }
+  if (!rows.dataset.wired) { rows.dataset.wired = '1'; rows.addEventListener('click', cpRowClick); }
+  var count = document.getElementById('cp-snap-count');
+  if (count) count.textContent = items.length;
   var undo = document.getElementById('cp-undo-btn');
   if (undo) {
     var lb = st.last_backup;
@@ -9198,13 +9230,6 @@ function cpUpdateStatus(st) {
   }
   var un = document.getElementById('cp-uninstall-btn');
   if (un) un.style.display = st.installed ? '' : 'none';
-  cpOnSelect();
-}
-
-function cpOnSelect() {
-  var sel = document.getElementById('cp-snap');
-  var del = document.getElementById('cp-del-edited');
-  if (del && sel) del.style.display = sel.value.indexOf('edited:') === 0 ? '' : 'none';
 }
 
 function cpCount() {
@@ -9280,14 +9305,13 @@ function cpShowResult(r) {
   box.innerHTML = h;
 }
 
-async function cpPreview() {
-  var sel = document.getElementById('cp-snap');
-  if (!sel || !sel.value) { cpMsg('Pick a snapshot first.', false); return; }
+async function cpPreview(sel) {
+  if (!sel) { cpMsg('Pick a snapshot first.', false); return; }
   cpMsg('Reading the snapshot...');
-  var r = await cpCall({action: 'cp_preview', snapshot: sel.value, keep_comments: document.getElementById('cp-keep').checked});
+  var r = await cpCall({action: 'cp_preview', snapshot: sel, keep_comments: document.getElementById('cp-keep').checked});
   if (!r.plan) { cpMsg(r.message || r.error || 'Preview failed.', false); return; }
   CP_PLAN = r.plan;
-  CP_SNAP = sel.value;
+  CP_SNAP = sel;
   CP_SECRETS = {};
   CP_CHECKED = {};
   (r.plan.files || []).forEach(function(f) { CP_CHECKED[f.path] = !!f.checked; });
@@ -9338,10 +9362,7 @@ async function cpUninstall() {
   refreshStatus();
 }
 
-async function cpDeleteEdited() {
-  var sel = document.getElementById('cp-snap');
-  if (!sel || sel.value.indexOf('edited:') !== 0) return;
-  var name = sel.value.slice(7);
+async function cpDeleteEdited(name) {
   if (!confirm('Delete the uploaded copy ' + name + '?')) return;
   var r = await cpCall({action: 'cp_delete_edited', name: name});
   cpMsg(r.message || r.error, r._ok);
@@ -9360,9 +9381,6 @@ async function cpUpload() {
   if (r.ok) {
     inp.value = '';
     await refreshStatus();
-    var sel = document.getElementById('cp-snap');
-    if (sel && data.name) sel.value = 'edited:' + data.name;
-    cpOnSelect();
   }
 }
 """
@@ -10488,7 +10506,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 
 <div class="hdr">Quick Links</div>
 <div class="card">
-  <div class="row">{quicklinks_html}
+  <div class="row" style="justify-content:center">{quicklinks_html}
   </div>
 </div>
 
@@ -10498,22 +10516,27 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <button data-action="gh_check">Check GitHub</button>
     <button class="b-comms" id="fu-btn" data-action="full_update" disabled>Full Update</button>
     <button class="b-danger" id="fu-stop-btn" data-action="fu_stop" style="display:none">Stop Full Update</button>
-    <span id="gh-summary" class="small">{github_html}</span>
   </div>
-  <div class="small muted" style="margin-top:.35rem">
+  <div id="gh-summary" class="small" style="margin-top:.35rem">{github_html}</div>
+  <div id="channel-choice" class="row small" style="margin-top:.35rem"></div>
+  <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
+  <div id="fu-progress" style="font-size:1.15rem"></div>
+  <div id="fu-plan"></div>
+  <div class="row" style="margin-top:.6rem">
+    <button id="gh-notes-btn" onclick="ghNotesToggle()">Show</button>
+    <span class="small muted">About Full Update and Quiet System</span>
+  </div>
+  <div id="gh-notes" class="small muted" style="display:none;margin-top:.35rem">
     Full Update: pauses the web tools, downloads and checks every newer file first, then uninstalls the old and
     installs the new one component at a time (instmon last). A component that fails is put back, skipped and
     listed at the end. New install scripts only go to the Scripts library -- they are never run for you.
-    Stop Full Update puts the tool it is on back to the version it had and skips the rest.</div>
-  <div id="channel-choice" class="row small" style="margin-top:.35rem"></div>
-  <div id="build-choice" class="row small" style="display:none;margin-top:.35rem"></div>
-  <div id="fu-progress"></div>
-  <div id="fu-plan"></div>
-  <div class="row" style="margin-top:.6rem">
+    Stop Full Update puts the tool it is on back to the version it had and skips the rest.
+    <br><br>
+    Quiet System, before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
+    Node Talker, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</div>
+  <div class="row btn-row">
     <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
     <button id="restore-btn" data-action="restore" disabled>Restore</button>
-    <span class="small muted">Before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
-    Node Talker, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</span>
   </div>
 </div>
 
@@ -10522,30 +10545,31 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
 <div id="components">{components_html}
 </div>
 
-<div class="card" id="cp-card">
+<div class="card" id="confputter-card">
   <div class="row comp-row">
     <b>Config putter</b>
     <span class="ver" id="cp-ver"></span>
     <span class="badge b-src" id="cp-badge">NOT INSTALLED</span>
     <span class="muted small">confputter.py &middot; runs on demand, no service</span>
   </div>
-  <div class="small muted">Puts the files of a Config getter snapshot back on this node: to undo a bad edit, to apply a copy
-  you or Claude corrected, or to rebuild a wiped node. Pick a snapshot and press Preview: nothing is written until you
-  tick files and press Restore. The files it replaces are saved first (Undo last restore). Passwords and keys are not in a
-  snapshot: each one keeps the value this node has now, and you type any it does not have. Firewall and WireGuard files
-  are marked CAREFUL and left unticked. System files (network, hosts, ssh, Wi-Fi) are never restored.</div>
   <div class="row btn-row">
-    <select id="cp-snap" title="Snapshot to restore from" onchange="cpOnSelect()" style="max-width:100%;min-width:0"><option value="">Loading&hellip;</option></select>
-    <button id="cp-preview-btn" onclick="cpPreview()" disabled>Preview</button>
     <button class="b-del" id="cp-undo-btn" onclick="cpUndo()" style="display:none">Undo last restore</button>
     <button class="b-del" id="cp-uninstall-btn" onclick="cpUninstall()" style="display:none">Uninstall</button>
   </div>
-  <label class="small muted"><input type="checkbox" id="cp-keep" checked> Keep this node's comment lines when the copy has none (a copy with the comments stripped)</label>
-  <div class="row">
+  <div class="small muted">Puts the files of a Config getter snapshot back on this node: to undo a bad edit, to apply a copy
+  you or Claude corrected, or to rebuild a wiped node. Press Preview on a snapshot: nothing is written until you
+  tick files and press Restore. The files it replaces are saved first (Undo last restore). Passwords and keys are not in a
+  snapshot: each one keeps the value this node has now, and you type any it does not have. Firewall and WireGuard files
+  are marked CAREFUL and left unticked. System files (network, hosts, ssh, Wi-Fi) are never restored.</div>
+  <div class="card libgrp-nested">
+    <div class="libgrp-hdr"><b>Snapshots (<span id="cp-snap-count">0</span>)</b></div>
+    <div class="librows" id="cp-snaprows"><div class="small muted" style="padding:.4rem .2rem">Loading&hellip;</div></div>
+  </div>
+  <div class="row btn-row">
     <input type="file" id="cp-file" accept=".md">
     <button onclick="cpUpload()">Upload corrected copy</button>
-    <button class="b-del" id="cp-del-edited" onclick="cpDeleteEdited()" style="display:none">Delete uploaded copy</button>
   </div>
+  <label class="small muted"><input type="checkbox" id="cp-keep" checked> Keep this node's comment lines when the copy has none (a copy with the comments stripped)</label>
   <div class="small muted" id="cp-msg"></div>
   <div id="cp-plan"></div>
 </div>

@@ -8,11 +8,13 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:background="@color/bar"
+        android:background="@drawable/header_bar"
+        android:letterSpacing="0.1"
         android:paddingHorizontal="16dp"
         android:paddingVertical="14dp"
         android:text="@string/nodes_title"
-        android:textColor="@color/text"
+        android:textAllCaps="true"
+        android:textColor="@color/amber"
         android:textSize="18sp"
         android:textStyle="bold" />
 
