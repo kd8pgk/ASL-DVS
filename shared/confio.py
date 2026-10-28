@@ -1,6 +1,7 @@
 USED_BY = {
     "atomic_write": ("nodecontrol", "nodecontrol_pi02w", "sysmon", "sysmon_pi02w", "nodetalker",
                      "amp_nodetalker", "44helper", "wifimon", "confputter"),
+    "ami_credentials": ("nodetalker",),
     "http_get": ("44helper",),
     "fill_secrets": ("44helper", "confputter"),
     "firewall_backend": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
@@ -266,3 +267,34 @@ def close_firewall_port(port, proto="tcp"):
             return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
         return "-", "closed %s in ufw" % spec
     return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
+
+
+def ami_credentials(conf_path, user="", secret=""):
+    if user and secret:
+        return user, secret
+    try:
+        with open(conf_path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError:
+        return "", ""
+    name = ""
+    word = ""
+    section = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith((";", "#")):
+            continue
+        if line.startswith("[") and "]" in line:
+            if name and word and section.lower() != "general":
+                return name, word
+            section = line[1:line.index("]")].strip()
+            name = section
+            word = ""
+            continue
+        if "=" in line:
+            k, _, v = line.partition("=")
+            if k.strip().lower() == "secret":
+                word = v.strip()
+    if name and word and section.lower() != "general":
+        return name, word
+    return "", ""
