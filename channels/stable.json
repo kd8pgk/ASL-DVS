@@ -10,6 +10,15 @@
    "reason": "count",
    "version": "0.0.216"
   },
+  "amp_nodetalker": {
+   "blob": "0f29c6e14afaebec99f879d7ee4fa9795f61fdcc",
+   "commit": "be394fc578ccc1756ffef2f1c15351e1905f43c1",
+   "file": "amp_nodetalker_v0_3_0_20261020.py",
+   "landed": "2026-10-20T15:25:49Z",
+   "promoted": "2026-10-28T18:44:35Z",
+   "reason": "count",
+   "version": "0.3.0"
+  },
   "install_all": {
    "blob": "d2eeed6da7640f9857ace7f8a0a729ef4783bd1b",
    "commit": "bf629f9da5426861732b45f18cb0e59673ecbb52",
