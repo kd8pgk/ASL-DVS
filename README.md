@@ -43,8 +43,8 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_94_20261028.py` | `sysmon_pi02w_v6_13_82_20261028.py` | `instmon_v2_83_0_20261028.py` |
-| `VERSION` | `6.13.94` | `6.13.82-pi02w` | `2.83.0` |
+| File name | `sysmon_v6_13_94_20261028.py` | `sysmon_pi02w_v6_13_82_20261028.py` | `instmon_v2_84_0_20261028.py` |
+| `VERSION` | `6.13.94` | `6.13.82-pi02w` | `2.84.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
 read it from there. File names follow `<tool>_vX_Y_Z_YYYYMMDD.py` and change
@@ -509,7 +509,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_100_20261028.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_94_20261028.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_82_20261028.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_83_0_20261028.py` | common |
+| `instmon_v2_84_0_20261028.py` | common |
 | `wifimon_v5_41_0_20261028.py` | common |
 | `44helper_v0_0_223_20261028.py` | common |
 | `nodetalker_v0_9_47_20261028.py` | common |
