@@ -2421,8 +2421,11 @@ _CSS = r"""@font-face{font-family:"Readex Pro";font-style:normal;font-weight:400
 *{box-sizing:border-box}
 html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.45 "Readex Pro",Arial,Helvetica,sans-serif}
 body{display:flex;flex-direction:column;height:100vh;height:100dvh;overflow:hidden}
-header{flex:none;display:flex;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top)) 16px 12px;border-bottom:1px solid var(--line);background:var(--card);z-index:5}
-header h1{font-size:18px;margin:0;white-space:nowrap}
+header{flex:none;display:flex;align-items:center;gap:10px;padding:calc(12px + env(safe-area-inset-top)) 16px 12px;border-bottom:2px solid var(--amber);background:linear-gradient(90deg,#0f1a2e,#161e2e 50%,#0f1a2e);z-index:5;box-shadow:0 2px 0 rgba(255,208,64,.25),0 6px 30px rgba(0,0,0,.7)}
+header .hdr-left{display:flex;flex-direction:column;min-width:0}
+header h1{font-size:1.21rem;margin:0;white-space:nowrap;color:var(--amber);letter-spacing:.1em;text-transform:uppercase;text-shadow:0 0 10px rgba(255,208,64,.9),0 0 30px rgba(255,208,64,.5),0 0 60px rgba(255,208,64,.2)}
+header .logo-sub{font-size:.715rem;letter-spacing:.22em;text-transform:uppercase;color:var(--amber);margin-top:.1rem}
+
 header .ver{color:var(--muted);font-size:12px}
 header .sp{flex:1}
 .pill{display:inline-flex;align-items:center;gap:6px;min-height:40px;padding:0 12px;border:1px solid var(--line2);border-radius:999px;color:var(--text);text-decoration:none;background:transparent;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
@@ -2496,8 +2499,8 @@ background:transparent;color:#ffd040;border:1px solid #6b4800;border-radius:4px;
 #login-msg{min-height:1.1rem;font-size:.78rem;color:#ff3d5a;margin-top:.2rem}
 #login-tls{max-width:300px;font-size:.78rem;color:#ff3d5a;margin-top:.4rem}#login-tls:empty{display:none}
 nav.tabs{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--card);border-top:1px solid var(--line);padding:4px 6px calc(8px + env(safe-area-inset-bottom));z-index:5}
-nav.tabs button{background:transparent;border:0;min-height:52px;color:var(--muted);font-size:13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
-nav.tabs button[aria-current=page]{color:var(--accent);font-weight:700;box-shadow:inset 0 2px 0 var(--accent)}
+nav.tabs button{background:transparent;border:1px solid var(--line2);border-bottom:0;border-radius:5px 5px 0 0;min-height:52px;text-transform:uppercase;letter-spacing:.08em;font-weight:700;color:var(--muted);font-size:13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px}
+nav.tabs button[aria-current=page]{color:#22d4ff;border-color:#22d4ff;background:rgba(34,212,255,.12);box-shadow:0 0 10px rgba(34,212,255,.35)}
 nav.tabs svg{width:22px;height:22px}
 main.fit{padding-top:10px;padding-bottom:12px}
 #tab-listen{min-height:100%;display:flex;flex-direction:column}
@@ -4343,7 +4346,7 @@ _HTML_TEMPLATE = r"""<!DOCTYPE html>
 <style>__CSS__</style>
 </head>
 <body>
-<header><h1>Node Talker</h1><span class="ver">AMP · v__VERSION__</span><span class="sp"></span>
+<header><div class="hdr-left"><h1>Node Talker</h1><div class="logo-sub">AMP · web</div></div><span class="ver">AMP · v__VERSION__</span><span class="sp"></span>
 <a id="amp-web" class="pill hidden" href="#" aria-label="Open AMP's web page">AMP</a>
 <button id="login-open" class="pill hidden" type="button">Log In</button>
 <button id="logout" class="pill hidden" type="button">Log Out</button></header>
