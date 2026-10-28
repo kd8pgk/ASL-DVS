@@ -1,6 +1,10 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_48_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_49_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.49 (2026-10-28)
+
+- **Dark and light mode.** A Dark / Light switch at the bottom of the Setup tab, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
 
 ## 0.9.48 (2026-10-28)
 

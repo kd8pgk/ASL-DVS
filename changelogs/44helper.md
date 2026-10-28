@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_223_20261028.py`. Newest entries first.
+Current file: `44helper_v0_0_224_20261028.py`. Newest entries first.
+
+## 0.0.224 (2026-10-28)
+
+- **Dark and light mode.** A Dark / Light switch at the bottom of the Config tab, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
 
 ## 0.0.223 (2026-10-28)
 

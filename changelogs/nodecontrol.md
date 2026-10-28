@@ -1,6 +1,15 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_95_20261028.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_96_20261028.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.96 (2026-10-28)
+
+The full-build port of the Pi Zero 2 W Dashboard's upgrades that were not in the full build yet (9.3.76, 9.3.77 and 9.3.94-pi02w), and a theme switch. The full build keeps its own list search in memory, its 1-second poll, its 3-second idle and 500 ms keyed page polls, and its bridge and registration timings.
+- **Fresh-boot fixes** (9.3.76 and 9.3.77-pi02w). The startup DVSwitch tune runs in the background and waits up to 5 minutes from Analog_Bridge's start for its report from this boot (at most 10 minutes after boot); the boot marker is written only when the fresh-boot work is done. The boot disconnect-all waits until Asterisk has been up 30 s and, when 44helper's boot order is in place, `44helper-netready` has finished (at most 7.5 minutes); a Dashboard restart in the same boot does not run it again (`/run/asl_dvs/boot_disconnect_done`). Analog_Bridge's report is matched against its own start time, so an NTP clock step no longer throws it out, and the registration "since" time in `/run/asl_dvs/asl_reg.json` is counted on the monotonic clock. The Phone refresh at start tries again every 15 s for up to 5 minutes while Asterisk is not up.
+- **Node Talker under either name** (9.3.94-pi02w). The port is read from `nodetalker.conf`, then `nodelisten.conf`; the transmit node is recognised by either `rpt.conf` marker; the Listen link and the log say Node Talker.
+- **Local API for Node Talker's digital modes** (9.3.94-pi02w): `dvs-tune` (DMR, STFU, YSF, P25, NXDN, D-STAR, through the same code as the tabs; `dmr-network-missing` when the DMR network isn't in Node Controller, `once` joins it for one tune), `dvs-disconnect`, `dvs-status` and `dmr-server-add` (up to 20 networks, with a backup). DMR passwords are never logged.
+- **Shared launcher.** The service starts through `/usr/local/bin/asl_dvs_launch.py`, the same launcher the other tools write (`-OO`, `MALLOC_ARENA_MAX=2` and `malloc_trim`, each with its off switch in `/etc/asl_dvs/launch_no_*`). Uninstall removes it only when no other service uses it.
+- **Dark and light mode.** A Dark / Light switch at the bottom of the Edit tab, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
 
 ## 9.3.95 (2026-10-28)
 

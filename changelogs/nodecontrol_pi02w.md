@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_100_20261028.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_101_20261028.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.101-pi02w (2026-10-28)
+
+- **Dark and light mode.** A Dark / Light switch at the bottom of the Edit tab, at the right. Light mode turns the page light with dark text and darker accent colours (red, green, amber, teal and the rest) so they stay readable; pictures, video, drawn graphs (such as a spectrum) and checkboxes keep their own colours. The choice is kept in this browser for this tool (each tool has its own), and dark stays the default. The login screen follows the choice too.
 
 ## 9.3.100-pi02w (2026-10-28)
 

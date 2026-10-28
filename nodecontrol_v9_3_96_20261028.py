@@ -38,8 +38,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.95"
-BUILD_DATE   = "2026-10-19"
+VERSION      = "9.3.96"
+BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
 ASL_BRIDGE_NODE = "1999"
@@ -92,6 +92,7 @@ _DSTAR_BASE_LEN = 6
 ASL_DVS_CONF = "/etc/asl_dvs/asl_dvs.conf"
 
 _BOOT_MARKER_PATH = "/run/asl_dvs/boot_marker"
+_BOOT_DISCONNECT_MARKER_PATH = "/run/asl_dvs/boot_disconnect_done"
 
 _INSTALL_DIR      = "/usr/local/lib/asl_dvs/nodecontrol"
 _OLD_INSTALL_DIRS = ("/usr/local/lib/asl_dvs/dashboard", "/usr/local/lib/asl_dvs")
@@ -101,6 +102,64 @@ _SERVICE_NAME     = "nodecontrol.service"
 _SERVICE_PATH     = "/etc/systemd/system/nodecontrol.service"
 _LEGACY_SERVICE_NAME = "asl_dvs_dashboard.service"
 _LEGACY_SERVICE_PATH = "/etc/systemd/system/asl_dvs_dashboard.service"
+_LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
+_SYSTEMD_UNIT_DIR = "/etc/systemd/system"
+_LAUNCHER_CODE = '''#!/usr/bin/env python3
+import os
+import runpy
+import sys
+
+_OFF = "/etc/asl_dvs/launch_no_"
+_AGAIN = "ASL_DVS_LAUNCH"
+
+if _AGAIN in os.environ:
+    if os.environ.pop(_AGAIN) == "arena":
+        os.environ.pop("MALLOC_ARENA_MAX", None)
+else:
+    flags = []
+    env = dict(os.environ)
+    env[_AGAIN] = ""
+    if sys.flags.optimize < 2 and not os.path.exists(_OFF + "optimize"):
+        flags.append("-OO")
+    if "MALLOC_ARENA_MAX" not in env and not os.path.exists(_OFF + "arena_cap"):
+        env["MALLOC_ARENA_MAX"] = "2"
+        env[_AGAIN] = "arena"
+    if (flags or env[_AGAIN]) and sys.executable:
+        try:
+            os.execve(sys.executable, [sys.executable] + flags + sys.argv, env)
+        except OSError:
+            pass
+
+def _trim_loop():
+    import time
+    time.sleep(60)
+    try:
+        import ctypes
+        trim = ctypes.CDLL("libc.so.6").malloc_trim
+    except (ImportError, OSError, AttributeError):
+        return
+    trim.argtypes = [ctypes.c_size_t]
+    while True:
+        trim(0)
+        time.sleep(300)
+
+if not os.path.exists(_OFF + "trim"):
+    import threading
+    threading.Thread(target=_trim_loop, name="mem-trim", daemon=True).start()
+
+target = os.path.realpath(sys.argv[1])
+name = os.path.splitext(os.path.basename(target))[0]
+sys.argv = [target] + sys.argv[2:]
+sys.path.insert(0, os.path.dirname(target))
+if name.isidentifier():
+    runpy.run_module(name, run_name="__main__", alter_sys=True)
+else:
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("__main__", target)
+    main = importlib.util.module_from_spec(spec)
+    sys.modules["__main__"] = main
+    spec.loader.exec_module(main)
+'''
 _SERVICE_CONTENT  = f"""[Unit]
 Description=ASL-DVS Node Control Dashboard
 After=network.target
@@ -108,7 +167,7 @@ After=network.target
 [Service]
 Type=notify
 NotifyAccess=main
-ExecStart=/usr/bin/python3 {_INSTALL_LINK}
+ExecStart=/usr/bin/python3 {_LAUNCHER_PATH} {_INSTALL_LINK}
 Restart=always
 RestartSec=3s
 WatchdogSec=30
@@ -2842,13 +2901,29 @@ def _phone_then_prepare(tones: str) -> bool:
     log.warning("phone: couldn't hand the saved tones to Asterisk — sending them after answer")
     return False
 
+_PHONE_REFRESH_DELAY = 20
+_PHONE_REFRESH_RETRY = 15
+_PHONE_REFRESH_WAIT  = 300
+
+def _phone_refresh_ready() -> "dict | None":
+    doc = _phone_load()
+    if not doc.get("activated") or not doc.get("networks") or _ph_read(_ph_path(_PH_OWNED["ext"])) is None:
+        return None
+    return doc
+
 def _phone_refresh_on_start() -> None:
-    time.sleep(20)
+    end = time.monotonic() + _PHONE_REFRESH_WAIT
+    time.sleep(_PHONE_REFRESH_DELAY)
     try:
-        doc = _phone_load()
-        ext = _ph_path(_PH_OWNED["ext"])
-        if not doc.get("activated") or not doc.get("networks") or _ph_read(ext) is None \
-                or not _svc_is_active("asterisk"):
+        if _phone_refresh_ready() is None:
+            return
+        while not _svc_is_active("asterisk"):
+            if time.monotonic() >= end:
+                log.info("phone: Asterisk isn't running after %d s — start-up refresh skipped", _PHONE_REFRESH_WAIT)
+                return
+            time.sleep(_PHONE_REFRESH_RETRY)
+        doc = _phone_refresh_ready()
+        if doc is None:
             return
         if not _phone_setup_stale(doc):
             return
@@ -4237,7 +4312,7 @@ _STFU_CACHE_TTL   = 60.0
 _ECHO_CACHE_TTL   = 120.0
 _SYSMON_PORT      = 9999
 _SYSMON_CACHE_TTL = 15.0
-_NODELISTEN_CONF      = "/etc/asl_dvs/nodelisten.conf"
+_NODELISTEN_CONFS     = ("/etc/asl_dvs/nodetalker.conf", "/etc/asl_dvs/nodelisten.conf")
 _NODELISTEN_PORT      = 8993
 _NODELISTEN_CACHE_TTL = 15.0
 _M17_CACHE_TTL    = 60.0
@@ -4387,9 +4462,13 @@ def action_sysmon_status() -> dict:
     return {"running": _detect_sysmon(), "port": _SYSMON_PORT}
 
 def _nodelisten_port() -> int:
-    try:
-        text = Path(_NODELISTEN_CONF).read_text(errors="replace")
-    except OSError:
+    for path in _NODELISTEN_CONFS:
+        try:
+            text = Path(path).read_text(errors="replace")
+            break
+        except OSError:
+            continue
+    else:
         return _NODELISTEN_PORT
     m = re.search(r"^\s*port\s*=\s*(\d{4,5})\s*$", text, re.M)
     if m and 1024 <= int(m.group(1)) <= 65535:
@@ -4397,7 +4476,7 @@ def _nodelisten_port() -> int:
     return _NODELISTEN_PORT
 
 _NODELISTEN_TX_NODE = "1921"
-_NODELISTEN_TX_MARK = "; nodelisten: transmit node"
+_NODELISTEN_TX_MARKS = ("; nodelisten: transmit node", "; nodetalker: transmit node")
 _nl_tx_cache = {"key": None, "owned": False}
 _nl_tx_drop_at = 0.0
 _NODELISTEN_TX_DROP_GAP = 30.0
@@ -4413,7 +4492,7 @@ def _nodelisten_tx_owned() -> bool:
         try:
             lines = Path(ASL_CONF).read_text(errors="replace").splitlines()
             for i, ln in enumerate(lines[:-1]):
-                if ln.strip().startswith(_NODELISTEN_TX_MARK) and \
+                if ln.strip().startswith(_NODELISTEN_TX_MARKS) and \
                         lines[i + 1].strip().startswith(f"[{_NODELISTEN_TX_NODE}]"):
                     owned = True
                     break
@@ -4446,7 +4525,7 @@ def _nodelisten_tx_check(adjacent: List[str]) -> None:
     if now - _nl_tx_drop_at < _NODELISTEN_TX_DROP_GAP:
         return
     _nl_tx_drop_at = now
-    log.info("nodelisten: Node Listen is not running — unlinking its transmit node %s", _NODELISTEN_TX_NODE)
+    log.info("nodelisten: Node Talker is not running — unlinking its transmit node %s", _NODELISTEN_TX_NODE)
     threading.Thread(target=_disconnect, args=(_NODELISTEN_TX_NODE,), daemon=True,
                      name="nodelisten-tx-drop").start()
 
@@ -6070,7 +6149,7 @@ def _log_teardown_survivors(what: str) -> None:
         bridge_set = _bridge_set()
         left = [nd for nd in left if nd not in _nodelisten_keep_set()]
         if not left:
-            log.info("teardown check (%s): all links cleared (Node Listen's transmit node kept)", what)
+            log.info("teardown check (%s): all links cleared (Node Talker's transmit node kept)", what)
             return
         for nd in left:
             log.warning("teardown check (%s): node %s STILL LINKED%s%s", what, nd,
@@ -6373,15 +6452,17 @@ _ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
 _ASL_REG_FAST_SEC  = 30.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
-_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.time()}
+_asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.monotonic()}
 ASL_REG_STATUS_FILE = "/run/asl_dvs/asl_reg.json"
 
-def _asl_reg_write_status(node: str, state: str, since: float) -> None:
+def _asl_reg_write_status(node: str, state: str, since_mono: float) -> None:
     try:
         os.makedirs(os.path.dirname(ASL_REG_STATUS_FILE), exist_ok=True)
         tmp = ASL_REG_STATUS_FILE + ".tmp"
+        now = time.time()
+        since = now - max(0.0, time.monotonic() - since_mono)
         with open(tmp, "w") as f:
-            json.dump({"node": node, "state": state, "since": since, "checked_at": time.time(),
+            json.dump({"node": node, "state": state, "since": since, "checked_at": now,
                        "next_check_secs": _ASL_REG_SLOW_SEC if state == "registered" else _ASL_REG_FAST_SEC}, f)
         os.chmod(tmp, 0o644)
         os.replace(tmp, ASL_REG_STATUS_FILE)
@@ -6409,7 +6490,7 @@ def _asl_reg_check() -> str:
     with _asl_reg_lock:
         prev = _asl_reg_info["state"]
         if state != prev:
-            _asl_reg_info["since"] = time.time()
+            _asl_reg_info["since"] = time.monotonic()
         _asl_reg_info.update(state=state, node=node, at=time.monotonic())
         since = _asl_reg_info["since"]
     if state != prev:
@@ -6421,7 +6502,6 @@ def _asl_reg_public() -> str:
     with _asl_reg_lock:
         return _asl_reg_info["state"]
 
-_SVC_AB_UNITS  = ("analog_bridge.service", "Analog_Bridge.service")
 _SVC_CHECK_SEC = 15.0
 _svc_lock      = threading.Lock()
 _SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn", "ircddb", "m17")
@@ -6450,7 +6530,7 @@ def _svc_unit_states(groups: dict) -> dict:
 
 def _svc_check() -> dict:
     res = _svc_unit_states({
-        "ab":   _SVC_AB_UNITS,
+        "ab":   _BOOT_AB_UNITS,
         "stfu": ("stfu.service",),
         "ysf":  ("ysfgateway.service",),
         "p25":  ("p25gateway.service",),
@@ -7753,6 +7833,21 @@ HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<style>
+html[data-theme="light"]{filter:invert(1) hue-rotate(180deg);--red:#ff7d8c;--red2:#ff7d8c;--red-line:#ff7d8c;--green:#44be99;--amber:#ce9e44;--blue:#59b9de;--teal:#44bcb0;--accent:#44bcb0;--fcs:#51c1af;--orange:#e89542;--cloudflare:#ed9647;--pink:#ff78d2;--purple:#d778ff;--lime:#9bab41}
+html[data-theme="light"] img,html[data-theme="light"] video,html[data-theme="light"] canvas,html[data-theme="light"] iframe,html[data-theme="light"] input[type="checkbox"],html[data-theme="light"] input[type="radio"]{filter:invert(1) hue-rotate(180deg)}
+html[data-theme="light"] *{text-shadow:none!important}
+.theme-row{grid-column:1/-1;display:flex;justify-content:flex-end;align-items:center;gap:.5rem;margin:1rem 0 .4rem;padding:0 .2rem}
+.theme-row .theme-lbl{font-size:.72rem;color:#aab8cc;letter-spacing:.04em}
+.theme-sw{display:inline-flex;border:1px solid #3a5278;border-radius:4px;overflow:hidden}
+.theme-sw>button.theme-opt{all:unset;box-sizing:border-box;cursor:pointer;padding:.28rem .75rem;font-family:inherit;font-size:.72rem;line-height:1.2;color:#aab8cc;background:transparent}
+.theme-sw>button.theme-opt+button.theme-opt{border-left:1px solid #3a5278}
+.theme-sw>button.theme-opt[aria-pressed="true"]{background:#1e2a3f;color:#ffffff}
+.theme-sw>button.theme-opt:focus-visible{outline:2px solid #22d4ff;outline-offset:-2px}
+</style>
+<script>
+(function(){var K="asl_dvs_theme",d=document.documentElement;function g(){try{return localStorage.getItem(K)==="light"?"light":"dark"}catch(e){return"dark"}}function a(t){d.setAttribute("data-theme",t);var b=document.querySelectorAll("[data-theme-set]");for(var i=0;i<b.length;i++)b[i].setAttribute("aria-pressed",String(b[i].getAttribute("data-theme-set")===t))}a(g());document.addEventListener("DOMContentLoaded",function(){a(g())});document.addEventListener("click",function(e){var b=e.target&&e.target.closest?e.target.closest("[data-theme-set]"):null;if(!b)return;var t=b.getAttribute("data-theme-set")==="light"?"light":"dark";try{localStorage.setItem(K,t)}catch(x){}a(t)});window.addEventListener("storage",function(e){if(e.key===K)a(g())})})();
+</script>
 <title>Node Controller</title>
 <style>
 /* ── :root variables ── */
@@ -9142,7 +9237,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
       </div>
       <div class="tg-wrap">
         <span id="tg-indicator" class="ind-idle"><span class="dot dot-off" id="tg-dot-l"></span><span id="tg-value">——</span><span class="dot dot-off" id="tg-dot-r"></span></span>
-        <a id="lnk-listen" class="ql ql-listen ql-off" href="#" aria-disabled="true" title="Node Listen is not running">Listen</a>
+        <a id="lnk-listen" class="ql ql-listen ql-off" href="#" aria-disabled="true" title="Node Talker is not running">Listen</a>
       </div>
       <div class="ql-group ql-right">
         <a class="ql" data-ql-port="8990" href="#" target="_blank" rel="noopener">InstMon</a>
@@ -9578,6 +9673,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
             <button class="btn btn-teal"  onclick="edSave()">Save</button>
             <button class="btn btn-muted" onclick="edReload()">Reload</button>
           </div>
+          <div class="theme-row"><span class="theme-lbl">Theme</span><span class="theme-sw" role="group" aria-label="Page theme"><button type="button" class="theme-opt" data-theme-set="dark" aria-pressed="true">Dark</button><button type="button" class="theme-opt" data-theme-set="light" aria-pressed="false">Light</button></span></div>
         </div>
       </div>
     </div>
@@ -13499,12 +13595,12 @@ async function _probeNodeListen() {
       a.href = `http://${window.location.hostname}:${d.port}/`;
       a.classList.remove('ql-off');
       a.removeAttribute('aria-disabled');
-      a.title = 'Listen to this node in the browser (Node Listen)';
+      a.title = 'Listen to this node in the browser (Node Talker)';
     } else {
       a.href = '#';
       a.classList.add('ql-off');
       a.setAttribute('aria-disabled', 'true');
-      a.title = 'Node Listen is not running';
+      a.title = 'Node Talker is not running';
     }
   } catch (_) {}
 }
@@ -14145,7 +14241,7 @@ def action_local(data: dict) -> Tuple[bool, str]:
             ok, msg = action_switch_tab(page)
             if not ok:
                 return False, msg
-        log.info("local API: Node Listen asks to connect %s %s", page, node)
+        log.info("local API: Node Talker asks to connect %s %s", page, node)
         if page == "ECHO":
             return action_echo_connect(node, name)
         return action_asl_connect(node, name)
@@ -14156,7 +14252,7 @@ def action_local(data: dict) -> Tuple[bool, str]:
         if node in _bridge_set() or node == _NODELISTEN_TX_NODE:
             return False, f"Node {node} is managed by the dashboard"
         st = get_state()
-        log.info("local API: Node Listen asks to disconnect %s", node)
+        log.info("local API: Node Talker asks to disconnect %s", node)
         if st.current_fav and st.current_fav == node:
             return action_asl_disconnect_current()
         if st.echo_fav and st.echo_fav.strip() and st.echo_fav != TG_BLANK_ADDR \
@@ -14169,12 +14265,143 @@ def action_local(data: dict) -> Tuple[bool, str]:
         st = get_state()
         if st.page != "M17" or not st.current_fav:
             return True, "No M17 reflector is connected."
-        log.info("local API: Node Listen asks to disconnect M17 %s", st.current_fav)
+        log.info("local API: Node Talker asks to disconnect M17 %s", st.current_fav)
         return action_m17_disconnect()
     if act == "m17-status":
         st = get_state()
         return True, str(st.current_fav) if st.page == "M17" and st.current_fav else ""
+    if act == "dvs-tune":
+        return _local_dvs_tune(data)
+    if act == "dvs-disconnect":
+        return _local_dvs_disconnect()
+    if act == "dvs-status":
+        st = get_state()
+        srv = next((s for s in st.dmr_servers if s.get("name") == st.active_dmr_server), None)
+        on = st.page in _LOCAL_DVS_MODES and bool(st.current_fav)
+        return True, json.dumps({"page": st.page, "fav": str(st.current_fav or "") if on else "",
+                                 "server": st.active_dmr_server or "",
+                                 "address": str(srv.get("address", "")) if srv else ""})
+    if act == "dmr-server-add":
+        return _local_dmr_server_add(data)
     return False, f"Unknown local action '{act}'"
+
+_LOCAL_DVS_MODES = ("DMR", "STFU", "YSF", "P25", "NXDN", "DSTAR")
+_LOCAL_NET_MISSING = "dmr-network-missing"
+_DMR_SERVERS_MAX = 20
+
+def _local_net(data: dict) -> Tuple[Optional[dict], str]:
+    net = data.get("net")
+    if not isinstance(net, dict):
+        return None, "DMR needs its network"
+    name = _clip_label(str(net.get("name", "")).strip())
+    addr = str(net.get("address", "")).strip()
+    pw = str(net.get("password", "")).strip()
+    url = str(net.get("url", "")).strip()
+    host, sep, port = addr.rpartition(":")
+    if not name or "|" in name or "[" in name or "]" in name or _has_ctrl_chars(name):
+        return None, "DMR network name is missing or has | [ ]"
+    if not sep or not host or not port.isdigit() or not (1 <= int(port) <= 65535) \
+            or "|" in addr or _has_ctrl_chars(addr):
+        return None, f"DMR network {name}: address must be host:port"
+    if "|" in pw or _has_ctrl_chars(pw) or "|" in url or _has_ctrl_chars(url):
+        return None, f"DMR network {name}: illegal characters"
+    return {"name": name, "address": addr, "password": pw, "net_url": url}, ""
+
+def _local_dvs_tune(data: dict) -> Tuple[bool, str]:
+    mode = str(data.get("mode", "")).strip().upper()
+    tg = str(data.get("tg", "")).strip()
+    name = _clip_label(str(data.get("name", "")).strip() or f"{mode} {tg}")
+    if mode not in _LOCAL_DVS_MODES:
+        return False, f"Unknown mode '{mode}'"
+    if mode == "STFU" and not get_state().has_stfu:
+        return False, "STFU is not running on this node"
+    if mode == "DSTAR":
+        tg = tg.upper()
+        if len(tg) < 3 or not tg.endswith("L") or not tg[-2].isalpha():
+            return False, f"D-STAR tune string '{tg}' must end in a module letter and L"
+        log.info("local API: Node Talker asks to tune D-STAR %s", tg)
+        return action_dstar_connect(tg[:-2].strip(), tg[-2], name)
+    if mode == "DMR":
+        net, err = _local_net(data)
+        if net is None:
+            return False, err
+        servers = get_state().dmr_servers
+        srv = next((s for s in servers if str(s.get("address", "")).strip().lower() == net["address"].lower()), None) \
+            or next((s for s in servers if str(s.get("name", "")).strip().lower() == net["name"].lower()), None)
+        if srv is None and not data.get("once"):
+            return False, f"{_LOCAL_NET_MISSING}: Node Controller has no DMR network {net['name']} ({net['address']})"
+        if get_state().page != "DMR":
+            ok, msg = action_switch_tab("DMR")
+            if not ok:
+                return False, msg
+        if srv is not None:
+            log.info("local API: Node Talker asks to tune DMR %s on %s", tg, srv["name"])
+            ok, msg = action_switch_dmr_server(srv["name"])
+        else:
+            if not net["password"]:
+                return False, f"DMR network {net['name']} needs its password"
+            log.info("local API: Node Talker asks to tune DMR %s on %s (%s, this tune only)", tg, net["name"], net["address"])
+            ok, msg = _dmr_tune_once(net)
+        if not ok:
+            return False, msg
+        return action_tune("DMR", tg, name)
+    log.info("local API: Node Talker asks to tune %s %s", mode, tg)
+    return action_tune(mode, tg, name)
+
+@_link_locked
+def _dmr_tune_once(net: dict) -> Tuple[bool, str]:
+    global _dmr_switch_time, _dmr_last_net_tune, _status_etag
+    tune_str = f"{net['password']}@{net['address']}"
+    with _lock:
+        same = bool(_dmr_last_net_tune) and tune_str == _dmr_last_net_tune
+    if same:
+        return True, f"Already on {net['name']}"
+    _dvs("tune", TG_DISCONNECT)
+    time.sleep(0.5)
+    with _lock:
+        _dmr_switch_time = time.monotonic()
+    ok, out = _dvs("tune", tune_str)
+    if not ok:
+        _invalidate_dmr_net_tune()
+        if _dvs_timed_out(out):
+            return False, (f"{net['name']}: the network tune is taking longer than "
+                           f"{_DVS_TUNE_TIMEOUT_SEC}s — it may still be completing.")
+        return False, f"Could not join {net['name']}: {str(out).replace(net['password'], '***')}"
+    with _lock:
+        _dmr_last_net_tune = tune_str
+        _status_etag = ""
+    set_state(current_fav=None, current_fav_node=None, current_dvs_mode="DMR")
+    return True, f"Joined {net['name']} for this tune"
+
+def _local_dvs_disconnect() -> Tuple[bool, str]:
+    st = get_state()
+    if st.page not in _LOCAL_DVS_MODES or not st.current_fav:
+        return True, "Nothing is tuned."
+    log.info("local API: Node Talker asks to disconnect %s %s", st.page, st.current_fav)
+    if st.page == "DSTAR":
+        return action_dstar_disconnect()
+    return action_tune(st.page, TG_DISCONNECT, "")
+
+def _local_dmr_server_add(data: dict) -> Tuple[bool, str]:
+    net, err = _local_net(data)
+    if net is None:
+        return False, err
+    if not net["password"]:
+        return False, f"DMR network {net['name']} needs its password"
+    st = get_state()
+    servers = list(st.dmr_servers)
+    if any(str(s.get("name", "")).strip().lower() == net["name"].lower()
+           or _server_key(str(s.get("name", ""))) == _server_key(net["name"]) for s in servers):
+        return False, f"Node Controller already has a DMR network named {net['name']}"
+    if len(servers) >= _DMR_SERVERS_MAX:
+        return False, f"Node Controller already has {_DMR_SERVERS_MAX} DMR networks"
+    servers.append({"name": net["name"], "password": net["password"], "address": net["address"],
+                    "net_url": net["net_url"] or _dmr_server_default_url(net["name"])})
+    srv_tgs = {k: [{"name": n, "tg": tg} for _m, n, tg, *_r in rows] for k, rows in st.dmr_server_tgs.items()}
+    srv_tgs.setdefault(_server_key(net["name"]), [])
+    log.info("local API: Node Talker adds DMR network %s (%s)", net["name"], net["address"])
+    ok, msg = action_save_dmr_server_tgs(srv_tgs, servers)
+    return (True, f"Added DMR network {net['name']} to Node Controller") if ok else (False, msg)
 
 def _local_m17_connect(data: dict) -> Tuple[bool, str]:
     base = str(data.get("reflector", "")).strip()
@@ -14199,7 +14426,7 @@ def _local_m17_connect(data: dict) -> Tuple[bool, str]:
         base, addr, label = str(row[1]).strip(), str(row[3]).strip(), row[0]
     if not addr or "|" in addr:
         return False, f"{base} has no usable address"
-    log.info("local API: Node Listen asks to connect M17 %s %s", base, module)
+    log.info("local API: Node Talker asks to connect M17 %s %s", base, module)
     return action_m17_connect(name or _clip_label(str(label)), base, addr, module)
 
 _POST_ACTIONS: dict = {
@@ -14354,20 +14581,257 @@ def _dvs_startup_init() -> None:
         _dvs("tune", TG_DISCONNECT)
         set_state(current_dvs_mode="DMR")
 
-def _is_fresh_boot() -> bool:
+def _boot_id() -> str:
     try:
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        return Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except Exception:
+        return ""
+
+def _is_fresh_boot() -> bool:
+    boot_id = _boot_id()
+    if not boot_id:
         return True
     try:
         marker = Path(_BOOT_MARKER_PATH)
         prev = marker.read_text().strip() if marker.is_file() else None
-        fresh = prev != boot_id
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(boot_id)
-        return fresh
+        return prev != boot_id
     except Exception:
         return True
+
+def _write_boot_marker(path: str, what: str) -> None:
+    boot_id = _boot_id()
+    if not boot_id:
+        return
+    try:
+        marker = Path(path)
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.write_text(boot_id)
+    except Exception as exc:
+        log.warning("startup: could not write the %s: %s", what, exc)
+
+def _mark_boot_done() -> None:
+    _write_boot_marker(_BOOT_MARKER_PATH, "boot marker")
+
+def _boot_disconnect_done() -> bool:
+    boot_id = _boot_id()
+    if not boot_id:
+        return False
+    try:
+        marker = Path(_BOOT_DISCONNECT_MARKER_PATH)
+        return marker.is_file() and marker.read_text().strip() == boot_id
+    except Exception:
+        return False
+
+def _mark_boot_disconnect_done() -> None:
+    _write_boot_marker(_BOOT_DISCONNECT_MARKER_PATH, "boot disconnect marker")
+
+_boot_work_lock = threading.Lock()
+_boot_work_left: set = set()
+
+def _boot_work_done(name: str) -> None:
+    with _boot_work_lock:
+        _boot_work_left.discard(name)
+        left = bool(_boot_work_left)
+    if not left:
+        _mark_boot_done()
+
+_BOOT_AB_WAIT = 300
+_BOOT_AB_CAP = 600
+_BOOT_AB_UNITS = ("analog_bridge.service", "Analog_Bridge.service")
+_BOOT_ABINFO_SLACK = 5
+_BOOT_ASTERISK_SETTLE = 30
+_BOOT_ASTERISK_WAIT = 450
+_BOOT_NETREADY_UNIT = "44helper-netready.service"
+_dash_started = time.monotonic()
+
+def _unit_props(unit: str, *props: str) -> dict:
+    cmd = ["systemctl", "show", unit]
+    for p in props:
+        cmd += ["-p", p]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    except Exception:
+        return {}
+    return dict(ln.split("=", 1) for ln in (r.stdout or "").splitlines() if "=" in ln)
+
+def _unit_active_since_mono(props: dict) -> "float | None":
+    if props.get("ActiveState") != "active":
+        return None
+    try:
+        since = int(props.get("ActiveEnterTimestampMonotonic") or 0) / 1e6
+    except ValueError:
+        return None
+    return since if since > 0 else None
+
+def _unit_up_secs(unit: str) -> "float | None":
+    since = _unit_active_since_mono(_unit_props(unit, "ActiveState", "ActiveEnterTimestampMonotonic"))
+    return time.monotonic() - since if since is not None else None
+
+def _ab_unit() -> "str | None":
+    for unit in _BOOT_AB_UNITS:
+        if _unit_props(unit, "LoadState").get("LoadState") == "loaded":
+            return unit
+    return None
+
+def _unit_active_since_wall(unit: str) -> "list[float]":
+    props = _unit_props(unit, "ActiveState", "ActiveEnterTimestampMonotonic")
+    since = _unit_active_since_mono(props)
+    if since is None:
+        return []
+    out = [time.time() - (time.monotonic() - since)]
+    try:
+        val = ""
+        for extra in (["--timestamp=unix"], []):
+            r = subprocess.run(["systemctl", "show", unit, "-p", "ActiveEnterTimestamp"] + extra,
+                               capture_output=True, text=True, timeout=5)
+            val = (r.stdout or "").strip().partition("=")[2].strip()
+            if r.returncode == 0 and val:
+                break
+        if val.startswith("@"):
+            out.append(float(val[1:]))
+        elif val:
+            d = subprocess.run(["date", "-d", val, "+%s"], capture_output=True, text=True, timeout=5)
+            if d.returncode == 0 and d.stdout.strip():
+                out.append(float(d.stdout.strip()))
+    except Exception:
+        pass
+    return out
+
+def _abinfo_this_boot() -> "dict | None":
+    unit = _ab_unit()
+    if unit:
+        starts = _unit_active_since_wall(unit)
+        if not starts:
+            return None
+        floor = min(starts) - _BOOT_ABINFO_SLACK
+    else:
+        try:
+            up = float(Path("/proc/uptime").read_text().split()[0])
+        except Exception:
+            up = 0.0
+        floor = time.time() - up
+    try:
+        files = [f for f in _glob.glob("/tmp/ABInfo_*.json") if _is_root_owned(f) and os.path.getmtime(f) >= floor]
+    except Exception:
+        files = []
+    return _read_abinfo() if files else None
+
+def _dvs_apply_live(fresh_boot: bool, live_ab: "dict | None") -> None:
+    if live_ab:
+        ab_mode    = live_ab.get("tlv", {}).get("ambe_mode", "")
+        ab_last_tg = live_ab.get("last_tune", "")
+        ab_gw      = str(live_ab.get("digital", {}).get("gw", "0")).strip()
+        ab_active  = bool(ab_gw and ab_gw != "0")
+        if ab_mode in DIGITAL_MODES:
+            if ab_active or not fresh_boot:
+                reason = (f"active call gw={ab_gw}" if ab_active
+                          else "idle, process restart same boot")
+                log.info(
+                    "startup: AB live in %s (%s) — preserving connection",
+                    ab_mode, reason,
+                )
+                set_state(
+                    current_dvs_mode = ab_mode,
+                    current_fav      = ab_last_tg or None,
+                    current_fav_node  = None,
+                )
+            else:
+                log.info(
+                    "startup: AB live in %s (idle, fresh boot) — re-establishing server connection",
+                    ab_mode,
+                )
+                if ab_mode == "DMR":
+                    _dvs_startup_init()
+                else:
+                    _dvs("tune", TG_DISCONNECT)
+                    _dvs_settle()
+                    _dvs("mode", ab_mode)
+                    set_state(
+                        current_dvs_mode = ab_mode,
+                        current_fav      = None,
+                        current_fav_node = None,
+                    )
+        else:
+            _dvs_startup_init()
+    else:
+        _dvs_startup_init()
+
+def _ab_wait_over(unit: "str | None", end: float) -> bool:
+    now = time.monotonic()
+    if unit is None:
+        return now >= end
+    if now >= _BOOT_AB_CAP:
+        return True
+    up = _unit_up_secs(unit)
+    return up is not None and up >= _BOOT_AB_WAIT
+
+def _dvs_boot_init() -> None:
+    try:
+        end = time.monotonic() + _BOOT_AB_WAIT
+        unit = _ab_unit()
+        live_ab = _abinfo_this_boot()
+        if live_ab is None:
+            if unit:
+                log.info("startup: fresh boot — waiting for Analog_Bridge (%s, up to %d s after it starts) "
+                         "before the startup tune", unit, _BOOT_AB_WAIT)
+            else:
+                log.info("startup: fresh boot — waiting up to %d s for Analog_Bridge before the startup tune", _BOOT_AB_WAIT)
+        while live_ab is None and not _ab_wait_over(unit, end):
+            time.sleep(5)
+            live_ab = _abinfo_this_boot()
+        if live_ab is None:
+            log.warning("startup: Analog_Bridge didn't report — sending the startup tune anyway")
+        _dvs_apply_live(True, live_ab)
+    except Exception as exc:
+        log.warning("startup: boot DVSwitch init failed: %s", exc)
+    finally:
+        _boot_work_done("dvs")
+
+def _asterisk_up_secs() -> "float | None":
+    return _unit_up_secs("asterisk")
+
+def _netready_pending() -> bool:
+    props = _unit_props(_BOOT_NETREADY_UNIT, "LoadState", "ActiveState", "Job")
+    if props.get("LoadState") != "loaded":
+        return False
+    state = props.get("ActiveState", "")
+    if state in ("active", "failed"):
+        return False
+    return state in ("activating", "reloading") or props.get("Job", "").strip() not in ("", "0")
+
+def _asl_boot_disconnect() -> None:
+    try:
+        end = _dash_started + _BOOT_ASTERISK_WAIT
+        waited_net = False
+        up = None
+        while True:
+            up = _asterisk_up_secs()
+            net_wait = _netready_pending()
+            waited_net = waited_net or net_wait
+            if up is not None and up >= _BOOT_ASTERISK_SETTLE and not net_wait:
+                break
+            if time.monotonic() >= end:
+                break
+            time.sleep(3)
+        if up is None:
+            log.warning("startup: fresh boot — Asterisk isn't running after %d s; skipping the boot disconnect-all",
+                        _BOOT_ASTERISK_WAIT)
+            return
+        if _netready_pending():
+            log.warning("startup: fresh boot — the network still isn't ready after %d s; disconnect-all anyway",
+                        _BOOT_ASTERISK_WAIT)
+        elif waited_net:
+            log.info("startup: fresh boot — disconnect-all once Asterisk has settled and the network is ready")
+        else:
+            log.info("startup: fresh boot — disconnect-all once Asterisk has settled")
+        try:
+            _disconnect_all()
+        finally:
+            _mark_boot_disconnect_done()
+    except Exception as exc:
+        log.warning("startup: boot disconnect-all failed: %s", exc)
+    finally:
+        _boot_work_done("asl")
 
 def _harden_existing_conf_perms() -> None:
     try:
@@ -14413,6 +14877,16 @@ def startup() -> None:
     fresh_boot = _is_fresh_boot()
     if not fresh_boot:
         log.info("startup: process restart within same boot — preserving live links")
+    boot_disconnect = fresh_boot and has_asl and not _boot_disconnect_done()
+    if fresh_boot and has_asl and not boot_disconnect:
+        log.info("startup: the boot disconnect-all already ran this boot — not repeating it")
+    with _boot_work_lock:
+        _boot_work_left.clear()
+        if fresh_boot and has_dvs:
+            _boot_work_left.add("dvs")
+        if boot_disconnect:
+            _boot_work_left.add("asl")
+        boot_work = bool(_boot_work_left)
 
     if has_dvs:
         has_stfu = _detect_stfu()
@@ -14420,45 +14894,12 @@ def startup() -> None:
         if has_stfu:
             set_state(stfu_server=detect_stfu_server())
 
-        live_ab = _read_abinfo()
-        if live_ab:
-            ab_mode    = live_ab.get("tlv", {}).get("ambe_mode", "")
-            ab_last_tg = live_ab.get("last_tune", "")
-            ab_gw      = str(live_ab.get("digital", {}).get("gw", "0")).strip()
-            ab_active  = bool(ab_gw and ab_gw != "0")
-            if ab_mode in DIGITAL_MODES:
-                if ab_active or not fresh_boot:
-                    reason = (f"active call gw={ab_gw}" if ab_active
-                              else "idle, process restart same boot")
-                    log.info(
-                        "startup: AB live in %s (%s) — preserving connection",
-                        ab_mode, reason,
-                    )
-                    set_state(
-                        current_dvs_mode = ab_mode,
-                        current_fav      = ab_last_tg or None,
-                        current_fav_node  = None,
-                    )
-                else:
-                    log.info(
-                        "startup: AB live in %s (idle, fresh boot) — re-establishing server connection",
-                        ab_mode,
-                    )
-                    if ab_mode == "DMR":
-                        _dvs_startup_init()
-                    else:
-                        _dvs("tune", TG_DISCONNECT)
-                        _dvs_settle()
-                        _dvs("mode", ab_mode)
-                        set_state(
-                            current_dvs_mode = ab_mode,
-                            current_fav      = None,
-                            current_fav_node = None,
-                        )
-            else:
-                _dvs_startup_init()
+        if fresh_boot:
+            threading.Thread(target=_dvs_boot_init, name="dvs-boot-init", daemon=True).start()
         else:
-            _dvs_startup_init()
+            _dvs_apply_live(False, _read_abinfo())
+    if not boot_work:
+        _mark_boot_done()
 
     if has_asl or has_dvs:
         try:
@@ -14474,10 +14915,9 @@ def startup() -> None:
     if has_asl:
         has_echo = _detect_echo()
         set_state(has_echo=has_echo)
-        if fresh_boot:
-            _disconnect_all()
-            time.sleep(0.5)
-        else:
+        if boot_disconnect:
+            threading.Thread(target=_asl_boot_disconnect, name="asl-boot-disconnect", daemon=True).start()
+        elif not fresh_boot:
             log.info("startup: process restart within same boot — skipping ASL disconnect-all")
         _write_event_script()
         threading.Thread(target=_phone_refresh_on_start, name="phone-refresh", daemon=True).start()
@@ -14550,6 +14990,48 @@ class _QuietThreadingHTTPServer(ThreadingHTTPServer):
         if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
             return
         super().handle_error(request, client_address)
+
+def _write_launcher() -> None:
+    tmp = _LAUNCHER_PATH + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(_LAUNCHER_CODE)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, _LAUNCHER_PATH)
+    print(f"  [+] Wrote launcher {_LAUNCHER_PATH}")
+
+def _glob_pyc(dir_path: str, name: str = "*") -> list:
+    import glob as _g
+    return _g.glob(os.path.join(dir_path, "__pycache__", f"{name}.*.pyc"))
+
+def _prune_pyc(dir_path: str) -> None:
+    for pyc in _glob_pyc(dir_path):
+        name = os.path.basename(pyc).split(".", 1)[0]
+        if not os.path.exists(os.path.join(dir_path, name + ".py")):
+            try:
+                os.remove(pyc)
+            except OSError:
+                pass
+
+def _remove_launcher_if_unused() -> None:
+    if not os.path.exists(_LAUNCHER_PATH):
+        return
+    unit_dir = _SYSTEMD_UNIT_DIR
+    try:
+        names = os.listdir(unit_dir)
+    except OSError:
+        return
+    for n in names:
+        p = os.path.join(unit_dir, n)
+        try:
+            if os.path.isfile(p) and _LAUNCHER_PATH in open(p, errors="replace").read():
+                return
+        except OSError:
+            continue
+    try:
+        os.remove(_LAUNCHER_PATH)
+    except FileNotFoundError:
+        return
+    print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
 def _nc_remove_pyc(dir_path: str, prefix: str) -> None:
     pycache = os.path.join(dir_path, "__pycache__")
@@ -14705,6 +15187,8 @@ def install_service() -> None:
         print(f"  [-] Removed the old folder {_OLD_INSTALL_DIRS[0]}")
     except OSError:
         pass
+    _write_launcher()
+    _prune_pyc(_INSTALL_DIR)
 
     if os.path.exists(_LEGACY_SERVICE_PATH):
         subprocess.run(["systemctl", "disable", "--now", _LEGACY_SERVICE_NAME], stderr=subprocess.DEVNULL)
@@ -14761,6 +15245,7 @@ def uninstall_service() -> None:
             os.rmdir(d)
         except OSError:
             pass
+    _remove_launcher_if_unused()
 
     mark, msg = close_firewall_port(_listen_port())
     print(f"  [{mark}] {msg}")
