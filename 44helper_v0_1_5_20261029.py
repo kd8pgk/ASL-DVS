@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.4"
+APP_VERSION = "0.1.5"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -740,6 +740,47 @@ def system_profile(root="/"):
         "wifi_iface": "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else ""),
         "wifi_ifaces": ifaces,
     }
+
+def allmon3_sync(text, add=(), remove=(), own=""):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]")
+    kvre = re.compile(r"^\s*([^;=\s][^=]*?)\s*=>?\s*(.*)$")
+    lines = text.splitlines()
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines)})
+    names = {s["name"] for s in secs}
+    notes = []
+    public = [s for s in secs if s["name"].isdigit() and not 1000 <= int(s["name"]) <= 1999]
+    public.sort(key=lambda s: s["name"] != own)
+    drop = set()
+    for s in secs:
+        if s["name"] in remove:
+            drop.update(range(s["start"], s["end"]))
+            notes.append("allmon3.ini: [%s] removed" % s["name"])
+    out = [line for i, line in enumerate(lines) if i not in drop]
+    adds = sorted((n for n in add if n not in names and n not in remove), key=int)
+    if adds and not public:
+        notes.append("allmon3.ini has no public node section to copy host/user/pass from; add "
+                     + ", ".join(adds) + " to Allmon3 by hand")
+        return "\n".join(out) + "\n", notes
+    for n in adds:
+        src = public[0]
+        body = []
+        for i in range(src["start"] + 1, src["end"]):
+            s = lines[i].strip()
+            m = None if not s or s.startswith(";") or s.startswith("[") else kvre.match(lines[i])
+            if m and m.group(1).strip().lower() in ("host", "port", "user", "pass"):
+                body.append(lines[i].rstrip())
+        while out and not out[-1].strip():
+            out.pop()
+        out += ["", "[%s]" % n] + body
+        notes.append("allmon3.ini: [%s] added (host/user/pass copied from [%s])" % (n, src["name"]))
+    return "\n".join(out) + "\n", notes
 
 
 def install_service() -> None:
@@ -15246,37 +15287,10 @@ def _cfgr_apply_ini(lines: list[str], wanted: dict[str, dict[str, str]]) -> tupl
     return out, notes
 
 def _cfgr_allmon_sync(text: str, want: set[str], removed: list[str]) -> tuple[list[str], list[str]]:
-    lines = _cfgr_lines(text)
-    secs = _cfgr_sections(lines, [False] * len(lines))
-    names = {s["name"] for s in secs}
-    notes: list[str] = []
-    public = [s for s in secs if s["name"].isdigit() and not _cfgr_is_private(s["name"])]
     c = globals().get("_cfg")
     own = c.get("identity", "node", fallback="").strip() if c is not None else ""
-    public.sort(key=lambda s: s["name"] != own)
-    drop: set[int] = set()
-    for s in secs:
-        if s["name"] in removed:
-            drop.update(range(s["start"], s["end"]))
-            notes.append(f"allmon3.ini: [{s['name']}] removed")
-    out = [line for i, line in enumerate(lines) if i not in drop]
-    adds = sorted((n for n in want if n not in names), key=int)
-    if adds and not public:
-        notes.append("allmon3.ini has no public node section to copy host/user/pass from; add "
-                     + ", ".join(adds) + " to Allmon3 by hand")
-        return out, notes
-    for n in adds:
-        src = public[0]
-        body = []
-        for i in range(src["start"] + 1, src["end"]):
-            kv = _cfgr_kv(lines[i])
-            if kv and kv[0].lower() in ("host", "port", "user", "pass"):
-                body.append(lines[i].rstrip())
-        while out and not out[-1].strip():
-            out.pop()
-        out += ["", f"[{n}]"] + body
-        notes.append(f"allmon3.ini: [{n}] added (host/user/pass copied from [{src['name']}])")
-    return out, notes
+    new, notes = allmon3_sync(text, want, removed, own)
+    return _cfgr_lines(new), notes
 
 def _cfgr_listeners(override: dict[str, bytes] | None = None) -> list[tuple[str, str, str]]:
     found: list[tuple[str, str, str]] = []
@@ -16891,6 +16905,18 @@ def _pn_finish(changes: dict[str, tuple[bytes, bytes]], reason: str, apply: bool
                    "restart_groups": [g for g in groups if installed.get(g)]})
     return result
 
+def _pn_allmon(changes: dict[str, tuple[bytes, bytes]], notes: list[str], add: list[str], remove: list[str]) -> None:
+    am = _cfgr_read(_CFGR_ALLMON)
+    if am is None:
+        notes.append(f"{_CFGR_ALLMON} not found; Allmon3 is not changed.")
+        return
+    new, n2 = _cfgr_allmon_sync(am.decode("utf-8", "replace"), set(add), remove)
+    notes += n2
+    data = _cfgr_join(new).encode("utf-8")
+    if data != am:
+        changes[_CFGR_ALLMON] = (am, data)
+        notes.append("Allmon3 shows the change after it restarts (the ASL3 Restart button restarts it with Asterisk).")
+
 def _cfgr_act_pn_add(payload: dict, apply: bool) -> dict:
     rpt_b = _cfgr_read(_CFGR_RPT)
     if rpt_b is None:
@@ -16972,7 +16998,7 @@ def _cfgr_act_pn_add(payload: dict, apply: bool) -> dict:
         override = {path: nd for path, (_o, nd) in changes.items()}
         clashes, _n = _cfgr_port_clashes(override)
         notes += [f"WARNING: {w}" for w in clashes]
-    notes.append("Allmon3 is not changed. Add the node there by hand if you want to see it.")
+    _pn_allmon(changes, notes, [node], [])
     head = [f"Private node {node} ({'USRP bridge ' + rx if kind == 'usrp' else 'plain, ' + rx}):"]
     return _pn_finish(changes, f"adding private node {node}", apply, head, notes, {"node": node})
 
@@ -17012,6 +17038,7 @@ def _cfgr_act_pn_remove(payload: dict, apply: bool) -> dict:
             if keep != el:
                 changes[_CFGR_EXT] = (ext_b, _cfgr_join(keep).encode("utf-8"))
     notes = ["modules.conf is not changed (other nodes may use chan_usrp)."]
+    _pn_allmon(changes, notes, [], [node])
     return _pn_finish(changes, f"removing private node {node}", apply, [f"Remove private node {node}:"], notes)
 
 def _pn_status() -> dict:

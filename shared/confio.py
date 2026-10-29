@@ -11,6 +11,7 @@ USED_BY = {
     "close_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
                             "nodetalker", "amp_nodetalker", "pibrary"),
     "system_profile": ("44helper", "wifimon"),
+    "allmon3_sync": ("44helper", "nodecontrol", "nodecontrol_pi02w", "nodetalker"),
 }
 
 
@@ -370,3 +371,45 @@ def system_profile(root="/"):
         "wifi_iface": "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else ""),
         "wifi_ifaces": ifaces,
     }
+
+
+def allmon3_sync(text, add=(), remove=(), own=""):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]")
+    kvre = re.compile(r"^\s*([^;=\s][^=]*?)\s*=>?\s*(.*)$")
+    lines = text.splitlines()
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines)})
+    names = {s["name"] for s in secs}
+    notes = []
+    public = [s for s in secs if s["name"].isdigit() and not 1000 <= int(s["name"]) <= 1999]
+    public.sort(key=lambda s: s["name"] != own)
+    drop = set()
+    for s in secs:
+        if s["name"] in remove:
+            drop.update(range(s["start"], s["end"]))
+            notes.append("allmon3.ini: [%s] removed" % s["name"])
+    out = [line for i, line in enumerate(lines) if i not in drop]
+    adds = sorted((n for n in add if n not in names and n not in remove), key=int)
+    if adds and not public:
+        notes.append("allmon3.ini has no public node section to copy host/user/pass from; add "
+                     + ", ".join(adds) + " to Allmon3 by hand")
+        return "\n".join(out) + "\n", notes
+    for n in adds:
+        src = public[0]
+        body = []
+        for i in range(src["start"] + 1, src["end"]):
+            s = lines[i].strip()
+            m = None if not s or s.startswith(";") or s.startswith("[") else kvre.match(lines[i])
+            if m and m.group(1).strip().lower() in ("host", "port", "user", "pass"):
+                body.append(lines[i].rstrip())
+        while out and not out[-1].strip():
+            out.pop()
+        out += ["", "[%s]" % n] + body
+        notes.append("allmon3.ini: [%s] added (host/user/pass copied from [%s])" % (n, src["name"]))
+    return "\n".join(out) + "\n", notes

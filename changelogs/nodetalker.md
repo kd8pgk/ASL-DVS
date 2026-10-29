@@ -1,6 +1,10 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_55_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_56_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.56 (2026-10-29)
+
+- **The TX card keeps Allmon3 in step.** Adding transmit node 1921 also adds it to `/etc/allmon3/allmon3.ini`, and removing it takes it out there. Allmon3 is not restarted: the result says to restart it. The Allmon3 update is the shared `allmon3_sync` in `shared/confio.py`, kept identical in 44helper, both Dashboard builds and Node Talker and checked by the repo check. It only adds a section that is missing, copying `host`, `port`, `user` and `pass` from this node's public node section, and only removes the section of a node this tool removed. The public node's section is never changed. With no allmon3.ini, or no public node section to copy from, Allmon3 is left alone and the result says so.
 
 ## 0.9.55 (2026-10-29)
 

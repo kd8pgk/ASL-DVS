@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.55"
+VERSION = "0.9.56"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker"
 
@@ -1920,6 +1920,27 @@ def _write_rpt(lines):
 
 def _write_failed(exc):
     return {"ok": False, "error": f"Could not write {RPT_CONF}: {exc}"}
+
+
+ALLMON3_INI = "/etc/allmon3/allmon3.ini"
+
+
+def allmon_follow(add, remove, main=""):
+    try:
+        with open(ALLMON3_INI, encoding="utf-8", errors="replace") as fh:
+            old = fh.read()
+    except OSError:
+        return ""
+    new, notes = allmon3_sync(old, add, remove, main or main_node() or "")
+    if not notes:
+        return ""
+    if new != old:
+        try:
+            atomic_write(ALLMON3_INI, new)
+        except OSError as exc:
+            return f" allmon3.ini not updated: {exc}."
+        log_event("; ".join(notes), "ok")
+    return " " + "; ".join(notes) + ". Restart Allmon3 to see it."
 
 
 def _changed(backup, message):
@@ -5523,7 +5544,8 @@ def tx_enable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: added transmit node {TX_NODE} for node {main} (backup {backup})", "ok")
-    return _changed(backup, f"Added node {TX_NODE}. Restart Asterisk, then Node Talker links it to node {main}.")
+    return _changed(backup, f"Added node {TX_NODE}. Restart Asterisk, then Node Talker links it to node {main}."
+                    + allmon_follow([TX_NODE], [], main))
 
 
 def tx_unlink(why):
@@ -5557,7 +5579,8 @@ def tx_disable():
         except OSError as exc:
             return _write_failed(exc)
     log_event(f"rpt.conf: removed transmit node {TX_NODE} (backup {backup})", "ok")
-    return _changed(backup, f"Removed node {TX_NODE}. Restart Asterisk for it to take effect.")
+    return _changed(backup, f"Removed node {TX_NODE}. Restart Asterisk for it to take effect."
+                    + allmon_follow([], [TX_NODE]))
 
 
 def link_keeper_loop():
@@ -11263,6 +11286,48 @@ def close_firewall_port(port, proto="tcp"):
             return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
         return "-", "closed %s in ufw" % spec
     return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
+
+
+def allmon3_sync(text, add=(), remove=(), own=""):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]")
+    kvre = re.compile(r"^\s*([^;=\s][^=]*?)\s*=>?\s*(.*)$")
+    lines = text.splitlines()
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines)})
+    names = {s["name"] for s in secs}
+    notes = []
+    public = [s for s in secs if s["name"].isdigit() and not 1000 <= int(s["name"]) <= 1999]
+    public.sort(key=lambda s: s["name"] != own)
+    drop = set()
+    for s in secs:
+        if s["name"] in remove:
+            drop.update(range(s["start"], s["end"]))
+            notes.append("allmon3.ini: [%s] removed" % s["name"])
+    out = [line for i, line in enumerate(lines) if i not in drop]
+    adds = sorted((n for n in add if n not in names and n not in remove), key=int)
+    if adds and not public:
+        notes.append("allmon3.ini has no public node section to copy host/user/pass from; add "
+                     + ", ".join(adds) + " to Allmon3 by hand")
+        return "\n".join(out) + "\n", notes
+    for n in adds:
+        src = public[0]
+        body = []
+        for i in range(src["start"] + 1, src["end"]):
+            s = lines[i].strip()
+            m = None if not s or s.startswith(";") or s.startswith("[") else kvre.match(lines[i])
+            if m and m.group(1).strip().lower() in ("host", "port", "user", "pass"):
+                body.append(lines[i].rstrip())
+        while out and not out[-1].strip():
+            out.pop()
+        out += ["", "[%s]" % n] + body
+        notes.append("allmon3.ini: [%s] added (host/user/pass copied from [%s])" % (n, src["name"]))
+    return "\n".join(out) + "\n", notes
 
 
 SETUP_PATH = os.path.join(CONFIG_DIR, "nodetalker_setup.json")
