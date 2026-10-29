@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.49"
+VERSION = "0.9.52"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker"
 
@@ -5129,12 +5129,46 @@ class LoadGuard:
 GUARD = LoadGuard()
 
 
-def tone_link_block():
+TONE_LINK = {"node": ""}
+
+
+def tone_link_set(body):
+    action = body.get("action")
+    node = str(body.get("node", "")).strip()
+    main = main_node()
+    if not main:
+        return {"ok": False, "error": "No main node is set up."}
+    if action == "connect":
+        if not _is_node_name(node) or node in (TX_NODE, main):
+            return {"ok": False, "error": f"Enter a node number other than {TX_NODE} and {main}."}
+        if TONE.status()["running"] or TALKER.state()["keyed"]:
+            return {"ok": False, "error": "Wait until the test or transmission is over."}
+        ok, out = ilink(main, 3, node)
+        if not ok:
+            return {"ok": False, "error": "Could not connect node " + node + ": " + str(out).strip()[:200]}
+        TONE_LINK["node"] = node
+        log_event(f"Tone test link: connected node {main} to {node}", "ok")
+        return {"ok": True, "node": node, "message": f"Connecting node {main} to {node}. Wait a few seconds, then run the test."}
+    if action == "disconnect":
+        target = TONE_LINK["node"] or node
+        if not target:
+            return {"ok": True, "message": "Nothing to disconnect."}
+        ok, out = ilink(main, 1, target)
+        TONE_LINK["node"] = ""
+        if not ok:
+            return {"ok": False, "error": "Could not disconnect node " + target + ": " + str(out).strip()[:200]}
+        log_event(f"Tone test link: disconnected node {target} from {main}", "ok")
+        return {"ok": True, "message": f"Disconnected node {target}."}
+    raise ValueError("action must be connect or disconnect")
+
+
+def tone_link_block(tx=False):
     node = main_node()
     ok, links = rpt_links(node, max_age=0.5)
     if not ok:
         return "The node's link list could not be read, so no tones are sent. Check that Asterisk is running."
-    other = sorted({x["node"] for x in links} - {TX_NODE})
+    allowed = {TONE_LINK["node"]} - {""} if tx else set()
+    other = sorted({x["node"] for x in links} - {TX_NODE} - allowed)
     if other:
         bridges = bridge_nodes()
         names = [f"{n} (bridge)" if n in (bridges.get("digital"), bridges.get("m17")) else n for n in other]
@@ -5151,6 +5185,7 @@ class ToneTest:
         self.recording = False
         self.running = False
         self.abort = False
+        self.mode = "rx"
         self.stage = "idle"
         self.progress = 0.0
         self.error = ""
@@ -5177,7 +5212,7 @@ class ToneTest:
                 why = self._check_load()
                 if not why and time.monotonic() - last_link >= LINK_WATCH_SEC:
                     last_link = time.monotonic()
-                    block = tone_link_block()
+                    block = tone_link_block(tx=self.mode == "tx")
                     why = "Stopped: " + block if block else ""
             except Exception as exc:
                 why = ""
@@ -5200,8 +5235,9 @@ class ToneTest:
 
     def status(self):
         with self.lock:
-            return {"ok": True, "running": self.running, "stage": self.stage,
-                    "progress": round(self.progress, 3), "error": self.error, "report": self.report}
+            return {"ok": True, "running": self.running, "stage": self.stage, "mode": self.mode,
+                    "progress": round(self.progress, 3), "error": self.error, "report": self.report,
+                    "target": TONE_LINK["node"]}
 
     def stop(self):
         with self.lock:
@@ -5212,10 +5248,13 @@ class ToneTest:
 
     def start(self, body):
         hz, sec = _tone_request(body)
+        mode = body.get("mode", "rx")
+        if mode not in ("rx", "tx"):
+            raise ValueError("mode must be rx or tx")
         call, _src = callsign_now()
         if not call:
             return {"ok": False, "error": "Set your callsign in Setup first: the test identifies itself on air."}
-        block = tone_link_block()
+        block = tone_link_block(tx=mode == "tx")
         if block:
             return {"ok": False, "error": block}
         frames, plan = _tone_plan(hz, sec, call)
@@ -5234,6 +5273,7 @@ class ToneTest:
             if TALKER.state()["keyed"]:
                 return {"ok": False, "error": "The node is already transmitting."}
             self.running, self.abort = True, False
+            self.mode = mode
             self.stage, self.progress, self.error, self.report = "keying", 0.0, "", None
             self.raw, self.proc = [], []
         owner = _ToneOwner()
@@ -5244,10 +5284,10 @@ class ToneTest:
             return {"ok": False, "error": msg}
         meta = {"node": TX_NODE, "callsign": call, "tx_gain_db": tune_value("tx_gain_db"),
                 "rx_gain_db": tune_value("rx_gain_db"), "level_db": TONE_LEVEL_DB, "rx_gate": _cfg_get("rx_gate"),
-                "tone_sec": sec, "tones": hz, "started": time.time()}
+                "tone_sec": sec, "tones": hz, "mode": mode, "started": time.time()}
         threading.Thread(target=self._run, args=(owner, frames, plan, meta), daemon=True,
                          name="tone-test").start()
-        log_event(f"Tone test started: {len(hz)} tones, {sec} s each, {total:.1f} s", "ok")
+        log_event(f"{mode.upper()} tone test started: {len(hz)} tones, {sec} s each, {total:.1f} s", "ok")
         return {"ok": True, "message": "Tone test started.", "tones": hz, "tone_sec": sec,
                 "seconds": round(total, 1), "callsign": call}
 
@@ -5258,7 +5298,7 @@ class ToneTest:
         stop = threading.Event()
         threading.Thread(target=self._watch_loop, args=(stop,), daemon=True, name="tone-watch").start()
         try:
-            self.recording = True
+            self.recording = meta["mode"] == "rx"
             self._set(stage="sending")
             t0 = time.monotonic()
             for i, fr in enumerate(frames):
@@ -5278,7 +5318,8 @@ class ToneTest:
             end = time.monotonic() + 5.0
             while _tone_keyed(owner) and time.monotonic() < end:
                 time.sleep(0.05)
-            time.sleep(TONE_RETURN_SEC)
+            if meta["mode"] == "rx":
+                time.sleep(TONE_RETURN_SEC)
         except Exception as exc:
             err = f"Test error: {exc}"
         finally:
@@ -5289,10 +5330,18 @@ class ToneTest:
             self._set(running=False, stage="failed", error=err)
             log_event(f"Tone test ended early: {err}", "warn")
             return
+        if meta["mode"] == "tx":
+            report = {"mode": "tx", "node": meta["node"], "callsign": meta["callsign"], "tones": meta["tones"],
+                      "tone_sec": meta["tone_sec"], "level_db": TONE_LEVEL_DB, "seconds": round(len(frames) * FRAME_SEC, 1),
+                      "load": dict(self.peak)}
+            self._set(running=False, stage="done", report=report, progress=1.0)
+            log_event("TX tone test finished", "ok")
+            return
         self._set(stage="analysing")
         try:
             report = _tone_analyse(list(self.raw), list(self.proc), plan, meta)
             report["load"] = dict(self.peak)
+            report["mode"] = "rx"
         except Exception as exc:
             self._set(running=False, stage="failed", error=f"Analysis error: {exc}")
             log_event(f"Tone test analysis failed: {exc}", "err")
@@ -6124,7 +6173,7 @@ function sendOp(op) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op}));
 }
 
-const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'exp', 'chk', 'phone', 'kc', 'log'];
+const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'chk', 'phone', 'kc', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -6716,7 +6765,7 @@ function chkTick() {
 }
 
 function chkUi() {
-  const run = !!(chk && chk.running);
+  const run = !!(chk && chk.running) || !!exp;
   $('chk-start').classList.toggle('hidden', run);
   $('chk-stop').classList.toggle('hidden', !run);
   $('chk-mins').disabled = run;
@@ -6856,6 +6905,7 @@ function chkTable(id, rows, cmp) {
 
 const JIT_STEPS = [150, 250, 500, 1000], TXB_STEPS = [60, 120, 200, 300];
 const nextStep = (steps, v) => steps.find((x) => x > Number(v)) || null;
+const prevStep = (steps, v) => steps.slice().reverse().find((x) => x < Number(v)) || null;
 
 // Suggestions are sorted by tier: 0 loses or distorts audio, 1 level, 2 noise and filters, 3 information.
 // At most CHK_MAX_CHANGES changes carry an Apply button; the rest are marked Later, so each change is
@@ -6879,6 +6929,10 @@ function chkSuggest(r, cfg) {
     const j = nextStep(JIT_STEPS, c.tune_enabled ? c.jitter_ms : 250);
     if (j) node(0, R.drops + ' dropouts: raise the Listen buffer to ' + (j / 1000) + ' s.', {tune_enabled: true, jitter_ms: j});
     else add(0, R.drops + ' dropouts even with the largest Listen buffer: the phone\'s connection is the problem (try Wi-Fi).');
+  }
+  if (R.drops === 0 && rxOk) {
+    const lo = prevStep(JIT_STEPS, c.tune_enabled ? c.jitter_ms : 250);
+    if (lo) node(2, 'No dropouts this check: lower the Listen buffer to ' + (lo / 1000) + ' s to cut the delay.', {tune_enabled: true, jitter_ms: lo});
   }
   const N = r.node;
   if (N && !N.available) add(3, 'Node cross-check unavailable: ' + N.why
@@ -6967,54 +7021,78 @@ async function chkApply(i, s2, btn, undo) {
 let chkShown = null, chkCmp = false;
 
 // ---- Tone test (Pi side, v0.9.3): start, poll, show the report ----
-let toneTimer = null, toneWasRunning = false;
+let toneTimer = null, toneWasRunning = false, toneMode = 'rx';
 const TONE_STAGE = {keying: 'Keying the node', sending: 'Transmitting', analysing: 'Analyzing'};
 const toneFmt = (v, digits, signed) => (v == null ? '-' : ((signed && v > 0) ? '+' : '') + Number(v).toFixed(digits == null ? 1 : digits));
 
+function tonePre() { return toneMode === 'tx' ? 'tx-tone-' : 'tone-'; }
+
 function toneUi(running) {
-  $('tone-start').classList.toggle('hidden', running);
-  $('tone-stop').classList.toggle('hidden', !running);
-  $('tone-prog').classList.toggle('hidden', !running);
-  $('tone-hz').disabled = running;
-  $('tone-sec').disabled = running;
+  $('tx-link-connect').disabled = running;
+  $('tx-link-disconnect').disabled = running;
+  ['tone-', 'tx-tone-'].forEach((q) => {
+    const act = q === tonePre() && running;
+    $(q + 'start').classList.toggle('hidden', running);
+    $(q + 'stop').classList.toggle('hidden', !act);
+    $(q + 'prog').classList.toggle('hidden', !act);
+    $(q + 'hz').disabled = running;
+    $(q + 'sec').disabled = running;
+  });
 }
 
-async function toneStart() {
-  const raw = $('tone-hz').value.trim();
+async function toneStart(mode) {
+  toneMode = mode;
+  const p = tonePre();
+  const raw = $(p + 'hz').value.trim();
   const tones = raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null;
-  $('tone-start').disabled = true;
-  note('tone-msg', '', 'Starting...');
-  const d = await post('/api/tonetest/start', {tones: tones, tone_sec: Number($('tone-sec').value)});
-  $('tone-start').disabled = false;
-  if (!d.ok) { note('tone-msg', 'err', d.error || 'Could not start the tone test.'); return; }
-  note('tone-msg', '', '');
-  $('tone-rep').classList.add('hidden');
+  $(p + 'start').disabled = true;
+  note(p + 'msg', '', 'Starting...');
+  const d = await post('/api/tonetest/start', {tones: tones, tone_sec: Number($(p + 'sec').value), mode: mode});
+  $(p + 'start').disabled = false;
+  if (!d.ok) { note(p + 'msg', 'err', d.error || 'Could not start the tone test.'); return; }
+  note(p + 'msg', '', '');
+  $(p + 'rep').classList.add('hidden');
   toneWasRunning = true;
   toneUi(true);
   tonePoll();
 }
 
+async function txLink(action) {
+  const node = $('tx-link-node').value.trim();
+  note('tx-link-msg', '', action === 'connect' ? 'Connecting...' : 'Disconnecting...');
+  const d = await post('/api/tonetest/link', {action: action, node: node});
+  note('tx-link-msg', d.ok ? 'ok' : 'err', d.ok ? (d.message || 'Done.') : (d.error || 'Could not change the link.'));
+}
+
 async function toneStop() {
   const d = await post('/api/tonetest/stop', {});
-  if (!d.ok) note('tone-msg', 'err', d.error || 'Could not stop the tone test.');
+  if (!d.ok) note(tonePre() + 'msg', 'err', d.error || 'Could not stop the tone test.');
 }
 
 async function tonePoll() {
   clearTimeout(toneTimer);
   const s = await api('/api/tonetest/status');
-  if (!s.ok) { note('tone-msg', 'err', s.error || 'Node Talker is not answering.'); toneUi(false); return; }
+  if (!s.ok) { note(tonePre() + 'msg', 'err', s.error || 'Node Talker is not answering.'); toneUi(false); return; }
+  if (s.target && !$('tx-link-node').value) $('tx-link-node').value = s.target;
   if (s.running) {
+    toneMode = s.mode || 'rx';
     toneWasRunning = true;
     toneUi(true);
-    $('tone-prog').textContent = (TONE_STAGE[s.stage] || 'Working') + ' ' + Math.round(s.progress * 100) + ' %';
+    $(tonePre() + 'prog').textContent = (TONE_STAGE[s.stage] || 'Working') + ' ' + Math.round(s.progress * 100) + ' %';
     toneTimer = setTimeout(tonePoll, 1000);
     return;
   }
   toneUi(false);
-  if (toneWasRunning && s.stage === 'failed') note('tone-msg', 'err', s.error || 'The tone test failed.');
-  if (toneWasRunning && s.stage === 'done') note('tone-msg', 'ok', 'Tone test finished.');
+  if (toneWasRunning && s.stage === 'failed') note(tonePre() + 'msg', 'err', s.error || 'The tone test failed.');
+  if (toneWasRunning && s.stage === 'done') note(tonePre() + 'msg', 'ok', 'Tone test finished.');
   toneWasRunning = false;
-  if (s.report) toneShow(s.report);
+  if (s.report) { if (s.report.mode === 'tx') txToneShow(s.report); else toneShow(s.report); }
+}
+
+function txToneShow(r) {
+  $('tx-tone-rep').classList.remove('hidden');
+  $('tx-tone-sum').textContent = 'Sent ' + r.tones.join(', ') + ' Hz, ' + r.tone_sec + ' s each, ' + r.seconds + ' s in all, at '
+    + r.level_db + ' dBFS, through node ' + r.node + ' with ID ' + r.callsign + '. Third-party nodes measure what they receive.';
 }
 
 function toneShow(r) {
@@ -7124,6 +7202,11 @@ function balToneDiff(r) {
   return row ? BAL_TONE_TARGET - row.proc_db : null;
 }
 
+function balToneListen(r, cfg) {
+  if (!(r.dropouts > 0)) return null;
+  return nextStep(JIT_STEPS, cfg && cfg.tune_enabled ? cfg.jitter_ms : 250);
+}
+
 function balToneScore(r) {
   const d = balToneDiff(r);
   return d == null ? null : Math.abs(d) + 0.5 * (r.dropouts || 0);
@@ -7197,10 +7280,17 @@ function expFail(msg) {
 }
 
 function expUi(running) {
-  $('exp-start').classList.toggle('hidden', running);
-  $('exp-stop').classList.toggle('hidden', !running);
-  ['exp-live', 'exp-tone', 'exp-bal', 'exp-mins'].forEach((id) => { $(id).disabled = running; });
+  ['exp-tone', 'exp-bal'].forEach((id) => { $(id).disabled = running; });
+  chkUi();
   if (!running) expStage('');
+}
+
+const BAL_RX_KEYS = ['rx_gain_db', 'rx_hpf', 'rx_agc', 'rx_gate', 'jitter_ms'], BAL_TX_KEYS = ['tx_gain_db', 'tx_buffer_ms'];
+
+function balNote(change, kind, text) {
+  const keys = Object.keys(change || {});
+  const rx = keys.some((k) => BAL_RX_KEYS.includes(k)), tx = keys.some((k) => BAL_TX_KEYS.includes(k));
+  note(rx && !tx ? 'rx-bal-msg' : tx && !rx ? 'tx-bal-msg' : 'exp-msg', kind, text);
 }
 
 function expLive(mins) {
@@ -7211,6 +7301,7 @@ function expLive(mins) {
 }
 
 async function expTone() {
+  toneMode = 'rx';
   const raw = $('tone-hz').value.trim();
   const tones = raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null;
   const d = await post('/api/tonetest/start', {tones: tones, tone_sec: Number($('tone-sec').value)});
@@ -7241,12 +7332,12 @@ async function expToneRounds() {
     const r = await expTone();
     if (!r || exp.stopped || !exp.balance) return;
     const score = balToneScore(r);
-    if (score == null) { exp.balance = false; note('exp-msg', 'warn', 'No tone came back from the node, so there is nothing to balance. Balancing stopped.'); return; }
+    if (score == null) { exp.balance = false; note('rx-bal-msg', 'warn', 'No tone came back from the node, so there is nothing to balance. Balancing stopped.'); return; }
     if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.lastTone) {
       await post('/api/config', exp.lastTone);
       loadConfig();
       exp.balance = false;
-      note('exp-msg', 'warn', 'The last RX gain change made the tones worse, so it was put back. Balancing stopped.');
+      note('rx-bal-msg', 'warn', 'The last RX gain change made the tones worse, so it was put back. Balancing stopped.');
       return;
     }
     prev = score;
@@ -7255,11 +7346,14 @@ async function expToneRounds() {
     if (!cur.config) return expFail(cur.error || 'Could not read the settings.');
     const before = cur.config.tune_enabled ? Math.round(Number(cur.config.rx_gain_db) || 0) : 0;
     const next = balToneStep(r, before);
-    if (next == null) { note('exp-msg', 'ok', 'Tone levels are within 1.5 dB of the target. Nothing to change.'); return; }
-    const res = await balApply({tune_enabled: true, rx_gain_db: next});
-    if (!res.ok) return expFail(res.error || 'Could not save RX gain.');
+    const lb = next == null ? balToneListen(r, cur.config) : null;
+    if (next == null && lb == null) { note('rx-bal-msg', 'ok', 'Tone levels are within 1.5 dB of the target and no tone dropped out. Nothing to change.'); return; }
+    const change = next != null ? {tune_enabled: true, rx_gain_db: next} : {tune_enabled: true, jitter_ms: lb};
+    const res = await balApply(change);
+    if (!res.ok) return expFail(res.error || 'Could not save the setting.');
     exp.lastTone = res.undo;
-    note('exp-msg', '', 'RX gain set to ' + fmtGain(next) + ' (was ' + fmtGain(before) + ').');
+    note('rx-bal-msg', '', next != null ? 'RX gain set to ' + fmtGain(next) + ' (was ' + fmtGain(before) + ').'
+      : 'Listen buffer set to ' + (lb / 1000) + ' s (tones dropped out).');
   }
 }
 
@@ -7292,7 +7386,7 @@ async function expLiveRounds() {
     const res = await balApply(hit.change);
     if (!res.ok) return expFail(res.error);
     exp.undo = res.undo;
-    note('exp-msg', '', 'Changed live: ' + hit.text);
+    balNote(hit.change, '', 'Changed live: ' + hit.text);
   }
 }
 
@@ -7354,12 +7448,18 @@ async function expRun(o) {
 
 function expStart() {
   if (exp) return;
-  const live = $('exp-live').checked, tone = $('exp-tone').checked, balance = $('exp-bal').checked;
-  if (!live && !tone) { note('exp-msg', 'err', 'Tick the live audio check, the node tone test, or both.'); return; }
-  if (live && appAudio()) { note('exp-msg', 'err', 'The live check measures page audio: switch the app to Page audio in its Audio settings first.'); return; }
-  if (live && chk && chk.running) { note('exp-msg', 'err', 'A check is already running.'); return; }
+  const tone = $('exp-tone').checked, balance = $('exp-bal').checked;
+  if (appAudio()) { note('exp-msg', 'err', 'The live check measures page audio: switch the app to Page audio in its Audio settings first.'); return; }
+  if (chk && chk.running) { note('exp-msg', 'err', 'A check is already running.'); return; }
   note('exp-msg', '', '');
-  expRun({live: live, tone: tone, balance: balance, mins: Number($('exp-mins').value) || 5});
+  note('rx-bal-msg', '', '');
+  note('tx-bal-msg', '', '');
+  expRun({live: true, tone: tone, balance: balance, mins: Number($('chk-mins').value) || 5});
+}
+
+function auditStop() {
+  if (exp) expStop();
+  else if (chk && chk.running) chkStop();
 }
 
 async function expRefreshSnap() {
@@ -7371,9 +7471,7 @@ async function expRefreshSnap() {
 }
 
 function expInit() {
-  $('exp-start').addEventListener('click', expStart);
-  $('exp-stop').addEventListener('click', expStop);
-  $('cd-exp').querySelector('.fold-btn').addEventListener('click', expRefreshSnap);
+  $('cd-chk').querySelector('.fold-btn').addEventListener('click', expRefreshSnap);
   $('exp-restore').addEventListener('click', async () => {
     const d = await post('/api/balance/restore', {});
     loadConfig();
@@ -7434,7 +7532,7 @@ function chkClearFile() {
 
 async function chkShow(r) {
   chkShown = r;
-  if (!r) { $('chk-rep').classList.add('hidden'); return; }
+  if (!r) { $('chk-rep').classList.add('hidden'); $('chk-rx-box').classList.add('hidden'); $('chk-tx-box').classList.add('hidden'); return; }
   $('chk-export').disabled = false;
   let prev = chkCompareWith;
   if (!prev) { try { prev = JSON.parse(localStorage.getItem('nlCheckPrev') || 'null'); } catch (e) {} }
@@ -7468,6 +7566,8 @@ async function chkShow(r) {
   const n = sugs.filter((x) => x.change).length;
   sum('chk', 'Last check: ' + (n ? n + ' thing' + (n > 1 ? 's' : '') + ' to change' : 'all good'));
   $('chk-rep').classList.remove('hidden');
+  $('chk-rx-box').classList.remove('hidden');
+  $('chk-tx-box').classList.remove('hidden');
 }
 
 // Settings Node Talker Mobile reports, when it provides NodeTalkerApp.audioInfo(). It returns JSON:
@@ -7661,10 +7761,14 @@ function chkInit() {
   if (!chk && last) chkShow(last);
   chkUi();
   setInterval(chkTick, 1000);
-  $('chk-start').addEventListener('click', chkStart);
-  $('chk-stop').addEventListener('click', chkStop);
-  $('tone-start').addEventListener('click', toneStart);
+  $('chk-start').addEventListener('click', expStart);
+  $('chk-stop').addEventListener('click', auditStop);
+  $('tone-start').addEventListener('click', () => toneStart('rx'));
   $('tone-stop').addEventListener('click', toneStop);
+  $('tx-tone-start').addEventListener('click', () => toneStart('tx'));
+  $('tx-link-connect').addEventListener('click', () => txLink('connect'));
+  $('tx-link-disconnect').addEventListener('click', () => txLink('disconnect'));
+  $('tx-tone-stop').addEventListener('click', toneStop);
   $('chk-export').addEventListener('click', chkExport);
   $('chk-file').addEventListener('click', () => $('chk-file-in').click());
   $('chk-file-in').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) chkCompareFile(f); });
@@ -8518,7 +8622,7 @@ async function micTest() {
   $('rep-mic').classList.add('hidden');
   const pc = newAudioCtx();
   try { pc.resume(); } catch (e) {}
-  note('mic-test-msg', '', 'Recording 4 s: talk as you would on the air...');
+  note('mic-test-msg', '', 'Recording 20 s: talk as you would on the air...');
   micTaps.push(tap);
   vuHold = {db: -120, t: 0};
   const done = () => { micTaps = micTaps.filter((f) => f !== tap); $('vu-mic').classList.add('hidden'); };
@@ -8530,7 +8634,7 @@ async function micTest() {
     return;
   }
   vuRun($('vu-mic'), () => testing);
-  await sleep(4000);
+  await sleep(20000);
   stopMic(); testing = false; done();
   const n = testBuf.reduce((x, y) => x + y.length, 0);
   if (!n) { pc.close(); $('mic-test').disabled = false; note('mic-test-msg', '', 'Nothing was recorded.'); return; }
@@ -9505,13 +9609,16 @@ async function ffUpload() {
   if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
 }
 
-const CFG_NUM = ['port', 'udp_port', 'max_listeners', 'tot_sec', 'kerchunk_delay_ms'], CFG_BOOL = ['public_listen', 'https', 'busy_lockout'];
+const CFG_NUM = ['port', 'udp_port'], CFG_BOOL = ['public_listen', 'https'];
+const AUDIO_NUM = ['max_listeners', 'tot_sec', 'kerchunk_delay_ms'], AUDIO_BOOL = ['busy_lockout'];
 
 async function loadConfig() {
   const d = await api('/api/config');
   if (!d.ok) return;
   CFG_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
+  AUDIO_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
+  AUDIO_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
   sum('cfg', (d.config.https ? 'HTTPS' : 'HTTP') + ' · ' + d.config.max_listeners + ' listeners' + (d.config.public_listen ? ' · public' : '')
     + (ptt.mode === 'tap' ? ' · tap to talk ' + ptt.guard + ' s' : '') + (ptt.gap ? ' · 4 s wait' : ''));
   pttSetUi();
@@ -9530,6 +9637,7 @@ async function loadConfig() {
 
 function tuneUi() {
   const on = $('tune-on').checked;
+  $('tune-on-rx').checked = on;
   const clean = [];
   if ($('rx-hpf').checked) clean.push('300 Hz cut');
   if ($('rx-agc').checked) clean.push('auto level');
@@ -9540,13 +9648,15 @@ function tuneUi() {
   $('tune-tx-v').textContent = fmtGain(Number($('tune-tx').value));
   $('tune-rx-v').textContent = fmtGain(Number($('tune-rx').value));
   ['tune-body', 'tune-body-rx'].forEach((id) => { $(id).classList.toggle('muted', !on); $(id).classList.toggle('na', !on); });
-  $('tune-body').title = $('tune-body-rx').title = on ? '' : 'Turn on Adjust audio levels here (TX card) to use these.';
+  $('tune-body').title = $('tune-body-rx').title = on ? '' : 'Turn on Adjust audio levels to use these.';
 }
 
 async function saveTune(msgId = 'tune-msg') {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
     rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value,
     rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value};
+  AUDIO_NUM.forEach((k) => { body[k] = $('cfg-' + k).value; });
+  AUDIO_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   setMsg(msgId, await post('/api/config', body));
 }
 
@@ -9639,6 +9749,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
   $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
   ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  $('tune-on-rx').addEventListener('input', () => { $('tune-on').checked = $('tune-on-rx').checked; tuneUi(); });
   $('tune-save').addEventListener('click', () => saveTune('tune-msg'));
   loadMicUi();
   chkInit();
@@ -9842,13 +9953,8 @@ html[data-theme="light"] *{text-shadow:none!important}
 <h3 style="margin:6px 0 4px">1. Node Talker settings</h3>
 <div id="cb-cfg">
 <div class="row"><label>Web port <input type="number" id="cfg-port" min="1024" max="65535"></label>
-<label>UDP port <input type="number" id="cfg-udp_port" min="1024" max="65535"></label>
-<label>Max listeners <input type="number" id="cfg-max_listeners" min="1" max="10"></label>
-<label>TX time-out (s) <input type="number" id="cfg-tot_sec" min="30" max="600"></label></div>
+<label>UDP port <input type="number" id="cfg-udp_port" min="1024" max="65535"></label></div>
 <div class="row"><label><input type="checkbox" id="cfg-https"> HTTPS (needed for the microphone)</label></div>
-<div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
-<div class="row"><label>Drop kerchunks from Listen <select id="cfg-kerchunk_delay_ms"><option value="0">Off</option><option value="100">0.1 s</option><option value="200">0.2 s</option><option value="300">0.3 s</option><option value="400">0.4 s</option><option value="500">0.5 s</option><option value="600">0.6 s</option><option value="700">0.7 s</option><option value="800">0.8 s</option><option value="900">0.9 s</option><option value="1000">1.0 s</option></select></label></div>
-<p class="muted small">Listen waits this long before it plays audio, so every delay adds the same lag to Listen. A kerchunk is dropped only if it has ended before its audio would play. A kerchunk needs its length plus 0.6 s to be known to be over, so a short wait drops only the shortest kerchunks. Off plays everything.</p>
 <div class="row"><label><input type="checkbox" id="cfg-public_listen"> Listen without logging in</label></div>
 <p class="muted small">HTTPS uses a certificate made on this Pi, so the browser shows a warning: accept it to continue. Changing a port or HTTPS restarts Node Talker.</p>
 <div id="cfg-msg" class="msg"></div>
@@ -9944,7 +10050,28 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><label><input type="checkbox" id="play-s16"> 16-bit audio (cleaner on quiet audio; 128 kbit/s instead of 64)</label></div>
 <div class="row"><label><input type="checkbox" id="play-smooth"> Smooth playback (filtered upsampling, no sizzle)</label></div>
 </div>
+<h3 style="margin:14px 0 4px">Listen</h3>
+<div class="row"><label>Max listeners <input type="number" id="cfg-max_listeners" min="1" max="10"></label>
+<label>Drop kerchunks from Listen <select id="cfg-kerchunk_delay_ms"><option value="0">Off</option><option value="100">0.1 s</option><option value="200">0.2 s</option><option value="300">0.3 s</option><option value="400">0.4 s</option><option value="500">0.5 s</option><option value="600">0.6 s</option><option value="700">0.7 s</option><option value="800">0.8 s</option><option value="900">0.9 s</option><option value="1000">1.0 s</option></select></label></div>
+<p class="muted small">Listen waits this long before it plays audio, so every delay adds the same lag to Listen. A kerchunk is dropped only if it has ended before its audio would play. A kerchunk needs its length plus 0.6 s to be known to be over, so a short wait drops only the shortest kerchunks. Off plays everything.</p>
+<h3 style="margin:14px 0 4px">Headset / audio output</h3>
+<div id="cb-hs-out">
+<p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
+<p class="muted small why hidden" id="why-hs"></p>
+<div id="ap-out-row" class="hidden"><label for="ap-out">Sound through (app audio)</label>
+<select id="ap-out" style="width:100%;min-height:44px;margin-top:6px">
+<option value="speaker">Speaker / media volume: louder; keep the phone's media volume up</option>
+<option value="earpiece">Earpiece / call volume: quieter; the phone's call volume sets it</option>
+</select></div>
+<div id="hs-out-row"><label for="hs-out">Audio output</label>
+<select id="hs-out" style="width:100%;min-height:44px;margin-top:6px"></select></div>
+<p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Talker follows it.</p>
+<div class="row"><button id="hs-names" class="btn hidden" type="button">Show device names</button></div>
+<div class="muted small" id="hs-now"></div>
+<div id="hs-msg" class="msg"></div>
+</div>
 <h3 style="margin:14px 0 4px">Audio levels</h3>
+<div class="row"><label><input type="checkbox" id="tune-on-rx"> Adjust audio levels here</label></div>
 <div id="tune-body-rx">
 <div class="row"><label for="tune-rx" style="min-width:130px">Node to phone (RX)</label>
 <input type="range" id="tune-rx" min="-12" max="12" step="1" style="flex:1"><span id="tune-rx-v" class="mono small">0 dB</span></div>
@@ -9964,6 +10091,24 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
 <div class="row"><button id="rx-save" class="btn primary" type="button">Save</button></div>
 <div id="rx-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Receive results</h3>
+<p class="muted small">From the last Audio check: what the node sent to this phone and what came back. Shown after a check.</p>
+<div id="chk-rx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table></div>
+<div id="rx-bal-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">RX tone test (known baseline)</h3>
+<p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. This is the known baseline for the receive path. Local network only. The report is kept in memory on the Pi until the next test.</p>
+<div class="row"><label for="tone-sec" style="min-width:90px">Tone length</label>
+<select id="tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
+<div class="row"><label for="tone-hz" style="min-width:90px">Tones (Hz)</label>
+<input id="tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
+<div class="row"><button id="tone-start" class="btn primary" type="button">Run RX tone test</button><button id="tone-stop" class="btn hidden" type="button">Stop</button></div>
+<div id="tone-prog" class="chk-run hidden"></div>
+<div id="tone-rep" class="hidden">
+<div id="tone-sum" class="muted small"></div>
+<div class="tone-scroll"><table class="chk-t tone-t"><thead><tr><th>Hz</th><th>Sent dB</th><th>Raw dB</th><th>Raw vs sent</th><th>After cleanup dB</th><th>Cleanup effect</th><th>Freq err Hz</th><th>Drops</th></tr></thead><tbody id="tone-rows"></tbody></table></div>
+<div id="tone-warn"></div>
+</div>
+<div id="tone-msg" class="msg"></div>
 </div>
 </div>
 
@@ -9982,6 +10127,9 @@ Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <button id="tx-remove" class="btn" type="button">Remove</button>
 </div>
 <div id="tx-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Transmit limits</h3>
+<div class="row"><label>TX time-out (s) <input type="number" id="cfg-tot_sec" min="30" max="600"></label></div>
+<div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
 <h3 style="margin:14px 0 4px">Audio levels</h3>
 <div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
 <p class="muted small">Off: the gains and buffers below aren't used. These change only this page's path,
@@ -10015,6 +10163,21 @@ unkeys. It never runs past the node's TX time-out. <span id="ptt-guard-note"></s
 <div class="row"><button id="ptt-save" class="btn primary" type="button">Save on this phone</button>
 <button id="ptt-restore" class="btn" type="button">Restore from the Pi</button></div>
 <div id="ptt-set-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Headset microphone and button</h3>
+<div id="cb-hs-tx">
+<p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
+<div style="margin-top:10px"><label for="hs-mic">Microphone for push-to-talk</label>
+<select id="hs-mic" style="width:100%;min-height:44px;margin-top:6px"></select></div>
+<p class="muted small">Default follows Android: the headset mic when a headset is plugged in. With Bluetooth, picking the phone's own mic can keep the headset in music quality while you talk, on some phones.</p>
+<div style="margin-top:10px"><label for="hs-btn">Headset button</label>
+<select id="hs-btn" style="width:100%;min-height:44px;margin-top:6px">
+<option value="listen">Listen on / off</option>
+<option value="ptt">Push to talk: press to talk, press again to stop</option>
+<option value="off">Off</option>
+</select></div>
+<p class="muted small">The button only reaches the page while Node Talker is playing. Push to talk uses the same transmit as the Talk button, and the same guard timer (set under Push-to-talk on this phone, never past the node's time-out); if the second press doesn't arrive, the guard timer ends the transmission.</p>
+<div id="hs-tx-msg" class="msg"></div>
+</div>
 <h3 style="margin:14px 0 4px">Microphone</h3>
 <div id="cb-mic">
 <p class="muted small">Saved in this browser only; each phone keeps its own. Browsers can't change the phone's own
@@ -10031,7 +10194,7 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="row"><label for="mic-gain" style="min-width:130px">Mic gain</label>
 <input type="range" id="mic-gain" min="-12" max="24" step="1" style="flex:1"><span id="mic-gain-v" class="mono small">0 dB</span></div>
 <p class="muted small">With automatic gain on, the browser undoes most of the mic gain; turn it off for a fixed level.</p>
-<div class="row"><button id="mic-test" class="btn" type="button">Test mic (4 s, plays back)</button></div>
+<div class="row"><button id="mic-test" class="btn" type="button">Test mic (20 s, plays back)</button></div>
 <div class="vu hidden" id="vu-mic" aria-live="off">
 <div class="vu-bar"><i class="vu-avg"></i><i class="vu-pk"></i><i class="vu-hold"></i></div>
 <div class="vu-scale"><span>-60</span><span>-40</span><span>-20</span><span>-6 · -3</span><span>0 dBFS</span></div>
@@ -10041,7 +10204,7 @@ mic volume, so the gain here is applied in the page.</p>
 <div id="mic-test-msg" class="msg"></div>
 <div class="rep hidden" id="rep-mic">
 <h3>Mic test report</h3>
-<div class="rep-strip"><canvas id="rep-mic-c"></canvas><span class="rep-lbl">your level, 4 s</span><i class="rep-head"></i></div>
+<div class="rep-strip"><canvas id="rep-mic-c"></canvas><span class="rep-lbl">your level, 20 s</span><i class="rep-head"></i></div>
 <div class="rep-n" id="rep-mic-n"></div>
 <div class="rep-v" id="rep-mic-v"></div>
 </div>
@@ -10055,70 +10218,44 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="rep-n" id="rep-node-n"></div>
 <div class="rep-v" id="rep-node-v"></div>
 </div>
+<h3 style="margin:14px 0 4px">Transmit results</h3>
+<p class="muted small">From the last Audio check: what this phone sent to the node. Shown after a check.</p>
+<div id="chk-tx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table></div>
+<div id="tx-bal-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">TX tone test (for third-party nodes)</h3>
+<p class="muted small">Keys node 1921 and sends a station ID, a series of tones and the station ID again, so other stations can measure what they receive. Nothing is measured here. Like the RX test, it is refused while the node is linked or something is tuned.</p>
+<div class="row"><label for="tx-link-node" style="min-width:90px">Link to node</label>
+<input id="tx-link-node" type="text" inputmode="numeric" maxlength="7" placeholder="Third-party node" style="width:140px">
+<button id="tx-link-connect" class="btn" type="button">Connect</button><button id="tx-link-disconnect" class="btn" type="button">Disconnect</button></div>
+<div id="tx-link-msg" class="msg"></div>
+<div class="row"><label for="tx-tone-sec" style="min-width:90px">Tone length</label>
+<select id="tx-tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
+<div class="row"><label for="tx-tone-hz" style="min-width:90px">Tones (Hz)</label>
+<input id="tx-tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
+<div class="row"><button id="tx-tone-start" class="btn primary" type="button">Run TX tone test</button><button id="tx-tone-stop" class="btn hidden" type="button">Stop</button></div>
+<div id="tx-tone-prog" class="chk-run hidden"></div>
+<div id="tx-tone-rep" class="hidden"><div id="tx-tone-sum" class="muted small"></div></div>
+<div id="tx-tone-msg" class="msg"></div>
 </div>
-<h3 style="margin:14px 0 4px">Headset / audio output</h3>
-<div id="cb-hs">
-<p class="muted small">For a wired, USB-C or Bluetooth headset. Saved in this browser only; each phone keeps its own.</p>
-<p class="muted small why hidden" id="why-hs"></p>
-<div id="ap-out-row" class="hidden"><label for="ap-out">Sound through (app audio)</label>
-<select id="ap-out" style="width:100%;min-height:44px;margin-top:6px">
-<option value="speaker">Speaker / media volume: louder; keep the phone's media volume up</option>
-<option value="earpiece">Earpiece / call volume: quieter; the phone's call volume sets it</option>
-</select></div>
-<div id="hs-out-row"><label for="hs-out">Audio output</label>
-<select id="hs-out" style="width:100%;min-height:44px;margin-top:6px"></select></div>
-<p class="muted small hidden" id="hs-out-note">This browser plays through whatever Android is using: plug in the headset, or pick the Bluetooth device in Android's sound settings, and Node Talker follows it.</p>
-<div style="margin-top:10px"><label for="hs-mic">Microphone for push-to-talk</label>
-<select id="hs-mic" style="width:100%;min-height:44px;margin-top:6px"></select></div>
-<p class="muted small">Default follows Android: the headset mic when a headset is plugged in. With Bluetooth, picking the phone's own mic can keep the headset in music quality while you talk, on some phones.</p>
-<div style="margin-top:10px"><label for="hs-btn">Headset button</label>
-<select id="hs-btn" style="width:100%;min-height:44px;margin-top:6px">
-<option value="listen">Listen on / off</option>
-<option value="ptt">Push to talk: press to talk, press again to stop</option>
-<option value="off">Off</option>
-</select></div>
-<p class="muted small">The button only reaches the page while Node Talker is playing. Push to talk uses the same transmit as the Talk button, and the same guard timer (set under Push-to-talk on this phone, never past the node's time-out); if the second press doesn't arrive, the guard timer ends the transmission.</p>
-<div class="row"><button id="hs-names" class="btn hidden" type="button">Show device names</button></div>
-<div class="muted small" id="hs-now"></div>
-<div id="hs-msg" class="msg"></div>
-</div>
-</div>
-</div>
-
-<div class="card fold" id="cd-exp">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-exp"><span class="fold-t">Expanded test</span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-exp">
-<p class="muted small">Runs the live audio check and the node tone test one after the other. The tone test keys the node, so it is off unless you tick it. Tone length and tones come from the Tone test below. Tones are never sent while the node is linked or something is tuned, and the test stops if the Pi runs out of memory or its CPU stays high.</p>
-<div class="row"><label class="small"><input type="checkbox" id="exp-live" checked> Live audio check (listen and talk)</label>
-<label class="small"><input type="checkbox" id="exp-tone"> Node tone test (2 min max)</label></div>
-<div class="row"><label for="exp-mins" style="min-width:90px">Live length</label>
-<select id="exp-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select></div>
-<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs, put back if a change makes things worse</label></div>
-<div class="row"><button id="exp-start" class="btn primary" type="button">Start expanded test</button><button id="exp-stop" class="btn hidden" type="button">Stop</button></div>
-<div id="exp-run" class="chk-run hidden"></div>
-<div id="exp-open" class="hidden"><div class="msg warn" id="exp-open-msg"></div>
-<div class="row"><button id="exp-restore" class="btn" type="button">Restore original settings</button><button id="exp-keep" class="btn" type="button">Keep changes</button></div></div>
-<div id="exp-msg" class="msg"></div>
 </div>
 </div>
 
 <div class="card fold" id="cd-chk">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Audio check</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-chk">
-<p class="muted small">Start a check, go to the Listen tab and use the node as usual: listen, talk, listen. Come back
-for a report with averages and what to change. Only numbers are kept, never audio, and only in this browser.</p>
+<p class="muted small">Start, go to the Listen tab and use the node as usual: listen, talk, listen. Come back for a report with averages and what to change. The receive results are in the RX card and the transmit results are in the TX card. Only numbers are kept, never audio, and only in this browser.</p>
 <div class="row"><label for="chk-mins" style="min-width:90px">Length</label>
 <select id="chk-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select>
-<button id="chk-start" class="btn primary" type="button">Start check</button><button id="chk-stop" class="btn hidden" type="button">Stop</button>
+<button id="chk-start" class="btn primary" type="button">Start</button><button id="chk-stop" class="btn hidden" type="button">Stop</button>
 <button id="chk-copy-card" class="btn" type="button">Copy all</button></div>
 <p class="muted small why hidden" id="why-chk"></p>
 <div class="row"><label class="small"><input type="checkbox" id="chk-guide" checked> Prompt me to talk during the check</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="exp-tone"> Run the RX tone test after the check (keys the node; tone length and tones are set in the RX card)</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs, put back if a change makes things worse</label></div>
+<p class="muted small">Tones are never sent while the node is linked or something is tuned, and the check stops if the Pi runs out of memory or its CPU stays high.</p>
 <div id="chk-run" class="chk-run hidden"></div>
+<div id="exp-run" class="chk-run hidden"></div>
 <div id="chk-rep" class="hidden">
-<h3 style="margin:10px 0 4px">Receive</h3>
-<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table>
-<h3 style="margin:10px 0 4px">Transmit</h3>
-<table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table>
 <h3 style="margin:10px 0 4px">Per minute</h3>
 <div id="chk-min" class="chk-min"></div>
 <h3 style="margin:12px 0 2px">What to change</h3>
@@ -10130,21 +10267,10 @@ for a report with averages and what to change. Only numbers are kept, never audi
 <button id="chk-clear-file" class="btn hidden" type="button">Stop comparing</button>
 <input id="chk-file-in" type="file" accept="application/json,.json" class="hidden"></div>
 <div id="chk-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Tone test</h3>
-<p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. Local network only. The report is kept in memory on the Pi until the next test.</p>
-<div class="row"><label for="tone-sec" style="min-width:90px">Tone length</label>
-<select id="tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
-<div class="row"><label for="tone-hz" style="min-width:90px">Tones (Hz)</label>
-<input id="tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
-<div class="row"><button id="tone-start" class="btn primary" type="button">Run tone test</button><button id="tone-stop" class="btn hidden" type="button">Stop</button></div>
-<div id="tone-prog" class="chk-run hidden"></div>
-<div id="tone-rep" class="hidden">
-<div id="tone-sum" class="muted small"></div>
-<div class="tone-scroll"><table class="chk-t tone-t"><thead><tr><th>Hz</th><th>Sent dB</th><th>Raw dB</th><th>Raw vs sent</th><th>After cleanup dB</th><th>Cleanup effect</th><th>Freq err Hz</th><th>Drops</th></tr></thead><tbody id="tone-rows"></tbody></table></div>
-<div id="tone-warn"></div>
 </div>
-<div id="tone-msg" class="msg"></div>
-</div>
+<div id="exp-open" class="hidden"><div class="msg warn" id="exp-open-msg"></div>
+<div class="row"><button id="exp-restore" class="btn" type="button">Restore original settings</button><button id="exp-keep" class="btn" type="button">Keep changes</button></div></div>
+<div id="exp-msg" class="msg"></div>
 </div>
 </div>
 
@@ -10237,6 +10363,7 @@ _POST_ACTIONS = {
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
     "/api/favorites-file": (lambda b: fav_file_put(b.get("text")), ()),
     "/api/tonetest/start": (lambda b: TONE.start(b), (ValueError,)),
+    "/api/tonetest/link": (lambda b: tone_link_set(b), (ValueError,)),
     "/api/tonetest/stop": (lambda b: TONE.stop(), ()),
     "/api/balance/snapshot": (balance_snapshot, ()),
     "/api/balance/restore": (balance_restore, ()),
@@ -10552,7 +10679,7 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authed():
             self._json(401, {"ok": False, "error": "Log in first."})
             return
-        if path in ("/api/tonetest/start", "/api/tonetest/stop") and self._wan():
+        if path in ("/api/tonetest/start", "/api/tonetest/stop", "/api/tonetest/link") and self._wan():
             self._json(403, {"ok": False, "error": "The tone test runs from the local network only."})
             return
         action = _POST_ACTIONS.get(path)

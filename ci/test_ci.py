@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -1135,6 +1136,49 @@ class ConfgetterTests(unittest.TestCase):
         newest = [s for s in snaps if "old" not in s][0]
         self.assertEqual(os.stat(os.path.join(self.out, newest)).st_mode & 0o777, 0o600)
         self.assertEqual([f for f in os.listdir(self.out) if f.endswith(".tmp")], [])
+
+
+class NodeTalkerCardTests(unittest.TestCase):
+    CARDS = {
+        "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "setup-save"],
+        "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
+                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-save", "nd-select",
+                  "chk-rx", "rx-bal-msg", "tone-start", "tone-hz", "tone-sec", "tone-rep", "tone-msg"],
+        "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
+                  "hs-mic", "hs-btn", "mic-gain", "mic-test", "node-test", "tx-add", "tune-save",
+                  "chk-tx", "tx-bal-msg", "tx-tone-start", "tx-tone-hz", "tx-tone-sec", "tx-tone-rep",
+                  "tx-link-node", "tx-link-connect", "tx-link-disconnect"],
+        "cd-chk": ["chk-start", "chk-stop", "chk-mins", "exp-tone", "exp-bal"],
+    }
+
+    def setUp(self):
+        import glob
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            self.text = fh.read()
+        self.cards = [(m.start(), m.group(1)) for m in re.finditer(r'<div class="card fold" id="(cd-[a-z]+)">', self.text)]
+
+    def owner(self, element_id):
+        pos = self.text.index('id="%s"' % element_id)
+        return max((c for c in self.cards if c[0] < pos), key=lambda c: c[0])[1]
+
+    def test_settings_sit_in_their_cards(self):
+        for card, ids in self.CARDS.items():
+            for element_id in ids:
+                self.assertEqual(self.owner(element_id), card, element_id)
+
+    def test_audio_check_and_expanded_test_share_one_start(self):
+        self.assertNotIn('id="cd-exp"', self.text)
+        self.assertNotIn('id="exp-start"', self.text)
+        self.assertEqual(self.owner("chk-start"), "cd-chk")
+
+    def test_tone_link_route_is_writable_only_locally(self):
+        self.assertIn('"/api/tonetest/link"', self.text)
+        self.assertIn('"/api/tonetest/stop", "/api/tonetest/link") and self._wan()', self.text)
+
+    def test_mic_test_records_20_seconds(self):
+        self.assertIn("Test mic (20 s, plays back)", self.text)
+        self.assertIn("Recording 20 s", self.text)
 
 
 if __name__ == "__main__":
