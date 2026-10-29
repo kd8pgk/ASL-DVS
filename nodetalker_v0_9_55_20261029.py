@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.54"
+VERSION = "0.9.55"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker"
 
@@ -56,7 +56,8 @@ RESTORE_MAX_AGE_SEC = 1800
 RPT_CONF = os.environ.get("NODETALKER_RPT_CONF", "/etc/asterisk/rpt.conf")
 FEED_PYTHON = "/usr/bin/python3"
 FEED_MARKS = ("nodelisten.py,--feed,", "nodetalker.py,--feed,")
-HOOK_NOTE = "; nodelisten: sends this node's audio to the Node Listen page (remove it from that page)"
+HOOK_NOTE = "; nodetalker: sends this node's audio to Node Talker (remove it from the RX card)"
+HOOK_NOTES = (HOOK_NOTE, "; nodelisten: sends this node's audio to the Node Listen page (remove it from that page)")
 
 _LAUNCHER_PATH = "/usr/local/bin/asl_dvs_launch.py"
 _LAUNCHER_CODE = '''#!/usr/bin/env python3
@@ -1905,7 +1906,7 @@ def _remove_ours(lines, stanzas):
         if _is_ours(s["outstream"]):
             i = s["outstream_line"]
             drop.add(i)
-            if i > 0 and lines[i - 1].strip() == HOOK_NOTE:
+            if i > 0 and lines[i - 1].strip() in HOOK_NOTES:
                 drop.add(i - 1)
     return [ln for i, ln in enumerate(lines) if i not in drop], bool(drop)
 
@@ -2329,7 +2330,8 @@ TLS_KEY = os.path.join(TLS_DIR, "key.pem")
 TX_NODE = "1921"
 TX_USRP_SEND = 32018
 TX_USRP_LISTEN = 34018
-TX_NOTE = "; nodelisten: transmit node for the Node Listen page (remove it from that page)"
+TX_NOTE = "; nodetalker: transmit node for Node Talker (remove it from the TX card)"
+TX_NOTES = (TX_NOTE, "; nodelisten: transmit node for the Node Listen page (remove it from that page)")
 IAX_CONF = os.environ.get("NODETALKER_IAX_CONF", "/etc/asterisk/iax.conf")
 LOCAL_KEY_PATH = os.environ.get("NODETALKER_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
 SYSMON_PORT = 9999
@@ -5139,7 +5141,7 @@ def tone_link_set(body):
     if not main:
         return {"ok": False, "error": "No main node is set up."}
     if action == "connect":
-        if not _is_node_name(node) or node in (TX_NODE, main):
+        if not re.fullmatch(r"[0-9]{1,7}", node) or node in (TX_NODE, main):
             return {"ok": False, "error": f"Enter a node number other than {TX_NODE} and {main}."}
         if TONE.status()["running"] or TALKER.state()["keyed"]:
             return {"ok": False, "error": "Wait until the test or transmission is over."}
@@ -5153,6 +5155,12 @@ def tone_link_set(body):
         target = TONE_LINK["node"] or node
         if not target:
             return {"ok": True, "message": "Nothing to disconnect."}
+        if not re.fullmatch(r"[0-9]{1,7}", target) or target in (TX_NODE, main):
+            return {"ok": False, "error": f"Enter a node number other than {TX_NODE} and {main}."}
+        if not TONE_LINK["node"]:
+            ok, links = rpt_links(main, max_age=0.5)
+            if not ok or target not in {x["node"] for x in links}:
+                return {"ok": False, "error": f"Node {target} is not linked to node {main}."}
         ok, out = ilink(main, 1, target)
         TONE_LINK["node"] = ""
         if not ok:
@@ -5438,7 +5446,7 @@ def _tx_stanza(lines, stanzas):
 
 def _tx_ours(lines, s):
     h = s["header"]
-    return h > 0 and lines[h - 1].strip() == TX_NOTE
+    return h > 0 and lines[h - 1].strip() in TX_NOTES
 
 
 def _has_line(lines, want):
@@ -7060,7 +7068,9 @@ async function toneStart(mode) {
 }
 
 async function setupCheck() {
+  if ($('setup-dlg').open) return;
   const d = await api('/api/setup');
+  if ($('setup-dlg').open) return;
   if (!d.ok || !d.pending || (!d.steps.length && !d.blocked.length)) return;
   const list = $('setup-steps');
   list.innerHTML = '';
@@ -7269,19 +7279,27 @@ function balLiveScore(r) {
 }
 
 const AUTO_WINDOW_MIN = 1, AUTO_SETTLE_MS = 300000, AUTO_GAP_MS = 240000, AUTO_CPU_PCT = 70, AUTO_CPU_SEC = 30;
+const AUTO_WORSE = 2, AUTO_REJECT_MS = 1800000, AUTO_WATCH_SLOW_MS = 15000, POLL_STALL_MS = 20000;
 let autoRun = null;
-const autoBest = {rx: null, tx: null}, autoUndo = {rx: null, tx: null};
+const autoUndo = {rx: null, tx: null}, autoPre = {rx: null, tx: null}, autoSig = {rx: '', tx: ''}, autoRejected = {rx: {}, tx: {}};
 
 function autoOn(side) { return !!$(side + '-auto').checked; }
 function autoWanted() { return autoOn('rx') || autoOn('tx'); }
 function autoKeys(side) { return side === 'rx' ? BAL_RX_KEYS : BAL_TX_KEYS; }
-function autoStatus(text) { ['rx', 'tx'].forEach((s) => { if (autoOn(s)) note(s + '-auto-msg', '', text); }); }
+function autoAwakeNote() {
+  if (autoRun && autoRun.lock && !autoRun.lock.released) return '';
+  const a = appInfo();
+  if (a && a.keepScreenOn) return '';
+  return ' The page cannot keep the screen on here (it needs HTTPS, or the app\'s Keep screen on), so the balancer pauses while the screen is off.';
+}
+
+function autoStatus(text) { const extra = autoAwakeNote(); ['rx', 'tx'].forEach((s) => { if (autoOn(s)) note(s + '-auto-msg', '', text + extra); }); }
 function autoSettled() { return !!autoRun && Date.now() - autoRun.started >= AUTO_SETTLE_MS; }
 function pollBusy() { return keyed || talking || testing || toneWasRunning || !!exp || !!(chk && chk.running); }
 
 function pollEvery(fn, fast, slow) {
   setTimeout(async () => {
-    try { await fn(); } catch (e) {}
+    try { await Promise.race([fn(), sleep(POLL_STALL_MS)]); } catch (e) {}
     pollEvery(fn, fast, slow);
   }, autoSettled() && !pollBusy() ? slow : fast);
 }
@@ -7302,6 +7320,8 @@ function autoPauseLoad(run, why) {
 }
 
 async function autoWatchTick(run) {
+  if (autoSettled() && !run.window && Date.now() - (run.lastWatch || 0) < AUTO_WATCH_SLOW_MS) return;
+  run.lastWatch = Date.now();
   const d = await api('/api/load');
   if (autoRun !== run || !d.ok) return;
   if (d.breach) { autoPauseLoad(run, 'the Pi is under load (' + d.breach + ')'); return; }
@@ -7336,28 +7356,38 @@ async function autoSleep(run, ms) {
   for (let t = 0; t < ms && autoRun === run; t += 1000) await sleep(1000);
 }
 
+function autoSigOf(change) {
+  return JSON.stringify(Object.keys(change).filter((k) => k !== 'node').sort().map((k) => [k, change[k]]));
+}
+
 async function autoStep(side, r, cfg) {
+  const msg = side + '-auto-msg';
   const act = side === 'rx' ? r.rx.actSecs : r.tx.actSecs;
+  if (!(act >= CHK_MIN_SPEECH)) { note(msg, '', 'Not enough ' + (side === 'rx' ? 'received' : 'transmitted') + ' speech this minute to judge.'); return; }
   const score = side === 'rx' ? balRxScore(r) : balTxScore(r);
-  const best = autoBest[side];
-  if (best != null && score > best + BAL_KEEP_MARGIN && autoUndo[side]) {
-    await post('/api/config', autoUndo[side]);
+  if (autoUndo[side]) {
+    if (score > autoPre[side] + AUTO_WORSE) {
+      await post('/api/config', autoUndo[side]);
+      loadConfig();
+      autoRejected[side][autoSig[side]] = Date.now() + AUTO_REJECT_MS;
+      note(msg, 'warn', 'The last change made it worse, so it was put back. It is not tried again for 30 min.');
+    } else note(msg, 'ok', 'The last change is kept.');
     autoUndo[side] = null;
-    loadConfig();
-    note(side + '-auto-msg', 'warn', 'The last change made it worse, so it was put back.');
     return;
   }
-  if (act < CHK_MIN_SPEECH) { note(side + '-auto-msg', '', 'Not enough speech this minute to judge.'); return; }
-  autoBest[side] = best == null ? score : Math.min(best, score);
-  const keys = autoKeys(side);
-  const hit = chkSuggest(r, cfg).find((x) => x.change && !x.change.mic && !x.change.node
-    && Object.keys(x.change).every((k) => k === 'tune_enabled' || keys.includes(k)));
-  if (!hit) { note(side + '-auto-msg', '', 'Nothing to change this minute.'); return; }
+  const keys = autoKeys(side), now = Date.now();
+  const hit = chkSuggest(r, cfg).find((x) => x.change && !x.change.mic
+    && Object.keys(x.change).every((k) => k === 'node' || k === 'tune_enabled' || keys.includes(k))
+    && Object.keys(x.change).some((k) => keys.includes(k))
+    && !((autoRejected[side][autoSigOf(x.change)] || 0) > now));
+  if (!hit) { note(msg, '', 'Nothing to change this minute.'); return; }
   if (!(await balQuiet())) return;
   const res = await balApply(hit.change);
-  if (!res.ok) { note(side + '-auto-msg', 'err', res.error || 'Could not save.'); return; }
+  if (!res.ok) { note(msg, 'err', res.error || 'Could not save.'); return; }
   autoUndo[side] = res.undo;
-  note(side + '-auto-msg', '', new Date().toLocaleTimeString() + ': ' + hit.text);
+  autoPre[side] = score;
+  autoSig[side] = autoSigOf(hit.change);
+  note(msg, '', new Date().toLocaleTimeString() + ': ' + hit.text + ' On trial until the next check.');
 }
 
 async function autoLoop(run) {
@@ -9480,6 +9510,7 @@ function tnButtons() {
   $('t-save').disabled = !ok;
   $('t-lh').classList.toggle('lh-off', !tnLink());
   $('t-lh').setAttribute('aria-disabled', tnLink() ? 'false' : 'true');
+  $('t-lh').disabled = !tnLink();
 }
 
 function tnOpenLink() {
@@ -9659,6 +9690,7 @@ async function loadDashFavs() {
   sel.innerHTML = '';
   addOption(sel, '', dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites found');
   dashFavs.forEach((f, i) => addOption(sel, String(i), f.label || (modeName(f.mode) + ' ' + favNum(f))));
+  feDashUi();
 }
 
 function drawFavEditor() {
@@ -9703,7 +9735,11 @@ function drawFavEditor() {
   });
   $('fe-count').textContent = favEdit.length + ' / ' + favMax;
   $('fe-add').disabled = favEdit.length >= favMax;
-  $('fe-dash-add').disabled = favEdit.length >= favMax;
+  feDashUi();
+}
+
+function feDashUi() {
+  $('fe-dash-add').disabled = favEdit.length >= favMax || !dashFavs.length || $('fe-dash').value === '';
 }
 
 function feAdd() { if (favEdit.length < favMax) { favEdit.push({mode: 'ASL', num: '', label: ''}); drawFavEditor(); } }
@@ -9716,9 +9752,6 @@ function feAddDash() {
 async function setupSave() {
   note('setup-msg', '', 'Saving...');
   await saveConfig();
-  await feSave();
-  await nwSave();
-  await dgSave();
   note('setup-msg', '', '');
 }
 
@@ -9935,6 +9968,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('tx-remove').addEventListener('click', txDisable);
   $('fe-add').addEventListener('click', feAdd);
   $('fe-dash-add').addEventListener('click', feAddDash);
+  $('fe-dash').addEventListener('change', feDashUi);
   $('nw-add').addEventListener('click', nwAdd);
   ['c', 't'].forEach((p) => {
     $(p + '-net-add').addEventListener('click', () => netAnswer('add'));
@@ -10297,7 +10331,7 @@ use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.
 <p class="muted small">From the last Audio check: what the node sent to this phone and what came back. Shown after a check.</p>
 <div id="chk-rx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table></div>
 <div id="rx-bal-msg" class="msg"></div>
-<div class="row"><label class="small"><input type="checkbox" id="rx-auto"> Run automatically: keep balancing the RX settings. Stays on while the screen is awake (the screen is kept on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="rx-auto"> Run automatically: keep balancing the RX settings. Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
 <div id="rx-auto-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">RX tone test (known baseline)</h3>
 <p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. This is the known baseline for the receive path. Local network only. The report is kept in memory on the Pi until the next test.</p>
@@ -10426,7 +10460,7 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small">From the last Audio check: what this phone sent to the node. Shown after a check.</p>
 <div id="chk-tx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table></div>
 <div id="tx-bal-msg" class="msg"></div>
-<div class="row"><label class="small"><input type="checkbox" id="tx-auto"> Run automatically: keep balancing the TX settings. Stays on while the screen is awake (the screen is kept on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="tx-auto"> Run automatically: keep balancing the TX settings. Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
 <div id="tx-auto-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">TX tone test (for third-party nodes)</h3>
 <p class="muted small">Keys node 1921 and sends a station ID, a series of tones and the station ID again, so other stations can measure what they receive. Nothing is measured here. Like the RX test, it is refused while the node is linked or something is tuned.</p>
@@ -11246,8 +11280,10 @@ def setup_mark(pending):
     _atomic_write(SETUP_PATH, json.dumps({"pending": bool(pending), "version": VERSION}) + "\n", 0o644)
 
 
-def setup_plan():
+def setup_plan(full=False):
     pending = setup_pending()
+    if not pending and not full:
+        return {"pending": False, "steps": [], "blocked": [], "node": "", "rpt": RPT_CONF}
     main = main_node()
     steps, blocked = [], []
     if not main:
@@ -11278,7 +11314,7 @@ def setup_plan():
 
 
 def setup_apply():
-    plan = setup_plan()
+    plan = setup_plan(full=True)
     if plan["blocked"]:
         return {"ok": False, "error": " ".join(plan["blocked"])}
     ids = {s["id"] for s in plan["steps"]}
@@ -11333,8 +11369,9 @@ def install_service():
         _write_fav_doc([], [], {})
         print(f"  [+] Wrote {FAV_CONF_PATH}")
     _print_digital()
-    setup_mark(True)
-    print("  [i] Node Talker will ask to set up the transmit node and receive feed on first open (rpt.conf is backed up first).")
+    if not os.path.exists(SETUP_PATH):
+        setup_mark(True)
+        print("  [i] Node Talker will ask to set up the transmit node and receive feed on first open (rpt.conf is backed up first).")
     legacy = _legacy_unit_real()
     aside = LEGACY_SERVICE_PATH + LEGACY_ASIDE
     if legacy:
