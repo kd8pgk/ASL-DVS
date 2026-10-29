@@ -1,6 +1,10 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_96_20261028.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_97_20261029.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.97 (2026-10-29)
+
+- **Event address through a tunnel needs the login.** `/api/event` (Asterisk's hook that makes the Dashboard re-read its link status) was answered without a login for any request from 127.0.0.1. A Cloudflare Tunnel delivers its traffic from 127.0.0.1 too, so with the Dashboard published through it anyone on the internet could call it. The exemption now applies only when the request carries no proxy or tunnel headers (Cf-Connecting-Ip, X-Forwarded-For and the like). Asterisk's own hook on the node works as before.
 
 ## 9.3.96 (2026-10-28)
 
