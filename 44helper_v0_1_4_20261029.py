@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.3"
+APP_VERSION = "0.1.4"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -14383,6 +14383,7 @@ def build_config_status() -> dict:
         "changed": changed,
         "points": _cfgr_list_points(),
         "presets": presets,
+        "private_nodes": _pn_status(),
         "max_points": _CFGR_MAX_POINTS,
         "port_clashes": clashes,
         "ports_checked": n_ports,
@@ -14712,12 +14713,25 @@ def _cfgr_managed_headers(lines: list[str], mask: list[bool]) -> set[str]:
             out.add(m.group(1).strip())
     return out
 
-def _cfgr_rpt_units(lines: list[str], mask: list[bool]) -> tuple[dict[str, list[dict]], list[dict]]:
+_CFGR_FOREIGN_NOTES = ("; nodetalker: transmit node", "; nodelisten: transmit node")
+_CFGR_NT_RX = re.compile(r"(?i)^\s*rxchannel\s*=\s*usrp/127\.0\.0\.1:34018:32018\s*$")
+
+def _cfgr_foreign_nodes(lines: list[str], mask: list[bool]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for i, line in enumerate(lines):
+        m = None if mask[i] else _CFGR_HDR_RE.match(line)
+        if m and i > 0 and _cfgr_is_private(m.group(1).strip()) \
+                and lines[i - 1].strip().startswith(_CFGR_FOREIGN_NOTES):
+            out[m.group(1).strip()] = i - 1
+    return out
+
+def _cfgr_rpt_units(lines: list[str], mask: list[bool],
+                    skip: frozenset[str] = frozenset()) -> tuple[dict[str, list[dict]], list[dict]]:
     secs = _cfgr_sections(lines, mask)
     by_name = {s["name"]: s for s in secs}
     units: dict[str, list[dict]] = {}
     for s in secs:
-        if not _cfgr_is_private(s["name"]):
+        if not _cfgr_is_private(s["name"]) or s["name"] in skip:
             continue
         members = [s]
         for i in range(s["start"] + 1, s["end"]):
@@ -14769,10 +14783,14 @@ def _cfgr_capture() -> tuple[dict | None, list[str], list[str]]:
     rl = _cfgr_lines(rpt_b.decode("utf-8", "replace"))
     rmask = _cfgr_managed_mask(rl)
     public = _cfgr_public_numbers(rl, rmask)
-    units, secs = _cfgr_rpt_units(rl, rmask)
+    foreign = _cfgr_foreign_nodes(rl, rmask)
+    units, secs = _cfgr_rpt_units(rl, rmask, frozenset(foreign))
     managed = sorted(h for h in _cfgr_managed_headers(rl, rmask) if _cfgr_is_private(h))
     if managed:
         notes.append("Left out (managed by the dashboard's Phone tab): private node " + ", ".join(managed))
+    if foreign:
+        notes.append("Left out (Node Talker's own node; add it on each node from Node Talker's TX card): private node "
+                     + ", ".join(sorted(foreign, key=int)))
     nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
     nodes_out = []
     for node in sorted(units, key=int):
@@ -15025,13 +15043,26 @@ def _cfgr_identity_lines(lines: list[str], mask: list[bool], sec: dict, only: fr
 def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list[str] | None, list[str], list[str], str, list[str]]:
     mask = _cfgr_managed_mask(lines)
     managed = _cfgr_managed_headers(lines, mask)
+    foreign = _cfgr_foreign_nodes(lines, mask)
+    notes: list[str] = []
+    skipped_nt = []
+    for n in p["rpt"]["nodes"]:
+        main = next((st for st in n["stanzas"] if st["name"] == n["node"]), None)
+        if n["node"] in foreign or (main and any(_CFGR_NT_RX.match(x) for x in main["lines"])):
+            skipped_nt.append(n["node"])
+    if skipped_nt:
+        p = dict(p, rpt=dict(p["rpt"], nodes=[n for n in p["rpt"]["nodes"] if n["node"] not in skipped_nt]))
+        notes.append("Not touched (Node Talker's own node; it is added from Node Talker's TX card): private node "
+                     + ", ".join(sorted(skipped_nt, key=int)))
+    elif foreign:
+        notes.append("Not touched (Node Talker's own node): private node " + ", ".join(sorted(foreign, key=int)))
     want = {n["node"]: n for n in p["rpt"]["nodes"]}
     clash = sorted(n for n in want if n in managed)
     if clash:
         return None, [], [], ("private node " + ", ".join(clash) + " is also in the dashboard's Phone-tab block in "
                               "rpt.conf. Change it on the Phone tab first."), []
-    units, secs = _cfgr_rpt_units(lines, mask)
-    notes: list[str] = []
+    units, secs = _cfgr_rpt_units(lines, mask, frozenset(foreign))
+    keep = set(foreign.values())
     public = [s for s in secs if s["name"].isdigit() and not _cfgr_is_private(s["name"])]
     c = globals().get("_cfg")
     own = c.get("identity", "node", fallback="").strip() if c is not None else ""
@@ -15056,7 +15087,8 @@ def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list
         for s in members:
             first_start = s["start"] if first_start is None else min(first_start, s["start"])
             drop.update(i for i in range(s["start"], s["end"])
-                        if not mask[i] and not lines[i].lstrip().startswith("#"))
+                        if not mask[i] and not lines[i].lstrip().startswith("#") and i not in keep)
+    drop.update(i for i, ln in enumerate(lines) if not mask[i] and ln.strip() == _PN_NOTE)
     nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
     add_before: dict[int, list[str]] = {}
     tail: list[str] = []
@@ -15072,7 +15104,7 @@ def _cfgr_apply_rpt(lines: list[str], p: dict, port: str = "4569") -> tuple[list
         last = nodes_sec["start"]
         for i in range(nodes_sec["start"] + 1, nodes_sec["end"]):
             kv = None if mask[i] else _cfgr_kv(lines[i])
-            if kv and _cfgr_is_private(kv[0]):
+            if kv and _cfgr_is_private(kv[0]) and kv[0] not in foreign:
                 drop.add(i)
             elif lines[i].strip() and i not in drop:
                 last = i
@@ -15944,7 +15976,7 @@ def _cfgr_set_key(lines: list[str], section: str, key: str, value: str) -> tuple
     return new, None, True
 
 _CFGR_RI_UNIT = "asl-dvs-reinstall"
-_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "gateways_apply", "gateways_revert", "id_set_callsign",
+_CFGR_RI_CHANGING = frozenset({"restore", "preset_apply", "pn_add", "pn_remove", "gateways_apply", "gateways_revert", "id_set_callsign",
                                "bundle_apply"})
 _CFGR_RI_JOB = r'''#!/usr/bin/env python3
 import json
@@ -16758,6 +16790,241 @@ def _fcr_status() -> dict:
     })
     return out
 
+_PN_NOTE = "; 44helper: private node added on the Config tab (remove it there)"
+_PN_RESERVED = ("1921", "1999", "1917")
+_PN_TPL_RE = re.compile(r"^\s*\[[^\]]+\]\s*(\([^)]*\))")
+
+def _pn_scan(lines: list[str]) -> dict:
+    mask = _cfgr_managed_mask(lines)
+    secs = _cfgr_sections(lines, mask)
+    used: set[str] = set()
+    for line in lines:
+        m = _CFGR_HDR_RE.match(line)
+        if m:
+            used.add(m.group(1).strip())
+    nodes_sec = next((s for s in secs if s["name"].lower() == "nodes"), None)
+    if nodes_sec is not None:
+        for i in range(nodes_sec["start"] + 1, nodes_sec["end"]):
+            kv = _cfgr_kv(lines[i])
+            if kv and kv[0].isdigit():
+                used.add(kv[0])
+    ours: dict[str, dict] = {}
+    ports: set[int] = set()
+    for s in secs:
+        for i in range(s["start"] + 1, s["end"]):
+            kv = None if mask[i] else _cfgr_kv(lines[i])
+            if kv and kv[0].lower() == "rxchannel":
+                mm = _CFGR_USRP_RX_RE.match(kv[1])
+                if mm:
+                    ports.update((int(mm.group(1)), int(mm.group(2))))
+        if _cfgr_is_private(s["name"]) and s["start"] > 0 and lines[s["start"] - 1].strip() == _PN_NOTE:
+            rx = next((kv[1] for kv in (_cfgr_kv(lines[i]) for i in range(s["start"] + 1, s["end"]))
+                       if kv and kv[0].lower() == "rxchannel"), "")
+            ours[s["name"]] = {"node": s["name"], "marker": s["start"] - 1, "start": s["start"], "end": s["end"],
+                               "rxchannel": rx}
+    return {"mask": mask, "secs": secs, "used": used, "ours": ours, "nodes": nodes_sec, "ports": ports}
+
+def _pn_next_free(used: set[str]) -> str:
+    for n in range(_CFGR_PRIVATE_MIN, _CFGR_PRIVATE_MAX + 1):
+        if str(n) not in used and str(n) not in _PN_RESERVED:
+            return str(n)
+    return ""
+
+def _pn_template(lines: list[str], secs: list[dict]) -> tuple[str, str]:
+    c = globals().get("_cfg")
+    own = c.get("identity", "node", fallback="").strip() if c is not None else ""
+    names = [s for s in secs if s["name"].isdigit() and not _cfgr_is_private(s["name"]) and len(s["name"]) >= 4]
+    main = next((s for s in names if s["name"] == own), names[0] if names else None)
+    if main is not None:
+        m = _PN_TPL_RE.match(lines[main["start"]])
+        if m:
+            return m.group(1).replace(" ", ""), main["name"]
+    if any(s["name"] == "node-main" for s in secs):
+        return "(node-main)", main["name"] if main else ""
+    return "", main["name"] if main else ""
+
+def _pn_insert_in_section(lines: list[str], sec: dict, new: list[str]) -> list[str]:
+    mask = _cfgr_managed_mask(lines)
+    last = sec["start"]
+    for i in range(sec["start"] + 1, sec["end"]):
+        if not mask[i] and _cfgr_kv(lines[i]) is not None:
+            last = i
+    return lines[:last + 1] + new + lines[last + 1:]
+
+def _pn_ext_section(lines: list[str]) -> dict | None:
+    mask = _cfgr_managed_mask(lines)
+    return next((s for s in _cfgr_sections(lines, mask) if s["name"].lower() == "radio-secure"), None)
+
+def _pn_ext_line(node: str) -> str:
+    return f"exten => {node},1,rpt,{node}"
+
+def _pn_finish(changes: dict[str, tuple[bytes, bytes]], reason: str, apply: bool, head: list[str],
+               notes: list[str], extra: dict | None = None) -> dict:
+    lines: list[str] = list(head)
+    for path, (old, new) in changes.items():
+        d = difflib.unified_diff(old.decode("utf-8", "replace").splitlines(),
+                                 new.decode("utf-8", "replace").splitlines(),
+                                 f"now: {path}", f"after: {path}", lineterm="")
+        lines += [""] + list(d)
+    if notes:
+        lines += [""] + notes
+    result = {"success": True, "changes": sorted(changes)}
+    result.update(extra or {})
+    if not apply:
+        result["output"] = "\n".join(lines)
+        return result
+    groups = [g for g in _CFGR_GROUPS if any(path in _CFGR_GROUPS[g]["files"] for path in changes)]
+    auto_id, dropped = _cfgr_auto_point(reason, groups)
+    done = [f"Current files saved first as automatic copy {auto_id}."]
+    ok = True
+    for path, (_old, new) in changes.items():
+        uid, gid, mode = _cfgr_meta_of(path)
+        res = _cfgr_write_file(path, new, uid, gid, mode)
+        ok = ok and not res.startswith("NOT")
+        done.append(f"  {path}: {res}")
+    if dropped:
+        done.append("Oldest automatic copies dropped: " + ", ".join(dropped))
+    done.append("Asterisk was NOT restarted. Use the ASL3 Restart button below when ready.")
+    installed = _cfgr_installed()
+    log(f"{'OK' if ok else 'FAIL'}: CONFIG {reason} ({', '.join(sorted(changes))})")
+    result.update({"success": ok, "output": "\n".join(done + [""] + lines),
+                   "restart_groups": [g for g in groups if installed.get(g)]})
+    return result
+
+def _cfgr_act_pn_add(payload: dict, apply: bool) -> dict:
+    rpt_b = _cfgr_read(_CFGR_RPT)
+    if rpt_b is None:
+        return {"success": False, "output": f"{_CFGR_RPT} not found. Install ASL3 first."}
+    lines = _cfgr_lines(rpt_b.decode("utf-8", "replace"))
+    sc = _pn_scan(lines)
+    node = str(payload.get("node", "")).strip()
+    if not node:
+        node = _pn_next_free(sc["used"])
+        if not node:
+            return {"success": False, "output": "No free private node number left (1000-1999)."}
+    if not _cfgr_is_private(node):
+        return {"success": False, "output": "Node number: use 1000 to 1999 (a private node), or leave it blank."}
+    if node == "1921":
+        return {"success": False, "output": "1921 is Node Talker's transmit node. Add it from Node Talker's TX card."}
+    if node in sc["used"]:
+        return {"success": False, "output": f"Node {node} is already in rpt.conf. Pick another number, or leave it blank."}
+    kind = str(payload.get("kind", "plain"))
+    if kind not in ("plain", "usrp"):
+        return {"success": False, "output": "Unknown node type."}
+    notes: list[str] = []
+    rx = "Local/pseudo"
+    if kind == "usrp":
+        ports = []
+        for key, label in (("tx_port", "Port the other program listens on"), ("rx_port", "Port Asterisk listens on")):
+            v = str(payload.get(key, "")).strip()
+            if not _CFGR_PORT_RE.match(v) or not 1 <= int(v) <= 65535:
+                return {"success": False, "output": f"{label}: use a number from 1 to 65535."}
+            ports.append(int(v))
+        if ports[0] == ports[1]:
+            return {"success": False, "output": "The two USRP ports must be different."}
+        taken = [p for p in ports if p in sc["ports"]]
+        if taken:
+            return {"success": False, "output": "Port " + ", ".join(map(str, taken)) +
+                    " is already used by another USRP node in rpt.conf. Pick other ports."}
+        rx = f"USRP/127.0.0.1:{ports[0]}:{ports[1]}"
+    tpl, main = _pn_template(lines, sc["secs"])
+    notes.append(f"Template: {tpl} (from node {main})" if tpl and main else
+                 (f"Template: {tpl}" if tpl else "No template found; the node has only the lines below."))
+    stanza = [_PN_NOTE, f"[{node}]{tpl}", f"rxchannel = {rx}"]
+    if kind == "usrp":
+        stanza += [f"{k} = {v}" for k, v in _CFGR_BRIDGE_PROFILE]
+    port = _cfgr_bindport()
+    nodes_line = f"{node} = radio@127.0.0.1/{node},NONE" if port == "4569" else f"{node} = radio@127.0.0.1:{port}/{node},NONE"
+    new = list(lines)
+    if sc["nodes"] is not None:
+        new = _pn_insert_in_section(new, sc["nodes"], [nodes_line])
+        tail = []
+    else:
+        tail = ["", "[nodes]", nodes_line]
+    while new and not new[-1].strip():
+        new.pop()
+    new += [""] + stanza + tail
+    changes: dict[str, tuple[bytes, bytes]] = {}
+    data = _cfgr_join(new).encode("utf-8")
+    changes[_CFGR_RPT] = (rpt_b, data)
+    if payload.get("ext", True):
+        ext_b = _cfgr_read(_CFGR_EXT)
+        el = _cfgr_lines(ext_b.decode("utf-8", "replace")) if ext_b is not None else None
+        sec = _pn_ext_section(el) if el is not None else None
+        if sec is None:
+            notes.append("extensions.conf has no [radio-secure] context, so no exten line was added. Add "
+                         f"'{_pn_ext_line(node)}' by hand where your nodes are.")
+        elif any(_CFGR_EXTEN_RE.match(x) and _CFGR_EXTEN_RE.match(x).group(1) == node for x in el):
+            notes.append(f"extensions.conf already has an exten line for {node}; left as it is.")
+        else:
+            changes[_CFGR_EXT] = (ext_b, _cfgr_join(_pn_insert_in_section(el, sec, [_pn_ext_line(node)])).encode("utf-8"))
+    if kind == "usrp":
+        mod_b = _cfgr_read(_CFGR_MOD)
+        if mod_b is None:
+            notes.append(f"{_CFGR_MOD} not found; make sure chan_usrp is loaded.")
+        else:
+            ml, warn = _cfgr_apply_mod(_cfgr_lines(mod_b.decode("utf-8", "replace")), {"modules": {"chan_usrp": "load"}})
+            notes += warn
+            md = _cfgr_join(ml).encode("utf-8")
+            if md != mod_b:
+                changes[_CFGR_MOD] = (mod_b, md)
+                notes.append("modules.conf: chan_usrp is set to load (a USRP node needs it).")
+        override = {path: nd for path, (_o, nd) in changes.items()}
+        clashes, _n = _cfgr_port_clashes(override)
+        notes += [f"WARNING: {w}" for w in clashes]
+    notes.append("Allmon3 is not changed. Add the node there by hand if you want to see it.")
+    head = [f"Private node {node} ({'USRP bridge ' + rx if kind == 'usrp' else 'plain, ' + rx}):"]
+    return _pn_finish(changes, f"adding private node {node}", apply, head, notes, {"node": node})
+
+def _cfgr_act_pn_remove(payload: dict, apply: bool) -> dict:
+    node = str(payload.get("node", "")).strip()
+    rpt_b = _cfgr_read(_CFGR_RPT)
+    if rpt_b is None:
+        return {"success": False, "output": f"{_CFGR_RPT} not found."}
+    lines = _cfgr_lines(rpt_b.decode("utf-8", "replace"))
+    sc = _pn_scan(lines)
+    o = sc["ours"].get(node)
+    if o is None:
+        return {"success": False, "output": f"Node {node} was not added from this card, so it is not removed here."}
+    drop = set(range(o["marker"], o["end"]))
+    if sc["nodes"] is not None:
+        for i in range(sc["nodes"]["start"] + 1, sc["nodes"]["end"]):
+            kv = None if sc["mask"][i] else _cfgr_kv(lines[i])
+            if kv and kv[0] == node:
+                drop.add(i)
+    new = [x for i, x in enumerate(lines) if i not in drop]
+    out: list[str] = []
+    for x in new:
+        if not x.strip() and out and not out[-1].strip():
+            continue
+        out.append(x)
+    while out and not out[-1].strip():
+        out.pop()
+    changes = {_CFGR_RPT: (rpt_b, _cfgr_join(out).encode("utf-8"))}
+    ext_b = _cfgr_read(_CFGR_EXT)
+    if ext_b is not None:
+        el = _cfgr_lines(ext_b.decode("utf-8", "replace"))
+        sec = _pn_ext_section(el)
+        if sec is not None:
+            want = _pn_ext_line(node).replace(" ", "")
+            keep = [x for i, x in enumerate(el)
+                    if not (sec["start"] < i < sec["end"] and x.split(";", 1)[0].replace(" ", "") == want)]
+            if keep != el:
+                changes[_CFGR_EXT] = (ext_b, _cfgr_join(keep).encode("utf-8"))
+    notes = ["modules.conf is not changed (other nodes may use chan_usrp)."]
+    return _pn_finish(changes, f"removing private node {node}", apply, [f"Remove private node {node}:"], notes)
+
+def _pn_status() -> dict:
+    rpt_b = _cfgr_read(_CFGR_RPT)
+    if rpt_b is None:
+        return {"available": False}
+    lines = _cfgr_lines(rpt_b.decode("utf-8", "replace"))
+    sc = _pn_scan(lines)
+    tpl, main = _pn_template(lines, sc["secs"])
+    return {"available": True, "next_free": _pn_next_free(sc["used"]), "template": tpl, "main": main,
+            "ours": [{"node": o["node"], "rxchannel": o["rxchannel"]} for o in sorted(sc["ours"].values(),
+                                                                                    key=lambda x: int(x["node"]))]}
+
 _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "save_restore": _cfgr_act_save_restore,
     "retake_restore": _cfgr_act_retake_restore,
@@ -16770,6 +17037,10 @@ _CFGR_ACTIONS: dict[str, Callable[[dict], dict]] = {
     "preset_capture": lambda p: _cfgr_act_preset_capture(p, True),
     "preset_apply_preview": lambda p: _cfgr_act_preset_apply(p, False),
     "preset_apply": lambda p: _cfgr_act_preset_apply(p, True),
+    "pn_add_preview": lambda p: _cfgr_act_pn_add(p, False),
+    "pn_add": lambda p: _cfgr_act_pn_add(p, True),
+    "pn_remove_preview": lambda p: _cfgr_act_pn_remove(p, False),
+    "pn_remove": lambda p: _cfgr_act_pn_remove(p, True),
     "gateways_apply": _cfgr_act_gateways_apply,
     "gateways_revert": _cfgr_act_gateways_revert,
     "reinstall_preview": _cfgr_act_reinstall_preview,
@@ -17048,6 +17319,54 @@ function cfgPresetCapture(btn, save) {
   cfgPost({action: save ? 'preset_capture' : 'preset_capture_preview', preset: 'travel_node'}, 'cfg-preset-out', btn);
 }
 
+function cfgPnKind() {
+  document.getElementById('cfg-pn-usrp').style.display = document.getElementById('cfg-pn-kind').value === 'usrp' ? '' : 'none';
+}
+
+function cfgPnAdd(btn, apply) {
+  var kind = document.getElementById('cfg-pn-kind').value;
+  var p = {action: apply ? 'pn_add' : 'pn_add_preview', node: document.getElementById('cfg-pn-node').value.trim(),
+           kind: kind, ext: document.getElementById('cfg-pn-ext').checked};
+  if (kind === 'usrp') {
+    p.tx_port = document.getElementById('cfg-pn-tx').value.trim();
+    p.rx_port = document.getElementById('cfg-pn-rx').value.trim();
+  }
+  if (apply && !confirm('Add private node ' + (p.node || '(next free number)') + ' to rpt.conf?\n\n' +
+                        'An automatic copy of the current files is saved first. Asterisk is not restarted.')) return;
+  cfgPost(p, 'cfg-pn-out', btn).then(function(res) {
+    if (apply && res && res.success) document.getElementById('cfg-pn-node').value = '';
+  });
+}
+
+function cfgPnRemove(btn, node, apply) {
+  if (apply && !confirm('Remove private node ' + node + ' (its stanza, [nodes] line and exten line)?\n\n' +
+                        'An automatic copy of the current files is saved first. Asterisk is not restarted.')) return;
+  cfgPost({action: apply ? 'pn_remove' : 'pn_remove_preview', node: node}, 'cfg-pn-out', btn);
+}
+
+function cfgPnRender(pn) {
+  var stEl = document.getElementById('cfg-pn-state');
+  var list = document.getElementById('cfg-pn-list');
+  if (!stEl || !list) return;
+  if (!pn || !pn.available) {
+    stEl.textContent = 'rpt.conf not found (install ASL3 first)';
+    list.innerHTML = '';
+    return;
+  }
+  stEl.textContent = 'next free: ' + (pn.next_free || 'none') + (pn.template ? ' \u00b7 template ' + pn.template : '');
+  var nodeEl = document.getElementById('cfg-pn-node');
+  if (nodeEl) nodeEl.placeholder = pn.next_free ? ('blank = ' + pn.next_free) : 'no free number left';
+  var ours = pn.ours || [];
+  if (!ours.length) { list.innerHTML = ''; return; }
+  var h = '<table class="cfg-table"><tr><th>Added here</th><th>rxchannel</th><th></th></tr>';
+  ours.forEach(function(o) {
+    h += '<tr><td>' + cfgEsc(o.node) + '</td><td>' + cfgEsc(o.rxchannel) + '</td><td>' +
+         '<button class="btn-copy" data-n="' + cfgEsc(o.node) + '" onclick="cfgPnRemove(this,this.dataset.n,false)">Preview remove</button> ' +
+         '<button class="btn-run" data-n="' + cfgEsc(o.node) + '" onclick="cfgPnRemove(this,this.dataset.n,true)">Remove</button></td></tr>';
+  });
+  list.innerHTML = h + '</table>';
+}
+
 function cfgRender(d) {
   var order = d.order || [];
   var banner = document.getElementById('cfg-banner');
@@ -17127,6 +17446,7 @@ function cfgRender(d) {
   cfgOnPointChange();
   var tp = (d.presets || {}).travel_node || {};
   document.getElementById('cfg-preset-state').textContent = tp.exists ? ('saved ' + tp.saved_at) : 'not saved on this node';
+  cfgPnRender(d.private_nodes);
   document.getElementById('cfg-library').textContent = d.library;
   document.getElementById('cfg-checked-at').textContent = 'checked ' + d.checked_at;
 }
@@ -17552,6 +17872,37 @@ def _render_config_panel() -> str:
       <button class="btn-run" onclick="cfgPresetCapture(this,true)">Save as Travel Node</button>
     </div>
     <div class="asl3-console shown placeholder" id="cfg-preset-out">(nothing run yet)</div>
+  </div>
+
+  <div class="step-card" id="cfg-pn-card">
+    <div class="step-head"><div class="step-title">Add private node</div>
+      <span class="cfg-hint" id="cfg-pn-state"></span></div>
+    <div class="step-body">Adds a private node (1000-1999) to rpt.conf: its stanza with the main node's template, its
+      [nodes] line on this node's IAX port and, if ticked, its exten line in extensions.conf [radio-secure]. A USRP
+      bridge also gets the upstream USRP2M17 values, and chan_usrp is set to load. Preview shows every change and writes
+      nothing; Add node saves an automatic copy first. Asterisk is not restarted. Only nodes added here can be removed
+      here; the dashboard's Phone nodes and Node Talker's node 1921 are never touched.</div>
+    <label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">Node number (blank = next free):
+      <input type="text" class="asl3-cmd-input" id="cfg-pn-node" maxlength="4" inputmode="numeric" autocomplete="off"></label>
+    <label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">Type:
+      <select id="cfg-pn-kind" onchange="cfgPnKind()">
+        <option value="plain">Plain (Local/pseudo, for example a hub)</option>
+        <option value="usrp">USRP bridge (DVSwitch, USRP2M17, SvxLink USRP)</option>
+      </select></label>
+    <div id="cfg-pn-usrp" style="display:none">
+      <label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">Port the other program listens on:
+        <input type="text" class="asl3-cmd-input" id="cfg-pn-tx" maxlength="5" inputmode="numeric" placeholder="e.g. 34001" autocomplete="off"></label>
+      <label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">Port Asterisk listens on:
+        <input type="text" class="asl3-cmd-input" id="cfg-pn-rx" maxlength="5" inputmode="numeric" placeholder="e.g. 32001" autocomplete="off"></label>
+    </div>
+    <label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">
+      <input type="checkbox" id="cfg-pn-ext" checked> Add the exten line to extensions.conf [radio-secure]</label>
+    <div class="step-actions">
+      <button class="btn-copy" onclick="cfgPnAdd(this,false)">Preview</button>
+      <button class="btn-run" onclick="cfgPnAdd(this,true)">Add node</button>
+    </div>
+    <div id="cfg-pn-list"></div>
+    <div class="asl3-console shown placeholder" id="cfg-pn-out">(nothing run yet)</div>
   </div>
 
   <div class="step-card" id="cfg-id-card">
