@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2123,6 +2123,45 @@ PI_INSTALL_PORTS = {
                                    "specifically want remote dashboard access over the tunnel."},
 }
 
+_SUDO_SHIM_DIR = "/run/44helper-bin"
+_SUDO_SHIM = """#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    -u|--user)
+      [ "$2" = root ] || { echo "sudo is not installed on this node, so this cannot run as $2" >&2; exit 1; }
+      shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || exit 0
+HOME=/root; export HOME
+exec env "$@"
+"""
+
+def _ensure_sudo_shim() -> bool:
+    if os.geteuid() != 0 or shutil.which("sudo"):
+        return False
+    try:
+        os.makedirs(_SUDO_SHIM_DIR, mode=0o755, exist_ok=True)
+        os.chmod(_SUDO_SHIM_DIR, 0o755)
+        atomic_write(os.path.join(_SUDO_SHIM_DIR, "sudo"), _SUDO_SHIM.encode(), new_mode=0o755)
+    except OSError as exc:
+        log(f"sudo is missing and the stand-in could not be written: {exc}")
+        return False
+    parts = [p for p in os.environ.get("PATH", "/usr/sbin:/usr/bin:/sbin:/bin").split(":") if p]
+    if _SUDO_SHIM_DIR not in parts:
+        os.environ["PATH"] = ":".join(parts + [_SUDO_SHIM_DIR])
+    log(f"sudo is not installed: install steps run as root through the stand-in in {_SUDO_SHIM_DIR}")
+    return True
+
+def _unit_env_args() -> list[str]:
+    out = ["--setenv=DEBIAN_FRONTEND=noninteractive"]
+    if _SUDO_SHIM_DIR in os.environ.get("PATH", "").split(":"):
+        out.append("--setenv=PATH=" + os.environ["PATH"])
+    return out
+
 def _run_argv(argv: list[str], timeout: int = 20) -> dict:
     log(f"RUN: {' '.join(argv)}")
     try:
@@ -2510,12 +2549,15 @@ def _cockpit_install_step(num: int) -> dict:
         "id": "install_cockpit", "num": num, "title": "Install Cockpit (web admin UI)",
         "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt install -y "
                "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
-               "cockpit cockpit-networkmanager cockpit-packagekit cockpit-storaged cockpit-system cockpit-ws",
+               "cockpit " + ("cockpit-networkmanager " if _system().get("wifi_manager") == "NetworkManager" else "")
+               + "cockpit-packagekit cockpit-storaged cockpit-system cockpit-ws",
         "timeout": 900,
         "note": "Cockpit is a browser-based admin console (port 9090) — not specific to this tab's software "
                 "stack, so this same step appears on ASL3/DVSwitch/SVXLink/M17 alike. Installing it more "
                 "than once across tabs is a harmless no-op (apt skips packages already installed) — run it "
-                "once from whichever tab you set up first, skip it on the others.",
+                "once from whichever tab you set up first, skip it on the others. cockpit-networkmanager is "
+                "only included when NetworkManager runs this node's network: it pulls in NetworkManager, "
+                "which would compete with ifupdown or systemd-networkd on a Debian machine.",
     }
 
 def _cockpit_enable_step(num: int) -> dict:
@@ -2574,15 +2616,41 @@ def _default_distro(fallback: str = "trixie") -> str:
     name = str(_system().get("codename") or "")
     return name if name in ("bookworm", "trixie") else fallback
 
+_FW_KEEP_SHELL = (
+    "z=$(sudo firewall-cmd --get-default-zone 2>/dev/null); if [ -z \"$z\" ]; then "
+    "echo 'WARN: could not read firewalld default zone -- check this page, SysMon and IAX still answer from the LAN.'; "
+    "else echo \"firewalld is new on this node. Its default zone ($z) allows only SSH, so these ports that already "
+    "answer are kept open there:\"; "
+    "me=$(sed -n 's/^[[:space:]]*port[[:space:]]*=[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /etc/44helper/44helper.conf 2>/dev/null | head -1); "
+    "for pp in ${me:-9997}/tcp 8989/tcp 8990/tcp 8991/tcp 9090/tcp 9999/tcp 4569/udp 5198/udp 5199/udp; do "
+    "p=${pp%/*}; if [ \"${pp#*/}\" = udp ]; then f=-Hlun; else f=-Hltn; fi; "
+    "if ss $f \"sport = :$p\" 2>/dev/null | grep -q .; then "
+    "if sudo firewall-cmd --permanent --zone=\"$z\" --add-port=\"$pp\" >/dev/null; then echo \"ok    $pp\"; "
+    "else echo \"FAIL  $pp\"; fi; fi; done; "
+    "sudo firewall-cmd --reload >/dev/null && echo 'ok    firewall reloaded'; fi"
+)
+
+_ASL3_PREREQS_CMD = (
+    "fw=firewalld; if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q 'Status: active'; then "
+    "fw=; echo 'ufw is the active firewall here -- firewalld is left out.'; fi; "
+    "fresh=; [ -n \"$fw\" ] && ! command -v firewall-cmd >/dev/null 2>&1 && fresh=1; "
+    "sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt install -y "
+    "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
+    "wget curl git dpkg sudo $fw alsa-utils python3-serial && "
+    "if [ -n \"$fresh\" ]; then " + _FW_KEEP_SHELL + "; fi"
+)
+
 def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
     return [
         {"id": "prereqs", "num": 1, "title": "Install prerequisites",
-         "cmd": "sudo apt update && sudo DEBIAN_FRONTEND=noninteractive apt install -y "
-                "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
-                "wget curl git dpkg sudo "
-                "firewalld alsa-utils python3-serial"},
+         "cmd": _ASL3_PREREQS_CMD,
+         "note": "firewalld is left out when ufw is already the active firewall (two firewalls on one "
+                 "machine fight over the rules). When firewalld is new on this node, its default zone only "
+                 "allows SSH, so the ports that are already answering (this page, the Dashboard, instmon, "
+                 "wifimon, Cockpit, SysMon, IAX 4569/udp and EchoLink 5198-5199/udp) are kept open in it."},
         {"id": "fetch_repo", "num": 2, "title": "Download ASL3 repo package",
-         "cmd": f"cd /tmp && sudo wget https://repo.allstarlink.org/public/asl-apt-repos.{distro_deb_suffix}_all.deb",
+         "cmd": f"cd /tmp && sudo wget -O asl-apt-repos.{distro_deb_suffix}_all.deb "
+                f"https://repo.allstarlink.org/public/asl-apt-repos.{distro_deb_suffix}_all.deb",
          "note": "Adapted from the source doc's separate `cd /tmp` line — each step here runs in its own "
                  "subprocess, so cd alone would not carry over to the next step."},
         {"id": "install_repo", "num": 3, "title": "Install ASL3 repo package",
@@ -2849,7 +2917,8 @@ _DV_DISABLE_CMD = (
 
 def _dv_fetch_repo_cmd(flag: str = "") -> str:
     return (f"if {_DV_SRC_TEST}; then echo 'DVSwitch source already set up -- skipping'; "
-            f"else cd /tmp && sudo wget {flag}http://dvswitch.org/bookworm; fi")
+            f"else command -v wget >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y wget || exit 1; "
+            f"cd /tmp && sudo wget {flag}http://dvswitch.org/bookworm; fi")
 
 def _dv_run_repo_cmd() -> str:
     return (f"if {_DV_SRC_TEST}; then echo 'DVSwitch source already set up -- skipping'; "
@@ -3344,12 +3413,25 @@ stanza:
 NODE1 = 1917
 """
 
+_M17_INSTALL_PREP = (
+    "cd /tmp/USRP2M17-Selector 2>/dev/null || { echo 'No /tmp/USRP2M17-Selector -- run step 3 first.'; exit 1; }; "
+    "sudo sh -c 'mkdir -p \"$HOME/git\" && cd \"$HOME/git\" && rm -rf MMDVM_CM && "
+    "git -c http.version=HTTP/1.1 clone --depth 1 https://github.com/nostar/MMDVM_CM.git && "
+    "git -C MMDVM_CM config http.version HTTP/1.1'"
+)
+
 def _m17_install_steps() -> list[dict]:
     return [
-        {"id": "m17_install_git", "num": 1, "title": "Install git",
+        {"id": "m17_install_git", "num": 1, "title": "Install git, sudo and the build tools",
          "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt update && "
                 "sudo DEBIAN_FRONTEND=noninteractive apt install -y "
-                "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" git"},
+                "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
+                "git sudo build-essential jq python3 python3-pip python3-requests",
+         "timeout": 900,
+         "note": "The installer in step 4 installs the same build tools itself, but without answering "
+                 "package questions; installing them here first, the same safe way as every other step, "
+                 "leaves nothing for it to ask. sudo is needed by the web UI (step 10) and is not "
+                 "installed by default on a Debian machine set up with a root password."},
         {"id": "m17_install_php", "num": 2, "title": "Install PHP for Apache",
          "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt install -y "
                 "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
@@ -3372,13 +3454,23 @@ def _m17_install_steps() -> list[dict]:
                  "one command only (via -c, not --global) — a live test hit a mid-transfer HTTP/2 stream "
                  "cancellation on a flaky connection; both changes make the clone more likely to survive a "
                  "marginal link without touching git's global config."},
-        {"id": "m17_run_install", "num": 4, "title": "Run the installer (prompts for callsign)",
-         "cmd": "cd /tmp/USRP2M17-Selector && sudo ./install.sh",
-         "manual": True,
-         "note": "INTERACTIVE — install.sh prompts for your callsign and does the real install (PHP UI to "
-                 "/var/www/html/m17, a usrp2m17.service unit, directory permissions). This engine has no "
-                 "stdin channel to answer prompts, same reasoning as the ASL3 tab's asl-menu step — run this "
-                 "over SSH or the Cockpit terminal instead."},
+        {"id": "m17_run_install", "num": 4, "title": "Run the installer (builds USRP2M17)",
+         "fields": [
+             {"id": "callsign", "label": "Callsign", "type": "text", "default": ""},
+         ],
+         "cmd_template": _M17_INSTALL_PREP + " && printf '%s\\n' \"$(printf '%s' '{{callsign}}' | "
+                         "tr '[:lower:]' '[:upper:]')\" | sudo DEBIAN_FRONTEND=noninteractive ./install.sh",
+         "cmd": _M17_INSTALL_PREP + " && sudo DEBIAN_FRONTEND=noninteractive ./install.sh",
+         "timeout": 3600,
+         "note": "install.sh asks one question, your callsign: type it in the box and Run answers it for you "
+                 "(it is put in capitals). It then installs the PHP UI to /var/www/html/m17, downloads and "
+                 "compiles USRP2M17 (a few minutes, longer on a Pi Zero 2 W), writes "
+                 "/opt/USRP2M17/USRP2M17.ini and starts usrp2m17.service. Before it runs, MMDVM_CM (the "
+                 "USRP2M17 source) is downloaded into root's ~/git the same way as step 3, so a flaky "
+                 "connection is less likely to break it part-way; install.sh then only updates that copy. "
+                 "Note: install.sh deletes root's whole ~/git folder when it finishes, so keep nothing "
+                 "else there. You can still run it by hand over SSH (Copy) or in the terminal, where it "
+                 "asks for the callsign itself."},
         {"id": "m17_rptconf", "num": 5, "title": "rpt.conf — add the M17 node stanza",
          "cmd": _M17_RPTCONF_SNIPPET,
          "manual_block": True,
@@ -3399,13 +3491,15 @@ def _m17_install_steps() -> list[dict]:
                  "an officially documented requirement — include it if your ASL3 config uses NODE/NODE1 "
                  "globals elsewhere, skip it otherwise."},
         {"id": "m17_restart_asterisk", "num": 8, "title": "Restart Asterisk",
-         "cmd": "sudo astres.sh",
-         "note": "astres.sh is ASL3/HamVOIP's standard Asterisk-restart helper. If it's not on PATH on your "
-                 "image, edit this field to `sudo systemctl restart asterisk` before running."},
+         "cmd": "if command -v astres.sh >/dev/null 2>&1; then sudo astres.sh; "
+                "else sudo systemctl restart asterisk && echo 'Asterisk restarted (systemctl).'; fi",
+         "note": "Uses astres.sh, ASL3/HamVOIP's Asterisk-restart helper, when the node has it, and "
+                 "`systemctl restart asterisk` when it does not."},
         _config_save_step("m17_save_restore", 9),
         {"id": "m17_sudoers", "num": 10, "title": "Install sudoers rule for the web UI",
          "cmd": "printf 'www-data ALL=(ALL) NOPASSWD: /var/www/html/m17/update_usrp2m17.sh\\n"
-                "www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart usrp2m17\\n' | "
+                "www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart usrp2m17\\n"
+                "www-data ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart usrp2m17\\n' | "
                 "sudo tee /etc/sudoers.d/usrp2m17 >/dev/null && "
                 "sudo chmod 0440 /etc/sudoers.d/usrp2m17 && "
                 "sudo visudo -c -f /etc/sudoers.d/usrp2m17",
@@ -3984,9 +4078,11 @@ _CF_PREFLIGHT_CMD = (
 )
 
 _CF_INSTALL_APT_CMD = (
+    "{ command -v curl >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl; } && "
     "sudo mkdir -p --mode=0755 /usr/share/keyrings && "
-    "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg "
-    "| sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null && "
+    "curl -fsSL -o /tmp/cloudflare-main.gpg https://pkg.cloudflare.com/cloudflare-main.gpg && "
+    "sudo install -m 0644 /tmp/cloudflare-main.gpg /usr/share/keyrings/cloudflare-main.gpg && "
+    "rm -f /tmp/cloudflare-main.gpg && "
     "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] "
     "https://pkg.cloudflare.com/cloudflared any main' "
     "| sudo tee /etc/apt/sources.list.d/cloudflared.list && "
@@ -4967,8 +5063,8 @@ def _run_pkg_unit(job_key: str, cmd: str) -> dict:
             subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
             subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
             start = _run_argv(["systemd-run", f"--unit={unit}", "-p", "RemainAfterExit=yes",
-                               "-p", "LogRateLimitIntervalSec=0",
-                               "--setenv=DEBIAN_FRONTEND=noninteractive", "/bin/sh", "-c", cmd], timeout=30)
+                               "-p", "LogRateLimitIntervalSec=0"] + _unit_env_args() + ["/bin/sh", "-c", cmd],
+                              timeout=30)
             if not start["success"]:
                 return {"success": False, "returncode": None,
                         "output": "Could not start the package job: " + start["output"]}
@@ -5004,8 +5100,8 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
         props_argv = ["-p", "RemainAfterExit=yes", "-p", "LogRateLimitIntervalSec=0"]
         if low_priority:
             props_argv += ["-p", "Nice=19", "-p", "IOSchedulingClass=best-effort", "-p", "IOSchedulingPriority=7"]
-        start = _run_argv(["systemd-run", f"--unit={unit}"] + props_argv +
-                          ["--setenv=DEBIAN_FRONTEND=noninteractive", "/bin/sh", "-c", cmd], timeout=30)
+        start = _run_argv(["systemd-run", f"--unit={unit}"] + props_argv + _unit_env_args() +
+                          ["/bin/sh", "-c", cmd], timeout=30)
         if not start["success"]:
             _job_append_output(job_key, "Could not start the package job: " + start["output"] + "\n")
             return
@@ -24998,8 +25094,8 @@ _M17_WARNING = """Stage 1: installs mjwgeek/USRP2M17-Selector (GitHub) — a web
   No-Redistribution licensed, personal/non-commercial use only; this tab only clones and runs its own
   unmodified install.sh, same as the README's manual instructions. Three steps (rpt.conf/modules.conf/
   extensions.conf) are file edits shown as editable-but-not-auto-run text blocks — too risky to sed into a
-  live Asterisk config unattended, so apply those by hand. install.sh itself (step 3) is also manual since it
-  interactively prompts for your callsign. Purge runs automatically (non-manual, non-optional steps) after
+  live Asterisk config unattended, so apply those by hand. install.sh (step 4) asks for your callsign: type it
+  in the step's box and Run answers it. Purge runs automatically (non-manual, non-optional steps) after
   its double-confirm but never touches the three conf-file edits — revert those by hand. Check firewall posture on the Ports tab after install."""
 
 def _render_m17_panel() -> str:
@@ -28962,6 +29058,7 @@ _cfg: configparser.ConfigParser
 def main() -> None:
     global _cfg
     _cfg = load_config()
+    _ensure_sudo_shim()
 
     host = _cfg.get("server", "host", fallback="0.0.0.0")
     port = _cfg.getint("server", "port", fallback=9997)

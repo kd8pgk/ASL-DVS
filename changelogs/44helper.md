@@ -1,6 +1,20 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_0_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_1_20261029.py`. Newest entries first.
+
+## 0.1.1 (2026-10-29)
+
+Install-tab fixes for Raspberry Pi and Debian.
+
+- **USRP2M17 installs from the page.** M17 step 4 has a Callsign box. Run answers install.sh's only question (the callsign, put in capitals) and runs it with `DEBIAN_FRONTEND=noninteractive`, so no terminal is needed. The terminal and Copy still run it by hand, where it asks for the callsign itself.
+- **M17 step 4 downloads MMDVM_CM first.** It is fetched into root's `~/git` the same way as step 3 (HTTP/1.1, shallow), so install.sh only updates it. A flaky connection is less likely to break the build part-way.
+- **M17 step 1 installs the build tools.** git, sudo, build-essential, jq, python3, python3-pip and python3-requests are installed the same safe way as every other step, so install.sh's own package install has nothing to ask.
+- **M17 Restart Asterisk** uses `astres.sh` when the node has it and `systemctl restart asterisk` when it does not.
+- **M17 sudoers rule** also names `/usr/bin/systemctl`.
+- **Steps work without sudo.** A Debian machine set up with a root password has no `sudo`, so every step failed with "sudo: command not found". When 44helper runs as root and sudo is missing, it puts a small stand-in at the end of PATH (`/run/44helper-bin/sudo`) that runs the command as root. Package jobs, other steps and the terminal all use it. Once sudo is installed, the real one is used.
+- **ASL3 prerequisites keep the page reachable.** firewalld is left out when ufw is the active firewall. When firewalld is new, the ports that already answer are kept open in its default zone, the same as on the Split Tunnel tab: this page, the Dashboard (8989), instmon (8990), wifimon (8991), Cockpit (9090), SysMon (9999), IAX (4569/udp) and EchoLink (5198-5199/udp). Before, the new firewall blocked them.
+- **Cockpit's NetworkManager plugin only where NetworkManager runs.** `cockpit-networkmanager` pulls in NetworkManager, which would compete with ifupdown or systemd-networkd on a Debian machine.
+- **Downloads.** The ASL3 repo package is saved with `wget -O`, so a re-run replaces a broken copy instead of saving `.deb.1`. The DVSwitch repo script installs wget first when it is missing. The Cloudflare step installs curl when it is missing, and saves the signing key to a file before installing it, so a failed download stops the step instead of leaving an empty key.
 
 ## 0.1.0 (2026-10-29)
 
