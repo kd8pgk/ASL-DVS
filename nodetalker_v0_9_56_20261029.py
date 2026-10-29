@@ -31,8 +31,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.55"
-DATE_STR = "2026-10-28"
+VERSION = "0.9.56"
+DATE_STR = "2026-10-29"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -211,6 +211,9 @@ LISTENER_QUEUE_MAX = 150
 ACTIVE_DB = -50.0
 ACTIVE_HOLD_SEC = 0.6
 KERCHUNK_MAX_SEC = 0.4
+OURS_WINDOW_SEC = 300.0
+FEED_GAP_SEC = 0.5
+PUMP_LATE_SEC = 0.06
 
 _START_TIME = time.time()
 
@@ -1587,19 +1590,26 @@ class Hub:
         self.pump_beat = time.monotonic()
         self.rate_window = deque(maxlen=60)
         self.udp_error = ""
+        self.events = deque(maxlen=2000)
 
     def feed(self, data):
         now = time.monotonic()
         with self.lock:
+            if self.last_rx and now - self.last_rx > FEED_GAP_SEC and self.burst_last >= self.last_rx - ACTIVE_HOLD_SEC:
+                self.events.append((now, "gap", now - self.last_rx))
             self.packets += 1
             self.last_rx = now
             self.inbuf += data
             while len(self.inbuf) >= FRAME_BYTES:
                 self.frames.append(bytes(self.inbuf[:FRAME_BYTES]))
                 del self.inbuf[:FRAME_BYTES]
+            over = 0
             while len(self.frames) > IN_QUEUE_MAX:
                 self.frames.popleft()
-                self.dropped += 1
+                over += 1
+            if over:
+                self.dropped += over
+                self.events.append((now, "drop", over))
 
     def add_listener(self, ip, pcm=False):
         with self.lock:
@@ -1654,6 +1664,9 @@ class Hub:
             if len(self.frames) > IN_QUEUE_TRIM:
                 self.frames.popleft()
                 self.dropped += 1
+                self.events.append((now, "drop", 1))
+            if now - self.pump_beat > PUMP_LATE_SEC:
+                self.events.append((now, "late", now - self.pump_beat))
             have_listeners = bool(self.listeners)
         if frame is not None:
             db = frame_db(frame)
@@ -1751,7 +1764,19 @@ class Hub:
             "udp_port": _cfg_get("udp_port"),
             "udp_error": self.udp_error,
             "rx_load_pct": RXC.load_pct,
+            "ours": self.ours(now),
         }
+
+    def ours(self, now):
+        cutoff = now - OURS_WINDOW_SEC
+        with self.lock:
+            evs = [e for e in self.events if e[0] >= cutoff]
+        gaps = [v for _, k, v in evs if k == "gap"]
+        late = [v for _, k, v in evs if k == "late"]
+        return {"window_s": int(OURS_WINDOW_SEC),
+                "gaps": len(gaps), "gap_max_ms": round(max(gaps) * 1000) if gaps else 0,
+                "dropped": sum(v for _, k, v in evs if k == "drop"),
+                "late": len(late), "late_max_ms": round(max(late) * 1000) if late else 0}
 
 
 HUB = Hub()
@@ -6418,6 +6443,23 @@ async function pollStatus() {
   tnButtons();
   $('nd-feeder').textContent = d.feeder_pids && d.feeder_pids.length ? 'running (pid ' + d.feeder_pids.join(', ') + ')' : 'not running';
   if (d.udp_port) $('nd-udp').textContent = d.udp_error ? d.udp_error : '127.0.0.1:' + d.udp_port + ' (listening)';
+  oursRender(d);
+}
+
+function oursRender(d) {
+  const o = d.ours;
+  if (!o) return;
+  const min = Math.round(o.window_s / 60);
+  let txt, cls;
+  if (!d.packets) { txt = 'No feed from the node yet'; cls = 'st-warn'; }
+  else if (o.late) { txt = 'Node Talker side: stalled ' + o.late + ' time' + (o.late === 1 ? '' : 's') + ' in ' + min + ' min'; cls = 'st-bad'; }
+  else if (o.gaps || o.dropped) { txt = 'Feed side: audio arrived late or in bursts; Node Talker kept up'; cls = 'st-warn'; }
+  else { txt = 'Node Talker side is clean in the last ' + min + ' min'; cls = 'st-ok'; }
+  $('ours-verdict').textContent = txt;
+  $('ours-verdict').className = 'mono ' + cls;
+  $('ours-gaps').textContent = o.gaps ? o.gaps + ' (longest ' + o.gap_max_ms + ' ms)' : 'none';
+  $('ours-drops').textContent = o.dropped ? o.dropped + ' frames' : 'none';
+  $('ours-late').textContent = o.late ? o.late + ' (longest ' + o.late_max_ms + ' ms)' : 'none';
 }
 
 function flush() {
@@ -10182,6 +10224,14 @@ html[data-theme="light"] *{text-shadow:none!important}
 <table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
 <div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
 <div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
+</div>
+<div class="card" id="cd-ours">
+<h2>Our end</h2>
+<p id="ours-verdict" class="mono" style="font-weight:700;margin:4px 0 8px"></p>
+<table><tr><th>Feed gaps</th><td id="ours-gaps">-</td></tr>
+<tr><th>Audio dropped</th><td id="ours-drops">-</td></tr>
+<tr><th>Node Talker stalls</th><td id="ours-late">-</td></tr></table>
+<p class="muted small" id="ours-note">Last 5 minutes. A Node Talker stall means Node Talker itself fell behind: that is our end. Feed gaps and dropped audio mean the audio reached Node Talker late or in bursts. If no stall shows, Node Talker kept up. The phone and its Wi-Fi are not measured here.</p>
 </div>
 <div class="card fold" id="cd-setup">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-setup"><span class="fold-t">Setup</span><span class="fold-sum" id="sum-setup"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>

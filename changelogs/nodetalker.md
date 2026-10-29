@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_55_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_56_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.56 (2026-10-29)
+
+- **Our end card.** The Setup tab has a new card, Our end, always shown (no tap needed). It gives one verdict for the last 5 minutes: **Node Talker side is clean**, **Node Talker side: stalled** (red, Node Talker itself fell behind), or **Feed side: audio arrived late or in bursts; Node Talker kept up** (amber). It also lists the feed gaps (longest in ms), the audio dropped from the buffer (frames) and the Node Talker stalls (longest in ms).
+- **What is counted.** A feed gap is more than 0.5 s with no audio arriving from Asterisk, when the node was carrying audio just before it. A stall is a pump tick more than 60 ms after the one before it. Dropped audio is frames the buffer trimmed or discarded. Only the stalls mean Node Talker is at fault; gaps and drops come from the feed.
+- **Not measured.** The phone and its Wi-Fi are not in the card. The RX feed carries raw audio with no sequence numbers, so packet loss on the link itself is not counted.
+- The status data (`/api/status`) gains an `ours` object with the same counts, for the Android app later.
 
 ## 0.9.55 (2026-10-29)
 
