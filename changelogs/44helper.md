@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_4_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_5_20261029.py`. Newest entries first.
+
+## 0.1.5 (2026-10-29)
+
+- **Add private node updates Allmon3.** Adding a node also adds it to `/etc/allmon3/allmon3.ini`, and Remove takes it out, in the same preview and automatic copy. The ASL3 Restart button restarts Allmon3 with Asterisk. The Travel Node preset uses the same code as before, now shared. The Allmon3 update is the shared `allmon3_sync` in `shared/confio.py`, kept identical in 44helper, both Dashboard builds and Node Talker and checked by the repo check. It only adds a section that is missing, copying `host`, `port`, `user` and `pass` from this node's public node section, and only removes the section of a node this tool removed. The public node's section is never changed. With no allmon3.ini, or no public node section to copy from, Allmon3 is left alone and the result says so.
 
 ## 0.1.4 (2026-10-29)
 

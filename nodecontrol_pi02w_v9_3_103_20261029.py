@@ -39,7 +39,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.102-pi02w"
+VERSION      = "9.3.103-pi02w"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -1730,6 +1730,32 @@ def _phone_astdb(op: str, key: str, val: str = "") -> bool:
         log.warning("phone: AstDB %s %s failed: %s", op, key, e)
         return False
 
+_ALLMON3_INI = "/etc/allmon3/allmon3.ini"
+
+def _ph_block_nodes(text: Optional[str]) -> List[str]:
+    out: List[str] = []
+    for m in _PH_BLOCK_RE.finditer(text or ""):
+        out += [n for n in re.findall(r"(?m)^\s*\[(\d+)\]", m.group(0)) if n not in out]
+    return out
+
+def _allmon_follow(add: List[str], remove: List[str]) -> str:
+    if not add and not remove:
+        return ""
+    old = _ph_read(_ALLMON3_INI)
+    if old is None:
+        return ""
+    new, notes = allmon3_sync(old, add, remove, str(_cfg.asl_node))
+    if not notes:
+        return ""
+    if new == old:
+        return "; ".join(notes)
+    try:
+        atomic_write(_ALLMON3_INI, new)
+    except OSError as e:
+        return f"allmon3.ini not updated: {e}"
+    log.info("phone: %s", "; ".join(notes))
+    return "; ".join(notes) + " (restart Allmon3 to see it: systemctl restart allmon3)"
+
 def _ph_strip(text: str) -> str:
     return _PH_BLOCK_RE.sub("", text)
 
@@ -2157,6 +2183,7 @@ def action_phone_apply(restart: bool = False) -> Tuple[bool, str]:
         iax  = any(n["type"] == "iax2" for n in doc["networks"])
         rpt_path = _ph_path("rpt.conf")
         rpt_old  = _ph_read(rpt_path)
+        old_nodes = _ph_block_nodes(rpt_old)
         if rpt_old is None:
             return False, f"{rpt_path} not found"
         nodes_body, stanza, err = _phone_render_rpt(targets, rpt_old)
@@ -2271,6 +2298,10 @@ def action_phone_apply(restart: bool = False) -> Tuple[bool, str]:
             _phone_astdb("put", "patch", "1" if doc.get("patch_enabled", True) else "0")
     else:
         notes.append("Asterisk isn't running — changes take effect when it starts")
+    new_nodes = [nd for nd, _c in targets]
+    am = _allmon_follow(new_nodes, [nd for nd in old_nodes if nd not in new_nodes])
+    if am:
+        notes.append(am)
     upd = [c for c in changed if c not in removed]
     what = ("nothing needed changing" if not changed else
             "; ".join(x for x in ("updated " + ", ".join(upd) if upd else "",
@@ -2322,6 +2353,7 @@ def action_phone_revert(restart: bool = False) -> Tuple[bool, str]:
     with _phone_lock:
         doc = _phone_load()
         nodes = _phone_all_nodes(doc)
+        old_nodes = _ph_block_nodes(_ph_read(_ph_path("rpt.conf")))
         mods_txt = _ph_read(_ph_path("modules.conf")) or ""
         ours = "".join(m.group(0) for m in _PH_BLOCK_RE.finditer(mods_txt))
         sip_was = any(f"load => {m}" in ours for m in _PH_PJSIP_MODULES)
@@ -2385,6 +2417,9 @@ def action_phone_revert(restart: bool = False) -> Tuple[bool, str]:
                              f"systemctl restart asterisk, or sysmon Console → Restart Asterisk when idle")
     else:
         notes.append("Asterisk isn't running — it starts without the phone")
+    am = _allmon_follow([], old_nodes)
+    if am:
+        notes.append(am)
     global _phone_open_state
     _phone_open_state = False
     _phone_state_cache[0] = 0.0
@@ -15251,6 +15286,47 @@ def close_firewall_port(port, proto="tcp"):
             return "!", "closed %s in ufw, but ufw's default allows incoming traffic, so it stays reachable" % spec
         return "-", "closed %s in ufw" % spec
     return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
+
+def allmon3_sync(text, add=(), remove=(), own=""):
+    import re
+    hdr = re.compile(r"^\s*\[([^\]]+)\]")
+    kvre = re.compile(r"^\s*([^;=\s][^=]*?)\s*=>?\s*(.*)$")
+    lines = text.splitlines()
+    secs = []
+    for i, line in enumerate(lines):
+        m = hdr.match(line)
+        if m:
+            if secs:
+                secs[-1]["end"] = i
+            secs.append({"name": m.group(1).strip(), "start": i, "end": len(lines)})
+    names = {s["name"] for s in secs}
+    notes = []
+    public = [s for s in secs if s["name"].isdigit() and not 1000 <= int(s["name"]) <= 1999]
+    public.sort(key=lambda s: s["name"] != own)
+    drop = set()
+    for s in secs:
+        if s["name"] in remove:
+            drop.update(range(s["start"], s["end"]))
+            notes.append("allmon3.ini: [%s] removed" % s["name"])
+    out = [line for i, line in enumerate(lines) if i not in drop]
+    adds = sorted((n for n in add if n not in names and n not in remove), key=int)
+    if adds and not public:
+        notes.append("allmon3.ini has no public node section to copy host/user/pass from; add "
+                     + ", ".join(adds) + " to Allmon3 by hand")
+        return "\n".join(out) + "\n", notes
+    for n in adds:
+        src = public[0]
+        body = []
+        for i in range(src["start"] + 1, src["end"]):
+            s = lines[i].strip()
+            m = None if not s or s.startswith(";") or s.startswith("[") else kvre.match(lines[i])
+            if m and m.group(1).strip().lower() in ("host", "port", "user", "pass"):
+                body.append(lines[i].rstrip())
+        while out and not out[-1].strip():
+            out.pop()
+        out += ["", "[%s]" % n] + body
+        notes.append("allmon3.ini: [%s] added (host/user/pass copied from [%s])" % (n, src["name"]))
+    return "\n".join(out) + "\n", notes
 
 def _listen_port() -> int:
     try:

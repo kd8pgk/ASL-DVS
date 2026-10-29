@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_102_20261029.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_103_20261029.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.103-pi02w (2026-10-29)
+
+- **The Phone tab keeps Allmon3 in step.** Saving or switching on the phone adds each phone network's private node to `/etc/allmon3/allmon3.ini`; a phone network that is gone, or switching the phone off, removes its node there. Allmon3 is not restarted: the result says to restart it. The Allmon3 update is the shared `allmon3_sync` in `shared/confio.py`, kept identical in 44helper, both Dashboard builds and Node Talker and checked by the repo check. It only adds a section that is missing, copying `host`, `port`, `user` and `pass` from this node's public node section, and only removes the section of a node this tool removed. The public node's section is never changed. With no allmon3.ini, or no public node section to copy from, Allmon3 is left alone and the result says so.
 
 ## 9.3.102-pi02w (2026-10-29)
 
