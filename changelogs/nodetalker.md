@@ -1,6 +1,23 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_54_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_55_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.55 (2026-10-29)
+
+Fixes from an audit of 0.9.50 to 0.9.54:
+
+- **Automatic balancing changes settings now.** In 0.9.53 and 0.9.54 the Run automatically balancers skipped every node-side change (RX and TX gain, buffers, cleanup), so they never changed anything.
+- **A change is on trial, and a rejected one waits.** Each change is judged against the minute just before it, and only on a minute with enough speech. It is put back only if it is clearly worse; a change that was put back is not tried again for 30 minutes. Before, the same bad change could be tried and put back over and over.
+- **Keeping the screen on: what it really does.** The page can keep the screen on only over HTTPS, or in the app with its Keep screen on setting. When it can't, the balancer's status says so, and the balancer pauses while the screen is off. The checkbox text says this too. (0.9.53 said the screen was always kept on.)
+- **Updates don't bring the setup popup back.** The installer marks setup as pending only the first time (when there is no setup file yet), so an update no longer asks again after Not now or after node 1921 was removed on purpose.
+- **Status polling can't get stuck.** A request that never answers no longer stops the status and log polling; the next poll starts after 20 s at most.
+- **TX tone test link: node numbers only.** Connect and Disconnect take 1 to 7 digits. Disconnect drops only the node Node Talker connected, or a node that is linked to the main node right now.
+- **Setup's Save saves only the Setup card.** It used to save the Favorites, DMR networks and Digital cards too, so a blank favorite row made it fail; each of those cards has its own Save.
+- **Dashboard favorites Add is off when there is nothing to add.** With no Dashboard favorites (or the first entry picked) the button is off, instead of doing nothing.
+- **The LH (Last Heard) button is off when there is no Last Heard page** for what is tuned, instead of doing nothing.
+- **The comment above node 1921 in rpt.conf says Node Talker.** New installs get `; nodetalker: transmit node for Node Talker (remove it from the TX card)`. A 1921 stanza with the old Node Listen comment is still recognised, so the TX card can still remove it.
+- **The comment above the receive feed's outstreamcmd line says Node Talker too.** New lines get `; nodetalker: sends this node's audio to Node Talker (remove it from the RX card)`. The old Node Listen comment is still removed with the line by the RX card's Remove.
+- **Smaller fixes.** The setup popup can't open twice. Opening the page doesn't read rpt.conf when no setup is pending. The balancer's load check runs every 15 s instead of 3 s once it has settled.
 
 ## 0.9.54 (2026-10-29)
 

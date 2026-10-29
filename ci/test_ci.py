@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CHECK = os.path.join(HERE, "check_repo.py")
@@ -1189,6 +1190,131 @@ class NodeTalkerCardTests(unittest.TestCase):
     def test_mic_test_records_20_seconds(self):
         self.assertIn("Test mic (20 s, plays back)", self.text)
         self.assertIn("Recording 20 s", self.text)
+
+
+def load_nodetalker():
+    import glob
+    import importlib.util
+    path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+    spec = importlib.util.spec_from_file_location("nodetalker_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+class NodeTalkerBehaviourTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        nt = self.nt
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.state = {"tx": {"defined": False, "ours": False, "ready": False},
+                      "stanzas": [{"name": "1999", "outstream": ""}], "links": []}
+        self.calls = []
+        patches = {
+            "SETUP_PATH": os.path.join(self.tmp.name, "setup.json"),
+            "log_event": lambda *a, **k: None,
+            "main_node": lambda: "1999",
+            "tx_state": lambda main=None: dict(self.state["tx"]),
+            "read_rpt": lambda: ([], self.state["stanzas"]),
+            "_is_ours": lambda v: "--feed" in (v or ""),
+            "tx_enable": lambda: self.calls.append("tx") or {"ok": True, "message": "tx"},
+            "hook_enable": lambda n: self.calls.append("feed") or {"ok": True, "message": "feed"},
+            "restart_asterisk": lambda: self.calls.append("restart") or {"ok": True, "message": "restart"},
+            "ilink": lambda node, op, peer: self.calls.append(("ilink", op, peer)) or (True, ""),
+            "rpt_links": lambda node, max_age=2.0: (True, [{"node": n} for n in self.state["links"]]),
+            "bridge_nodes": lambda *a: {},
+            "tuned_now": lambda running: "",
+            "nc_running": lambda cached=False: False,
+        }
+        for name, value in patches.items():
+            p = mock.patch.object(nt, name, value)
+            p.start()
+            self.addCleanup(p.stop)
+        p = mock.patch.object(nt.TALKER, "state", lambda: {"keyed": False})
+        p.start()
+        self.addCleanup(p.stop)
+        nt.TONE_LINK["node"] = ""
+        self.addCleanup(lambda: nt.TONE_LINK.update(node=""))
+
+    def test_setup_lists_missing_steps_and_apply_runs_them(self):
+        nt = self.nt
+        nt.setup_mark(True)
+        plan = nt.setup_plan()
+        self.assertTrue(plan["pending"])
+        self.assertEqual([s["id"] for s in plan["steps"]], ["tx", "feed"])
+        self.assertTrue(nt.setup_apply()["ok"])
+        self.assertEqual(self.calls, ["tx", "feed", "restart"])
+        self.assertFalse(nt.setup_pending())
+
+    def test_setup_clears_itself_when_nothing_is_missing(self):
+        nt = self.nt
+        self.state["tx"] = {"defined": True, "ours": True, "ready": True}
+        self.state["stanzas"] = [{"name": "1999", "outstream": "python3,x,--feed,6200"}]
+        nt.setup_mark(True)
+        self.assertEqual(nt.setup_plan()["steps"], [])
+        self.assertFalse(nt.setup_pending())
+
+    def test_setup_is_blocked_by_a_foreign_feed(self):
+        nt = self.nt
+        self.state["stanzas"] = [{"name": "1999", "outstream": "/usr/bin/broadcastify"}]
+        nt.setup_mark(True)
+        self.assertTrue(nt.setup_plan()["blocked"])
+        self.assertFalse(nt.setup_apply()["ok"])
+        self.assertEqual(self.calls, [])
+
+    def test_setup_reads_nothing_when_not_pending(self):
+        nt = self.nt
+        with mock.patch.object(nt, "tx_state", side_effect=AssertionError("read while not pending")):
+            self.assertFalse(nt.setup_plan()["pending"])
+
+    def test_tone_link_connect_takes_node_numbers_only(self):
+        nt = self.nt
+        for bad in ("12a", "12345678", "1921", "1999", "", "45001 x"):
+            self.assertFalse(nt.tone_link_set({"action": "connect", "node": bad})["ok"], bad)
+        self.assertTrue(nt.tone_link_set({"action": "connect", "node": "45001"})["ok"])
+        self.assertEqual(nt.TONE_LINK["node"], "45001")
+        self.assertIn(("ilink", 3, "45001"), self.calls)
+
+    def test_tone_link_disconnect_only_drops_a_linked_node(self):
+        nt = self.nt
+        self.assertFalse(nt.tone_link_set({"action": "disconnect", "node": "45001"})["ok"])
+        self.assertFalse(nt.tone_link_set({"action": "disconnect", "node": "4500; x"})["ok"])
+        self.assertEqual(self.calls, [])
+        self.state["links"] = ["45001"]
+        self.assertTrue(nt.tone_link_set({"action": "disconnect", "node": "45001"})["ok"])
+        self.assertEqual(self.calls, [("ilink", 1, "45001")])
+
+    def test_transmit_node_comment_old_and_new_are_recognised(self):
+        nt = self.nt
+        for note, ours in [(nt.TX_NOTES[0], True), (nt.TX_NOTES[1], True), ("; someone else's node", False)]:
+            lines, stanzas = nt.parse_rpt("\n".join(["[1999]", "duplex = 1", "", note, "[1921]", "rxchannel = USRP/127.0.0.1:34018:32018"]))
+            s, _ = nt._tx_stanza(lines, stanzas)
+            self.assertEqual(nt._tx_ours(lines, s), ours, note)
+        self.assertIn("Node Talker", nt.TX_NOTE)
+
+    def test_feed_comment_old_and_new_are_removed_with_the_line(self):
+        nt = self.nt
+        for note in nt.HOOK_NOTES:
+            text = "\n".join(["[1999]", note, "outstreamcmd = /usr/bin/python3,/usr/local/bin/nodetalker,--feed,6200", "duplex = 1"])
+            lines, stanzas = nt.parse_rpt(text)
+            with mock.patch.object(nt, "_is_ours", lambda v: "--feed" in (v or "")):
+                left, changed = nt._remove_ours(lines, stanzas)
+            self.assertTrue(changed)
+            self.assertEqual([ln for ln in left if ln.strip()], ["[1999]", "duplex = 1"], note)
+        self.assertIn("Node Talker", nt.HOOK_NOTE)
+
+    def test_tone_link_guard_allows_only_the_target_for_tx(self):
+        nt = self.nt
+        nt.TONE_LINK["node"] = "45001"
+        self.state["links"] = ["1921", "45001"]
+        self.assertEqual(nt.tone_link_block(tx=True), "")
+        self.assertNotEqual(nt.tone_link_block(tx=False), "")
+        self.state["links"] = ["1921", "45001", "77777"]
+        self.assertIn("77777", nt.tone_link_block(tx=True))
 
 
 if __name__ == "__main__":
