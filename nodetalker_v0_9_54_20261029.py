@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.53"
+VERSION = "0.9.54"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker"
 
@@ -6259,7 +6259,7 @@ async function whoami() {
   if (!d.backend) $('login-msg').textContent = 'No root password is set on this Pi, so login cannot work.';
   render();
   autoListen();
-  if (authed) pttFromPi(false);
+  if (authed) { pttFromPi(false); setupCheck(); }
 }
 
 function hostLinks(d) {
@@ -6309,7 +6309,7 @@ async function login(ev) {
   const d = await post('/api/login', {password: $('pw').value});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); pttFromPi(false); pollHostLinks(); }
+  if (d.ok) { authed = true; loginWanted = false; render(); autoListen(); loadFavs(); pttFromPi(false); pollHostLinks(); setupCheck(); }
   else $('login-msg').textContent = d.error || 'Login failed.';
 }
 
@@ -7057,6 +7057,32 @@ async function toneStart(mode) {
   toneWasRunning = true;
   toneUi(true);
   tonePoll();
+}
+
+async function setupCheck() {
+  const d = await api('/api/setup');
+  if (!d.ok || !d.pending || (!d.steps.length && !d.blocked.length)) return;
+  const list = $('setup-steps');
+  list.innerHTML = '';
+  d.steps.forEach((s) => { const li = document.createElement('li'); li.textContent = s.text; list.appendChild(li); });
+  $('setup-blocked').textContent = d.blocked.join(' ');
+  $('setup-blocked').classList.toggle('hidden', !d.blocked.length);
+  $('setup-ok').disabled = d.blocked.length > 0 || !d.steps.length;
+  $('setup-ok').classList.remove('hidden');
+  $('setup-later').textContent = 'Not now';
+  $('setup-dlg-msg').textContent = '';
+  $('setup-dlg').showModal();
+}
+
+async function setupApply() {
+  $('setup-ok').disabled = true;
+  note('setup-dlg-msg', '', 'Setting up. Asterisk restarts, so the links on this node drop for a moment...');
+  const d = await post('/api/setup/apply', {});
+  if (!d.ok) { $('setup-ok').disabled = false; note('setup-dlg-msg', 'err', d.error || 'Setup did not finish.'); return; }
+  note('setup-dlg-msg', 'ok', d.message || 'Done.');
+  $('setup-ok').classList.add('hidden');
+  $('setup-later').textContent = 'Close';
+  loadNode(); loadTx(); loadConfig();
 }
 
 async function txLink(action) {
@@ -7937,6 +7963,8 @@ function chkInit() {
   $('rx-auto').addEventListener('change', autoPrefChanged);
   $('tx-auto').addEventListener('change', autoPrefChanged);
   loadAutoPrefs();
+  $('setup-ok').addEventListener('click', setupApply);
+  $('setup-later').addEventListener('click', () => $('setup-dlg').close());
   $('tone-start').addEventListener('click', () => toneStart('rx'));
   $('tone-stop').addEventListener('click', toneStop);
   $('tx-tone-start').addEventListener('click', () => toneStart('tx'));
@@ -10500,6 +10528,15 @@ mic volume, so the gain here is applied in the page.</p>
 <button id="nav-setup" type="button">__ICON_SETUP__Setup</button>
 </nav>
 <script>__JS__</script>
+<dialog id="setup-dlg" class="setup-dlg" aria-labelledby="setup-title">
+<h2 id="setup-title">Set up Node Talker</h2>
+<p>Node Talker needs these changes to <code>rpt.conf</code> before it can talk and listen through this node:</p>
+<ul id="setup-steps"></ul>
+<p id="setup-blocked" class="msg warn hidden"></p>
+<p class="muted small">Reversible. rpt.conf is backed up before each change, and the backup's path is shown in the result. Remove on the TX card (node 1921) and Remove on the RX card (receive feed) put back what Node Talker added. Asterisk restarts after the changes, so the links on this node drop and come back.</p>
+<div class="row"><button id="setup-ok" class="btn primary" type="button">OK, install</button><button id="setup-later" class="btn" type="button">Not now</button></div>
+<div id="setup-dlg-msg" class="msg"></div>
+</dialog>
 </body>
 </html>
 """
@@ -10525,6 +10562,7 @@ _POST_ACTIONS = {
     "/api/node/enable": (lambda b: hook_enable(b.get("node", "")), (ValueError, OSError)),
     "/api/node/disable": (lambda b: hook_disable(), (OSError,)),
     "/api/tx/enable": (lambda b: tx_enable(), (OSError,)),
+    "/api/setup/apply": (lambda b: setup_apply(), (OSError,)),
     "/api/tx/disable": (lambda b: tx_disable(), (OSError,)),
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
     "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
@@ -10701,6 +10739,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, balance_get())
             elif path == "/api/tx":
                 self._json(200, dict(tx_state(), ok=True))
+            elif path == "/api/setup":
+                self._json(200, dict(setup_plan(), ok=True))
             elif path == "/api/favorites":
                 dash = dashboard_conf()
                 self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(),
@@ -11191,6 +11231,78 @@ def close_firewall_port(port, proto="tcp"):
     return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
 
 
+SETUP_PATH = os.path.join(CONFIG_DIR, "nodetalker_setup.json")
+
+
+def setup_pending():
+    try:
+        with open(SETUP_PATH, "r", encoding="utf-8") as fh:
+            return bool(json.load(fh).get("pending"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+def setup_mark(pending):
+    _atomic_write(SETUP_PATH, json.dumps({"pending": bool(pending), "version": VERSION}) + "\n", 0o644)
+
+
+def setup_plan():
+    pending = setup_pending()
+    main = main_node()
+    steps, blocked = [], []
+    if not main:
+        blocked.append("Pick the node on the Node card first.")
+    else:
+        tx = tx_state(main)
+        if tx.get("defined") and not tx.get("ours"):
+            blocked.append(f"rpt.conf already has a node {TX_NODE} that Node Talker didn't add. Remove it or pick another node.")
+        elif not tx.get("ready"):
+            steps.append({"id": "tx", "text": f"Add transmit node {TX_NODE} to rpt.conf: its own stanza, a USRP channel on "
+                          f"127.0.0.1 ports {TX_USRP_LISTEN} and {TX_USRP_SEND}, and a [nodes] line. Node Talker then links it to node {main}."})
+        try:
+            with _rpt_lock:
+                _, stanzas = read_rpt()
+            target = _find_stanza(stanzas, main)
+            if target is None:
+                blocked.append(f"Node {main} is not in rpt.conf.")
+            elif target["outstream"] and not _is_ours(target["outstream"]):
+                blocked.append(f"Node {main} already has an outstreamcmd (a Broadcastify feed?). Remove that line first.")
+            elif not _is_ours(target["outstream"]):
+                steps.append({"id": "feed", "text": f"Send node {main}'s audio to Node Talker: one outstreamcmd line in its stanza."})
+        except OSError as exc:
+            blocked.append(f"Could not read rpt.conf: {exc}")
+    if pending and not steps and not blocked:
+        setup_mark(False)
+        pending = False
+    return {"pending": pending, "steps": steps, "blocked": blocked, "node": main or "", "rpt": RPT_CONF}
+
+
+def setup_apply():
+    plan = setup_plan()
+    if plan["blocked"]:
+        return {"ok": False, "error": " ".join(plan["blocked"])}
+    ids = {s["id"] for s in plan["steps"]}
+    msgs = []
+    if "tx" in ids:
+        r = tx_enable()
+        if not r.get("ok"):
+            return r
+        msgs.append(r.get("message", ""))
+    if "feed" in ids:
+        r = hook_enable(plan["node"])
+        if not r.get("ok"):
+            return {"ok": False, "error": (" ".join(msgs) + " " + r.get("error", "")).strip() + " Setup is not finished."}
+        msgs.append(r.get("message", ""))
+    if ids:
+        r = restart_asterisk()
+        if not r.get("ok"):
+            return {"ok": False, "error": " ".join(msgs + [r.get("error", "")]) + " Restart Asterisk by hand."}
+        msgs.append(r.get("message", ""))
+    setup_mark(False)
+    log_event("Node Talker setup finished", "ok")
+    return {"ok": True, "message": " ".join(m for m in msgs if m) or "Nothing to change."}
+
+
 def install_service():
     if os.geteuid() != 0:
         print("Error: installing needs root. Run with sudo.")
@@ -11221,6 +11333,8 @@ def install_service():
         _write_fav_doc([], [], {})
         print(f"  [+] Wrote {FAV_CONF_PATH}")
     _print_digital()
+    setup_mark(True)
+    print("  [i] Node Talker will ask to set up the transmit node and receive feed on first open (rpt.conf is backed up first).")
     legacy = _legacy_unit_real()
     aside = LEGACY_SERVICE_PATH + LEGACY_ASIDE
     if legacy:

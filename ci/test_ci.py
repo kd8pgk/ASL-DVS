@@ -1180,6 +1180,12 @@ class NodeTalkerCardTests(unittest.TestCase):
         self.assertIn("pollEvery(pollStatus, 1500, 5000);", self.text)
         self.assertIn("pollEvery(pollLog, 3000, 10000);", self.text)
 
+    def test_first_open_setup_popup_is_wired(self):
+        self.assertIn('setup_mark(True)', self.text)
+        self.assertIn('"/api/setup/apply": (lambda b: setup_apply(), (OSError,)),', self.text)
+        self.assertIn('<dialog id="setup-dlg"', self.text)
+        self.assertIn('setupCheck();', self.text)
+
     def test_mic_test_records_20_seconds(self):
         self.assertIn("Test mic (20 s, plays back)", self.text)
         self.assertIn("Recording 20 s", self.text)
