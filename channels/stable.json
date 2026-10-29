@@ -56,13 +56,13 @@
    "version": "9.3.94-pi02w"
   },
   "nodetalker": {
-   "blob": "8694205d8a9ca1117b2d03de0f190fde47335070",
-   "commit": "806ba53e00e116ccbaeff80c4d3b3e19f01c941c",
-   "file": "nodetalker_v0_9_29_20261026.py",
-   "landed": "2026-10-26T12:51:15Z",
-   "promoted": "2026-10-29T12:51:15Z",
+   "blob": "28adff5d1bd6f974007cdfcbce0b615ad2370fd6",
+   "commit": "83eeddb138a87cd84445c0ecf0acfe9b8ff4819b",
+   "file": "nodetalker_v0_9_34_20261026.py",
+   "landed": "2026-10-26T17:00:34Z",
+   "promoted": "2026-10-29T17:00:34Z",
    "reason": "count",
-   "version": "0.9.29"
+   "version": "0.9.34"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
