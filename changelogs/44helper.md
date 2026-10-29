@@ -1,6 +1,15 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_3_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_4_20261029.py`. Newest entries first.
+
+## 0.1.4 (2026-10-29)
+
+- **Add private node (Config tab, under Travel Node preset).** A new card adds a private node (1000-1999) to rpt.conf the same way the Dashboard's Phone tab and Node Talker do: a stanza with the main node's template, a `[nodes]` line on this node's IAX port (`radio@127.0.0.1[:port]/N,NONE`) and, if ticked, `exten => N,1,rpt,N` in extensions.conf `[radio-secure]`.
+  - **Number:** blank picks the next free one, skipping every number already in rpt.conf and the usual ones (1921 Node Talker, 1999 DVSwitch, 1917 M17). 1921 is refused: Node Talker adds it.
+  - **Type:** Plain (`rxchannel = Local/pseudo`) or USRP bridge (`USRP/127.0.0.1:<other program's port>:<Asterisk's port>`) with the upstream USRP2M17 values. A USRP node refuses ports another USRP node already uses, warns on other port clashes and sets chan_usrp to load.
+  - **Preview** shows every change and writes nothing. **Add node** saves an automatic copy first. Asterisk is not restarted.
+  - A node added here carries the line `; 44helper: private node added on the Config tab (remove it there)` and is listed on the card with **Preview remove** and **Remove** (stanza, `[nodes]` line, exten line). Nodes the card did not add, the Dashboard's Phone nodes and Node Talker's node are never touched.
+- **The Travel Node preset leaves Node Talker's node alone.** Node Talker's transmit node (1921, marked by its own comment line) was saved into the preset without that line, and applying a preset without it removed it. Saving now leaves it out. Applying never removes or rewrites it, keeps its comment line and `[nodes]` line, and skips a 1921 carried by an older preset. Add it on each node from Node Talker's TX card.
 
 ## 0.1.3 (2026-10-29)
 
