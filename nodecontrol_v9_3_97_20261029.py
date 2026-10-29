@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.96"
+VERSION      = "9.3.97"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -13838,6 +13838,9 @@ _PUBLIC_GET_PATHS = {"/", "/index.html", "/api/ping", "/healthz"}
 class _EarlyReturn(Exception):
     pass
 
+_PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "Cf-Ipcountry", "Cf-Visitor", "X-Forwarded-For",
+                  "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Via")
+
 class Handler(BaseHTTPRequestHandler):
     timeout = 30
 
@@ -13952,6 +13955,9 @@ class Handler(BaseHTTPRequestHandler):
             raise _EarlyReturn()
         return self.rfile.read(length)
 
+    def _via_proxy(self) -> bool:
+        return any(self.headers.get(h) is not None for h in _PROXY_HEADERS)
+
     def _client_ip(self) -> str:
         try:
             return self.client_address[0]
@@ -13994,7 +14000,7 @@ class Handler(BaseHTTPRequestHandler):
         if not handler:
             self.send_response(404); self.end_headers()
             return
-        if path == "/api/event" and self._client_ip() in ("127.0.0.1", "::1"):
+        if path == "/api/event" and self._client_ip() in ("127.0.0.1", "::1") and not self._via_proxy():
             pass
         elif path not in _PUBLIC_GET_PATHS and not self._require_auth():
             return
