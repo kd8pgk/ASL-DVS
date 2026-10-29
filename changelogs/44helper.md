@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_2_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_3_20261029.py`. Newest entries first.
+
+## 0.1.3 (2026-10-29)
+
+Cloudflare tab fixes.
+
+- **The pre-flight checks the Cloudflare apt source and key.** Cloudflare changed its package signing key on 30 Oct 2025 and the old key stopped working on 30 Apr 2026. A node that installed cloudflared before then still has the old key, so `apt update` fails, and with it every install step on the other tabs that starts with `apt update`. Step 1 now shows the Cloudflare apt source and warns when the key is missing or older than the change. Running step 2 again replaces the key.
+- **Install stops on a second Cloudflare source.** When another apt source file (for example a `cloudflared.sources`) already names Cloudflare's repo, step 2 stops and names the file before it writes anything. Two sources with different keys make every `apt update` fail with "Conflicting values set for option Signed-By".
+- **Purge removes the apt source and key.** Both purges (token and quick) now remove `/etc/apt/sources.list.d/cloudflared.list` and the signing key after the package. Before, apt kept checking Cloudflare's repo after cloudflared was gone, and failed once the key was out of date.
 
 ## 0.1.2 (2026-10-29)
 
