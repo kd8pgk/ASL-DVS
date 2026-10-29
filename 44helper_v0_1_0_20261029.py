@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.0.224"
+APP_VERSION = "0.1.0"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -671,6 +671,76 @@ def close_firewall_port(port, proto="tcp"):
         return "-", "closed %s in ufw" % spec
     return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
 
+def system_profile(root="/"):
+    import os
+    import subprocess
+
+    def path(rel):
+        return os.path.join(root, rel)
+
+    def read(rel):
+        try:
+            with open(path(rel), encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+
+    def active(unit):
+        try:
+            return subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True,
+                                  timeout=5).stdout.strip() == "active"
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    osr = {}
+    for line in read("etc/os-release").splitlines():
+        key, sep, val = line.partition("=")
+        if sep:
+            osr[key.strip()] = val.strip().strip('"').strip("'")
+    model = read("proc/device-tree/model").replace("\0", "").strip()
+    arch = ""
+    try:
+        arch = subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not arch:
+        arch = os.uname().machine
+    ifaces = []
+    try:
+        for name in sorted(os.listdir(path("sys/class/net"))):
+            if os.path.isdir(path("sys/class/net/" + name + "/wireless")):
+                ifaces.append(name)
+    except OSError:
+        pass
+    wpa_sockets = False
+    for rel in ("run/wpa_supplicant", "var/run/wpa_supplicant"):
+        try:
+            if os.listdir(path(rel)):
+                wpa_sockets = True
+        except OSError:
+            pass
+    if active("NetworkManager.service"):
+        manager = "NetworkManager"
+    elif wpa_sockets:
+        manager = "wpa_supplicant"
+    elif active("systemd-networkd.service"):
+        manager = "systemd-networkd"
+    else:
+        manager = "unknown"
+    return {
+        "board": "pi" if "raspberry pi" in model.lower() else "other",
+        "model": model,
+        "os_id": osr.get("ID", ""),
+        "os_name": osr.get("PRETTY_NAME", ""),
+        "codename": osr.get("VERSION_CODENAME", ""),
+        "version_id": osr.get("VERSION_ID", ""),
+        "arch": arch,
+        "wifi_manager": manager,
+        "wifi_iface": "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else ""),
+        "wifi_ifaces": ifaces,
+    }
+
 
 def install_service() -> None:
     if os.geteuid() != 0:
@@ -1238,6 +1308,7 @@ def build_overview_data(cfg: configparser.ConfigParser) -> dict:
         "self_check": self_check,
         "tunnel_kind": cfg.get("tunnels", "tunnel.pi.kind", fallback=""),
         "asl_reg": asl_registration_info() if shutil.which("asterisk") else None,
+        "system": _system_text(),
         "checked_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -2481,6 +2552,28 @@ def _config_save_step(step_id: str, num: int) -> dict:
                     "the Restore point, once. Running it again only adds systems installed since; saved files are "
                     "never overwritten. The Restore point, save points and presets are on the Config tab."}
 
+_SYSTEM_CACHE: dict = {"data": None}
+
+def _system() -> dict:
+    if _SYSTEM_CACHE["data"] is None:
+        try:
+            _SYSTEM_CACHE["data"] = system_profile()
+        except Exception:
+            _SYSTEM_CACHE["data"] = {"board": "other", "model": "", "os_id": "", "os_name": "", "codename": "",
+                                     "version_id": "", "arch": "", "wifi_manager": "unknown", "wifi_iface": "",
+                                     "wifi_ifaces": []}
+    return _SYSTEM_CACHE["data"]
+
+def _system_text() -> str:
+    sysinfo = _system()
+    board = str(sysinfo.get("model") or "Raspberry Pi") if sysinfo.get("board") == "pi" else "not a Raspberry Pi"
+    parts = [str(sysinfo.get("os_name") or sysinfo.get("os_id") or "Linux"), str(sysinfo.get("arch") or ""), board]
+    return " · ".join(p for p in parts if p)
+
+def _default_distro(fallback: str = "trixie") -> str:
+    name = str(_system().get("codename") or "")
+    return name if name in ("bookworm", "trixie") else fallback
+
 def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
     return [
         {"id": "prereqs", "num": 1, "title": "Install prerequisites",
@@ -2514,7 +2607,7 @@ def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
         {"id": "install_appliance", "num": 10, "title": "(Optional) Full ASL3 Appliance branding/firewall defaults",
          "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt install -y "
                 "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
-                "asl3-appliance asl3-appliance-pi",
+                + ("asl3-appliance asl3-appliance-pi" if _system().get("board") == "pi" else "asl3-appliance"),
          "timeout": 900,
          "note": "Optional per source doc — applies appliance branding, web rules, and pre-configured "
                  "firewall defaults. asl3-appliance-pi is the Raspberry Pi-specific companion package (all "
@@ -2525,7 +2618,8 @@ def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
                  "fine — so treat that doc wording with a grain of salt rather than as a hard Bookworm "
                  "blocker, but keep an eye out if a fresh Bookworm install ever fails here. Skip entirely if "
                  "you don't want appliance branding. Kept as one step (not split further) since both "
-                 "packages are a matched pair for this fleet's Pi-based nodes, unlike the asl3/allmon3/"
+                 "packages are a matched pair for this fleet's Pi-based nodes (on a machine that is not a Raspberry Pi "
+                 "only asl3-appliance is installed, because asl3-appliance-pi is the Pi companion), unlike the asl3/allmon3/"
                  "cockpit/node-utils grouping this version split apart — those were three unrelated software "
                  "components bundled into one apt line, not a matched pair."},
         {"id": "allmon3_delete_default", "num": 11, "title": "Remove default Allmon3 account",
@@ -18364,6 +18458,7 @@ function renderOverview(data) {
     : 'No findings.';
 
   document.getElementById('ov-checked-at').textContent = 'Last checked: ' + (data.checked_at || '');
+  document.getElementById('ov-system').textContent = data.system ? 'System: ' + data.system : '';
 }
 
 function _ovEsc(s) {
@@ -25335,6 +25430,7 @@ def _render_overview_panel() -> str:
 
   <button class="btn-recheck" onclick="refreshOverview(true)">Re-check</button>
   <span style="font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);margin-left:.6rem" id="ov-checked-at"></span>
+  <div style="font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);margin-top:.5rem" id="ov-system"></div>
 </div>
 """
 
@@ -25377,8 +25473,8 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "split_tunnel": _render_split_tunnel_panel,
     "router_install": _render_router_install_panel,
     "nodes": _render_nodes_panel,
-    "asl3": lambda: _render_install_panel("asl3", "asl3", _ASL3_WARNING),
-    "dvswitch": lambda: _render_install_panel("dvswitch", "dv", _DVSWITCH_WARNING),
+    "asl3": lambda: _render_install_panel("asl3", "asl3", _ASL3_WARNING, default_distro=_default_distro()),
+    "dvswitch": lambda: _render_install_panel("dvswitch", "dv", _DVSWITCH_WARNING, default_distro="bookworm"),
     "svxlink": lambda: _render_install_panel(
         "svxlink", "svx", _SVXLINK_WARNING,
         extra_options='<option value="usrp" selected>USRP fork (source build, DL1HRC) — default</option>',

@@ -10,6 +10,7 @@ USED_BY = {
                            "nodetalker", "amp_nodetalker", "pibrary"),
     "close_firewall_port": ("sysmon_pi02w", "nodecontrol_pi02w", "wifimon", "instmon", "44helper",
                             "nodetalker", "amp_nodetalker", "pibrary"),
+    "system_profile": ("44helper", "wifimon"),
 }
 
 
@@ -298,3 +299,74 @@ def ami_credentials(conf_path, user="", secret=""):
     if name and word and section.lower() != "general":
         return name, word
     return "", ""
+
+
+def system_profile(root="/"):
+    import os
+    import subprocess
+
+    def path(rel):
+        return os.path.join(root, rel)
+
+    def read(rel):
+        try:
+            with open(path(rel), encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+
+    def active(unit):
+        try:
+            return subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True,
+                                  timeout=5).stdout.strip() == "active"
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    osr = {}
+    for line in read("etc/os-release").splitlines():
+        key, sep, val = line.partition("=")
+        if sep:
+            osr[key.strip()] = val.strip().strip('"').strip("'")
+    model = read("proc/device-tree/model").replace("\0", "").strip()
+    arch = ""
+    try:
+        arch = subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not arch:
+        arch = os.uname().machine
+    ifaces = []
+    try:
+        for name in sorted(os.listdir(path("sys/class/net"))):
+            if os.path.isdir(path("sys/class/net/" + name + "/wireless")):
+                ifaces.append(name)
+    except OSError:
+        pass
+    wpa_sockets = False
+    for rel in ("run/wpa_supplicant", "var/run/wpa_supplicant"):
+        try:
+            if os.listdir(path(rel)):
+                wpa_sockets = True
+        except OSError:
+            pass
+    if active("NetworkManager.service"):
+        manager = "NetworkManager"
+    elif wpa_sockets:
+        manager = "wpa_supplicant"
+    elif active("systemd-networkd.service"):
+        manager = "systemd-networkd"
+    else:
+        manager = "unknown"
+    return {
+        "board": "pi" if "raspberry pi" in model.lower() else "other",
+        "model": model,
+        "os_id": osr.get("ID", ""),
+        "os_name": osr.get("PRETTY_NAME", ""),
+        "codename": osr.get("VERSION_CODENAME", ""),
+        "version_id": osr.get("VERSION_ID", ""),
+        "arch": arch,
+        "wifi_manager": manager,
+        "wifi_iface": "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else ""),
+        "wifi_ifaces": ifaces,
+    }

@@ -1,6 +1,13 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_42_0_20261028.py`. Newest entries first.
+Current file: `wifimon_v5_43_0_20261029.py`. Newest entries first.
+
+## 5.43.0 (2026-10-29)
+
+- **Detects the system it runs on.** A shared `system_profile` in `shared/confio.py` (kept identical in wifimon and 44helper and checked by the repo check) reads the board (Raspberry Pi or not), the OS (`/etc/os-release`), the processor type, which WiFi manager is running (NetworkManager, wpa_supplicant, systemd-networkd, or unknown) and the WiFi devices present. The page's Service card shows it on a new **System** line.
+- **Works on Debian, not only Raspberry Pi OS.** The WiFi tool follows the manager that is running, not just the tools that are installed: `nmcli` only when NetworkManager is running, `wpa_cli` for wpa_supplicant, and when the manager can't be told it tries `nmcli`, then `wpa_cli`, as before. On systemd-networkd, with no tool wifimon can drive, it is monitor only: the watchdog, signal, scan and device information keep working and reconnect is skipped, and the System line says so. The NetworkManager monitor, Keep on/off, saved-network and hotspot features stay off when NetworkManager is not running.
+- **Finds the WiFi device on its own.** With no saved device and no `wlan0` (for example `wlp2s0` on a PC), wifimon starts on the first WiFi device it finds. A saved device still wins, and `wlan0` is still the default when it exists.
+- **No voltage error without `vcgencmd`.** The low-voltage check returns nothing when `vcgencmd` is missing or cannot run; before, a machine without it raised a `FileNotFoundError` that `_check_voltage` did not catch.
 
 ## 5.42.0 (2026-10-28)
 
