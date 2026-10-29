@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.42.0"
+APP_VERSION = "5.43.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -606,6 +606,76 @@ def close_firewall_port(port, proto="tcp"):
         return "-", "closed %s in ufw" % spec
     return "=", "no active firewall (ufw or firewalld), so there is no %s rule to close" % spec
 
+def system_profile(root="/"):
+    import os
+    import subprocess
+
+    def path(rel):
+        return os.path.join(root, rel)
+
+    def read(rel):
+        try:
+            with open(path(rel), encoding="utf-8", errors="replace") as fh:
+                return fh.read()
+        except OSError:
+            return ""
+
+    def active(unit):
+        try:
+            return subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True,
+                                  timeout=5).stdout.strip() == "active"
+        except (OSError, subprocess.SubprocessError):
+            return False
+
+    osr = {}
+    for line in read("etc/os-release").splitlines():
+        key, sep, val = line.partition("=")
+        if sep:
+            osr[key.strip()] = val.strip().strip('"').strip("'")
+    model = read("proc/device-tree/model").replace("\0", "").strip()
+    arch = ""
+    try:
+        arch = subprocess.run(["dpkg", "--print-architecture"], capture_output=True, text=True,
+                              timeout=5).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if not arch:
+        arch = os.uname().machine
+    ifaces = []
+    try:
+        for name in sorted(os.listdir(path("sys/class/net"))):
+            if os.path.isdir(path("sys/class/net/" + name + "/wireless")):
+                ifaces.append(name)
+    except OSError:
+        pass
+    wpa_sockets = False
+    for rel in ("run/wpa_supplicant", "var/run/wpa_supplicant"):
+        try:
+            if os.listdir(path(rel)):
+                wpa_sockets = True
+        except OSError:
+            pass
+    if active("NetworkManager.service"):
+        manager = "NetworkManager"
+    elif wpa_sockets:
+        manager = "wpa_supplicant"
+    elif active("systemd-networkd.service"):
+        manager = "systemd-networkd"
+    else:
+        manager = "unknown"
+    return {
+        "board": "pi" if "raspberry pi" in model.lower() else "other",
+        "model": model,
+        "os_id": osr.get("ID", ""),
+        "os_name": osr.get("PRETTY_NAME", ""),
+        "codename": osr.get("VERSION_CODENAME", ""),
+        "version_id": osr.get("VERSION_ID", ""),
+        "arch": arch,
+        "wifi_manager": manager,
+        "wifi_iface": "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else ""),
+        "wifi_ifaces": ifaces,
+    }
+
 
 def install_service() -> None:
     if os.geteuid() != 0:
@@ -1029,10 +1099,37 @@ _reconnect_lock = threading.Lock()
 _reconnecting = False
 _last_absent: List[str] = []
 
+_system_cache: Dict[str, object] = {"at": -1e9, "data": None}
+
+def _system() -> Dict[str, object]:
+    now = time.monotonic()
+    if _system_cache["data"] is None or now - float(_system_cache["at"]) > 60:
+        try:
+            _system_cache["data"] = system_profile()
+        except Exception:
+            log.debug("system profile failed", exc_info=True)
+            if _system_cache["data"] is None:
+                _system_cache["data"] = {"board": "other", "wifi_manager": "unknown", "wifi_iface": ""}
+        _system_cache["at"] = now
+    return _system_cache["data"]
+
+def _system_text() -> str:
+    sysinfo = _system()
+    os_part = str(sysinfo.get("os_name") or sysinfo.get("os_id") or "Linux")
+    board = str(sysinfo.get("model") or "") if sysinfo.get("board") == "pi" else "not a Raspberry Pi"
+    manager = str(sysinfo.get("wifi_manager") or "unknown")
+    if _wifi_backend() is None:
+        manager += " (no supported WiFi tool: monitor only)"
+    parts = [os_part, str(sysinfo.get("arch") or ""), board, manager]
+    return " · ".join(p for p in parts if p)
+
+def _nm_on() -> bool:
+    return bool(shutil.which("nmcli")) and _system().get("wifi_manager") in ("NetworkManager", "unknown")
+
 def _wifi_backend() -> Optional[str]:
-    if shutil.which("nmcli"):
+    if _nm_on():
         return "nmcli"
-    if shutil.which("wpa_cli"):
+    if shutil.which("wpa_cli") and _system().get("wifi_manager") in ("wpa_supplicant", "unknown"):
         return "wpa_cli"
     return None
 
@@ -1109,7 +1206,7 @@ def _connect_wpa_cli(ssid: str, psk: str) -> bool:
 
 def _nm_device_state() -> Optional[str]:
     nm = shutil.which("nmcli")
-    if not nm:
+    if not nm or not _nm_on():
         return None
     try:
         r = subprocess.run([nm, "-t", "-f", "DEVICE,STATE", "device"], capture_output=True,
@@ -1145,7 +1242,7 @@ def _attempt_reconnect(networks: List[Dict[str, object]], last_ssid: Optional[st
     global _reconnecting, _last_absent
     backend = _wifi_backend()
     if backend is None:
-        log.warning("Reconnect: neither nmcli nor wpa_cli found — cannot retry")
+        log.warning("Reconnect: no usable WiFi tool (NetworkManager with nmcli, or wpa_supplicant with wpa_cli) — cannot retry")
         _reconnecting = False
         return
 
@@ -1267,6 +1364,8 @@ def _check_voltage() -> Optional[float]:
     except OSError:
         pass
 
+    if not shutil.which("vcgencmd"):
+        return None
     try:
         r = subprocess.run(["vcgencmd", "measure_volts", "core"], capture_output=True, text=True, timeout=5)
         _, _, val_part = r.stdout.strip().partition("=")
@@ -1274,7 +1373,7 @@ def _check_voltage() -> Optional[float]:
             volts = float(val_part.rstrip("Vv"))
             if 0.50 <= volts < LOW_VOLTAGE_THRESHOLD:
                 return volts
-    except (subprocess.SubprocessError, ValueError):
+    except (OSError, subprocess.SubprocessError, ValueError):
         pass
 
     return None
@@ -2684,7 +2783,7 @@ def _power_save() -> Optional[bool]:
     return (m.group(1).lower() == "on") if m else None
 
 def _wifi_devices() -> List[Dict[str, object]]:
-    if shutil.which("nmcli"):
+    if _nm_on():
         out: List[Dict[str, object]] = []
         txt = _run_text(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device"])
         for line in txt.splitlines():
@@ -2776,7 +2875,7 @@ def _collect_slow() -> Dict[str, object]:
     out: Dict[str, object] = {"backend": _wifi_backend()}
     out.update(_ip4_address())
     out["gateway"] = _get_gateway()
-    if shutil.which("nmcli"):
+    if _nm_on():
         lines = _nm_scan_lines()
         out.update(_nmcli_active_ap(lines))
         out["scan"] = _scan_from_lines(lines)
@@ -2806,7 +2905,7 @@ def _collect_slow() -> Dict[str, object]:
         _ps_check.set()
     out["has_5ghz"] = _has_5ghz()
     out["connectivity"] = (_run_text(["nmcli", "networking", "connectivity"]).strip() or None
-                           if shutil.which("nmcli") else None)
+                           if _nm_on() else None)
     out["devices"] = _wifi_devices()
     out["ipmap"] = _ipv4_map()
     return out
@@ -2878,6 +2977,7 @@ def _build_status() -> Dict[str, object]:
         "mac": fast.get("mac"),
         "operstate": fast.get("operstate"),
         "backend": slow.get("backend"),
+        "system": _system_text(),
         "ssid": ssid,
         "profile": slow.get("profile"),
         "bssid": bssid,
@@ -3089,6 +3189,14 @@ def _load_saved_interface() -> None:
     elif name:
         log.warning("Saved WiFi device %r not found — using %s", name, INTERFACE)
 
+def _default_interface() -> None:
+    if os.path.isdir(f"/sys/class/net/{INTERFACE}/wireless"):
+        return
+    name = str(_system().get("wifi_iface") or "")
+    if name and _IFACE_RE.match(name):
+        log.info("No WiFi device %s here — using the detected WiFi device %s", INTERFACE, name)
+        _set_interface(name, persist=False)
+
 def _pending_persist(p: Optional[Dict[str, object]]) -> None:
     try:
         if p is None:
@@ -3275,7 +3383,7 @@ def _control_public() -> Dict[str, object]:
     with _change_lock:
         last = dict(_last_result) if _last_result else None
     return {
-        "available": bool(shutil.which("nmcli")),
+        "available": _nm_on(),
         "pending": _pending_public(),
         "grace_remaining": grace if grace > 0 else None,
         "grace_total": CHANGE_GRACE_SECS,
@@ -3380,7 +3488,7 @@ def _keepoff_nm_keys() -> List[str]:
 def _keepoff_sync() -> None:
     with _devmode_lock:
         offs = {k: v["name"] for k, v in _dev_modes.items() if v["mode"] == "off"}
-    if os.geteuid() != 0 or not shutil.which("nmcli"):
+    if os.geteuid() != 0 or not _nm_on():
         return
     keys = sorted(offs)
     try:
@@ -3483,7 +3591,7 @@ def _keep_on_join(name: str) -> Tuple[bool, str]:
 def _devmode_tick() -> None:
     with _devmode_lock:
         modes = {k: dict(v) for k, v in _dev_modes.items()}
-    if not modes or not shutil.which("nmcli") or _hotspot_active():
+    if not modes or not _nm_on() or _hotspot_active():
         return
     if not _action_lock.acquire(blocking=False):
         return
@@ -3747,7 +3855,7 @@ def _saved_public(slow: Dict[str, object], active_ssid: object) -> Dict[str, obj
         row["signal"] = scan[ssid]["signal"] if ssid in scan else None
         row["security"] = row.get("security") or (scan[ssid]["security"] if ssid in scan else None)
         result.append(row)
-    return {"available": bool(shutil.which("nmcli")), "networks": result,
+    return {"available": _nm_on(), "networks": result,
             "test_secs": NEW_NETWORK_TEST_SECS, "fallback_secs": FALLBACK_TEST_SECS}
 
 def _keyfile_escape(value: str) -> str:
@@ -4353,7 +4461,7 @@ def _build_report(kind: str, trigger: str, reason: str) -> Dict[str, object]:
 
 def _diagnostics(budget: float) -> Dict[str, str]:
     deadline = time.monotonic() + budget
-    nm = bool(shutil.which("nmcli"))
+    nm = _nm_on()
     cmds = [
         ("WiFi link", ["iw", "dev", INTERFACE, "link"]),
         ("Devices", ["nmcli", "-t", "device"] if nm else ["ip", "-br", "link"]),
@@ -4559,7 +4667,7 @@ def _mark_networks_changed() -> None:
     _nm_sync_wanted.set()
 
 def _sync_nm_priorities() -> None:
-    if not shutil.which("nmcli"):
+    if not _nm_on():
         return
     with _conf_lock:
         nets = _conf_networks()
@@ -4661,7 +4769,7 @@ def _nm_monitor_loop() -> None:
     delay = 5
     while not _shutdown_event.is_set():
         nm = shutil.which("nmcli")
-        if not nm:
+        if not nm or not _nm_on():
             if _shutdown_event.wait(60):
                 return
             continue
@@ -4745,7 +4853,7 @@ def _powersave_code(value: str) -> Optional[int]:
     return None
 
 def _autojoin_off_ssids() -> set:
-    if not shutil.which("nmcli"):
+    if not _nm_on():
         return set()
     seen: Dict[str, bool] = {}
     for p in _nm_wifi_profiles():
@@ -4800,7 +4908,7 @@ def _apply_keep_powersave_off(enabled: bool) -> Optional[str]:
         if not ok:
             log.warning("nmcli general reload conf failed: %s", msg)
             note = "NetworkManager will pick up the power save default after its next restart."
-    if enabled and shutil.which("nmcli"):
+    if enabled and _nm_on():
         fixed = 0
         for p in _nm_wifi_profiles():
             if p.get("powersave") in (1, 3):
@@ -4949,7 +5057,7 @@ def _keep_powersave_check() -> None:
         log.warning("Power save is on and couldn't be turned off (iw failed)")
 
 def _no_internet_reason() -> str:
-    if DETECT_LOGIN_PAGES and shutil.which("nmcli"):
+    if DETECT_LOGIN_PAGES and _nm_on():
         state = _run_text(["nmcli", "networking", "connectivity", "check"], timeout=20).strip()
         if state == "portal":
             return "it wants a login page, which the node can't fill in by itself"
@@ -5151,7 +5259,7 @@ def _hotspot_active() -> bool:
         return bool(_hotspot.get("active"))
 
 def _hotspot_ready() -> Tuple[bool, str]:
-    if not shutil.which("nmcli"):
+    if not _nm_on():
         return False, "The hotspot needs NetworkManager (nmcli)."
     if not (shutil.which("dnsmasq") or os.path.exists("/usr/sbin/dnsmasq")):
         return False, "The hotspot needs dnsmasq to hand out addresses (sudo apt install dnsmasq-base)."
@@ -5841,7 +5949,7 @@ class _Handler(BaseHTTPRequestHandler):
         if body.get("confirm") is not True:
             self._json(400, {"error": "This change needs confirmation."})
             return False
-        if not shutil.which("nmcli"):
+        if not _nm_on():
             self._json(409, {"error": "This needs NetworkManager (nmcli), which isn't installed."})
             return False
         if not _action_lock.acquire(blocking=False):
@@ -6072,7 +6180,7 @@ class _Handler(BaseHTTPRequestHandler):
         return _nmcli_active_ap().get("nm_ssid") or _current_ssid()
 
     def _handle_scan(self, body: Dict[str, object]) -> None:
-        if not shutil.which("nmcli"):
+        if not _nm_on():
             self._json(409, {"error": "Scanning needs NetworkManager (nmcli)."})
             return
         if not _action_lock.acquire(blocking=False):
@@ -6224,7 +6332,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(200, {"ok": True})
 
     def _handle_net_track(self, body: Dict[str, object]) -> None:
-        if not shutil.which("nmcli"):
+        if not _nm_on():
             self._json(409, {"error": "This needs NetworkManager (nmcli)."})
             return
         if body.get("all") is True:
@@ -6566,7 +6674,7 @@ class _Handler(BaseHTTPRequestHandler):
         if body.get("confirm") is not True:
             self._json(400, {"error": "This change needs confirmation."})
             return
-        if not shutil.which("nmcli"):
+        if not _nm_on():
             self._json(409, {"error": "This needs NetworkManager (nmcli)."})
             return
         scope, value = body.get("scope"), body.get("value", "off")
@@ -7999,6 +8107,7 @@ a.btnlink:hover{border-color:var(--blue)}
       ["Running for", dur(sv.uptime_secs)],
       ["Connection", sv.tls ? "Encrypted (HTTPS)" : sv.tls_wanted ? "Not encrypted (HTTPS failed to start)" : "Plain HTTP"],
       ["WiFi tool", val(w.backend)],
+      ["System", val(w.system)],
       ["Running as root", yesno(sv.is_root)],
       ["Started by systemd", yesno(sv.systemd)],
     ]);
@@ -9020,6 +9129,7 @@ def run() -> None:
     _clear_shutdown_state()
     _marker_check_and_set()
     _load_saved_interface()
+    _default_interface()
     _load_dev_modes()
     _keepoff_sync()
     _load_saved_settings()

@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_0_224_20261028.py`. Newest entries first.
+Current file: `44helper_v0_1_0_20261029.py`. Newest entries first.
+
+## 0.1.0 (2026-10-29)
+
+- **Detects the system it runs on.** A shared `system_profile` in `shared/confio.py` (kept identical in 44helper and wifimon and checked by the repo check) reads the board (Raspberry Pi or not), the OS and Debian release from `/etc/os-release`, the processor type and the WiFi manager. The Overview tab shows it under the Re-check button, for example "Debian GNU/Linux 13 (trixie) · amd64 · not a Raspberry Pi".
+- **Install scripts follow the Debian release.** The ASL3 Script dropdown starts on the release the node runs (Bookworm or Trixie); any other or unknown release keeps the old default, Trixie. You can still pick the other one.
+- **The Pi-only package is Pi-only.** ASL3 step 10 (Appliance) installs `asl3-appliance-pi` only on a Raspberry Pi; on any other machine it installs `asl3-appliance` alone. The purge steps are unchanged.
+- **DVSwitch starts on Bookworm.** DVSwitch has packages for Bookworm only, so its Script dropdown always starts on Bookworm, whatever release the node runs. Trixie stays in the list and keeps using the Bookworm repository, as before.
 
 ## 0.0.224 (2026-10-28)
 
