@@ -1,6 +1,14 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_53_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_54_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.54 (2026-10-29)
+
+- **First-open setup.** The installer now marks Node Talker as needing setup. The first time the page is opened after install, a Set up Node Talker popup lists what is missing: the transmit node 1921 in rpt.conf (its own stanza, a USRP channel on 127.0.0.1 ports 34018 and 32018, and a [nodes] line) and the receive feed (one outstreamcmd line for the node). Nothing is written until you press OK, install.
+- **Reversible.** rpt.conf is backed up before each change, and the result shows the backup path. The TX card's Remove and the RX card's Remove undo the two changes.
+- **Asterisk restarts after the changes**, so the links on this node drop and come back. The popup says so.
+- **Nothing missing, nothing shown.** If both are already in place, the setup marker clears itself and no popup appears. A foreign outstreamcmd (such as a Broadcastify feed) or an existing node 1921 that Node Talker didn't add blocks the popup with the reason, and the OK button stays off.
+- **Not now** keeps the setup pending, so the popup returns the next time the page is opened.
 
 ## 0.9.53 (2026-10-29)
 
