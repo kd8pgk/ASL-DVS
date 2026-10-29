@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.1"
+APP_VERSION = "0.1.2"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -6192,6 +6192,11 @@ def action_install_firewalld() -> dict:
     err = _require_root()
     if err:
         return err
+    if firewall_backend() == "ufw":
+        return {"success": False, "verified": False,
+                "output": "ufw is the active firewall on this node, so firewalld was not installed. The tunnel steps "
+                          "use firewalld zones, and two firewalls on one machine fight over the rules. Switch ufw "
+                          "off first (sudo ufw disable), then run this step again."}
     fresh = shutil.which("firewall-cmd") is None
     results = [_run_pkg_unit("pi_firewalld_prereq", f"apt-get install -y {_APT_NI_OPTS} firewalld")
                if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_firewalld()]
@@ -6257,20 +6262,73 @@ def _argv_install_resolved() -> list[list[str]]:
         ["systemctl", "enable", "--now", "systemd-resolved"],
     ]
 
+_RS_DNS_DROPIN = "/etc/systemd/resolved.conf.d/44helper-dns.conf"
+
+def _resolv_conf_servers(path: str = "/etc/resolv.conf") -> list[str]:
+    if os.path.realpath(path).startswith("/run/systemd/resolve/"):
+        return []
+    out: list[str] = []
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    for ln in lines:
+        parts = ln.split("#", 1)[0].split()
+        if len(parts) < 2 or parts[0] != "nameserver":
+            continue
+        try:
+            addr = ipaddress.ip_address(parts[1].split("%", 1)[0])
+        except ValueError:
+            continue
+        if not (addr.is_loopback or addr.is_unspecified) and parts[1] not in out:
+            out.append(parts[1])
+    return out
+
+def _resolved_has_servers() -> bool:
+    try:
+        r = subprocess.run(["resolvectl", "dns"], capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+    return any(ln.split(":", 1)[1].split() for ln in (r.stdout or "").splitlines() if ":" in ln)
+
+def _name_lookup_ok() -> bool:
+    for name in ("deb.debian.org", "github.com"):
+        try:
+            if subprocess.run(["getent", "ahosts", name], capture_output=True, timeout=6).returncode == 0:
+                return True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    return False
+
 def action_install_resolved() -> dict:
     err = _require_root()
     if err:
         return err
+    before = _resolv_conf_servers()
     results = [_run_pkg_unit("pi_resolved_prereq", f"apt-get install -y {_APT_NI_OPTS} wireguard systemd-resolved")
                if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_resolved()]
     ok = all(r["success"] for r in results)
     lines = [r["output"] for r in results if r["output"]]
+    if before and _systemctl_is_active("systemd-resolved") and not _resolved_has_servers():
+        try:
+            os.makedirs(os.path.dirname(_RS_DNS_DROPIN), mode=0o755, exist_ok=True)
+            atomic_write(_RS_DNS_DROPIN, "[Resolve]\nDNS=" + " ".join(before) + "\n", new_mode=0o644)
+            _run_argv(["systemctl", "restart", "systemd-resolved"], timeout=30)
+            time.sleep(2)
+            lines.append(f"ok    systemd-resolved had no DNS servers (nothing on this machine hands them over), so the "
+                         f"ones this machine used before are set in {_RS_DNS_DROPIN}: {', '.join(before)}")
+        except OSError as e:
+            lines.append(f"FAIL  systemd-resolved has no DNS servers and {_RS_DNS_DROPIN} could not be written: {e}")
     status = status_resolved_prereq(force=True)
     if status["active"] and not status["answers"]:
         lines.append(f"systemd-resolved is running but not answering ({status['why']}). Restarting it once:")
         _run_argv(["systemctl", "restart", "systemd-resolved"], timeout=30)
         time.sleep(2)
         status = status_resolved_prereq(force=True)
+    if status["done"] and not _name_lookup_ok():
+        lines.append("WARN  systemd-resolved runs, but names don't resolve yet (deb.debian.org, github.com). Check "
+                     "this machine's DNS servers with: resolvectl dns")
     if status["done"]:
         lines.append("ok    systemd-resolved is running and answers.")
     elif status["active"]:
@@ -7514,7 +7572,14 @@ def action_enable_tunnel() -> dict:
         if _wg_apply_endpoint_pin(cur)[1] or _wg_legacy_fix(cur)[1]:
             gate += _wg_write_conf(cur)
     except OSError as e:
+        cur = ""
         gate.append(f"wg0.conf not updated: {e}")
+    if (any(n.prefixlen == 0 for n in _wg_peer_allowed_nets(cur)) and not re.search(r"(?im)^\s*table\s*=", cur)
+            and not (shutil.which("nft") or shutil.which("iptables-restore"))):
+        gate.append("FAIL  a full tunnel (AllowedIPs 0.0.0.0/0) needs nft or iptables-restore for wg-quick's routing "
+                    "rules, and neither is installed. Install one first (sudo apt install nftables), then start the "
+                    "tunnel again.")
+        return {"success": False, "verified": False, "output": "\n".join(gate)}
     t0 = int(time.time())
     if _wg_quick_template_available():
         unit = "wg-quick@wg0"
