@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.2"
+APP_VERSION = "0.1.3"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4042,7 +4042,20 @@ def _amp_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
 def _dispatch_amp_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _amp_lookup_step, "amp", valid_distros=("server", "hub"))
 
+_CF_KEY_ROLL_EPOCH = 1761782400
+
 _CF_PREFLIGHT_CMD = (
+    "echo '== Cloudflare apt source and signing key =='; "
+    "k=/usr/share/keyrings/cloudflare-main.gpg; "
+    "src=$(grep -ls 'pkg.cloudflare.com/cloudflared' /etc/apt/sources.list /etc/apt/sources.list.d/*.list "
+    "/etc/apt/sources.list.d/*.sources 2>/dev/null | tr '\\n' ' '); "
+    "if [ -z \"$src\" ]; then echo 'no Cloudflare apt source (clean).'; else echo \"apt source: $src\"; "
+    "if [ ! -f \"$k\" ]; then echo \"WARN: $k is missing -- every apt update will fail. Run step 2 again.\"; "
+    f"elif [ \"$(stat -c %Y \"$k\")\" -lt {_CF_KEY_ROLL_EPOCH} ]; then "
+    "echo \"WARN: $k is from before Cloudflare changed its signing key (30 Oct 2025). The old key stopped working "
+    "on 30 Apr 2026, so apt update fails, and with it the install steps on every other tab. Run step 2 again "
+    "to get the new key, or remove cloudflared with the purge.\"; "
+    "else echo \"signing key: $k ($(stat -c %y \"$k\" | cut -d' ' -f1))\"; fi; fi; echo; "
     "echo '== cloudflared present? =='; "
     "if command -v cloudflared >/dev/null 2>&1; then "
     "echo \"cloudflared INSTALLED: $(command -v cloudflared)\"; cloudflared --version 2>/dev/null | head -1; "
@@ -4078,6 +4091,11 @@ _CF_PREFLIGHT_CMD = (
 )
 
 _CF_INSTALL_APT_CMD = (
+    "o=$(grep -ls 'pkg.cloudflare.com/cloudflared' /etc/apt/sources.list /etc/apt/sources.list.d/*.list "
+    "/etc/apt/sources.list.d/*.sources 2>/dev/null | grep -vx /etc/apt/sources.list.d/cloudflared.list); "
+    "if [ -n \"$o\" ]; then echo \"STOP: another apt source also names Cloudflare's repo: $o\"; "
+    "echo 'Two sources for one repo with different keys make every apt update fail (Conflicting values set for "
+    "option Signed-By). Remove that file, then run this step again.'; exit 1; fi; "
     "{ command -v curl >/dev/null 2>&1 || sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl; } && "
     "sudo mkdir -p --mode=0755 /usr/share/keyrings && "
     "curl -fsSL -o /tmp/cloudflare-main.gpg https://pkg.cloudflare.com/cloudflare-main.gpg && "
@@ -4095,7 +4113,9 @@ _CF_INSTALL_APT_NOTE = (
     "key is removed 30 Apr 2026, so the cloudflare-main.gpg fetched here is the CURRENT key (required on Debian "
     "Trixie / RPM). If apt later reports \"Conflicting values set for option Signed-By\", a stale cloudflared.list "
     "and a DEB822 cloudflared.sources are both describing this repo with different key paths -- keep one. Re-check "
-    "the repo line and key URL against https://pkg.cloudflare.com if this fails."
+    "the repo line and key URL against https://pkg.cloudflare.com if this fails. Before it writes anything, the "
+    "step stops if another apt source file already names Cloudflare's repo. Running it again on a node with the "
+    "old key replaces the key, which also fixes apt update."
 )
 
 _CF_TOKEN_INSTALL_BLOCK = (
@@ -4173,6 +4193,11 @@ def _cf_token_purge_steps() -> list[dict]:
                  "Trust dashboard, NOT from this host (there is no `cloudflared tunnel delete` for token mode)."},
         {"id": "cf_purge_pkg", "num": 2, "title": "Remove the cloudflared package",
          "cmd": "sudo apt-get purge -y cloudflared 2>&1; true"},
+        {"id": "cf_purge_apt_source", "num": 0, "title": "Remove the Cloudflare apt source and signing key",
+         "cmd": "sudo rm -f /etc/apt/sources.list.d/cloudflared.list /usr/share/keyrings/cloudflare-main.gpg && "
+                "echo 'Cloudflare apt source and key removed.'",
+         "note": "Without this, apt keeps checking Cloudflare's repo after cloudflared is gone. Once that key "
+                 "is out of date, apt update fails, and with it the install steps on every other tab."},
         {"id": "cf_purge_creds", "num": 3, "title": "(Optional) Remove stored credentials",
          "cmd": "sudo rm -rf /etc/cloudflared",
          "auto": False,
@@ -4202,7 +4227,12 @@ def _cf_quick_purge_steps() -> list[dict]:
         {"id": "cf_purge_pkg", "num": 1, "title": "Remove the cloudflared package",
          "cmd": "sudo apt-get purge -y cloudflared 2>&1; true",
          "note": "Quick mode leaves no service or config behind to remove (the quick tunnel is foreground-only "
-                 "and gone once you Ctrl-C it), so removing the package is the whole cleanup."},
+                 "and gone once you Ctrl-C it), so the package and its apt source are the whole cleanup."},
+        {"id": "cf_purge_apt_source", "num": 0, "title": "Remove the Cloudflare apt source and signing key",
+         "cmd": "sudo rm -f /etc/apt/sources.list.d/cloudflared.list /usr/share/keyrings/cloudflare-main.gpg && "
+                "echo 'Cloudflare apt source and key removed.'",
+         "note": "Without this, apt keeps checking Cloudflare's repo after cloudflared is gone. Once that key "
+                 "is out of date, apt update fails, and with it the install steps on every other tab."},
     ]
 
 _CF_SCRIPTS: dict[str, dict[str, list[dict]]] = {
