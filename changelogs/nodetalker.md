@@ -1,6 +1,14 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_52_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_53_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.53 (2026-10-29)
+
+- **Automatic balancing, one for RX and one for TX.** A Run automatically checkbox in the RX card and in the TX card. The RX one balances the RX gain, Listen buffer and cleanup settings; the TX one balances the TX gain and TX buffer. Each uses the same score and keep-or-put-back rule as the Audio check's balance. Changes are kept only if the score doesn't get worse.
+- **It runs until you untick it.** It measures in one-minute windows, so the Listen and talk audio is used while it runs. The screen is kept awake while it runs. The browser pauses when the phone sleeps, so it resumes when the screen is back on.
+- **Load pause.** It pauses when the Pi's CPU is above 70 % for 30 s, or when the load guard trips, and resumes once the CPU is back under 70 %.
+- **Settles after five minutes.** For the first five minutes, windows follow one another. After that it checks once every five minutes, and status and log polling slow down (from 1.5 s to 5 s, and from 3 s to 10 s). Keying, a tone test or a check puts polling back to normal.
+- The one-shot balance in the Audio check card is unchanged.
 
 ## 0.9.52 (2026-10-29)
 

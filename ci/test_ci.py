@@ -1142,12 +1142,12 @@ class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
         "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "setup-save"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
-                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-save", "nd-select",
+                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-save", "nd-select", "rx-auto", "rx-auto-msg",
                   "chk-rx", "rx-bal-msg", "tone-start", "tone-hz", "tone-sec", "tone-rep", "tone-msg"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
                   "hs-mic", "hs-btn", "mic-gain", "mic-test", "node-test", "tx-add", "tune-save",
                   "chk-tx", "tx-bal-msg", "tx-tone-start", "tx-tone-hz", "tx-tone-sec", "tx-tone-rep",
-                  "tx-link-node", "tx-link-connect", "tx-link-disconnect"],
+                  "tx-link-node", "tx-link-connect", "tx-link-disconnect", "tx-auto", "tx-auto-msg"],
         "cd-chk": ["chk-start", "chk-stop", "chk-mins", "exp-tone", "exp-bal"],
     }
 
@@ -1175,6 +1175,10 @@ class NodeTalkerCardTests(unittest.TestCase):
     def test_tone_link_route_is_writable_only_locally(self):
         self.assertIn('"/api/tonetest/link"', self.text)
         self.assertIn('"/api/tonetest/stop", "/api/tonetest/link") and self._wan()', self.text)
+
+    def test_status_polling_slows_down_only_when_settled(self):
+        self.assertIn("pollEvery(pollStatus, 1500, 5000);", self.text)
+        self.assertIn("pollEvery(pollLog, 3000, 10000);", self.text)
 
     def test_mic_test_records_20_seconds(self):
         self.assertIn("Test mic (20 s, plays back)", self.text)

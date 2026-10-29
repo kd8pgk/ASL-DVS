@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.52"
+VERSION = "0.9.53"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker"
 
@@ -6794,6 +6794,7 @@ function chkWakeHeld() { return !!(chkWake && !chkWake.released); }
 
 document.addEventListener('visibilitychange', () => {
   if (chk && chk.running && document.visibilityState === 'visible' && !chkWakeHeld()) chkWakeOn();
+  if (autoRun && document.visibilityState === 'visible' && !(autoRun.lock && !autoRun.lock.released)) autoWake(autoRun);
   if (document.visibilityState === 'visible') specKick();
 });
 
@@ -6845,6 +6846,7 @@ async function chkStop() {
     localStorage.setItem('nlCheckLast', JSON.stringify(r));
   } catch (e) {}
   await chkShow(r);
+  if (autoRun && autoRun.wait) { const w = autoRun.wait; autoRun.wait = null; autoRun.window = false; w(r); }
   if (exp && exp.liveDone) { const done = exp.liveDone; exp.liveDone = null; done(r); }
 }
 
@@ -7220,12 +7222,179 @@ function balToneStep(r, rxGain) {
   return next === cur ? null : next;
 }
 
-function balLiveScore(r) {
-  const R = r.rx, T = r.tx;
+function balAlive() {
+  return exp ? !exp.stopped : !!(autoRun && !autoRun.stop);
+}
+
+function balRxScore(r) {
+  const R = r.rx;
   let s = R.clipPct * 3 + R.dropsMin * 2 + (R.resets || 0) + (R.tails || 0) * 0.5;
   if (R.actSecs >= CHK_MIN_SPEECH && R.speech != null) s += Math.abs(BAL_LIVE_TARGET - R.speech);
-  if (T.actSecs >= CHK_MIN_SPEECH && T.speech != null) s += Math.abs(-18 - T.speech) * 0.5 + T.clipPct * 3;
   return s;
+}
+
+function balTxScore(r) {
+  const T = r.tx;
+  return T.actSecs >= CHK_MIN_SPEECH && T.speech != null ? Math.abs(-18 - T.speech) * 0.5 + T.clipPct * 3 : 0;
+}
+
+function balLiveScore(r) {
+  return balRxScore(r) + balTxScore(r);
+}
+
+const AUTO_WINDOW_MIN = 1, AUTO_SETTLE_MS = 300000, AUTO_GAP_MS = 240000, AUTO_CPU_PCT = 70, AUTO_CPU_SEC = 30;
+let autoRun = null;
+const autoBest = {rx: null, tx: null}, autoUndo = {rx: null, tx: null};
+
+function autoOn(side) { return !!$(side + '-auto').checked; }
+function autoWanted() { return autoOn('rx') || autoOn('tx'); }
+function autoKeys(side) { return side === 'rx' ? BAL_RX_KEYS : BAL_TX_KEYS; }
+function autoStatus(text) { ['rx', 'tx'].forEach((s) => { if (autoOn(s)) note(s + '-auto-msg', '', text); }); }
+function autoSettled() { return !!autoRun && Date.now() - autoRun.started >= AUTO_SETTLE_MS; }
+function pollBusy() { return keyed || talking || testing || toneWasRunning || !!exp || !!(chk && chk.running); }
+
+function pollEvery(fn, fast, slow) {
+  setTimeout(async () => {
+    try { await fn(); } catch (e) {}
+    pollEvery(fn, fast, slow);
+  }, autoSettled() && !pollBusy() ? slow : fast);
+}
+
+function autoBlock() {
+  if (!authed) return 'log in to Node Talker';
+  if (keyed || talking || testing) return 'you are transmitting or testing the microphone';
+  if (toneWasRunning) return 'a tone test is running';
+  if (exp) return 'a balance run is going';
+  if (chk && chk.running && !(autoRun && autoRun.window)) return 'a check is running';
+  return '';
+}
+
+function autoPauseLoad(run, why) {
+  if (autoRun !== run || run.pause) return;
+  run.pause = why;
+  if (run.window && chk && chk.running) chkStop();
+}
+
+async function autoWatchTick(run) {
+  const d = await api('/api/load');
+  if (autoRun !== run || !d.ok) return;
+  if (d.breach) { autoPauseLoad(run, 'the Pi is under load (' + d.breach + ')'); return; }
+  if (d.cpu_pct != null && d.cpu_pct > AUTO_CPU_PCT) {
+    run.hot = run.hot || Date.now();
+    if (Date.now() - run.hot >= AUTO_CPU_SEC * 1000) autoPauseLoad(run, 'CPU above ' + AUTO_CPU_PCT + ' % for ' + AUTO_CPU_SEC + ' s');
+  } else {
+    run.hot = 0;
+    run.pause = null;
+  }
+}
+
+function autoWake(run) {
+  try {
+    if ('wakeLock' in navigator && document.visibilityState === 'visible') {
+      navigator.wakeLock.request('screen').then((l) => { if (autoRun === run) run.lock = l; else l.release(); }).catch(() => {});
+    }
+  } catch (e) {}
+}
+
+function autoWindow(run) {
+  return new Promise((resolve) => {
+    run.wait = resolve;
+    run.window = true;
+    chkStart(AUTO_WINDOW_MIN);
+    if (chk) chk.guide = false;
+    if (!chk || !chk.running) { run.window = false; run.wait = null; resolve(null); }
+  });
+}
+
+async function autoSleep(run, ms) {
+  for (let t = 0; t < ms && autoRun === run; t += 1000) await sleep(1000);
+}
+
+async function autoStep(side, r, cfg) {
+  const act = side === 'rx' ? r.rx.actSecs : r.tx.actSecs;
+  const score = side === 'rx' ? balRxScore(r) : balTxScore(r);
+  const best = autoBest[side];
+  if (best != null && score > best + BAL_KEEP_MARGIN && autoUndo[side]) {
+    await post('/api/config', autoUndo[side]);
+    autoUndo[side] = null;
+    loadConfig();
+    note(side + '-auto-msg', 'warn', 'The last change made it worse, so it was put back.');
+    return;
+  }
+  if (act < CHK_MIN_SPEECH) { note(side + '-auto-msg', '', 'Not enough speech this minute to judge.'); return; }
+  autoBest[side] = best == null ? score : Math.min(best, score);
+  const keys = autoKeys(side);
+  const hit = chkSuggest(r, cfg).find((x) => x.change && !x.change.mic && !x.change.node
+    && Object.keys(x.change).every((k) => k === 'tune_enabled' || keys.includes(k)));
+  if (!hit) { note(side + '-auto-msg', '', 'Nothing to change this minute.'); return; }
+  if (!(await balQuiet())) return;
+  const res = await balApply(hit.change);
+  if (!res.ok) { note(side + '-auto-msg', 'err', res.error || 'Could not save.'); return; }
+  autoUndo[side] = res.undo;
+  note(side + '-auto-msg', '', new Date().toLocaleTimeString() + ': ' + hit.text);
+}
+
+async function autoLoop(run) {
+  while (autoRun === run && autoWanted()) {
+    if (run.pause) { autoStatus('Paused: ' + run.pause + '. It resumes when the Pi settles.'); await autoSleep(run, 5000); continue; }
+    const why = autoBlock();
+    if (why) { autoStatus('Waiting: ' + why + '.'); await autoSleep(run, 3000); continue; }
+    autoStatus('Measuring for ' + AUTO_WINDOW_MIN + ' min...');
+    const r = await autoWindow(run);
+    if (autoRun !== run || !r || run.pause) continue;
+    const cur = await api('/api/config');
+    if (!cur.config) { autoStatus('Could not read the settings. Trying again.'); await autoSleep(run, 5000); continue; }
+    if (autoOn('rx')) await autoStep('rx', r, cur.config);
+    if (autoOn('tx') && autoRun === run) await autoStep('tx', r, cur.config);
+    if (autoRun === run && autoSettled()) {
+      autoStatus('Settled: checking every ' + (AUTO_GAP_MS / 60000 + AUTO_WINDOW_MIN) + ' min.');
+      await autoSleep(run, AUTO_GAP_MS);
+    }
+  }
+}
+
+function autoStart() {
+  if (autoRun) return;
+  const run = {started: Date.now(), stop: false, wait: null, window: false, hot: 0, pause: null, lock: null, watch: null};
+  autoRun = run;
+  run.watch = setInterval(() => autoWatchTick(run), BAL_WATCH_MS);
+  autoWake(run);
+  autoStatus('Starting...');
+  (async () => {
+    const s = await api('/api/balance');
+    if (autoRun === run && !(s.ok && s.snapshot)) await post('/api/balance/snapshot', {});
+  })();
+  autoLoop(run);
+}
+
+function autoStop(untick) {
+  const run = autoRun;
+  if (!run) return;
+  if (untick) { ['rx', 'tx'].forEach((s) => { $(s + '-auto').checked = false; }); saveAutoPrefs(); }
+  autoRun = null;
+  clearInterval(run.watch);
+  try { if (run.lock) run.lock.release(); } catch (e) {}
+  if (run.window && chk && chk.running) chkStop();
+  if (run.wait) { const w = run.wait; run.wait = null; w(null); }
+  ['rx', 'tx'].forEach((s) => note(s + '-auto-msg', '', 'Stopped. Changes are kept; Restore original settings in the Audio check card undoes them.'));
+}
+
+function autoPrefChanged() {
+  saveAutoPrefs();
+  if (autoWanted()) { if (!autoRun) autoStart(); }
+  else if (autoRun) autoStop(false);
+}
+
+function saveAutoPrefs() {
+  try { localStorage.setItem('nlAutoBal', JSON.stringify({rx: autoOn('rx'), tx: autoOn('tx')})); } catch (e) {}
+}
+
+function loadAutoPrefs() {
+  let p = {};
+  try { p = JSON.parse(localStorage.getItem('nlAutoBal') || '{}') || {}; } catch (e) {}
+  $('rx-auto').checked = !!p.rx;
+  $('tx-auto').checked = !!p.tx;
+  if (autoWanted()) autoStart();
 }
 
 function balLiveChange(r, cfg) {
@@ -7258,7 +7427,7 @@ async function balApply(change) {
 async function balQuiet() {
   const start = Date.now();
   let since = start;
-  while (exp && !exp.stopped) {
+  while (balAlive()) {
     const s = await api('/api/status');
     if (keyed || testing || s.ok === false || s.audio_active || (s.tx && s.tx.keyed)) since = Date.now();
     if (Date.now() - since >= BAL_QUIET_MS) return true;
@@ -7448,6 +7617,7 @@ async function expRun(o) {
 
 function expStart() {
   if (exp) return;
+  if (autoRun) { note('exp-msg', 'err', 'Automatic balancing is on: untick it in the RX or TX card first.'); return; }
   const tone = $('exp-tone').checked, balance = $('exp-bal').checked;
   if (appAudio()) { note('exp-msg', 'err', 'The live check measures page audio: switch the app to Page audio in its Audio settings first.'); return; }
   if (chk && chk.running) { note('exp-msg', 'err', 'A check is already running.'); return; }
@@ -7458,6 +7628,7 @@ function expStart() {
 }
 
 function auditStop() {
+  if (autoRun) autoStop(true);
   if (exp) expStop();
   else if (chk && chk.running) chkStop();
 }
@@ -7763,6 +7934,9 @@ function chkInit() {
   setInterval(chkTick, 1000);
   $('chk-start').addEventListener('click', expStart);
   $('chk-stop').addEventListener('click', auditStop);
+  $('rx-auto').addEventListener('change', autoPrefChanged);
+  $('tx-auto').addEventListener('change', autoPrefChanged);
+  loadAutoPrefs();
   $('tone-start').addEventListener('click', () => toneStart('rx'));
   $('tone-stop').addEventListener('click', toneStop);
   $('tx-tone-start').addEventListener('click', () => toneStart('tx'));
@@ -9792,9 +9966,9 @@ document.addEventListener('DOMContentLoaded', () => {
   whoami().then(() => { if (authed) loadFavs(); });
   availUi();
   setInterval(availUi, 2000);
-  setInterval(pollStatus, 1500);
+  pollEvery(pollStatus, 1500, 5000);
   setInterval(gapTick, 100);
-  setInterval(pollLog, 3000);
+  pollEvery(pollLog, 3000, 10000);
   setInterval(() => { if (authed && foldOpen('kc')) kcRefresh(); }, 10000);
   setInterval(() => { if (authed && foldOpen('kc') && kcLast && kcLast.test && kcLast.test.on) $('kc-test-state').textContent = kcTestLine(kcLast.test); }, 1000);
   $('kc-copy').addEventListener('click', kcCopy);
@@ -10095,6 +10269,8 @@ use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.
 <p class="muted small">From the last Audio check: what the node sent to this phone and what came back. Shown after a check.</p>
 <div id="chk-rx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table></div>
 <div id="rx-bal-msg" class="msg"></div>
+<div class="row"><label class="small"><input type="checkbox" id="rx-auto"> Run automatically: keep balancing the RX settings. Stays on while the screen is awake (the screen is kept on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
+<div id="rx-auto-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">RX tone test (known baseline)</h3>
 <p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. This is the known baseline for the receive path. Local network only. The report is kept in memory on the Pi until the next test.</p>
 <div class="row"><label for="tone-sec" style="min-width:90px">Tone length</label>
@@ -10222,6 +10398,8 @@ mic volume, so the gain here is applied in the page.</p>
 <p class="muted small">From the last Audio check: what this phone sent to the node. Shown after a check.</p>
 <div id="chk-tx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table></div>
 <div id="tx-bal-msg" class="msg"></div>
+<div class="row"><label class="small"><input type="checkbox" id="tx-auto"> Run automatically: keep balancing the TX settings. Stays on while the screen is awake (the screen is kept on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
+<div id="tx-auto-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">TX tone test (for third-party nodes)</h3>
 <p class="muted small">Keys node 1921 and sends a station ID, a series of tones and the station ID again, so other stations can measure what they receive. Nothing is measured here. Like the RX test, it is refused while the node is linked or something is tuned.</p>
 <div class="row"><label for="tx-link-node" style="min-width:90px">Link to node</label>
