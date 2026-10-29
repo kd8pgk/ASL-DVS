@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_1_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_2_20261029.py`. Newest entries first.
+
+## 0.1.2 (2026-10-29)
+
+Split Tunnel and Full Tunnel fixes (both tabs share these steps).
+
+- **No second firewall.** Step 1 (firewalld) stops with a message when ufw is the active firewall, instead of installing firewalld next to it. The tunnel steps use firewalld zones, and two firewalls fight over the rules. Switch ufw off first, then run the step again.
+- **DNS keeps working after step 1a on Debian.** Installing systemd-resolved turns `/etc/resolv.conf` into a link to resolved. On a machine without NetworkManager, nothing hands resolved the DNS servers, so names stopped resolving. The step now notes the servers the machine used before. When resolved has none afterwards, it sets them in `/etc/systemd/resolved.conf.d/44helper-dns.conf` and restarts resolved. It then tries a real lookup and warns when names still don't resolve. With NetworkManager (Raspberry Pi OS) nothing changes.
+- **Full tunnel start checks its routing tools.** wg-quick needs `nft` or `iptables-restore` for a 0.0.0.0/0 tunnel. When neither is installed, Start stops with a message to install nftables, instead of wg-quick failing and taking the tunnel down.
 
 ## 0.1.1 (2026-10-29)
 
