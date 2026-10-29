@@ -1,6 +1,30 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_5_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_6_20261029.py`. Newest entries first.
+
+## 0.1.6 (2026-10-29)
+
+Ampersand tab: the standard install (amp-server) and the hub install (amp-hub) run from the page, end to end. Checked against the Ampersand guides and the published packages.
+
+- **Downloads check the package first.** The download step has a Version box (the release date). Before downloading, it checks that the processor is aarch64 or x86_64 (no package exists for a 32-bit OS) and that Ampersand publishes that version for it. If either fails, it stops with a message instead of a failed download. On 2026-10-29 amp-server 20260610 existed for aarch64 only: the x86_64 file is gone from Ampersand's server. Download output is shortened (`wget -nv`).
+- **Standard install (amp-server):**
+  - Step 2 also installs `libasound2` and `libusb-1.0-0`. The binary needs them, and the guide's package list leaves them out.
+  - Step 3 writes the upstream udev rule (`/etc/udev/rules.d/99-ampersand.rules`) and reloads udev.
+  - Step 6 **Install & start the service** (Run as user, Web UI port):
+    - stops a running amp-server (an upgrade), copies the binary to `/usr/bin`, and adds the user to `audio`, `dialout` and `plugdev`;
+    - writes the unit from the current guide (10 s start delay, real-time priority) and starts it, then shows the log if it fails.
+  - New optional step 7 sets a web UI password in a root-only drop-in.
+  - The first run is now optional, with a note that it saves settings for root, not for the service's user.
+- **Hub install (amp-hub):**
+  - Step 2 installs the guide's packages (`net-tools wget libcurl4-gnutls-dev`). Before, only wget was installed, and the binary needs libcurl.
+  - Step 3 fixes two faults in the 20260225 package:
+    - its unit reads `/etc/amp-hub.env`, but install.sh puts the file in `/usr/etc`, so the service could not start. A drop-in now points it at `/usr/etc/amp-hub.env`.
+    - `AMP_PIPER_DIR=/etc` does not match where the voice is installed, which crashes the hub at start. It is set to `/usr/etc`.
+  - Running step 3 again upgrades the hub and keeps your settings.
+  - New step 4 sets the node number, password, greeting and IAX port.
+  - The reference block for the other settings drops the `export` prefixes (the service reads the file directly) and the wrong default port.
+  - Step 6 starts the hub and shows the log.
+- **Purges:** the server purge also removes the password drop-in. The hub purge removes the drop-in and the program files install.sh copied (binary, libraries, voice).
 
 ## 0.1.5 (2026-10-29)
 

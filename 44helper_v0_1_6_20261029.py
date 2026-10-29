@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.5"
+APP_VERSION = "0.1.6"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3773,6 +3773,8 @@ _STEP_FIELD_RULES = {
     "port": (re.compile(r"[0-9]{1,5}"), "use a number from 1 to 65535"),
     "branch": (re.compile(r"[A-Za-z0-9._/-]{1,100}"), "use letters, digits and . _ / -"),
     "username": (re.compile(r"[A-Za-z0-9._-]{1,32}"), "use 1 to 32 letters, digits and . _ -"),
+    "version": (re.compile(r"[0-9]{8}"), "use the 8-digit release date, for example 20260610"),
+    "node": (re.compile(r"[0-9]{4,7}"), "use the 4 to 7 digit node number"),
     "password": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{1,64}"),
                  "use up to 64 letters, digits and . _ + = @ % ^ ~ , : - (no spaces, quotes, / or &). "
                  "Set any other password from the Custom box"),
@@ -3854,79 +3856,116 @@ def _dispatch_svxlink_action(payload: dict) -> dict:
 def _dispatch_m17_action(payload: dict) -> dict:
     return _dispatch_tab_action(payload, _m17_lookup_step, "m17", valid_distros=("standard",))
 
-_AMP_SERVER_UDEV_SNIPPET = """# Create /etc/udev/rules.d/99-ampersand.rules with these two lines:
+_AMP_REL = "https://ampersand-asl.s3.us-west-1.amazonaws.com/releases"
+_AMP_SERVER_DEFAULT = "20260610"
+_AMP_HUB_DEFAULT = "20260225"
 
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="0d8c", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1209", MODE="0666", TAG+="uaccess"
+def _amp_fetch_cmd(prefix: str, version: str, what: str, guide: str) -> str:
+    return (f"v={version}; a=$(uname -m); case \"$a\" in aarch64|x86_64) ;; *) "
+            f"echo \"No {what} package is built for $a (only aarch64 and x86_64). A 32-bit OS cannot run it: "
+            "use a 64-bit OS.\"; exit 1;; esac; "
+            f"u={_AMP_REL}/{prefix}-$v-$a.tar.gz; "
+            f"if ! wget -q --spider \"$u\"; then echo \"Ampersand has no {what} $v package for $a on its download "
+            f"server ($u). Look up the current version in {guide} and put it in the Version box.\"; exit 1; fi; "
+            f"cd /tmp && wget -nv -N \"$u\" && tar xf {prefix}-$v-$a.tar.gz")
 
-# Then reload udev (or just reboot):
-sudo udevadm control --reload-rules
-sudo udevadm trigger"""
+_AMP_SERVER_GUIDE = "github.com/Ampersand-ASL/amp-server/blob/main/docs/user.md"
+_AMP_HUB_GUIDE = "github.com/Ampersand-ASL/amp-hub/blob/main/docs/user.md"
 
-_AMP_SERVER_SYSTEMD_SNIPPET = """# 1) Copy the binary somewhere persistent (/tmp is cleared on reboot):
-sudo cp /tmp/amp/amp-server /usr/bin/amp-server
+_AMP_UDEV_CMD = (
+    "printf '%s\\n' '# Ampersand: COS/PTT access to the USB radio interface (written by 44helper)' "
+    "'SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"0d8c\", MODE=\"0666\", TAG+=\"uaccess\"' "
+    "'SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"1209\", MODE=\"0666\", TAG+=\"uaccess\"' "
+    "| sudo tee /etc/udev/rules.d/99-ampersand.rules >/dev/null && sudo udevadm control --reload-rules && "
+    "sudo udevadm trigger && echo 'Written: /etc/udev/rules.d/99-ampersand.rules (C-Media 0d8c and 1209)'"
+)
 
-# 2) Create /lib/systemd/system/amp-server.service with this content.
-#    Change User= to your own login (best NOT to run as root). To set a
-#    web-UI password or a non-default port, append the options to ExecStart,
-#    e.g.  ExecStart=/usr/bin/amp-server --httppwd "YOURPASS" --httport 8081
+def _amp_port_check(var: str) -> str:
+    return (f"case \"${var}\" in ''|*[!0-9]*) echo 'Port must be a number'; exit 1;; esac; "
+            f"if [ \"${var}\" -lt 1 ] || [ \"${var}\" -gt 65535 ]; then echo 'Port must be 1 to 65535'; exit 1; fi; ")
 
-[Unit]
-Description=AMP Server
-After=network.target
-StartLimitIntervalSec=0
+def _amp_service_cmd(user: str, port: str) -> str:
+    unit = ["[Unit]", "Description=Ampersand ASL Server",
+            "After=network.target systemd-udev-settle.service sound.target",
+            "Wants=network.target systemd-udev-settle.service sound.target", "StartLimitIntervalSec=10", "",
+            "[Service]", "Type=simple", "Restart=always", "RestartSec=5"]
+    unit_end = ["ExecStartPre=/bin/sleep 10", "WorkingDirectory=/tmp", "RestrictRealtime=off",
+                "ExecStartPost=+/bin/sh -c \"/usr/bin/chrt --rr -p 50 $MAINPID\"", "", "[Install]",
+                "WantedBy=multi-user.target"]
+    q = " ".join("'" + x + "'" for x in unit)
+    q2 = " ".join("'" + x + "'" for x in unit_end)
+    return (f"u='{user}'; p='{port}'; " + _amp_port_check("p") +
+            "id -u \"$u\" >/dev/null 2>&1 || { echo \"There is no user $u on this node. Use your own login name.\"; exit 1; }; "
+            "[ -x /tmp/amp/amp-server ] || { echo 'No /tmp/amp/amp-server: run step 4 first.'; exit 1; }; "
+            "sudo systemctl stop amp-server 2>/dev/null; "
+            "sudo install -m 0755 /tmp/amp/amp-server /usr/bin/amp-server && "
+            "for g in audio dialout plugdev; do getent group $g >/dev/null && sudo usermod -a -G $g \"$u\"; done; "
+            f"printf '%s\\n' {q} \"User=$u\" \"ExecStart=/usr/bin/amp-server --httport $p\" {q2} "
+            "| sudo tee /lib/systemd/system/amp-server.service >/dev/null && sudo systemctl daemon-reload && "
+            "sudo systemctl enable amp-server && sudo systemctl restart amp-server && echo 'Starting (it waits 10 s)...' && "
+            "sleep 14; if systemctl is-active --quiet amp-server; then "
+            "echo \"amp-server runs as $u. Web UI: http://<this node>:$p/ (user name: user).\"; "
+            "else journalctl -u amp-server -n 25 --no-pager; exit 1; fi")
 
-[Service]
-Type=simple
-Restart=always
-RestartSec=1
-User=YOURUSER
-ExecStart=/usr/bin/amp-server
-WorkingDirectory=/tmp
-RestrictRealtime=off
-# Make the process real-time (high priority); the + requests privileges:
-ExecStartPost=+/bin/sh -c "/usr/bin/chrt --rr -p 50 $MAINPID"
+def _amp_password_cmd(port: str, password: str) -> str:
+    return (f"p='{port}'; " + _amp_port_check("p") +
+            f"w=$(printf '%s' '{password}' | sed 's/%/%%/g'); "
+            "[ -f /lib/systemd/system/amp-server.service ] || { echo 'No amp-server service yet: run step 6 first.'; exit 1; }; "
+            "d=/etc/systemd/system/amp-server.service.d; sudo mkdir -p $d && "
+            "printf '%s\\n' '[Service]' 'ExecStart=' \"ExecStart=/usr/bin/amp-server --httport $p --httppwd $w\" "
+            "| sudo tee $d/44helper-password.conf >/dev/null && sudo chmod 600 $d/44helper-password.conf && "
+            "sudo systemctl daemon-reload && sudo systemctl restart amp-server && "
+            "echo \"Web UI password set (user name: user, port $p). amp-server is restarting (10 s).\"")
 
-[Install]
-WantedBy=multi-user.target
+_AMP_HUB_ENV_SNIPPET = """# /usr/etc/amp-hub.env -- the hub's settings (no 'export', one NAME=value per line).
+# Step 4 sets the node number, password, greeting and IAX port for you.
+# These are the other lines you may want to change by hand:
 
-# 3) Enable and start:
-sudo systemctl daemon-reload
-sudo systemctl enable amp-server
-sudo systemctl start amp-server
-
-# View the log:
-journalctl -u amp-server -f"""
-
-_AMP_HUB_ENV_SNIPPET = """# install.sh writes /usr/etc/amp-hub.env. Edit it before starting the
-# service. These are the lines that usually need changing:
-
-# Your hub's ASL node number and password (blank password = private node,
-# no ASL registration attempted):
-export AMP_NODE0_NUMBER=672731
-export AMP_NODE0_PASSWORD=
+# Comma-separated node numbers allowed to connect. Leave it commented out
+# to let any node connect:
+#AMP_IAX_ALLOWLIST=672731,581610
 
 # OPEN = no authentication checks (typical for a public hub):
-export AMP_IAX_AUTHMODE=OPEN
+AMP_IAX_AUTHMODE=OPEN
 
-# Comma-separated node numbers allowed to connect:
-export AMP_IAX_ALLOWLIST=1000,672730
+# VOTER (RTCM) port and passwords, if you use voting receivers:
+AMP_VOTER_PORT=1667
+AMP_VOTER_SERVER_PASSWORD=parrot0
+AMP_VOTER_CLIENT_PASSWORDS=client0
 
-export AMP_IAX_PROTO=IPV4
+# Then restart the hub (step 6):
+sudo systemctl restart amp-hub"""
 
-# CONFLICT AVOIDANCE: if this machine already runs Asterisk/ASL3 on
-# 4569/udp, keep the hub on a different IAX port (and a different node
-# number) so the two do not collide:
-export AMP_IAX_PORT=4568
+def _amp_hub_install_cmd(version: str) -> str:
+    return (_amp_fetch_cmd("amp-hub", version, "amp-hub", _AMP_HUB_GUIDE) + " && cd amp-hub-$v-$a && "
+            "keep=; if [ -f /usr/etc/amp-hub.env ]; then sudo cp -p /usr/etc/amp-hub.env /usr/etc/amp-hub.env.44helper-keep && keep=1; fi; "
+            "sudo systemctl stop amp-hub 2>/dev/null; sudo bash ./install.sh; "
+            "if [ -n \"$keep\" ]; then sudo mv /usr/etc/amp-hub.env.44helper-keep /usr/etc/amp-hub.env && "
+            "echo 'Kept your /usr/etc/amp-hub.env settings.'; fi; "
+            "[ -x /usr/bin/amp-hub ] || { echo 'install.sh did not install /usr/bin/amp-hub.'; exit 1; }; "
+            "d=/etc/systemd/system/amp-hub.service.d; sudo mkdir -p $d && "
+            "printf '%s\\n' '[Service]' 'EnvironmentFile=' 'EnvironmentFile=/usr/etc/amp-hub.env' "
+            "| sudo tee $d/44helper-env.conf >/dev/null && "
+            "if [ -f /usr/etc/en_US-amy-low.onnx ] && [ ! -f /etc/en_US-amy-low.onnx ]; then "
+            "sudo sed -i 's|^AMP_PIPER_DIR=/etc$|AMP_PIPER_DIR=/usr/etc|' /usr/etc/amp-hub.env; fi && "
+            "sudo systemctl daemon-reload && echo \"amp-hub $v installed. Settings: /usr/etc/amp-hub.env\"")
 
-# The ASL registration/stats/DNS URLs, AMP_PIPER_DIR (Piper TTS) and
-# LD_LIBRARY_PATH are set up by install.sh — leave them as-is unless you
-# have a specific reason to change them."""
+def _amp_hub_config_cmd(node: str, password: str, port: str) -> str:
+    return ("f=/usr/etc/amp-hub.env; [ -f $f ] || { echo 'No /usr/etc/amp-hub.env: run step 3 first.'; exit 1; }; "
+            f"p='{port}'; " + _amp_port_check("p") +
+            f"n='{node}'; g=$(printf '%s' \"$n\" | sed 's/./& /g; s/ $//'); "
+            f"sudo sed -i -e \"s|^AMP_NODE0_NUMBER=.*|AMP_NODE0_NUMBER=$n|\" "
+            f"-e 's|^AMP_NODE0_PASSWORD=.*|AMP_NODE0_PASSWORD={password}|' "
+            "-e \"s|^AMP_NODE0_GREETING=.*|AMP_NODE0_GREETING=\\\"Welcome to node $g.\\\"|\" "
+            "-e \"s|^AMP_IAX_PORT=.*|AMP_IAX_PORT=$p|\" $f && "
+            "grep -E '^AMP_(NODE0_NUMBER|NODE0_GREETING|IAX_PORT)=' $f && "
+            "echo 'Saved. Start or restart the hub (step 6) to use it.'")
 
 def _amp_server_install_steps() -> list[dict]:
     return [
         {"id": "amp_srv_check_conflicts", "num": 1, "title": "Check for conflicts (read-only)",
-         "cmd": "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; "
+         "cmd": "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
+                "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; "
                 "systemctl is-enabled asterisk 2>&1; echo; "
                 "echo '== Listeners on IAX 4569/udp and web UI 8080/tcp =='; "
                 "sudo ss -lunp 2>/dev/null | grep -E ':4569' || echo 'nothing on 4569/udp'; "
@@ -3936,52 +3975,67 @@ def _amp_server_install_steps() -> list[dict]:
                  "ASL3/app_rpt on the same node. If Asterisk is active here, or something already listens "
                  "on 4569/udp, do NOT also run amp-server as the same node on the same IAX port. Either use "
                  "a dedicated node for Ampersand, or give it a different IAX port and node number. 8080/tcp "
-                 "is amp-server's own web UI — change it with --httport (see the systemd step) if it clashes."},
+                 "is amp-server's own web UI; pick another port in step 6 if it clashes."},
         {"id": "amp_srv_deps", "num": 2, "title": "Install required packages",
          "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt update && "
                 "sudo DEBIAN_FRONTEND=noninteractive apt install -y "
                 "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
-                "wget net-tools libcurl4-gnutls-dev",
-         "note": "The exact package set from the Ampersand user guide. libcurl4-gnutls-dev is what the "
-                 "binary links against at runtime."},
+                "wget net-tools libcurl4-gnutls-dev libasound2 libusb-1.0-0",
+         "note": "The package set from the Ampersand user guide (wget, net-tools, libcurl4-gnutls-dev), plus "
+                 "libasound2 and libusb-1.0-0: the amp-server binary links against ALSA and libusb too, and a "
+                 "minimal Debian install may not have them. On Debian 13 apt installs libasound2t64 for "
+                 "libasound2."},
         {"id": "amp_srv_udev", "num": 3, "title": "udev HID rule (COS/PTT access)",
-         "cmd": _AMP_SERVER_UDEV_SNIPPET,
-         "manual_block": True,
-         "note": "Lets non-root processes read the C-Media HID lines used for carrier-detect (COS) and PTT. "
-                 "MODE=\"0666\" is what the Ampersand docs specify — note it grants WORLD read/write to "
-                 "these hidraw nodes, which is broad; it is the upstream-recommended rule, shown here so you "
-                 "can see exactly what it does rather than have it written silently. Vendor 0d8c is C-Media; "
-                 "1209 is added because the ASL3 installer includes it too (per the Ampersand docs). Run "
-                 "`lsusb` to confirm your interface's real vendor ID. Radio-less/hub setups don't need this."},
+         "cmd": _AMP_UDEV_CMD,
+         "note": "Writes /etc/udev/rules.d/99-ampersand.rules so the server, running as your user, can read the "
+                 "C-Media HID lines used for carrier-detect (COS) and PTT, then reloads udev. These are the "
+                 "upstream rule lines: vendor 0d8c (C-Media) and 1209 (which the ASL3 installer includes too). "
+                 "MODE=\"0666\" gives everyone read/write on those hidraw devices, as the Ampersand guide "
+                 "specifies. Check your interface's vendor ID with `lsusb`. Radio-less setups don't need this."},
         {"id": "amp_srv_download", "num": 4, "title": "Download & unpack the server",
-         "cmd": "export AMP_SERVER_VERSION=20260610 && export AMP_ARCH=$(uname -m) && cd /tmp && "
-                "wget -N https://ampersand-asl.s3.us-west-1.amazonaws.com/releases/"
-                "amp-${AMP_SERVER_VERSION}-${AMP_ARCH}.tar.gz && "
-                "tar xvf amp-${AMP_SERVER_VERSION}-${AMP_ARCH}.tar.gz && "
-                "ln -sfn amp-${AMP_SERVER_VERSION}-${AMP_ARCH} amp",
+         "fields": [{"id": "version", "label": "Version (release date)", "type": "text",
+                     "default": _AMP_SERVER_DEFAULT}],
+         "cmd_template": _amp_fetch_cmd("amp", "{{version}}", "amp-server", _AMP_SERVER_GUIDE)
+                         + " && ln -sfn amp-$v-$a amp && echo \"amp-server $v ($a) unpacked in /tmp/amp\"",
+         "cmd": _amp_fetch_cmd("amp", _AMP_SERVER_DEFAULT, "amp-server", _AMP_SERVER_GUIDE)
+                + " && ln -sfn amp-$v-$a amp && echo \"amp-server $v ($a) unpacked in /tmp/amp\"",
          "timeout": 900,
-         "note": "Release date is PINNED at 20260610 (the current build at the time this tab was written). "
-                 "Edit the AMP_SERVER_VERSION date above if a newer build exists — check the CHANGELOG link "
-                 "in the note at the top of this tab. `uname -m` picks aarch64 vs x86_64 automatically. "
-                 "Staged in /tmp (matching the systemd unit's WorkingDirectory=/tmp); the systemd step then "
-                 "copies the binary to /usr/bin so it survives a reboot. `ln -sfn` makes re-running update "
-                 "the `amp` symlink cleanly."},
-        {"id": "amp_srv_firstrun", "num": 5, "title": "First run (foreground smoke test)",
+         "note": "Checks first that Ampersand publishes this version for this processor (aarch64 or x86_64), "
+                 "and stops with a message if not. Ampersand keeps only the current build on its server, "
+                 "sometimes for one processor only (on 2026-10-29 version 20260610 existed for aarch64 but "
+                 "not x86_64), so a version that worked before can disappear. Look up the current version in "
+                 "the user guide and put it in the box. Unpacked in /tmp/amp; step 6 copies the binary to "
+                 "/usr/bin."},
+        {"id": "amp_srv_firstrun", "num": 5, "title": "(Optional) First run (foreground smoke test)",
          "cmd": "cd /tmp/amp && ./amp-server",
          "manual": True,
-         "note": "INTERACTIVE/FOREGROUND — run this over SSH or the Cockpit terminal, not through this "
-                 "engine (there's no stdin channel and it doesn't return). It starts the web UI on port 8080 "
-                 "(username is always \"user\"; set a password with --httppwd \"...\", change the port with "
-                 "--httport). Point a browser at http://<node>:8080, fill in your node number / password / "
-                 "IAX port on the Configuration tab, then Ctrl-C and set up the service (next step) for "
-                 "persistent operation."},
-        {"id": "amp_srv_systemd", "num": 6, "title": "Run as a systemd service",
-         "cmd": _AMP_SERVER_SYSTEMD_SNIPPET,
-         "manual_block": True,
-         "note": "Ampersand ships NO unit file, so this authors one. Set User= to your login (running as a "
-                 "non-root user is recommended). The chrt line gives the audio path real-time priority. Add "
-                 "--httport to ExecStart if 8080 is taken by another dashboard, and --httppwd for a web-UI "
-                 "password. Edit the text below before copying."},
+         "note": "Optional, by hand over SSH or in the terminal (it runs in the foreground until Ctrl-C). It "
+                 "starts the web UI on port 8080 as root, so the settings it saves go to root's "
+                 "~/amp-server.json, not to the user the service runs as. Skip it and configure the node in "
+                 "the web UI once step 6 has started the service."},
+        {"id": "amp_srv_service", "num": 6, "title": "Install & start the service",
+         "fields": [{"id": "username", "label": "Run as user (your login, not root)", "type": "text", "default": ""},
+                    {"id": "port", "label": "Web UI port", "type": "text", "default": "8080"}],
+         "cmd_template": _amp_service_cmd("{{username}}", "{{port}}"),
+         "cmd": _amp_service_cmd("YOURUSER", "8080"),
+         "timeout": 120,
+         "note": "Stops a running amp-server (an upgrade), copies the binary to /usr/bin, adds the user to the "
+                 "audio, dialout and plugdev groups (sound card, serial COS, USB), writes "
+                 "/lib/systemd/system/amp-server.service as in the Ampersand guide (10 s start delay, real-time "
+                 "priority) and starts it. The node's settings are kept in that user's ~/amp-server.json and "
+                 "set in the web UI: open http://<this node>:<port>/ and fill in the node number, password and "
+                 "IAX port on the Configuration tab. Open the IAX port in the firewall (Ports tab) and on your "
+                 "router if other nodes must reach it."},
+        {"id": "amp_srv_password", "num": 7, "title": "(Optional) Web UI password",
+         "fields": [{"id": "port", "label": "Web UI port (same as step 6)", "type": "text", "default": "8080"},
+                    {"id": "password", "label": "Web UI password", "type": "password", "default": ""}],
+         "cmd_template": _amp_password_cmd("{{port}}", "{{password}}"),
+         "cmd": _amp_password_cmd("8080", "YOURPASSWORD"),
+         "timeout": 60,
+         "note": "Adds --httppwd to the service in a drop-in (/etc/systemd/system/amp-server.service.d/"
+                 "44helper-password.conf, readable by root only) and restarts amp-server. The user name is "
+                 "always \"user\". Run it again to change the password; delete that file and run "
+                 "`sudo systemctl daemon-reload && sudo systemctl restart amp-server` to remove it."},
     ]
 
 def _amp_server_purge_steps() -> list[dict]:
@@ -3990,7 +4044,9 @@ def _amp_server_purge_steps() -> list[dict]:
          "cmd": "sudo systemctl disable --now amp-server 2>&1; true",
          "note": "Trailing `; true` so this doesn't report failure if the unit was never installed."},
         {"id": "amp_srv_purge_unit", "num": 2, "title": "Remove the systemd unit",
-         "cmd": "sudo rm -f /lib/systemd/system/amp-server.service && sudo systemctl daemon-reload"},
+         "cmd": "sudo rm -f /lib/systemd/system/amp-server.service && "
+                "sudo rm -rf /etc/systemd/system/amp-server.service.d && sudo systemctl daemon-reload",
+         "note": "Also removes the web UI password drop-in from step 7."},
         {"id": "amp_srv_purge_bin", "num": 3, "title": "Remove the installed binary",
          "cmd": "sudo rm -f /usr/bin/amp-server"},
         {"id": "amp_srv_purge_stage", "num": 4, "title": "Remove the staged tarball & unpack dir",
@@ -4001,50 +4057,64 @@ def _amp_server_purge_steps() -> list[dict]:
          "auto": False,
          "note": "NOT run automatically — deletes your saved node number / password / IAX-port config "
                  "(amp-server.json) and the HID udev rule. Only run this for a completely clean slate. Note "
-                 "amp-server.json lives in the HOME of whoever ran the server; adjust the path if it wasn't "
-                 "root."},
+                 "amp-server.json lives in the HOME of the user the service ran as (step 6); this removes "
+                 "root's copy only, so delete that user's ~/amp-server.json by hand."},
     ]
 
 def _amp_hub_install_steps() -> list[dict]:
     return [
         {"id": "amp_hub_check_conflicts", "num": 1, "title": "Check for conflicts (read-only)",
-         "cmd": "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; echo; "
-                "echo '== Listeners on IAX 4568/udp (hub default) and 4569/udp =='; "
-                "sudo ss -lunp 2>/dev/null | grep -E ':456[89]' || echo 'nothing on 4568-4569/udp'",
+         "cmd": "echo \"== processor: $(uname -m) (packages exist for aarch64 and x86_64 only) ==\"; echo; "
+                "echo '== Asterisk service =='; systemctl is-active asterisk 2>&1; echo; "
+                "echo '== Listeners on IAX 4569/udp and VOTER 1667/udp =='; "
+                "sudo ss -lunp 2>/dev/null | grep -E ':(4569|1667)\\b' || echo 'nothing on 4569 or 1667/udp'",
          "timeout": 30,
-         "note": "Read-only — changes nothing. A hub is radio-less, but it still binds an IAX port and "
-                 "registers a node number. If this box already runs Asterisk/ASL3 on 4569/udp, keep the hub "
-                 "on a different AMP_IAX_PORT (the env file defaults to 4568) and a different node number so "
-                 "the two don't collide."},
-        {"id": "amp_hub_deps", "num": 2, "title": "Install wget",
+         "note": "Read-only — changes nothing. A hub is radio-less, but it still binds an IAX port (4569 by "
+                 "default) and the VOTER port 1667, and registers a node number. If this box already runs "
+                 "Asterisk/ASL3 on 4569/udp, give the hub another IAX port in step 4 and its own node number."},
+        {"id": "amp_hub_deps", "num": 2, "title": "Install required packages",
          "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt update && "
-                "sudo DEBIAN_FRONTEND=noninteractive apt install -y wget",
-         "note": "wget is needed to fetch the release tarball. The bundled install.sh (next step) handles "
-                 "the hub's own runtime dependencies, the service account, and the systemd unit."},
-        {"id": "amp_hub_install", "num": 3, "title": "Download, unpack & run install.sh",
-         "cmd": "export AMP_HUB_VERSION=20260225 && export AMP_ARCH=$(uname -m) && cd /tmp && "
-                "wget -N https://ampersand-asl.s3.us-west-1.amazonaws.com/releases/"
-                "amp-hub-${AMP_HUB_VERSION}-${AMP_ARCH}.tar.gz && "
-                "tar xvf amp-hub-${AMP_HUB_VERSION}-${AMP_ARCH}.tar.gz && "
-                "cd amp-hub-${AMP_HUB_VERSION}-${AMP_ARCH} && chmod +x install.sh && sudo ./install.sh",
+                "sudo DEBIAN_FRONTEND=noninteractive apt install -y "
+                "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
+                "net-tools wget libcurl4-gnutls-dev",
+         "note": "The package set from the amp-hub guide. The hub binary links against libcurl-gnutls; without "
+                 "it the service fails to start."},
+        {"id": "amp_hub_install", "num": 3, "title": "Download & install the hub",
+         "fields": [{"id": "version", "label": "Version (release date)", "type": "text", "default": _AMP_HUB_DEFAULT}],
+         "cmd_template": _amp_hub_install_cmd("{{version}}"),
+         "cmd": _amp_hub_install_cmd(_AMP_HUB_DEFAULT),
          "timeout": 900,
-         "note": "Runs the project's own unmodified install.sh — per the Ampersand docs this performs the "
-                 "install (creates the amp-hub nologin service user, installs the bundled amp-hub.service "
-                 "unit, and drops config at /usr/etc/amp-hub.env). Release date is PINNED at 20260225; edit "
-                 "AMP_HUB_VERSION if a newer build exists (see the CHANGELOG link at the top of this tab). "
-                 "If install.sh turns out to prompt for input on your build, run it over SSH instead — this "
-                 "engine has no stdin channel."},
-        {"id": "amp_hub_env", "num": 4, "title": "Configure /usr/etc/amp-hub.env",
+         "note": "Checks that Ampersand publishes this version for this processor, then runs the package's own "
+                 "install.sh (binary to /usr/bin, libraries to /usr/lib, settings and the Piper voice to /usr/etc, "
+                 "the amp-hub service user and unit). Two fixes for that package: its unit reads /etc/amp-hub.env "
+                 "while install.sh puts the file in /usr/etc, so the service would not start; a drop-in "
+                 "(/etc/systemd/system/amp-hub.service.d/44helper-env.conf) points it at /usr/etc/amp-hub.env. "
+                 "AMP_PIPER_DIR is set to /usr/etc, where the voice files are. Running it again upgrades the hub "
+                 "and keeps your /usr/etc/amp-hub.env."},
+        {"id": "amp_hub_config", "num": 4, "title": "Set the node number, password and IAX port",
+         "fields": [{"id": "node", "label": "Hub node number", "type": "text", "default": ""},
+                    {"id": "password", "label": "Node password (from the AllStarLink portal)", "type": "password",
+                     "default": ""},
+                    {"id": "port", "label": "IAX port", "type": "text", "default": "4569"}],
+         "cmd_template": _amp_hub_config_cmd("{{node}}", "{{password}}", "{{port}}"),
+         "cmd": _amp_hub_config_cmd("YOURNODE", "YOURPASSWORD", "4569"),
+         "timeout": 30,
+         "note": "Writes AMP_NODE0_NUMBER, AMP_NODE0_PASSWORD, the greeting (\"Welcome to node 6 7 2 7 3 1.\") "
+                 "and AMP_IAX_PORT in /usr/etc/amp-hub.env. For a private hub with no registration, or for an "
+                 "allowlist, edit the file by hand (next step)."},
+        {"id": "amp_hub_env", "num": 5, "title": "(Optional) Other settings in /usr/etc/amp-hub.env",
          "cmd": _AMP_HUB_ENV_SNIPPET,
          "manual_block": True,
-         "note": "The hub is configured through this env file, not a web UI. Set your node number, password "
-                 "(blank = private), allowlist, and — importantly for conflict avoidance — a distinct "
-                 "AMP_IAX_PORT if Asterisk already owns 4569 on this box. Edit /usr/etc/amp-hub.env by hand "
-                 "(nano or the Cockpit editor); the block below is a reference of the lines that usually "
-                 "change."},
-        {"id": "amp_hub_enable", "num": 5, "title": "Enable & start the hub",
-         "cmd": "sudo systemctl enable amp-hub && sudo systemctl start amp-hub",
-         "note": "Watch it come up with `journalctl -u amp-hub -f`. Restart it after any amp-hub.env change."},
+         "note": "Edit /usr/etc/amp-hub.env by hand (nano or the Cockpit editor). Lines are NAME=value, with no "
+                 "'export' in front: the service reads the file directly."},
+        {"id": "amp_hub_enable", "num": 6, "title": "Enable & start the hub",
+         "cmd": "sudo systemctl daemon-reload && sudo systemctl enable amp-hub && sudo systemctl restart amp-hub && "
+                "sleep 3; if systemctl is-active --quiet amp-hub; then echo 'amp-hub is running.'; "
+                "journalctl -u amp-hub -n 10 --no-pager; else journalctl -u amp-hub -n 25 --no-pager; exit 1; fi",
+         "timeout": 60,
+         "note": "Shows the last log lines. Restart it the same way after any amp-hub.env change. Other nodes "
+                 "reach the hub on its IAX port: open it in the firewall (Ports tab) and forward it on your "
+                 "router."},
     ]
 
 def _amp_hub_purge_steps() -> list[dict]:
@@ -4053,16 +4123,22 @@ def _amp_hub_purge_steps() -> list[dict]:
          "cmd": "sudo systemctl disable --now amp-hub 2>&1; true",
          "note": "Trailing `; true` so this doesn't report failure if the unit was never installed."},
         {"id": "amp_hub_purge_unit", "num": 2, "title": "Remove the systemd unit",
-         "cmd": "sudo rm -f /lib/systemd/system/amp-hub.service && sudo systemctl daemon-reload",
-         "note": "Best-effort path — this is where the Ampersand docs say install.sh puts the unit. Confirm "
-                 "with `systemctl status amp-hub` first if unsure."},
+         "cmd": "sudo rm -f /lib/systemd/system/amp-hub.service && sudo rm -rf /etc/systemd/system/amp-hub.service.d "
+                "&& sudo systemctl daemon-reload",
+         "note": "Also removes 44helper's EnvironmentFile drop-in."},
         {"id": "amp_hub_purge_user", "num": 3, "title": "Remove the service account",
          "cmd": "sudo userdel amp-hub 2>&1; true",
          "note": "Removes the `amp-hub` nologin system user created by install.sh. `; true` tolerates it "
                  "already being gone."},
-        {"id": "amp_hub_purge_stage", "num": 4, "title": "Remove the staged tarball & unpack dir",
+        {"id": "amp_hub_purge_files", "num": 4, "title": "Remove the hub's program files",
+         "cmd": "sudo rm -f /usr/bin/amp-hub /usr/bin/amp-hub.backup /usr/lib/libpiper.so /usr/lib/libonnxruntime.so.1 "
+                "/usr/lib/libonnxruntime.so.1.22.0 /usr/etc/amp-hub.service /usr/etc/en_US-amy-low.onnx "
+                "/usr/etc/en_US-amy-low.onnx.json && sudo rm -rf /usr/etc/espeak-ng-data && sudo ldconfig; true",
+         "note": "What install.sh copied: the binary, its two libraries and the Piper voice. The settings file "
+                 "is kept (last step)."},
+        {"id": "amp_hub_purge_stage", "num": 5, "title": "Remove the staged tarball & unpack dir",
          "cmd": "rm -f /tmp/amp-hub-*.tar.gz && rm -rf /tmp/amp-hub-*-*"},
-        {"id": "amp_hub_purge_config", "num": 5, "title": "(Optional) Remove the env config",
+        {"id": "amp_hub_purge_config", "num": 6, "title": "(Optional) Remove the env config",
          "cmd": "sudo rm -f /usr/etc/amp-hub.env",
          "auto": False,
          "note": "NOT run automatically — deletes your hub's node number, password, allowlist and port "
@@ -18012,7 +18088,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("dvswitch", "DVSwitch", "t-dvswitch", "Stage 1 (real Bookworm apt-based + Trixie source-build install/purge steps)"),
     ("svxlink", "SVXLink", "t-svxlink", "Stage 1 (real install/purge steps, same package on both distros)"),
     ("m17", "M17", "t-m17", "Stage 1 (USRP2M17-Selector install helper; manual file-edit steps for rpt.conf/modules.conf/extensions.conf)"),
-    ("amp", "Ampersand", "t-amp", "Stages 1-4 (amp-server radio node + amp-hub conference hub; S3 tarball install, conflict pre-flight, systemd/udev/env manual blocks)"),
+    ("amp", "Ampersand", "t-amp", "Stages 1-4 (amp-server radio node + amp-hub conference hub; S3 tarball install, conflict pre-flight, service, udev and hub settings from the page)"),
     ("cloudflare", "Cloudflare", "t-cloudflare", "Stages 1-4 (cloudflared connector: token dashboard-managed + quick TryCloudflare; outbound-only, no inbound ports, WireGuard-coexistence pre-flight)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
@@ -25601,12 +25677,15 @@ _AMP_WARNING = """Install helper for the Ampersand-ASL project (github.com/Amper
   from-scratch, <b>Asterisk-free</b> ASL/IAX node. Choose a product from the dropdown:
   <b>Radio node (amp-server)</b> for a station with attached radio/hotspot hardware, or
   <b>Hub node (amp-hub)</b> for a radio-less conference hub. Both install from prebuilt,
-  date-versioned tarballs on the project's S3 bucket (CPU arch auto-detected by uname -m); the
-  release date is pinned in the editable command field &mdash; bump it if a newer build exists.
+  date-versioned tarballs on the project's S3 bucket (aarch64 or x86_64, picked by uname -m). Put the
+  release date in the Version box of the download step; the step checks that Ampersand publishes it for
+  this processor before it downloads anything. Ampersand keeps only current builds there, sometimes for
+  one processor only. Every step runs from this page: the standard install ends with the amp-server
+  service running as your user, the hub install with amp-hub running from /usr/etc/amp-hub.env.
   <br><br><b>Conflict warning:</b> Ampersand REPLACES Asterisk; it does not run alongside
   ASL3/app_rpt on the same node. Each card's first step is a read-only conflict check. If this node
   already runs Asterisk on IAX 4569/udp, give Ampersand a different node number and IAX port
-  (amp-server: --httport / the config tab; amp-hub: AMP_IAX_PORT in the env file), or use a
+  (amp-server: the web UI's Configuration tab and the port in step 6; amp-hub: the IAX port in step 4), or use a
   dedicated node. This tab never stops Asterisk or changes ports for you.
   <br><br>Docs:
   <a href="https://github.com/Ampersand-ASL/amp-server/blob/main/docs/user.md" target="_blank" rel="noopener">amp-server guide</a> &middot;
