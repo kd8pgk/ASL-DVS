@@ -1,6 +1,39 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_49_20261028.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_53_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.53 (2026-10-29)
+
+- **Automatic balancing, one for RX and one for TX.** A Run automatically checkbox in the RX card and in the TX card. The RX one balances the RX gain, Listen buffer and cleanup settings; the TX one balances the TX gain and TX buffer. Each uses the same score and keep-or-put-back rule as the Audio check's balance. Changes are kept only if the score doesn't get worse.
+- **It runs until you untick it.** It measures in one-minute windows, so the Listen and talk audio is used while it runs. The screen is kept awake while it runs. The browser pauses when the phone sleeps, so it resumes when the screen is back on.
+- **Load pause.** It pauses when the Pi's CPU is above 70 % for 30 s, or when the load guard trips, and resumes once the CPU is back under 70 %.
+- **Settles after five minutes.** For the first five minutes, windows follow one another. After that it checks once every five minutes, and status and log polling slow down (from 1.5 s to 5 s, and from 3 s to 10 s). Keying, a tone test or a check puts polling back to normal.
+- The one-shot balance in the Audio check card is unchanged.
+
+## 0.9.52 (2026-10-29)
+
+- **TX tone test can connect to a third-party node.** The TX card's tone test has a Link to node field with Connect and Disconnect. Connect links the main node to that node (the same permanent link as the Listen tab's connect) so the tones reach it; the test then runs with that one link allowed. Any other link still refuses the test. The RX test still refuses any link. Disconnect drops the link. Connect and Disconnect are local-network only, like the tone test.
+- **Live balance can lower the Listen buffer.** A check with no dropouts and enough speech suggests the next step down (0.5 s to 0.25 s, 0.25 s to 0.15 s), so the delay comes down. The balance keeps it only if no dropouts appear, the same rule as raising it.
+- **RX tone balance can raise the Listen buffer.** When the gain is in range but tones drop out, the balance raises the Listen buffer one step, and puts it back if the score gets worse.
+
+## 0.9.51 (2026-10-29)
+
+- **Mic test is 20 seconds.** Test mic records and plays back 20 s (it was 4 s), and the report is labelled 20 s.
+- **One Audio check.** The live check, the RX tone test and automatic balancing run from one Start and one Stop in the Audio check card. Length is the Audio check's Length. The separate Expanded test controls are gone.
+- **Results are on their cards.** The Receive table, the RX tone test and the RX balance changes are on the RX card. The Transmit table and the TX balance changes are on the TX card. The per-minute strip, What to change, and the restore and keep panel stay in the Audio check card.
+- **RX tone test is the known baseline.** It is the same test as before: tones go out through the node and come back, and the report shows the raw and cleaned response.
+- **TX tone test is for third-party nodes.** A new tone test on the TX card keys node 1921 and sends the station ID and tones for other stations to measure. Nothing is analysed on the Pi. The test sends the same tones and level as the RX test, and is refused in the same cases (the node is linked, something is tuned, or the channel is busy).
+
+## 0.9.50 (2026-10-29)
+
+Settings are on the card they belong to:
+
+- **RX card.** Max listeners, Drop kerchunks from Listen, Headset / audio output (output and app audio), and the Adjust audio levels switch are there now. The switch is shown on the RX and TX cards and both follow each other.
+- **TX card.** TX time-out and Don't transmit while the node is busy are under Transmit limits. The headset microphone and headset button are under Headset microphone and button, with the push-to-talk settings.
+- **Setup card.** Only the ports, HTTPS and Listen without logging in. Each card saves its own settings with its Save button.
+- **Audio check card.** The Expanded test is part of it now, below the tone test. Its own card is gone.
+
+Each card's settings are checked by `NodeTalkerCardTests` in `ci/test_ci.py`, so a setting that moves to another card fails the checks.
 
 ## 0.9.49 (2026-10-28)
 
