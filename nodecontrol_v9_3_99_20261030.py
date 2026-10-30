@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.98"
+VERSION      = "9.3.99"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -14322,6 +14322,18 @@ def action_local(data: dict) -> Tuple[bool, str]:
         return True, json.dumps({"page": st.page, "fav": str(st.current_fav or "") if on else "",
                                  "server": st.active_dmr_server or "",
                                  "address": str(srv.get("address", "")) if srv else ""})
+    if act == "phone-status":
+        doc = _phone_doc()
+        net = _phone_active_net(doc)
+        st = _phone_call_state()
+        typ = str((net or {}).get("type", ""))
+        return True, json.dumps({"state": st.get("state", "idle"), "net": str((net or {}).get("name", "")),
+                                 "type": typ, "type_label": _PHONE_TYPE_LBL.get(typ, ""),
+                                 "node": _phone_live_node(doc)})
+    if act == "phone-tones":
+        tones = str(data.get("tones", ""))
+        log.info("local API: Node Talker asks to send phone tones %s", tones[:32])
+        return action_phone_send_tones(tones)
     if act == "dmr-server-add":
         return _local_dmr_server_add(data)
     return False, f"Unknown local action '{act}'"

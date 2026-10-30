@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_56_20261029.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_57_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.57 (2026-10-30)
+
+- **Phone patch: keypad tones when you talk on a phone call.** On a Node Controller phone call (a SIP or IAX2 phone network), each time you talk Node Talker sends the open tones to the far end first, waits, then sends your voice; when you stop it sends the close tones. Works with tap to talk, hold to talk and a headset button. The new Phone patch section in the Audio settings holds the switch (off by default), the open tones (`*99`), the close tones (`#`) and the wait after open (500 ms, 0 to 3000). The tones and the wait are checked when saved; open and close take 1 to 8 of 0-9, `*` and `#`.
+  - The phone status comes from Node Controller's `phone-status` and is cached for 5 s. The tones go out through `phone-tones`, so this needs Node Controller 9.3.104-pi02w or 9.3.99 or later; with an older Node Controller the page says so and the patch does nothing.
+  - If the open tones can't be sent, Node Talker says so on the page and transmits anyway. The wait for the open tones never holds a talk longer than 5 s after it starts.
+  - While a phone call is active the Talk button reads "· PHONE", and the Audio settings show the phone's state (no call, dialing, ringing, or in a call on the network).
 
 ## 0.9.56 (2026-10-29)
 

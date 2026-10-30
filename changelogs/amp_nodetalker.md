@@ -1,6 +1,14 @@
 # Node Talker for AMP changelog
 
-Current file: `amp_nodetalker_v0_3_4_20261028.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+Current file: `amp_nodetalker_v0_3_6_20261030.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+
+## 0.3.6 (2026-10-30)
+
+- **Works with amp-hub.** A node can run the AMP hub (`amp-hub`) instead of `amp-server`. Node Talker finds whichever is running, and starts after either one. The service unit waits for `amp-hub.service` too.
+  - The hub has no web page, so its favourites can't be read and Links, Connect and Disconnect are off on the page. Its settings come from `/usr/etc/amp-hub.env` (node number, IAX port, `AMP_IAX_ALLOWLIST`). The page and the install check say so.
+  - The hub's list of links comes from the link Node Talker keeps open to it. Links show as connecting or linked and update within 10 s.
+  - Connect sends the hub's `*3` command and waits up to 30 s for the link. Disconnect sends the hub's `*71` command. The hub has no command to drop one node, so it drops every link it placed itself; nodes that called the hub stay linked, and the result says so.
+  - Setup does not write a login file for the hub. If the hub refuses the call, Node Talker says so, and when `AMP_IAX_ALLOWLIST` is set and does not include the caller it names the node to add and the hub to restart.
 
 ## 0.3.4 (2026-10-28)
 
