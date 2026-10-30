@@ -1,6 +1,12 @@
 # instmon changelog
 
-Current file: `instmon_v2_84_0_20261028.py`. Newest entries first.
+Current file: `instmon_v2_85_0_20261030.py`. Newest entries first.
+
+## 2.85.0 (2026-10-30)
+
+- **Config putter is laid out like Config getter.** Its card shows the state badge and version, Uninstall, and a Snapshots list where each snapshot has a Preview button and each uploaded copy has Preview and Delete. The snapshot dropdown is gone. Upload corrected copy sits under the list, with the comment-lines tick box. The card is no longer part of the Components list, so a refresh does not wipe an open preview. Its title is still Config putter.
+- **Node Talker Mobile sits under Node Talker** in the Components list, not at the end.
+- **GitHub Updates card reorganised.** Quick Links are centred. The summary sits on its own line under the buttons. The channel and build choices come next, then the progress text, now larger. All explanatory text (Full Update and Quiet System) is in one field with a Show/Hide button. Quiet System and Restore are on the bottom row, under that field.
 
 ## 2.84.0 (2026-10-28)
 
