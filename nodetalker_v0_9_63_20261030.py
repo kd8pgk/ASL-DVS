@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.58"
+VERSION = "0.9.63"
 DATE_STR = "2026-10-30"
 APP_NAME = "Node Talker"
 
@@ -4000,6 +4000,16 @@ def _fav_disconnect_impl(index=None):
     return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
 
 
+def disconnect_links(_body=None):
+    fav = fav_disconnect(None)
+    tune = tune_disconnect(None)
+    bad = [r["error"] for r in (fav, tune) if not r["ok"]]
+    if bad:
+        return {"ok": False, "error": " ".join(bad)}
+    said = [r["message"] for r in (fav, tune) if r["message"] not in ("No favorite is linked.", "Nothing is tuned.")]
+    return {"ok": True, "message": " ".join(said) or "Nothing is linked."}
+
+
 def drop_peers(node, hit):
     via = node == dashboard_conf()["asl_node"]
     for peer in hit:
@@ -5884,6 +5894,8 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .tn-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
 #t-now{flex:1;min-width:0;overflow-wrap:anywhere;text-align:center}
 .tn-bar #t-go{flex:1 1 100%;min-height:56px;font-size:17px}
+.btn-pair{display:flex;gap:8px;width:100%}
+.tn-bar .btn-pair>.btn{flex:1 1 0!important;width:auto!important;min-width:0}
 #tab-connect{min-height:100%;display:flex;flex-direction:column}
 #tab-connect .card{padding:8px 10px;margin-bottom:8px}
 #tab-connect h2{font-size:14px;margin:0 0 4px}
@@ -5893,7 +5905,8 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #tab-connect .tn-bar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--tn-gap)}
 #tab-connect .tn-bar>*{width:100%!important;flex:none!important;max-width:none!important;min-width:0}
 #tab-connect #t-find,#tab-connect #t-pick{grid-column:span 2}
-#tab-connect #t-go{grid-column:1 / -1;min-height:44px;font-size:15px}
+#tab-connect .tn-pair{grid-column:1 / -1}
+#tab-connect #t-go{min-height:44px;font-size:15px}
 #tab-connect .tn-msg,#tab-connect .msg,#tab-connect .small{font-size:12px;margin-top:2px}
 #tab-connect .tn-foot{margin-top:2px}
 #cd-sys .row{justify-content:center}
@@ -5939,7 +5952,7 @@ main.fit{padding-top:10px;padding-bottom:12px}
 .lpanel .msg{margin-top:0;min-height:0}
 .lpanel #listen-msg:empty{display:none}
 #listen-msg{display:none}
-.lstat{display:flex;align-items:center;gap:12px;font-size:13px;color:var(--soft);white-space:nowrap;overflow:hidden}
+.lstat{display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:var(--soft);white-space:nowrap;overflow:hidden}
 .lstat>span{flex:none;display:inline-flex;align-items:center}
 .lstat #st-node{font-weight:700;color:var(--text)}
 .lstat #st-feed-w{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}
@@ -6969,7 +6982,6 @@ function chkTick() {
   chk.last = now;
   const left = Math.max(0, chk.mins * 60000 - chk.elapsed);
   const txt = fmtSecs(chk.elapsed / 1000);
-  $('chk-badge').textContent = 'CHECK ' + txt;
   sum('chk', 'Running ' + txt + ' / ' + chk.mins + ':00');
   $('chk-run').textContent = 'Running: ' + txt + ' of ' + chk.mins + ' min. Heard ' + Math.round(chk.rx.act * 0.02) + ' s of audio, ' +
     chk.txN + ' transmission(s) of yours.' + (chk.paused > 5000 ? ' Paused ' + fmtSecs(chk.paused / 1000) + ' (page closed or asleep).' : '');
@@ -6986,7 +6998,6 @@ function chkUi() {
   $('chk-mins').disabled = run;
   $('chk-guide').disabled = run;
   $('chk-run').classList.toggle('hidden', !run);
-  $('chk-badge').classList.toggle('hidden', !run);
 }
 
 // Keep the screen awake during a check. The lock is released by the browser when the page is
@@ -8216,7 +8227,6 @@ function chkInit() {
   $('fav-save').addEventListener('click', () => feSave());
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
   $('chk-cmp').addEventListener('click', () => { chkCmp = !chkCmp; $('chk-cmp').textContent = chkCmp ? 'Hide last check' : 'Compare with last check'; chkShow(chkShown); });
-  $('chk-badge').addEventListener('click', () => { showTab('setup'); foldSet('chk', true); });
   expInit();
 }
 
@@ -9353,15 +9363,23 @@ function listenLinkShow() {
   if (k.state === 'none') { el.textContent = 'Not connected'; return; }
   if (k.state === 'idle' || k.state === 'noasl') el.textContent = k.label;
   else {
-    if (k.mode) { const b = document.createElement('span'); b.className = 'lk-badge'; b.textContent = k.mode; el.append(b, ' '); }
+    if (k.mode) { const b = document.createElement('span'); b.className = 'lk-badge'; b.dataset.mode = k.mode; b.textContent = k.mode; el.append(b, ' '); }
     el.append(k.label + (k.state === 'linking' ? ' (connecting)' : ''));
   }
   if (k.tag) { const t = document.createElement('span'); t.className = 'muted'; t.textContent = ' · ' + k.tag; el.append(t); }
 }
 
+function paintModes() {
+  const f = favs[Number($('c-fav').value)];
+  $('cd-tune').dataset.mode = $('t-mode') ? $('t-mode').value : '';
+  $('c-fav').closest('.card').dataset.mode = f ? f.mode : '';
+  $('c-mode').dataset.mode = f ? f.mode : '';
+}
+
 function showSelected() {
   const f = favs[Number($('c-fav').value)];
   $('c-mode').textContent = f ? modeName(f.mode) : '';
+  paintModes();
   $('c-num').textContent = f ? favNum(f) : '';
   $('c-label').textContent = f ? f.label : '';
   connectLabel();
@@ -9374,29 +9392,19 @@ function selectedLinked() {
 
 function connectLabel() {
   const b = $('c-connect'), on = selectedLinked();
-  b.textContent = on ? 'Disconnect' : 'Connect';
-  b.classList.toggle('primary', !on);
-  b.classList.toggle('danger', on);
+  b.textContent = 'Connect';
+  b.disabled = on || connBusy;
 }
 
 async function favConnect() {
   const i = $('c-fav').value;
-  if (i === '') return;
+  if (i === '' || selectedLinked()) return;
   const f = favs[Number(i)];
-  const off = selectedLinked();
   netHide();
-  if (!off) {
-    const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
-    await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
-      tune ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
-    if ($('c-msg').classList.contains('ok')) { tuneDone = true; favSel = Number(i); }
-    return;
-  }
-  $('c-connect').disabled = true;
-  note('c-msg', '', 'Disconnecting...');
-  try { setMsg('c-msg', await post('/api/disconnect', {index: Number(i)})); }
-  finally { $('c-connect').disabled = false; }
-  setTimeout(pollStatus, 1000);
+  const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
+  await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
+    tune ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
+  if ($('c-msg').classList.contains('ok')) { tuneDone = true; favSel = Number(i); }
 }
 
 let connMsgTimer = null, connBusy = false, connBack = false;
@@ -9503,7 +9511,8 @@ function tnInit() {
   TN_MODES.forEach((x) => addOption(m, x, modeName(x)));
   m.value = 'ASL';
   $('t-find').value = tnState.find || '';
-  $('t-mode').addEventListener('change', () => tnMode(false));
+  $('t-mode').addEventListener('change', () => { tnMode(false); paintModes(); });
+  $('c-fav').addEventListener('change', paintModes);
   $('t-net').addEventListener('change', () => { tnButtons(); tnRemember(); });
   $('t-mod').addEventListener('change', () => { tnButtons(); tnRemember(); });
   $('t-find').addEventListener('input', () => {
@@ -9514,7 +9523,8 @@ function tnInit() {
   });
   $('t-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') tnConnect(); });
   $('t-pick').addEventListener('change', () => { tnMods(); tnButtons(); tnRemember(); });
-  $('t-go').addEventListener('click', tnToggle);
+  $('t-go').addEventListener('click', tnConnect);
+  $('t-disc').addEventListener('click', () => linksDisconnect('t-msg'));
   $('t-lh').addEventListener('click', tnOpenLink);
   $('t-save').addEventListener('click', tnSaveFav);
   sizeInit('tn');
@@ -9624,6 +9634,7 @@ function tnSetSel(s) {
   tnPrimed = true;
   tnState = {mode: s.mode, net: s.net || '', mod: s.mod || '', find: s.find || '', pick: s.pick || ''};
   $('t-mode').value = s.mode;
+  paintModes();
   $('t-find').value = s.find || '';
   tnMode(true);
   if (s.net && favNets.includes(s.net)) $('t-net').value = s.net;
@@ -9723,10 +9734,8 @@ function tnLink() {
 function tnButtons() {
   const ok = !!tnBody();
   const on = tnLinked(), go = $('t-go');
-  go.textContent = on ? 'Disconnect' : 'Connect';
-  go.classList.toggle('primary', !on);
-  go.classList.toggle('danger', on);
-  go.disabled = connBusy || (!on && !ok);
+  go.textContent = 'Connect';
+  go.disabled = connBusy || on || !ok;
   $('t-save').disabled = !ok;
   $('t-lh').classList.toggle('lh-off', !tnLink());
   $('t-lh').setAttribute('aria-disabled', tnLink() ? 'false' : 'true');
@@ -9765,8 +9774,6 @@ async function tnSaveFav() {
   finally { tnButtons(); }
   loadFavs();
 }
-
-function tnToggle() { return tnLinked() ? tnOff() : tnConnect(); }
 
 let daPoll = null, daMine = false, daList = 'md380-emu, Analog_Bridge, MMDVM_Bridge, USRP2M17 and Asterisk';
 
@@ -9808,13 +9815,11 @@ async function daGo() {
   daStatus();
 }
 
-async function tnOff() {
+async function linksDisconnect(msgId) {
   tnLast = null;
-  note('t-msg', '', 'Disconnecting...');
-  const b = TN_SEARCH.includes($('t-mode').value) ? tnBody() : null;
-  if (TN_SEARCH.includes($('t-mode').value) && !b) { note('t-msg', 'warn', 'Pick or type the node to disconnect.'); return; }
-  try { setMsg('t-msg', await post('/api/tune/disconnect', b || {})); }
-  finally { tnButtons(); }
+  note(msgId, '', 'Disconnecting...');
+  try { setMsg(msgId, await post('/api/disconnect-links', {})); }
+  finally { connectLabel(); tnButtons(); }
   setTimeout(pollStatus, 1000);
 }
 
@@ -10184,6 +10189,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('c-fav').addEventListener('change', showSelected);
   $('c-fav').addEventListener('change', () => { favSel = Number($('c-fav').value); });
   $('c-connect').addEventListener('click', favConnect);
+  $('c-disc').addEventListener('click', () => linksDisconnect('c-msg'));
   $('nd-enable').addEventListener('click', nodeEnable);
   $('nd-disable').addEventListener('click', nodeDisable);
   $('nd-refresh').addEventListener('click', loadNode);
@@ -10292,6 +10298,76 @@ html[data-theme="light"] *{text-shadow:none!important}
 <meta name="theme-color" content="#161e2e">
 <title>Node Talker</title>
 <style>__CSS__</style>
+<style>
+/* v0.9.60: mode colours on Connect cards and Listen badge (same palette as Node Controller) */
+.card[data-mode="ASL"]{border-color:rgb(0,255,229)!important}
+.card[data-mode="ASL"] select,.card[data-mode="ASL"] input{border-color:rgb(0,255,229)!important;color:rgb(0,255,229)!important}
+#c-mode[data-mode="ASL"]{color:rgb(0,255,229)!important}
+.lk-badge[data-mode="ASL"]{border-color:rgb(0,255,229)!important;color:rgb(0,255,229)!important}
+.card[data-mode="ECHO"]{border-color:rgb(255,208,64)!important}
+.card[data-mode="ECHO"] select,.card[data-mode="ECHO"] input{border-color:rgb(255,208,64)!important;color:rgb(255,208,64)!important}
+#c-mode[data-mode="ECHO"]{color:rgb(255,208,64)!important}
+.lk-badge[data-mode="ECHO"]{border-color:rgb(255,208,64)!important;color:rgb(255,208,64)!important}
+.card[data-mode="DMR"]{border-color:rgb(34,212,255)!important}
+.card[data-mode="DMR"] select,.card[data-mode="DMR"] input{border-color:rgb(34,212,255)!important;color:rgb(34,212,255)!important}
+#c-mode[data-mode="DMR"]{color:rgb(34,212,255)!important}
+.lk-badge[data-mode="DMR"]{border-color:rgb(34,212,255)!important;color:rgb(34,212,255)!important}
+.card[data-mode="STFU"]{border-color:rgb(0,255,176)!important}
+.card[data-mode="STFU"] select,.card[data-mode="STFU"] input{border-color:rgb(0,255,176)!important;color:rgb(0,255,176)!important}
+#c-mode[data-mode="STFU"]{color:rgb(0,255,176)!important}
+.lk-badge[data-mode="STFU"]{border-color:rgb(0,255,176)!important;color:rgb(0,255,176)!important}
+.card[data-mode="YSF"]{border-color:rgb(212,102,255)!important}
+.card[data-mode="YSF"] select,.card[data-mode="YSF"] input{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
+#c-mode[data-mode="YSF"]{color:rgb(212,102,255)!important}
+.lk-badge[data-mode="YSF"]{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
+.card[data-mode="FCS"]{border-color:rgb(0,196,160)!important}
+.card[data-mode="FCS"] select,.card[data-mode="FCS"] input{border-color:rgb(0,196,160)!important;color:rgb(0,196,160)!important}
+#c-mode[data-mode="FCS"]{color:rgb(0,196,160)!important}
+.lk-badge[data-mode="FCS"]{border-color:rgb(0,196,160)!important;color:rgb(0,196,160)!important}
+.card[data-mode="P25"]{border-color:rgb(255,170,34)!important}
+.card[data-mode="P25"] select,.card[data-mode="P25"] input{border-color:rgb(255,170,34)!important;color:rgb(255,170,34)!important}
+#c-mode[data-mode="P25"]{color:rgb(255,170,34)!important}
+.lk-badge[data-mode="P25"]{border-color:rgb(255,170,34)!important;color:rgb(255,170,34)!important}
+.card[data-mode="NXDN"]{border-color:rgb(212,255,0)!important}
+.card[data-mode="NXDN"] select,.card[data-mode="NXDN"] input{border-color:rgb(212,255,0)!important;color:rgb(212,255,0)!important}
+#c-mode[data-mode="NXDN"]{color:rgb(212,255,0)!important}
+.lk-badge[data-mode="NXDN"]{border-color:rgb(212,255,0)!important;color:rgb(212,255,0)!important}
+.card[data-mode="DSTAR"]{border-color:rgb(255,68,204)!important}
+.card[data-mode="DSTAR"] select,.card[data-mode="DSTAR"] input{border-color:rgb(255,68,204)!important;color:rgb(255,68,204)!important}
+#c-mode[data-mode="DSTAR"]{color:rgb(255,68,204)!important}
+.lk-badge[data-mode="DSTAR"]{border-color:rgb(255,68,204)!important;color:rgb(255,68,204)!important}
+.card[data-mode="XLX"]{border-color:rgb(0,255,229)!important}
+.card[data-mode="XLX"] select,.card[data-mode="XLX"] input{border-color:rgb(0,255,229)!important;color:rgb(0,255,229)!important}
+#c-mode[data-mode="XLX"]{color:rgb(0,255,229)!important}
+.lk-badge[data-mode="XLX"]{border-color:rgb(0,255,229)!important;color:rgb(0,255,229)!important}
+.card[data-mode="M17"]{border-color:rgb(212,102,255)!important}
+.card[data-mode="M17"] select,.card[data-mode="M17"] input{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
+#c-mode[data-mode="M17"]{color:rgb(212,102,255)!important}
+.lk-badge[data-mode="M17"]{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
+/* v0.9.62: Connect/Tune card text follows the mode colour (mode tag border, big number); headings unchanged */
+.card[data-mode="ASL"] .big-num{color:rgb(0,255,229)!important}
+#c-mode[data-mode="ASL"]{border-color:rgb(0,255,229)!important}
+.card[data-mode="ECHO"] .big-num{color:rgb(255,208,64)!important}
+#c-mode[data-mode="ECHO"]{border-color:rgb(255,208,64)!important}
+.card[data-mode="DMR"] .big-num{color:rgb(34,212,255)!important}
+#c-mode[data-mode="DMR"]{border-color:rgb(34,212,255)!important}
+.card[data-mode="STFU"] .big-num{color:rgb(0,255,176)!important}
+#c-mode[data-mode="STFU"]{border-color:rgb(0,255,176)!important}
+.card[data-mode="YSF"] .big-num{color:rgb(212,102,255)!important}
+#c-mode[data-mode="YSF"]{border-color:rgb(212,102,255)!important}
+.card[data-mode="FCS"] .big-num{color:rgb(0,196,160)!important}
+#c-mode[data-mode="FCS"]{border-color:rgb(0,196,160)!important}
+.card[data-mode="P25"] .big-num{color:rgb(255,170,34)!important}
+#c-mode[data-mode="P25"]{border-color:rgb(255,170,34)!important}
+.card[data-mode="NXDN"] .big-num{color:rgb(212,255,0)!important}
+#c-mode[data-mode="NXDN"]{border-color:rgb(212,255,0)!important}
+.card[data-mode="DSTAR"] .big-num{color:rgb(255,68,204)!important}
+#c-mode[data-mode="DSTAR"]{border-color:rgb(255,68,204)!important}
+.card[data-mode="XLX"] .big-num{color:rgb(0,255,229)!important}
+#c-mode[data-mode="XLX"]{border-color:rgb(0,255,229)!important}
+.card[data-mode="M17"] .big-num{color:rgb(212,102,255)!important}
+#c-mode[data-mode="M17"]{border-color:rgb(212,102,255)!important}
+</style>
 </head>
 <body>
 <header><div class="hdr-left"><h1>Node Talker</h1></div><span class="ver">v__VERSION__</span><span class="sp"></span>
@@ -10321,7 +10397,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="sel-card">
 <div class="row" style="margin:0"><span class="tag" id="c-mode"></span><span class="big-num" id="c-num"></span></div>
 <div class="muted" id="c-label"></div>
-<button id="c-connect" class="btn primary big" type="button">Connect</button>
+<div class="btn-pair"><button id="c-connect" class="btn primary big" type="button">Connect</button><button id="c-disc" class="btn danger big" type="button">Disconnect</button></div>
 </div>
 </div>
 <div id="c-msg" class="msg"></div>
@@ -10341,7 +10417,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <select id="t-pick" aria-label="Pick from the list"></select>
 <button id="t-lh" class="btn-last lh-off" type="button" aria-label="Open Last Heard">LH</button>
 <button id="t-save" class="btn" type="button" aria-label="Save to favorites">Save</button>
-<button id="t-go" class="btn big primary" type="button">Connect</button>
+<div class="btn-pair tn-pair"><button id="t-go" class="btn big primary" type="button">Connect</button><button id="t-disc" class="btn big danger" type="button">Disconnect</button></div>
 </div>
 <div id="t-list" class="tn-msg"></div>
 <div id="t-msg" class="msg"></div>
@@ -10367,7 +10443,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <span id="st-feed-w"><span id="st-feed" class="dot"></span><span id="st-feed-t">feed</span></span>
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span>
 <span id="s-tx-w" title="Lit while someone transmits from Node Talker"><span id="s-tx" class="dot"></span>TX</span>
-<span id="st-listeners" title="Listeners">-</span><span id="chk-badge" class="chk hidden" title="An audio check is running (Setup tab)"></span></div>
+<span id="st-listeners" title="Listeners">-</span></div>
 <div class="spec" id="spec-wrap">
 <div class="spec-box" id="spec-box"><canvas id="spec" aria-label="Audio spectrum"></canvas>
 <span id="gap-cd" class="gap-cd hidden" aria-hidden="true"></span>
@@ -10832,6 +10908,7 @@ _POST_ACTIONS = {
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
     "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
     "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
+    "/api/disconnect-links": (disconnect_links, ()),
     "/api/tune": (tune_connect, ()),
     "/api/tune/save": (tune_save, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
