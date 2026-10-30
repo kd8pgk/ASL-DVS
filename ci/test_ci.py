@@ -998,10 +998,10 @@ class InstmonConfputterTests(unittest.TestCase):
 
     def test_card_is_on_the_page_below_config_getter(self):
         html = self.m.render_page()
-        self.assertIn('id="cp-card"', html)
+        self.assertIn('id="confputter-card"', html)
         self.assertLess(html.index('id="cg-card"') if 'id="cg-card"' in html else html.index('id="components"'),
-                        html.index('id="cp-card"'))
-        self.assertLess(html.index('id="cp-card"'), html.index('id="usbimp-card"'))
+                        html.index('id="confputter-card"'))
+        self.assertLess(html.index('id="confputter-card"'), html.index('id="usbimp-card"'))
         self.assertIn("function cpApply", html)
         self.assertIn("Config putter", self.m.render_library_html(self.m.scan_library()))
 
