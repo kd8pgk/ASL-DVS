@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.62"
+VERSION = "0.9.63"
 DATE_STR = "2026-10-30"
 APP_NAME = "Node Talker"
 
@@ -4000,6 +4000,16 @@ def _fav_disconnect_impl(index=None):
     return {"ok": True, "message": f"Disconnected {', '.join(done + hit)}."}
 
 
+def disconnect_links(_body=None):
+    fav = fav_disconnect(None)
+    tune = tune_disconnect(None)
+    bad = [r["error"] for r in (fav, tune) if not r["ok"]]
+    if bad:
+        return {"ok": False, "error": " ".join(bad)}
+    said = [r["message"] for r in (fav, tune) if r["message"] not in ("No favorite is linked.", "Nothing is tuned.")]
+    return {"ok": True, "message": " ".join(said) or "Nothing is linked."}
+
+
 def drop_peers(node, hit):
     via = node == dashboard_conf()["asl_node"]
     for peer in hit:
@@ -5884,6 +5894,8 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .tn-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
 #t-now{flex:1;min-width:0;overflow-wrap:anywhere;text-align:center}
 .tn-bar #t-go{flex:1 1 100%;min-height:56px;font-size:17px}
+.btn-pair{display:flex;gap:8px;width:100%}
+.tn-bar .btn-pair>.btn{flex:1 1 0!important;width:auto!important;min-width:0}
 #tab-connect{min-height:100%;display:flex;flex-direction:column}
 #tab-connect .card{padding:8px 10px;margin-bottom:8px}
 #tab-connect h2{font-size:14px;margin:0 0 4px}
@@ -5893,7 +5905,8 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #tab-connect .tn-bar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--tn-gap)}
 #tab-connect .tn-bar>*{width:100%!important;flex:none!important;max-width:none!important;min-width:0}
 #tab-connect #t-find,#tab-connect #t-pick{grid-column:span 2}
-#tab-connect #t-go{grid-column:1 / -1;min-height:44px;font-size:15px}
+#tab-connect .tn-pair{grid-column:1 / -1}
+#tab-connect #t-go{min-height:44px;font-size:15px}
 #tab-connect .tn-msg,#tab-connect .msg,#tab-connect .small{font-size:12px;margin-top:2px}
 #tab-connect .tn-foot{margin-top:2px}
 #cd-sys .row{justify-content:center}
@@ -9379,29 +9392,19 @@ function selectedLinked() {
 
 function connectLabel() {
   const b = $('c-connect'), on = selectedLinked();
-  b.textContent = on ? 'Disconnect' : 'Connect';
-  b.classList.toggle('primary', !on);
-  b.classList.toggle('danger', on);
+  b.textContent = 'Connect';
+  b.disabled = on || connBusy;
 }
 
 async function favConnect() {
   const i = $('c-fav').value;
-  if (i === '') return;
+  if (i === '' || selectedLinked()) return;
   const f = favs[Number(i)];
-  const off = selectedLinked();
   netHide();
-  if (!off) {
-    const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
-    await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
-      tune ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
-    if ($('c-msg').classList.contains('ok')) { tuneDone = true; favSel = Number(i); }
-    return;
-  }
-  $('c-connect').disabled = true;
-  note('c-msg', '', 'Disconnecting...');
-  try { setMsg('c-msg', await post('/api/disconnect', {index: Number(i)})); }
-  finally { $('c-connect').disabled = false; }
-  setTimeout(pollStatus, 1000);
+  const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
+  await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
+    tune ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
+  if ($('c-msg').classList.contains('ok')) { tuneDone = true; favSel = Number(i); }
 }
 
 let connMsgTimer = null, connBusy = false, connBack = false;
@@ -9520,7 +9523,8 @@ function tnInit() {
   });
   $('t-find').addEventListener('keydown', (e) => { if (e.key === 'Enter') tnConnect(); });
   $('t-pick').addEventListener('change', () => { tnMods(); tnButtons(); tnRemember(); });
-  $('t-go').addEventListener('click', tnToggle);
+  $('t-go').addEventListener('click', tnConnect);
+  $('t-disc').addEventListener('click', () => linksDisconnect('t-msg'));
   $('t-lh').addEventListener('click', tnOpenLink);
   $('t-save').addEventListener('click', tnSaveFav);
   sizeInit('tn');
@@ -9730,10 +9734,8 @@ function tnLink() {
 function tnButtons() {
   const ok = !!tnBody();
   const on = tnLinked(), go = $('t-go');
-  go.textContent = on ? 'Disconnect' : 'Connect';
-  go.classList.toggle('primary', !on);
-  go.classList.toggle('danger', on);
-  go.disabled = connBusy || (!on && !ok);
+  go.textContent = 'Connect';
+  go.disabled = connBusy || on || !ok;
   $('t-save').disabled = !ok;
   $('t-lh').classList.toggle('lh-off', !tnLink());
   $('t-lh').setAttribute('aria-disabled', tnLink() ? 'false' : 'true');
@@ -9772,8 +9774,6 @@ async function tnSaveFav() {
   finally { tnButtons(); }
   loadFavs();
 }
-
-function tnToggle() { return tnLinked() ? tnOff() : tnConnect(); }
 
 let daPoll = null, daMine = false, daList = 'md380-emu, Analog_Bridge, MMDVM_Bridge, USRP2M17 and Asterisk';
 
@@ -9815,13 +9815,11 @@ async function daGo() {
   daStatus();
 }
 
-async function tnOff() {
+async function linksDisconnect(msgId) {
   tnLast = null;
-  note('t-msg', '', 'Disconnecting...');
-  const b = TN_SEARCH.includes($('t-mode').value) ? tnBody() : null;
-  if (TN_SEARCH.includes($('t-mode').value) && !b) { note('t-msg', 'warn', 'Pick or type the node to disconnect.'); return; }
-  try { setMsg('t-msg', await post('/api/tune/disconnect', b || {})); }
-  finally { tnButtons(); }
+  note(msgId, '', 'Disconnecting...');
+  try { setMsg(msgId, await post('/api/disconnect-links', {})); }
+  finally { connectLabel(); tnButtons(); }
   setTimeout(pollStatus, 1000);
 }
 
@@ -10191,6 +10189,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('c-fav').addEventListener('change', showSelected);
   $('c-fav').addEventListener('change', () => { favSel = Number($('c-fav').value); });
   $('c-connect').addEventListener('click', favConnect);
+  $('c-disc').addEventListener('click', () => linksDisconnect('c-msg'));
   $('nd-enable').addEventListener('click', nodeEnable);
   $('nd-disable').addEventListener('click', nodeDisable);
   $('nd-refresh').addEventListener('click', loadNode);
@@ -10398,7 +10397,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="sel-card">
 <div class="row" style="margin:0"><span class="tag" id="c-mode"></span><span class="big-num" id="c-num"></span></div>
 <div class="muted" id="c-label"></div>
-<button id="c-connect" class="btn primary big" type="button">Connect</button>
+<div class="btn-pair"><button id="c-connect" class="btn primary big" type="button">Connect</button><button id="c-disc" class="btn danger big" type="button">Disconnect</button></div>
 </div>
 </div>
 <div id="c-msg" class="msg"></div>
@@ -10418,7 +10417,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <select id="t-pick" aria-label="Pick from the list"></select>
 <button id="t-lh" class="btn-last lh-off" type="button" aria-label="Open Last Heard">LH</button>
 <button id="t-save" class="btn" type="button" aria-label="Save to favorites">Save</button>
-<button id="t-go" class="btn big primary" type="button">Connect</button>
+<div class="btn-pair tn-pair"><button id="t-go" class="btn big primary" type="button">Connect</button><button id="t-disc" class="btn big danger" type="button">Disconnect</button></div>
 </div>
 <div id="t-list" class="tn-msg"></div>
 <div id="t-msg" class="msg"></div>
@@ -10909,6 +10908,7 @@ _POST_ACTIONS = {
     "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
     "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
     "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
+    "/api/disconnect-links": (disconnect_links, ()),
     "/api/tune": (tune_connect, ()),
     "/api/tune/save": (tune_save, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
