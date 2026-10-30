@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.63"
+VERSION = "0.9.64"
 DATE_STR = "2026-10-30"
 APP_NAME = "Node Talker"
 
@@ -4004,9 +4004,19 @@ def disconnect_links(_body=None):
     fav = fav_disconnect(None)
     tune = tune_disconnect(None)
     bad = [r["error"] for r in (fav, tune) if not r["ok"]]
+    said = [r["message"] for r in (fav, tune) if r["ok"] and r["message"] not in ("No favorite is linked.", "Nothing is tuned.")]
+    node, err = _connect_node()
+    if node:
+        ok, links = rpt_links(node, max_age=0)
+        if not ok:
+            bad.append(NO_LINK_LIST)
+        else:
+            hit = [l["node"] for l in links if l["node"] != TX_NODE]
+            if hit:
+                drop_peers(node, hit)
+                said.append(f"Disconnected {', '.join(hit)}.")
     if bad:
         return {"ok": False, "error": " ".join(bad)}
-    said = [r["message"] for r in (fav, tune) if r["message"] not in ("No favorite is linked.", "Nothing is tuned.")]
     return {"ok": True, "message": " ".join(said) or "Nothing is linked."}
 
 

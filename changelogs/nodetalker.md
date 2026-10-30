@@ -1,6 +1,11 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_63_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_64_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.64 (2026-10-30)
+
+- **Disconnect drops every link on the node.** The Disconnect button on the favorite card and on the Tune card now drops every link the node lists, not only the favorites and the Tune link. The transmit node 1921 is left alone, because it is the local transmit feed and not a remote link. Private nodes and the digital and M17 bridge links are dropped too, so Disconnect will take down a bridge that is linked. Disconnect All is unchanged.
+- **Fix:** when the favorites disconnect failed, the Disconnect result could fail with an error instead of the message. The failure is now shown.
 
 ## 0.9.63 (2026-10-30)
 
