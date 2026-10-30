@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.6"
+APP_VERSION = "0.1.7"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2197,6 +2197,9 @@ def _ensure_sudo_shim() -> bool:
     log(f"sudo is not installed: install steps run as root through the stand-in in {_SUDO_SHIM_DIR}")
     return True
 
+def _unit_cmd(cmd: str) -> str:
+    return cmd.replace("$", "$$")
+
 def _unit_env_args() -> list[str]:
     out = ["--setenv=DEBIAN_FRONTEND=noninteractive"]
     if _SUDO_SHIM_DIR in os.environ.get("PATH", "").split(":"):
@@ -2681,6 +2684,22 @@ _ASL3_PREREQS_CMD = (
     "if [ -n \"$fresh\" ]; then " + _FW_KEEP_SHELL + "; fi"
 )
 
+def _purge_installed_cmd(pkgs: str) -> str:
+    return (f"pk=$(dpkg-query -W -f='${{Package}} ${{Status}}\\n' {pkgs} 2>/dev/null | awk '$NF != \"not-installed\" "
+            "{print $1}' | tr '\\n' ' '); if [ -n \"$pk\" ]; then echo \"Purging: $pk\"; "
+            "sudo DEBIAN_FRONTEND=noninteractive apt purge -y $pk; else echo 'None of these packages are on this node.'; fi")
+
+def _asl3_appliance_cmd(distro_deb_suffix: str) -> str:
+    opts = "sudo DEBIAN_FRONTEND=noninteractive apt install -y -o Dpkg::Options::=\"--force-confdef\" " \
+           "-o Dpkg::Options::=\"--force-confold\" "
+    if distro_deb_suffix == "deb12":
+        if _system().get("board") == "pi":
+            return opts + "asl3-pi-appliance"
+        return ("echo 'Skipped: for Debian 12 the ASL3 appliance is only published for the Raspberry Pi "
+                "(asl3-pi-appliance). On a PC it needs Debian 13 (asl3-appliance-pc). Nothing was changed.'")
+    return opts + ("asl3-appliance asl3-appliance-pi" if _system().get("board") == "pi"
+                   else "asl3-appliance asl3-appliance-pc")
+
 def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
     return [
         {"id": "prereqs", "num": 1, "title": "Install prerequisites",
@@ -2714,9 +2733,7 @@ def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
                 "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
                 "asl3-update-nodelist asl3-tts"},
         {"id": "install_appliance", "num": 10, "title": "(Optional) Full ASL3 Appliance branding/firewall defaults",
-         "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt install -y "
-                "-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\" "
-                + ("asl3-appliance asl3-appliance-pi" if _system().get("board") == "pi" else "asl3-appliance"),
+         "cmd": _asl3_appliance_cmd(distro_deb_suffix),
          "timeout": 900,
          "note": "Optional per source doc — applies appliance branding, web rules, and pre-configured "
                  "firewall defaults. asl3-appliance-pi is the Raspberry Pi-specific companion package (all "
@@ -2772,17 +2789,17 @@ def _asl3_purge_steps() -> list[dict]:
                  "doesn't report failure if a unit was never installed. Cockpit is NOT stopped here since "
                  "v0.0.44 — see purge_cockpit below, the optional step that replaces it."},
         {"id": "purge_packages", "num": 2, "title": "Purge ASL3 and Allmon3 packages",
-         "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt purge -y asl3 asl3-appliance asl3-appliance-pi "
-                "asl3-update-nodelist asl3-tts allmon3",
+         "cmd": _purge_installed_cmd("asl3 asl3-appliance asl3-appliance-pi asl3-appliance-pc asl3-pi-appliance "
+                                     "asl3-update-nodelist asl3-tts allmon3"),
          "note": "Reverses install_asl3_core/install_allmon3/install_node_utils and the optional "
                  "install_appliance step. `purge` (not `remove`) also drops each package's own config "
-                 "files. apt skips any package name here that isn't currently installed rather than failing "
-                 "the whole command. Cockpit packages moved out of this list in v0.0.44 (now a shared "
+                 "files. Only the packages this node has are purged: apt refuses the whole command when it names a "
+                 "package its repositories don't know (Debian 12 has no asl3-appliance, Debian 13 no asl3-appliance-pi on a PC). Cockpit packages moved out of this list in v0.0.44 (now a shared "
                  "cross-tab step) — see purge_cockpit below."},
         {"id": "purge_autoremove", "num": 3, "title": "Remove now-unused dependencies",
          "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt autoremove -y --purge"},
         {"id": "purge_repo", "num": 4, "title": "Remove the ASL3 apt repository package",
-         "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt purge -y asl-apt-repos && sudo apt update",
+         "cmd": _purge_installed_cmd("asl-apt-repos") + " && sudo apt update",
          "note": "Reverses install_repo — drops the repo.allstarlink.org apt source, then refreshes the index "
                  "so apt stops treating those packages as available from a repo that's no longer configured."},
         {"id": "purge_cleanup_tmp", "num": 5, "title": "Clean up downloaded repo package file",
@@ -2925,7 +2942,9 @@ _DV_INSTALL_CMD = (
     "if [ -z \"$(ls -A /opt/$d 2>/dev/null)\" ]; then "
     "echo \"/opt/$d is empty -- re-installing $p to restore its files and config\"; "
     f"sudo DEBIAN_FRONTEND=noninteractive apt install -y --reinstall {_DV_APT_OPTS} "
-    "-o Dpkg::Options::=\"--force-confmiss\" $p || exit 1; fi; done"
+    "-o Dpkg::Options::=\"--force-confmiss\" $p || exit 1; "
+    "[ -n \"$(ls -A /opt/$d 2>/dev/null)\" ] || { echo \"/opt/$d is still empty: apt could not re-install $p "
+    "(is the DVSwitch package source set up? Run the repo steps again).\"; exit 1; }; fi; done"
 )
 
 _DV_ENABLE_CMD = (
@@ -3054,9 +3073,8 @@ def _dvswitch_purge_steps_bookworm() -> list[dict]:
          "note": "Stops and disables each DVSwitch service that exists and skips any that don't (a single "
                  "`systemctl disable a b c` aborts on the first missing one)."},
         {"id": "bw_purge_packages", "num": 2, "title": "Purge DVSwitch packages",
-         "cmd": "sudo DEBIAN_FRONTEND=noninteractive apt purge -y dvswitch-server dvswitch dvswitch-base "
-                "dvswitch-dashboard dvswitch-menu dvswitch-monit analog-bridge analog-reflector mmdvm-bridge "
-                "md380-emu ircddbgateway",
+         "cmd": _purge_installed_cmd("dvswitch-server dvswitch dvswitch-base dvswitch-dashboard dvswitch-menu "
+                                     "dvswitch-monit analog-bridge analog-reflector mmdvm-bridge md380-emu ircddbgateway"),
          "note": "The bundle plus every DVSwitch package seen installed on a real node (652700): dvswitch, "
                  "dvswitch-base (netcheck), dvswitch-dashboard (runs on lighttpd), dvswitch-menu, dvswitch-monit "
                  "(a service monitor that auto-restarts DVSwitch services), the three working parts, and (v0.0.122) "
@@ -3150,10 +3168,16 @@ def _svxlink_install_steps() -> list[dict]:
                  "harmless to run even if your interface doesn't need it. Takes effect on the service's next "
                  "start, not retroactively."},
         _svx_config_field_step(5),
-        {"id": "svx_enable_service", "num": 6, "title": "Enable SvxLink at boot",
-         "cmd": "sudo systemctl enable --now svxlink",
-         "note": "The package may already enable this on install on some systems — this command is "
-                 "idempotent either way."},
+        {"id": "svx_enable_service", "num": 6, "title": "Enable & start SvxLink",
+         "cmd": "sudo systemctl enable svxlink && sudo systemctl restart svxlink; sleep 3; "
+                "if systemctl is-active --quiet svxlink; then echo 'svxlink is running.'; "
+                "else echo 'svxlink did not start. Its own log (/var/log/svxlink):'; sudo tail -n 15 /var/log/svxlink; "
+                "echo 'A message about the audio device means the sound card in [Rx1]/[Tx1] AUDIO_DEV of "
+                "/etc/svxlink/svxlink.conf is missing or wrong (aplay -l lists the cards).'; exit 1; fi",
+         "timeout": 60,
+         "note": "Enables the service at boot and starts it now. SvxLink stops at once when the sound card set in "
+                 "svxlink.conf ([Rx1] and [Tx1] AUDIO_DEV, alsa:plughw:0 by default) isn't there; the step then "
+                 "shows SvxLink's own log, which names the problem."},
         _cockpit_install_step(7),
         _cockpit_enable_step(8),
     ]
@@ -3187,6 +3211,55 @@ USRP_HOST=127.0.0.1
 #    USRP_RX_PORT = the port Analog_Bridge SENDS to  (fork default 41233)
 #    Match them to Analog_Bridge.ini -- the two ends are mirror images.
 #    Keep everything on 127.0.0.1; never open these ports in a firewall."""
+
+_SVX_USRP_CONF = f"{_SVX_USRP_ETC}/svxlink.conf"
+_SVX_USRP_LOGIC_CONF = f"{_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf"
+
+def _svx_usrp_wire_cmd(call: str, tx: str, rx: str) -> str:
+    f, u = _SVX_USRP_CONF, _SVX_USRP_LOGIC_CONF
+    return (f"F={f}; U={u}; [ -f $F ] || {{ echo 'No {f}: run step 5 first.'; exit 1; }}; "
+            f"c='{call}'; tx='{tx}'; rx='{rx}'; "
+            "for p in \"$tx\" \"$rx\"; do case \"$p\" in ''|*[!0-9]*) echo 'Ports must be numbers'; exit 1;; esac; "
+            "if [ \"$p\" -lt 1 ] || [ \"$p\" -gt 65535 ]; then echo 'Ports must be 1 to 65535'; exit 1; fi; done; "
+            "[ \"$tx\" != \"$rx\" ] || { echo 'The two ports must be different'; exit 1; }; "
+            "sudo cp -n $F $F.44helper-bak; "
+            "L=$(sed -n '/^\\[GLOBAL\\]/,/^\\[/ s/^LOGICS=\\([^,]*\\).*/\\1/p' $F | head -1); L=${L:-SimplexLogic}; "
+            "grep -qE '^LOGICS=.*UsrpLogic' $F || sudo sed -i '/^\\[GLOBAL\\]/,/^\\[/ s/^LOGICS=\\(.*\\)$/LOGICS=\\1,UsrpLogic/' $F; "
+            "if grep -qE '^LINKS=' $F; then grep -qE '^LINKS=.*LinkToUsrp' $F || "
+            "sudo sed -i '/^\\[GLOBAL\\]/,/^\\[/ s/^LINKS=\\(.*\\)$/LINKS=\\1,LinkToUsrp/' $F; "
+            "else sudo sed -i '/^\\[GLOBAL\\]/,/^\\[/ s/^LOGICS=.*$/&\\nLINKS=LinkToUsrp/' $F; fi; "
+            "grep -q '^\\[LinkToUsrp\\]' $F || printf '\\n[LinkToUsrp]\\nCONNECT_LOGICS=%s:9:USRP,UsrpLogic\\nDEFAULT_ACTIVE=1\\nTIMEOUT=0\\n' \"$L\" "
+            "| sudo tee -a $F >/dev/null; "
+            "sudo sed -i \"s/^CALLSIGN=.*/CALLSIGN=$c/\" $F; "
+            "for x in $F $U; do [ -f $x ] && sudo sed -i -e \"/^\\[UsrpLogic\\]/,/^\\[/ {"
+            " s|^CALL=.*|CALL=$c|; s|^USRP_HOST=.*|USRP_HOST=127.0.0.1|; s|^USRP_TX_PORT=.*|USRP_TX_PORT=$tx|;"
+            f" s|^USRP_RX_PORT=.*|USRP_RX_PORT=$rx|; s|^DV_USER_INFOFILE=.*|DV_USER_INFOFILE={_SVX_USRP_ETC}/dv_users.json|; }}\" $x; done; "
+            "echo \"--- $F:\"; sed -n '/^\\[GLOBAL\\]/,/^\\[/p' $F | grep -E '^(LOGICS|LINKS)='; "
+            "sed -n '/^\\[LinkToUsrp\\]/,/^\\[/p' $F | grep -v '^\\[' | grep -v '^$'; "
+            "echo \"--- UsrpLogic:\"; grep -hE '^(CALL|USRP_HOST|USRP_TX_PORT|USRP_RX_PORT|DV_USER_INFOFILE)=' $U 2>/dev/null || "
+            "sed -n '/^\\[UsrpLogic\\]/,/^\\[/p' $F | grep -E '^(CALL|USRP_|DV_USER)'; "
+            "echo \"Linked $L with UsrpLogic. Backup of the first version: $F.44helper-bak\"")
+
+_SVX_USRP_UNIT_LINES = (
+    "[Unit]", "Description=SvxLink (USRP fork, written by 44helper)", "After=network.target sound.target", "",
+    "[Service]", "ExecStartPre=-/bin/touch /var/log/svxlink", "ExecStartPre=-/bin/chown svxlink /var/log/svxlink",
+    f"ExecStart={_SVX_USRP_PREFIX}/bin/svxlink --logfile=/var/log/svxlink --config={_SVX_USRP_CONF} --runasuser=svxlink",
+    "Restart=on-failure", "RestartSec=5", f"WorkingDirectory={_SVX_USRP_ETC}", "", "[Install]", "WantedBy=multi-user.target",
+)
+
+_SVX_USRP_SERVICE_CMD = (
+    f"[ -x {_SVX_USRP_PREFIX}/bin/svxlink ] || {{ echo 'No {_SVX_USRP_PREFIX}/bin/svxlink: run step 5 first.'; exit 1; }}; "
+    "id svxlink >/dev/null 2>&1 || { echo 'No svxlink user: run step 4 first.'; exit 1; }; "
+    "if systemctl is-active --quiet svxlink 2>/dev/null; then echo 'The apt svxlink service is running. Stop and "
+    "disable it first (sudo systemctl disable --now svxlink): both use the same ports.'; exit 1; fi; "
+    "printf '%s\\n' " + " ".join("'" + x + "'" for x in _SVX_USRP_UNIT_LINES) +
+    " | sudo tee /etc/systemd/system/svxlink-usrp.service >/dev/null && sudo systemctl daemon-reload && "
+    "sudo systemctl enable svxlink-usrp && sudo systemctl restart svxlink-usrp; sleep 3; "
+    "if systemctl is-active --quiet svxlink-usrp; then echo 'svxlink-usrp is running.'; sudo tail -n 8 /var/log/svxlink; "
+    "else echo 'svxlink-usrp did not start. Its own log (/var/log/svxlink):'; sudo tail -n 15 /var/log/svxlink; "
+    f"echo 'A message about the audio device means the sound card in [Rx1]/[Tx1] AUDIO_DEV of {_SVX_USRP_CONF} "
+    "is missing or wrong (aplay -l lists the cards).'; exit 1; fi"
+)
 
 def _svxlink_install_steps_usrp() -> list[dict]:
     return [
@@ -3230,11 +3303,28 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "Alternative (v0.0.140): f5vmr's svxlink_usrp script (github.com/f5vmr/svxlink_usrp) builds the same "
                  "fork, but it is documented for Bookworm only, asks for your callsign part-way through, and installs "
                  "into /usr and /etc — run it by hand in a terminal if you prefer it; it cannot run from this helper."},
-        {"id": "usrp_build", "num": 4, "title": "Configure & build (compiles from source)",
+        {"id": "usrp_user", "num": 4, "title": "Create the svxlink user",
+         "cmd": "if id svxlink >/dev/null 2>&1; then echo 'svxlink user already exists'; "
+                "elif getent group svxlink >/dev/null; then sudo useradd -r -g svxlink -d /var/lib/svxlink "
+                "-s /usr/sbin/nologin svxlink && echo 'svxlink user created'; "
+                "else sudo useradd -r -U -d /var/lib/svxlink -s /usr/sbin/nologin svxlink && "
+                "echo 'svxlink user created'; fi && "
+                "sudo usermod -a -G dialout,audio,plugdev svxlink && "
+                "sudo mkdir -p /var/spool/svxlink /var/lib/svxlink && "
+                "sudo chown -R svxlink:svxlink /var/spool/svxlink /var/lib/svxlink && "
+                "sudo touch /var/log/svxlink && sudo chown svxlink:svxlink /var/log/svxlink && "
+                "id svxlink",
+         "timeout": 60,
+         "note": "Safe to run more than once. A source build doesn't create the 'svxlink' user the way the apt "
+                 "package does, the service in step 9 runs as that user, and SvxLink's own "
+                 "install (step 5) hands its spool folder to it, so it must exist before the build. Also adds it to the sound-card and "
+                 "USB-serial groups, and makes its log file, spool and state folders writable by it — without that, the "
+                 "service would fail to start as svxlink."},
+        {"id": "usrp_build", "num": 5, "title": "Configure & build (compiles from source)",
          "cmd": "j=$(awk '/^MemAvailable:/ {print int($2/716800)}' /proc/meminfo); n=$(nproc); "
                 "[ \"${j:-0}\" -lt 1 ] && j=1; [ \"$j\" -gt \"$n\" ] && j=$n; "
                 f"cd {_SVX_USRP_SRC_DIR}/src && "
-                "if ! grep -rqs --include=CMakeLists.txt --include='*.cmake' WITH_CONTRIB_USRP_LOGIC . ; then "
+                "if ! grep -rqsE --include=CMakeLists.txt --include='*.cmake' 'WITH_CONTRIB_USRP_LOGIC|add_contrib\\(USRP_LOGIC' . ; then "
                 "echo 'STOP: this copy of the fork has no WITH_CONTRIB_USRP_LOGIC build switch -- the USRP part "
                 "would not be built. Check the branch name in step 3.'; exit 1; fi && "
                 "echo 'USRP build switch found in the fork -- building with it on.' && "
@@ -3264,15 +3354,15 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "for the DVSwitch/M17 USRP channels). BENCH-ONLY: this tool cannot exercise an actual build "
                  "of a third-party fork in its own sandbox — confirm the build completes and installs "
                  "cleanly on real hardware (652702/652703) before relying on it."},
-        {"id": "usrp_check_built", "num": 5, "title": "Check the USRP part was built (read-only)",
+        {"id": "usrp_check_built", "num": 6, "title": "Check the USRP part was built (read-only)",
          "cmd": f"f=$(find {_SVX_USRP_PREFIX}/lib {_SVX_USRP_PREFIX}/share/svxlink {_SVX_USRP_ETC} "
                 "-iname '*usrp*' 2>/dev/null); "
                 "if [ -n \"$f\" ]; then echo 'USRP part: FOUND'; echo \"$f\"; "
                 f"echo; echo 'USRP settings file: {_SVX_USRP_ETC}/svxlink.d/UsrpLogic.conf'; "
                 f"ls -l {_SVX_USRP_ETC}/svxlink.d/ 2>/dev/null | grep -i usrp || "
                 "echo '(no UsrpLogic.conf there yet -- check the list above for where the template landed)'; "
-                "else echo 'USRP part: NOT FOUND -- the build finished without it. Re-run steps 3 and 4 and read "
-                "step 4 output for the USRP switch line.'; exit 1; fi",
+                "else echo 'USRP part: NOT FOUND -- the build finished without it. Re-run steps 3 and 5 and read "
+                "step 5 output for the USRP switch line.'; exit 1; fi",
          "timeout": 60,
          "note": "Read-only. Confirms the build really included the USRP part (a build without it still "
                  "'succeeds', which is why this is checked on its own). For this build the USRP settings live in "
@@ -3281,49 +3371,39 @@ def _svxlink_install_steps_usrp() -> list[dict]:
                  "Analog_Bridge LISTENS on, and the port SvxLink listens on must be the one Analog_Bridge sends "
                  "to — the two ends are mirror images. Keep both on 127.0.0.1. Use the key names in the template "
                  "the build installed, not ones copied from a web page."},
-        {"id": "usrp_user", "num": 6, "title": "Create the svxlink user",
-         "cmd": "if id svxlink >/dev/null 2>&1; then echo 'svxlink user already exists'; "
-                "elif getent group svxlink >/dev/null; then sudo useradd -r -g svxlink -d /var/lib/svxlink "
-                "-s /usr/sbin/nologin svxlink && echo 'svxlink user created'; "
-                "else sudo useradd -r -U -d /var/lib/svxlink -s /usr/sbin/nologin svxlink && "
-                "echo 'svxlink user created'; fi && "
-                "sudo usermod -a -G dialout,audio,plugdev svxlink && "
-                "sudo mkdir -p /var/spool/svxlink /var/lib/svxlink && "
-                "sudo chown -R svxlink:svxlink /var/spool/svxlink /var/lib/svxlink && "
-                "sudo touch /var/log/svxlink && sudo chown svxlink:svxlink /var/log/svxlink && "
-                "id svxlink",
-         "timeout": 60,
-         "note": "Safe to run more than once. A source build doesn't create the 'svxlink' user the way the apt "
-                 "package does, and the service in step 9 runs as that user. Also adds it to the sound-card and "
-                 "USB-serial groups, and makes its log file, spool and state folders writable by it — without that, the "
-                 "service would fail to start as svxlink."},
         {"id": "usrp_locate", "num": 7, "title": "Locate installed files (read-only)",
          "cmd": f"which svxlink; ls -la {_SVX_USRP_ETC} 2>/dev/null; "
                 f"find {_SVX_USRP_PREFIX} -iname 'svxlink*.service' 2>/dev/null; true",
          "note": "Read-only. A third-party fork's CMakeLists can differ from upstream's — this lists what "
-                 "the build step actually installed and where, since step 9 (manual) needs the real "
-                 "binary path to write a correct systemd unit."},
-        {"id": "usrp_logic_conf", "num": 8, "title": "svxlink.conf + UsrpLogic.conf — switch UsrpLogic on",
-         "manual": True, "manual_block": True,
-         "cmd": _SVX_USRP_LOGIC_SNIPPET,
-         "note": "Edit by hand (nano or the Cockpit file editor) — v0.0.155. The build installs UsrpLogic but "
-                 "does not switch it on: svxlink.conf ships with LOGICS=SimplexLogic and no link to it, so "
-                 "without these edits the service starts but no audio reaches the USRP side. Change "
-                 "SimplexLogic to RepeaterLogic below if that is the logic your node uses. The "
-                 "DV_USER_INFOFILE fix is needed because the fork's template points at /etc/svxlink, but "
-                 "this build installs that file under /usr/local/etc/svxlink."},
-        {"id": "usrp_service_unit", "num": 9, "title": "Systemd unit (author by hand)", "manual": True,
-         "manual_block": True,
-         "cmd": "[Unit]\nDescription=SvxLink (USRP fork)\nAfter=network.target sound.target\n\n[Service]\n"
-                f"ExecStart={_SVX_USRP_PREFIX}/bin/svxlink --logfile=/var/log/svxlink --config={_SVX_USRP_ETC}/svxlink.conf\n"
-                "User=svxlink\nRestart=on-failure\n\n[Install]\nWantedBy=multi-user.target",
-         "note": "Too risky to guess-and-write onto a live system unattended (same reasoning the M17 tab "
-                 "uses for its rpt.conf/modules.conf edits). Adjust the ExecStart path above using step 5's "
-                 "output if it differs, save this as /etc/systemd/system/svxlink-usrp.service, then run "
-                 "`sudo systemctl daemon-reload && sudo systemctl enable --now svxlink-usrp` yourself. The "
-                 "'svxlink' user it runs as comes from step 6 — run that first. Do step 8 (UsrpLogic on, "
-                 "ports) before starting it."},
-        _svx_config_field_step(10, conf_path=f"{_SVX_USRP_ETC}/svxlink.conf", svc="svxlink-usrp"),
+                 "the build step actually installed and where, since the service in step 9 "
+                 "starts the binary from there."},
+        {"id": "usrp_logic_conf", "num": 8, "title": "Switch UsrpLogic on and set its ports",
+         "fields": [{"id": "callsign", "label": "Callsign", "type": "text", "default": ""},
+                    {"id": "port", "label": "Port Analog_Bridge LISTENS on (SvxLink sends to it)", "type": "text",
+                     "default": "41234"},
+                    {"id": "rx_port", "label": "Port Analog_Bridge SENDS to (SvxLink listens on it)", "type": "text",
+                     "default": "41233"}],
+         "cmd_template": _svx_usrp_wire_cmd("{{callsign}}", "{{port}}", "{{rx_port}}"),
+         "cmd": _svx_usrp_wire_cmd("YOURCALL", "41234", "41233"),
+         "timeout": 60,
+         "note": "Edits the build's config (a copy of the first version is kept as svxlink.conf.44helper-bak). In "
+                 "[GLOBAL] it adds UsrpLogic to LOGICS and LinkToUsrp to LINKS, and adds a [LinkToUsrp] section "
+                 "joining your radio logic (the first one in LOGICS, SimplexLogic by default) with UsrpLogic. A "
+                 "[LinkToUsrp] section alone does nothing: SvxLink only uses links listed in LINKS=. It sets the "
+                 "callsign everywhere, and in UsrpLogic the callsign, USRP_HOST=127.0.0.1, the two ports and "
+                 "DV_USER_INFOFILE (the fork's template points at /etc/svxlink, this build installs it under "
+                 "/usr/local/etc/svxlink). The ports are mirror images of Analog_Bridge.ini's [USRP] txPort and "
+                 "rxPort. Keep everything on 127.0.0.1; never open these ports in a firewall."},
+        {"id": "usrp_service_unit", "num": 9, "title": "Install & start the svxlink-usrp service",
+         "cmd": _SVX_USRP_SERVICE_CMD,
+         "timeout": 60,
+         "note": "Writes /etc/systemd/system/svxlink-usrp.service (the same way the Debian package starts SvxLink: "
+                 "it starts as root and drops to the svxlink user from step 4), enables it at boot and starts it. It "
+                 "stops first if the apt svxlink service is running, since both use the same ports. When SvxLink "
+                 "stops at once, the step shows its own log."},
+        _svx_config_field_step(10, conf_path=f"{_SVX_USRP_ETC}/svxlink.conf", svc="svxlink-usrp") |
+        {"title": "(Optional) Change the callsign", "note": "Step 8 already sets it. Use this to change it later: "
+                 "it sets CALLSIGN= in every logic of the build's svxlink.conf and restarts svxlink-usrp."},
         _cockpit_install_step(11),
         _cockpit_enable_step(12),
     ]
@@ -3349,10 +3429,10 @@ def _svxlink_purge_steps_usrp() -> list[dict]:
                  "so svxreflector, the shared libraries and man pages go too), falling back to the "
                  "well-known paths if the source folder is gone, and deletes the callsign/config along with it. Only run this for a completely "
                  "clean slate; double-check nothing else under /usr/local depends on these paths first."},
-        {"id": "usrp_purge_unit", "num": 3, "title": "(Optional) Remove the hand-authored systemd unit",
+        {"id": "usrp_purge_unit", "num": 3, "title": "(Optional) Remove the svxlink-usrp systemd unit",
          "cmd": "sudo rm -f /etc/systemd/system/svxlink-usrp.service && sudo systemctl daemon-reload",
          "auto": False,
-         "note": "Only removes it if you saved it at the path suggested in the install step's manual card."},
+         "note": "Removes the unit step 9 of the install wrote."},
         {"id": "usrp_purge_source", "num": 4, "title": "(Optional) Remove cloned source tree",
          "cmd": f"rm -rf {_SVX_USRP_SRC_DIR}",
          "auto": False,
@@ -3773,6 +3853,7 @@ _STEP_FIELD_RULES = {
     "port": (re.compile(r"[0-9]{1,5}"), "use a number from 1 to 65535"),
     "branch": (re.compile(r"[A-Za-z0-9._/-]{1,100}"), "use letters, digits and . _ / -"),
     "username": (re.compile(r"[A-Za-z0-9._-]{1,32}"), "use 1 to 32 letters, digits and . _ -"),
+    "rx_port": (re.compile(r"[0-9]{1,5}"), "use a number from 1 to 65535"),
     "version": (re.compile(r"[0-9]{8}"), "use the 8-digit release date, for example 20260610"),
     "node": (re.compile(r"[0-9]{4,7}"), "use the 4 to 7 digit node number"),
     "password": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{1,64}"),
@@ -3876,8 +3957,10 @@ _AMP_UDEV_CMD = (
     "printf '%s\\n' '# Ampersand: COS/PTT access to the USB radio interface (written by 44helper)' "
     "'SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"0d8c\", MODE=\"0666\", TAG+=\"uaccess\"' "
     "'SUBSYSTEM==\"hidraw\", ATTRS{idVendor}==\"1209\", MODE=\"0666\", TAG+=\"uaccess\"' "
-    "| sudo tee /etc/udev/rules.d/99-ampersand.rules >/dev/null && sudo udevadm control --reload-rules && "
-    "sudo udevadm trigger && echo 'Written: /etc/udev/rules.d/99-ampersand.rules (C-Media 0d8c and 1209)'"
+    "| { sudo mkdir -p /etc/udev/rules.d && sudo tee /etc/udev/rules.d/99-ampersand.rules >/dev/null; } && "
+    "echo 'Written: /etc/udev/rules.d/99-ampersand.rules (C-Media 0d8c and 1209)' && "
+    "if command -v udevadm >/dev/null 2>&1; then sudo udevadm control --reload-rules && sudo udevadm trigger; "
+    "else echo 'udev is not installed here, so the rule takes effect only once it is.'; fi"
 )
 
 def _amp_port_check(var: str) -> str:
@@ -3890,7 +3973,7 @@ def _amp_service_cmd(user: str, port: str) -> str:
             "Wants=network.target systemd-udev-settle.service sound.target", "StartLimitIntervalSec=10", "",
             "[Service]", "Type=simple", "Restart=always", "RestartSec=5"]
     unit_end = ["ExecStartPre=/bin/sleep 10", "WorkingDirectory=/tmp", "RestrictRealtime=off",
-                "ExecStartPost=+/bin/sh -c \"/usr/bin/chrt --rr -p 50 $MAINPID\"", "", "[Install]",
+                "ExecStartPost=-+/bin/sh -c \"/usr/bin/chrt --rr -p 50 $MAINPID\"", "", "[Install]",
                 "WantedBy=multi-user.target"]
     q = " ".join("'" + x + "'" for x in unit)
     q2 = " ".join("'" + x + "'" for x in unit_end)
@@ -3944,7 +4027,8 @@ def _amp_hub_install_cmd(version: str) -> str:
             "echo 'Kept your /usr/etc/amp-hub.env settings.'; fi; "
             "[ -x /usr/bin/amp-hub ] || { echo 'install.sh did not install /usr/bin/amp-hub.'; exit 1; }; "
             "d=/etc/systemd/system/amp-hub.service.d; sudo mkdir -p $d && "
-            "printf '%s\\n' '[Service]' 'EnvironmentFile=' 'EnvironmentFile=/usr/etc/amp-hub.env' "
+            "printf '%s\\n' '[Service]' 'EnvironmentFile=' 'EnvironmentFile=/usr/etc/amp-hub.env' 'ExecStartPost=' "
+            "'ExecStartPost=-+/bin/sh -c \"/usr/bin/chrt --rr -p 50 $MAINPID\"' "
             "| sudo tee $d/44helper-env.conf >/dev/null && "
             "if [ -f /usr/etc/en_US-amy-low.onnx ] && [ ! -f /etc/en_US-amy-low.onnx ]; then "
             "sudo sed -i 's|^AMP_PIPER_DIR=/etc$|AMP_PIPER_DIR=/usr/etc|' /usr/etc/amp-hub.env; fi && "
@@ -4022,7 +4106,7 @@ def _amp_server_install_steps() -> list[dict]:
          "note": "Stops a running amp-server (an upgrade), copies the binary to /usr/bin, adds the user to the "
                  "audio, dialout and plugdev groups (sound card, serial COS, USB), writes "
                  "/lib/systemd/system/amp-server.service as in the Ampersand guide (10 s start delay, real-time "
-                 "priority) and starts it. The node's settings are kept in that user's ~/amp-server.json and "
+                 "priority, which is skipped where the kernel refuses it) and starts it. The node's settings are kept in that user's ~/amp-server.json and "
                  "set in the web UI: open http://<this node>:<port>/ and fill in the node number, password and "
                  "IAX port on the Configuration tab. Open the IAX port in the firewall (Ports tab) and on your "
                  "router if other nodes must reach it."},
@@ -4089,7 +4173,8 @@ def _amp_hub_install_steps() -> list[dict]:
                  "the amp-hub service user and unit). Two fixes for that package: its unit reads /etc/amp-hub.env "
                  "while install.sh puts the file in /usr/etc, so the service would not start; a drop-in "
                  "(/etc/systemd/system/amp-hub.service.d/44helper-env.conf) points it at /usr/etc/amp-hub.env. "
-                 "AMP_PIPER_DIR is set to /usr/etc, where the voice files are. Running it again upgrades the hub "
+                 "AMP_PIPER_DIR is set to /usr/etc, where the voice files are. The real-time priority (chrt) is made "
+                 "optional: where the kernel refuses it, the hub still starts instead of failing. Running it again upgrades the hub "
                  "and keeps your /usr/etc/amp-hub.env."},
         {"id": "amp_hub_config", "num": 4, "title": "Set the node number, password and IAX port",
          "fields": [{"id": "node", "label": "Hub node number", "type": "text", "default": ""},
@@ -5210,7 +5295,7 @@ def _run_pkg_unit(job_key: str, cmd: str) -> dict:
             subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
             subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
             start = _run_argv(["systemd-run", f"--unit={unit}", "-p", "RemainAfterExit=yes",
-                               "-p", "LogRateLimitIntervalSec=0"] + _unit_env_args() + ["/bin/sh", "-c", cmd],
+                               "-p", "LogRateLimitIntervalSec=0"] + _unit_env_args() + ["/bin/sh", "-c", _unit_cmd(cmd)],
                               timeout=30)
             if not start["success"]:
                 return {"success": False, "returncode": None,
@@ -5248,7 +5333,7 @@ def _unit_job_worker(job_key: str, cmd: str, quiet: bool, low_priority: bool) ->
         if low_priority:
             props_argv += ["-p", "Nice=19", "-p", "IOSchedulingClass=best-effort", "-p", "IOSchedulingPriority=7"]
         start = _run_argv(["systemd-run", f"--unit={unit}"] + props_argv + _unit_env_args() +
-                          ["/bin/sh", "-c", cmd], timeout=30)
+                          ["/bin/sh", "-c", _unit_cmd(cmd)], timeout=30)
         if not start["success"]:
             _job_append_output(job_key, "Could not start the package job: " + start["output"] + "\n")
             return
@@ -6405,7 +6490,7 @@ def status_resolved_prereq(force: bool = False) -> dict:
 
 def _argv_install_resolved() -> list[list[str]]:
     return [
-        ["apt-get", "install", "-y", "wireguard", "systemd-resolved"],
+        ["apt-get", "install", "-y", "wireguard-tools", "systemd-resolved"],
         ["systemctl", "enable", "--now", "systemd-resolved"],
     ]
 
@@ -6453,7 +6538,8 @@ def action_install_resolved() -> dict:
     if err:
         return err
     before = _resolv_conf_servers()
-    results = [_run_pkg_unit("pi_resolved_prereq", f"apt-get install -y {_APT_NI_OPTS} wireguard systemd-resolved")
+    results = [_run_pkg_unit("pi_resolved_prereq", f"apt-get install -y {_APT_NI_OPTS} --no-install-recommends wireguard-tools && "
+                             f"apt-get install -y {_APT_NI_OPTS} systemd-resolved")
                if a[0] == "apt-get" else _run_argv(a, timeout=20) for a in _argv_install_resolved()]
     ok = all(r["success"] for r in results)
     lines = [r["output"] for r in results if r["output"]]
@@ -19172,7 +19258,7 @@ var PI_STEP_META = [
   {id: 'firewalld_prereq', num: 1, title: 'Firewall prereq (firewalld)',
    cmd: 'apt-get install -y firewalld && systemctl enable --now firewalld'},
   {id: 'resolved_prereq', num: '1a', title: 'systemd-resolved prereq (ARDC guide, sec 1a.1)',
-   cmd: 'apt-get install -y wireguard systemd-resolved && systemctl enable --now systemd-resolved'},
+   cmd: 'apt-get install -y --no-install-recommends wireguard-tools && apt-get install -y systemd-resolved && systemctl enable --now systemd-resolved'},
   {id: 'create_zone', num: 2, title: 'Create 44NetConnect firewall zone',
    cmd: 'firewall-cmd --permanent --new-zone=44NetConnect && firewall-cmd --reload'},
   {id: 'service_ports', num: 3, title: 'Add inbound services/ports', checklist: true},
@@ -25603,8 +25689,9 @@ _SVXLINK_WARNING = """DEFAULT (v0.0.155): the USRP fork source build is selected
   UsrpLogic module so SvxLink can talk to this fleet's DVSwitch bridges over the USRP protocol, not merged
   upstream (sm0svx/svxlink PR #547). Installs under /usr/local to avoid colliding with the apt package's
   /usr and /etc files, but the two still can't run at once — read the pre-flight and build-step notes before
-  using it, especially the unpatched crafted-packet crash flagged in the build step's note. The systemd unit
-  for this variant is hand-authored, not auto-installed — see that step's card. Since v0.0.141 there is ONE
+  using it, especially the unpatched crafted-packet crash flagged in the build step's note. Every step of this
+  variant runs from the page: the build, switching UsrpLogic on with its ports, and the svxlink-usrp service.
+  Since v0.0.141 there is ONE
   purge for the whole tab: whichever option is selected, it stops both services, purges the apt package if
   present, and offers the USRP build's files as optional steps. BENCH-ONLY: confirm the actual build/branch on real hardware
   (652702/652703) before relying on it."""
