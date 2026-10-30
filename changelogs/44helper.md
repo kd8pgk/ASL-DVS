@@ -1,6 +1,36 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_6_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_7_20261029.py`. Newest entries first.
+
+## 0.1.7 (2026-10-30)
+
+SvxLink tab (package and USRP fork) fixed, and every install tab test-installed, then purged, in Debian 12 and 13 containers (x86-64, with systemd) through 44helper's own step engine. What a container cannot test: a sound card (SvxLink then stops, as it should), WireGuard in the kernel (the tunnel start), aarch64 packages, and asl-menu and the other by-hand steps.
+
+- **USRP build never ran.** Step 4 (now 5) looked for the text `WITH_CONTRIB_USRP_LOGIC` in the fork's build files to make sure the USRP part exists. The fork makes that switch from a macro (`add_contrib(USRP_LOGIC …)` → `WITH_CONTRIB_${name}`), so the text appears nowhere and the step always stopped with "this copy of the fork has no WITH_CONTRIB_USRP_LOGIC build switch". It now also accepts `add_contrib(USRP_LOGIC`.
+- **USRP install failed at the end of the build.** SvxLink's `make install` gives its spool folder to the `svxlink` user, which was only created two steps later, so it stopped with "invalid user: svxlink:svxlink". Creating the user is now step 4, before the build (step 5).
+- **USRP audio never reached the other side.** The by-hand step 8 added a `[LinkToUsrp]` section but not `LINKS=LinkToUsrp` in `[GLOBAL]`, and SvxLink only uses links listed there. Step 8 now runs from the page:
+  - It asks for the callsign and the two ports.
+  - It adds UsrpLogic to `LOGICS`, `LinkToUsrp` to `LINKS` and the `[LinkToUsrp]` section joining your radio logic (the first in `LOGICS`).
+  - It sets the callsign, `USRP_HOST=127.0.0.1`, the ports and `DV_USER_INFOFILE` in both `[UsrpLogic]` copies.
+  - It keeps a backup of the first version.
+- **USRP service from the page.** Step 9 writes `/etc/systemd/system/svxlink-usrp.service`, started the way the Debian package starts SvxLink (as root, dropping to `svxlink`). It refuses while the apt svxlink service runs, starts the service and shows SvxLink's own log if it stops.
+- **Package Enable & start** shows SvxLink's own log when it stops, with the usual cause (the sound card in `[Rx1]`/`[Tx1] AUDIO_DEV`).
+- **ASL3 Appliance step:** the package names differ by release.
+  - Debian 12 publishes only `asl3-pi-appliance` (Raspberry Pi).
+  - Debian 13 publishes `asl3-appliance` plus `asl3-appliance-pi` or `asl3-appliance-pc`.
+  - The step now installs the right ones. On a Debian 12 PC it says there is none, instead of failing with "Unable to locate package asl3-appliance".
+- **Ampersand:**
+  - The real-time priority line (`chrt`) of the amp-server unit and the amp-hub unit is now optional (`ExecStartPost=-+…`). Where the kernel refuses real-time scheduling ("chrt: failed to set pid's policy: Operation not permitted"), the service starts without it instead of failing. For the hub this is in 44helper's drop-in.
+  - The udev step creates `/etc/udev/rules.d` if needed and skips the reload when udev isn't installed.
+- **Split and Full Tunnel step 1a** installs `wireguard-tools` without its recommended packages (the module is in every current kernel). `wireguard` and `wireguard-tools` recommend `wireguard-modules`, and on a machine whose kernel package doesn't provide it, apt installed a whole new kernel to satisfy that.
+- **Package steps kept their `${…}` shell variables.** Steps that install or remove packages run as their own systemd job (`systemd-run`), and systemd replaces `${NAME}` in the command with its own (empty) environment value before the shell sees it. Every `${…}` in those steps came out empty. Among others:
+  - the purge package lists (`${Package}`) purged nothing;
+  - DVSwitch's "re-install a part whose `/opt` folder is empty" loop (`${pair%%:*}`) never repaired anything.
+
+  44helper now passes the command with `$` written as `$$`, which systemd turns back into `$`.
+- **DVSwitch repair checks its result.** When a re-installed part's `/opt` folder is still empty (apt only warns "cannot be downloaded" when the DVSwitch source is missing), the step stops and says so instead of reporting OK.
+- **ASL3 purge can run twice.** Removing the ASL3 repo package now skips it when it is already gone, instead of failing with "Unable to locate package asl-apt-repos".
+- **ASL3 and DVSwitch purges** purge only the packages the node has. apt refused the whole command when one name was unknown to its repositories (on Debian 12: `asl3-appliance`, `asl3-appliance-pi`), so nothing was purged.
 
 ## 0.1.6 (2026-10-29)
 
