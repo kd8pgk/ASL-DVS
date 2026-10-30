@@ -30,7 +30,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.4"
+VERSION = "0.3.6"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker for AMP"
 
@@ -111,7 +111,7 @@ else:
 
 SYSTEMD_SERVICE_CONTENT = f"""[Unit]
 Description=Node Talker for AMP: AMP node audio in the browser
-After=network.target amp-server.service
+After=network.target amp-server.service amp-hub.service
 
 [Service]
 Type=notify
@@ -1207,6 +1207,11 @@ _URI_RE = re.compile(r"^iax:[A-Za-z0-9_.-]{1,32}@\d{1,3}(?:\.\d{1,3}){3}(?::\d{1
 LINK_WAIT_SEC = 15
 AMP_PROCESS = "amp-server"
 AMP_DEFAULT_AUTH = "/etc/ampersand/auth.txt"
+AMP_HUB_PROCESS = "amp-hub"
+AMP_HUB_ENV = "/usr/etc/amp-hub.env"
+AMP_HUB_NO_WEB = "amp-hub has no web page, so AMP's own favorites can't be read here"
+HUB_LINK_WAIT_SEC = 30
+_LINK_ITEM_RE = re.compile(r"^[TRC]([A-Za-z0-9_.-]{1,32})$")
 AMP_INFO_TTL = 5.0
 AMP_STATUS_TTL = 2.0
 AMP_PING_SEC = 10.0
@@ -1254,30 +1259,53 @@ def _amp_args(argv):
     return out
 
 
-def _amp_processes():
+def _amp_processes(name=AMP_PROCESS):
     try:
         names = sorted((n for n in os.listdir("/proc") if n.isdigit()), key=int)
     except OSError:
         return []
     found = []
-    for name in names:
-        if not name.isdigit():
+    for pid in names:
+        if not pid.isdigit():
             continue
         try:
-            with open(f"/proc/{name}/comm", "r", encoding="utf-8", errors="replace") as fh:
-                if fh.read().strip() != AMP_PROCESS:
-                    continue
-            with open(f"/proc/{name}/cmdline", "rb") as fh:
+            with open(f"/proc/{pid}/comm", "r", encoding="utf-8", errors="replace") as fh:
+                comm = fh.read().strip()
+            with open(f"/proc/{pid}/cmdline", "rb") as fh:
                 argv = [a.decode("utf-8", "replace") for a in fh.read().split(b"\0") if a]
-            uid = os.stat(f"/proc/{name}").st_uid
+            if comm != name and not (argv and os.path.basename(argv[0]) == name):
+                continue
+            uid = os.stat(f"/proc/{pid}").st_uid
         except OSError:
             continue
-        found.append({"pid": int(name), "uid": uid, "args": _amp_args(argv)})
+        found.append({"pid": int(pid), "uid": uid, "args": _amp_args(argv), "kind": "hub" if name == AMP_HUB_PROCESS else "server"})
     return found
+
+
+def _hub_env(path=AMP_HUB_ENV):
+    out = {}
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            lines = fh.read().split("\n")
+    except OSError as exc:
+        return out, str(exc)
+    for ln in lines:
+        ln = ln.strip()
+        if not ln or ln.startswith("#") or "=" not in ln:
+            continue
+        key, _, val = ln.partition("=")
+        val = val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        out[key.strip()] = val
+    return out, ""
 
 
 def _amp_process():
     procs = _amp_processes()
+    if not procs:
+        hubs = _amp_processes(AMP_HUB_PROCESS)
+        return (hubs[0] if hubs else None), len(hubs)
     want_cfg, want_port = _cfg_get("amp_config"), _cfg_get("amp_iax_port")
     for p in procs:
         if want_cfg and os.path.realpath(p["args"].get("config", "")) == os.path.realpath(want_cfg):
@@ -1321,12 +1349,20 @@ def amp_info(max_age=AMP_INFO_TTL):
     proc, count = _amp_process()
     info = {"running": proc is not None, "pid": proc["pid"] if proc else None, "count": count, "user": "", "uid": None, "gid": None,
             "config": "", "config_error": "", "node": "", "callsign": "", "iax_port": 4569, "http_port": 8080,
-            "http_pwd": "", "auth_file": AMP_DEFAULT_AUTH}
+            "http_pwd": "", "auth_file": AMP_DEFAULT_AUTH, "kind": "server", "allowlist": []}
     args = proc["args"] if proc else {}
     home = ""
     if proc:
         info["uid"] = proc["uid"]
         info["user"], home, info["gid"] = _user_of(proc["uid"])
+    if proc and proc["kind"] == "hub":
+        env, env_err = _hub_env()
+        allow = [x.strip() for x in env.get("AMP_IAX_ALLOWLIST", "").split(",") if x.strip()]
+        info.update(kind="hub", config=AMP_HUB_ENV, config_error=env_err, node=env.get("AMP_NODE0_NUMBER", "").strip(),
+                    iax_port=_port_or(env.get("AMP_IAX_PORT", ""), 4569), http_port=0, auth_file="", allowlist=allow)
+        with _amp_info_lock:
+            _amp_info_cache.update(t=now, v=dict(info))
+        return info
     path = _cfg_get("amp_config") or args.get("config") or (os.path.join(home, "amp-server.json") if home else "") or _amp_config_guess()
     info["config"] = path
     cfg = {}
@@ -1366,6 +1402,8 @@ def main_node():
 
 
 def amp_http(method, path, body=None, timeout=4):
+    if amp_info()["kind"] == "hub":
+        return None, AMP_HUB_NO_WEB
     t = amp_target()
     headers = {}
     if t["http_pwd"]:
@@ -1401,6 +1439,12 @@ _amp_status_lock = threading.Lock()
 
 
 def amp_calls(max_age=AMP_STATUS_TTL):
+    if amp_info()["kind"] == "hub":
+        links = AMP_LINK.hub_links()
+        if links is None:
+            return False, [], "Waiting for the hub's list of links (it sends one every 10 s once Node Talker is linked)", ""
+        return True, [{"node": n, "line": None, "call": None, "active": False, "permanent": False, "talker": "",
+                       "pending": mode == "C"} for n, mode in links], "", ""
     with _amp_status_lock:
         c = _amp_status
         if time.monotonic() - c["t"] < max_age:
@@ -1441,7 +1485,8 @@ def amp_links():
     for c in calls:
         if c["node"] == me:
             continue
-        state = ("talking" + (": " + c["talker"] if c["talker"] else "")) if c["active"] else ("permanent" if c["permanent"] else "linked")
+        state = ("talking" + (": " + c["talker"] if c["talker"] else "")) if c["active"] else (
+            "connecting" if c.get("pending") else "permanent" if c["permanent"] else "linked")
         links.append({"node": c["node"], "state": state})
     return ok, links, err
 
@@ -1552,11 +1597,18 @@ def fav_connect(index):
     if any(c["node"] == target for c in calls):
         return {"ok": True, "message": f"Node {node} is already connected to {fav_name(f)}."}
     since = amp_message_stamp()
-    _, err = amp_http("POST", "/status-pressed", {"action": "call", "node": f["num"]})
-    if err:
-        return {"ok": False, "error": err}
-    log_event(f"Connect {fav_name(f)} from node {node}", "ok")
-    state, msg = wait_link(target, since)
+    hub = amp_info()["kind"] == "hub"
+    if hub:
+        dest = f["num"][4:] if f["num"].lower().startswith("iax:") else f["num"]
+        if not AMP_LINK.dtmf("*3" + dest):
+            return {"ok": False, "error": "Node Talker is not linked to the hub yet, so it can't send the connect command."}
+    else:
+        _, err = amp_http("POST", "/status-pressed", {"action": "call", "node": f["num"]})
+        if err:
+            return {"ok": False, "error": err}
+    log_event(f"Connect {fav_name(f)} from node {node}" + (" (hub command *3)" if hub else ""), "ok")
+    wait = HUB_LINK_WAIT_SEC if hub else LINK_WAIT_SEC
+    state, msg = wait_link(target, since, wait)
     _amp_status_invalidate()
     if state == "up":
         log_event(f"Node {node} linked to {fav_name(f)}", "ok")
@@ -1566,6 +1618,9 @@ def fav_connect(index):
     log_event(f"Node {node} could not connect to {fav_name(f)}" + (f": {msg}" if msg else ""), "warn")
     if "fail" in msg.lower() and target in msg:
         return {"ok": False, "error": f"Node {node} did not connect to {fav_name(f)}. AMP says: {msg}"}
+    if hub:
+        return {"ok": False, "error": f"Node {node} did not connect to {fav_name(f)}: no link after {wait} s. The hub says why "
+                                      "on the air (it speaks the reason; it does not send it to Node Talker)."}
     return {"ok": False, "error": f"Node {node} did not connect to {fav_name(f)}: no link after {LINK_WAIT_SEC} s"
                                   + (f" (AMP says: {msg})" if msg else "") + ". Check the number; the node may be offline or refusing connections."}
 
@@ -1584,6 +1639,14 @@ def fav_disconnect(index=None):
     hit = [c for c in calls if c["node"] in targets and c["node"] != _cfg_get("amp_caller")]
     if not hit:
         return {"ok": True, "message": "That favorite is not linked." if index is not None else "No favorite is linked."}
+    if amp_info()["kind"] == "hub":
+        if not AMP_LINK.dtmf("*71"):
+            return {"ok": False, "error": "Node Talker is not linked to the hub yet, so it can't send the disconnect command."}
+        names = ", ".join(c["node"] for c in hit)
+        log_event(f"Disconnect via hub command *71 (asked for {names})", "ok")
+        return {"ok": True, "message": f"Sent the hub's disconnect command (*71). The hub has no command to drop one node: "
+                                       f"it drops every link it placed itself, which includes {names} if the hub called it. "
+                                       f"Nodes that called the hub stay linked. The list updates within 10 s."}
     for c in hit:
         _, err = amp_http("POST", "/status-pressed", {"action": "dropcall", "lineId": c["line"], "callId": c["call"]})
         if err:
@@ -1604,6 +1667,8 @@ def _auth_lines(path):
 
 def amp_auth_state(info=None):
     info = info or amp_info()
+    if info["kind"] == "hub":
+        return {"path": "", "exists": False, "ours": False, "error": ""}
     path = info["auth_file"]
     try:
         lines = _auth_lines(path)
@@ -1621,6 +1686,9 @@ _amp_setup_lock = threading.Lock()
 
 def amp_setup():
     info = amp_info(max_age=0)
+    if info["kind"] == "hub":
+        return {"ok": False, "error": f"amp-hub has no login file, so there is nothing to set up. If AMP_IAX_ALLOWLIST is set in "
+                                      f"{AMP_HUB_ENV}, add {_cfg_get('amp_caller')} to it and restart amp-hub."}
     if not info["config"] or info["config_error"]:
         return {"ok": False, "error": f"AMP's configuration file could not be read ({info['config'] or 'not found'}: "
                                       f"{info['config_error'] or 'missing'}). Start AMP once, or set its path in amp_nodetalker.conf (amp_config)."}
@@ -1675,6 +1743,7 @@ def amp_setup():
 
 IAX_HDR = struct.Struct(">HHIBBBB")
 IAX_T_VOICE, IAX_T_CONTROL, IAX_T_IAX, IAX_T_TEXT = 2, 4, 6, 7
+IAX_T_DTMF_END, IAX_T_DTMF_BEGIN = 1, 12
 IAX_NEW, IAX_PING, IAX_PONG, IAX_ACK, IAX_HANGUP, IAX_REJECT, IAX_ACCEPT, IAX_AUTHREQ, IAX_AUTHREP = 1, 2, 3, 4, 5, 6, 7, 8, 9
 IAX_INVAL, IAX_LAGRQ, IAX_LAGRP, IAX_VNAK, IAX_CALLTOKEN = 10, 11, 12, 18, 40
 IAX_C_ANSWER, IAX_C_UNKEY = 4, 13
@@ -1727,6 +1796,9 @@ class AmpCall:
         self.state = "calling"
         self.error = ""
         self.heard = False
+        self.rejected = False
+        self.links = None
+        self.links_at = 0.0
         self.started = time.monotonic()
         self.last_rx = time.monotonic()
         self.last_ping = time.monotonic()
@@ -1799,6 +1871,15 @@ class AmpCall:
             self.last_voice_ts = ts
             return True
 
+    def dtmf(self, digits):
+        with self.lock:
+            if self.state != "up":
+                return False
+            for ch in digits:
+                self._full(IAX_T_DTMF_BEGIN, ord(ch) & 0xFF, track=True)
+                self._full(IAX_T_DTMF_END, ord(ch) & 0xFF, track=True)
+            return True
+
     def unkey(self):
         with self.lock:
             if self.state == "up":
@@ -1845,6 +1926,13 @@ class AmpCall:
         if len(data) < 12:
             return
         srcc, dstc, ts, oseq, iseq, ftype, sub = IAX_HDR.unpack_from(data)
+        if dstc & 0x7FFF == 0 and ftype == IAX_T_IAX and sub == IAX_REJECT and self.state == "calling":
+            ies = _ies(data[12:])
+            cause = _CALL_TRIM.sub(" ", (ies.get(IE_CAUSE) or ies.get(0x31) or b"").decode("latin-1", "replace")).strip()[:120]
+            self.heard = self.rejected = True
+            self.error = "AMP refused the call" + (f": {cause}" if cause else "")
+            self.state = "down"
+            return
         if dstc & 0x7FFF != self.src:
             return
         srcc &= 0x7FFF
@@ -1901,6 +1989,7 @@ class AmpCall:
                 self.state = "up"
                 self.last_ping = time.monotonic()
             elif sub in (IAX_HANGUP, IAX_REJECT):
+                self.rejected = sub == IAX_REJECT
                 cause = _CALL_TRIM.sub(" ", _ies(body).get(IE_CAUSE, b"").decode("latin-1", "replace")).strip()[:120]
                 self.error = (("AMP refused the call" if sub == IAX_REJECT else "AMP hung up") + (f": {cause}" if cause else ""))
                 self.state = "down"
@@ -1914,10 +2003,18 @@ class AmpCall:
                 if pcm:
                     out.append(pcm)
         elif ftype == IAX_T_TEXT:
-            m = _TALKER_RE.match(body.rstrip(b"\0").decode("latin-1", "replace"))
+            text = body.rstrip(b"\0").decode("latin-1", "replace")
+            m = _TALKER_RE.match(text)
             if m:
                 self.talker = _CALL_TRIM.sub(" ", m.group(1)).strip()[:40]
                 self.talker_at = time.monotonic()
+            elif text == "L" or text.startswith("L "):
+                nodes = []
+                for item in text[2:].split(","):
+                    lm = _LINK_ITEM_RE.match(item.strip())
+                    if lm:
+                        nodes.append((lm.group(1), item.strip()[0]))
+                self.links, self.links_at = nodes[:64], time.monotonic()
 
 
 class AmpLink:
@@ -1949,6 +2046,16 @@ class AmpLink:
     def send_voice(self, pcm):
         c = self.call
         return c is not None and c.send_voice(pcm)
+
+    def dtmf(self, digits):
+        c = self.call
+        return c is not None and self.up() and c.dtmf(digits)
+
+    def hub_links(self):
+        c = self.call
+        if c is None or not self.up() or c.links is None:
+            return None
+        return list(c.links)
 
     def unkey(self):
         c = self.call
@@ -2013,11 +2120,19 @@ class AmpLink:
                     self.logged = ""
                     log_event(f"Linked to AMP node {t['node']} as {t['caller']} ({'16-bit' if call.codec == CODEC_SLIN else 'mu-law'})", "ok")
                 if call.state == "down":
-                    self._set("down", call.error or "AMP ended the call")
+                    err = call.error or "AMP ended the call"
+                    if call.rejected:
+                        hub = amp_info()
+                        if hub["kind"] == "hub" and hub["allowlist"] and t["caller"] not in hub["allowlist"]:
+                            err = (f"amp-hub refused the call: AMP_IAX_ALLOWLIST in {AMP_HUB_ENV} does not include {t['caller']}. "
+                                   "Add it and restart amp-hub")
+                    self._set("down", err)
                     log_event(f"AMP link down: {self.error}", "warn")
                     break
                 if call.state != "up" and now - call.started > AMP_CALL_WAIT_SEC:
-                    err = (f"AMP did not accept Node Talker's login (user {t['user']}): Setup tab, AMP link, Set up for me"
+                    err = (f"amp-hub did not accept Node Talker (node {t['caller']}): if AMP_IAX_ALLOWLIST is set in {AMP_HUB_ENV}, add {t['caller']} to it and restart amp-hub"
+                           if call.heard and amp_info()["kind"] == "hub" else
+                           f"AMP did not accept Node Talker's login (user {t['user']}): Setup tab, AMP link, Set up for me"
                            if call.heard else f"No answer from AMP on {t['host']}:{t['iax_port']} (is amp-server running?)")
                     if self.logged != err:
                         self.logged = err
@@ -2072,7 +2187,7 @@ def amp_state():
             "config_error": info["config_error"], "node": t["node"], "callsign": info["callsign"], "host": t["host"],
             "iax_port": t["iax_port"], "http_port": t["http_port"], "http_pwd_set": bool(t["http_pwd"]),
             "http_pwd_auto": bool(info["http_pwd"]) and not _cfg_get("amp_http_pwd"),
-            "auth": auth, "login_user": t["user"], "caller": t["caller"], "link": snap,
+            "auth": auth, "kind": info["kind"], "allowlist": info["allowlist"], "login_user": t["user"], "caller": t["caller"], "link": snap,
             "local": t["host"] in ("127.0.0.1", "localhost", "::1")}
 
 
@@ -4088,17 +4203,17 @@ function ampLinkLine(l) {
 async function loadAmp() {
   const d = await api('/api/amp');
   if (!d.ok) { note('amp-msg', 'err', d.error || 'Could not read the AMP state.'); return; }
-  $('amp-proc').textContent = d.running ? 'running (pid ' + d.pid + (d.user ? ', user ' + d.user : '') + ')'
+  $('amp-proc').textContent = d.running ? (d.kind === 'hub' ? 'amp-hub running (pid ' : 'running (pid ') + d.pid + (d.user ? ', user ' + d.user : '') + ')'
     + (d.count > 1 ? '; ' + d.count + ' AMP servers run here: pick one by its Config path (Advanced)' : '') : 'not running on this Pi';
   $('amp-node').textContent = (d.node || '(not set in AMP)') + (d.callsign ? ' · ' + d.callsign : '');
   $('amp-cfg').textContent = (d.config || 'not found') + (d.config_error ? ' (' + d.config_error + ')' : '');
   const a = d.auth || {};
-  $('amp-auth').textContent = a.path + ': ' + (a.error ? a.error : a.ours ? 'has Node Talker\'s login (' + d.login_user + ')'
+  $('amp-auth').textContent = d.kind === 'hub' ? 'the hub has no login file; ' + (d.allowlist && d.allowlist.length ? 'its allowlist ' + (d.allowlist.indexOf(d.caller) >= 0 ? 'includes ' : 'does NOT include ') + d.caller : 'no allowlist is set, so any node may call in') : a.path + ': ' + (a.error ? a.error : a.ours ? 'has Node Talker\'s login (' + d.login_user + ')'
     : a.exists ? 'Node Talker\'s login is not in it yet' : 'does not exist yet');
-  $('amp-ports').textContent = d.host + ' · IAX ' + d.iax_port + ' · web ' + d.http_port
+  $('amp-ports').textContent = d.host + ' · IAX ' + d.iax_port + (d.kind === 'hub' ? ' · no web page' : ' · web ' + d.http_port)
     + (d.http_pwd_set ? (d.http_pwd_auto ? ' (password read from AMP)' : ' (password set here)') : '');
   $('amp-caller').textContent = d.caller + ' (user ' + d.login_user + ')';
-  $('amp-setup').disabled = !d.local;
+  $('amp-setup').disabled = !d.local || d.kind === 'hub';
   ampLinkLine(d.link || {});
   if (!ampDirty) {
     const c = (await api('/api/config')).config || {};
@@ -5024,7 +5139,8 @@ def run_server():
     scheme = "https" if httpd.ssl_ctx is not None else "http"
     t = amp_target()
     log_event(f"{APP_NAME} v{VERSION} on {scheme} port {port}; AMP node {t['node'] or '(not set)'} on "
-              f"{t['host']}:{t['iax_port']} (IAX) and port {t['http_port']} (web), Node Talker calls in as {t['caller']}", "ok")
+              f"{t['host']}:{t['iax_port']} (IAX) and " + ("no web page (amp-hub)" if amp_info()["kind"] == "hub" else f"port {t['http_port']} (web)")
+              + f", Node Talker calls in as {t['caller']}", "ok")
     _sd_notify("READY=1")
 
     def _on_term(signum, frame):
@@ -5278,7 +5394,9 @@ def install_service():
     info = amp_info(max_age=0)
     auth = amp_auth_state(info)
     if not info["running"]:
-        print("  [i] amp-server is not running; Node Talker links to it when it starts.")
+        print("  [i] neither amp-server nor amp-hub is running; Node Talker links when one starts.")
+    elif info["kind"] == "hub":
+        print(f"  [i] amp-hub node {info['node'] or '(not set)'}, IAX port {info['iax_port']}: it has no web page, so Links, Connect and Disconnect are off. If AMP_IAX_ALLOWLIST is set, add {_cfg_get('amp_caller')} to it.")
     elif auth["ours"]:
         print(f"  [i] AMP node {info['node'] or '(not set)'}: Node Talker's login is already in {auth['path']}")
     else:

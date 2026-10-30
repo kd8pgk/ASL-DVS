@@ -31,8 +31,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.56"
-DATE_STR = "2026-10-28"
+VERSION = "0.9.57"
+DATE_STR = "2026-10-30"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -255,6 +255,10 @@ DEFAULT_CONFIG = {
     "ptt_mode": "hold",
     "ptt_guard_sec": 60,
     "ptt_rx_gap": False,
+    "phone_tones": True,
+    "phone_open": "*99",
+    "phone_close": "#",
+    "phone_lead_ms": 500,
 }
 
 
@@ -304,6 +308,13 @@ def _norm_ptt_guard(value):
     return v
 
 
+def _norm_phone_code(value):
+    v = str(value).strip()
+    if not re.fullmatch(r"[0-9*#]{1,8}", v):
+        raise ValueError("phone tones must be 1-8 of 0-9, * and #")
+    return v
+
+
 def _norm_node(value):
     v = str(value).strip()
     if v and not re.fullmatch(r"\d{1,7}", v):
@@ -340,6 +351,10 @@ _NORMALIZERS = {
     "ptt_mode": _norm_ptt_mode,
     "ptt_guard_sec": _norm_ptt_guard,
     "ptt_rx_gap": _parse_bool,
+    "phone_tones": _parse_bool,
+    "phone_open": _norm_phone_code,
+    "phone_close": _norm_phone_code,
+    "phone_lead_ms": _norm_int(0, 3000, "phone_lead_ms must be 0-3000"),
     "rx_hpf": _parse_bool,
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
@@ -2306,6 +2321,12 @@ def build_status(full):
             st["kc_test"] = _kc_test["on"]
         st["tx"] = {k: tx.get(k) for k in ("node", "ready", "linked", "keyed", "who", "secs", "tot",
                                             "peak_db", "last_peak_db", "gaps", "last_gaps")}
+        ph = phone_status_cached() if _cfg_get("phone_tones") and nc else None
+        st["phone"] = {"on": bool(_cfg_get("phone_tones")), "known": ph is not None,
+                       "active": bool(ph and ph["active"]), "supported": ph["supported"] if ph else None,
+                       "state": ph["state"] if ph else "", "net": ph["net"] if ph else "",
+                       "type_label": ph["type_label"] if ph else "", "error": ph["error"] if ph else "",
+                       "open": _cfg_get("phone_open"), "close": _cfg_get("phone_close")}
     else:
         st.pop("listener_list", None)
         st.pop("udp_error", None)
@@ -4630,6 +4651,130 @@ class WebSocket:
         self.send(1, json.dumps(obj).encode("utf-8"))
 
 
+PHONE_TONE_TYPES = ("sip", "sip_ip", "hoip", "awire", "iax2")
+PHONE_STATUS_TTL = 5.0
+PHONE_HOLD_MAX_SEC = 5.0
+PHONE_QUEUE_MAX = 300
+_phone_cache = {"t": -PHONE_STATUS_TTL, "v": None, "busy": False}
+_phone_cache_lock = threading.Lock()
+
+
+def _phone_fetch():
+    r = dash_call({"action": "phone-status"}, timeout=3)
+    v = {"supported": None, "state": "", "net": "", "type": "", "type_label": "", "node": "", "active": False, "error": ""}
+    if r is None:
+        v["error"] = "Node Controller is not running"
+    elif not r["ok"]:
+        if "Unknown local action" in r["error"]:
+            v["supported"] = False
+            v["error"] = "Node Controller is too old for phone tones (9.3.104-pi02w / 9.3.99 or later)"
+        else:
+            v["error"] = r["error"]
+    else:
+        try:
+            d = json.loads(r["message"])
+        except ValueError:
+            d = None
+        if isinstance(d, dict):
+            v["supported"] = True
+            for k in ("state", "net", "type", "type_label", "node"):
+                v[k] = _CALL_TRIM.sub(" ", str(d.get(k, "")))[:40]
+            v["active"] = v["state"] == "in_call" and v["type"] in PHONE_TONE_TYPES
+        else:
+            v["error"] = "Node Controller sent a phone status Node Talker can't read"
+    with _phone_cache_lock:
+        _phone_cache.update(t=time.monotonic(), v=dict(v), busy=False)
+    return v
+
+
+def phone_status_now():
+    return _phone_fetch()
+
+
+def phone_status_cached():
+    with _phone_cache_lock:
+        v = _phone_cache["v"]
+        stale = time.monotonic() - _phone_cache["t"] > PHONE_STATUS_TTL
+        start = stale and not _phone_cache["busy"]
+        if start:
+            _phone_cache["busy"] = True
+    if start:
+        threading.Thread(target=_phone_fetch, name="phone-status", daemon=True).start()
+    return dict(v) if v else None
+
+
+class PhonePatch:
+    def __init__(self):
+        self.q = queue.Queue()
+        self.opened = {}
+        self.thread = None
+        self.lock = threading.Lock()
+
+    def _ensure(self):
+        with self.lock:
+            if self.thread is None or not self.thread.is_alive():
+                self.thread = threading.Thread(target=self._run, name="phone-tones", daemon=True)
+                self.thread.start()
+
+    def open(self, sid, owner):
+        self._ensure()
+        self.q.put(("open", sid, owner))
+
+    def close(self, sid):
+        self._ensure()
+        self.q.put(("close", sid, None))
+
+    def _tell(self, owner, ok, text):
+        if owner is not None:
+            try:
+                owner.send_json({"ev": "phone", "ok": ok, "text": text})
+            except (OSError, AttributeError):
+                pass
+
+    def _run(self):
+        while True:
+            what, sid, owner = self.q.get()
+            try:
+                if what == "open":
+                    self._open(sid, owner)
+                else:
+                    self._close(sid)
+            except Exception as exc:
+                log_event(f"Phone tones: {exc}", "warn")
+                TALKER.phone_release(sid, False)
+
+    def _open(self, sid, owner):
+        st = phone_status_now()
+        if not st["active"]:
+            TALKER.phone_release(sid, False)
+            return
+        code = _cfg_get("phone_open")
+        r = dash_call({"action": "phone-tones", "tones": code}, timeout=12)
+        ok = bool(r and r["ok"])
+        name = st["net"] or st["type_label"] or "the phone network"
+        self.opened[sid] = ok
+        while len(self.opened) > 20:
+            self.opened.pop(next(iter(self.opened)))
+        TALKER.phone_release(sid, ok)
+        if ok:
+            log_event(f"Phone: sent {code} on the call ({name}) before transmitting", "ok")
+            self._tell(owner, True, f"Phone call on {name}: sent {code} to open the far end.")
+        else:
+            why = (r or {}).get("error") or "Node Controller did not answer"
+            log_event(f"Phone: could not send {code} ({why}); transmitting anyway", "warn")
+            self._tell(owner, False, f"Phone call on {name}: could not send {code} ({why}). Transmitting anyway.")
+
+    def _close(self, sid):
+        if not self.opened.pop(sid, False):
+            return
+        code = _cfg_get("phone_close")
+        r = dash_call({"action": "phone-tones", "tones": code}, timeout=12)
+        if r and r["ok"]:
+            log_event(f"Phone: sent {code} on the call after transmitting", "ok")
+        else:
+            log_event(f"Phone: could not send {code} after transmitting ({(r or {}).get('error') or 'Node Controller did not answer'})", "warn")
+
+
 class Talker:
     def __init__(self):
         self.lock = threading.Lock()
@@ -4656,6 +4801,21 @@ class Talker:
         self.first_at = None
         self.last_frame = None
         self.after_gap = False
+        self.phone_sid = 0
+        self.phone_session = False
+        self.phone_until = None
+
+    def phone_release(self, sid, opened):
+        with self.lock:
+            if not self.keyed or self.phone_sid != sid:
+                return
+            self.phone_until = time.monotonic() + (_cfg_get("phone_lead_ms") / 1000.0 if opened else 0.0)
+            if not opened:
+                self.phone_session = False
+
+    def _phone_holding(self, now):
+        return (self.phone_session and (self.phone_until is None or now < self.phone_until)
+                and now - self.key_at < PHONE_HOLD_MAX_SEC)
 
     def _socket(self):
         if self.sock is None:
@@ -4679,7 +4839,7 @@ class Talker:
                     "last_peak_db": self.last_peak, "gaps": self.gaps if self.keyed else None,
                     "last_gaps": self.last_gaps}
 
-    def key(self, owner, who):
+    def key(self, owner, who, phone=True):
         st = tx_state()
         if not st["ready"]:
             return False, "not-ready"
@@ -4707,7 +4867,13 @@ class Talker:
             self.primed_once = False
             self.last_frame = None
             self.after_gap = False
+            self.phone_sid += 1
+            sid = self.phone_sid
+            self.phone_session = bool(phone and _cfg_get("phone_tones"))
+            self.phone_until = None
         log_event(f"TX: {who} keyed node {TX_NODE}", "ok")
+        if self.phone_session:
+            PHONE.open(sid, owner)
         return True, ""
 
     def audio(self, owner, data):
@@ -4722,7 +4888,8 @@ class Talker:
                 del self.buf[:FRAME_BYTES]
                 self.peak = max(self.peak, peak_db(fr))
                 self.q.append(fr)
-            while len(self.q) > TX_QUEUE_MAX:
+            cap = PHONE_QUEUE_MAX if self.phone_session else TX_QUEUE_MAX
+            while len(self.q) > cap:
                 self.q.popleft()
 
     def release(self, owner):
@@ -4750,8 +4917,13 @@ class Talker:
             self.last_peak = round(self.peak, 1)
             self.last_gaps = self.gaps
             gaps = self.gaps
+            sid = self.phone_sid
+            phone = self.phone_session
+            self.phone_session = False
         for _ in range(3):
             self._packet(PCM_SILENCE, False)
+        if phone:
+            PHONE.close(sid)
         log_event(f"TX: {who} unkeyed after {secs:.1f} s ({why})" + (f", {gaps} audio gap(s)" if gaps else ""),
                   "warn" if why in ("timeout", "deadman") or gaps else "ok")
         if owner is not None:
@@ -4772,10 +4944,13 @@ class Talker:
             if not self.keyed:
                 return
             target = max(2, tune_value("tx_buffer_ms") // 20)
+            holding = self._phone_holding(now)
             if now - self.start > _cfg_get("tot_sec"):
                 why = "timeout"
             elif not self.sending:
-                if (len(self.q) >= target or (self.releasing and self.q)
+                if holding:
+                    pass
+                elif (len(self.q) >= target or (self.releasing and self.q)
                         or (not self.primed_once and now - self.start > target * FRAME_SEC + 0.3)):
                     self.sending = True
                     self.primed_once = True
@@ -4814,6 +4989,7 @@ class Talker:
 
 
 TALKER = Talker()
+PHONE = PhonePatch()
 
 
 TONE_RATE = 8000
@@ -5306,7 +5482,7 @@ class ToneTest:
             self.stage, self.progress, self.error, self.report = "keying", 0.0, "", None
             self.raw, self.proc = [], []
         owner = _ToneOwner()
-        ok, why = TALKER.key(owner, "tone test")
+        ok, why = TALKER.key(owner, "tone test", phone=False)
         if not ok:
             msg = TONE_KEY_ERRORS.get(why, why)
             self._set(running=False, stage="idle", error=msg)
@@ -6405,6 +6581,8 @@ async function pollStatus() {
   $('s-tx-w').title = tx.keyed ? 'Transmitting: ' + tx.who + ' ' + fmtSecs(tx.secs) : (tx.ready ? 'Nobody is transmitting' : 'Transmit node not set up');
   busyText = tx.keyed && !talking && !keyed && performance.now() - ownUnkeyAt > 2500 ? 'Busy: ' + tx.who + ' ' + fmtSecs(tx.secs) : '';
   rxStatus(!!d.audio_active || !!busyText);
+  phoneOn = !!(d.phone && d.phone.active);
+  if ($('phone-state')) $('phone-state').textContent = phoneText(d.phone);
   pttLabel();
   totSec = tx.tot || totSec;
   $('tune-txpk').textContent = tx.keyed && tx.peak_db != null ? fmtDb(tx.peak_db) + ' (now)'
@@ -8505,11 +8683,22 @@ async function wakeLockApply() {
   }
 }
 
+let phoneOn = false;
+
+function phoneText(p) {
+  if (!p || !p.on) return 'tones off';
+  if (!p.known) return 'checking...';
+  if (p.supported === false || p.error) return p.error || 'not available';
+  if (p.active) return 'in a call on ' + (p.net || p.type_label || 'the phone network') + ' · ' + p.open + ' / ' + p.close + ' when you talk';
+  return {idle: 'no call', dialing: 'dialing', incoming: 'ringing'}[p.state] || (p.state || 'no call');
+}
+
 function pttLabel() {
   const idle = pttState !== 'talking' && pttState !== 'keying';
   const tap = ptt.mode === 'tap';
-  $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : tap ? 'TALKING · tap to stop' : 'TALKING')
-    : pttState === 'keying' ? 'Keying...' : (busyText || (gapLeft() > 0 ? 'Wait...' : tap ? 'Tap to talk' : 'Hold to talk'));
+  const ph = phoneOn ? ' · PHONE' : '';
+  $('ptt-label').textContent = pttState === 'talking' ? (hsTx ? 'TALKING (headset)' : tap ? 'TALKING · tap to stop' : 'TALKING') + ph
+    : pttState === 'keying' ? 'Keying...' : (busyText || (gapLeft() > 0 ? 'Wait...' : (tap ? 'Tap to talk' : 'Hold to talk') + ph));
   $('ptt').setAttribute('aria-label', tap ? 'Push to talk: tap to transmit, tap again to stop' : 'Push to talk: hold to transmit');
   $('ptt').classList.toggle('busy', idle && !!busyText);
 }
@@ -8536,6 +8725,8 @@ function talkMsg(m) {
     preKey = [];
     pttUi('talking', '');
     if (navigator.vibrate) navigator.vibrate(30);
+  } else if (m.ev === 'phone') {
+    note('ptt-msg', m.ok ? '' : 'warn', m.text || '');
   } else if (m.ev === 'denied') {
     const why = {busy: 'The node is busy (someone is talking). Try again when it is quiet.',
       'in-use': 'Someone else is transmitting from Node Talker.',
@@ -9868,7 +10059,8 @@ async function ffUpload() {
 }
 
 const CFG_NUM = ['port', 'udp_port'], CFG_BOOL = ['public_listen', 'https'];
-const AUDIO_NUM = ['max_listeners', 'tot_sec', 'kerchunk_delay_ms'], AUDIO_BOOL = ['busy_lockout'];
+const AUDIO_NUM = ['max_listeners', 'tot_sec', 'kerchunk_delay_ms', 'phone_lead_ms'], AUDIO_BOOL = ['busy_lockout', 'phone_tones'];
+const AUDIO_TXT = ['phone_open', 'phone_close'];
 
 async function loadConfig() {
   const d = await api('/api/config');
@@ -9877,6 +10069,7 @@ async function loadConfig() {
   CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
   AUDIO_NUM.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   AUDIO_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
+  AUDIO_TXT.forEach((k) => { $('cfg-' + k).value = d.config[k]; });
   sum('cfg', (d.config.https ? 'HTTPS' : 'HTTP') + ' · ' + d.config.max_listeners + ' listeners' + (d.config.public_listen ? ' · public' : '')
     + (ptt.mode === 'tap' ? ' · tap to talk ' + ptt.guard + ' s' : '') + (ptt.gap ? ' · 4 s wait' : ''));
   pttSetUi();
@@ -9915,6 +10108,7 @@ async function saveTune(msgId = 'tune-msg') {
     rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value};
   AUDIO_NUM.forEach((k) => { body[k] = $('cfg-' + k).value; });
   AUDIO_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
+  AUDIO_TXT.forEach((k) => { body[k] = $('cfg-' + k).value.trim(); });
   setMsg(msgId, await post('/api/config', body));
 }
 
@@ -10391,6 +10585,15 @@ Node Talker adds its stanza and <code>[nodes]</code> line to rpt.conf (with a ba
 <h3 style="margin:14px 0 4px">Transmit limits</h3>
 <div class="row"><label>TX time-out (s) <input type="number" id="cfg-tot_sec" min="30" max="600"></label></div>
 <div class="row"><label><input type="checkbox" id="cfg-busy_lockout"> Don't transmit while the node is busy</label></div>
+<h3 style="margin:14px 0 4px">Phone patch</h3>
+<div class="row"><label><input type="checkbox" id="cfg-phone_tones"> Send keypad tones when I talk on a phone call</label></div>
+<p class="muted small">During a Node Controller phone call (SIP or IAX2 network), each time you talk Node Talker
+sends the open tones to the far end first, waits, then sends your voice; when you stop it sends the close tones.
+Works with tap to talk, hold to talk and a headset button.</p>
+<div class="row"><label>Open <input id="cfg-phone_open" style="width:70px" maxlength="8" autocapitalize="off" spellcheck="false"></label>
+<label>Close <input id="cfg-phone_close" style="width:70px" maxlength="8" autocapitalize="off" spellcheck="false"></label>
+<label>Wait after open (ms) <input type="number" id="cfg-phone_lead_ms" min="0" max="3000" step="100" style="width:80px"></label></div>
+<p class="muted small">Phone now: <span id="phone-state">-</span></p>
 <h3 style="margin:14px 0 4px">Audio levels</h3>
 <div class="row"><label><input type="checkbox" id="tune-on"> Adjust audio levels here</label></div>
 <p class="muted small">Off: the gains and buffers below aren't used. These change only this page's path,

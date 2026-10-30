@@ -1,6 +1,12 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_98_20261029.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_99_20261030.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.99 (2026-10-30)
+
+- **Two local API actions for the phone.** Node Talker can read the phone's state and send phone tones through Node Controller, on localhost with the key in `/etc/asl_dvs/local_api.key`, like the other actions:
+  - `phone-status`: `{state, net, type, type_label, node}`. The state is the phone call state (`idle`, `dialing`, `incoming` or `in_call`), `net` and `type` name the phone network in use, `type_label` is its readable label, and `node` is the live node number for it.
+  - `phone-tones {tones}`: sends the tones through the same code as the Phone tab, and returns its result.
 
 ## 9.3.98 (2026-10-29)
 

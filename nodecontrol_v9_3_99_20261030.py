@@ -7,7 +7,6 @@ import fcntl
 import functools
 import gzip
 import glob as _glob
-import io
 import hashlib
 import hmac
 import ipaddress
@@ -39,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.103-pi02w"
+VERSION      = "9.3.99"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -5809,154 +5808,75 @@ def action_save_dmr_favorite(network: str, tg: str) -> Tuple[bool, str]:
     return True, f"Saved {network} {label} to favorite slot {slot}"
 
 _ASTDB_PATH        = "/var/lib/asterisk/astdb.txt"
+_ASTDB_TTL         = 300.0
 _ASTDB_MAX_MATCHES = 200
 _ASTDB_MIN_QUERY   = 2
 
-_CTRL_IN_RE = re.compile(r"[\x00-\x1f\x7f]")
+def _parse_astdb(f) -> dict:
+    rows, by_node = [], {}
+    for raw in f:
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        parts = [_strip_ctrl(p.strip()) for p in line.split("|")]
+        node = parts[0]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node in by_node:
+            continue
+        call = parts[1] if len(parts) > 1 else ""
+        desc = parts[2] if len(parts) > 2 else ""
+        loc  = parts[3] if len(parts) > 3 else ""
+        row = (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
+        rows.append(row)
+        by_node[node] = row
+    return {"rows": rows, "by_node": by_node}
 
-class _LineDB:
+def _build_astdb(prev):
+    try:
+        mtime = int(os.stat(_ASTDB_PATH).st_mtime)
+    except OSError:
+        return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
+    if prev and prev.get("found") and prev["mtime"] == mtime:
+        return prev, False
+    try:
+        with open(_ASTDB_PATH, "r", encoding="utf-8", errors="replace") as f:
+            part = _parse_astdb(f)
+    except OSError as e:
+        log.warning("Could not read %s: %s", _ASTDB_PATH, e)
+        part = {"rows": [], "by_node": {}}
+    return {"found": True, "mtime": mtime, **part}, False
 
-    def __init__(self, path_fn, node_of, parse, missing_msg: str = ""):
-        self._path_fn     = path_fn
-        self._node_of     = node_of
-        self._parse       = parse
-        self._missing_msg = missing_msg
-        self._warned      = False
-        self._lock        = threading.Lock()
-        self._index_key   = None
-        self._index       = (0, True, frozenset())
+_astdb_cache = _ListCache(_ASTDB_TTL, _build_astdb,
+                          lambda _r: log.warning("AllStar node list not found at %s — the ASL "
+                                                 "node menu will be empty (turn on "
+                                                 "asl3-update-astdb)", _ASTDB_PATH))
 
-    @property
-    def path(self) -> str:
-        return self._path_fn()
+def _load_astdb() -> dict:
+    return _astdb_cache.get()
 
-    def stat(self) -> "tuple[bool, int, int]":
-        try:
-            st = os.stat(self.path)
-        except OSError:
-            if self._missing_msg and not self._warned:
-                self._warned = True
-                log.warning(self._missing_msg, self.path)
-            return False, 0, 0
-        self._warned = False
-        return True, int(st.st_mtime), st.st_size
-
-    def index(self) -> "tuple[int, bool, frozenset]":
-        found, mtime, size = self.stat()
-        if not found:
-            return 0, True, frozenset()
-        key = (mtime, size)
-        with self._lock:
-            if self._index_key == key:
-                return self._index
-        seen: "set[str]" = set()
-        repeats = False
-        ctrl: "set[int]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                for i, raw in enumerate(f):
-                    if _CTRL_IN_RE.search(raw.strip()):
-                        ctrl.add(i)
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if node in seen:
-                        repeats = True
-                    else:
-                        seen.add(node)
-        except OSError:
-            return 0, True, frozenset()
-        result = (len(seen), repeats, frozenset(ctrl))
-        with self._lock:
-            self._index_key, self._index = key, result
-        return result
-
-    def total(self) -> int:
-        return self.index()[0]
-
-    def rows(self, raw_ok=None, node_ok=None):
-        _total, repeats, ctrl = self.index()
-        seen: "set[str]" = set()
-        try:
-            with open(self.path, "r", encoding="utf-8", errors="replace") as f:
-                st = os.fstat(f.fileno())
-                with self._lock:
-                    same = self._index_key == (int(st.st_mtime), st.st_size)
-                if not same:
-                    repeats, raw_ok, ctrl = True, None, frozenset()
-                for i, raw in enumerate(f):
-                    quick = raw_ok is not None and i not in ctrl
-                    if not repeats and quick and not raw_ok(raw):
-                        continue
-                    node = self._node_of(raw)
-                    if node is None:
-                        continue
-                    if repeats:
-                        if node in seen:
-                            continue
-                        seen.add(node)
-                        if quick and not raw_ok(raw):
-                            continue
-                    if node_ok is not None and not node_ok(node):
-                        continue
-                    yield self._parse(raw, node)
-        except OSError as e:
-            log.warning("Could not read %s: %s", self.path, e)
-
-    def find(self, node: str):
-        for row in self.rows(raw_ok=lambda raw: node in raw.split("|", 1)[0],
-                             node_ok=lambda n: n == node):
-            return row
-        return None
-
-def _astdb_node_of(raw: str):
-    line = raw.strip()
-    if not line or line.startswith(("#", ";")):
-        return None
-    node = _strip_ctrl(line.split("|", 1)[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    return str(int(node))
-
-def _astdb_parse(raw: str, node: str):
-    parts = [_strip_ctrl(p.strip()) for p in raw.strip().split("|")]
-    call = parts[1] if len(parts) > 1 else ""
-    desc = parts[2] if len(parts) > 2 else ""
-    loc  = parts[3] if len(parts) > 3 else ""
-    return (node, call, desc, loc, f"{node} {call} {desc} {loc}".lower())
-
-_astdb = _LineDB(lambda: _ASTDB_PATH, _astdb_node_of, _astdb_parse,
-                 "AllStar node list not found at %s — the ASL node menu will be empty "
-                 "(turn on asl3-update-astdb)")
-
-def _dir_search(path: str, db: _LineDB, min_q: int, limit: int, text_col: int,
+def _dir_search(path: str, db: dict, min_q: int, limit: int, text_col: int,
                 ncols: int, to_asl=None, extra: Optional[dict] = None) -> dict:
     try:
         q = parse_qs(urlparse(path).query).get("q", [""])[0]
     except Exception:
         q = ""
     q = _strip_ctrl(q).strip().lower()[:40]
-    found, mtime, _size = db.stat()
-    out = {"ok": True, "found": found, **(extra or {}), "mtime": mtime,
-           "total": db.total() if found else 0, "min": min_q,
+    out = {"ok": True, "found": db["found"], **(extra or {}), "mtime": db["mtime"],
+           "total": len(db["rows"]), "min": min_q,
            "limit": limit, "count": 0, "matches": []}
-    if not found or len(q) < min_q:
+    if not db["found"] or len(q) < min_q:
         return out
     bridges = _bridge_set()
     words = q.split()
     if len(words) == 1 and words[0].isdigit():
         pre = words[0].lstrip("0") or "0"
         test = lambda r: r[0].startswith(pre)
-        raw_ok = lambda raw: pre in raw.split("|", 1)[0]
-        node_ok = lambda node: node.startswith(pre)
     else:
         test = lambda r: all(w in r[text_col] for w in words)
-        def raw_ok(raw):
-            low = raw.lower()
-            return all(w in low for w in words)
-        node_ok = None
     count, matches = 0, []
-    for r in db.rows(raw_ok, node_ok):
+    for r in db["rows"]:
         if (to_asl(r[0]) if to_asl else r[0]) in bridges or not test(r):
             continue
         count += 1
@@ -5979,11 +5899,11 @@ def _save_node_favorite(field: str, node: str, label: str, what: str) -> Tuple[b
                          dup=lambda r: r[0], saved=f"{what} {label}", after=clear_etag)
 
 def action_asl_directory(path: str) -> dict:
-    return _dir_search(path, _astdb, _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
+    return _dir_search(path, _load_astdb(), _ASTDB_MIN_QUERY, _ASTDB_MAX_MATCHES,
                        text_col=4, ncols=4, extra={"path": _ASTDB_PATH})
 
 def _astdb_label(node: str) -> str:
-    row = _astdb.find(node)
+    row = _load_astdb()["by_node"].get(node)
     if not row:
         return f"Node {node}"
     place = row[3] or row[2]
@@ -6006,72 +5926,44 @@ _ECHODB_TTL         = 300.0
 _ECHODB_MAX_MATCHES = 200
 _ECHODB_MIN_QUERY   = 2
 
-_ECHODB_FILE        = "/run/asl_dvs_dashboard/echodb.txt"
-
-_echodb_refresh_lock = threading.Lock()
-_echodb_next_try     = 0.0
-_echodb_warned       = False
-
-def _echodb_node_of(raw: str):
-    parts = raw.split("|", 2)
-    if len(parts) < 2:
-        return None
-    node = _strip_ctrl(parts[0].strip())
-    if not node.isdigit() or len(node) > 7:
-        return None
-    node = str(int(node))
-    return None if node == "0" else node
-
-def _echodb_parse(raw: str, node: str):
-    call = _strip_ctrl(raw.split("|", 2)[1].strip())[:24]
-    return (node, call, f"{node} {call}".lower())
-
-def _echodb_write(text: str) -> None:
-    seen: "set[str]" = set()
-    rows = []
-    for raw in io.StringIO(text):
-        node = _echodb_node_of(raw)
-        if node is None or node in seen:
+def _parse_echodb(text: str) -> dict:
+    rows, by_node = [], {}
+    for raw in text.splitlines():
+        parts = [_strip_ctrl(p.strip()) for p in raw.split("|")]
+        if len(parts) < 2:
             continue
-        seen.add(node)
-        rows.append((int(node), node, _echodb_parse(raw, node)[1]))
-    rows.sort()
-    os.makedirs(os.path.dirname(_ECHODB_FILE), exist_ok=True)
-    tmp = _ECHODB_FILE + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        for _n, node, call in rows:
-            f.write(f"{node}|{call}\n")
-    os.replace(tmp, _ECHODB_FILE)
+        node, call = parts[0], parts[1]
+        if not node.isdigit() or len(node) > 7:
+            continue
+        node = str(int(node))
+        if node == "0" or node in by_node:
+            continue
+        call = call[:24]
+        row = (node, call, f"{node} {call}".lower())
+        rows.append(row)
+        by_node[node] = row
+    rows.sort(key=lambda r: int(r[0]))
+    return {"rows": rows, "by_node": by_node}
 
-def _echodb_refresh() -> None:
-    global _echodb_next_try, _echodb_warned
-    with _echodb_refresh_lock:
-        now = time.time()
-        try:
-            age = now - os.stat(_ECHODB_FILE).st_mtime
-        except OSError:
-            age = None
-        if (age is not None and age < _ECHODB_TTL) or now < _echodb_next_try:
-            return
-        out, ok = ami_command(_ECHODB_CMD, timeout=8)
-        if ok and "no such command" not in out.lower():
-            try:
-                _echodb_write(out)
-                _echodb_warned = False
-                return
-            except OSError as e:
-                log.warning("Could not write %s: %s", _ECHODB_FILE, e)
-        _echodb_next_try = now + _ECHODB_TTL
-        if age is None and not _echodb_warned:
-            _echodb_warned = True
-            log.warning("EchoLink station list not available (%s failed -- is chan_echolink loaded?)",
-                        _ECHODB_CMD)
+def _build_echodb(prev):
+    out, ok = ami_command(_ECHODB_CMD, timeout=8)
+    if ok and "no such command" not in out.lower():
+        part = _parse_echodb(out)
+        return {"found": True, "mtime": int(time.time()), **part}, False
+    if prev and prev.get("found"):
+        return prev, False
+    return {"found": False, "mtime": 0, "rows": [], "by_node": {}}, True
 
-_echodb = _LineDB(lambda: _ECHODB_FILE, _echodb_node_of, _echodb_parse)
+_echodb_cache = _ListCache(_ECHODB_TTL, _build_echodb,
+                           lambda _r: log.warning("EchoLink station list not available "
+                                                  "(%s failed -- is chan_echolink loaded?)",
+                                                  _ECHODB_CMD))
+
+def _load_echodb() -> dict:
+    return _echodb_cache.get()
 
 def action_echo_directory(path: str) -> dict:
-    _echodb_refresh()
-    return _dir_search(path, _echodb, _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
+    return _dir_search(path, _load_echodb(), _ECHODB_MIN_QUERY, _ECHODB_MAX_MATCHES,
                        text_col=2, ncols=2, to_asl=_echolink_to_asl)
 
 def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
@@ -6083,8 +5975,7 @@ def action_save_echo_favorite(node: str) -> Tuple[bool, str]:
         return False, "EchoLink node 0 can't be saved"
     if _is_bridge_node(_echolink_to_asl(node)):
         return False, _bridge_reject_msg(_echolink_to_asl(node), "an EchoLink favorite")
-    _echodb_refresh()
-    row = _echodb.find(node)
+    row = _load_echodb()["by_node"].get(node)
     label = _clip_label(_sf({"n": f"{node} {row[1]}" if row and row[1] else f"Node {node}"}, "n"))
     return _save_node_favorite("echo_nodes", node, label, "Echo")
 
@@ -6473,11 +6364,11 @@ def _dvs_settle() -> None:
 _bridge_slot_last_reconnect = {BRIDGE_SLOT_DIGITAL: 0.0, BRIDGE_SLOT_M17: 0.0, BRIDGE_SLOT_PHONE: 0.0}
 _bridge_slot_down_polls     = {BRIDGE_SLOT_DIGITAL: 0,   BRIDGE_SLOT_M17: 0,   BRIDGE_SLOT_PHONE: 0}
 _BRIDGE_RECONNECT_COOLDOWN = 8.0
-_BRIDGE_DOWN_THRESHOLD     = 2
+_BRIDGE_DOWN_THRESHOLD     = 3
 
 _bridge_node_up_polls:  Dict[str, int]   = {}
 _bridge_node_last_reap: Dict[str, float] = {}
-_BRIDGE_UP_THRESHOLD    = 2
+_BRIDGE_UP_THRESHOLD    = 3
 _BRIDGE_REAP_COOLDOWN   = 8.0
 _bridge_reaper_armed    = False
 
@@ -6593,7 +6484,7 @@ def _phone_link_mode_fix(node: str, page: str) -> None:
         _link_exit()
 
 _ASL_REG_BAD_WORDS = ("unregist", "rejected", "failed", "timeout", "timed out")
-_ASL_REG_FAST_SEC  = 60.0
+_ASL_REG_FAST_SEC  = 30.0
 _ASL_REG_SLOW_SEC  = 900.0
 _asl_reg_lock      = threading.Lock()
 _asl_reg_info      = {"state": "unknown", "node": "", "at": 0.0, "since": time.monotonic()}
@@ -6805,7 +6696,7 @@ def _sd_heartbeat_loop() -> None:
 
 def _link_poll_loop() -> None:
     global _poll_beat
-    INTERVAL     = 2.0
+    INTERVAL     = 1.0
     fails        = 0
     last_detect  = time.monotonic()
     busy_noted   = False
@@ -9796,7 +9687,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
               <details class="ph-hint ph-howto"><summary>How calls from the radio work (show/hide)</summary>
                 <p><b>Dialing:</b> key up and send *61 then the number. The phone node collects the digits, hands the number to this dashboard and lets go straight away. The dashboard then places the call exactly as if you had pressed Dial on the Phone tab, so the same number rules apply and the Phone tab must be open.</p>
                 <p><b>Why it works this way:</b> the old way (autopatch) kept your radio node keyed for the whole call, so a simplex radio could never hear you. Now the call joins the node like an incoming call: the radio only transmits while the far end is talking.</p>
-                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call. (In 9.3.71.8 and 9.3.71.9, *65 did nothing; 9.3.71.10 fixed that.)</p>
+                <p><b>Hanging up:</b> *62 or *65 from the radio, or Hang up on the Phone tab, ends any call.</p>
               </details>
               <div class="ed-sec-hdr" style="padding-left:0"><span>Networks</span></div>
               <div id="ph-nets"></div>
@@ -13479,7 +13370,7 @@ async function edSave(){
 }
 function schedulePoll(){
   clearTimeout(_pollTimer);
-  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:5000);  // Pi02w: idle was 3000
+  _pollTimer=setTimeout(async()=>{try{await refresh()}finally{schedulePoll()}},busy?1000:3000);
 }
 let _keyedTimer=null;
 async function pollKeyed(){
@@ -13550,7 +13441,7 @@ async function pollKeyed(){
     }
 
   }catch(_){}
-  _keyedTimer=setTimeout(pollKeyed,1000);  // Pi02w: was 500 (the server updates every 2 s)
+  _keyedTimer=setTimeout(pollKeyed,500);
 }
 /* ── Analog Bridge confirmation poll ─────────────────────────────────────── */
 async function pollAbInfo(){
@@ -14431,6 +14322,18 @@ def action_local(data: dict) -> Tuple[bool, str]:
         return True, json.dumps({"page": st.page, "fav": str(st.current_fav or "") if on else "",
                                  "server": st.active_dmr_server or "",
                                  "address": str(srv.get("address", "")) if srv else ""})
+    if act == "phone-status":
+        doc = _phone_doc()
+        net = _phone_active_net(doc)
+        st = _phone_call_state()
+        typ = str((net or {}).get("type", ""))
+        return True, json.dumps({"state": st.get("state", "idle"), "net": str((net or {}).get("name", "")),
+                                 "type": typ, "type_label": _PHONE_TYPE_LBL.get(typ, ""),
+                                 "node": _phone_live_node(doc)})
+    if act == "phone-tones":
+        tones = str(data.get("tones", ""))
+        log.info("local API: Node Talker asks to send phone tones %s", tones[:32])
+        return action_phone_send_tones(tones)
     if act == "dmr-server-add":
         return _local_dmr_server_add(data)
     return False, f"Unknown local action '{act}'"
@@ -15437,11 +15340,6 @@ def uninstall_service() -> None:
         except OSError:
             pass
     _remove_launcher_if_unused()
-
-    echodb_dir = os.path.dirname(_ECHODB_FILE)
-    if os.path.isdir(echodb_dir):
-        shutil.rmtree(echodb_dir, ignore_errors=True)
-        print(f"  [-] Removed {echodb_dir} (EchoLink station cache)")
 
     mark, msg = close_firewall_port(_listen_port())
     print(f"  [{mark}] {msg}")
