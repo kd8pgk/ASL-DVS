@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_58_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_62_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.62 (2026-10-30)
+
+- **Mode colours follow the mode.** On the Connect and Tune cards, the mode tag border, the big number and the Listen badge take the colour of the mode (ASL, ECHO, DMR, STFU, YSF, FCS, P25, NXDN, D-STAR, XLX, M17), the same palette as Node Controller. The card headings are unchanged. The colour is set from the selected favorite and the Tune mode, and it follows a change to either.
+- **The header CHECK badge is gone.** The badge that showed a running audio check, and its click to open Setup, are removed. The audio check still runs from the Setup tab.
+- **Layout.** The status line in the header is centred.
+
+## 0.9.59 to 0.9.61
+
+- No entries were written in this file for 0.9.59 and 0.9.61. The mode colour for the Connect cards and the Listen badge is from 0.9.60 (see 0.9.62 above).
 
 ## 0.9.58 (2026-10-30)
 
