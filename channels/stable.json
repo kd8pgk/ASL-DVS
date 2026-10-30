@@ -2,13 +2,13 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "51d48ce2119790e8519e2372289676fddad5afd6",
-   "commit": "9e50b9bd253285a2734bf13db2cd9f87c018f3d6",
-   "file": "44helper_v0_0_219_20261027.py",
-   "landed": "2026-10-27T12:42:32Z",
-   "promoted": "2026-10-30T12:42:32Z",
+   "blob": "72004a9884d944660dd268bd2261da4e6bbd5a9d",
+   "commit": "25e77e40c9a1dd8995769b323a67c8ddeb8bc877",
+   "file": "44helper_v0_0_221_20261027.py",
+   "landed": "2026-10-27T20:43:56Z",
+   "promoted": "2026-10-30T20:43:56Z",
    "reason": "count",
-   "version": "0.0.219"
+   "version": "0.0.221"
   },
   "amp_nodetalker": {
    "blob": "866725fc9eede5aff336d6587c674a6f7c2503bf",
