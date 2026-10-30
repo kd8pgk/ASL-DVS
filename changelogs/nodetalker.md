@@ -1,6 +1,10 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_57_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_9_58_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.9.58 (2026-10-30)
+
+- **The Node Controller look.** The page uses Node Controller's colours, with Readex Pro embedded in the page so it needs no internet. The header title is the amber Node Controller title with its glow and a small sub-line, the header buttons are outlined like Node Controller's, Connect and Disconnect are in the accent colour and red, and the cards and tabs follow Node Controller's shapes. Restored from the unmerged Node Talker 0.9.48 look and merged onto 0.9.57, so the light and dark switch, the phone patch and the rest of 0.9.57 are unchanged.
 
 ## 0.9.57 (2026-10-30)
 
