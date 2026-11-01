@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.64"
+VERSION = "0.9.64.1"
 DATE_STR = "2026-10-30"
 APP_NAME = "Node Talker"
 
@@ -10354,6 +10354,10 @@ html[data-theme="light"] *{text-shadow:none!important}
 .card[data-mode="M17"] select,.card[data-mode="M17"] input{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
 #c-mode[data-mode="M17"]{color:rgb(212,102,255)!important}
 .lk-badge[data-mode="M17"]{border-color:rgb(212,102,255)!important;color:rgb(212,102,255)!important}
+/* v0.9.64.1: Connect card Connect/Disconnect buttons match the Tune card pair and fill the row */
+#tab-connect .sel-card .btn-pair{gap:var(--tn-gap)}
+#tab-connect .sel-card .btn-pair>.btn{flex:1 1 0;width:auto;min-width:0;min-height:var(--tn-h);padding:0 14px}
+#tab-connect #c-connect{min-height:44px;font-size:15px}
 /* v0.9.62: Connect/Tune card text follows the mode colour (mode tag border, big number); headings unchanged */
 .card[data-mode="ASL"] .big-num{color:rgb(0,255,229)!important}
 #c-mode[data-mode="ASL"]{border-color:rgb(0,255,229)!important}

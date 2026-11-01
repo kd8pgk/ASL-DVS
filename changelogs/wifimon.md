@@ -1,6 +1,27 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_43_0_20261029.py`. Newest entries first.
+Current file: `wifimon_v5_46_0_20261101.py`. Newest entries first.
+
+## 5.46.0 (2026-11-01)
+
+- **A clear message when wpa_supplicant isn't running for an adapter.** Without NetworkManager, the device list shows an adapter with no wpa_supplicant control socket as **no supplicant**, and its controls say how to start it on Debian: the config file, or the `wpa-conf` line in `/etc/network/interfaces`, then `systemctl enable --now wpa_supplicant@<device>`. Before, the control failed with a generic error.
+
+## 5.45.0 (2026-11-01)
+
+- **Debian 12 and 13 without NetworkManager.** Debian's standard setups without NetworkManager (ifupdown or systemd-networkd, with wpa_supplicant running per device) now get full WiFi control. The device list reads each device's state and network from `wpa_cli status`, so a connected adapter shows its network name. Before, it showed only the kernel's up or down state.
+- **Radio, disconnect and connect work through wpa_supplicant.** Radio off and on use `rfkill block wlan` and `rfkill unblock wlan`, which need the `rfkill` package (the Wi-Fi management tools card installs it). Disconnect and Use this device use `wpa_cli -i <device> disconnect` and `reconnect`. Undo uses the same calls.
+- **Clear messages where NetworkManager is required.** Keep on and Keep off still need NetworkManager. On a wpa_supplicant node the page says so, instead of failing. With no WiFi tool at all, controls say which tool is missing.
+- With NetworkManager running, nothing changes.
+
+## 5.44.0 (2026-11-01)
+
+- **Install card.** A new **Wi-Fi management tools** card lists iw, rfkill, wpa_supplicant (wpa_cli) and NetworkManager (nmcli and nmtui), each Installed or Missing, with an Install button on each missing one. Each install asks for confirmation, then runs apt in a systemd transient unit, so it keeps going if the page reloads. Its output is kept in `/run/wifimon` (RAM), not on the SD card. Nothing is installed until you press Install and confirm. An install is refused when another change is running, a change is waiting to be kept or undone, or `dpkg --audit` reports broken packages.
+- **Changes need an explicit switch.** The actions that change the node (radio, disconnect, device switch, mode, forget, service restart and install) now only work when `/etc/wifimon/install.enable` exists, is a regular file owned by root and is not writable by group or others. They also need a login, and they only work from this machine or the local network, not through a proxy. Without the file the page says changes are switched off and names the file to create. Reading status, scans and the watchdog are unchanged.
+- **Scans work on wpa_supplicant.** When NetworkManager is not running and `wpa_cli` is in use, Scan runs `wpa_cli scan` and lists the results in the same table as nmcli's.
+- **Adapter details.** Each WiFi device shows its driver, bus, USB id, maker and product from sysfs when the device exposes them.
+- **The working adapter is picked by state.** With no saved device, wifimon takes the first adapter that is up, then `wlan0`, then the first WiFi device. A saved device is used only when it is a WiFi device on this machine.
+- **Adapters can be plugged in later.** If the watched USB adapter is unplugged, wifimon picks another WiFi device; the device list is rebuilt the same way.
+- **The voltage watchdog is for the Raspberry Pi only.** On other boards it stays off; the Pi journal fallback for the chip temperature also runs on Broadcom-driven boards.
 
 ## 5.43.0 (2026-10-29)
 

@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.43.0"
+APP_VERSION = "5.46.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -663,6 +663,11 @@ def system_profile(root="/"):
         manager = "systemd-networkd"
     else:
         manager = "unknown"
+    up = [name for name in ifaces if read("sys/class/net/" + name + "/operstate").strip() == "up"]
+    if up:
+        wifi_iface = up[0]
+    else:
+        wifi_iface = "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else "")
     return {
         "board": "pi" if "raspberry pi" in model.lower() else "other",
         "model": model,
@@ -672,7 +677,7 @@ def system_profile(root="/"):
         "version_id": osr.get("VERSION_ID", ""),
         "arch": arch,
         "wifi_manager": manager,
-        "wifi_iface": "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else ""),
+        "wifi_iface": wifi_iface,
         "wifi_ifaces": ifaces,
     }
 
@@ -1356,7 +1361,12 @@ def _current_ssid() -> Optional[str]:
 
     return None
 
+def _is_pi() -> bool:
+    return _system().get("board") == "pi"
+
 def _check_voltage() -> Optional[float]:
+    if not _is_pi():
+        return None
     try:
         with open("/sys/class/hwmon/hwmon0/in0_lcrit_alarm", "r") as f:
             if f.read().strip() == "1":
@@ -2278,7 +2288,8 @@ def _pi_chip_info() -> Dict[str, object]:
     info.update(driver=d.get("driver") or _roam_state().get("driver"),
                 firmware=d.get("firmware") or None, bus=d.get("bus") or None)
     lines = dict(_pi_chip_boot_lines)
-    if not lines and shutil.which("journalctl") and _pi_chip_cache is None:
+    brcm = str(info.get("driver") or "").startswith("brcm")
+    if not lines and (_is_pi() or brcm) and shutil.which("journalctl") and _pi_chip_cache is None:
         txt = _run_text(["journalctl", "-k", "-b", "-o", "cat", "--no-pager"], timeout=15)
         for line in txt.splitlines():
             if "brcmf" in line and ("for chip " in line or "Firmware: " in line):
@@ -2782,6 +2793,110 @@ def _power_save() -> Optional[bool]:
                   _run_text(["iw", "dev", INTERFACE, "get", "power_save"]), re.I)
     return (m.group(1).lower() == "on") if m else None
 
+def _wpa_sec(flags: str) -> str:
+    for word in ("SAE", "WPA2", "WPA", "WEP"):
+        if word in flags:
+            return "WPA3" if word == "SAE" else word
+    return "--"
+
+def _wpa_cli_ok(args: List[str], timeout: float = 15) -> Tuple[bool, str]:
+    try:
+        r = subprocess.run(["wpa_cli", "-i", INTERFACE] + args, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    out = (r.stdout or "").strip()
+    return out == "OK", out or (r.stderr or "").strip()
+
+_WPA_STATE_MAP = {"COMPLETED": "connected", "SCANNING": "connecting", "AUTHENTICATING": "connecting",
+                  "ASSOCIATING": "connecting", "ASSOCIATED": "connecting", "4WAY_HANDSHAKE": "connecting",
+                  "GROUP_HANDSHAKE": "connecting", "DISCONNECTED": "disconnected", "INACTIVE": "disconnected",
+                  "INTERFACE_DISABLED": "disconnected"}
+
+def _wpa_socket(name: str) -> bool:
+    return any(os.path.exists(os.path.join(d, name)) for d in ("/run/wpa_supplicant", "/var/run/wpa_supplicant"))
+
+def _wpa_missing_msg(name: str) -> str:
+    return (f"wpa_supplicant isn't running for {name}. On Debian, make sure its config is in "
+            f"/etc/wpa_supplicant/wpa_supplicant-{name}.conf (or wpa-conf is set for {name} in "
+            f"/etc/network/interfaces), then run: systemctl enable --now wpa_supplicant@{name}")
+
+def _wpa_status(name: str) -> Tuple[Optional[str], Optional[str]]:
+    if not _wpa_socket(name):
+        return "no supplicant", None
+    kv: Dict[str, str] = {}
+    for line in _run_text(["wpa_cli", "-i", name, "status"], timeout=8).splitlines():
+        k, sep, v = line.partition("=")
+        if sep:
+            kv[k.strip()] = v.strip()
+    st = kv.get("wpa_state")
+    if not st:
+        return None, None
+    return _WPA_STATE_MAP.get(st, "unknown"), kv.get("ssid") or None
+
+def _wpa_on(name: str, args: List[str], timeout: float = 15) -> Tuple[bool, str]:
+    if not _wpa_socket(name):
+        return False, _wpa_missing_msg(name)
+    try:
+        r = subprocess.run(["wpa_cli", "-i", name] + args, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    out = (r.stdout or "").strip()
+    return out == "OK", out or (r.stderr or "").strip()
+
+def _no_wifi_tool() -> Tuple[bool, str]:
+    return False, "No supported WiFi tool is running here: NetworkManager, or wpa_supplicant with wpa_cli."
+
+def _radio_set(on: bool) -> Tuple[bool, str]:
+    if _nm_on():
+        return _nmcli_ok(["radio", "wifi", "on" if on else "off"])
+    if not shutil.which("rfkill"):
+        return False, "rfkill is not installed. Install it from the Wi-Fi management tools card first."
+    return _nmcli_free_run(["rfkill", "unblock" if on else "block", "wlan"], timeout=15)
+
+def _dev_disconnect(name: str) -> Tuple[bool, str]:
+    if _nm_on():
+        return _nmcli_ok(["device", "disconnect", name])
+    if _wifi_backend() != "wpa_cli":
+        return _no_wifi_tool()
+    return _wpa_on(name, ["disconnect"])
+
+def _dev_connect(name: str) -> Tuple[bool, str]:
+    if _nm_on():
+        return _nmcli_ok(["device", "connect", name], timeout=45)
+    if _wifi_backend() != "wpa_cli":
+        return _no_wifi_tool()
+    return _wpa_on(name, ["reconnect"], timeout=45)
+
+def _wpa_scan_lines(current: Optional[str]) -> List[List[str]]:
+    lines: List[List[str]] = []
+    for row in _run_text(["wpa_cli", "-i", INTERFACE, "scan_results"], timeout=10).splitlines():
+        parts = row.split("\t")
+        if len(parts) < 5 or parts[0] == "bssid":
+            continue
+        bssid, freq, signal, flags, ssid = parts[0], parts[1], parts[2], parts[3], "\t".join(parts[4:])
+        in_use = "*" if current and ssid == current else ""
+        lines.append([in_use, ssid, bssid, "", freq, signal, _wpa_sec(flags)])
+    return lines
+
+def _adapter_info(name: str) -> Dict[str, Optional[str]]:
+    dev = f"/sys/class/net/{name}/device"
+    info: Dict[str, Optional[str]] = {"driver": None, "bus": None, "usb_id": None, "maker": None, "product": None}
+    try:
+        info["driver"] = os.path.basename(os.readlink(dev + "/driver")) or None
+    except OSError:
+        pass
+    if os.path.islink(dev + "/subsystem"):
+        info["bus"] = os.path.basename(os.path.realpath(dev + "/subsystem")) or None
+    if info["bus"] == "usb":
+        parent = os.path.realpath(dev + "/..")
+        vendor = (_read_text(parent + "/idVendor") or "").strip()
+        product_id = (_read_text(parent + "/idProduct") or "").strip()
+        if vendor and product_id:
+            info["usb_id"] = f"{vendor}:{product_id}"
+        info["maker"] = (_read_text(parent + "/manufacturer") or "").strip() or None
+        info["product"] = (_read_text(parent + "/product") or "").strip() or None
+    return info
+
 def _wifi_devices() -> List[Dict[str, object]]:
     if _nm_on():
         out: List[Dict[str, object]] = []
@@ -2792,7 +2907,7 @@ def _wifi_devices() -> List[Dict[str, object]]:
                 conn = f[3].strip()
                 out.append({"device": f[0], "state": f[2],
                             "connection": conn if conn and conn != "--" else None,
-                            "hw": _adapter_key(f[0])})
+                            "hw": _adapter_key(f[0]), **_adapter_info(f[0])})
         return out
     out = []
     try:
@@ -2802,8 +2917,13 @@ def _wifi_devices() -> List[Dict[str, object]]:
     for name in names:
         if os.path.isdir(f"/sys/class/net/{name}/wireless"):
             state = (_read_text(f"/sys/class/net/{name}/operstate") or "").strip() or None
-            out.append({"device": name, "state": state, "connection": None,
-                        "hw": _adapter_key(name)})
+            conn = None
+            if _wifi_backend() == "wpa_cli":
+                wpa_state, ssid = _wpa_status(name)
+                if wpa_state is not None:
+                    state, conn = wpa_state, ssid
+            out.append({"device": name, "state": state, "connection": conn,
+                        "hw": _adapter_key(name), **_adapter_info(name)})
     return out
 
 def _ipv4_map() -> Dict[str, str]:
@@ -2820,6 +2940,8 @@ def _read_power() -> Dict[str, object]:
         "undervoltage_now": None, "undervoltage_seen": None,
         "throttled_now": None, "freq_capped_now": None,
     }
+    if not _is_pi():
+        return out
     alarm = _read_text("/sys/class/hwmon/hwmon0/in0_lcrit_alarm")
     if alarm is not None:
         out["lcrit_alarm"] = alarm.strip() == "1"
@@ -2872,6 +2994,8 @@ def _collect_fast() -> Dict[str, object]:
     return out
 
 def _collect_slow() -> Dict[str, object]:
+    if not os.path.isdir(f"/sys/class/net/{INTERFACE}/wireless"):
+        _default_interface()
     out: Dict[str, object] = {"backend": _wifi_backend()}
     out.update(_ip4_address())
     out["gateway"] = _get_gateway()
@@ -2886,6 +3010,7 @@ def _collect_slow() -> Dict[str, object]:
         out["radio"] = _nmcli_radio()
     else:
         out["ssid_fallback"] = _current_ssid()
+        out["scan"] = _scan_from_lines(_wpa_scan_lines(out["ssid_fallback"])) if _wifi_backend() == "wpa_cli" else []
         out["dns"] = _resolv_dns()
         out["radio"] = None
     soft, hard = _rfkill_wlan()
@@ -3193,7 +3318,7 @@ def _default_interface() -> None:
     if os.path.isdir(f"/sys/class/net/{INTERFACE}/wireless"):
         return
     name = str(_system().get("wifi_iface") or "")
-    if name and _IFACE_RE.match(name):
+    if name and _IFACE_RE.match(name) and os.path.isdir(f"/sys/class/net/{name}/wireless"):
         log.info("No WiFi device %s here — using the detected WiFi device %s", INTERFACE, name)
         _set_interface(name, persist=False)
 
@@ -3295,7 +3420,7 @@ def _apply_undo(undo: Dict[str, object]) -> Tuple[bool, str]:
             if not ok:
                 notes.append("reconnect: " + msg)
     if undo.get("radio_on"):
-        ok, msg = _nmcli_ok(["radio", "wifi", "on"])
+        ok, msg = _radio_set(True)
         ok_all &= ok
         if not ok:
             notes.append("radio on: " + msg)
@@ -3303,15 +3428,15 @@ def _apply_undo(undo: Dict[str, object]) -> Tuple[bool, str]:
     if undo.get("interface"):
         _set_interface(str(undo["interface"]))
     if undo.get("disconnect"):
-        ok, msg = _nmcli_ok(["device", "disconnect", str(undo["disconnect"])])
+        ok, msg = _dev_disconnect(str(undo["disconnect"]))
         if not ok:
             notes.append("disconnect: " + msg)
     if undo.get("reconnect"):
         dev, prof = str(undo["reconnect"]), undo.get("profile")
-        if prof:
+        if prof and _nm_on():
             ok, msg = _nmcli_ok(["connection", "up", "id", str(prof), "ifname", dev], timeout=45)
         else:
-            ok, msg = _nmcli_ok(["device", "connect", dev], timeout=45)
+            ok, msg = _dev_connect(dev)
         ok_all &= ok
         if not ok:
             notes.append("reconnect: " + msg)
@@ -5639,6 +5764,163 @@ _SECURITY_HEADERS = (
 def _log_safe(text: object) -> str:
     return _LOG_CONTROL_RE.sub(" ", str(text))
 
+import ipaddress
+import stat as _stat
+
+_INSTALL_ENABLE_FILE = os.path.join(CONFIG_DIR, "install.enable")
+_INSTALL_DIR = "/run/wifimon"
+_INSTALL_LOG = os.path.join(_INSTALL_DIR, "install.log")
+_INSTALL_TIMEOUT = 1800
+_INSTALL_TOOLS: Dict[str, Dict[str, str]] = {
+    "iw": {"label": "iw", "pkg": "iw", "desc": "wireless device tool", "bin": "iw"},
+    "rfkill": {"label": "rfkill", "pkg": "rfkill", "desc": "radio block control", "bin": "rfkill"},
+    "wpasupplicant": {"label": "wpa_supplicant", "pkg": "wpasupplicant", "desc": "wpa_cli, WiFi without NetworkManager",
+                      "bin": "wpa_cli"},
+    "network-manager": {"label": "NetworkManager", "pkg": "network-manager",
+                        "desc": "nmcli and nmtui", "bin": "nmtui"},
+}
+_INSTALL_STATE_LOCK = threading.Lock()
+_INSTALL_STATE: Dict[str, object] = {"tool": None, "running": False, "rc": None,
+                                     "started": 0.0, "message": ""}
+_PROXY_HEADERS = ("X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip",
+                  "Forwarded", "Via", "Cf-Connecting-Ip", "Cf-Ray", "Cf-Visitor", "Cf-Ipcountry")
+_CONTROL_PATHS = frozenset({"/api/radio", "/api/device/disconnect", "/api/device/switch",
+                            "/api/device/mode", "/api/device/forget", "/api/service/restart",
+                            "/api/install/start"})
+
+def _install_enabled() -> bool:
+    try:
+        st = os.lstat(_INSTALL_ENABLE_FILE)
+    except OSError:
+        return False
+    return _stat.S_ISREG(st.st_mode) and st.st_uid == 0 and not (st.st_mode & 0o022)
+
+def _source_allowed(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(str(ip).split("%", 1)[0])
+    except ValueError:
+        return False
+    if addr.version == 6 and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
+    return addr.is_loopback or (addr.is_private and not addr.is_unspecified)
+
+def _control_gate(h) -> bool:
+    if not h._authed():
+        h._json(401, {"error": "Log in first."})
+        return False
+    if not _source_allowed(h.client_address[0]) or any(h.headers.get(x) for x in _PROXY_HEADERS):
+        h._json(403, {"error": "Changes only work from this machine or the local network, not through a proxy."})
+        return False
+    if not _install_enabled():
+        h._json(403, {"error": "Changes are switched off. Create " + _INSTALL_ENABLE_FILE +
+                               " (owned by root) to allow them."})
+        return False
+    return True
+
+def _install_read_log() -> str:
+    try:
+        with open(_INSTALL_LOG, "rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 65536))
+            return f.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+def _install_start(tool: str) -> Tuple[bool, str]:
+    spec = _INSTALL_TOOLS.get(tool)
+    if spec is None:
+        return False, "That tool is not on the install list."
+    if shutil.which(spec["bin"]):
+        return False, spec["label"] + " is already installed."
+    if not shutil.which("dpkg") or not shutil.which("systemd-run"):
+        return False, "This install needs dpkg and systemd-run."
+    try:
+        audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return False, "Install refused: could not check the package system (dpkg --audit)."
+    if (audit.stdout or "").strip():
+        return False, ("Install refused: the package system has unfinished or broken packages. "
+                       "Fix them first.\n" + audit.stdout.strip())
+    if not _action_lock.acquire(blocking=False):
+        return False, "Another change is running. Try again when it finishes."
+    try:
+        with _change_lock:
+            busy = _pending is not None
+        if busy:
+            _action_lock.release()
+            return False, "A change is still waiting to be kept or undone. Finish that one first."
+        os.makedirs(_INSTALL_DIR, mode=0o700, exist_ok=True)
+        open(_INSTALL_LOG, "w").close()
+        unit = "wifimon-install-" + tool
+        subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
+        subprocess.run(["systemctl", "reset-failed", unit], capture_output=True, timeout=30)
+        cmd = ("apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+               "-o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold "
+               + spec["pkg"] + "; echo WIFIMON_RC=$?")
+        start = subprocess.run(["systemd-run", f"--unit={unit}", "-p", "RemainAfterExit=yes",
+                                "-p", f"StandardOutput=append:{_INSTALL_LOG}",
+                                "-p", f"StandardError=append:{_INSTALL_LOG}",
+                                "--setenv=DEBIAN_FRONTEND=noninteractive",
+                                "/bin/sh", "-c", cmd],
+                               capture_output=True, text=True, timeout=30)
+        if start.returncode != 0:
+            _action_lock.release()
+            return False, "Could not start the install job: " + (start.stderr or start.stdout).strip()
+    except Exception as exc:
+        _action_lock.release()
+        return False, f"Could not start the install job: {exc}"
+    with _INSTALL_STATE_LOCK:
+        _INSTALL_STATE.update(tool=tool, running=True, rc=None, started=time.time(),
+                              message="Installing " + spec["label"] + "...")
+    threading.Thread(target=_install_watch, args=(unit,), daemon=True).start()
+    log.info("Install started: %s", spec["pkg"])
+    return True, "Installing " + spec["label"] + ". Output appears below."
+
+def _install_watch(unit: str) -> None:
+    rc = None
+    message = ""
+    t0 = time.time()
+    try:
+        while True:
+            time.sleep(2)
+            found = re.findall(r"WIFIMON_RC=(\d+)", _install_read_log())
+            if found:
+                rc = int(found[-1])
+                message = "Finished OK." if rc == 0 else f"Failed (exit {rc}). See the output."
+                break
+            if time.time() - t0 > 10:
+                st = subprocess.run(["systemctl", "show", "-p", "ActiveState", "--value", unit],
+                                    capture_output=True, text=True, timeout=10).stdout.strip()
+                if st in ("inactive", "failed"):
+                    message = "The job ended without a result."
+                    break
+            if time.time() - t0 > _INSTALL_TIMEOUT:
+                subprocess.run(["systemctl", "stop", unit], capture_output=True, timeout=30)
+                message = "Timed out. The job was stopped."
+                break
+    except Exception as exc:
+        message = f"Install watcher error: {exc}"
+    finally:
+        with _INSTALL_STATE_LOCK:
+            _INSTALL_STATE.update(running=False, rc=rc, message=message)
+        _action_lock.release()
+
+def _install_status() -> Dict[str, object]:
+    tools = [{"id": k, "label": v["label"], "desc": v["desc"],
+              "installed": bool(shutil.which(v["bin"]))} for k, v in _INSTALL_TOOLS.items()]
+    with _INSTALL_STATE_LOCK:
+        job = dict(_INSTALL_STATE)
+    return {"tools": tools, "enabled": _install_enabled(), "job": job,
+            "output": _install_read_log()[-16000:]}
+
+def _handle_install_start(h, body: Dict[str, object]) -> None:
+    if body.get("confirm") is not True:
+        h._json(400, {"error": "This install needs confirmation."})
+        return
+    ok, msg = _install_start(str(body.get("tool") or ""))
+    h._json(200 if ok else 409, {"ok": ok, "message": msg})
+
 class _Handler(BaseHTTPRequestHandler):
     server_version = "wifimon"
     sys_version = ""
@@ -5810,6 +6092,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(400, {"error": "Bad request body."})
             return
 
+        if path in _CONTROL_PATHS and not _control_gate(self):
+            return
         if path == "/api/login":
             self._handle_login(body)
         elif path == "/api/logout":
@@ -5818,6 +6102,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._json(401, {"error": "Log in first."})
         elif path == "/api/service/restart":
             self._handle_restart(body)
+        elif path == "/api/install/status":
+            self._json(200, _install_status())
+        elif path == "/api/install/start":
+            _handle_install_start(self, body)
         elif path == "/api/radio":
             self._handle_radio(body)
         elif path == "/api/device/disconnect":
@@ -6006,7 +6294,7 @@ class _Handler(BaseHTTPRequestHandler):
                      self.client_address[0])
             _grace_start("WiFi radio turned " + ("on" if on else "off") + " from the dashboard")
             if on:
-                ok, msg = _nmcli_ok(["radio", "wifi", "on"])
+                ok, msg = _radio_set(True)
                 _slow_refresh.set()
                 if ok:
                     self._json(200, {"ok": True, "message": "WiFi radio turned on."})
@@ -6019,7 +6307,7 @@ class _Handler(BaseHTTPRequestHandler):
                     profile = d["connection"]
             p = _begin_change("radio_off", "WiFi radio turned off",
                               {"radio_on": True, "reconnect": INTERFACE, "profile": profile})
-            ok, msg = _nmcli_ok(["radio", "wifi", "off"])
+            ok, msg = _radio_set(False)
             self._change_result(p, ok, msg, "WiFi radio turned off.")
         finally:
             self._release_and_send()
@@ -6044,7 +6332,7 @@ class _Handler(BaseHTTPRequestHandler):
             p = _begin_change("disconnect",
                               f"Disconnected {name}" + (f" from {profile}" if profile else ""),
                               {"reconnect": name, "profile": profile})
-            ok, msg = _nmcli_ok(["device", "disconnect", name])
+            ok, msg = _dev_disconnect(name)
             self._change_result(p, ok, msg, f"{name} disconnected.")
         finally:
             self._release_and_send()
@@ -6073,7 +6361,7 @@ class _Handler(BaseHTTPRequestHandler):
                                "disconnect": None if was_connected else name})
             ok, msg = True, ""
             if not was_connected:
-                ok, msg = _nmcli_ok(["device", "connect", name], timeout=45)
+                ok, msg = _dev_connect(name)
             if ok:
                 _set_interface(name)
             self._change_result(p, ok, msg, f"Now using {name}.")
@@ -6099,6 +6387,10 @@ class _Handler(BaseHTTPRequestHandler):
             prev = _dev_mode_of(key)
             if prev == mode:
                 self._json(200, {"ok": True, "message": f"{name} is already set to {word}."})
+                return
+            if not _nm_on():
+                self._json(409, {"error": "Keep on and Keep off need NetworkManager. This node is not "
+                                          "running NetworkManager, so the adapter's mode can't be changed here."})
                 return
             if mode == "off" and name == INTERFACE:
                 self._json(409, {"error": f"The watchdog is using {name}. Press \"Use this device\" on "
@@ -6180,21 +6472,25 @@ class _Handler(BaseHTTPRequestHandler):
         return _nmcli_active_ap().get("nm_ssid") or _current_ssid()
 
     def _handle_scan(self, body: Dict[str, object]) -> None:
-        if not _nm_on():
-            self._json(409, {"error": "Scanning needs NetworkManager (nmcli)."})
+        backend = _wifi_backend()
+        if backend is None:
+            self._json(409, {"error": "Scanning needs NetworkManager (nmcli) or wpa_supplicant (wpa_cli)."})
             return
         if not _action_lock.acquire(blocking=False):
             self._json(409, {"error": "Busy with another change. Try again in a moment."})
             return
         try:
-            ok, msg = _nmcli_ok(["device", "wifi", "rescan", "ifname", INTERFACE], timeout=15)
+            if backend == "nmcli":
+                ok, msg = _nmcli_ok(["device", "wifi", "rescan", "ifname", INTERFACE], timeout=15)
+            else:
+                ok, msg = _wpa_cli_ok(["scan"])
         finally:
             _action_lock.release()
         _slow_refresh.set()
         if ok:
             self._json(200, {"ok": True, "message": "Scanning. The list updates in a few seconds."})
         else:
-            self._json(500, {"error": f"Scan didn't start: {msg or 'nmcli failed'}"})
+            self._json(500, {"error": f"Scan didn't start: {msg or backend + ' failed'}"})
 
     def _handle_net_connect(self, body: Dict[str, object]) -> None:
         if not self._change_begin_checks(body):
@@ -7473,6 +7769,16 @@ a.btnlink:hover{border-color:var(--blue)}
         <button type="button" class="danger" id="btn-restart">Restart service</button>
         <button type="button" id="btn-logout">Log Out</button>
       </div>
+    </section>
+
+    <section class="card wide" id="card-install" aria-labelledby="in-h">
+      <h2 id="in-h">Wi-Fi management tools</h2>
+      <p class="note" id="in-note" hidden></p>
+      <div id="in-tools"><p class="muted">Loading…</p></div>
+      <p class="rules">Installs run apt in the background, so they keep going if this page reloads. Output is kept in RAM only, and nothing is changed until you press Install and confirm.</p>
+      <h3>Install output</h3>
+      <p class="muted" id="in-state"></p>
+      <pre class="pre" id="in-out" role="log" aria-live="polite"></pre>
     </section>
 
     <section class="card wide" id="card-log" aria-labelledby="lg-h">
@@ -9102,6 +9408,63 @@ a.btnlink:hover{border-color:var(--blue)}
   }));
 
   // ── Start ───────────────────────────────────────────────────────────
+  // ── Install card (5.44.0) ─────────────────────────────────────────
+  let installTimer = null;
+  let installPolling = false;
+  function installOutputText(raw) {
+    return String(raw || "").split("\n").map((l) =>
+      l.indexOf("WIFIMON_RC=") === 0 ? "[exit " + l.slice(11) + "]" : l).join("\n");
+  }
+  function renderInstall(s) {
+    const note = $("in-note"), tools = $("in-tools");
+    const job = s.job || {};
+    if (!s.enabled) {
+      note.textContent = "Installs are switched off. Create /etc/wifimon/install.enable, owned by root, to allow them.";
+      note.hidden = false;
+    } else {
+      note.hidden = true;
+    }
+    tools.textContent = "";
+    (s.tools || []).forEach((t) => {
+      const row = document.createElement("div");
+      row.className = "radio-row";
+      const name = document.createElement("span");
+      name.textContent = t.label + " \u2014 " + t.desc;
+      const st = document.createElement("span");
+      st.className = "v " + (t.installed ? "good" : "bad");
+      st.textContent = t.installed ? "Installed" : "Missing";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.textContent = "Install";
+      btn.disabled = !!t.installed || !s.enabled || !!job.running || busy;
+      btn.addEventListener("click", () => {
+        if (!confirm("Install " + t.label + " with apt? This changes system software on this node.")) return;
+        post("/api/install/start", { tool: t.id, confirm: true }).then(() => pollInstall());
+      });
+      row.append(name, st, btn);
+      tools.append(row);
+    });
+    $("in-state").textContent = job.message || "";
+    const out = $("in-out");
+    out.textContent = installOutputText(s.output);
+    out.scrollTop = out.scrollHeight;
+  }
+  async function pollInstall() {
+    if (installPolling) return;
+    installPolling = true;
+    let r = null;
+    try {
+      r = await api("/api/install/status", {});
+      if (r.status === 200) renderInstall(r.data);
+    } catch (e) {
+      // Not reachable right now; try again on the next tick.
+    } finally {
+      installPolling = false;
+    }
+  }
+  setInterval(pollInstall, 5000);
+  pollInstall();
+
   setDetails(detailsOpen);
   api("/api/whoami")
     .then((r) => { if (r.data.auth) showApp(); else showLogin(""); })

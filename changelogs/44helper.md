@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_7_20261029.py`. Newest entries first.
+Current file: `44helper_v0_1_8_20261101.py`. Newest entries first.
+
+## 0.1.8 (2026-11-01)
+
+- **The WiFi adapter that is up is found first.** The shared `system_profile` (kept identical in 44helper and wifimon, and checked by the repo check) picks the first WiFi adapter that is up, then `wlan0`, then the first WiFi device. A USB adapter with another name, such as `wlx…`, is found when it is connected. Nothing else changes.
 
 ## 0.1.7 (2026-10-30)
 
