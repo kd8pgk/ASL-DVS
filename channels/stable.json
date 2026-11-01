@@ -2,13 +2,13 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "f70431b13c37b388e1ffe76df130fb1f40eb7fdb",
-   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
-   "file": "44helper_v0_0_224_20261028.py",
-   "landed": "2026-10-28T18:44:35Z",
-   "promoted": "2026-10-31T18:44:35Z",
+   "blob": "f9e39c29da1322529988c0d95747dda56febe9e5",
+   "commit": "62d87c7533b09de6f5074fc4cb6c9f2d9ad57b55",
+   "file": "44helper_v0_1_1_20261029.py",
+   "landed": "2026-10-29T22:22:31Z",
+   "promoted": "2026-11-01T22:22:31Z",
    "reason": "count",
-   "version": "0.0.224"
+   "version": "0.1.1"
   },
   "amp_nodetalker": {
    "blob": "866725fc9eede5aff336d6587c674a6f7c2503bf",
@@ -56,13 +56,13 @@
    "version": "9.3.100-pi02w"
   },
   "nodetalker": {
-   "blob": "19b531c278789db923712aecb9049c33ea98ea31",
-   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
-   "file": "nodetalker_v0_9_49_20261028.py",
-   "landed": "2026-10-28T18:44:35Z",
-   "promoted": "2026-10-31T18:44:35Z",
+   "blob": "18f1f196bdc468d1605e756c4ad9e3d691684d17",
+   "commit": "d0d55aa72cbf6362a302b1ea5e6e5882a0949093",
+   "file": "nodetalker_v0_9_55_20261029.py",
+   "landed": "2026-10-29T20:44:12Z",
+   "promoted": "2026-11-01T20:44:12Z",
    "reason": "count",
-   "version": "0.9.49"
+   "version": "0.9.55"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
@@ -110,13 +110,13 @@
    "version": "3.1"
   },
   "wifimon": {
-   "blob": "19e1a2e73921fe0ef2f39f1b167487553279dabe",
-   "commit": "9e50b9bd253285a2734bf13db2cd9f87c018f3d6",
-   "file": "wifimon_v5_39_4_20261027.py",
-   "landed": "2026-10-27T12:42:32Z",
-   "promoted": "2026-10-30T12:42:32Z",
+   "blob": "61c265349ae8449e9562e2dcaaca3221fca698bb",
+   "commit": "2b4e94d644682913782e8dd9145247a98198c1d8",
+   "file": "wifimon_v5_40_0_20261027.py",
+   "landed": "2026-10-27T22:41:35Z",
+   "promoted": "2026-11-01T22:30:06Z",
    "reason": "count",
-   "version": "5.39.4"
+   "version": "5.40.0"
   }
  }
 }
