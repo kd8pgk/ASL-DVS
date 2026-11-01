@@ -1,6 +1,16 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_43_0_20261029.py`. Newest entries first.
+Current file: `wifimon_v5_44_0_20261101.py`. Newest entries first.
+
+## 5.44.0 (2026-11-01)
+
+- **Install card.** A new **Wi-Fi management tools** card lists iw, rfkill, wpa_supplicant (wpa_cli) and NetworkManager (nmcli and nmtui), each Installed or Missing, with an Install button on each missing one. Each install asks for confirmation, then runs apt in a systemd transient unit, so it keeps going if the page reloads. Its output is kept in `/run/wifimon` (RAM), not on the SD card. Nothing is installed until you press Install and confirm. An install is refused when another change is running, a change is waiting to be kept or undone, or `dpkg --audit` reports broken packages.
+- **Changes need an explicit switch.** The actions that change the node (radio, disconnect, device switch, mode, forget, service restart and install) now only work when `/etc/wifimon/install.enable` exists, is a regular file owned by root and is not writable by group or others. They also need a login, and they only work from this machine or the local network, not through a proxy. Without the file the page says changes are switched off and names the file to create. Reading status, scans and the watchdog are unchanged.
+- **Scans work on wpa_supplicant.** When NetworkManager is not running and `wpa_cli` is in use, Scan runs `wpa_cli scan` and lists the results in the same table as nmcli's.
+- **Adapter details.** Each WiFi device shows its driver, bus, USB id, maker and product from sysfs when the device exposes them.
+- **The working adapter is picked by state.** With no saved device, wifimon takes the first adapter that is up, then `wlan0`, then the first WiFi device. A saved device is used only when it is a WiFi device on this machine.
+- **Adapters can be plugged in later.** If the watched USB adapter is unplugged, wifimon picks another WiFi device; the device list is rebuilt the same way.
+- **The voltage watchdog is for the Raspberry Pi only.** On other boards it stays off; the Pi journal fallback for the chip temperature also runs on Broadcom-driven boards.
 
 ## 5.43.0 (2026-10-29)
 

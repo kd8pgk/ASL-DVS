@@ -2,6 +2,10 @@
 
 Current file: `nodetalker_v0_9_64_20261030.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
+## 0.9.64.1 (2026-11-01)
+
+- **Connect buttons fill the row.** On the Connect tab, the Connect and Disconnect buttons on the favorite card and on the Tune card match the Tune card's button pair and fill their row. Connect is a little taller. Layout only: what the buttons do is unchanged. This is a cosmetic build, so it stays on testing.
+
 ## 0.9.64 (2026-10-30)
 
 - **Disconnect drops every link on the node.** The Disconnect button on the favorite card and on the Tune card now drops every link the node lists, not only the favorites and the Tune link. The transmit node 1921 is left alone, because it is the local transmit feed and not a remote link. Private nodes and the digital and M17 bridge links are dropped too, so Disconnect will take down a bridge that is linked. Disconnect All is unchanged.
