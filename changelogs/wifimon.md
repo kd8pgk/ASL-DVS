@@ -1,6 +1,13 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_44_0_20261101.py`. Newest entries first.
+Current file: `wifimon_v5_45_0_20261101.py`. Newest entries first.
+
+## 5.45.0 (2026-11-01)
+
+- **Debian 12 and 13 without NetworkManager.** Debian's standard setups without NetworkManager (ifupdown or systemd-networkd, with wpa_supplicant running per device) now get full WiFi control. The device list reads each device's state and network from `wpa_cli status`, so a connected adapter shows its network name. Before, it showed only the kernel's up or down state.
+- **Radio, disconnect and connect work through wpa_supplicant.** Radio off and on use `rfkill block wlan` and `rfkill unblock wlan`, which need the `rfkill` package (the Wi-Fi management tools card installs it). Disconnect and Use this device use `wpa_cli -i <device> disconnect` and `reconnect`. Undo uses the same calls.
+- **Clear messages where NetworkManager is required.** Keep on and Keep off still need NetworkManager. On a wpa_supplicant node the page says so, instead of failing. With no WiFi tool at all, controls say which tool is missing.
+- With NetworkManager running, nothing changes.
 
 ## 5.44.0 (2026-11-01)
 

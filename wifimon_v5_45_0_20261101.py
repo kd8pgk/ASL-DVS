@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.44.0"
+APP_VERSION = "5.45.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -2807,6 +2807,54 @@ def _wpa_cli_ok(args: List[str], timeout: float = 15) -> Tuple[bool, str]:
     out = (r.stdout or "").strip()
     return out == "OK", out or (r.stderr or "").strip()
 
+_WPA_STATE_MAP = {"COMPLETED": "connected", "SCANNING": "connecting", "AUTHENTICATING": "connecting",
+                  "ASSOCIATING": "connecting", "ASSOCIATED": "connecting", "4WAY_HANDSHAKE": "connecting",
+                  "GROUP_HANDSHAKE": "connecting", "DISCONNECTED": "disconnected", "INACTIVE": "disconnected",
+                  "INTERFACE_DISABLED": "disconnected"}
+
+def _wpa_status(name: str) -> Tuple[Optional[str], Optional[str]]:
+    kv: Dict[str, str] = {}
+    for line in _run_text(["wpa_cli", "-i", name, "status"], timeout=8).splitlines():
+        k, sep, v = line.partition("=")
+        if sep:
+            kv[k.strip()] = v.strip()
+    st = kv.get("wpa_state")
+    if not st:
+        return None, None
+    return _WPA_STATE_MAP.get(st, "unknown"), kv.get("ssid") or None
+
+def _wpa_on(name: str, args: List[str], timeout: float = 15) -> Tuple[bool, str]:
+    try:
+        r = subprocess.run(["wpa_cli", "-i", name] + args, capture_output=True, text=True, timeout=timeout)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, str(exc)
+    out = (r.stdout or "").strip()
+    return out == "OK", out or (r.stderr or "").strip()
+
+def _no_wifi_tool() -> Tuple[bool, str]:
+    return False, "No supported WiFi tool is running here: NetworkManager, or wpa_supplicant with wpa_cli."
+
+def _radio_set(on: bool) -> Tuple[bool, str]:
+    if _nm_on():
+        return _nmcli_ok(["radio", "wifi", "on" if on else "off"])
+    if not shutil.which("rfkill"):
+        return False, "rfkill is not installed. Install it from the Wi-Fi management tools card first."
+    return _nmcli_free_run(["rfkill", "unblock" if on else "block", "wlan"], timeout=15)
+
+def _dev_disconnect(name: str) -> Tuple[bool, str]:
+    if _nm_on():
+        return _nmcli_ok(["device", "disconnect", name])
+    if _wifi_backend() != "wpa_cli":
+        return _no_wifi_tool()
+    return _wpa_on(name, ["disconnect"])
+
+def _dev_connect(name: str) -> Tuple[bool, str]:
+    if _nm_on():
+        return _nmcli_ok(["device", "connect", name], timeout=45)
+    if _wifi_backend() != "wpa_cli":
+        return _no_wifi_tool()
+    return _wpa_on(name, ["reconnect"], timeout=45)
+
 def _wpa_scan_lines(current: Optional[str]) -> List[List[str]]:
     lines: List[List[str]] = []
     for row in _run_text(["wpa_cli", "-i", INTERFACE, "scan_results"], timeout=10).splitlines():
@@ -2857,7 +2905,12 @@ def _wifi_devices() -> List[Dict[str, object]]:
     for name in names:
         if os.path.isdir(f"/sys/class/net/{name}/wireless"):
             state = (_read_text(f"/sys/class/net/{name}/operstate") or "").strip() or None
-            out.append({"device": name, "state": state, "connection": None,
+            conn = None
+            if _wifi_backend() == "wpa_cli":
+                wpa_state, ssid = _wpa_status(name)
+                if wpa_state is not None:
+                    state, conn = wpa_state, ssid
+            out.append({"device": name, "state": state, "connection": conn,
                         "hw": _adapter_key(name), **_adapter_info(name)})
     return out
 
@@ -3355,7 +3408,7 @@ def _apply_undo(undo: Dict[str, object]) -> Tuple[bool, str]:
             if not ok:
                 notes.append("reconnect: " + msg)
     if undo.get("radio_on"):
-        ok, msg = _nmcli_ok(["radio", "wifi", "on"])
+        ok, msg = _radio_set(True)
         ok_all &= ok
         if not ok:
             notes.append("radio on: " + msg)
@@ -3363,15 +3416,15 @@ def _apply_undo(undo: Dict[str, object]) -> Tuple[bool, str]:
     if undo.get("interface"):
         _set_interface(str(undo["interface"]))
     if undo.get("disconnect"):
-        ok, msg = _nmcli_ok(["device", "disconnect", str(undo["disconnect"])])
+        ok, msg = _dev_disconnect(str(undo["disconnect"]))
         if not ok:
             notes.append("disconnect: " + msg)
     if undo.get("reconnect"):
         dev, prof = str(undo["reconnect"]), undo.get("profile")
-        if prof:
+        if prof and _nm_on():
             ok, msg = _nmcli_ok(["connection", "up", "id", str(prof), "ifname", dev], timeout=45)
         else:
-            ok, msg = _nmcli_ok(["device", "connect", dev], timeout=45)
+            ok, msg = _dev_connect(dev)
         ok_all &= ok
         if not ok:
             notes.append("reconnect: " + msg)
@@ -6229,7 +6282,7 @@ class _Handler(BaseHTTPRequestHandler):
                      self.client_address[0])
             _grace_start("WiFi radio turned " + ("on" if on else "off") + " from the dashboard")
             if on:
-                ok, msg = _nmcli_ok(["radio", "wifi", "on"])
+                ok, msg = _radio_set(True)
                 _slow_refresh.set()
                 if ok:
                     self._json(200, {"ok": True, "message": "WiFi radio turned on."})
@@ -6242,7 +6295,7 @@ class _Handler(BaseHTTPRequestHandler):
                     profile = d["connection"]
             p = _begin_change("radio_off", "WiFi radio turned off",
                               {"radio_on": True, "reconnect": INTERFACE, "profile": profile})
-            ok, msg = _nmcli_ok(["radio", "wifi", "off"])
+            ok, msg = _radio_set(False)
             self._change_result(p, ok, msg, "WiFi radio turned off.")
         finally:
             self._release_and_send()
@@ -6267,7 +6320,7 @@ class _Handler(BaseHTTPRequestHandler):
             p = _begin_change("disconnect",
                               f"Disconnected {name}" + (f" from {profile}" if profile else ""),
                               {"reconnect": name, "profile": profile})
-            ok, msg = _nmcli_ok(["device", "disconnect", name])
+            ok, msg = _dev_disconnect(name)
             self._change_result(p, ok, msg, f"{name} disconnected.")
         finally:
             self._release_and_send()
@@ -6296,7 +6349,7 @@ class _Handler(BaseHTTPRequestHandler):
                                "disconnect": None if was_connected else name})
             ok, msg = True, ""
             if not was_connected:
-                ok, msg = _nmcli_ok(["device", "connect", name], timeout=45)
+                ok, msg = _dev_connect(name)
             if ok:
                 _set_interface(name)
             self._change_result(p, ok, msg, f"Now using {name}.")
@@ -6322,6 +6375,10 @@ class _Handler(BaseHTTPRequestHandler):
             prev = _dev_mode_of(key)
             if prev == mode:
                 self._json(200, {"ok": True, "message": f"{name} is already set to {word}."})
+                return
+            if not _nm_on():
+                self._json(409, {"error": "Keep on and Keep off need NetworkManager. This node is not "
+                                          "running NetworkManager, so the adapter's mode can't be changed here."})
                 return
             if mode == "off" and name == INTERFACE:
                 self._json(409, {"error": f"The watchdog is using {name}. Press \"Use this device\" on "
