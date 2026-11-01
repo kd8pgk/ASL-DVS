@@ -1,0 +1,10 @@
+#!/bin/sh
+D="${STUB_DIR:?STUB_DIR not set}"
+if [ -f "$D/asterisk_down" ]; then echo "Unable to connect to remote asterisk (does /var/run/asterisk/asterisk.ctl exist?)" >&2; exit 1; fi
+if [ "$1" = "-rx" ]; then
+  slug=$(printf '%s' "$2" | tr ' ' '_')
+  [ -f "$D/asterisk/$slug" ] && cat "$D/asterisk/$slug"
+  exit 0
+fi
+[ -f "$D/asterisk/$(printf '%s' "$*" | tr ' ' '_')" ] && cat "$D/asterisk/$(printf '%s' "$*" | tr ' ' '_')"
+exit 0

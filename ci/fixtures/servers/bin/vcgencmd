@@ -1,0 +1,8 @@
+#!/bin/sh
+D="${STUB_DIR:?STUB_DIR not set}"
+case "$1" in
+  get_throttled) echo "throttled=$(cat "$D/throttled" 2>/dev/null || echo 0x0)" ;;
+  measure_temp) echo "temp=$(cat "$D/temp" 2>/dev/null || echo 42.0)'C" ;;
+  *) echo "" ;;
+esac
+exit 0

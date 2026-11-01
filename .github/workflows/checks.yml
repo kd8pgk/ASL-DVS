@@ -10,7 +10,7 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -29,3 +29,13 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || 'origin/main' }}
         run: python ci/check_repo.py --base "$BASE_SHA"
+      - name: Install Playwright and Chromium
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pw" --no-save playwright@1.63.0
+          PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/pw-browsers" "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
+          echo "ASL_TEST_PLAYWRIGHT_MODULE=$RUNNER_TEMP/pw/node_modules/playwright/index.js" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pw-browsers" >> "$GITHUB_ENV"
+      - name: Server tests (six servers, stubbed hardware)
+        run: sudo -E env PATH="$PATH" python3 ci/test_servers.py
+      - name: Page tests (headless Chromium)
+        run: sudo -E env PATH="$PATH" python3 ci/test_pages.py
