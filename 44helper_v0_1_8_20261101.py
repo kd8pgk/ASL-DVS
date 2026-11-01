@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.7"
+APP_VERSION = "0.1.8"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -728,6 +728,11 @@ def system_profile(root="/"):
         manager = "systemd-networkd"
     else:
         manager = "unknown"
+    up = [name for name in ifaces if read("sys/class/net/" + name + "/operstate").strip() == "up"]
+    if up:
+        wifi_iface = up[0]
+    else:
+        wifi_iface = "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else "")
     return {
         "board": "pi" if "raspberry pi" in model.lower() else "other",
         "model": model,
@@ -737,7 +742,7 @@ def system_profile(root="/"):
         "version_id": osr.get("VERSION_ID", ""),
         "arch": arch,
         "wifi_manager": manager,
-        "wifi_iface": "wlan0" if "wlan0" in ifaces else (ifaces[0] if ifaces else ""),
+        "wifi_iface": wifi_iface,
         "wifi_ifaces": ifaces,
     }
 
