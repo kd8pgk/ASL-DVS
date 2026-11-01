@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_105_20261101.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_106_20261101.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.106-pi02w (2026-11-01)
+
+- **The service block has a timestamp.** `/api/status` now carries `svc_at`, the time the services were last checked (every 15 seconds). The status response is refreshed on each check, so the time stays current when no service changes.
 
 ## 9.3.105-pi02w (2026-11-01)
 

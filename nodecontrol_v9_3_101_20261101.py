@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.100"
+VERSION      = "9.3.101"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -6541,6 +6541,7 @@ _SVC_CHECK_SEC = 15.0
 _svc_lock      = threading.Lock()
 _SVC_KEYS      = ("ab", "stfu", "ysf", "p25", "nxdn", "ircddb", "m17")
 _svc_state     = {k: "unknown" for k in _SVC_KEYS}
+_svc_checked_at: float = 0.0
 
 def _svc_unit_states(groups: dict) -> dict:
     units = [u for us in groups.values() for u in us]
@@ -6583,7 +6584,7 @@ def _svc_public() -> dict:
         return dict(_svc_state)
 
 def _svc_loop() -> None:
-    global _status_etag
+    global _status_etag, _svc_checked_at
     while True:
         try:
             new = _svc_check()
@@ -6594,10 +6595,11 @@ def _svc_loop() -> None:
             changed = new != _svc_state
             if changed:
                 _svc_state.update(new)
+            _svc_checked_at = time.time()
         if changed:
             log.info("svc: %s", ", ".join(f"{k} {v}" for k, v in new.items()))
-            with _lock:
-                _status_etag = ""
+        with _lock:
+            _status_etag = ""
         time.sleep(_SVC_CHECK_SEC)
 
 def _net_signature() -> tuple:
@@ -7812,6 +7814,7 @@ def build_status() -> dict:
         "status":            st["status"],
         "asl_reg":           _asl_reg_public(),
         "svc":               _svc_public(),
+        "svc_at":            round(_svc_checked_at, 1),
         "current_fav":       st["linked_node"] if (st["page"] == "ASL" and not st["current_fav"] and st["linked_node"]) else st["current_fav"],
         "has_asl":           st["has_asl"],
         "has_dvs":           st["has_dvs"],

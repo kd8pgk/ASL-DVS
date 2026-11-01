@@ -19,12 +19,12 @@ ROOT_PW_ENV = "ASL_TEST_ROOT_PASSWORD"
 SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 
 SERVERS = {
-    "nodecontrol": {"file": "nodecontrol_v9_3_100_20261101.py", "port": 8989, "scheme": "http"},
-    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_105_20261101.py", "port": 8989, "scheme": "http"},
+    "nodecontrol": {"file": "nodecontrol_v9_3_101_20261101.py", "port": 8989, "scheme": "http"},
+    "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_106_20261101.py", "port": 8989, "scheme": "http"},
     "sysmon": {"file": "sysmon_v6_13_95_20261028.py", "port": 9999, "scheme": "http"},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_83_20261028.py", "port": 9999, "scheme": "http"},
-    "nodetalker": {"file": "nodetalker_v0_9_64_20261030.py", "port": 8993, "scheme": "https", "health": "/api/health"},
-    "amp_nodetalker": {"file": "amp_nodetalker_v0_3_6_20261030.py", "port": 8993, "scheme": "https", "health": "/api/health"},
+    "nodetalker": {"file": "nodetalker_v0_9_65_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
+    "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
 }
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")

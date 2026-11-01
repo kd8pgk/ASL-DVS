@@ -1,6 +1,10 @@
 # Node Talker for AMP changelog
 
-Current file: `amp_nodetalker_v0_3_6_20261030.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+Current file: `amp_nodetalker_v0_3_7_20261101.py`. Before 0.3.0 the tool was Node Listen for AMP, the file was `amp_nodelisten_v….py` and this log was `amp_nodelisten.md`. Newest entries first.
+
+## 0.3.7 (2026-11-01)
+
+- **Error replies carry a `message` key.** Every JSON error reply also has `message` with the same text as `error`, as Node Controller and SysMon use. The `error` key is unchanged.
 
 ## 0.3.6 (2026-10-30)
 

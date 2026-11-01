@@ -30,7 +30,7 @@ from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "0.3.6"
+VERSION = "0.3.7"
 DATE_STR = "2026-10-28"
 APP_NAME = "Node Talker for AMP"
 
@@ -4852,6 +4852,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, code, obj, headers=None):
+        if isinstance(obj, dict) and obj.get("error") and "message" not in obj:
+            obj = dict(obj, message=obj["error"])
         self._send(code, json.dumps(obj).encode("utf-8"), "application/json", headers)
 
     def _read_json(self):

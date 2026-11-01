@@ -31,7 +31,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.9.64.1"
+VERSION = "0.9.65"
 DATE_STR = "2026-10-30"
 APP_NAME = "Node Talker"
 
@@ -11019,6 +11019,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _json(self, code, obj, headers=None):
+        if isinstance(obj, dict) and obj.get("error") and "message" not in obj:
+            obj = dict(obj, message=obj["error"])
         self._send(code, json.dumps(obj).encode("utf-8"), "application/json", headers)
 
     def _read_json(self):
