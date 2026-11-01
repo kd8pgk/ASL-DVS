@@ -1,6 +1,10 @@
 # Dashboard, Pi Zero 2 W build changelog
 
-Current file: `nodecontrol_pi02w_v9_3_104_20261030.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_pi02w_v9_3_105_20261101.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.105-pi02w (2026-11-01)
+
+- **The service states show on every node.** The services block on the status (analog bridge, STFU, YSF, P25, NXDN, IRCDDB and M17) was checked only when DVSwitch was found. On a node without DVSwitch it stayed `unknown`, even while a service ran. It is checked on every node now; a service that is not installed reads `none`.
 
 ## 9.3.104-pi02w (2026-10-30)
 
