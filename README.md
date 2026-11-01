@@ -36,7 +36,7 @@ SysMon and the Dashboard come in two builds:
 
 - **Full build:** for a Pi 3, 4 or 5.
 - **Pi Zero 2 W fork:** a lighter build for the 512 MB Pi Zero 2 W.
-  - **SysMon:** drops the Console, Net, Reg, Firewall and Zello tabs.
+  - **SysMon:** drops the Console, Net, Firewall and Zello tabs.
   - **Dashboard:** keeps every tab, including Phone and all digital modes. It searches the AllStar and EchoLink lists from disk instead of memory, and polls less often.
 
 All the other tools are **common**, with one build for every node.
