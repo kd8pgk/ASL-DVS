@@ -1,6 +1,12 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_46_0_20261101.py`. Newest entries first.
+Current file: `wifimon_v5_47_0_20261101.py`. Newest entries first.
+
+## 5.47.0 (2026-11-01)
+
+- **Joining a saved network works without NetworkManager.** Connect and the automatic fallback to another saved network now join through wpa_supplicant (`wpa_cli`) when NetworkManager is not running, and the network is saved to the supplicant's config. Before, the join always went through NetworkManager, so it could not succeed on Debian's ifupdown or systemd-networkd setups.
+- **The visible-network check uses the wpa_supplicant scan** when NetworkManager is not running, so fallback decisions use the networks the adapter actually sees.
+- Keep on and Keep off still need NetworkManager.
 
 ## 5.46.0 (2026-11-01)
 

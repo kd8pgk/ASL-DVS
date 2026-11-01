@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.46.0"
+APP_VERSION = "5.47.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -4040,12 +4040,23 @@ def _profiles_for(ssid: str) -> List[Dict[str, object]]:
 
 def _activate_and_check(ssid: str, secs: int) -> Tuple[bool, str]:
     deadline = time.monotonic() + secs
-    profiles = _profiles_for(ssid)
+    if not _nm_on():
+        conf = next((n for n in _conf_networks() if n["ssid"] == ssid), None)
+        if conf is None:
+            return False, "no saved network"
+        if _wifi_backend() != "wpa_cli":
+            return False, _no_wifi_tool()[1]
+        ok, msg = _connect_wpa_cli(ssid, str(conf.get("psk") or "")), ""
+        if not ok:
+            return False, "couldn't join " + ssid + " through wpa_supplicant"
+        profiles = []
+    else:
+        profiles = _profiles_for(ssid)
     if profiles:
         ok, msg = _nmcli_ok(["--wait", str(secs), "connection", "up",
                              "uuid", str(profiles[0]["uuid"]), "ifname", INTERFACE],
                             timeout=secs + 15)
-    else:
+    elif _nm_on():
         conf = next((n for n in _conf_networks() if n["ssid"] == ssid), None)
         if conf is None:
             return False, "no saved profile"
@@ -4060,6 +4071,13 @@ def _activate_and_check(ssid: str, secs: int) -> Tuple[bool, str]:
         time.sleep(2)
 
 def _visible_ssids() -> Optional[set]:
+    if not _nm_on():
+        if _wifi_backend() != "wpa_cli":
+            return None
+        _wpa_cli_ok(["scan"])
+        time.sleep(3)
+        names = {f[1] for f in _wpa_scan_lines(None) if f[1]}
+        return names or None
     _nmcli_ok(["device", "wifi", "rescan", "ifname", INTERFACE], timeout=15)
     time.sleep(3)
     names = {f[1] for f in _nm_scan_lines() if f[1]}
