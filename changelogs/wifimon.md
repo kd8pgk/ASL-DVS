@@ -1,6 +1,10 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_45_0_20261101.py`. Newest entries first.
+Current file: `wifimon_v5_46_0_20261101.py`. Newest entries first.
+
+## 5.46.0 (2026-11-01)
+
+- **A clear message when wpa_supplicant isn't running for an adapter.** Without NetworkManager, the device list shows an adapter with no wpa_supplicant control socket as **no supplicant**, and its controls say how to start it on Debian: the config file, or the `wpa-conf` line in `/etc/network/interfaces`, then `systemctl enable --now wpa_supplicant@<device>`. Before, the control failed with a generic error.
 
 ## 5.45.0 (2026-11-01)
 

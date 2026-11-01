@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.45.0"
+APP_VERSION = "5.46.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -2812,7 +2812,17 @@ _WPA_STATE_MAP = {"COMPLETED": "connected", "SCANNING": "connecting", "AUTHENTIC
                   "GROUP_HANDSHAKE": "connecting", "DISCONNECTED": "disconnected", "INACTIVE": "disconnected",
                   "INTERFACE_DISABLED": "disconnected"}
 
+def _wpa_socket(name: str) -> bool:
+    return any(os.path.exists(os.path.join(d, name)) for d in ("/run/wpa_supplicant", "/var/run/wpa_supplicant"))
+
+def _wpa_missing_msg(name: str) -> str:
+    return (f"wpa_supplicant isn't running for {name}. On Debian, make sure its config is in "
+            f"/etc/wpa_supplicant/wpa_supplicant-{name}.conf (or wpa-conf is set for {name} in "
+            f"/etc/network/interfaces), then run: systemctl enable --now wpa_supplicant@{name}")
+
 def _wpa_status(name: str) -> Tuple[Optional[str], Optional[str]]:
+    if not _wpa_socket(name):
+        return "no supplicant", None
     kv: Dict[str, str] = {}
     for line in _run_text(["wpa_cli", "-i", name, "status"], timeout=8).splitlines():
         k, sep, v = line.partition("=")
@@ -2824,6 +2834,8 @@ def _wpa_status(name: str) -> Tuple[Optional[str], Optional[str]]:
     return _WPA_STATE_MAP.get(st, "unknown"), kv.get("ssid") or None
 
 def _wpa_on(name: str, args: List[str], timeout: float = 15) -> Tuple[bool, str]:
+    if not _wpa_socket(name):
+        return False, _wpa_missing_msg(name)
     try:
         r = subprocess.run(["wpa_cli", "-i", name] + args, capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.SubprocessError) as exc:
