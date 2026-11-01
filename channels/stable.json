@@ -2,13 +2,13 @@
  "channel": "stable",
  "tools": {
   "44helper": {
-   "blob": "a74b9ea2a93df2dd1bf5ee6717d55967ce7c4c14",
-   "commit": "22568d86f255cde585175b5efe09e470f54e4ce3",
-   "file": "44helper_v0_0_223_20261028.py",
-   "landed": "2026-10-28T07:28:17Z",
-   "promoted": "2026-10-31T07:28:17Z",
+   "blob": "f70431b13c37b388e1ffe76df130fb1f40eb7fdb",
+   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
+   "file": "44helper_v0_0_224_20261028.py",
+   "landed": "2026-10-28T18:44:35Z",
+   "promoted": "2026-10-31T18:44:35Z",
    "reason": "count",
-   "version": "0.0.223"
+   "version": "0.0.224"
   },
   "amp_nodetalker": {
    "blob": "866725fc9eede5aff336d6587c674a6f7c2503bf",
@@ -56,13 +56,13 @@
    "version": "9.3.100-pi02w"
   },
   "nodetalker": {
-   "blob": "88b74a6d3c8334499f0c4aa86782cd38e0ef2fb8",
-   "commit": "1ffab118301c4774293e4aa81bebfe769b166d4c",
-   "file": "nodetalker_v0_9_47_20261028.py",
-   "landed": "2026-10-28T06:48:22Z",
-   "promoted": "2026-10-31T06:48:22Z",
+   "blob": "19b531c278789db923712aecb9049c33ea98ea31",
+   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
+   "file": "nodetalker_v0_9_49_20261028.py",
+   "landed": "2026-10-28T18:44:35Z",
+   "promoted": "2026-10-31T18:44:35Z",
    "reason": "count",
-   "version": "0.9.47"
+   "version": "0.9.49"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
