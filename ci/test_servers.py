@@ -25,6 +25,7 @@ SERVERS = {
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_13_83_20261028.py", "port": 9999, "scheme": "http"},
     "nodetalker": {"file": "nodetalker_v0_10_1_20261102.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
+    "noderecorder": {"file": "noderecorder_v0_1_0_20261102.py", "port": 8995, "scheme": "https", "health": "/api/health"},
 }
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")
@@ -38,6 +39,7 @@ PUBLIC_BY_DESIGN = {
     "sysmon_pi02w": {"/api/event"},
     "nodetalker": {"/api/health", "/api/whoami"},
     "amp_nodetalker": {"/api/health", "/api/whoami"},
+    "noderecorder": {"/api/health", "/api/whoami"},
 }
 
 
