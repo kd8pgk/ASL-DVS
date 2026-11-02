@@ -1,6 +1,10 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_10_20261102.py`. Newest entries first.
+Current file: `44helper_v0_1_11_20261102.py`. Newest entries first.
+
+## 0.1.11 (2026-11-02)
+
+- **Ampersand is Trixie (Debian 13) only.** The Ampersand download step, which both the radio-node (amp-server) and hub (amp-hub) installs run first, now stops on any other release with a message naming the release it found. Nothing is downloaded or changed. The tab's warning says so too. The hub build 20260225 needs GLIBC 2.38, which Debian 12 (Bookworm) does not have, so it failed to start on a Bookworm node after its settings file loaded.
 
 ## 0.1.10 (2026-11-02)
 

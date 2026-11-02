@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.10"
+APP_VERSION = "0.1.11"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3942,7 +3942,9 @@ _AMP_SERVER_DEFAULT = "20260610"
 _AMP_HUB_DEFAULT = "20260225"
 
 def _amp_fetch_cmd(prefix: str, version: str, what: str, guide: str) -> str:
-    return (f"v={version}; a=$(uname -m); case \"$a\" in aarch64|x86_64) ;; *) "
+    return ("grep -q '^VERSION_CODENAME=trixie$' /etc/os-release || { echo \"Ampersand needs Debian 13 (Trixie); "
+            "this node is $(. /etc/os-release; echo ${VERSION_CODENAME:-unknown}). Nothing was changed.\"; exit 1; }; "
+            f"v={version}; a=$(uname -m); case \"$a\" in aarch64|x86_64) ;; *) "
             f"echo \"No {what} package is built for $a (only aarch64 and x86_64). A 32-bit OS cannot run it: "
             "use a 64-bit OS.\"; exit 1;; esac; "
             f"u={_AMP_REL}/{prefix}-$v-$a.tar.gz; "
@@ -25775,7 +25777,8 @@ _AMP_WARNING = """Install helper for the Ampersand-ASL project (github.com/Amper
   <b>Hub node (amp-hub)</b> for a radio-less conference hub. Both install from prebuilt,
   date-versioned tarballs on the project's S3 bucket (aarch64 or x86_64, picked by uname -m). Put the
   release date in the Version box of the download step; the step checks that Ampersand publishes it for
-  this processor before it downloads anything. Ampersand keeps only current builds there, sometimes for
+  this processor before it downloads anything. Ampersand is for Debian 13 (Trixie) only: the download step
+  stops on any other release. Ampersand keeps only current builds there, sometimes for
   one processor only. Every step runs from this page: the standard install ends with the amp-server
   service running as your user, the hub install with amp-hub running from /usr/etc/amp-hub.env.
   <br><br><b>Conflict warning:</b> Ampersand REPLACES Asterisk; it does not run alongside
