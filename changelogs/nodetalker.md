@@ -1,6 +1,19 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_2_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_3_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.3 (2026-11-02)
+
+- **Receive health names the bad IAX link.** The loss, drops, out-of-order frames, jitter and round trip are now kept per link (the peer, without the call number), and the Outside the LAN row names the worst link and how many were affected. Up to 8 links are kept per minute, the worst first. The per-minute file rows carry them under `links`.
+- **Receive health tells devices apart.** The page reports itself as `browser` and the Android app as `android` (Node Talker Mobile 0.6.3, which also marks its listen stream). The per-minute rows carry each device's counters under `clients`. The Phone / browser row lists them per device, and the verdict separates three cases:
+  - audio stopped reaching the phone (its connection);
+  - the phone's player underran while audio was waiting (the phone itself);
+  - both.
+  An older app or a command-line client shows as `other`.
+- **Stalled listeners are seen from the Pi.** For each listener the Pi now reads how much audio is waiting unsent in the socket's send queue, which shows a slow phone link before the old slow-send check can. It counts a stall when 0.5 s or more is waiting, once per episode, and keeps the longest wait. The old slow-send and queue-overrun counts stay.
+- A `trim` is still not blamed on the Pi: it follows a burst after an upstream gap.
+- New tests replay real minutes from a Pi (`ci/fixtures/rxhealth_field_20261102.json`) and check each verdict. They also cover the per-link counts, the device tags, the send-queue reading on a real socket, and that the Android app's report keys are all accepted.
+- This is a release, not a cosmetic build.
 
 ## 0.10.2 (2026-11-02)
 

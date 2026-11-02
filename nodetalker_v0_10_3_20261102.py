@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.2"
+VERSION = "0.10.3"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -1053,9 +1053,12 @@ def udp_socket(port=None):
 
 
 class _Listener:
-    __slots__ = ("q", "closed", "ip", "since", "pcm")
+    __slots__ = ("q", "closed", "ip", "since", "pcm", "sock", "client", "stalled")
 
     def __init__(self, ip, pcm=False):
+        self.sock = None
+        self.client = "other"
+        self.stalled = False
         self.q = deque(maxlen=LISTENER_QUEUE_MAX)
         self.closed = False
         self.ip = ip
@@ -1595,11 +1598,80 @@ RXH_WINDOW_MIN = 5
 RXH_JITTER_FLAG_MS = 60
 RXH_CPU_FLAG = 90.0
 RXH_CLIENT_MAX = 100000
+RXH_LINKS_MAX = 8
+RXH_OUTQ_STALL_MS = 500
+RXH_OUTQ_NOTE_MS = 100
+RXH_OUTQ_SEC = 0.25
+RXH_CLIENT_NAMES = ("android", "browser", "other")
+RXH_CLIENT_KEYS = ("client", "under", "reset", "silence_ms", "under_local", "stall_ms")
 _RXH_SUM = ("pkts", "gaps", "over", "trim", "pump_late", "lst_overrun", "slow_writes", "net_lost", "net_drop",
-            "net_ooo", "throttled", "cl_under", "cl_reset", "cl_silence_ms")
+            "net_ooo", "throttled", "cl_under", "cl_reset", "cl_silence_ms", "cl_under_local", "out_stalls")
 _RXH_MAX = ("gap_ms_max", "jit_ms_max", "pump_ms_max", "write_ms_max", "net_jit_max", "net_rtt_max", "cpu_max",
-            "net_peers")
+            "net_peers", "cl_stall_ms_max", "out_ms_max")
 _RXH_FIELDS = _RXH_SUM + _RXH_MAX
+_RXH_LINK_SUM = ("lost", "drop", "ooo")
+_RXH_LINK_MAX = ("jit", "rtt")
+_RXH_CLIENT_SUM = ("under", "reset", "silence_ms", "under_local", "out_stalls")
+_RXH_CLIENT_MAX = ("stall_ms", "out_ms")
+
+
+def link_key(chan):
+    return re.sub(r"-\d+$", "", chan)
+
+
+def rxh_client_name(name, ua):
+    n = str(name or "").strip().lower()
+    if n in RXH_CLIENT_NAMES:
+        return n
+    u = str(ua or "").lower()
+    if "dalvik" in u or "okhttp" in u:
+        return "android"
+    if "mozilla" in u:
+        return "browser"
+    return "other"
+
+
+def sock_unsent(sock):
+    try:
+        import fcntl
+        import termios
+        raw = fcntl.ioctl(sock.fileno(), termios.TIOCOUTQ, b"\0\0\0\0")
+        return struct.unpack("i", raw)[0]
+    except (ImportError, OSError, ValueError, AttributeError, struct.error):
+        return None
+
+
+def rxh_outq_ms(unsent, pcm):
+    return int(unsent * 1000 / (16000 if pcm else 8000))
+
+
+def rxh_outq_note(rxh, client, ms, stalled):
+    if stalled:
+        now = ms >= RXH_OUTQ_STALL_MS / 2
+        rxh.note_outq(client, ms, False)
+    else:
+        now = ms >= RXH_OUTQ_STALL_MS
+        rxh.note_outq(client, ms, now)
+    return now
+
+
+def rxh_outq_sample(rxh, listeners):
+    for lst in listeners:
+        if lst.sock is None:
+            continue
+        unsent = sock_unsent(lst.sock)
+        if unsent is None:
+            continue
+        ms = rxh_outq_ms(unsent, lst.pcm)
+        if ms >= RXH_OUTQ_NOTE_MS or lst.stalled:
+            lst.stalled = rxh_outq_note(rxh, lst.client, ms, lst.stalled)
+
+
+def _copy_row(r):
+    out = dict(r)
+    out["links"] = {k: dict(v) for k, v in (r.get("links") or {}).items()}
+    out["clients"] = {k: dict(v) for k, v in (r.get("clients") or {}).items()}
+    return out
 
 
 def parse_netstats(text):
@@ -1637,7 +1709,16 @@ class RxHealth:
     def _new(self, minute):
         row = {k: 0 for k in _RXH_FIELDS}
         row["t"] = minute
+        row["links"] = {}
+        row["clients"] = {}
         return row
+
+    def _client(self, b, name):
+        c = b["clients"].get(name)
+        if c is None:
+            c = {k: 0 for k in _RXH_CLIENT_SUM + _RXH_CLIENT_MAX}
+            b["clients"][name] = c
+        return c
 
     def _bucket(self):
         minute = int(time.time() // 60) * 60
@@ -1710,12 +1791,30 @@ class RxHealth:
             if throttled:
                 b["throttled"] += 1
 
-    def note_client(self, under, reset, silence_ms):
+    def note_client(self, under, reset, silence_ms, client="other", under_local=0, stall_ms=0):
         with self.lock:
             b = self._bucket()
             b["cl_under"] += under
             b["cl_reset"] += reset
             b["cl_silence_ms"] += silence_ms
+            b["cl_under_local"] += under_local
+            b["cl_stall_ms_max"] = max(b["cl_stall_ms_max"], stall_ms)
+            c = self._client(b, client)
+            c["under"] += under
+            c["reset"] += reset
+            c["silence_ms"] += silence_ms
+            c["under_local"] += under_local
+            c["stall_ms"] = max(c["stall_ms"], stall_ms)
+
+    def note_outq(self, client, ms, new_stall):
+        with self.lock:
+            b = self._bucket()
+            c = self._client(b, client)
+            b["out_ms_max"] = max(b["out_ms_max"], ms)
+            c["out_ms"] = max(c["out_ms"], ms)
+            if new_stall:
+                b["out_stalls"] += 1
+                c["out_stalls"] += 1
 
     def note_net(self, rows):
         with self.lock:
@@ -1723,16 +1822,28 @@ class RxHealth:
             self.net_ok = True
             self.net_why = ""
             seen = {}
+            links = b["links"]
             for r in rows:
                 prev = self.net_seen.get(r["chan"])
                 seen[r["chan"]] = (r["lost"], r["drop"], r["ooo"])
+                lk = links.setdefault(link_key(r["chan"]), {"lost": 0, "drop": 0, "ooo": 0, "jit": 0, "rtt": 0})
                 if prev is not None:
-                    b["net_lost"] += max(0, r["lost"] - prev[0])
-                    b["net_drop"] += max(0, r["drop"] - prev[1])
-                    b["net_ooo"] += max(0, r["ooo"] - prev[2])
+                    dl, dd, do = (max(0, r["lost"] - prev[0]), max(0, r["drop"] - prev[1]), max(0, r["ooo"] - prev[2]))
+                    b["net_lost"] += dl
+                    b["net_drop"] += dd
+                    b["net_ooo"] += do
+                    lk["lost"] += dl
+                    lk["drop"] += dd
+                    lk["ooo"] += do
                 b["net_jit_max"] = max(b["net_jit_max"], r["jit"])
+                lk["jit"] = max(lk["jit"], r["jit"])
                 if r["rtt"] is not None and r["rtt"] >= 0:
                     b["net_rtt_max"] = max(b["net_rtt_max"], r["rtt"])
+                    lk["rtt"] = max(lk["rtt"], r["rtt"])
+            if len(links) > RXH_LINKS_MAX:
+                keep = sorted(links, key=lambda k: (links[k]["lost"] + links[k]["drop"], links[k]["jit"]), reverse=True)
+                for k in keep[RXH_LINKS_MAX:]:
+                    del links[k]
             b["net_peers"] = max(b["net_peers"], len(rows))
             self.net_seen = seen
 
@@ -1745,13 +1856,13 @@ class RxHealth:
         with self.lock:
             self._bucket()
             rows = list(self.buckets)[-(minutes - 1):] if minutes > 1 else []
-            rows.append(dict(self.cur))
-            return [dict(r) for r in rows]
+            rows.append(self.cur)
+            return [_copy_row(r) for r in rows]
 
     def history(self, minutes=60):
         with self.lock:
             self._bucket()
-            return [dict(r) for r in list(self.buckets)[-minutes:]] + [dict(self.cur)]
+            return [_copy_row(r) for r in list(self.buckets)[-minutes:]] + [_copy_row(self.cur)]
 
     def net_state(self):
         with self.lock:
@@ -1770,12 +1881,52 @@ def _rxh_write(row):
 
 def rxh_sum(rows):
     agg = {k: 0 for k in _RXH_FIELDS}
+    agg["links"] = {}
+    agg["clients"] = {}
     for r in rows:
         for k in _RXH_SUM:
             agg[k] += r.get(k, 0)
         for k in _RXH_MAX:
             agg[k] = max(agg[k], r.get(k, 0))
+        for name, lk in (r.get("links") or {}).items():
+            a = agg["links"].setdefault(name, {k: 0 for k in _RXH_LINK_SUM + _RXH_LINK_MAX})
+            for k in _RXH_LINK_SUM:
+                a[k] += lk.get(k, 0)
+            for k in _RXH_LINK_MAX:
+                a[k] = max(a[k], lk.get(k, 0))
+        for name, c in (r.get("clients") or {}).items():
+            a = agg["clients"].setdefault(name, {k: 0 for k in _RXH_CLIENT_SUM + _RXH_CLIENT_MAX})
+            for k in _RXH_CLIENT_SUM:
+                a[k] += c.get(k, 0)
+            for k in _RXH_CLIENT_MAX:
+                a[k] = max(a[k], c.get(k, 0))
     return agg
+
+
+def _rxh_worst_link(links, total):
+    if not links:
+        return ""
+    worst = max(links, key=lambda k: (links[k]["lost"] + links[k]["drop"], links[k]["jit"], links[k]["rtt"]))
+    w = links[worst]
+    hit = sum(1 for lk in links.values() if lk["lost"] or lk["drop"])
+    return (f"; worst {worst} (lost {w['lost']}, dropped {w['drop']}, jitter up to {w['jit']} ms, "
+            f"round trip up to {w['rtt']} ms); {hit} of {max(total, len(links))} links affected")
+
+
+def _rxh_client_text(clients):
+    bits = []
+    for name in sorted(clients):
+        c = clients[name]
+        if not (c["under"] or c["reset"]):
+            continue
+        t = f"{name}: {c['under']} underruns"
+        if c["under_local"]:
+            t += f" ({c['under_local']} with audio waiting, the phone itself)"
+        t += f", {c['silence_ms']} ms of silence, {c['reset']} queue resets"
+        if c["stall_ms"]:
+            t += f", playback interrupted for up to {c['stall_ms']} ms"
+        bits.append(t)
+    return "; ".join(bits)
 
 
 def rxh_verdict(agg, net):
@@ -1795,7 +1946,10 @@ def rxh_verdict(agg, net):
                 f"out of order {agg['net_ooo']}", f"jitter up to {agg['net_jit_max']} ms",
                 f"round trip up to {agg['net_rtt_max']} ms"]
         net_bad = bool(agg["net_lost"] or agg["net_drop"] or agg["net_jit_max"] >= RXH_JITTER_FLAG_MS)
-        add("Outside the LAN (IAX links)", "bad" if net_bad else "ok", ", ".join(bits))
+        text = ", ".join(bits)
+        if net_bad:
+            text += _rxh_worst_link(agg["links"], agg["net_peers"])
+        add("Outside the LAN (IAX links)", "bad" if net_bad else "ok", text)
     gap_bad = agg["gaps"] > 0
     add("Audio arriving at the Pi", "bad" if gap_bad else "ok",
         f"{agg['gaps']} gaps over {int(RXH_GAP_SEC * 1000)} ms (longest {agg['gap_ms_max']} ms), "
@@ -1813,24 +1967,44 @@ def rxh_verdict(agg, net):
     add("This Pi", "bad" if pi_bad else "ok",
         "; ".join(pi_bits) if pi_bad else f"queue clean, pump on time, power fine, RX load up to {agg['cpu_max']} %")
     lst_bits = []
+    if agg["out_stalls"]:
+        lst_bits.append(f"{agg['out_stalls']} times audio waited unsent to a listener, up to {agg['out_ms_max']} ms")
     if agg["slow_writes"]:
         lst_bits.append(f"{agg['slow_writes']} slow sends to a listener (worst {agg['write_ms_max']} ms)")
     if agg["lst_overrun"]:
         lst_bits.append(f"{agg['lst_overrun']} listener queue overruns")
     lst_bad = bool(lst_bits)
-    add("Pi to listener", "bad" if lst_bad else "ok", "; ".join(lst_bits) if lst_bad else "sends keep up")
+    if lst_bad:
+        lst_text = "; ".join(lst_bits)
+    elif agg["out_ms_max"]:
+        lst_text = f"sends keep up (audio waited unsent at most {agg['out_ms_max']} ms)"
+    else:
+        lst_text = "sends keep up"
+    add("Pi to listener", "bad" if lst_bad else "ok", lst_text)
     cl_bad = bool(agg["cl_under"] or agg["cl_reset"])
     add("Phone / browser", "bad" if cl_bad else "ok",
-        f"{agg['cl_under']} underruns ({agg['cl_silence_ms']} ms of silence), {agg['cl_reset']} queue resets"
-        if cl_bad else "no underruns reported")
+        (_rxh_client_text(agg["clients"]) or f"{agg['cl_under']} underruns ({agg['cl_silence_ms']} ms of silence), "
+         f"{agg['cl_reset']} queue resets") if cl_bad else "no underruns reported")
     if not agg["pkts"]:
         state, text = "idle", "No received audio in the last few minutes."
     elif pi_bad:
         state, text = "pi", "This Pi is part of the problem: see the Pi row."
     elif net_bad or gap_bad:
         state, text = "network", "Not the Pi. Audio is already late or missing before it reaches the Pi: the network outside the LAN."
+        if lst_bad or cl_bad:
+            text += " The phone also had underruns or stalls in this window."
     elif lst_bad or cl_bad:
-        state, text = "listener", "Not the Pi and not the link into it. The loss is between the Pi and the listener: the phone's connection."
+        local = agg["cl_under_local"]
+        starved = bool(agg["out_stalls"] or agg["slow_writes"] or agg["lst_overrun"] or agg["cl_stall_ms_max"]
+                       or agg["cl_reset"] or agg["cl_under"] > local)
+        state = "listener"
+        if local and not starved:
+            text = "Not the Pi and not the link into it. The phone itself: playback underruns while audio was waiting."
+        elif local:
+            text = ("Not the Pi and not the link into it. The phone: audio sometimes did not arrive, and its playback "
+                    "also underran with audio waiting.")
+        else:
+            text = "Not the Pi and not the link into it. The loss is between the Pi and the listener: the phone's connection."
     else:
         state, text = "clean", "Clean: no loss, gaps or drops anywhere in the last few minutes."
     return {"state": state, "text": text, "rows": rows}
@@ -1841,6 +2015,18 @@ def rxh_status():
     out = rxh_verdict(agg, RXH.net_state())
     out["minutes"] = RXH_WINDOW_MIN
     return out
+
+
+def rxh_outq_loop():
+    while True:
+        try:
+            with HUB.lock:
+                lsts = list(HUB.listeners)
+            if lsts:
+                rxh_outq_sample(RXH, lsts)
+        except Exception:
+            pass
+        time.sleep(RXH_OUTQ_SEC)
 
 
 def rxh_netstats_loop():
@@ -1867,7 +2053,8 @@ def rxh_client(body):
         except (TypeError, ValueError):
             raise ValueError(f"{key} must be a whole number")
 
-    RXH.note_client(num("under"), num("reset"), num("silence_ms"))
+    RXH.note_client(num("under"), num("reset"), num("silence_ms"), rxh_client_name(body.get("client"), ""),
+                    num("under_local"), num("stall_ms"))
     return {"ok": True}
 
 
@@ -7070,7 +7257,7 @@ function rxhCount(silence) {
 
 async function rxhSend() {
   if (!authed || !(rxh.under || rxh.reset)) return;
-  const sent = {under: rxh.under, reset: rxh.reset, silence_ms: rxh.silence};
+  const sent = {under: rxh.under, reset: rxh.reset, silence_ms: rxh.silence, client: 'browser'};
   rxh.under = 0; rxh.reset = 0; rxh.silence = 0;
   const r = await post('/api/rxhealth/client', sent);
   if (!r || r.ok === false) { rxh.under += sent.under; rxh.reset += sent.reset; rxh.silence += sent.silence_ms; }
@@ -11604,7 +11791,7 @@ class Handler(BaseHTTPRequestHandler):
                 else:
                     self._json(200, dict(rxh_status(), ok=True, history=RXH.history(60)))
             elif path == "/api/listen":
-                self._stream((query.get("fmt") or [""])[0] == "s16")
+                self._stream((query.get("fmt") or [""])[0] == "s16", (query.get("client") or [""])[0])
             elif path == "/api/talk":
                 self._talk()
             elif path == "/api/node":
@@ -11666,12 +11853,15 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def _stream(self, pcm=False):
+    def _stream(self, pcm=False, client=""):
+        client = rxh_client_name(client, self.headers.get("User-Agent", ""))
         lst = HUB.add_listener(self._ip(), pcm)
         if lst is None:
             self.close_connection = True
             self._json(503, {"ok": False, "error": f"All {_cfg_get('max_listeners')} listener slots are in use."})
             return
+        lst.client = client
+        lst.sock = self.connection
         try:
             self._head(200, "application/octet-stream", {
                 "X-Audio-Format": "s16le; rate=8000; channels=1" if pcm else "mulaw; rate=8000; channels=1",
@@ -11889,6 +12079,7 @@ def run_server():
     threading.Thread(target=KEYED.loop, name="ami-keyed", daemon=True).start()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=rxh_netstats_loop, name="rxh-net", daemon=True).start()
+    threading.Thread(target=rxh_outq_loop, name="rxh-outq", daemon=True).start()
     threading.Thread(target=pi_loop, name="pi-health", daemon=True).start()
     threading.Thread(target=udp_loop, args=(_cfg_get("udp_port"),), name="udp", daemon=True).start()
     threading.Thread(target=TALKER.pacer_loop, name="tx-pacer", daemon=True).start()

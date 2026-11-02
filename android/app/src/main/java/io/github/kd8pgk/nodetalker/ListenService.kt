@@ -451,7 +451,7 @@ class ListenService : Service() {
         while (live(g)) {
             try {
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
-                val c = NodeHttp.open(n, "/api/listen?fmt=s16", cookie)
+                val c = NodeHttp.open(n, "/api/listen?fmt=s16&client=android", cookie)
                 c.readTimeout = 6000
                 c.useCaches = false
                 val code = c.responseCode
@@ -587,7 +587,10 @@ class ListenService : Service() {
                         val now = track.underrunCount
                         val missed = now - lastUnder
                         lastUnder = now
-                        if (missed > 0 && counting()) stats.underrun(missed, gap)
+                        if (counting()) {
+                            stats.stall(gap)
+                            if (missed > 0) stats.underrun(missed, gap)
+                        }
                         stallAt = 0L
                     }
                 }
@@ -616,7 +619,7 @@ class ListenService : Service() {
                 if (++n >= LEVEL_FRAMES) {
                     val under = track.underrunCount
                     if (under != lastUnder) {
-                        if (counting()) stats.underrun(under - lastUnder, 0)
+                        if (counting()) stats.underrun(under - lastUnder, 0, true)
                         lastUnder = under
                     }
                     Listen.level = if (peak == 0) -120.0 else 20 * log10(peak / 32768.0)

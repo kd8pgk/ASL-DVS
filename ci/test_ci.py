@@ -1,11 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+import glob
 import json
 import os
 import re
+import shutil
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -1437,6 +1441,365 @@ class RxHealthTests(unittest.TestCase):
         self.rxh.note_packet(500.0)
         self.assertEqual(len(self.rxh.buckets), 1)
         self.assertEqual(self.rxh.buckets[0]["pkts"], 10)
+
+
+FIELD_FIXTURE = os.path.join(HERE, "fixtures", "rxhealth_field_20261102.json")
+
+NETSTATS_LINKS = """                               -------- LOCAL ---------------------  -------- REMOTE --------------------
+Channel               RTT  Jit  Del  Lost   %  Drop  OOO  Kbytes  Jit  Del  Lost   %  Drop  OOO  Kbytes
+IAX2/10.1.2.3:4569-1   42   12   60     3   1%     0    1      80    0    0     0   0%     0    0      70
+IAX2/node2-7           30    5   60     0   0%     0    0      12    0    0     0   0%     0    0       9
+IAX2/45001-3          900  300   60    40  20%     6    2      30    0    0     0   0%     0    0      20
+"""
+
+
+class RxHealthFieldTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+        with open(FIELD_FIXTURE, encoding="utf-8") as fh:
+            cls.cases = json.load(fh)["rows"]
+
+    EXPECT = {"12:14": "network", "12:46": "pi", "13:30": "clean", "14:06": "listener", "14:11": "listener",
+              "15:10": "listener", "15:52": "network", "18:36": "network", "17:33": "network"}
+
+    def test_real_pi_minutes_get_the_right_verdict(self):
+        nt = self.nt
+        seen = set()
+        for case in self.cases:
+            key = case["at"][:5]
+            seen.add(key)
+            v = nt.rxh_verdict(nt.rxh_sum([case["row"]]), {"ok": True, "why": ""})
+            self.assertEqual(v["state"], self.EXPECT[key], f"{case['at']}: {case['note']}")
+        self.assertEqual(seen, set(self.EXPECT))
+
+    def test_a_clean_real_minute_has_no_bad_row(self):
+        nt = self.nt
+        case = next(c for c in self.cases if c["at"].startswith("13:30"))
+        v = nt.rxh_verdict(nt.rxh_sum([case["row"]]), {"ok": True, "why": ""})
+        self.assertEqual([r["layer"] for r in v["rows"] if r["level"] == "bad"], [])
+
+    def test_trim_after_a_gap_is_not_blamed_on_the_pi(self):
+        nt = self.nt
+        case = next(c for c in self.cases if c["at"].startswith("17:33"))
+        v = nt.rxh_verdict(nt.rxh_sum([case["row"]]), {"ok": True, "why": ""})
+        pi = next(r for r in v["rows"] if r["layer"] == "This Pi")
+        self.assertEqual(pi["level"], "ok")
+
+    def test_old_rows_without_the_new_fields_still_sum(self):
+        nt = self.nt
+        agg = nt.rxh_sum([c["row"] for c in self.cases])
+        self.assertGreater(agg["net_lost"], 0)
+        self.assertEqual(agg["links"], {})
+        self.assertEqual(agg["clients"], {})
+
+
+class RxHealthLinkTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        self.rxh = self.nt.RxHealth()
+        p = mock.patch.object(self.nt, "RXH_PATH", os.devnull)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_link_key_drops_the_call_number(self):
+        nt = self.nt
+        self.assertEqual(nt.link_key("IAX2/10.1.2.3:4569-12"), "IAX2/10.1.2.3:4569")
+        self.assertEqual(nt.link_key("IAX2/node2-7"), "IAX2/node2")
+        self.assertEqual(nt.link_key("IAX2/45001-3"), "IAX2/45001")
+        self.assertEqual(nt.link_key("IAX2/plain"), "IAX2/plain")
+
+    def test_loss_is_kept_per_link(self):
+        nt = self.nt
+        rows = nt.parse_netstats(NETSTATS_LINKS)
+        self.rxh.note_net(rows)
+        for r in rows:
+            if r["chan"].startswith("IAX2/45001"):
+                r["lost"] += 25
+                r["drop"] += 4
+                r["jit"] = 700
+        rows[0]["lost"] += 1
+        self.rxh.note_net(rows)
+        links = self.rxh.cur["links"]
+        self.assertEqual(links["IAX2/45001"]["lost"], 25)
+        self.assertEqual(links["IAX2/45001"]["drop"], 4)
+        self.assertEqual(links["IAX2/45001"]["jit"], 700)
+        self.assertEqual(links["IAX2/10.1.2.3:4569"]["lost"], 1)
+        self.assertEqual(links["IAX2/node2"]["lost"], 0)
+        self.assertEqual(self.rxh.cur["net_lost"], 26)
+
+    def test_a_new_call_to_the_same_peer_keeps_one_link(self):
+        nt = self.nt
+        self.rxh.note_net(nt.parse_netstats(NETSTATS_LINKS))
+        again = nt.parse_netstats(NETSTATS_LINKS.replace("45001-3", "45001-9"))
+        again[2]["lost"] = 5
+        self.rxh.note_net(again)
+        self.assertEqual(self.rxh.cur["links"]["IAX2/45001"]["lost"], 0)
+
+    def test_only_the_worst_links_are_kept(self):
+        nt = self.nt
+        rows = [{"chan": f"IAX2/n{i}-1", "rtt": 5, "jit": 1, "lost": 0, "pct": 0, "drop": 0, "ooo": 0} for i in range(12)]
+        self.rxh.note_net(rows)
+        for i, r in enumerate(rows):
+            r["lost"] = i
+        self.rxh.note_net(rows)
+        links = self.rxh.cur["links"]
+        self.assertEqual(len(links), nt.RXH_LINKS_MAX)
+        self.assertIn("IAX2/n11", links)
+        self.assertNotIn("IAX2/n1", links)
+
+    def test_verdict_names_the_worst_link(self):
+        nt = self.nt
+        rows = nt.parse_netstats(NETSTATS_LINKS)
+        self.rxh.note_packet(100.0)
+        self.rxh.note_net(rows)
+        rows[2]["lost"] += 30
+        rows[1]["lost"] += 2
+        self.rxh.note_net(rows)
+        v = nt.rxh_verdict(nt.rxh_sum(self.rxh.window()), {"ok": True, "why": ""})
+        row = next(r for r in v["rows"] if r["layer"].startswith("Outside"))
+        self.assertIn("IAX2/45001", row["text"])
+        self.assertIn("2 of 3 links", row["text"])
+
+    def test_links_merge_across_minutes(self):
+        nt = self.nt
+        a = {"links": {"IAX2/a": {"lost": 3, "drop": 0, "ooo": 1, "jit": 10, "rtt": 50}}}
+        b = {"links": {"IAX2/a": {"lost": 4, "drop": 1, "ooo": 0, "jit": 30, "rtt": 40}, "IAX2/b": {"lost": 0, "drop": 0, "ooo": 0, "jit": 1, "rtt": 2}}}
+        agg = nt.rxh_sum([a, b])
+        self.assertEqual(agg["links"]["IAX2/a"], {"lost": 7, "drop": 1, "ooo": 1, "jit": 30, "rtt": 50})
+        self.assertEqual(set(agg["links"]), {"IAX2/a", "IAX2/b"})
+
+    def test_minute_row_on_disk_carries_the_links_and_clients(self):
+        nt = self.nt
+        path = os.path.join(tempfile.mkdtemp(), "rxh.jsonl")
+        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
+        with mock.patch.object(nt, "RXH_PATH", path):
+            row = self.rxh._new(1000)
+            row["pkts"] = 5
+            row["links"] = {"IAX2/a": {"lost": 1, "drop": 0, "ooo": 0, "jit": 2, "rtt": 3}}
+            row["clients"] = {"android": {"under": 1, "reset": 0, "silence_ms": 5, "under_local": 0, "stall_ms": 900,
+                                          "out_stalls": 0, "out_ms": 0}}
+            nt._rxh_write(row)
+            with open(path, encoding="utf-8") as fh:
+                got = json.loads(fh.read().strip())
+        self.assertEqual(got["links"]["IAX2/a"]["lost"], 1)
+        self.assertEqual(got["clients"]["android"]["stall_ms"], 900)
+
+    def test_file_rotates_at_its_limit(self):
+        nt = self.nt
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "rxh.jsonl")
+        with mock.patch.object(nt, "RXH_PATH", path), mock.patch.object(nt, "RXH_FILE_MAX", 100):
+            for i in range(10):
+                nt._rxh_write({"t": i, "pad": "x" * 40})
+            self.assertTrue(os.path.exists(path + ".1"))
+            self.assertLess(os.path.getsize(path), 400)
+
+
+class RxHealthClientTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        self.rxh = self.nt.RxHealth()
+        p = mock.patch.object(self.nt, "RXH", self.rxh)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def test_client_name_comes_from_the_report_then_the_user_agent(self):
+        nt = self.nt
+        self.assertEqual(nt.rxh_client_name("android", ""), "android")
+        self.assertEqual(nt.rxh_client_name("browser", "Dalvik/2.1"), "browser")
+        self.assertEqual(nt.rxh_client_name("", "Mozilla/5.0 (X11)"), "browser")
+        self.assertEqual(nt.rxh_client_name("", "Dalvik/2.1.0 (Linux; Android 14)"), "android")
+        self.assertEqual(nt.rxh_client_name("<script>", "curl/8"), "other")
+        self.assertEqual(nt.rxh_client_name(None, None), "other")
+
+    def test_report_is_kept_per_device_and_in_the_totals(self):
+        nt = self.nt
+        nt.rxh_client({"client": "android", "under": 3, "reset": 1, "silence_ms": 700, "under_local": 2, "stall_ms": 1300})
+        nt.rxh_client({"client": "browser", "under": 1, "reset": 0, "silence_ms": 100})
+        cur = self.rxh.cur
+        self.assertEqual(cur["cl_under"], 4)
+        self.assertEqual(cur["cl_under_local"], 2)
+        self.assertEqual(cur["cl_stall_ms_max"], 1300)
+        self.assertEqual(cur["clients"]["android"]["under"], 3)
+        self.assertEqual(cur["clients"]["android"]["under_local"], 2)
+        self.assertEqual(cur["clients"]["browser"]["under"], 1)
+
+    def test_a_report_without_a_client_is_other_and_older_apps_still_work(self):
+        nt = self.nt
+        self.assertTrue(nt.rxh_client({"under": 1, "reset": 0, "silence_ms": 5})["ok"])
+        self.assertEqual(self.rxh.cur["clients"]["other"]["under"], 1)
+
+    def test_report_values_are_checked_and_clamped(self):
+        nt = self.nt
+        for key in ("under_local", "stall_ms"):
+            with self.assertRaises(ValueError):
+                nt.rxh_client({"client": "android", key: "x"})
+        nt.rxh_client({"client": "android", "stall_ms": 10 ** 12, "under_local": -5})
+        a = self.rxh.cur["clients"]["android"]
+        self.assertEqual(a["stall_ms"], nt.RXH_CLIENT_MAX)
+        self.assertEqual(a["under_local"], 0)
+
+    def test_the_apps_report_keys_are_all_accepted(self):
+        import re
+        nt = self.nt
+        path = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker", "PlayStats.kt")
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        keys = set(re.findall(r'\\"(\w+)\\":', text))
+        self.assertTrue(keys, "no keys found in PlayStats.json()")
+        self.assertEqual(keys - set(nt.RXH_CLIENT_KEYS), set())
+
+    def test_the_app_marks_its_listen_stream(self):
+        path = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker", "ListenService.kt")
+        with open(path, encoding="utf-8") as fh:
+            self.assertIn("/api/listen?fmt=s16&client=android", fh.read())
+
+    def test_the_page_names_itself_in_its_report(self):
+        path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
+        with open(path, encoding="utf-8") as fh:
+            self.assertIn("client: 'browser'", fh.read())
+
+    def test_listener_underruns_with_audio_waiting_blame_the_phone_itself(self):
+        nt = self.nt
+        self.rxh.note_packet(100.0)
+        nt.rxh_client({"client": "android", "under": 2, "reset": 0, "silence_ms": 200, "under_local": 2, "stall_ms": 0})
+        v = nt.rxh_verdict(nt.rxh_sum(self.rxh.window()), {"ok": True, "why": ""})
+        self.assertEqual(v["state"], "listener")
+        self.assertIn("phone itself", v["text"])
+        row = next(r for r in v["rows"] if r["layer"].startswith("Phone"))
+        self.assertIn("android", row["text"])
+
+    def test_starved_underruns_blame_the_phones_connection(self):
+        nt = self.nt
+        self.rxh.note_packet(100.0)
+        nt.rxh_client({"client": "android", "under": 2, "reset": 0, "silence_ms": 900, "under_local": 0, "stall_ms": 1800})
+        v = nt.rxh_verdict(nt.rxh_sum(self.rxh.window()), {"ok": True, "why": ""})
+        self.assertEqual(v["state"], "listener")
+        self.assertIn("connection", v["text"])
+        self.assertNotIn("phone itself", v["text"])
+
+    def test_a_network_verdict_also_mentions_a_phone_problem(self):
+        nt = self.nt
+        self.rxh.note_packet(100.0)
+        self.rxh.note_packet(100.3)
+        nt.rxh_client({"client": "android", "under": 1, "reset": 0, "silence_ms": 90, "under_local": 0, "stall_ms": 500})
+        v = nt.rxh_verdict(nt.rxh_sum(self.rxh.window()), {"ok": True, "why": ""})
+        self.assertEqual(v["state"], "network")
+        self.assertIn("phone also", v["text"])
+
+
+class RxHealthSendQueueTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def pair(self):
+        srv = socket.socket()
+        srv.bind(("127.0.0.1", 0))
+        srv.listen(1)
+        cli = socket.create_connection(srv.getsockname())
+        conn, _ = srv.accept()
+        srv.close()
+        self.addCleanup(cli.close)
+        self.addCleanup(conn.close)
+        return conn, cli
+
+    def test_unsent_bytes_show_a_stalled_receiver(self):
+        nt = self.nt
+        conn, cli = self.pair()
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        cli.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        conn.setblocking(False)
+        self.assertEqual(nt.sock_unsent(conn), 0)
+        sent = 0
+        try:
+            while sent < 2000000:
+                sent += conn.send(b"x" * 4096)
+        except BlockingIOError:
+            pass
+        waiting = nt.sock_unsent(conn)
+        self.assertGreater(waiting, 0)
+        conn.setblocking(True)
+        cli.settimeout(2)
+        got = 0
+        while got < sent:
+            got += len(cli.recv(65536))
+        time.sleep(0.2)
+        self.assertEqual(nt.sock_unsent(conn), 0)
+
+    def test_unsent_is_none_when_the_socket_cannot_say(self):
+        nt = self.nt
+
+        class Dead:
+            def fileno(self):
+                raise OSError("closed")
+
+        self.assertIsNone(nt.sock_unsent(Dead()))
+
+    def test_unsent_bytes_become_milliseconds_of_audio(self):
+        nt = self.nt
+        self.assertEqual(nt.rxh_outq_ms(8000, False), 1000)
+        self.assertEqual(nt.rxh_outq_ms(8000, True), 500)
+        self.assertEqual(nt.rxh_outq_ms(0, False), 0)
+
+    def test_a_stall_is_counted_once_per_episode(self):
+        nt = self.nt
+        rxh = nt.RxHealth()
+        state = {"on": False}
+        for ms in (0, 100, 600, 900, 700, 200, 50, 800):
+            state["on"] = nt.rxh_outq_note(rxh, "android", ms, state["on"])
+        a = rxh.cur["clients"]["android"]
+        self.assertEqual(a["out_stalls"], 2)
+        self.assertEqual(a["out_ms"], 900)
+        self.assertEqual(rxh.cur["out_stalls"], 2)
+        self.assertEqual(rxh.cur["out_ms_max"], 900)
+
+    def test_the_sampler_sees_a_stall_while_the_send_is_blocked(self):
+        nt = self.nt
+        conn, cli = self.pair()
+        conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        cli.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+        conn.setblocking(False)
+        try:
+            while True:
+                conn.send(b"x" * 4096)
+        except BlockingIOError:
+            pass
+        lst = nt._Listener("10.0.0.9", False)
+        lst.sock = conn
+        lst.client = "android"
+        rxh = nt.RxHealth()
+        with mock.patch.object(nt, "rxh_outq_ms", lambda unsent, pcm: 2000 if unsent else 0):
+            nt.rxh_outq_sample(rxh, [lst])
+            nt.rxh_outq_sample(rxh, [lst])
+        self.assertTrue(lst.stalled)
+        self.assertEqual(rxh.cur["clients"]["android"]["out_stalls"], 1)
+        self.assertEqual(rxh.cur["out_ms_max"], 2000)
+
+    def test_the_sampler_skips_listeners_without_a_socket(self):
+        nt = self.nt
+        rxh = nt.RxHealth()
+        nt.rxh_outq_sample(rxh, [nt._Listener("10.0.0.9", False)])
+        self.assertEqual(rxh.cur, None)
+
+    def test_a_stalled_send_queue_blames_the_listeners_connection(self):
+        nt = self.nt
+        rxh = nt.RxHealth()
+        rxh.note_packet(100.0)
+        nt.rxh_outq_note(rxh, "android", 1500, False)
+        v = nt.rxh_verdict(nt.rxh_sum(rxh.window()), {"ok": True, "why": ""})
+        self.assertEqual(v["state"], "listener")
+        row = next(r for r in v["rows"] if r["layer"] == "Pi to listener")
+        self.assertEqual(row["level"], "bad")
+        self.assertIn("1500", row["text"])
 
 
 if __name__ == "__main__":
