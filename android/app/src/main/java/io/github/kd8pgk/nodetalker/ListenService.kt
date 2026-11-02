@@ -23,6 +23,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.SystemClock
 import android.webkit.CookieManager
 import org.json.JSONObject
 import java.io.IOException
@@ -96,6 +97,9 @@ class ListenService : Service() {
     private var node: Node? = null
     private var net: Thread? = null
     private var player: Thread? = null
+    private var reporter: Thread? = null
+    private val stats = PlayStats()
+    @Volatile private var playStartedAt = 0L
     @Volatile private var running = false
     @Volatile private var gen = 0
     private var playerSettings: AudioSettings? = null
@@ -186,8 +190,10 @@ class ListenService : Service() {
         running = true
         val g = ++gen
         queue.clear()
+        stats.clear()
         net = Thread({ netLoop(n, g) }, "nt-listen-net").apply { start() }
         player = Thread({ playLoop(g) }, "nt-listen-play").apply { start() }
+        reporter = Thread({ reportLoop(n, g) }, "nt-listen-report").apply { start() }
         return START_NOT_STICKY
     }
 
@@ -422,10 +428,13 @@ class ListenService : Service() {
         }, "nt-listen-close").start()
         net?.interrupt()
         player?.interrupt()
+        reporter?.interrupt()
         net?.join(2000)
         player?.join(2000)
+        reporter?.join(2000)
         net = null
         player = null
+        reporter = null
     }
 
     private fun restartPlayer() {
@@ -510,7 +519,30 @@ class ListenService : Service() {
             if (!queue.offer(f)) {
                 queue.poll()
                 queue.offer(f)
+                if (counting()) stats.reset()
             }
+        }
+    }
+
+    private fun counting(): Boolean {
+        val at = playStartedAt
+        return at != 0L && SystemClock.elapsedRealtime() - at > STATS_GRACE_MS && !(Listen.muted || focusLost)
+    }
+
+    private fun reportLoop(n: Node, g: Int) {
+        try {
+            while (live(g)) {
+                Thread.sleep(STATS_SEND_MS)
+                val snap = stats.take() ?: continue
+                val cookie = CookieManager.getInstance().getCookie(n.origin)
+                when (RxReport.send(n, cookie, snap)) {
+                    RxReport.SENT -> Unit
+                    RxReport.UNSUPPORTED -> return
+                    else -> stats.put(snap)
+                }
+            }
+        } catch (e: InterruptedException) {
+            return
         }
     }
 
@@ -537,8 +569,12 @@ class ListenService : Service() {
         var filling = true
         var peak = 0
         var n = 0
+        var stallAt = 0L
+        var lastUnder = 0
         try {
             track.play()
+            playStartedAt = SystemClock.elapsedRealtime()
+            lastUnder = track.underrunCount
             while (live(g) && !Thread.currentThread().isInterrupted) {
                 if (filling) {
                     if (queue.size < target) {
@@ -546,10 +582,24 @@ class ListenService : Service() {
                         continue
                     }
                     filling = false
+                    if (stallAt != 0L) {
+                        val gap = SystemClock.elapsedRealtime() - stallAt
+                        val now = track.underrunCount
+                        val missed = now - lastUnder
+                        lastUnder = now
+                        if (missed > 0 && counting()) stats.underrun(missed, gap)
+                        stallAt = 0L
+                    }
                 }
-                while (queue.size > target * 3 + 5) queue.poll()
+                var trimmed = false
+                while (queue.size > target * 3 + 5) {
+                    queue.poll()
+                    trimmed = true
+                }
+                if (trimmed && counting()) stats.reset()
                 val f = queue.poll(FRAME_MS * 4L, TimeUnit.MILLISECONDS)
                 if (f == null) {
+                    if (stallAt == 0L) stallAt = SystemClock.elapsedRealtime() - FRAME_MS * 4L
                     filling = true
                     continue
                 }
@@ -564,6 +614,11 @@ class ListenService : Service() {
                 track.write(if (quiet) silence else f, 0, FRAME)
                 for (v in f) peak = max(peak, abs(v.toInt()))
                 if (++n >= LEVEL_FRAMES) {
+                    val under = track.underrunCount
+                    if (under != lastUnder) {
+                        if (counting()) stats.underrun(under - lastUnder, 0)
+                        lastUnder = under
+                    }
                     Listen.level = if (peak == 0) -120.0 else 20 * log10(peak / 32768.0)
                     peak = 0
                     n = 0
@@ -574,6 +629,7 @@ class ListenService : Service() {
         } catch (e: InterruptedException) {
             Listen.level = -120.0
         } finally {
+            playStartedAt = 0L
             track.pause()
             track.flush()
             track.release()
@@ -707,6 +763,8 @@ class ListenService : Service() {
         private const val FRAME_MS = 20
         private const val QUEUE_FRAMES = 150
         private const val LEVEL_FRAMES = 10
+        private const val STATS_SEND_MS = 30000L
+        private const val STATS_GRACE_MS = 3000L
         private const val MAX_GAIN_MB = 1800
 
         private val ULAW = ShortArray(256) { i ->
