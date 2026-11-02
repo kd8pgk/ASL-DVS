@@ -47,13 +47,13 @@
    "version": "9.3.96"
   },
   "nodecontrol_pi02w": {
-   "blob": "e4c116050c83482ac037b8828fb0018034b0adb8",
-   "commit": "b685a4b3afaafb5a3e3aea12ade636fd696bc978",
-   "file": "nodecontrol_pi02w_v9_3_101_20261028.py",
-   "landed": "2026-10-28T18:44:35Z",
-   "promoted": "2026-11-02T00:15:52Z",
+   "blob": "fa57234dc14679167d59b6143ba9e5b5ca8a5915",
+   "commit": "d4c803633663f8e2fe9b1e0cd08110f72693c5dd",
+   "file": "nodecontrol_pi02w_v9_3_102_20261029.py",
+   "landed": "2026-10-29T23:07:58Z",
+   "promoted": "2026-11-02T14:53:37Z",
    "reason": "count",
-   "version": "9.3.101-pi02w"
+   "version": "9.3.102-pi02w"
   },
   "nodetalker": {
    "blob": "1f96769b3da48df9815fe1da0c72113db057dcb9",
