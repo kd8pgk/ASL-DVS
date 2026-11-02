@@ -1,6 +1,17 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_2_0_20261102.py`. Newest entries first.
+Current file: `noderecorder_v0_3_0_20261102.py`. Newest entries first.
+
+## 0.3.0 (2026-11-02)
+
+- **Phase 3: it records.** Scheduled windows now connect, record, stop and disconnect for real. Turn `schedule_dry_run` on to walk the steps without connecting or recording. Each recording is one WAV file named `YYYYMMDD-HHMMSS_<entry name>.wav`, 8 kHz mono: u-law (about 29 MB an hour) or PCM (about 58 MB an hour), as the entry says. The audio is what Node Recorder's receive chain makes of the node's audio (300 Hz cut, auto level, gate and gain, as set on the RX card), with silence written between transmissions so a file is as long as its window.
+- **Files are safe against interruptions.** A separate writer thread does the disk work, so a slow drive cannot hold up the audio. The file is flushed and synced every 10 s and its header refreshed every 10 s. After a power cut Node Recorder repairs the header of any recording that was not closed (at start-up and before each window), so Pibrary plays the whole file. A stopping Node Recorder closes the file cleanly first.
+- **Write failures end the window cleanly.** If the disk fills or the USB drive is unplugged during a recording, the window stops, the file is kept, the link is dropped and the result shows as "could not write the file".
+- **Where recordings go.** The Setup tab has a Storage card with a Recordings folder and a limit in MB. Empty means automatic, in this order: the Pibrary library if it is on a USB drive, any other mounted USB drive (`<drive>/pibrary/audio/recordings`), then the Pibrary library (or `/srv/pibrary/media`) on the SD card. The folder is `audio/recordings` inside the library, so Pibrary lists and plays the recordings in its Audio tab. Pibrary's settings file is only read. If both a Recordings folder and a Pibrary library are set and differ, the Record tab shows both paths and which is used.
+- **Recordings never go to the SD card while a USB drive is mounted.** If the Recordings folder is on the SD card and a USB drive is mounted, the window does not start and the Record tab says why.
+- **Space and the limit.** Before a window starts Node Recorder removes the oldest of its own recordings (only files with its own naming) until the new window fits under the MB limit, then checks the drive has room for the whole window plus 50 MB. If it does not, the window does not start.
+- **Status for other tools.** `GET /api/recorder/status` (answered only to programs on this Pi, never through a proxy) gives the state (idle, connecting, recording, stopping, disconnecting), a `busy` flag that is true during a real window, the entry name, start and end, seconds elapsed and the file name. It is kept in memory only. New route `/api/storage`.
+- This is a release, not a cosmetic build.
 
 ## 0.2.0 (2026-11-02)
 
