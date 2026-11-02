@@ -1,6 +1,14 @@
 # instmon changelog
 
-Current file: `instmon_v2_86_0_20261102.py`. Newest entries first.
+Current file: `instmon_v2_87_0_20261102.py`. Newest entries first.
+
+## 2.87.0 (2026-11-02)
+
+- **Nothing can be changed under a recording.** instmon asks Node Recorder (`http://127.0.0.1:8995/api/recorder/status`, answered only on this Pi) whether a recording is in progress, every time the page refreshes and before it acts. While one is, config saves, installs, updates, uninstalls, Start and Stop, Restart Comms, Quiet System and Restore, Reboot and Shutdown, Full Update, the config putter and getter runs, and the disk-image jobs (backup, clone, restore, format, mount, unmount, eject and their schedule) are refused with a message that names the recording and when it ends. There is no override.
+- **The page shows it.** Those buttons turn grey with a tooltip. Pressing one shows a popup with the recording's name, how long it has run and when it ends, before any confirmation question. The popup shows on the first attempt, not when the page opens. Anything that only reads, checks or downloads stays open, as do Delete and the library lock.
+- **A scheduled disk-image backup waits** while a recording runs and is tried again a minute later, so it cannot stop the recording's services.
+- If Node Recorder is not installed or not answering, nothing is blocked and nothing changes.
+- This is a release, not a cosmetic build.
 
 ## 2.86.0 (2026-11-02)
 
