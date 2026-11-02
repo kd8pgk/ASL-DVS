@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.4"
+VERSION = "0.10.5"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -2024,6 +2024,8 @@ def _rxh_wifi_row(agg, wifi):
         if why:
             return "info", "No Wi-Fi data: " + _WIFI_WHY.get(why, why), False
         return "info", "No Wi-Fi data yet", False
+    if agg["wifi_down"] >= agg["wifi_samples"]:
+        return "info", "Wi-Fi is not connected in this window (the Pi may be on Ethernet)", False
     bits = []
     if agg["wifi_weak"]:
         bits.append(f"signal worst -{agg['wifi_weak']} dBm")
