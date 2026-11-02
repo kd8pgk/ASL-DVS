@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_1_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_2_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.2 (2026-11-02)
+
+- **Links and the receive feed are locked while Node Recorder is recording.** Node Talker asks Node Recorder (`http://127.0.0.1:8995/api/recorder/status`, answered only on this Pi) whether a recording is in progress. While one is, these are refused with a message that names the recording and when it ends: Connect, Disconnect and Disconnect All, Tune and its Disconnect, the receive feed (Send its audio here, Remove), the transmit node 1921 (Add, Remove), Set up, Restart Asterisk, Reboot and Shutdown, the Digital settings, the tone tests, and saving the web port, UDP port, HTTPS or node, because those restart Node Talker. Every other setting still saves. There is no override: a change waits until the recording ends.
+- **The page shows it.** The locked buttons turn grey with a tooltip. Pressing one, or saving one of the locked settings, opens a "Recording in progress" box with the recording's name, how long it has run and when it ends. It opens on the first attempt, not when the page opens, and the locks clear a few seconds after the recording ends.
+- Listening, talking and everything that only reads stay open. If Node Recorder is not installed or not answering, nothing is locked and nothing changes. `/api/status` has a `recording` key for a signed-in page.
+- This is a release, not a cosmetic build.
 
 ## 0.10.1 (2026-11-02)
 
