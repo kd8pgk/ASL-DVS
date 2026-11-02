@@ -1,6 +1,11 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_4_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_5_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.5 (2026-11-02)
+
+- **Fix: a Pi on Ethernet no longer shows a Wi-Fi fault.** In 0.10.4 a Pi whose Wi-Fi is not connected (for example a Pi 4B on a cable) counted every sample as "no link", so the Wi-Fi row turned bad and a loss could be blamed on the Wi-Fi. When the Wi-Fi is not connected for the whole window, the row now says so (the Pi may be on Ethernet) and is not a fault. Losing the link part-way through a window is still a fault.
+- This is a release, not a cosmetic build.
 
 ## 0.10.4 (2026-11-02)
 

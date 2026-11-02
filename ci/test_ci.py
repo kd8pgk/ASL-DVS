@@ -1981,6 +1981,27 @@ class RxHealthWifiTests(unittest.TestCase):
         self.rxh.note_wifi(self.sample(linked=False, signal_dbm=None, tx_bitrate=None, bssid_id=None), None)
         self.assertEqual(self.rxh.cur["wifi_down"], 1)
 
+    def test_wifi_that_is_not_in_use_is_not_a_fault(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_packet(100.3)
+        for _ in range(3):
+            self.rxh.note_wifi(self.sample(linked=False, signal_dbm=None, tx_bitrate=None, bssid_id=None), None)
+        v = self.verdict()
+        row = self.wifi_row(v)
+        self.assertEqual(row["level"], "info")
+        self.assertIn("not connected", row["text"])
+        self.assertIn("Ethernet", row["text"])
+        self.assertEqual(v["state"], "network")
+
+    def test_losing_the_wifi_link_during_the_window_is_a_fault(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_packet(100.3)
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(linked=False, signal_dbm=None, tx_bitrate=None, bssid_id=None), None)
+        v = self.verdict()
+        self.assertEqual(self.wifi_row(v)["level"], "bad")
+        self.assertEqual(v["state"], "wifi")
+
     def test_no_file_is_reported_not_blamed(self):
         self.rxh.note_packet(100.0)
         self.rxh.note_wifi(None, "absent")
