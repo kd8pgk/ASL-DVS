@@ -1,6 +1,11 @@
 # Node Talker Mobile changelog
 
-Current version: `0.6.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.3 (2026-11-02)
+
+- **Receive health can tell the phone's connection from the phone itself.** The report the app sends to the node every 30 seconds now says it comes from the Android app, and splits its underruns in two: those where the audio ran out (the connection) and those where the phone's player fell behind while audio was waiting (the phone itself). It also reports the longest time playback was interrupted. The listen stream is marked as the app's, so the node can see how much audio was waiting to be sent to the phone.
+- Nodes older than Node Talker 0.10.3 ignore the extra values and show the report as before.
 
 ## 0.6.2 (2026-11-02)
 
