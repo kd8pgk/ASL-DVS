@@ -37,7 +37,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.86.0"
+VERSION ="2.87.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -2698,6 +2698,10 @@ def _diskimg_schedule_tick():
         return
     if full_update_running():
         skip("Full Update is running.")
+        return
+    rec = recorder_busy()
+    if rec:
+        skip(f"A recording is in progress ({rec.get('entry') or 'Node Recorder'}); the backup waits for it to end.")
         return
     with _running_installs_lock:
         installing = sorted(_running_installs)
@@ -5645,6 +5649,47 @@ _FU_JOB_UNIT = "instmon-fu-job"
 _FU_JOB_LOG = os.path.join(CONFIG_DIR, "instmon_fu_job.log")
 _FU_NO_STOP_PHASES = ("instmon", "recovering")
 
+RECORDER_STATUS_URL = os.environ.get("INSTMON_RECORDER_STATUS_URL", "http://127.0.0.1:8995/api/recorder/status")
+_recorder_cache = {"t": -1e9, "v": None}
+_RECORDING_BLOCKED_ACTIONS = frozenset((
+    "install", "uninstall", "start", "stop", "install_config", "run_script", "rpiclone_install", "save_alternate",
+    "comms_restart", "reboot", "shutdown", "gh_update", "quiet", "restore", "full_update", "install_confgetter",
+    "cg_run", "cg_uninstall", "install_confputter", "cp_uninstall", "cp_apply", "cp_undo"))
+_RECORDING_BLOCKED_PATHS = frozenset((
+    "/api/file", "/api/confputter/upload", "/api/diskimg/backup/start", "/api/diskimg/format/start",
+    "/api/diskimg/clone/start", "/api/diskimg/restore/start", "/api/diskimg/mount", "/api/diskimg/unmount",
+    "/api/diskimg/eject", "/api/diskimg/schedule"))
+
+
+def recorder_busy():
+    now = time.monotonic()
+    if now - _recorder_cache["t"] < 2.0:
+        return _recorder_cache["v"]
+    busy = None
+    try:
+        with urllib.request.urlopen(RECORDER_STATUS_URL, timeout=0.6) as resp:
+            d = json.loads(resp.read(65536).decode("utf-8", "replace"))
+        if isinstance(d, dict) and d.get("ok") and d.get("busy"):
+            busy = {k: d.get(k, "") for k in ("state", "entry", "start", "end", "elapsed", "file")}
+    except (OSError, ValueError, urllib.error.URLError):
+        busy = None
+    _recorder_cache.update(t=now, v=busy)
+    return busy
+
+
+def recording_text(rec):
+    secs = int(rec.get("elapsed") or 0)
+    end = str(rec.get("end") or "")[11:16]
+    return (f"A recording is in progress: {rec.get('entry') or 'Node Recorder'} ({secs // 60}:{secs % 60:02d} so far"
+            + (f", until {end}" if end else "") + "). Settings, installs and service actions are locked until it ends, "
+            "so the recording is not interrupted.")
+
+
+def recording_block_payload(rec):
+    text = recording_text(rec)
+    return {"error": text, "message": text, "level": "warn", "recording": rec}
+
+
 def full_update_running():
     with _fu_lock:
         return _fu_state["running"]
@@ -7558,6 +7603,7 @@ button.b-comms{color:var(--amber);border-color:var(--amber-dim);background:rgba(
 button.b-go{color:var(--amber);border-color:var(--amber-dim);background:rgba(255,61,90,.15);
   text-shadow:0 0 8px rgba(255,208,64,.4)}
 button.b-self-locked{text-decoration:line-through}
+button.rec-locked{opacity:.45;cursor:not-allowed}
 /* Router quick link: hidden until pollGateway() confirms a usable gateway.
    Base display:none + .open, the same pattern as the overlays -- never a
    [hidden] attribute or .hidden class that a later button rule could beat. */
@@ -8095,10 +8141,67 @@ function renderQuietFullUpdate(quiet, fu) {
   });
 }
 
+let recBusy = null;
+const REC_UI = ['start', 'stop', 'uninstall', 'install', 'run_script', 'install_config', 'install_confgetter', 'install_confputter', 'cg_run',
+  'cg_uninstall', 'cp_apply', 'cp_undo', 'cp_uninstall', 'restore', 'quiet', 'reboot', 'shutdown', 'comms_restart', 'gh_update', 'full_update',
+  'save_alternate', 'rpiclone_install', 'diskimg_backup_start', 'diskimg_format_start', 'diskimg_clone_start', 'diskimg_restore_start',
+  'diskimg_mount', 'diskimg_unmount', 'diskimg_eject', 'diskimg_schedule_save'];
+const REC_API = ['install', 'uninstall', 'start', 'stop', 'install_config', 'run_script', 'rpiclone_install', 'save_alternate', 'comms_restart',
+  'reboot', 'shutdown', 'gh_update', 'quiet', 'restore', 'full_update', 'install_confgetter', 'cg_run', 'cg_uninstall', 'install_confputter',
+  'cp_uninstall', 'cp_apply', 'cp_undo'];
+const REC_PATHS = ['/api/file', '/api/confputter/upload', '/api/diskimg/backup/start', '/api/diskimg/format/start', '/api/diskimg/clone/start',
+  '/api/diskimg/restore/start', '/api/diskimg/mount', '/api/diskimg/unmount', '/api/diskimg/eject', '/api/diskimg/schedule'];
+
+function recText(rec) {
+  const secs = Number(rec.elapsed) || 0, end = String(rec.end || '').slice(11, 16);
+  return 'A recording is in progress: ' + (rec.entry || 'Node Recorder') + ' (' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + ' so far'
+    + (end ? ', until ' + end : '') + '). Settings, installs and service actions are locked until it ends, so the recording is not interrupted.';
+}
+
+function recApplyLocks() {
+  document.querySelectorAll('button[data-action]').forEach((b) => {
+    if (!REC_UI.includes(b.dataset.action)) return;
+    if (recBusy) {
+      if (!b.classList.contains('rec-locked')) { b.dataset.recTitle = b.getAttribute('title') || ''; b.classList.add('rec-locked'); }
+      b.title = 'A recording is in progress. This is locked until it ends.';
+    } else if (b.classList.contains('rec-locked')) {
+      b.classList.remove('rec-locked');
+      if (b.dataset.recTitle) b.title = b.dataset.recTitle; else b.removeAttribute('title');
+      delete b.dataset.recTitle;
+    }
+  });
+}
+
+document.addEventListener('click', (ev) => {
+  if (!recBusy || !ev.target || !ev.target.closest) return;
+  const b = ev.target.closest('button[data-action]');
+  if (!b || !REC_UI.includes(b.dataset.action)) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+  showPopup(recText(recBusy), 'warn');
+}, true);
+
+const _plainFetch = window.fetch.bind(window);
+window.fetch = function (url, opts) {
+  if (recBusy && opts && String(opts.method || '').toUpperCase() === 'POST') {
+    const path = String(url).split('?')[0];
+    let blocked = REC_PATHS.includes(path);
+    if (path === '/api/action') { try { blocked = REC_API.includes(JSON.parse(opts.body).action); } catch (e) { blocked = false; } }
+    if (blocked) {
+      const text = recText(recBusy);
+      if (path !== '/api/action') showPopup(text, 'warn');
+      return Promise.resolve(new Response(JSON.stringify({error: text, message: text, level: 'warn'}),
+        {status: 409, headers: {'Content-Type': 'application/json'}}));
+    }
+  }
+  return _plainFetch(url, opts);
+};
+
 async function refreshStatus() {
   try {
     const r = await fetch('/api/status');
     const data = await r.json();
+    recBusy = data.recording || null;
     document.getElementById('components').innerHTML = data.components_html;
     document.getElementById('library').innerHTML = data.library_html;
     if (typeof cpUpdateStatus === 'function') cpUpdateStatus(data.confputter);
@@ -8115,6 +8218,7 @@ async function refreshStatus() {
     renderChannelChoice(data.channel);
     applyLibraryCollapseState();
     wireButtons();
+    recApplyLocks();
   } catch (e) { /* ignore this tick */ }
 }
 
@@ -9084,7 +9188,7 @@ function showPopup(message, level) {
   _popupTimer = setTimeout(() => {
     box.classList.remove('popup-show');
     setTimeout(() => overlay.classList.remove('open'), 200);
-  }, 2500);
+  }, /recording is in progress/.test(message) ? 9000 : 2500);
 }
 
 function dismissPopup() {
@@ -11209,6 +11313,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
         "library_html":render_library_html (status ["library"]),
         **_gh_status_payload (),
         **_fu_status_payload (),
+        "recording":recorder_busy (),
         })
 
     def _route_gateway(self):
@@ -12098,6 +12203,11 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self._send_json(409, {"error": "Full Update is running",
                                   "message": "Full Update is running -- wait for it to finish.", "level": "warn"})
             return
+        if self.path in _RECORDING_BLOCKED_PATHS:
+            rec = recorder_busy()
+            if rec:
+                self._send_json(409, recording_block_payload(rec))
+                return
         handler_fn =_POST_ROUTES .get (self .path )
         if handler_fn is None :
             self ._error_json (404 ,"Not found")
@@ -12383,6 +12493,11 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             self._send_json(409, {"error": "Full Update is running",
                                   "message": "Full Update is running -- wait for it to finish.", "level": "warn"})
             return
+        if action in _RECORDING_BLOCKED_ACTIONS:
+            rec = recorder_busy()
+            if rec:
+                self._send_json(409, recording_block_payload(rec))
+                return
         handler_fn =_ACTION_HANDLERS .get (action )
         if handler_fn is None :
             self ._error_json (400 ,f"Unknown action '{action }'")
