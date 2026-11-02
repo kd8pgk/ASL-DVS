@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import http.client
+from datetime import datetime
 import json
 import os
 import socket
@@ -336,7 +337,8 @@ def make_nt_case(key):
             return st, json.loads(b)
 
         def test_schedule_save_overlap_dry_run_and_remove(self):
-            base = {"days": [1], "start": "06:00", "end": "08:00", "target": {"mode": "ASL", "num": "29332"}, "format": "ulaw"}
+            far = [(datetime.now().weekday() + 4) % 7]
+            base = {"days": far, "start": "06:00", "end": "08:00", "target": {"mode": "ASL", "num": "29332"}, "format": "ulaw"}
             ids = ("citest1", "citest2")
             try:
                 st, d = self._sched_post("/api/schedule/set", {"entry": dict(base, id=ids[0], name="First")})
@@ -350,7 +352,7 @@ def make_nt_case(key):
                 self.assertTrue(d["ok"], "two minutes apart is allowed: " + str(d))
                 st, d = get_json(self.server, "/api/schedule", self.cookie)
                 self.assertEqual({e["id"] for e in d["entries"]} & set(ids), set(ids))
-                self.assertTrue(d["dry_run"], "the engine is not built yet, so windows run as dry runs")
+                self.assertFalse(d["dry_run"], "real windows record unless dry run is switched on")
                 st, d = self._sched_post("/api/schedule/dryrun", {"id": ids[0]})
                 self.assertEqual([x["step"] for x in d["steps"]], ["connect", "start", "stop", "disconnect"], d)
                 self.assertEqual(d["result"], "ok")
@@ -359,6 +361,22 @@ def make_nt_case(key):
                     self._sched_post("/api/schedule/remove", {"id": i})
             st, d = get_json(self.server, "/api/schedule", self.cookie)
             self.assertFalse({e["id"] for e in d["entries"]} & set(ids), "the test entries must be gone")
+
+        def test_storage_and_local_status(self):
+            st, d = get_json(self.server, "/api/storage", self.cookie)
+            self.assertEqual(st, 200)
+            for k in ("path", "source", "kind", "usable", "cap_mb", "files", "conflict"):
+                self.assertIn(k, d)
+            self.assertTrue(d["path"].endswith("audio/recordings") or d["recorder_path"], d["path"])
+            st, h, b = self.server.request("GET", "/api/recorder/status", timeout=15)
+            self.assertEqual(st, 200, "the status is open to programs on this Pi without a login")
+            d = json.loads(b)
+            self.assertEqual(d["state"], "idle")
+            self.assertFalse(d["busy"])
+            for k in ("entry", "start", "end", "elapsed", "file", "dry_run", "version"):
+                self.assertIn(k, d)
+            st, h, b = self.server.request("GET", "/api/recorder/status", headers={"X-Forwarded-For": "203.0.113.9"}, timeout=15)
+            self.assertEqual(st, 403, "a proxied request is not local")
 
     NTCase.__name__ = f"Authed_{key}"
     NTCase.__qualname__ = f"Authed_{key}"

@@ -11,6 +11,7 @@ import json
 import math
 import operator
 import os
+import queue
 import re
 import secrets
 import shutil
@@ -28,7 +29,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -233,6 +234,8 @@ DEFAULT_CONFIG = {
     "rx_agc": True,
     "rx_gate": 1,
     "schedule_dry_run": False,
+    "record_path": "",
+    "record_max_mb": 4096,
 }
 
 
@@ -262,6 +265,18 @@ def _norm_node(value):
     return v
 
 
+def _norm_dirpath(value):
+    v = str(value).strip()
+    if not v:
+        return ""
+    if len(v) > 200 or "%" in v or _CALL_TRIM.search(v) or not v.startswith("/"):
+        raise ValueError("the recordings folder must be a full path starting with /")
+    v = os.path.normpath(v)
+    if v == "/" or v.startswith(("/proc", "/sys", "/dev", "/boot", "/etc/asterisk")):
+        raise ValueError("pick a folder on a drive, not a system folder")
+    return v
+
+
 def _norm_gain(value):
     try:
         v = int(round(float(str(value).strip())))
@@ -285,6 +300,8 @@ _NORMALIZERS = {
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
     "schedule_dry_run": _parse_bool,
+    "record_path": _norm_dirpath,
+    "record_max_mb": _norm_int(100, 2000000, "record_max_mb must be 100-2000000"),
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -1191,6 +1208,7 @@ class Hub:
         self.peak_db = -120.0
         self.last_active = 0.0
         self.usrp_keyed = False
+        self.recorder = None
         self.pump_beat = time.monotonic()
         self.rate_window = deque(maxlen=60)
         self.udp_errors = {}
@@ -1264,13 +1282,17 @@ class Hub:
         else:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
-        if have_listeners:
+        rec = self.recorder
+        if have_listeners or rec is not None:
             if frame is not None:
                 pcm = RXC.process(frame, tune_value("rx_gain_db"), db)
             else:
                 RXC.idle_tick()
                 pcm = PCM_SILENCE
-            self._deliver(pcm)
+            if have_listeners:
+                self._deliver(pcm)
+            if rec is not None:
+                rec.feed(pcm)
         self.pump_beat = now
 
     def _deliver(self, pcm):
@@ -4167,6 +4189,372 @@ def link_keeper_loop():
             log_event(f"Link keeper error: {exc}", "err")
 
 
+PIBRARY_CONF = os.environ.get("NODERECORDER_PIBRARY_CONF", "/etc/pibrary/pibrary.conf")
+PROC_MOUNTS = os.environ.get("NODERECORDER_PROC_MOUNTS", "/proc/mounts")
+SYS_BLOCK = os.environ.get("NODERECORDER_SYS_BLOCK", "/sys/class/block")
+RECORD_DEFAULT_ROOT = "/srv/pibrary/media"
+RECORD_SUBDIR = os.path.join("audio", "recordings")
+RECORD_RESERVE_BYTES = 50 * 1024 * 1024
+RECORD_QUEUE_FRAMES = 500
+RECORD_SYNC_SEC = 10.0
+RECORD_HEADER_SEC = 10.0
+RECORD_CLOSE_SEC = 20.0
+_REC_NAME_RE = re.compile(r"^\d{8}-\d{6}_[A-Za-z0-9._-]{1,48}\.wav$")
+
+
+def pibrary_storage():
+    out = {"root": "", "usb_uuid": ""}
+    cp = configparser.ConfigParser(interpolation=None)
+    try:
+        cp.read(PIBRARY_CONF)
+    except configparser.Error:
+        return out
+    if cp.has_section("pibrary"):
+        out["root"] = cp.get("pibrary", "library_root", fallback="").strip()
+        out["usb_uuid"] = cp.get("pibrary", "usb_uuid", fallback="").strip()
+    return out
+
+
+def _mount_table():
+    rows = []
+    try:
+        with open(PROC_MOUNTS, "r", encoding="utf-8", errors="replace") as fh:
+            for ln in fh:
+                p = ln.split()
+                if len(p) >= 3:
+                    rows.append((p[0], p[1].replace("\\040", " "), p[2]))
+    except OSError:
+        pass
+    return rows
+
+
+def _dev_kind(dev):
+    if not dev.startswith("/dev/"):
+        return "other"
+    name = os.path.basename(os.path.realpath(dev))
+    if name.startswith("mmcblk"):
+        return "sd"
+    try:
+        real = os.path.realpath(os.path.join(SYS_BLOCK, name))
+    except OSError:
+        return "other"
+    return "usb" if "/usb" in real else "other"
+
+
+def _existing_ancestor(path):
+    p = os.path.realpath(path)
+    while p and not os.path.exists(p) and p != "/":
+        p = os.path.dirname(p)
+    return p or "/"
+
+
+def fs_kind(path):
+    real = _existing_ancestor(path)
+    best = None
+    for dev, mp, _fs in _mount_table():
+        if real == mp or real.startswith(mp.rstrip("/") + "/") or mp == "/":
+            if best is None or len(mp) >= len(best[1]):
+                best = (dev, mp)
+    if best is None:
+        return "other", "", ""
+    return _dev_kind(best[0]), best[1], best[0]
+
+
+def usb_mounts():
+    seen, out = set(), []
+    for dev, mp, _fs in _mount_table():
+        if mp not in seen and _dev_kind(dev) == "usb":
+            seen.add(mp)
+            out.append(mp)
+    return out
+
+
+def storage_pick():
+    pib = pibrary_storage()
+    pib_root = pib["root"]
+    usb = usb_mounts()
+    own = _cfg_get("record_path")
+    out = {"recorder_path": own, "pibrary_root": pib_root,
+           "pibrary_path": os.path.join(pib_root, RECORD_SUBDIR) if pib_root else "",
+           "usb_mounts": usb, "path": "", "source": "", "kind": "", "mount": "", "ok": False, "reason": "", "conflict": False}
+    if own:
+        path, source = own, "the Recordings folder setting"
+        out["conflict"] = bool(out["pibrary_path"]) and os.path.normpath(out["pibrary_path"]) != os.path.normpath(own)
+    else:
+        base = pib_root or RECORD_DEFAULT_ROOT
+        if fs_kind(base)[0] == "usb":
+            path, source = os.path.join(base, RECORD_SUBDIR), "the Pibrary library on a USB drive"
+        elif usb:
+            path, source = os.path.join(usb[0], "pibrary", RECORD_SUBDIR), f"the USB drive at {usb[0]}"
+        else:
+            path = os.path.join(base, RECORD_SUBDIR)
+            source = "the Pibrary library" if pib_root else "the default folder"
+    kind, mount, _dev = fs_kind(path)
+    out.update(path=path, source=source, kind=kind, mount=mount)
+    if kind == "sd" and usb:
+        out["reason"] = (f"{path} is on the SD card while a USB drive ({usb[0]}) is mounted, and recordings never go to the SD card "
+                         "when a USB drive is available. Point the Recordings folder at the USB drive, or leave it empty.")
+        return out
+    out["ok"] = True
+    return out
+
+
+def recordings_list(d):
+    out = []
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    for n in names:
+        if _REC_NAME_RE.match(n):
+            p = os.path.join(d, n)
+            if os.path.isfile(p) and not os.path.islink(p):
+                try:
+                    out.append((n, os.path.getsize(p)))
+                except OSError:
+                    pass
+    out.sort()
+    return out
+
+
+def retention_enforce(d, need):
+    cap_mb = int(_cfg_get("record_max_mb"))
+    files = recordings_list(d)
+    budget = cap_mb * 1024 * 1024 - need
+    total = sum(f[1] for f in files)
+    removed = 0
+    for name, size in files:
+        if total <= budget:
+            break
+        try:
+            os.remove(os.path.join(d, name))
+        except OSError as exc:
+            log_event(f"Retention: could not remove {name}: {exc}", "warn")
+            continue
+        total -= size
+        removed += 1
+        log_event(f"Retention: removed the oldest recording {name} to stay within {cap_mb} MB", "info")
+    if total > budget and need:
+        log_event(f"Retention: this window alone needs more than the {cap_mb} MB cap allows", "warn")
+    return removed
+
+
+def storage_view():
+    pick = storage_pick()
+    path = pick["path"]
+    out = dict(pick, ok=True, cap_mb=int(_cfg_get("record_max_mb")), free=None, total=None, files=0, bytes=0)
+    out["usable"] = pick["ok"]
+    out["ok"] = True
+    try:
+        st = os.statvfs(_existing_ancestor(path))
+        out["free"], out["total"] = st.f_bavail * st.f_frsize, st.f_blocks * st.f_frsize
+    except OSError:
+        pass
+    files = recordings_list(path)
+    out["files"], out["bytes"] = len(files), sum(f[1] for f in files)
+    return out
+
+
+def wav_header(fmt, data_bytes, samples):
+    if fmt == "ulaw":
+        body = struct.pack("<HHIIHHH", 7, 1, 8000, 8000, 1, 8, 0)
+        return (b"RIFF" + struct.pack("<I", 50 + data_bytes) + b"WAVEfmt " + struct.pack("<I", 18) + body
+                + b"fact" + struct.pack("<II", 4, samples) + b"data" + struct.pack("<I", data_bytes))
+    body = struct.pack("<HHIIHH", 1, 1, 8000, 16000, 2, 16)
+    return b"RIFF" + struct.pack("<I", 36 + data_bytes) + b"WAVEfmt " + struct.pack("<I", 16) + body + b"data" + struct.pack("<I", data_bytes)
+
+
+def repair_recording(path):
+    try:
+        with open(path, "r+b") as fh:
+            head = fh.read(96)
+            if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+                return False
+            pos, tag, data_off, size_pos = 12, None, None, None
+            while pos + 8 <= len(head):
+                cid = head[pos:pos + 4]
+                csz = struct.unpack_from("<I", head, pos + 4)[0]
+                if cid == b"fmt " and pos + 10 <= len(head):
+                    tag = struct.unpack_from("<H", head, pos + 8)[0]
+                elif cid == b"data":
+                    data_off, size_pos = pos + 8, pos + 4
+                    break
+                pos += 8 + csz + (csz & 1)
+            if tag not in (1, 7) or data_off is None:
+                return False
+            fmt = "ulaw" if tag == 7 else "pcm"
+            if data_off != len(wav_header(fmt, 0, 0)):
+                return False
+            actual = os.fstat(fh.fileno()).st_size - data_off
+            if fmt == "pcm":
+                actual -= actual % 2
+            if struct.unpack_from("<I", head, size_pos)[0] == actual:
+                return False
+            fh.seek(0)
+            fh.write(wav_header(fmt, actual, actual if fmt == "ulaw" else actual // 2))
+            fh.flush()
+            os.fsync(fh.fileno())
+            return True
+    except OSError:
+        return False
+
+
+def repair_recordings(d):
+    fixed = 0
+    for name, _size in recordings_list(d):
+        if repair_recording(os.path.join(d, name)):
+            fixed += 1
+            log_event(f"Repaired the header of {name} (it was not closed cleanly)", "warn")
+    return fixed
+
+
+class RecordingEngine:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.a = None
+
+    def feed(self, pcm):
+        a = self.a
+        if a is None:
+            return
+        try:
+            a["q"].put_nowait(pcm)
+        except queue.Full:
+            a["dropped"] += 1
+
+    def healthy(self):
+        a = self.a
+        if a is None:
+            return True, ""
+        if a["error"]:
+            return False, a["error"]
+        if not a["thread"].is_alive():
+            return False, "the recording writer stopped"
+        return True, ""
+
+    def start(self, entry, window):
+        with self.lock:
+            if self.a is not None:
+                return False, "a recording is already open", None
+            pick = storage_pick()
+            if not pick["ok"]:
+                return False, pick["reason"], None
+            d = pick["path"]
+            fmt = entry["format"]
+            secs = max(60.0, (window[1] - datetime.now()).total_seconds()) if window else 3600.0
+            need = int(secs * (8000 if fmt == "ulaw" else 16000))
+            try:
+                os.makedirs(d, exist_ok=True)
+            except OSError as exc:
+                return False, f"cannot create {d}: {exc}", None
+            repair_recordings(d)
+            retention_enforce(d, need)
+            try:
+                st = os.statvfs(d)
+            except OSError as exc:
+                return False, f"cannot check the free space in {d}: {exc}", None
+            free = st.f_bavail * st.f_frsize
+            if free < need + RECORD_RESERVE_BYTES:
+                return False, (f"not enough free space in {d}: {free // 1048576} MB free, "
+                               f"{(need + RECORD_RESERVE_BYTES) // 1048576} MB needed for this window"), None
+            slug = re.sub(r"[^A-Za-z0-9._-]+", "-", entry["name"]).strip("-.")[:48] or "recording"
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            name = f"{stamp}_{slug}.wav"
+            n = 1
+            while os.path.exists(os.path.join(d, name)):
+                n += 1
+                name = f"{stamp}_{slug}-{n}.wav"
+            path = os.path.join(d, name)
+            try:
+                fh = open(path, "xb", buffering=65536)
+                fh.write(wav_header(fmt, 0, 0))
+                fh.flush()
+            except OSError as exc:
+                return False, f"cannot create {path}: {exc}", None
+            a = {"q": queue.Queue(RECORD_QUEUE_FRAMES), "fh": fh, "path": path, "name": name, "dir": d, "fmt": fmt,
+                 "bytes": 0, "samples": 0, "dropped": 0, "error": "", "thread": None, "t0": time.monotonic()}
+            a["thread"] = threading.Thread(target=self._writer, args=(a,), name="rec-writer", daemon=True)
+            self.a = a
+            a["thread"].start()
+            HUB.recorder = self
+        log_event(f"Recording started: {path} ({'u-law' if fmt == 'ulaw' else 'PCM'})", "ok")
+        return True, f"recording to {path}", name
+
+    def _patch(self, a):
+        fh = a["fh"]
+        fh.flush()
+        fh.seek(0)
+        fh.write(wav_header(a["fmt"], a["bytes"], a["samples"]))
+        fh.flush()
+        fh.seek(0, 2)
+
+    def _writer(self, a):
+        fh, q, ulaw = a["fh"], a["q"], a["fmt"] == "ulaw"
+        last_sync = last_hdr = time.monotonic()
+        try:
+            while True:
+                try:
+                    pcm = q.get(timeout=1.0)
+                except queue.Empty:
+                    pcm = b""
+                if pcm is None:
+                    break
+                if pcm:
+                    data = ulaw_encode(pcm) if ulaw else pcm
+                    fh.write(data)
+                    a["bytes"] += len(data)
+                    a["samples"] += len(pcm) // 2
+                now = time.monotonic()
+                if now - last_hdr >= RECORD_HEADER_SEC:
+                    self._patch(a)
+                    last_hdr = now
+                if now - last_sync >= RECORD_SYNC_SEC:
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                    last_sync = now
+            self._patch(a)
+            os.fsync(fh.fileno())
+        except (OSError, ValueError) as exc:
+            a["error"] = f"writing {a['name']} failed: {exc}"
+            if HUB.recorder is self:
+                HUB.recorder = None
+            log_event(a["error"], "err")
+        finally:
+            try:
+                fh.close()
+            except (OSError, ValueError):
+                pass
+
+    def stop(self):
+        with self.lock:
+            a = self.a
+            if a is None:
+                return True, "no recording was open", None
+            if HUB.recorder is self:
+                HUB.recorder = None
+            try:
+                a["q"].put(None, timeout=5.0)
+            except queue.Full:
+                pass
+            a["thread"].join(RECORD_CLOSE_SEC)
+            alive = a["thread"].is_alive()
+            self.a = None
+        secs = a["samples"] / 8000.0
+        if alive:
+            msg = f"{a['name']} did not close within {int(RECORD_CLOSE_SEC)} s"
+            log_event(msg, "err")
+            return False, msg, None
+        removed = retention_enforce(a["dir"], 0)
+        note = f", {a['dropped']} frames dropped" if a["dropped"] else ""
+        if a["error"]:
+            return False, f"{a['error']} (kept {a['name']}, {round(secs)} s)", None
+        log_event(f"Recording saved: {a['name']} ({round(secs)} s, {a['bytes'] / 1048576:.1f} MB{note})", "ok")
+        return True, f"saved {a['name']} ({round(secs)} s, {a['bytes'] / 1048576:.1f} MB{note})" + (f"; removed {removed} old" if removed else ""), None
+
+
+ENGINE = RecordingEngine()
+
+
 SCHEDULE_PATH = os.path.join(CONFIG_DIR, "schedule.json")
 SCHEDULE_STATE_PATH = os.path.join(CONFIG_DIR, "schedule_state.json")
 SCHEDULE_MAX = 40
@@ -4178,7 +4566,7 @@ STEP_TIMEOUT = {"connect": 120, "start": 15, "stop": 30, "disconnect": 60}
 LINK_CHECK_SEC = 5
 LINK_LOST_CHECKS = 2
 MISSED_LOOKBACK = timedelta(hours=24)
-ENGINE_READY = False
+ENGINE_READY = True
 _sched_lock = threading.RLock()
 _sched_cache = {"key": None, "data": None}
 _ENTRY_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
@@ -4446,6 +4834,9 @@ class DryActions:
     def link_alive(self, entry):
         return True
 
+    def healthy(self, entry):
+        return True, ""
+
     def start(self, entry, window):
         return True, f"dry run: would start a {entry['format']} recording", "dry-run"
 
@@ -4464,11 +4855,14 @@ class RealActions:
     def link_alive(self, entry):
         return _entry_linked(entry["target"])
 
+    def healthy(self, entry):
+        return ENGINE.healthy()
+
     def start(self, entry, window):
-        return False, "the recording engine is not built yet", None
+        return ENGINE.start(entry, window)
 
     def stop(self):
-        return True, "", None
+        return ENGINE.stop()
 
     def disconnect(self, entry):
         r = tune_disconnect(entry["target"])
@@ -4506,6 +4900,13 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
             result, detail = "aborted", "Node Recorder was stopping"
             break
         if t >= end_at:
+            break
+        try:
+            healthy, why = actions.healthy(entry)
+        except Exception:
+            healthy, why = True, ""
+        if not healthy:
+            result, detail = "write_failed", why
             break
         if t >= next_check:
             try:
@@ -4722,6 +5123,15 @@ def schedule_dry_run(body):
                        lambda s, file=None: states.append(s), lambda: clock["t"], sleep)
     return {"ok": True, "result": res["result"], "detail": res["detail"], "steps": res["steps"], "states": states,
             "message": "Dry run finished: nothing was connected or recorded."}
+
+
+def recorder_status():
+    st = SCHED.status()
+    cur = st["current"] or {}
+    dry = bool(cur.get("dry_run"))
+    return {"ok": True, "version": VERSION, "state": st["state"], "busy": st["state"] != "idle" and not dry, "dry_run": dry,
+            "entry": cur.get("name", ""), "start": cur.get("start", ""), "end": cur.get("end", ""),
+            "elapsed": cur.get("elapsed", 0), "file": cur.get("file", "")}
 
 
 def schedule_view():
@@ -5678,7 +6088,7 @@ async function pollLog() {
 }
 let sysmonPort = null;
 const TABS = ['connect', 'record', 'setup'];
-const FOLDS = ['setup', 'fav', 'dig', 'node', 'rx', 'log'];
+const FOLDS = ['setup', 'fav', 'dig', 'node', 'store', 'rx', 'log'];
 const CFG_BOOL = ['https'];
 const SVC_TXT = {active: 'running', inactive: 'stopped', failed: 'failed', missing: 'not installed', unknown: '?'};
 
@@ -5691,8 +6101,8 @@ function showTab(name) {
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
   if (name === 'connect') { loadFavs(); connectTabEnter(); }
-  if (name === 'record') loadSchedule();
-  if (name === 'setup') { loadRecNode(); loadConfig(); loadFavEditor(); loadDashFavs(); loadDigital(); }
+  if (name === 'record') { loadSchedule(); loadStorage(); }
+  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadFavEditor(); loadDashFavs(); loadDigital(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
 
@@ -5870,7 +6280,7 @@ async function loadRecNode() {
 
 const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
 const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped',
-  stop_failed: 'did not stop cleanly', disconnect_failed: 'did not disconnect', aborted: 'stopped early', interrupted: 'interrupted by a restart',
+  stop_failed: 'did not stop cleanly', write_failed: 'could not write the file', disconnect_failed: 'did not disconnect', aborted: 'stopped early', interrupted: 'interrupted by a restart',
   missed: 'missed', error: 'failed'};
 
 function schedDays(days) {
@@ -5908,6 +6318,33 @@ async function loadSchedule() {
     .map((r) => r.name + ' ' + r.window.replace('T', ' ') + ': ' + (RESULT_TXT[r.result] || r.result) + (r.detail ? ' (' + r.detail + ')' : '')).join(' | ');
 }
 
+function fmtBytes(n) {
+  if (n == null) return '-';
+  return n >= 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : Math.round(n / 1048576) + ' MB';
+}
+
+async function loadStorage() {
+  if (!authed) return;
+  const d = await api('/api/storage');
+  if (!d.ok) return;
+  $('rs-path').textContent = d.path + (d.kind === 'usb' ? ' (USB drive)' : d.kind === 'sd' ? ' (SD card)' : '');
+  $('rs-source').textContent = d.source;
+  $('rs-free').textContent = fmtBytes(d.free) + (d.total ? ' of ' + fmtBytes(d.total) : '');
+  $('rs-files').textContent = d.files + ' file' + (d.files === 1 ? '' : 's') + ', ' + fmtBytes(d.bytes) + ' (keeps at most ' + d.cap_mb + ' MB)';
+  $('rs-block').textContent = d.usable ? '' : 'Recording is blocked: ' + d.reason;
+  $('rs-block').classList.toggle('hidden', !!d.usable);
+  $('rs-conflict').textContent = d.conflict
+    ? 'Two folders are set. Node Recorder uses ' + d.path + ' (the Recordings folder setting). Pibrary\'s library is at ' + d.pibrary_path + ', so Pibrary will not list these recordings.' : '';
+  $('rs-conflict').classList.toggle('hidden', !d.conflict);
+  sum('store', d.path);
+}
+
+async function saveStore() {
+  note('store-msg', '', 'Saving...');
+  setMsg('store-msg', await post('/api/config', {record_path: $('cfg-record_path').value.trim(), record_max_mb: $('cfg-record_max_mb').value}));
+  loadStorage();
+}
+
 async function schedDryRun(id) {
   note('sch-msg', '', 'Walking through the steps...');
   const d = await post('/api/schedule/dryrun', {id: id});
@@ -5932,6 +6369,8 @@ async function loadConfig() {
   const d = await api('/api/config');
   if (!d.ok) return;
   CFG_BOOL.forEach((k) => { $('cfg-' + k).checked = !!d.config[k]; });
+  $('cfg-record_path').value = d.config.record_path || '';
+  $('cfg-record_max_mb').value = d.config.record_max_mb;
   sum('cfg', d.config.https ? 'HTTPS' : 'HTTP');
   $('tune-on').checked = !!d.config.tune_enabled;
   $('tune-rx').value = d.config.rx_gain_db;
@@ -6006,6 +6445,8 @@ document.addEventListener('DOMContentLoaded', () => {
   pollEvery(pollStatus, 1500);
   pollEvery(pollLog, 3000);
   pollEvery(() => (tab === 'record' ? loadSchedule() : null), 4000);
+  pollEvery(() => (tab === 'record' ? loadStorage() : null), 15000);
+  $('store-save').addEventListener('click', saveStore);
 });
 """
 
@@ -6183,6 +6624,17 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
 <div id="rec-state" class="muted" style="margin-top:8px">Idle.</div>
 </div>
+<div class="card" id="cd-rstore">
+<h2>Storage</h2>
+<table>
+<tr><th>Saving to</th><td id="rs-path">-</td></tr>
+<tr><th>Chosen by</th><td id="rs-source">-</td></tr>
+<tr><th>Free</th><td id="rs-free">-</td></tr>
+<tr><th>Recordings</th><td id="rs-files">-</td></tr>
+</table>
+<div id="rs-block" class="msg err hidden"></div>
+<div id="rs-conflict" class="msg warn hidden"></div>
+</div>
 <div class="card" id="cd-sched">
 <h2>Schedule</h2>
 <div id="sch-note" class="muted small"></div>
@@ -6299,6 +6751,16 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div id="rn-msg" class="msg"></div>
 </div>
 </div>
+<div class="card fold" id="cd-store">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-store"><span class="fold-t">Storage</span><span class="fold-sum" id="sum-store"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-store">
+<p class="muted small">Recordings are saved as u-law WAV files (about 29 MB an hour) or PCM WAV (about 58 MB an hour). Leave the folder empty to use the Pibrary library (or a USB drive) automatically, so Pibrary lists and plays them. Recordings never go to the SD card while a USB drive is mounted.</p>
+<div class="row"><label>Recordings folder <input type="text" id="cfg-record_path" maxlength="200" placeholder="automatic" style="width:260px"></label></div>
+<div class="row"><label>Keep at most <input type="number" id="cfg-record_max_mb" min="100" max="2000000" style="width:110px"> MB (the oldest recordings go first)</label></div>
+<div class="row"><button id="store-save" class="btn primary" type="button">Save</button></div>
+<div id="store-msg" class="msg"></div>
+</div>
+</div>
 <div class="card fold" id="cd-rx">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-rx"><span class="fold-t">RX</span><span class="fold-sum" id="sum-rx"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-rx">
@@ -6413,6 +6875,10 @@ class Handler(BaseHTTPRequestHandler):
         ip = _parse_ip(self._peer())
         return str(ip) if ip is not None else self._peer()
 
+    def _local_peer(self):
+        peer = _parse_ip(self._peer())
+        return bool(peer is not None and peer.is_loopback and not self._proxied())
+
     def _wan(self):
         return self._proxied() or not _is_lan(self._peer())
 
@@ -6486,6 +6952,12 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
+        if path == "/api/recorder/status":
+            if self._local_peer():
+                self._json(200, recorder_status())
+            else:
+                self._json(403, {"ok": False, "error": "The recording status is for programs on this Pi only."})
+            return
         authed = self._authed()
         if path not in _OPEN_GET_PATHS and not authed:
             if not (path in _PUBLIC_LISTEN_PATHS and _cfg_get("public_listen")):
@@ -6511,6 +6983,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._stream((query.get("fmt") or [""])[0] == "s16")
             elif path == "/api/disconnect-all/status":
                 self._json(200, disconnect_all_status())
+            elif path == "/api/storage":
+                self._json(200, storage_view())
             elif path == "/api/schedule":
                 self._json(200, schedule_view())
             elif path == "/api/recnode":
@@ -6704,6 +7178,7 @@ def run_server():
     threading.Thread(target=KEYED.loop, name="ami-keyed", daemon=True).start()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=pi_loop, name="pi-health", daemon=True).start()
+    threading.Thread(target=lambda: repair_recordings(storage_pick()["path"]), name="rec-repair", daemon=True).start()
     threading.Thread(target=SCHED.loop, name="schedule", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(FWD_PORT, None), name="usrp-fwd", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(REC_USRP_IN, talker_idle), name="usrp-node", daemon=True).start()
