@@ -22,7 +22,9 @@ import subprocess
 import sys
 import threading
 import time
-from collections import defaultdict
+import urllib.error
+import urllib.request
+from collections import defaultdict, deque
 from dataclasses import dataclass, field, replace as _dc_replace
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -38,7 +40,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "9.3.101"
+VERSION      = "9.3.102"
 BUILD_DATE   = "2026-10-28"
 
 ASL_NODE        = "652702"
@@ -8449,6 +8451,11 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 }
 
 /* ── Toast ── */
+#rec-banner { display: none; position: sticky; top: 0; z-index: 1100; text-align: center; font-size: .85rem; padding: .4rem .8rem;
+  background: #3a2a00; color: var(--amber); border-bottom: 1px solid var(--amber); }
+#rec-banner.open { display: block; }
+#rec-banner.ovr { background: #3a1010; color: #ff9a9a; border-bottom-color: #ff6b6b; }
+body.rec-locked [id$="-grid"] { opacity: .55; }
 #toast-stack {
   position: fixed;
   bottom: 1.5rem;
@@ -9240,6 +9247,7 @@ body.radio-keyed .row-grid[class*="active-"] .row-name{color:#ffd700;text-shadow
 </style>
 </head>
 <body>
+<div id="rec-banner" role="status"></div>
 <div id="login-screen" class="hidden">
   <div class="welcome">Welcome to the <b>KD8PGK</b> Node Controller</div>
   <div class="splash-license">Node Controller · <a href="https://creativecommons.org/licenses/by-nc/4.0/" target="_blank" rel="noopener">CC BY-NC 4.0</a></div>
@@ -9871,6 +9879,49 @@ function modal(msg,buttons){
   });
 }
 const confirm1=msg=>modal(msg,[{label:'Cancel',cls:'btn-muted',value:false},{label:'OK',cls:'btn-amber',value:true}]);
+let recBusy=null,_recAsking=false;
+const REC_API=['switch-tab','retune-tab','tune','quick-tune','asl-connect','asl-disc-current','disc-perm-link','connect-by-number','echo-connect',
+  'echo-connect-by-number','echo-disc','dstar-connect','xlx-connect','dstar-disconnect','xlx-disconnect','m17-connect','m17-disconnect','disc-all',
+  'switch-dmr-server','save-all','save-dmr-server-tgs','save-xlx','save-m17','save-config','save-phone','phone-select','phone-apply','phone-activate',
+  'phone-revert','phone-dial','phone-test','phone-patch','reboot','shutdown'];
+function recText(rec){
+  const secs=Number(rec.elapsed)||0,end=String(rec.end||'').slice(11,16);
+  return 'A recording is in progress: '+(rec.entry||'Node Recorder')+' ('+Math.floor(secs/60)+':'+String(secs%60).padStart(2,'0')+' so far'
+    +(end?', until '+end:'')+'). Links, settings and restarts are locked until it ends, so the recording is not interrupted.';
+}
+function recBanner(){
+  const b=byId('rec-banner');
+  document.body.classList.toggle('rec-locked',!!recBusy&&!recBusy.override);
+  if(!recBusy){b.className='';b.textContent='';return}
+  b.className='open'+(recBusy.override?' ovr':'');
+  b.textContent=recBusy.override?'Recording in progress: override is on, so changes go through. It ends with the recording.'
+    :'Recording in progress: '+(recBusy.entry||'Node Recorder')+'. Links, settings and restarts are locked until it ends.';
+}
+async function recPoll(){
+  try{
+    const r=await fetch('/api/recording');
+    if(!r.ok)return;
+    const d=await r.json();
+    recBusy=d.recording||null;
+    recBanner();
+  }catch(e){}
+}
+async function recPopup(rec){
+  if(_recAsking)return false;
+  _recAsking=true;
+  try{
+    const v=await modal(recText(rec),[{label:'OK',cls:'btn-muted',value:'ok'},{label:'Override…',cls:'btn-red',value:'ovr'}]);
+    if(v!=='ovr')return false;
+    const sure=await modal('Override the recording lock? Changes will go through while the recording keeps running, and they can spoil it. The override is logged and ends when the recording ends.',
+      [{label:'Cancel',cls:'btn-muted',value:false},{label:'Override',cls:'btn-red',value:true}]);
+    if(!sure)return false;
+    const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'recording-override',confirm:true})});
+    const d=await r.json();
+    toast(d.message||(d.ok?'Override is on.':'Override failed.'),d.ok?'ok':'err');
+    if(d.ok){recBusy=Object.assign({},rec,{override:true});recBanner();}
+    return !!d.ok;
+  }finally{_recAsking=false}
+}
 function errModal(msg){
   byId('err-modal-msg').textContent=msg;
   byId('err-modal-overlay').classList.add('open');
@@ -9923,13 +9974,22 @@ function hideWorking(){
 const DVS_TUNE_MS      = 55000;
 const DVS_MODE_TUNE_MS = 95000;
 const LINK_SWITCH_MS   = 130000;
-async function api(body,ms=25000){
+async function api(body,ms=25000,_again=false){
+  if(!_again&&recBusy&&!recBusy.override&&REC_API.indexOf(body.action)>=0){
+    if(!(await recPopup(recBusy)))return{ok:false,message:'Locked while a recording is in progress.'};
+  }
   const ctrl=new AbortController();
   const tid=setTimeout(()=>ctrl.abort(),ms);
   try{
     const r=await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify(body),signal:ctrl.signal});
-    clearTimeout(tid);return await r.json();
+    clearTimeout(tid);
+    const j=await r.json();
+    if(r.status===409&&j.recording_block&&!_again){
+      recBusy=j.recording;recBanner();
+      if(await recPopup(j.recording))return api(body,ms,true);
+    }
+    return j;
   }catch(e){clearTimeout(tid);return{ok:false,message:e.name==='AbortError'?'Request timed out':'Network error'}}
 }
 const esc=s=>String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
@@ -13480,7 +13540,7 @@ let _appStarted=false;
 function _startApp(){
   if(_appStarted)return;
   _appStarted=true;
-  refresh().then(()=>{loadTgData();schedulePoll();pollKeyed();pollAbInfo();});
+  refresh().then(()=>{loadTgData();schedulePoll();pollKeyed();pollAbInfo();recPoll();setInterval(recPoll,3000);});
   setInterval(pollAbInfo,10_000);
   setInterval(()=>{
     if(!_uptimeAt)return;
@@ -14162,7 +14222,84 @@ class Handler(BaseHTTPRequestHandler):
         fn = _POST_ACTIONS.get(action)
         if fn is None:
             return False, f"Unknown action '{action}'"
+        if action in _REC_BLOCKED_ACTIONS:
+            rec = recorder_busy()
+            if rec:
+                if _rec_override_active(rec):
+                    with _rec_lock:
+                        _rec_note(f"{action} went through under the override")
+                else:
+                    self.send_json({"ok": False, "message": recording_text(rec), "recording_block": True,
+                                    "recording": rec}, 409)
+                    raise _EarlyReturn()
         return fn(self, data)
+
+RECORDER_STATUS_URL = os.environ.get("NODECONTROL_RECORDER_STATUS_URL", "http://127.0.0.1:8995/api/recorder/status")
+_rec_lock = threading.Lock()
+_rec_cache: dict = {"t": -1e9, "v": None}
+_rec_override: dict = {"key": ""}
+_rec_override_log: deque = deque(maxlen=50)
+_REC_BLOCKED_ACTIONS = frozenset((
+    "switch-tab", "retune-tab", "tune", "quick-tune", "asl-connect", "asl-disc-current", "disc-perm-link",
+    "connect-by-number", "echo-connect", "echo-connect-by-number", "echo-disc", "dstar-connect", "xlx-connect",
+    "dstar-disconnect", "xlx-disconnect", "m17-connect", "m17-disconnect", "disc-all", "switch-dmr-server",
+    "save-all", "save-dmr-server-tgs", "save-xlx", "save-m17", "save-config", "save-phone", "phone-select",
+    "phone-apply", "phone-activate", "phone-revert", "phone-dial", "phone-test", "phone-patch", "reboot", "shutdown"))
+
+def _rec_note(text: str) -> None:
+    _rec_override_log.append({"at": datetime.now().isoformat(timespec="seconds"), "text": text})
+
+def _rec_key(rec: dict) -> str:
+    return f"{rec.get('entry', '')}|{rec.get('start', '')}"
+
+def recorder_busy() -> Optional[dict]:
+    now = time.monotonic()
+    with _rec_lock:
+        if now - _rec_cache["t"] < 2.0:
+            return _rec_cache["v"]
+    busy = None
+    try:
+        with urllib.request.urlopen(RECORDER_STATUS_URL, timeout=0.6) as resp:
+            d = json.loads(resp.read(65536).decode("utf-8", "replace"))
+        if isinstance(d, dict) and d.get("ok") and d.get("busy"):
+            busy = {k: d.get(k, "") for k in ("state", "entry", "start", "end", "elapsed", "file")}
+    except (OSError, ValueError, urllib.error.URLError):
+        busy = None
+    with _rec_lock:
+        _rec_cache.update(t=now, v=busy)
+        if _rec_override["key"] and (busy is None or _rec_key(busy) != _rec_override["key"]):
+            _rec_override["key"] = ""
+            _rec_note("Override cleared: the recording ended")
+    return busy
+
+def _rec_override_active(rec: Optional[dict]) -> bool:
+    with _rec_lock:
+        return bool(rec) and _rec_override["key"] == _rec_key(rec)
+
+def recording_text(rec: dict) -> str:
+    secs = int(rec.get("elapsed") or 0)
+    end = str(rec.get("end") or "")[11:16]
+    return (f"A recording is in progress: {rec.get('entry') or 'Node Recorder'} ({secs // 60}:{secs % 60:02d} so far"
+            + (f", until {end}" if end else "") + "). Links, settings and restarts are locked until it ends, so the "
+            "recording is not interrupted.")
+
+def action_recording_override(d: dict) -> Tuple[bool, str]:
+    if d.get("confirm") is not True:
+        return False, "The override needs a confirmation."
+    rec = recorder_busy()
+    if not rec:
+        return False, "No recording is in progress."
+    with _rec_lock:
+        _rec_override["key"] = _rec_key(rec)
+        _rec_note(f"Override on for the recording {rec.get('entry') or 'Node Recorder'}; it ends with the recording")
+    return True, "Override is on until the recording ends. The recording keeps running."
+
+def recording_view() -> dict:
+    rec = recorder_busy()
+    active = _rec_override_active(rec)
+    with _rec_lock:
+        feed = list(_rec_override_log)
+    return {"ok": True, "recording": dict(rec, override=active) if rec else None, "override_log": feed}
 
 def _arg(d: dict, key: str) -> str:
     return str(d.get(key, ""))
@@ -14487,6 +14624,7 @@ def _local_m17_connect(data: dict) -> Tuple[bool, str]:
 
 _POST_ACTIONS: dict = {
     "logout":            _act_logout,
+    "recording-override": lambda h, d: action_recording_override(d),
     "switch-tab":        _act_page(lambda page, d: action_switch_tab(page)),
     "retune-tab":        _act_page(lambda page, d: action_retune_tab(page, _arg_s(d, "server"))),
     "tune":              _act_mode(lambda mode, d: action_tune(mode, _arg(d, "tg"),
@@ -14566,6 +14704,7 @@ _GET_ROUTES: dict = {
     "/api/sysmon-status": lambda h: h.send_json(action_sysmon_status()),
     "/api/nodelisten-status": lambda h: h.send_json(action_nodelisten_status()),
     "/api/status":     lambda h: h.send_status(),
+    "/api/recording":  lambda h: h.send_json(recording_view()),
     "/api/keyed":      lambda h: h.send_json(action_get_keyed()),
     "/api/talkgroups":     lambda h: h.send_json(action_get_talkgroups()),
     "/api/asl-nodes":      lambda h: h.send_json(action_get_asl_nodes()),

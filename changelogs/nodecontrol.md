@@ -1,6 +1,14 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_101_20261101.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_102_20261102.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.102 (2026-11-02)
+
+- **Links and settings are locked while Node Recorder is recording, with an Override.** The Dashboard asks Node Recorder (`http://127.0.0.1:8995/api/recorder/status`, answered only on this Pi) whether a recording is in progress, every 3 s from the page and before it acts. While one is, connecting, disconnecting and tuning (ASL, EchoLink, D-STAR, XLX, M17, DMR networks and the other digital modes, Disconnect All), the tab switch that retunes, saving the node, mode and phone settings (Save, Save all, the DMR and XLX and M17 lists), the phone patch settings and calls, Reboot and Shutdown are refused with a message that names the recording and when it ends. Saving a favorite, hanging up a call and the CPU-weight calls stay open. If Node Recorder is not installed or not answering, nothing is locked.
+- **The popup.** When you use a locked control, a box names the recording (how long it has run and when it ends) and offers **OK** or **Override…**. A bar at the top of the page shows "Recording in progress" while one runs.
+- **Override needs a second confirmation** ("Override the recording lock?"). It lets changes through while the recording keeps running, and it can spoil the recording. It is held in memory only, belongs to that one recording, and clears when the recording ends or another one starts, or when the Dashboard restarts. The page then repeats the action you asked for. Starting the override, each action it lets through, and its end are written to a short in-memory list (the last 50) that is not written to disk or the system log; `GET /api/recording` returns it. New: `GET /api/recording` and the `recording-override` action.
+- Same change as the Pi Zero 2 W build's 9.3.107-pi02w, made here because the full build was named.
+- This is a release, not a cosmetic build.
 
 ## 9.3.101 (2026-11-01)
 
