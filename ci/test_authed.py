@@ -199,6 +199,74 @@ def make_nc_case(key):
     base = make_case(key)
 
     class NCCase(base):
+        if key == "nodecontrol_pi02w":
+            def test_recording_in_progress_locks_links_until_override(self):
+                import http.server
+                import threading
+                state = {"busy": True, "entry": "CI net"}
+
+                class Stub(http.server.BaseHTTPRequestHandler):
+                    def do_GET(h):
+                        body = json.dumps({"ok": True, "busy": state["busy"], "state": "recording" if state["busy"] else "idle",
+                                           "entry": state["entry"], "start": "2026-01-01T00:00", "end": "2026-01-01T01:00",
+                                           "elapsed": 61, "file": "x.wav"}).encode()
+                        h.send_response(200)
+                        h.send_header("Content-Type", "application/json")
+                        h.send_header("Content-Length", str(len(body)))
+                        h.end_headers()
+                        h.wfile.write(body)
+
+                    def log_message(h, *a):
+                        pass
+
+                stub = http.server.ThreadingHTTPServer(("127.0.0.1", 8995), Stub)
+                threading.Thread(target=stub.serve_forever, daemon=True).start()
+                hdr = {"Cookie": self.cookie, "Content-Type": "application/json"}
+
+                def post(body):
+                    st, _, b = self.server.request("POST", "/api/action", body=json.dumps(body), headers=hdr, timeout=20)
+                    return st, json.loads(b)
+
+                try:
+                    time.sleep(2.5)
+                    st, d = get_json(self.server, "/api/recording", self.cookie)
+                    self.assertEqual(d["recording"]["entry"], "CI net")
+                    self.assertFalse(d["recording"]["override"])
+                    for action in ("asl-connect", "asl-disc-current", "tune", "save-config", "save-all", "switch-dmr-server"):
+                        st, d = post({"action": action})
+                        self.assertEqual(st, 409, action)
+                        self.assertTrue(d.get("recording_block"), action)
+                        self.assertIn("recording is in progress", d["message"])
+                    st, d = post({"action": "cpuweight-away"})
+                    self.assertNotEqual(st, 409, "an action that touches no link or setting is not locked")
+                    st, d = post({"action": "recording-override"})
+                    self.assertFalse(d["ok"], "the override needs a confirmation")
+                    st, d = post({"action": "recording-override", "confirm": True})
+                    self.assertTrue(d["ok"], d)
+                    st, d = get_json(self.server, "/api/recording", self.cookie)
+                    self.assertTrue(d["recording"]["override"])
+                    st, d = post({"action": "asl-disc-current"})
+                    self.assertNotEqual(st, 409, "a locked action passes under the override")
+                    state["entry"] = "Another net"
+                    time.sleep(2.5)
+                    st, d = get_json(self.server, "/api/recording", self.cookie)
+                    self.assertFalse(d["recording"]["override"], "the override belongs to one recording")
+                    st, d = post({"action": "asl-disc-current"})
+                    self.assertEqual(st, 409)
+                    post({"action": "recording-override", "confirm": True})
+                    state["busy"] = False
+                    time.sleep(2.5)
+                    st, d = get_json(self.server, "/api/recording", self.cookie)
+                    self.assertIsNone(d["recording"])
+                    self.assertTrue(any("cleared" in e["text"] for e in d["override_log"]), d["override_log"])
+                    st, d = post({"action": "asl-disc-current"})
+                    self.assertNotEqual(st, 409, "nothing is locked once the recording ends")
+                    st, d = post({"action": "recording-override", "confirm": True})
+                    self.assertFalse(d["ok"], "there is nothing to override when no recording runs")
+                finally:
+                    stub.shutdown()
+                    stub.server_close()
+
         def test_service_block_follows_systemd_within_poll_interval(self):
             set_unit(self.server, "analog_bridge.service", "active")
             self.assert_svc_becomes("ab", "active")
