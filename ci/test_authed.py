@@ -199,7 +199,7 @@ def make_nc_case(key):
     base = make_case(key)
 
     class NCCase(base):
-        if key == "nodecontrol_pi02w":
+        if key in ("nodecontrol", "nodecontrol_pi02w"):
             def test_recording_in_progress_locks_links_until_override(self):
                 import http.server
                 import threading

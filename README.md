@@ -508,7 +508,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_101_20261101.py` | Dashboard, full (current) |
+| `nodecontrol_v9_3_102_20261102.py` | Dashboard, full (current) |
 | `nodecontrol_pi02w_v9_3_107_20261102.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_95_20261028.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_83_20261028.py` | SysMon, Pi Zero 2 W (current) |
