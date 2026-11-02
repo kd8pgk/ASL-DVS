@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_3_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_4_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.4 (2026-11-02)
+
+- **Receive health looks at the Pi's own Wi-Fi.** On a Pi Zero 2 W the Wi-Fi carries the IAX links and the phone's audio, so a weak or retrying link could show up as "outside the LAN" or "the phone". Node Talker now reads `/run/asl_dvs/wifi_link.json`, which wifimon 5.48.0 writes, and adds a "This Pi's Wi-Fi" row: worst signal, slowest send rate, retries as a share of packets, failed sends, beacon loss, link blips, drops, chip stalls, rejoins and roams.
+- **Verdict.** If the Wi-Fi row is bad while audio was lost, late or stalled, and the Pi row is clean, the verdict is now "Not the Pi's software: the Pi's own Wi-Fi link" ahead of "the network outside the LAN". A Pi problem still comes first. A weak Wi-Fi on its own, with nothing lost, only marks the row.
+- **Works with any wifimon.** With no file, an old wifimon, or a stale file (older than 30 s), the row says why there is no Wi-Fi data and nothing else changes. The per-minute rows in `nodetalker_rxhealth.jsonl` carry the `wifi_*` numbers (changes in counters, not the running totals).
+- This is a release, not a cosmetic build.
 
 ## 0.10.3 (2026-11-02)
 

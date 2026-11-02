@@ -1802,5 +1802,258 @@ class RxHealthSendQueueTests(unittest.TestCase):
         self.assertIn("1500", row["text"])
 
 
+def load_wifimon():
+    import importlib.util
+    path = sorted(glob.glob(os.path.join(HERE, "..", "wifimon_v*.py")))[-1]
+    spec = importlib.util.spec_from_file_location("wifimon_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    with mock.patch("signal.signal"):
+        spec.loader.exec_module(mod)
+    return mod
+
+
+WIFI_SAMPLE = {"v": 1, "at": 0, "iface": "wlan0", "linked": True, "bssid_id": "a1b2c3d4", "band": "2.4 GHz", "channel": 6,
+               "signal_dbm": -58, "noise_dbm": -92, "rx_bitrate": 65.0, "tx_bitrate": 72.2, "tx_packets": 1000,
+               "tx_retries": 100, "tx_failed": 0, "beacon_loss": 0, "connected_secs": 600, "power_save": False,
+               "blips": 0, "drops": 0, "chip_stalls": 0}
+
+
+class WifimonLinkFileTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.wm = load_wifimon()
+        cls.nt = load_nodetalker()
+
+    def fast(self, **kw):
+        d = {"iface": "wlan0", "linked": True, "bssid": "aa:bb:cc:dd:ee:ff", "ssid_iw": "HomeNet", "freq_mhz": 2437,
+             "signal_dbm": -61.0, "noise_dbm": -90.0, "rx_bitrate": 58.5, "tx_bitrate": 65.0, "tx_packets": 4000,
+             "tx_retries": 300, "tx_failed": 2, "beacon_loss": 1, "connected_secs": 120, "mac": "11:22:33:44:55:66"}
+        d.update(kw)
+        return d
+
+    def test_station_dump_gives_the_packet_count(self):
+        out = self.wm._parse_station_dump("Station aa:bb (on wlan0)\n\tconnected time:\t120 seconds\n\ttx packets:\t5000\n"
+                                          "\ttx retries:\t300\n\ttx failed:\t2\n\tbeacon loss:\t1\n")
+        self.assertEqual(out["tx_packets"], 5000)
+        self.assertEqual(out["tx_retries"], 300)
+
+    def test_snapshot_carries_link_numbers_and_nothing_private(self):
+        wm = self.wm
+        snap = wm._wifi_link_snapshot(self.fast(), {"blips": 3, "drops": 1, "chip_stalls": 0}, {"power_save": True}, now=1000.0)
+        self.assertEqual(snap["v"], 1)
+        self.assertEqual(snap["at"], 1000.0)
+        self.assertTrue(snap["linked"])
+        self.assertEqual(snap["signal_dbm"], -61.0)
+        self.assertEqual(snap["tx_retries"], 300)
+        self.assertEqual((snap["blips"], snap["drops"]), (3, 1))
+        self.assertEqual(snap["band"], "2.4 GHz")
+        self.assertEqual(snap["channel"], 6)
+        text = json.dumps(snap)
+        for private in ("HomeNet", "aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"):
+            self.assertNotIn(private, text)
+        self.assertEqual(len(snap["bssid_id"]), 8)
+
+    def test_same_access_point_keeps_the_same_id_and_another_changes_it(self):
+        wm = self.wm
+        a = wm._wifi_link_snapshot(self.fast(), {}, {}, now=1.0)["bssid_id"]
+        b = wm._wifi_link_snapshot(self.fast(), {}, {}, now=2.0)["bssid_id"]
+        c = wm._wifi_link_snapshot(self.fast(bssid="aa:bb:cc:dd:ee:00"), {}, {}, now=3.0)["bssid_id"]
+        self.assertEqual(a, b)
+        self.assertNotEqual(a, c)
+
+    def test_snapshot_when_not_linked_has_no_link_numbers(self):
+        snap = self.wm._wifi_link_snapshot({"iface": "wlan0", "linked": False}, {"blips": 1}, {}, now=5.0)
+        self.assertFalse(snap["linked"])
+        self.assertIsNone(snap["signal_dbm"])
+        self.assertEqual(snap["blips"], 1)
+
+    def test_file_is_written_whole_and_world_readable(self):
+        wm = self.wm
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "run", "wifi_link.json")
+        with mock.patch.object(wm, "WIFI_LINK_FILE", path):
+            wm._wifi_link_write({"v": 1, "at": 1.0, "linked": True})
+            with open(path, encoding="utf-8") as fh:
+                self.assertEqual(json.load(fh)["linked"], True)
+            self.assertEqual(os.stat(path).st_mode & 0o777, 0o644)
+            self.assertFalse(os.path.exists(path + ".tmp"))
+
+    def test_an_unwritable_run_directory_does_not_stop_the_collector(self):
+        wm = self.wm
+        with mock.patch.object(wm, "WIFI_LINK_FILE", "/proc/nope/wifi_link.json"):
+            wm._wifi_link_write({"v": 1})
+
+    def test_publish_uses_the_last_collected_numbers(self):
+        wm = self.wm
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "wifi_link.json")
+        with mock.patch.object(wm, "WIFI_LINK_FILE", path):
+            wm._wifi_link_publish(self.fast())
+            with open(path, encoding="utf-8") as fh:
+                got = json.load(fh)
+        self.assertEqual(got["tx_packets"], 4000)
+        self.assertIn("blips", got)
+
+    def test_every_key_node_talker_reads_is_written_by_wifimon(self):
+        snap = self.wm._wifi_link_snapshot(self.fast(), {"blips": 0, "drops": 0, "chip_stalls": 0}, {"power_save": False}, now=1.0)
+        self.assertEqual(set(self.nt.WIFI_LINK_KEYS) - set(snap), set())
+
+
+class RxHealthWifiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        self.rxh = self.nt.RxHealth()
+        p = mock.patch.object(self.nt, "RXH_PATH", os.devnull)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def sample(self, **kw):
+        d = dict(WIFI_SAMPLE)
+        d.update(kw)
+        return d
+
+    def verdict(self):
+        nt = self.nt
+        return nt.rxh_verdict(nt.rxh_sum(self.rxh.window()), {"ok": True, "why": ""}, self.rxh.wifi_state())
+
+    def wifi_row(self, v):
+        return next(r for r in v["rows"] if r["layer"].startswith("This Pi's Wi-Fi"))
+
+    def test_read_link_file_fresh_stale_missing_and_bad(self):
+        nt = self.nt
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "wifi_link.json")
+        with mock.patch.object(nt, "WIFI_LINK_PATH", path):
+            self.assertEqual(nt.read_wifi_link(100.0), (None, "absent"))
+            with open(path, "w") as fh:
+                fh.write("not json")
+            self.assertEqual(nt.read_wifi_link(100.0)[1], "unreadable")
+            with open(path, "w") as fh:
+                json.dump(dict(WIFI_SAMPLE, at=100.0), fh)
+            got, why = nt.read_wifi_link(110.0)
+            self.assertEqual((got["signal_dbm"], why), (-58, ""))
+            self.assertEqual(nt.read_wifi_link(100.0 + nt.WIFI_STALE_SEC + 5)[1], "stale")
+            with open(path, "w") as fh:
+                json.dump(dict(WIFI_SAMPLE, at=100.0, v=99), fh)
+            self.assertEqual(nt.read_wifi_link(110.0)[1], "unsupported")
+
+    def test_first_sample_sets_the_baseline_only(self):
+        self.rxh.note_wifi(self.sample(), None)
+        cur = self.rxh.cur
+        self.assertEqual((cur["wifi_retries"], cur["wifi_failed"], cur["wifi_beacon"]), (0, 0, 0))
+        self.assertEqual(cur["wifi_samples"], 1)
+        self.assertEqual(cur["wifi_weak"], 58)
+        self.assertEqual(cur["wifi_rate_min"], 72)
+
+    def test_counters_are_kept_as_changes(self):
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(tx_packets=1500, tx_retries=160, tx_failed=2, beacon_loss=1, blips=1, drops=1,
+                                       chip_stalls=1, signal_dbm=-74, tx_bitrate=11.0), None)
+        cur = self.rxh.cur
+        self.assertEqual(cur["wifi_tx_pkts"], 500)
+        self.assertEqual(cur["wifi_retries"], 60)
+        self.assertEqual((cur["wifi_failed"], cur["wifi_beacon"]), (2, 1))
+        self.assertEqual((cur["wifi_blips"], cur["wifi_drops"], cur["wifi_stalls"]), (1, 1, 1))
+        self.assertEqual(cur["wifi_weak"], 74)
+        self.assertEqual(cur["wifi_rate_min"], 11)
+
+    def test_a_counter_that_restarts_is_not_a_negative_change(self):
+        self.rxh.note_wifi(self.sample(tx_retries=5000, tx_packets=90000), None)
+        self.rxh.note_wifi(self.sample(tx_retries=10, tx_packets=50, connected_secs=3), None)
+        cur = self.rxh.cur
+        self.assertEqual((cur["wifi_retries"], cur["wifi_tx_pkts"]), (0, 0))
+        self.assertEqual(cur["wifi_rejoins"], 1)
+
+    def test_a_new_access_point_is_a_roam_not_a_rejoin(self):
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(bssid_id="ffffffff", connected_secs=2), None)
+        self.assertEqual(self.rxh.cur["wifi_roams"], 1)
+        self.assertEqual(self.rxh.cur["wifi_rejoins"], 0)
+
+    def test_not_linked_counts_as_down(self):
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(linked=False, signal_dbm=None, tx_bitrate=None, bssid_id=None), None)
+        self.assertEqual(self.rxh.cur["wifi_down"], 1)
+
+    def test_no_file_is_reported_not_blamed(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_wifi(None, "absent")
+        v = self.verdict()
+        row = self.wifi_row(v)
+        self.assertEqual(row["level"], "info")
+        self.assertIn("wifimon", row["text"])
+        self.assertEqual(v["state"], "clean")
+
+    def test_a_healthy_link_is_ok_and_shows_its_numbers(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(tx_packets=2000, tx_retries=200), None)
+        row = self.wifi_row(self.verdict())
+        self.assertEqual(row["level"], "ok")
+        self.assertIn("-58 dBm", row["text"])
+        self.assertIn("10 %", row["text"])
+
+    def test_a_weak_signal_alone_does_not_change_a_clean_verdict(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_wifi(self.sample(signal_dbm=-84), None)
+        v = self.verdict()
+        self.assertEqual(self.wifi_row(v)["level"], "bad")
+        self.assertEqual(v["state"], "clean")
+
+    def test_wifi_trouble_with_a_gap_blames_the_pis_wifi_not_the_internet(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_packet(100.3)
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(beacon_loss=3, tx_failed=4), None)
+        v = self.verdict()
+        self.assertEqual(v["state"], "wifi")
+        self.assertIn("Wi-Fi", v["text"])
+        self.assertIn("Not the Pi's software", v["text"])
+
+    def test_the_pi_still_comes_before_its_wifi(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_drops(2, 0)
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(blips=2), None)
+        self.assertEqual(self.verdict()["state"], "pi")
+
+    def test_wifi_trouble_with_a_listener_stall_is_the_pis_wifi(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_outq("android", 1500, True)
+        self.rxh.note_wifi(self.sample(), None)
+        self.rxh.note_wifi(self.sample(tx_packets=3000, tx_retries=900), None)
+        v = self.verdict()
+        self.assertEqual(self.wifi_row(v)["level"], "bad")
+        self.assertEqual(v["state"], "wifi")
+
+    def test_few_packets_do_not_make_a_retry_percentage(self):
+        self.rxh.note_packet(100.0)
+        self.rxh.note_wifi(self.sample(tx_packets=10, tx_retries=1), None)
+        self.rxh.note_wifi(self.sample(tx_packets=20, tx_retries=9), None)
+        self.assertEqual(self.wifi_row(self.verdict())["level"], "ok")
+
+    def test_wifi_numbers_merge_across_minutes(self):
+        nt = self.nt
+        a = {"wifi_retries": 5, "wifi_weak": 60, "wifi_rate_min": 54, "wifi_tx_pkts": 100}
+        b = {"wifi_retries": 7, "wifi_weak": 75, "wifi_rate_min": 11, "wifi_tx_pkts": 50}
+        c = {"wifi_rate_min": 0}
+        agg = nt.rxh_sum([a, b, c])
+        self.assertEqual((agg["wifi_retries"], agg["wifi_tx_pkts"]), (12, 150))
+        self.assertEqual((agg["wifi_weak"], agg["wifi_rate_min"]), (75, 11))
+
+    def test_real_minutes_without_wifi_fields_still_get_a_verdict(self):
+        nt = self.nt
+        with open(FIELD_FIXTURE, encoding="utf-8") as fh:
+            case = json.load(fh)["rows"][0]
+        v = nt.rxh_verdict(nt.rxh_sum([case["row"]]), {"ok": True, "why": ""}, {"ok": None, "why": "absent"})
+        self.assertEqual(v["state"], "network")
+
+
 if __name__ == "__main__":
     unittest.main()

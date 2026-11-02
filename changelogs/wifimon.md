@@ -1,6 +1,12 @@
 # wifimon changelog
 
-Current file: `wifimon_v5_47_0_20261101.py`. Newest entries first.
+Current file: `wifimon_v5_48_0_20261102.py`. Newest entries first.
+
+## 5.48.0 (2026-11-02)
+
+- **Wi-Fi link file for other tools.** Every 5 seconds wifimon also writes `/run/asl_dvs/wifi_link.json` (world-readable, in memory only, nothing on the SD card). It holds the numbers wifimon already collects: signal and noise, send bitrate, packets sent, retries, failed sends, beacon loss, time since the link was made, a short id of the access point (a hash, not the address), the band and channel, power save, and today's link blips, drops and chip stalls. It has no network name, address, password or MAC. Node Talker 0.10.4 reads it to tell the Pi's own Wi-Fi from the internet and the phone; nothing else changes in wifimon, and it works the same when nothing reads the file.
+- The station dump now also reads `tx packets`, so retries can be shown as a share of packets sent.
+- This is a release, not a cosmetic build.
 
 ## 5.47.0 (2026-11-01)
 

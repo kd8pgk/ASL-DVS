@@ -7,6 +7,7 @@ import configparser
 import ctypes
 import ctypes.util
 import getpass
+import hashlib
 import hmac
 import http.cookies
 import io
@@ -34,7 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import unquote as urllib_unquote, urlsplit
 
-APP_VERSION = "5.47.0"
+APP_VERSION = "5.48.0"
 
 INTERFACE                 = "wlan0"
 PING_TARGET               = "8.8.8.8"
@@ -102,6 +103,7 @@ NM_CONN_DIR         = "/etc/NetworkManager/system-connections"
 NM_CONF_FILE        = "/etc/NetworkManager/conf.d/90-wifimon-connectivity.conf"
 NM_PS_CONF_FILE     = "/etc/NetworkManager/conf.d/90-wifimon-powersave.conf"
 HEALTH_FILE         = os.path.join(SHUTDOWN_STATE_DIR, "health.json")
+WIFI_LINK_FILE      = "/run/asl_dvs/wifi_link.json"
 ROAM_MODPROBE       = "/etc/modprobe.d/wifimon-brcmfmac.conf"
 REPORT_DIR          = "/var/log/wifimon"
 RUN_MARKER          = "/var/lib/wifimon/running.json"
@@ -2670,6 +2672,8 @@ def _parse_station_dump(text: str) -> Dict[str, object]:
         key = key.strip()
         if key == "connected time":
             out["connected_secs"] = _first_int(value)
+        elif key == "tx packets":
+            out["tx_packets"] = _first_int(value)
         elif key == "tx retries":
             out["tx_retries"] = _first_int(value)
         elif key == "tx failed":
@@ -3035,6 +3039,55 @@ def _collect_slow() -> Dict[str, object]:
     out["ipmap"] = _ipv4_map()
     return out
 
+def _wifi_link_snapshot(fast: Dict[str, object], health: Dict[str, object], slow: Dict[str, object],
+                        now: Optional[float] = None) -> Dict[str, object]:
+    linked = fast.get("linked")
+    if linked is None and fast.get("operstate"):
+        linked = fast.get("operstate") == "up"
+    bssid = fast.get("bssid")
+    band, channel = _freq_band_channel(fast.get("freq_mhz")) if linked else (None, None)
+    signal = fast.get("signal_dbm")
+    if signal is None:
+        signal = fast.get("proc_signal_dbm")
+    out: Dict[str, object] = {
+        "v": 1,
+        "at": time.time() if now is None else now,
+        "iface": fast.get("iface", INTERFACE),
+        "linked": linked,
+        "bssid_id": hashlib.sha1(str(bssid).encode("utf-8")).hexdigest()[:8] if linked and bssid else None,
+        "band": band,
+        "channel": channel,
+        "signal_dbm": signal if linked else None,
+        "noise_dbm": fast.get("noise_dbm") if linked else None,
+        "rx_bitrate": fast.get("rx_bitrate") if linked else None,
+        "tx_bitrate": fast.get("tx_bitrate") if linked else None,
+        "tx_packets": fast.get("tx_packets") if linked else None,
+        "tx_retries": fast.get("tx_retries") if linked else None,
+        "tx_failed": fast.get("tx_failed") if linked else None,
+        "beacon_loss": fast.get("beacon_loss") if linked else None,
+        "connected_secs": fast.get("connected_secs") if linked else None,
+        "power_save": slow.get("power_save"),
+        "blips": health.get("blips"),
+        "drops": health.get("drops"),
+        "chip_stalls": health.get("chip_stalls"),
+    }
+    return out
+
+def _wifi_link_write(data: Dict[str, object]) -> None:
+    try:
+        _durable_write(WIFI_LINK_FILE, json.dumps(data).encode("utf-8"), dir_mode=0o755)
+        os.chmod(WIFI_LINK_FILE, 0o644)
+    except OSError:
+        pass
+
+def _wifi_link_publish(fast: Dict[str, object]) -> None:
+    try:
+        with _status_lock:
+            slow = dict(_status["slow"])
+        _wifi_link_write(_wifi_link_snapshot(fast, _health_public(), slow))
+    except Exception:
+        log.debug("Couldn't publish the Wi-Fi link file", exc_info=True)
+
 def _collector_loop() -> None:
     next_slow = 0.0
     while not _shutdown_event.is_set():
@@ -3044,6 +3097,7 @@ def _collector_loop() -> None:
             with _status_lock:
                 _status["fast"] = fast
                 _status["fast_at"] = time.time()
+            _wifi_link_publish(fast)
             if t0 >= next_slow or _slow_refresh.is_set():
                 _slow_refresh.clear()
                 slow = _collect_slow()
