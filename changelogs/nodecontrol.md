@@ -1,6 +1,14 @@
 # Dashboard, full build changelog
 
-Current file: `nodecontrol_v9_3_99_20261030.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+Current file: `nodecontrol_v9_3_101_20261101.py`. Before 9.3.76 / 9.3.71.15-pi02w the file was `asl_dvs_dashboard[_pi02w]_v….py` and this log was `asl_dvs_dashboard[_pi02w].md`. Newest entries first.
+
+## 9.3.101 (2026-11-01)
+
+- **The service block has a timestamp.** `/api/status` now carries `svc_at`, the time the services were last checked (every 15 seconds). The status response is refreshed on each check, so the time stays current when no service changes.
+
+## 9.3.100 (2026-11-01)
+
+- **The service states show on every node.** The services block on the status (analog bridge, STFU, YSF, P25, NXDN, IRCDDB and M17) was checked only when DVSwitch was found. On a node without DVSwitch it stayed `unknown`, even while a service ran. It is checked on every node now; a service that is not installed reads `none`.
 
 ## 9.3.99 (2026-10-30)
 

@@ -1,0 +1,55 @@
+#!/bin/sh
+D="${STUB_DIR:?STUB_DIR not set}/units"
+mkdir -p "$D"
+cmd="$1"; shift
+[ "$cmd" = "--no-pager" ] && { cmd="$1"; shift; }
+u="${1%.service}"
+state() { [ -f "$D/$1.state" ] && cat "$D/$1.state" || echo inactive; }
+enabled() { [ -f "$D/$1.enabled" ] && cat "$D/$1.enabled" || echo disabled; }
+case "$cmd" in
+  is-active)
+    s=$(state "$u"); echo "$s"; [ "$s" = active ] && exit 0 || exit 3 ;;
+  is-enabled)
+    e=$(enabled "$u"); echo "$e"; [ "$e" = enabled ] && exit 0 || exit 1 ;;
+  is-failed)
+    s=$(state "$u"); [ "$s" = failed ] && { echo failed; exit 0; }; echo "$s"; exit 1 ;;
+  start|restart|reload)
+    echo active > "$D/$u.state"; exit 0 ;;
+  stop)
+    echo inactive > "$D/$u.state"; exit 0 ;;
+  enable)
+    echo enabled > "$D/$u.enabled"; exit 0 ;;
+  disable)
+    echo disabled > "$D/$u.enabled"; exit 0 ;;
+  show)
+    units=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -p) shift ;;
+        --) ;;
+        *) units="$units $1" ;;
+      esac
+      shift
+    done
+    first=1
+    for x in $units; do
+      n="${x%.service}"
+      [ $first -eq 1 ] || echo
+      first=0
+      if [ -f "$D/$n.state" ]; then
+        echo "LoadState=loaded"
+        echo "ActiveState=$(state "$n")"
+        echo "UnitFileState=$(enabled "$n")"
+      else
+        echo "LoadState=not-found"
+        echo "ActiveState=inactive"
+        echo "UnitFileState="
+      fi
+    done
+    exit 0 ;;
+  list-units|list-unit-files)
+    for f in "$D"/*.state; do [ -f "$f" ] || continue; n=$(basename "$f" .state); echo "$n.service loaded $(cat "$f") running -"; done
+    exit 0 ;;
+  daemon-reload|daemon-reexec|--version|--help) exit 0 ;;
+  *) exit 0 ;;
+esac

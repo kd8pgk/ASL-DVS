@@ -36,7 +36,7 @@ SysMon and the Dashboard come in two builds:
 
 - **Full build:** for a Pi 3, 4 or 5.
 - **Pi Zero 2 W fork:** a lighter build for the 512 MB Pi Zero 2 W.
-  - **SysMon:** drops the Console, Net, Reg, Firewall and Zello tabs.
+  - **SysMon:** drops the Console, Net, Firewall and Zello tabs.
   - **Dashboard:** keeps every tab, including Phone and all digital modes. It searches the AllStar and EchoLink lists from disk instead of memory, and polls less often.
 
 All the other tools are **common**, with one build for every node.
@@ -138,7 +138,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_9_64_20261030.py --install
+  sudo python3 nodetalker_v0_9_65_20261101.py --install
   ```
 
 Then:
@@ -276,7 +276,7 @@ Talker for a node that runs the
   or use it.
 
 ```
-sudo python3 amp_nodetalker_v0_3_6_20261030.py --install
+sudo python3 amp_nodetalker_v0_3_7_20261101.py --install
 ```
 
 1. Open `http://<pi-address>:8993`. It moves you to `https://`.
@@ -507,15 +507,15 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 
 | File | Build |
 |---|---|
-| `nodecontrol_v9_3_99_20261030.py` | Dashboard, full (current) |
-| `nodecontrol_pi02w_v9_3_104_20261030.py` | Dashboard, Pi Zero 2 W (current) |
+| `nodecontrol_v9_3_101_20261101.py` | Dashboard, full (current) |
+| `nodecontrol_pi02w_v9_3_106_20261101.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_95_20261028.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_83_20261028.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_85_0_20261030.py` | common |
 | `wifimon_v5_47_0_20261101.py` | common |
 | `44helper_v0_1_8_20261101.py` | common |
-| `nodetalker_v0_9_64_20261030.py` | common |
-| `amp_nodetalker_v0_3_6_20261030.py` | AMP nodes only (stands alone) |
+| `nodetalker_v0_9_65_20261101.py` | common |
+| `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_15_0_20261028.py` | common |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
