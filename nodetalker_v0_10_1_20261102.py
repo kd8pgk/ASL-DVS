@@ -31,8 +31,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.0"
-DATE_STR = "2026-10-30"
+VERSION = "0.10.1"
+DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -2625,7 +2625,7 @@ def node_counters():
 def build_status(full):
     st = HUB.snapshot()
     st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME),
-               "jitter_ms": tune_value("jitter_ms")})
+               "jitter_ms": tune_value("jitter_ms"), "usrp_forward": True})
     if full:
         st["pi"] = pi_snapshot()
         st["rxh"] = rxh_status()
@@ -2702,6 +2702,9 @@ TX_USRP_SEND = 32018
 TX_USRP_LISTEN = 34018
 TX_NOTE = "; nodetalker: transmit node for Node Talker (remove it from the TX card)"
 TX_NOTES = (TX_NOTE, "; nodelisten: transmit node for the Node Listen page (remove it from that page)")
+RECORDER_NOTE = "; noderecorder: receive node for Node Recorder (remove it from the Node Recorder page)"
+RECORDER_UNIT = os.environ.get("NODETALKER_RECORDER_UNIT", "/etc/systemd/system/noderecorder.service")
+RECORDER_FWD_PORT = 9995
 IAX_CONF = os.environ.get("NODETALKER_IAX_CONF", "/etc/asterisk/iax.conf")
 LOCAL_KEY_PATH = os.environ.get("NODETALKER_LOCAL_KEY", "/etc/asl_dvs/local_api.key")
 SYSMON_PORT = 9999
@@ -5964,6 +5967,8 @@ def balance_keep(_body=None):
 
 
 def usrp_drain_loop():
+    fwd = udp_socket()
+    dest = ("127.0.0.1", RECORDER_FWD_PORT)
     while True:
         try:
             s = udp_socket(TX_USRP_LISTEN)
@@ -5973,7 +5978,11 @@ def usrp_drain_loop():
             continue
         try:
             while True:
-                s.recv(4096)
+                data = s.recv(4096)
+                try:
+                    fwd.sendto(data, dest)
+                except OSError:
+                    pass
         except OSError:
             pass
         finally:
@@ -5989,9 +5998,17 @@ def _tx_stanza(lines, stanzas):
     return None, None
 
 
-def _tx_ours(lines, s):
+def _tx_note(lines, s):
     h = s["header"]
-    return h > 0 and lines[h - 1].strip() in TX_NOTES
+    return lines[h - 1].strip() if h > 0 else ""
+
+
+def _tx_ours(lines, s):
+    return _tx_note(lines, s) in TX_NOTES + (RECORDER_NOTE,)
+
+
+def recorder_installed():
+    return os.path.exists(RECORDER_UNIT)
 
 
 def _has_line(lines, want):
@@ -6011,7 +6028,7 @@ def _put_nodes_line(lines, nodes_line):
 
 
 def tx_state(main=None):
-    out = {"node": TX_NODE, "main": main_node() if main is None else main, "defined": False, "ours": False, "nodes_line": False,
+    out = {"node": TX_NODE, "main": main_node() if main is None else main, "defined": False, "ours": False, "recorder": False, "nodes_line": False,
            "ready": False, "linked": None, "rxchannel": f"USRP/127.0.0.1:{TX_USRP_LISTEN}:{TX_USRP_SEND}"}
     try:
         lines, stanzas = read_rpt()
@@ -6022,6 +6039,7 @@ def tx_state(main=None):
     if s is not None:
         out["defined"] = True
         out["ours"] = _tx_ours(lines, s)
+        out["recorder"] = _tx_note(lines, s) == RECORDER_NOTE
         body = _squash("\n".join(lines[s["header"]:end]))
         out["rx_ok"] = f"rxchannel={out['rxchannel']}" in body
     out["nodes_line"] = _has_line(lines, tx_nodes_line())
@@ -6043,12 +6061,21 @@ def tx_enable():
         if s is not None:
             if _tx_ours(lines, s):
                 want = tx_nodes_line()
-                if _has_line(lines, want):
+                adopt = _tx_note(lines, s) == RECORDER_NOTE
+                if _has_line(lines, want) and not adopt:
                     return {"ok": True, "changed": False, "message": f"Node {TX_NODE} is already set up."}
+                new = list(lines)
+                if adopt:
+                    new[s["header"] - 1] = TX_NOTE
+                if not _has_line(lines, want):
+                    new = _put_nodes_line(new, want)
                 try:
-                    backup = _write_rpt(_put_nodes_line(lines, want))
+                    backup = _write_rpt(new)
                 except OSError as exc:
                     return _write_failed(exc)
+                if adopt:
+                    log_event(f"rpt.conf: took over node {TX_NODE} from Node Recorder (backup {backup})", "ok")
+                    return _changed(backup, f"Took over node {TX_NODE} from Node Recorder. It keeps recording from this node.")
                 log_event(f"rpt.conf: fixed the [nodes] line for node {TX_NODE}: {want} (backup {backup})", "ok")
                 return _changed(backup, f"Fixed the [nodes] line for node {TX_NODE} ({want}). Restart Asterisk.")
             return {"ok": False, "error": f"rpt.conf already has a [{TX_NODE}] node that Node Talker didn't add. Remove it or pick another node."}
@@ -6082,7 +6109,27 @@ def tx_unlink(why):
         log_event(f"Unlinked node {TX_NODE} from node {main} ({why})", "ok")
 
 
+def tx_hand_back():
+    with _rpt_lock:
+        lines, stanzas = read_rpt()
+        s, _ = _tx_stanza(lines, stanzas)
+        if s is None or not _tx_ours(lines, s):
+            return {"ok": True, "changed": False, "message": f"Node Talker has no node {TX_NODE} in rpt.conf."}
+        if _tx_note(lines, s) == RECORDER_NOTE:
+            return {"ok": True, "changed": False, "message": f"Node {TX_NODE} already belongs to Node Recorder."}
+        new = list(lines)
+        new[s["header"] - 1] = RECORDER_NOTE
+        try:
+            backup = _write_rpt(new)
+        except OSError as exc:
+            return _write_failed(exc)
+    log_event(f"rpt.conf: handed node {TX_NODE} to Node Recorder (backup {backup})", "ok")
+    return _changed(backup, f"Node {TX_NODE} stays in rpt.conf for Node Recorder.")
+
+
 def tx_disable():
+    if recorder_installed():
+        return tx_hand_back()
     tx_unlink("transmit node removed")
     with _rpt_lock:
         lines, stanzas = read_rpt()
@@ -12038,6 +12085,8 @@ def setup_plan(full=False):
         tx = tx_state(main)
         if tx.get("defined") and not tx.get("ours"):
             blocked.append(f"rpt.conf already has a node {TX_NODE} that Node Talker didn't add. Remove it or pick another node.")
+        elif tx.get("recorder"):
+            steps.append({"id": "tx", "text": f"Take over node {TX_NODE} in rpt.conf from Node Recorder. It keeps recording from this node."})
         elif not tx.get("ready"):
             steps.append({"id": "tx", "text": f"Add transmit node {TX_NODE} to rpt.conf: its own stanza, a USRP channel on "
                           f"127.0.0.1 ports {TX_USRP_LISTEN} and {TX_USRP_SEND}, and a [nodes] line. Node Talker then links it to node {main}."})

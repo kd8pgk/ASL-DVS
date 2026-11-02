@@ -1,6 +1,14 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_0_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_1_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.1 (2026-11-02)
+
+- **Audio for Node Recorder.** Node Talker already reads the audio Asterisk sends to transmit node 1921 (UDP 34018) and throws it away. It now also sends a copy of each packet to `127.0.0.1:9995/udp`, where Node Recorder listens. If nothing listens there, nothing changes: the copy is dropped and Node Talker behaves as before.
+- **Node 1921 is shared.** Node Recorder creates the same node 1921 when Node Talker is not on the node. Node Talker accepts that node as its own. Setup offers "Take over node 1921 from Node Recorder", which only changes the note line above the stanza. The stanza itself is identical, so nothing else changes in rpt.conf.
+- **Uninstall and the TX card's remove button hand node 1921 back** to Node Recorder when it is installed (`noderecorder.service`), by changing the note line. The node stays in rpt.conf and linked. Without Node Recorder, removing the node works as before.
+- `/api/status` has a new `usrp_forward` key (always `true`) so Node Recorder can tell this version from an older one.
+- This is a release, not a cosmetic build.
 
 ## 0.10.0 (2026-11-02)
 
