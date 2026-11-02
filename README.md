@@ -46,7 +46,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_95_20261028.py` | `sysmon_pi02w_v6_13_83_20261028.py` | `instmon_v2_85_0_20261030.py` |
+| File name | `sysmon_v6_13_95_20261028.py` | `sysmon_pi02w_v6_13_83_20261028.py` | `instmon_v2_86_0_20261102.py` |
 | `VERSION` | `6.13.95` | `6.13.83-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -90,7 +90,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_85_0_20261030.py --install
+   sudo python3 instmon_v2_86_0_20261102.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -357,7 +357,7 @@ over a USB drive or the SD card, with resume positions, played markers, a restor
 trash, a duplicate finder, drive health and an optional import from a plugged-in
 drive. It is one stdlib-only file, `pibrary_v*.py`, and a common tool.
 
-- Install: `sudo python3 pibrary_v0_15_0_20261028.py --install`, or from instmon.
+- Install: `sudo python3 pibrary_v0_16_0_20261102.py --install`, or from instmon.
   It listens on port 9000 (the port in `/etc/pibrary/pibrary.conf`). Install opens
   the port in `ufw` or `firewalld` and uninstall closes it.
 - Login is on by default: sign in with the Pibrary password, or the node's root password
@@ -512,13 +512,13 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_106_20261101.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_95_20261028.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_83_20261028.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_85_0_20261030.py` | common |
+| `instmon_v2_86_0_20261102.py` | common |
 | `wifimon_v5_47_0_20261101.py` | common |
 | `44helper_v0_1_8_20261101.py` | common |
 | `nodetalker_v0_10_1_20261102.py` | common |
 | `noderecorder_v0_1_0_20261102.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
-| `pibrary_v0_15_0_20261028.py` | common |
+| `pibrary_v0_16_0_20261102.py` | common |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |

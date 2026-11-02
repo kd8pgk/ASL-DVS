@@ -30,8 +30,8 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 
-VERSION = "0.15.0"
-DATE_STR = "2026-10-28"
+VERSION = "0.16.0"
+DATE_STR = "2026-11-02"
 APP_NAME = "Pibrary"
 
 INSTALL_BIN_PATH = "/usr/local/bin/pibrary.py"
@@ -1013,6 +1013,80 @@ _MIME = {
     ".oga": "audio/ogg", ".opus": "audio/ogg", ".wav": "audio/wav", ".flac": "audio/flac",
     ".weba": "audio/webm", ".pdf": "application/pdf",
 }
+
+def _ulaw_to_pcm(b):
+    u = ~b & 0xFF
+    t = (((u & 0x0F) << 3) + 0x84) << ((u >> 4) & 7)
+    t -= 0x84
+    return -t if u & 0x80 else t
+
+
+_ULAW_PCM = [struct.pack("<h", _ulaw_to_pcm(b)) for b in range(256)]
+ULAW_CHUNK = 32768
+
+
+def _ulaw_wav_info(full):
+    try:
+        with open(full, "rb") as fh:
+            head = fh.read(4096)
+            total = os.fstat(fh.fileno()).st_size
+    except OSError:
+        return None
+    if len(head) < 12 or head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return None
+    pos, fmt, data = 12, None, None
+    while pos + 8 <= len(head):
+        cid = head[pos:pos + 4]
+        csz = struct.unpack_from("<I", head, pos + 4)[0]
+        body = pos + 8
+        if cid == b"fmt " and body + 16 <= len(head):
+            tag, ch, rate, _br, _ba, bits = struct.unpack_from("<HHIIHH", head, body)
+            fmt = (tag, ch, rate, bits)
+        elif cid == b"data":
+            data = (body, csz)
+            break
+        pos = body + csz + (csz & 1)
+    if not fmt or not data or fmt[0] != 7 or fmt[3] != 8 or not 1 <= fmt[1] <= 2 or not 1 <= fmt[2] <= 192000:
+        return None
+    off, csz = data
+    avail = max(0, total - off)
+    n = avail if csz in (0, 0xFFFFFFFF) or csz > avail else csz
+    return {"rate": fmt[2], "ch": fmt[1], "off": off, "n": n, "vsize": 44 + 2 * n}
+
+
+def _pcm_wav_header(info):
+    n2 = info["n"] * 2
+    ch, rate = info["ch"], info["rate"]
+    return (b"RIFF" + struct.pack("<I", (36 + n2) & 0xFFFFFFFF) + b"WAVEfmt "
+            + struct.pack("<IHHIIHH", 16, 1, ch, rate, rate * ch * 2, ch * 2, 16)
+            + b"data" + struct.pack("<I", n2 & 0xFFFFFFFF))
+
+
+def _ulaw_chunks(fh, info, start, length):
+    hdr = _pcm_wav_header(info)
+    end = start + length
+    pos = start
+    if pos < 44:
+        take = min(end, 44) - pos
+        yield hdr[pos:pos + take]
+        pos += take
+    while pos < end:
+        d = pos - 44
+        src, skip = d // 2, d % 2
+        want = end - pos
+        nsrc = min((want + skip + 1) // 2, ULAW_CHUNK, info["n"] - src)
+        if nsrc <= 0:
+            break
+        fh.seek(info["off"] + src)
+        raw = fh.read(nsrc)
+        if not raw:
+            break
+        pcm = b"".join(map(_ULAW_PCM.__getitem__, raw))[skip:][:want]
+        if not pcm:
+            break
+        yield pcm
+        pos += len(pcm)
+
 
 LIST_CAP = 5000
 SCAN_TTL_SEC = 30
@@ -9156,8 +9230,11 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
             self._error_json(404, "No such file")
             return
         ctype = _MIME.get(os.path.splitext(full)[1].lower(), "application/octet-stream")
+        conv = None
+        if kind == "audio" and full.lower().endswith(".wav") and q.get("download", ["0"])[0] != "1":
+            conv = _ulaw_wav_info(full)
         try:
-            size = os.path.getsize(full)
+            size = conv["vsize"] if conv else os.path.getsize(full)
             fh = open(full, "rb")
         except OSError as exc:
             self._error_json(500, f"Could not read file: {exc}")
@@ -9192,17 +9269,22 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
                              disp + "; filename*=UTF-8''" + urllib.parse.quote(os.path.basename(full)))
             self.send_header("Cache-Control", "private, no-cache")
             self.end_headers()
-            fh.seek(start)
             sock = self.connection
             sock.settimeout(STREAM_SEND_TIMEOUT_SEC)
-            remaining = length
-            while remaining > 0:
-                chunk = fh.read(min(65536, remaining))
-                if not chunk:
-                    break
-                if not _send_stream(sock, chunk, token):
-                    break
-                remaining -= len(chunk)
+            if conv:
+                for chunk in _ulaw_chunks(fh, conv, start, length):
+                    if not _send_stream(sock, chunk, token):
+                        break
+            else:
+                fh.seek(start)
+                remaining = length
+                while remaining > 0:
+                    chunk = fh.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    if not _send_stream(sock, chunk, token):
+                        break
+                    remaining -= len(chunk)
         except OSError:
             pass
         finally:

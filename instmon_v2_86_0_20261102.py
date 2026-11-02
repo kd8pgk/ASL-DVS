@@ -37,8 +37,8 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.85.0"
-DATE_STR ="2026-10-28"
+VERSION ="2.86.0"
+DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
 UNINSTALLER_SCRIPT_GLOBS =("uninstall_all*.sh","uninstall_asl_dvs*.sh")
@@ -2819,6 +2819,7 @@ LIB_SUBDIRS ={
 "wifimon":os .path .join (LIBRARY_DIR ,"wifimon"),
 "44helper":os .path .join (LIBRARY_DIR ,"44helper"),
 "nodelisten":os .path .join (LIBRARY_DIR ,"nodelisten"),
+"noderecorder":os .path .join (LIBRARY_DIR ,"noderecorder"),
 "pibrary":os .path .join (LIBRARY_DIR ,"pibrary"),
 "instmon":os .path .join (LIBRARY_DIR ,"instmon"),
 "scripts":os .path .join (LIBRARY_DIR ,"scripts"),
@@ -2833,6 +2834,7 @@ ALLOWED_EXT ={
 "wifimon":(".py",),
 "44helper":(".py",),
 "nodelisten":(".py",),
+"noderecorder":(".py",),
 "pibrary":(".py",),
 "instmon":(".py",),
 "scripts":(".sh",),
@@ -2886,6 +2888,14 @@ COMPONENTS =[
 "category":"nodelisten",
 },
 {
+"name":"Node Recorder",
+"service":"noderecorder",
+"port":8995 ,
+"install_link":"/usr/local/bin/noderecorder.py",
+"unit_paths":{"noderecorder":("/usr/local/bin/noderecorder.py","/usr/local/lib/asl_dvs/noderecorder")},
+"category":"noderecorder",
+},
+{
 "name":"Pibrary",
 "service":"pibrary",
 "port":9000 ,
@@ -2912,6 +2922,7 @@ HOME_SCAN_PATTERN_MAP =[
 ("wifimon",["wifimon*.py"]),
 ("44helper",["44helper*.py","asl_dvs_m17_44helper*.py"]),
 ("nodelisten",["nodetalker*.py","nodelisten*.py"]),
+("noderecorder",["noderecorder*.py"]),
 ("pibrary",["pibrary*.py"]),
 ("instmon",["instmon*.py"]),
 ("config",["asl_dvs*.conf","sysmon*.conf","wifimon*.conf","nodetalker*.conf","nodelisten*.conf"]),
@@ -5604,7 +5615,7 @@ def _build_wanted_variant():
         return None
     return BUILD_PI02W_SUFFIX if build_pref_get() == "fork" else ""
 
-FU_ORDER = ("44helper", "wifimon", "nodelisten", "pibrary", "dashboard", "sysmon", "instmon")
+FU_ORDER = ("44helper", "wifimon", "nodelisten", "noderecorder", "pibrary", "dashboard", "sysmon", "instmon")
 FU_START_TIMEOUT_SEC = int(os.environ.get("INSTMON_FU_START_TIMEOUT_SEC", "60"))
 FU_SELF_GUARD_SEC = 90
 _FU_STATE_PATH = os.path.join(CONFIG_DIR, "instmon_full_update.json")
@@ -5615,6 +5626,7 @@ _FU_DEFAULT_STEM = {
     "wifimon": "wifimon",
     "44helper": "44helper",
     "nodelisten": "nodetalker",
+    "noderecorder": "noderecorder",
     "pibrary": "pibrary",
     "instmon": "instmon",
 }
@@ -7291,6 +7303,7 @@ _LIBRARY_GROUPS: list [tuple [str ,str ,str ]]=[
     ("wifimon","wifimon","install"),
     ("44helper","44helper","install"),
     ("Node Talker","nodelisten","install"),
+    ("Node Recorder","noderecorder","install"),
     ("Pibrary","pibrary","install"),
     ("instmon","instmon","install"),
     ("Scripts (.sh)","scripts","run_script"),
@@ -9670,7 +9683,7 @@ _JS_ACTIONS = """function wireButtons() {
         } else if (action === 'gh_check') {
           await postAction({action: 'gh_check'});
         } else if (action === 'quiet') {
-          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper, Node Talker, Pibrary and any watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
+          if (!confirm('Quiet the system? Pauses SysMon, the Dashboard, 44helper, Node Talker, Node Recorder, Pibrary and any watchdog timer (whichever are running) until you press Restore -- auto-restore after 30 min. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.')) { btn.disabled = false; return; }
           await postAction({action: 'quiet'});
         } else if (action === 'restore') {
           await postAction({action: 'restore'});
@@ -10554,7 +10567,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     Stop Full Update puts the tool it is on back to the version it had and skips the rest.
     <br><br>
     Quiet System, before a big upload or install on a small Pi: pauses SysMon, the Dashboard, 44helper,
-    Node Talker, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</div>
+    Node Talker, Node Recorder, Pibrary and any watchdog timer. Radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up.</div>
   <div class="row btn-row">
     <button class="b-comms" id="quiet-btn" data-action="quiet">Quiet System</button>
     <button id="restore-btn" data-action="restore" disabled>Restore</button>
@@ -10611,6 +10624,7 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
       <option value="wifimon">WiFiMon (.py)</option>
       <option value="44helper">44helper (.py)</option>
       <option value="nodelisten">Node Talker (.py)</option>
+      <option value="noderecorder">Node Recorder (.py)</option>
       <option value="pibrary">Pibrary (.py)</option>
       <option value="instmon">InstMon (.py)</option>
       <option value="confgetter">Config getter (.sh)</option>
