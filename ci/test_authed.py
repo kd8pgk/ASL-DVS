@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import socket
+import struct
 import ssl
 import time
 import unittest
@@ -305,13 +306,18 @@ def make_nt_case(key):
     class NTCase(base):
         def test_receive_status_counts_packets_and_drops_after_silence(self):
             st, d = get_json(self.server, "/api/status", self.cookie)
-            if "packets" not in d or "udp_port" not in d:
+            usrp = key == "noderecorder"
+            if "packets" not in d or ("udp_port" not in d and not usrp):
                 self.skipTest("build does not expose a node-audio UDP port in its status")
             start = d["packets"]
             udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             try:
-                for _ in range(20):
-                    udp.sendto(os.urandom(320), ("127.0.0.1", d["udp_port"]))
+                for n in range(20):
+                    if usrp:
+                        data = struct.pack(">4s7i", b"USRP", n, 0, 1, 0, 0, 0, 0) + os.urandom(320)
+                        udp.sendto(data, ("127.0.0.1", 9995))
+                    else:
+                        udp.sendto(os.urandom(320), ("127.0.0.1", d["udp_port"]))
             finally:
                 udp.close()
             time.sleep(0.5)
