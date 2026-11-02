@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.8.1"
+APP_VERSION = "0.1.9"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3848,6 +3848,12 @@ _STEP_FIELD_RULES = {
     "rx_port": (re.compile(r"[0-9]{1,5}"), "use a number from 1 to 65535"),
     "version": (re.compile(r"[0-9]{8}"), "use the 8-digit release date, for example 20260610"),
     "node": (re.compile(r"[0-9]{4,7}"), "use the 4 to 7 digit node number"),
+    "hubpassword": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{0,64}"),
+                    "use up to 64 letters, digits and . _ + = @ % ^ ~ , : - (no spaces, quotes, / or &), "
+                    "or leave it blank for a private node"),
+    "authmode": (re.compile(r"[A-Za-z]{2,16}"), "use letters only, for example OPEN"),
+    "allowlist": (re.compile(r"([0-9]{4,7}(,[0-9]{4,7})*)?"),
+                  "use node numbers of 4 to 7 digits separated by commas, or leave it blank"),
     "password": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{1,64}"),
                  "use up to 64 letters, digits and . _ + = @ % ^ ~ , : - (no spaces, quotes, / or &). "
                  "Set any other password from the Custom box"),
@@ -4026,15 +4032,18 @@ def _amp_hub_install_cmd(version: str) -> str:
             "sudo sed -i 's|^AMP_PIPER_DIR=/etc$|AMP_PIPER_DIR=/usr/etc|' /usr/etc/amp-hub.env; fi && "
             "sudo systemctl daemon-reload && echo \"amp-hub $v installed. Settings: /usr/etc/amp-hub.env\"")
 
-def _amp_hub_config_cmd(node: str, password: str, port: str) -> str:
+def _amp_hub_config_cmd(node: str, password: str, port: str, authmode: str, allowlist: str) -> str:
     return ("f=/usr/etc/amp-hub.env; [ -f $f ] || { echo 'No /usr/etc/amp-hub.env: run step 3 first.'; exit 1; }; "
             f"p='{port}'; " + _amp_port_check("p") +
             f"n='{node}'; g=$(printf '%s' \"$n\" | sed 's/./& /g; s/ $//'); "
+            f"a='{allowlist}'; if [ -n \"$a\" ]; then al=\"AMP_IAX_ALLOWLIST=$a\"; else al='#AMP_IAX_ALLOWLIST='; fi; "
             f"sudo sed -i -e \"s|^AMP_NODE0_NUMBER=.*|AMP_NODE0_NUMBER=$n|\" "
             f"-e 's|^AMP_NODE0_PASSWORD=.*|AMP_NODE0_PASSWORD={password}|' "
             "-e \"s|^AMP_NODE0_GREETING=.*|AMP_NODE0_GREETING=\\\"Welcome to node $g.\\\"|\" "
-            "-e \"s|^AMP_IAX_PORT=.*|AMP_IAX_PORT=$p|\" $f && "
-            "grep -E '^AMP_(NODE0_NUMBER|NODE0_GREETING|IAX_PORT)=' $f && "
+            "-e \"s|^AMP_IAX_PORT=.*|AMP_IAX_PORT=$p|\" "
+            f"-e 's|^#\\?AMP_IAX_AUTHMODE=.*|AMP_IAX_AUTHMODE={authmode}|' "
+            "-e \"s|^#\\?AMP_IAX_ALLOWLIST=.*|$al|\" $f && "
+            "grep -E '^#?AMP_(NODE0_NUMBER|NODE0_GREETING|IAX_PORT|IAX_AUTHMODE|IAX_ALLOWLIST)=' $f && "
             "echo 'Saved. Start or restart the hub (step 6) to use it.'")
 
 def _amp_server_install_steps() -> list[dict]:
@@ -4168,17 +4177,23 @@ def _amp_hub_install_steps() -> list[dict]:
                  "AMP_PIPER_DIR is set to /usr/etc, where the voice files are. The real-time priority (chrt) is made "
                  "optional: where the kernel refuses it, the hub still starts instead of failing. Running it again upgrades the hub "
                  "and keeps your /usr/etc/amp-hub.env."},
-        {"id": "amp_hub_config", "num": 4, "title": "Set the node number, password and IAX port",
+        {"id": "amp_hub_config", "num": 4, "title": "Set the hub's node, password, port and access",
          "fields": [{"id": "node", "label": "Hub node number", "type": "text", "default": ""},
-                    {"id": "password", "label": "Node password (from the AllStarLink portal)", "type": "password",
-                     "default": ""},
-                    {"id": "port", "label": "IAX port", "type": "text", "default": "4569"}],
-         "cmd_template": _amp_hub_config_cmd("{{node}}", "{{password}}", "{{port}}"),
-         "cmd": _amp_hub_config_cmd("YOURNODE", "YOURPASSWORD", "4569"),
+                    {"id": "hubpassword", "label": "Node password (blank = private node, no ASL registration)",
+                     "type": "password", "default": ""},
+                    {"id": "port", "label": "IAX port (4569; use 4568 if Asterisk/ASL3 already uses 4569)",
+                     "type": "text", "default": "4569"},
+                    {"id": "authmode", "label": "Auth mode (OPEN = no authentication checks)", "type": "text",
+                     "default": "OPEN"},
+                    {"id": "allowlist", "label": "Allowed node numbers, comma-separated (blank = any node)",
+                     "type": "text", "default": ""}],
+         "cmd_template": _amp_hub_config_cmd("{{node}}", "{{hubpassword}}", "{{port}}", "{{authmode}}",
+                                             "{{allowlist}}"),
+         "cmd": _amp_hub_config_cmd("YOURNODE", "YOURPASSWORD", "4569", "OPEN", ""),
          "timeout": 30,
-         "note": "Writes AMP_NODE0_NUMBER, AMP_NODE0_PASSWORD, the greeting (\"Welcome to node 6 7 2 7 3 1.\") "
-                 "and AMP_IAX_PORT in /usr/etc/amp-hub.env. For a private hub with no registration, or for an "
-                 "allowlist, edit the file by hand (next step)."},
+         "note": "Writes AMP_NODE0_NUMBER, AMP_NODE0_PASSWORD, the greeting, AMP_IAX_PORT, AMP_IAX_AUTHMODE and "
+                 "AMP_IAX_ALLOWLIST in /usr/etc/amp-hub.env. A blank allowlist leaves that line commented out, so "
+                 "any node can connect. Other settings are in step 5."},
         {"id": "amp_hub_env", "num": 5, "title": "(Optional) Other settings in /usr/etc/amp-hub.env",
          "cmd": _AMP_HUB_ENV_SNIPPET,
          "manual_block": True,

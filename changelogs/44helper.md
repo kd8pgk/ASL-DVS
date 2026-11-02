@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_8_20261101.py`. Newest entries first.
+Current file: `44helper_v0_1_9_20261102.py`. Newest entries first.
+
+## 0.1.9 (2026-11-02)
+
+- **Ampersand hub settings are fields, not hand edits.** Step 4 (Set the hub's node, password, port and access) now has fields for the node number, node password (blank for a private node), IAX port, auth mode (OPEN by default) and allowed node numbers (comma-separated; blank leaves the line commented out, so any node can connect). Each is checked before it is written, and the step writes them into `/usr/etc/amp-hub.env` with the greeting. Step 5 is still the manual block for other settings.
+- The node password field has its own rule, so a blank password (a private node) is accepted. The shared password rule is unchanged.
+- The `AMP_IAX_PROTO` line from the earlier manual text is not in the repo's env template, so it is not a field. It needs checking against the Ampersand package before it is added.
+- Includes the 0.1.8.1 text changes (step 10 note and M17 installer note).
 
 ## 0.1.8.1 (2026-11-02)
 
