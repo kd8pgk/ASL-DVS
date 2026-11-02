@@ -1,6 +1,10 @@
 # Node Talker Mobile changelog
 
-Current version: `0.6.1`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.2`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.2 (2026-11-02)
+
+- **Receive health "Phone / browser" row now fills on the phone.** Listen plays audio inside the app, so the node page had nothing to count and the row stayed empty. The app now counts its own underruns, queue resets and silence while it plays, and reports them to the node every 30 seconds. Counting starts 3 seconds after play begins and pauses while muted or when another app holds the audio. Nodes older than Node Talker 0.10.0 have no such row; the app stops reporting to them.
 
 ## 0.6.1 (2026-10-28)
 
