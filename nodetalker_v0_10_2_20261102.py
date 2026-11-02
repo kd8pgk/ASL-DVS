@@ -25,13 +25,15 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
 import urllib.parse
+import urllib.request
 from collections import deque
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.1"
+VERSION = "0.10.2"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -2622,11 +2624,46 @@ def node_counters():
     return {"ok": True, "node": TX_NODE, "keyups": keyups, "tx_secs": secs, "raw": lines}
 
 
+RECORDER_STATUS_URL = os.environ.get("NODETALKER_RECORDER_STATUS_URL", "http://127.0.0.1:8995/api/recorder/status")
+_recorder_cache = {"t": -1e9, "v": None}
+_RECORDING_BLOCKED = frozenset((
+    "/api/node/enable", "/api/node/disable", "/api/tx/enable", "/api/tx/disable", "/api/setup/apply", "/api/connect",
+    "/api/disconnect", "/api/disconnect-links", "/api/disconnect-all", "/api/tune", "/api/tune/disconnect",
+    "/api/asterisk/restart", "/api/system/reboot", "/api/system/shutdown", "/api/digital", "/api/tonetest/start",
+    "/api/tonetest/link"))
+_RECORDING_CFG_KEYS = frozenset(("port", "udp_port", "https", "node"))
+
+
+def recorder_busy():
+    now = time.monotonic()
+    if now - _recorder_cache["t"] < 2.0:
+        return _recorder_cache["v"]
+    busy = None
+    try:
+        with urllib.request.urlopen(RECORDER_STATUS_URL, timeout=0.6) as resp:
+            d = json.loads(resp.read(65536).decode("utf-8", "replace"))
+        if isinstance(d, dict) and d.get("ok") and d.get("busy"):
+            busy = {k: d.get(k, "") for k in ("state", "entry", "start", "end", "elapsed", "file")}
+    except (OSError, ValueError, urllib.error.URLError):
+        busy = None
+    _recorder_cache.update(t=now, v=busy)
+    return busy
+
+
+def recording_text(rec):
+    secs = int(rec.get("elapsed") or 0)
+    end = str(rec.get("end") or "")[11:16]
+    return (f"A recording is in progress: {rec.get('entry') or 'Node Recorder'} ({secs // 60}:{secs % 60:02d} so far"
+            + (f", until {end}" if end else "") + "). Links, the receive feed and the settings that restart Node Talker are locked "
+            "until it ends, so the recording is not interrupted.")
+
+
 def build_status(full):
     st = HUB.snapshot()
     st.update({"version": VERSION, "node": _cfg_get("node"), "uptime": int(time.time() - _START_TIME),
                "jitter_ms": tune_value("jitter_ms"), "usrp_forward": True})
     if full:
+        st["recording"] = recorder_busy()
         st["pi"] = pi_snapshot()
         st["rxh"] = rxh_status()
         st["feeder_pids"] = feeder_pids()
@@ -6432,6 +6469,71 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
+let recBusy = null;
+const REC_LOCK_IDS = ['c-connect', 'c-disc', 't-go', 't-disc', 'da-btn', 'nd-enable', 'nd-disable', 'tx-add', 'tx-remove', 'setup-restart',
+  'sys-reboot', 'sys-shutdown', 'tone-start', 'tx-tone-start', 'setup-ok', 'dig-save'];
+const REC_PATHS = ['/api/node/enable', '/api/node/disable', '/api/tx/enable', '/api/tx/disable', '/api/setup/apply', '/api/connect', '/api/disconnect',
+  '/api/disconnect-links', '/api/disconnect-all', '/api/tune', '/api/tune/disconnect', '/api/asterisk/restart', '/api/system/reboot',
+  '/api/system/shutdown', '/api/digital', '/api/tonetest/start', '/api/tonetest/link'];
+const REC_CFG_KEYS = ['port', 'udp_port', 'https', 'node'];
+
+function recText(rec) {
+  const secs = Number(rec.elapsed) || 0, end = String(rec.end || '').slice(11, 16);
+  return 'A recording is in progress: ' + (rec.entry || 'Node Recorder') + ' (' + Math.floor(secs / 60) + ':' + String(secs % 60).padStart(2, '0') + ' so far'
+    + (end ? ', until ' + end : '') + '). Links, the receive feed and the settings that restart Node Talker are locked until it ends, so the recording is not interrupted.';
+}
+
+function recPopup(text) {
+  const dlg = document.getElementById('rec-dlg');
+  if (!dlg) return;
+  document.getElementById('rec-dlg-text').textContent = text;
+  if (!dlg.open) dlg.showModal();
+}
+
+function recApplyLocks() {
+  REC_LOCK_IDS.forEach((id) => {
+    const b = document.getElementById(id);
+    if (!b) return;
+    if (recBusy) {
+      if (!b.classList.contains('rec-locked')) { b.dataset.recTitle = b.getAttribute('title') || ''; b.classList.add('rec-locked'); }
+      b.title = 'A recording is in progress. This is locked until it ends.';
+    } else if (b.classList.contains('rec-locked')) {
+      b.classList.remove('rec-locked');
+      if (b.dataset.recTitle) b.title = b.dataset.recTitle; else b.removeAttribute('title');
+      delete b.dataset.recTitle;
+    }
+  });
+}
+
+document.addEventListener('click', (ev) => {
+  if (!recBusy || !ev.target || !ev.target.closest) return;
+  const b = ev.target.closest('button');
+  if (!b || !REC_LOCK_IDS.includes(b.id)) return;
+  ev.preventDefault();
+  ev.stopImmediatePropagation();
+  recPopup(recText(recBusy));
+}, true);
+
+const _plainFetch = window.fetch.bind(window);
+window.fetch = function (url, opts) {
+  if (recBusy && opts && String(opts.method || '').toUpperCase() === 'POST') {
+    const path = String(url).split('?')[0];
+    let blocked = REC_PATHS.includes(path);
+    if (path === '/api/config') { try { blocked = Object.keys(JSON.parse(opts.body)).some((k) => REC_CFG_KEYS.includes(k)); } catch (e) { blocked = false; } }
+    if (blocked) {
+      const text = recText(recBusy);
+      recPopup(text);
+      return Promise.resolve(new Response(JSON.stringify({ok: false, error: text, message: text}),
+        {status: 409, headers: {'Content-Type': 'application/json'}}));
+    }
+  }
+  return _plainFetch(url, opts);
+};
+
+document.addEventListener('DOMContentLoaded', () => {
+  const ok = document.getElementById('rec-dlg-ok');
+  if (ok) ok.addEventListener('click', () => document.getElementById('rec-dlg').close());
+});
 let loginWanted = false;
 let authed = false, publicListen = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
 let ctx = null, gainNode = null, ctrl = null, playing = false, nextT = 0;
@@ -6997,6 +7099,8 @@ async function pollStatus() {
   const d = await api('/api/status');
   if (!d || d.ok === false) return;
   lastStatus = d;
+  recBusy = d.recording || null;
+  recApplyLocks();
   $('ptt-mark').classList.toggle('hidden', !(authed && d.kc_test));
   $('st-node').textContent = d.node || '(not set)';
   if ((d.node || '') !== nodeLabel) { nodeLabel = d.node || ''; setMediaInfo(); }
@@ -10718,6 +10822,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 </script>
 <meta name="theme-color" content="#161e2e">
 <title>Node Talker</title>
+<style>button.rec-locked{opacity:.45;cursor:not-allowed}</style>
 <style>__CSS__</style>
 <style>
 /* v0.9.60: mode colours on Connect cards and Listen badge (same palette as Node Controller) */
@@ -11308,6 +11413,11 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="row"><button id="setup-ok" class="btn primary" type="button">OK, install</button><button id="setup-later" class="btn" type="button">Not now</button></div>
 <div id="setup-dlg-msg" class="msg"></div>
 </dialog>
+<dialog id="rec-dlg" class="setup-dlg" aria-labelledby="rec-dlg-title">
+<h2 id="rec-dlg-title">Recording in progress</h2>
+<p id="rec-dlg-text"></p>
+<div class="row"><button id="rec-dlg-ok" class="btn primary" type="button">OK</button></div>
+</dialog>
 </body>
 </html>
 """
@@ -11684,6 +11794,12 @@ class Handler(BaseHTTPRequestHandler):
         if path in ("/api/tonetest/start", "/api/tonetest/stop", "/api/tonetest/link") and self._wan():
             self._json(403, {"ok": False, "error": "The tone test runs from the local network only."})
             return
+        if path in _RECORDING_BLOCKED or (path == "/api/config" and _RECORDING_CFG_KEYS & set(body)):
+            rec = recorder_busy()
+            if rec:
+                text = recording_text(rec)
+                self._json(409, {"ok": False, "error": text, "message": text, "recording": rec})
+                return
         action = _POST_ACTIONS.get(path)
         try:
             if action is None:

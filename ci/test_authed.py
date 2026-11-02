@@ -330,6 +330,61 @@ def make_nt_case(key):
             self.assertFalse(d["receiving"], "receiving should drop after 3 s of silence")
             self.assertGreaterEqual(d["last_rx_age"], 3.0)
 
+    if key == "nodetalker":
+        def test_recording_in_progress_locks_links_and_the_feed(self):
+            import http.server
+            import threading
+            state = {"busy": True}
+
+            class Stub(http.server.BaseHTTPRequestHandler):
+                def do_GET(h):
+                    body = json.dumps({"ok": True, "busy": state["busy"], "state": "recording" if state["busy"] else "idle",
+                                       "entry": "CI net", "start": "2026-01-01T00:00", "end": "2026-01-01T01:00",
+                                       "elapsed": 61, "file": "x.wav"}).encode()
+                    h.send_response(200)
+                    h.send_header("Content-Type", "application/json")
+                    h.send_header("Content-Length", str(len(body)))
+                    h.end_headers()
+                    h.wfile.write(body)
+
+                def log_message(h, *a):
+                    pass
+
+            stub = http.server.ThreadingHTTPServer(("127.0.0.1", 8995), Stub)
+            threading.Thread(target=stub.serve_forever, daemon=True).start()
+            hdr = {"Cookie": self.cookie, "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"}
+
+            def post(path, body):
+                st, _, b = self.server.request("POST", path, body=json.dumps(body), headers=hdr, timeout=15)
+                return st, json.loads(b)
+
+            try:
+                time.sleep(2.5)
+                st, d = get_json(self.server, "/api/status", self.cookie)
+                self.assertEqual((d.get("recording") or {}).get("entry"), "CI net")
+                for path in ("/api/connect", "/api/disconnect-links", "/api/disconnect-all", "/api/tune", "/api/node/enable",
+                             "/api/tx/disable", "/api/setup/apply", "/api/asterisk/restart", "/api/system/reboot"):
+                    st, d = post(path, {})
+                    self.assertEqual(st, 409, path)
+                    self.assertIn("recording is in progress", d["error"])
+                    self.assertFalse(d["ok"])
+                cfg = get_json(self.server, "/api/config", self.cookie)[1]["config"]
+                for body in ({"udp_port": cfg["udp_port"]}, {"port": cfg["port"]}, {"https": cfg["https"]}):
+                    st, d = post("/api/config", body)
+                    self.assertEqual(st, 409, body)
+                st, d = post("/api/config", {"ptt_guard_sec": cfg["ptt_guard_sec"]})
+                self.assertEqual(st, 200)
+                self.assertTrue(d["ok"], "a setting that does not touch links or the feed still saves")
+                state["busy"] = False
+                time.sleep(2.5)
+                st, d = get_json(self.server, "/api/status", self.cookie)
+                self.assertIsNone(d.get("recording"))
+                st, d = post("/api/config", {"udp_port": cfg["udp_port"]})
+                self.assertEqual(st, 200, "nothing is locked once the recording ends")
+            finally:
+                stub.shutdown()
+                stub.server_close()
+
     if key == "noderecorder":
         def _sched_post(self, path, body):
             hdr = {"Cookie": self.cookie, "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"}
