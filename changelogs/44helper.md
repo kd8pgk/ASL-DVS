@@ -1,6 +1,11 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_9_20261102.py`. Newest entries first.
+Current file: `44helper_v0_1_10_20261102.py`. Newest entries first.
+
+## 0.1.10 (2026-11-02)
+
+- **DVSwitch installs the digital-mode gateways.** The DVSwitch install step (Bookworm step 4, Trixie step 6) now also installs `ircddbgateway`, `ysfgateway`, `p25gateway` and `nxdngateway`. Before, only the bundle, the bridges and md380-emu were installed, so the gateway step ("Enable the digital-mode gateways at boot") failed with none of the four installed. On node yoganode the four packages exist in the DVSwitch repo, and the bundle does not bring them. The Trixie dry-run step checks them too.
+- The gateway units' names after install are not yet confirmed on a node: the enable step expects `ircddbgatewayd`, `ysfgateway`, `p25gateway` and `nxdngateway`.
 
 ## 0.1.9 (2026-11-02)
 

@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.9"
+APP_VERSION = "0.1.10"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2847,7 +2847,8 @@ def _dv_config_field_step(num: int) -> dict:
                 "USRP ports or AMBE settings.",
     }
 
-_DV_COMPONENTS = "dvswitch-server analog-bridge mmdvm-bridge md380-emu"
+_DV_COMPONENTS = ("dvswitch-server analog-bridge mmdvm-bridge md380-emu "
+                  "ircddbgateway ysfgateway p25gateway nxdngateway")
 _DV_APT_OPTS = ("-o Dpkg::Options::=\"--force-confdef\" -o Dpkg::Options::=\"--force-confold\"")
 _DV_SRC_TEST = "grep -rqs 'dvswitch.org' /etc/apt/sources.list /etc/apt/sources.list.d/"
 _DV_UNITS = "analog_bridge mmdvm_bridge md380-emu"
@@ -2987,7 +2988,8 @@ _DV_REPO_NOTE = ("Official dvswitch.org script, written for Debian 12 — adds t
                  "node. Run with `sudo bash` rather than executed directly, because some images mount /tmp so "
                  "programs cannot run from it. Skips itself if the source is already set up.")
 _DV_INSTALL_NOTE = ("Installs the dvswitch-server bundle AND its working parts by name (analog-bridge, mmdvm-bridge, "
-                    "md380-emu) — the bundle alone has been seen installed with the parts missing. Any part whose "
+                    "md380-emu) and the four digital-mode gateways (ircddbgateway, ysfgateway, p25gateway, nxdngateway). "
+                    "The bundle alone does not bring the gateways, and it has been seen installed with the parts missing. Any part whose "
                     "/opt folder is empty is then re-installed with --force-confmiss so deleted files and .ini "
                     "config come back. The bridge units depend on netcheck.service; if the bridges won't start "
                     "with the tunnel up, see the netcheck troubleshooting card on the tunnel tabs.")
