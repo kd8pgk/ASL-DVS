@@ -1,6 +1,14 @@
 # instmon changelog
 
-Current file: `instmon_v2_85_0_20261030.py`. Newest entries first.
+Current file: `instmon_v2_86_0_20261102.py`. Newest entries first.
+
+## 2.86.0 (2026-11-02)
+
+- **Node Recorder has a card** in the Components list, after Node Talker and its mobile app. It shows the service state, port 8995 and Start, Stop, Uninstall and Install like the other tools.
+- **Node Recorder files can be uploaded and installed.** The library has a Node Recorder group (`noderecorder*.py`), the upload list offers Node Recorder (.py), and Full Update and GitHub updates cover it, in the order Node Talker, Node Recorder, Pibrary.
+- **Quiet System pauses Node Recorder** with the other tools, and Restore starts it again. Its text now names Node Recorder.
+- A node without Node Recorder shows the card as not installed and nothing else changes.
+- This is a release, not a cosmetic build.
 
 ## 2.85.0 (2026-10-30)
 
