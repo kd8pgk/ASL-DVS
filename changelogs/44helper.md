@@ -4,6 +4,7 @@ Current file: `44helper_v0_1_8_20261101.py`. Newest entries first.
 
 ## 0.1.8.1 (2026-11-02)
 
+- **M17 installer card is shorter.** The note for the M17 tab's "Run the installer" step is now three sentences: type the callsign and press Run, what the installer does, and that Open in terminal is the backup if Run fails. The callsign field, Run button and terminal row are unchanged.
 - **Step 10 note matches the package list.** The note for ASL3 step 10 (Appliance) said `asl3-appliance-pi` installs on Bookworm, which 0.1.7 showed is wrong. It now says Bookworm publishes only `asl3-pi-appliance` (Raspberry Pi only; a PC gets a skip message), and Trixie installs `asl3-appliance` with the Pi or PC companion. The package list is unchanged.
 
 ## 0.1.8 (2026-11-01)

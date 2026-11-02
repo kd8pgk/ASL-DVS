@@ -3581,15 +3581,9 @@ def _m17_install_steps() -> list[dict]:
                          "tr '[:lower:]' '[:upper:]')\" | sudo DEBIAN_FRONTEND=noninteractive ./install.sh",
          "cmd": _M17_INSTALL_PREP + " && sudo DEBIAN_FRONTEND=noninteractive ./install.sh",
          "timeout": 3600,
-         "note": "install.sh asks one question, your callsign: type it in the box and Run answers it for you "
-                 "(it is put in capitals). It then installs the PHP UI to /var/www/html/m17, downloads and "
-                 "compiles USRP2M17 (a few minutes, longer on a Pi Zero 2 W), writes "
-                 "/opt/USRP2M17/USRP2M17.ini and starts usrp2m17.service. Before it runs, MMDVM_CM (the "
-                 "USRP2M17 source) is downloaded into root's ~/git the same way as step 3, so a flaky "
-                 "connection is less likely to break it part-way; install.sh then only updates that copy. "
-                 "Note: install.sh deletes root's whole ~/git folder when it finishes, so keep nothing "
-                 "else there. You can still run it by hand over SSH (Copy) or in the terminal, where it "
-                 "asks for the callsign itself."},
+         "note": "Type your callsign and press Run. The installer asks one question, your callsign, and the page answers it. "
+                 "It installs the PHP UI, builds USRP2M17 (a few minutes, longer on a Pi Zero 2 W) and starts usrp2m17.service. "
+                 "Backup: Open in terminal runs the same installer interactively if Run fails."},
         {"id": "m17_rptconf", "num": 5, "title": "rpt.conf — add the M17 node stanza",
          "cmd": _M17_RPTCONF_SNIPPET,
          "manual_block": True,
