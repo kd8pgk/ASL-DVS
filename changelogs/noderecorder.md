@@ -1,6 +1,18 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_1_0_20261102.py`. Newest entries first.
+Current file: `noderecorder_v0_2_0_20261102.py`. Newest entries first.
+
+## 0.2.0 (2026-11-02)
+
+- **Phase 2: the schedule and its state machine.** Node Recorder now keeps a schedule and walks each window through the same steps every time: connect, start recording, stop recording, disconnect. **Recording itself is not built yet**, so until the recording engine arrives every window runs as a dry run: the steps are walked and logged, but nothing is connected and no audio is written. The Record tab says so.
+- **Schedule entries.** Each entry has a name, the days of the week (Sunday to Saturday, one or several, or every day), a start and an end time, a target (mode and the node, talkgroup, reflector or network, copied in when the entry is saved, with no live link to where it came from), a recording format (u-law or PCM) and an enabled flag. An end time earlier than the start runs past midnight. A window is under 24 hours.
+- **Overlaps are refused.** Two enabled windows must be at least 2 minutes apart, so the first can disconnect before the next connects. This counts across midnight and across the end of the week, and a window that runs into its own next day is refused too. A refused save says which entries clash.
+- **Stored safely.** The schedule is `schedule.json` in the settings folder, written atomically (up to 40 entries). If the file cannot be read, a copy is kept as `schedule.json.bad`, the schedule shows as empty with the reason, and saving is refused until it is fixed, so a damaged file is never overwritten.
+- **Each step has a time limit and a way out.** Connect 120 s, start 15 s, stop 30 s, disconnect 60 s. If connecting fails, nothing is recorded, the failure is logged and the node is left disconnected. If starting fails, the link is dropped. If the link drops during the recording (two checks, 5 s apart, both find it gone), the recording is stopped cleanly and the rest is cleaned up. If Asterisk cannot say whether the link is up, the recording carries on. A stopping Node Recorder ends the window cleanly first.
+- **Restart and power-loss recovery.** A small state file remembers which window is open and which have finished. After a restart inside an open window the window resumes; one that ended while Node Recorder was down is logged as interrupted or missed, once. A window is never run twice, and an entry saved after its window ended is not reported missed. No history is written to disk.
+- **Dry run on request.** The Record tab lists the schedule (days, window, target, format, next run) with a Dry run button on each entry that shows every step. New settings: `schedule_dry_run`. New routes: `/api/schedule`, `/api/schedule/set`, `/api/schedule/remove`, `/api/schedule/dryrun`.
+- The page for adding and editing entries comes in a later build; this one stores and runs them.
+- This is a release, not a cosmetic build.
 
 ## 0.1.0 (2026-11-02)
 

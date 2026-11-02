@@ -329,6 +329,37 @@ def make_nt_case(key):
             self.assertFalse(d["receiving"], "receiving should drop after 3 s of silence")
             self.assertGreaterEqual(d["last_rx_age"], 3.0)
 
+    if key == "noderecorder":
+        def _sched_post(self, path, body):
+            hdr = {"Cookie": self.cookie, "Content-Type": "application/json", "X-Requested-With": "XMLHttpRequest"}
+            st, _, b = self.server.request("POST", path, body=json.dumps(body), headers=hdr, timeout=15)
+            return st, json.loads(b)
+
+        def test_schedule_save_overlap_dry_run_and_remove(self):
+            base = {"days": [1], "start": "06:00", "end": "08:00", "target": {"mode": "ASL", "num": "29332"}, "format": "ulaw"}
+            ids = ("citest1", "citest2")
+            try:
+                st, d = self._sched_post("/api/schedule/set", {"entry": dict(base, id=ids[0], name="First")})
+                self.assertTrue(d["ok"], d)
+                st, d = self._sched_post("/api/schedule/set", {"entry": dict(base, id=ids[1], name="Second", start="07:00", end="09:00")})
+                self.assertFalse(d["ok"], "an overlapping window must be refused")
+                self.assertTrue(d.get("conflicts"), d)
+                st, d = self._sched_post("/api/schedule/set", {"entry": dict(base, id=ids[1], start="25:00")})
+                self.assertFalse(d["ok"], "a bad time must be refused")
+                st, d = self._sched_post("/api/schedule/set", {"entry": dict(base, id=ids[1], name="Second", start="08:02", end="09:00")})
+                self.assertTrue(d["ok"], "two minutes apart is allowed: " + str(d))
+                st, d = get_json(self.server, "/api/schedule", self.cookie)
+                self.assertEqual({e["id"] for e in d["entries"]} & set(ids), set(ids))
+                self.assertTrue(d["dry_run"], "the engine is not built yet, so windows run as dry runs")
+                st, d = self._sched_post("/api/schedule/dryrun", {"id": ids[0]})
+                self.assertEqual([x["step"] for x in d["steps"]], ["connect", "start", "stop", "disconnect"], d)
+                self.assertEqual(d["result"], "ok")
+            finally:
+                for i in ids:
+                    self._sched_post("/api/schedule/remove", {"id": i})
+            st, d = get_json(self.server, "/api/schedule", self.cookie)
+            self.assertFalse({e["id"] for e in d["entries"]} & set(ids), "the test entries must be gone")
+
     NTCase.__name__ = f"Authed_{key}"
     NTCase.__qualname__ = f"Authed_{key}"
     return NTCase
