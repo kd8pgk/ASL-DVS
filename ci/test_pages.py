@@ -78,12 +78,16 @@ def make_page_case(key, expect):
             spec = cls.server.spec
             url = f"{spec['scheme']}://127.0.0.1:{spec['port']}/"
             login = None
-            if expect.get("login"):
-                if not os.environ.get("ASL_TEST_ROOT_PASSWORD"):
-                    raise unittest.SkipTest("set ASL_TEST_ROOT_PASSWORD to test the logged-in pages")
-                login = LOGIN_FORMS[server_key]
-            cls.result = run_check(url, expect["click"], login=login,
-                                   tab_selector=(login or {}).get("tabSelector"))
+            try:
+                if expect.get("login"):
+                    if not os.environ.get("ASL_TEST_ROOT_PASSWORD"):
+                        raise unittest.SkipTest("set ASL_TEST_ROOT_PASSWORD to test the logged-in pages")
+                    login = LOGIN_FORMS[server_key]
+                cls.result = run_check(url, expect["click"], login=login,
+                                       tab_selector=(login or {}).get("tabSelector"))
+            except BaseException:
+                cls.tearDownClass()
+                raise
 
         @classmethod
         def tearDownClass(cls):

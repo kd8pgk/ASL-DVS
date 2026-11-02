@@ -42,8 +42,8 @@ jobs:
           echo "root:$PW" | sudo chpasswd
           echo "ASL_TEST_ROOT_PASSWORD=$PW" >> "$GITHUB_ENV"
       - name: Server tests (six servers, stubbed hardware)
-        run: sudo -E env PATH="$PATH" python3 ci/test_servers.py
+        run: sudo env PATH="$PATH" ASL_TEST_PLAYWRIGHT_MODULE="$ASL_TEST_PLAYWRIGHT_MODULE" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_servers.py
       - name: Page tests (headless Chromium)
-        run: sudo -E env PATH="$PATH" python3 ci/test_pages.py
+        run: sudo env PATH="$PATH" ASL_TEST_PLAYWRIGHT_MODULE="$ASL_TEST_PLAYWRIGHT_MODULE" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_pages.py
       - name: Authenticated tests (login, every route, badge truth)
-        run: sudo -E env PATH="$PATH" python3 ci/test_authed.py
+        run: sudo env PATH="$PATH" ASL_TEST_PLAYWRIGHT_MODULE="$ASL_TEST_PLAYWRIGHT_MODULE" PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_PATH" ASL_TEST_ROOT_PASSWORD="$ASL_TEST_ROOT_PASSWORD" python3 ci/test_authed.py
