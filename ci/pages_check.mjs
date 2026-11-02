@@ -38,8 +38,15 @@ try {
   const resp = await page.goto(input.url, { waitUntil: "load", timeout: 20000 });
   out.status = resp ? resp.status() : null;
   out.title = await page.title();
+  if (input.login) {
+    await page.fill(input.login.passwordSelector, input.login.password);
+    await page.click(input.login.submitSelector);
+    await page.waitForSelector(input.login.readySelector, { state: "attached", timeout: 15000 });
+    out.loggedIn = true;
+  }
   await page.waitForTimeout(1500);
-  out.tabs = await page.$$eval('[id^="tbtn-"]', (els) => els.map((e) => e.id.replace(/^tbtn-/, "")).sort());
+  const tabSel = input.tabSelector || '[id^="tbtn-"]';
+  out.tabs = await page.$$eval(tabSel, (els) => els.map((e) => (e.id || e.textContent || "").replace(/^tbtn-/, "").trim()).filter(Boolean).sort());
   out.themeToggle = (await page.$$('[data-theme-toggle], #theme-toggle, .theme-toggle, [id*="theme"]')).length;
   for (const tab of input.clickTabs || []) {
     const btn = page.locator(`#tbtn-${tab}`);

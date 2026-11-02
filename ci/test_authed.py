@@ -16,7 +16,8 @@ UNIT_FILES = {
     "asl-zello-bridge": "/etc/systemd/system/asl-zello-bridge.service",
 }
 SYSMON_BADGES = [("/api/stfu", "stfu"), ("/api/m17", "usrp2m17"), ("/api/zello", "asl-zello-bridge")]
-SVC_POLL_SEC = 25.0
+SVC_POLL_SEC = 20.0
+DVS_PATH = "/opt/MMDVM_Bridge/dvswitch.sh"
 READ_CAP = 262144
 
 
@@ -202,6 +203,19 @@ def make_nc_case(key):
             set_unit(self.server, "analog_bridge.service", "inactive")
             self.assert_svc_becomes("ab", "inactive")
 
+        def test_service_timestamp_advances_each_check(self):
+            st, d = get_json(self.server, "/api/status", self.cookie)
+            first = d.get("svc_at")
+            self.assertIsNotNone(first, "svc_at missing from /api/status")
+            deadline = time.time() + SVC_POLL_SEC
+            while time.time() < deadline:
+                time.sleep(1)
+                st, d = get_json(self.server, "/api/status", self.cookie)
+                if d.get("svc_at", 0) > first:
+                    self.assertLess(time.time() - d["svc_at"], 20, "svc_at should be recent")
+                    return
+            self.fail(f"svc_at stayed at {first}; the service check is not refreshing it")
+
         def assert_svc_becomes(self, name, want):
             deadline = time.time() + SVC_POLL_SEC
             last = None
@@ -218,6 +232,59 @@ def make_nc_case(key):
     NCCase.__name__ = f"Authed_{key}"
     NCCase.__qualname__ = f"Authed_{key}"
     return NCCase
+
+
+def make_nc_dvs_case(key):
+    class DVSCase(make_nc_case(key)):
+        fixture = None
+        created_dir = False
+
+        @classmethod
+        def setUpClass(cls):
+            reason = skip_reason()
+            if reason:
+                raise unittest.SkipTest(reason)
+            if os.path.exists(DVS_PATH):
+                raise unittest.SkipTest(f"{DVS_PATH} already exists; refusing to overwrite it")
+            d = os.path.dirname(DVS_PATH)
+            cls.created_dir = not os.path.isdir(d)
+            os.makedirs(d, exist_ok=True)
+            with open(DVS_PATH, "w") as f:
+                f.write("#!/bin/sh\nexit 0\n")
+            os.chmod(DVS_PATH, 0o755)
+            cls.fixture = DVS_PATH
+            cls.server = ts.Server(key)
+            try:
+                cls.server.start()
+                cls.cookie = login(cls.server)
+            except BaseException:
+                cls.tearDownClass()
+                raise
+
+        @classmethod
+        def tearDownClass(cls):
+            if cls.server:
+                cls.server.stop()
+            if cls.fixture:
+                try:
+                    os.remove(cls.fixture)
+                except FileNotFoundError:
+                    pass
+            if cls.created_dir:
+                try:
+                    os.rmdir(os.path.dirname(DVS_PATH))
+                except OSError:
+                    pass
+
+        def test_service_block_follows_systemd_with_dvswitch_present(self):
+            set_unit(self.server, "stfu.service", "active")
+            self.assert_svc_becomes("stfu", "active")
+            set_unit(self.server, "stfu.service", "inactive")
+            self.assert_svc_becomes("stfu", "inactive")
+
+    DVSCase.__name__ = f"AuthedDVS_{key}"
+    DVSCase.__qualname__ = f"AuthedDVS_{key}"
+    return DVSCase
 
 
 def make_sysmon_case(key):
@@ -264,6 +331,7 @@ def make_nt_case(key):
 for _key in ts.SERVERS:
     if _key.startswith("nodecontrol"):
         globals()[f"Authed_{_key}"] = make_nc_case(_key)
+        globals()[f"AuthedDVS_{_key}"] = make_nc_dvs_case(_key)
     elif _key.startswith("sysmon"):
         globals()[f"Authed_{_key}"] = make_sysmon_case(_key)
     else:

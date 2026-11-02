@@ -233,6 +233,7 @@ def make_case(key):
                 headers={"Content-Type": "application/json"})
             self.assertIn(status, (401, 403, 429), body[:200])
             self.assertNotIn(status, (200, 204))
+            self.assertIn("message", json.loads(body), "error replies must carry a message key")
 
         def test_login_rejects_empty_password(self):
             status, _, _ = self.server.request(

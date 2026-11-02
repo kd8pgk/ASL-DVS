@@ -35,15 +35,15 @@ jobs:
           PLAYWRIGHT_BROWSERS_PATH="$RUNNER_TEMP/pw-browsers" "$RUNNER_TEMP/pw/node_modules/.bin/playwright" install --with-deps chromium
           echo "ASL_TEST_PLAYWRIGHT_MODULE=$RUNNER_TEMP/pw/node_modules/playwright/index.js" >> "$GITHUB_ENV"
           echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/pw-browsers" >> "$GITHUB_ENV"
-      - name: Server tests (six servers, stubbed hardware)
-        run: sudo -E env PATH="$PATH" python3 ci/test_servers.py
-      - name: Page tests (headless Chromium)
-        run: sudo -E env PATH="$PATH" python3 ci/test_pages.py
       - name: Set a random root password on this runner (authenticated tests)
         run: |
           PW="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9' | head -c 24)"
           echo "::add-mask::$PW"
           echo "root:$PW" | sudo chpasswd
           echo "ASL_TEST_ROOT_PASSWORD=$PW" >> "$GITHUB_ENV"
+      - name: Server tests (six servers, stubbed hardware)
+        run: sudo -E env PATH="$PATH" python3 ci/test_servers.py
+      - name: Page tests (headless Chromium)
+        run: sudo -E env PATH="$PATH" python3 ci/test_pages.py
       - name: Authenticated tests (login, every route, badge truth)
         run: sudo -E env PATH="$PATH" python3 ci/test_authed.py

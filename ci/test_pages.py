@@ -18,6 +18,11 @@ SYSMON_FULL_TABS = {"asldvs", "console", "dvsm", "edit", "firewall", "hardware",
 SYSMON_PI02W_TABS = {"asldvs", "dvsm", "edit", "hardware", "journal", "m17", "overview", "phone",
                      "ports", "reg", "sdcard", "services", "stfu", "tune"}
 
+NC_FULL_TABS = {"tab-asl", "tab-dmr", "tab-dstar", "tab-echo", "tab-edit", "tab-fcs", "tab-m17",
+                "tab-nxdn", "tab-p25", "tab-phone", "tab-stfu", "tab-xlx", "tab-ysf"}
+NC_PI02W_TABS = NC_FULL_TABS
+NT_TABS = {"nav-connect", "nav-listen", "nav-setup"}
+
 PAGE_CASES = {
     "sysmon": {"title": "System Monitor", "tabs": SYSMON_FULL_TABS,
                "click": ["overview", "services", "ports", "hardware", "journal", "dvsm"]},
@@ -26,14 +31,30 @@ PAGE_CASES = {
     "nodecontrol": {"title": "Node Controller", "tabs": None, "click": []},
     "nodecontrol_pi02w": {"title": "Node Controller", "tabs": None, "click": []},
     "nodetalker": {"title": "Node Talker", "tabs": None, "click": []},
+    "nodecontrol_login": {"server": "nodecontrol", "title": "Node Controller", "tabs": NC_FULL_TABS, "click": [], "login": True},
+    "nodecontrol_pi02w_login": {"server": "nodecontrol_pi02w", "title": "Node Controller", "tabs": NC_PI02W_TABS, "click": [], "login": True},
+    "nodetalker_login": {"server": "nodetalker", "title": "Node Talker", "tabs": NT_TABS, "click": [], "login": True},
 }
 
 
-def run_check(url, clicks):
+LOGIN_FORMS = {
+    "nodecontrol": {"passwordSelector": "#login-pw", "submitSelector": "#login-btn",
+                    "readySelector": "#login-screen.hidden", "tabSelector": '.tabs .tab[id^="tab-"]'},
+    "nodecontrol_pi02w": {"passwordSelector": "#login-pw", "submitSelector": "#login-btn",
+                          "readySelector": "#login-screen.hidden", "tabSelector": '.tabs .tab[id^="tab-"]'},
+    "nodetalker": {"passwordSelector": "#pw", "submitSelector": "#login-btn",
+                   "readySelector": "#nav:not(.hidden)", "tabSelector": "#nav button, #nav a"},
+}
+
+
+def run_check(url, clicks, login=None, tab_selector=None):
     if not shutil.which("node"):
         raise unittest.SkipTest("node is not installed")
-    payload = json.dumps({"url": url, "clickTabs": clicks, "chromePath": CHROME,
-                          "playwrightModule": PLAYWRIGHT_MODULE})
+    payload = {"url": url, "clickTabs": clicks, "chromePath": CHROME,
+               "playwrightModule": PLAYWRIGHT_MODULE, "tabSelector": tab_selector}
+    if login:
+        payload["login"] = dict(login, password=os.environ.get("ASL_TEST_ROOT_PASSWORD", ""))
+    payload = json.dumps(payload)
     r = subprocess.run(["node", CHECK], input=payload, capture_output=True, text=True, timeout=120)
     if r.returncode == 3:
         raise unittest.SkipTest("playwright is not installed (set ASL_TEST_PLAYWRIGHT_MODULE)")
@@ -51,11 +72,18 @@ def make_page_case(key, expect):
         def setUpClass(cls):
             if os.geteuid() != 0:
                 raise unittest.SkipTest("server tests run as root (the tools require root)")
-            cls.server = ts.Server(key)
+            server_key = expect.get("server", key)
+            cls.server = ts.Server(server_key)
             cls.server.start()
             spec = cls.server.spec
             url = f"{spec['scheme']}://127.0.0.1:{spec['port']}/"
-            cls.result = run_check(url, expect["click"])
+            login = None
+            if expect.get("login"):
+                if not os.environ.get("ASL_TEST_ROOT_PASSWORD"):
+                    raise unittest.SkipTest("set ASL_TEST_ROOT_PASSWORD to test the logged-in pages")
+                login = LOGIN_FORMS[server_key]
+            cls.result = run_check(url, expect["click"], login=login,
+                                   tab_selector=(login or {}).get("tabSelector"))
 
         @classmethod
         def tearDownClass(cls):
