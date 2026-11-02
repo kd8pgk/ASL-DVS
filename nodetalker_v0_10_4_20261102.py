@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.3"
+VERSION = "0.10.4"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -1604,11 +1604,43 @@ RXH_OUTQ_NOTE_MS = 100
 RXH_OUTQ_SEC = 0.25
 RXH_CLIENT_NAMES = ("android", "browser", "other")
 RXH_CLIENT_KEYS = ("client", "under", "reset", "silence_ms", "under_local", "stall_ms")
+WIFI_LINK_PATH = os.environ.get("NODETALKER_WIFI_LINK", "/run/asl_dvs/wifi_link.json")
+WIFI_STALE_SEC = 30.0
+WIFI_LINK_KEYS = ("v", "at", "linked", "bssid_id", "signal_dbm", "tx_bitrate", "tx_packets", "tx_retries", "tx_failed",
+                  "beacon_loss", "connected_secs", "blips", "drops", "chip_stalls")
+RXH_WIFI_WEAK_DBM = 80
+RXH_WIFI_RETRY_PCT = 30
+RXH_WIFI_MIN_PKTS = 200
 _RXH_SUM = ("pkts", "gaps", "over", "trim", "pump_late", "lst_overrun", "slow_writes", "net_lost", "net_drop",
-            "net_ooo", "throttled", "cl_under", "cl_reset", "cl_silence_ms", "cl_under_local", "out_stalls")
+            "net_ooo", "throttled", "cl_under", "cl_reset", "cl_silence_ms", "cl_under_local", "out_stalls",
+            "wifi_samples", "wifi_down", "wifi_retries", "wifi_failed", "wifi_beacon", "wifi_blips", "wifi_drops",
+            "wifi_stalls", "wifi_rejoins", "wifi_roams", "wifi_tx_pkts")
 _RXH_MAX = ("gap_ms_max", "jit_ms_max", "pump_ms_max", "write_ms_max", "net_jit_max", "net_rtt_max", "cpu_max",
-            "net_peers", "cl_stall_ms_max", "out_ms_max")
-_RXH_FIELDS = _RXH_SUM + _RXH_MAX
+            "net_peers", "cl_stall_ms_max", "out_ms_max", "wifi_weak")
+_RXH_MIN = ("wifi_rate_min",)
+_RXH_FIELDS = _RXH_SUM + _RXH_MAX + _RXH_MIN
+_WIFI_COUNTERS = (("tx_packets", "wifi_tx_pkts"), ("tx_retries", "wifi_retries"), ("tx_failed", "wifi_failed"),
+                  ("beacon_loss", "wifi_beacon"), ("blips", "wifi_blips"), ("drops", "wifi_drops"),
+                  ("chip_stalls", "wifi_stalls"))
+
+
+def read_wifi_link(now=None):
+    now = time.time() if now is None else now
+    try:
+        with open(WIFI_LINK_PATH, encoding="utf-8") as fh:
+            d = json.loads(fh.read(65536))
+    except FileNotFoundError:
+        return None, "absent"
+    except (OSError, ValueError):
+        return None, "unreadable"
+    if not isinstance(d, dict):
+        return None, "unreadable"
+    if d.get("v") != 1:
+        return None, "unsupported"
+    at = d.get("at")
+    if not isinstance(at, (int, float)) or now - at > WIFI_STALE_SEC:
+        return None, "stale"
+    return d, ""
 _RXH_LINK_SUM = ("lost", "drop", "ooo")
 _RXH_LINK_MAX = ("jit", "rtt")
 _RXH_CLIENT_SUM = ("under", "reset", "silence_ms", "under_local", "out_stalls")
@@ -1705,6 +1737,9 @@ class RxHealth:
         self.net_why = ""
         self.net_seen = {}
         self.net_at = 0.0
+        self.wifi_prev = None
+        self.wifi_ok = None
+        self.wifi_why = ""
 
     def _new(self, minute):
         row = {k: 0 for k in _RXH_FIELDS}
@@ -1847,6 +1882,48 @@ class RxHealth:
             b["net_peers"] = max(b["net_peers"], len(rows))
             self.net_seen = seen
 
+    def note_wifi(self, d, why):
+        with self.lock:
+            if d is None:
+                self.wifi_ok = False
+                self.wifi_why = why
+                self.wifi_prev = None
+                return
+            self.wifi_ok = True
+            self.wifi_why = ""
+            b = self._bucket()
+            b["wifi_samples"] += 1
+            if not d.get("linked"):
+                b["wifi_down"] += 1
+                self.wifi_prev = None
+                return
+            sig = d.get("signal_dbm")
+            if isinstance(sig, (int, float)):
+                b["wifi_weak"] = max(b["wifi_weak"], max(0, int(round(-sig))))
+            rate = d.get("tx_bitrate")
+            if isinstance(rate, (int, float)) and int(round(rate)) > 0:
+                r = int(round(rate))
+                if b["wifi_rate_min"] == 0 or r < b["wifi_rate_min"]:
+                    b["wifi_rate_min"] = r
+            prev = self.wifi_prev
+            if prev is not None:
+                for key, field in _WIFI_COUNTERS:
+                    cur, old = d.get(key), prev.get(key)
+                    if isinstance(cur, int) and isinstance(old, int) and cur > old:
+                        b[field] += cur - old
+                roamed = bool(prev.get("bssid_id") and d.get("bssid_id") and prev["bssid_id"] != d["bssid_id"])
+                if roamed:
+                    b["wifi_roams"] += 1
+                else:
+                    cs, ps = d.get("connected_secs"), prev.get("connected_secs")
+                    if isinstance(cs, (int, float)) and isinstance(ps, (int, float)) and cs < ps - 2:
+                        b["wifi_rejoins"] += 1
+            self.wifi_prev = d
+
+    def wifi_state(self):
+        with self.lock:
+            return {"ok": self.wifi_ok, "why": self.wifi_why}
+
     def net_down(self, why):
         with self.lock:
             self.net_ok = False
@@ -1888,6 +1965,10 @@ def rxh_sum(rows):
             agg[k] += r.get(k, 0)
         for k in _RXH_MAX:
             agg[k] = max(agg[k], r.get(k, 0))
+        for k in _RXH_MIN:
+            v = r.get(k, 0)
+            if v and (agg[k] == 0 or v < agg[k]):
+                agg[k] = v
         for name, lk in (r.get("links") or {}).items():
             a = agg["links"].setdefault(name, {k: 0 for k in _RXH_LINK_SUM + _RXH_LINK_MAX})
             for k in _RXH_LINK_SUM:
@@ -1929,7 +2010,42 @@ def _rxh_client_text(clients):
     return "; ".join(bits)
 
 
-def rxh_verdict(agg, net):
+_WIFI_WHY = {
+    "absent": "wifimon 5.48 or newer is not running, or the Pi is not on Wi-Fi",
+    "stale": "wifimon stopped updating its Wi-Fi file",
+    "unreadable": "the Wi-Fi file from wifimon could not be read",
+    "unsupported": "the Wi-Fi file is from a newer wifimon than this Node Talker understands",
+}
+
+
+def _rxh_wifi_row(agg, wifi):
+    if agg["wifi_samples"] == 0:
+        why = (wifi or {}).get("why") or ""
+        if why:
+            return "info", "No Wi-Fi data: " + _WIFI_WHY.get(why, why), False
+        return "info", "No Wi-Fi data yet", False
+    bits = []
+    if agg["wifi_weak"]:
+        bits.append(f"signal worst -{agg['wifi_weak']} dBm")
+    if agg["wifi_rate_min"]:
+        bits.append(f"slowest send {agg['wifi_rate_min']} Mb/s")
+    pct = 0
+    if agg["wifi_tx_pkts"] >= RXH_WIFI_MIN_PKTS:
+        pct = int(round(100.0 * agg["wifi_retries"] / agg["wifi_tx_pkts"]))
+        bits.append(f"retries {pct} % of {agg['wifi_tx_pkts']} packets")
+    else:
+        bits.append(f"retries {agg['wifi_retries']}")
+    events = [("wifi_failed", "failed sends"), ("wifi_beacon", "beacon loss"), ("wifi_blips", "link blips"),
+              ("wifi_drops", "drops"), ("wifi_stalls", "chip stalls"), ("wifi_rejoins", "rejoins"),
+              ("wifi_roams", "roams"), ("wifi_down", "samples with no link")]
+    for key, label in events:
+        if agg[key]:
+            bits.append(f"{label} {agg[key]}")
+    bad = bool(any(agg[k] for k, _ in events) or agg["wifi_weak"] >= RXH_WIFI_WEAK_DBM or pct >= RXH_WIFI_RETRY_PCT)
+    return ("bad" if bad else "ok"), ", ".join(bits), bad
+
+
+def rxh_verdict(agg, net, wifi=None):
     rows = []
 
     def add(layer, level, text):
@@ -1966,6 +2082,8 @@ def rxh_verdict(agg, net):
     pi_bad = bool(pi_bits)
     add("This Pi", "bad" if pi_bad else "ok",
         "; ".join(pi_bits) if pi_bad else f"queue clean, pump on time, power fine, RX load up to {agg['cpu_max']} %")
+    wifi_level, wifi_text, wifi_bad = _rxh_wifi_row(agg, wifi)
+    add("This Pi's Wi-Fi", wifi_level, wifi_text)
     lst_bits = []
     if agg["out_stalls"]:
         lst_bits.append(f"{agg['out_stalls']} times audio waited unsent to a listener, up to {agg['out_ms_max']} ms")
@@ -1989,6 +2107,11 @@ def rxh_verdict(agg, net):
         state, text = "idle", "No received audio in the last few minutes."
     elif pi_bad:
         state, text = "pi", "This Pi is part of the problem: see the Pi row."
+    elif wifi_bad and (net_bad or gap_bad or agg["out_stalls"] or agg["slow_writes"] or agg["lst_overrun"]
+                       or agg["cl_under"] or agg["cl_reset"]):
+        state = "wifi"
+        text = ("Not the Pi's software. The Pi's own Wi-Fi link to the router was unhealthy while audio was lost or late, "
+                "which is the likely cause: see the Wi-Fi row.")
     elif net_bad or gap_bad:
         state, text = "network", "Not the Pi. Audio is already late or missing before it reaches the Pi: the network outside the LAN."
         if lst_bad or cl_bad:
@@ -2012,7 +2135,7 @@ def rxh_verdict(agg, net):
 
 def rxh_status():
     agg = rxh_sum(RXH.window())
-    out = rxh_verdict(agg, RXH.net_state())
+    out = rxh_verdict(agg, RXH.net_state(), RXH.wifi_state())
     out["minutes"] = RXH_WINDOW_MIN
     return out
 
@@ -2043,6 +2166,11 @@ def rxh_netstats_loop():
             RXH.note_pi(RXC.load_pct, throttled)
         except Exception as exc:
             RXH.net_down(str(exc)[:120])
+        try:
+            link, why = read_wifi_link()
+            RXH.note_wifi(link, why)
+        except Exception:
+            pass
         time.sleep(RXH_NET_ACTIVE_SEC if live else RXH_NET_IDLE_SEC)
 
 
