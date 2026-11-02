@@ -1,6 +1,19 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_9_65_20261101.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_0_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.0 (2026-11-02)
+
+- **Field test: where does the loss start?** The RX card has a new "Receive health" section that looks at the last 5 minutes of received audio and says whether a gap or drop started outside the LAN, on this Pi, or between the Pi and the listener. It only measures: no setting, the balancer and the Audio check are unchanged.
+  - **Outside the LAN:** IAX link loss, drops, out-of-order frames, jitter and round trip, from `iax2 show netstats` (read every 5 s while audio is active, every 30 s otherwise). Only frames lost since the last read are counted. If Asterisk will not answer, the row says so and blames nothing.
+  - **Audio arriving at the Pi:** gaps over 60 ms and arrival jitter between the packets Asterisk sends. A silence of 0.5 s or more is the end of a transmission and is not counted.
+  - **This Pi:** input-queue overflow, an audio pump that ran late, under-voltage or throttling, and the RX processing load.
+  - **Pi to listener:** sends to a listener that took 0.25 s or more, and listener queue overruns. This covers the browser and the Android app, which both read `/api/listen`.
+  - **Phone / browser:** underruns, queue resets and silence time counted by the page while it plays (the Android app does not report these yet).
+  - **Verdict:** a Pi problem is named first. Otherwise a problem upstream is "not the Pi: the network outside the LAN", and one only at the listener is "the phone's connection". A clean window says so.
+- **`dropped` is split** in `/api/status` into `dropped_over` (input queue full) and `dropped_trim` (queue trimmed); `dropped` is still their sum.
+- **Field data.** One row per minute with audio is appended to `nodetalker_rxhealth.jsonl` in the config directory (rotated at 1 MB), with the Listen buffer and TX buffer in force. `/api/rxhealth?all=1` returns it as JSON, and the RX card links to it. New routes: `/api/rxhealth` (GET) and `/api/rxhealth/client` (POST, counters from the page).
+- This is a release, not a cosmetic build.
 
 ## 0.9.65 (2026-11-01)
 
