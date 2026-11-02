@@ -1,6 +1,13 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_15_0_20261028.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_16_0_20261102.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.16.0 (2026-11-02)
+
+- **Node Recorder files play in the Audio tab.** Node Recorder saves its recordings as u-law WAV (8 kHz, mono, format tag 7), which is half the size of PCM but which some browsers, Firefox among them, cannot play. When Pibrary plays such a file it decodes it to 16-bit PCM on the way out, so every browser plays it. Seeking works: the player can jump anywhere in a recording. Nothing decoded is written to disk. Put recordings in a folder under `audio/` in the library, for example `audio/recordings/`, and they list with the rest of the Audio tab.
+- **Download still gives the original file.** The Download action sends the u-law WAV as recorded, not the decoded copy.
+- **Other files are untouched.** PCM WAV files and every other format are served exactly as before. A recording that is still being written (its header not yet finished) plays up to what is on disk.
+- This is a release, not a cosmetic build.
 
 ## 0.15.0 (2026-10-28)
 
