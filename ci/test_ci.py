@@ -1432,7 +1432,6 @@ class RxHealthTests(unittest.TestCase):
         self.assertLessEqual(self.rxh.cur["cl_under"], 2 + nt.RXH_CLIENT_MAX)
 
     def test_minute_rollover_keeps_history(self):
-        nt = self.nt
         self.feed(10)
         self.rxh.cur["t"] -= 60
         self.rxh.note_packet(500.0)
