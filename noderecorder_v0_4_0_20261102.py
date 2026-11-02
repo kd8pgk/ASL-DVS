@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -2228,52 +2228,6 @@ def favcfg():
     return fav_doc()["cfg"]
 
 
-def _check_favs(clean):
-    bridges = {v for k, v in bridge_nodes().items() if k in ("digital", "m17") and v}
-    seen = set()
-    for f in clean:
-        if f["mode"] == "ASL" and f["num"] in bridges:
-            raise ValueError(f"Node {f['num']} is a bridge node, not a favorite")
-        key = fav_target(f)
-        if key in seen:
-            raise ValueError(f"{fav_name(f)} is listed twice.")
-        seen.add(key)
-
-
-def fav_save(items):
-    if not isinstance(items, list):
-        return {"ok": False, "error": "favorites must be a list"}
-    if len(items) > FAV_MAX:
-        return {"ok": False, "error": f"At most {FAV_MAX} favorites."}
-    with _fav_lock:
-        doc = fav_doc()
-        nets, added = list(doc["nets"]), []
-        for f in items:
-            if not isinstance(f, dict) or _mode_safe(f) != "DMR":
-                continue
-            net = str(f.get("net", "") or "").strip().lower()
-            if not net or any(n["name"].lower() == net for n in nets):
-                continue
-            hit = next((n for n in dashboard_conf()["nets"] if n["name"].lower() == net), None)
-            if hit is not None and len(nets) < DMR_NET_MAX:
-                nets.append(hit)
-                added.append(hit["name"])
-        try:
-            clean = [_norm_fav(f, nets) for f in items]
-            _check_favs(clean)
-        except ValueError as exc:
-            return {"ok": False, "error": str(exc)}
-        try:
-            _write_fav_doc(clean, nets, doc["cfg"])
-        except OSError as exc:
-            return {"ok": False, "error": f"Could not save: {exc}"}
-    log_event(f"Favorites saved ({len(clean)})" + (f"; DMR network {', '.join(added)} copied from Node Controller" if added else ""), "ok")
-    msg = f"Saved {len(clean)} favorite(s)."
-    if added:
-        msg += f" Copied DMR network {', '.join(added)} from Node Controller."
-    return {"ok": True, "message": msg, "favs": clean}
-
-
 def nets_save(rows):
     if not isinstance(rows, list):
         return {"ok": False, "error": "networks must be a list"}
@@ -2382,39 +2336,6 @@ def digital_save(body):
     _bridge_cache["t"] = -60.0
     log_event("Digital settings saved", "ok")
     return {"ok": True, "message": "Saved."}
-
-
-def fav_file_text():
-    doc = fav_doc()
-    return render_fav_conf(doc["favs"], doc["nets"], doc["cfg"])
-
-
-def fav_file_put(text):
-    if not isinstance(text, str) or not text.strip():
-        return {"ok": False, "error": "The file is empty."}
-    if len(text) > 48 * 1024:
-        return {"ok": False, "error": "The file is too big for a favorites file."}
-    d = parse_fav_conf(text)
-    if d["bad"]:
-        return {"ok": False, "error": "Not loaded: " + "; ".join(d["bad"][:3]) + (" ..." if len(d["bad"]) > 3 else "")}
-    if d["more"]:
-        return {"ok": False, "error": f"Not loaded: the file has more than {FAV_MAX} favorites."}
-    try:
-        call = _norm_callsign(d["cfg"].get("callsign"))
-        b = (d["cfg"].get("bridge_nodes", "").split(",") + ["", ""])[:2]
-        dg, m = _norm_bridge(b[0], "The digital bridge node"), _norm_bridge(b[1], "The M17 bridge node")
-        _check_favs(d["favs"])
-    except ValueError as exc:
-        return {"ok": False, "error": f"Not loaded: {exc}"}
-    cfg = {"callsign": call, "bridge_nodes": f"{dg},{m}" if dg or m else ""}
-    try:
-        _write_fav_doc(d["favs"], d["nets"], cfg)
-    except OSError as exc:
-        return {"ok": False, "error": f"Could not save: {exc}"}
-    _bridge_cache["t"] = -60.0
-    _dvs_now["dmr"] = ""
-    log_event(f"Favorites file loaded ({len(d['favs'])} favorites, {len(d['nets'])} DMR networks)", "ok")
-    return {"ok": True, "message": f"Loaded {len(d['favs'])} favorite(s) and {len(d['nets'])} DMR network(s)."}
 
 
 def _ini_read(path):
@@ -3247,26 +3168,6 @@ def _fav_at(favs, index):
     return favs[i] if 0 <= i < len(favs) else None
 
 
-def fav_connect(index, net_action=None):
-    r = _fav_connect_impl(index, net_action)
-    f = _fav_at(fav_load(), index)
-    return r if f is None else _set_active(f, r)
-
-
-def _fav_connect_impl(index, net_action=None):
-    f = _fav_at(fav_load(), index)
-    if f is None:
-        return {"ok": False, "error": "Pick a favorite."}
-    node, err = _connect_node()
-    if not node:
-        return {"ok": False, "error": err}
-    if f["mode"] in DVS_MODES:
-        return solo_dvs(f, node, net_action if net_action in ("add", "once") else None)
-    if f["mode"] == "M17":
-        return m17_connect(f, node)
-    return node_connect(f, node)
-
-
 def node_connect(f, node):
     if node == dashboard_conf()["asl_node"]:
         r = dash_call({"action": "connect", "mode": f["mode"], "node": f["num"], "name": f["label"]})
@@ -3661,24 +3562,6 @@ def tune_connect(b):
     except ValueError:
         return r
     return _set_active(f, r)
-
-
-def tune_save(b):
-    try:
-        f = _tune_fav(b)
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
-    favs = fav_load()
-    if any(fav_target(x) == fav_target(f) for x in favs):
-        return {"ok": True, "message": f"{fav_name(f)} is already in favorites."}
-    if len(favs) >= FAV_MAX:
-        return {"ok": False, "error": f"Favorites are full ({FAV_MAX}). Remove one on the Setup tab first."}
-    n = len(favs) + 1
-    r = fav_save(favs + [f])
-    if r.get("ok"):
-        log_event(f"Saved {fav_name(f)} to favorites", "ok")
-        return {"ok": True, "message": f"Saved {fav_name(f)} to favorites ({n} of {FAV_MAX})."}
-    return r
 
 
 def tune_disconnect(b=None):
@@ -4615,7 +4498,13 @@ def schedule_norm_entry(raw, check_target=True):
     if start == end:
         raise ValueError("Start and end must differ")
     if check_target:
-        target = _target_keys(_tune_fav(raw.get("target")))
+        try:
+            target = _target_keys(_tune_fav(raw.get("target")))
+        except ValueError as exc:
+            msg = str(exc)
+            if "DMR network list" in msg:
+                msg += ". Add the network on the Setup tab (Digital card), or use Copy from Node Controller there."
+            raise ValueError(msg)
     else:
         t = raw.get("target")
         if not isinstance(t, dict) or not t.get("mode") or not t.get("num"):
@@ -5134,6 +5023,49 @@ def recorder_status():
             "elapsed": cur.get("elapsed", 0), "file": cur.get("file", "")}
 
 
+TALKER_FAV_PATH = os.environ.get("NODERECORDER_TALKER_FAV", "/etc/asl_dvs/nodetalker_favorites.conf")
+TALKER_FAV_JSON = os.environ.get("NODERECORDER_TALKER_FAV_JSON", "/etc/asl_dvs/nodetalker_favorites.json")
+
+
+_DSTAR_TUNE_RE = re.compile(r"^([A-Z0-9]{3,6}) *([A-Z])L$")
+
+
+def _fav_pick(f):
+    out = {k: str(f[k]) for k in ("mode", "num", "module", "net", "label") if f.get(k) not in (None, "")}
+    if out.get("mode") == "DSTAR":
+        m = _DSTAR_TUNE_RE.match(out.get("num", "").upper())
+        if m:
+            out["num"], out["module"] = m.group(1), m.group(2)
+        else:
+            parts = out.get("num", "").split()
+            out["num"] = parts[0] if parts else ""
+            if len(parts) > 1:
+                out["module"] = parts[1]
+    return out
+
+
+def _read_talker_favs():
+    try:
+        with open(TALKER_FAV_PATH, "r", encoding="utf-8", errors="replace") as fh:
+            return True, [_fav_pick(f) for f in parse_fav_conf(fh.read())["favs"]]
+    except OSError:
+        pass
+    try:
+        with open(TALKER_FAV_JSON, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return True, [_fav_pick(f) for f in data if isinstance(f, dict) and f.get("mode") and f.get("num")]
+    except (OSError, ValueError):
+        return False, []
+
+
+def schedule_sources(_body=None):
+    found, talker = _read_talker_favs()
+    dash = dashboard_conf()
+    return {"ok": True, "talker": talker, "talker_found": found, "talker_path": TALKER_FAV_PATH,
+            "controller": [_fav_pick(f) for f in dash["favs"]], "controller_found": os.path.exists(DASH_CONF),
+            "controller_path": DASH_CONF, "nets": [n["name"] for n in nets_load()], "modes": list(FAV_MODES)}
+
+
 def schedule_view():
     data = schedule_load()
     now = datetime.now()
@@ -5407,12 +5339,8 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 
 _JS = r"""const $ = (id) => document.getElementById(id);
 let authed = false, publicListen = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
-let favs = [], favEdit = [], dashFavs = [], favMax = 15, favNets = [], favModes = ['ASL', 'EchoLink', 'M17'];
+let favNets = [], favModes = ['ASL', 'EchoLink', 'M17'];
 let nets = [], netMax = 10;
-const FAV_HINT = {ASL: ['Node', 'Node number', 'numeric'], EchoLink: ['Number', 'EchoLink number', 'numeric'],
-  DMR: ['TG', 'DMR talkgroup', 'numeric'], STFU: ['TG', 'STFU talkgroup', 'numeric'], YSF: ['Reflector', 'YSF reflector', 'text'],
-  P25: ['TG', 'P25 talkgroup', 'numeric'], NXDN: ['TG', 'NXDN talkgroup', 'numeric'],
-  DSTAR: ['REF001 C', 'D-STAR reflector and module', 'text'], M17: ['M17-USA A', 'Reflector and module', 'text']};
 async function api(url, opts) {
   opts = opts || {};
   opts.headers = Object.assign({'X-Requested-With': 'XMLHttpRequest'}, opts.headers || {});
@@ -5495,23 +5423,8 @@ async function doShutdown() {
 }
 function fmtDb(db) { return db <= -119 ? '-inf' : ((Math.round(db) || 0) + ' dBFS'); }
 function dbPct(db) { return Math.max(0, Math.min(100, (db + 60) / 60 * 100)); }
-function fmtSecs(s) { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
-function favNum(f) {
-  if (f.mode === 'M17') return f.num + (f.module ? ' ' + f.module : '');
-  if (f.mode === 'DMR') return (f.net ? f.net + ' ' : '') + f.num;
-  if (f.mode === 'DSTAR') return f.num.trim().replace(/ +/, ' ');
-  return f.num;
-}
 function modeName(m) { return m === 'DSTAR' ? 'D-STAR' : m; }
-const DVS = ['DMR', 'STFU', 'YSF', 'P25', 'NXDN', 'DSTAR'];
-let linkedTargets = new Set();
-function linkedFavs(d) {
-  const links = (d && d.links) || [];
-  const set = new Set(links.map((l) => l.node));
-  if (d && d.m17) set.add(d.m17);
-  if (d && d.tuned) set.add(d.tuned);
-  return favs.filter((f) => set.has(f.target));
-}
+let linkedNodes = new Set();
 async function setupCheck() {
   if ($('setup-dlg').open) return;
   const d = await api('/api/setup');
@@ -5528,61 +5441,20 @@ async function setupCheck() {
   $('setup-dlg-msg').textContent = '';
   $('setup-dlg').showModal();
 }
-async function loadFavs() {
-  const d = await api('/api/favorites');
+async function loadTuneInfo() {
+  const d = await api('/api/tune-info');
   if (!d.ok) return;
-  favs = d.favs || [];
-  favMax = d.max || 10;
-  const sel = $('c-fav'), keep = sel.value;
-  sel.innerHTML = '';
   favNets = d.nets || [];
   favNetLinks = d.net_links || {};
   favModes = d.modes || favModes;
-  favs.forEach((f, i) => addOption(sel, String(i), f.label || (modeName(f.mode) + ' ' + favNum(f))));
   tnNets();
-  if (keep && Number(keep) < favs.length) sel.value = keep;
-  $('c-empty').classList.toggle('hidden', favs.length > 0);
-  $('c-pick').classList.toggle('hidden', favs.length === 0);
-  showSelected();
-  showSelected();
 }
 function paintModes() {
-  const f = favs[Number($('c-fav').value)];
   $('cd-tune').dataset.mode = $('t-mode') ? $('t-mode').value : '';
-  $('c-fav').closest('.card').dataset.mode = f ? f.mode : '';
-  $('c-mode').dataset.mode = f ? f.mode : '';
-}
-function showSelected() {
-  const f = favs[Number($('c-fav').value)];
-  $('c-mode').textContent = f ? modeName(f.mode) : '';
-  paintModes();
-  $('c-num').textContent = f ? favNum(f) : '';
-  $('c-label').textContent = f ? f.label : '';
-  connectLabel();
-}
-function selectedLinked() {
-  const f = favs[Number($('c-fav').value)];
-  return !!f && linkedTargets.has(f.target);
-}
-function connectLabel() {
-  const b = $('c-connect'), on = selectedLinked();
-  b.textContent = 'Connect';
-  b.disabled = on || connBusy;
-}
-async function favConnect() {
-  const i = $('c-fav').value;
-  if (i === '' || selectedLinked()) return;
-  const f = favs[Number(i)];
-  netHide();
-  const tune = f && (f.mode === 'M17' || DVS.includes(f.mode));
-  await connectFlow({index: Number(i)}, (tune ? 'Tuning ' : 'Connecting to ') + (f ? f.label : 'the favorite') + '...',
-    tune ? 'Tuning...' : 'Connecting... (checking the link for up to 15 s)');
-  if ($('c-msg').classList.contains('ok')) { tuneDone = true; favSel = Number(i); }
 }
 let connMsgTimer = null, connBusy = false, connBack = false;
 let netAsk = null;
 function netHide() {
-  $('c-net').classList.add('hidden');
   $('t-ask').classList.add('hidden');
   netAsk = null;
 }
@@ -5650,7 +5522,6 @@ function tnInit() {
   m.value = 'ASL';
   $('t-find').value = tnState.find || '';
   $('t-mode').addEventListener('change', () => { tnMode(false); paintModes(); });
-  $('c-fav').addEventListener('change', paintModes);
   $('t-net').addEventListener('change', () => { tnButtons(); tnRemember(); });
   $('t-mod').addEventListener('change', () => { tnButtons(); tnRemember(); });
   $('t-find').addEventListener('input', () => {
@@ -5664,7 +5535,6 @@ function tnInit() {
   $('t-go').addEventListener('click', tnConnect);
   $('t-disc').addEventListener('click', () => linksDisconnect('t-msg'));
   $('t-lh').addEventListener('click', tnOpenLink);
-  $('t-save').addEventListener('click', tnSaveFav);
   sizeInit('tn');
   tnMode(true);
 }
@@ -5736,18 +5606,15 @@ async function tnSearch(m, want) {
   tnFill(want);
 }
 let tunedNow = '';
-function findFavFor(tb) {
-  return favs.find((x) => x.mode === tb.mode && x.num === String(tb.num)
-    && (tb.mode !== 'DMR' || x.net === tb.net) && (tb.mode !== 'M17' && tb.mode !== 'DSTAR' || x.module === tb.module));
-}
 function tnLinkedB(tb) {
   if (!tb) return false;
-  const fav = findFavFor(tb);
-  if (fav) return linkedTargets.has(fav.target);
-  return !!tunedNow && tunedNow.includes(String(tb.num));
+  const num = String(tb.num);
+  if (tb.mode === 'ASL') return linkedNodes.has(num);
+  if (tb.mode === 'EchoLink') return linkedNodes.has('3' + num.padStart(6, '0'));
+  return !!tunedNow && tunedNow.includes(num);
 }
 function tnLinked() { return tnLinkedB(tnBody()); }
-let tnLast = null, tnPrimed = false, defaultMode = '', tuneDone = false, favSel = null;
+let tnLast = null, tnPrimed = false, defaultMode = '';
 function tnSnap() {
   return {mode: $('t-mode').value, net: $('t-net').value, mod: $('t-mod').value,
     find: $('t-find').value, pick: $('t-pick').value};
@@ -5767,12 +5634,6 @@ function tnSetSel(s) {
   tnButtons();
 }
 function connectTabEnter() {
-  if (connBack) { if (!daPoll) daStatus(); return; }
-  if (favs.length) {
-    const i = tuneDone && favSel !== null && favSel < favs.length ? favSel : 0;
-    $('c-fav').value = String(i);
-    showSelected();
-  }
   if (tnLast && tnLinkedB(tnLast.b)) tnSetSel(tnLast.snap);
   else tnSetSel(defaultSel());
   if (!daPoll) daStatus();
@@ -5854,7 +5715,6 @@ function tnButtons() {
   const on = tnLinked(), go = $('t-go');
   go.textContent = 'Connect';
   go.disabled = connBusy || on || !ok;
-  $('t-save').disabled = !ok;
   $('t-lh').classList.toggle('lh-off', !tnLink());
   $('t-lh').setAttribute('aria-disabled', tnLink() ? 'false' : 'true');
   $('t-lh').disabled = !tnLink();
@@ -5875,19 +5735,8 @@ async function tnConnect() {
     '/api/tune', {msg: 't-msg', btn: 't-go', ask: 't-ask'});
   if ($('t-msg').classList.contains('ok')) {
     tnLast = {b: b, snap: tnSnap(), seen: false};
-    tuneDone = true;
-    const fav = findFavFor(b);
-    if (fav) favSel = favs.indexOf(fav);
   }
   tnButtons();
-}
-async function tnSaveFav() {
-  const b = tnBody();
-  if (!b) return;
-  $('t-save').disabled = true;
-  try { setMsg('t-msg', await post('/api/tune/save', b)); }
-  finally { tnButtons(); }
-  loadFavs();
 }
 let daPoll = null, daMine = false, daList = 'md380-emu, Analog_Bridge, MMDVM_Bridge, USRP2M17 and Asterisk';
 function daShow(d) {
@@ -5919,85 +5768,6 @@ async function linksDisconnect(msgId) {
   finally { connectLabel(); tnButtons(); }
   setTimeout(pollStatus, 1000);
 }
-function favCopy(f) { return {mode: f.mode, num: f.num, module: f.module, net: f.net, ip: f.ip, label: f.label, rx_gain_db: f.rx_gain_db, tx_gain_db: f.tx_gain_db}; }
-async function loadFavEditor() {
-  const d = await api('/api/favorites');
-  if (!d.ok) return;
-  favEdit = (d.favs || []).map(favCopy);
-  favMax = d.max || 15;
-  favNets = d.nets || [];
-  favModes = d.modes || favModes;
-  drawFavEditor();
-  if (foldOpen('fav')) loadDashFavs();
-}
-async function loadDashFavs() {
-  const dd = await api('/api/dash-favorites');
-  dashFavs = dd.ok ? dd.favs : [];
-  const sel = $('fe-dash');
-  sel.innerHTML = '';
-  addOption(sel, '', dashFavs.length ? 'From the Dashboard...' : 'No Dashboard favorites found');
-  dashFavs.forEach((f, i) => addOption(sel, String(i), f.label || (modeName(f.mode) + ' ' + favNum(f))));
-  feDashUi();
-}
-function drawFavEditor() {
-  const box = $('fe-rows');
-  box.innerHTML = '';
-  favEdit.forEach((f, i) => {
-    const row = document.createElement('div'); row.className = 'fav-row';
-    const m = document.createElement('select'); m.setAttribute('aria-label', 'Network ' + (i + 1));
-    favModes.forEach((v) => addOption(m, v, modeName(v)));
-    const n = document.createElement('input'); n.value = f.mode === 'DMR' ? f.num : favNum(f);
-    const net = document.createElement('select'); net.className = 'fav-net'; net.setAttribute('aria-label', 'DMR network ' + (i + 1));
-    addOption(net, '', favNets.length ? 'DMR network...' : 'Add a DMR network on the Digital card first');
-    favNets.forEach((v) => addOption(net, v, v));
-    if (f.net && !favNets.includes(f.net)) addOption(net, f.net, f.net + ' (not in the list)');
-    net.value = f.net || '';
-    net.onchange = () => { f.net = net.value; };
-    const numUi = () => {
-      const k = FAV_HINT[f.mode] || FAV_HINT.ASL;
-      n.inputMode = k[2]; n.placeholder = k[0];
-      n.setAttribute('aria-label', k[1] + ' ' + (i + 1));
-      net.classList.toggle('hidden', f.mode !== 'DMR');
-    };
-    m.value = f.mode; m.onchange = () => { f.mode = m.value; numUi(); };
-    numUi();
-    n.oninput = () => { f.num = n.value.trim(); f.module = ''; f.ip = ''; };
-    const l = document.createElement('input'); l.value = f.label; l.maxLength = 40; l.placeholder = 'Name';
-    l.setAttribute('aria-label', 'Name ' + (i + 1)); l.oninput = () => { f.label = l.value; };
-    const x = document.createElement('button'); x.type = 'button'; x.textContent = '✕'; x.setAttribute('aria-label', 'Remove favorite ' + (i + 1));
-    x.onclick = () => { favEdit.splice(i, 1); drawFavEditor(); };
-    const g = document.createElement('div'); g.className = 'fav-gain';
-    const gain = (key, lab) => {
-      const inp = document.createElement('input'); inp.type = 'text'; inp.inputMode = 'text'; inp.maxLength = 4;
-      inp.placeholder = lab; inp.value = f[key] == null ? '' : String(f[key]);
-      inp.setAttribute('aria-label', lab + ' gain ' + (i + 1) + ' (blank = global)');
-      inp.oninput = () => { const v = inp.value.trim(); if (v === '') delete f[key]; else f[key] = v; };
-      return inp;
-    };
-    const gl = document.createElement('span'); gl.textContent = 'Gain dB (blank = global)';
-    g.appendChild(gl); g.appendChild(gain('rx_gain_db', 'RX dB')); g.appendChild(gain('tx_gain_db', 'TX dB'));
-    row.appendChild(m); row.appendChild(n); row.appendChild(l); row.appendChild(x); row.appendChild(net); row.appendChild(g);
-    box.appendChild(row);
-  });
-  $('fe-count').textContent = favEdit.length + ' / ' + favMax;
-  $('fe-add').disabled = favEdit.length >= favMax;
-  feDashUi();
-}
-function feDashUi() {
-  $('fe-dash-add').disabled = favEdit.length >= favMax || !dashFavs.length || $('fe-dash').value === '';
-}
-function feAdd() { if (favEdit.length < favMax) { favEdit.push({mode: 'ASL', num: '', label: ''}); drawFavEditor(); } }
-function feAddDash() {
-  const i = $('fe-dash').value;
-  if (i === '' || favEdit.length >= favMax) return;
-  favEdit.push(favCopy(dashFavs[Number(i)]));
-  drawFavEditor();
-}
-async function feSave() {
-  const d = await post('/api/favorites', {favs: favEdit});
-  setMsg('fe-msg', d);
-  if (d.ok) { favEdit = d.favs.map(favCopy); drawFavEditor(); loadFavs(); }
-}
 async function loadDigital() {
   const d = await api('/api/digital');
   if (!d.ok) return;
@@ -6018,7 +5788,6 @@ async function loadDigital() {
   const src = (v, s) => v ? v + (s && s !== 'set here' ? ' (from ' + s + ')' : '') : 'none found';
   $('dg-auto').textContent = 'In use: digital bridge ' + src(b.digital, b.digital_src) + ', M17 bridge ' + src(b.m17, b.m17_src)
     + ', callsign ' + src(d.callsign, d.callsign_src) + '. Leave a box empty to find it on its own.';
-  $('dg-file').textContent = d.file || 'noderecorder_favorites.conf';
   $('nw-import').disabled = !d.dash_nets;
   sum('dig', [nc ? 'Node Controller' : 'Solo', d.tuned || '', (d.nets || []).length ? (d.nets.length + ' DMR network' + (d.nets.length > 1 ? 's' : '')) : ''].filter((x) => x).join(' · '));
   nets = (d.nets || []).map((n) => ({orig: n.name, name: n.name, address: n.address, url: n.url, password: '', has: n.has_password}));
@@ -6050,26 +5819,17 @@ function nwAdd() { if (nets.length < netMax) { nets.push({orig: '', name: '', ad
 async function nwSave() {
   const d = await post('/api/dmr-networks', {nets: nets.map((n) => ({orig: n.orig, name: n.name.trim(), address: n.address.trim(), url: (n.url || '').trim(), password: n.password}))});
   setMsg('nw-msg', d);
-  if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
+  if (d.ok) { loadDigital(); loadTuneInfo(); loadSchedSources(); }
 }
 async function nwImport() {
   const d = await post('/api/dmr-networks/import', {});
   setMsg('nw-msg', d);
-  if (d.ok) { loadDigital(); loadFavEditor(); }
+  if (d.ok) { loadDigital(); loadTuneInfo(); loadSchedSources(); }
 }
 async function dgSave() {
   const d = await post('/api/digital', {digital_bridge: $('dg-dbridge').value.trim(), m17_bridge: $('dg-mbridge').value.trim(), callsign: $('dg-call').value.trim()});
   setMsg('dg-msg', d);
   if (d.ok) loadDigital();
-}
-async function ffUpload() {
-  const file = $('ff-up').files[0];
-  $('ff-up').value = '';
-  if (!file) return;
-  if (file.size > 48 * 1024) { note('ff-msg', 'err', 'The file is too big for a favorites file.'); return; }
-  const d = await post('/api/favorites-file', {text: await file.text()});
-  setMsg('ff-msg', d);
-  if (d.ok) { loadDigital(); loadFavEditor(); loadFavs(); }
 }
 async function pollLog() {
   if (!authed || tab !== 'setup' || !foldOpen('log')) return;
@@ -6088,10 +5848,9 @@ async function pollLog() {
 }
 let sysmonPort = null;
 const TABS = ['connect', 'record', 'setup'];
-const FOLDS = ['setup', 'fav', 'dig', 'node', 'store', 'rx', 'log'];
+const FOLDS = ['setup', 'sched', 'dig', 'node', 'store', 'rx', 'log'];
 const CFG_BOOL = ['https'];
 const SVC_TXT = {active: 'running', inactive: 'stopped', failed: 'failed', missing: 'not installed', unknown: '?'};
-
 function showTab(name) {
   if (!authed || TABS.indexOf(name) < 0) name = 'connect';
   tab = name;
@@ -6100,12 +5859,11 @@ function showTab(name) {
     const b = $('nav-' + t);
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  if (name === 'connect') { loadFavs(); connectTabEnter(); }
+  if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); }
   if (name === 'record') { loadSchedule(); loadStorage(); }
-  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadFavEditor(); loadDashFavs(); loadDigital(); }
+  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadSchedule(); loadDigital(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
-
 function render() {
   const wasOpen = $('login-screen').classList.contains('open');
   $('login-screen').classList.toggle('open', !authed);
@@ -6115,7 +5873,6 @@ function render() {
   if (!authed) { TABS.forEach((t) => $('tab-' + t).classList.add('hidden')); return; }
   showTab('connect');
 }
-
 async function whoami() {
   const d = await api('/api/whoami');
   authed = !!d.authed;
@@ -6125,7 +5882,6 @@ async function whoami() {
   render();
   if (authed) setupCheck();
 }
-
 async function login(ev) {
   ev.preventDefault();
   $('login-btn').disabled = true;
@@ -6133,35 +5889,31 @@ async function login(ev) {
   const d = await post('/api/login', {password: $('pw').value});
   $('login-btn').disabled = false;
   $('pw').value = '';
-  if (d.ok) { authed = true; render(); loadFavs(); pollHostLinks(); setupCheck(); }
+  if (d.ok) { authed = true; render(); pollHostLinks(); setupCheck(); }
   else $('login-msg').textContent = d.error || 'Login failed.';
 }
-
 async function logout() {
   await post('/api/logout');
   authed = false;
   render();
 }
-
 function foldSet(k, open) {
   const b = $('cd-' + k).querySelector('.fold-btn');
   $('cb-' + k).classList.toggle('hidden', !open);
   b.setAttribute('aria-expanded', open ? 'true' : 'false');
   b.querySelector('.fold-i').textContent = open ? '▾' : '▸';
   if (!open) return;
-  if (k === 'fav') loadDashFavs();
+  if (k === 'sched') loadSchedule();
   if (k === 'dig') loadDigital();
   if (k === 'node') loadRecNode();
   if (k === 'log') pollLog();
 }
-
 function pollEvery(fn, ms) {
   setTimeout(async () => {
     try { await fn(); } catch (e) {}
     pollEvery(fn, ms);
   }, ms);
 }
-
 async function pollStatus() {
   if (!authed || document.visibilityState === 'hidden') return;
   const d = await api('/api/status');
@@ -6188,16 +5940,14 @@ async function pollStatus() {
   const recNode = (d.rec_node && d.rec_node.node) || '';
   links.forEach((l) => {
     const tr = document.createElement('tr');
-    const f = favs.find((x) => x.target === l.node);
-    [l.node + (l.node === recNode ? ' (recorder)' : ''), f ? f.label : '', l.dir, l.time, l.state].forEach((v) => {
+    [l.node + (l.node === recNode ? ' (recorder)' : ''), '', l.dir, l.time, l.state].forEach((v) => {
       const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td);
     });
     tb.appendChild(tr);
   });
   $('s-nolinks').classList.toggle('hidden', links.length > 0);
   $('s-links-err').classList.toggle('hidden', d.links_ok !== false);
-  linkedTargets = new Set(linkedFavs(d).map((f) => f.target));
-  connectLabel();
+  linkedNodes = new Set(links.map((l) => l.node));
   $('t-now').textContent = d.tuned_now ? 'Tuned: ' + d.tuned_now : '';
   tunedNow = d.tuned_now || '';
   defaultMode = d.default_mode || '';
@@ -6208,10 +5958,9 @@ async function pollStatus() {
   if (!tnPrimed && authed) tnSetSel(defaultSel());
   tnButtons();
 }
-
 async function connectFlow(body, listenText, connectText, url, box) {
-  url = url || '/api/connect';
-  box = box || {msg: 'c-msg', btn: 'c-connect', ask: 'c-net'};
+  url = url || '/api/tune';
+  box = box || {msg: 't-msg', btn: 't-go', ask: 't-ask'};
   $(box.btn).disabled = true;
   connBusy = true;
   note(box.msg, '', connectText);
@@ -6223,7 +5972,6 @@ async function connectFlow(body, listenText, connectText, url, box) {
   pollStatus();
   return d;
 }
-
 async function daGo() {
   if (!confirm('Disconnect All?\n\nDrops every link and restarts ' + (daList || 'the node services') +
                '. The node is off the air until they are back up, up to a minute or two.')) return;
@@ -6236,7 +5984,6 @@ async function daGo() {
   if (daPoll) clearTimeout(daPoll);
   daStatus();
 }
-
 async function setupApply() {
   $('setup-ok').disabled = true;
   note('setup-dlg-msg', '', 'Setting up. Asterisk restarts, so the links on this node drop for a moment...');
@@ -6247,14 +5994,12 @@ async function setupApply() {
   $('setup-later').textContent = 'Close';
   loadRecNode(); loadConfig();
 }
-
 async function astRestart(msgId) {
   if (!confirm('Restart Asterisk now? Every link on this node drops and reconnects.')) return;
   note(msgId, '', 'Restarting Asterisk...');
   setMsg(msgId, await post('/api/asterisk/restart', {}));
   setTimeout(loadRecNode, 4000);
 }
-
 async function loadRecNode() {
   const d = await api('/api/recnode');
   if (!d.ok) { $('rn-state').textContent = d.error || 'Could not read rpt.conf.'; sum('node', 'Could not read rpt.conf'); return; }
@@ -6277,52 +6022,67 @@ async function loadRecNode() {
   $('rn-add').disabled = d.defined && (talker || d.nodes_line);
   $('rn-remove').disabled = !(d.defined && d.owner === 'recorder') && !d.nodes_line;
 }
-
 const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
 const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped',
   stop_failed: 'did not stop cleanly', write_failed: 'could not write the file', disconnect_failed: 'did not disconnect', aborted: 'stopped early', interrupted: 'interrupted by a restart',
   missed: 'missed', error: 'failed'};
-
 function schedDays(days) {
   return days.length === 7 ? 'Every day' : days.map((d) => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d]).join(' ');
 }
-
-function schedTarget(t) {
-  return t.label || ((t.mode === 'DSTAR' ? 'D-STAR' : t.mode) + ' ' + t.num + (t.module ? ' ' + t.module : ''));
+function schedDstar(num) {
+  const m = /^([A-Z0-9]{3,6}) *([A-Z])L$/.exec(String(num || '').toUpperCase());
+  return m ? [m[1], m[2]] : [String(num || '').split(' ')[0], String(num || '').split(' ')[1] || ''];
 }
 
+function schedTarget(t) {
+  if (t.label) return t.label;
+  if (t.mode === 'DSTAR') { const p = schedDstar(t.num); return 'D-STAR ' + p[0] + (t.module || p[1] ? ' ' + (t.module || p[1]) : ''); }
+  return t.mode + ' ' + t.num + (t.module ? ' ' + t.module : '');
+}
 async function loadSchedule() {
   if (!authed) return;
   const d = await api('/api/schedule');
   if (!d.ok) return;
+  schedRows = d.entries;
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
   $('sch-note').textContent = 'Times are the Pi\'s clock (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
   $('sch-err').textContent = d.error || '';
   $('sch-err').classList.toggle('hidden', !d.error);
-  const tb = $('sch-rows');
-  tb.innerHTML = '';
-  d.entries.forEach((e) => {
-    const tr = document.createElement('tr');
-    [e.name + (e.enabled ? '' : ' (off)'), schedDays(e.days), e.start + '-' + e.end, schedTarget(e.target),
-      e.format === 'pcm' ? 'PCM' : 'u-law', e.now ? 'now' : e.next].forEach((v) => {
-      const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td);
+  const rows = (id, manage) => {
+    const tb = $(id);
+    tb.innerHTML = '';
+    d.entries.forEach((e) => {
+      const tr = document.createElement('tr');
+      const cells = [e.name + (e.enabled ? '' : ' (off)'), schedDays(e.days), e.start + '-' + e.end, schedTarget(e.target),
+        e.format === 'pcm' ? 'PCM' : 'u-law', e.now ? 'now' : e.next];
+      cells.forEach((v) => { const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td); });
+      const act = document.createElement('td');
+      const btn = (text, fn) => { const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = text; b.addEventListener('click', fn); act.appendChild(b); };
+      btn('Dry run', () => schedDryRun(e.id));
+      if (manage) {
+        const on = document.createElement('input'); on.type = 'checkbox'; on.checked = e.enabled; on.title = 'On';
+        on.addEventListener('change', () => schedToggle(e, on.checked));
+        act.appendChild(on);
+        btn('Edit', () => schedEdit(e));
+        btn('Remove', () => schedRemove(e));
+      }
+      tr.appendChild(act);
+      tb.appendChild(tr);
     });
-    const act = document.createElement('td'), b = document.createElement('button');
-    b.className = 'btn'; b.type = 'button'; b.textContent = 'Dry run';
-    b.addEventListener('click', () => schedDryRun(e.id));
-    act.appendChild(b); tr.appendChild(act); tb.appendChild(tr);
-  });
+  };
+  rows('sch-rows', false);
+  rows('sl-rows', true);
   $('sch-none').classList.toggle('hidden', d.entries.length > 0);
+  $('sl-none').classList.toggle('hidden', d.entries.length > 0);
+  sum('sched', d.entries.length + (d.entries.length === 1 ? ' entry' : ' entries'));
   $('sch-results').textContent = (st.results || []).slice(-5).reverse()
     .map((r) => r.name + ' ' + r.window.replace('T', ' ') + ': ' + (RESULT_TXT[r.result] || r.result) + (r.detail ? ' (' + r.detail + ')' : '')).join(' | ');
 }
-
 function fmtBytes(n) {
   if (n == null) return '-';
   return n >= 1073741824 ? (n / 1073741824).toFixed(1) + ' GB' : Math.round(n / 1048576) + ' MB';
 }
-
 async function loadStorage() {
   if (!authed) return;
   const d = await api('/api/storage');
@@ -6338,13 +6098,11 @@ async function loadStorage() {
   $('rs-conflict').classList.toggle('hidden', !d.conflict);
   sum('store', d.path);
 }
-
 async function saveStore() {
   note('store-msg', '', 'Saving...');
   setMsg('store-msg', await post('/api/config', {record_path: $('cfg-record_path').value.trim(), record_max_mb: $('cfg-record_max_mb').value}));
   loadStorage();
 }
-
 async function schedDryRun(id) {
   note('sch-msg', '', 'Walking through the steps...');
   const d = await post('/api/schedule/dryrun', {id: id});
@@ -6358,13 +6116,11 @@ async function schedDryRun(id) {
   });
   box.classList.toggle('hidden', !(d.steps && d.steps.length));
 }
-
 async function recNodeEnable() { setMsg('rn-msg', await post('/api/recnode/enable', {})); loadRecNode(); }
 async function recNodeDisable() {
   if (!confirm('Remove node 1921 from rpt.conf? Recording stops working until it is added again.')) return;
   setMsg('rn-msg', await post('/api/recnode/disable', {})); loadRecNode();
 }
-
 async function loadConfig() {
   const d = await api('/api/config');
   if (!d.ok) return;
@@ -6379,7 +6135,6 @@ async function loadConfig() {
   $('rx-gate').value = String(d.config.rx_gate);
   tuneUi();
 }
-
 function tuneUi() {
   const on = $('tune-on').checked;
   const clean = [];
@@ -6390,64 +6145,194 @@ function tuneUi() {
   $('tune-rx').disabled = !on;
   $('tune-rx-v').textContent = fmtGain(Number($('tune-rx').value));
 }
-
 async function saveTune(msgId = 'rx-msg') {
   const body = {tune_enabled: $('tune-on').checked, rx_gain_db: $('tune-rx').value,
     rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value};
   setMsg(msgId, await post('/api/config', body));
 }
-
 async function saveConfig() {
   const body = {};
   CFG_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   setMsg('cfg-msg', await post('/api/config', body));
 }
-
-document.addEventListener('DOMContentLoaded', () => {
+const DAY_PRESETS = [['*', 'Every day', [0, 1, 2, 3, 4, 5, 6]], ['1-5', 'Weekdays (Mon-Fri)', [1, 2, 3, 4, 5]], ['0,6', 'Weekends (Sat, Sun)', [0, 6]],
+  ['0', 'Sunday', [0]], ['1', 'Monday', [1]], ['2', 'Tuesday', [2]], ['3', 'Wednesday', [3]], ['4', 'Thursday', [4]], ['5', 'Friday', [5]], ['6', 'Saturday', [6]]];
+const SC_FIELDS = {ASL: {num: 'Node'}, EchoLink: {num: 'Number'}, DMR: {num: 'Talkgroup', net: true}, STFU: {num: 'Talkgroup'}, YSF: {num: 'Reflector'},
+  P25: {num: 'Talkgroup'}, NXDN: {num: 'Talkgroup'}, DSTAR: {num: 'Reflector', mod: true}, M17: {num: 'Reflector', mod: true}};
+let schedRows = [], schedSrc = null, schedEditId = '', schedLabel = '';
+function schedDaysValue() {
+  const v = $('sc-days').value, p = DAY_PRESETS.find((x) => x[0] === v);
+  if (p) return p[2];
+  return v.indexOf('custom:') === 0 ? v.slice(7).split(',').map(Number) : [];
+}
+function schedSetDays(days) {
+  const sel = $('sc-days'), key = days.join(',');
+  const hit = DAY_PRESETS.find((p) => p[2].join(',') === key);
+  if (hit) { sel.value = hit[0]; return; }
+  Array.from(sel.querySelectorAll('option[data-custom]')).forEach((o) => o.remove());
+  const o = document.createElement('option');
+  o.value = 'custom:' + key; o.dataset.custom = '1'; o.textContent = schedDays(days);
+  sel.appendChild(o);
+  sel.value = o.value;
+}
+function schedFieldsShow() {
+  const m = $('sc-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
+  $('sc-num-l').textContent = f.num;
+  $('sc-net-w').classList.toggle('hidden', !f.net);
+  $('sc-mod-w').classList.toggle('hidden', !f.mod);
+  $('cd-sched-form').dataset.mode = m;
+}
+function schedNetFill(want) {
+  const sel = $('sc-net'), nets = schedSrc ? schedSrc.nets : [];
+  sel.innerHTML = '';
+  addOption(sel, '', nets.length ? 'Network...' : 'Add a DMR network on the Setup tab first');
+  nets.forEach((n) => addOption(sel, n, n));
+  if (want && !nets.includes(want)) addOption(sel, want, want + ' (not in the list)');
+  sel.value = want || '';
+}
+function schedPickFill() {
+  const m = $('sc-mode').value, sel = $('sc-pick');
+  sel.innerHTML = '';
+  addOption(sel, '', 'Pick a favorite...');
+  if (!schedSrc) return;
+  [['talker', 'Node Talker'], ['controller', 'Node Controller']].forEach((src) => {
+    const list = schedSrc[src[0]].map((f, i) => [f, i]).filter((x) => x[0].mode === m);
+    if (!list.length) return;
+    const g = document.createElement('optgroup');
+    g.label = src[1];
+    list.forEach((x) => { const o = document.createElement('option'); o.value = src[0] + ':' + x[1]; o.textContent = x[0].label || schedTarget(x[0]); g.appendChild(o); });
+    sel.appendChild(g);
+  });
+}
+async function loadSchedSources() {
+  if (!authed) return;
+  const d = await api('/api/schedule/sources');
+  if (!d.ok) return;
+  schedSrc = d;
+  schedPickFill();
+  schedNetFill($('sc-net').value);
+  $('sc-src').textContent = 'Favorites to pick from, read only: Node Talker ' + (d.talker_found ? d.talker.length : 'not found')
+    + ', Node Controller ' + (d.controller_found ? d.controller.length : 'not found') + '. A pick is copied into the entry; it does not stay linked.';
+}
+function schedModeChanged() {
+  schedFieldsShow();
+  schedPickFill();
+  $('sc-num').value = ''; $('sc-mod').value = ''; schedNetFill(''); schedLabel = '';
+}
+function schedPick() {
+  const v = $('sc-pick').value;
+  if (!v || !schedSrc) return;
+  const parts = v.split(':'), f = schedSrc[parts[0]][Number(parts[1])];
+  if (!f) return;
+  $('sc-num').value = f.num || '';
+  $('sc-mod').value = f.module || '';
+  schedNetFill(f.net || '');
+  schedLabel = f.label || '';
+  note('sc-msg', 'ok', 'Copied ' + (f.label || schedTarget(f)) + '. Changing it later in ' + (parts[0] === 'talker' ? 'Node Talker' : 'Node Controller') + ' will not change this entry.');
+}
+function schedClear(keepMsg) {
+  schedEditId = ''; schedLabel = '';
+  $('sc-title').textContent = 'Schedule a recording';
+  $('sc-name').value = '';
+  schedSetDays([0, 1, 2, 3, 4, 5, 6]);
+  $('sc-start').value = '20:00'; $('sc-end').value = '21:00';
+  $('sc-mode').value = 'ASL';
+  schedFieldsShow(); schedPickFill();
+  $('sc-num').value = ''; $('sc-mod').value = ''; schedNetFill('');
+  $('sc-format').value = 'ulaw'; $('sc-enabled').checked = true;
+  if (!keepMsg) note('sc-msg', '', '');
+}
+function schedEntry(e, on) {
+  return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format};
+}
+async function schedSet() {
+  const m = $('sc-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
+  const target = {mode: m, num: $('sc-num').value.trim()};
+  if (f.net) target.net = $('sc-net').value;
+  if (f.mod && $('sc-mod').value.trim()) target.module = $('sc-mod').value.trim().toUpperCase();
+  if (schedLabel) target.label = schedLabel;
+  const entry = {name: $('sc-name').value.trim(), enabled: $('sc-enabled').checked, days: schedDaysValue(), start: $('sc-start').value,
+    end: $('sc-end').value, target: target, format: $('sc-format').value};
+  if (schedEditId) entry.id = schedEditId;
+  note('sc-msg', '', 'Saving...');
+  const d = await post('/api/schedule/set', {entry: entry});
+  setMsg('sc-msg', d);
+  if (d.ok) { schedClear(true); loadSchedule(); }
+}
+function schedEdit(e) {
+  schedEditId = e.id;
+  $('sc-title').textContent = 'Change a recording';
+  $('sc-name').value = e.name;
+  schedSetDays(e.days);
+  $('sc-start').value = e.start; $('sc-end').value = e.end;
+  $('sc-mode').value = e.target.mode;
+  schedFieldsShow(); schedPickFill();
+  let num = e.target.num || '', mod = e.target.module || '';
+  if (e.target.mode === 'DSTAR') { const dp = schedDstar(num); num = dp[0]; mod = mod || dp[1]; }
+  $('sc-num').value = num; $('sc-mod').value = mod;
+  schedNetFill(e.target.net || '');
+  schedLabel = e.target.label || '';
+  $('sc-format').value = e.format; $('sc-enabled').checked = e.enabled;
+  showTab('connect');
+  note('sc-msg', '', 'Change it and press Set.');
+  $('cd-sched-form').scrollIntoView();
+}
+async function schedToggle(e, on) {
+  const d = await post('/api/schedule/set', {entry: schedEntry(e, on)});
+  setMsg('sl-msg', d);
+  loadSchedule();
+}
+async function schedRemove(e) {
+  if (!confirm('Remove ' + e.name + ' from the schedule?')) return;
+  setMsg('sl-msg', await post('/api/schedule/remove', {id: e.id}));
+  if (schedEditId === e.id) schedClear();
+  loadSchedule();
+}
+function schedInit() {
+  DAY_PRESETS.forEach((p) => addOption($('sc-days'), p[0], p[1]));
+  Object.keys(SC_FIELDS).forEach((m) => addOption($('sc-mode'), m, modeName(m)));
+  schedClear();
+}
+function initPage() {
   $('login-form').addEventListener('submit', login);
   $('logout').addEventListener('click', logout);
   TABS.forEach((t) => $('nav-' + t).addEventListener('click', () => showTab(t)));
-  $('c-fav').addEventListener('change', showSelected);
-  $('c-fav').addEventListener('change', () => { favSel = Number($('c-fav').value); });
-  $('c-fav').addEventListener('change', netHide);
-  $('c-connect').addEventListener('click', favConnect);
-  $('c-disc').addEventListener('click', () => linksDisconnect('c-msg'));
   $('rn-add').addEventListener('click', recNodeEnable);
   $('rn-remove').addEventListener('click', recNodeDisable);
-  $('fe-add').addEventListener('click', feAdd);
-  $('fe-dash-add').addEventListener('click', feAddDash);
-  $('fe-dash').addEventListener('change', feDashUi);
-  $('fav-save').addEventListener('click', () => feSave());
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
-  ['c', 't'].forEach((p) => {
-    $(p + '-net-add').addEventListener('click', () => netAnswer('add'));
-    $(p + '-net-once').addEventListener('click', () => netAnswer('once'));
-    $(p + '-net-no').addEventListener('click', () => netAnswer(''));
-  });
+  $('t-net-add').addEventListener('click', () => netAnswer('add'));
+  $('t-net-once').addEventListener('click', () => netAnswer('once'));
+  $('t-net-no').addEventListener('click', () => netAnswer(''));
   tnInit();
   sizeInit('sett');
-  $('ff-up').addEventListener('change', ffUpload);
   $('setup-save').addEventListener('click', async () => { note('setup-msg', '', 'Saving...'); await saveConfig(); note('setup-msg', '', ''); });
   $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
   $('setup-ok').addEventListener('click', setupApply);
   $('setup-later').addEventListener('click', () => $('setup-dlg').close());
   $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
   ['tune-on', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  $('store-save').addEventListener('click', saveStore);
   $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, $('dash-link').dataset.win || 'asl_dvs_dash'); });
   $('sys-reboot').addEventListener('click', doReboot);
   $('sys-shutdown').addEventListener('click', doShutdown);
   $('da-btn').addEventListener('click', daGo);
+  schedInit();
+  $('sc-mode').addEventListener('change', schedModeChanged);
+  $('sc-pick').addEventListener('change', schedPick);
+  ['sc-num', 'sc-mod', 'sc-net'].forEach((id) => $(id).addEventListener('input', () => { schedLabel = ''; }));
+  $('sc-set').addEventListener('click', schedSet);
+  $('sc-clear').addEventListener('click', () => schedClear());
   setInterval(pollHostLinks, 30000);
   FOLDS.forEach((k) => $('cd-' + k).querySelector('.fold-btn').addEventListener('click', () => foldSet(k, !foldOpen(k))));
-  whoami().then(() => { if (authed) loadFavs(); });
+  whoami();
   pollEvery(pollStatus, 1500);
   pollEvery(pollLog, 3000);
   pollEvery(() => (tab === 'record' ? loadSchedule() : null), 4000);
   pollEvery(() => (tab === 'record' ? loadStorage() : null), 15000);
-  $('store-save').addEventListener('click', saveStore);
-});
+}
+document.addEventListener('DOMContentLoaded', initPage);
 """
 
 _ICON_CONNECT = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"></path><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"></path></svg>'
@@ -6570,24 +6455,6 @@ html[data-theme="light"] *{text-shadow:none!important}
 <main>
 
 <section id="tab-connect" class="hidden">
-<div class="card">
-<h2>Connect</h2>
-<div id="c-empty" class="muted">No favorites yet. Add up to 15 on the Setup tab.</div>
-<div id="c-pick">
-<select id="c-fav" aria-label="Favorite" style="width:100%;min-height:40px;margin-top:4px;font-size:14px"></select>
-<div class="sel-card">
-<div class="row" style="margin:0"><span class="tag" id="c-mode"></span><span class="big-num" id="c-num"></span></div>
-<div class="muted" id="c-label"></div>
-<div class="btn-pair"><button id="c-connect" class="btn primary big" type="button">Connect</button><button id="c-disc" class="btn danger big" type="button">Disconnect</button></div>
-</div>
-</div>
-<div id="c-msg" class="msg"></div>
-<div id="c-net" class="hidden">
-<div class="row"><button id="c-net-add" class="btn primary" type="button">Add it to Node Controller and tune</button>
-<button id="c-net-once" class="btn" type="button">Tune this once</button>
-<button id="c-net-no" class="btn" type="button">Cancel</button></div>
-</div>
-</div>
 <div class="card" id="cd-tune">
 <h2>Tune</h2>
 <div class="tn-bar">
@@ -6597,7 +6464,6 @@ html[data-theme="light"] *{text-shadow:none!important}
 <input id="t-find" type="search" maxlength="40" aria-label="Search or type" autocomplete="off" autocapitalize="off" spellcheck="false">
 <select id="t-pick" aria-label="Pick from the list"></select>
 <button id="t-lh" class="btn-last lh-off" type="button" aria-label="Open Last Heard">LH</button>
-<button id="t-save" class="btn" type="button" aria-label="Save to favorites">Save</button>
 <div class="btn-pair tn-pair"><button id="t-go" class="btn big primary" type="button">Connect</button><button id="t-disc" class="btn big danger" type="button">Disconnect</button></div>
 </div>
 <div id="t-list" class="tn-msg"></div>
@@ -6608,6 +6474,23 @@ html[data-theme="light"] *{text-shadow:none!important}
 <button id="t-net-no" class="btn" type="button">Cancel</button></div>
 </div>
 <div class="tn-foot"><span id="t-now" class="muted small"></span></div>
+</div>
+<div class="card" id="cd-sched-form">
+<h2 id="sc-title">Schedule a recording</h2>
+<div class="row"><label>Name <input type="text" id="sc-name" maxlength="40" placeholder="optional" style="width:150px"></label>
+<label>Day <select id="sc-days"></select></label>
+<label>From <input type="time" id="sc-start" value="20:00"></label>
+<label>To <input type="time" id="sc-end" value="21:00"></label></div>
+<div class="row"><label>Mode <select id="sc-mode"></select></label>
+<label>Favorite <select id="sc-pick"></select></label></div>
+<div class="row"><label><span id="sc-num-l">Node</span> <input type="text" id="sc-num" maxlength="40" style="width:150px"></label>
+<label id="sc-net-w" class="hidden">Network <select id="sc-net"></select></label>
+<label id="sc-mod-w" class="hidden">Module <input type="text" id="sc-mod" maxlength="2" style="width:48px;text-transform:uppercase"></label></div>
+<div class="row"><label>Format <select id="sc-format"><option value="ulaw">u-law (half the size)</option><option value="pcm">PCM</option></select></label>
+<label><input type="checkbox" id="sc-enabled" checked> On</label></div>
+<div class="row"><button id="sc-set" class="btn primary" type="button">Set</button><button id="sc-clear" class="btn" type="button">Clear</button></div>
+<div id="sc-msg" class="msg"></div>
+<div id="sc-src" class="muted small"></div>
 </div>
 <div id="da-wrap">
 <button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span></button>
@@ -6635,7 +6518,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div id="rs-block" class="msg err hidden"></div>
 <div id="rs-conflict" class="msg warn hidden"></div>
 </div>
-<div class="card" id="cd-sched">
+<div class="card" id="cd-rsched">
 <h2>Schedule</h2>
 <div id="sch-note" class="muted small"></div>
 <table class="links"><thead><tr><th>Name</th><th>Days</th><th>Window</th><th>Target</th><th>Format</th><th>Next</th><th></th></tr></thead><tbody id="sch-rows"></tbody></table>
@@ -6687,25 +6570,13 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div id="setup-msg" class="msg"></div>
 </div>
 </div>
-<div class="card fold" id="cd-fav">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-fav"><span class="fold-t">Favorites</span><span class="fold-sum" id="sum-fav"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-fav">
-<p class="muted small">The Connect tab offers only these. EchoLink numbers are the station's own number.
-DMR: the talkgroup and its network (Digital card). STFU, YSF, P25 and NXDN: the talkgroup or reflector, as DVSwitch
-tunes it. D-STAR: the reflector and module, for example <code>REF001 C</code>. M17: the reflector and module, for example
-<code>M17-USA A</code> (or <code>@ALL</code> for every module). Connect sets the mode, tunes and links the bridge node;
-while Node Controller runs, it does that instead.</p>
-<div id="fe-rows"></div>
-<div class="row"><span id="fe-count" class="muted small"></span><button id="fe-add" class="btn" type="button">Add row</button>
-<select id="fe-dash" aria-label="Dashboard favorites"></select><button id="fe-dash-add" class="btn" type="button">Add</button></div>
-<div id="fe-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Favorites file</h3>
-<p class="muted small"><code id="dg-file">noderecorder_favorites.conf</code> holds the favorites, the DMR networks and these
-settings in Node Controller's format. It holds the DMR passwords too.</p>
-<div class="row"><a id="ff-down" class="btn" href="/api/favorites-file" download="noderecorder_favorites.conf" style="display:inline-flex;align-items:center;text-decoration:none">Download</a>
-<label class="btn" style="display:inline-flex;align-items:center">Upload<input type="file" id="ff-up" accept=".conf,text/plain" class="hidden"></label></div>
-<div id="ff-msg" class="msg"></div>
-<div class="row"><button id="fav-save" class="btn primary" type="button">Save favorites</button></div>
+<div class="card fold" id="cd-sched">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-sched"><span class="fold-t">Schedule</span><span class="fold-sum" id="sum-sched"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-sched">
+<p class="muted small">Add recordings on the Connect tab. Here you can turn an entry off or on, change it, remove it or try it with a dry run. Windows must be at least 2 minutes apart.</p>
+<table class="links"><thead><tr><th>Name</th><th>Days</th><th>Window</th><th>Target</th><th>Format</th><th>Next</th><th></th></tr></thead><tbody id="sl-rows"></tbody></table>
+<div id="sl-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
+<div id="sl-msg" class="msg"></div>
 </div>
 </div>
 <div class="card fold" id="cd-dig">
@@ -6726,7 +6597,7 @@ A DMR network Node Controller doesn't have can be added to it, or used for one t
 <p class="muted small" id="dg-auto"></p>
 <div id="dg-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">DMR networks</h3>
-<p class="muted small">Each DMR favorite joins its network with <code>password@address:port</code> before it tunes the
+<p class="muted small">Each DMR entry joins its network with <code>password@address:port</code> before it tunes the
 talkgroup, as Node Controller does. Leave a password empty to keep the saved one.</p>
 <div id="nw-rows"></div>
 <div class="row"><button id="nw-add" class="btn" type="button">Add network</button>
@@ -6828,12 +6699,8 @@ _POST_ACTIONS = {
     "/api/schedule/remove": (schedule_remove, ()),
     "/api/schedule/dryrun": (schedule_dry_run, (ValueError,)),
     "/api/recnode/disable": (lambda b: rec_node_disable(), (OSError,)),
-    "/api/favorites": (lambda b: fav_save(b.get("favs")), ()),
-    "/api/connect": (lambda b: fav_connect(b.get("index"), b.get("net_action")), ()),
-    "/api/disconnect": (lambda b: fav_disconnect(b.get("index")), ()),
     "/api/disconnect-links": (disconnect_links, ()),
     "/api/tune": (tune_connect, ()),
-    "/api/tune/save": (tune_save, ()),
     "/api/tune/disconnect": (tune_disconnect, ()),
     "/api/asterisk/restart": (lambda b: restart_asterisk(), ()),
     "/api/disconnect-all": (disconnect_all, ()),
@@ -6842,7 +6709,6 @@ _POST_ACTIONS = {
     "/api/digital": (digital_save, ()),
     "/api/dmr-networks": (lambda b: nets_save(b.get("nets")), ()),
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
-    "/api/favorites-file": (lambda b: fav_file_put(b.get("text")), ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
 _PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
@@ -6985,30 +6851,23 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, disconnect_all_status())
             elif path == "/api/storage":
                 self._json(200, storage_view())
+            elif path == "/api/schedule/sources":
+                self._json(200, schedule_sources())
             elif path == "/api/schedule":
                 self._json(200, schedule_view())
             elif path == "/api/recnode":
                 self._json(200, dict(rec_node_state(), ok=True))
             elif path == "/api/setup":
                 self._json(200, dict(setup_plan(), ok=True))
-            elif path == "/api/favorites":
-                dash = dashboard_conf()
-                self._json(200, {"ok": True, "max": FAV_MAX, "main": main_node(),
-                                 "dash_node": dash["asl_node"] if port_open_cached(dash["port"]) else "",
-                                 "modes": list(FAV_MODES), "nets": [n["name"] for n in nets_load()],
-                                 "net_links": {n["name"]: n["url"] for n in nets_load()},
-                                 "favs": [dict(f, target=fav_target(f)) for f in fav_load()]})
+            elif path == "/api/tune-info":
+                self._json(200, {"ok": True, "modes": list(FAV_MODES), "nets": [n["name"] for n in nets_load()],
+                                 "net_links": {n["name"]: n["url"] for n in nets_load()}})
             elif path == "/api/tune-search":
                 self._json(200, tune_search(query.get("mode", [""])[0], query.get("q", [""])[0]))
             elif path == "/api/tune-list":
                 self._json(200, tune_list(query.get("mode", [""])[0]))
             elif path == "/api/digital":
                 self._json(200, digital_info())
-            elif path == "/api/favorites-file":
-                self._send(200, fav_file_text().encode("utf-8"), "text/plain; charset=utf-8",
-                           {"Content-Disposition": 'attachment; filename="noderecorder_favorites.conf"'})
-            elif path == "/api/dash-favorites":
-                self._json(200, {"ok": True, "favs": dashboard_conf()["favs"]})
             elif path == "/api/config":
                 with _config_lock:
                     cfg = dict(_config)

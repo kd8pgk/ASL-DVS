@@ -362,6 +362,18 @@ def make_nt_case(key):
             st, d = get_json(self.server, "/api/schedule", self.cookie)
             self.assertFalse({e["id"] for e in d["entries"]} & set(ids), "the test entries must be gone")
 
+        def test_schedule_favorite_sources_are_read_only_lists(self):
+            st, d = get_json(self.server, "/api/schedule/sources", self.cookie)
+            self.assertEqual(st, 200)
+            for k in ("talker", "controller", "talker_found", "controller_found", "nets", "modes"):
+                self.assertIn(k, d)
+            for f in d["talker"] + d["controller"]:
+                self.assertIn(f["mode"], d["modes"])
+                self.assertTrue(f.get("num"), f)
+            st, d = self._sched_post("/api/schedule/set", {"entry": {"days": [1], "start": "06:00", "end": "07:00", "target": {"mode": "DMR", "num": "3120", "net": "No-such-net"}}})
+            self.assertFalse(d["ok"])
+            self.assertIn("Digital card", d["error"], "a missing DMR network says where to add it")
+
         def test_storage_and_local_status(self):
             st, d = get_json(self.server, "/api/storage", self.cookie)
             self.assertEqual(st, 200)

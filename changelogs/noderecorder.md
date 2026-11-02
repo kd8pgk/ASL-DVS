@@ -1,6 +1,15 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_3_0_20261102.py`. Newest entries first.
+Current file: `noderecorder_v0_4_0_20261102.py`. Newest entries first.
+
+## 0.4.0 (2026-11-02)
+
+- **Phase 4: recordings are scheduled from the page.** The Connect tab has a new Schedule card. Pick a mode and the card shows only that mode's fields: Node (ASL), Number (EchoLink), Talkgroup and Network (DMR), Talkgroup (STFU, P25, NXDN), Reflector (YSF), Reflector and Module (D-STAR, M17). Choose the days from a drop-down (every day, Mon-Fri, Sat and Sun, or one day), the start and end times, the format (u-law or PCM) and whether it is on, then press **Set**. The result is added to the schedule, or the card says what is wrong, for example which two entries overlap.
+- **Favorites are picked from Node Talker and Node Controller.** The Favorite drop-down lists the favorites of the chosen mode from Node Talker's favorites file and from Node Controller's list, in two groups. Picking one copies its values into the card; changing the favorite later in Node Talker or Node Controller does not change the entry. Node Recorder only reads those files and never writes to them. A DMR favorite needs its network in this tool's own DMR list (Setup, Digital card; **Copy from Node Controller** fills it); the card says so if it is missing.
+- **The schedule is managed in Setup.** A new Schedule card lists every entry with an On box, Edit (loads it back into the Connect card), Dry run and Remove. The Record tab keeps its read-only list.
+- **The favorites section is gone.** Setup no longer has a Favorites card or its file download and upload, the Connect tab no longer has its own favorite to connect, and the Tune card no longer has a Save button. Tune and Disconnect All stay. The routes behind them (`/api/favorites`, `/api/favorites-file`, `/api/connect`, `/api/disconnect`, `/api/tune/save`, `/api/dash-favorites`) are removed; the Tune card gets its modes and networks from the new `/api/tune-info`. New route `/api/schedule/sources`.
+- A D-STAR reflector is shown and saved as the reflector plus its module (for example REF001 and C).
+- This is a release, not a cosmetic build.
 
 ## 0.3.0 (2026-11-02)
 
