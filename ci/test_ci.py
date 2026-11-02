@@ -1143,7 +1143,7 @@ class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
         "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "setup-save"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
-                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-save", "nd-select", "rx-auto", "rx-auto-msg",
+                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-save", "rxh-verdict", "rxh-rows", "rxh-dl", "nd-select", "rx-auto", "rx-auto-msg",
                   "chk-rx", "rx-bal-msg", "tone-start", "tone-hz", "tone-sec", "tone-rep", "tone-msg"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
                   "hs-mic", "hs-btn", "mic-gain", "mic-test", "node-test", "tx-add", "tune-save",
@@ -1315,6 +1315,128 @@ class NodeTalkerBehaviourTests(unittest.TestCase):
         self.assertNotEqual(nt.tone_link_block(tx=False), "")
         self.state["links"] = ["1921", "45001", "77777"]
         self.assertIn("77777", nt.tone_link_block(tx=True))
+
+
+NETSTATS_SAMPLE = """                               -------- LOCAL ---------------------  -------- REMOTE --------------------
+Channel               RTT  Jit  Del  Lost   %  Drop  OOO  Kbytes  Jit  Del  Lost   %  Drop  OOO  Kbytes
+IAX2/10.1.2.3:4569-1   42   12   60     3   1%     0    1      80    0    0     0   0%     0    0      70
+IAX2/node2-7           Unknown 5 60 0 0% 0 0 12 0 0 0 0% 0 0 9
+1 IAX channel(s) shown
+"""
+
+
+class RxHealthTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        nt = self.nt
+        self.rxh = nt.RxHealth()
+        p = mock.patch.object(nt, "RXH_PATH", os.devnull)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def verdict(self, net_ok=True):
+        nt = self.nt
+        return nt.rxh_verdict(nt.rxh_sum(self.rxh.window()), {"ok": net_ok, "why": ""})
+
+    def feed(self, n, gap=0.02, start=100.0):
+        t = start
+        for _ in range(n):
+            self.rxh.note_packet(t)
+            t += gap
+        return t
+
+    def test_netstats_parser_reads_local_columns(self):
+        rows = self.nt.parse_netstats(NETSTATS_SAMPLE)
+        self.assertEqual(len(rows), 2)
+        self.assertEqual((rows[0]["rtt"], rows[0]["jit"], rows[0]["lost"], rows[0]["drop"], rows[0]["ooo"]), (42, 12, 3, 0, 1))
+        self.assertIsNone(rows[1]["rtt"])
+
+    def test_netstats_loss_counts_only_new_frames(self):
+        rows = self.nt.parse_netstats(NETSTATS_SAMPLE)
+        self.rxh.note_net(rows)
+        self.assertEqual(self.rxh.cur["net_lost"], 0)
+        rows[0]["lost"] += 5
+        self.rxh.note_net(rows)
+        self.assertEqual(self.rxh.cur["net_lost"], 5)
+        self.assertEqual(self.rxh.cur["net_peers"], 2)
+
+    def test_clean_audio_is_clean(self):
+        self.feed(200)
+        v = self.verdict()
+        self.assertEqual(v["state"], "clean")
+
+    def test_idle_without_audio(self):
+        self.assertEqual(self.verdict()["state"], "idle")
+
+    def test_gap_with_a_healthy_pi_is_the_network(self):
+        t = self.feed(50)
+        self.feed(50, start=t + 0.3)
+        v = self.verdict()
+        self.assertEqual(v["state"], "network")
+        pi = next(r for r in v["rows"] if r["layer"] == "This Pi")
+        self.assertEqual(pi["level"], "ok")
+
+    def test_a_gap_longer_than_a_transmission_end_is_not_counted(self):
+        t = self.feed(50)
+        self.feed(50, start=t + 2.0)
+        self.assertEqual(self.verdict()["state"], "clean")
+
+    def test_pi_problem_wins_over_network(self):
+        t = self.feed(50)
+        self.feed(50, start=t + 0.3)
+        self.rxh.note_tick(10.0)
+        self.rxh.note_tick(10.3)
+        self.assertEqual(self.verdict()["state"], "pi")
+
+    def test_input_overflow_blames_the_pi(self):
+        self.feed(50)
+        self.rxh.note_drops(2, 0)
+        self.assertEqual(self.verdict()["state"], "pi")
+
+    def test_iax_loss_is_the_network(self):
+        self.feed(50)
+        rows = self.nt.parse_netstats(NETSTATS_SAMPLE)
+        self.rxh.note_net(rows)
+        rows[0]["lost"] += 2
+        self.rxh.note_net(rows)
+        self.assertEqual(self.verdict()["state"], "network")
+
+    def test_slow_listener_with_clean_upstream_is_the_listener(self):
+        self.feed(50)
+        self.rxh.note_write(1.2)
+        v = self.verdict()
+        self.assertEqual(v["state"], "listener")
+        self.assertIn("Not the Pi", v["text"])
+
+    def test_client_underruns_with_clean_upstream_is_the_listener(self):
+        self.feed(50)
+        self.rxh.note_client(3, 1, 400)
+        self.assertEqual(self.verdict()["state"], "listener")
+
+    def test_unreadable_netstats_is_reported_not_blamed(self):
+        self.feed(50)
+        v = self.verdict(net_ok=False)
+        self.assertEqual(v["state"], "clean")
+        self.assertEqual(v["rows"][0]["level"], "warn")
+
+    def test_client_report_is_checked_and_clamped(self):
+        nt = self.nt
+        with mock.patch.object(nt, "RXH", self.rxh):
+            self.assertTrue(nt.rxh_client({"under": 2, "reset": 0, "silence_ms": 5})["ok"])
+            with self.assertRaises(ValueError):
+                nt.rxh_client({"under": "x"})
+            nt.rxh_client({"under": 10 ** 12})
+        self.assertLessEqual(self.rxh.cur["cl_under"], 2 + nt.RXH_CLIENT_MAX)
+
+    def test_minute_rollover_keeps_history(self):
+        self.feed(10)
+        self.rxh.cur["t"] -= 60
+        self.rxh.note_packet(500.0)
+        self.assertEqual(len(self.rxh.buckets), 1)
+        self.assertEqual(self.rxh.buckets[0]["pkts"], 10)
 
 
 if __name__ == "__main__":
