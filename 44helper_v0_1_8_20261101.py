@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.8"
+APP_VERSION = "0.1.8.1"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2740,19 +2740,12 @@ def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
         {"id": "install_appliance", "num": 10, "title": "(Optional) Full ASL3 Appliance branding/firewall defaults",
          "cmd": _asl3_appliance_cmd(distro_deb_suffix),
          "timeout": 900,
-         "note": "Optional per source doc — applies appliance branding, web rules, and pre-configured "
-                 "firewall defaults. asl3-appliance-pi is the Raspberry Pi-specific companion package (all "
-                 "652701/652702/652703 nodes are Pi-based) — it pulls in apache2 for its fallback-AP "
-                 "WiFi-setup feature, confirmed expected on a live test. Current AllStarLink docs describe "
-                 "the manual add-appliance-to-an-existing-install path as Debian 13 (Trixie) only, though a "
-                 "live hardware test on this node's own Bookworm install had this package install and work "
-                 "fine — so treat that doc wording with a grain of salt rather than as a hard Bookworm "
-                 "blocker, but keep an eye out if a fresh Bookworm install ever fails here. Skip entirely if "
-                 "you don't want appliance branding. Kept as one step (not split further) since both "
-                 "packages are a matched pair for this fleet's Pi-based nodes (on a machine that is not a Raspberry Pi "
-                 "only asl3-appliance is installed, because asl3-appliance-pi is the Pi companion), unlike the asl3/allmon3/"
-                 "cockpit/node-utils grouping this version split apart — those were three unrelated software "
-                 "components bundled into one apt line, not a matched pair."},
+         "note": "Optional. Applies appliance branding, web rules and pre-configured firewall defaults. "
+                 "The package depends on the release. On Bookworm (Debian 12) only asl3-pi-appliance is published, "
+                 "and only for a Raspberry Pi; on a PC this step changes nothing. On Trixie (Debian 13) it installs "
+                 "asl3-appliance plus asl3-appliance-pi on a Pi, or asl3-appliance plus asl3-appliance-pc on a PC. "
+                 "The Pi package pulls in apache2 for its fallback-AP WiFi-setup feature. AllStarLink's current docs "
+                 "describe this path for Debian 13 only. Skip this step if you don't want appliance branding."},
         {"id": "allmon3_delete_default", "num": 11, "title": "Remove default Allmon3 account",
          "cmd": "sudo allmon3-passwd --delete allmon3"},
         {"id": "allmon3_set_admin", "num": 12, "title": "Set Allmon3 admin password",

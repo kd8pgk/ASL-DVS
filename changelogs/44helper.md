@@ -2,6 +2,10 @@
 
 Current file: `44helper_v0_1_8_20261101.py`. Newest entries first.
 
+## 0.1.8.1 (2026-11-02)
+
+- **Step 10 note matches the package list.** The note for ASL3 step 10 (Appliance) said `asl3-appliance-pi` installs on Bookworm, which 0.1.7 showed is wrong. It now says Bookworm publishes only `asl3-pi-appliance` (Raspberry Pi only; a PC gets a skip message), and Trixie installs `asl3-appliance` with the Pi or PC companion. The package list is unchanged.
+
 ## 0.1.8 (2026-11-01)
 
 - **The WiFi adapter that is up is found first.** The shared `system_profile` (kept identical in 44helper and wifimon, and checked by the repo check) picks the first WiFi adapter that is up, then `wlan0`, then the first WiFi device. A USB adapter with another name, such as `wlx…`, is found when it is connected. Nothing else changes.
