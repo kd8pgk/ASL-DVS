@@ -1,6 +1,11 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_12_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_13_20261103.py`. Newest entries first.
+
+## 0.1.13 (2026-11-03)
+
+- **M17 purge removes the real unit file.** The "Remove the systemd unit" step deleted only `/etc/systemd/system/usrp2m17.service`, but the USRP2M17-Selector installer writes the unit to `/usr/lib/systemd/system/usrp2m17.service`, so the file stayed behind after a purge. The step now removes both paths, then reloads systemd. Its note says so.
+- **Tested here:** the step's command against a scratch copy of both paths (both files removed, no error when one is missing). **Not yet tested on a node:** a full M17 install followed by a purge.
 
 ## 0.1.12 (2026-11-03)
 
