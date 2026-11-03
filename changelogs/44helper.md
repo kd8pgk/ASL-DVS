@@ -1,6 +1,11 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_13_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_14_20261103.py`. Newest entries first.
+
+## 0.1.14 (2026-11-03)
+
+- **Claude Remote folder and service steps work under `/bin/sh`.** Both commands used `${d:2}`, which only bash understands. The node runs them with `/bin/sh` (dash on Debian), so they stopped with "Bad substitution". They now use the POSIX form `${d#??}`, which gives the same result in both shells.
+- **Tested here:** both commands' path logic under dash and bash (`~/claude-remote`, `~`, an absolute path). **Not yet tested on a node:** the two steps run from the page.
 
 ## 0.1.13 (2026-11-03)
 

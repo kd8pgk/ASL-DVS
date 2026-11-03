@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.13"
+APP_VERSION = "0.1.14"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4529,7 +4529,7 @@ _CR_FOLDER_CMD = (
     "u='{{cruser}}'; d='{{crfolder}}'; h=$(getent passwd \"$u\" | cut -d: -f6); "
     "[ -n \"$h\" ] || { echo \"No such user: $u\"; exit 1; }; "
     "case \"$d\" in *..*) echo 'The folder may not contain ..'; exit 1;; esac; "
-    "case \"$d\" in \"~\") p=\"$h\";; \"~/\"*) p=\"$h/${d:2}\";; /*) p=\"$d\";; "
+    "case \"$d\" in \"~\") p=\"$h\";; \"~/\"*) p=\"$h/${d#??}\";; /*) p=\"$d\";; "
     "*) echo 'The folder must start with ~/ or /'; exit 1;; esac; "
     "case \"$p\" in \"$h\") echo 'Choose a folder inside your home, not the home folder itself'; exit 1;; "
     "\"$h\"/.*) echo 'The folder may not be a hidden (dot) folder'; exit 1;; "
@@ -4540,7 +4540,7 @@ _CR_FOLDER_CMD = (
 _CR_SERVICE_CMD = (
     "u='{{cruser}}'; d='{{crfolder}}'; h=$(getent passwd \"$u\" | cut -d: -f6); "
     "[ -n \"$h\" ] || { echo \"No such user: $u\"; exit 1; }; "
-    "case \"$d\" in \"~\") p=\"$h\";; \"~/\"*) p=\"$h/${d:2}\";; *) p=\"$d\";; esac; "
+    "case \"$d\" in \"~\") p=\"$h\";; \"~/\"*) p=\"$h/${d#??}\";; *) p=\"$d\";; esac; "
     "[ -d \"$p\" ] || { echo \"Folder missing: $p. Run the folder step first.\"; exit 1; }; "
     "printf '%s\\n' '[Unit]' 'Description=Claude Code remote control (44helper)' "
     "'After=network-online.target' 'Wants=network-online.target' '' '[Service]' 'Type=simple' "
