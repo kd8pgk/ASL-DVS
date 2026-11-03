@@ -1,12 +1,12 @@
 package io.github.kd8pgk.nodetalker
 
-import android.util.Base64
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.SecureRandom
+import java.util.Base64
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -44,7 +44,7 @@ class WsClient(private val node: Node, private val cookie: String?) {
             .append("GET /api/talk HTTP/1.1\r\n")
             .append("Host: ").append(hostHdr).append("\r\n")
             .append("Upgrade: websocket\r\nConnection: Upgrade\r\n")
-            .append("Sec-WebSocket-Key: ").append(Base64.encodeToString(key, Base64.NO_WRAP)).append("\r\n")
+            .append("Sec-WebSocket-Key: ").append(Base64.getEncoder().encodeToString(key)).append("\r\n")
             .append("Sec-WebSocket-Version: 13\r\n")
             .append("Origin: ").append(node.origin).append("\r\n")
         if (!cookie.isNullOrEmpty()) req.append("Cookie: ").append(cookie).append("\r\n")

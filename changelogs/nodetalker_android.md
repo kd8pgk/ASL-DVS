@@ -1,6 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.9`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.10`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.10 (2026-11-03)
+
+- **Unit tests.** The app now has JVM unit tests for the talk channel (`WsClient`) and the node address helpers (`Node`): the upgrade request, the refusal messages, masked frames at every length form, reading text, answering pings with pongs, close frames, and the frame-size limits. They run in CI (`testReleaseUnitTest`) before the APK is built. JUnit 4 is a test-only dependency; the APK does not include it.
+- **Talk channel uses `java.util.Base64`** for the WebSocket key instead of `android.util.Base64`. The bytes sent are the same; the change lets the tests run on the JVM.
+- **Known gap, found by the tests:** a text message split over continuation frames is not put back together (the first part is delivered and the rest is dropped). The node never splits messages, so nothing is affected today. Kept as an ignored test until it is fixed.
+- No change in what the app does for the user.
 
 ## 0.10.9 (2026-11-03)
 

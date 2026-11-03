@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersion = "0.10.9"
+val appVersion = "0.10.10"
 
 android {
     namespace = "io.github.kd8pgk.nodetalker"
@@ -54,4 +54,8 @@ kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
     }
+}
+
+dependencies {
+    testImplementation("junit:junit:4.13.2")
 }
