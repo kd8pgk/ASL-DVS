@@ -1,6 +1,14 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_16_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_17_20261103.py`. Newest entries first.
+
+## 0.1.17 (2026-11-03)
+
+- **M17 steps 5-7 are one automatic step.** "Add the M17 node to rpt.conf, modules.conf and extensions.conf" replaces the three by-hand steps, with one node-number field (default 1917). It adds the node stanza and its `[nodes]` line (rpt.conf), changes `noload` to `load` for chan_usrp (modules.conf, either `=` or `=>` spelling) and adds the extension to `[radio-secure]` (extensions.conf). The later steps move up by two (Restart Asterisk is now step 6).
+- **Safe by design.** It reads all three files and plans every edit before writing anything, and stops without changes if the node number is already used, a stanza is missing, or a file has Windows line endings. The first change to a file keeps `<file>.44helper-bak`. After writing it reads each file back, and puts the originals back if anything does not match. Running it again leaves what is there alone. Every added line is tagged `44helper M17`.
+- **Purge undoes the edits.** New purge steps "Undo the Asterisk config edits" and "Restart Asterisk" remove only the tagged lines and put the original `noload` line back. Edits made by hand are left alone. The old note saying purge never reverts these files is updated.
+- **Not added:** the optional `NODE1 = ...` line in rpt.conf `[globals]` (the upstream README reports it without confirming it is needed). Add it by hand if your config uses NODE/NODE1 globals.
+- **Tested here:** the shipped command under `sh` and `bash` on sample ASL3-style files: fresh apply, a second apply, undo (all three files identical to the originals), another node number, a modules.conf with no `noload` line, a node number already in use, a missing `[radio-secure]` stanza, a bad node number, and a forced write failure (originals restored). **Not yet tested on a node:** a real ASL3 install, and Asterisk loading chan_usrp after the restart.
 
 ## 0.1.16 (2026-11-03)
 
