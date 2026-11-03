@@ -514,7 +514,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `sysmon_pi02w_v6_13_83_20261028.py` | SysMon, Pi Zero 2 W (current) |
 | `instmon_v2_87_0_20261102.py` | common |
 | `wifimon_v5_48_0_20261102.py` | common |
-| `44helper_v0_1_8_20261101.py` | common |
+| `44helper_v0_1_16_20261103.py` | common |
 | `nodetalker_v0_10_5_20261102.py` | common |
 | `noderecorder_v0_4_0_20261102.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
