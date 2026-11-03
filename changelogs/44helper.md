@@ -1,6 +1,34 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_8_20261101.py`. Newest entries first.
+Current file: `44helper_v0_1_12_20261103.py`. Newest entries first.
+
+## 0.1.12 (2026-11-03)
+
+- **New Claude Remote tab.** Installs Node.js 22 and Claude Code on the node, signs in, and runs `claude remote-control` as a systemd service in a folder you choose. Works on Debian 12 (Bookworm) and 13 (Trixie), on Debian or Armbian, on x86-64 and arm64. Eight steps: check, Node.js, Claude Code, sign-in (manual, in a terminal), folder, service, status, stop. Purge removes the service, Claude Code and Node.js 22.
+- **Node.js comes from nodejs.org, pinned.** Claude Code needs Node 22 or newer, and the Bookworm and Trixie packages are older. The tab downloads node-v22.23.4 for the node's processor and checks its SHA256 against the value pinned in 44helper, then installs it under /opt. Nothing comes from a third-party apt source.
+- **Claude Code is pinned** to @anthropic-ai/claude-code 2.1.317. The service runs as the login user (the one that signed in), not root, and its folder must be inside that user's home, not hidden.
+- **Tested here:** the Node 22 x64 download and checksum; the arm64 checksum (download only); Claude Code 2.1.317 installed with that Node and run (`claude --version`); the folder rules (accepted and refused cases); the unit file the service step writes. **Not yet tested on hardware:** the service under systemd on the Orange Pi (arm64), and whether `claude remote-control` runs without a terminal under systemd.
+
+## 0.1.11 (2026-11-02)
+
+- **Ampersand is Trixie (Debian 13) only.** The Ampersand download step, which both the radio-node (amp-server) and hub (amp-hub) installs run first, now stops on any other release with a message naming the release it found. Nothing is downloaded or changed. The tab's warning says so too. The hub build 20260225 needs GLIBC 2.38, which Debian 12 (Bookworm) does not have, so it failed to start on a Bookworm node after its settings file loaded.
+
+## 0.1.10 (2026-11-02)
+
+- **DVSwitch installs the digital-mode gateways.** The DVSwitch install step (Bookworm step 4, Trixie step 6) now also installs `ircddbgateway`, `ysfgateway`, `p25gateway` and `nxdngateway`. Before, only the bundle, the bridges and md380-emu were installed, so the gateway step ("Enable the digital-mode gateways at boot") failed with none of the four installed. On node yoganode the four packages exist in the DVSwitch repo, and the bundle does not bring them. The Trixie dry-run step checks them too.
+- The gateway units' names after install are not yet confirmed on a node: the enable step expects `ircddbgatewayd`, `ysfgateway`, `p25gateway` and `nxdngateway`.
+
+## 0.1.9 (2026-11-02)
+
+- **Ampersand hub settings are fields, not hand edits.** Step 4 (Set the hub's node, password, port and access) now has fields for the node number, node password (blank for a private node), IAX port, auth mode (OPEN by default) and allowed node numbers (comma-separated; blank leaves the line commented out, so any node can connect). Each is checked before it is written, and the step writes them into `/usr/etc/amp-hub.env` with the greeting. Step 5 is still the manual block for other settings.
+- The node password field has its own rule, so a blank password (a private node) is accepted. The shared password rule is unchanged.
+- The `AMP_IAX_PROTO` line from the earlier manual text is not in the repo's env template, so it is not a field. It needs checking against the Ampersand package before it is added.
+- Includes the 0.1.8.1 text changes (step 10 note and M17 installer note).
+
+## 0.1.8.1 (2026-11-02)
+
+- **M17 installer card is shorter.** The note for the M17 tab's "Run the installer" step is now three sentences: type the callsign and press Run, what the installer does, and that Open in terminal is the backup if Run fails. The callsign field, Run button and terminal row are unchanged.
+- **Step 10 note matches the package list.** The note for ASL3 step 10 (Appliance) said `asl3-appliance-pi` installs on Bookworm, which 0.1.7 showed is wrong. It now says Bookworm publishes only `asl3-pi-appliance` (Raspberry Pi only; a PC gets a skip message), and Trixie installs `asl3-appliance` with the Pi or PC companion. The package list is unchanged.
 
 ## 0.1.8 (2026-11-01)
 
