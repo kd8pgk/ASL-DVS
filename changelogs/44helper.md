@@ -1,6 +1,11 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_15_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_16_20261103.py`. Newest entries first.
+
+## 0.1.16 (2026-11-03)
+
+- **Open in terminal on three more steps.** Cloudflare "Install the connector service" asks for just the tunnel token (hidden, checked for stray characters) and runs `cloudflared service install` itself, so the token stays out of the Actions Log. Cloudflare "Run a quick test tunnel" asks for the local port (default 8989) and runs the tunnel in the terminal. Ampersand hub "Other settings" opens `/usr/etc/amp-hub.env` in nano. The notes on those cards mention the button.
+- **Tested here:** the three commands against stub `cloudflared`/`sudo` (good token, bad token, empty, default and custom port, a non-number port, missing env file) and that they appear in the terminal's allow-list. **Not yet tested on a node:** the buttons in the page.
 
 ## 0.1.15 (2026-11-03)
 
