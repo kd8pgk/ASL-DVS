@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_11_20261102.py`. Newest entries first.
+Current file: `44helper_v0_1_12_20261103.py`. Newest entries first.
+
+## 0.1.12 (2026-11-03)
+
+- **New Claude Remote tab.** Installs Node.js 22 and Claude Code on the node, signs in, and runs `claude remote-control` as a systemd service in a folder you choose. Works on Debian 12 (Bookworm) and 13 (Trixie), on Debian or Armbian, on x86-64 and arm64. Eight steps: check, Node.js, Claude Code, sign-in (manual, in a terminal), folder, service, status, stop. Purge removes the service, Claude Code and Node.js 22.
+- **Node.js comes from nodejs.org, pinned.** Claude Code needs Node 22 or newer, and the Bookworm and Trixie packages are older. The tab downloads node-v22.23.4 for the node's processor and checks its SHA256 against the value pinned in 44helper, then installs it under /opt. Nothing comes from a third-party apt source.
+- **Claude Code is pinned** to @anthropic-ai/claude-code 2.1.317. The service runs as the login user (the one that signed in), not root, and its folder must be inside that user's home, not hidden.
+- **Tested here:** the Node 22 x64 download and checksum; the arm64 checksum (download only); Claude Code 2.1.317 installed with that Node and run (`claude --version`); the folder rules (accepted and refused cases); the unit file the service step writes. **Not yet tested on hardware:** the service under systemd on the Orange Pi (arm64), and whether `claude remote-control` runs without a terminal under systemd.
 
 ## 0.1.11 (2026-11-02)
 

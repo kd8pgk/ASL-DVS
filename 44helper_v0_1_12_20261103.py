@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.11"
+APP_VERSION = "0.1.12"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3711,6 +3711,7 @@ _GUARD_TAB_UNITS: dict[str, list[str]] = {
     "m17": ["usrp2m17.service"],
     "amp": ["amp-server.service", "amp-hub.service"],
     "cf": ["cloudflared.service"],
+    "cr": ["claude-remote.service"],
 }
 _GUARD_TAB_UNITS["update"] = sorted({u for units in _GUARD_TAB_UNITS.values() for u in units})
 _GUARD_LAST: dict[str, dict] = {}
@@ -3856,6 +3857,9 @@ _STEP_FIELD_RULES = {
     "authmode": (re.compile(r"[A-Za-z]{2,16}"), "use letters only, for example OPEN"),
     "allowlist": (re.compile(r"([0-9]{4,7}(,[0-9]{4,7})*)?"),
                   "use node numbers of 4 to 7 digits separated by commas, or leave it blank"),
+    "cruser": (re.compile(r"[a-z_][a-z0-9_-]{0,31}"), "use a Linux login name: lowercase letters, digits, _ and -"),
+    "crfolder": (re.compile(r"[~/A-Za-z0-9._-]{1,200}"),
+                 "use a folder path such as ~/claude-remote or /home/you/claude-remote (no spaces)"),
     "password": (re.compile(r"[A-Za-z0-9._+=@%^~,:-]{1,64}"),
                  "use up to 64 letters, digits and . _ + = @ % ^ ~ , : - (no spaces, quotes, / or &). "
                  "Set any other password from the Custom box"),
@@ -4453,6 +4457,183 @@ _CF_SCRIPTS: dict[str, dict[str, list[dict]]] = {
     "purge": {"token": _cf_token_purge_steps(), "quick": _cf_quick_purge_steps()},
 }
 
+_CR_NODE_DIR = "/opt/node-v22.23.4"
+_CR_NODE_VERSION = "22.23.4"
+_CR_NODE_SHA256 = {
+    "x86_64": "1805bcd35e6815559bd2eb97db438d3fdb0eb3a5e6a977b7c1badca76337e9ce",
+    "aarch64": "6287aa46b6c375d816e63ae66d024fbbfd70404825aabdfdf898a970871d2f4b",
+}
+_CR_NODE_FILE = {"x86_64": "linux-x64", "aarch64": "linux-arm64"}
+_CR_CLAUDE_PKG = "@anthropic-ai/claude-code@2.1.317"
+_CR_FOLDER_DEFAULT = "~/claude-remote"
+_CR_WARNING = """Runs <b>Claude Code</b>'s <b>remote control</b> on this node as a systemd service, so the
+  node can be reached from your Claude apps while it runs. Works on Debian 12 (Bookworm) and 13 (Trixie),
+  on Debian or Armbian, on x86-64 and arm64. Node.js 22 is downloaded from nodejs.org with its SHA256
+  checked against the value pinned in 44helper, and installed under /opt; nothing comes from a third-party
+  apt repository. <b>Sign in</b> once as the login user (step 4, in a terminal); the service runs as that
+  user, because the sign-in is stored in its home folder. <b>Stop</b> disables the service and the device
+  stops being reachable from the apps."""
+
+def _cr_default_user() -> str:
+    try:
+        with open("/etc/passwd", encoding="utf-8") as fh:
+            for line in fh:
+                parts = line.rstrip("\n").split(":")
+                if (len(parts) >= 7 and parts[2].isdigit() and 1000 <= int(parts[2]) < 60000
+                        and parts[5].startswith("/home/") and parts[6].endswith("sh")):
+                    return parts[0]
+    except OSError:
+        pass
+    return "pi"
+
+_CR_DEFAULT_USER = _cr_default_user()
+
+def _cr_fill(tmpl: str) -> str:
+    return tmpl.replace("{{cruser}}", _CR_DEFAULT_USER).replace("{{crfolder}}", _CR_FOLDER_DEFAULT)
+
+_CR_CHECK_CMD = (
+    "grep -E '^(PRETTY_NAME|VERSION_CODENAME)=' /etc/os-release; echo \"arch: $(uname -m)\"; "
+    "echo '== Node.js =='; if [ -x /opt/node-v22.23.4/bin/node ]; then /opt/node-v22.23.4/bin/node --version; "
+    "else echo 'not installed'; fi; "
+    "echo '== Claude Code =='; if [ -x /usr/local/bin/claude ]; then /usr/local/bin/claude --version 2>&1 | head -1; "
+    "else echo 'not installed'; fi; "
+    "echo '== service =='; systemctl is-enabled claude-remote 2>&1; systemctl is-active claude-remote 2>&1; true"
+)
+
+def _cr_node_install_cmd() -> str:
+    x64, a64 = _CR_NODE_SHA256["x86_64"], _CR_NODE_SHA256["aarch64"]
+    return ("a=$(uname -m); case \"$a\" in "
+            f"x86_64) f=linux-x64; s={x64};; "
+            f"aarch64) f=linux-arm64; s={a64};; "
+            "*) echo \"No Node.js build for $a here (x86_64 and aarch64 only).\"; exit 1;; esac; "
+            f"d={_CR_NODE_DIR}; "
+            "if [ -x $d/bin/node ]; then echo \"Node.js already in $d\"; else "
+            f"cd /tmp && curl -fsSL -o node-cr.tar.xz https://nodejs.org/dist/v{_CR_NODE_VERSION}/"
+            f"node-v{_CR_NODE_VERSION}-$f.tar.xz && echo \"$s  node-cr.tar.xz\" | sha256sum -c - && "
+            "sudo mkdir -p /opt && sudo tar -xJf node-cr.tar.xz -C /opt && sudo rm -rf $d && "
+            f"sudo mv /opt/node-v{_CR_NODE_VERSION}-$f $d && rm -f node-cr.tar.xz; fi && "
+            "sudo ln -sf $d/bin/node /usr/local/bin/node && sudo ln -sf $d/bin/npm /usr/local/bin/npm && "
+            "sudo ln -sf $d/bin/npx /usr/local/bin/npx && $d/bin/node --version"
+            )
+
+_CR_CLAUDE_CMD = (
+    f"sudo {_CR_NODE_DIR}/bin/npm install -g {_CR_CLAUDE_PKG} && "
+    f"sudo ln -sf {_CR_NODE_DIR}/bin/claude /usr/local/bin/claude && /usr/local/bin/claude --version"
+)
+
+_CR_SIGNIN_CMD = f"sudo -u {_CR_DEFAULT_USER} -H /usr/local/bin/claude"
+
+_CR_FOLDER_CMD = (
+    "u='{{cruser}}'; d='{{crfolder}}'; h=$(getent passwd \"$u\" | cut -d: -f6); "
+    "[ -n \"$h\" ] || { echo \"No such user: $u\"; exit 1; }; "
+    "case \"$d\" in *..*) echo 'The folder may not contain ..'; exit 1;; esac; "
+    "case \"$d\" in \"~\") p=\"$h\";; \"~/\"*) p=\"$h/${d:2}\";; /*) p=\"$d\";; "
+    "*) echo 'The folder must start with ~/ or /'; exit 1;; esac; "
+    "case \"$p\" in \"$h\") echo 'Choose a folder inside your home, not the home folder itself'; exit 1;; "
+    "\"$h\"/.*) echo 'The folder may not be a hidden (dot) folder'; exit 1;; "
+    "\"$h\"/*) ;; *) echo 'The folder must be inside the login user home'; exit 1;; esac; "
+    "sudo -u \"$u\" mkdir -p \"$p\" && echo \"Folder ready: $p\""
+)
+
+_CR_SERVICE_CMD = (
+    "u='{{cruser}}'; d='{{crfolder}}'; h=$(getent passwd \"$u\" | cut -d: -f6); "
+    "[ -n \"$h\" ] || { echo \"No such user: $u\"; exit 1; }; "
+    "case \"$d\" in \"~\") p=\"$h\";; \"~/\"*) p=\"$h/${d:2}\";; *) p=\"$d\";; esac; "
+    "[ -d \"$p\" ] || { echo \"Folder missing: $p. Run the folder step first.\"; exit 1; }; "
+    "printf '%s\\n' '[Unit]' 'Description=Claude Code remote control (44helper)' "
+    "'After=network-online.target' 'Wants=network-online.target' '' '[Service]' 'Type=simple' "
+    "\"User=$u\" \"Environment=HOME=$h\" \"WorkingDirectory=$p\" "
+    "'ExecStart=/usr/local/bin/claude remote-control' 'Restart=on-failure' 'RestartSec=10' '' "
+    "'[Install]' 'WantedBy=multi-user.target' "
+    "| sudo tee /etc/systemd/system/claude-remote.service >/dev/null && "
+    "sudo systemctl daemon-reload && sudo systemctl enable --now claude-remote && sleep 5 && "
+    "systemctl is-active claude-remote && journalctl -u claude-remote -n 15 --no-pager"
+)
+
+_CR_STATUS_CMD = ("systemctl status claude-remote --no-pager -l 2>&1 | head -25; "
+                  "journalctl -u claude-remote -n 30 --no-pager 2>&1; true")
+_CR_STOP_CMD = "sudo systemctl disable --now claude-remote 2>&1; true"
+
+_CR_FIELD_USER = {"id": "cruser", "label": "Login user (the one that signed in)", "type": "text",
+                  "default": _CR_DEFAULT_USER}
+_CR_FIELD_FOLDER = {"id": "crfolder", "label": "Folder for Remote Control", "type": "text",
+                    "default": _CR_FOLDER_DEFAULT}
+
+def _cr_install_steps() -> list[dict]:
+    return [
+        {"id": "cr_check", "num": 1, "title": "Check what is here (read-only)",
+         "cmd": _CR_CHECK_CMD, "timeout": 30,
+         "note": "Changes nothing. Shows the OS release and processor, Node.js and Claude Code if they are "
+                 "installed, and the service state."},
+        {"id": "cr_node", "num": 2, "title": "Install Node.js 22 (pinned, SHA256-checked)",
+         "cmd": _cr_node_install_cmd(), "timeout": 900,
+         "note": f"Downloads node-v{_CR_NODE_VERSION} from nodejs.org for this processor, checks its SHA256 against "
+                 "the value pinned in 44helper, and installs it under /opt. Claude Code needs Node 22 or newer; "
+                 "the Debian Bookworm and Trixie packages are older, so they are not used."},
+        {"id": "cr_claude", "num": 3, "title": "Install Claude Code",
+         "cmd": _CR_CLAUDE_CMD, "timeout": 900,
+         "note": f"Installs {_CR_CLAUDE_PKG} with the Node.js from step 2 and links claude into /usr/local/bin."},
+        {"id": "cr_signin", "num": 4, "title": "Sign in as the login user (manual, in a terminal)",
+         "cmd": _CR_SIGNIN_CMD, "manual_block": True,
+         "note": "Run this in an SSH terminal on the node. Claude shows a sign-in link: open it on another device, "
+                 "sign in with the same account as the Claude apps, paste the code back, then exit with Ctrl+C. "
+                 f"Replace {_CR_DEFAULT_USER} with your login user if it is different. The sign-in is "
+                 "stored in that user's home folder."},
+        {"id": "cr_folder", "num": 5, "title": "Create the Remote Control folder",
+         "fields": [_CR_FIELD_USER, _CR_FIELD_FOLDER],
+         "cmd_template": _CR_FOLDER_CMD,
+         "cmd": _cr_fill(_CR_FOLDER_CMD), "timeout": 60,
+         "note": "Creates the folder as the login user. Use a folder inside your home (for example "
+                 "~/claude-remote). The home folder itself and hidden (dot) folders are refused."},
+        {"id": "cr_service", "num": 6, "title": "Start Claude Remote as a service",
+         "fields": [_CR_FIELD_USER, _CR_FIELD_FOLDER],
+         "cmd_template": _CR_SERVICE_CMD,
+         "cmd": _cr_fill(_CR_SERVICE_CMD), "timeout": 120,
+         "note": "Writes /etc/systemd/system/claude-remote.service, which runs claude remote-control as the login "
+                 "user in the folder, enables it at boot and starts it. It restarts on failure. Needs step 4 "
+                 "(sign-in) first."},
+        {"id": "cr_status", "num": 7, "title": "Check the service",
+         "cmd": _CR_STATUS_CMD, "timeout": 30,
+         "note": "Shows the service status and its last log lines. A running service that cannot reach Claude "
+                 "shows the reason here."},
+        {"id": "cr_stop", "num": 8, "title": "Stop Claude Remote",
+         "cmd": _CR_STOP_CMD, "timeout": 60,
+         "note": "Stops the service and disables it at boot. The device stops being reachable from the Claude apps."},
+    ]
+
+def _cr_purge_steps() -> list[dict]:
+    return [
+        {"id": "cr_purge_service", "num": 1, "title": "Stop and remove the service",
+         "cmd": "sudo systemctl disable --now claude-remote 2>&1; sudo rm -f /etc/systemd/system/claude-remote.service; "
+                "sudo systemctl daemon-reload; true",
+         "note": "Removes the service unit. The sign-in in the login user's home folder is kept; remove the "
+                 "~/.claude folder by hand if you want it gone too."},
+        {"id": "cr_purge_claude", "num": 2, "title": "Remove Claude Code",
+         "cmd": f"sudo {_CR_NODE_DIR}/bin/npm uninstall -g {_CR_CLAUDE_PKG.rsplit('@', 1)[0]} 2>&1; "
+                "sudo rm -f /usr/local/bin/claude; true"},
+        {"id": "cr_purge_node", "num": 3, "title": "Remove Node.js 22",
+         "cmd": f"sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx; sudo rm -rf {_CR_NODE_DIR}; true",
+         "note": "Removes the Node.js 22 install that step 2 put under /opt, and its links in /usr/local/bin."},
+    ]
+
+_CR_SCRIPTS: dict[str, dict[str, list[dict]]] = {
+    "install": {"claude": _cr_install_steps()},
+    "purge": {"claude": _cr_purge_steps()},
+}
+
+
+def _render_cr_panel() -> str:
+    return """
+<div class="tab-panel hidden" id="panel-claude-remote">
+  <div class="step-warn-box"><button type="button" class="step-warn-toggle" onclick="toggleStepWarn(this)" aria-expanded="false" title="Show note">&#9660;</button><div class="step-warn sw-hidden">{warning}</div></div>
+  <div class="asl3-topbar">
+    <button class="btn-purge" id="cr-purge-btn" onclick="crTogglePurge()">Uninstall (runs automatically)</button>
+  </div>
+  <div id="cr-purge-steps"></div>
+  <div id="cr-steps"></div>
+</div>
+""".format(warning=_CR_WARNING)
+
 _PURGE_CLEANUP_SPEC: dict[str, tuple[str, list[str]]] = {
     "asl3": ("^(asl3|allmon3|asterisk)", ["/etc/asterisk", "/var/lib/asterisk", "/etc/allmon3"]),
     "dv": ("^(dvswitch|analog-bridge|analog-reflector|mmdvm-bridge|md380-emu|ircddbgateway)",
@@ -4462,6 +4643,7 @@ _PURGE_CLEANUP_SPEC: dict[str, tuple[str, list[str]]] = {
     "m17": ("^(usrp2m17|m17)", ["/opt/USRP2M17"]),
     "amp": ("^amp-", []),
     "cf": ("^cloudflared", ["/etc/cloudflared"]),
+    "cr": ("^claude-remote", []),
 }
 
 def _purge_cleanup_steps(tab: str) -> list[dict]:
@@ -4508,7 +4690,8 @@ def _purge_cleanup_steps(tab: str) -> list[dict]:
 def _add_purge_cleanup() -> None:
     seen = set()
     for tab, catalog in (("asl3", _ASL3_SCRIPTS), ("dv", _DVSWITCH_SCRIPTS), ("svx", _SVXLINK_SCRIPTS),
-                         ("m17", _M17_SCRIPTS), ("amp", _AMP_SCRIPTS), ("cf", _CF_SCRIPTS)):
+                         ("m17", _M17_SCRIPTS), ("amp", _AMP_SCRIPTS), ("cf", _CF_SCRIPTS),
+                         ("cr", _CR_SCRIPTS)):
         for distro, steps in catalog["purge"].items():
             if id(steps) in seen:
                 continue
@@ -4534,7 +4717,7 @@ _TERM_LOCK = threading.Lock()
 
 def _term_allowlist() -> dict[str, dict]:
     out: dict[str, dict] = {}
-    catalogs = (_ASL3_SCRIPTS, _DVSWITCH_SCRIPTS, _SVXLINK_SCRIPTS, _M17_SCRIPTS, _AMP_SCRIPTS, _CF_SCRIPTS)
+    catalogs = (_ASL3_SCRIPTS, _DVSWITCH_SCRIPTS, _SVXLINK_SCRIPTS, _M17_SCRIPTS, _AMP_SCRIPTS, _CF_SCRIPTS, _CR_SCRIPTS)
     for tid, (step_id, title) in _TERM_ALLOW.items():
         cmds = {st.get("cmd") for cat in catalogs for steps in cat.get("install", {}).values()
                 for st in steps if st.get("id") == step_id and st.get("cmd")}
@@ -18187,6 +18370,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("m17", "M17", "t-m17", "Stage 1 (USRP2M17-Selector install helper; manual file-edit steps for rpt.conf/modules.conf/extensions.conf)"),
     ("amp", "Ampersand", "t-amp", "Stages 1-4 (amp-server radio node + amp-hub conference hub; S3 tarball install, conflict pre-flight, service, udev and hub settings from the page)"),
     ("cloudflare", "Cloudflare", "t-cloudflare", "Stages 1-4 (cloudflared connector: token dashboard-managed + quick TryCloudflare; outbound-only, no inbound ports, WireGuard-coexistence pre-flight)"),
+    ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (Debian 12 and 13, Debian or Armbian)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
     ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),
@@ -20643,6 +20827,7 @@ function _startApp() {
   refreshSvxlink();
   refreshM17();
   refreshAmp();
+  refreshCr();
   refreshCF();
   refreshUpdate();
   refreshSystemOpt();
@@ -23212,6 +23397,293 @@ function ampTogglePurge() {
   ampRunAllPurge(distro);
 }
 
+function crCurrentDistro() {
+  return 'claude';
+}
+
+function crEscapeAttr(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function crRenderStepList(mode, distro) {
+  var steps = ((window._crScripts || {})[mode] || {})[distro] || [];
+  var html = '';
+  steps.forEach(function(step) {
+    var stateKey = mode + '_' + distro + '_' + step.id;
+    var st = (window._crState || {})[stateKey] || {};
+    html += '<div class="step-card">';
+    html += '<div class="step-head"><div class="step-title"><span class="step-num">' + step.num + '.</span>' + step.title + '</div>';
+    if (step.manual_block) {
+      html += '<span class="step-pill not_started">Manual</span></div>';
+      if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
+      html += '<textarea class="cmd-preview" id="cr-block-' + stateKey + '" style="width:100%;min-height:110px;background:#05080f;' +
+        'color:#ffffff;font-family:var(--sans);font-size:var(--fs-sm);border:1px solid var(--border2);' +
+        'border-radius:4px;padding:.5rem;white-space:pre" spellcheck="false">' + crEscapeAttr(step.cmd) + '</textarea>';
+      html += '<div class="step-actions"><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
+      html += '</div>';
+      return;
+    }
+    if (step.manual) {
+      html += '<span class="step-pill not_started">Manual</span></div>';
+      if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
+      html += '<input type="text" class="asl3-cmd-input" readonly value="' + crEscapeAttr(step.cmd) + '">';
+      html += '<div class="step-actions"><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
+      html += '</div>';
+      return;
+    }
+    var pillClass = st.status === 'ok' ? 'done' : (st.status === 'fail' ? 'danger' : (st.status === 'attempted' ? 'attempted_unconfirmed' : 'not_started'));
+    var pillLabel = st.status === 'ok' ? 'OK' : (st.status === 'fail' ? 'Failed' : (st.status === 'attempted' ? 'Running\u2026' : 'Not run'));
+    html += '<span class="step-pill ' + pillClass + '" id="cr-pill-' + stateKey + '">' + pillLabel + '</span></div>';
+    if (step.note) html += renderStepWarn(crEscapeAttr(step.note));
+    if (step.fields) {
+      step.fields.forEach(function(f) {
+        html += '<label style="display:block;font-family:var(--sans);font-size:var(--fs-base);color:var(--muted);margin-top:.4rem">' + crEscapeAttr(f.label) + ':' +
+          '<input type="' + crEscapeAttr(f.type || 'text') + '" class="asl3-cmd-input" id="cr-field-' + f.id + '-' + stateKey + '" value="' + crEscapeAttr(f.default || '') + '" autocomplete="off"></label>';
+      });
+    } else {
+      html += '<input type="text" class="asl3-cmd-input" id="cr-cmd-' + stateKey + '" readonly value="' + crEscapeAttr(step.cmd) + '">';
+    }
+    html += '<div class="step-actions"><button class="btn-run" id="cr-btn-' + stateKey + '" onclick="crRunStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Run</button><button class="btn-copy" onclick="crCopyStep(this,\\'' + mode + '\\',\\'' + distro + '\\',\\'' + step.id + '\\')">Copy</button></div>';
+    html += '<div class="asl3-console shown' + (st.status === 'fail' ? ' fail' : (st.status === 'ok' ? ' ok' : (st.output ? '' : ' placeholder'))) + '" id="cr-out-' + stateKey + '">' + (st.output ? crEscapeAttr(st.output) : '(not run yet)') + '</div>';
+    html += '</div>';
+  });
+  return html || '<div class="step-body">(no steps defined)</div>';
+}
+
+function crRender() {
+  var distro = crCurrentDistro();
+  var stepsEl = document.getElementById('cr-steps');
+  var purgeBtn = document.getElementById('cr-purge-btn');
+  purgeBtn.style.display = 'inline-block';
+  stepsEl.style.display = 'block';
+  stepsEl.innerHTML = crRenderStepList('install', distro);
+  crReconnectRunningJobs(distro);
+}
+
+function refreshCr() {
+  fetch('/api/cr/script').then(function(r) { return r.json(); }).then(function(data) {
+    window._crScripts = data;
+    window._crState = window._crState || {};
+    crRender();
+  });
+}
+
+function crFindStep(mode, distro, stepId) {
+  var steps = ((window._crScripts || {})[mode] || {})[distro] || [];
+  for (var i = 0; i < steps.length; i++) { if (steps[i].id === stepId) return steps[i]; }
+  return null;
+}
+
+function crFinishStep(stateKey, result, pill, btn) {
+  window._crState[stateKey] = {status: result.success ? 'ok' : 'fail', output: result.output || ''};
+  if (pill) { pill.className = 'step-pill ' + (result.success ? 'done' : 'danger'); pill.textContent = result.success ? 'OK' : 'Failed'; }
+  var out = document.getElementById('cr-out-' + stateKey);
+  if (out) {
+    out.className = 'asl3-console shown' + (result.success ? ' ok' : ' fail');
+    out.textContent = result.output || '(no output)';
+  }
+  if (btn) btn.disabled = false;
+  if (result && result.success) { if (typeof jobHelpHide === 'function') jobHelpHide('cr', stateKey); }
+  else if (typeof jobHelpShow === 'function') jobHelpShow('cr', stateKey, result);
+  return result;
+}
+
+function crPollJob(jobKey, stateKey, pill, btn) {
+  var startedAt = Date.now();
+  var firstFailureAt = null;
+  var POLL_FAIL_GIVEUP_MS = Infinity;  // v0.0.111: never give up while the node may still be running it
+  return new Promise(function(resolve) {
+    var timer = setInterval(function() {
+      if (!jobPollDue(firstFailureAt)) return;
+      fetch('/api/action_status?job_key=' + encodeURIComponent(jobKey)).then(function(r) { return r.json(); }).then(function(status) {
+        firstFailureAt = null;
+        var out = document.getElementById('cr-out-' + stateKey);
+        if (out && status.status !== 'unknown') {
+          out.className = 'asl3-console shown';
+          out.textContent = status.output || '(no output yet)';
+        }
+        if (pill && status.status === 'running') {
+          var secs = jobElapsedSec(status, startedAt);
+          pill.textContent = jobRunningLabel(secs);
+        }
+        if (status.status === 'done' || status.status === 'unknown') {
+          clearInterval(timer);
+          resolve(crFinishStep(stateKey, {success: status.success, output: status.output}, pill, btn));
+        }
+      }).catch(function(e) {
+        if (firstFailureAt === null) firstFailureAt = Date.now();
+        if (pill) pill.textContent = jobReconnectLabel();
+        if (Date.now() - firstFailureAt >= POLL_FAIL_GIVEUP_MS) {
+          clearInterval(timer);
+          resolve(crFinishStep(stateKey, {success: false, output: 'Lost the polling connection for over 30s: ' + e +
+            '\\n\\nThe command may still be running on the node \u2014 reload the page to reconnect and check.'}, pill, btn));
+        }
+      });
+    }, jobPollMs(500));
+  });
+}
+
+function crExecuteStep(mode, distro, stepId, cmd, btn, values) {
+  var stateKey = mode + '_' + distro + '_' + stepId;
+  window._crState = window._crState || {};
+  window._crState[stateKey] = {status: 'attempted', output: ''};
+  var pill = document.getElementById('cr-pill-' + stateKey);
+  if (pill) { pill.className = 'step-pill attempted_unconfirmed'; pill.textContent = 'Running\u2026'; }
+  var outEl = document.getElementById('cr-out-' + stateKey);
+  if (outEl) { outEl.className = 'asl3-console shown placeholder'; outEl.textContent = 'Running\u2026'; }
+  if (btn) btn.disabled = true;
+  return fetch('/api/cr/action', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
+    body: JSON.stringify({mode: mode, distro: distro, step_id: stepId, command_text: cmd, fields: values || {}})
+  }).then(function(r) { return r.json(); }).then(function(startResult) {
+    if (startResult.status === 'done') {
+      return crFinishStep(stateKey, startResult, pill, btn);
+    }
+    return crPollJob(startResult.job_key, stateKey, pill, btn);
+  }).catch(function(e) {
+    return crFinishStep(stateKey, {success: false, output: 'Request failed: ' + e}, pill, btn);
+  });
+}
+
+function crReconnectRunningJobs(distro) {
+  window._crState = window._crState || {};
+  ['install', 'purge'].forEach(function(mode) {
+    var steps = ((window._crScripts || {})[mode] || {})[distro] || [];
+    steps.forEach(function(step) {
+      if (step.manual || step.manual_block) return;
+      var stateKey = mode + '_' + distro + '_' + step.id;
+      var jobKey = 'cr_' + stateKey;
+      fetch('/api/action_status?job_key=' + encodeURIComponent(jobKey)).then(function(r) { return r.json(); }).then(function(status) {
+        var pill = document.getElementById('cr-pill-' + stateKey);
+        var btn = document.getElementById('cr-btn-' + stateKey);
+        var out = document.getElementById('cr-out-' + stateKey);
+        if (status.status === 'running') {
+          window._crState[stateKey] = {status: 'attempted', output: status.output || ''};
+          if (pill) { pill.className = 'step-pill attempted_unconfirmed'; pill.textContent = 'Running\u2026'; }
+          if (out) { out.className = 'asl3-console shown'; out.textContent = status.output || 'Running\u2026'; }
+          if (btn) btn.disabled = true;
+          crPollJob(jobKey, stateKey, pill, btn);
+        } else if (status.status === 'done') {
+          crFinishStep(stateKey, {success: status.success, output: status.output}, pill, btn);
+        }
+      }).catch(function() {});
+    });
+  });
+}
+
+function crResolveCommand(mode, distro, stepId) {
+  var stateKey = mode + '_' + distro + '_' + stepId;
+  var step = crFindStep(mode, distro, stepId);
+  if (step && step.fields) {
+    var values = {};
+    var missing = false;
+    step.fields.forEach(function(f) {
+      var el = document.getElementById('cr-field-' + f.id + '-' + stateKey);
+      var v = el ? el.value : '';
+      if (!v) missing = true;
+      values[f.id] = v;
+    });
+    if (missing) return {cmd: null, confirmText: null};
+    var cmd = step.cmd_template;
+    var maskedCmd = step.cmd_template;
+    Object.keys(values).forEach(function(k) {
+      cmd = cmd.split('{{' + k + '}}').join(values[k]);
+      var masked = (k === 'password') ? '\u2022'.repeat(values[k].length || 6) : values[k];
+      maskedCmd = maskedCmd.split('{{' + k + '}}').join(masked);
+    });
+    return {cmd: cmd, confirmText: maskedCmd, values: values};
+  } else {
+    var inputEl = document.getElementById('cr-cmd-' + stateKey);
+    var cmd2 = inputEl ? inputEl.value : (step ? step.cmd : '');
+    return {cmd: cmd2, confirmText: cmd2};
+  }
+}
+
+function crRunStep(btn, mode, distro, stepId) {
+  var resolved = crResolveCommand(mode, distro, stepId);
+  if (resolved.cmd === null) { alert('Fill in all fields before running.'); return; }
+  if (!resolved.cmd.trim()) return;
+  var _cst = crFindStep(mode, distro, stepId);
+  if (_cst && _cst.confirm_text && !confirm(_cst.confirm_text)) return;
+  if (!confirm('Run this on the node?\\n\\n' + resolved.confirmText)) return;
+  crExecuteStep(mode, distro, stepId, resolved.cmd, btn, resolved.values);
+}
+
+function crCopyStep(btn, mode, distro, stepId) {
+  var stateKey = mode + '_' + distro + '_' + stepId;
+  var step = crFindStep(mode, distro, stepId);
+  var label = 'Step ' + (step ? step.num : '?') + '. ' + (step ? step.title : stepId);
+  var text;
+  if (step && step.manual_block) {
+    var blockEl = document.getElementById('cr-block-' + stateKey);
+    var blockText = blockEl ? blockEl.value : step.cmd;
+    text = label + '\\n' + blockText;
+  } else if (step && step.manual) {
+    text = label + '\\n$ ' + step.cmd + '\\n\\n--- output ---\\n(manual step \u2014 not run through this engine)';
+  } else {
+    var resolved = crResolveCommand(mode, distro, stepId);
+    if (resolved.cmd === null) { alert('Fill in all fields before copying.'); return; }
+    var outEl = document.getElementById('cr-out-' + stateKey);
+    var output = outEl ? outEl.textContent : '(not run yet)';
+    text = label + '\\n$ ' + resolved.cmd + '\\n\\n--- output ---\\n' + output;
+  }
+  copyTextToClipboard(text, btn);
+}
+
+function crPurgeSetSummary(text, cls) {
+  var el = document.getElementById('cr-purge-summary');
+  if (el) { el.textContent = text; el.className = 'step-warn' + (cls ? ' ' + cls : ''); }
+}
+
+function crRunAllPurge(distro) {
+  var steps = ((window._crScripts || {}).purge || {})[distro] || [];
+  var autoSteps = steps.filter(function(s) { return !s.manual && !s.manual_block && s.auto !== false; });
+  if (!autoSteps.length) { crPurgeSetSummary('No automatic purge steps defined for ' + distro + '.'); return; }
+  var i = 0;
+  var okCount = 0;
+  function runNext() {
+    if (i >= autoSteps.length) {
+      crPurgeSetSummary('Purge: ' + okCount + '/' + autoSteps.length + ' steps OK \u2014 complete.');
+      return;
+    }
+    var step = autoSteps[i];
+    var stateKey = 'purge_' + distro + '_' + step.id;
+    var btn = document.getElementById('cr-btn-' + stateKey);
+    crPurgeSetSummary('Purge: running step ' + (i + 1) + '/' + autoSteps.length + ' \u2014 ' + step.title + '\u2026');
+    crExecuteStep('purge', distro, step.id, step.cmd, btn).then(function(result) {
+      if (result && result.success) {
+        okCount++;
+        i++;
+        runNext();
+      } else {
+        crPurgeSetSummary('Purge stopped at step ' + (i + 1) + '/' + autoSteps.length + ' (' + step.title +
+          ') \u2014 see its console below for output. Fix the issue, then re-run that step\\'s Run button, or ' +
+          'toggle Purge off and on again to restart the whole sequence.', 'fail');
+        if (result && result.gate === 'pkg_health' && typeof repairThenPurgeOffer === 'function') {
+          repairThenPurgeOffer('cr-purge-summary', function() { crRunAllPurge(distro); });
+        }
+      }
+    });
+  }
+  runNext();
+}
+
+function crTogglePurge() {
+  if (window._crPurgeShown) {
+    document.getElementById('cr-purge-steps').innerHTML = '';
+    window._crPurgeShown = false;
+    return;
+  }
+  var distro = crCurrentDistro();
+  if (!confirm('This will run the purge steps for removing a previous Ampersand install (' + distro + '). Continue?')) return;
+  if (!confirm('Are you sure? Purge steps are destructive and cannot be undone automatically. Confirm again to run them.')) return;
+  document.getElementById('cr-purge-steps').innerHTML =
+    '<div class="step-warn" id="cr-purge-summary">Starting purge\u2026</div>' + crRenderStepList('purge', distro);
+  window._crPurgeShown = true;
+  crRunAllPurge(distro);
+}
+
 """
 
 _JS_CF = """
@@ -24539,6 +25011,7 @@ var GUARD_TABS = {
   m17: {key: 'm17', panel: 'panel-m17', btn: 'm17-btn-install_'},
   amp: {key: 'amp', panel: 'panel-amp', btn: 'amp-btn-install_'},
   cloudflare: {key: 'cf', panel: 'panel-cloudflare', btn: 'cf-btn-install_'},
+  'claude-remote': {key: 'cr', panel: 'panel-claude-remote', btn: 'cr-btn-install_'},
   update: {key: 'update', panel: 'panel-update', btn: null}
 };
 window._guardState = window._guardState || {};
@@ -24758,7 +25231,8 @@ var JOBHELP_TABS = {
   svx: {tab: 'svxlink', label: 'SVXLink', guard: 'svx'},
   m17: {tab: 'm17', label: 'M17', guard: 'm17'},
   amp: {tab: 'amp', label: 'Ampersand', guard: 'amp'},
-  cf: {tab: 'cloudflare', label: 'Cloudflare', guard: 'cf'}
+  cf: {tab: 'cloudflare', label: 'Cloudflare', guard: 'cf'},
+  cr: {tab: 'claude-remote', label: 'Claude Remote', guard: 'cr'}
 };
 function jobHelpSplitKey(stateKey) {
   var a = stateKey.indexOf('_'), b = stateKey.indexOf('_', a + 1);
@@ -26229,6 +26703,7 @@ _PANEL_RENDERERS: dict[str, Callable[[], str]] = {
     "m17": _render_m17_panel,
     "amp": _render_amp_panel,
     "cloudflare": _render_cf_panel,
+    "claude-remote": _render_cr_panel,
     "update": _render_update_panel,
     "system_opt": _render_system_opt_panel,
     "config": _render_config_panel,
@@ -27122,6 +27597,18 @@ def _route_svxlink_script(query: dict) -> tuple[int, str, bytes]:
 def _route_m17_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_M17_SCRIPTS).encode("utf-8")
 
+def _cr_lookup_step(mode: str, distro: str, step_id: str) -> dict | None:
+    for step in _CR_SCRIPTS.get(mode, {}).get(distro, []):
+        if step["id"] == step_id:
+            return step
+    return None
+
+def _dispatch_cr_action(payload: dict) -> dict:
+    return _dispatch_tab_action(payload, _cr_lookup_step, "cr", valid_distros=("claude",))
+
+def _route_cr_script(query: dict) -> tuple[int, str, bytes]:
+    return 200, "application/json", json.dumps(_CR_SCRIPTS).encode("utf-8")
+
 def _route_amp_script(query: dict) -> tuple[int, str, bytes]:
     return 200, "application/json", json.dumps(_AMP_SCRIPTS).encode("utf-8")
 
@@ -27179,6 +27666,7 @@ _GET_ROUTES: dict[str, Callable[[dict], tuple[int, str, bytes]]] = {
     "/api/m17/script": _route_m17_script,
     "/api/amp/script": _route_amp_script,
     "/api/cf/script": _route_cf_script,
+    "/api/cr/script": _route_cr_script,
     "/api/update/script": _route_update_script,
     "/api/update/status": _route_update_status,
     "/api/quiet/status": _route_quiet_status,
@@ -27876,6 +28364,15 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, "application/json", err)
                 return
             result = _dispatch_amp_action(payload)
+            self._send(200, "application/json", json.dumps(result).encode("utf-8"))
+            return
+
+        if path == "/api/cr/action":
+            payload, err = self._read_json_body()
+            if err is not None:
+                self._send(400, "application/json", err)
+                return
+            result = _dispatch_cr_action(payload)
             self._send(200, "application/json", json.dumps(result).encode("utf-8"))
             return
 
