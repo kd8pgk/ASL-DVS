@@ -1,6 +1,17 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_5_20261102.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_6_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.6 (2026-11-03)
+
+Fixes from the first real field data on a Wi-Fi-only Pi 4B.
+
+- **The Wi-Fi verdict is relative to the node's own normal.** A busy 2.4 GHz link retries 25-35 % of packets and fails a few sends all day, so fixed limits would blame the Wi-Fi every time. The row now compares the last 5 minutes with the earlier minutes kept in memory (at least 2000 packets): retries count as a fault only when they are 30 % or more and 20 points above usual, failed sends only when they are 3 times the usual rate and at least 1 % of packets. With no baseline yet, only retries of 75 % or more, or failed sends of 5 % or more, count. The row shows "(usual N %)". Hard events (beacon loss, blips, drops, chip stalls, rejoins, roams, no link) are still faults. A Pi on Ethernet still shows "Wi-Fi is not connected" without a fault.
+- **The loopback IAX link (127.0.0.1) is left out** of peers and per-link loss.
+- **An IAX round trip of exactly 1000 ms is treated as "not measured"** (a placeholder from Asterisk), so it no longer fakes the worst round trip.
+- **Link names lose a bare trailing dash** (`IAX2/1.2.3.4:4569-` is `IAX2/1.2.3.4:4569`).
+- **The Wi-Fi band and channel are logged** (`wifi_band`, `wifi_chan` in each minute) and shown in the Wi-Fi row, to tell 2.4 GHz from 5 GHz in the field data.
+- This is a release, not a cosmetic build.
 
 ## 0.10.5 (2026-11-02)
 
