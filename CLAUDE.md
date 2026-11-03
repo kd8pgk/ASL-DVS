@@ -73,6 +73,13 @@
   and adds an entry at the top of `changelogs/nodetalker_android.md` with
   its "Current version" line updated (`ci/check_repo.py` checks this). No
   cosmetic fourth part.
+- **The app's version mirrors Node Talker's.** When the APK is released,
+  `appVersion` takes Node Talker's current `X.Y.Z` (drop a cosmetic `.N`).
+  They need not match perfectly: an app-only change takes Node Talker's next
+  number, and Node Talker's next release takes that number or a later one.
+  The version must still be newer than on `main`, so a number is never
+  reused. `versionCode` is `X*1000000 + Y*1000 + Z`; never change that
+  formula back.
 - **Kotlin and Gradle files carry no comments**, like the scripts.
 - **No libraries** beyond the Kotlin standard library unless a phase needs
   one.
