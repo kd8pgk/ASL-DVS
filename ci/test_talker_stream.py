@@ -19,8 +19,8 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NODE_FILE = sorted(glob.glob(os.path.join(ROOT, "nodetalker_v*.py")), key=lambda f: [int(x) for x in re.findall(r"\d+", os.path.basename(f))[:3]])[-1]
 STUB_BIN = os.path.join(ROOT, "ci", "fixtures", "servers", "bin")
-PORT = 18993
-UDP_PORT = 16200
+PORT = int(os.environ.get("NT_TEST_PORT") or 18993)
+UDP_PORT = int(os.environ.get("NT_TEST_UDP_PORT") or 16200)
 PASSWORD = "stream-test-password"
 FRAME_SEC = 0.02
 FRAME_BYTES = 320
@@ -265,15 +265,16 @@ class Node:
         with open(self.boot, "w", encoding="utf-8") as f:
             f.write(BOOT)
         self.log_path = os.path.join(self.dir, "server.log")
+        self.log = None
         self.proc = None
 
     def start(self):
         env = dict(os.environ)
         env.update(NODETALKER_CONFIG_DIR=self.dir, STUB_DIR=self.dir,
                    PATH=STUB_BIN + os.pathsep + os.environ.get("PATH", ""))
-        log = open(self.log_path, "w", encoding="utf-8")
+        self.log = open(self.log_path, "w", encoding="utf-8")
         self.proc = subprocess.Popen([sys.executable, self.boot, NODE_FILE, PASSWORD], cwd=ROOT, env=env,
-                                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                                     stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
         deadline = time.time() + 30
         while time.time() < deadline:
             if self.proc.poll() is not None:
@@ -295,6 +296,8 @@ class Node:
                     os.killpg(self.proc.pid, signal.SIGKILL)
                 except ProcessLookupError:
                     pass
+        if self.log:
+            self.log.close()
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def fds(self):
