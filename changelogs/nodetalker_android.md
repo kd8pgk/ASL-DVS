@@ -1,6 +1,11 @@
 # Node Talker Mobile changelog
 
-Current version: `0.6.5`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.9`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.9 (2026-11-03)
+
+- **The version number now follows Node Talker.** From this build the app's version is Node Talker's (0.10.9), so the two are easy to compare. Numbers may be skipped or repeated apart: an app-only change takes Node Talker's next number. The jump from 0.6.5 is deliberate. The internal version code is now `X*1000000 + Y*1000 + Z` (it was `X*10000 + Y*100 + Z`), so it keeps rising and does not collide when a patch number passes 99. 0.10.9 is 10009, above 0.6.5 (605), so it installs over the old app.
+- **Spectrum when the app plays the audio.** The app computes the spectrum from the audio it is about to play (512 samples, Blackman window, 128 bars from 0 to 4 kHz, the same dB range and smoothing as the browser) and sends it to the page about 25 times a second, but only while the Listen tab is showing, Spectrum is on and audio is playing. Nothing is sent over the network.
 
 ## 0.6.5 (2026-11-03)
 

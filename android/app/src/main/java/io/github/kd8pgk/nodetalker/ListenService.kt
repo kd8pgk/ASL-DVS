@@ -49,6 +49,8 @@ object Listen {
     @Volatile var level: Double = -120.0
     @Volatile var muted = false
     @Volatile var volume = 1f
+    @Volatile var specOn = false
+    @Volatile var specSink: ((String, Double) -> Unit)? = null
 
     val listeners = CopyOnWriteArrayList<() -> Unit>()
 
@@ -106,6 +108,8 @@ class ListenService : Service() {
     private var reporter: Thread? = null
     private val stats = PlayStats()
     private var netInfo: NetInfo? = null
+    private val spec = Spectrum()
+    private var specAt = 0L
     @Volatile private var trimLevel = 0
     @Volatile private var connectAt = 0L
     @Volatile private var playStartedAt = 0L
@@ -672,6 +676,15 @@ class ListenService : Service() {
                 }
                 val quiet = Listen.muted || focusLost
                 track.write(if (quiet) silence else f, 0, FRAME)
+                val sink = Listen.specSink
+                if (sink != null && Listen.specOn) {
+                    spec.push(if (quiet) silence else f)
+                    val at = SystemClock.elapsedRealtime()
+                    if (at - specAt >= SPEC_MS) {
+                        specAt = at
+                        sink(spec.encode(), spec.peakDb())
+                    }
+                }
                 for (v in f) peak = max(peak, abs(v.toInt()))
                 if (++n >= LEVEL_FRAMES) {
                     val under = track.underrunCount
@@ -827,6 +840,7 @@ class ListenService : Service() {
         private const val QUEUE_FRAMES = 150
         private const val LEVEL_FRAMES = 10
         private const val STATS_SEND_MS = 30000L
+        private const val SPEC_MS = 40L
         private const val STATS_SAMPLE_MS = 5000L
         private const val STATS_BEAT_EVERY = 5
         private const val STATS_GRACE_MS = 3000L

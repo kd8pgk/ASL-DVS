@@ -5,7 +5,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val appVersion = "0.6.5"
+val appVersion = "0.10.9"
 
 android {
     namespace = "io.github.kd8pgk.nodetalker"
@@ -16,7 +16,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionName = appVersion
-        versionCode = appVersion.split(".").map { it.toInt() }.let { it[0] * 10000 + it[1] * 100 + it[2] }
+        versionCode = appVersion.split(".").map { it.toInt() }.let { it[0] * 1000000 + it[1] * 1000 + it[2] }
     }
 
     signingConfigs {

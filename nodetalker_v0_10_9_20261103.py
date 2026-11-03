@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.8"
+VERSION = "0.10.9"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -1592,8 +1592,9 @@ LISTEN_EVENTS_MAX = 20
 LISTEN_WHY = ("button", "notification", "media_button", "auto_open", "balancer", "node_test", "headset_back",
               "headset_lost", "bluetooth_connect", "bluetooth_gone", "login_rejected", "stream_ended",
               "service_destroyed", "process_killed", "format_changed", "logout", "app_start", "app_stop",
-              "client_closed", "write_timeout", "error", "pump_stopped", "other")
-LISTEN_DETAIL_NUM = ("vis", "screen", "fg", "doze", "psave", "ign", "bucket", "up", "trim", "code", "imp", "secs")
+              "client_closed", "write_timeout", "error", "pump_stopped", "page_frozen", "page_resumed", "page_hidden",
+              "page_shown", "page_unload", "resumed_dead", "other")
+LISTEN_DETAIL_NUM = ("vis", "screen", "fg", "doze", "psave", "ign", "bucket", "up", "trim", "code", "imp", "secs", "hid", "gap")
 LISTEN_DETAIL_STR = ("net", "exit", "err")
 _LISTEN_STR_RE = re.compile(r"[^A-Za-z0-9_ .:/-]")
 RXH_GAP_SEC = 0.06
@@ -2342,7 +2343,7 @@ def listen_note(client, src, action, why, detail, phone_t=None):
     _listenlog_write(row)
     bits = ", ".join(f"{k} {v}" for k, v in detail.items())
     log_event(f"Listen {action}: {client}, {src}, {why.replace('_', ' ')}" + (f" ({bits})" if bits else ""),
-              "ok" if src != "system" else "warn")
+              "ok" if src != "system" or action == "page" else "warn")
 
 
 def listen_event(body):
@@ -2355,7 +2356,9 @@ def listen_event(body):
         if not isinstance(ev, dict):
             continue
         action, src = ev.get("action"), ev.get("src")
-        if action not in ("connect", "disconnect") or src not in ("user", "system"):
+        if action not in ("connect", "disconnect", "page") or src not in ("user", "system"):
+            continue
+        if action == "page" and src != "system":
             continue
         why = ev.get("why") if ev.get("why") in LISTEN_WHY else "other"
         listen_note(client, src, action, why, listen_detail(ev.get("detail")), ev.get("t"))
@@ -9291,7 +9294,30 @@ const SPEC_PAL = (() => {
   return p;
 })();
 
-function specOn() { return !!play.spec && !!analyser && playing && tab === 'listen' && document.visibilityState === 'visible'; }
+let appBins = null, appPeak = -120, appSpecWant = false;
+
+function appSpecOk() {
+  try { return appAudio() && typeof NodeTalkerApp.specWanted === 'function'; } catch (e) { return false; }
+}
+
+function specOn() { return !!play.spec && (!!analyser || appSpecOk()) && playing && tab === 'listen' && document.visibilityState === 'visible'; }
+
+function appSpecSync() {
+  const want = appSpecOk() && specOn();
+  if (want === appSpecWant) return;
+  appSpecWant = want;
+  try { NodeTalkerApp.specWanted(want); } catch (e) {}
+  if (!want) appBins = null;
+}
+
+window.ntAppSpec = (b64, pk) => {
+  try {
+    const t = atob(b64);
+    if (!appBins || appBins.length !== t.length) appBins = new Uint8Array(t.length);
+    for (let i = 0; i < t.length; i++) appBins[i] = t.charCodeAt(i);
+    appPeak = Number(pk) || -120;
+  } catch (e) {}
+};
 
 function specFit() {
   const wrap = $('spec-wrap'), box = $('spec-box');
@@ -9315,6 +9341,11 @@ const SPEC_DB_LO = -100, SPEC_DB_HI = -25;
 let specWave = null, specPk = {level: -120, hold: -120, holdAt: 0};
 
 function specMeter(now) {
+  if (!analyser) {
+    specPk.level = Math.max(appPeak, specPk.level - 1.5);
+    if (specPk.level >= specPk.hold || now - specPk.holdAt > 1000) { specPk.hold = specPk.level; specPk.holdAt = now; }
+    return;
+  }
   if (!specWave) specWave = new Float32Array(analyser.fftSize);
   analyser.getFloatTimeDomainData(specWave);
   let pk = 0;
@@ -9327,10 +9358,11 @@ function specMeter(now) {
 function specDraw(now) {
   const cv = $('spec'), g = cv.getContext('2d'), w = cv.width, h = cv.height, r = window.devicePixelRatio || 1;
   const gl = Math.round(40 * r), gr = Math.round(52 * r), bx = gl, bw = w - gl - gr;
-  analyser.getByteFrequencyData(specBins);
+  let bins = specBins;
+  if (analyser) analyser.getByteFrequencyData(specBins); else bins = appBins || new Uint8Array(128);
   specMeter(now || performance.now());
-  const top = Math.min(specBins.length, Math.ceil(SPEC_HZ / (ctx.sampleRate / 2) * specBins.length));
-  const at = (x) => specBins[Math.min(top - 1, Math.floor((x - bx) / bw * top))];
+  const top = analyser ? Math.min(bins.length, Math.ceil(SPEC_HZ / (ctx.sampleRate / 2) * bins.length)) : bins.length;
+  const at = (x) => bins[Math.min(top - 1, Math.floor((x - bx) / bw * top))];
   const yDb = (db) => h - (db - SPEC_DB_LO) / (SPEC_DB_HI - SPEC_DB_LO) * h;
   g.fillStyle = '#0a1016';
   g.fillRect(0, 0, w, h);
@@ -9377,6 +9409,7 @@ function specLoop(t) {
 }
 
 function specKick() {
+  appSpecSync();
   if (!specFit()) return;
   if (!specOn()) { if (!playing) specClear(); return; }
   if (!specRaf) specRaf = requestAnimationFrame(specLoop);
@@ -9438,6 +9471,7 @@ function appListenUi(on) {
   $('listen-btn').classList.toggle('connect', !on);
   $('listen-btn').classList.toggle('disconnect', on);
   if (!on) { note('listen-msg', '', ''); if (!talking) $('meter-bar').style.width = '0%'; }
+  specKick();
 }
 
 window.ntAppEvent = (e) => {
@@ -9461,6 +9495,7 @@ function appSync() {
 }
 
 async function autoListen() {
+  if (wantGet() === '0') return;
   if (appAudio()) {
     appSync();
     if (!playing && play.auto && (authed || publicListen)) startListen('system', 'auto_open');
@@ -9484,9 +9519,30 @@ function listenDetail(extra) {
   return Object.assign({vis: document.visibilityState === 'visible' ? 1 : 0, up: Math.round(performance.now() / 1000)}, extra || {});
 }
 
-function listenLog(action, src, why, extra) {
+function listenLog(action, src, why, extra, keep) {
   if (appAudio() || !authed) return;
-  post('/api/listen/event', {client: 'browser', events: [{action: action, src: src, why: why, t: Date.now(), detail: listenDetail(extra)}]}).catch(() => {});
+  api('/api/listen/event', {method: 'POST', keepalive: !!keep, body: {client: 'browser', events: [{action: action, src: src, why: why, t: Date.now(), detail: listenDetail(extra)}]}}).catch(() => {});
+}
+
+function wantGet() { try { return localStorage.getItem('nlWant'); } catch (e) { return null; } }
+function wantSet(v) { try { localStorage.setItem('nlWant', v); } catch (e) {} }
+
+let hiddenAt = 0, lastDataAt = 0;
+const REVIVE_MS = 5000;
+function dataGap() { return lastDataAt ? Math.round((performance.now() - lastDataAt) / 1000) : -1; }
+
+function listenPage(why, extra, keep) {
+  if (playing) listenLog('page', 'system', why, extra, keep);
+}
+
+function listenRevive() {
+  if (!playing || appAudio() || starting || !lastDataAt || performance.now() - lastDataAt < REVIVE_MS) return;
+  listenLog('connect', 'system', 'resumed_dead', {gap: dataGap()});
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  const old = ctrl;
+  ctrl = null;
+  if (old) old.abort();
+  startListen('system', 'retry');
 }
 
 function appListenCall(name, src, why) {
@@ -9500,6 +9556,7 @@ let listenErrLogged = false;
 
 async function startListen(src, why) {
   src = src || 'system'; why = why || 'other';
+  if (src === 'user') wantSet('1');
   autoWaitEnd();
   if (appAudio()) {
     appCall('setVolume', listenVolume());
@@ -9530,9 +9587,10 @@ async function startListen(src, why) {
   $('listen-btn').classList.remove('connect');
   $('listen-btn').classList.add('disconnect');
   note('listen-msg', '', 'Connecting...');
-  ctrl = new AbortController();
+  const myCtrl = ctrl = new AbortController();
+  lastDataAt = performance.now();
   try {
-    const r = await fetch('/api/listen' + (play.s16 ? '?fmt=s16' : ''), {signal: ctrl.signal, cache: 'no-store'});
+    const r = await fetch('/api/listen' + (play.s16 ? '?fmt=s16' : ''), {signal: myCtrl.signal, cache: 'no-store'});
     if (!r.ok) {
       let e = 'HTTP ' + r.status;
       try { const d = await r.json(); e = d.error || e; } catch (x) {}
@@ -9547,10 +9605,11 @@ async function startListen(src, why) {
       const {value, done} = await rd.read();
       if (done) break;
       push(value);
+      lastDataAt = performance.now();
     }
     if (playing) throw new Error('stream ended');
   } catch (e) {
-    if (!playing) return;
+    if (!playing || ctrl !== myCtrl) return;
     if (!listenErrLogged) { listenErrLogged = true; listenLog('disconnect', 'system', 'stream_ended', {err: String(e.message || e)}); }
     note('listen-msg', 'warn', 'Disconnected (' + e.message + '). Retrying in 3 s...');
     retryTimer = setTimeout(() => { if (playing) startListen('system', 'retry'); }, 3000);
@@ -9559,6 +9618,7 @@ async function startListen(src, why) {
 
 function stopListen(src, why) {
   src = src || 'system'; why = why || 'other';
+  if (src === 'user') wantSet('0');
   autoWaitEnd();
   if (appAudio()) { appListenCall('listenStop', src, why); appListenUi(false); return; }
   if (playing) listenLog('disconnect', src, why);
@@ -9982,7 +10042,7 @@ function availUi() {
   const playWhy = {
     'play-s16': app ? A_PLAY : '',
     'play-smooth': app ? A_PLAY : (ctx && ctx.sampleRate === 8000 ? 'This phone already plays at 8 kHz, so there is nothing to smooth.' : ''),
-    'play-spec': app ? A_PLAY : '',
+    'play-spec': app ? (appSpecOk() ? '' : 'The spectrum in app audio needs a newer app.') : '',
   };
   Object.keys(playWhy).forEach((id) => naSet(id, playWhy[id]));
   whyNote('why-play', Object.values(playWhy));
@@ -11270,6 +11330,16 @@ document.addEventListener('DOMContentLoaded', () => {
   $('mic-gate').addEventListener('change', saveMic);
   ['play-s16', 'play-smooth', 'play-auto', 'play-spec'].forEach((id) => $(id).addEventListener('change', savePlay));
   window.addEventListener('resize', specKick);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') { hiddenAt = Date.now(); listenPage('page_hidden', null, true); return; }
+    const hid = hiddenAt ? Math.round((Date.now() - hiddenAt) / 1000) : 0;
+    hiddenAt = 0;
+    listenPage('page_shown', {hid: hid, gap: dataGap()});
+    listenRevive();
+  });
+  document.addEventListener('freeze', () => listenPage('page_frozen', null, true));
+  document.addEventListener('resume', () => { listenPage('page_resumed', {gap: dataGap()}); listenRevive(); });
+  window.addEventListener('pagehide', (e) => listenPage('page_unload', {code: e.persisted ? 1 : 0}, true));
   $('mic-test').addEventListener('click', micTest);
   $('node-test').addEventListener('click', nodeTest);
   try { window.name = 'asl_dvs_listen'; } catch (e) {}
