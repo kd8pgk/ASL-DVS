@@ -5,7 +5,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
-import org.junit.Ignore
 import org.junit.Test
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
@@ -35,6 +34,17 @@ class WsClientTest {
                 sb.append(b.toChar())
             }
             return sb.toString()
+        }
+
+        fun accept(head: String, accept: String? = null) {
+            val key = head.lines().first { it.startsWith("Sec-WebSocket-Key:", ignoreCase = true) }
+                .substringAfter(':').trim()
+            val value = accept ?: WsClient.acceptFor(key)
+            out.write(
+                ("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
+                    "Sec-WebSocket-Accept: $value\r\n\r\n").toByteArray(Charsets.ISO_8859_1)
+            )
+            out.flush()
         }
 
         fun answer(status: String) {
@@ -133,8 +143,9 @@ class WsClientTest {
         Harness().use { h ->
             val head = AtomicReference("")
             h.serve { p ->
-                head.set(p.readHead())
-                p.answer("101 Switching Protocols")
+                val req = p.readHead()
+                head.set(req)
+                p.accept(req)
             }
             val c = WsClient(h.node(), "session=abc")
             c.connect()
@@ -158,8 +169,9 @@ class WsClientTest {
         Harness().use { h ->
             val head = AtomicReference("")
             h.serve { p ->
-                head.set(p.readHead())
-                p.answer("101 Switching Protocols")
+                val req = p.readHead()
+                head.set(req)
+                p.accept(req)
             }
             WsClient(h.node(), null).apply { connect(); close() }
             h.finish()
@@ -209,8 +221,7 @@ class WsClientTest {
             val sizes = listOf(0, 1, 125, 126, 300, 65535, 65536, 70000)
             val got = CopyOnWriteArrayList<Frame>()
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 repeat(sizes.size) { got.add(p.readFrame()) }
             }
             val c = WsClient(h.node(), null)
@@ -233,8 +244,7 @@ class WsClientTest {
         Harness().use { h ->
             val got = AtomicReference<Frame?>(null)
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 got.set(p.readFrame())
             }
             val c = WsClient(h.node(), null)
@@ -251,8 +261,7 @@ class WsClientTest {
         Harness().use { h ->
             val received = mutableListOf<String>()
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 p.write(frameBytes(1, "hi".toByteArray()))
                 p.write(frameBytes(1, "x".repeat(200).toByteArray()))
                 p.write(frameBytes(1, "y".repeat(70000).toByteArray()))
@@ -271,8 +280,7 @@ class WsClientTest {
         Harness().use { h ->
             val pong = AtomicReference<Frame?>(null)
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 p.write(frameBytes(9, "ping-data".toByteArray()))
                 pong.set(p.readFrame())
             }
@@ -290,8 +298,7 @@ class WsClientTest {
     fun a_close_frame_from_the_node_ends_read_with_closed() {
         Harness().use { h ->
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 p.write(frameBytes(8, ByteArray(0)))
             }
             val c = WsClient(h.node(), null)
@@ -306,8 +313,7 @@ class WsClientTest {
     fun a_frame_longer_than_a_megabyte_is_refused() {
         Harness().use { h ->
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 p.write(byteArrayOf(0x81.toByte(), 127) + longBytes(1_000_001L))
             }
             val c = WsClient(h.node(), null)
@@ -322,8 +328,7 @@ class WsClientTest {
     fun a_negative_64_bit_length_is_refused() {
         Harness().use { h ->
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 p.write(byteArrayOf(0x81.toByte(), 127) + longBytes(Long.MIN_VALUE))
             }
             val c = WsClient(h.node(), null)
@@ -339,8 +344,7 @@ class WsClientTest {
         Harness().use { h ->
             val got = AtomicReference<Frame?>(null)
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 got.set(p.readFrame())
             }
             val c = WsClient(h.node(), null)
@@ -359,14 +363,12 @@ class WsClientTest {
         assertEquals("not connected", e.message)
     }
 
-    @Ignore("Known gap from the audit: a message split over continuation frames is not reassembled")
     @Test
     fun a_fragmented_text_message_is_reassembled() {
         Harness().use { h ->
             val received = mutableListOf<String>()
             h.serve { p ->
-                p.readHead()
-                p.answer("101 Switching Protocols")
+                p.accept(p.readHead())
                 p.write(frameBytes(1, "Hel".toByteArray(), fin = false))
                 p.write(frameBytes(0, "lo".toByteArray(), fin = true))
             }
@@ -376,5 +378,119 @@ class WsClientTest {
             h.finish()
             assertEquals(listOf("Hello"), received)
         }
+    }
+
+    @Test
+    fun a_ping_between_fragments_is_answered_and_the_message_still_joins() {
+        Harness().use { h ->
+            val received = mutableListOf<String>()
+            val pong = AtomicReference<Frame?>(null)
+            h.serve { p ->
+                p.accept(p.readHead())
+                p.write(frameBytes(1, "Hel".toByteArray(), fin = false))
+                p.write(frameBytes(9, "mid".toByteArray()))
+                p.write(frameBytes(0, "lo".toByteArray(), fin = true))
+                pong.set(p.readFrame())
+            }
+            val c = WsClient(h.node(), null)
+            c.connect()
+            drain(c) { received.add(it) }
+            h.finish()
+            assertEquals(listOf("Hello"), received)
+            assertEquals(10, pong.get()!!.op)
+            assertArrayEquals("mid".toByteArray(), pong.get()!!.payload)
+        }
+    }
+
+    @Test
+    fun a_continuation_with_nothing_to_continue_is_refused() {
+        Harness().use { h ->
+            h.serve { p ->
+                p.accept(p.readHead())
+                p.write(frameBytes(0, "lo".toByteArray(), fin = true))
+            }
+            val c = WsClient(h.node(), null)
+            c.connect()
+            assertEquals("bad frame from the node", drain(c) {}.message)
+            h.finish()
+        }
+    }
+
+    @Test
+    fun a_new_message_before_the_last_one_ended_is_refused() {
+        Harness().use { h ->
+            h.serve { p ->
+                p.accept(p.readHead())
+                p.write(frameBytes(1, "a".toByteArray(), fin = false))
+                p.write(frameBytes(1, "b".toByteArray(), fin = true))
+            }
+            val c = WsClient(h.node(), null)
+            c.connect()
+            assertEquals("bad frame from the node", drain(c) {}.message)
+            h.finish()
+        }
+    }
+
+    @Test
+    fun a_message_that_grows_past_a_megabyte_in_pieces_is_refused() {
+        Harness().use { h ->
+            val piece = ByteArray(600_000) { 'a'.code.toByte() }
+            h.serve { p ->
+                p.accept(p.readHead())
+                p.write(frameBytes(1, piece, fin = false))
+                p.write(frameBytes(0, piece, fin = true))
+            }
+            val received = mutableListOf<String>()
+            val c = WsClient(h.node(), null)
+            c.connect()
+            assertEquals("bad frame from the node", drain(c) { received.add(it) }.message)
+            h.finish()
+            assertTrue(received.isEmpty())
+        }
+    }
+
+    @Test
+    fun a_binary_message_is_not_delivered_as_text() {
+        Harness().use { h ->
+            val received = mutableListOf<String>()
+            h.serve { p ->
+                p.accept(p.readHead())
+                p.write(frameBytes(2, byteArrayOf(1, 2, 3)))
+                p.write(frameBytes(1, "x".toByteArray()))
+            }
+            val c = WsClient(h.node(), null)
+            c.connect()
+            drain(c) { received.add(it) }
+            h.finish()
+            assertEquals(listOf("x"), received)
+        }
+    }
+
+    @Test
+    fun a_wrong_accept_key_is_refused() {
+        Harness().use { h ->
+            h.serve { p -> p.accept(p.readHead(), "AAAAAAAAAAAAAAAAAAAAAAAAAAA=") }
+            val e = assertThrows(IOException::class.java) { WsClient(h.node(), null).connect() }
+            assertEquals("bad answer from the node", e.message)
+            h.finish()
+        }
+    }
+
+    @Test
+    fun a_missing_accept_key_is_refused() {
+        Harness().use { h ->
+            h.serve { p ->
+                p.readHead()
+                p.answer("101 Switching Protocols")
+            }
+            val e = assertThrows(IOException::class.java) { WsClient(h.node(), null).connect() }
+            assertEquals("bad answer from the node", e.message)
+            h.finish()
+        }
+    }
+
+    @Test
+    fun the_accept_key_matches_the_rfc_6455_example() {
+        assertEquals("s3pPLMBiTxaQ9kYGzzhZRbK+xOo=", WsClient.acceptFor("dGhlIHNhbXBsZSBub25jZQ=="))
     }
 }
