@@ -767,7 +767,7 @@ class ListenSilenceTests(unittest.TestCase):
 @unittest.skipUnless(SOAK_MIN > 0, "set NT_SOAK_MIN=<minutes> to run the soak")
 class SoakTests(unittest.TestCase):
     def test_soak(self):
-        node = Node(max_listeners=3).start()
+        node = Node(max_listeners=4).start()
         cookie = login()
         feeder = Feeder(tone=True).start()
         try:
@@ -829,6 +829,7 @@ class SoakTests(unittest.TestCase):
                 s.close()
             self.assertFalse(any(st["eof"] for st in stats), "a steady listener was dropped")
             self.assertTrue(all(st["max_gap"] < 1.0 for st in stats), "a steady listener had a gap of 1 s or more")
+            self.assertGreater(churn_ok, 0, "the churn never got a slot")
             self.assertLessEqual(node.fds(), fd0 + 5)
             self.assertLessEqual(node.threads(), th0 + 5)
             self.assertLess(node.rss_kb() - rss0, 20000)
