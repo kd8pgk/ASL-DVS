@@ -1,6 +1,13 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_14_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_15_20261103.py`. Newest entries first.
+
+## 0.1.15 (2026-11-03)
+
+- **Claude Code sign-in opens in the Remote Control folder.** The sign-in step now starts Claude as the login user inside the Remote Control folder, so the folder can be trusted there. The note says to answer Yes to trust the folder (the service refuses to start until it is trusted) and to exit with /exit or Ctrl+C twice.
+- **New Root shell in the terminal.** A **Terminal** link in the page header opens a root shell on the node. It needs the root password, works on the local network only, and asks to switch the terminal on first when it is off. The sign-in step also appears in the terminal's command list.
+- **Folder and service steps keep the 0.1.14 fix** (`${d#??}`, works under `/bin/sh`).
+- **Tested on a node:** the sign-in step and the terminal, from the node's own build of this file. **Not retested here:** the page in a browser.
 
 ## 0.1.14 (2026-11-03)
 

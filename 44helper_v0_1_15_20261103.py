@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.14"
+APP_VERSION = "0.1.15"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4523,7 +4523,8 @@ _CR_CLAUDE_CMD = (
     f"sudo ln -sf {_CR_NODE_DIR}/bin/claude /usr/local/bin/claude && /usr/local/bin/claude --version"
 )
 
-_CR_SIGNIN_CMD = f"sudo -u {_CR_DEFAULT_USER} -H /usr/local/bin/claude"
+_CR_SIGNIN_CMD = (f"sudo -u {_CR_DEFAULT_USER} -H bash -c "
+                  f"'mkdir -p {_CR_FOLDER_DEFAULT} && cd {_CR_FOLDER_DEFAULT} && exec /usr/local/bin/claude'")
 
 _CR_FOLDER_CMD = (
     "u='{{cruser}}'; d='{{crfolder}}'; h=$(getent passwd \"$u\" | cut -d: -f6); "
@@ -4577,10 +4578,12 @@ def _cr_install_steps() -> list[dict]:
          "note": f"Installs {_CR_CLAUDE_PKG} with the Node.js from step 2 and links claude into /usr/local/bin."},
         {"id": "cr_signin", "num": 4, "title": "Sign in as the login user (manual, in a terminal)",
          "cmd": _CR_SIGNIN_CMD, "manual_block": True,
-         "note": "Run this in an SSH terminal on the node. Claude shows a sign-in link: open it on another device, "
-                 "sign in with the same account as the Claude apps, paste the code back, then exit with Ctrl+C. "
-                 f"Replace {_CR_DEFAULT_USER} with your login user if it is different. The sign-in is "
-                 "stored in that user's home folder."},
+         "note": "Use Open in terminal (or run it over SSH). It starts Claude in the Remote Control folder as the "
+                 "login user. Claude shows a sign-in link: open it on another device, sign in with the same account "
+                 "as the Claude apps and paste the code back. Then answer Yes to trust the folder (the service "
+                 "refuses to start until it is trusted) and exit with /exit or Ctrl+C twice. "
+                 f"Replace {_CR_DEFAULT_USER} and {_CR_FOLDER_DEFAULT} if your login user or folder are different. "
+                 "The sign-in is stored in that user's home folder."},
         {"id": "cr_folder", "num": 5, "title": "Create the Remote Control folder",
          "fields": [_CR_FIELD_USER, _CR_FIELD_FOLDER],
          "cmd_template": _CR_FOLDER_CMD,
@@ -4710,10 +4713,12 @@ _TERM_ALLOW: dict[str, tuple[str, str]] = {
     "asl_menu": ("run_asl_menu", "asl-menu (ASL3 node settings)"),
     "m17_install": ("m17_run_install", "USRP2M17 installer (asks for your callsign)"),
     "amp_firstrun": ("amp_srv_firstrun", "amp-server first run (foreground)"),
+    "cr_signin": ("cr_signin", "Claude Code sign-in (as the login user)"),
 }
 _TERM_PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "Cf-Ipcountry", "Cf-Visitor", "X-Forwarded-For",
                        "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Via")
 _TERM_TICKET_TTL = 60.0
+_TERM_SHELL_ID = "shell"
 _TERM_TICKETS: dict[str, dict] = {}
 _TERM_LOCK = threading.Lock()
 
@@ -4725,6 +4730,8 @@ def _term_allowlist() -> dict[str, dict]:
                 for st in steps if st.get("id") == step_id and st.get("cmd")}
         if len(cmds) == 1:
             out[tid] = {"id": tid, "step": step_id, "title": title, "cmd": cmds.pop()}
+    out[_TERM_SHELL_ID] = {"id": _TERM_SHELL_ID, "step": "", "title": "Root shell",
+                           "cmd": "cd /root 2>/dev/null || cd /; exec bash -l"}
     return out
 
 def _term_enabled() -> tuple[bool, str]:
@@ -4896,7 +4903,7 @@ def _term_status(ip: str, headers) -> dict:
     client_ok, cwhy = _term_client_ok(ip, headers)
     with _TERM_LOCK:
         busy = _TERM_ACTIVE.get("id") is not None
-    cmds = {v["step"]: {"id": v["id"], "title": v["title"]} for v in _term_allowlist().values()}
+    cmds = {v["step"]: {"id": v["id"], "title": v["title"]} for v in _term_allowlist().values() if v["step"]}
     can_enable, ewhy = _term_can_enable(ip, headers)
     return {"enabled": enabled, "reason": why, "client_ok": client_ok, "client_reason": cwhy,
             "can_enable": can_enable, "enable_reason": ewhy,
@@ -13807,6 +13814,8 @@ _CSS_AUTH = """
 #hdr-logout:hover{color:var(--amber);text-decoration:underline}
 #hdr-logout-all{font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);cursor:pointer;margin-right:.8rem}
 #hdr-logout-all:hover{color:var(--red);text-decoration:underline}
+#hdr-term{font-family:var(--sans);font-size:var(--fs-sm);color:var(--muted);cursor:pointer;margin-right:.8rem}
+#hdr-term:hover{color:var(--amber);text-decoration:underline}
 #login-screen,#login{flex-direction:column;gap:18px;padding:40px 16px 56px}
 .welcome{font-size:1.1rem;font-weight:700;color:var(--text-bright);letter-spacing:.02em;text-wrap:balance;max-width:44ch}
 .welcome b{color:var(--amber);font-weight:700;text-shadow:0 0 12px rgba(255,208,64,.5)}
@@ -24727,9 +24736,24 @@ function termRefreshAll() {
   document.querySelectorAll('.term-slot').forEach(function(el) { el.remove(); });
   termInit();
 }
+function termShell() {
+  if (_term.ws) { document.getElementById('term-box').classList.add('open'); if (_term.xt) _term.xt.focus(); return; }
+  fetch('/api/term/status').then(function(r) { return r.json(); }).then(function(st) {
+    _term.status = st;
+    if (st.enabled && st.client_ok) { termAsk('shell', 'Root shell'); return; }
+    if (!st.enabled && st.can_enable) {
+      termAskEnable();
+      document.getElementById('term-box').dataset.next = 'shell';
+      document.getElementById('term-auth-msg').textContent = 'The terminal is switched off for this node. Re-enter the root password to switch it on and open a root shell. You can switch it off again without a password.';
+      document.getElementById('term-go').textContent = 'Enable and open';
+      return;
+    }
+    alert('Terminal: ' + (st.enabled ? st.client_reason : (st.enable_reason || st.reason)));
+  }).catch(function(e) { alert('Could not check the terminal: ' + e); });
+}
 function termAskEnable() {
   var box = _termEnsureBox();
-  box.dataset.mode = 'enable'; box.dataset.id = '';
+  box.dataset.mode = 'enable'; box.dataset.id = ''; box.dataset.next = '';
   document.getElementById('term-title').textContent = 'Switch the terminal on';
   document.getElementById('term-auth-msg').textContent = 'Re-enter the root password to switch the terminal on for this node. You can switch it off again without a password.';
   document.getElementById('term-go').textContent = 'Enable';
@@ -24771,7 +24795,7 @@ function _termEnsureBox() {
 function termAsk(id, title) {
   if (_term.ws) { alert('A terminal is already open.'); return; }
   var box = _termEnsureBox();
-  box.dataset.id = id; box.dataset.mode = 'open';
+  box.dataset.id = id; box.dataset.mode = 'open'; box.dataset.next = '';
   document.getElementById('term-title').textContent = title;
   document.getElementById('term-auth-msg').textContent = 'Re-enter the root password to open this command in a terminal.';
   document.getElementById('term-go').textContent = 'Open';
@@ -24812,8 +24836,16 @@ function termOpen() {
     .then(function(d) {
       document.getElementById('term-pw').value = '';
       if (!d.success) { err.textContent = d.output || 'Refused.'; return; }
-      box.classList.remove('open');
       termRefreshAll();
+      if (box.dataset.next === 'shell') {
+        box.dataset.next = ''; box.dataset.mode = 'open'; box.dataset.id = 'shell';
+        document.getElementById('term-title').textContent = 'Root shell';
+        document.getElementById('term-pw').value = pw;
+        go.disabled = false;
+        termOpen();
+        return;
+      }
+      box.classList.remove('open');
     })
     .catch(function(e) { err.textContent = 'Could not switch the terminal on: ' + e; })
     .then(function() { go.disabled = false; });
@@ -26762,6 +26794,7 @@ def render_page(cfg: configparser.ConfigParser) -> str:
   </div>
   <div class="hdr-right">
     <span id="hdr-uptime">v{APP_VERSION}</span>
+    <span id="hdr-term" onclick="termShell()" title="Open a root shell on this node in this page (local network only, root password needed)">Terminal</span>
     <span id="hdr-logout-all" onclick="doLogoutAll()" title="End every login to this helper, on every browser and device">Log out all devices</span>
     <span id="hdr-logout" onclick="doLogout()" title="Log out of this session">Log Out</span>
   </div>
