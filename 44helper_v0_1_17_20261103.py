@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.16"
+APP_VERSION = "0.1.17"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3534,6 +3534,245 @@ stanza:
 NODE1 = 1917
 """
 
+_M17_CONF_PY = r"""import os
+import re
+import shutil
+import sys
+
+mode = sys.argv[1]
+node = os.environ.get("NODE", "")
+RPT = "/etc/asterisk/rpt.conf"
+MOD = "/etc/asterisk/modules.conf"
+EXT = "/etc/asterisk/extensions.conf"
+TAG = "44helper M17"
+BEGIN = "; BEGIN " + TAG
+END = "; END " + TAG
+
+STANZA = [
+    "rxchannel = USRP/127.0.0.1:34008:32008",
+    "duplex = 0",
+    "hangtime = 0",
+    "althangtime = 0",
+    "holdofftelem = 1",
+    "telemdefault = 0",
+    "telemdynamic = 0",
+    "linktolink = no",
+    "nounkeyct = 1",
+    "tx_timeout = 170000",
+]
+
+
+def fail(msg):
+    print("STOPPED: " + msg + " Nothing was changed.")
+    sys.exit(1)
+
+
+def section(lines, name):
+    start = None
+    for i, line in enumerate(lines):
+        if re.match(r"^\s*\[" + re.escape(name) + r"\]", line):
+            start = i
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        if re.match(r"^\s*\[", lines[j]):
+            end = j
+            break
+    return start, end
+
+
+def insert_point(lines, start, end):
+    k = end
+    while k > start + 1 and lines[k - 1].strip() == "":
+        k -= 1
+    return k
+
+
+def apply_rpt(text):
+    lines = text.split("\n")
+    notes = []
+    sec = section(lines, "nodes")
+    if sec is None:
+        fail("rpt.conf has no [nodes] stanza.")
+    s, e = sec
+    if any(re.match(r"^\s*" + node + r"\s*=", x) for x in lines[s + 1:e]):
+        notes.append("[nodes] line already there")
+    else:
+        lines.insert(insert_point(lines, s, e), node + " = radio@127.0.0.1/" + node + ",NONE ; " + TAG)
+        notes.append("added " + node + " to [nodes]")
+    ours = any(x.strip() == BEGIN + " node " + node for x in lines)
+    if ours:
+        notes.append("[" + node + "] stanza already there")
+    else:
+        if any(re.match(r"^\s*\[" + node + r"\]", x) for x in lines):
+            fail("Node " + node + " is already defined in rpt.conf and was not added by this helper. Use another node number.")
+        while lines and lines[-1].strip() == "":
+            lines.pop()
+        lines += ["", BEGIN + " node " + node, "[" + node + "]"] + STANZA + [END + " node " + node, ""]
+        notes.append("added the [" + node + "] stanza")
+    return "\n".join(lines), notes
+
+
+def apply_mod(text):
+    lines = text.split("\n")
+    if any(re.match(r"^\s*load\s*=>?\s*chan_usrp\.so\b", x) for x in lines):
+        return text, ["chan_usrp already loaded"]
+    hit = False
+    for i, x in enumerate(lines):
+        m = re.match(r"^(\s*)noload(\s*=>?\s*)chan_usrp\.so\b.*$", x)
+        if m:
+            lines[i] = m.group(1) + "load" + m.group(2) + "chan_usrp.so ; " + TAG + " (was: " + x.strip() + ")"
+            hit = True
+    if hit:
+        return "\n".join(lines), ["changed noload to load for chan_usrp"]
+    sec = section(lines, "modules")
+    if sec is None:
+        fail("modules.conf has no [modules] stanza.")
+    lines.insert(insert_point(lines, sec[0], sec[1]), "load => chan_usrp.so ; " + TAG + " (added)")
+    return "\n".join(lines), ["added load for chan_usrp"]
+
+
+def apply_ext(text):
+    lines = text.split("\n")
+    sec = section(lines, "radio-secure")
+    if sec is None:
+        fail("extensions.conf has no [radio-secure] stanza.")
+    s, e = sec
+    body = lines[s + 1:e]
+    if any(re.match(r"^\s*exten\s*=>\s*" + node + r"\s*,\s*1\s*,\s*rpt\s*,\s*" + node + r"\b", x) for x in body):
+        return text, ["extension already there"]
+    if any(re.match(r"^\s*exten\s*=>\s*" + node + r"\s*,", x) for x in body):
+        fail("Extension " + node + " is already used in [radio-secure] for something else.")
+    lines.insert(insert_point(lines, s, e), "exten => " + node + ",1,rpt," + node + " ; " + TAG)
+    return "\n".join(lines), ["added extension " + node]
+
+
+def undo_rpt(text):
+    out = []
+    skip = False
+    n = 0
+    for x in text.split("\n"):
+        if x.strip().startswith(BEGIN):
+            skip = True
+            n += 1
+            if out and out[-1].strip() == "":
+                out.pop()
+            continue
+        if skip:
+            if x.strip().startswith(END):
+                skip = False
+            continue
+        if x.rstrip().endswith("; " + TAG):
+            n += 1
+            continue
+        out.append(x)
+    if skip:
+        fail("rpt.conf has a BEGIN marker without its END marker, so it was left alone.")
+    return "\n".join(out), ["removed " + str(n) + " item(s)" if n else "nothing to undo"]
+
+
+def undo_mod(text):
+    out = []
+    n = 0
+    for x in text.split("\n"):
+        if "; " + TAG + " (" in x:
+            m = re.search(r"\(was: (.*)\)\s*$", x)
+            if m:
+                out.append(m.group(1))
+                n += 1
+                continue
+            if x.rstrip().endswith("(added)"):
+                n += 1
+                continue
+        out.append(x)
+    return "\n".join(out), ["restored " + str(n) + " line(s)" if n else "nothing to undo"]
+
+
+def undo_ext(text):
+    out = []
+    n = 0
+    for x in text.split("\n"):
+        if x.rstrip().endswith("; " + TAG):
+            n += 1
+            continue
+        out.append(x)
+    return "\n".join(out), ["removed " + str(n) + " line(s)" if n else "nothing to undo"]
+
+
+def write(path, new):
+    bak = path + ".44helper-bak"
+    if not os.path.exists(bak):
+        shutil.copy2(path, bak)
+    tmp = path + ".44helper-tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(new)
+    shutil.copystat(path, tmp)
+    st = os.stat(path)
+    os.chown(tmp, st.st_uid, st.st_gid)
+    os.replace(tmp, path)
+
+
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
+if mode == "apply":
+    if not re.fullmatch(r"[0-9]{4,7}", node):
+        fail("The node number must be 4 to 7 digits.")
+    steps = [(RPT, apply_rpt), (MOD, apply_mod), (EXT, apply_ext)]
+elif mode == "undo":
+    steps = [(RPT, undo_rpt), (MOD, undo_mod), (EXT, undo_ext)]
+else:
+    fail("Unknown mode.")
+
+plan = []
+report = []
+for path, fn in steps:
+    try:
+        old = read(path)
+    except OSError as err:
+        fail(path + " could not be read (" + str(err) + ").")
+    if "\r" in old:
+        fail(path + " uses Windows line endings.")
+    new, notes = fn(old)
+    plan.append((path, old, new))
+    report.append(os.path.basename(path) + ": " + "; ".join(notes))
+
+done = []
+try:
+    for path, old, new in plan:
+        if new != old:
+            write(path, new)
+            done.append((path, old))
+    for path, old, new in plan:
+        if read(path) != new:
+            raise RuntimeError(path + " did not read back as written")
+except Exception as err:
+    for path, old in done:
+        try:
+            write(path, old)
+        except OSError:
+            pass
+    print("STOPPED: " + str(err) + ". The original files were put back.")
+    sys.exit(1)
+
+print("\n".join(report))
+if done:
+    print("Backups: <file>.44helper-bak (kept from the first change). Restart Asterisk to apply.")
+"""
+
+def _m17_conf_cmd(mode: str, node: str = "") -> str:
+    env = f"NODE='{node}' " if node else ""
+    return f"sudo env {env}python3 - {mode} <<'PYEOF'\n{_M17_CONF_PY}PYEOF"
+
+_M17_RESTART_CMD = (
+    "if command -v astres.sh >/dev/null 2>&1; then sudo astres.sh; "
+    "else sudo systemctl restart asterisk && echo 'Asterisk restarted (systemctl).'; fi"
+)
+
 _M17_INSTALL_PREP = (
     "cd /tmp/USRP2M17-Selector 2>/dev/null || { echo 'No /tmp/USRP2M17-Selector -- run step 3 first.'; exit 1; }; "
     "sudo sh -c 'mkdir -p \"$HOME/git\" && cd \"$HOME/git\" && rm -rf MMDVM_CM && "
@@ -3586,32 +3825,28 @@ def _m17_install_steps() -> list[dict]:
          "note": "Type your callsign and press Run. The installer asks one question, your callsign, and the page answers it. "
                  "It installs the PHP UI, builds USRP2M17 (a few minutes, longer on a Pi Zero 2 W) and starts usrp2m17.service. "
                  "Backup: Open in terminal runs the same installer interactively if Run fails."},
-        {"id": "m17_rptconf", "num": 5, "title": "rpt.conf — add the M17 node stanza",
-         "cmd": _M17_RPTCONF_SNIPPET,
-         "manual_block": True,
-         "note": "Edit /etc/asterisk/rpt.conf by hand (nano or the Cockpit file editor) — add this stanza "
-                 "plus the matching [nodes] line. 1917 is upstream's example node number; change it to "
-                 "whatever number you want to dedicate to M17 traffic. Edit the text below before copying if "
-                 "you want a different node number."},
-        {"id": "m17_modules", "num": 6, "title": "modules.conf — enable chan_usrp",
-         "cmd": _M17_MODULES_SNIPPET,
-         "manual_block": True,
-         "note": "Edit /etc/asterisk/modules.conf by hand — flips the USRP channel driver from unloaded to "
-                 "loaded, required for the rpt.conf rxchannel line above to work."},
-        {"id": "m17_extensions", "num": 7, "title": "extensions.conf — add the M17 extension",
-         "cmd": _M17_EXTENSIONS_SNIPPET,
-         "manual_block": True,
-         "note": "Edit /etc/asterisk/extensions.conf by hand. The ASL3 globals addition is community-"
-                 "reported in the upstream README (\"is it correct? I don't know but it worked for me\"), not "
-                 "an officially documented requirement — include it if your ASL3 config uses NODE/NODE1 "
-                 "globals elsewhere, skip it otherwise."},
-        {"id": "m17_restart_asterisk", "num": 8, "title": "Restart Asterisk",
-         "cmd": "if command -v astres.sh >/dev/null 2>&1; then sudo astres.sh; "
-                "else sudo systemctl restart asterisk && echo 'Asterisk restarted (systemctl).'; fi",
+        {"id": "m17_asterisk_conf", "num": 5, "title": "Add the M17 node to rpt.conf, modules.conf and extensions.conf",
+         "fields": [
+             {"id": "node", "label": "M17 node number", "type": "text", "default": "1917"},
+         ],
+         "cmd_template": _m17_conf_cmd("apply", "{{node}}"),
+         "cmd": _m17_conf_cmd("apply", "1917"),
+         "timeout": 60,
+         "note": "1917 is upstream's example node number; use whatever number you want for M17 traffic. In "
+                 "/etc/asterisk it adds the [node] stanza and its line in [nodes] (rpt.conf), changes "
+                 "noload=chan_usrp.so to load (modules.conf) and adds the extension to [radio-secure] "
+                 "(extensions.conf). Safe to run again: anything already there is left alone. It stops without "
+                 "changing anything if the node number is already used, or a stanza is missing. A copy of each file "
+                 "is kept as <file>.44helper-bak the first time it is changed, and the files are put back if the "
+                 "result does not read back correctly. Every line added is tagged 44helper M17, so Purge can remove "
+                 "it. The optional NODE1 line in rpt.conf [globals], which the upstream README reports without "
+                 "confirming it is needed, is not added: add it by hand if your ASL3 config uses NODE/NODE1 globals."},
+        {"id": "m17_restart_asterisk", "num": 6, "title": "Restart Asterisk",
+         "cmd": _M17_RESTART_CMD,
          "note": "Uses astres.sh, ASL3/HamVOIP's Asterisk-restart helper, when the node has it, and "
                  "`systemctl restart asterisk` when it does not."},
-        _config_save_step("m17_save_restore", 9),
-        {"id": "m17_sudoers", "num": 10, "title": "Install sudoers rule for the web UI",
+        _config_save_step("m17_save_restore", 7),
+        {"id": "m17_sudoers", "num": 8, "title": "Install sudoers rule for the web UI",
          "cmd": "printf 'www-data ALL=(ALL) NOPASSWD: /var/www/html/m17/update_usrp2m17.sh\\n"
                 "www-data ALL=(ALL) NOPASSWD: /bin/systemctl restart usrp2m17\\n"
                 "www-data ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart usrp2m17\\n' | "
@@ -3623,33 +3858,40 @@ def _m17_install_steps() -> list[dict]:
                  "a drop-in is safer to install/remove unattended. Assumes ASL3-Appliance's Apache runs as "
                  "www-data; if this node is HamVOIP instead (runs its web server as `http`), edit the "
                  "installed file afterward and swap www-data for http, matching upstream's HamVOIP block."},
-        _cockpit_install_step(11),
-        _cockpit_enable_step(12),
+        _cockpit_install_step(9),
+        _cockpit_enable_step(10),
     ]
 
 def _m17_purge_steps() -> list[dict]:
     return [
-        {"id": "m17_purge_stop", "num": 1, "title": "Stop & disable USRP2M17",
+        {"id": "m17_purge_conf", "num": 1, "title": "Undo the Asterisk config edits (rpt.conf, modules.conf, extensions.conf)",
+         "cmd": _m17_conf_cmd("undo"),
+         "timeout": 60,
+         "note": "Removes only the lines tagged 44helper M17 that the install step added, and puts noload back "
+                 "where it changed it. Edits you made by hand are not touched. Each file keeps its "
+                 "<file>.44helper-bak copy from the first change."},
+        {"id": "m17_purge_restart", "num": 2, "title": "Restart Asterisk",
+         "cmd": _M17_RESTART_CMD,
+         "note": "Applies the undone config. Skip it if you will restart Asterisk another way."},
+        {"id": "m17_purge_stop", "num": 3, "title": "Stop & disable USRP2M17",
          "cmd": "sudo systemctl disable --now usrp2m17 2>&1; true",
          "note": "Trailing `; true` so this doesn't report failure if the unit was never installed."},
-        {"id": "m17_purge_webroot", "num": 2, "title": "Remove the web UI",
+        {"id": "m17_purge_webroot", "num": 4, "title": "Remove the web UI",
          "cmd": "sudo rm -rf /var/www/html/m17"},
-        {"id": "m17_purge_sudoers", "num": 3, "title": "Remove the sudoers drop-in",
+        {"id": "m17_purge_sudoers", "num": 5, "title": "Remove the sudoers drop-in",
          "cmd": "sudo rm -f /etc/sudoers.d/usrp2m17"},
-        {"id": "m17_purge_unit", "num": 4, "title": "Remove the systemd unit",
+        {"id": "m17_purge_unit", "num": 6, "title": "Remove the systemd unit",
          "cmd": "sudo rm -f /usr/lib/systemd/system/usrp2m17.service /etc/systemd/system/usrp2m17.service && "
                 "sudo systemctl daemon-reload",
          "note": "The USRP2M17-Selector installer writes the unit to /usr/lib/systemd/system/usrp2m17.service. "
                  "This step removes that file and, in case a copy was placed by hand, the one in "
                  "/etc/systemd/system."},
-        {"id": "m17_purge_clone_dir", "num": 5, "title": "(Optional) Remove the clone directory",
+        {"id": "m17_purge_clone_dir", "num": 7, "title": "(Optional) Remove the clone directory",
          "cmd": "sudo rm -rf /tmp/USRP2M17-Selector",
          "auto": False,
-         "note": "NOT run automatically — harmless leftover clone-directory cleanup only. Separately: the "
-                 "rpt.conf / modules.conf / extensions.conf edits from the install steps above are NEVER "
-                 "reverted by purge — remove the M17 stanza/lines and restore noload=chan_usrp.so by hand, "
-                 "then restart Asterisk, if you want a completely clean slate."},
-        _cockpit_purge_step(6),
+         "note": "NOT run automatically — harmless leftover clone-directory cleanup only. Config edits made by "
+                 "hand (not by the install step) are not undone by purge."},
+        _cockpit_purge_step(8),
     ]
 
 _M17_SCRIPTS: dict[str, dict[str, list[dict]]] = {
