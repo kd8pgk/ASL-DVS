@@ -1639,6 +1639,27 @@ class RxHealthClientTests(unittest.TestCase):
         self.assertEqual(nt.rxh_client_name("<script>", "curl/8"), "other")
         self.assertEqual(nt.rxh_client_name(None, None), "other")
 
+    def test_phone_network_report_is_kept_and_explained(self):
+        nt = self.nt
+        nt.rxh_client({"client": "android", "under": 2, "reset": 0, "silence_ms": 400, "reconn": 2, "why": "timeout",
+                       "ttfb_ms": 900, "gap_ms": 5200, "net_chg": 1, "net": "wifi", "metered": 0, "vpn": 0, "psave": 1,
+                       "idle": 0, "rssi_min": -78, "link_mbps": 24, "mhz": 2437})
+        nt.rxh_client({"client": "android", "net": "cell", "link_mbps": 12, "rssi_min": 0, "why": "<b>"})
+        agg = nt.rxh_sum(self.rxh.window())
+        c = agg["clients"]["android"]
+        self.assertEqual((c["reconn"], c["net_chg"], c["ttfb_ms"], c["gap_ms"]), (2, 1, 900, 5200))
+        self.assertEqual((c["rssi_weak"], c["mhz"], c["link_mbps"], c["why"]), (78, 2437, 12, "timeout"))
+        self.assertEqual((c["wifi"], c["cell"], c["psave"]), (1, 1, 1))
+        text = nt._rxh_client_text(agg["clients"])
+        for bit in ("mobile data", "-78 dBm", "2437 MHz", "reconnected 2x (last: timeout)", "5200 ms", "battery saver"):
+            self.assertIn(bit, text)
+
+    def test_phone_fields_are_optional_and_junk_is_ignored(self):
+        nt = self.nt
+        nt.rxh_client({"client": "android", "under": 1, "net": ["x"], "rssi_min": "bad", "psave": 7, "why": 5})
+        c = self.rxh.cur["clients"]["android"]
+        self.assertEqual((c["wifi"], c["cell"], c["rssi_weak"], c["psave"], c["why"]), (0, 0, 0, 1, ""))
+
     def test_report_is_kept_per_device_and_in_the_totals(self):
         nt = self.nt
         nt.rxh_client({"client": "android", "under": 3, "reset": 1, "silence_ms": 700, "under_local": 2, "stall_ms": 1300})
@@ -1669,9 +1690,11 @@ class RxHealthClientTests(unittest.TestCase):
     def test_the_apps_report_keys_are_all_accepted(self):
         import re
         nt = self.nt
-        path = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker", "PlayStats.kt")
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
+        text = ""
+        for name in ("PlayStats.kt", "NetInfo.kt"):
+            path = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker", name)
+            with open(path, encoding="utf-8") as fh:
+                text += fh.read()
         keys = set(re.findall(r'\\"(\w+)\\":', text))
         self.assertTrue(keys, "no keys found in PlayStats.json()")
         self.assertEqual(keys - set(nt.RXH_CLIENT_KEYS), set())

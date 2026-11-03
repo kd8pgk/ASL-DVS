@@ -1,6 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.6.3`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.4`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.4 (2026-11-03)
+
+- **The receive-health report now says what the phone's connection was doing**, to tell a phone problem from the Pi's or the internet. It adds: Wi-Fi or mobile data, Wi-Fi signal, frequency and slowest link speed, network changes, battery saver, idle mode, VPN and metered; and for the listen stream: reconnects with the reason (timeout, connect, closed, http), time to first audio, and the longest time audio stopped arriving.
+- **Light on a slow link.** Nothing extra is sent: the same small report goes out every 30 seconds only when something happened, plus one short report every 2.5 minutes when all is quiet (about 250 bytes). The phone's signal is read locally every 5 seconds. No probing and no new requests.
+- Needs two new permissions without any prompt: network state and Wi-Fi state. No location permission; the Wi-Fi name is not read.
+- Nodes older than Node Talker 0.10.7 ignore the new values.
 
 ## 0.6.3 (2026-11-02)
 

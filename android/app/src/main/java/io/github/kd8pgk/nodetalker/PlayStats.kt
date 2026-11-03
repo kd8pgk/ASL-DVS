@@ -6,10 +6,20 @@ class PlayStats {
     private var silenceMs = 0L
     private var underLocal = 0
     private var stallMs = 0L
+    private var reconn = 0
+    private var why = ""
+    private var ttfbMs = 0L
+    private var gapMs = 0L
+    private var netChg = 0
 
-    class Snapshot(val under: Int, val reset: Int, val silenceMs: Long, val underLocal: Int, val stallMs: Long) {
+    class Snapshot(
+        val under: Int, val reset: Int, val silenceMs: Long, val underLocal: Int, val stallMs: Long,
+        val reconn: Int = 0, val why: String = "", val ttfbMs: Long = 0, val gapMs: Long = 0, val netChg: Int = 0,
+        val extra: String = ""
+    ) {
         fun json(): String = "{\"client\":\"android\",\"under\":$under,\"reset\":$reset,\"silence_ms\":$silenceMs," +
-            "\"under_local\":$underLocal,\"stall_ms\":$stallMs}"
+            "\"under_local\":$underLocal,\"stall_ms\":$stallMs,\"reconn\":$reconn,\"why\":\"$why\"," +
+            "\"ttfb_ms\":$ttfbMs,\"gap_ms\":$gapMs,\"net_chg\":$netChg$extra}"
     }
 
     @Synchronized
@@ -31,17 +41,37 @@ class PlayStats {
     }
 
     @Synchronized
-    fun take(): Snapshot? {
-        if (under == 0 && reset == 0) {
+    fun reconnect(reason: String) {
+        reconn = (reconn + 1).coerceAtMost(LIMIT)
+        why = reason
+    }
+
+    @Synchronized
+    fun firstByte(ms: Long) {
+        ttfbMs = maxOf(ttfbMs, ms.coerceIn(0, LIMIT.toLong()))
+    }
+
+    @Synchronized
+    fun gap(ms: Long) {
+        if (ms > gapMs) gapMs = ms.coerceAtMost(LIMIT.toLong())
+    }
+
+    @Synchronized
+    fun netChange() {
+        netChg = (netChg + 1).coerceAtMost(LIMIT)
+    }
+
+    @Synchronized
+    fun take(force: Boolean = false, extra: String = ""): Snapshot? {
+        val notable = under > 0 || reset > 0 || reconn > 0 || netChg > 0 || gapMs >= GAP_NOTE_MS
+        if (!notable && !force) {
             stallMs = 0
+            ttfbMs = 0
+            gapMs = 0
             return null
         }
-        val s = Snapshot(under, reset, silenceMs, underLocal, stallMs)
-        under = 0
-        reset = 0
-        silenceMs = 0
-        underLocal = 0
-        stallMs = 0
+        val s = Snapshot(under, reset, silenceMs, underLocal, stallMs, reconn, why, ttfbMs, gapMs, netChg, extra)
+        clearLocked()
         return s
     }
 
@@ -52,18 +82,33 @@ class PlayStats {
         silenceMs = (silenceMs + s.silenceMs).coerceAtMost(LIMIT.toLong())
         underLocal = (underLocal + s.underLocal).coerceAtMost(LIMIT)
         stallMs = maxOf(stallMs, s.stallMs)
+        reconn = (reconn + s.reconn).coerceAtMost(LIMIT)
+        if (s.why.isNotEmpty()) why = s.why
+        ttfbMs = maxOf(ttfbMs, s.ttfbMs)
+        gapMs = maxOf(gapMs, s.gapMs)
+        netChg = (netChg + s.netChg).coerceAtMost(LIMIT)
     }
 
     @Synchronized
     fun clear() {
+        clearLocked()
+    }
+
+    private fun clearLocked() {
         under = 0
         reset = 0
         silenceMs = 0
         underLocal = 0
         stallMs = 0
+        reconn = 0
+        why = ""
+        ttfbMs = 0
+        gapMs = 0
+        netChg = 0
     }
 
     companion object {
         const val LIMIT = 100000
+        const val GAP_NOTE_MS = 1000L
     }
 }

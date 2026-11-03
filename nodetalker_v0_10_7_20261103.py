@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.6"
+VERSION = "0.10.7"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -1603,7 +1603,8 @@ RXH_OUTQ_STALL_MS = 500
 RXH_OUTQ_NOTE_MS = 100
 RXH_OUTQ_SEC = 0.25
 RXH_CLIENT_NAMES = ("android", "browser", "other")
-RXH_CLIENT_KEYS = ("client", "under", "reset", "silence_ms", "under_local", "stall_ms")
+RXH_CLIENT_KEYS = ("client", "under", "reset", "silence_ms", "under_local", "stall_ms", "reconn", "why", "ttfb_ms", "gap_ms",
+                   "net_chg", "net", "metered", "vpn", "psave", "idle", "rssi_min", "link_mbps", "mhz")
 WIFI_LINK_PATH = os.environ.get("NODETALKER_WIFI_LINK", "/run/asl_dvs/wifi_link.json")
 WIFI_STALE_SEC = 30.0
 WIFI_LINK_KEYS = ("v", "at", "linked", "bssid_id", "signal_dbm", "tx_bitrate", "tx_packets", "tx_retries", "tx_failed",
@@ -1651,8 +1652,10 @@ def read_wifi_link(now=None):
     return d, ""
 _RXH_LINK_SUM = ("lost", "drop", "ooo")
 _RXH_LINK_MAX = ("jit", "rtt")
-_RXH_CLIENT_SUM = ("under", "reset", "silence_ms", "under_local", "out_stalls")
-_RXH_CLIENT_MAX = ("stall_ms", "out_ms")
+_RXH_CLIENT_SUM = ("under", "reset", "silence_ms", "under_local", "out_stalls", "reconn", "net_chg")
+_RXH_CLIENT_MAX = ("stall_ms", "out_ms", "ttfb_ms", "gap_ms", "rssi_weak", "wifi", "cell", "psave", "idle", "metered", "vpn", "mhz")
+_RXH_CLIENT_MIN = ("link_mbps",)
+_RXH_CLIENT_WHY = ("timeout", "connect", "closed", "http", "other")
 
 
 def _rxh_loopback(chan):
@@ -1766,7 +1769,8 @@ class RxHealth:
     def _client(self, b, name):
         c = b["clients"].get(name)
         if c is None:
-            c = {k: 0 for k in _RXH_CLIENT_SUM + _RXH_CLIENT_MAX}
+            c = {k: 0 for k in _RXH_CLIENT_SUM + _RXH_CLIENT_MAX + _RXH_CLIENT_MIN}
+            c["why"] = ""
             b["clients"][name] = c
         return c
 
@@ -1855,6 +1859,18 @@ class RxHealth:
             c["silence_ms"] += silence_ms
             c["under_local"] += under_local
             c["stall_ms"] = max(c["stall_ms"], stall_ms)
+
+    def note_phone(self, client, p):
+        with self.lock:
+            c = self._client(self._bucket(), client)
+            for k in ("reconn", "net_chg"):
+                c[k] += p[k]
+            for k in ("ttfb_ms", "gap_ms", "rssi_weak", "wifi", "cell", "psave", "idle", "metered", "vpn", "mhz"):
+                c[k] = max(c[k], p[k])
+            if p["link_mbps"] and (c["link_mbps"] == 0 or p["link_mbps"] < c["link_mbps"]):
+                c["link_mbps"] = p["link_mbps"]
+            if p["why"]:
+                c["why"] = p["why"]
 
     def note_outq(self, client, ms, new_stall):
         with self.lock:
@@ -2010,11 +2026,18 @@ def rxh_sum(rows):
             for k in _RXH_LINK_MAX:
                 a[k] = max(a[k], lk.get(k, 0))
         for name, c in (r.get("clients") or {}).items():
-            a = agg["clients"].setdefault(name, {k: 0 for k in _RXH_CLIENT_SUM + _RXH_CLIENT_MAX})
+            a = agg["clients"].setdefault(name, {k: 0 for k in _RXH_CLIENT_SUM + _RXH_CLIENT_MAX + _RXH_CLIENT_MIN})
+            a.setdefault("why", "")
             for k in _RXH_CLIENT_SUM:
                 a[k] += c.get(k, 0)
             for k in _RXH_CLIENT_MAX:
                 a[k] = max(a[k], c.get(k, 0))
+            for k in _RXH_CLIENT_MIN:
+                v = c.get(k, 0)
+                if v and (a[k] == 0 or v < a[k]):
+                    a[k] = v
+            if c.get("why"):
+                a["why"] = c["why"]
     return agg
 
 
@@ -2026,6 +2049,29 @@ def _rxh_worst_link(links, total):
     hit = sum(1 for lk in links.values() if lk["lost"] or lk["drop"])
     return (f"; worst {worst} (lost {w['lost']}, dropped {w['drop']}, jitter up to {w['jit']} ms, "
             f"round trip up to {w['rtt']} ms); {hit} of {max(total, len(links))} links affected")
+
+
+def _rxh_phone_text(c):
+    bits = []
+    if c.get("cell"):
+        bits.append("on mobile data" + (" (also on Wi-Fi)" if c.get("wifi") else ""))
+    if c.get("wifi") and c.get("rssi_weak"):
+        t = f"Wi-Fi worst -{c['rssi_weak']} dBm"
+        if c.get("mhz"):
+            t += f" at {c['mhz']} MHz"
+        if c.get("link_mbps"):
+            t += f", slowest link {c['link_mbps']} Mb/s"
+        bits.append(t)
+    if c.get("net_chg"):
+        bits.append(f"network changed {c['net_chg']}x")
+    if c.get("reconn"):
+        bits.append(f"reconnected {c['reconn']}x" + (f" (last: {c['why']})" if c.get("why") else ""))
+    if c.get("gap_ms", 0) >= 1000:
+        bits.append(f"audio stopped arriving for up to {c['gap_ms']} ms")
+    for k, label in (("psave", "battery saver on"), ("idle", "phone idle mode"), ("vpn", "VPN on")):
+        if c.get(k):
+            bits.append(label)
+    return ", ".join(bits)
 
 
 def _rxh_client_text(clients):
@@ -2040,6 +2086,9 @@ def _rxh_client_text(clients):
         t += f", {c['silence_ms']} ms of silence, {c['reset']} queue resets"
         if c["stall_ms"]:
             t += f", playback interrupted for up to {c['stall_ms']} ms"
+        ph = _rxh_phone_text(c)
+        if ph:
+            t += " [" + ph + "]"
         bits.append(t)
     return "; ".join(bits)
 
@@ -2232,8 +2281,20 @@ def rxh_client(body):
         except (TypeError, ValueError):
             raise ValueError(f"{key} must be a whole number")
 
-    RXH.note_client(num("under"), num("reset"), num("silence_ms"), rxh_client_name(body.get("client"), ""),
-                    num("under_local"), num("stall_ms"))
+    name = rxh_client_name(body.get("client"), "")
+    RXH.note_client(num("under"), num("reset"), num("silence_ms"), name, num("under_local"), num("stall_ms"))
+    net = body.get("net")
+    why = body.get("why")
+    rssi = body.get("rssi_min")
+    rssi = int(rssi) if isinstance(rssi, (int, float)) and not isinstance(rssi, bool) else 0
+    RXH.note_phone(name, {
+        "reconn": num("reconn"), "net_chg": num("net_chg"), "ttfb_ms": num("ttfb_ms"), "gap_ms": num("gap_ms"),
+        "rssi_weak": max(0, min(127, -rssi)) if rssi < 0 else 0,
+        "wifi": 1 if net == "wifi" else 0, "cell": 1 if net == "cell" else 0,
+        "psave": 1 if num("psave") else 0, "idle": 1 if num("idle") else 0,
+        "metered": 1 if num("metered") else 0, "vpn": 1 if num("vpn") else 0,
+        "mhz": num("mhz"), "link_mbps": num("link_mbps"),
+        "why": why if why in _RXH_CLIENT_WHY else ""})
     return {"ok": True}
 
 
