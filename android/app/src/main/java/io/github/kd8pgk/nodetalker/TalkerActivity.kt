@@ -41,6 +41,16 @@ class TalkerActivity : Activity() {
     private var certDialog: AlertDialog? = null
     private val pushState: () -> Unit = { runOnUiThread { sendState() } }
     private val pushTalk: (String) -> Unit = { ev -> runOnUiThread { sendTalk(ev) } }
+    private val specBusy = java.util.concurrent.atomic.AtomicBoolean(false)
+    private val pushSpec: (String, Double) -> Unit = { bars, peak ->
+        if (::web.isInitialized && specBusy.compareAndSet(false, true)) {
+            runOnUiThread {
+                web.evaluateJavascript("window.ntAppSpec&&window.ntAppSpec('$bars',${String.format(java.util.Locale.US, "%.1f", peak)})") {
+                    specBusy.set(false)
+                }
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,12 +86,15 @@ class TalkerActivity : Activity() {
         super.onResume()
         Listen.listeners.add(pushState)
         Talk.listeners.add(pushTalk)
+        specBusy.set(false)
+        Listen.specSink = pushSpec
         sendState()
     }
 
     override fun onPause() {
         Listen.listeners.remove(pushState)
         Talk.listeners.remove(pushTalk)
+        Listen.specSink = null
         super.onPause()
     }
 
@@ -129,6 +142,11 @@ class TalkerActivity : Activity() {
             } catch (e: SecurityException) {
                 false
             }
+        }
+
+        @JavascriptInterface
+        fun specWanted(on: Boolean) {
+            Listen.specOn = on
         }
 
         @JavascriptInterface

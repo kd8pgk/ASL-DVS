@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_8_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_9_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.9 (2026-11-03)
+
+From the first Listen-button log (a browser page playing the audio itself, ending after 13-16 minutes with "write timeout" and coming back by itself on reload).
+
+- **Auto-open respects your last choice.** The page remembers whether you last pressed Connect or Disconnect. After a Disconnect, "Start listening when the page opens" no longer reconnects on reload. A Connect, or never having pressed either, behaves as before.
+- **The page records its own lifecycle while it is playing** (browser audio only): hidden, shown (with how long it was hidden and how long since audio last arrived), frozen and resumed by the browser, and unloaded. They go to the Log tab and `nodetalker_listenlog.jsonl` as `page` events, sent so they survive the page closing. This shows whether a browser froze the page when it was in the background.
+- **Reconnect on return.** If the page comes back and no audio has arrived for 5 seconds or more, it restarts the stream once and logs `resumed_dead`, instead of waiting for you to notice.
+- **Spectrum in app audio.** With Node Talker Mobile 0.10.9 the Spectrum card now works when the app plays the audio: the app computes the bars from what it plays and sends them to the page, only while the Listen tab is showing and Spectrum is on. With an older app the Spectrum option stays off and says the app needs updating.
+- This is a release, not a cosmetic build.
 
 ## 0.10.8 (2026-11-03)
 

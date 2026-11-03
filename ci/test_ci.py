@@ -2020,6 +2020,38 @@ class ListenEventTests(unittest.TestCase):
         for why in re.findall(r"(?:start|stop)Listen\('(?:system|user)', '(\w+)'\)", text):
             self.assertTrue(why == "retry" or why in nt.LISTEN_WHY, why)
 
+    def test_page_events_are_system_only_and_known(self):
+        nt = self.nt
+        evs = [{"action": "page", "src": "system", "why": w, "detail": {"hid": 90, "gap": 20}}
+               for w in ("page_hidden", "page_shown", "page_frozen", "page_resumed", "page_unload", "resumed_dead")]
+        evs.append({"action": "page", "src": "user", "why": "page_hidden"})
+        self.assertEqual(nt.listen_event({"client": "browser", "events": evs})["n"], 6)
+        rows = self.rows()
+        self.assertEqual([r["why"] for r in rows], ["page_hidden", "page_shown", "page_frozen", "page_resumed", "page_unload", "resumed_dead"])
+        self.assertEqual(rows[1]["detail"], {"hid": 90, "gap": 20})
+
+    def test_the_app_spectrum_and_the_page_agree(self):
+        import re
+        nt = self.nt
+        base = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker")
+        with open(os.path.join(base, "Spectrum.kt"), encoding="utf-8") as fh:
+            spec = fh.read()
+        with open(os.path.join(base, "TalkerActivity.kt"), encoding="utf-8") as fh:
+            talker = fh.read()
+        with open(nt.__file__, encoding="utf-8") as fh:
+            page = fh.read()
+        bars = int(re.search(r"const val BARS = (\d+)", spec).group(1))
+        lo = float(re.search(r"const val DB_LO = (-?[\d.]+)", spec).group(1))
+        hi = float(re.search(r"const val DB_HI = (-?[\d.]+)", spec).group(1))
+        self.assertEqual(int(re.search(r"const val N = (\d+)", spec).group(1)) // 2 % bars, 0)
+        self.assertIn("analyser.minDecibels = %d;" % int(lo), page)
+        self.assertIn("analyser.maxDecibels = %d;" % int(hi), page)
+        self.assertIn("new Uint8Array(%d)" % bars, page)
+        self.assertIn("fun specWanted(on: Boolean)", talker)
+        self.assertIn("window.ntAppSpec", talker)
+        self.assertIn("window.ntAppSpec = (", page)
+        self.assertIn("NodeTalkerApp.specWanted(want)", page)
+
     def test_the_apps_event_keys_are_accepted(self):
         import re
         nt = self.nt
