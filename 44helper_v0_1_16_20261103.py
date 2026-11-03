@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.15"
+APP_VERSION = "0.1.16"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4207,7 +4207,7 @@ def _amp_hub_install_steps() -> list[dict]:
         {"id": "amp_hub_env", "num": 5, "title": "(Optional) Other settings in /usr/etc/amp-hub.env",
          "cmd": _AMP_HUB_ENV_SNIPPET,
          "manual_block": True,
-         "note": "Edit /usr/etc/amp-hub.env by hand (nano or the Cockpit editor). Lines are NAME=value, with no "
+         "note": "Edit /usr/etc/amp-hub.env by hand (Open in terminal opens it in nano, or use the Cockpit editor). Lines are NAME=value, with no "
                  "'export' in front: the service reads the file directly."},
         {"id": "amp_hub_enable", "num": 6, "title": "Enable & start the hub",
          "cmd": "sudo systemctl daemon-reload && sudo systemctl enable amp-hub && sudo systemctl restart amp-hub && "
@@ -4378,7 +4378,8 @@ def _cf_token_install_steps() -> list[dict]:
         {"id": "cf_svc_install", "num": 3, "title": "Install the connector service (paste the token by hand)",
          "cmd": _CF_TOKEN_INSTALL_BLOCK,
          "manual_block": True,
-         "note": "MANUAL / not run through this engine -- on purpose. Copy the whole `sudo cloudflared service "
+         "note": "MANUAL / not run through this engine -- on purpose. Open in terminal asks for just the token (hidden) and installs "
+                 "the service for you. Or copy the whole `sudo cloudflared service "
                  "install eyJ...` command from your tunnel in the Zero Trust dashboard (Networks -> Connectors -> "
                  "Cloudflare Tunnels -> your tunnel) and run it over SSH. Running it here would write the token "
                  "into the Actions Log; running it by hand keeps it out. cloudflared still stores the token at "
@@ -4432,7 +4433,7 @@ def _cf_quick_install_steps() -> list[dict]:
         {"id": "cf_quick_run", "num": 3, "title": "Run a quick test tunnel (foreground)",
          "cmd": "cloudflared tunnel --url http://localhost:8989",
          "manual": True,
-         "note": "MANUAL / FOREGROUND -- run this over SSH or the Cockpit terminal, NOT through this engine "
+         "note": "MANUAL / FOREGROUND -- Open in terminal asks for the local port and runs it, or run it over SSH or the Cockpit terminal, NOT through this engine "
                  "(there is no stdin channel and it does not return). It prints a random *.trycloudflare.com URL "
                  "that proxies to the LOCAL port you point it at, needs no Cloudflare account or hostname, and "
                  "dies on Ctrl-C. Testing only, never persistent. Change `--url http://localhost:8989` to the "
@@ -4714,6 +4715,29 @@ _TERM_ALLOW: dict[str, tuple[str, str]] = {
     "m17_install": ("m17_run_install", "USRP2M17 installer (asks for your callsign)"),
     "amp_firstrun": ("amp_srv_firstrun", "amp-server first run (foreground)"),
     "cr_signin": ("cr_signin", "Claude Code sign-in (as the login user)"),
+    "cf_token": ("cf_svc_install", "Cloudflare connector service (paste the token)"),
+    "cf_quick": ("cf_quick_run", "Cloudflare quick test tunnel"),
+    "amp_hub_env": ("amp_hub_env", "Edit /usr/etc/amp-hub.env"),
+}
+_TERM_OWN_CMD: dict[str, str] = {
+    "cf_token": (
+        "command -v cloudflared >/dev/null || { echo 'cloudflared is not installed. Run step 2 first.'; exit 1; }; "
+        "echo 'Paste only the token (the long eyJ... string at the end of the dashboard command). Input is hidden.'; "
+        "read -r -s -p 'Token: ' t; echo; "
+        "case \"$t\" in ''|*[!A-Za-z0-9_=.-]*) echo 'That does not look like a token. Nothing was changed.'; exit 1;; esac; "
+        "sudo cloudflared service install \"$t\""
+    ),
+    "cf_quick": (
+        "command -v cloudflared >/dev/null || { echo 'cloudflared is not installed. Run the install step first.'; exit 1; }; "
+        "read -r -p 'Local port to test [8989]: ' p; p=${p:-8989}; "
+        "case \"$p\" in *[!0-9]*) echo 'The port must be a number.'; exit 1;; esac; "
+        "echo 'Press Ctrl+C to stop the tunnel.'; exec cloudflared tunnel --url \"http://localhost:$p\""
+    ),
+    "amp_hub_env": (
+        "command -v nano >/dev/null || { echo 'nano is not installed: sudo apt install nano'; exit 1; }; "
+        "[ -f /usr/etc/amp-hub.env ] || { echo '/usr/etc/amp-hub.env does not exist yet. Run the hub install steps first.'; exit 1; }; "
+        "sudo nano /usr/etc/amp-hub.env && echo 'Saved. Restart the hub (step 6) to apply the change.'"
+    ),
 }
 _TERM_PROXY_HEADERS = ("Cf-Connecting-Ip", "Cf-Ray", "Cf-Ipcountry", "Cf-Visitor", "X-Forwarded-For",
                        "X-Forwarded-Host", "X-Forwarded-Proto", "X-Real-Ip", "Forwarded", "Via")
@@ -4728,7 +4752,10 @@ def _term_allowlist() -> dict[str, dict]:
     for tid, (step_id, title) in _TERM_ALLOW.items():
         cmds = {st.get("cmd") for cat in catalogs for steps in cat.get("install", {}).values()
                 for st in steps if st.get("id") == step_id and st.get("cmd")}
-        if len(cmds) == 1:
+        if tid in _TERM_OWN_CMD:
+            if cmds:
+                out[tid] = {"id": tid, "step": step_id, "title": title, "cmd": _TERM_OWN_CMD[tid]}
+        elif len(cmds) == 1:
             out[tid] = {"id": tid, "step": step_id, "title": title, "cmd": cmds.pop()}
     out[_TERM_SHELL_ID] = {"id": _TERM_SHELL_ID, "step": "", "title": "Root shell",
                            "cmd": "cd /root 2>/dev/null || cd /; exec bash -l"}
