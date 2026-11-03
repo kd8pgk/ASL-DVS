@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.5"
+VERSION = "0.10.6"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -1607,9 +1607,17 @@ RXH_CLIENT_KEYS = ("client", "under", "reset", "silence_ms", "under_local", "sta
 WIFI_LINK_PATH = os.environ.get("NODETALKER_WIFI_LINK", "/run/asl_dvs/wifi_link.json")
 WIFI_STALE_SEC = 30.0
 WIFI_LINK_KEYS = ("v", "at", "linked", "bssid_id", "signal_dbm", "tx_bitrate", "tx_packets", "tx_retries", "tx_failed",
-                  "beacon_loss", "connected_secs", "blips", "drops", "chip_stalls")
+                  "beacon_loss", "connected_secs", "blips", "drops", "chip_stalls", "band", "channel")
 RXH_WIFI_WEAK_DBM = 80
 RXH_WIFI_RETRY_PCT = 30
+RXH_WIFI_RETRY_ABS_PCT = 75
+RXH_WIFI_RETRY_RISE_PCT = 20
+RXH_WIFI_BASE_PKTS = 2000
+RXH_WIFI_FAIL_ABS_PCT = 5.0
+RXH_WIFI_FAIL_MIN_PCT = 1.0
+RXH_WIFI_FAIL_X = 3
+RXH_LOOPBACK = ("127.", "::1", "localhost")
+RXH_RTT_PLACEHOLDER = 1000
 RXH_WIFI_MIN_PKTS = 200
 _RXH_SUM = ("pkts", "gaps", "over", "trim", "pump_late", "lst_overrun", "slow_writes", "net_lost", "net_drop",
             "net_ooo", "throttled", "cl_under", "cl_reset", "cl_silence_ms", "cl_under_local", "out_stalls",
@@ -1647,8 +1655,13 @@ _RXH_CLIENT_SUM = ("under", "reset", "silence_ms", "under_local", "out_stalls")
 _RXH_CLIENT_MAX = ("stall_ms", "out_ms")
 
 
+def _rxh_loopback(chan):
+    c = chan.split("/", 1)[-1]
+    return c.startswith(RXH_LOOPBACK)
+
+
 def link_key(chan):
-    return re.sub(r"-\d+$", "", chan)
+    return re.sub(r"-\d*$", "", chan)
 
 
 def rxh_client_name(name, ua):
@@ -1744,6 +1757,8 @@ class RxHealth:
     def _new(self, minute):
         row = {k: 0 for k in _RXH_FIELDS}
         row["t"] = minute
+        row["wifi_band"] = ""
+        row["wifi_chan"] = 0
         row["links"] = {}
         row["clients"] = {}
         return row
@@ -1858,6 +1873,7 @@ class RxHealth:
             self.net_why = ""
             seen = {}
             links = b["links"]
+            rows = [r for r in rows if not _rxh_loopback(r["chan"])]
             for r in rows:
                 prev = self.net_seen.get(r["chan"])
                 seen[r["chan"]] = (r["lost"], r["drop"], r["ooo"])
@@ -1872,7 +1888,7 @@ class RxHealth:
                     lk["ooo"] += do
                 b["net_jit_max"] = max(b["net_jit_max"], r["jit"])
                 lk["jit"] = max(lk["jit"], r["jit"])
-                if r["rtt"] is not None and r["rtt"] >= 0:
+                if r["rtt"] is not None and 0 <= r["rtt"] != RXH_RTT_PLACEHOLDER:
                     b["net_rtt_max"] = max(b["net_rtt_max"], r["rtt"])
                     lk["rtt"] = max(lk["rtt"], r["rtt"])
             if len(links) > RXH_LINKS_MAX:
@@ -1905,6 +1921,11 @@ class RxHealth:
                 r = int(round(rate))
                 if b["wifi_rate_min"] == 0 or r < b["wifi_rate_min"]:
                     b["wifi_rate_min"] = r
+            band, chan = d.get("band"), d.get("channel")
+            if isinstance(band, str) and band:
+                b["wifi_band"] = band[:12]
+            if isinstance(chan, int) and not isinstance(chan, bool) and chan > 0:
+                b["wifi_chan"] = chan
             prev = self.wifi_prev
             if prev is not None:
                 for key, field in _WIFI_COUNTERS:
@@ -1922,7 +1943,15 @@ class RxHealth:
 
     def wifi_state(self):
         with self.lock:
-            return {"ok": self.wifi_ok, "why": self.wifi_why}
+            old = list(self.buckets)[:-(RXH_WINDOW_MIN - 1)] if RXH_WINDOW_MIN > 1 else list(self.buckets)
+            pk = sum(r.get("wifi_tx_pkts", 0) for r in old)
+            rt = sum(r.get("wifi_retries", 0) for r in old)
+            fl = sum(r.get("wifi_failed", 0) for r in old)
+            out = {"ok": self.wifi_ok, "why": self.wifi_why, "base_pkts": pk}
+            if pk >= RXH_WIFI_BASE_PKTS:
+                out["base_retry_pct"] = 100.0 * rt / pk
+                out["base_failed_pct"] = 100.0 * fl / pk
+            return out
 
     def net_down(self, why):
         with self.lock:
@@ -1960,7 +1989,12 @@ def rxh_sum(rows):
     agg = {k: 0 for k in _RXH_FIELDS}
     agg["links"] = {}
     agg["clients"] = {}
+    agg["wifi_band"] = ""
+    agg["wifi_chan"] = 0
     for r in rows:
+        if r.get("wifi_band"):
+            agg["wifi_band"] = r["wifi_band"]
+            agg["wifi_chan"] = r.get("wifi_chan", 0)
         for k in _RXH_SUM:
             agg[k] += r.get(k, 0)
         for k in _RXH_MAX:
@@ -2027,6 +2061,8 @@ def _rxh_wifi_row(agg, wifi):
     if agg["wifi_down"] >= agg["wifi_samples"]:
         return "info", "Wi-Fi is not connected in this window (the Pi may be on Ethernet)", False
     bits = []
+    if agg["wifi_band"]:
+        bits.append(agg["wifi_band"] + (f" ch {agg['wifi_chan']}" if agg["wifi_chan"] else ""))
     if agg["wifi_weak"]:
         bits.append(f"signal worst -{agg['wifi_weak']} dBm")
     if agg["wifi_rate_min"]:
@@ -2034,16 +2070,29 @@ def _rxh_wifi_row(agg, wifi):
     pct = 0
     if agg["wifi_tx_pkts"] >= RXH_WIFI_MIN_PKTS:
         pct = int(round(100.0 * agg["wifi_retries"] / agg["wifi_tx_pkts"]))
-        bits.append(f"retries {pct} % of {agg['wifi_tx_pkts']} packets")
+        base = (wifi or {}).get("base_retry_pct")
+        bits.append(f"retries {pct} % of {agg['wifi_tx_pkts']} packets" +
+                    (f" (usual {int(round(base))} %)" if base is not None else ""))
     else:
         bits.append(f"retries {agg['wifi_retries']}")
-    events = [("wifi_failed", "failed sends"), ("wifi_beacon", "beacon loss"), ("wifi_blips", "link blips"),
+    fail_pct = 100.0 * agg["wifi_failed"] / agg["wifi_tx_pkts"] if agg["wifi_tx_pkts"] else 0.0
+    if agg["wifi_failed"]:
+        bits.append(f"failed sends {agg['wifi_failed']}")
+    events = [("wifi_beacon", "beacon loss"), ("wifi_blips", "link blips"),
               ("wifi_drops", "drops"), ("wifi_stalls", "chip stalls"), ("wifi_rejoins", "rejoins"),
               ("wifi_roams", "roams"), ("wifi_down", "samples with no link")]
     for key, label in events:
         if agg[key]:
             bits.append(f"{label} {agg[key]}")
-    bad = bool(any(agg[k] for k, _ in events) or agg["wifi_weak"] >= RXH_WIFI_WEAK_DBM or pct >= RXH_WIFI_RETRY_PCT)
+    base = (wifi or {}).get("base_retry_pct")
+    base_fail = (wifi or {}).get("base_failed_pct")
+    retry_bad = bool(agg["wifi_tx_pkts"] >= RXH_WIFI_MIN_PKTS and (
+        pct >= RXH_WIFI_RETRY_ABS_PCT
+        or (base is not None and pct >= RXH_WIFI_RETRY_PCT and pct >= base + RXH_WIFI_RETRY_RISE_PCT)))
+    fail_bad = bool(agg["wifi_failed"] and agg["wifi_tx_pkts"] >= RXH_WIFI_MIN_PKTS and (
+        fail_pct >= RXH_WIFI_FAIL_ABS_PCT
+        if base_fail is None else fail_pct >= max(RXH_WIFI_FAIL_MIN_PCT, RXH_WIFI_FAIL_X * base_fail)))
+    bad = bool(any(agg[k] for k, _ in events) or agg["wifi_weak"] >= RXH_WIFI_WEAK_DBM or retry_bad or fail_bad)
     return ("bad" if bad else "ok"), ", ".join(bits), bad
 
 

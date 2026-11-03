@@ -1512,6 +1512,25 @@ class RxHealthLinkTests(unittest.TestCase):
         self.assertEqual(nt.link_key("IAX2/45001-3"), "IAX2/45001")
         self.assertEqual(nt.link_key("IAX2/plain"), "IAX2/plain")
 
+    def test_link_key_with_a_bare_trailing_dash(self):
+        self.assertEqual(self.nt.link_key("IAX2/108.61.191.101:4569-"), "IAX2/108.61.191.101:4569")
+
+    def test_loopback_link_is_not_a_peer(self):
+        rows = [{"chan": "IAX2/127.0.0.1:4569-1", "lost": 0, "drop": 0, "ooo": 0, "jit": 5, "rtt": 0},
+                {"chan": "IAX2/10.1.2.3:4569-2", "lost": 0, "drop": 0, "ooo": 0, "jit": 5, "rtt": 20}]
+        self.rxh.note_net(rows)
+        self.assertEqual(self.rxh.cur["net_peers"], 1)
+        self.assertEqual(list(self.rxh.cur["links"]), ["IAX2/10.1.2.3:4569"])
+
+    def test_rtt_of_1000_is_a_placeholder(self):
+        rows = [{"chan": "IAX2/10.1.2.3:4569-2", "lost": 0, "drop": 0, "ooo": 0, "jit": 5, "rtt": 1000}]
+        self.rxh.note_net(rows)
+        self.assertEqual(self.rxh.cur["net_rtt_max"], 0)
+        self.assertEqual(self.rxh.cur["links"]["IAX2/10.1.2.3:4569"]["rtt"], 0)
+        rows[0]["rtt"] = 80
+        self.rxh.note_net(rows)
+        self.assertEqual(self.rxh.cur["net_rtt_max"], 80)
+
     def test_loss_is_kept_per_link(self):
         nt = self.nt
         rows = nt.parse_netstats(NETSTATS_LINKS)
@@ -2048,10 +2067,53 @@ class RxHealthWifiTests(unittest.TestCase):
         self.rxh.note_packet(100.0)
         self.rxh.note_outq("android", 1500, True)
         self.rxh.note_wifi(self.sample(), None)
-        self.rxh.note_wifi(self.sample(tx_packets=3000, tx_retries=900), None)
+        self.rxh.note_wifi(self.sample(tx_packets=3000, tx_retries=1700), None)
         v = self.verdict()
         self.assertEqual(self.wifi_row(v)["level"], "bad")
         self.assertEqual(v["state"], "wifi")
+
+    def feed_baseline(self, retries, failed, minutes=10, pkts=1000):
+        for i in range(minutes):
+            self.rxh.buckets.append(dict(self.rxh._new(1000 + i * 60), wifi_tx_pkts=pkts, wifi_retries=retries,
+                                         wifi_failed=failed))
+        for i in range(self.nt.RXH_WINDOW_MIN - 1):
+            self.rxh.buckets.append(self.rxh._new(2000 + i * 60))
+
+    def window_row(self, retries, failed, pkts=1000):
+        self.rxh.note_wifi(self.sample(tx_packets=1000, tx_retries=0, tx_failed=0), None)
+        self.rxh.note_wifi(self.sample(tx_packets=1000 + pkts, tx_retries=retries, tx_failed=failed), None)
+        return self.wifi_row(self.verdict())
+
+    def test_usual_retries_are_not_a_fault(self):
+        self.feed_baseline(250, 30)
+        r = self.window_row(300, 30)
+        self.assertEqual(r["level"], "ok")
+        self.assertIn("usual 25 %", r["text"])
+
+    def test_retries_far_above_usual_are_a_fault(self):
+        self.feed_baseline(250, 30)
+        self.assertEqual(self.window_row(550, 30)["level"], "bad")
+
+    def test_no_baseline_does_not_flag_moderate_retries(self):
+        self.assertEqual(self.window_row(450, 0)["level"], "ok")
+
+    def test_very_high_retries_are_a_fault_without_a_baseline(self):
+        self.assertEqual(self.window_row(800, 0)["level"], "bad")
+
+    def test_failed_sends_at_their_usual_rate_are_ok(self):
+        self.feed_baseline(250, 30)
+        self.assertEqual(self.window_row(250, 30)["level"], "ok")
+
+    def test_failed_sends_well_above_usual_are_a_fault(self):
+        self.feed_baseline(250, 30)
+        self.assertEqual(self.window_row(250, 150)["level"], "bad")
+
+    def test_band_and_channel_are_recorded_and_shown(self):
+        self.rxh.note_wifi(self.sample(band="5 GHz", channel=149), None)
+        self.assertEqual((self.rxh.cur["wifi_band"], self.rxh.cur["wifi_chan"]), ("5 GHz", 149))
+        self.assertIn("5 GHz ch 149", self.wifi_row(self.verdict())["text"])
+        self.assertIn("band", self.nt.WIFI_LINK_KEYS)
+        self.assertIn("channel", self.nt.WIFI_LINK_KEYS)
 
     def test_few_packets_do_not_make_a_retry_percentage(self):
         self.rxh.note_packet(100.0)
