@@ -118,7 +118,24 @@ class TalkerActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun listenStartWhy(src: String, why: String, detail: String): Boolean {
+            val n = node
+            askNotifications()
+            return try {
+                Listen.start(this@TalkerActivity, n, src, why, detail.take(300))
+                true
+            } catch (e: IllegalStateException) {
+                false
+            } catch (e: SecurityException) {
+                false
+            }
+        }
+
+        @JavascriptInterface
         fun listenStop() = Listen.stop(this@TalkerActivity)
+
+        @JavascriptInterface
+        fun listenStopWhy(src: String, why: String, detail: String) = Listen.stop(this@TalkerActivity, src, why, detail.take(300))
 
         @JavascriptInterface
         fun listenState(): String =

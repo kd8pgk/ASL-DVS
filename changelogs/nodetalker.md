@@ -1,6 +1,13 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_7_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_8_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.8 (2026-11-03)
+
+- **The Listen tab's connect / disconnect button now leaves a record of every connect and disconnect, and why.** Each one says who did it: `user` (a tap on the button, or a headset button) or `system` (the page or the phone did it on its own), with a reason: auto-start on page open, balancer run, headset back or lost, Bluetooth, sound-format change, login rejected, stream ended, service destroyed, process killed, and so on. System events carry details: screen on/off, app in front or not, Doze, battery saver, battery optimisation, standby bucket, network, page age, and for a killed app Android's exit reason.
+- **Where to read it.** Events appear in the Log tab ("Listen disconnect: android, system, process killed (exit low_memory, ...)") and in `nodetalker_listenlog.jsonl` next to the other node files (rotates at 1 MB, one old copy kept). The node also records its own view of each stream: when it opened and how it ended (client closed, 15 s write timeout, pump stopped, error) with the length in seconds. Compare the two when the phone and the node disagree.
+- New `POST /api/listen/event` takes a list of events (up to 20 at a time). Older apps and pages do not send it and work as before. No IP addresses are written to the new file.
+- This is a release, not a cosmetic build.
 
 ## 0.10.7 (2026-11-03)
 

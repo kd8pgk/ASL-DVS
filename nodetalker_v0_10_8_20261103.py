@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.7"
+VERSION = "0.10.8"
 DATE_STR = "2026-11-02"
 APP_NAME = "Node Talker"
 
@@ -1586,6 +1586,16 @@ KEYED = KeyedWatch()
 
 RXH_PATH = os.path.join(CONFIG_DIR, "nodetalker_rxhealth.jsonl")
 RXH_FILE_MAX = 1000000
+LISTENLOG_PATH = os.path.join(CONFIG_DIR, "nodetalker_listenlog.jsonl")
+LISTENLOG_FILE_MAX = 1000000
+LISTEN_EVENTS_MAX = 20
+LISTEN_WHY = ("button", "notification", "media_button", "auto_open", "balancer", "node_test", "headset_back",
+              "headset_lost", "bluetooth_connect", "bluetooth_gone", "login_rejected", "stream_ended",
+              "service_destroyed", "process_killed", "format_changed", "logout", "app_start", "app_stop",
+              "client_closed", "write_timeout", "error", "pump_stopped", "other")
+LISTEN_DETAIL_NUM = ("vis", "screen", "fg", "doze", "psave", "ign", "bucket", "up", "trim", "code", "imp", "secs")
+LISTEN_DETAIL_STR = ("net", "exit", "err")
+_LISTEN_STR_RE = re.compile(r"[^A-Za-z0-9_ .:/-]")
 RXH_GAP_SEC = 0.06
 RXH_BURST_SEC = 0.5
 RXH_PUMP_LATE_SEC = 0.06
@@ -2298,6 +2308,61 @@ def rxh_client(body):
     return {"ok": True}
 
 
+def _listenlog_write(row):
+    try:
+        if os.path.exists(LISTENLOG_PATH) and os.path.getsize(LISTENLOG_PATH) > LISTENLOG_FILE_MAX:
+            os.replace(LISTENLOG_PATH, LISTENLOG_PATH + ".1")
+        with open(LISTENLOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
+    except OSError:
+        pass
+
+
+def listen_detail(raw):
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for k in LISTEN_DETAIL_NUM:
+        v = raw.get(k)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            out[k] = max(-1, min(RXH_CLIENT_MAX, int(v)))
+    for k in LISTEN_DETAIL_STR:
+        v = raw.get(k)
+        if isinstance(v, str) and v:
+            out[k] = _LISTEN_STR_RE.sub("", v)[:40]
+    return out
+
+
+def listen_note(client, src, action, why, detail, phone_t=None):
+    row = {"at": int(time.time()), "client": client, "src": src, "action": action, "why": why}
+    if isinstance(phone_t, (int, float)) and not isinstance(phone_t, bool) and abs(phone_t / 1000.0 - time.time()) < 86400:
+        row["t"] = int(phone_t / 1000)
+    if detail:
+        row["detail"] = detail
+    _listenlog_write(row)
+    bits = ", ".join(f"{k} {v}" for k, v in detail.items())
+    log_event(f"Listen {action}: {client}, {src}, {why.replace('_', ' ')}" + (f" ({bits})" if bits else ""),
+              "ok" if src != "system" else "warn")
+
+
+def listen_event(body):
+    events = body.get("events")
+    if not isinstance(events, list):
+        raise ValueError("events must be a list")
+    client = rxh_client_name(body.get("client"), "")
+    n = 0
+    for ev in events[:LISTEN_EVENTS_MAX]:
+        if not isinstance(ev, dict):
+            continue
+        action, src = ev.get("action"), ev.get("src")
+        if action not in ("connect", "disconnect") or src not in ("user", "system"):
+            continue
+        why = ev.get("why") if ev.get("why") in LISTEN_WHY else "other"
+        listen_note(client, src, action, why, listen_detail(ev.get("detail")), ev.get("t"))
+        n += 1
+    return {"ok": True, "n": n}
+
+
 def rxh_report(body=None):
     rows = []
     for path in (RXH_PATH + ".1", RXH_PATH):
@@ -2369,12 +2434,13 @@ class Hub:
         log_event(f"Listener connected from {ip}" + (" (16-bit)" if pcm else ""))
         return lst
 
-    def remove_listener(self, lst):
+    def remove_listener(self, lst, how=""):
         with self.cond:
             lst.closed = True
             self.listeners.discard(lst)
             self.cond.notify_all()
-        log_event(f"Listener from {lst.ip} left after {int(time.time() - lst.since)}s")
+        log_event(f"Listener from {lst.ip} left after {int(time.time() - lst.since)}s" +
+                  (f" ({how.replace('_', ' ')})" if how else ""))
 
     def audio_active(self):
         now = time.monotonic()
@@ -7462,7 +7528,7 @@ async function logout() {
   if (ws) { try { ws.close(); } catch (e) {} }
   await post('/api/logout');
   authed = false;
-  stopListen();
+  stopListen('system', 'logout');
   render();
 }
 
@@ -7990,7 +8056,7 @@ function chkStart(mins) {
   api('/api/node/counters').then((d) => { if (chk) chk.nodeStart = d; });
   chkSave(); chkUi(); chkTick();
   note('chk-msg', '', '');
-  if (!playing) startListen();
+  if (!playing) startListen('system', 'balancer');
 }
 
 function chkSummary(c) {
@@ -9397,34 +9463,54 @@ function appSync() {
 async function autoListen() {
   if (appAudio()) {
     appSync();
-    if (!playing && play.auto && (authed || publicListen)) startListen();
+    if (!playing && play.auto && (authed || publicListen)) startListen('system', 'auto_open');
     return;
   }
   if (playing || starting || autoWait || !play.auto || !(authed || publicListen) || !makeCtx()) return;
   await Promise.race([ctx.resume().catch(() => {}), sleep(400)]);
   if (playing || starting || autoWait) return;
-  if (ctx.state === 'running') { startListen(); return; }
+  if (ctx.state === 'running') { startListen('system', 'auto_open'); return; }
   note('listen-msg', 'warn', 'Tap anywhere to start listening (the browser holds sound until you do).');
   autoWait = (e) => {
     autoWaitEnd();
     if (e.target && e.target.closest && e.target.closest('#listen-btn')) return;
-    if (!playing) startListen();
+    if (!playing) startListen('system', 'auto_open');
   };
   document.addEventListener('pointerdown', autoWait, true);
   document.addEventListener('keydown', autoWait, true);
 }
 
-async function startListen() {
+function listenDetail(extra) {
+  return Object.assign({vis: document.visibilityState === 'visible' ? 1 : 0, up: Math.round(performance.now() / 1000)}, extra || {});
+}
+
+function listenLog(action, src, why, extra) {
+  if (appAudio() || !authed) return;
+  post('/api/listen/event', {client: 'browser', events: [{action: action, src: src, why: why, t: Date.now(), detail: listenDetail(extra)}]}).catch(() => {});
+}
+
+function appListenCall(name, src, why) {
+  try {
+    if (appAudio() && typeof NodeTalkerApp[name + 'Why'] === 'function') return NodeTalkerApp[name + 'Why'](src, why, JSON.stringify(listenDetail()));
+  } catch (e) {}
+  return appCall(name);
+}
+
+let listenErrLogged = false;
+
+async function startListen(src, why) {
+  src = src || 'system'; why = why || 'other';
   autoWaitEnd();
   if (appAudio()) {
     appCall('setVolume', listenVolume());
-    if (appCall('listenStart')) { appListenUi(true); note('listen-msg', '', 'Connecting...'); }
+    if (appListenCall('listenStart', src, why)) { appListenUi(true); note('listen-msg', '', 'Connecting...'); }
     else note('listen-msg', 'err', 'The app could not start listening.');
     return;
   }
   if (starting) return;
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
   if (!makeCtx()) return;
+  if (why !== 'retry') { listenErrLogged = false; listenLog('connect', src, why); }
   starting = true;
   try {
     await ctx.resume();
@@ -9454,6 +9540,7 @@ async function startListen() {
     }
     streamPcm = /^s16le/.test(r.headers.get('X-Audio-Format') || '');
     oddByte = -1;
+    listenErrLogged = false;
     note('listen-msg', 'ok', 'Listening.' + (streamPcm ? ' (16-bit)' : ''));
     const rd = r.body.getReader();
     for (;;) {
@@ -9464,14 +9551,17 @@ async function startListen() {
     if (playing) throw new Error('stream ended');
   } catch (e) {
     if (!playing) return;
+    if (!listenErrLogged) { listenErrLogged = true; listenLog('disconnect', 'system', 'stream_ended', {err: String(e.message || e)}); }
     note('listen-msg', 'warn', 'Disconnected (' + e.message + '). Retrying in 3 s...');
-    retryTimer = setTimeout(() => { if (playing) startListen(); }, 3000);
+    retryTimer = setTimeout(() => { if (playing) startListen('system', 'retry'); }, 3000);
   }
 }
 
-function stopListen() {
+function stopListen(src, why) {
+  src = src || 'system'; why = why || 'other';
   autoWaitEnd();
-  if (appAudio()) { appCall('listenStop'); appListenUi(false); return; }
+  if (appAudio()) { appListenCall('listenStop', src, why); appListenUi(false); return; }
+  if (playing) listenLog('disconnect', src, why);
   playing = false;
   specKick();
   if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
@@ -9494,7 +9584,10 @@ function listenSession(end) {
   if (!end && ctx && busNode) { sessNode = ctx.createGain(); sessNode.connect(busNode); }
 }
 
-function toggleListen() { if (playing) stopListen(); else startListen(); }
+function toggleListen(e) {
+  const src = e && e.isTrusted ? 'user' : 'system';
+  if (playing) stopListen(src, 'button'); else startListen(src, 'button');
+}
 
 function setMediaInfo() {
   if (!('mediaSession' in navigator) || typeof MediaMetadata === 'undefined') return;
@@ -9522,7 +9615,7 @@ function setupMediaSession() {
 function hsAct(a) {
   if (hs.btn === 'off') return;
   if (hs.btn !== 'ptt') {
-    if (a === 'play') { if (!playing) startListen(); } else if (playing) stopListen();
+    if (a === 'play') { if (!playing) startListen('user', 'media_button'); } else if (playing) stopListen('user', 'media_button');
     return;
   }
   if (a === 'stop') { if (talking) pttUp(); return; }
@@ -9623,7 +9716,7 @@ function hsLost() {
   if (talking) pttUp();
   if (chk && chk.running) chk.outDrops = (chk.outDrops || 0) + 1;
   outLost = Date.now();
-  stopListen();
+  stopListen('system', 'headset_lost');
   note('listen-msg', 'warn', 'Headset unplugged or audio output changed. Tap Listen to play again (it restarts on its own when the headset comes back).');
 }
 
@@ -9633,7 +9726,7 @@ async function hsDevChange() {
   const n = list.length;
   if (outLost && devCount >= 0 && n > devCount && Date.now() - outLost < 30 * 60000 && !playing) {
     outLost = 0;
-    startListen();
+    startListen('system', 'headset_back');
   }
   devCount = n;
 }
@@ -9949,7 +10042,7 @@ function savePlay() {
   try { localStorage.setItem('nlPlay', JSON.stringify(play)); } catch (e) {}
   ups = null;
   playSummary();
-  if (playing && was !== play.s16) { stopListen(); startListen(); }
+  if (playing && was !== play.s16) { stopListen('system', 'format_changed'); startListen('system', 'format_changed'); }
 }
 
 const sleep = (ms) => new Promise((res) => setTimeout(res, ms));
@@ -9966,7 +10059,7 @@ async function nodeTest() {
   const wasPlaying = playing;
   try {
     note(out, '', 'Connecting...');
-    if (!playing) startListen();
+    if (!playing) startListen('system', 'node_test');
     if (!wsReady) openTalk(true);
     for (let i = 0; i < 40 && !(wsReady && playing && /^Listening/.test($('listen-msg').textContent)); i++) await sleep(100);
     if (!wsReady) throw new Error('the talk channel did not open');
@@ -9990,7 +10083,7 @@ async function nodeTest() {
     await sleep(1500);
     const rec = Float32Array.from(otaRec || []);
     otaRec = null;
-    if (!wasPlaying) stopListen();
+    if (!wasPlaying) stopListen('system', 'node_test');
     let pk = 0;
     for (let i = 0; i < rec.length; i++) { const a = rec[i] < 0 ? -rec[i] : rec[i]; if (a > pk) pk = a; }
     if (!rec.length || pk < 0.003) throw new Error('nothing came back from the node (is its audio feed set up?)');
@@ -10020,7 +10113,7 @@ async function nodeTest() {
     otaRec = null;
     micTaps = micTaps.filter((f) => f === chkMic);
     $('vu-mic').classList.add('hidden');
-    if (!wasPlaying && playing) stopListen();
+    if (!wasPlaying && playing) stopListen('system', 'node_test');
     note(out, 'err', 'Node test: ' + (e.message || e));
     pc.close();
   } finally {
@@ -11891,6 +11984,7 @@ _POST_ACTIONS = {
     "/api/tonetest/link": (lambda b: tone_link_set(b), (ValueError,)),
     "/api/tonetest/stop": (lambda b: TONE.stop(), ()),
     "/api/rxhealth/client": (rxh_client, (ValueError,)),
+    "/api/listen/event": (listen_event, (ValueError,)),
     "/api/balance/snapshot": (balance_snapshot, ()),
     "/api/balance/restore": (balance_restore, ()),
     "/api/balance/keep": (balance_keep, ()),
@@ -12102,6 +12196,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         lst.client = client
         lst.sock = self.connection
+        how = "error"
+        listen_note(client, "node", "connect", "other", {})
         try:
             self._head(200, "application/octet-stream", {
                 "X-Audio-Format": "s16le; rate=8000; channels=1" if pcm else "mulaw; rate=8000; channels=1",
@@ -12118,11 +12214,17 @@ class Handler(BaseHTTPRequestHandler):
                     if took >= RXH_WRITE_NOTE_SEC:
                         RXH.note_write(took)
                 elif time.monotonic() - HUB.pump_beat > 5.0:
+                    how = "pump_stopped"
                     break
-        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
-            pass
+        except socket.timeout:
+            how = "write_timeout"
+        except (BrokenPipeError, ConnectionResetError):
+            how = "client_closed"
+        except OSError:
+            how = "error"
         finally:
-            HUB.remove_listener(lst)
+            HUB.remove_listener(lst, how)
+            listen_note(client, "node", "disconnect", how, {"secs": int(time.time() - lst.since)})
 
     def _talk(self):
         self.close_connection = True

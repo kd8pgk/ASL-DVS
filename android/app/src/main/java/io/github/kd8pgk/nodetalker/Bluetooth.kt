@@ -41,7 +41,7 @@ object Bluetooth {
         if (!start || Listen.state != Listen.OFF) return
         val n = NodeStore.get(c, NodeStore.lastNode(c)) ?: return
         try {
-            Listen.start(c, n)
+            Listen.start(c, n, "system", "bluetooth_connect")
         } catch (e: IllegalStateException) {
             return
         } catch (e: SecurityException) {
@@ -54,7 +54,7 @@ object Bluetooth {
         val s = NodeStore.bluetooth(c)
         if (!s.autoStop || Listen.state == Listen.OFF) return
         resumePending = s.resume
-        Listen.stop(c)
+        Listen.stop(c, "system", "bluetooth_gone")
     }
 
     fun isBluetooth(type: Int): Boolean =

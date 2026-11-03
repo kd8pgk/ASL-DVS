@@ -1,6 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.6.4`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.6.5`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.6.5 (2026-11-03)
+
+- **The app records why the feed connects and disconnects.** Every start and stop of listening is saved on the phone and sent to the node (Log tab and `nodetalker_listenlog.jsonl`) as user or system with a reason: the button, the notification's Stop, a headset button, page auto-start, the balancer run, Bluetooth connecting or leaving, a changed sound setting, login rejected, or the service destroyed by Android. Details for system events: screen, app in front, Doze, battery saver, battery optimisation, standby bucket, network.
+- **If Android kills the app while it was listening**, the next launch notices (it saved "listening" and the app never said stop) and records "process killed" with Android's own exit reason (for example low memory or excessive resource use) on Android 11 and later.
+- **Light on a slow link.** A few hundred bytes per event, only when one happens. Events wait in the phone (up to 200) until the node can be reached.
+- Needs Node Talker 0.10.8 on the node; an older node ignores the events.
 
 ## 0.6.4 (2026-11-03)
 
