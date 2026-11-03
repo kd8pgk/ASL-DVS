@@ -1,6 +1,23 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.9`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.11`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.11 (2026-11-03)
+
+From the audit of Node Talker and Node Talker Mobile with a test server.
+
+- **A message split over several frames is now put back together.** Before, the talk channel delivered the first part and dropped the rest. Pings that arrive between the parts are still answered. A message over 1 MB, a part with nothing to continue and a new message started before the last one ended are refused. The node never splits messages today, so nothing changes in use.
+- **The app checks the node's answer to the talk channel request.** It now verifies the `Sec-WebSocket-Accept` key and refuses a node whose answer does not match, with "bad answer from the node". Every Node Talker version computes it, so nothing changes with a real node.
+- **The app no longer retries every second against a node that accepts and then drops at once.** The wait between tries (listen feed 1 s, talk channel 2 s, up to 10 s) now goes back to the start only after a connection stayed up for 5 s. Before, any connection reset it, so a feed that opened and closed straight away was retried every second for ever.
+- More unit tests: 31 in all (the talk channel, the node address helpers and the new wait rule), run in CI.
+- Works with any Node Talker. Node Talker 0.10.10 also drops a listener that stops reading after 20 to 26 s instead of about 4.5 minutes.
+
+## 0.10.10 (2026-11-03)
+
+- **Unit tests.** The app now has JVM unit tests for the talk channel (`WsClient`) and the node address helpers (`Node`): the upgrade request, the refusal messages, masked frames at every length form, reading text, answering pings with pongs, close frames, and the frame-size limits. They run in CI (`testReleaseUnitTest`) before the APK is built. JUnit 4 is a test-only dependency; the APK does not include it.
+- **Talk channel uses `java.util.Base64`** for the WebSocket key instead of `android.util.Base64`. The bytes sent are the same; the change lets the tests run on the JVM.
+- **Known gap, found by the tests:** a text message split over continuation frames is not put back together (the first part is delivered and the rest is dropped). The node never splits messages, so nothing is affected today. Kept as an ignored test until it is fixed.
+- No change in what the app does for the user.
 
 ## 0.10.9 (2026-11-03)
 

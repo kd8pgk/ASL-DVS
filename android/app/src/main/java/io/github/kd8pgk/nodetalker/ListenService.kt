@@ -273,8 +273,9 @@ class ListenService : Service() {
     }
 
     private fun talkLoop(n: Node, g: Int) {
-        var delayMs = 2000L
+        val backoff = Backoff(2000L)
         while (talkWanted && g == talkGen) {
+            var upMs = 0L
             val c = WsClient(n, CookieManager.getInstance().getCookie(n.origin))
             try {
                 c.connect()
@@ -290,10 +291,14 @@ class ListenService : Service() {
                 }
                 Talk.open = true
                 Talk.error = ""
-                delayMs = 2000L
                 Talk.emit("{\"ev\":\"open\"}")
                 node?.let { notifyState(it) }
-                c.read { onTalkText(it) }
+                val upAt = SystemClock.elapsedRealtime()
+                try {
+                    c.read { onTalkText(it) }
+                } finally {
+                    upMs = SystemClock.elapsedRealtime() - upAt
+                }
             } catch (e: IOException) {
                 Talk.error = e.message ?: e.javaClass.simpleName
             }
@@ -306,11 +311,10 @@ class ListenService : Service() {
             if (was) Talk.emit(JSONObject().put("ev", "closed").put("error", Talk.error).toString())
             node?.let { notifyState(it) }
             try {
-                Thread.sleep(delayMs)
+                Thread.sleep(backoff.next(upMs))
             } catch (e: InterruptedException) {
                 return
             }
-            delayMs = minOf(delayMs * 2, 10000L)
         }
     }
 
@@ -484,8 +488,9 @@ class ListenService : Service() {
     private fun live(g: Int) = running && g == gen
 
     private fun netLoop(n: Node, g: Int) {
-        var delayMs = 1000L
+        val backoff = Backoff(1000L)
         while (live(g)) {
+            var upMs = 0L
             try {
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
                 connectAt = SystemClock.elapsedRealtime()
@@ -521,9 +526,13 @@ class ListenService : Service() {
                     return
                 }
                 stream = input
-                delayMs = 1000L
                 Listen.error = ""
-                readFrames(input, pcm, g)
+                val upAt = SystemClock.elapsedRealtime()
+                try {
+                    readFrames(input, pcm, g)
+                } finally {
+                    upMs = SystemClock.elapsedRealtime() - upAt
+                }
                 c.disconnect()
                 if (live(g)) throw IOException(getString(R.string.listen_ended))
             } catch (e: IOException) {
@@ -537,13 +546,13 @@ class ListenService : Service() {
                         else -> "other"
                     }
                 )
-                set(Listen.RECONNECTING, getString(R.string.listen_retry, e.message ?: e.javaClass.simpleName, delayMs / 1000))
+                val waitMs = backoff.next(upMs)
+                set(Listen.RECONNECTING, getString(R.string.listen_retry, e.message ?: e.javaClass.simpleName, waitMs / 1000))
                 try {
-                    Thread.sleep(delayMs)
+                    Thread.sleep(waitMs)
                 } catch (x: InterruptedException) {
                     return
                 }
-                delayMs = minOf(delayMs * 2, 10000L)
             }
         }
     }
