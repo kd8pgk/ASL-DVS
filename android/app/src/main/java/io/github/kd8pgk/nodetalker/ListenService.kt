@@ -99,6 +99,8 @@ class ListenService : Service() {
     private var player: Thread? = null
     private var reporter: Thread? = null
     private val stats = PlayStats()
+    private var netInfo: NetInfo? = null
+    @Volatile private var connectAt = 0L
     @Volatile private var playStartedAt = 0L
     @Volatile private var running = false
     @Volatile private var gen = 0
@@ -191,6 +193,8 @@ class ListenService : Service() {
         val g = ++gen
         queue.clear()
         stats.clear()
+        netInfo?.stop()
+        netInfo = NetInfo(this) { stats.netChange() }.also { it.start() }
         net = Thread({ netLoop(n, g) }, "nt-listen-net").apply { start() }
         player = Thread({ playLoop(g) }, "nt-listen-play").apply { start() }
         reporter = Thread({ reportLoop(n, g) }, "nt-listen-report").apply { start() }
@@ -429,6 +433,8 @@ class ListenService : Service() {
         net?.interrupt()
         player?.interrupt()
         reporter?.interrupt()
+        netInfo?.stop()
+        netInfo = null
         net?.join(2000)
         player?.join(2000)
         reporter?.join(2000)
@@ -451,6 +457,7 @@ class ListenService : Service() {
         while (live(g)) {
             try {
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
+                connectAt = SystemClock.elapsedRealtime()
                 val c = NodeHttp.open(n, "/api/listen?fmt=s16&client=android", cookie)
                 c.readTimeout = 6000
                 c.useCaches = false
@@ -489,6 +496,15 @@ class ListenService : Service() {
                 if (live(g)) throw IOException(getString(R.string.listen_ended))
             } catch (e: IOException) {
                 if (!live(g)) return
+                stats.reconnect(
+                    when {
+                        e is java.net.SocketTimeoutException -> "timeout"
+                        e is java.net.ConnectException || e is java.net.UnknownHostException -> "connect"
+                        e.message == getString(R.string.listen_ended) -> "closed"
+                        e.message?.startsWith("HTTP") == true -> "http"
+                        else -> "other"
+                    }
+                )
                 set(Listen.RECONNECTING, getString(R.string.listen_retry, e.message ?: e.javaClass.simpleName, delayMs / 1000))
                 try {
                     Thread.sleep(delayMs)
@@ -503,6 +519,7 @@ class ListenService : Service() {
     private fun readFrames(input: InputStream, pcm: Boolean, g: Int) {
         val bytesPer = if (pcm) FRAME * 2 else FRAME
         val buf = ByteArray(bytesPer)
+        var lastAt = 0L
         while (live(g)) {
             var got = 0
             while (got < bytesPer) {
@@ -510,6 +527,9 @@ class ListenService : Service() {
                 if (r < 0) return
                 got += r
             }
+            val now = SystemClock.elapsedRealtime()
+            if (lastAt == 0L) stats.firstByte(now - connectAt) else stats.gap(now - lastAt)
+            lastAt = now
             val f = ShortArray(FRAME)
             if (pcm) {
                 for (i in 0 until FRAME) f[i] = ((buf[2 * i].toInt() and 0xff) or (buf[2 * i + 1].toInt() shl 8)).toShort()
@@ -530,10 +550,18 @@ class ListenService : Service() {
     }
 
     private fun reportLoop(n: Node, g: Int) {
+        var beats = 0
         try {
+            var tick = 0
             while (live(g)) {
-                Thread.sleep(STATS_SEND_MS)
-                val snap = stats.take() ?: continue
+                Thread.sleep(STATS_SAMPLE_MS)
+                netInfo?.sample()
+                tick++
+                if (tick < STATS_SEND_MS / STATS_SAMPLE_MS) continue
+                tick = 0
+                beats++
+                val beat = beats % STATS_BEAT_EVERY == 0
+                val snap = stats.take(beat, netInfo?.take().orEmpty()) ?: continue
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
                 when (RxReport.send(n, cookie, snap)) {
                     RxReport.SENT -> Unit
@@ -767,6 +795,8 @@ class ListenService : Service() {
         private const val QUEUE_FRAMES = 150
         private const val LEVEL_FRAMES = 10
         private const val STATS_SEND_MS = 30000L
+        private const val STATS_SAMPLE_MS = 5000L
+        private const val STATS_BEAT_EVERY = 5
         private const val STATS_GRACE_MS = 3000L
         private const val MAX_GAIN_MB = 1800
 

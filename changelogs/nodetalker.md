@@ -1,6 +1,11 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_6_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_7_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.7 (2026-11-03)
+
+- **Receive health records the phone's network.** The Node Talker Mobile 0.6.4 report now carries the phone's connection (Wi-Fi or mobile data, Wi-Fi signal, frequency and link speed, network changes, battery saver, idle mode, VPN) and how the listen stream behaved (reconnects with the reason, time to first audio, longest time audio stopped arriving). The node keeps them per device in each minute of `nodetalker_rxhealth.jsonl` and adds them to the phone text of the verdict. Reports without these fields (older apps, the browser) work as before.
+- This is a release, not a cosmetic build.
 
 ## 0.10.6 (2026-11-03)
 
