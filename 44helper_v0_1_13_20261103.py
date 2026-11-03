@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.12"
+APP_VERSION = "0.1.13"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -3637,9 +3637,11 @@ def _m17_purge_steps() -> list[dict]:
         {"id": "m17_purge_sudoers", "num": 3, "title": "Remove the sudoers drop-in",
          "cmd": "sudo rm -f /etc/sudoers.d/usrp2m17"},
         {"id": "m17_purge_unit", "num": 4, "title": "Remove the systemd unit",
-         "cmd": "sudo rm -f /etc/systemd/system/usrp2m17.service && sudo systemctl daemon-reload",
-         "note": "Best-effort filename, taken from the repo's usrp2m17.service file — confirm with "
-                 "`systemctl status usrp2m17` first if unsure it matches what install.sh actually wrote."},
+         "cmd": "sudo rm -f /usr/lib/systemd/system/usrp2m17.service /etc/systemd/system/usrp2m17.service && "
+                "sudo systemctl daemon-reload",
+         "note": "The USRP2M17-Selector installer writes the unit to /usr/lib/systemd/system/usrp2m17.service. "
+                 "This step removes that file and, in case a copy was placed by hand, the one in "
+                 "/etc/systemd/system."},
         {"id": "m17_purge_clone_dir", "num": 5, "title": "(Optional) Remove the clone directory",
          "cmd": "sudo rm -rf /tmp/USRP2M17-Selector",
          "auto": False,
