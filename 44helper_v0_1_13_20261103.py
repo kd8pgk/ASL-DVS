@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.12"
+APP_VERSION = "0.1.13"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -4465,14 +4465,17 @@ _CR_NODE_SHA256 = {
 }
 _CR_NODE_FILE = {"x86_64": "linux-x64", "aarch64": "linux-arm64"}
 _CR_CLAUDE_PKG = "@anthropic-ai/claude-code@2.1.317"
+_CR_CLAUDE_BIN = f"{_CR_NODE_DIR}/bin/claude"
 _CR_FOLDER_DEFAULT = "~/claude-remote"
 _CR_WARNING = """Runs <b>Claude Code</b>'s <b>remote control</b> on this node as a systemd service, so the
-  node can be reached from your Claude apps while it runs. Works on Debian 12 (Bookworm) and 13 (Trixie),
-  on Debian or Armbian, on x86-64 and arm64. Node.js 22 is downloaded from nodejs.org with its SHA256
-  checked against the value pinned in 44helper, and installed under /opt; nothing comes from a third-party
-  apt repository. <b>Sign in</b> once as the login user (step 4, in a terminal); the service runs as that
-  user, because the sign-in is stored in its home folder. <b>Stop</b> disables the service and the device
-  stops being reachable from the apps."""
+  node can be reached from your Claude apps while it runs. Meant for Debian 12 (Bookworm) and 13 (Trixie),
+  Debian or Armbian, on x86-64 and arm64; it has been tried on x86-64 only so far. Claude Code runs as a
+  native program. Node.js 22 is only needed to install it: it is downloaded from nodejs.org with its SHA256
+  checked against the value pinned in 44helper, and installed under /opt. Nothing comes from a third-party
+  apt repository and nothing is linked into /usr/local/bin. <b>Sign in</b> once as the login user (step 4,
+  in a terminal); the service runs as that user, because the sign-in is stored in its home folder, and it
+  will not start until <code>claude auth status</code> shows that user is signed in. <b>Stop</b> disables
+  the service and the device stops being reachable from the apps."""
 
 def _cr_default_user() -> str:
     try:
@@ -4495,8 +4498,8 @@ _CR_CHECK_CMD = (
     "grep -E '^(PRETTY_NAME|VERSION_CODENAME)=' /etc/os-release; echo \"arch: $(uname -m)\"; "
     "echo '== Node.js =='; if [ -x /opt/node-v22.23.4/bin/node ]; then /opt/node-v22.23.4/bin/node --version; "
     "else echo 'not installed'; fi; "
-    "echo '== Claude Code =='; if [ -x /usr/local/bin/claude ]; then /usr/local/bin/claude --version 2>&1 | head -1; "
-    "else echo 'not installed'; fi; "
+    "echo '== Claude Code =='; if [ -x /opt/node-v22.23.4/bin/claude ]; then /opt/node-v22.23.4/bin/claude --version "
+    "2>&1 | head -1; else echo 'not installed'; fi; "
     "echo '== service =='; systemctl is-enabled claude-remote 2>&1; systemctl is-active claude-remote 2>&1; true"
 )
 
@@ -4512,16 +4515,14 @@ def _cr_node_install_cmd() -> str:
             f"node-v{_CR_NODE_VERSION}-$f.tar.xz && echo \"$s  node-cr.tar.xz\" | sha256sum -c - && "
             "sudo mkdir -p /opt && sudo tar -xJf node-cr.tar.xz -C /opt && sudo rm -rf $d && "
             f"sudo mv /opt/node-v{_CR_NODE_VERSION}-$f $d && rm -f node-cr.tar.xz; fi && "
-            "sudo ln -sf $d/bin/node /usr/local/bin/node && sudo ln -sf $d/bin/npm /usr/local/bin/npm && "
-            "sudo ln -sf $d/bin/npx /usr/local/bin/npx && $d/bin/node --version"
+            "$d/bin/node --version"
             )
 
 _CR_CLAUDE_CMD = (
-    f"sudo {_CR_NODE_DIR}/bin/npm install -g {_CR_CLAUDE_PKG} && "
-    f"sudo ln -sf {_CR_NODE_DIR}/bin/claude /usr/local/bin/claude && /usr/local/bin/claude --version"
+    f"sudo {_CR_NODE_DIR}/bin/npm install -g {_CR_CLAUDE_PKG} && {_CR_CLAUDE_BIN} --version"
 )
 
-_CR_SIGNIN_CMD = f"sudo -u {_CR_DEFAULT_USER} -H /usr/local/bin/claude"
+_CR_SIGNIN_CMD = f"sudo -u {_CR_DEFAULT_USER} -H {_CR_CLAUDE_BIN} auth login"
 
 _CR_FOLDER_CMD = (
     "u='{{cruser}}'; d='{{crfolder}}'; h=$(getent passwd \"$u\" | cut -d: -f6); "
@@ -4536,23 +4537,38 @@ _CR_FOLDER_CMD = (
 )
 
 _CR_SERVICE_CMD = (
-    "u='{{cruser}}'; d='{{crfolder}}'; h=$(getent passwd \"$u\" | cut -d: -f6); "
+    "u='{{cruser}}'; d='{{crfolder}}'; cl=/opt/node-v22.23.4/bin/claude; "
+    "h=$(getent passwd \"$u\" | cut -d: -f6); "
     "[ -n \"$h\" ] || { echo \"No such user: $u\"; exit 1; }; "
     "case \"$d\" in \"~\") p=\"$h\";; \"~/\"*) p=\"$h/${d:2}\";; *) p=\"$d\";; esac; "
     "[ -d \"$p\" ] || { echo \"Folder missing: $p. Run the folder step first.\"; exit 1; }; "
+    "sudo -u \"$u\" test -x \"$cl\" || { echo \"$u cannot run $cl. Run steps 2 and 3 first.\"; exit 1; }; "
+    "sudo -u \"$u\" -H \"$cl\" auth status 2>&1 | grep -q '\"loggedIn\": true' || "
+    "{ echo \"Not signed in as $u. Run step 4 first, then run this step again.\"; exit 1; }; "
     "printf '%s\\n' '[Unit]' 'Description=Claude Code remote control (44helper)' "
-    "'After=network-online.target' 'Wants=network-online.target' '' '[Service]' 'Type=simple' "
-    "\"User=$u\" \"Environment=HOME=$h\" \"WorkingDirectory=$p\" "
-    "'ExecStart=/usr/local/bin/claude remote-control' 'Restart=on-failure' 'RestartSec=10' '' "
+    "'After=network-online.target' 'Wants=network-online.target' "
+    "'StartLimitIntervalSec=300' 'StartLimitBurst=5' '' '[Service]' 'Type=simple' "
+    "\"User=$u\" \"Environment=HOME=$h\" 'Environment=DISABLE_AUTOUPDATER=1' \"WorkingDirectory=$p\" "
+    "\"ExecStart=$cl remote-control\" 'Restart=on-failure' 'RestartSec=10' '' "
     "'[Install]' 'WantedBy=multi-user.target' "
     "| sudo tee /etc/systemd/system/claude-remote.service >/dev/null && "
     "sudo systemctl daemon-reload && sudo systemctl enable --now claude-remote && sleep 5 && "
     "systemctl is-active claude-remote && journalctl -u claude-remote -n 15 --no-pager"
 )
 
-_CR_STATUS_CMD = ("systemctl status claude-remote --no-pager -l 2>&1 | head -25; "
-                  "journalctl -u claude-remote -n 30 --no-pager 2>&1; true")
+_CR_STATUS_CMD = (
+    "systemctl status claude-remote --no-pager -l 2>&1 | head -25; "
+    "u=$(systemctl show -p User --value claude-remote 2>/dev/null); "
+    "if [ -n \"$u\" ] && [ -x /opt/node-v22.23.4/bin/claude ]; then echo \"== sign-in for $u ==\"; "
+    "sudo -u \"$u\" -H /opt/node-v22.23.4/bin/claude auth status --text 2>&1 | head -5; fi; "
+    "journalctl -u claude-remote -n 30 --no-pager 2>&1; true"
+)
 _CR_STOP_CMD = "sudo systemctl disable --now claude-remote 2>&1; true"
+
+_CR_UNLINK_OURS_CMD = (
+    "for l in node npm npx claude; do p=/usr/local/bin/$l; "
+    "case \"$(readlink \"$p\" 2>/dev/null)\" in /opt/node-v22.23.4/*) sudo rm -f \"$p\";; esac; done"
+)
 
 _CR_FIELD_USER = {"id": "cruser", "label": "Login user (the one that signed in)", "type": "text",
                   "default": _CR_DEFAULT_USER}
@@ -4568,17 +4584,21 @@ def _cr_install_steps() -> list[dict]:
         {"id": "cr_node", "num": 2, "title": "Install Node.js 22 (pinned, SHA256-checked)",
          "cmd": _cr_node_install_cmd(), "timeout": 900,
          "note": f"Downloads node-v{_CR_NODE_VERSION} from nodejs.org for this processor, checks its SHA256 against "
-                 "the value pinned in 44helper, and installs it under /opt. Claude Code needs Node 22 or newer; "
-                 "the Debian Bookworm and Trixie packages are older, so they are not used."},
+                 "the value pinned in 44helper, and installs it under /opt. Nothing is linked into /usr/local/bin, "
+                 "so a Node.js you already have is left alone. The Claude Code npm package needs Node 22 or newer "
+                 "to install (Claude Code itself runs as a native program); the Debian Bookworm and Trixie "
+                 "packages are older, so they are not used."},
         {"id": "cr_claude", "num": 3, "title": "Install Claude Code",
          "cmd": _CR_CLAUDE_CMD, "timeout": 900,
-         "note": f"Installs {_CR_CLAUDE_PKG} with the Node.js from step 2 and links claude into /usr/local/bin."},
+         "note": f"Installs {_CR_CLAUDE_PKG} with the Node.js from step 2, under {_CR_NODE_DIR}. Claude Code is "
+                 f"then run by its full path, {_CR_CLAUDE_BIN}."},
         {"id": "cr_signin", "num": 4, "title": "Sign in as the login user (manual, in a terminal)",
          "cmd": _CR_SIGNIN_CMD, "manual_block": True,
-         "note": "Run this in an SSH terminal on the node. Claude shows a sign-in link: open it on another device, "
-                 "sign in with the same account as the Claude apps, paste the code back, then exit with Ctrl+C. "
-                 f"Replace {_CR_DEFAULT_USER} with your login user if it is different. The sign-in is "
-                 "stored in that user's home folder."},
+         "note": "Run this in an SSH terminal on the node. Claude prints a sign-in link: open it in a browser on any "
+                 "device and sign in with the same account as the Claude apps (the default Claude subscription "
+                 "login). If it asks for a code, paste it back. Remote Control does not accept tokens made with "
+                 f"`claude setup-token`. Replace {_CR_DEFAULT_USER} with your login user if it is different. "
+                 "The sign-in is stored in that user's home folder."},
         {"id": "cr_folder", "num": 5, "title": "Create the Remote Control folder",
          "fields": [_CR_FIELD_USER, _CR_FIELD_FOLDER],
          "cmd_template": _CR_FOLDER_CMD,
@@ -4589,13 +4609,14 @@ def _cr_install_steps() -> list[dict]:
          "fields": [_CR_FIELD_USER, _CR_FIELD_FOLDER],
          "cmd_template": _CR_SERVICE_CMD,
          "cmd": _cr_fill(_CR_SERVICE_CMD), "timeout": 120,
-         "note": "Writes /etc/systemd/system/claude-remote.service, which runs claude remote-control as the login "
-                 "user in the folder, enables it at boot and starts it. It restarts on failure. Needs step 4 "
-                 "(sign-in) first."},
+         "note": "Stops with a message unless the login user can run Claude and `claude auth status` shows that "
+                 "user is signed in (step 4). Then writes /etc/systemd/system/claude-remote.service, which runs "
+                 "claude remote-control as that user in the folder, enables it at boot and starts it. It "
+                 "restarts on failure, and gives up after 5 failed starts in 5 minutes (step 7 shows why). "
+                 "DISABLE_AUTOUPDATER=1 is set so Claude Code does not update itself away from the pinned version."},
         {"id": "cr_status", "num": 7, "title": "Check the service",
          "cmd": _CR_STATUS_CMD, "timeout": 30,
-         "note": "Shows the service status and its last log lines. A running service that cannot reach Claude "
-                 "shows the reason here."},
+         "note": "Shows the service status, whether the service's user is signed in, and the last log lines."},
         {"id": "cr_stop", "num": 8, "title": "Stop Claude Remote",
          "cmd": _CR_STOP_CMD, "timeout": 60,
          "note": "Stops the service and disables it at boot. The device stops being reachable from the Claude apps."},
@@ -4609,11 +4630,12 @@ def _cr_purge_steps() -> list[dict]:
          "note": "Removes the service unit. The sign-in in the login user's home folder is kept; remove the "
                  "~/.claude folder by hand if you want it gone too."},
         {"id": "cr_purge_claude", "num": 2, "title": "Remove Claude Code",
-         "cmd": f"sudo {_CR_NODE_DIR}/bin/npm uninstall -g {_CR_CLAUDE_PKG.rsplit('@', 1)[0]} 2>&1; "
-                "sudo rm -f /usr/local/bin/claude; true"},
+         "cmd": f"sudo {_CR_NODE_DIR}/bin/npm uninstall -g {_CR_CLAUDE_PKG.rsplit('@', 1)[0]} 2>&1; true"},
         {"id": "cr_purge_node", "num": 3, "title": "Remove Node.js 22",
-         "cmd": f"sudo rm -f /usr/local/bin/node /usr/local/bin/npm /usr/local/bin/npx; sudo rm -rf {_CR_NODE_DIR}; true",
-         "note": "Removes the Node.js 22 install that step 2 put under /opt, and its links in /usr/local/bin."},
+         "cmd": f"sudo rm -rf {_CR_NODE_DIR}; {_CR_UNLINK_OURS_CMD}; true",
+         "note": "Removes the Node.js 22 install that step 2 put under /opt. Links in /usr/local/bin are removed "
+                 "only if they point into that folder (an earlier version made some); any other node, npm, npx "
+                 "or claude there is left alone."},
     ]
 
 _CR_SCRIPTS: dict[str, dict[str, list[dict]]] = {
@@ -13278,6 +13300,7 @@ _CSS_BASE = """
   --fs-xs:.66rem;--fs-sm:.72rem;--fs-base:.8rem;--fs-md:.9rem;--fs-lg:1rem;--fs-logo:1.21rem;
   --cloudflare:#f38020;
   --cloudflare-dim:#5c2d00;
+  --claude:#d97757;
 }
 button,input,select{font-family:var(--sans)}
 textarea,pre,code{font-family:var(--mono)!important}
@@ -13388,6 +13411,7 @@ header {
 .tab.t-m17{--mc:var(--teal);--mc-rgb:0,255,229}
 .tab.t-amp{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-cloudflare{--mc:var(--cloudflare);--mc-rgb:243,128,32}
+.tab.t-claude-remote{--mc:var(--claude);--mc-rgb:217,119,87}
 .tab.t-update{--mc:var(--orange);--mc-rgb:255,170,34}
 .tab.t-boot{--mc:var(--amber);--mc-rgb:255,208,64}
 .tab.t-services{--mc:var(--green);--mc-rgb:0,255,176}
@@ -18158,7 +18182,7 @@ function refreshConfig() {
 
 
 _THEME_HEAD = r"""<style>
-html[data-theme="light"]{filter:invert(1) hue-rotate(180deg);--red:#ff7d8c;--red2:#ff7d8c;--red-line:#ff7d8c;--green:#44be99;--amber:#ce9e44;--blue:#59b9de;--teal:#44bcb0;--accent:#44bcb0;--fcs:#51c1af;--orange:#e89542;--cloudflare:#ed9647;--pink:#ff78d2;--purple:#d778ff;--lime:#9bab41}
+html[data-theme="light"]{filter:invert(1) hue-rotate(180deg);--red:#ff7d8c;--red2:#ff7d8c;--red-line:#ff7d8c;--green:#44be99;--amber:#ce9e44;--blue:#59b9de;--teal:#44bcb0;--accent:#44bcb0;--fcs:#51c1af;--orange:#e89542;--cloudflare:#ed9647;--claude:#c56343;--pink:#ff78d2;--purple:#d778ff;--lime:#9bab41}
 html[data-theme="light"] img,html[data-theme="light"] video,html[data-theme="light"] canvas,html[data-theme="light"] iframe,html[data-theme="light"] input[type="checkbox"],html[data-theme="light"] input[type="radio"]{filter:invert(1) hue-rotate(180deg)}
 html[data-theme="light"] *{text-shadow:none!important}
 .theme-row{grid-column:1/-1;display:flex;justify-content:flex-end;align-items:center;gap:.5rem;margin:1rem 0 .4rem;padding:0 .2rem}
@@ -18370,7 +18394,7 @@ TABS: list[tuple[str, str, str, str]] = [
     ("m17", "M17", "t-m17", "Stage 1 (USRP2M17-Selector install helper; manual file-edit steps for rpt.conf/modules.conf/extensions.conf)"),
     ("amp", "Ampersand", "t-amp", "Stages 1-4 (amp-server radio node + amp-hub conference hub; S3 tarball install, conflict pre-flight, service, udev and hub settings from the page)"),
     ("cloudflare", "Cloudflare", "t-cloudflare", "Stages 1-4 (cloudflared connector: token dashboard-managed + quick TryCloudflare; outbound-only, no inbound ports, WireGuard-coexistence pre-flight)"),
-    ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (Debian 12 and 13, Debian or Armbian)"),
+    ("claude-remote", "Claude Remote", "t-claude-remote", "Node.js 22 and Claude Code on this node, sign-in, and claude remote-control as a systemd service (meant for Debian 12 and 13, Debian or Armbian)"),
     ("update", "Update", "t-update", "apt maintenance — default flow + aggressive alts"),
     ("system_opt", "System Optimization", "t-system-opt", "Stage 4 (done) — SD-card wear reduction: journald, rsyslog, fstab noatime, mandb"),
     ("config", "Config", "t-config", "Restore point, save points, Travel Node preset"),

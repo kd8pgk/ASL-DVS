@@ -1,6 +1,17 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_12_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_13_20261103.py`. Newest entries first.
+
+## 0.1.13 (2026-11-03)
+
+Claude Remote tab fixes from an audit of 0.1.12, checked against the real Claude Code 2.1.317.
+
+- **The service will not start unless the login user is signed in.** Step 6 checks that the user can run Claude and that `claude auth status` shows `"loggedIn": true`, and stops with a message if not (unexpected output also stops it). Before, a user who had not signed in got a service that exited and restarted every 10 seconds, forever. The unit now also gives up after 5 failed starts in 5 minutes, and sets `DISABLE_AUTOUPDATER=1` (the name is in the Claude Code program; what it does here has not been tested). Step 7 also shows whether the service's user is signed in.
+- **Nothing is linked into `/usr/local/bin`.** 0.1.12 overwrote any `node`, `npm` and `npx` there, and purge deleted them even when they were not its own. Node.js is only needed to install the package (Claude Code is a native program), so step 2 no longer makes any links. The service and the sign-in call Claude by its full path under `/opt/node-v22.23.4`. Purge removes a link in `/usr/local/bin` only if it points into that folder (0.1.12 made some); anything else is left alone.
+- **Step 4 signs in with `claude auth login`** (the explicit command, by full path) instead of plain `claude`. The note says Remote Control needs this login and does not accept tokens from `claude setup-token`.
+- **The tab has its own colour.** The Claude Remote tab uses the orange of the Claude logo (`#D97757`, the logo fill on claude.com and anthropic.com), in the dark and light themes. Before it had no accent colour.
+- **Wording corrected.** 0.1.12 said Claude Remote works on Debian 12 and 13, Debian or Armbian, on x86-64 and arm64. It has only been run on x86-64 (Ubuntu 24.04): the arm64 Node.js checksum and the Claude Code arm64 library needs were checked, not run. The page now says "meant for" and "tried on x86-64 only so far". It also no longer says Claude Code needs Node 22 to run: the npm package needs it to install, and Claude Code runs as a native program.
+- **Tested here:** the sign-in gate with a fake `claude` (signed in, signed out, unexpected output, not runnable); the unit text; the Node.js 22 download, checksum and unpack into a scratch folder, with nothing created in a stand-in `/usr/local/bin`; purge with our links, someone else's link and a regular file; the tab colour on the real page in both themes (displays `#D97757`). **Still not tested:** the service under systemd on an Orange Pi, whether `claude remote-control` stays up without a terminal, and the headless sign-in.
 
 ## 0.1.12 (2026-11-03)
 
