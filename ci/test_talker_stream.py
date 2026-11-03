@@ -1,8 +1,10 @@
 import base64
+import glob
 import http.client
 import json
 import math
 import os
+import re
 import shutil
 import signal
 import socket
@@ -15,7 +17,7 @@ import time
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-NODE_FILE = os.path.join(ROOT, "nodetalker_v0_10_9_20261103.py")
+NODE_FILE = sorted(glob.glob(os.path.join(ROOT, "nodetalker_v*.py")), key=lambda f: [int(x) for x in re.findall(r"\d+", os.path.basename(f))[:3]])[-1]
 STUB_BIN = os.path.join(ROOT, "ci", "fixtures", "servers", "bin")
 PORT = 18993
 UDP_PORT = 16200
@@ -207,6 +209,16 @@ class WS:
             body = payload
         self.sock.sendall(hdr + body)
 
+    def close_code(self, secs):
+        self.sock.settimeout(secs)
+        try:
+            while True:
+                op, payload = self.recv_frame()
+                if op == 8:
+                    return struct.unpack(">H", payload[:2])[0] if len(payload) >= 2 else 0
+        except (EOFError, OSError):
+            return None
+
     def closed_within(self, secs):
         self.sock.settimeout(secs)
         try:
@@ -354,6 +366,7 @@ class AuthAndEventTests(unittest.TestCase):
 
     def test_event_with_bad_shape_is_refused_not_crashed(self):
         st, _, body = http_json("POST", "/api/listen/event", {"events": "nope"}, cookie=self.cookie)
+        self.assertEqual(st, 200, "the app keeps events until it gets a 200, so a bad batch must not be a 400")
         self.assertFalse(body.get("ok"))
         self.assertIn("message", body)
         st2, _, _ = http_json("GET", "/api/health")
@@ -441,13 +454,13 @@ class TalkHandshakeTests(unittest.TestCase):
     def test_unmasked_client_frame_closes_the_session(self):
         ws = talk_open(self.cookie)
         ws.send(2, bytes(FRAME_BYTES), mask=False)
-        self.assertTrue(ws.closed_within(3))
+        self.assertEqual(ws.close_code(3), 1002)
         ws.sock.close()
 
     def test_oversize_frame_is_refused_without_reading_it(self):
         ws = talk_open(self.cookie)
         ws.sock.sendall(bytes([0x82, 0x80 | 127]) + struct.pack(">Q", 65537) + os.urandom(4))
-        self.assertTrue(ws.closed_within(3))
+        self.assertEqual(ws.close_code(3), 1009)
         ws.sock.close()
         st, _, _ = http_json("GET", "/api/health")
         self.assertEqual(st, 200)
@@ -668,7 +681,6 @@ class StalledListenerTests(unittest.TestCase):
     def settle(self):
         time.sleep(0.5)
 
-    @unittest.expectedFailure
     def test_a_stalled_listener_is_dropped_within_60_seconds(self):
         self.settle()
         stop = threading.Event()

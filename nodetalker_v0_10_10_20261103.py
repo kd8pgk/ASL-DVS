@@ -33,8 +33,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.9"
-DATE_STR = "2026-11-02"
+VERSION = "0.10.10"
+DATE_STR = "2026-11-03"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -210,6 +210,7 @@ FRAME_SEC = 0.02
 IN_QUEUE_MAX = 25
 IN_QUEUE_TRIM = 10
 LISTENER_QUEUE_MAX = 150
+LISTENER_SNDBUF = 65536
 ACTIVE_DB = -50.0
 ACTIVE_HOLD_SEC = 0.6
 KERCHUNK_MAX_SEC = 0.4
@@ -5472,6 +5473,7 @@ class WebSocket:
         self.w = handler.wfile
         self.lock = threading.Lock()
         self.closed = False
+        self.close_code = 0
 
     def _read(self, n):
         data = self.r.read(n)
@@ -5491,6 +5493,7 @@ class WebSocket:
             elif n == 127:
                 n = struct.unpack(">Q", self._read(8))[0]
             if n > WS_MAX_PAYLOAD or not masked:
+                self.close_code = 1009 if n > WS_MAX_PAYLOAD else 1002
                 raise EOFError("bad frame")
             mask = self._read(4)
             raw = self._read(n)
@@ -5510,6 +5513,7 @@ class WebSocket:
                 msg_op = op
             msg += payload
             if len(msg) > WS_MAX_PAYLOAD:
+                self.close_code = 1009
                 raise EOFError("message too big")
             if fin:
                 return msg_op, bytes(msg)
@@ -12266,6 +12270,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         lst.client = client
         lst.sock = self.connection
+        try:
+            self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, LISTENER_SNDBUF)
+        except OSError:
+            pass
         how = "error"
         listen_note(client, "node", "connect", "other", {})
         try:
@@ -12349,7 +12357,7 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             stop.set()
             TALKER.drop(ws)
-            ws.send(8, b"")
+            ws.send(8, struct.pack(">H", ws.close_code) if ws.close_code else b"")
             ws.closed = True
 
     def do_POST(self):
