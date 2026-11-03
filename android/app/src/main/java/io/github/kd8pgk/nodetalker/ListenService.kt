@@ -57,15 +57,21 @@ object Listen {
 
     fun changed() = listeners.forEach { it() }
 
-    fun start(c: Context, node: Node) {
+    fun start(c: Context, node: Node, src: String = "system", why: String = "app_start", detail: String = "") {
         NodeStore.setLastNode(c, node.id)
         val i = Intent(c, ListenService::class.java).setAction(ListenService.ACTION_START).putExtra(ListenService.EXTRA_NODE, node.id)
+            .putExtra(ListenService.EXTRA_SRC, ListenLog.src(src)).putExtra(ListenService.EXTRA_WHY, ListenLog.why(why, "app_start"))
+            .putExtra(ListenService.EXTRA_DETAIL, detail)
         c.startForegroundService(i)
     }
 
-    fun stop(c: Context) {
+    fun stop(c: Context, src: String = "system", why: String = "app_stop", detail: String = "") {
         if (state == OFF) return
-        c.startService(Intent(c, ListenService::class.java).setAction(ListenService.ACTION_LISTEN_STOP))
+        c.startService(
+            Intent(c, ListenService::class.java).setAction(ListenService.ACTION_LISTEN_STOP)
+                .putExtra(ListenService.EXTRA_SRC, ListenLog.src(src)).putExtra(ListenService.EXTRA_WHY, ListenLog.why(why, "app_stop"))
+                .putExtra(ListenService.EXTRA_DETAIL, detail)
+        )
     }
 }
 
@@ -100,6 +106,7 @@ class ListenService : Service() {
     private var reporter: Thread? = null
     private val stats = PlayStats()
     private var netInfo: NetInfo? = null
+    @Volatile private var trimLevel = 0
     @Volatile private var connectAt = 0L
     @Volatile private var playStartedAt = 0L
     @Volatile private var running = false
@@ -147,10 +154,15 @@ class ListenService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                logEnd("user", "notification")
                 shutdown()
                 return START_NOT_STICKY
             }
             ACTION_LISTEN_STOP -> {
+                logEnd(
+                    ListenLog.src(intent?.getStringExtra(EXTRA_SRC)), ListenLog.why(intent?.getStringExtra(EXTRA_WHY), "app_stop"),
+                    intent?.getStringExtra(EXTRA_DETAIL)
+                )
                 listenStop()
                 return START_NOT_STICKY
             }
@@ -190,6 +202,10 @@ class ListenService : Service() {
         Listen.error = ""
         set(Listen.CONNECTING)
         running = true
+        ListenLog.add(
+            this, "connect", ListenLog.src(intent?.getStringExtra(EXTRA_SRC)),
+            ListenLog.why(intent?.getStringExtra(EXTRA_WHY), "app_start"), intent?.getStringExtra(EXTRA_DETAIL)
+        )
         val g = ++gen
         queue.clear()
         stats.clear()
@@ -201,7 +217,18 @@ class ListenService : Service() {
         return START_NOT_STICKY
     }
 
+    override fun onTrimMemory(level: Int) {
+        trimLevel = level
+        super.onTrimMemory(level)
+    }
+
+    private fun logEnd(src: String, why: String, detail: String? = null) {
+        if (!running) return
+        ListenLog.add(this, "disconnect", src, why, detail)
+    }
+
     override fun onDestroy() {
+        if (running) logEnd("system", "service_destroyed", "{\"trim\":$trimLevel}")
         shutdown()
         if (Talk.svc === this) Talk.svc = null
         session?.release()
@@ -468,6 +495,7 @@ class ListenService : Service() {
                 }
                 if (code == 401) {
                     c.disconnect()
+                    logEnd("system", "login_rejected")
                     set(Listen.OFF, getString(R.string.listen_login))
                     running = false
                     mainHandler().post { shutdown() }
@@ -561,6 +589,7 @@ class ListenService : Service() {
                 tick = 0
                 beats++
                 val beat = beats % STATS_BEAT_EVERY == 0
+                ListenLog.flush(this)
                 val snap = stats.take(beat, netInfo?.take().orEmpty()) ?: continue
                 val cookie = CookieManager.getInstance().getCookie(n.origin)
                 when (RxReport.send(n, cookie, snap)) {
@@ -787,6 +816,9 @@ class ListenService : Service() {
         const val ACTION_TALK_CLOSE = "io.github.kd8pgk.nodetalker.TALK_CLOSE"
         private const val PRE_KEY_FRAMES = 25
         const val EXTRA_NODE = "node"
+        const val EXTRA_SRC = "src"
+        const val EXTRA_WHY = "why"
+        const val EXTRA_DETAIL = "detail"
         private const val CHANNEL = "listen"
         private const val NOTIF_ID = 1
         private const val RATE = 8000

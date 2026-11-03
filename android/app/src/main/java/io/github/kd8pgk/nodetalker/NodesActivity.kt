@@ -216,8 +216,8 @@ class NodesActivity : Activity() {
             .setPositiveButton(R.string.save) { _, _ ->
                 val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), a.earpiece, voice.isChecked, boost.progress)
                 NodeStore.setAudio(this, b)
-                if (!b.app) Listen.stop(this)
-                else Listen.nodeId?.let { id -> NodeStore.get(this, id)?.let { Listen.start(this, it) } }
+                if (!b.app) Listen.stop(this, "system", "format_changed")
+                else Listen.nodeId?.let { id -> NodeStore.get(this, id)?.let { Listen.start(this, it, "system", "format_changed") } }
                 Toast.makeText(this, R.string.audio_saved, Toast.LENGTH_LONG).show()
             }
             .setNegativeButton(R.string.cancel, null)

@@ -1943,6 +1943,102 @@ class WifimonLinkFileTests(unittest.TestCase):
         self.assertEqual(set(self.nt.WIFI_LINK_KEYS) - set(snap), set())
 
 
+class ListenEventTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.path = os.path.join(d, "listenlog.jsonl")
+        p = mock.patch.object(self.nt, "LISTENLOG_PATH", self.path)
+        p.start()
+        self.addCleanup(p.stop)
+        q = mock.patch.object(self.nt, "log_event")
+        self.log = q.start()
+        self.addCleanup(q.stop)
+
+    def rows(self):
+        with open(self.path, encoding="utf-8") as fh:
+            return [json.loads(ln) for ln in fh]
+
+    def test_an_event_is_logged_and_written(self):
+        nt = self.nt
+        ev = {"action": "disconnect", "src": "system", "why": "process_killed", "t": int(time.time() * 1000),
+              "detail": {"exit": "low_memory", "screen": 0, "fg": 0, "doze": 1, "net": "cell"}}
+        self.assertEqual(nt.listen_event({"client": "android", "events": [ev]}), {"ok": True, "n": 1})
+        row = self.rows()[0]
+        self.assertEqual((row["client"], row["src"], row["action"], row["why"]), ("android", "system", "disconnect", "process_killed"))
+        self.assertEqual(row["detail"]["exit"], "low_memory")
+        self.assertIn("t", row)
+        msg = self.log.call_args[0][0]
+        for bit in ("disconnect", "android", "system", "process killed", "exit low_memory"):
+            self.assertIn(bit, msg)
+
+    def test_bad_events_are_dropped_and_unknown_reasons_become_other(self):
+        nt = self.nt
+        evs = [{"action": "connect", "src": "node", "why": "button"}, {"action": "poke", "src": "user"}, "x",
+               {"action": "connect", "src": "user", "why": "<script>", "detail": {"err": "a<b>c;d" * 30, "up": "x", "vis": True,
+                                                                              "screen": 10 ** 12, "zzz": 1}}]
+        self.assertEqual(nt.listen_event({"client": "browser", "events": evs})["n"], 1)
+        row = self.rows()[0]
+        self.assertEqual(row["why"], "other")
+        self.assertLessEqual(len(row["detail"]["err"]), 40)
+        self.assertNotIn("<", row["detail"]["err"])
+        self.assertEqual(row["detail"]["screen"], nt.RXH_CLIENT_MAX)
+        self.assertNotIn("zzz", row["detail"])
+        self.assertNotIn("up", row["detail"])
+        self.assertNotIn("vis", row["detail"])
+
+    def test_events_must_be_a_list_and_a_batch_is_capped(self):
+        nt = self.nt
+        with self.assertRaises(ValueError):
+            nt.listen_event({"events": "x"})
+        evs = [{"action": "connect", "src": "user", "why": "button"}] * (nt.LISTEN_EVENTS_MAX + 5)
+        self.assertEqual(nt.listen_event({"events": evs})["n"], nt.LISTEN_EVENTS_MAX)
+
+    def test_a_far_off_phone_time_is_not_kept(self):
+        self.nt.listen_event({"events": [{"action": "connect", "src": "user", "why": "button", "t": 1000}]})
+        self.assertNotIn("t", self.rows()[0])
+
+    def test_the_log_file_rotates(self):
+        nt = self.nt
+        with open(self.path, "w") as fh:
+            fh.write("x" * (nt.LISTENLOG_FILE_MAX + 1))
+        nt.listen_event({"events": [{"action": "connect", "src": "user", "why": "button"}]})
+        self.assertTrue(os.path.exists(self.path + ".1"))
+        self.assertEqual(len(self.rows()), 1)
+
+    def test_the_route_exists_and_the_page_names_every_start_and_stop(self):
+        nt = self.nt
+        with open(nt.__file__, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn('"/api/listen/event": (listen_event', text)
+        import re
+        self.assertEqual(re.findall(r"\b(?:start|stop)Listen\(\)", text), [])
+        for why in re.findall(r"(?:start|stop)Listen\('(?:system|user)', '(\w+)'\)", text):
+            self.assertTrue(why == "retry" or why in nt.LISTEN_WHY, why)
+
+    def test_the_apps_event_keys_are_accepted(self):
+        import re
+        nt = self.nt
+        base = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker")
+        with open(os.path.join(base, "ListenLog.kt"), encoding="utf-8") as fh:
+            text = fh.read()
+        keys = set(re.findall(r'd\.put\("(\w+)"', text))
+        self.assertTrue(keys)
+        self.assertEqual(keys - set(nt.LISTEN_DETAIL_NUM) - set(nt.LISTEN_DETAIL_STR), set())
+        with open(os.path.join(base, "ListenService.kt"), encoding="utf-8") as fh:
+            svc = fh.read()
+        for why in re.findall(r'logEnd\("(?:user|system)", "(\w+)"', svc):
+            self.assertIn(why, nt.LISTEN_WHY)
+        with open(os.path.join(base, "Bluetooth.kt"), encoding="utf-8") as fh:
+            bt = fh.read()
+        for why in re.findall(r'"(?:system|user)", "(\w+)"', bt):
+            self.assertIn(why, nt.LISTEN_WHY)
+
+
 class RxHealthWifiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
