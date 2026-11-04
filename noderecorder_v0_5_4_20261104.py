@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.4"
+VERSION = "0.5.4.1"
 DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -6485,7 +6485,10 @@ async function loadSchedule() {
       const cell = (lines) => { const td = document.createElement('td'); lines.forEach((v, i) => { const x = document.createElement('div'); x.textContent = v || ''; if (i) x.className = 'muted small'; td.appendChild(x); }); tr.appendChild(td); };
       cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target)]);
       cell([schedDays(e.days) + ' ' + e.start + '-' + e.end + ' ' + (e.format === 'pcm' ? 'PCM' : 'u-law'), 'Next: ' + (e.now ? 'now' : e.next)]);
+      const tr2 = document.createElement('tr');
       const act = document.createElement('td');
+      act.colSpan = 3;
+      tr2.appendChild(act);
       const btn = (text, fn) => { const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = text; b.addEventListener('click', fn); act.appendChild(b); };
       btn('Dry run', () => schedDryRun(e.id));
       if (manage) {
@@ -6495,8 +6498,8 @@ async function loadSchedule() {
         btn('Edit', () => schedEdit(e));
         btn('Remove', () => schedRemove(e));
       }
-      tr.appendChild(act);
       tb.appendChild(tr);
+      tb.appendChild(tr2);
     });
   };
   rows('sch-rows', false);

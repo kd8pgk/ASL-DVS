@@ -2,6 +2,11 @@
 
 Current file: `noderecorder_v0_5_4_20261104.py`. Newest entries first.
 
+## 0.5.4.1 (2026-11-04)
+
+- **Schedule buttons on their own row.** Dry run, the on/off box, Edit and Remove now sit on a new row under each recording in the schedule tables, instead of in a third column.
+- This is a cosmetic build: only the layout changed.
+
 ## 0.5.4 (2026-11-04)
 
 - **Days are check boxes.** The Day drop-down on the schedule form is seven check boxes (Sun to Sat), so any mix of days can be picked, such as Mon, Wed and Fri. At least one day must be ticked.
