@@ -19,10 +19,9 @@ JS_NAME_RE = re.compile(r"^_*(?:[A-Z0-9]+_)*JS$")
 PLACEHOLDER_RE = re.compile(r"^\s*\{\w+\}\s*$")
 CHANNEL_FILES = ("channels/rules.json", "channels/overrides.json")
 STABLE_FILE = "channels/stable.json"
-ANDROID_APPS = (
-    ("android/", "android/app/build.gradle.kts", "changelogs/nodetalker_android.md"),
-    ("android-controller/", "android-controller/app/build.gradle.kts", "changelogs/nodecontroller_android.md"),
-)
+ANDROID_DIR = "android/"
+ANDROID_GRADLE = "android/app/build.gradle.kts"
+ANDROID_LOG = "changelogs/nodetalker_android.md"
 ANDROID_VERSION_RE = re.compile(r'^val appVersion = "([^"]+)"', re.M)
 
 errors = []
@@ -301,33 +300,33 @@ def check_changelog(stem, name, version):
         fail(f"{path}: the top entry is '{head}', not {version}")
 
 
-def check_android(base, paths, app_dir, gradle, log):
-    if not any(p.startswith(app_dir) for p in paths):
+def check_android(base, paths):
+    if not any(p.startswith(ANDROID_DIR) for p in paths):
         return
-    m = ANDROID_VERSION_RE.search(read(gradle) if os.path.isfile(gradle) else "")
+    m = ANDROID_VERSION_RE.search(read(ANDROID_GRADLE) if os.path.isfile(ANDROID_GRADLE) else "")
     if not m:
-        fail(f"{gradle}: no 'val appVersion = \"X.Y.Z\"' line found")
+        fail(f"{ANDROID_GRADLE}: no 'val appVersion = \"X.Y.Z\"' line found")
         return
     version = m.group(1)
     vt, suffix = split_version(version)
     if vt is None or suffix or len(vt) != 3:
-        fail(f"{gradle}: appVersion '{version}' must be X.Y.Z")
+        fail(f"{ANDROID_GRADLE}: appVersion '{version}' must be X.Y.Z")
         return
-    om = ANDROID_VERSION_RE.search(show(base, gradle) or "")
+    om = ANDROID_VERSION_RE.search(show(base, ANDROID_GRADLE) or "")
     if om:
         ot, _ = split_version(om.group(1))
         if ot is not None and vt <= ot:
-            fail(f"{gradle}: {app_dir} changed but appVersion {version} is not newer than {om.group(1)}")
-    if not os.path.isfile(log):
-        fail(f"{app_dir}: {log} is missing")
+            fail(f"{ANDROID_GRADLE}: android/ changed but appVersion {version} is not newer than {om.group(1)}")
+    if not os.path.isfile(ANDROID_LOG):
+        fail(f"android/: {ANDROID_LOG} is missing")
         return
-    lines = read(log).splitlines()
+    lines = read(ANDROID_LOG).splitlines()
     cur = next((ln for ln in lines if ln.startswith("Current version:")), "")
     if f"`{version}`" not in cur:
-        fail(f"{log}: the 'Current version' line does not name `{version}`")
+        fail(f"{ANDROID_LOG}: the 'Current version' line does not name `{version}`")
     head = next((ln for ln in lines if ln.startswith("## ")), "")
     if version not in head.split():
-        fail(f"{log}: the top entry is '{head}', not {version}")
+        fail(f"{ANDROID_LOG}: the top entry is '{head}', not {version}")
 
 
 def check_launchers():
@@ -512,8 +511,7 @@ def main():
             notes.append(f"{path}: tool '{canon(t[0])}' removed")
 
     check_launchers()
-    for app_dir, gradle, log in ANDROID_APPS:
-        check_android(base, added + modified + deleted, app_dir, gradle, log)
+    check_android(base, added + modified + deleted)
 
     for n in notes:
         print(f"note: {n}")
