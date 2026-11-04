@@ -1,22 +1,6 @@
 # SysMon, full build changelog
 
-Current file: `sysmon_v6_15_0_20261104.py`. Newest entries first.
-
-## 6.15.0 (2026-11-04)
-
-The Console tab is reorganised around fixed tasks and log reading, not phone calls. There is still no shell: every command is a fixed Asterisk command from a list, or a fixed log command.
-
-- **Quick tasks** (was Commands), grouped as Node, Phone, Links, Config, Memory, System and Advanced. Each button runs one fixed command; the node number comes from the Node box and is checked against the nodes on this system. Changes ask first and take a snapshot before and after. A star keeps a button in a Favourites row, in this browser only.
-- **Recent runs** under Results: the last 20 runs on this node, newest first, with the time, the task and the command.
-- **Log triage** (new card). Reads the Asterisk log file (`/var/log/asterisk/full`, then `messages`) or the journal for `asterisk.service`, over the last 15 minutes, 1 hour or 24 hours. Lines are grouped by their message with numbers, IP addresses and quoted names replaced, and each group shows its count, level, last time seen and a sample line. Fifteen known problems (password refused, no route, codec, far end not answering, port in use, registration rejected, one-way audio, name lookup, link dropped, module load, config error, permission, low disk or memory, restart) get a plain meaning, a suggested fix and a button to the tab that handles it. Secrets (secret, password, passwd, md5secret, token) are masked before display or copy.
-- **Snapshots** (new card). A snapshot saves four read-only checks (node stats when a node is picked, IAX peers, PJSIP registrations and active calls) with the time. Take one by hand, or they are taken before and after each change button. Pick two to compare: the card shows what changed, line by line. Up to 20 are kept on the node in `/var/lib/sysmon/snapshots`.
-- **Follow in a terminal** (new). Two read-only follows, the Asterisk journal (`journalctl -f`) and the Asterisk log file (`tail -F`), open in the terminal card after the root password. They use the same session limits as the live console: one at a time, LAN only, idle timeout.
-- **Verbose 3** now goes back to verbose 0 after the same 5 minutes as the audio and SIP debug timers.
-- **Advanced** holds the audio and SIP debug toggles, the codec list, the phone settings readout and the phone node checks, plus the debug summary (collapsed).
-- **Removed** from the buttons, as duplicates or low value: node variables, node local stats, PJSIP contacts, PJSIP transports, call quality and Verbose 5.
-- **Not moved:** the Phone-only buttons stay in the Console tab's Advanced group. Moving them to the Phone tab is a follow-up.
-- **Routes:** `/api/console/triage`, `/api/console/history`, `/api/console/snapshots`, `/api/console/snapshot` (GET for one, POST to take one), `/api/console/snapdiff` and `/api/console/task/term`. All need login, and the POST routes need the root password or root to run.
-- **Tested here:** 71 checks on the new code with stubbed log files and a stubbed Asterisk: triage grouping, redaction, the journal path, the window limits, the snapshot store (limit, ID check, comparison), run validation, history, and the terminal tickets. **Not yet tested on a node:** the buttons and cards in a browser with a live Asterisk.
+Current file: `sysmon_v6_14_0_20261104.py`. Newest entries first.
 
 ## 6.14.0 (2026-11-04)
 
