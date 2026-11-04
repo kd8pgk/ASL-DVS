@@ -1,6 +1,12 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_3_20261104.py`. Newest entries first.
+Current file: `noderecorder_v0_5_4_20261104.py`. Newest entries first.
+
+## 0.5.4 (2026-11-04)
+
+- **Days are check boxes.** The Day drop-down on the schedule form is seven check boxes (Sun to Sat), so any mix of days can be picked, such as Mon, Wed and Fri. At least one day must be ticked.
+- **Schedule tables fit the page.** Each recording now takes two lines: the name and target on the first, and the days, window, format and next time on the second. The table no longer runs off the side of the page.
+- This is a release, not a cosmetic build.
 
 ## 0.5.3 (2026-11-04)
 

@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.3"
+VERSION = "0.5.4"
 DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -6482,9 +6482,9 @@ async function loadSchedule() {
     tb.innerHTML = '';
     d.entries.forEach((e) => {
       const tr = document.createElement('tr');
-      const cells = [e.name + (e.enabled ? '' : ' (off)'), schedDays(e.days), e.start + '-' + e.end, schedTarget(e.target),
-        e.format === 'pcm' ? 'PCM' : 'u-law', e.now ? 'now' : e.next];
-      cells.forEach((v) => { const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td); });
+      const cell = (lines) => { const td = document.createElement('td'); lines.forEach((v, i) => { const x = document.createElement('div'); x.textContent = v || ''; if (i) x.className = 'muted small'; td.appendChild(x); }); tr.appendChild(td); };
+      cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target)]);
+      cell([schedDays(e.days) + ' ' + e.start + '-' + e.end + ' ' + (e.format === 'pcm' ? 'PCM' : 'u-law'), 'Next: ' + (e.now ? 'now' : e.next)]);
       const act = document.createElement('td');
       const btn = (text, fn) => { const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = text; b.addEventListener('click', fn); act.appendChild(b); };
       btn('Dry run', () => schedDryRun(e.id));
@@ -6670,25 +6670,14 @@ async function saveConfig() {
   CFG_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   setMsg('cfg-msg', await post('/api/config', body));
 }
-const DAY_PRESETS = [['*', 'Every day', [0, 1, 2, 3, 4, 5, 6]], ['1-5', 'Weekdays (Mon-Fri)', [1, 2, 3, 4, 5]], ['0,6', 'Weekends (Sat, Sun)', [0, 6]],
-  ['0', 'Sunday', [0]], ['1', 'Monday', [1]], ['2', 'Tuesday', [2]], ['3', 'Wednesday', [3]], ['4', 'Thursday', [4]], ['5', 'Friday', [5]], ['6', 'Saturday', [6]]];
 const SC_FIELDS = {ASL: {num: 'Node'}, EchoLink: {num: 'Number'}, DMR: {num: 'Talkgroup', net: true}, STFU: {num: 'Talkgroup'}, YSF: {num: 'Reflector'},
   P25: {num: 'Talkgroup'}, NXDN: {num: 'Talkgroup'}, DSTAR: {num: 'Reflector', mod: true}, M17: {num: 'Reflector', mod: true}};
 let schedRows = [], schedSrc = null, schedEditId = '', schedLabel = '';
 function schedDaysValue() {
-  const v = $('sc-days').value, p = DAY_PRESETS.find((x) => x[0] === v);
-  if (p) return p[2];
-  return v.indexOf('custom:') === 0 ? v.slice(7).split(',').map(Number) : [];
+  return Array.from($('sc-days').querySelectorAll('input:checked')).map((c) => Number(c.value));
 }
 function schedSetDays(days) {
-  const sel = $('sc-days'), key = days.join(',');
-  const hit = DAY_PRESETS.find((p) => p[2].join(',') === key);
-  if (hit) { sel.value = hit[0]; return; }
-  Array.from(sel.querySelectorAll('option[data-custom]')).forEach((o) => o.remove());
-  const o = document.createElement('option');
-  o.value = 'custom:' + key; o.dataset.custom = '1'; o.textContent = schedDays(days);
-  sel.appendChild(o);
-  sel.value = o.value;
+  $('sc-days').querySelectorAll('input').forEach((c) => { c.checked = days.indexOf(Number(c.value)) >= 0; });
 }
 function schedFieldsShow() {
   const m = $('sc-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
@@ -6818,7 +6807,6 @@ async function schedRemove(e) {
   loadSchedule();
 }
 function schedInit() {
-  DAY_PRESETS.forEach((p) => addOption($('sc-days'), p[0], p[1]));
   Object.keys(SC_FIELDS).forEach((m) => addOption($('sc-mode'), m, modeName(m)));
   schedClear();
 }
@@ -7010,7 +6998,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="card" id="cd-sched-form">
 <h2 id="sc-title">Schedule a recording</h2>
 <div class="row"><label>Name <input type="text" id="sc-name" maxlength="40" placeholder="optional" style="width:150px"></label>
-<label>Day <select id="sc-days"></select></label>
+<span class="daypick" id="sc-days" role="group" aria-label="Days" style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center"><span class="muted small">Days</span><label><input type="checkbox" value="0"> Sun</label><label><input type="checkbox" value="1"> Mon</label><label><input type="checkbox" value="2"> Tue</label><label><input type="checkbox" value="3"> Wed</label><label><input type="checkbox" value="4"> Thu</label><label><input type="checkbox" value="5"> Fri</label><label><input type="checkbox" value="6"> Sat</label></span>
 <label>From <input type="time" id="sc-start" value="20:00"></label>
 <label>To <input type="time" id="sc-end" value="21:00"></label></div>
 <div class="row"><label>Mode <select id="sc-mode"></select></label>
@@ -7056,7 +7044,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="card" id="cd-rsched">
 <h2>Schedule</h2>
 <div id="sch-note" class="muted small"></div>
-<table class="links"><thead><tr><th>Name</th><th>Days</th><th>Window</th><th>Target</th><th>Format</th><th>Next</th><th></th></tr></thead><tbody id="sch-rows"></tbody></table>
+<table class="links"><thead><tr><th>Recording</th><th>When</th><th></th></tr></thead><tbody id="sch-rows"></tbody></table>
 <div id="sch-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
 <div id="sch-err" class="msg err hidden"></div>
 <div id="sch-msg" class="msg"></div>
@@ -7109,7 +7097,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-sched"><span class="fold-t">Schedule</span><span class="fold-sum" id="sum-sched"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-sched">
 <p class="muted small">Add recordings on the Connect tab. Here you can turn an entry off or on, change it, remove it or try it with a dry run. Windows must be at least 2 minutes apart.</p>
-<table class="links"><thead><tr><th>Name</th><th>Days</th><th>Window</th><th>Target</th><th>Format</th><th>Next</th><th></th></tr></thead><tbody id="sl-rows"></tbody></table>
+<table class="links"><thead><tr><th>Recording</th><th>When</th><th></th></tr></thead><tbody id="sl-rows"></tbody></table>
 <div id="sl-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
 <div id="sl-msg" class="msg"></div>
 </div>
