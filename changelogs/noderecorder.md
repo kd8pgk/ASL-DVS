@@ -1,22 +1,13 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_4_20261104.py`. Newest entries first.
-
-## 0.5.4.1 (2026-11-04)
-
-- **Schedule buttons on their own row.** Dry run, the on/off box, Edit and Remove now sit on a new row under each recording in the schedule tables, instead of in a third column.
-- This is a cosmetic build: only the layout changed.
-
-## 0.5.4 (2026-11-04)
-
-- **Days are check boxes.** The Day drop-down on the schedule form is seven check boxes (Sun to Sat), so any mix of days can be picked, such as Mon, Wed and Fri. At least one day must be ticked.
-- **Schedule tables fit the page.** Each recording now takes two lines: the name and target on the first, and the days, window, format and next time on the second. The table no longer runs off the side of the page.
-- This is a release, not a cosmetic build.
+Current file: `noderecorder_v0_5_3_20261104.py`. Newest entries first.
 
 ## 0.5.3 (2026-11-04)
 
-- **Record now and Stop recording on the Record card.** Record now starts a recording by hand, using the target and format set in the Connect tab's schedule form, and it runs until Stop recording is pressed. It stops by itself after 4 hours. Stop recording ends the recording in progress: what was recorded is saved, the link is dropped, and the scheduled window does not start again. Both buttons follow the recorder's state, and only one recording can run at a time. A manual start is refused while a scheduled window is due. New routes `POST /api/recording/start` and `POST /api/recording/stop`.
+- **Record now and Stop recording on the Record card.** Record now starts a recording by hand, using the target and format set in the Connect tab's schedule form, and it runs until Stop recording is pressed. It stops by itself after 4 hours. Stop recording ends the recording in progress: what was recorded is saved, the link is dropped, and the scheduled window does not start again. Only one recording can run at a time, and a manual start is refused while a scheduled window is due. New routes `POST /api/recording/start` and `POST /api/recording/stop`.
 - **Removing a scheduled recording that is recording stops it.** Before, Remove was refused while the entry was recording. Now the recording is stopped by hand, saved, and the entry is deleted.
+- **Days are check boxes.** The Day drop-down on the schedule form is seven check boxes (Sun to Sat), so any mix of days can be picked. At least one must be ticked.
+- **Schedule tables fit the page.** Each recording takes two lines (name and target, then days, window, format and next time), and its buttons (Dry run, on/off, Edit, Remove) sit on a row of their own under it.
 - This is a release, not a cosmetic build.
 
 ## 0.5.2 (2026-11-04)
