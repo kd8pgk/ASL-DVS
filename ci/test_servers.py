@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 import ast
+import base64
+import hashlib
 import http.client
 import json
 import os
 import shutil
 import signal
 import socket
+import secrets
 import ssl
 import subprocess
 import sys
@@ -26,6 +29,8 @@ SERVERS = {
     "nodetalker": {"file": "nodetalker_v0_10_11_20261104.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "noderecorder": {"file": "noderecorder_v0_5_2_20261104.py", "port": 8995, "scheme": "https", "health": "/api/health"},
+    "pibrary": {"file": "pibrary_v0_16_1_20261104.py", "port": 9000, "scheme": "http", "health": "/api/health",
+                "dirs_env": {"PIBRARY_CONFIG_DIR": "config", "PIBRARY_STAGE_DIR": "staged"}, "login_password": True},
 }
 for _spec in SERVERS.values():
     _spec.setdefault("health", "/healthz")
@@ -40,6 +45,7 @@ PUBLIC_BY_DESIGN = {
     "nodetalker": {"/api/health", "/api/whoami"},
     "amp_nodetalker": {"/api/health", "/api/whoami"},
     "noderecorder": {"/api/health", "/api/whoami", "/api/recorder/status"},
+    "pibrary": {"/api/health", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png"},
 }
 
 
@@ -106,7 +112,24 @@ class Server:
         env = dict(os.environ)
         env["STUB_DIR"] = self.stub_dir
         env["PATH"] = STUB_BIN + os.pathsep + env.get("PATH", "")
+        for var, sub in self.spec.get("dirs_env", {}).items():
+            path = os.path.join(self.stub_dir, sub)
+            os.makedirs(path, exist_ok=True)
+            env[var] = path
         return env
+
+    def seed_login(self):
+        if not self.spec.get("login_password"):
+            return None
+        password = secrets.token_urlsafe(18)
+        salt = os.urandom(16)
+        dk = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=16384, r=8, p=1, maxmem=64 * 1024 * 1024, dklen=32)
+        stored = "scrypt$16384$8$1$%s$%s" % (base64.b64encode(salt).decode("ascii"), base64.b64encode(dk).decode("ascii"))
+        config = os.path.join(self.stub_dir, self.spec["dirs_env"]["PIBRARY_CONFIG_DIR"])
+        os.makedirs(config, exist_ok=True)
+        with open(os.path.join(config, "pibrary.auth"), "w") as f:
+            f.write(stored + "\n")
+        return password
 
     def start(self, timeout=30):
         free_port_or_fail(self.spec["port"])
@@ -114,6 +137,7 @@ class Server:
             os.remove(SHARED_AUTH_STATE)
         except FileNotFoundError:
             pass
+        self.seed_login()
         self.log = open(self.log_path, "w")
         self.proc = subprocess.Popen(
             [sys.executable, os.path.join(ROOT, self.spec["file"])],

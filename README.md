@@ -357,7 +357,7 @@ over a USB drive or the SD card, with resume positions, played markers, a restor
 trash, a duplicate finder, drive health and an optional import from a plugged-in
 drive. It is one stdlib-only file, `pibrary_v*.py`, and a common tool.
 
-- Install: `sudo python3 pibrary_v0_16_0_20261102.py --install`, or from instmon.
+- Install: `sudo python3 pibrary_v0_16_1_20261104.py --install`, or from instmon.
   It listens on port 9000 (the port in `/etc/pibrary/pibrary.conf`). Install opens
   the port in `ufw` or `firewalld` and uninstall closes it.
 - Login is on by default: sign in with the Pibrary password, or the node's root password
@@ -518,7 +518,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodetalker_v0_10_11_20261104.py` | common |
 | `noderecorder_v0_5_2_20261104.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
-| `pibrary_v0_16_0_20261102.py` | common |
+| `pibrary_v0_16_1_20261104.py` | common |
 | `install_all_v7_4_0_20261020.sh` | common |
 | `uninstall_all_v1_9_0_20261027.sh` | common |
 | `confgetter_v1_0_2_20261027.sh` | common |

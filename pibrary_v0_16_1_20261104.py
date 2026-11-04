@@ -30,8 +30,8 @@ import urllib.request
 from collections import deque
 from datetime import datetime
 
-VERSION = "0.16.0"
-DATE_STR = "2026-11-02"
+VERSION = "0.16.1"
+DATE_STR = "2026-11-04"
 APP_NAME = "Pibrary"
 
 INSTALL_BIN_PATH = "/usr/local/bin/pibrary.py"
@@ -8992,6 +8992,8 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
         )
 
     def _send_json(self, status, payload, extra_headers=None):
+        if isinstance(payload, dict) and payload.get("error") and "message" not in payload:
+            payload = dict(payload, message=payload["error"])
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -9040,18 +9042,6 @@ class PibraryHandler(http.server.BaseHTTPRequestHandler):
         return True
 
     def _require_auth(self):
-        client_ip = self.client_address[0]
-        remaining = _auth_lockout_remaining(client_ip)
-        if remaining > 0:
-            retry_after = int(remaining) + 1
-            body = f"Too many failed login attempts. Try again in {retry_after}s.".encode()
-            self.send_response(429)
-            self.send_header("Retry-After", str(retry_after))
-            self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
         self._error_json(401, "Authentication required")
 
     def _check_csrf(self):
