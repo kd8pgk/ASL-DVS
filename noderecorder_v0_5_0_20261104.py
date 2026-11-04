@@ -29,8 +29,8 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.4.0"
-DATE_STR = "2026-11-02"
+VERSION = "0.5.0"
+DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
 
@@ -236,6 +236,9 @@ DEFAULT_CONFIG = {
     "schedule_dry_run": False,
     "record_path": "",
     "record_max_mb": 4096,
+    "record_convert": True,
+    "record_encoder": "lame",
+    "record_kbps": 32,
 }
 
 
@@ -277,6 +280,26 @@ def _norm_dirpath(value):
     return v
 
 
+MP3_KBPS = (24, 32, 48, 64)
+
+
+def _norm_kbps(value):
+    try:
+        v = int(str(value).strip())
+    except ValueError:
+        v = 0
+    if v not in MP3_KBPS:
+        raise ValueError("the quality must be " + ", ".join(str(k) for k in MP3_KBPS) + " kbps")
+    return v
+
+
+def _norm_encoder(value):
+    v = str(value).strip().lower()
+    if v not in ("lame", "sox", "shine", "opus", "flac"):
+        raise ValueError("the encoder must be lame, sox, shine, opus or flac")
+    return v
+
+
 def _norm_gain(value):
     try:
         v = int(round(float(str(value).strip())))
@@ -302,6 +325,9 @@ _NORMALIZERS = {
     "schedule_dry_run": _parse_bool,
     "record_path": _norm_dirpath,
     "record_max_mb": _norm_int(100, 2000000, "record_max_mb must be 100-2000000"),
+    "record_convert": _parse_bool,
+    "record_encoder": _norm_encoder,
+    "record_kbps": _norm_kbps,
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -4082,7 +4108,9 @@ RECORD_QUEUE_FRAMES = 500
 RECORD_SYNC_SEC = 10.0
 RECORD_HEADER_SEC = 10.0
 RECORD_CLOSE_SEC = 20.0
-_REC_NAME_RE = re.compile(r"^\d{8}-\d{6}_[A-Za-z0-9._-]{1,48}\.wav$")
+_REC_NAME_RE = re.compile(r"^\d{8}-\d{6}_[A-Za-z0-9._-]{1,48}\.(wav|mp3|opus|flac)$")
+ENCODE_JOB_SEC = 7200
+ENCODER_INSTALL_SEC = 900
 
 
 def pibrary_storage():
@@ -4285,10 +4313,307 @@ def repair_recording(path):
 def repair_recordings(d):
     fixed = 0
     for name, _size in recordings_list(d):
+        if not name.endswith(".wav"):
+            continue
         if repair_recording(os.path.join(d, name)):
             fixed += 1
             log_event(f"Repaired the header of {name} (it was not closed cleanly)", "warn")
     return fixed
+
+
+def _ulaw_decode_table():
+    out = array.array("h")
+    for b in range(256):
+        c = ~b & 0xFF
+        t = (((c & 0x0F) << 3) + 0x84) << ((c & 0x70) >> 4)
+        out.append(0x84 - t if c & 0x80 else t - 0x84)
+    return out
+
+
+ULAW_DECODE = _ulaw_decode_table()
+
+
+def _enc_lame(exe, kbps, out):
+    return [exe, "--quiet", "-r", "-s", "8", "--signed", "--little-endian", "--bitwidth", "16", "-m", "m",
+            "--resample", "16", "--cbr", "-b", str(kbps), "-", out], "raw"
+
+
+def _enc_sox(exe, kbps, out):
+    return [exe, "-q", "-t", "raw", "-r", "8000", "-e", "signed-integer", "-b", "16", "-c", "1", "-",
+            "-t", "mp3", "-r", "16000", "-C", str(kbps), out], "raw"
+
+
+def _enc_shine(exe, kbps, out):
+    return [exe, "-q", "-m", "-b", str(kbps), "-", out], "wav"
+
+
+def _enc_opus(exe, kbps, out):
+    return [exe, "--quiet", "--raw", "--raw-rate", "8000", "--raw-chan", "1", "--raw-bits", "16",
+            "--bitrate", str(kbps), "-", out], "raw"
+
+
+def _enc_flac(exe, kbps, out):
+    return [exe, "--silent", "-f", "--force-raw-format", "--endian=little", "--sign=signed", "--channels=1",
+            "--bps=16", "--sample-rate=8000", "-o", out, "-"], "raw"
+
+
+ENCODERS = {
+    "lame": {"label": "lame (MP3)", "bin": "lame", "pkgs": "lame", "ext": ".mp3", "kbps": True, "build": _enc_lame,
+             "note": "Recommended. Small (about 1 MB), well tested on the Pi, and the MP3 plays in every browser and phone. "
+                     "Voice is resampled to 16 kHz mono."},
+    "sox": {"label": "sox (MP3)", "bin": "sox", "pkgs": "sox libsox-fmt-mp3", "ext": ".mp3", "kbps": True, "build": _enc_sox,
+            "note": "Also makes MP3, but needs the extra libsox-fmt-mp3 package. Choose it if sox is already on the node for other jobs."},
+    "shine": {"label": "shine (MP3)", "bin": "shineenc", "pkgs": "shineenc", "ext": ".mp3", "kbps": True, "build": _enc_shine,
+              "note": "A fixed-point MP3 encoder: the lightest on the CPU of the Pi Zero 2 W. It keeps the 8 kHz rate, "
+                      "so a few players may not play the file, and it is not in every repository."},
+    "opus": {"label": "opusenc (Opus)", "bin": "opusenc", "pkgs": "opus-tools", "ext": ".opus", "kbps": True, "build": _enc_opus,
+             "note": "Much smaller files for the same voice quality (24 kbps sounds good). Pibrary plays .opus, "
+                     "but not every phone or player does."},
+    "flac": {"label": "flac (FLAC)", "bin": "flac", "pkgs": "flac", "ext": ".flac", "kbps": False, "build": _enc_flac,
+             "note": "Lossless: nothing is lost, and the file is about half the size of the WAV. "
+                     "The quality setting does not apply."},
+}
+ENCODER_IDS = tuple(ENCODERS)
+
+
+def encoder_path(key=None):
+    return shutil.which(ENCODERS[key or _cfg_get("record_encoder")]["bin"])
+
+
+def encoder_version(key):
+    exe = encoder_path(key)
+    if not exe:
+        return ""
+    flag = "-V" if key == "flac" else "--version"
+    if key == "shine":
+        return ""
+    try:
+        r = subprocess.run([exe, flag], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    text = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+    return text[0].split(" (http")[0].strip()[:60] if text else ""
+
+
+def wav_layout(path):
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(96)
+            size = os.fstat(fh.fileno()).st_size
+    except OSError:
+        return None
+    if head[:4] != b"RIFF" or head[8:12] != b"WAVE":
+        return None
+    pos, tag = 12, None
+    while pos + 8 <= len(head):
+        cid = head[pos:pos + 4]
+        csz = struct.unpack_from("<I", head, pos + 4)[0]
+        if cid == b"fmt " and pos + 10 <= len(head):
+            tag = struct.unpack_from("<H", head, pos + 8)[0]
+        elif cid == b"data":
+            if tag not in (1, 7):
+                return None
+            return ("ulaw" if tag == 7 else "pcm"), pos + 8, max(0, size - (pos + 8))
+        pos += 8 + csz + (csz & 1)
+    return None
+
+
+def encode_file(wav, key, kbps):
+    enc = ENCODERS[key]
+    exe = encoder_path(key)
+    if not exe:
+        return False, f"{enc['bin']} is not installed"
+    lay = wav_layout(wav)
+    if lay is None:
+        return False, "not a recording Node Recorder wrote"
+    fmt, off, nbytes = lay
+    if fmt == "pcm":
+        nbytes -= nbytes % 2
+    if nbytes <= 0:
+        return False, "the recording holds no audio"
+    base = wav[:-4]
+    out = base + enc["ext"]
+    n = 1
+    while os.path.exists(out):
+        n += 1
+        out = f"{base}-{n}{enc['ext']}"
+    tmp = out + ".part"
+    cmd, mode = enc["build"](exe, kbps, tmp)
+    nice = shutil.which("nice")
+    if nice:
+        cmd = [nice, "-n", "19"] + cmd
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    except OSError as exc:
+        return False, f"could not run {enc['bin']}: {exc}"
+    timer = threading.Timer(ENCODE_JOB_SEC, proc.kill)
+    timer.start()
+    try:
+        if mode == "wav":
+            proc.stdin.write(b"RIFF" + struct.pack("<I", 36 + nbytes * 2) + b"WAVEfmt "
+                             + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
+                             + b"data" + struct.pack("<I", nbytes * 2 if fmt == "ulaw" else nbytes))
+        with open(wav, "rb") as fh:
+            fh.seek(off)
+            left = nbytes
+            while left > 0:
+                chunk = fh.read(min(65536, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+                if fmt == "ulaw":
+                    pcm = array.array("h", map(ULAW_DECODE.__getitem__, chunk))
+                    if sys.byteorder == "big":
+                        pcm.byteswap()
+                    chunk = pcm.tobytes()
+                proc.stdin.write(chunk)
+        proc.stdin.close()
+        err = proc.stderr.read().decode("utf-8", "replace").strip()
+        rc = proc.wait()
+    except (OSError, ValueError) as exc:
+        proc.kill()
+        proc.wait()
+        _remove_quiet(tmp)
+        return False, f"conversion failed: {exc}"
+    finally:
+        timer.cancel()
+    try:
+        ok = rc == 0 and os.path.getsize(tmp) > 0
+    except OSError:
+        ok = False
+    if not ok:
+        _remove_quiet(tmp)
+        return False, f"{enc['bin']} failed" + (f": {err[:200]}" if err else f" (exit {rc})")
+    try:
+        os.replace(tmp, out)
+        os.remove(wav)
+    except OSError as exc:
+        _remove_quiet(tmp)
+        return False, f"could not finish {os.path.basename(wav)}: {exc}"
+    return True, os.path.basename(out)
+
+
+_enc = {"q": queue.Queue(), "pending": set(), "current": "", "done": 0, "failed": 0, "last": "", "thread": None}
+_enc_lock = threading.Lock()
+
+
+def _enc_worker():
+    while True:
+        wav = _enc["q"].get()
+        with _enc_lock:
+            _enc["current"] = os.path.basename(wav)
+        try:
+            if _cfg_get("record_convert") and os.path.isfile(wav):
+                ok, msg = encode_file(wav, _cfg_get("record_encoder"), _cfg_get("record_kbps"))
+                name = os.path.basename(wav)
+                with _enc_lock:
+                    _enc["done" if ok else "failed"] += 1
+                    _enc["last"] = f"{name} -> {msg}" if ok else f"{name}: {msg}"
+                if ok:
+                    log_event(f"Converted {name} to {msg} (the WAV was deleted)", "ok")
+                else:
+                    log_event(f"Could not convert {name}: {msg} (the WAV was kept)", "warn")
+        finally:
+            with _enc_lock:
+                _enc["pending"].discard(wav)
+                _enc["current"] = ""
+
+
+def enc_enqueue(wav):
+    if not _cfg_get("record_convert") or not wav.endswith(".wav") or not encoder_path():
+        return False
+    with _enc_lock:
+        if wav in _enc["pending"]:
+            return False
+        _enc["pending"].add(wav)
+        if _enc["thread"] is None or not _enc["thread"].is_alive():
+            _enc["thread"] = threading.Thread(target=_enc_worker, name="enc-worker", daemon=True)
+            _enc["thread"].start()
+    _enc["q"].put(wav)
+    return True
+
+
+def enc_sweep(d):
+    if not _cfg_get("record_convert") or not encoder_path():
+        return 0
+    a = ENGINE.a
+    skip = a["path"] if a else ""
+    n = 0
+    for name, _size in recordings_list(d):
+        p = os.path.join(d, name)
+        if name.endswith(".wav") and p != skip and enc_enqueue(p):
+            n += 1
+    return n
+
+
+_enc_job = {"running": False, "key": "", "lines": deque(maxlen=400), "rc": None}
+_enc_job_lock = threading.Lock()
+
+
+def _enc_install_run(key):
+    pkgs = ENCODERS[key]["pkgs"]
+    script = ("export DEBIAN_FRONTEND=noninteractive; "
+              "echo '$ apt-get update'; apt-get update -q -o DPkg::Lock::Timeout=120 || exit 1; echo; "
+              f"echo '$ apt-get install -y --no-install-recommends {pkgs}'; "
+              f"apt-get install -y --no-install-recommends -o DPkg::Lock::Timeout=120 {pkgs} || exit 1")
+    cmd = ["sh", "-c", script]
+    tmo = shutil.which("timeout")
+    if tmo:
+        cmd = [tmo, str(ENCODER_INSTALL_SEC)] + cmd
+    rc = 1
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
+                                text=True, errors="replace")
+        for line in proc.stdout:
+            with _enc_job_lock:
+                _enc_job["lines"].append(line.rstrip("\n")[:300])
+        rc = proc.wait()
+    except OSError as exc:
+        with _enc_job_lock:
+            _enc_job["lines"].append(f"could not run apt-get: {exc}")
+    found = bool(encoder_path(key))
+    with _enc_job_lock:
+        _enc_job["lines"].append("")
+        _enc_job["lines"].append(f"{key} is installed." if found else f"{key} is not installed (exit {rc}).")
+        _enc_job["rc"] = rc
+        _enc_job["running"] = False
+    if found:
+        log_event(f"{ENCODERS[key]['bin']} installed from the Setup tab", "ok")
+        try:
+            enc_sweep(storage_pick()["path"])
+        except OSError:
+            pass
+    else:
+        log_event(f"{ENCODERS[key]['bin']} install failed (exit {rc})", "err")
+
+
+def encoder_install(body):
+    key = str((body or {}).get("encoder", "")).strip()
+    if key not in ENCODERS:
+        return {"ok": False, "error": "Pick one of: " + ", ".join(ENCODER_IDS) + "."}
+    if os.geteuid() != 0:
+        return {"ok": False, "error": "Installing needs root: run Node Recorder as root."}
+    if encoder_path(key):
+        return {"ok": True, "message": f"{ENCODERS[key]['bin']} is already installed."}
+    with _enc_job_lock:
+        if _enc_job["running"]:
+            return {"ok": False, "error": "An install is already running."}
+        _enc_job.update(running=True, key=key, rc=None)
+        _enc_job["lines"].clear()
+    threading.Thread(target=_enc_install_run, args=(key,), name="enc-install", daemon=True).start()
+    return {"ok": True, "message": f"Installing {ENCODERS[key]['pkgs']}..."}
+
+
+def encoder_view():
+    with _enc_job_lock:
+        job = {"running": _enc_job["running"], "key": _enc_job["key"], "rc": _enc_job["rc"], "lines": list(_enc_job["lines"])}
+    with _enc_lock:
+        st = {"queued": len(_enc["pending"]), "current": _enc["current"], "done": _enc["done"],
+              "failed": _enc["failed"], "last": _enc["last"]}
+    encs = [{"id": k, "label": v["label"], "note": v["note"], "pkgs": v["pkgs"], "ext": v["ext"], "kbps": v["kbps"],
+             "installed": bool(encoder_path(k)), "version": encoder_version(k)} for k, v in ENCODERS.items()]
+    return {"ok": True, "enabled": _cfg_get("record_convert"), "encoder": _cfg_get("record_encoder"),
+            "kbps": _cfg_get("record_kbps"), "kbps_choices": list(MP3_KBPS), "encoders": encs, "job": job, "convert": st}
 
 
 class RecordingEngine:
@@ -4331,6 +4656,7 @@ class RecordingEngine:
             except OSError as exc:
                 return False, f"cannot create {d}: {exc}", None
             repair_recordings(d)
+            enc_sweep(d)
             retention_enforce(d, need)
             try:
                 st = os.statvfs(d)
@@ -4344,7 +4670,7 @@ class RecordingEngine:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             name = f"{stamp}_{slug}.wav"
             n = 1
-            while os.path.exists(os.path.join(d, name)):
+            while any(os.path.exists(os.path.join(d, name[:-4] + e)) for e in (".wav", ".mp3", ".opus", ".flac")):
                 n += 1
                 name = f"{stamp}_{slug}-{n}.wav"
             path = os.path.join(d, name)
@@ -4432,6 +4758,7 @@ class RecordingEngine:
         if a["error"]:
             return False, f"{a['error']} (kept {a['name']}, {round(secs)} s)", None
         log_event(f"Recording saved: {a['name']} ({round(secs)} s, {a['bytes'] / 1048576:.1f} MB{note})", "ok")
+        enc_enqueue(a["path"])
         return True, f"saved {a['name']} ({round(secs)} s, {a['bytes'] / 1048576:.1f} MB{note})" + (f"; removed {removed} old" if removed else ""), None
 
 
@@ -5165,6 +5492,8 @@ table.links td:nth-child(2){width:100%;max-width:0;overflow:hidden;text-overflow
 th{color:var(--muted);font-weight:600;white-space:nowrap;overflow-wrap:normal}
 code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12px;word-break:break-all}
 #log{max-height:260px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px}
+.enc-opt{border-top:1px solid var(--line);padding:4px 0}.enc-opt p{margin:2px 0 4px}
+#conv-term{max-height:260px;overflow:auto;margin:6px 0;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:#05080f;color:#c8f7c5;border:1px solid var(--line);border-radius:8px;padding:8px;white-space:pre-wrap;word-break:break-all}
 #log .err{color:var(--red)}#log .warn{color:var(--amber)}#log .ok{color:var(--accent)}
 .hidden{display:none !important}
 .na{opacity:.45}
@@ -5848,7 +6177,7 @@ async function pollLog() {
 }
 let sysmonPort = null;
 const TABS = ['connect', 'record', 'setup'];
-const FOLDS = ['setup', 'sched', 'dig', 'node', 'store', 'rx', 'log'];
+const FOLDS = ['setup', 'sched', 'dig', 'node', 'store', 'conv', 'rx', 'log'];
 const CFG_BOOL = ['https'];
 const SVC_TXT = {active: 'running', inactive: 'stopped', failed: 'failed', missing: 'not installed', unknown: '?'};
 function showTab(name) {
@@ -5861,7 +6190,7 @@ function showTab(name) {
   });
   if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); }
   if (name === 'record') { loadSchedule(); loadStorage(); }
-  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadSchedule(); loadDigital(); }
+  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadSchedule(); loadDigital(); loadConv(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
 function render() {
@@ -6098,6 +6427,93 @@ async function loadStorage() {
   $('rs-conflict').classList.toggle('hidden', !d.conflict);
   sum('store', d.path);
 }
+let convTimer = null, convBuilt = false;
+function convBuild(d) {
+  const box = $('conv-list');
+  box.textContent = '';
+  d.encoders.forEach((e) => {
+    const row = document.createElement('div');
+    row.className = 'enc-opt';
+    row.id = 'enc-' + e.id;
+    const head = document.createElement('div');
+    head.className = 'row';
+    const lab = document.createElement('label');
+    const radio = document.createElement('input');
+    radio.type = 'radio'; radio.name = 'cfg-record_encoder'; radio.value = e.id;
+    radio.addEventListener('change', convSum);
+    const name = document.createElement('b');
+    name.textContent = ' ' + e.label;
+    lab.appendChild(radio); lab.appendChild(name);
+    const st = document.createElement('span');
+    st.className = 'small enc-st';
+    const btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'btn hidden'; btn.textContent = 'Install';
+    btn.addEventListener('click', () => installEncoder(e.id));
+    head.appendChild(lab); head.appendChild(st); head.appendChild(btn);
+    const note = document.createElement('p');
+    note.className = 'muted small';
+    note.textContent = e.note + ' (apt package: ' + e.pkgs + '; file type ' + e.ext + ')';
+    row.appendChild(head); row.appendChild(note);
+    box.appendChild(row);
+  });
+  convBuilt = true;
+}
+function convPicked() {
+  const r = document.querySelector('input[name="cfg-record_encoder"]:checked');
+  return r ? r.value : '';
+}
+function convSum() {
+  $('cfg-record_kbps').disabled = convPicked() === 'flac';
+}
+async function loadConv() {
+  if (!authed) return;
+  const d = await api('/api/convert');
+  if (!d.ok) return;
+  if (!convBuilt) convBuild(d);
+  const sel = $('cfg-record_kbps');
+  if (!sel.options.length) d.kbps_choices.forEach((k) => addOption(sel, String(k), k + ' kbps'));
+  const run = d.job.running;
+  if (!$('conv-list').contains(document.activeElement) && document.activeElement !== sel && document.activeElement !== $('cfg-record_convert')) {
+    sel.value = String(d.kbps);
+    $('cfg-record_convert').checked = !!d.enabled;
+    const r = document.querySelector('input[name="cfg-record_encoder"][value="' + d.encoder + '"]');
+    if (r) r.checked = true;
+  }
+  d.encoders.forEach((e) => {
+    const row = $('enc-' + e.id);
+    row.querySelector('.enc-st').textContent = e.installed ? 'installed' + (e.version ? ' (' + e.version + ')' : '') : 'not installed';
+    const btn = row.querySelector('button');
+    btn.classList.toggle('hidden', e.installed);
+    btn.disabled = run;
+  });
+  convSum();
+  const c = d.convert;
+  $('conv-stat').textContent = (c.current ? 'Converting ' + c.current + '. ' : '') + (c.queued ? c.queued + ' waiting or running. ' : '') +
+    (c.done || c.failed ? c.done + ' converted, ' + c.failed + ' failed since Node Recorder started.' : '') + (c.last ? ' Last: ' + c.last : '');
+  const term = $('conv-term'), lines = d.job.lines;
+  term.classList.toggle('hidden', !lines.length);
+  if (lines.length) {
+    const atEnd = term.scrollTop + term.clientHeight >= term.scrollHeight - 8;
+    term.textContent = lines.join('\n');
+    if (atEnd || run) term.scrollTop = term.scrollHeight;
+  }
+  const cur = d.encoders.find((e) => e.id === d.encoder);
+  sum('conv', !d.enabled ? 'off (WAV kept)' : cur && !cur.installed ? cur.label + ' missing' : cur ? cur.label : '');
+  const poll = run || c.queued > 0;
+  if (poll && !convTimer) convTimer = setInterval(() => { if (tab === 'setup') loadConv(); }, 2000);
+  if (!poll && convTimer) { clearInterval(convTimer); convTimer = null; }
+}
+async function saveConv() {
+  note('conv-msg', '', 'Saving...');
+  setMsg('conv-msg', await post('/api/config', {record_convert: $('cfg-record_convert').checked,
+    record_encoder: convPicked(), record_kbps: $('cfg-record_kbps').value}));
+  loadConv();
+}
+async function installEncoder(id) {
+  note('conv-msg', '', 'Starting...');
+  setMsg('conv-msg', await post('/api/convert/install', {encoder: id}));
+  loadConv();
+}
 async function saveStore() {
   note('store-msg', '', 'Saving...');
   setMsg('store-msg', await post('/api/config', {record_path: $('cfg-record_path').value.trim(), record_max_mb: $('cfg-record_max_mb').value}));
@@ -6307,6 +6723,7 @@ function initPage() {
   $('t-net-no').addEventListener('click', () => netAnswer(''));
   tnInit();
   sizeInit('sett');
+  $('conv-save').addEventListener('click', saveConv);
   $('setup-save').addEventListener('click', async () => { note('setup-msg', '', 'Saving...'); await saveConfig(); note('setup-msg', '', ''); });
   $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
   $('setup-ok').addEventListener('click', setupApply);
@@ -6625,11 +7042,24 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="card fold" id="cd-store">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-store"><span class="fold-t">Storage</span><span class="fold-sum" id="sum-store"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-store">
-<p class="muted small">Recordings are saved as u-law WAV files (about 29 MB an hour) or PCM WAV (about 58 MB an hour). Leave the folder empty to use the Pibrary library (or a USB drive) automatically, so Pibrary lists and plays them. Recordings never go to the SD card while a USB drive is mounted.</p>
+<p class="muted small">Recordings are written as u-law WAV files (about 29 MB an hour) or PCM WAV (about 58 MB an hour), then turned into MP3 if the MP3 card is on. Leave the folder empty to use the Pibrary library (or a USB drive) automatically, so Pibrary lists and plays them. Recordings never go to the SD card while a USB drive is mounted.</p>
 <div class="row"><label>Recordings folder <input type="text" id="cfg-record_path" maxlength="200" placeholder="automatic" style="width:260px"></label></div>
 <div class="row"><label>Keep at most <input type="number" id="cfg-record_max_mb" min="100" max="2000000" style="width:110px"> MB (the oldest recordings go first)</label></div>
 <div class="row"><button id="store-save" class="btn primary" type="button">Save</button></div>
 <div id="store-msg" class="msg"></div>
+</div>
+</div>
+<div class="card fold" id="cd-conv">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-conv"><span class="fold-t">Convert</span><span class="fold-sum" id="sum-conv"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-conv">
+<p class="muted small">When a recording ends, Node Recorder compresses the WAV file with the encoder chosen below and then deletes the WAV. If the conversion fails the WAV is kept. It runs at the lowest priority, one file at a time, and only if the encoder is installed. ffmpeg is not used: it is a very large install for this job.</p>
+<div class="row"><label><input type="checkbox" id="cfg-record_convert"> Convert recordings and delete the WAV</label>
+<label>Quality <select id="cfg-record_kbps"></select></label></div>
+<div id="conv-list"></div>
+<div class="row"><button id="conv-save" class="btn primary" type="button">Save</button></div>
+<div id="conv-msg" class="msg"></div>
+<pre id="conv-term" class="hidden" aria-live="polite"></pre>
+<p id="conv-stat" class="muted small"></p>
 </div>
 </div>
 <div class="card fold" id="cd-rx">
@@ -6695,6 +7125,7 @@ _POST_ACTIONS = {
     "/api/config": (config_update, ()),
     "/api/recnode/enable": (lambda b: rec_node_enable(), (OSError,)),
     "/api/setup/apply": (lambda b: setup_apply(), (OSError,)),
+    "/api/convert/install": (encoder_install, ()),
     "/api/schedule/set": (schedule_set, (ValueError,)),
     "/api/schedule/remove": (schedule_remove, ()),
     "/api/schedule/dryrun": (schedule_dry_run, (ValueError,)),
@@ -6851,6 +7282,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, disconnect_all_status())
             elif path == "/api/storage":
                 self._json(200, storage_view())
+            elif path == "/api/convert":
+                self._json(200, encoder_view())
             elif path == "/api/schedule/sources":
                 self._json(200, schedule_sources())
             elif path == "/api/schedule":
@@ -7037,7 +7470,8 @@ def run_server():
     threading.Thread(target=KEYED.loop, name="ami-keyed", daemon=True).start()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()
     threading.Thread(target=pi_loop, name="pi-health", daemon=True).start()
-    threading.Thread(target=lambda: repair_recordings(storage_pick()["path"]), name="rec-repair", daemon=True).start()
+    threading.Thread(target=lambda: (repair_recordings(storage_pick()["path"]), enc_sweep(storage_pick()["path"])),
+                     name="rec-repair", daemon=True).start()
     threading.Thread(target=SCHED.loop, name="schedule", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(FWD_PORT, None), name="usrp-fwd", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(REC_USRP_IN, talker_idle), name="usrp-node", daemon=True).start()

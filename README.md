@@ -16,7 +16,7 @@ By KD8PGK, written with Claude (Anthropic).
 | wifimon | `wifimon_v*.py` | 8991 | WiFi and supply-voltage watchdog. Powers off on sustained low voltage; reboots (or powers off) on a lost network. Hardware watchdog, and alerts by ntfy or webhook. |
 | 44helper | `44helper_v*.py` | 9997 | 44Net Connect, firewall, router and SvxLink helper; config restore points, presets and a Pi Zero 2 W full config replacement from `configs/pi02w/` (Config tab); boot timeline, logs and saved copies (Boot tab). |
 | Node Talker | `nodetalker_v*.py` | 8993 | Listen to an ASL node's audio in the browser and talk with push-to-talk; connect or tune up to 15 ASL, EchoLink, DVSwitch and M17 favorites, on its own or through Node Controller. Was Node Listen (`nodelisten_v*.py`). |
-| Node Recorder | `noderecorder_v*.py` | 8995 | Records an ASL node's audio from the private node 1921 (shared with Node Talker, which owns it when installed). Schedule (set on the Connect tab with a favorite picker that reads Node Talker's and Node Controller's favorites), recording to u-law or PCM WAV (on USB in preference to the SD card, within an MB limit) and a status route for the other tools. Forked from Node Talker. |
+| Node Recorder | `noderecorder_v*.py` | 8995 | Records an ASL node's audio from the private node 1921 (shared with Node Talker, which owns it when installed). Schedule (set on the Connect tab with a favorite picker that reads Node Talker's and Node Controller's favorites), recording to u-law or PCM WAV, then compressed to MP3, Opus or FLAC by lame, sox, shine, opusenc or flac (installable from the Setup tab; the WAV is deleted after a good conversion), stored on USB in preference to the SD card within an MB limit and a status route for the other tools. Forked from Node Talker. |
 | Node Talker for AMP | `amp_nodetalker_v*.py` | 8993 | Node Talker for a node that runs the Ampersand AMP server instead of Asterisk. Stands alone; see below. Was Node Listen for AMP. |
 | Node Talker Mobile | `android/` (APK under Releases) | - | Optional Android app for Node Talker (was Node Talker for Android): opens only a Node Talker page, remembers its certificate, and runs receive and transmit in the background. Sideload test builds for now. |
 | Pibrary | `pibrary_v*.py` | 9000 | Media library dashboard for a Pi Zero 2 W. Browse and play movies and audio and read PDFs from a USB or SD library in the browser, with resume positions, a restorable trash, a duplicate finder and drive health. Password login, on by default. |
@@ -516,7 +516,7 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `wifimon_v5_48_0_20261102.py` | common |
 | `44helper_v0_1_17_20261103.py` | common |
 | `nodetalker_v0_10_11_20261104.py` | common |
-| `noderecorder_v0_4_0_20261102.py` | common |
+| `noderecorder_v0_5_0_20261104.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_0_20261102.py` | common |
 | `install_all_v7_4_0_20261020.sh` | common |
