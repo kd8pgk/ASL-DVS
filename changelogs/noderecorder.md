@@ -1,6 +1,20 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_0_20261104.py`. Newest entries first.
+Current file: `noderecorder_v0_5_2_20261104.py`. Newest entries first.
+
+## 0.5.2 (2026-11-04)
+
+- **A chatty encoder cannot stall a conversion.** An encoder that writes a lot to its error output used to block until the job timed out (up to two hours). Its error output now goes to a temporary file, so the conversion runs to the end. When an encoder fails, the message carries the encoder's own error text.
+- **Retention leaves a recording that is being converted alone.** Before, the oldest-first cleanup could delete the WAV that the conversion was reading, and the conversion then reported "could not finish" although the MP3 had been written. Such a recording is skipped until it is converted.
+- **shine: correct header for PCM recordings.** The RIFF size written in front of a PCM recording was twice the audio length plus 36. Now it is 36 plus the audio length, as for the data chunk.
+- **The Setup tab stops starting encoders every 2 s.** The encoder version shown in the Convert card is worked out once per encoder binary and kept until the binary changes, instead of running `--version` on every refresh.
+- This is a release, not a cosmetic build.
+
+## 0.5.1 (2026-11-04)
+
+- **A late start cannot leave a recording open.** A window whose start runs past its 15 s limit is now stopped properly: the sequence stops whatever the recorder opened late, so the next window can start. Before, the late recording stayed open with nothing to stop it, and every later window failed with "a recording is already open" until a restart.
+- **A slow drive cannot leave a writer running.** Stopping no longer depends on a stop message that can be dropped when the queue is full. The writer finishes once it has written what is queued and closes the file. If the drive is so slow that the stop is not finished within 20 s, the recording is kept and the window reports it; the next window waits until the old file has closed, then converts it.
+- This is a release, not a cosmetic build.
 
 ## 0.5.0 (2026-11-04)
 

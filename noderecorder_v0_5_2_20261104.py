@@ -21,6 +21,7 @@ import ssl
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -29,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.0"
+VERSION = "0.5.2"
 DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4234,9 +4235,13 @@ def retention_enforce(d, need):
     budget = cap_mb * 1024 * 1024 - need
     total = sum(f[1] for f in files)
     removed = 0
+    with _enc_lock:
+        busy = set(_enc["pending"])
     for name, size in files:
         if total <= budget:
             break
+        if os.path.join(d, name) in busy:
+            continue
         try:
             os.remove(os.path.join(d, name))
         except OSError as exc:
@@ -4380,19 +4385,30 @@ def encoder_path(key=None):
     return shutil.which(ENCODERS[key or _cfg_get("record_encoder")]["bin"])
 
 
+_enc_versions = {}
+
+
 def encoder_version(key):
     exe = encoder_path(key)
-    if not exe:
-        return ""
-    flag = "-V" if key == "flac" else "--version"
-    if key == "shine":
+    if not exe or key == "shine":
         return ""
     try:
-        r = subprocess.run([exe, flag], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+        stamp = (exe, os.stat(exe).st_mtime_ns)
+    except OSError:
         return ""
-    text = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
-    return text[0].split(" (http")[0].strip()[:60] if text else ""
+    hit = _enc_versions.get(key)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    flag = "-V" if key == "flac" else "--version"
+    ver = ""
+    try:
+        r = subprocess.run([exe, flag], capture_output=True, text=True, timeout=10)
+        text = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        ver = text[0].split(" (http")[0].strip()[:60] if text else ""
+    except (OSError, subprocess.TimeoutExpired):
+        ver = ""
+    _enc_versions[key] = (stamp, ver)
+    return ver
 
 
 def wav_layout(path):
@@ -4416,6 +4432,14 @@ def wav_layout(path):
             return ("ulaw" if tag == 7 else "pcm"), pos + 8, max(0, size - (pos + 8))
         pos += 8 + csz + (csz & 1)
     return None
+
+
+def _enc_stderr(f):
+    try:
+        f.seek(0)
+        return f.read(65536).decode("utf-8", "replace").strip()
+    except (OSError, ValueError):
+        return ""
 
 
 def encode_file(wav, key, kbps):
@@ -4442,17 +4466,21 @@ def encode_file(wav, key, kbps):
     nice = shutil.which("nice")
     if nice:
         cmd = [nice, "-n", "19"] + cmd
+    errf = tempfile.TemporaryFile()
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errf)
     except OSError as exc:
+        errf.close()
         return False, f"could not run {enc['bin']}: {exc}"
     timer = threading.Timer(ENCODE_JOB_SEC, proc.kill)
     timer.start()
+    err = ""
     try:
         if mode == "wav":
-            proc.stdin.write(b"RIFF" + struct.pack("<I", 36 + nbytes * 2) + b"WAVEfmt "
+            data_len = nbytes * 2 if fmt == "ulaw" else nbytes
+            proc.stdin.write(b"RIFF" + struct.pack("<I", 36 + data_len) + b"WAVEfmt "
                              + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
-                             + b"data" + struct.pack("<I", nbytes * 2 if fmt == "ulaw" else nbytes))
+                             + b"data" + struct.pack("<I", data_len))
         with open(wav, "rb") as fh:
             fh.seek(off)
             left = nbytes
@@ -4468,15 +4496,17 @@ def encode_file(wav, key, kbps):
                     chunk = pcm.tobytes()
                 proc.stdin.write(chunk)
         proc.stdin.close()
-        err = proc.stderr.read().decode("utf-8", "replace").strip()
         rc = proc.wait()
+        err = _enc_stderr(errf)
     except (OSError, ValueError) as exc:
         proc.kill()
         proc.wait()
         _remove_quiet(tmp)
-        return False, f"conversion failed: {exc}"
+        detail = _enc_stderr(errf)
+        return False, f"conversion failed: {exc}" + (f" ({detail[:200]})" if detail else "")
     finally:
         timer.cancel()
+        errf.close()
     try:
         ok = rc == 0 and os.path.getsize(tmp) > 0
     except OSError:
@@ -4620,6 +4650,7 @@ class RecordingEngine:
     def __init__(self):
         self.lock = threading.Lock()
         self.a = None
+        self.closing = None
 
     def feed(self, pcm):
         a = self.a
@@ -4644,6 +4675,8 @@ class RecordingEngine:
         with self.lock:
             if self.a is not None:
                 return False, "a recording is already open", None
+            if self.closing is not None and self.closing.is_alive():
+                return False, "the previous recording is still closing", None
             pick = storage_pick()
             if not pick["ok"]:
                 return False, pick["reason"], None
@@ -4681,7 +4714,8 @@ class RecordingEngine:
             except OSError as exc:
                 return False, f"cannot create {path}: {exc}", None
             a = {"q": queue.Queue(RECORD_QUEUE_FRAMES), "fh": fh, "path": path, "name": name, "dir": d, "fmt": fmt,
-                 "bytes": 0, "samples": 0, "dropped": 0, "error": "", "thread": None, "t0": time.monotonic()}
+                 "bytes": 0, "samples": 0, "dropped": 0, "error": "", "thread": None, "t0": time.monotonic(),
+                 "stop": threading.Event()}
             a["thread"] = threading.Thread(target=self._writer, args=(a,), name="rec-writer", daemon=True)
             self.a = a
             a["thread"].start()
@@ -4706,13 +4740,13 @@ class RecordingEngine:
                     pcm = q.get(timeout=1.0)
                 except queue.Empty:
                     pcm = b""
-                if pcm is None:
-                    break
                 if pcm:
                     data = ulaw_encode(pcm) if ulaw else pcm
                     fh.write(data)
                     a["bytes"] += len(data)
                     a["samples"] += len(pcm) // 2
+                elif a["stop"].is_set() and q.empty():
+                    break
                 now = time.monotonic()
                 if now - last_hdr >= RECORD_HEADER_SEC:
                     self._patch(a)
@@ -4739,18 +4773,18 @@ class RecordingEngine:
             a = self.a
             if a is None:
                 return True, "no recording was open", None
+            self.a = None
             if HUB.recorder is self:
                 HUB.recorder = None
-            try:
-                a["q"].put(None, timeout=5.0)
-            except queue.Full:
-                pass
+            a["stop"].set()
             a["thread"].join(RECORD_CLOSE_SEC)
             alive = a["thread"].is_alive()
-            self.a = None
+            if alive:
+                self.closing = a["thread"]
         secs = a["samples"] / 8000.0
         if alive:
-            msg = f"{a['name']} did not close within {int(RECORD_CLOSE_SEC)} s"
+            msg = (f"{a['name']} did not close within {int(RECORD_CLOSE_SEC)} s; the drive is slow. "
+                   "It is kept, still closing in the background, and converted at the next window")
             log_event(msg, "err")
             return False, msg, None
         removed = retention_enforce(a["dir"], 0)
@@ -5105,6 +5139,7 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
         return done("connect_failed", f"connect failed: {msg}")
     ok, msg, fname = do("start", actions.start, entry, window)
     if not ok:
+        do("stop", actions.stop)
         do("disconnect", actions.disconnect, entry)
         return done("start_failed", f"could not start recording: {msg}")
     set_state("recording", file=fname or "")

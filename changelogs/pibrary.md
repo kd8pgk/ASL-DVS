@@ -1,6 +1,13 @@
 # Pibrary changelog
 
-Current file: `pibrary_v0_16_0_20261102.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+Current file: `pibrary_v0_16_1_20261104.py`. Before 0.14.0 Pibrary was kept outside this repo; its earlier entries are below. Newest entries first.
+
+## 0.16.1 (2026-11-04)
+
+- **Error replies carry a `message` key.** Every JSON error reply now has `message` as well as `error`, the same as Node Controller, Node Recorder and Node Talker. The page keeps reading `error`, so nothing changes on screen.
+- **Requests without a session always get 401.** A client that is locked out after failed passwords still gets the lockout (429 with Retry-After) when it tries to log in or to confirm a password (password change, staged update, keep). Other requests with no session now get the same 401 "Authentication required" as everyone else, not 429. Before, a locked-out client was refused with a plain-text 429 on every page and API call. Nothing is less protected: a request without a password checks no password.
+- **Pibrary is in the server tests.** `ci/test_servers.py` runs the same nine checks on Pibrary as on the other servers. Its config and staging folders are temporary in those tests, and it is given its own password there, so the tests do not depend on the runner's root password. `test_authed.py` does not yet cover Pibrary's own routes.
+- This is a release, not a cosmetic build.
 
 ## 0.16.0 (2026-11-02)
 

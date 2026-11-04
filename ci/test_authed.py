@@ -519,6 +519,8 @@ def make_nt_case(key):
 
 
 for _key in ts.SERVERS:
+    if _key == "pibrary":
+        continue
     if _key.startswith("nodecontrol"):
         globals()[f"Authed_{_key}"] = make_nc_case(_key)
         globals()[f"AuthedDVS_{_key}"] = make_nc_dvs_case(_key)
