@@ -21,6 +21,7 @@ import ssl
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -29,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4234,9 +4235,13 @@ def retention_enforce(d, need):
     budget = cap_mb * 1024 * 1024 - need
     total = sum(f[1] for f in files)
     removed = 0
+    with _enc_lock:
+        busy = set(_enc["pending"])
     for name, size in files:
         if total <= budget:
             break
+        if os.path.join(d, name) in busy:
+            continue
         try:
             os.remove(os.path.join(d, name))
         except OSError as exc:
@@ -4380,19 +4385,30 @@ def encoder_path(key=None):
     return shutil.which(ENCODERS[key or _cfg_get("record_encoder")]["bin"])
 
 
+_enc_versions = {}
+
+
 def encoder_version(key):
     exe = encoder_path(key)
-    if not exe:
-        return ""
-    flag = "-V" if key == "flac" else "--version"
-    if key == "shine":
+    if not exe or key == "shine":
         return ""
     try:
-        r = subprocess.run([exe, flag], capture_output=True, text=True, timeout=10)
-    except (OSError, subprocess.TimeoutExpired):
+        stamp = (exe, os.stat(exe).st_mtime_ns)
+    except OSError:
         return ""
-    text = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
-    return text[0].split(" (http")[0].strip()[:60] if text else ""
+    hit = _enc_versions.get(key)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    flag = "-V" if key == "flac" else "--version"
+    ver = ""
+    try:
+        r = subprocess.run([exe, flag], capture_output=True, text=True, timeout=10)
+        text = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
+        ver = text[0].split(" (http")[0].strip()[:60] if text else ""
+    except (OSError, subprocess.TimeoutExpired):
+        ver = ""
+    _enc_versions[key] = (stamp, ver)
+    return ver
 
 
 def wav_layout(path):
@@ -4416,6 +4432,14 @@ def wav_layout(path):
             return ("ulaw" if tag == 7 else "pcm"), pos + 8, max(0, size - (pos + 8))
         pos += 8 + csz + (csz & 1)
     return None
+
+
+def _enc_stderr(f):
+    try:
+        f.seek(0)
+        return f.read(65536).decode("utf-8", "replace").strip()
+    except (OSError, ValueError):
+        return ""
 
 
 def encode_file(wav, key, kbps):
@@ -4442,17 +4466,21 @@ def encode_file(wav, key, kbps):
     nice = shutil.which("nice")
     if nice:
         cmd = [nice, "-n", "19"] + cmd
+    errf = tempfile.TemporaryFile()
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=errf)
     except OSError as exc:
+        errf.close()
         return False, f"could not run {enc['bin']}: {exc}"
     timer = threading.Timer(ENCODE_JOB_SEC, proc.kill)
     timer.start()
+    err = ""
     try:
         if mode == "wav":
-            proc.stdin.write(b"RIFF" + struct.pack("<I", 36 + nbytes * 2) + b"WAVEfmt "
+            data_len = nbytes * 2 if fmt == "ulaw" else nbytes
+            proc.stdin.write(b"RIFF" + struct.pack("<I", 36 + data_len) + b"WAVEfmt "
                              + struct.pack("<IHHIIHH", 16, 1, 1, 8000, 16000, 2, 16)
-                             + b"data" + struct.pack("<I", nbytes * 2 if fmt == "ulaw" else nbytes))
+                             + b"data" + struct.pack("<I", data_len))
         with open(wav, "rb") as fh:
             fh.seek(off)
             left = nbytes
@@ -4468,15 +4496,17 @@ def encode_file(wav, key, kbps):
                     chunk = pcm.tobytes()
                 proc.stdin.write(chunk)
         proc.stdin.close()
-        err = proc.stderr.read().decode("utf-8", "replace").strip()
         rc = proc.wait()
+        err = _enc_stderr(errf)
     except (OSError, ValueError) as exc:
         proc.kill()
         proc.wait()
         _remove_quiet(tmp)
-        return False, f"conversion failed: {exc}"
+        detail = _enc_stderr(errf)
+        return False, f"conversion failed: {exc}" + (f" ({detail[:200]})" if detail else "")
     finally:
         timer.cancel()
+        errf.close()
     try:
         ok = rc == 0 and os.path.getsize(tmp) > 0
     except OSError:

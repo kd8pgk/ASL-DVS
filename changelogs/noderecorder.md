@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_1_20261104.py`. Newest entries first.
+Current file: `noderecorder_v0_5_2_20261104.py`. Newest entries first.
+
+## 0.5.2 (2026-11-04)
+
+- **A chatty encoder cannot stall a conversion.** An encoder that writes a lot to its error output used to block until the job timed out (up to two hours). Its error output now goes to a temporary file, so the conversion runs to the end. When an encoder fails, the message carries the encoder's own error text.
+- **Retention leaves a recording that is being converted alone.** Before, the oldest-first cleanup could delete the WAV that the conversion was reading, and the conversion then reported "could not finish" although the MP3 had been written. Such a recording is skipped until it is converted.
+- **shine: correct header for PCM recordings.** The RIFF size written in front of a PCM recording was twice the audio length plus 36. Now it is 36 plus the audio length, as for the data chunk.
+- **The Setup tab stops starting encoders every 2 s.** The encoder version shown in the Convert card is worked out once per encoder binary and kept until the binary changes, instead of running `--version` on every refresh.
+- This is a release, not a cosmetic build.
 
 ## 0.5.1 (2026-11-04)
 
