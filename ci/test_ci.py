@@ -2473,6 +2473,197 @@ class InstmonSuiteLogTests(unittest.TestCase):
         self.assertEqual(lines[-1]["msg"], "newest")
         self.assertEqual(lines[0]["kind"], "mark")
 
+    def fill(self, n=40):
+        self.col.start()
+        base = time.time() + 1.0
+        for i in range(n):
+            lvl = "err" if i % 10 == 0 else "warn" if i % 5 == 0 else "info"
+            self.col.emit("journal:nodetalker" if i % 2 else "journal:wifimon", lvl, "msg number %d" % i, now=base + i * 30)
+        self.col._write({"kind": "rxh", "src": "nodetalker", "data": {"t": 1, "pkts": 3000, "net_lost": 7, "out_stalls": 2,
+                                                                  "cl_under": 1, "gaps": 0}}, base + 40 * 30)
+        return base
+
+    def test_query_filters_orders_and_limits(self):
+        base = self.fill()
+        q = self.col.query
+        allrows = q(limit=500)
+        self.assertEqual(allrows["matched"], 42)
+        self.assertEqual(allrows["rows"][0]["t"], max(r["t"] for r in allrows["rows"]))
+        self.assertEqual(q(newest_first=False, limit=500)["rows"][0]["kind"], "mark")
+        self.assertEqual(q(limit=5)["shown"], 5)
+        self.assertTrue(q(limit=5)["truncated"])
+        errs = q(levels=("err",), limit=500)
+        self.assertEqual({r["lvl"] for r in errs["rows"]}, {"err"})
+        self.assertEqual(errs["matched"], 4)
+        one = q(srcs=("journal:wifimon",), limit=500)
+        self.assertEqual({r["src"] for r in one["rows"]}, {"journal:wifimon"})
+        self.assertEqual(q(text="NUMBER 7", limit=500)["matched"], 1)
+        win = q(since=int((base + 60) * 1000), until=int((base + 150) * 1000), limit=500)
+        self.assertTrue(win["rows"])
+        self.assertTrue(all(base * 1000 + 60000 - 2 <= r["t"] <= base * 1000 + 150000 + 2 for r in win["rows"]))
+        self.assertEqual(q(kinds=("rxh",))["matched"], 1)
+        self.assertEqual(q(limit="x")["ok"], True)
+
+    def test_query_reads_the_tail_for_a_recent_window_and_both_segments(self):
+        col = self.m.SuiteCollector(self.path, self.flag, 3000)
+        col.start()
+        for i in range(120):
+            col.emit("journal:a", "info", "row %03d %s" % (i, "q" * 40), now=1800000000.0 + i * 61)
+        self.assertTrue(os.path.exists(self.path + ".1"))
+        late = col.query(since=int((1800000000.0 + 100 * 61) * 1000), limit=500, newest_first=False)
+        self.assertEqual(late["rows"][-1]["msg"], "row 119 " + "q" * 40)
+        self.assertTrue(all("row" in r["msg"] for r in late["rows"][:3]))
+        every = col.query(limit=500)
+        self.assertGreater(every["matched"], late["matched"])
+        self.assertLess(late["scanned"], every["scanned"] + 1)
+
+    def test_query_builds_a_minute_strip(self):
+        self.fill()
+        d = self.col.query(strip=True, limit=500)
+        self.assertTrue(d["strip"])
+        self.assertEqual(sum(b["n"] for b in d["strip"]), 42)
+        self.assertTrue(any(b.get("rxh", {}).get("net_lost") == 7 for b in d["strip"]))
+        self.assertTrue(any(b["err"] for b in d["strip"]))
+        self.assertEqual([b["m"] for b in d["strip"]], sorted(b["m"] for b in d["strip"]))
+
+    def test_sources_are_counted_and_cached(self):
+        self.fill()
+        d = self.col.scan_sources(force=True)
+        by = {a["src"]: a for a in d["sources"]}
+        self.assertEqual(by["journal:wifimon"]["rows"], 20)
+        self.assertEqual(by["journal:nodetalker"]["rows"], 20)
+        self.assertEqual(by["nodetalker"]["rows"], 1)
+        self.assertGreater(by["journal:wifimon"]["err"], 0)
+        self.assertIn("rxh", {k["kind"] for k in d["kinds"]})
+        self.col.emit("journal:late", "info", "x", now=1800001000.0)
+        self.assertNotIn("journal:late", {a["src"] for a in self.col.scan_sources()["sources"]})
+        self.assertIn("journal:late", {a["src"] for a in self.col.scan_sources(force=True)["sources"]})
+
+    def test_coverage_names_seen_silent_missing_and_unreadable_sources(self):
+        self.fill()
+        logf = os.path.join(self.d, "seen.log")
+        gone = os.path.join(self.d, "gone.log")
+        quiet = os.path.join(self.d, "quiet.log")
+        for p in (logf, quiet):
+            with open(p, "w") as fh:
+                fh.write("x\n")
+        self.col.ingest_file_line(logf, "hello")
+        with mock.patch.object(self.m, "SL_FILES", (logf, gone, quiet, os.path.join(self.d, "nomatch*"))), \
+                mock.patch.object(self.m, "SL_UNITS", ("nodetalker", "wifimon", "ghost", "sleeper")), \
+                mock.patch.object(self.m.SuiteCollector, "unit_states",
+                                  staticmethod(lambda: {"nodetalker": ("loaded", "active"), "wifimon": ("loaded", "active"),
+                                                        "sleeper": ("loaded", "active")})), \
+                mock.patch.object(self.m.SuiteCollector, "unit_list", lambda self_: ["nodetalker", "wifimon", "ghost", "sleeper"]):
+            early = {r["src"]: r["state"] for r in self.col.coverage(force=True)["rows"]}
+            late = {r["src"]: r["state"] for r in self.col.coverage(now=self.col.since + 3600, force=True)["rows"]}
+        self.assertEqual(early["journal:nodetalker"], "seen")
+        self.assertEqual(early["journal:ghost"], "not installed")
+        self.assertEqual(early["journal:sleeper"], "waiting")
+        self.assertEqual(late["journal:sleeper"], "silent")
+        self.assertEqual(early["file:" + logf], "seen")
+        self.assertEqual(early["file:" + quiet], "waiting")
+        self.assertEqual(late["file:" + quiet], "silent")
+        self.assertEqual(early["file:" + gone], "not found")
+        self.assertEqual(early["rows:rxh"], "seen")
+        self.assertEqual(early["kernel"], "quiet")
+        self.assertEqual(early["rows:listen"], "waiting")
+
+    def test_a_time_limit_stops_collection_and_says_why(self):
+        st = self.col.start(hours=2)
+        self.assertEqual(st["until"], int(self.col.until))
+        self.assertAlmostEqual(self.col.until - self.col.since, 7200, delta=2)
+        self.assertTrue(os.path.exists(self.flag + ".until"))
+        self.assertIsNone(self.col.guard_once(now=self.col.since + 3600, mem_kb=500000))
+        self.assertEqual(self.col.guard_once(now=self.col.since + 7201, mem_kb=500000), "time")
+        self.assertFalse(self.col.running())
+        self.assertIn("2 hours", self.col.status()["last_stop"]["reason"])
+        self.assertFalse(os.path.exists(self.flag + ".until"))
+        self.assertEqual(self.rows(("mark",))[-1]["data"]["reason"], "auto-stop after 2 hours")
+
+    def test_no_limit_when_hours_is_zero_and_the_default_is_twelve(self):
+        self.col.start(hours=0)
+        self.assertEqual(self.col.status()["until"], 0)
+        self.col.stop()
+        self.col.start()
+        self.assertAlmostEqual(self.col.until - self.col.since, 12 * 3600, delta=2)
+        self.col.stop()
+        self.col.start(hours="junk")
+        self.assertAlmostEqual(self.col.until - self.col.since, 12 * 3600, delta=2)
+
+    def test_low_memory_stops_collection(self):
+        self.col.start()
+        self.assertEqual(self.col.guard_once(mem_kb=self.m.SL_MEM_FLOOR_KB - 1), "memory")
+        self.assertFalse(self.col.running())
+        self.assertIn("low memory", self.col.status()["last_stop"]["reason"])
+        self.assertIsNone(self.col.guard_once(mem_kb=1))
+
+    def test_a_restart_keeps_the_deadline(self):
+        self.col.start(hours=1)
+        until = self.col.until
+        other = self.m.SuiteCollector(self.path, self.flag, 100000)
+        with mock.patch.object(self.m.SuiteCollector, "_launch"):
+            self.assertTrue(other.resume_if_flagged())
+        self.assertAlmostEqual(other.until, until, delta=1)
+
+    def test_throttle_flags_are_named(self):
+        f = self.m.SuiteCollector.throttle_flags
+        self.assertEqual(f(0), [])
+        self.assertEqual(f(0x50005), ["under-voltage now", "throttled now", "under-voltage since boot",
+                                      "throttled since boot"])
+
+    def test_a_snapshot_has_the_health_numbers(self):
+        with mock.patch.object(self.m.subprocess, "run") as run:
+            def fake(cmd, **kw):
+                class R:
+                    stdout = ""
+                r = R()
+                if cmd[0] == "vcgencmd":
+                    r.stdout = "throttled=0x50000\n"
+                elif cmd[0] == "systemctl":
+                    n = len(cmd) - 2
+                    r.stdout = "\n".join(["active"] * n)
+                return r
+            run.side_effect = fake
+            snap = self.col.snapshot()
+        self.assertEqual(snap["throttled"]["raw"], "0x50000")
+        self.assertIn("under-voltage since boot", snap["throttled"]["flags"])
+        self.assertIn("/run", snap["disk"])
+        self.assertIn("load", snap)
+        self.assertTrue(snap["services"])
+        self.col.start()
+        self.col.emit("system", "info", "", kind="snap", data={"load": [0.1, 0.2, 0.3]})
+        self.assertEqual(self.rows(("snap",))[0]["data"]["load"], [0.1, 0.2, 0.3])
+
+    def test_the_viewer_page_has_copy_and_download_choices(self):
+        m = self.m
+        page = m.SUITELOG_PAGE
+        for ident in ("a-copy-text", "a-copy-json", "a-dl-text", "a-dl-json", "a-dl-all", "f-around", "cov", "chips",
+                      "strip", "f-live"):
+            self.assertIn('id="%s"' % ident, page)
+        self.assertIn("/api/suitelog/download", page)
+        self.assertIn("execCommand('copy')", page)
+        for path in ("/suitelog", "/api/suitelog/query", "/api/suitelog/sources", "/api/suitelog/coverage"):
+            self.assertIn(path, m._GET_ROUTES)
+        self.assertIn("sl-hours", m.HTML_TEMPLATE)
+        self.assertIn("/suitelog", m.HTML_TEMPLATE)
+        self.assertNotIn("innerHTML = r", page)
+
+    def test_the_start_route_reads_the_hours(self):
+        import io
+        seen = []
+
+        class Fake:
+            headers = {"Content-Length": "14"}
+            rfile = io.BytesIO(b'{"hours": 3.5}')
+
+            def _send_json(self, code, payload):
+                seen.append((code, payload))
+
+        with mock.patch.object(self.m, "SUITELOG", self.col):
+            self.m.InstmonHandler._route_suitelog_start(Fake())
+        self.assertAlmostEqual(self.col.until - self.col.since, 3.5 * 3600, delta=2)
+        self.assertEqual(seen[0][0], 200)
+
     def test_the_card_and_routes_are_in_the_page(self):
         m = self.m
         self.assertIn("/api/suitelog/status", m._GET_ROUTES)

@@ -38,7 +38,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.88.0"
+VERSION ="2.89.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -5669,6 +5669,15 @@ SL_FILES = ("/var/log/asterisk/full", "/var/log/asterisk/messages", "/var/log/as
             "/media/*/.pibrary/logs/*.log", "/media/*/*/.pibrary/logs/*.log", "/mnt/*/.pibrary/logs/*.log",
             "/mnt/*/*/.pibrary/logs/*.log")
 SL_WIFI_FILE = "/run/asl_dvs/wifi_link.json"
+SL_DEFAULT_HOURS = 12
+SL_MEM_FLOOR_KB = 61440
+SL_SNAP_SEC = 600
+SL_QUERY_MAX = 5000
+SL_SILENT_SEC = 600
+_SL_T = re.compile(r'"t":(\d+)')
+_SL_SRC = re.compile(r'"src":"([^"]*)"')
+_SL_LVL = re.compile(r'"lvl":"([a-z]*)"')
+_SL_KIND = re.compile(r'"kind":"([a-z_]*)"')
 SL_KERNEL_RE = re.compile(r"brcmfmac|wlan\d|mmc\d|usb \d|under-?voltage|throttl|thermal|oom|out of memory|voltage|"
                           r"firmware|i/o error|ext4-fs|reset", re.I)
 SL_LINE_MAX = 2000
@@ -5697,7 +5706,10 @@ class SuiteCollector:
         self.runs = {}
         self.budget = {}
         self.tails = {}
-        self.sources_seen = set()
+        self.until = 0.0
+        self.last_stop = None
+        self.scan_lock = threading.Lock()
+        self.scan_cache = None
 
     def running(self):
         return self.salt is not None and not self.stop_evt.is_set()
@@ -5941,18 +5953,111 @@ class SuiteCollector:
             info["units"] = self.unit_list()
         return info
 
+    @staticmethod
+    def mem_available_kb():
+        try:
+            with open("/proc/meminfo") as fh:
+                for ln in fh:
+                    if ln.startswith("MemAvailable:"):
+                        return int(ln.split()[1])
+        except (OSError, ValueError, IndexError):
+            pass
+        return None
+
+    def guard_once(self, now=None, mem_kb=None):
+        now = time.time() if now is None else now
+        if not self.running():
+            return None
+        if self.until and now >= self.until:
+            self.stop("auto-stop after %g hours" % ((self.until - self.since) / 3600.0))
+            return "time"
+        mem = self.mem_available_kb() if mem_kb is None else mem_kb
+        if mem is not None and mem < SL_MEM_FLOOR_KB:
+            self.stop("low memory (%d MB free)" % (mem // 1024))
+            return "memory"
+        return None
+
+    def _guard_loop(self):
+        while not self.stop_evt.wait(30.0):
+            self.guard_once()
+
+    @staticmethod
+    def throttle_flags(value):
+        names = ((0, "under-voltage now"), (1, "frequency capped now"), (2, "throttled now"), (3, "temperature limit now"),
+                 (16, "under-voltage since boot"), (17, "frequency capped since boot"), (18, "throttled since boot"),
+                 (19, "temperature limit since boot"))
+        return [n for bit, n in names if value & (1 << bit)]
+
+    def snapshot(self):
+        snap = {}
+        try:
+            snap["load"] = [round(x, 2) for x in os.getloadavg()]
+        except OSError:
+            pass
+        try:
+            mem = {}
+            with open("/proc/meminfo") as fh:
+                for ln in fh:
+                    k, _, v = ln.partition(":")
+                    if k in ("MemTotal", "MemAvailable", "SwapFree", "SwapTotal"):
+                        mem[k] = int(v.split()[0]) // 1024
+            snap["mem_mb"] = mem
+        except (OSError, ValueError):
+            pass
+        disks = {}
+        for name in ("/run", "/"):
+            try:
+                du = shutil.disk_usage(name)
+                disks[name] = {"free_mb": du.free // 1048576, "total_mb": du.total // 1048576}
+            except OSError:
+                pass
+        snap["disk"] = disks
+        try:
+            with open("/sys/class/thermal/thermal_zone0/temp") as fh:
+                snap["cpu_c"] = round(int(fh.read().strip()) / 1000.0, 1)
+        except (OSError, ValueError):
+            pass
+        try:
+            out = subprocess.run(["vcgencmd", "get_throttled"], capture_output=True, text=True, timeout=3).stdout
+            m = re.search(r"0x([0-9a-fA-F]+)", out)
+            if m:
+                val = int(m.group(1), 16)
+                snap["throttled"] = {"raw": "0x%x" % val, "flags": self.throttle_flags(val)}
+        except (OSError, subprocess.SubprocessError):
+            pass
+        units = self.unit_list()
+        try:
+            out = subprocess.run(["systemctl", "is-active"] + [u + ".service" for u in units], capture_output=True,
+                                 text=True, timeout=8).stdout.split()
+            if len(out) == len(units):
+                snap["services"] = {u: st for u, st in zip(units, out) if st != "inactive" or u in SL_UNITS}
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return snap
+
+    def _snap_loop(self):
+        while not self.stop_evt.is_set():
+            self.emit("system", "info", "", kind="snap", data=self.snapshot())
+            if self.stop_evt.wait(SL_SNAP_SEC):
+                break
+
     def _launch(self):
         self.stop_evt = threading.Event()
         self.threads = [threading.Thread(target=t, args=a, daemon=True, name="suitelog-" + t.__name__)
                         for t, a in ((self._journal_loop, (False,)), (self._journal_loop, (True,)),
-                                     (self._file_loop, ()), (self._wifi_loop, ()))]
+                                     (self._file_loop, ()), (self._wifi_loop, ()), (self._guard_loop, ()),
+                                     (self._snap_loop, ()))]
         for t in self.threads:
             t.start()
 
-    def start(self):
+    def start(self, hours=SL_DEFAULT_HOURS):
         with self.lock:
             if self.running():
                 return self.status()
+            try:
+                hours = max(0.0, min(float(hours), 168.0))
+            except (TypeError, ValueError):
+                hours = float(SL_DEFAULT_HOURS)
             salt = secrets.token_hex(8)
             os.makedirs(os.path.dirname(self.flag) or ".", exist_ok=True)
             tmp = self.flag + ".tmp"
@@ -5961,10 +6066,15 @@ class SuiteCollector:
             os.replace(tmp, self.flag)
             self.salt = salt
             self.since = time.time()
+            self.until = self.since + hours * 3600 if hours else 0.0
+            self.last_stop = None
+            self._save_until()
             self.written = self.dropped = 0
             self.counts, self.runs, self.budget, self.tails = {}, {}, {}, {}
+            head = self.header("collection_start")
+            head["hours"] = hours
             self._write({"kind": "mark", "src": "instmon", "lvl": "info", "msg": "collection started",
-                         "data": self.header("collection_start")}, self.since)
+                         "data": head}, self.since)
             self._launch()
             log_event("Suite log collection started (testing)", "info")
             return self.status()
@@ -5976,12 +6086,30 @@ class SuiteCollector:
                 return False
             self.salt = salt
             self.since = time.time()
+            self.until = self._load_until()
             self._write({"kind": "mark", "src": "instmon", "lvl": "info", "msg": "collection resumed after an instmon restart",
                          "data": self.header("collection_resume")}, self.since)
             self._launch()
         return True
 
-    def stop(self):
+    def _save_until(self):
+        try:
+            if self.until:
+                with open(self.flag + ".until", "w") as fh:
+                    fh.write("%d\n" % int(self.until))
+            else:
+                os.unlink(self.flag + ".until")
+        except OSError:
+            pass
+
+    def _load_until(self):
+        try:
+            with open(self.flag + ".until") as fh:
+                return float(fh.read().strip() or 0)
+        except (OSError, ValueError):
+            return 0.0
+
+    def stop(self, reason="user"):
         with self.lock:
             if self.salt is None:
                 return self.status()
@@ -5995,14 +6123,17 @@ class SuiteCollector:
             for src in list(self.runs):
                 self._flush_run(src)
             self._write({"kind": "mark", "src": "instmon", "lvl": "info", "msg": "collection stopped",
-                         "data": {"event": "collection_stop", "written": self.written, "dropped": self.dropped}},
-                        time.time())
-            try:
-                os.unlink(self.flag)
-            except OSError:
-                pass
+                         "data": {"event": "collection_stop", "reason": reason, "written": self.written,
+                                  "dropped": self.dropped}}, time.time())
+            for name in (self.flag, self.flag + ".until"):
+                try:
+                    os.unlink(name)
+                except OSError:
+                    pass
             self.salt = None
-            log_event("Suite log collection stopped", "info")
+            self.until = 0.0
+            self.last_stop = {"t": int(time.time()), "reason": reason}
+            log_event("Suite log collection stopped (%s)" % reason, "info")
             return self.status()
 
     def clear(self):
@@ -6035,12 +6166,448 @@ class SuiteCollector:
     def status(self):
         with self.lock:
             top = sorted(self.counts.items(), key=lambda kv: -kv[1])[:8]
-            return {"ok": True, "running": self.running(), "since": int(self.since) if self.running() else 0,
+            return {"ok": True, "now": int(time.time() * 1000), "running": self.running(),
+                    "since": int(self.since * 1000) if self.running() else 0,
+                    "until": int(self.until) if self.running() and self.until else 0, "last_stop": self.last_stop,
                     "bytes": self.size(), "cap": 2 * self.seg, "written": self.written, "dropped": self.dropped,
                     "sources": [{"src": k, "rows": v} for k, v in top]}
 
+    def _tail_read(self, name, size):
+        try:
+            with open(name, "rb") as fh:
+                total = os.fstat(fh.fileno()).st_size
+                if not size or size >= total:
+                    return fh.read().decode("utf-8", "replace").splitlines(), True
+                fh.seek(total - size)
+                return fh.read().decode("utf-8", "replace").splitlines()[1:], False
+        except OSError:
+            return [], True
+
+    def _lines(self, since_ms=0):
+        cur, prev = self.path, self.path + ".1"
+        if not since_ms:
+            for name in (prev, cur):
+                lines, _ = self._tail_read(name, 0)
+                for ln in lines:
+                    yield ln
+            return
+        lines, whole = [], True
+        for size in (1 << 20, 4 << 20, 16 << 20, 0):
+            lines, whole = self._tail_read(cur, size)
+            if whole:
+                break
+            ts = _SL_T.findall(lines[0]) if lines else []
+            if ts and int(ts[-1]) <= since_ms:
+                break
+        if whole:
+            for ln in self._tail_read(prev, 0)[0]:
+                yield ln
+        for ln in lines:
+            yield ln
+
+    def query(self, since=0, until=0, srcs=(), levels=(), kinds=(), text="", limit=300, newest_first=True, strip=False):
+        try:
+            limit = max(1, min(int(limit), SL_QUERY_MAX))
+        except (TypeError, ValueError):
+            limit = 300
+        needle = str(text or "").lower()
+        keys = ['"src":' + json.dumps(x) for x in srcs]
+        matched = collections.deque(maxlen=limit)
+        total = scanned = 0
+        bars = {}
+        for ln in self._lines(since):
+            scanned += 1
+            if not strip:
+                if needle and needle not in ln.lower():
+                    continue
+                if keys and not any(k in ln for k in keys):
+                    continue
+            try:
+                r = json.loads(ln)
+            except ValueError:
+                continue
+            if not isinstance(r, dict):
+                continue
+            t = r.get("t") or 0
+            if (since and t < since) or (until and t > until):
+                continue
+            if strip:
+                b = bars.setdefault(int(t // 60000), {"m": int(t // 60000) * 60000, "n": 0, "err": 0, "warn": 0})
+                b["n"] += 1
+                if r.get("lvl") == "err":
+                    b["err"] += 1
+                elif r.get("lvl") == "warn":
+                    b["warn"] += 1
+                if r.get("kind") == "rxh" and isinstance(r.get("data"), dict):
+                    d = r["data"]
+                    b["rxh"] = {k: d.get(k, 0) for k in ("pkts", "net_lost", "out_stalls", "cl_under", "gaps")}
+                if needle and needle not in ln.lower():
+                    continue
+                if keys and not any(k in ln for k in keys):
+                    continue
+            if levels and r.get("lvl") not in levels:
+                continue
+            if kinds and r.get("kind") not in kinds:
+                continue
+            total += 1
+            matched.append(r)
+        rows = list(matched)
+        if newest_first:
+            rows.reverse()
+        out = {"ok": True, "rows": rows, "matched": total, "shown": len(rows), "truncated": total > len(rows),
+               "scanned": scanned}
+        if strip:
+            out["strip"] = [bars[k] for k in sorted(bars)][-360:]
+        return out
+
+    def scan_sources(self, force=False):
+        with self.scan_lock:
+            now = time.monotonic()
+            if not force and self.scan_cache is not None and now - self.scan_cache[0] < 8.0:
+                return self.scan_cache[1]
+            agg = {}
+            kinds = {}
+            for ln in self._lines():
+                m = _SL_SRC.search(ln)
+                if not m:
+                    continue
+                ts = _SL_T.findall(ln)
+                t = int(ts[-1]) if ts else 0
+                a = agg.setdefault(m.group(1), {"src": m.group(1), "rows": 0, "err": 0, "warn": 0, "last": 0})
+                a["rows"] += 1
+                a["last"] = max(a["last"], t)
+                lv = _SL_LVL.search(ln)
+                if lv and lv.group(1) in ("err", "warn"):
+                    a[lv.group(1)] += 1
+                k = _SL_KIND.search(ln)
+                if k:
+                    kk = kinds.setdefault(k.group(1), {"kind": k.group(1), "rows": 0, "last": 0})
+                    kk["rows"] += 1
+                    kk["last"] = max(kk["last"], t)
+            out = {"sources": sorted(agg.values(), key=lambda a: -a["rows"]), "kinds": sorted(kinds.values(),
+                   key=lambda a: -a["rows"])}
+            self.scan_cache = (now, out)
+            return out
+
+    @staticmethod
+    def unit_states():
+        try:
+            out = subprocess.run(["systemctl", "list-units", "--all", "--type=service", "--no-legend", "--plain"],
+                                 capture_output=True, text=True, timeout=8).stdout
+        except (OSError, subprocess.SubprocessError):
+            return None
+        states = {}
+        for ln in out.splitlines():
+            p = ln.split()
+            if len(p) >= 3 and p[0].endswith(".service"):
+                states[p[0][:-8]] = (p[1], p[2])
+        return states
+
+    def coverage(self, now=None, force=False):
+        now = time.time() if now is None else now
+        scan = self.scan_sources(force)
+        by_src = {a["src"]: a for a in scan["sources"]}
+        by_kind = {k["kind"]: k for k in scan["kinds"]}
+        states = self.unit_states()
+        running = self.running()
+        waited = running and now - self.since >= SL_SILENT_SEC
+        rows = []
+
+        def add(group, src, state, note="", seen=None, size=None):
+            a = seen if seen is not None else by_src.get(src, {})
+            rows.append({"group": group, "src": src, "state": state, "note": note, "rows": a.get("rows", 0),
+                         "last": a.get("last", 0), "err": a.get("err", 0), "warn": a.get("warn", 0), "size": size})
+
+        for u in self.unit_list():
+            src = "journal:" + u
+            seen = by_src.get(src)
+            if seen:
+                add("journal", src, "seen")
+            elif states is None:
+                add("journal", src, "unknown", "systemctl could not be read")
+            elif u not in states:
+                add("journal", src, "not installed")
+            elif states[u][1] != "active":
+                add("journal", src, "not running", states[u][1])
+            else:
+                add("journal", src, "silent" if waited else "waiting", "running, no lines yet")
+        add("kernel", "kernel", "seen" if "kernel" in by_src else "quiet", "only warnings and hardware keywords are kept")
+        add("wifi", "wifi", "seen" if "wifi" in by_src else ("waiting" if os.path.exists(SL_WIFI_FILE) else "no file"),
+            SL_WIFI_FILE)
+        for pat in SL_FILES:
+            hits = [p for p in sorted(glob.glob(pat)) if not p.endswith((".gz", ".1", ".old"))]
+            if not hits:
+                add("file", "file:" + pat, "not found")
+            for p in hits:
+                src = "file:" + p
+                try:
+                    size = os.path.getsize(p)
+                except OSError:
+                    size = None
+                if not os.access(p, os.R_OK):
+                    add("file", src, "no permission", size=size)
+                elif src in by_src:
+                    add("file", src, "seen", size=size)
+                else:
+                    add("file", src, "silent" if waited else "waiting", "no new lines yet", size=size)
+        for kind, label in (("rxh", "Node Talker receive health (only while audio flows)"),
+                            ("listen", "Node Talker listen events"), ("kc", "Node Talker Kerchunk bursts"),
+                            ("snap", "health snapshots")):
+            k = by_kind.get(kind)
+            add("rows", "rows:" + kind, "seen" if k else "waiting", label, seen=k)
+        return {"ok": True, "running": running, "rows": rows, "kinds": scan["kinds"]}
+
 
 SUITELOG = SuiteCollector()
+
+SUITELOG_PAGE = r"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Suite Log (testing)</title>
+__THEME__
+<style>
+:root{--bg:#0b1118;--card:#121b26;--line:#25354a;--fg:#d7e2ef;--mut:#8ea2b8;--acc:#22c3a6;--err:#ff6b78;--warn:#f4c04e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.4 system-ui,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:1200px;margin:0 auto;padding:12px}
+h1{font-size:1.25rem;margin:.2rem 0}
+a{color:var(--acc)}
+.bar{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin:.4rem 0}
+.card{background:var(--card);border:1px solid var(--line);border-radius:6px;padding:.6rem .7rem;margin:.6rem 0}
+button,select,input[type=text],input[type=datetime-local]{background:#1a2635;color:var(--fg);border:1px solid var(--line);border-radius:4px;padding:.35rem .6rem;font:inherit}
+button{cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.primary{background:#0f4a3f;border-color:var(--acc)}
+button:disabled{opacity:.5;cursor:default}
+label{display:inline-flex;gap:.3rem;align-items:center;color:var(--mut)}
+.mut{color:var(--mut)}
+.small{font-size:.82rem}
+.chips{display:flex;flex-wrap:wrap;gap:.3rem}
+.chip{border:1px solid var(--line);border-radius:999px;padding:.1rem .55rem;font-size:.8rem;cursor:pointer;color:var(--mut);background:#101923}
+.chip.on{border-color:var(--acc);color:var(--fg);background:#0f2f2a}
+.strip{display:flex;align-items:flex-end;gap:2px;height:54px;overflow-x:auto;margin:.3rem 0}
+.sbar{min-width:7px;width:7px;background:#2c4560;cursor:pointer;position:relative}
+.sbar.w{background:var(--warn)}
+.sbar.e{background:var(--err)}
+table{width:100%;border-collapse:collapse;font-size:.84rem}
+th,td{text-align:left;padding:.18rem .4rem;border-bottom:1px solid #1a2837;vertical-align:top}
+th{color:var(--mut);position:sticky;top:0;background:var(--card)}
+td.t{white-space:nowrap;font-family:ui-monospace,Menlo,Consolas,monospace;cursor:pointer;color:var(--acc)}
+td.s{white-space:nowrap;color:var(--mut);max-width:240px;overflow:hidden;text-overflow:ellipsis}
+td.m{word-break:break-word;font-family:ui-monospace,Menlo,Consolas,monospace}
+tr.err td.l{color:var(--err)}
+tr.warn td.l{color:var(--warn)}
+.tw{max-height:70vh;overflow:auto}
+.msg{min-height:1.2em}
+.ok{color:var(--acc)}.bad{color:var(--err)}
+details summary{cursor:pointer}
+.cov td.st{white-space:nowrap}
+</style></head><body><div class="wrap">
+<div class="bar"><h1>Suite Log (testing)</h1><span class="mut small">instmon __VERSION__</span>
+<a href="/">Back to instmon</a></div>
+<div class="card"><div id="st">Loading...</div><div id="stwarn" class="small bad"></div></div>
+
+<div class="card">
+<div class="bar">
+<label>Time <select id="f-range"><option value="5">last 5 minutes</option><option value="15" selected>last 15 minutes</option><option value="60">last hour</option><option value="360">last 6 hours</option><option value="0">everything</option></select></label>
+<label>Level <select id="f-level"><option value="">all</option><option value="warn,err">warnings and errors</option><option value="err">errors only</option></select></label>
+<label>Kind <select id="f-kind"><option value="">all</option><option value="log">log lines</option><option value="rxh">receive health</option><option value="listen">listen events</option><option value="wifi">Wi-Fi samples</option><option value="snap">health snapshots</option><option value="kc">Kerchunk</option><option value="mark,drop">marks and drops</option></select></label>
+<input type="text" id="f-q" placeholder="Search text" size="22">
+<label>Rows <select id="f-limit"><option>300</option><option>1000</option><option>5000</option></select></label>
+<label>Order <select id="f-order"><option value="desc">newest first</option><option value="asc">oldest first</option></select></label>
+<label><input type="checkbox" id="f-live"> Live (every 3 s)</label>
+<button id="f-go" class="primary">Show</button>
+<button id="f-reset">Reset filters</button>
+</div>
+<div class="bar"><label>Around a time <input type="datetime-local" id="f-around" step="1"></label>
+<button id="f-around-go">Show 2 minutes either side</button>
+<span class="mut small">or click a time in the table.</span></div>
+<div id="mom" class="small mut"></div>
+<div class="chips" id="chips"></div>
+<div class="strip" id="strip" title="One bar per minute: red has errors, amber has warnings. Click a bar to see that minute."></div>
+</div>
+
+<div class="card">
+<div class="bar">
+<button id="a-copy-text">Copy view as text</button>
+<button id="a-copy-json">Copy view as JSON lines</button>
+<button id="a-dl-text">Download view (.txt)</button>
+<button id="a-dl-json">Download view (.jsonl)</button>
+<a id="a-dl-all" href="/api/suitelog/download" download><button type="button">Download everything (.jsonl)</button></a>
+</div>
+<div class="small mut">"View" is the rows in the table below. "Everything" is the whole file, both segments, as collected.</div>
+<div id="a-msg" class="msg small"></div>
+<div id="count" class="small mut"></div>
+</div>
+
+<div class="card tw"><table><thead><tr><th>Time</th><th>Level</th><th>Source</th><th>What</th></tr></thead><tbody id="rows"></tbody></table></div>
+
+<details class="card" id="cov"><summary>Coverage: are we getting every log?</summary>
+<div class="bar"><button id="cov-go">Check now</button><span class="mut small" id="cov-note">Shows each expected source and whether lines have arrived.</span></div>
+<table class="cov"><thead><tr><th>Source</th><th>State</th><th>Rows</th><th>Last line</th><th>Note</th></tr></thead><tbody id="cov-rows"></tbody></table>
+</details>
+</div>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var S = {rows: [], skew: 0, srcs: new Set(), moment: 0, timer: null, last: null};
+  function nowMs() { return Date.now() + S.skew; }
+  function pad(n, w) { n = String(n); while (n.length < (w || 2)) n = '0' + n; return n; }
+  function fmt(t) { var d = new Date(t); return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds()) + '.' + pad(d.getMilliseconds(), 3); }
+  function fmtDate(t) { var d = new Date(t); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + ' ' + fmt(t); }
+  function sz(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+  function say(id, text, bad) { var e = $(id); e.textContent = text; e.className = (e.className.split(' ')[0] || '') + (bad ? ' bad' : ''); }
+  function summary(r) {
+    var d = r.data;
+    if (r.kind === 'rxh' && d) return 'receive health: ' + (d.pkts || 0) + ' packets, ' + (d.net_lost || 0) + ' lost, ' + (d.out_stalls || 0) + ' send stalls, ' + (d.cl_under || 0) + ' phone underruns';
+    if (r.kind === 'listen' && d) return 'listen ' + (d.client || '') + ': ' + (d.src || '') + ' ' + (d.action || '') + ' (' + String(d.why || '').replace(/_/g, ' ') + ')' + (d.detail ? ' ' + JSON.stringify(d.detail) : '');
+    if (r.kind === 'kc' && d) return 'Kerchunk burst ' + d.id + ' ' + d.secs + ' s ' + (d.label || '');
+    if (r.kind === 'wifi' && d) return 'Wi-Fi ' + (d.band || '') + ' ch ' + (d.channel || '') + ' ' + (d.signal_dbm || '') + ' dBm';
+    if (r.kind === 'snap' && d) return 'snapshot ' + JSON.stringify(d);
+    if (r.kind === 'mark' && d) return (r.msg || '') + ' ' + JSON.stringify(d);
+    var m = r.msg || '';
+    if (r.n > 1) m += ' (x' + r.n + ')';
+    return m;
+  }
+  function rowText(r) { return fmtDate(r.t) + '  ' + String(r.lvl || r.kind || '').padEnd(5) + ' ' + (r.src || '') + '  ' + summary(r); }
+  function rangeMs() { var v = Number($('f-range').value); return v ? v * 60000 : 0; }
+  function params(extra) {
+    var q = new URLSearchParams();
+    var span = rangeMs();
+    if (S.moment) { q.set('since', S.moment - 120000); q.set('until', S.moment + 120000); q.set('order', 'asc'); q.set('strip', '1'); }
+    else {
+      if (span) q.set('since', nowMs() - span);
+      q.set('order', $('f-order').value);
+      if (span && span <= 360 * 60000) q.set('strip', '1');
+    }
+    $('f-level').value.split(',').filter(Boolean).forEach(function (x) { q.append('lvl', x); });
+    $('f-kind').value.split(',').filter(Boolean).forEach(function (x) { q.append('kind', x); });
+    S.srcs.forEach(function (x) { q.append('src', x); });
+    if ($('f-q').value.trim()) q.set('q', $('f-q').value.trim());
+    q.set('limit', $('f-limit').value);
+    return q;
+  }
+  async function api(url) {
+    var r = await fetch(url, {cache: 'no-store'});
+    if (r.status === 401) { var e = new Error('login'); e.login = true; throw e; }
+    return r.json();
+  }
+  function needLogin() { $('st').innerHTML = 'Please log in on the <a href="/">instmon page</a> first, then reload this page.'; }
+  async function status() {
+    try {
+      var d = await api('/api/suitelog/status');
+      S.skew = (d.now || Date.now()) - Date.now();
+      S.last = d;
+      var t = d.running ? 'Collecting since ' + new Date(d.since).toLocaleTimeString() : 'Not collecting';
+      if (d.running && d.until) t += ', stops at ' + new Date(d.until * 1000).toLocaleTimeString();
+      if (!d.running && d.last_stop) t += ' (stopped: ' + d.last_stop.reason + ')';
+      t += ' - ' + sz(d.bytes) + ' of ' + sz(d.cap) + ' used';
+      $('st').textContent = t;
+      $('stwarn').textContent = d.dropped ? d.dropped + ' lines were dropped by the per-source limit this run.' : '';
+    } catch (e) { if (e.login) needLogin(); else $('st').textContent = 'Could not read the status.'; }
+  }
+  function chips(list) {
+    var box = $('chips'); box.textContent = '';
+    list.slice(0, 40).forEach(function (a) {
+      var c = document.createElement('span');
+      c.className = 'chip' + (S.srcs.has(a.src) ? ' on' : '');
+      c.textContent = a.src + ' ' + a.rows + (a.err ? ' (' + a.err + ' err)' : '');
+      c.onclick = function () { if (S.srcs.has(a.src)) S.srcs.delete(a.src); else S.srcs.add(a.src); chips(list); load(); };
+      box.appendChild(c);
+    });
+  }
+  async function sources(force) {
+    try { var d = await api('/api/suitelog/sources' + (force ? '?force=1' : '')); S.srcList = d.sources || []; chips(S.srcList); } catch (e) {}
+  }
+  function drawStrip(strip) {
+    var box = $('strip'); box.textContent = '';
+    if (!strip || !strip.length) return;
+    var peak = Math.max.apply(null, strip.map(function (b) { return b.n; })) || 1;
+    strip.forEach(function (b) {
+      var d = document.createElement('div');
+      d.className = 'sbar' + (b.err ? ' e' : b.warn ? ' w' : '');
+      d.style.height = Math.max(4, Math.round(50 * b.n / peak)) + 'px';
+      var tip = fmt(b.m).slice(0, 5) + ': ' + b.n + ' rows, ' + b.err + ' errors, ' + b.warn + ' warnings';
+      if (b.rxh) tip += '; ' + b.rxh.pkts + ' packets, ' + b.rxh.net_lost + ' lost, ' + b.rxh.out_stalls + ' stalls';
+      d.title = tip;
+      d.onclick = function () { around(b.m + 30000); };
+      box.appendChild(d);
+    });
+  }
+  function render(d) {
+    S.rows = d.rows || [];
+    var tb = $('rows'); tb.textContent = '';
+    var frag = document.createDocumentFragment();
+    S.rows.forEach(function (r) {
+      var tr = document.createElement('tr'); tr.className = r.lvl === 'err' ? 'err' : r.lvl === 'warn' ? 'warn' : '';
+      var a = document.createElement('td'); a.className = 't'; a.textContent = fmt(r.t); a.title = fmtDate(r.t) + ' - click to see 2 minutes either side'; a.onclick = function () { around(r.t); };
+      var b = document.createElement('td'); b.className = 'l'; b.textContent = r.lvl || r.kind || '';
+      var c = document.createElement('td'); c.className = 's'; c.textContent = r.src || ''; c.title = r.src || '';
+      var e = document.createElement('td'); e.className = 'm'; e.textContent = summary(r);
+      tr.append(a, b, c, e); frag.appendChild(tr);
+    });
+    tb.appendChild(frag);
+    $('count').textContent = 'Showing ' + d.shown + ' of ' + d.matched + ' matching rows' + (d.truncated ? ' (more match: raise Rows or narrow the filters)' : '') + '.';
+    drawStrip(d.strip);
+    $('mom').textContent = S.moment ? 'Showing 2 minutes either side of ' + fmtDate(S.moment) + ', oldest first. ' : '';
+    if (S.moment) { var b2 = document.createElement('button'); b2.textContent = 'Back to the normal view'; b2.onclick = function () { S.moment = 0; load(); }; $('mom').appendChild(b2); }
+  }
+  async function load() {
+    try { render(await api('/api/suitelog/query?' + params().toString())); } catch (e) { if (e.login) needLogin(); else $('count').textContent = 'Could not load the rows.'; }
+  }
+  function around(t) { S.moment = t; $('f-live').checked = false; load(); window.scrollTo(0, 0); }
+  function copyText(text, what) {
+    var done = function () { say('a-msg', 'Copied ' + what + ' (' + S.rows.length + ' rows) to the clipboard.', false); };
+    var fail = function () { say('a-msg', 'This browser would not let the page copy. Use a Download button instead.', true); };
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done, fail); return; }
+    var ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta); ta.select();
+    var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+    document.body.removeChild(ta);
+    if (ok) done(); else fail();
+  }
+  function save(text, name, type, what) {
+    var blob = new Blob([text], {type: type});
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); document.body.removeChild(a); }, 1000);
+    say('a-msg', 'Saved ' + what + ' (' + S.rows.length + ' rows) as ' + name + '.', false);
+  }
+  function stamp() { var d = new Date(); return d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + '-' + pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds()); }
+  function viewText() { return S.rows.map(rowText).join('\n') + '\n'; }
+  function viewJson() { return S.rows.map(function (r) { return JSON.stringify(r); }).join('\n') + '\n'; }
+  function needRows() { if (!S.rows.length) { say('a-msg', 'There are no rows in the view to copy or save.', true); return false; } return true; }
+  $('a-copy-text').onclick = function () { if (needRows()) copyText(viewText(), 'the view as text'); };
+  $('a-copy-json').onclick = function () { if (needRows()) copyText(viewJson(), 'the view as JSON lines'); };
+  $('a-dl-text').onclick = function () { if (needRows()) save(viewText(), 'suitelog-view-' + stamp() + '.txt', 'text/plain', 'the view as text'); };
+  $('a-dl-json').onclick = function () { if (needRows()) save(viewJson(), 'suitelog-view-' + stamp() + '.jsonl', 'application/x-ndjson', 'the view as JSON lines'); };
+  $('f-go').onclick = function () { S.moment = 0; load(); };
+  $('f-reset').onclick = function () { S.moment = 0; S.srcs.clear(); $('f-range').value = '15'; $('f-level').value = ''; $('f-kind').value = ''; $('f-q').value = ''; $('f-limit').value = '300'; $('f-order').value = 'desc'; $('f-live').checked = false; if (S.srcList) chips(S.srcList); load(); };
+  $('f-q').addEventListener('keydown', function (e) { if (e.key === 'Enter') { S.moment = 0; load(); } });
+  ['f-range', 'f-level', 'f-kind', 'f-limit', 'f-order'].forEach(function (id) { $(id).addEventListener('change', function () { S.moment = 0; load(); }); });
+  $('f-around-go').onclick = function () { var v = $('f-around').value; if (!v) { say('a-msg', 'Pick a date and time first.', true); return; } var t = new Date(v).getTime(); if (isNaN(t)) { say('a-msg', 'That time was not understood.', true); return; } around(t); };
+  $('f-live').addEventListener('change', function () {
+    if ($('f-live').checked && (rangeMs() === 0 || rangeMs() > 60 * 60000)) { $('f-live').checked = false; say('a-msg', 'Live view works with the 5 minute, 15 minute and 1 hour ranges.', true); return; }
+    S.moment = 0;
+  });
+  async function coverage() {
+    $('cov-note').textContent = 'Checking...';
+    try {
+      var d = await api('/api/suitelog/coverage?force=1');
+      var tb = $('cov-rows'); tb.textContent = '';
+      d.rows.forEach(function (r) {
+        var tr = document.createElement('tr');
+        var cells = [r.src, r.state, String(r.rows), r.last ? fmtDate(r.last) : '-', (r.note || '') + (r.size != null ? ' ' + sz(r.size) : '') + (r.err ? ' ' + r.err + ' errors' : '')];
+        cells.forEach(function (x, i) { var td = document.createElement('td'); td.textContent = x; if (i === 1) { td.className = 'st ' + (r.state === 'seen' ? 'ok' : (r.state === 'silent' || r.state === 'no permission') ? 'bad' : 'mut'); } tr.appendChild(td); });
+        tb.appendChild(tr);
+      });
+      $('cov-note').textContent = d.running ? 'Silent means a running service or log file had no lines for ' + Math.round(600 / 60) + ' minutes.' : 'Not collecting: start collecting to fill this in.';
+    } catch (e) { $('cov-note').textContent = e.login ? 'Please log in first.' : 'Could not check.'; }
+  }
+  $('cov-go').onclick = coverage;
+  $('cov').addEventListener('toggle', function () { if ($('cov').open) coverage(); });
+  setInterval(function () { if (!document.hidden) { status(); if ($('f-live').checked && !S.moment) load(); } }, 3000);
+  status().then(function () { return sources(false); }).then(load);
+})();
+</script></body></html>
+"""
 
 
 _RECORDING_BLOCKED_PATHS = frozenset((
@@ -10951,7 +11518,9 @@ async function slPoll() {
     const d = await r.json();
     document.getElementById('sl-start').disabled = !!d.running;
     document.getElementById('sl-stop').disabled = !d.running;
-    let t = d.running ? 'Collecting since ' + new Date(d.since * 1000).toLocaleTimeString() : 'Stopped';
+    let t = d.running ? 'Collecting since ' + new Date(d.since).toLocaleTimeString() : 'Stopped';
+    if (d.running && d.until) t += ', stops at ' + new Date(d.until * 1000).toLocaleTimeString();
+    if (!d.running && d.last_stop) t += ' (' + d.last_stop.reason + ')';
     t += ' - ' + slFmt(d.bytes) + ' of ' + slFmt(d.cap) + ', ' + d.written + ' rows this run';
     if (d.dropped) t += ', ' + d.dropped + ' lines dropped by the per-source limit';
     st.textContent = t;
@@ -10961,7 +11530,8 @@ async function slPoll() {
 async function slAct(what) {
   if (what === 'clear' && !window.confirm('Clear the collected data? The Kerchunk rows are kept.')) return;
   try {
-    await fetch('/api/suitelog/' + what, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}, body: '{}'});
+    const hrs = what === 'start' ? Number(document.getElementById('sl-hours').value) : 0;
+    await fetch('/api/suitelog/' + what, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}, body: JSON.stringify(what === 'start' ? {hours: isNaN(hrs) ? 12 : hrs} : {})});
   } catch (e) {}
   slPoll();
 }
@@ -11522,6 +12092,8 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
     <button id="sl-stop" onclick="slAct('stop')" disabled>Stop</button>
     <button id="sl-dl" onclick="slDownload()">Download</button>
     <button class="b-danger" id="sl-clear" onclick="slAct('clear')">Clear</button>
+    <a href="/suitelog" target="_blank" rel="noopener"><button type="button">Open the log viewer</button></a>
+    <label class="small muted">Stop after <input type="number" id="sl-hours" value="12" min="0" max="168" style="width:4.5rem"> hours (0 = no limit)</label>
   </div>
   <div id="sl-status" class="small" style="margin-top:.35rem">Loading...</div>
   <div id="sl-sources" class="small muted"></div>
@@ -11629,6 +12201,10 @@ _GET_ROUTES ={
 "/api/diskimg/schedule":lambda self :self ._route_diskimg_schedule_get (),
 "/api/suitelog/status":lambda self :self ._send_json (200 ,SUITELOG .status (),extra_headers =[("Cache-Control","no-store")]),
 "/api/suitelog/download":lambda self :self ._route_suitelog_download (),
+"/api/suitelog/query":lambda self :self ._route_suitelog_query (),
+"/api/suitelog/sources":lambda self :self ._send_json (200 ,SUITELOG .scan_sources (force ="force=1"in self .path ),extra_headers =[("Cache-Control","no-store")]),
+"/api/suitelog/coverage":lambda self :self ._send_json (200 ,SUITELOG .coverage (force ="force=1"in self .path ),extra_headers =[("Cache-Control","no-store")]),
+"/suitelog":lambda self :self ._send_html (200 ,SUITELOG_PAGE .replace ("__THEME__",_THEME_HEAD ).replace ("__VERSION__",VERSION )),
 }
 
 _POST_ROUTES ={
@@ -11642,7 +12218,7 @@ _POST_ROUTES ={
 "/api/diskimg/preview":lambda self :self .handle_diskimg_preview (),
 "/api/diskimg/backup/start":lambda self :self .handle_diskimg_backup_start (),
 "/api/diskimg/backup/delete":lambda self :self .handle_diskimg_backup_delete (),
-"/api/suitelog/start":lambda self :self ._send_json (200 ,SUITELOG .start ()),
+"/api/suitelog/start":lambda self :self ._route_suitelog_start (),
 "/api/suitelog/stop":lambda self :self ._send_json (200 ,SUITELOG .stop ()),
 "/api/suitelog/clear":lambda self :self ._send_json (200 ,SUITELOG .clear ()),
 "/api/diskimg/job/cancel":lambda self :self .handle_diskimg_job_cancel (),
@@ -11821,6 +12397,29 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             log_event(f"Downloaded disk-image backup: {match['name']}", "info")
         except Exception as exc:
             self._error_json(500, f"Error downloading backup: {exc}")
+
+    def _route_suitelog_start(self):
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            body = {}
+        hours = body.get("hours", SL_DEFAULT_HOURS) if isinstance(body, dict) else SL_DEFAULT_HOURS
+        self._send_json(200, SUITELOG.start(hours))
+
+    def _route_suitelog_query(self):
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+
+        def num(key):
+            try:
+                return int(float(q.get(key, ["0"])[0]))
+            except ValueError:
+                return 0
+
+        out = SUITELOG.query(since=num("since"), until=num("until"), srcs=q.get("src", []), levels=q.get("lvl", []),
+                             kinds=q.get("kind", []), text=q.get("q", [""])[0], limit=num("limit") or 300,
+                             newest_first=q.get("order", ["desc"])[0] != "asc", strip=q.get("strip", [""])[0] == "1")
+        self._send_json(200, out, extra_headers=[("Cache-Control", "no-store")])
 
     def _route_suitelog_download(self):
         parts = []
@@ -12637,7 +13236,7 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
 
     def do_GET (self ):
         parsed_path =self .path .split ("?",1 )[0 ]
-        if parsed_path not in ("/","/index.html"):
+        if parsed_path not in ("/","/index.html","/suitelog"):
             if not _check_session(self._session_token()):
                 self._require_auth()
                 return
