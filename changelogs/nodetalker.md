@@ -1,6 +1,14 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_10_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_11_20261104.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.11 (2026-11-04)
+
+**Testing only.** The suite log, with instmon 2.88.0. Not meant for production copies; it does nothing until someone presses Start in instmon.
+
+- **One file in memory.** Node Talker no longer writes `nodetalker_rxhealth.jsonl` and `nodetalker_listenlog.jsonl` on the SD card. While instmon's Suite Log is collecting, the per-minute receive-health rows and all listen events (user, system, page, the node's own stream records, and the app's) go into `/run/asl_dvs/suitelog.jsonl` (RAM, 20 MB cap in two segments). While it is stopped nothing is written, and `/api/rxhealth?all=1` answers from the last 120 minutes in memory. IP addresses, MAC addresses, network names and passwords are replaced by short tags or hidden before a row is written.
+- **Kerchunk bursts are JSON in the same file.** The burst table, labels and reset are rows (`kc`, `kc_label`, `kc_reset`), written even when collection is stopped, so the Kerchunk tab works as before. The first start after this update converts `nodetalker_bursts.csv` once and renames it `.imported`. When the file rotates, the table is written again at the start of the new segment. A reboot clears the history (it is in RAM). Reset no longer keeps a `.bak` file. This block is marked to be removed after testing.
+- This is a release, not a cosmetic build.
 
 ## 0.10.10 (2026-11-03)
 

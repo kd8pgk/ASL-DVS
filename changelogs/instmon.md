@@ -1,6 +1,17 @@
 # instmon changelog
 
-Current file: `instmon_v2_87_0_20261102.py`. Newest entries first.
+Current file: `instmon_v2_88_0_20261104.py`. Newest entries first.
+
+## 2.88.0 (2026-11-04)
+
+**Testing only.** A Suite Log card, with Node Talker 0.10.11. Not meant for production copies; it does nothing until Start is pressed.
+
+- **Suite Log (testing) card** with Start collecting, Stop, Download and Clear, and a status line (running or stopped, size out of the 20 MB cap, rows this run, lines dropped, the busiest sources). Collection state lives in RAM: the flag `/run/asl_dvs/suitelog.on` (which holds a random salt for the address tags) and the data in `/run/asl_dvs/suitelog.jsonl` plus one older segment, 10 MB each, so the total never goes over 20 MB and the oldest data goes first. Both are gone after a reboot, so download first. After an instmon restart, a collection that was running carries on with the same salt.
+- **What is collected** while it is running: journald for the suite's units (a known list plus any unit file the suite wrote), kernel messages at warning level and above and any about Wi-Fi, SD card, USB, voltage, throttling, thermal or memory, the file logs (Asterisk `full` and `messages`, MMDVM, USRP, DVSwitch, ircDDBGateway, wifimon, svxlink, the Full Update job log, Pibrary's log on the USB library), a sample of the Wi-Fi link file every 10 s, and the rows Node Talker writes (receive health, listen events, Kerchunk bursts). Files are followed from their last 50 lines.
+- **Volume control.** A line that repeats within 60 s becomes one row with a count. Each source is limited to about 96 KB a minute; warnings and errors are never dropped, and a `drop` row says how many lines were lost.
+- **Privacy.** IP addresses, MAC addresses and network names become short tags (the same address gets the same tag during a run), and passwords, tokens, cookies and Authorization headers are hidden before anything is written.
+- **Clear** removes the collected data and keeps the Kerchunk rows. **Download** sends both segments as one `suitelog-<time>.jsonl`.
+- This is a release, not a cosmetic build.
 
 ## 2.87.0 (2026-11-02)
 
