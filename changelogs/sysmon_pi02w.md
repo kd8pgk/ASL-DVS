@@ -1,6 +1,10 @@
 # SysMon, Pi Zero 2 W build changelog
 
-Current file: `sysmon_pi02w_v6_13_83_20261028.py`. Newest entries first.
+Current file: `sysmon_pi02w_v6_14_0_20261104.py`. Newest entries first.
+
+## 6.14.0-pi02w (2026-11-04)
+
+- **CGNAT card** on the Reg tab (a third card, under IAX). It checks whether the node is behind carrier-grade NAT (100.64.0.0/10), which stops inbound port forwards from working. Red when the node's own address or the router's WAN address (read over UPnP) is in that range; green when the router has a public address, or when traffic leaves through a VPN such as Tailscale; grey when the router doesn't answer UPnP. The public IP is shown for reference and is not used for the result. The result is cached for 10 minutes, and the router is asked over UPnP (SSDP and a SOAP GetExternalIPAddress call, read only). New route `/api/reg/cgnat`.
 
 ## 6.13.83-pi02w (2026-10-28)
 
