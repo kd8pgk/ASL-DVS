@@ -2664,6 +2664,16 @@ class InstmonSuiteLogTests(unittest.TestCase):
         self.assertAlmostEqual(self.col.until - self.col.since, 3.5 * 3600, delta=2)
         self.assertEqual(seen[0][0], 200)
 
+    def test_the_card_does_not_poll_before_login(self):
+        m = self.m
+        js = m._JS_SUITELOG
+        self.assertNotIn("addEventListener('load'", js)
+        self.assertNotIn("slPoll();\nsetInterval", js)
+        start = m._JS.index("function _startApp()")
+        body = m._JS[start:m._JS.index("\n}\n", start)]
+        self.assertIn("slStart();", body)
+        self.assertEqual(m._JS.count("slStart();"), 1)
+
     def test_the_card_and_routes_are_in_the_page(self):
         m = self.m
         self.assertIn("/api/suitelog/status", m._GET_ROUTES)

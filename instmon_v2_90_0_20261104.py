@@ -38,7 +38,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.89.0"
+VERSION ="2.90.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -11268,6 +11268,7 @@ function _startApp() {
   // panel someone is likely watching live while a multi-GB copy runs.
   setInterval(() => { if (!document.hidden) pollDiskimgJob(); }, 2000);
   setInterval(() => { if (!document.hidden) pollDiskimgBackups(); }, 5000);
+  slStart();
   // Router button: the server caches its probe for 30s, so 15s is plenty.
   setInterval(() => { if (!document.hidden) pollGateway(); }, 15000);
   document.addEventListener('visibilitychange', () => {
@@ -11536,7 +11537,13 @@ async function slAct(what) {
   slPoll();
 }
 function slDownload() { window.location.href = '/api/suitelog/download'; }
-window.addEventListener('load', () => { slPoll(); setInterval(() => { if (!document.hidden) slPoll(); }, 3000); });
+let _slStarted = false;
+function slStart() {
+  if (_slStarted) return;
+  _slStarted = true;
+  slPoll();
+  setInterval(() => { if (!document.hidden) slPoll(); }, 3000);
+}
 """
 
 _JS = (
