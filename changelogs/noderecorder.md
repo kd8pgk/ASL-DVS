@@ -1,6 +1,15 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_2_20261104.py`. Newest entries first.
+Current file: `noderecorder_v0_5_3_20261104.py`. Newest entries first.
+
+## 0.5.3 (2026-11-04)
+
+- **Record now and Stop recording on the Record card.** Record now starts a recording by hand, using the target and format set in the Connect tab's schedule form, and it runs until Stop recording is pressed. It stops by itself after 4 hours. Stop recording ends the recording in progress: what was recorded is saved, the link is dropped, and the scheduled window does not start again. Only one recording can run at a time, and a manual start is refused while a scheduled window is due. New routes `POST /api/recording/start` and `POST /api/recording/stop`.
+- **Removing a scheduled recording that is recording stops it.** Before, Remove was refused while the entry was recording. Now the recording is stopped by hand, saved, and the entry is deleted.
+- **Days are check boxes.** The Day drop-down on the schedule form is seven check boxes (Sun to Sat), so any mix of days can be picked. At least one must be ticked.
+- **Schedule tables fit the page.** Each recording takes two lines (name and target, then days, window, format and next time), and its buttons (Dry run, on/off, Edit, Remove) sit on a row of their own under it.
+- **Specials.** A schedule entry is now a Regular (weekly, as before) or a Special (one time, on a date). Tick "Special (one time)" on the Schedule a recording card and pick the date. A special takes over from a recording that is running: the regular's first part is saved and its window resumes after the special ends, as a new file. While a special's window is on, a regular does not start over it. A special runs once and is then removed; if the Pi was off for its window it is removed and reported as missed. Two specials that overlap are refused when saved; a special may overlap a regular. Stopping a special by hand also removes it.
+- This is a release, not a cosmetic build.
 
 ## 0.5.2 (2026-11-04)
 

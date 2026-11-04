@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4815,6 +4815,7 @@ _sched_lock = threading.RLock()
 _sched_cache = {"key": None, "data": None}
 _ENTRY_ID_RE = re.compile(r"^[a-z0-9]{1,16}$")
 _HM_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
+_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 
 def _hm_minutes(value, what):
@@ -4885,9 +4886,30 @@ def schedule_norm_entry(raw, check_target=True):
         datetime.fromisoformat(rev)
     except ValueError:
         rev = ""
+    kind = str(raw.get("kind") or "regular").strip().lower()
+    if kind not in ("regular", "special"):
+        raise ValueError("kind must be regular or special")
+    date = ""
+    if kind == "special":
+        date = str(raw.get("date") or "").strip()
+        if not _DATE_RE.match(date):
+            raise ValueError("a special needs a date such as 2026-11-30")
+        try:
+            datetime.strptime(date, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError("a special needs a real date such as 2026-11-30")
+        days = []
+    else:
+        days = _norm_days(raw.get("days", raw.get("day")))
     return {"id": eid, "name": name, "enabled": _parse_bool(raw.get("enabled", True)),
-            "days": _norm_days(raw.get("days", raw.get("day"))), "start": _hm_text(start), "end": _hm_text(end),
-            "duration_min": (end - start) % 1440, "target": target, "format": fmt, "rev": rev}
+            "days": days, "start": _hm_text(start), "end": _hm_text(end),
+            "duration_min": (end - start) % 1440, "target": target, "format": fmt, "rev": rev,
+            "kind": kind, "date": date}
+
+
+def _special_window(e):
+    s = datetime.fromisoformat(e["date"]) + timedelta(minutes=_hm_minutes(e["start"], "Start"))
+    return s, s + timedelta(minutes=e["duration_min"])
 
 
 def _sched_pieces(e, gap):
@@ -4907,7 +4929,7 @@ def _sched_pieces(e, gap):
 def schedule_conflicts(entries):
     items = []
     for e in entries:
-        if e.get("enabled"):
+        if e.get("enabled") and e.get("kind") != "special":
             for p in _sched_pieces(e, SCHEDULE_GAP_MIN):
                 items.append((e, p))
     seen, out = set(), []
@@ -4924,6 +4946,14 @@ def schedule_conflicts(entries):
                         out.append(f"{ea['name']} runs into its own next window; shorten it")
                     else:
                         out.append(f"{ea['name']} and {eb['name']} overlap or are less than {SCHEDULE_GAP_MIN} minutes apart")
+    gap = timedelta(minutes=SCHEDULE_GAP_MIN)
+    sps = [e for e in entries if e.get("enabled") and e.get("kind") == "special"]
+    for i in range(len(sps)):
+        for j in range(i + 1, len(sps)):
+            a0, a1 = _special_window(sps[i])
+            b0, b1 = _special_window(sps[j])
+            if a0 < b1 + gap and b0 < a1 + gap:
+                out.append(f"{sps[i]['name']} and {sps[j]['name']} are both specials on overlapping times")
     return out
 
 
@@ -4932,6 +4962,8 @@ def _cron_dow(day):
 
 
 def schedule_windows(e, now, back=1, ahead=8):
+    if e.get("kind") == "special":
+        return [_special_window(e)]
     hh, mm = divmod(_hm_minutes(e["start"], "Start"), 60)
     out = []
     for off in range(-back, ahead + 1):
@@ -5002,6 +5034,9 @@ def schedule_set(body):
     raw = body.get("entry") if isinstance(body, dict) else None
     e = schedule_norm_entry(raw)
     e["rev"] = datetime.now().isoformat(timespec="seconds")
+    if e["kind"] == "special" and _special_window(e)[1] <= datetime.now():
+        return {"ok": False, "error": "That special has already ended. Pick a later date or time."}
+    running = SCHED.is_running(e["id"])
     with _sched_lock:
         data = schedule_load()
         if data["error"]:
@@ -5009,7 +5044,7 @@ def schedule_set(body):
         entries = [x for x in data["entries"] if x["id"] != e["id"]]
         if len(entries) >= SCHEDULE_MAX and not any(x["id"] == e["id"] for x in data["entries"]):
             return {"ok": False, "error": f"The schedule is full ({SCHEDULE_MAX} entries)."}
-        if SCHED.is_running(e["id"]):
+        if running:
             return {"ok": False, "error": f"{e['name']} is recording now; change it when the recording ends."}
         entries.append(e)
         bad = schedule_conflicts(entries)
@@ -5021,12 +5056,15 @@ def schedule_set(body):
             schedule_store(entries)
         except OSError as exc:
             return {"ok": False, "error": f"could not save {SCHEDULE_PATH}: {exc}"}
-    log_event(f"Schedule: saved {e['name']} ({', '.join(SCHEDULE_DAY_NAMES[d] for d in e['days'])} {e['start']}-{e['end']})", "ok")
+    what = f"special on {e['date']}" if e["kind"] == "special" else ", ".join(SCHEDULE_DAY_NAMES[d] for d in e["days"])
+    log_event(f"Schedule: saved {e['name']} ({what} {e['start']}-{e['end']})", "ok")
     return {"ok": True, "entry": e, "message": "Saved."}
 
 
 def schedule_remove(body):
     eid = str(body.get("id", "") if isinstance(body, dict) else "").strip().lower()
+    if SCHED.is_running(eid):
+        SCHED.stop_by_hand()
     with _sched_lock:
         data = schedule_load()
         if data["error"]:
@@ -5034,8 +5072,6 @@ def schedule_remove(body):
         hit = next((x for x in data["entries"] if x["id"] == eid), None)
         if hit is None:
             return {"ok": False, "error": "No such schedule entry."}
-        if SCHED.is_running(eid):
-            return {"ok": False, "error": f"{hit['name']} is recording now; remove it when the recording ends."}
         try:
             schedule_store([x for x in data["entries"] if x["id"] != eid])
         except OSError as exc:
@@ -5137,6 +5173,9 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
     if not ok:
         do("disconnect", actions.disconnect, entry)
         return done("connect_failed", f"connect failed: {msg}")
+    if abort.is_set():
+        do("disconnect", actions.disconnect, entry)
+        return done("aborted", "stopped before the recording started")
     ok, msg, fname = do("start", actions.start, entry, window)
     if not ok:
         do("stop", actions.stop)
@@ -5181,6 +5220,20 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
     return done(result, detail)
 
 
+def _special_remove(eid):
+    with _sched_lock:
+        data = schedule_load()
+        if data["error"]:
+            return
+        keep = [x for x in data["entries"] if x["id"] != eid]
+        if len(keep) == len(data["entries"]):
+            return
+        try:
+            schedule_store(keep)
+        except OSError as exc:
+            log_event(f"Schedule: could not remove the special {eid}: {exc}", "err")
+
+
 class Scheduler:
     def __init__(self, real_actions=None, dry_actions=None):
         self.lock = threading.RLock()
@@ -5192,6 +5245,9 @@ class Scheduler:
         self.thread = None
         self.state = "idle"
         self.cur = None
+        self.run_abort = threading.Event()
+        self.user_stop = False
+        self.preempt = False
         self.results = deque(maxlen=20)
         self.done = {}
         self.active = None
@@ -5243,20 +5299,31 @@ class Scheduler:
             if self.cur is not None and file is not None:
                 self.cur["file"] = file
 
-    def _note(self, entry, window_start, result, detail):
+    def _note(self, entry, window_start, result, detail, manual=False):
         row = {"id": entry["id"], "name": entry["name"], "window": window_start, "result": result,
                "detail": detail, "at": datetime.now().isoformat(timespec="seconds")}
         self.results.append(row)
         level = "ok" if result == "ok" else "warn"
-        log_event(f"Schedule: {entry['name']} {window_start}: {result}" + (f" ({detail})" if detail else ""), level)
+        label = "Record now" if manual else "Schedule"
+        log_event(f"{label}: {entry['name']} {window_start}: {result}" + (f" ({detail})" if detail else ""), level)
 
     def _dry(self):
         return bool(_cfg_get("schedule_dry_run")) or not ENGINE_READY
+
+    def _due_special(self, specials, now):
+        for e in specials:
+            w = schedule_current(e, now)
+            if w and self.done.get(e["id"]) != w[0].isoformat(timespec="minutes"):
+                return e, w
+        return None
 
     def tick(self, now=None):
         now = now or datetime.now()
         data = schedule_load()
         entries = [e for e in data["entries"] if e["enabled"]]
+        specials = [e for e in entries if e.get("kind") == "special"]
+        regulars = [e for e in entries if e.get("kind") != "special"]
+        prune = []
         with self.lock:
             if not self.booted:
                 self.booted = True
@@ -5277,14 +5344,23 @@ class Scheduler:
                         self.done[self.active["id"]] = self.active["start"]
                         self.active = None
                         self._state_save()
+            due = self._due_special(specials, now)
             if self.thread is not None and self.thread.is_alive():
+                if due and self.cur is not None and self.cur.get("kind") != "special" and not self.preempt:
+                    self.preempt = True
+                    log_event(f"Schedule: {due[0]['name']} takes over from {self.cur['name']}; that window resumes after it", "warn")
+                    self.run_abort.set()
                 return
             ids = {e["id"] for e in data["entries"]}
             for k in [k for k in self.done if k not in ids]:
                 del self.done[k]
-            for e in entries:
+            if due:
+                self._start_run(due[0], due[1], now)
+                return
+            covered = any(schedule_current(e, now) for e in specials)
+            for e in regulars:
                 w = schedule_current(e, now)
-                if w and self.done.get(e["id"]) != w[0].isoformat(timespec="minutes"):
+                if w and not covered and self.done.get(e["id"]) != w[0].isoformat(timespec="minutes"):
                     late = (now - w[0]).total_seconds()
                     if late > 60:
                         log_event(f"Schedule: {e['name']} starts {int(late)} s late", "warn")
@@ -5293,48 +5369,102 @@ class Scheduler:
             changed = False
             for e in entries:
                 w = schedule_last_ended(e, now)
-                if w is None or self.done.get(e["id"]) == w[0].isoformat(timespec="minutes"):
+                if w is None:
                     continue
+                key = w[0].isoformat(timespec="minutes")
                 if now - w[1] > MISSED_LOOKBACK:
+                    if e.get("kind") == "special":
+                        prune.append(e["id"])
+                    continue
+                if self.done.get(e["id"]) == key:
+                    if e.get("kind") == "special":
+                        prune.append(e["id"])
+                    continue
+                self.done[e["id"]] = key
+                changed = True
+                if e.get("kind") == "special":
+                    prune.append(e["id"])
+                    self._note(e, key, "missed", "Node Recorder was not running or was busy")
+                    continue
+                if any(_special_window(x)[0] < w[1] and w[0] < _special_window(x)[1] for x in specials):
                     continue
                 try:
                     saved = datetime.fromisoformat(e["rev"]) if e["rev"] else None
                 except ValueError:
                     saved = None
-                self.done[e["id"]] = w[0].isoformat(timespec="minutes")
-                changed = True
                 if saved is not None and w[1] > saved:
-                    self._note(e, w[0].isoformat(timespec="minutes"), "missed", "Node Recorder was not running or was busy")
+                    self._note(e, key, "missed", "Node Recorder was not running or was busy")
             if changed:
                 self._state_save()
+        for eid in prune:
+            _special_remove(eid)
 
-    def _start_run(self, entry, window, now):
+    def start_manual(self, entry, window):
+        with self.lock:
+            if self.cur is not None or (self.thread is not None and self.thread.is_alive()):
+                return False, "A recording is already running."
+            now = datetime.now()
+            data = schedule_load()
+            due = [e["name"] for e in data["entries"] if e["enabled"] and schedule_current(e, now)]
+            if due:
+                return False, f"{due[0]} is due now; record by hand after its window ends."
+            self._start_run(entry, window, now, manual=True)
+        return True, ""
+
+    def _start_run(self, entry, window, now, manual=False):
         end_at = self.clock() + (window[1] - now).total_seconds()
         s_iso = window[0].isoformat(timespec="minutes")
         dry = self._dry()
         with self.lock:
-            self.active = {"id": entry["id"], "start": s_iso}
-            self.cur = {"id": entry["id"], "name": entry["name"], "start": s_iso,
+            abort = threading.Event()
+            self.run_abort = abort
+            self.user_stop = False
+            self.preempt = False
+            if not manual:
+                self.active = {"id": entry["id"], "start": s_iso}
+            self.cur = {"id": entry["id"], "name": entry["name"], "start": s_iso, "manual": manual, "kind": entry.get("kind", "regular"),
                         "end": window[1].isoformat(timespec="minutes"), "started": self.clock(), "file": "", "dry_run": dry}
             self.state = "connecting"
             self._state_save()
         actions = (self.dry if dry else self.real)()
-        self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, actions),
+        self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, actions, abort, manual),
                                        name="sched-run", daemon=True)
         self.thread.start()
 
-    def _run(self, entry, window, s_iso, end_at, actions):
+    def stop_by_hand(self):
+        with self.lock:
+            if self.cur is None:
+                return False, "Nothing is being recorded."
+            if self.run_abort.is_set():
+                return True, "Already stopping."
+            self.user_stop = True
+            name = self.cur["name"]
+            self.run_abort.set()
+        log_event(f"Recording stopped by hand: {name}", "warn")
+        return True, f"Stopping {name}. What was recorded is saved and the link is dropped."
+
+    def _run(self, entry, window, s_iso, end_at, actions, abort, manual):
         try:
-            res = run_sequence(entry, actions, end_at, self.stop, self._set_state, self.clock, self.sleep, window=window)
+            res = run_sequence(entry, actions, end_at, abort, self._set_state, self.clock, self.sleep, window=window)
         except Exception as exc:
             res = {"result": "error", "detail": str(exc), "steps": []}
+        special = entry.get("kind") == "special"
         with self.lock:
-            self._note(entry, s_iso, res["result"], res["detail"])
-            self.done[entry["id"]] = s_iso
-            self.active = None
+            preempted = self.preempt and not self.user_stop and res["result"] == "aborted"
+            if self.user_stop and res["result"] == "aborted":
+                res["detail"] = "stopped by hand"
+            elif preempted:
+                res["detail"] = "a special recording took over; this window resumes after it"
+            self._note(entry, s_iso, res["result"], res["detail"], manual)
+            if not manual:
+                if not preempted:
+                    self.done[entry["id"]] = s_iso
+                self.active = None
+                self._state_save()
             self.cur = None
             self.state = "idle"
-            self._state_save()
+        if special:
+            _special_remove(entry["id"])
 
     def loop(self):
         while not self.stop.wait(1.0):
@@ -5345,6 +5475,7 @@ class Scheduler:
 
     def shutdown(self, wait=45.0):
         self.stop.set()
+        self.run_abort.set()
         t = self.thread
         if t is not None and t.is_alive():
             t.join(wait)
@@ -5383,6 +5514,30 @@ def recorder_status():
     return {"ok": True, "version": VERSION, "state": st["state"], "busy": st["state"] != "idle" and not dry, "dry_run": dry,
             "entry": cur.get("name", ""), "start": cur.get("start", ""), "end": cur.get("end", ""),
             "elapsed": cur.get("elapsed", 0), "file": cur.get("file", "")}
+
+
+MANUAL_MAX_SEC = 4 * 3600
+
+
+def recording_start(body):
+    raw = body.get("entry") if isinstance(body, dict) else None
+    if not isinstance(raw, dict):
+        return {"ok": False, "error": "bad request"}
+    try:
+        entry = schedule_norm_entry({"name": raw.get("name", ""), "target": raw.get("target"), "format": raw.get("format", "ulaw"),
+                                     "start": "00:00", "end": "00:01", "days": list(range(7))})
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    now = datetime.now()
+    ok, msg = SCHED.start_manual(entry, (now, now + timedelta(seconds=MANUAL_MAX_SEC)))
+    if not ok:
+        return {"ok": False, "error": msg}
+    return {"ok": True, "message": f"Recording {entry['name']}. Press Stop recording to end it (it stops by itself after 4 hours)."}
+
+
+def recording_stop():
+    ok, msg = SCHED.stop_by_hand()
+    return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 
 
 TALKER_FAV_PATH = os.environ.get("NODERECORDER_TALKER_FAV", "/etc/asl_dvs/nodetalker_favorites.conf")
@@ -6410,6 +6565,8 @@ async function loadSchedule() {
   schedRows = d.entries;
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
+  $('rec-start').disabled = st.state !== 'idle';
+  $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording';
   $('sch-note').textContent = 'Times are the Pi\'s clock (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
   $('sch-err').textContent = d.error || '';
   $('sch-err').classList.toggle('hidden', !d.error);
@@ -6418,10 +6575,13 @@ async function loadSchedule() {
     tb.innerHTML = '';
     d.entries.forEach((e) => {
       const tr = document.createElement('tr');
-      const cells = [e.name + (e.enabled ? '' : ' (off)'), schedDays(e.days), e.start + '-' + e.end, schedTarget(e.target),
-        e.format === 'pcm' ? 'PCM' : 'u-law', e.now ? 'now' : e.next];
-      cells.forEach((v) => { const td = document.createElement('td'); td.textContent = v || ''; td.title = v || ''; tr.appendChild(td); });
+      const cell = (lines) => { const td = document.createElement('td'); lines.forEach((v, i) => { const x = document.createElement('div'); x.textContent = v || ''; if (i) x.className = 'muted small'; td.appendChild(x); }); tr.appendChild(td); };
+      cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target)]);
+      cell([(e.kind === 'special' ? 'Special ' + e.date : schedDays(e.days)) + ' ' + e.start + '-' + e.end + ' ' + (e.format === 'pcm' ? 'PCM' : 'u-law'), 'Next: ' + (e.now ? 'now' : e.next)]);
+      const tr2 = document.createElement('tr');
       const act = document.createElement('td');
+      act.colSpan = 3;
+      tr2.appendChild(act);
       const btn = (text, fn) => { const b = document.createElement('button'); b.className = 'btn'; b.type = 'button'; b.textContent = text; b.addEventListener('click', fn); act.appendChild(b); };
       btn('Dry run', () => schedDryRun(e.id));
       if (manage) {
@@ -6431,8 +6591,8 @@ async function loadSchedule() {
         btn('Edit', () => schedEdit(e));
         btn('Remove', () => schedRemove(e));
       }
-      tr.appendChild(act);
       tb.appendChild(tr);
+      tb.appendChild(tr2);
     });
   };
   rows('sch-rows', false);
@@ -6606,25 +6766,14 @@ async function saveConfig() {
   CFG_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   setMsg('cfg-msg', await post('/api/config', body));
 }
-const DAY_PRESETS = [['*', 'Every day', [0, 1, 2, 3, 4, 5, 6]], ['1-5', 'Weekdays (Mon-Fri)', [1, 2, 3, 4, 5]], ['0,6', 'Weekends (Sat, Sun)', [0, 6]],
-  ['0', 'Sunday', [0]], ['1', 'Monday', [1]], ['2', 'Tuesday', [2]], ['3', 'Wednesday', [3]], ['4', 'Thursday', [4]], ['5', 'Friday', [5]], ['6', 'Saturday', [6]]];
 const SC_FIELDS = {ASL: {num: 'Node'}, EchoLink: {num: 'Number'}, DMR: {num: 'Talkgroup', net: true}, STFU: {num: 'Talkgroup'}, YSF: {num: 'Reflector'},
   P25: {num: 'Talkgroup'}, NXDN: {num: 'Talkgroup'}, DSTAR: {num: 'Reflector', mod: true}, M17: {num: 'Reflector', mod: true}};
 let schedRows = [], schedSrc = null, schedEditId = '', schedLabel = '';
 function schedDaysValue() {
-  const v = $('sc-days').value, p = DAY_PRESETS.find((x) => x[0] === v);
-  if (p) return p[2];
-  return v.indexOf('custom:') === 0 ? v.slice(7).split(',').map(Number) : [];
+  return Array.from($('sc-days').querySelectorAll('input:checked')).map((c) => Number(c.value));
 }
 function schedSetDays(days) {
-  const sel = $('sc-days'), key = days.join(',');
-  const hit = DAY_PRESETS.find((p) => p[2].join(',') === key);
-  if (hit) { sel.value = hit[0]; return; }
-  Array.from(sel.querySelectorAll('option[data-custom]')).forEach((o) => o.remove());
-  const o = document.createElement('option');
-  o.value = 'custom:' + key; o.dataset.custom = '1'; o.textContent = schedDays(days);
-  sel.appendChild(o);
-  sel.value = o.value;
+  $('sc-days').querySelectorAll('input').forEach((c) => { c.checked = days.indexOf(Number(c.value)) >= 0; });
 }
 function schedFieldsShow() {
   const m = $('sc-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
@@ -6685,6 +6834,7 @@ function schedClear(keepMsg) {
   schedEditId = ''; schedLabel = '';
   $('sc-title').textContent = 'Schedule a recording';
   $('sc-name').value = '';
+  $('sc-special').checked = false; $('sc-date').value = ''; schedKindShow();
   schedSetDays([0, 1, 2, 3, 4, 5, 6]);
   $('sc-start').value = '20:00'; $('sc-end').value = '21:00';
   $('sc-mode').value = 'ASL';
@@ -6694,16 +6844,40 @@ function schedClear(keepMsg) {
   if (!keepMsg) note('sc-msg', '', '');
 }
 function schedEntry(e, on) {
-  return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format};
+  return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format, kind: e.kind || 'regular', date: e.date || ''};
 }
-async function schedSet() {
+function schedKindShow() {
+  const sp = $('sc-special').checked;
+  $('sc-days').style.display = sp ? 'none' : 'flex';
+  $('sc-date-w').classList.toggle('hidden', !sp);
+  if (sp && !$('sc-date').value) {
+    const d = new Date();
+    $('sc-date').value = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+}
+function schedFormEntry() {
   const m = $('sc-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
   const target = {mode: m, num: $('sc-num').value.trim()};
   if (f.net) target.net = $('sc-net').value;
   if (f.mod && $('sc-mod').value.trim()) target.module = $('sc-mod').value.trim().toUpperCase();
   if (schedLabel) target.label = schedLabel;
-  const entry = {name: $('sc-name').value.trim(), enabled: $('sc-enabled').checked, days: schedDaysValue(), start: $('sc-start').value,
-    end: $('sc-end').value, target: target, format: $('sc-format').value};
+  const sp = $('sc-special').checked;
+  return {name: $('sc-name').value.trim(), enabled: $('sc-enabled').checked, days: sp ? [] : schedDaysValue(), start: $('sc-start').value,
+    end: $('sc-end').value, target: target, format: $('sc-format').value, kind: sp ? 'special' : 'regular', date: sp ? $('sc-date').value : ''};
+}
+async function recStart() {
+  $('rec-start').disabled = true;
+  const e = schedFormEntry();
+  setMsg('rec-msg', await post('/api/recording/start', {entry: {name: e.name, target: e.target, format: e.format}}));
+  loadSchedule();
+}
+async function recStop() {
+  $('rec-stop').disabled = true;
+  setMsg('rec-msg', await post('/api/recording/stop', {}));
+  loadSchedule();
+}
+async function schedSet() {
+  const entry = schedFormEntry();
   if (schedEditId) entry.id = schedEditId;
   note('sc-msg', '', 'Saving...');
   const d = await post('/api/schedule/set', {entry: entry});
@@ -6715,6 +6889,7 @@ function schedEdit(e) {
   $('sc-title').textContent = 'Change a recording';
   $('sc-name').value = e.name;
   schedSetDays(e.days);
+  $('sc-special').checked = e.kind === 'special'; $('sc-date').value = e.date || ''; schedKindShow();
   $('sc-start').value = e.start; $('sc-end').value = e.end;
   $('sc-mode').value = e.target.mode;
   schedFieldsShow(); schedPickFill();
@@ -6740,7 +6915,6 @@ async function schedRemove(e) {
   loadSchedule();
 }
 function schedInit() {
-  DAY_PRESETS.forEach((p) => addOption($('sc-days'), p[0], p[1]));
   Object.keys(SC_FIELDS).forEach((m) => addOption($('sc-mode'), m, modeName(m)));
   schedClear();
 }
@@ -6749,6 +6923,9 @@ function initPage() {
   $('logout').addEventListener('click', logout);
   TABS.forEach((t) => $('nav-' + t).addEventListener('click', () => showTab(t)));
   $('rn-add').addEventListener('click', recNodeEnable);
+  $('rec-start').addEventListener('click', recStart);
+  $('sc-special').addEventListener('change', schedKindShow);
+  $('rec-stop').addEventListener('click', recStop);
   $('rn-remove').addEventListener('click', recNodeDisable);
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
@@ -6930,7 +7107,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="card" id="cd-sched-form">
 <h2 id="sc-title">Schedule a recording</h2>
 <div class="row"><label>Name <input type="text" id="sc-name" maxlength="40" placeholder="optional" style="width:150px"></label>
-<label>Day <select id="sc-days"></select></label>
+<label><input type="checkbox" id="sc-special"> Special (one time)</label><label id="sc-date-w" class="hidden">Date <input type="date" id="sc-date"></label><span class="daypick" id="sc-days" role="group" aria-label="Days" style="display:flex;flex-wrap:wrap;gap:4px 12px;align-items:center"><span class="muted small">Days</span><label><input type="checkbox" value="0"> Sun</label><label><input type="checkbox" value="1"> Mon</label><label><input type="checkbox" value="2"> Tue</label><label><input type="checkbox" value="3"> Wed</label><label><input type="checkbox" value="4"> Thu</label><label><input type="checkbox" value="5"> Fri</label><label><input type="checkbox" value="6"> Sat</label></span>
 <label>From <input type="time" id="sc-start" value="20:00"></label>
 <label>To <input type="time" id="sc-end" value="21:00"></label></div>
 <div class="row"><label>Mode <select id="sc-mode"></select></label>
@@ -6958,6 +7135,9 @@ html[data-theme="light"] *{text-shadow:none!important}
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span></div>
 <div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
 <div id="rec-state" class="muted" style="margin-top:8px">Idle.</div>
+<div class="row"><button id="rec-start" class="btn primary" type="button">Record now</button><button id="rec-stop" class="btn danger" type="button" disabled>Stop recording</button></div>
+<p class="muted small">Record now records the target set in the Connect tab's schedule form, until you press Stop. It stops by itself after 4 hours.</p>
+<div id="rec-msg" class="msg"></div>
 </div>
 <div class="card" id="cd-rstore">
 <h2>Storage</h2>
@@ -6973,7 +7153,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="card" id="cd-rsched">
 <h2>Schedule</h2>
 <div id="sch-note" class="muted small"></div>
-<table class="links"><thead><tr><th>Name</th><th>Days</th><th>Window</th><th>Target</th><th>Format</th><th>Next</th><th></th></tr></thead><tbody id="sch-rows"></tbody></table>
+<table class="links"><thead><tr><th>Recording</th><th>When</th><th></th></tr></thead><tbody id="sch-rows"></tbody></table>
 <div id="sch-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
 <div id="sch-err" class="msg err hidden"></div>
 <div id="sch-msg" class="msg"></div>
@@ -7026,7 +7206,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-sched"><span class="fold-t">Schedule</span><span class="fold-sum" id="sum-sched"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-sched">
 <p class="muted small">Add recordings on the Connect tab. Here you can turn an entry off or on, change it, remove it or try it with a dry run. Windows must be at least 2 minutes apart.</p>
-<table class="links"><thead><tr><th>Name</th><th>Days</th><th>Window</th><th>Target</th><th>Format</th><th>Next</th><th></th></tr></thead><tbody id="sl-rows"></tbody></table>
+<table class="links"><thead><tr><th>Recording</th><th>When</th><th></th></tr></thead><tbody id="sl-rows"></tbody></table>
 <div id="sl-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
 <div id="sl-msg" class="msg"></div>
 </div>
@@ -7163,6 +7343,8 @@ _POST_ACTIONS = {
     "/api/convert/install": (encoder_install, ()),
     "/api/schedule/set": (schedule_set, (ValueError,)),
     "/api/schedule/remove": (schedule_remove, ()),
+    "/api/recording/start": (recording_start, (ValueError,)),
+    "/api/recording/stop": (lambda b: recording_stop(), ()),
     "/api/schedule/dryrun": (schedule_dry_run, (ValueError,)),
     "/api/recnode/disable": (lambda b: rec_node_disable(), (OSError,)),
     "/api/disconnect-links": (disconnect_links, ()),
