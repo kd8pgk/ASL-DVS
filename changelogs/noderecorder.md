@@ -1,6 +1,12 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_2_20261104.py`. Newest entries first.
+Current file: `noderecorder_v0_5_3_20261104.py`. Newest entries first.
+
+## 0.5.3 (2026-11-04)
+
+- **Record now and Stop recording on the Record card.** Record now starts a recording by hand, using the target and format set in the Connect tab's schedule form, and it runs until Stop recording is pressed. It stops by itself after 4 hours. Stop recording ends the recording in progress: what was recorded is saved, the link is dropped, and the scheduled window does not start again. Both buttons follow the recorder's state, and only one recording can run at a time. A manual start is refused while a scheduled window is due. New routes `POST /api/recording/start` and `POST /api/recording/stop`.
+- **Removing a scheduled recording that is recording stops it.** Before, Remove was refused while the entry was recording. Now the recording is stopped by hand, saved, and the entry is deleted.
+- This is a release, not a cosmetic build.
 
 ## 0.5.2 (2026-11-04)
 

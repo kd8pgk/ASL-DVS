@@ -30,7 +30,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
 DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -5035,7 +5035,7 @@ def schedule_remove(body):
         if hit is None:
             return {"ok": False, "error": "No such schedule entry."}
         if SCHED.is_running(eid):
-            return {"ok": False, "error": f"{hit['name']} is recording now; remove it when the recording ends."}
+            SCHED.stop_by_hand()
         try:
             schedule_store([x for x in data["entries"] if x["id"] != eid])
         except OSError as exc:
@@ -5137,6 +5137,9 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
     if not ok:
         do("disconnect", actions.disconnect, entry)
         return done("connect_failed", f"connect failed: {msg}")
+    if abort.is_set():
+        do("disconnect", actions.disconnect, entry)
+        return done("aborted", "stopped before the recording started")
     ok, msg, fname = do("start", actions.start, entry, window)
     if not ok:
         do("stop", actions.stop)
@@ -5192,6 +5195,8 @@ class Scheduler:
         self.thread = None
         self.state = "idle"
         self.cur = None
+        self.run_abort = threading.Event()
+        self.user_stop = False
         self.results = deque(maxlen=20)
         self.done = {}
         self.active = None
@@ -5243,12 +5248,13 @@ class Scheduler:
             if self.cur is not None and file is not None:
                 self.cur["file"] = file
 
-    def _note(self, entry, window_start, result, detail):
+    def _note(self, entry, window_start, result, detail, manual=False):
         row = {"id": entry["id"], "name": entry["name"], "window": window_start, "result": result,
                "detail": detail, "at": datetime.now().isoformat(timespec="seconds")}
         self.results.append(row)
         level = "ok" if result == "ok" else "warn"
-        log_event(f"Schedule: {entry['name']} {window_start}: {result}" + (f" ({detail})" if detail else ""), level)
+        label = "Record now" if manual else "Schedule"
+        log_event(f"{label}: {entry['name']} {window_start}: {result}" + (f" ({detail})" if detail else ""), level)
 
     def _dry(self):
         return bool(_cfg_get("schedule_dry_run")) or not ENGINE_READY
@@ -5308,33 +5314,64 @@ class Scheduler:
             if changed:
                 self._state_save()
 
-    def _start_run(self, entry, window, now):
+    def start_manual(self, entry, window):
+        with self.lock:
+            if self.cur is not None or (self.thread is not None and self.thread.is_alive()):
+                return False, "A recording is already running."
+            now = datetime.now()
+            data = schedule_load()
+            due = [e["name"] for e in data["entries"] if e["enabled"] and schedule_current(e, now)]
+            if due:
+                return False, f"{due[0]} is due now; record by hand after its window ends."
+            self._start_run(entry, window, now, manual=True)
+        return True, ""
+
+    def _start_run(self, entry, window, now, manual=False):
         end_at = self.clock() + (window[1] - now).total_seconds()
         s_iso = window[0].isoformat(timespec="minutes")
         dry = self._dry()
         with self.lock:
-            self.active = {"id": entry["id"], "start": s_iso}
-            self.cur = {"id": entry["id"], "name": entry["name"], "start": s_iso,
+            abort = threading.Event()
+            self.run_abort = abort
+            self.user_stop = False
+            if not manual:
+                self.active = {"id": entry["id"], "start": s_iso}
+            self.cur = {"id": entry["id"], "name": entry["name"], "start": s_iso, "manual": manual,
                         "end": window[1].isoformat(timespec="minutes"), "started": self.clock(), "file": "", "dry_run": dry}
             self.state = "connecting"
             self._state_save()
         actions = (self.dry if dry else self.real)()
-        self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, actions),
+        self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, actions, abort, manual),
                                        name="sched-run", daemon=True)
         self.thread.start()
 
-    def _run(self, entry, window, s_iso, end_at, actions):
+    def stop_by_hand(self):
+        with self.lock:
+            if self.cur is None:
+                return False, "Nothing is being recorded."
+            if self.run_abort.is_set():
+                return True, "Already stopping."
+            self.user_stop = True
+            name = self.cur["name"]
+            self.run_abort.set()
+        log_event(f"Recording stopped by hand: {name}", "warn")
+        return True, f"Stopping {name}. What was recorded is saved and the link is dropped."
+
+    def _run(self, entry, window, s_iso, end_at, actions, abort, manual):
         try:
-            res = run_sequence(entry, actions, end_at, self.stop, self._set_state, self.clock, self.sleep, window=window)
+            res = run_sequence(entry, actions, end_at, abort, self._set_state, self.clock, self.sleep, window=window)
         except Exception as exc:
             res = {"result": "error", "detail": str(exc), "steps": []}
         with self.lock:
-            self._note(entry, s_iso, res["result"], res["detail"])
-            self.done[entry["id"]] = s_iso
-            self.active = None
+            if self.user_stop and res["result"] == "aborted":
+                res["detail"] = "stopped by hand"
+            self._note(entry, s_iso, res["result"], res["detail"], manual)
+            if not manual:
+                self.done[entry["id"]] = s_iso
+                self.active = None
+                self._state_save()
             self.cur = None
             self.state = "idle"
-            self._state_save()
 
     def loop(self):
         while not self.stop.wait(1.0):
@@ -5345,6 +5382,7 @@ class Scheduler:
 
     def shutdown(self, wait=45.0):
         self.stop.set()
+        self.run_abort.set()
         t = self.thread
         if t is not None and t.is_alive():
             t.join(wait)
@@ -5383,6 +5421,30 @@ def recorder_status():
     return {"ok": True, "version": VERSION, "state": st["state"], "busy": st["state"] != "idle" and not dry, "dry_run": dry,
             "entry": cur.get("name", ""), "start": cur.get("start", ""), "end": cur.get("end", ""),
             "elapsed": cur.get("elapsed", 0), "file": cur.get("file", "")}
+
+
+MANUAL_MAX_SEC = 4 * 3600
+
+
+def recording_start(body):
+    raw = body.get("entry") if isinstance(body, dict) else None
+    if not isinstance(raw, dict):
+        return {"ok": False, "error": "bad request"}
+    try:
+        entry = schedule_norm_entry({"name": raw.get("name", ""), "target": raw.get("target"), "format": raw.get("format", "ulaw"),
+                                     "start": "00:00", "end": "00:01", "days": list(range(7))})
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    now = datetime.now()
+    ok, msg = SCHED.start_manual(entry, (now, now + timedelta(seconds=MANUAL_MAX_SEC)))
+    if not ok:
+        return {"ok": False, "error": msg}
+    return {"ok": True, "message": f"Recording {entry['name']}. Press Stop recording to end it (it stops by itself after 4 hours)."}
+
+
+def recording_stop():
+    ok, msg = SCHED.stop_by_hand()
+    return {"ok": ok, "message": msg} if ok else {"ok": False, "error": msg}
 
 
 TALKER_FAV_PATH = os.environ.get("NODERECORDER_TALKER_FAV", "/etc/asl_dvs/nodetalker_favorites.conf")
@@ -6410,6 +6472,8 @@ async function loadSchedule() {
   schedRows = d.entries;
   const st = d.status || {}, cur = st.current;
   $('rec-state').textContent = (STATE_TXT[st.state] || st.state) + (cur ? ' ' + cur.name + ' until ' + cur.end.slice(11) + (cur.dry_run ? ' (dry run)' : '') : '');
+  $('rec-start').disabled = st.state !== 'idle';
+  $('rec-stop').disabled = st.state !== 'connecting' && st.state !== 'recording';
   $('sch-note').textContent = 'Times are the Pi\'s clock (now ' + d.now + ').' + (d.dry_run ? ' Dry run: windows are walked through without connecting or recording.' : '');
   $('sch-err').textContent = d.error || '';
   $('sch-err').classList.toggle('hidden', !d.error);
@@ -6696,14 +6760,28 @@ function schedClear(keepMsg) {
 function schedEntry(e, on) {
   return {id: e.id, name: e.name, enabled: on, days: e.days, start: e.start, end: e.end, target: e.target, format: e.format};
 }
-async function schedSet() {
+function schedFormEntry() {
   const m = $('sc-mode').value, f = SC_FIELDS[m] || SC_FIELDS.ASL;
   const target = {mode: m, num: $('sc-num').value.trim()};
   if (f.net) target.net = $('sc-net').value;
   if (f.mod && $('sc-mod').value.trim()) target.module = $('sc-mod').value.trim().toUpperCase();
   if (schedLabel) target.label = schedLabel;
-  const entry = {name: $('sc-name').value.trim(), enabled: $('sc-enabled').checked, days: schedDaysValue(), start: $('sc-start').value,
+  return {name: $('sc-name').value.trim(), enabled: $('sc-enabled').checked, days: schedDaysValue(), start: $('sc-start').value,
     end: $('sc-end').value, target: target, format: $('sc-format').value};
+}
+async function recStart() {
+  $('rec-start').disabled = true;
+  const e = schedFormEntry();
+  setMsg('rec-msg', await post('/api/recording/start', {entry: {name: e.name, target: e.target, format: e.format}}));
+  loadSchedule();
+}
+async function recStop() {
+  $('rec-stop').disabled = true;
+  setMsg('rec-msg', await post('/api/recording/stop', {}));
+  loadSchedule();
+}
+async function schedSet() {
+  const entry = schedFormEntry();
   if (schedEditId) entry.id = schedEditId;
   note('sc-msg', '', 'Saving...');
   const d = await post('/api/schedule/set', {entry: entry});
@@ -6749,6 +6827,8 @@ function initPage() {
   $('logout').addEventListener('click', logout);
   TABS.forEach((t) => $('nav-' + t).addEventListener('click', () => showTab(t)));
   $('rn-add').addEventListener('click', recNodeEnable);
+  $('rec-start').addEventListener('click', recStart);
+  $('rec-stop').addEventListener('click', recStop);
   $('rn-remove').addEventListener('click', recNodeDisable);
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
@@ -6958,6 +7038,9 @@ html[data-theme="light"] *{text-shadow:none!important}
 <span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span></div>
 <div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
 <div id="rec-state" class="muted" style="margin-top:8px">Idle.</div>
+<div class="row"><button id="rec-start" class="btn primary" type="button">Record now</button><button id="rec-stop" class="btn danger" type="button" disabled>Stop recording</button></div>
+<p class="muted small">Record now records the target set in the Connect tab's schedule form, until you press Stop. It stops by itself after 4 hours.</p>
+<div id="rec-msg" class="msg"></div>
 </div>
 <div class="card" id="cd-rstore">
 <h2>Storage</h2>
@@ -7163,6 +7246,8 @@ _POST_ACTIONS = {
     "/api/convert/install": (encoder_install, ()),
     "/api/schedule/set": (schedule_set, (ValueError,)),
     "/api/schedule/remove": (schedule_remove, ()),
+    "/api/recording/start": (recording_start, (ValueError,)),
+    "/api/recording/stop": (lambda b: recording_stop(), ()),
     "/api/schedule/dryrun": (schedule_dry_run, (ValueError,)),
     "/api/recnode/disable": (lambda b: rec_node_disable(), (OSError,)),
     "/api/disconnect-links": (disconnect_links, ()),
