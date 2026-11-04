@@ -33,8 +33,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.11"
-DATE_STR = "2026-11-03"
+VERSION = "0.10.12"
+DATE_STR = "2026-11-04"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -255,6 +255,7 @@ DEFAULT_CONFIG = {
     "rx_hpf": True,
     "rx_agc": True,
     "rx_gate": 1,
+    "rx_notch_hz": 0.0,
     "ptt_mode": "hold",
     "ptt_guard_sec": 60,
     "ptt_rx_gap": False,
@@ -335,6 +336,18 @@ def _norm_gain(value):
     return v
 
 
+def _norm_notch(value):
+    try:
+        v = round(float(str(value).strip()), 1)
+    except (OverflowError, ValueError):
+        raise ValueError("CTCSS notch must be 0 (off) or 60 to 300 Hz")
+    if v == 0:
+        return 0.0
+    if not 60.0 <= v <= 300.0:
+        raise ValueError("CTCSS notch must be 0 (off) or 60 to 300 Hz")
+    return v
+
+
 _NORMALIZERS = {
     "port": _norm_port,
     "udp_port": _norm_port,
@@ -361,6 +374,7 @@ _NORMALIZERS = {
     "rx_hpf": _parse_bool,
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
+    "rx_notch_hz": _norm_notch,
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -923,6 +937,16 @@ def _hp_section(q, fc=300.0, fs=8000.0):
 
 
 HP_SECTIONS = (_hp_section(0.5412), _hp_section(1.3066))
+NOTCH_Q = 25.0
+NOTCH_FS = 8000.0
+_notch_cache = {}
+
+
+def _notch_section(hz, q=NOTCH_Q, fs=NOTCH_FS):
+    w = 2 * math.pi * hz / fs
+    c, al = math.cos(w), math.sin(w) / (2 * q)
+    a0 = 1 + al
+    return (1 / a0, -2 * c / a0, 1 / a0, -2 * c / a0, (1 - al) / a0)
 
 
 def _dot(a, b):
@@ -950,6 +974,7 @@ class RxClean:
 
     def reset(self):
         self.z = (0.0,) * 8
+        self.nz = (0.0,) * 4
         self.gain_db = 0.0
         self.level_s = None
         self.fast = 0
@@ -978,12 +1003,31 @@ class RxClean:
                 p2, p1, y2, y1 = p1, w, y1, y
                 ys.append(y)
             self.z = (x1, x2, w1, w2, p1, p2, y1, y2)
+        hz = _cfg_get("rx_notch_hz")
+        if hz:
+            ys = self._notch(ys, hz)
         n = len(ys)
         ss = _dot(ys, ys)
         r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
         self.r2 = _dot(ys[2:], ys[:-2]) / ss if ss > 0 else 1.0
         db = 10.0 * math.log10(max(ss / n / 1073741824.0, 1e-30)) if ss > 0 else -120.0
         return ys, db, r1
+
+    def _notch(self, ys, hz):
+        sec = _notch_cache.get(hz)
+        if sec is None:
+            if len(_notch_cache) > 8:
+                _notch_cache.clear()
+            sec = _notch_cache[hz] = _notch_section(hz)
+        b0, b1, b2, a1, a2 = sec
+        x1, x2, y1, y2 = self.nz
+        out = []
+        for v in ys:
+            y = b0 * v + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            x2, x1, y2, y1 = x1, v, y1, y
+            out.append(y)
+        self.nz = (x1, x2, y1, y2)
+        return out
 
     def _agc(self, db, speechy):
         if not speechy:
@@ -1048,14 +1092,16 @@ class RxClean:
     def process(self, frame, user_db, raw_db=0.0):
         t0 = time.perf_counter()
         hpf, agc, gate = _cfg_get("rx_hpf"), _cfg_get("rx_agc"), _cfg_get("rx_gate")
-        if not (hpf or agc or gate):
-            if self.delay or any(self.z) or self.gain_db:
+        notch = _cfg_get("rx_notch_hz")
+        if not (hpf or agc or gate or notch):
+            if self.delay or any(self.z) or any(self.nz) or self.gain_db:
                 self.reset()
             out = apply_gain(frame, user_db)
             self._account(t0)
             return out
         if raw_db < RX_QUIET_DB:
             self.z = (0.0,) * 8
+            self.nz = (0.0,) * 4
             self.idle += 1
             if not gate:
                 self.delay.clear()
@@ -11348,6 +11394,7 @@ async function loadConfig() {
   $('rx-hpf').checked = !!d.config.rx_hpf;
   $('rx-agc').checked = !!d.config.rx_agc;
   $('rx-gate').value = String(d.config.rx_gate);
+  $('rx-notch').value = String(d.config.rx_notch_hz || 0);
   tuneUi();
   $('tune-sysmon').classList.toggle('hidden', !sysmonPort);
   if (sysmonPort) $('tune-sysmon-link').href = 'http://' + location.hostname + ':' + sysmonPort + '/';
@@ -11360,6 +11407,7 @@ function tuneUi() {
   if ($('rx-hpf').checked) clean.push('300 Hz cut');
   if ($('rx-agc').checked) clean.push('auto level');
   if ($('rx-gate').value !== '0') clean.push('gate ' + ($('rx-gate').value === '2' ? 'strong' : 'light'));
+  if (Number($('rx-notch').value) > 0) clean.push('CTCSS notch ' + Number($('rx-notch').value).toFixed(1) + ' Hz');
   sum('lvl', [on ? 'TX ' + fmtGain(Number($('tune-tx').value)) + ' · RX ' + fmtGain(Number($('tune-rx').value)) : '']
     .concat(clean).filter((x) => x).join(' · ') || 'Off (audio unchanged)');
   ['tune-tx', 'tune-rx', 'tune-jit', 'tune-txbuf'].forEach((id) => { $(id).disabled = !on; });
@@ -11372,7 +11420,7 @@ function tuneUi() {
 async function saveTune(msgId = 'tune-msg') {
   const body = {tune_enabled: $('tune-on').checked, tx_gain_db: $('tune-tx').value,
     rx_gain_db: $('tune-rx').value, jitter_ms: $('tune-jit').value, tx_buffer_ms: $('tune-txbuf').value,
-    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value};
+    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value, rx_notch_hz: $('rx-notch').value};
   AUDIO_NUM.forEach((k) => { body[k] = $('cfg-' + k).value; });
   AUDIO_BOOL.forEach((k) => { body[k] = $('cfg-' + k).checked; });
   AUDIO_TXT.forEach((k) => { body[k] = $('cfg-' + k).value.trim(); });
@@ -11469,7 +11517,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('setup-save').addEventListener('click', setupSave);
   $('setup-restart').addEventListener('click', () => astRestart('setup-msg'));
   $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
-  ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  ['tune-on', 'tune-tx', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate', 'rx-notch'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('tune-on-rx').addEventListener('input', () => { $('tune-on').checked = $('tune-on-rx').checked; tuneUi(); });
   $('tune-save').addEventListener('click', () => saveTune('tune-msg'));
   loadMicUi();
@@ -11891,6 +11939,8 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><label><input type="checkbox" id="rx-agc"> Automatic level (brings quiet stations up, loud ones down a little)</label></div>
 <div class="row"><label for="rx-gate" style="min-width:130px">Squelch-tail gate</label>
 <select id="rx-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong (can clip hissy speech)</option></select></div>
+<div class="row"><label for="rx-notch" style="min-width:130px">CTCSS notch (Hz)</label>
+<input type="number" id="rx-notch" min="0" max="300" step="0.1" style="width:90px"> <span class="small muted">0 = off. Enter the tone your radio sends, for example 100.0. Only that tone is removed; voice is kept.</span></div>
 <table><tr><th>Processing load</th><td id="rx-load" class="mono">-</td></tr></table>
 <h3 style="margin:14px 0 4px">Receive health: the network, this Pi or the phone?</h3>
 <p class="muted small">Looks at the last few minutes of received audio and says where any loss starts: outside the LAN, on the Pi, or between the Pi and the listener. It only measures; it changes no setting.</p>
