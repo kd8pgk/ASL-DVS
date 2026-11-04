@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.14.0"
+VERSION      = "6.15.0"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -4427,10 +4427,56 @@ body.tab-edit #zone-content{
   </div>
 
   <div id="panel-console" class="tab-panel">
-    <div class="ph-ro">A live Asterisk console (<code>asterisk -rvvv</code>) in the browser. Only the Asterisk console can run here, never a shell: the <b>!</b> key is blocked. Home network only, root password every time you open it.</div>
+    <div class="ph-ro">Quick tasks run fixed Asterisk commands from a list, with no shell. Log triage, snapshots and the live console sit on this tab too. Home network only; a root password is needed to open a console or a follow terminal.</div>
     <div class="s3-card">
       <div class="s3-card-hdr">
-        <span class="s3-card-title">Asterisk console</span>
+        <span class="s3-card-title">Quick tasks</span>
+        <span class="s3-card-meta" id="con-cmd-meta">results show below</span>
+        <div style="display:flex;gap:.3rem;margin-left:auto;align-items:center">
+          <label class="ph-note" for="con-node">Node</label>
+          <select id="con-node" class="con-select"></select>
+        </div>
+      </div>
+      <div id="con-btns"><div class="stub-panel" style="min-height:40px">Loading…</div></div>
+    </div>
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">Results</span>
+        <span class="s3-card-meta" id="con-res-meta">none yet</span>
+        <div style="display:flex;gap:.3rem;margin-left:auto">
+          <button class="btn btn-muted btn-sm" onclick="conCopyAll()">⎘ Copy all</button>
+          <button class="btn btn-muted btn-sm" onclick="conResClear()">Clear</button>
+        </div>
+      </div>
+      <div id="con-results"></div>
+      <div class="ph-sub" style="margin-top:.4rem">Recent runs (this node, newest first)</div>
+      <div id="con-hist" class="ph-note"></div>
+    </div>
+
+    <div class="s3-card" id="tri-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">Log triage</span>
+        <span class="s3-card-meta" id="tri-meta">reads the Asterisk log</span>
+        <div style="display:flex;gap:.3rem;margin-left:auto;align-items:center;flex-wrap:wrap">
+          <label class="ph-note" for="tri-src">From</label>
+          <select id="tri-src" class="con-select">
+            <option value="file">Log file</option>
+            <option value="journal">Journal</option>
+          </select>
+          <label class="ph-note" for="tri-win">Last</label>
+          <select id="tri-win" class="con-select">
+            <option value="15">15 min</option>
+            <option value="60" selected>1 hour</option>
+            <option value="1440">24 hours</option>
+          </select>
+          <button class="btn btn-sm" onclick="triRun()">Scan</button>
+          <button class="btn btn-muted btn-sm" onclick="triCopy()">&#9112; Copy</button>
+        </div>
+      </div>
+      <div id="tri-body"><div class="stub-panel" style="min-height:40px">Press Scan to read the last hour of the log. Lines are grouped, and known problems get a suggested fix.</div></div>
+    </div>
+<div class="s3-card-hdr">
+        <span class="s3-card-title">Live console</span>
         <span class="reg-card-status" id="con-status">—</span>
         <span class="s3-card-meta" id="con-meta">—</span>
         <div style="display:flex;gap:.3rem;margin-left:auto;flex-wrap:wrap" id="con-hdr-btns">
@@ -4441,7 +4487,12 @@ body.tab-edit #zone-content{
         </div>
       </div>
       <div id="con-why" class="ph-note" style="display:none"></div>
-      <div id="con-auth" class="con-auth" style="display:none">
+      <div class="con-tools" id="con-follow-row">
+          <span class="ph-note">Follow in a terminal (read only, root password):</span>
+          <button class="btn btn-muted btn-sm" onclick="conAskPw('task:follow_ast')">Asterisk journal</button>
+          <button class="btn btn-muted btn-sm" onclick="conAskPw('task:follow_file')">Asterisk log file</button>
+        </div>
+        <div id="con-auth" class="con-auth" style="display:none">
         <span id="con-auth-lbl">Root password</span>
         <input type="password" id="con-pw" autocomplete="current-password" onkeydown="if(event.key==='Enter')conPwGo()">
         <button class="btn btn-sm" id="con-pw-go" onclick="conPwGo()">Open</button>
@@ -4456,18 +4507,26 @@ body.tab-edit #zone-content{
       <div id="con-screen" class="con-screen" style="display:none"></div>
     </div>
     <div class="s3-card">
+      
+    <div class="s3-card" id="snap-card">
       <div class="s3-card-hdr">
-        <span class="s3-card-title">Commands</span>
-        <span class="s3-card-meta" id="con-cmd-meta">results show below</span>
-        <div style="display:flex;gap:.3rem;margin-left:auto;align-items:center">
-          <label class="ph-note" for="con-node">Node</label>
-          <select id="con-node" class="con-select"></select>
+        <span class="s3-card-title">Snapshots</span>
+        <span class="s3-card-meta" id="snap-meta">none yet</span>
+        <div style="display:flex;gap:.3rem;margin-left:auto;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-sm" onclick="snapTake('Manual snapshot', (conEl('con-node') || {}).value || '', false)">Take snapshot</button>
         </div>
       </div>
-      <div id="con-btns"><div class="stub-panel" style="min-height:40px">Loading…</div></div>
+      <div class="con-tools" style="display:flex;gap:.3rem;align-items:center;flex-wrap:wrap">
+        <label class="ph-note" for="snap-a">A</label>
+        <select id="snap-a" class="con-select"></select>
+        <label class="ph-note" for="snap-b">B</label>
+        <select id="snap-b" class="con-select"></select>
+        <button class="btn btn-muted btn-sm" onclick="snapCompare()">Compare</button>
+      </div>
+      <div id="snap-list"></div>
+      <pre id="snap-diff" style="display:none;max-height:320px;overflow:auto;font-family:var(--mono);font-size:var(--fs-xs);white-space:pre-wrap"></pre>
     </div>
-    <div class="s3-card">
-      <div class="s3-card-hdr">
+<div class="s3-card-hdr">
         <span class="s3-card-title">Troubleshooting</span>
         <span class="s3-card-meta" id="ts-meta">read-only checks · results show below</span>
         <div style="display:flex;gap:.3rem;margin-left:auto" id="ts-hdr-btns"></div>
@@ -4475,7 +4534,8 @@ body.tab-edit #zone-content{
       <div id="ts-btns"><div class="stub-panel" style="min-height:40px">Loading…</div></div>
     </div>
     <div class="s3-card" id="con-dbg-card" style="display:none">
-      <div class="s3-card-hdr">
+      <details class="con-adv" style="margin:.4rem 0 0"><summary class="ph-note" style="cursor:pointer">Advanced: debug summary (audio and SIP packets)</summary>
+<div class="s3-card-hdr">
         <span class="s3-card-title">Debug summary</span>
         <span class="reg-card-status" id="con-dbg-status">—</span>
         <span class="s3-card-meta" id="con-dbg-meta">—</span>
@@ -4494,9 +4554,10 @@ body.tab-edit #zone-content{
       </div>
     </div>
     <div class="s3-card">
-      <div class="s3-card-hdr">
-        <span class="s3-card-title">Results</span>
-        <span class="s3-card-meta" id="con-res-meta">none yet</span>
+      </details>
+  </div>
+
+n class="s3-card-meta" id="con-res-meta">none yet</span>
         <div style="display:flex;gap:.3rem;margin-left:auto">
           <button class="btn btn-muted btn-sm" onclick="conCopyAll()">⎘ Copy all</button>
           <button class="btn btn-muted btn-sm" onclick="conResClear()">Clear</button>
@@ -5179,6 +5240,8 @@ window.loadTab_console = function() {
   conRefresh();
   if (!_conCat) conLoadCatalog();
   if (!_tsCat) tsLoadCatalog();
+  snapList();
+  conHistLoad();
 };
 window.conAskPw = function(mode) {
   _con.mode = mode;
@@ -5194,7 +5257,9 @@ window.conPwGo = async function() {
   const pw = conEl("con-pw").value, err = conEl("con-err");
   if (!pw) { err.textContent = "Enter the root password."; return; }
   const go = conEl("con-pw-go"); go.disabled = true; err.textContent = "";
-  const d = await api(_con.mode === "enable" ? "/api/console/enable" : "/api/console/open", "POST", {password: pw});
+  const isTask = _con.mode.indexOf("task:") === 0;
+  const d = await api(isTask ? "/api/console/task/term" : (_con.mode === "enable" ? "/api/console/enable" : "/api/console/open"), "POST",
+                      isTask ? {id: _con.mode.slice(5), password: pw} : {password: pw});
   conEl("con-pw").value = ""; go.disabled = false;
   if (!d || !d.ok) { err.textContent = (d && d.message) || "Refused."; return; }
   conShow("con-auth", false);
@@ -5230,6 +5295,169 @@ window.conCopy = async function() {
 };
 window.conClear = function() { if (_con.xt) _con.xt.clear(); };
 window.addEventListener("resize", () => conFit());
+
+const _CT_FAV_KEY = "sysmon.console.favs";
+function ctFavs() {
+  try { const v = JSON.parse(localStorage.getItem(_CT_FAV_KEY) || "[]"); return Array.isArray(v) ? v : []; }
+  catch (e) { return []; }
+}
+function ctFavSave(list) { try { localStorage.setItem(_CT_FAV_KEY, JSON.stringify(list)); } catch (e) {} }
+function ctFavToggle(id) {
+  const list = ctFavs();
+  const i = list.indexOf(id);
+  if (i >= 0) list.splice(i, 1); else list.push(id);
+  ctFavSave(list);
+  if (_conCat) ctPaintCatalog(_conCat);
+  conBtnsState();
+}
+function ctTaskBtn(b) {
+  const cell = phEl("span", "con-cell");
+  cell.style.display = "inline-flex"; cell.style.gap = ".2rem"; cell.style.alignItems = "center";
+  const btn = phEl("button", "btn btn-muted btn-sm" + (b.kind === "act" ? " con-btn-act" : "") + (b.kind === "live" ? " con-btn-live" : ""), b.label);
+  btn.title = b.kind === "act" ? "Changes something -- asks first, and takes a snapshot before and after" : (b.kind === "live" ? "Needs the live console open" : "");
+  btn.onclick = () => conRun(b, btn);
+  btn.dataset.kind = b.kind;
+  cell.appendChild(btn);
+  const on = ctFavs().indexOf(b.id) >= 0;
+  const star = phEl("button", "btn btn-muted btn-sm con-star", on ? "★" : "☆");
+  star.title = on ? "Remove from favourites" : "Add to favourites";
+  star.onclick = () => ctFavToggle(b.id);
+  cell.appendChild(star);
+  return cell;
+}
+function ctPaintCatalog(d) {
+  const box = conEl("con-btns"); if (!box) return;
+  const all = {};
+  d.groups.forEach(g => g.buttons.forEach(b => { all[b.id] = b; }));
+  box.innerHTML = "";
+  const favs = ctFavs().filter(id => all[id]);
+  if (favs.length) {
+    const wrap = phEl("div", "con-grp");
+    wrap.appendChild(phEl("div", "con-grp-name", "Favourites"));
+    const row = phEl("div", "con-grp-btns");
+    favs.forEach(id => row.appendChild(ctTaskBtn(all[id])));
+    wrap.appendChild(row);
+    box.appendChild(wrap);
+  }
+  d.groups.forEach(g => {
+    const wrap = phEl("div", "con-grp");
+    wrap.appendChild(phEl("div", "con-grp-name", g.name));
+    const row = phEl("div", "con-grp-btns");
+    g.buttons.forEach(b => row.appendChild(ctTaskBtn(b)));
+    wrap.appendChild(row);
+    box.appendChild(wrap);
+  });
+}
+
+let _triLast = null;
+window.triRun = async function() {
+  const src = (conEl("tri-src") || {}).value || "file";
+  const win = (conEl("tri-win") || {}).value || "60";
+  const meta = conEl("tri-meta"), body = conEl("tri-body");
+  if (meta) meta.textContent = "reading...";
+  const d = await api("/api/console/triage?source=" + encodeURIComponent(src) + "&window=" + encodeURIComponent(win));
+  if (!d || !d.ok) {
+    _triLast = null;
+    if (meta) meta.textContent = "nothing read";
+    if (body) { body.innerHTML = ""; body.appendChild(phEl("div", "stub-panel", (d && d.message) || "Could not read the log")); }
+    return;
+  }
+  _triLast = d;
+  triPaint(d);
+};
+function triPaint(d) {
+  const meta = conEl("tri-meta"), body = conEl("tri-body");
+  if (!body) return;
+  const t = d.totals || {};
+  if (meta) meta.textContent = (t.errors || 0) + " errors · " + (t.warnings || 0) + " warnings · " + d.lines + " lines · " + d.source;
+  body.innerHTML = "";
+  if (!d.rows.length) { body.appendChild(phEl("div", "stub-panel", "Nothing in the log for this window.")); return; }
+  const tb = phEl("table", "ph-tbl");
+  const h = phEl("tr");
+  ["Count", "Level", "Last seen", "What it means", "Suggested fix", ""].forEach(x => h.appendChild(phEl("th", "", x)));
+  tb.appendChild(h);
+  d.rows.forEach(r => {
+    const tr = phEl("tr");
+    tr.appendChild(phEl("td", "", String(r.count)));
+    tr.appendChild(phEl("td", "con-c-" + (r.level === "ERROR" ? "fail" : r.level === "WARNING" ? "warn" : "info"), r.level || "-"));
+    tr.appendChild(phEl("td", "", r.last || r.first || "-"));
+    const what = phEl("td");
+    what.appendChild(phEl("div", "", r.pattern ? r.pattern.title + ": " + r.pattern.meaning : "Not a known pattern"));
+    const det = phEl("details");
+    det.appendChild(phEl("summary", "ph-note", "Sample line"));
+    det.appendChild(phEl("pre", "", (r.component ? r.component + ": " : "") + r.sample));
+    what.appendChild(det);
+    tr.appendChild(what);
+    tr.appendChild(phEl("td", "", r.pattern ? r.pattern.fix : ""));
+    const act = phEl("td");
+    if (r.pattern) {
+      const b = phEl("button", "btn btn-muted btn-sm", "Go to " + r.pattern.tab);
+      b.onclick = () => switchTab(r.pattern.tab, "0,255,229");
+      act.appendChild(b);
+    }
+    tr.appendChild(act);
+    tb.appendChild(tr);
+  });
+  body.appendChild(tb);
+}
+window.triCopy = async function() {
+  if (!_triLast || !_triLast.rows.length) { toast("Scan the log first", "err"); return; }
+  const out = ["sysmon v__VERSION__ · Log triage · " + _triLast.source, ""];
+  _triLast.rows.forEach(r => out.push(r.count + "x  " + (r.level || "-") + "  " + (r.first || "?") + " -> " + (r.last || "?") + "  " +
+    (r.pattern ? r.pattern.title + " -- fix: " + r.pattern.fix : "(not a known pattern)") + "\n    " +
+    (r.component ? r.component + ": " : "") + r.sample));
+  await _copyWithVerify(out.join("\n") + "\n");
+};
+
+window.snapTake = async function(label, node, quiet) {
+  const d = await api("/api/console/snapshot", "POST", {label: label, node: node || ""});
+  if (!d || !d.ok) { if (!quiet) toast((d && d.message) || "Snapshot failed", "err"); return null; }
+  if (!quiet) toast("Snapshot saved (" + d.count + " checks)", "ok");
+  snapList();
+  return d;
+};
+window.snapList = async function() {
+  const d = await api("/api/console/snapshots");
+  const box = conEl("snap-list"); if (!box) return;
+  if (!d || !d.ok) { box.innerHTML = '<div class="stub-panel">Could not load snapshots</div>'; return; }
+  const meta = conEl("snap-meta");
+  if (meta) meta.textContent = d.snaps.length ? d.snaps.length + " saved" : "none yet";
+  const a = conEl("snap-a"), b = conEl("snap-b");
+  const prevA = a ? a.value : "", prevB = b ? b.value : "";
+  [a, b].forEach(sel => {
+    if (!sel) return;
+    sel.innerHTML = "";
+    d.snaps.forEach(s => { const o = document.createElement("option"); o.value = s.id; o.textContent = s.time + " · " + s.label; sel.appendChild(o); });
+  });
+  if (a && prevA) a.value = prevA;
+  if (b && prevB) b.value = prevB;
+  if (a && b && !prevA && !prevB && d.snaps.length > 1) { a.selectedIndex = 1; b.selectedIndex = 0; }
+  box.innerHTML = "";
+  box.style.padding = ".2rem .6rem";
+  d.snaps.forEach(s => {
+    const row = phEl("div", "con-res-hdr");
+    row.appendChild(phEl("span", "con-res-title", s.label));
+    row.appendChild(phEl("span", "con-res-cmd", s.time + " · " + s.count + " checks" + (s.node ? " · " + s.node : "")));
+    box.appendChild(row);
+  });
+};
+window.snapCompare = async function() {
+  const a = (conEl("snap-a") || {}).value, b = (conEl("snap-b") || {}).value;
+  const pre = conEl("snap-diff");
+  if (!a || !b) { toast("Take two snapshots first", "err"); return; }
+  const d = await api("/api/console/snapdiff?a=" + encodeURIComponent(a) + "&b=" + encodeURIComponent(b));
+  if (!d || !d.ok) { toast((d && d.message) || "Compare failed", "err"); return; }
+  if (pre) { pre.style.display = ""; pre.textContent = d.text || "No differences"; }
+};
+
+window.conHistLoad = async function() {
+  const box = conEl("con-hist"); if (!box) return;
+  const d = await api("/api/console/history");
+  box.innerHTML = "";
+  if (!d || !d.ok || !d.items.length) { box.textContent = "No runs yet."; return; }
+  d.items.forEach(i => box.appendChild(phEl("div", "", i.time + "  " + i.title + (i.node ? " · " + i.node : "") + "  $ " + i.cmd)));
+};
+
 
 function stopTabPolling(tab) {
   let cleared = false;
@@ -12183,28 +12411,14 @@ async function conLoadCatalog() {
   if (sel && !sel.options.length) {
     (d.nodes || []).forEach(n => { const o = document.createElement("option"); o.value = n; o.textContent = n; sel.appendChild(o); });
   }
-  box.innerHTML = "";
-  d.groups.forEach(g => {
-    const wrap = phEl("div", "con-grp");
-    wrap.appendChild(phEl("div", "con-grp-name", g.name));
-    const row = phEl("div", "con-grp-btns");
-    g.buttons.forEach(b => {
-      const btn = phEl("button", "btn btn-muted btn-sm" + (b.kind === "act" ? " con-btn-act" : "") + (b.kind === "live" ? " con-btn-live" : ""), b.label);
-      btn.title = b.kind === "act" ? "Changes something -- asks first" : (b.kind === "live" ? "Needs the live console open" : "");
-      btn.onclick = () => conRun(b, btn);
-      btn.dataset.kind = b.kind;
-      row.appendChild(btn);
-    });
-    wrap.appendChild(row);
-    box.appendChild(wrap);
-  });
+  ctPaintCatalog(d);
   conBtnsState();
 }
 
 function conBtnsState() {
   const st = _con.st || {};
   const astUp = st.asterisk !== false;
-  document.querySelectorAll("#con-btns button").forEach(btn => {
+  document.querySelectorAll("#con-btns button:not(.con-star)").forEach(btn => {
     const live = btn.dataset.kind === "live";
     if (btn.dataset.kind === "sys") { btn.disabled = false; btn.title = "Reads the Pi directly -- works even if Asterisk is down"; return; }
     btn.disabled = !astUp || (live && !_con.ws);
@@ -12218,16 +12432,20 @@ function conBtnsState() {
 async function conRun(b, btn) {
   const node = b.needs_node ? (conEl("con-node") || {}).value : "";
   if (b.needs_node && !node) { toast("Pick a node first", "err"); return; }
-  if (b.kind === "act" && !await confirm("Are you sure? " + b.label + (node ? " on " + node : "") + ".")) return;
+  if (b.kind === "act" && !await confirm("Are you sure? " + b.label + (node ? " on " + node : "") + ". A snapshot is taken before and after.")) return;
   if (b.kind === "live" && !_con.ws) { toast("Open the live console first -- debug output only shows there", "err"); return; }
   btn.disabled = true;
+  if (b.kind === "act") await snapTake("before: " + b.label, node, true);
   const d = await api("/api/console/run", "POST", {id: b.id, node: node, confirm: b.kind === "act"});
   btn.disabled = false;
   if (!d || !d.ok) { toast((d && d.message) || "Command failed", "err"); return; }
+  if (b.kind === "act") await snapTake("after: " + b.label, node, true);
   if (typeof conDebugStarted === "function") conDebugStarted(b.id);
+  if (b.id === "verbose3") toast("Verbose 3 for " + Math.round(((_conCat && _conCat.debug_sec) || 300) / 60) + " min, then back to 0", "ok");
   _conRes.unshift(d);
   if (_conRes.length > _CON_RES_MAX) _conRes.pop();
   conResPaint();
+  conHistLoad();
 }
 
 function conSumText(r) {
@@ -27282,21 +27500,24 @@ def _con_switch(on: bool, ip: str) -> "tuple[bool, str]":
     _log(f"console: switched {'ON' if on else 'OFF'} from the page by {ip}")
     return True, f"Console switched {'on' if on else 'off'}."
 
-def _con_issue_ticket(session_token: str) -> str:
+def _con_issue_ticket(session_token: str, argv=None) -> str:
     now = time.time()
     tk = secrets.token_urlsafe(24)
     with _CON_LOCK:
         for k in [k for k, v in _CON_TICKETS.items() if v["exp"] < now]:
             del _CON_TICKETS[k]
-        _CON_TICKETS[tk] = {"sess": _con_sess_key(session_token), "exp": now + _CON_TICKET_TTL}
+        _CON_TICKETS[tk] = {"sess": _con_sess_key(session_token), "exp": now + _CON_TICKET_TTL,
+                            "argv": list(argv or _CON_ARGV)}
     return tk
 
-def _con_take_ticket(ticket: str, session_token: str) -> bool:
+def _con_take_ticket(ticket: str, session_token: str):
     with _CON_LOCK:
         v = _CON_TICKETS.pop(ticket, None) if ticket else None
     if v is None or v["exp"] < time.time():
-        return False
-    return hmac.compare_digest(v["sess"], _con_sess_key(session_token))
+        return None
+    if not hmac.compare_digest(v["sess"], _con_sess_key(session_token)):
+        return None
+    return list(v.get("argv") or _CON_ARGV)
 
 _WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -27358,8 +27579,9 @@ def _con_prepare_home() -> None:
     except OSError:
         pass
 
-def _con_spawn() -> "tuple[subprocess.Popen, int]":
+def _con_spawn(argv=None) -> "tuple[subprocess.Popen, int]":
     _con_prepare_home()
+    argv_ = list(argv or _CON_ARGV)
     master, slave = os.openpty()
     _con_set_size(master, 80, 24)
     env = {"PATH": os.environ.get("PATH", "/usr/sbin:/usr/bin:/sbin:/bin"), "HOME": str(_CON_HOME),
@@ -27367,10 +27589,10 @@ def _con_spawn() -> "tuple[subprocess.Popen, int]":
     setsid = shutil.which("setsid")
     try:
         if setsid:
-            proc = subprocess.Popen([setsid, "-c"] + _CON_ARGV, stdin=slave, stdout=slave, stderr=slave,
+            proc = subprocess.Popen([setsid, "-c"] + argv_, stdin=slave, stdout=slave, stderr=slave,
                                     close_fds=True, env=env, cwd=str(_CON_HOME))
         else:
-            proc = subprocess.Popen(_CON_ARGV, stdin=slave, stdout=slave, stderr=slave,
+            proc = subprocess.Popen(argv_, stdin=slave, stdout=slave, stderr=slave,
                                     close_fds=True, env=env, cwd=str(_CON_HOME), start_new_session=True)
     finally:
         os.close(slave)
@@ -27399,10 +27621,11 @@ def _con_filter(data: bytes) -> "tuple[bytes, bool]":
 
 _CON_BLOCK_MSG = b"\r\n\x1b[33m[sysmon: '!' is blocked here -- it would run shell commands as root]\x1b[0m\r\n"
 
-def _con_session(sock, alive, ip: str, on_close=None) -> str:
-    proc, master = _con_spawn()
+def _con_session(sock, alive, ip: str, on_close=None, argv=None) -> str:
+    cmd_argv = list(argv or _CON_ARGV)
+    proc, master = _con_spawn(cmd_argv)
     started = last_input = time.monotonic()
-    _log(f"console: opened ({' '.join(_CON_ARGV)}) from {ip}")
+    _log(f"console: opened ({' '.join(cmd_argv)}) from {ip}")
     reader = _WSReader()
     reason = "?"
 
@@ -27417,7 +27640,7 @@ def _con_session(sock, alive, ip: str, on_close=None) -> str:
             sock.sendall(_ws_frame(0x2, _CON_BLOCK_MSG))
 
     try:
-        send_json({"t": "hello", "cmd": " ".join(_CON_ARGV), "idle_sec": _CON_IDLE_SEC})
+        send_json({"t": "hello", "cmd": " ".join(cmd_argv), "idle_sec": _CON_IDLE_SEC})
         master_open = True
         while True:
             fds = [sock] + ([master] if master_open else [])
@@ -27510,46 +27733,40 @@ def _con_session(sock, alive, ip: str, on_close=None) -> str:
     return reason
 
 _CON_BTNS = [
-    ("Nodes", "rpt_stats", "rpt stats", "rpt stats {node}", ""),
-    ("Nodes", "rpt_lstats", "rpt lstats", "rpt lstats {node}", ""),
-    ("Nodes", "rpt_vars", "Node variables", "rpt xnode {node}", ""),
-    ("Nodes", "rpt_xnode", "Link details", "rpt xnode {node}", ""),
-    ("Nodes", "rpt_local", "Local nodes", "rpt localnodes", ""),
-    ("Nodes", "rpt_regs", "Registrations", "rpt show registrations", ""),
-    ("Nodes", "rpt_discall", "Disconnect all links", "rpt cmd {node} ilink 6", "act"),
-    ("Phone", "sip_regs", "Registrations", "pjsip show registrations", ""),
+    ("Node", "rpt_stats", "Node stats", "rpt stats {node}", ""),
+    ("Node", "rpt_xnode", "Link details", "rpt xnode {node}", ""),
+    ("Node", "rpt_local", "Local nodes", "rpt localnodes", ""),
+    ("Node", "rpt_regs", "Registrations", "rpt show registrations", ""),
+    ("Node", "rpt_discall", "Disconnect all links", "rpt cmd {node} ilink 6", "act"),
+    ("Phone", "sip_regs", "PJSIP registrations", "pjsip show registrations", ""),
     ("Phone", "sip_endpoints", "Endpoints", "pjsip show endpoints", ""),
-    ("Phone", "sip_contacts", "Contacts", "pjsip show contacts", ""),
+    ("Phone", "calls", "Active calls", "core show channels concise", ""),
     ("Phone", "sip_reregister", "Retry sign-in", "pjsip send register *all", "act"),
-    ("Phone", "sip_log_host", "SIP log for provider", "pjsip set logger host {sip_host}", "live"),
-    ("Phone", "sip_transports", "Transports", "pjsip show transports", ""),
-    ("Phone", "calls", "All calls", "core show channels concise", ""),
-    ("Phone", "sip_quality", "Call quality", "pjsip show channelstats", ""),
-    ("Phone", "dialplan", "Dialplan check", "dialplan show dvs-phone-out", ""),
-    ("Phone", "phone_db", "Phone settings in Asterisk", "database show dvsphone", ""),
-    ("Phone", "phone_nodes", "Phone nodes", "@phone_nodes", "sys"),
-    ("Phone", "phone_clash", "Phone node clash check", "@phone_clash", "sys"),
     ("Phone", "hangup_all", "Hang up all calls", "channel request hangup all", "act"),
-    ("AllStar links", "iax_peers", "Peers", "iax2 show peers", ""),
-    ("AllStar links", "iax_registry", "Registry", "iax2 show registry", ""),
-    ("AllStar links", "iax_channels", "Channels", "iax2 show channels", ""),
-    ("AllStar links", "iax_netstats", "Link quality", "iax2 show netstats", ""),
-    ("Audio and CPU", "translation", "Codec conversions", "core show translation", ""),
-    ("Audio and CPU", "rtp_on", "Audio debug on", "rtp set debug on", "live"),
-    ("Audio and CPU", "rtp_off", "Audio debug off", "rtp set debug off", ""),
-    ("Audio and CPU", "sip_log_on", "SIP logging on", "pjsip set logger on", "live"),
-    ("Audio and CPU", "sip_log_off", "SIP logging off", "pjsip set logger off", ""),
-    ("Detail level", "verbose3", "Verbose 3", "core set verbose 3", ""),
-    ("Detail level", "verbose5", "Verbose 5", "core set verbose 5", ""),
-    ("Detail level", "debug_off", "Debug off", "core set debug off", ""),
-    ("Reload", "dp_reload", "Dialplan reload", "dialplan reload", "act"),
-    ("Reload", "pjsip_reload", "PJSIP reload", "module reload res_pjsip.so", "act"),
+    ("Phone", "dialplan", "Phone dialplan", "dialplan show dvs-phone-out", ""),
+    ("Links", "iax_peers", "IAX peers", "iax2 show peers", ""),
+    ("Links", "iax_registry", "IAX registry", "iax2 show registry", ""),
+    ("Links", "iax_channels", "IAX channels", "iax2 show channels", ""),
+    ("Links", "iax_netstats", "Link quality", "iax2 show netstats", ""),
+    ("Config", "dp_reload", "Dialplan reload", "dialplan reload", "act"),
+    ("Config", "pjsip_reload", "PJSIP module reload", "module reload res_pjsip.so", "act"),
     ("Memory", "swap_now", "Swapping now?", "@swap_now", "sys"),
     ("Memory", "swap_progs", "Programs in swap", "@swap_progs", "sys"),
     ("System", "uptime", "Uptime", "core show uptime", ""),
     ("System", "version", "Version", "core show version", ""),
-    ("System", "modules", "Modules check", "module show", ""),
+    ("System", "modules", "Module check", "module show", ""),
     ("System", "restart_idle", "Restart Asterisk when idle", "core restart when convenient", "act"),
+    ("Advanced", "verbose3", "Verbose 3 (5 min)", "core set verbose 3", ""),
+    ("Advanced", "debug_off", "Debug off", "core set debug off", ""),
+    ("Advanced", "rtp_on", "Audio debug on", "rtp set debug on", "live"),
+    ("Advanced", "rtp_off", "Audio debug off", "rtp set debug off", ""),
+    ("Advanced", "sip_log_on", "SIP logging on", "pjsip set logger on", "live"),
+    ("Advanced", "sip_log_off", "SIP logging off", "pjsip set logger off", ""),
+    ("Advanced", "translation", "Codec conversions", "core show translation", ""),
+    ("Advanced", "sip_log_host", "SIP log for provider", "pjsip set logger host {sip_host}", "live"),
+    ("Advanced", "phone_db", "Phone settings in Asterisk", "database show dvsphone", ""),
+    ("Advanced", "phone_nodes", "Phone nodes", "@phone_nodes", "sys"),
+    ("Advanced", "phone_clash", "Phone node clash check", "@phone_clash", "sys"),
 ]
 
 _CON_BTN = {b[1]: b for b in _CON_BTNS}
@@ -28816,7 +29033,8 @@ def _route_console_catalog(h: "Handler") -> None:
         groups.setdefault(g, []).append({"id": bid, "label": label, "kind": kind,
                                          "needs_node": "{node}" in cmd})
     h.send_json({"ok": True, "groups": [{"name": g, "buttons": b} for g, b in groups.items()],
-                 "nodes": _con_nodes(), "debug_sec": _CON_DEBUG_SEC})
+                 "nodes": _con_nodes(), "debug_sec": _CON_DEBUG_SEC,
+                 "term": [{"id": k, "label": v[0]} for k, v in _CT_TERM_TASKS.items()]})
 
 def _route_console_run(h: "Handler", data: dict) -> None:
     if os.geteuid() != 0:
@@ -28873,6 +29091,8 @@ def _route_console_run(h: "Handler", data: dict) -> None:
         time.sleep(4)
         regs = _ph_cli("pjsip show registrations", timeout=8)
         raw = (raw.rstrip() + "\n\n" if raw.strip() else "") + "$ pjsip show registrations\n" + regs
+    elif bid == "verbose3":
+        _ct_verbose_revert()
     elif bid == "rtp_off":
         _CON_DEBUG["rtp"] = False
     elif bid == "sip_log_off":
@@ -28884,6 +29104,7 @@ def _route_console_run(h: "Handler", data: dict) -> None:
     except Exception as exc:
         _log(f"console: summary for {bid} failed: {exc}")
         summary = None
+    _ct_hist_add(bid, label, node, cmd)
     h.send_json({"ok": True, "id": bid, "group": group, "title": label + (f" · {node}" if node and "{node}" in tmpl else "")
                  + (f" · {cmd.rsplit(' ', 1)[-1]}" if "{sip_host}" in tmpl else ""),
                  "cmd": cmd, "raw": _ph_mask(raw) if bid == "phone_db" else raw, "summary": summary,
@@ -28919,7 +29140,8 @@ def _route_console_ws(h: "Handler") -> None:
         return
     token = h._session_token()
     ticket = parse_qs(urlparse(h.path).query).get("ticket", [""])[0]
-    if not _con_take_ticket(ticket, token):
+    argv = _con_take_ticket(ticket, token)
+    if not argv:
         refuse(403, "Console ticket missing, used or expired -- re-enter the root password.")
         return
     if not _con_claim():
@@ -28935,7 +29157,7 @@ def _route_console_ws(h: "Handler") -> None:
         h.send_header("Sec-WebSocket-Accept", _ws_accept_key(key))
         h.end_headers()
         h.wfile.flush()
-        _con_session(h.connection, lambda: _check_session(token), ip, on_close=_con_cleanup)
+        _con_session(h.connection, lambda: _check_session(token), ip, on_close=_con_cleanup, argv=argv)
     except (BrokenPipeError, ConnectionResetError, OSError):
         pass
     finally:
@@ -28995,6 +29217,348 @@ def _route_console_open(h: "Handler", data: dict) -> None:
         h.send_json({"ok": False, "message": "Asterisk is not running, so there is no console to open."}, 409)
         return
     h.send_json({"ok": True, "ticket": _con_issue_ticket(h._session_token())})
+
+_CT_LOG_FILES = ("/var/log/asterisk/full", "/var/log/asterisk/messages", "/var/log/asterisk/messages.log")
+_CT_WINDOWS = (15, 60, 1440)
+_CT_TRIAGE_ROWS = 60
+_CT_SNAP_DIR = Path("/var/lib/sysmon/snapshots")
+_CT_SNAP_KEEP = 20
+_CT_SNAP_ID_RE = re.compile(r"^\d{8}-\d{6}-[0-9a-f]{4}$")
+_CT_HEALTH = ("rpt_stats", "iax_peers", "sip_regs", "calls")
+_CT_HIST: deque = deque(maxlen=20)
+_CT_HIST_LOCK = threading.Lock()
+_CT_TERM_TASKS = {
+    "follow_ast": ("Follow the Asterisk journal",
+                   ["journalctl", "-u", "asterisk", "-f", "-n", "50", "--no-pager", "-o", "short-iso"]),
+    "follow_file": ("Follow the Asterisk log file",
+                    ["tail", "-n", "100", "-F", "/var/log/asterisk/full"]),
+}
+_CT_SECRET_RE = re.compile(r"(?i)\b(secret|password|passwd|md5secret|token)\b(\s*[:=]\s*|\s+)(\S+)")
+_CT_FILE_LINE = re.compile(r"^\[(?:\w{3}\s+\d+\s+\d\d:\d\d:\d\d|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)\]\s+(\w+)\[\d+\]\s+([^:]+?):\s+(.*)$")
+_CT_JRN_LINE = re.compile(r"^\S+\s+\S+\s+asterisk\[\d+\]:\s+(.*)$")
+_CT_LEVEL_HINT = re.compile(r"\b(ERROR|WARNING|NOTICE)\b")
+_CT_IP_RE = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+_CT_HEX_RE = re.compile(r"\b0x[0-9a-fA-F]+\b")
+_CT_QUOTE_RE = re.compile(r"'[^']{0,80}'|\"[^\"]{0,80}\"")
+_CT_NUM_RE = re.compile(r"\b\d+\b")
+_CT_LEVEL_RANK = {"ERROR": 3, "WARNING": 2, "NOTICE": 1}
+_CT_PATTERNS = [
+    ("auth", "Password refused",
+     re.compile(r"(?i)failed to authenticate|authentication (?:failed|required)|invalid password|wrong password"),
+     "A link or phone is refusing the password.",
+     "Check the secret on both ends, then re-enter it on the Reg tab if it changed.", "reg"),
+    ("noroute", "No route for a number or node",
+     re.compile(r"(?i)no route to destination|no such extension|unable to find extension|not found in context"),
+     "A dialled number or node has no matching rule.",
+     "Check the dialplan (Phone dialplan task), then the number or node.", "console"),
+    ("codec", "No common codec",
+     re.compile(r"(?i)no (?:common )?codec|codec .*not (?:supported|available)|unable to (?:get|find) codec"),
+     "The two ends can't agree on an audio format.",
+     "Use ulaw or gsm on the phone side, then try the call again.", "phone"),
+    ("unreach", "Far end didn't answer",
+     re.compile(r"(?i)is unreachable|timed out|connection refused|no route to host|host is down"),
+     "The far end is down, or the path to it is blocked.",
+     "Check the far end, its address and port (UDP 4569 for IAX), and the router forward.", "reg"),
+    ("transport", "Port or transport problem",
+     re.compile(r"(?i)transport .*(?:down|failed|not found)|failed to bind|address already in use"),
+     "Something else is using a port Asterisk needs, or a transport failed.",
+     "Check the Ports tab for another program on the same port, then restart Asterisk.", "ports"),
+    ("regrej", "Registration rejected",
+     re.compile(r"(?i)registration (?:rejected|failed|timed out)|unregistered|rejected by|403 forbidden"),
+     "The server turned the sign-in down.",
+     "Check the sign-in details, and that the provider accepts this address.", "reg"),
+    ("oneway", "One-way or dead audio",
+     re.compile(r"(?i)one.?way audio|rtp .*timeout|no rtp"),
+     "Audio isn't getting through in one or both directions.",
+     "Check the NAT settings and port forwards (the Phone tab checks these).", "phone"),
+    ("dns", "Name lookup failed",
+     re.compile(r"(?i)name or service not known|could not resolve|lookup failed|dns .*fail"),
+     "The Pi can't look up a server name.",
+     "Check the DNS servers on the Net tab.", "net"),
+    ("linkdrop", "Node link dropped",
+     re.compile(r"(?i)link .*(?:dropped|lost)|no link messages|forcing reconnect"),
+     "A node link went down.",
+     "Often the far end or its internet. Check Link details on this tab.", "console"),
+    ("module", "Module failed to load",
+     re.compile(r"(?i)unable to load module|error loading module|failed to load module"),
+     "Asterisk couldn't load a module.",
+     "Run the module check on this tab, then look at modules.conf.", "console"),
+    ("config", "Config file error",
+     re.compile(r"(?i)parse error|syntax error|unknown option|ignoring unknown"),
+     "A config file has a mistake. The message names the file and line.",
+     "Fix that line on the Edit tab, then reload.", "edit"),
+    ("perm", "Permission denied",
+     re.compile(r"(?i)permission denied|operation not permitted"),
+     "Asterisk can't read or write a file.",
+     "Check the file's ownership on the Security or Edit tab.", "security"),
+    ("resource", "Out of disk or memory",
+     re.compile(r"(?i)no space left|out of memory|cannot allocate memory"),
+     "The Pi is short of disk space or memory.",
+     "Check the Overview tab, then free space or swap.", "overview"),
+    ("restart", "Asterisk restarted",
+     re.compile(r"(?i)asterisk (?:ending|shutting down|shutdown)|restart requested|exiting"),
+     "Asterisk stopped or restarted.",
+     "Normal after a restart. If it was not expected, check the Journal tab.", "journal"),
+]
+
+def _ct_redact(text: str) -> str:
+    return _CT_SECRET_RE.sub(lambda m: m.group(1) + m.group(2) + "****", text or "")
+
+def _ct_since(txt: str, minutes: int) -> str:
+    cutoff = datetime.now() - timedelta(minutes=minutes)
+    keep = []
+    for ln in txt.splitlines():
+        m = re.match(r"^\[(\w{3}\s+\d+\s+\d\d:\d\d:\d\d|\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)", ln)
+        if m:
+            try:
+                s = m.group(1)
+                ts = (datetime.strptime(s, "%Y-%m-%d %H:%M:%S") if "-" in s
+                      else datetime.strptime(f"{datetime.now().year} {s}", "%Y %b %d %H:%M:%S"))
+                if ts < cutoff:
+                    continue
+            except ValueError:
+                pass
+        keep.append(ln)
+    return "\n".join(keep)
+
+def _ct_read(source: str, minutes: int) -> "tuple[str | None, str]":
+    if source == "journal":
+        out, prob = _ts_journal("asterisk", f"{minutes} minutes ago", lines=20000)
+        if prob:
+            return None, prob
+        return out, f"journal: asterisk.service, last {minutes} min"
+    for f in _CT_LOG_FILES:
+        try:
+            with open(f, "rb") as fh:
+                fh.seek(0, 2)
+                size = fh.tell()
+                fh.seek(max(0, size - 2_000_000))
+                txt = fh.read().decode("utf-8", "replace")
+        except OSError:
+            continue
+        return _ct_since(txt, minutes), f"file: {f}, last {minutes} min"
+    return None, "No Asterisk log file found"
+
+def _ct_sig(msg: str) -> str:
+    s = _CT_IP_RE.sub("IP", msg)
+    s = _CT_HEX_RE.sub("HEX", s)
+    s = _CT_QUOTE_RE.sub("'...'", s)
+    s = _CT_NUM_RE.sub("N", s)
+    return s.strip()[:160]
+
+def _ct_group(txt: str) -> "tuple[dict, int]":
+    groups: dict = {}
+    n = 0
+    for ln in txt.splitlines():
+        if not ln.strip():
+            continue
+        n += 1
+        body = ln
+        jm = _CT_JRN_LINE.match(ln)
+        if jm:
+            body = jm.group(1)
+        fm = _CT_FILE_LINE.match(body)
+        if fm:
+            level, comp, msg = fm.group(1).upper(), fm.group(2).strip(), fm.group(3)
+        else:
+            hint = _CT_LEVEL_HINT.search(body)
+            level, comp, msg = (hint.group(1) if hint else ""), "", body
+        msg = _ct_redact(msg).strip()
+        if not msg:
+            continue
+        sig = _ct_sig(msg)
+        t = _ts_time(ln)
+        g = groups.get(sig)
+        if g is None:
+            g = groups[sig] = {"sig": sig, "count": 0, "first": t, "last": t, "level": level,
+                               "component": comp, "sample": msg[:300]}
+        g["count"] += 1
+        g["last"] = t or g["last"]
+        if _CT_LEVEL_RANK.get(level, 0) > _CT_LEVEL_RANK.get(g["level"], 0):
+            g["level"] = level
+    return groups, n
+
+def _ct_match(msg: str):
+    for p in _CT_PATTERNS:
+        if p[2].search(msg):
+            return p
+    return None
+
+def _ct_rows(groups: dict) -> list:
+    rows = []
+    for g in groups.values():
+        p = _ct_match(g["sample"])
+        pat = {"id": p[0], "title": p[1], "meaning": p[3], "fix": p[4], "tab": p[5]} if p else None
+        rows.append(dict(g, pattern=pat))
+    rows.sort(key=lambda r: (r["pattern"] is None, -_CT_LEVEL_RANK.get(r["level"], 0), -r["count"]))
+    return rows[:_CT_TRIAGE_ROWS]
+
+def _route_console_triage(h: "Handler") -> None:
+    qs = parse_qs(urlparse(h.path).query)
+    source = (qs.get("source", ["file"])[0] or "file").strip()
+    try:
+        minutes = int((qs.get("window", ["60"])[0] or "60").strip())
+    except ValueError:
+        minutes = 0
+    if source not in ("file", "journal") or minutes not in _CT_WINDOWS:
+        h.send_json({"ok": False, "message": "Pick a source and a window from the list"}, 400)
+        return
+    txt, desc = _ct_read(source, minutes)
+    if txt is None:
+        h.send_json({"ok": False, "message": desc}, 409)
+        return
+    groups, n = _ct_group(txt)
+    totals = {"errors": sum(g["count"] for g in groups.values() if g["level"] == "ERROR"),
+              "warnings": sum(g["count"] for g in groups.values() if g["level"] == "WARNING"),
+              "groups": len(groups)}
+    h.send_json({"ok": True, "source": desc, "window": minutes, "lines": n, "totals": totals,
+                 "rows": _ct_rows(groups), "time": datetime.now().strftime("%H:%M:%S")})
+
+def _ct_hist_add(bid: str, title: str, node: str, cmd: str) -> None:
+    with _CT_HIST_LOCK:
+        _CT_HIST.appendleft({"time": datetime.now().strftime("%H:%M:%S"), "id": bid,
+                             "title": title, "node": node, "cmd": cmd})
+
+def _route_console_history(h: "Handler") -> None:
+    with _CT_HIST_LOCK:
+        items = list(_CT_HIST)
+    h.send_json({"ok": True, "items": items})
+
+def _ct_verbose_revert() -> None:
+    t = threading.Timer(_CON_DEBUG_SEC, lambda: _ph_cli("core set verbose 0", timeout=8))
+    t.daemon = True
+    t.start()
+
+def _ct_capture(bid: str, node: str):
+    b = _CON_BTN.get(bid)
+    if b is None:
+        return None
+    _grp, _bid, label, tmpl, kind = b
+    if kind in ("act", "live") or "{sip_host}" in tmpl:
+        return None
+    if "{node}" in tmpl and not node:
+        return None
+    if kind == "sys":
+        cmd, raw, _summary = _CON_SYS[tmpl]()
+    else:
+        cmd = tmpl.replace("{node}", node)
+        raw = _ph_cli(cmd, timeout=10) if _ph_ast_running() else "Asterisk is not running"
+    return {"id": bid, "title": label, "cmd": cmd, "raw": _ct_redact(raw)}
+
+def _ct_snap_save(label: str, items: list, node: str) -> dict:
+    sid = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)
+    meta = {"id": sid, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "label": (label or "Snapshot")[:60], "node": node, "items": items}
+    _CT_SNAP_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = _CT_SNAP_DIR / (sid + ".tmp")
+    tmp.write_text(json.dumps(meta), encoding="utf-8")
+    os.replace(tmp, _CT_SNAP_DIR / (sid + ".json"))
+    files = sorted(_CT_SNAP_DIR.glob("*.json"))
+    for old in files[:-_CT_SNAP_KEEP]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return meta
+
+def _ct_snap_load(sid: str):
+    if not _CT_SNAP_ID_RE.match(sid or ""):
+        return None
+    try:
+        return json.loads((_CT_SNAP_DIR / (sid + ".json")).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+def _ct_snap_list() -> list:
+    out = []
+    for f in sorted(_CT_SNAP_DIR.glob("*.json"), reverse=True)[:_CT_SNAP_KEEP]:
+        m = _ct_snap_load(f.stem)
+        if m:
+            out.append({"id": m["id"], "time": m["time"], "label": m["label"], "node": m.get("node", ""),
+                        "count": len(m.get("items", []))})
+    return out
+
+def _ct_snap_diff(a: dict, b: dict) -> dict:
+    import difflib as _difflib
+    ia = {i["id"]: i for i in a.get("items", [])}
+    ib = {i["id"]: i for i in b.get("items", [])}
+    out, changed = [], 0
+    for bid in dict.fromkeys(list(ia) + list(ib)):
+        if bid not in ia or bid not in ib:
+            title = (ia.get(bid) or ib.get(bid)).get("title", bid)
+            out.append(f"== {title}: only in one snapshot")
+            changed += 1
+            continue
+        title = ib[bid].get("title", bid)
+        d = list(_difflib.unified_diff(ia[bid].get("raw", "").splitlines(), ib[bid].get("raw", "").splitlines(),
+                                       "A", "B", lineterm="", n=1))
+        if d:
+            changed += 1
+            out.append(f"== {title}")
+            out.extend(d)
+        else:
+            out.append(f"== {title}: no change")
+        out.append("")
+    return {"text": "\n".join(out).strip(), "changed": changed}
+
+def _route_console_snapshots(h: "Handler") -> None:
+    h.send_json({"ok": True, "snaps": _ct_snap_list()})
+
+def _route_console_snapshot_get(h: "Handler") -> None:
+    qs = parse_qs(urlparse(h.path).query)
+    m = _ct_snap_load(qs.get("id", [""])[0])
+    if m is None:
+        h.send_json({"ok": False, "message": "Snapshot not found"}, 404)
+        return
+    h.send_json({"ok": True, "snap": m})
+
+def _route_console_snapdiff(h: "Handler") -> None:
+    qs = parse_qs(urlparse(h.path).query)
+    a = _ct_snap_load(qs.get("a", [""])[0])
+    b = _ct_snap_load(qs.get("b", [""])[0])
+    if a is None or b is None:
+        h.send_json({"ok": False, "message": "Pick two saved snapshots"}, 404)
+        return
+    h.send_json(dict({"ok": True}, **_ct_snap_diff(a, b)))
+
+def _route_console_snapshot_post(h: "Handler", data: dict) -> None:
+    if os.geteuid() != 0:
+        h.send_json({"ok": False, "message": "sysmon is not running as root"}, 403)
+        return
+    node = str(data.get("node", "")).strip()
+    if node and node not in _con_nodes():
+        h.send_json({"ok": False, "message": "Pick a node from the list"}, 400)
+        return
+    items = [c for c in (_ct_capture(bid, node) for bid in _CT_HEALTH) if c]
+    label = str(data.get("label", "")).strip() or "Snapshot"
+    meta = _ct_snap_save(label, items, node)
+    _log(f"console: snapshot '{meta['label']}' ({len(items)} checks) from {h._client_ip()}")
+    h.send_json({"ok": True, "id": meta["id"], "time": meta["time"], "count": len(items)})
+
+def _route_console_task_term(h: "Handler", data: dict) -> None:
+    ip = h._client_ip()
+    enabled, why = _con_enabled()
+    if not enabled:
+        h.send_json({"ok": False, "message": why}, 403)
+        return
+    ok, cwhy = _con_client_ok(ip, h.headers)
+    if not ok:
+        h.send_json({"ok": False, "message": cwhy}, 403)
+        return
+    tid = str(data.get("id", ""))
+    t = _CT_TERM_TASKS.get(tid)
+    if t is None:
+        h.send_json({"ok": False, "message": "Unknown task"}, 400)
+        return
+    if not _con_password_ok(h, data, f"opening '{tid}'"):
+        return
+    with _CON_LOCK:
+        busy = _CON_ACTIVE["open"]
+    if busy:
+        h.send_json({"ok": False, "message": "A terminal is already open. Close it first."}, 409)
+        return
+    _log(f"console: task '{tid}' opened from {ip}")
+    h.send_json({"ok": True, "title": t[0], "ticket": _con_issue_ticket(h._session_token(), t[1])})
 
 _CON_ASSETS_B64 = {
     "xterm.js": ("application/javascript", "98d0973151aff2991d335b1adbbdac2e14da26341abe329d677d4c0034402bdf", """
@@ -35276,6 +35840,11 @@ _GET_ROUTES = {
     "/api/console/ws":         _route_console_ws,
     "/api/console/catalog":    _route_console_catalog,
     "/api/console/tcatalog":   _route_console_tcatalog,
+    "/api/console/triage":     _route_console_triage,
+    "/api/console/history":    _route_console_history,
+    "/api/console/snapshots":  _route_console_snapshots,
+    "/api/console/snapshot":   _route_console_snapshot_get,
+    "/api/console/snapdiff":   _route_console_snapdiff,
     "/static/xterm.js":        _route_console_static,
     "/static/xterm.css":       _route_console_static,
     "/static/addon-fit.js":    _route_console_static,
@@ -35324,6 +35893,8 @@ _POST_ROUTES = {
     "/api/console/open":    _route_console_open,
     "/api/console/run":     _route_console_run,
     "/api/console/trun":    _route_console_trun,
+    "/api/console/snapshot": _route_console_snapshot_post,
+    "/api/console/task/term": _route_console_task_term,
 }
 
 def _lan_ip() -> str:

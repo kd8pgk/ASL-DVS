@@ -21,7 +21,7 @@ SHARED_AUTH_STATE = "/run/asl_dvs/auth_session.json"
 SERVERS = {
     "nodecontrol": {"file": "nodecontrol_v9_3_102_20261102.py", "port": 8989, "scheme": "http"},
     "nodecontrol_pi02w": {"file": "nodecontrol_pi02w_v9_3_107_20261102.py", "port": 8989, "scheme": "http"},
-    "sysmon": {"file": "sysmon_v6_14_0_20261104.py", "port": 9999, "scheme": "http"},
+    "sysmon": {"file": "sysmon_v6_15_0_20261104.py", "port": 9999, "scheme": "http"},
     "sysmon_pi02w": {"file": "sysmon_pi02w_v6_14_0_20261104.py", "port": 9999, "scheme": "http"},
     "nodetalker": {"file": "nodetalker_v0_10_11_20261104.py", "port": 8993, "scheme": "https", "health": "/api/health"},
     "amp_nodetalker": {"file": "amp_nodetalker_v0_3_7_20261101.py", "port": 8993, "scheme": "https", "health": "/api/health"},
