@@ -4487,7 +4487,12 @@ body.tab-edit #zone-content{
         </div>
       </div>
       <div id="con-why" class="ph-note" style="display:none"></div>
-      <div id="con-auth" class="con-auth" style="display:none">
+      <div class="con-tools" id="con-follow-row">
+          <span class="ph-note">Follow in a terminal (read only, root password):</span>
+          <button class="btn btn-muted btn-sm" onclick="conAskPw('task:follow_ast')">Asterisk journal</button>
+          <button class="btn btn-muted btn-sm" onclick="conAskPw('task:follow_file')">Asterisk log file</button>
+        </div>
+        <div id="con-auth" class="con-auth" style="display:none">
         <span id="con-auth-lbl">Root password</span>
         <input type="password" id="con-pw" autocomplete="current-password" onkeydown="if(event.key==='Enter')conPwGo()">
         <button class="btn btn-sm" id="con-pw-go" onclick="conPwGo()">Open</button>
@@ -5428,6 +5433,7 @@ window.snapList = async function() {
   if (b && prevB) b.value = prevB;
   if (a && b && !prevA && !prevB && d.snaps.length > 1) { a.selectedIndex = 1; b.selectedIndex = 0; }
   box.innerHTML = "";
+  box.style.padding = ".2rem .6rem";
   d.snaps.forEach(s => {
     const row = phEl("div", "con-res-hdr");
     row.appendChild(phEl("span", "con-res-title", s.label));
