@@ -1,6 +1,18 @@
 # instmon changelog
 
-Current file: `instmon_v2_88_0_20261104.py`. Newest entries first.
+Current file: `instmon_v2_89_0_20261104.py`. Newest entries first.
+
+## 2.89.0 (2026-11-04)
+
+**Testing only.** Phase 2 of the suite log: a log viewer page and safeguards. Not meant for production copies.
+
+- **Log viewer page** (`/suitelog`, opened from the Suite Log card, log in on the instmon page first). Filter by time (5 minutes, 15 minutes, an hour, 6 hours, everything), level, kind, source (chips with row and error counts) and text; order newest or oldest first; 300, 1000 or 5000 rows; a Live switch that refreshes every 3 s. A bar per minute shows rows, errors (red) and warnings (amber); click a bar or any time to see the 2 minutes either side from every source in one list, oldest first, or type a time in "Around a time". Text is shown as plain text, never as HTML.
+- **Copy and download on that page.** Copy the view as text or as JSON lines; download the view as `.txt` or `.jsonl`; download everything (both segments) as `.jsonl`. Each says what it did, and copying falls back to an older method on pages served over plain HTTP.
+- **Coverage panel** ("are we getting every log?"). Every expected source with its state: seen, waiting, silent (a running service or log file with no lines for 10 minutes), not running, not installed, not found, no permission, or quiet (kernel messages are filtered, so quiet is normal), with row counts, the last line and file sizes.
+- **Guards.** Collection stops itself after 12 hours (set the hours next to Start; 0 means no limit; the deadline survives an instmon restart) and if free memory falls under 60 MB. The stop row and the status line say why.
+- **Health snapshots** every 10 minutes (and at Start): load, memory, free space on `/run` and `/`, CPU temperature, the Raspberry Pi throttle flags (under-voltage, frequency cap, throttling, temperature limit, now and since boot) and which suite services are active.
+- Searches read only what is already in the file, which is already redacted.
+- This is a release, not a cosmetic build.
 
 ## 2.88.0 (2026-11-04)
 
