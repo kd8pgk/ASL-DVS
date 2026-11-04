@@ -181,6 +181,8 @@ class NodesActivity : Activity() {
         val buf = v.findViewById<SeekBar>(R.id.buffer)
         val bufText = v.findViewById<TextView>(R.id.buffer_text)
         val voice = v.findViewById<CheckBox>(R.id.voice_mic)
+        val rxClean = v.findViewById<CheckBox>(R.id.rx_clean)
+        val txClean = v.findViewById<CheckBox>(R.id.tx_clean)
         val boost = v.findViewById<SeekBar>(R.id.boost)
         val boostText = v.findViewById<TextView>(R.id.boost_text)
         boost.max = AudioSettings.MAX_BOOST_DB
@@ -195,6 +197,8 @@ class NodesActivity : Activity() {
             override fun onStopTrackingTouch(sb: SeekBar) = Unit
         })
         voice.isChecked = a.voiceMic
+        rxClean.isChecked = a.rxClean
+        txClean.isChecked = a.txClean
         app.isChecked = a.app
         page.isChecked = !a.app
         val step = 50
@@ -214,7 +218,10 @@ class NodesActivity : Activity() {
             .setTitle(R.string.audio_settings)
             .setView(v)
             .setPositiveButton(R.string.save) { _, _ ->
-                val b = AudioSettings(if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), a.earpiece, voice.isChecked, boost.progress)
+                val b = AudioSettings(
+                    if (app.isChecked) AudioSettings.APP else AudioSettings.PAGE, ms(), a.earpiece, voice.isChecked, boost.progress,
+                    rxClean.isChecked, txClean.isChecked,
+                )
                 NodeStore.setAudio(this, b)
                 if (!b.app) Listen.stop(this, "system", "format_changed")
                 else Listen.nodeId?.let { id -> NodeStore.get(this, id)?.let { Listen.start(this, it, "system", "format_changed") } }

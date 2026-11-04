@@ -364,7 +364,8 @@ class ListenService : Service() {
             stopTalk()
             return false
         }
-        val m = Mic(NodeStore.audio(this).voiceMic, gainDb, ::micFrame) { db ->
+        val a = NodeStore.audio(this)
+        val m = Mic(a.voiceMic, a.txClean, gainDb, ::micFrame) { db ->
             Talk.emit(JSONObject().put("ev", "level").put("db", db).toString())
         }
         if (!m.start()) {
@@ -633,6 +634,7 @@ class ListenService : Service() {
         } catch (e: RuntimeException) {
             null
         }
+        val chain = if (s.rxClean) VoiceChain(RATE) else null
         var boostMb = -1
         val target = (s.bufferMs / FRAME_MS).coerceAtLeast(2)
         val silence = ShortArray(FRAME)
@@ -670,12 +672,13 @@ class ListenService : Service() {
                     trimmed = true
                 }
                 if (trimmed && counting()) stats.reset()
-                val f = queue.poll(FRAME_MS * 4L, TimeUnit.MILLISECONDS)
-                if (f == null) {
+                val raw = queue.poll(FRAME_MS * 4L, TimeUnit.MILLISECONDS)
+                if (raw == null) {
                     if (stallAt == 0L) stallAt = SystemClock.elapsedRealtime() - FRAME_MS * 4L
                     filling = true
                     continue
                 }
+                val f = chain?.process(raw) ?: raw
                 val vol = Listen.volume
                 track.setVolume(vol.coerceAtMost(1f))
                 val mb = ((s.boostDb + overDb(vol)) * 100).roundToInt().coerceIn(0, MAX_GAIN_MB)

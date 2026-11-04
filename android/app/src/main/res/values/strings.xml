@@ -82,6 +82,9 @@
     <string name="listen_retry">Disconnected (%1$s). Retrying in %2$d s…</string>
     <string name="mic">Microphone (app audio)</string>
     <string name="voice_mic">Phone\'s echo and noise filter (turn off if your audio sounds choppy or muffled)</string>
+    <string name="clean_audio">Clean-up filters (both off by default)</string>
+    <string name="rx_clean">Received audio: cut rumble and hiss, lift speech clarity, and mute between words (squelch)</string>
+    <string name="tx_clean">Sent audio: the same filters on your microphone before it goes to the node</string>
     <string name="notif_talking">Transmitting</string>
     <string name="notif_talk_ready">Ready to talk</string>
     <string name="mic_needed">Allow the microphone so Node\u00A0Talker\u00A0Mobile can transmit.</string>

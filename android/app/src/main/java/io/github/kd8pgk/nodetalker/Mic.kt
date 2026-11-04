@@ -10,7 +10,7 @@ import kotlin.math.max
 import kotlin.math.pow
 import kotlin.math.roundToInt
 
-class Mic(private val voice: Boolean, gainDb: Double, private val sink: (ByteArray) -> Unit, private val level: (Double) -> Unit) {
+class Mic(private val voice: Boolean, private val clean: Boolean, gainDb: Double, private val sink: (ByteArray) -> Unit, private val level: (Double) -> Unit) {
     private val gain = 10.0.pow(gainDb.coerceIn(-20.0, 20.0) / 20.0)
     @Volatile private var running = false
     private var thread: Thread? = null
@@ -51,8 +51,9 @@ class Mic(private val voice: Boolean, gainDb: Double, private val sink: (ByteArr
         val step = rec.sampleRate / 8000
         val buf = ShortArray(rec.sampleRate / 50)
         val frame = ByteArray(FRAME * 2)
+        val fir = Fir(rec.sampleRate, 3400.0, 63)
+        val chain = if (clean) VoiceChain(8000) else null
         var n = 0
-        var acc = 0
         var cnt = 0
         var peak = 0
         var frames = 0
@@ -63,11 +64,12 @@ class Mic(private val voice: Boolean, gainDb: Double, private val sink: (ByteArr
                 if (got < 0) break
                 if (got == 0) continue
                 for (k in 0 until got) {
-                    acc += buf[k]
+                    val y = fir.run(buf[k].toDouble() / 32768.0)
                     if (++cnt < step) continue
-                    val v = (acc.toDouble() / step * gain).roundToInt().coerceIn(-32768, 32767)
-                    acc = 0
                     cnt = 0
+                    var x = y * gain
+                    if (chain != null) x = chain.run(x)
+                    val v = (x * 32768.0).roundToInt().coerceIn(-32768, 32767)
                     peak = max(peak, abs(v))
                     frame[2 * n] = v.toByte()
                     frame[2 * n + 1] = (v shr 8).toByte()

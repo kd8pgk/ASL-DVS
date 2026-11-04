@@ -1,6 +1,15 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.11`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.12`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.12 (2026-11-04)
+
+- **Clean-up filters, for received and sent audio.** The Audio dialog has two new check boxes under "Clean-up filters", both off by default: "Received audio" (the audio the phone plays) and "Sent audio" (the phone's microphone before it goes to the node). When on, each path runs a high-pass at 150 Hz (cuts rumble), a low-pass at 3.4 kHz (cuts hiss above speech), a gentle lift around 2.5 kHz for clearer speech, and a squelch that mutes between words (opens at -40 dBFS, closes at -46 dBFS, holds for 80 ms, with short fades so words are not clipped).
+- **The microphone is filtered before it is reduced to 8 kHz.** Before, a 16 kHz or 48 kHz microphone was reduced by averaging neighbouring samples, which let higher sounds fold back into the voice band. Now a low-pass at 3.4 kHz runs first, every time, whatever the microphone rate. Nothing changes in what is sent: still 8 kHz, 16-bit, mono.
+- Playback and the spectrum use the filtered audio when the received-audio check box is on.
+- Changing the check boxes restarts the listen feed, as the other audio settings do.
+- Filtering is done on the phone; the node is unchanged. CTCSS (sub-audible tone) removal for a radio on the Pi is a separate change and is not in this version.
+- 8 more unit tests for the filters (39 in all), run in CI.
 
 ## 0.10.11 (2026-11-03)
 
