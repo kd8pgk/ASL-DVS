@@ -1,6 +1,13 @@
 # instmon changelog
 
-Current file: `instmon_v2_89_0_20261104.py`. Newest entries first.
+Current file: `instmon_v2_90_0_20261104.py`. Newest entries first.
+
+## 2.90.0 (2026-11-04)
+
+**Testing only.** Fixes the page flickering between the login screen and the main page.
+
+- **Fix: the page no longer flickers between login and the main page.** The Suite Log card asked for its status as soon as the page loaded, before anyone had logged in. instmon reloads the page whenever a request comes back "not logged in", so it reloaded, asked again, and looped. The card now starts asking only after the app has started (after login), like every other poll on the page. Versions 2.88.0 and 2.89.0 have this fault.
+- This is a release, not a cosmetic build (page script logic).
 
 ## 2.89.0 (2026-11-04)
 
