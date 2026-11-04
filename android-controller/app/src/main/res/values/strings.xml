@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Node Controller</string>
+    <string name="title_nodes">Node Controller</string>
+    <string name="add_node">Add node</string>
+    <string name="edit_node">Edit node</string>
+    <string name="edit">Edit</string>
+    <string name="delete">Delete</string>
+    <string name="delete_confirm">Remove %1$s from this phone? The node itself is not changed.</string>
+    <string name="cancel">Cancel</string>
+    <string name="save">Save</string>
+    <string name="name_hint">Name (optional)</string>
+    <string name="address_hint">Address, e.g. 192.168.1.20 or 192.168.1.20:8989</string>
+    <string name="bad_address">Not a node address. Use host, host:port, or http:// or https:// followed by host and port.</string>
+    <string name="nodes_empty">No nodes yet. Add a node\'s Dashboard address. Port 8989 is used unless you give another.</string>
+    <string name="nodes_button">Nodes</string>
+    <string name="reload_button">Reload</string>
+    <string name="forget_button">Forget login</string>
+    <string name="forget_done">Login cleared on this phone.</string>
+    <string name="retry">Retry</string>
+    <string name="load_failed">Could not open %1$s: %2$s</string>
+    <string name="page_stopped">The page stopped. Retry to reopen it.</string>
+    <string name="no_browser">No app can open this link.</string>
+</resources>
