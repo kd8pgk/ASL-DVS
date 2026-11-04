@@ -4386,13 +4386,13 @@ def encoder_version(key):
         return ""
     flag = "-V" if key == "flac" else "--version"
     if key == "shine":
-        return "installed"
+        return ""
     try:
         r = subprocess.run([exe, flag], capture_output=True, text=True, timeout=10)
     except (OSError, subprocess.TimeoutExpired):
         return ""
     text = ((r.stdout or "") + (r.stderr or "")).strip().splitlines()
-    return text[0].strip()[:80] if text else "installed"
+    return text[0].split(" (http")[0].strip()[:60] if text else ""
 
 
 def wav_layout(path):
