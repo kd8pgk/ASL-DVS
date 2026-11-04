@@ -1,6 +1,12 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_0_20261104.py`. Newest entries first.
+Current file: `noderecorder_v0_5_1_20261104.py`. Newest entries first.
+
+## 0.5.1 (2026-11-04)
+
+- **A late start cannot leave a recording open.** A window whose start runs past its 15 s limit is now stopped properly: the sequence stops whatever the recorder opened late, so the next window can start. Before, the late recording stayed open with nothing to stop it, and every later window failed with "a recording is already open" until a restart.
+- **A slow drive cannot leave a writer running.** Stopping no longer depends on a stop message that can be dropped when the queue is full. The writer finishes once it has written what is queued and closes the file. If the drive is so slow that the stop is not finished within 20 s, the recording is kept and the window reports it; the next window waits until the old file has closed, then converts it.
+- This is a release, not a cosmetic build.
 
 ## 0.5.0 (2026-11-04)
 

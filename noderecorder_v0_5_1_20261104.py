@@ -29,7 +29,7 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 DATE_STR = "2026-11-04"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4620,6 +4620,7 @@ class RecordingEngine:
     def __init__(self):
         self.lock = threading.Lock()
         self.a = None
+        self.closing = None
 
     def feed(self, pcm):
         a = self.a
@@ -4644,6 +4645,8 @@ class RecordingEngine:
         with self.lock:
             if self.a is not None:
                 return False, "a recording is already open", None
+            if self.closing is not None and self.closing.is_alive():
+                return False, "the previous recording is still closing", None
             pick = storage_pick()
             if not pick["ok"]:
                 return False, pick["reason"], None
@@ -4681,7 +4684,8 @@ class RecordingEngine:
             except OSError as exc:
                 return False, f"cannot create {path}: {exc}", None
             a = {"q": queue.Queue(RECORD_QUEUE_FRAMES), "fh": fh, "path": path, "name": name, "dir": d, "fmt": fmt,
-                 "bytes": 0, "samples": 0, "dropped": 0, "error": "", "thread": None, "t0": time.monotonic()}
+                 "bytes": 0, "samples": 0, "dropped": 0, "error": "", "thread": None, "t0": time.monotonic(),
+                 "stop": threading.Event()}
             a["thread"] = threading.Thread(target=self._writer, args=(a,), name="rec-writer", daemon=True)
             self.a = a
             a["thread"].start()
@@ -4706,13 +4710,13 @@ class RecordingEngine:
                     pcm = q.get(timeout=1.0)
                 except queue.Empty:
                     pcm = b""
-                if pcm is None:
-                    break
                 if pcm:
                     data = ulaw_encode(pcm) if ulaw else pcm
                     fh.write(data)
                     a["bytes"] += len(data)
                     a["samples"] += len(pcm) // 2
+                elif a["stop"].is_set() and q.empty():
+                    break
                 now = time.monotonic()
                 if now - last_hdr >= RECORD_HEADER_SEC:
                     self._patch(a)
@@ -4739,18 +4743,18 @@ class RecordingEngine:
             a = self.a
             if a is None:
                 return True, "no recording was open", None
+            self.a = None
             if HUB.recorder is self:
                 HUB.recorder = None
-            try:
-                a["q"].put(None, timeout=5.0)
-            except queue.Full:
-                pass
+            a["stop"].set()
             a["thread"].join(RECORD_CLOSE_SEC)
             alive = a["thread"].is_alive()
-            self.a = None
+            if alive:
+                self.closing = a["thread"]
         secs = a["samples"] / 8000.0
         if alive:
-            msg = f"{a['name']} did not close within {int(RECORD_CLOSE_SEC)} s"
+            msg = (f"{a['name']} did not close within {int(RECORD_CLOSE_SEC)} s; the drive is slow. "
+                   "It is kept, still closing in the background, and converted at the next window")
             log_event(msg, "err")
             return False, msg, None
         removed = retention_enforce(a["dir"], 0)
@@ -5105,6 +5109,7 @@ def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, tim
         return done("connect_failed", f"connect failed: {msg}")
     ok, msg, fname = do("start", actions.start, entry, window)
     if not ok:
+        do("stop", actions.stop)
         do("disconnect", actions.disconnect, entry)
         return done("start_failed", f"could not start recording: {msg}")
     set_state("recording", file=fname or "")
