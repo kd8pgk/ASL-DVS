@@ -1,6 +1,21 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_4_0_20261102.py`. Newest entries first.
+Current file: `noderecorder_v0_5_0_20261104.py`. Newest entries first.
+
+## 0.5.0 (2026-11-04)
+
+- **Recordings are compressed after they are made.** When a recording ends, Node Recorder turns the WAV into a smaller file and then deletes the WAV. If the conversion fails, or the encoder is not installed, the WAV is kept. The work runs at the lowest priority (`nice -n 19`), one file at a time, so it does not disturb the node. u-law recordings are decoded to 16-bit audio on the way in.
+- **Setup tab, new Convert card.** Tick or untick the conversion, pick the quality (24, 32, 48 or 64 kbps; 32 is about 14 MB an hour) and choose the encoder. Each option shows why you would pick it, its apt package, its file type and whether it is installed. ffmpeg is not offered: it is a very large install for this job.
+  - **lame** (MP3, the default): about 1 MB, well tested on the Pi, plays everywhere; resampled to 16 kHz mono.
+  - **sox** (MP3): needs the extra `libsox-fmt-mp3` package; choose it if sox is already on the node.
+  - **shine** (MP3, `shineenc`): the lightest on the CPU of the Pi Zero 2 W, but it keeps 8 kHz so a few players may not play it, and it is not in every repository.
+  - **opusenc** (Opus, `opus-tools`): much smaller files for the same voice quality; Pibrary plays `.opus` but not every phone does.
+  - **flac** (FLAC): lossless, about half the size of the WAV; the quality setting does not apply.
+- **Install button and terminal.** Each encoder that is not installed has an Install button that runs `apt-get update` and `apt-get install` for its package and shows the output live in a terminal box on the card. It needs a network connection and runs one install at a time. When an install finishes, recordings that were left as WAV files are converted. New routes `GET /api/convert` and `POST /api/convert/install`.
+- **Leftovers are picked up.** At start-up and before each window, any WAV that is not the open recording (for example after a power cut, once its header is repaired) is converted too.
+- **Retention and counts include the new files.** The MB limit, the oldest-first removal and the Storage card's file count cover `.mp3`, `.opus` and `.flac` as well as `.wav`. Pibrary lists and plays all of them.
+- New settings: `record_convert` (default on), `record_encoder` (default `lame`), `record_kbps` (default 32).
+- This is a release, not a cosmetic build.
 
 ## 0.4.0 (2026-11-02)
 
