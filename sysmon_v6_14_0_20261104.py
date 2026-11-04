@@ -43,7 +43,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-VERSION      = "6.13.95"
+VERSION      = "6.14.0"
 BUILD_DATE   = "20261028"
 
 CONFIG_FILE  = Path("/etc/sysmon/sysmon.conf")
@@ -3462,6 +3462,21 @@ body.tab-edit #zone-content{
       </div>
     </div>
 
+    <div class="s3-card">
+      <div class="s3-card-hdr">
+        <span class="s3-card-title">CGNAT</span>
+        <span class="reg-card-status" id="reg-cgnat-status">—</span>
+        <span class="s3-card-meta" id="reg-cgnat-meta">—</span>
+        <div style="display:flex;gap:.3rem;margin-left:auto">
+          <button class="btn btn-muted btn-sm" id="reg-cgnat-refresh"
+                  onclick="loadTab_reg()">↻ Re-check</button>
+        </div>
+      </div>
+      <div id="reg-cgnat-body">
+        <div class="stub-panel" style="min-height:60px">Loading…</div>
+      </div>
+    </div>
+
   </div>
 
   <div id="panel-phone" class="tab-panel">
@@ -6870,19 +6885,23 @@ function nodeListenCopy(btn) {
 let _regRefreshTimer = null;
 const _REG_HTTP_IDS = {body: "reg-http-body", meta: "reg-http-meta", status: "reg-http-status"};
 const _REG_IAX_IDS  = {body: "reg-iax-body",  meta: "reg-iax-meta",  status: "reg-iax-status"};
+const _REG_CGNAT_IDS = {body: "reg-cgnat-body", meta: "reg-cgnat-meta", status: "reg-cgnat-status"};
 
 window.loadTab_reg = async function() {
   if (!_enabledTabSet.has("reg")) return;
   if (!_regRefreshTimer) _regRefreshTimer = setInterval(() => {
     if (document.visibilityState === "visible" && !_pausedByNavigation) loadTab_reg();
   }, 15000);
-  const [dHttp, dIax] = await Promise.all([api("/api/reg/http"), api("/api/reg/iax")]);
+  const [dHttp, dIax, dCgnat] = await Promise.all([api("/api/reg/http"), api("/api/reg/iax"), api("/api/reg/cgnat")]);
 
   if (!dHttp || !dHttp.ok) { _regShowUnreachable(_REG_HTTP_IDS); }
   else                     { renderRegChecks(dHttp.checks, dHttp.status, _REG_HTTP_IDS); }
 
   if (!dIax || !dIax.ok) { _regShowUnreachable(_REG_IAX_IDS); }
   else                   { renderRegChecks(dIax.checks, dIax.status, _REG_IAX_IDS); }
+
+  if (!dCgnat || !dCgnat.ok) { _regShowUnreachable(_REG_CGNAT_IDS); }
+  else                       { renderRegChecks(dCgnat.checks, dCgnat.status, _REG_CGNAT_IDS); }
 };
 
 function regJump() {
@@ -19426,6 +19445,161 @@ def _reg_live_summary(rl: dict, prev: "dict | None") -> dict:
     since = prev["since"] if prev and prev.get("state") == state else now
     return {"state": state, "since": since, "checked": now,
             "nodes": nodes, "perceived": dict(rl.get("perceived") or {}), "error": rl.get("error")}
+
+_CGNAT_NET = ipaddress.ip_network("100.64.0.0/10")
+_CGNAT_VPN_PREFIXES = ("tailscale", "wg", "tun")
+_CGNAT_CACHE_SEC = 600
+_cgnat_cache: dict = {"at": 0.0, "wan": {}}
+
+def _cgnat_ip(text):
+    try:
+        return ipaddress.ip_address((text or "").strip())
+    except ValueError:
+        return None
+
+def _cgnat_route() -> dict:
+    out, _ = _run_with_stderr(["ip", "-4", "route", "get", "1.1.1.1"], timeout=3)
+    m_dev = re.search(r"\bdev\s+(\S+)", out or "")
+    m_src = re.search(r"\bsrc\s+(\S+)", out or "")
+    return {"dev": m_dev.group(1) if m_dev else "", "src": m_src.group(1) if m_src else ""}
+
+def _cgnat_is_vpn(dev: str) -> bool:
+    return bool(dev) and dev.startswith(_CGNAT_VPN_PREFIXES)
+
+def _cgnat_ssdp_locations(timeout: float = 2.0) -> list:
+    msg = ("M-SEARCH * HTTP/1.1\r\n"
+           "HOST: 239.255.255.250:1900\r\n"
+           'MAN: "ssdp:discover"\r\n'
+           "MX: 1\r\n"
+           "ST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n").encode()
+    locations: list = []
+    sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+    try:
+        sock.settimeout(timeout)
+        sock.sendto(msg, ("239.255.255.250", 1900))
+        deadline = time.time() + timeout
+        while time.time() < deadline and len(locations) < 4:
+            try:
+                data, _ = sock.recvfrom(4096)
+            except _socket.timeout:
+                break
+            for line in data.decode("utf-8", "replace").split("\r\n"):
+                if line.lower().startswith("location:"):
+                    url = line.split(":", 1)[1].strip()
+                    if url.startswith("http") and url not in locations:
+                        locations.append(url)
+    except OSError as e:
+        log.debug("_cgnat_ssdp_locations: %s", e)
+    finally:
+        sock.close()
+    return locations
+
+def _cgnat_soap_wan_ip(location: str, timeout: float = 2.0) -> str:
+    import urllib.request as _urllib
+    import urllib.parse as _urlparse
+    import xml.etree.ElementTree as _ET
+    with _urllib.urlopen(location, timeout=timeout) as resp:
+        desc = _ET.fromstring(resp.read(262144))
+    for svc in desc.iter():
+        if svc.tag.split("}")[-1] != "service":
+            continue
+        fields = {c.tag.split("}")[-1]: (c.text or "").strip() for c in svc}
+        stype = fields.get("serviceType", "")
+        if "WANIPConnection" not in stype and "WANPPPConnection" not in stype:
+            continue
+        if any(ch in stype for ch in '"<>&') or not fields.get("controlURL"):
+            continue
+        ctrl = _urlparse.urljoin(location, fields["controlURL"])
+        body = ('<?xml version="1.0"?>'
+                '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" '
+                's:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">'
+                '<s:Body><u:GetExternalIPAddress xmlns:u="' + stype + '"/></s:Body>'
+                '</s:Envelope>').encode()
+        req = _urllib.Request(ctrl, data=body, method="POST", headers={
+            "Content-Type": 'text/xml; charset="utf-8"',
+            "SOAPAction": '"' + stype + '#GetExternalIPAddress"'})
+        with _urllib.urlopen(req, timeout=timeout) as resp:
+            reply = _ET.fromstring(resp.read(65536))
+        for el in reply.iter():
+            if el.tag.split("}")[-1] == "NewExternalIPAddress":
+                ip = _cgnat_ip(el.text)
+                return str(ip) if ip else ""
+    return ""
+
+def _cgnat_upnp_wan_ip() -> dict:
+    locations = _cgnat_ssdp_locations()
+    if not locations:
+        return {"ip": "", "responded": False}
+    for loc in locations:
+        try:
+            ip = _cgnat_soap_wan_ip(loc)
+        except Exception as e:
+            log.debug("_cgnat_upnp_wan_ip %s: %s", loc, e)
+            continue
+        if ip:
+            return {"ip": ip, "responded": True}
+    return {"ip": "", "responded": True}
+
+def _cgnat_wan_info() -> dict:
+    now = time.time()
+    if _cgnat_cache["wan"] and now - _cgnat_cache["at"] < _CGNAT_CACHE_SEC:
+        return _cgnat_cache["wan"]
+    try:
+        upnp = _cgnat_upnp_wan_ip()
+    except Exception as e:
+        log.debug("_cgnat_wan_info: %s", e)
+        upnp = {"ip": "", "responded": False}
+    info = {"upnp_ip": upnp["ip"], "responded": upnp["responded"], "public": _dvsm_wan_ip()}
+    _cgnat_cache.update(at=now, wan=info)
+    return info
+
+def get_cgnat_status() -> dict:
+    route = _cgnat_route()
+    dev, src = route["dev"], route["src"]
+    checks: list = []
+
+    if not dev:
+        checks.append({"title": "Default route", "value": "none found", "status": "info",
+                       "note": "No default route, so CGNAT can't be checked yet", "url": None})
+    elif _cgnat_is_vpn(dev):
+        checks.append({"title": "Default route", "value": f"via {dev} (VPN)", "status": "pass",
+                       "note": "Traffic leaves through a VPN such as Tailscale, so CGNAT doesn't block it", "url": None})
+    else:
+        checks.append({"title": "Default route", "value": f"via {dev}", "status": "pass",
+                       "note": None, "url": None})
+        local = _cgnat_ip(src)
+        if local is None:
+            checks.append({"title": "Node address", "value": src or "not found", "status": "info",
+                           "note": None, "url": None})
+        elif local in _CGNAT_NET:
+            checks.append({"title": "Node address", "value": f"{src} (carrier NAT range)", "status": "fail",
+                           "note": "The node has a carrier NAT address, so inbound port forwards can't work", "url": None})
+        else:
+            checks.append({"title": "Node address", "value": src, "status": "pass",
+                           "note": None, "url": None})
+
+        wan = _cgnat_wan_info()
+        wan_ip = _cgnat_ip(wan["upnp_ip"])
+        if wan_ip is None:
+            checks.append({"title": "Router WAN address", "value": "not visible", "status": "info",
+                           "note": "The router didn't answer UPnP. Turn UPnP on, or read the WAN address on the router's status page", "url": None})
+        elif wan_ip in _CGNAT_NET:
+            checks.append({"title": "Router WAN address", "value": f"{wan_ip} (carrier NAT range)", "status": "fail",
+                           "note": "The ISP shares its address, so inbound port forwards can't work. Ask for a public IPv4 address, or use a tunnel", "url": None})
+        elif wan_ip.is_private:
+            checks.append({"title": "Router WAN address", "value": f"{wan_ip} (private)", "status": "warn",
+                           "note": "Another router sits upstream. Check that router for CGNAT too", "url": None})
+        else:
+            checks.append({"title": "Router WAN address", "value": str(wan_ip), "status": "pass",
+                           "note": None, "url": None})
+        checks.append({"title": "Public IP", "value": wan["public"] or "not detected", "status": "info",
+                       "note": "For reference only; not used for the CGNAT result", "url": None})
+
+    verdict = [c for c in checks if c["title"] != "Public IP"]
+    return {"ok": True, "checks": checks, "status": _reg_overall_status(verdict)}
+
+def _route_reg_cgnat_get(h: Handler) -> None:
+    h.send_json(get_cgnat_status())
 
 def _reg_summary_for_page() -> "dict | None":
     sm = get_state_snapshot().get("reg_summary")
@@ -35096,6 +35270,7 @@ _GET_ROUTES = {
     "/healthz":                lambda h: h.send_ping(),
     "/api/reg/http":           _route_reg_http_get,
     "/api/reg/iax":            _route_reg_iax_get,
+    "/api/reg/cgnat":          _route_reg_cgnat_get,
     "/api/phone":              _route_phone_get,
     "/api/console/status":     _route_console_status,
     "/api/console/ws":         _route_console_ws,
