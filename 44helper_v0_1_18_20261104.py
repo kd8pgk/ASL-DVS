@@ -44,7 +44,7 @@ from typing import Callable
 
 APP_TITLE = "ASL-DVS-M17 44 Helper"
 APP_HEADER = "44 Helper"
-APP_VERSION = "0.1.17"
+APP_VERSION = "0.1.18"
 APP_STAGE = "v0.0.221: Full config replacement uses the shared secret resolver; history in changelogs/44helper.md"
 CONFIG_DIR = Path("/etc/44helper")
 CONFIG_FILE = CONFIG_DIR / "44helper.conf"
@@ -2694,16 +2694,29 @@ def _purge_installed_cmd(pkgs: str) -> str:
             "{print $1}' | tr '\\n' ' '); if [ -n \"$pk\" ]; then echo \"Purging: $pk\"; "
             "sudo DEBIAN_FRONTEND=noninteractive apt purge -y $pk; else echo 'None of these packages are on this node.'; fi")
 
+_ASL3_APPLIANCE_ARCHES = ("amd64", "arm64")
+
+def _asl3_appliance_pkg(distro_deb_suffix: str) -> "str | None":
+    sysinfo = _system()
+    release = {"bookworm": "deb12", "trixie": "deb13"}.get(str(sysinfo.get("codename") or ""), distro_deb_suffix)
+    arch = str(sysinfo.get("arch") or "")
+    if arch not in _ASL3_APPLIANCE_ARCHES:
+        return None
+    if sysinfo.get("board") == "pi" and release == "deb12":
+        return "asl3-pi-appliance" if arch == "arm64" else None
+    return "asl3-appliance"
+
 def _asl3_appliance_cmd(distro_deb_suffix: str) -> str:
-    opts = "sudo DEBIAN_FRONTEND=noninteractive apt install -y -o Dpkg::Options::=\"--force-confdef\" " \
-           "-o Dpkg::Options::=\"--force-confold\" "
-    if distro_deb_suffix == "deb12":
-        if _system().get("board") == "pi":
-            return opts + "asl3-pi-appliance"
-        return ("echo 'Skipped: for Debian 12 the ASL3 appliance is only published for the Raspberry Pi "
-                "(asl3-pi-appliance). On a PC it needs Debian 13 (asl3-appliance-pc). Nothing was changed.'")
-    return opts + ("asl3-appliance asl3-appliance-pi" if _system().get("board") == "pi"
-                   else "asl3-appliance asl3-appliance-pc")
+    pkg = _asl3_appliance_pkg(distro_deb_suffix)
+    if pkg is None:
+        sysinfo = _system()
+        where = "a Raspberry Pi" if sysinfo.get("board") == "pi" else "this board"
+        msg = (f"Skipped: no ASL3 appliance is published for {where} on "
+               f"{sysinfo.get('arch') or 'this processor'} ({sysinfo.get('codename') or 'unknown release'}). "
+               "Nothing was changed.")
+        return "echo " + shlex.quote(msg)
+    return ("sudo DEBIAN_FRONTEND=noninteractive apt install -y -o Dpkg::Options::=\"--force-confdef\" "
+            "-o Dpkg::Options::=\"--force-confold\" " + pkg)
 
 def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
     return [
@@ -2741,11 +2754,11 @@ def _asl3_install_steps(distro_deb_suffix: str) -> list[dict]:
          "cmd": _asl3_appliance_cmd(distro_deb_suffix),
          "timeout": 900,
          "note": "Optional. Applies appliance branding, web rules and pre-configured firewall defaults. "
-                 "The package depends on the release. On Bookworm (Debian 12) only asl3-pi-appliance is published, "
-                 "and only for a Raspberry Pi; on a PC this step changes nothing. On Trixie (Debian 13) it installs "
-                 "asl3-appliance plus asl3-appliance-pi on a Pi, or asl3-appliance plus asl3-appliance-pc on a PC. "
-                 "The Pi package pulls in apache2 for its fallback-AP WiFi-setup feature. AllStarLink's current docs "
-                 "describe this path for Debian 13 only. Skip this step if you don't want appliance branding."},
+                 "The package is chosen from this node's own board, processor and release, not from the Script "
+                 "list: asl3-appliance on amd64 or arm64 (Bookworm or Trixie); asl3-pi-appliance on a Raspberry Pi "
+                 "running Bookworm (arm64 only). A 32-bit (armhf) system is skipped and nothing changes. "
+                 "The Pi Bookworm package pulls in apache2 for its fallback-AP WiFi-setup feature. "
+                 "Skip this step if you don't want appliance branding."},
         {"id": "allmon3_delete_default", "num": 11, "title": "Remove default Allmon3 account",
          "cmd": "sudo allmon3-passwd --delete allmon3"},
         {"id": "allmon3_set_admin", "num": 12, "title": "Set Allmon3 admin password",

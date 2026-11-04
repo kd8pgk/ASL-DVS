@@ -1,6 +1,19 @@
 # 44helper changelog
 
-Current file: `44helper_v0_1_17_20261103.py`. Newest entries first.
+Current file: `44helper_v0_1_18_20261104.py`. Newest entries first.
+
+## 0.1.18 (2026-11-04)
+
+- **The ASL3 appliance is chosen from the node, not from the release list.** Step 10 "(Optional) Full ASL3 Appliance branding/firewall defaults" checks the node's own board, processor and release, then installs:
+  - `asl3-appliance` on amd64 or arm64, on Bookworm or Trixie (on a PC and on other boards, including Armbian);
+  - `asl3-pi-appliance` on a Raspberry Pi running Bookworm (arm64 only);
+  - `asl3-appliance` alone on a Raspberry Pi running Trixie, since its `asl3-appliance-pi` package is not published yet.
+- **Before:** on Trixie a non-Pi node installed `asl3-appliance-pc`, and on Bookworm a PC was told the appliance is Pi only. Both were wrong per the published-package matrix, so the step could fail or skip a valid install.
+- **Skipped cleanly on 32-bit (armhf)** systems, and on any processor other than amd64 or arm64. The step prints why and changes nothing.
+- The step's note now describes what is chosen and why, instead of the old per-release list.
+- Common tool: the change applies to the full build and the Pi Zero 2 W build alike.
+- This is a release, not a cosmetic build. Renamed to `44helper_v0_1_18_20261104.py`.
+- Selection tested with mocked board, processor and release values (12 cases, all pass). Not run on a real node: the matrix it follows is not yet checked against the repo (see the ASL3 check script).
 
 ## 0.1.17 (2026-11-03)
 
