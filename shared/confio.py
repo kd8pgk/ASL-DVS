@@ -12,6 +12,10 @@ USED_BY = {
                             "nodetalker", "amp_nodetalker", "pibrary"),
     "system_profile": ("44helper", "wifimon"),
     "allmon3_sync": ("44helper", "nodecontrol", "nodecontrol_pi02w", "nodetalker"),
+    "suitelog_redact": ("nodetalker", "instmon"),
+    "suitelog_append": ("nodetalker", "instmon"),
+    "suitelog_rows": ("nodetalker", "instmon"),
+    "suitelog_flag": ("nodetalker", "instmon"),
 }
 
 
@@ -418,3 +422,100 @@ def allmon3_sync(text, add=(), remove=(), own=""):
         out += ["", "[%s]" % n] + body
         notes.append("allmon3.ini: [%s] added (host/user/pass copied from [%s])" % (n, src["name"]))
     return "\n".join(out) + "\n", notes
+
+
+def suitelog_redact(text, salt):
+    import hashlib
+    import ipaddress
+    import re
+
+    def tag(kind, value):
+        return "%s:%s" % (kind, hashlib.sha256((salt + value.lower()).encode("utf-8")).hexdigest()[:4])
+
+    def hide(m):
+        return m.group(1) + "[hidden]"
+
+    def ip4(m):
+        try:
+            a = ipaddress.IPv4Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    def ip6(m):
+        try:
+            a = ipaddress.IPv6Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [hidden]", text)
+    text = re.sub(r"(?i)(\b(?:pass(?:word|wd|phrase)?|psk|secret|token|api[_-]?key|auth(?:orization)?|cookie|credential)s?[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&\"']+)", hide, text)
+    text = re.sub(r"(?i)(\bssid\b\s*[:=]?\s*)(?:\"[^\"]*\"|'[^']*')", lambda m: m.group(1) + tag("ssid", m.group(0)), text)
+    text = re.sub(r"\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b", lambda m: tag("mac", m.group(0)), text)
+    text = re.sub(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:.])", ip6, text)
+    text = re.sub(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])", ip4, text)
+    return text
+
+
+def suitelog_append(path, row, salt=None, seg_max=10000000):
+    import fcntl
+    import json
+    import os
+    import time
+    if "t" not in row:
+        row = dict(row, t=int(time.time() * 1000))
+    line = json.dumps(row, separators=(",", ":"))
+    if salt:
+        line = suitelog_redact(line, salt)
+    data = (line + "\n").encode("utf-8")
+    os.makedirs(os.path.dirname(path) or ".", mode=0o755, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, data)
+        size = os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+    if size < seg_max:
+        return False
+    lock = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if os.stat(path).st_size >= seg_max:
+                os.replace(path, path + ".1")
+                return True
+        except FileNotFoundError:
+            pass
+    finally:
+        os.close(lock)
+    return False
+
+
+def suitelog_rows(path, kinds=None):
+    import json
+    for name in (path + ".1", path):
+        try:
+            fh = open(name, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for ln in fh:
+                try:
+                    row = json.loads(ln)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and (kinds is None or row.get("kind") in kinds):
+                    yield row
+
+
+def suitelog_flag(path):
+    try:
+        with open(path, "r", encoding="ascii", errors="replace") as fh:
+            return fh.read(64).strip() or "x"
+    except OSError:
+        return None
