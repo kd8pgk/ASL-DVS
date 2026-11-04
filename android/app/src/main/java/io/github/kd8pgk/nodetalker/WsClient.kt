@@ -1,12 +1,14 @@
 package io.github.kd8pgk.nodetalker
 
-import android.util.Base64
+import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.Base64
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SSLSocket
 import javax.net.ssl.SSLSocketFactory
@@ -39,12 +41,13 @@ class WsClient(private val node: Node, private val cookie: String?) {
         val o = s.getOutputStream()
         val i = DataInputStream(s.getInputStream())
         val key = ByteArray(16).also { rnd.nextBytes(it) }
+        val keyText = Base64.getEncoder().encodeToString(key)
         val hostHdr = (if (node.host.contains(':')) "[${node.host}]" else node.host) + ":" + node.port
         val req = StringBuilder()
             .append("GET /api/talk HTTP/1.1\r\n")
             .append("Host: ").append(hostHdr).append("\r\n")
             .append("Upgrade: websocket\r\nConnection: Upgrade\r\n")
-            .append("Sec-WebSocket-Key: ").append(Base64.encodeToString(key, Base64.NO_WRAP)).append("\r\n")
+            .append("Sec-WebSocket-Key: ").append(keyText).append("\r\n")
             .append("Sec-WebSocket-Version: 13\r\n")
             .append("Origin: ").append(node.origin).append("\r\n")
         if (!cookie.isNullOrEmpty()) req.append("Cookie: ").append(cookie).append("\r\n")
@@ -63,6 +66,13 @@ class WsClient(private val node: Node, private val cookie: String?) {
         if (code != 101) {
             close()
             throw IOException(if (code == 401) "log in on the page first" else "the node refused the talk channel (HTTP $code)")
+        }
+        val accept = head.lineSequence()
+            .firstOrNull { it.startsWith("Sec-WebSocket-Accept:", ignoreCase = true) }
+            ?.substringAfter(':')?.trim()
+        if (accept != acceptFor(keyText)) {
+            close()
+            throw IOException("bad answer from the node")
         }
         out = o
         input = i
@@ -103,21 +113,39 @@ class WsClient(private val node: Node, private val cookie: String?) {
 
     fun read(onText: (String) -> Unit) {
         val i = input ?: throw IOException("not connected")
+        val msg = ByteArrayOutputStream()
+        var msgOp = 0
         while (true) {
             val b0 = i.readUnsignedByte()
             val b1 = i.readUnsignedByte()
+            val fin = b0 and 0x80 != 0
+            val op = b0 and 0x0f
             var len = (b1 and 0x7f).toLong()
             if (len == 126L) len = i.readUnsignedShort().toLong()
             else if (len == 127L) len = i.readLong()
-            if (len < 0 || len > 1_000_000) throw IOException("bad frame from the node")
+            if (len < 0 || len > MAX_MESSAGE) throw IOException("bad frame from the node")
             val mask = if (b1 and 0x80 != 0) ByteArray(4).also { i.readFully(it) } else null
             val data = ByteArray(len.toInt())
             i.readFully(data)
             if (mask != null) for (k in data.indices) data[k] = (data[k].toInt() xor mask[k and 3].toInt()).toByte()
-            when (b0 and 0x0f) {
-                1 -> onText(String(data, Charsets.UTF_8))
+            when (op) {
+                1, 2 -> {
+                    if (msgOp != 0) throw IOException("bad frame from the node")
+                    msgOp = op
+                    msg.reset()
+                    msg.write(data)
+                }
+                0 -> {
+                    if (msgOp == 0 || msg.size() + data.size > MAX_MESSAGE) throw IOException("bad frame from the node")
+                    msg.write(data)
+                }
                 8 -> throw IOException("the node closed the talk channel")
                 9 -> send(10, data)
+            }
+            if ((op == 0 || op == 1 || op == 2) && fin) {
+                if (msgOp == 1) onText(String(msg.toByteArray(), Charsets.UTF_8))
+                msg.reset()
+                msgOp = 0
             }
         }
     }
@@ -135,5 +163,15 @@ class WsClient(private val node: Node, private val cookie: String?) {
         }
         out = null
         input = null
+    }
+
+    companion object {
+        const val MAX_MESSAGE = 1_000_000L
+        private const val GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+        fun acceptFor(key: String): String =
+            Base64.getEncoder().encodeToString(
+                MessageDigest.getInstance("SHA-1").digest((key + GUID).toByteArray(Charsets.US_ASCII))
+            )
     }
 }

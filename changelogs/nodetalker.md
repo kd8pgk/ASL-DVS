@@ -1,6 +1,16 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_9_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_10_20261103.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.10 (2026-11-03)
+
+From the audit of Node Talker and Node Talker Mobile with a test server.
+
+- **A stalled listener no longer holds its slot for minutes.** A phone that went out of range, or a browser that stopped reading, kept its listener slot until the kernel's send buffer was full and the 15 s write timeout could fire. With the default Linux buffers that took about 4.5 minutes at 8 kB/s (measured: 267 s), and with 3 slots one dead phone blocked a third of them. Each listener socket now has a 64 KB send buffer, so a stalled listener is dropped 20 to 26 s after it stops reading (measured: 26 s for mu-law, 20 s for 16-bit). A listener that stops for a few seconds is unchanged; one that stops for longer than that gets no old audio burst when it comes back, it reconnects instead.
+- **The talk channel says why it closed a bad frame.** A frame that is not masked closes with status 1002, and one over 64 KB with 1009. Before, the close frame carried no status.
+- Checked and left as it is: `/api/listen/event` answers a bad batch with HTTP 200 and `ok: false`. Node Talker Mobile keeps events until it gets a 200 or 404, so a 400 would block every later event behind one bad batch.
+- Checked and left as it is: a closed listener frees its slot on the next audio write, about 16 ms later, so a reconnect in that window can see one 503.
+- This is a release, not a cosmetic build.
 
 ## 0.10.9 (2026-11-03)
 
