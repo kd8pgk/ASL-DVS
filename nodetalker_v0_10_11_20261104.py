@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.10"
+VERSION = "0.10.11"
 DATE_STR = "2026-11-03"
 APP_NAME = "Node Talker"
 
@@ -398,6 +398,103 @@ def _remove_quiet(path):
         os.remove(path)
     except OSError:
         pass
+
+
+def suitelog_redact(text, salt):
+    import hashlib
+    import ipaddress
+    import re
+
+    def tag(kind, value):
+        return "%s:%s" % (kind, hashlib.sha256((salt + value.lower()).encode("utf-8")).hexdigest()[:4])
+
+    def hide(m):
+        return m.group(1) + "[hidden]"
+
+    def ip4(m):
+        try:
+            a = ipaddress.IPv4Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    def ip6(m):
+        try:
+            a = ipaddress.IPv6Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [hidden]", text)
+    text = re.sub(r"(?i)(\b(?:pass(?:word|wd|phrase)?|psk|secret|token|api[_-]?key|auth(?:orization)?|cookie|credential)s?[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&\"']+)", hide, text)
+    text = re.sub(r"(?i)(\bssid\b\s*[:=]?\s*)(?:\"[^\"]*\"|'[^']*')", lambda m: m.group(1) + tag("ssid", m.group(0)), text)
+    text = re.sub(r"\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b", lambda m: tag("mac", m.group(0)), text)
+    text = re.sub(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:.])", ip6, text)
+    text = re.sub(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])", ip4, text)
+    return text
+
+
+def suitelog_append(path, row, salt=None, seg_max=10000000):
+    import fcntl
+    import json
+    import os
+    import time
+    if "t" not in row:
+        row = dict(row, t=int(time.time() * 1000))
+    line = json.dumps(row, separators=(",", ":"))
+    if salt:
+        line = suitelog_redact(line, salt)
+    data = (line + "\n").encode("utf-8")
+    os.makedirs(os.path.dirname(path) or ".", mode=0o755, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, data)
+        size = os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+    if size < seg_max:
+        return False
+    lock = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if os.stat(path).st_size >= seg_max:
+                os.replace(path, path + ".1")
+                return True
+        except FileNotFoundError:
+            pass
+    finally:
+        os.close(lock)
+    return False
+
+
+def suitelog_rows(path, kinds=None):
+    import json
+    for name in (path + ".1", path):
+        try:
+            fh = open(name, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for ln in fh:
+                try:
+                    row = json.loads(ln)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and (kinds is None or row.get("kind") in kinds):
+                    yield row
+
+
+def suitelog_flag(path):
+    try:
+        with open(path, "r", encoding="ascii", errors="replace") as fh:
+            return fh.read(64).strip() or "x"
+    except OSError:
+        return None
 
 
 def _atomic_write(path, data, mode=0o644, like=None):
@@ -1067,17 +1164,42 @@ class _Listener:
         self.pcm = pcm
 
 
+SUITELOG_PATH = os.environ.get("NODETALKER_SUITELOG", "/run/asl_dvs/suitelog.jsonl")
+SUITELOG_FLAG = os.environ.get("NODETALKER_SUITELOG_FLAG", "/run/asl_dvs/suitelog.on")
+SUITELOG_SEG = 10000000
+_sl_flag = {"at": -10.0, "salt": None}
+_sl_ino = {"ino": None}
+
+
+def suitelog_salt():
+    now = time.monotonic()
+    if now - _sl_flag["at"] > 2.0:
+        _sl_flag["at"] = now
+        _sl_flag["salt"] = suitelog_flag(SUITELOG_FLAG)
+    return _sl_flag["salt"]
+
+
+def suitelog_put(kind, data, always=False):
+    salt = suitelog_salt()
+    if salt is None and not always:
+        return False
+    try:
+        suitelog_append(SUITELOG_PATH, {"kind": kind, "src": "nodetalker", "v": VERSION, "data": data},
+                        salt, SUITELOG_SEG)
+    except OSError:
+        return False
+    return True
+
+
 KERCHUNK_LOG_PATH = os.path.join(CONFIG_DIR, "nodetalker_bursts.csv")
 KERCHUNK_MIN_SEC = 0.1
 KERCHUNK_LOG_MAX = 2000
-KERCHUNK_LOG_BYTES = 200000
 KERCHUNK_LEARN_MIN = 6
 KERCHUNK_LEARN_LO = 0.15
 KERCHUNK_LEARN_HI = 0.8
 KERCHUNK_TEST_MIN = 15
 KERCHUNK_TEST_MIN_LO = 1
 KERCHUNK_TEST_MAX = 60
-_KC_HEAD = "id,secs,peak_db,kerchunk,label,source,keyed_secs,who\n"
 _kc_lock = threading.Lock()
 _kc_state = {"threshold": KERCHUNK_MAX_SEC, "learned": False, "labels": 0}
 _kc_test = {"on": False, "started": 0.0, "ends": 0.0, "minutes": KERCHUNK_TEST_MIN, "rows": [], "pending": False}
@@ -1088,21 +1210,15 @@ _kc_writer = None
 _kc_last_id = 0
 
 
-def _kc_line(row):
-    keyed = "" if row.get("keyed_secs") is None else f"{row['keyed_secs']:.2f}"
-    return (f"{row['id']},{row['secs']:.2f},{row['peak']:.1f},{1 if row['kerchunk'] else 0},{row['label']},"
-            f"{row.get('source', 'audio')},{keyed},{row.get('who', '')}\n")
+_kc_mem = threading.RLock()
+_kc_cache = {"rows": None}
 
 
-def _kc_text(rows):
-    return _KC_HEAD + "".join(_kc_line(r) for r in rows[-KERCHUNK_LOG_MAX:])
-
-
-def _kc_rows():
+def _kc_csv_rows(path):
     try:
-        with open(KERCHUNK_LOG_PATH, encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             lines = fh.read().splitlines()[1:]
-    except FileNotFoundError:
+    except OSError:
         return []
     rows = []
     for ln in lines:
@@ -1118,6 +1234,70 @@ def _kc_rows():
         except ValueError:
             continue
     return rows
+
+
+def _kc_norm(d):
+    try:
+        keyed = d.get("keyed_secs")
+        return {"id": str(d["id"]), "secs": float(d["secs"]), "peak": float(d["peak"]), "kerchunk": bool(d["kerchunk"]),
+                "label": str(d.get("label") or ""), "source": str(d.get("source") or "audio"),
+                "keyed_secs": None if keyed is None else float(keyed), "who": str(d.get("who") or "")}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _kc_load():
+    rows = []
+    for r in suitelog_rows(SUITELOG_PATH, ("kc", "kc_label", "kc_reset", "kc_base")):
+        kind, d = r.get("kind"), r.get("data")
+        d = d if isinstance(d, dict) else {}
+        if kind in ("kc_reset", "kc_base"):
+            rows = []
+        elif kind == "kc":
+            row = _kc_norm(d)
+            if row is not None:
+                rows.append(row)
+        elif kind == "kc_label":
+            for x in rows:
+                if x["id"] == str(d.get("id")):
+                    x["label"] = str(d.get("label") or "")
+    return rows[-KERCHUNK_LOG_MAX:]
+
+
+def _kc_save(kind, data):
+    suitelog_put(kind, data, always=True)
+    try:
+        ino = os.stat(SUITELOG_PATH).st_ino
+    except OSError:
+        return
+    last, _sl_ino["ino"] = _sl_ino["ino"], ino
+    if last is not None and ino != last:
+        suitelog_put("kc_base", {}, always=True)
+        for row in _kc_cache["rows"] or []:
+            suitelog_put("kc", row, always=True)
+
+
+def _kc_rows():
+    with _kc_mem:
+        if _kc_cache["rows"] is None:
+            _kc_cache["rows"] = _kc_load()
+        return [dict(r) for r in _kc_cache["rows"]]
+
+
+def _kc_init():
+    with _kc_mem:
+        _kc_cache["rows"] = _kc_load()
+        if _kc_cache["rows"] or not os.path.exists(KERCHUNK_LOG_PATH):
+            return
+        rows = _kc_csv_rows(KERCHUNK_LOG_PATH)[-KERCHUNK_LOG_MAX:]
+        _kc_cache["rows"] = rows
+        suitelog_put("kc_base", {}, always=True)
+        for row in rows:
+            suitelog_put("kc", row, always=True)
+        try:
+            os.replace(KERCHUNK_LOG_PATH, KERCHUNK_LOG_PATH + ".imported")
+        except OSError:
+            pass
 
 
 def _kc_learn(rows):
@@ -1178,30 +1358,26 @@ def _kc_closed(row):
 
 def _kc_set_label(bid, label):
     with _kc_lock:
-        rows = _kc_rows()
-        hit = [r for r in rows if r["id"] == bid]
-        if not hit:
-            return False
-        hit[0]["label"] = label
-        try:
-            _atomic_write(KERCHUNK_LOG_PATH, _kc_text(rows), 0o644)
-        except OSError as exc:
-            log_event(f"Could not save the label in {KERCHUNK_LOG_PATH}: {exc}", "err")
-            return False
+        with _kc_mem:
+            _kc_rows()
+            hit = [r for r in _kc_cache["rows"] if r["id"] == bid]
+            if not hit:
+                return False
+            hit[0]["label"] = label
+            _kc_save("kc_label", {"id": bid, "label": label})
     _kc_refresh()
     return True
 
 
 def _kc_write_row(row):
     with _kc_lock:
-        try:
-            if os.path.exists(KERCHUNK_LOG_PATH) and os.path.getsize(KERCHUNK_LOG_PATH) > KERCHUNK_LOG_BYTES:
-                _atomic_write(KERCHUNK_LOG_PATH, _kc_text(_kc_rows()), 0o644)
-            fresh = not os.path.exists(KERCHUNK_LOG_PATH) or os.path.getsize(KERCHUNK_LOG_PATH) == 0
-            with open(KERCHUNK_LOG_PATH, "a", encoding="utf-8") as fh:
-                fh.write((_KC_HEAD if fresh else "") + _kc_line(row))
-        except OSError as exc:
-            log_event(f"Could not record a burst in {KERCHUNK_LOG_PATH}: {exc}", "err")
+        with _kc_mem:
+            _kc_rows()
+            kept = _kc_norm(row)
+            if kept is None:
+                return
+            _kc_cache["rows"] = (_kc_cache["rows"] + [kept])[-KERCHUNK_LOG_MAX:]
+            _kc_save("kc", kept)
 
 
 def _kc_write_loop():
@@ -1331,15 +1507,12 @@ def kerchunk_test_stop(_body=None):
 def kerchunk_reset(_body=None):
     with _kc_lock:
         _kc_test.update(on=False, rows=[], pending=False)
-        if os.path.exists(KERCHUNK_LOG_PATH):
-            backup = f"{KERCHUNK_LOG_PATH}.{time.strftime('%Y%m%d-%H%M%S')}.bak"
-            try:
-                os.replace(KERCHUNK_LOG_PATH, backup)
-            except OSError as exc:
-                return {"ok": False, "error": f"could not back up {KERCHUNK_LOG_PATH}: {exc}"}
+        with _kc_mem:
+            _kc_cache["rows"] = []
+            _kc_save("kc_reset", {})
     _kc_refresh()
-    log_event("Kerchunk log reset: the old log is kept as a .bak file, and the cut-off is back to the default", "warn")
-    return {"ok": True, "message": "Reset. The old log is kept as a backup file."}
+    log_event("Kerchunk log reset: the cut-off is back to the default", "warn")
+    return {"ok": True, "message": "Reset."}
 
 
 def kerchunk_label(body):
@@ -1348,15 +1521,13 @@ def kerchunk_label(body):
     if label not in ("", "kerchunk", "real"):
         return {"ok": False, "error": "The label must be Kerchunk, Real, or none."}
     with _kc_lock:
-        rows = _kc_rows()
-        hit = [r for r in rows if r["id"] == bid]
-        if not hit:
-            return {"ok": False, "error": "That burst is no longer in the log."}
-        hit[0]["label"] = label
-        try:
-            _atomic_write(KERCHUNK_LOG_PATH, _kc_text(rows), 0o644)
-        except OSError as exc:
-            return {"ok": False, "error": f"could not save {KERCHUNK_LOG_PATH}: {exc}"}
+        with _kc_mem:
+            _kc_rows()
+            hit = [r for r in _kc_cache["rows"] if r["id"] == bid]
+            if not hit:
+                return {"ok": False, "error": "That burst is no longer in the log."}
+            hit[0]["label"] = label
+            _kc_save("kc_label", {"id": bid, "label": label})
     _kc_refresh()
     return {"ok": True, "message": "Saved."}
 
@@ -1585,10 +1756,6 @@ class KeyedWatch:
 KEYED = KeyedWatch()
 
 
-RXH_PATH = os.path.join(CONFIG_DIR, "nodetalker_rxhealth.jsonl")
-RXH_FILE_MAX = 1000000
-LISTENLOG_PATH = os.path.join(CONFIG_DIR, "nodetalker_listenlog.jsonl")
-LISTENLOG_FILE_MAX = 1000000
 LISTEN_EVENTS_MAX = 20
 LISTEN_WHY = ("button", "notification", "media_button", "auto_open", "balancer", "node_test", "headset_back",
               "headset_lost", "bluetooth_connect", "bluetooth_gone", "login_rejected", "stream_ended",
@@ -2004,13 +2171,7 @@ class RxHealth:
 
 
 def _rxh_write(row):
-    try:
-        if os.path.exists(RXH_PATH) and os.path.getsize(RXH_PATH) > RXH_FILE_MAX:
-            os.replace(RXH_PATH, RXH_PATH + ".1")
-        with open(RXH_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
-    except OSError:
-        pass
+    suitelog_put("rxh", row)
 
 
 def rxh_sum(rows):
@@ -2311,13 +2472,7 @@ def rxh_client(body):
 
 
 def _listenlog_write(row):
-    try:
-        if os.path.exists(LISTENLOG_PATH) and os.path.getsize(LISTENLOG_PATH) > LISTENLOG_FILE_MAX:
-            os.replace(LISTENLOG_PATH, LISTENLOG_PATH + ".1")
-        with open(LISTENLOG_PATH, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(row, separators=(",", ":")) + "\n")
-    except OSError:
-        pass
+    suitelog_put("listen", row)
 
 
 def listen_detail(raw):
@@ -2368,17 +2523,9 @@ def listen_event(body):
 
 
 def rxh_report(body=None):
-    rows = []
-    for path in (RXH_PATH + ".1", RXH_PATH):
-        try:
-            with open(path, encoding="utf-8") as fh:
-                for ln in fh:
-                    try:
-                        rows.append(json.loads(ln))
-                    except ValueError:
-                        pass
-        except OSError:
-            pass
+    rows = [r["data"] for r in suitelog_rows(SUITELOG_PATH, ("rxh",)) if isinstance(r.get("data"), dict)]
+    if not rows:
+        rows = RXH.history(RXH_KEEP_MIN)
     return {"ok": True, "version": VERSION, "rows": rows[-4000:]}
 
 
@@ -12495,6 +12642,7 @@ def run_server():
                          "is sent in plain text. See the Node Talker log.")
     _solo_load()
     fav_doc()
+    _kc_init()
     _kc_refresh()
     threading.Thread(target=KEYED.loop, name="ami-keyed", daemon=True).start()
     threading.Thread(target=HUB.pump_loop, name="pump", daemon=True).start()

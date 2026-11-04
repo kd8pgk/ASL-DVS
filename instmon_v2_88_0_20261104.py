@@ -4,6 +4,7 @@ import argparse
 import collections
 import fcntl
 import fnmatch
+import glob
 import hashlib
 import hmac 
 import io
@@ -37,7 +38,7 @@ from collections import deque
 from datetime import datetime 
 
 PORT =8990 
-VERSION ="2.87.0"
+VERSION ="2.88.0"
 DATE_STR ="2026-11-02"
 
 INSTALLER_SCRIPT_GLOBS =("install_all*.sh","install_asl_dvs*.sh")
@@ -5655,6 +5656,393 @@ _RECORDING_BLOCKED_ACTIONS = frozenset((
     "install", "uninstall", "start", "stop", "install_config", "run_script", "rpiclone_install", "save_alternate",
     "comms_restart", "reboot", "shutdown", "gh_update", "quiet", "restore", "full_update", "install_confgetter",
     "cg_run", "cg_uninstall", "install_confputter", "cp_uninstall", "cp_apply", "cp_undo"))
+SUITELOG_PATH = os.environ.get("INSTMON_SUITELOG", "/run/asl_dvs/suitelog.jsonl")
+SUITELOG_FLAG = os.environ.get("INSTMON_SUITELOG_FLAG", "/run/asl_dvs/suitelog.on")
+SUITELOG_SEG = 10000000
+SL_UNITS = ("nodetalker", "nodelisten", "amp_nodetalker", "amp-server", "amp-hub", "wifimon", "instmon", "nodecontrol",
+            "asl_dvs_dashboard", "sysmon", "44helper", "44helper-netready", "noderecorder", "pibrary", "usrp2m17",
+            "stfu", "svxlink-usrp", "asl-zello-bridge", "mmdvm_bridge", "analog_bridge", "asterisk", "allmon3",
+            "asl_dvs_*", "wg-quick@*")
+SL_FILES = ("/var/log/asterisk/full", "/var/log/asterisk/messages", "/var/log/asterisk/messages.log",
+            "/var/log/mmdvm/*.log", "/var/log/usrp/*", "/var/log/dvswitch/*", "/var/log/ircddbgateway/*",
+            "/var/log/wifimon/*", "/var/log/svxlink", os.path.join(CONFIG_DIR, "instmon_fu_job.log"),
+            "/media/*/.pibrary/logs/*.log", "/media/*/*/.pibrary/logs/*.log", "/mnt/*/.pibrary/logs/*.log",
+            "/mnt/*/*/.pibrary/logs/*.log")
+SL_WIFI_FILE = "/run/asl_dvs/wifi_link.json"
+SL_KERNEL_RE = re.compile(r"brcmfmac|wlan\d|mmc\d|usb \d|under-?voltage|throttl|thermal|oom|out of memory|voltage|"
+                          r"firmware|i/o error|ext4-fs|reset", re.I)
+SL_LINE_MAX = 2000
+SL_SOURCE_BYTES_PER_MIN = 98304
+SL_REPEAT_SEC = 60.0
+SL_TAIL_FIRST = 50
+SL_KC_KINDS = ("kc", "kc_label", "kc_reset", "kc_base")
+_SL_CTRL = re.compile(r"\x1b\[[0-9;]*[A-Za-z]|[\x00-\x08\x0b-\x1f\x7f]")
+_SL_STAMP = re.compile(r"^\[[^\]]{8,32}\]\s*|^\d{4}-\d\d-\d\d[T ][\d:.,]+\S*\s*")
+
+
+class SuiteCollector:
+    def __init__(self, path=None, flag=None, seg=None):
+        self.path = path or SUITELOG_PATH
+        self.flag = flag or SUITELOG_FLAG
+        self.seg = seg or SUITELOG_SEG
+        self.lock = threading.RLock()
+        self.stop_evt = threading.Event()
+        self.threads = []
+        self.procs = []
+        self.salt = None
+        self.since = 0.0
+        self.written = 0
+        self.dropped = 0
+        self.counts = {}
+        self.runs = {}
+        self.budget = {}
+        self.tails = {}
+        self.sources_seen = set()
+
+    def running(self):
+        return self.salt is not None and not self.stop_evt.is_set()
+
+    def emit(self, src, level, msg, kind="log", now=None, data=None):
+        now = time.time() if now is None else now
+        msg = _SL_CTRL.sub(" ", str(msg)).strip()[:SL_LINE_MAX]
+        if not msg and data is None:
+            return False
+        with self.lock:
+            salt = self.salt
+            if salt is None:
+                return False
+            urgent = level in ("err", "warn")
+            key = _SL_STAMP.sub("", msg)
+            run = self.runs.get(src)
+            if run is not None and run["key"] == key and now - run["first"] < SL_REPEAT_SEC and data is None:
+                run["n"] += 1
+                run["last"] = now
+                return True
+            self._flush_run(src)
+            b = self.budget.setdefault(src, {"min": int(now // 60), "bytes": 0, "drop": 0})
+            if b["min"] != int(now // 60):
+                if b["drop"]:
+                    self._write({"kind": "drop", "src": src, "lvl": "warn", "n": b["drop"],
+                                 "msg": "dropped %d lines in the last minute" % b["drop"]}, now)
+                b.update(min=int(now // 60), bytes=0, drop=0)
+            if not urgent and b["bytes"] + len(msg) > SL_SOURCE_BYTES_PER_MIN:
+                b["drop"] += 1
+                self.dropped += 1
+                return False
+            b["bytes"] += len(msg)
+            row = {"kind": kind, "src": src, "lvl": level, "msg": msg}
+            if data is not None:
+                row["data"] = data
+            self._write(row, now)
+            if data is None:
+                self.runs[src] = {"key": key, "first": now, "last": now, "n": 0, "level": level, "msg": msg}
+            return True
+
+    def _write(self, row, now):
+        row = dict(row, t=int(now * 1000))
+        try:
+            suitelog_append(self.path, row, self.salt, self.seg)
+        except OSError:
+            return
+        self.written += 1
+        s = row.get("src", "")
+        self.counts[s] = self.counts.get(s, 0) + 1
+
+    def _flush_run(self, src):
+        run = self.runs.pop(src, None)
+        if run is not None and run["n"]:
+            self._write({"kind": "log", "src": src, "lvl": run["level"], "msg": run["msg"], "n": run["n"] + 1,
+                         "rep": True, "first": int(run["first"] * 1000), "last": int(run["last"] * 1000)}, run["last"])
+
+    def flush_runs(self, now=None):
+        now = time.time() if now is None else now
+        with self.lock:
+            for src in [s for s, r in self.runs.items() if now - r["first"] >= SL_REPEAT_SEC or self.stop_evt.is_set()]:
+                self._flush_run(src)
+
+    @staticmethod
+    def level_of(priority):
+        try:
+            p = int(priority)
+        except (TypeError, ValueError):
+            return "info"
+        return "err" if p <= 3 else "warn" if p == 4 else "info" if p <= 6 else "debug"
+
+    def ingest_journal(self, line, kernel=False):
+        try:
+            d = json.loads(line)
+        except ValueError:
+            return False
+        if not isinstance(d, dict):
+            return False
+        msg = d.get("MESSAGE")
+        if isinstance(msg, list):
+            msg = bytes(msg).decode("utf-8", "replace")
+        if not isinstance(msg, str):
+            return False
+        level = self.level_of(d.get("PRIORITY"))
+        try:
+            now = int(d.get("__REALTIME_TIMESTAMP")) / 1e6
+        except (TypeError, ValueError):
+            now = None
+        if kernel:
+            if level == "info" and not SL_KERNEL_RE.search(msg):
+                return False
+            if level == "debug":
+                return False
+            return self.emit("kernel", level, msg, now=now)
+        unit = str(d.get("_SYSTEMD_UNIT") or d.get("SYSLOG_IDENTIFIER") or "journal")
+        if unit.endswith(".service"):
+            unit = unit[:-8]
+        return self.emit("journal:" + unit, level, msg, now=now)
+
+    def ingest_file_line(self, path, line):
+        low = line.lower()
+        level = "err" if ("error" in low or "critical" in low or "fatal" in low) else "warn" if "warn" in low else "info"
+        return self.emit("file:" + path, level, line)
+
+    def tail_once(self, paths):
+        for path in paths:
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            state = self.tails.get(path)
+            try:
+                with open(path, "rb") as fh:
+                    if state is None:
+                        start = max(0, st.st_size - 65536)
+                        fh.seek(start)
+                        data = fh.read()
+                        lines = data.decode("utf-8", "replace").splitlines()
+                        if start:
+                            lines = lines[1:]
+                        lines = lines[-SL_TAIL_FIRST:]
+                        pos = st.st_size
+                    else:
+                        pos = state["pos"]
+                        if state["ino"] != st.st_ino or st.st_size < pos:
+                            pos = 0
+                        fh.seek(pos)
+                        data = fh.read(1048576)
+                        pos += len(data)
+                        lines = data.decode("utf-8", "replace").splitlines()
+                self.tails[path] = {"ino": st.st_ino, "pos": pos}
+            except OSError:
+                continue
+            for ln in lines:
+                if ln.strip():
+                    self.ingest_file_line(path, ln)
+
+    def file_list(self):
+        seen = []
+        for pat in SL_FILES:
+            for p in sorted(glob.glob(pat)):
+                if p not in seen and not p.endswith((".gz", ".1", ".old")):
+                    seen.append(p)
+        return seen
+
+    def unit_list(self):
+        units = list(SL_UNITS)
+        try:
+            for n in os.listdir(_SYSTEMD_UNIT_DIR):
+                if not n.endswith(".service") or n[:-8] in units:
+                    continue
+                p = os.path.join(_SYSTEMD_UNIT_DIR, n)
+                try:
+                    with open(p, errors="replace") as fh:
+                        if re.search(r"asl_dvs|ASL-DVS|DVSwitch|Node (?:Talker|Recorder|Control)", fh.read(4096)):
+                            units.append(n[:-8])
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        return sorted(set(units))
+
+    def _journal_loop(self, kernel):
+        last_units = None
+        proc = None
+        while not self.stop_evt.is_set():
+            units = None if kernel else self.unit_list()
+            if proc is not None and (units != last_units or proc.poll() is not None):
+                try:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                except (OSError, subprocess.SubprocessError):
+                    pass
+                proc = None
+            if proc is None:
+                cmd = ["journalctl", "-f", "-n", "0", "-o", "json", "--no-pager"]
+                cmd += ["-k"] if kernel else [a for u in units for a in ("-u", u)]
+                try:
+                    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+                                            errors="replace", preexec_fn=lambda: os.nice(10))
+                except OSError:
+                    self.stop_evt.wait(30)
+                    continue
+                with self.lock:
+                    self.procs.append(proc)
+                last_units = units
+                threading.Thread(target=self._read_proc, args=(proc, kernel), daemon=True).start()
+            self.stop_evt.wait(300 if not kernel else 5)
+        if proc is not None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def _read_proc(self, proc, kernel):
+        try:
+            for line in proc.stdout:
+                if self.stop_evt.is_set():
+                    break
+                self.ingest_journal(line, kernel)
+        except (OSError, ValueError):
+            pass
+
+    def _file_loop(self):
+        paths, at = [], 0.0
+        while not self.stop_evt.is_set():
+            if time.monotonic() - at > 30:
+                paths, at = self.file_list(), time.monotonic()
+            self.tail_once(paths)
+            self.flush_runs()
+            self.stop_evt.wait(1.0)
+
+    def sample_wifi(self):
+        try:
+            with open(SL_WIFI_FILE, encoding="utf-8") as fh:
+                d = json.loads(fh.read(65536))
+        except (OSError, ValueError):
+            return False
+        if not isinstance(d, dict):
+            return False
+        keep = ("linked", "band", "channel", "signal_dbm", "noise_dbm", "tx_bitrate", "rx_bitrate", "tx_packets",
+                "tx_retries", "tx_failed", "beacon_loss", "connected_secs", "blips", "drops", "chip_stalls")
+        return self.emit("wifi", "info", "", kind="wifi", data={k: d.get(k) for k in keep if k in d})
+
+    def _wifi_loop(self):
+        while not self.stop_evt.is_set():
+            self.sample_wifi()
+            self.stop_evt.wait(10.0)
+
+    def header(self, event):
+        info = {"event": event, "instmon": VERSION, "kernel": os.uname().release,
+                "journal": "disk" if os.path.isdir("/var/log/journal") else "memory",
+                "files": self.file_list()}
+        try:
+            with open("/proc/uptime") as fh:
+                info["uptime_s"] = int(float(fh.read().split()[0]))
+        except (OSError, ValueError, IndexError):
+            pass
+        if event == "collection_start":
+            info["units"] = self.unit_list()
+        return info
+
+    def _launch(self):
+        self.stop_evt = threading.Event()
+        self.threads = [threading.Thread(target=t, args=a, daemon=True, name="suitelog-" + t.__name__)
+                        for t, a in ((self._journal_loop, (False,)), (self._journal_loop, (True,)),
+                                     (self._file_loop, ()), (self._wifi_loop, ()))]
+        for t in self.threads:
+            t.start()
+
+    def start(self):
+        with self.lock:
+            if self.running():
+                return self.status()
+            salt = secrets.token_hex(8)
+            os.makedirs(os.path.dirname(self.flag) or ".", exist_ok=True)
+            tmp = self.flag + ".tmp"
+            with open(tmp, "w") as fh:
+                fh.write(salt + "\n")
+            os.replace(tmp, self.flag)
+            self.salt = salt
+            self.since = time.time()
+            self.written = self.dropped = 0
+            self.counts, self.runs, self.budget, self.tails = {}, {}, {}, {}
+            self._write({"kind": "mark", "src": "instmon", "lvl": "info", "msg": "collection started",
+                         "data": self.header("collection_start")}, self.since)
+            self._launch()
+            log_event("Suite log collection started (testing)", "info")
+            return self.status()
+
+    def resume_if_flagged(self):
+        salt = suitelog_flag(self.flag)
+        with self.lock:
+            if salt is None or self.running():
+                return False
+            self.salt = salt
+            self.since = time.time()
+            self._write({"kind": "mark", "src": "instmon", "lvl": "info", "msg": "collection resumed after an instmon restart",
+                         "data": self.header("collection_resume")}, self.since)
+            self._launch()
+        return True
+
+    def stop(self):
+        with self.lock:
+            if self.salt is None:
+                return self.status()
+            self.stop_evt.set()
+            for p in self.procs:
+                try:
+                    p.kill()
+                except OSError:
+                    pass
+            self.procs = []
+            for src in list(self.runs):
+                self._flush_run(src)
+            self._write({"kind": "mark", "src": "instmon", "lvl": "info", "msg": "collection stopped",
+                         "data": {"event": "collection_stop", "written": self.written, "dropped": self.dropped}},
+                        time.time())
+            try:
+                os.unlink(self.flag)
+            except OSError:
+                pass
+            self.salt = None
+            log_event("Suite log collection stopped", "info")
+            return self.status()
+
+    def clear(self):
+        with self.lock:
+            keep = [r for r in suitelog_rows(self.path, SL_KC_KINDS)]
+            for name in (self.path, self.path + ".1"):
+                try:
+                    os.unlink(name)
+                except OSError:
+                    pass
+            for r in keep:
+                try:
+                    suitelog_append(self.path, r, None, self.seg)
+                except OSError:
+                    break
+            self.counts, self.runs, self.budget, self.tails = {}, {}, {}, {}
+            self.written = self.dropped = 0
+            log_event("Suite log cleared (Kerchunk rows kept)", "info")
+            return self.status()
+
+    def size(self):
+        total = 0
+        for name in (self.path, self.path + ".1"):
+            try:
+                total += os.path.getsize(name)
+            except OSError:
+                pass
+        return total
+
+    def status(self):
+        with self.lock:
+            top = sorted(self.counts.items(), key=lambda kv: -kv[1])[:8]
+            return {"ok": True, "running": self.running(), "since": int(self.since) if self.running() else 0,
+                    "bytes": self.size(), "cap": 2 * self.seg, "written": self.written, "dropped": self.dropped,
+                    "sources": [{"src": k, "rows": v} for k, v in top]}
+
+
+SUITELOG = SuiteCollector()
+
+
 _RECORDING_BLOCKED_PATHS = frozenset((
     "/api/file", "/api/confputter/upload", "/api/diskimg/backup/start", "/api/diskimg/format/start",
     "/api/diskimg/clone/start", "/api/diskimg/restore/start", "/api/diskimg/mount", "/api/diskimg/unmount",
@@ -10553,6 +10941,34 @@ function docsInit() {
 }
 """
 
+_JS_SUITELOG = """// Suite log (testing): start, stop, download and clear.
+function slFmt(n) { return (n / 1048576).toFixed(1) + ' MB'; }
+async function slPoll() {
+  const st = document.getElementById('sl-status');
+  if (!st) return;
+  try {
+    const r = await fetch('/api/suitelog/status', {cache: 'no-store'});
+    const d = await r.json();
+    document.getElementById('sl-start').disabled = !!d.running;
+    document.getElementById('sl-stop').disabled = !d.running;
+    let t = d.running ? 'Collecting since ' + new Date(d.since * 1000).toLocaleTimeString() : 'Stopped';
+    t += ' - ' + slFmt(d.bytes) + ' of ' + slFmt(d.cap) + ', ' + d.written + ' rows this run';
+    if (d.dropped) t += ', ' + d.dropped + ' lines dropped by the per-source limit';
+    st.textContent = t;
+    document.getElementById('sl-sources').textContent = (d.sources || []).map(s => s.src + ' ' + s.rows).join(' | ');
+  } catch (e) { st.textContent = 'Could not read the status.'; }
+}
+async function slAct(what) {
+  if (what === 'clear' && !window.confirm('Clear the collected data? The Kerchunk rows are kept.')) return;
+  try {
+    await fetch('/api/suitelog/' + what, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'}, body: '{}'});
+  } catch (e) {}
+  slPoll();
+}
+function slDownload() { window.location.href = '/api/suitelog/download'; }
+window.addEventListener('load', () => { slPoll(); setInterval(() => { if (!document.hidden) slPoll(); }, 3000); });
+"""
+
 _JS = (
     _JS_LOG_POLL
     + _JS_STATUS_TOAST
@@ -10560,6 +10976,7 @@ _JS = (
     + _JS_ACTIONS
     + _JS_USBIMPORT
     + _JS_DOCS
+    + _JS_SUITELOG
     + _JS_CONFPUTTER
     + _JS_AUTH
     + _JS_INIT
@@ -11098,6 +11515,19 @@ HTML_TEMPLATE ="""<!DOCTYPE html>
   </div>
 </div>
 
+<div class="hdr">Suite Log (testing)</div>
+<div class="card" id="suitelog-card">
+  <div class="row">
+    <button class="b-comms" id="sl-start" onclick="slAct('start')">Start collecting</button>
+    <button id="sl-stop" onclick="slAct('stop')" disabled>Stop</button>
+    <button id="sl-dl" onclick="slDownload()">Download</button>
+    <button class="b-danger" id="sl-clear" onclick="slAct('clear')">Clear</button>
+  </div>
+  <div id="sl-status" class="small" style="margin-top:.35rem">Loading...</div>
+  <div id="sl-sources" class="small muted"></div>
+  <div class="small muted" style="margin-top:.35rem">Testing only. One file in memory (/run, 20 MB cap, the oldest data goes first). It is gone after a reboot, so download first. Addresses, MAC addresses, network names and passwords are hidden. Clear keeps the Kerchunk rows.</div>
+</div>
+
 <div class="hdr">Execution Log</div>
 <div class="row" style="justify-content:flex-end;margin-bottom:.3rem">
   <button id="log-copy-btn" onclick="copyExecutionLog()">&#9111; Copy Log</button>
@@ -11197,6 +11627,8 @@ _GET_ROUTES ={
 "/api/diskimg/backup/list":lambda self :self ._route_diskimg_backup_list (),
 "/api/diskimg/backup/download":lambda self :self ._route_diskimg_backup_download (),
 "/api/diskimg/schedule":lambda self :self ._route_diskimg_schedule_get (),
+"/api/suitelog/status":lambda self :self ._send_json (200 ,SUITELOG .status (),extra_headers =[("Cache-Control","no-store")]),
+"/api/suitelog/download":lambda self :self ._route_suitelog_download (),
 }
 
 _POST_ROUTES ={
@@ -11210,6 +11642,9 @@ _POST_ROUTES ={
 "/api/diskimg/preview":lambda self :self .handle_diskimg_preview (),
 "/api/diskimg/backup/start":lambda self :self .handle_diskimg_backup_start (),
 "/api/diskimg/backup/delete":lambda self :self .handle_diskimg_backup_delete (),
+"/api/suitelog/start":lambda self :self ._send_json (200 ,SUITELOG .start ()),
+"/api/suitelog/stop":lambda self :self ._send_json (200 ,SUITELOG .stop ()),
+"/api/suitelog/clear":lambda self :self ._send_json (200 ,SUITELOG .clear ()),
 "/api/diskimg/job/cancel":lambda self :self .handle_diskimg_job_cancel (),
 "/api/diskimg/job/reset":lambda self :self .handle_diskimg_job_reset (),
 "/api/diskimg/unmount":lambda self :self .handle_diskimg_unmount (),
@@ -11386,6 +11821,36 @@ class InstmonHandler (http .server .BaseHTTPRequestHandler ):
             log_event(f"Downloaded disk-image backup: {match['name']}", "info")
         except Exception as exc:
             self._error_json(500, f"Error downloading backup: {exc}")
+
+    def _route_suitelog_download(self):
+        parts = []
+        for name in (SUITELOG.path + ".1", SUITELOG.path):
+            try:
+                parts.append((name, os.path.getsize(name)))
+            except OSError:
+                continue
+        total = sum(n for _, n in parts)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        try:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Disposition", f"attachment; filename=\"suitelog-{stamp}.jsonl\"")
+            self.send_header("Content-Length", str(total))
+            self.end_headers()
+            for name, size in parts:
+                left = size
+                with open(name, "rb") as fh:
+                    while left > 0:
+                        chunk = fh.read(min(65536, left))
+                        if not chunk:
+                            break
+                        self.wfile.write(chunk)
+                        left -= len(chunk)
+                if left > 0:
+                    self.wfile.write(b"\n" * left)
+            log_event(f"Downloaded the suite log ({total} bytes)", "info")
+        except Exception as exc:
+            log_event(f"Suite log download failed: {exc}", "warn")
 
     def _route_diskimg_schedule_get(self):
         cfg = _diskimg_schedule_load()
@@ -13147,6 +13612,103 @@ def _remove_launcher_if_unused() -> None:
         return
     print(f"  [-] Removed {_LAUNCHER_PATH} (no other service uses it)")
 
+def suitelog_redact(text, salt):
+    import hashlib
+    import ipaddress
+    import re
+
+    def tag(kind, value):
+        return "%s:%s" % (kind, hashlib.sha256((salt + value.lower()).encode("utf-8")).hexdigest()[:4])
+
+    def hide(m):
+        return m.group(1) + "[hidden]"
+
+    def ip4(m):
+        try:
+            a = ipaddress.IPv4Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    def ip6(m):
+        try:
+            a = ipaddress.IPv6Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [hidden]", text)
+    text = re.sub(r"(?i)(\b(?:pass(?:word|wd|phrase)?|psk|secret|token|api[_-]?key|auth(?:orization)?|cookie|credential)s?[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&\"']+)", hide, text)
+    text = re.sub(r"(?i)(\bssid\b\s*[:=]?\s*)(?:\"[^\"]*\"|'[^']*')", lambda m: m.group(1) + tag("ssid", m.group(0)), text)
+    text = re.sub(r"\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b", lambda m: tag("mac", m.group(0)), text)
+    text = re.sub(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:.])", ip6, text)
+    text = re.sub(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])", ip4, text)
+    return text
+
+
+def suitelog_append(path, row, salt=None, seg_max=10000000):
+    import fcntl
+    import json
+    import os
+    import time
+    if "t" not in row:
+        row = dict(row, t=int(time.time() * 1000))
+    line = json.dumps(row, separators=(",", ":"))
+    if salt:
+        line = suitelog_redact(line, salt)
+    data = (line + "\n").encode("utf-8")
+    os.makedirs(os.path.dirname(path) or ".", mode=0o755, exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+    try:
+        os.write(fd, data)
+        size = os.fstat(fd).st_size
+    finally:
+        os.close(fd)
+    if size < seg_max:
+        return False
+    lock = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            if os.stat(path).st_size >= seg_max:
+                os.replace(path, path + ".1")
+                return True
+        except FileNotFoundError:
+            pass
+    finally:
+        os.close(lock)
+    return False
+
+
+def suitelog_rows(path, kinds=None):
+    import json
+    for name in (path + ".1", path):
+        try:
+            fh = open(name, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for ln in fh:
+                try:
+                    row = json.loads(ln)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and (kinds is None or row.get("kind") in kinds):
+                    yield row
+
+
+def suitelog_flag(path):
+    try:
+        with open(path, "r", encoding="ascii", errors="replace") as fh:
+            return fh.read(64).strip() or "x"
+    except OSError:
+        return None
+
+
 def firewall_backend():
     import shutil
     import subprocess
@@ -13365,6 +13927,10 @@ def run ():
         )
 
     _quiesce_startup_sweep ()
+    try:
+        SUITELOG.resume_if_flagged()
+    except Exception as exc:
+        log_event(f"Suite log: could not resume ({exc})", "warn")
     _diskimg_lastjob_recover ()
     full_update_resume_at_startup ()
     docs_start_first_fetch()

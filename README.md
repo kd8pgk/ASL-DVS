@@ -46,7 +46,7 @@ All the other tools are **common**, with one build for every node.
 
 | | Full build | Pi Zero 2 W fork | Common tool |
 |---|---|---|---|
-| File name | `sysmon_v6_13_95_20261028.py` | `sysmon_pi02w_v6_13_83_20261028.py` | `instmon_v2_87_0_20261102.py` |
+| File name | `sysmon_v6_13_95_20261028.py` | `sysmon_pi02w_v6_13_83_20261028.py` | `instmon_v2_88_0_20261104.py` |
 | `VERSION` | `6.13.95` | `6.13.83-pi02w` | `2.85.0` |
 
 The `-pi02w` suffix on `VERSION` marks the fork; the installer and instmon
@@ -90,7 +90,7 @@ To rebuild a PDF from its source: `cd docs/src/<folder> && node build.mjs` (need
 1. Copy the files you want onto the Pi, all in one folder.
 2. Install instmon first:
    ```
-   sudo python3 instmon_v2_87_0_20261102.py --install
+   sudo python3 instmon_v2_88_0_20261104.py --install
    ```
    Then open `http://<pi-address>:8990`.
 3. Install the rest with the installer:
@@ -139,7 +139,7 @@ It is optional.
 - **On its own:**
 
   ```
-  sudo python3 nodetalker_v0_10_10_20261103.py --install
+  sudo python3 nodetalker_v0_10_11_20261104.py --install
   ```
 
 Then:
@@ -512,10 +512,10 @@ the video driver or lowered GPU memory, it puts `/boot/firmware/config.txt` back
 | `nodecontrol_pi02w_v9_3_107_20261102.py` | Dashboard, Pi Zero 2 W (current) |
 | `sysmon_v6_13_95_20261028.py` | SysMon, full (current) |
 | `sysmon_pi02w_v6_13_83_20261028.py` | SysMon, Pi Zero 2 W (current) |
-| `instmon_v2_87_0_20261102.py` | common |
+| `instmon_v2_88_0_20261104.py` | common |
 | `wifimon_v5_48_0_20261102.py` | common |
 | `44helper_v0_1_17_20261103.py` | common |
-| `nodetalker_v0_10_10_20261103.py` | common |
+| `nodetalker_v0_10_11_20261104.py` | common |
 | `noderecorder_v0_4_0_20261102.py` | common |
 | `amp_nodetalker_v0_3_7_20261101.py` | AMP nodes only (stands alone) |
 | `pibrary_v0_16_0_20261102.py` | common |

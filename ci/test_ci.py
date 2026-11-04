@@ -1202,8 +1202,36 @@ def load_nodetalker():
     path = sorted(glob.glob(os.path.join(HERE, "..", "nodetalker_v*.py")))[-1]
     spec = importlib.util.spec_from_file_location("nodetalker_under_test", path)
     mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    old = {k: os.environ.get(k) for k in ("NODETALKER_SUITELOG", "NODETALKER_SUITELOG_FLAG")}
+    tmp = tempfile.mkdtemp()
+    os.environ["NODETALKER_SUITELOG"] = os.path.join(tmp, "suitelog.jsonl")
+    os.environ["NODETALKER_SUITELOG_FLAG"] = os.path.join(tmp, "suitelog.on")
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        for k, v in old.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
     return mod
+
+
+def suitelog_env(case, nt, collecting=True, seg=None):
+    d = tempfile.mkdtemp()
+    case.addCleanup(shutil.rmtree, d, True)
+    path, flag = os.path.join(d, "suitelog.jsonl"), os.path.join(d, "suitelog.on")
+    if collecting:
+        with open(flag, "w") as fh:
+            fh.write("saltsalt")
+    for name, value in (("SUITELOG_PATH", path), ("SUITELOG_FLAG", flag)) + ((("SUITELOG_SEG", seg),) if seg else ()):
+        p = mock.patch.object(nt, name, value)
+        p.start()
+        case.addCleanup(p.stop)
+    nt._sl_flag.update(at=-10.0, salt=None)
+    nt._sl_ino["ino"] = None
+    nt._kc_cache["rows"] = None
+    return path, flag
 
 
 class NodeTalkerBehaviourTests(unittest.TestCase):
@@ -1337,7 +1365,7 @@ class RxHealthTests(unittest.TestCase):
     def setUp(self):
         nt = self.nt
         self.rxh = nt.RxHealth()
-        p = mock.patch.object(nt, "RXH_PATH", os.devnull)
+        p = mock.patch.object(nt, "SUITELOG_PATH", os.devnull)
         p.start()
         self.addCleanup(p.stop)
 
@@ -1501,7 +1529,7 @@ class RxHealthLinkTests(unittest.TestCase):
 
     def setUp(self):
         self.rxh = self.nt.RxHealth()
-        p = mock.patch.object(self.nt, "RXH_PATH", os.devnull)
+        p = mock.patch.object(self.nt, "SUITELOG_PATH", os.devnull)
         p.start()
         self.addCleanup(p.stop)
 
@@ -1591,32 +1619,42 @@ class RxHealthLinkTests(unittest.TestCase):
         self.assertEqual(agg["links"]["IAX2/a"], {"lost": 7, "drop": 1, "ooo": 1, "jit": 30, "rtt": 50})
         self.assertEqual(set(agg["links"]), {"IAX2/a", "IAX2/b"})
 
-    def test_minute_row_on_disk_carries_the_links_and_clients(self):
+    def test_minute_row_in_the_suite_log_carries_the_links_and_clients(self):
         nt = self.nt
-        path = os.path.join(tempfile.mkdtemp(), "rxh.jsonl")
-        self.addCleanup(shutil.rmtree, os.path.dirname(path), True)
-        with mock.patch.object(nt, "RXH_PATH", path):
-            row = self.rxh._new(1000)
-            row["pkts"] = 5
-            row["links"] = {"IAX2/a": {"lost": 1, "drop": 0, "ooo": 0, "jit": 2, "rtt": 3}}
-            row["clients"] = {"android": {"under": 1, "reset": 0, "silence_ms": 5, "under_local": 0, "stall_ms": 900,
-                                          "out_stalls": 0, "out_ms": 0}}
-            nt._rxh_write(row)
-            with open(path, encoding="utf-8") as fh:
-                got = json.loads(fh.read().strip())
-        self.assertEqual(got["links"]["IAX2/a"]["lost"], 1)
-        self.assertEqual(got["clients"]["android"]["stall_ms"], 900)
+        path, _ = suitelog_env(self, nt)
+        row = self.rxh._new(1000)
+        row["pkts"] = 5
+        row["links"] = {"IAX2/a": {"lost": 1, "drop": 0, "ooo": 0, "jit": 2, "rtt": 3}}
+        row["clients"] = {"android": {"under": 1, "reset": 0, "silence_ms": 5, "under_local": 0, "stall_ms": 900,
+                                      "out_stalls": 0, "out_ms": 0}}
+        nt._rxh_write(row)
+        got = list(nt.suitelog_rows(path, ("rxh",)))[0]
+        self.assertEqual((got["src"], got["v"]), ("nodetalker", nt.VERSION))
+        self.assertEqual(got["data"]["links"]["IAX2/a"]["lost"], 1)
+        self.assertEqual(got["data"]["clients"]["android"]["stall_ms"], 900)
+
+    def test_nothing_is_written_while_collection_is_stopped(self):
+        nt = self.nt
+        path, _ = suitelog_env(self, nt, collecting=False)
+        nt._rxh_write({"t": 1})
+        self.assertFalse(os.path.exists(path))
+        rep = nt.rxh_report()
+        self.assertTrue(rep["ok"])
+
+    def test_the_report_reads_the_suite_log(self):
+        nt = self.nt
+        suitelog_env(self, nt)
+        for i in range(3):
+            nt._rxh_write({"t": i, "pkts": i})
+        self.assertEqual([r["t"] for r in nt.rxh_report()["rows"]], [0, 1, 2])
 
     def test_file_rotates_at_its_limit(self):
         nt = self.nt
-        d = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, d, True)
-        path = os.path.join(d, "rxh.jsonl")
-        with mock.patch.object(nt, "RXH_PATH", path), mock.patch.object(nt, "RXH_FILE_MAX", 100):
-            for i in range(10):
-                nt._rxh_write({"t": i, "pad": "x" * 40})
-            self.assertTrue(os.path.exists(path + ".1"))
-            self.assertLess(os.path.getsize(path), 400)
+        path, _ = suitelog_env(self, nt, seg=300)
+        for i in range(10):
+            nt._rxh_write({"t": i, "pad": "x" * 40})
+        self.assertTrue(os.path.exists(path + ".1"))
+        self.assertLess(os.path.getsize(path), 600)
 
 
 class RxHealthClientTests(unittest.TestCase):
@@ -1949,19 +1987,13 @@ class ListenEventTests(unittest.TestCase):
         cls.nt = load_nodetalker()
 
     def setUp(self):
-        d = tempfile.mkdtemp()
-        self.addCleanup(shutil.rmtree, d, True)
-        self.path = os.path.join(d, "listenlog.jsonl")
-        p = mock.patch.object(self.nt, "LISTENLOG_PATH", self.path)
-        p.start()
-        self.addCleanup(p.stop)
+        self.path, _ = suitelog_env(self, self.nt)
         q = mock.patch.object(self.nt, "log_event")
         self.log = q.start()
         self.addCleanup(q.stop)
 
     def rows(self):
-        with open(self.path, encoding="utf-8") as fh:
-            return [json.loads(ln) for ln in fh]
+        return [r["data"] for r in self.nt.suitelog_rows(self.path, ("listen",))]
 
     def test_an_event_is_logged_and_written(self):
         nt = self.nt
@@ -2002,13 +2034,12 @@ class ListenEventTests(unittest.TestCase):
         self.nt.listen_event({"events": [{"action": "connect", "src": "user", "why": "button", "t": 1000}]})
         self.assertNotIn("t", self.rows()[0])
 
-    def test_the_log_file_rotates(self):
+    def test_listen_events_wait_for_collection_to_start(self):
         nt = self.nt
-        with open(self.path, "w") as fh:
-            fh.write("x" * (nt.LISTENLOG_FILE_MAX + 1))
+        os.unlink(os.path.join(os.path.dirname(self.path), "suitelog.on"))
+        nt._sl_flag.update(at=-10.0, salt=None)
         nt.listen_event({"events": [{"action": "connect", "src": "user", "why": "button"}]})
-        self.assertTrue(os.path.exists(self.path + ".1"))
-        self.assertEqual(len(self.rows()), 1)
+        self.assertEqual(self.rows(), [])
 
     def test_the_route_exists_and_the_page_names_every_start_and_stop(self):
         nt = self.nt
@@ -2071,6 +2102,388 @@ class ListenEventTests(unittest.TestCase):
             self.assertIn(why, nt.LISTEN_WHY)
 
 
+class SuiteLogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def kc(self, i, label="", secs=0.5):
+        return {"id": str(1000 + i), "secs": secs, "peak": -20.0, "kerchunk": secs < 0.8, "label": label,
+                "source": "audio", "keyed_secs": None, "who": ""}
+
+    def test_redaction_tags_addresses_and_hides_secrets(self):
+        nt = self.nt
+        text = ("Listener from 192.168.0.168 mac aa:bb:cc:dd:ee:ff at 12:34:56 v0.10.11 lo 127.0.0.1 ::1 "
+                "v6 2001:db8::1 password=hunter2 token: \"abc def\" Authorization: Bearer xyz.123 ssid=\"My Net\"")
+        got = nt.suitelog_redact(text, "salt1")
+        for bit in ("192.168.0.168", "aa:bb:cc", "hunter2", "abc def", "xyz.123", "My Net", "2001:db8"):
+            self.assertNotIn(bit, got)
+        for bit in ("12:34:56", "v0.10.11", "127.0.0.1", " ::1 "):
+            self.assertIn(bit, got)
+        self.assertEqual(got, nt.suitelog_redact(text, "salt1"))
+        self.assertNotEqual(got, nt.suitelog_redact(text, "salt2"))
+        a = nt.suitelog_redact("a 10.1.2.3 b 10.1.2.3 c 10.1.2.4", "s")
+        t1, t2, t3 = [w for w in a.split() if w.startswith("ip:")]
+        self.assertEqual(t1, t2)
+        self.assertNotEqual(t1, t3)
+
+    def test_rows_come_back_in_order_across_both_segments(self):
+        nt = self.nt
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "s.jsonl")
+        rotated = [nt.suitelog_append(path, {"kind": "a", "n": i}, None, 200) for i in range(12)]
+        self.assertTrue(any(rotated))
+        with open(path, "a") as fh:
+            fh.write("not json\n")
+        rows = list(nt.suitelog_rows(path))
+        ns = [r["n"] for r in rows]
+        self.assertEqual(ns, sorted(ns))
+        self.assertEqual(ns[-1], 11)
+        self.assertEqual(len(list(nt.suitelog_rows(path, ("b",)))), 0)
+        self.assertTrue(all("t" in r for r in rows))
+
+    def test_the_total_stays_inside_two_segments_and_no_line_is_torn(self):
+        import threading
+        nt = self.nt
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "s.jsonl")
+
+        def writer(k):
+            for i in range(300):
+                nt.suitelog_append(path, {"kind": "w", "k": k, "i": i, "pad": "x" * 30}, None, 6000)
+
+        ts = [threading.Thread(target=writer, args=(k,)) for k in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        for name in (path, path + ".1"):
+            self.assertLess(os.path.getsize(name), 6000 + 200)
+            with open(name) as fh:
+                for ln in fh:
+                    json.loads(ln)
+
+    def test_the_flag_gives_the_salt(self):
+        nt = self.nt
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        flag = os.path.join(d, "on")
+        self.assertIsNone(nt.suitelog_flag(flag))
+        with open(flag, "w") as fh:
+            fh.write("abc123\n")
+        self.assertEqual(nt.suitelog_flag(flag), "abc123")
+
+    def test_kerchunk_bursts_are_written_even_when_collection_is_stopped(self):
+        nt = self.nt
+        path, _ = suitelog_env(self, nt, collecting=False)
+        nt._kc_write_row(self.kc(1))
+        nt._kc_write_row(self.kc(2, "kerchunk"))
+        self.assertEqual([r["kind"] for r in nt.suitelog_rows(path)], ["kc", "kc"])
+        nt._kc_cache["rows"] = None
+        self.assertEqual([r["id"] for r in nt._kc_rows()], ["1001", "1002"])
+        self.assertEqual(nt._kc_rows()[1]["label"], "kerchunk")
+
+    def test_labels_and_reset_are_rows_and_rebuild_the_table(self):
+        nt = self.nt
+        path, _ = suitelog_env(self, nt)
+        for i in range(3):
+            nt._kc_write_row(self.kc(i))
+        self.assertTrue(nt._kc_set_label("1001", "real"))
+        self.assertFalse(nt._kc_set_label("9999", "real"))
+        nt._kc_cache["rows"] = None
+        self.assertEqual([r["label"] for r in nt._kc_rows()], ["", "real", ""])
+        self.assertEqual(nt.kerchunk_label({"id": "1002", "label": "kerchunk"})["message"], "Saved.")
+        self.assertEqual(nt.kerchunk_reset()["message"], "Reset.")
+        nt._kc_cache["rows"] = None
+        self.assertEqual(nt._kc_rows(), [])
+        nt._kc_write_row(self.kc(7))
+        nt._kc_cache["rows"] = None
+        self.assertEqual([r["id"] for r in nt._kc_rows()], ["1007"])
+        kinds = [r["kind"] for r in nt.suitelog_rows(path)]
+        self.assertIn("kc_label", kinds)
+        self.assertIn("kc_reset", kinds)
+
+    def test_the_old_csv_is_imported_once_and_kept_as_imported(self):
+        nt = self.nt
+        path, _ = suitelog_env(self, nt, collecting=False)
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        csv_path = os.path.join(d, "nodetalker_bursts.csv")
+        with open(csv_path, "w") as fh:
+            fh.write("id,secs,peak_db,kerchunk,label,source,keyed_secs,who\n"
+                     "1500,0.40,-20.0,1,kerchunk,keyed,0.35,45192\n"
+                     "1600,2.10,-18.5,0,real,audio,,\n"
+                     "bad line\n")
+        with mock.patch.object(nt, "KERCHUNK_LOG_PATH", csv_path):
+            nt._kc_init()
+            rows = nt._kc_rows()
+            self.assertEqual([(r["id"], r["label"], r["source"], r["keyed_secs"], r["who"]) for r in rows],
+                             [("1500", "kerchunk", "keyed", 0.35, "45192"), ("1600", "real", "audio", None, "")])
+            self.assertTrue(os.path.exists(csv_path + ".imported"))
+            self.assertFalse(os.path.exists(csv_path))
+            nt._kc_init()
+            self.assertEqual(len(nt._kc_rows()), 2)
+        nt._kc_cache["rows"] = None
+        self.assertEqual(len(nt._kc_rows()), 2)
+
+    def test_a_rotation_by_another_writer_does_not_lose_the_bursts(self):
+        nt = self.nt
+        path, _ = suitelog_env(self, nt, seg=2000)
+        for i in range(3):
+            nt._kc_write_row(self.kc(i))
+        for i in range(60):
+            nt._rxh_write({"t": i, "pad": "x" * 60})
+        self.assertTrue(os.path.exists(path + ".1"))
+        nt._kc_write_row(self.kc(9))
+        for i in range(80):
+            nt._rxh_write({"t": i, "pad": "x" * 60})
+        nt._kc_write_row(self.kc(10))
+        if os.path.exists(path + ".1"):
+            os.unlink(path + ".1")
+        nt._kc_cache["rows"] = None
+        ids = [r["id"] for r in nt._kc_rows()]
+        self.assertIn("1010", ids)
+        self.assertEqual(ids[-1], "1010")
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertEqual(ids, sorted(ids))
+
+    def test_the_tab_data_still_reads_from_the_store(self):
+        nt = self.nt
+        suitelog_env(self, nt, collecting=False)
+        nt._kc_write_row(self.kc(1, secs=0.3))
+        nt._kc_write_row(self.kc(2, secs=2.0))
+        got = nt.kerchunk_status()
+        self.assertTrue(got["ok"])
+        self.assertEqual(got["kerchunks_total"], 1)
+        self.assertEqual(len(got["bursts"]), 2)
+
+
+class InstmonSuiteLogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.tmp0 = tempfile.mkdtemp()
+        cls.m = load_instmon({"INSTMON_LIBRARY_DIR": os.path.join(cls.tmp0, "lib"),
+                              "INSTMON_CONFIG_DIR": os.path.join(cls.tmp0, "cfg")})
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.tmp0, True)
+
+    def setUp(self):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        self.d = d
+        self.path = os.path.join(d, "run", "suitelog.jsonl")
+        self.flag = os.path.join(d, "run", "suitelog.on")
+        self.col = self.m.SuiteCollector(self.path, self.flag, 100000)
+        p = mock.patch.object(self.m.SuiteCollector, "_launch")
+        p.start()
+        self.addCleanup(p.stop)
+        q = mock.patch.object(self.m, "log_event")
+        q.start()
+        self.addCleanup(q.stop)
+
+    def rows(self, kinds=None):
+        return list(self.m.suitelog_rows(self.path, kinds))
+
+    def test_start_writes_the_flag_with_a_salt_and_a_header_and_stop_removes_it(self):
+        st = self.col.start()
+        self.assertTrue(st["running"])
+        salt = self.m.suitelog_flag(self.flag)
+        self.assertTrue(salt and len(salt) >= 8)
+        head = self.rows(("mark",))[0]
+        self.assertEqual(head["data"]["event"], "collection_start")
+        self.assertEqual(head["data"]["instmon"], self.m.VERSION)
+        self.assertEqual(self.col.start()["since"], st["since"])
+        st = self.col.stop()
+        self.assertFalse(st["running"])
+        self.assertIsNone(self.m.suitelog_flag(self.flag))
+        self.assertEqual([r["data"]["event"] for r in self.rows(("mark",))], ["collection_start", "collection_stop"])
+
+    def test_nothing_is_written_when_stopped(self):
+        self.assertFalse(self.col.emit("journal:x", "info", "hello"))
+        self.assertFalse(os.path.exists(self.path))
+
+    def test_lines_are_redacted_and_cleaned(self):
+        self.col.start()
+        self.col.emit("journal:nodetalker", "info", "Listener connected from 192.168.0.168 \x1b[31mred\x1b[0m password=abc")
+        row = self.rows(("log",))[0]
+        self.assertNotIn("192.168.0.168", row["msg"])
+        self.assertNotIn("abc", row["msg"])
+        self.assertNotIn("\x1b", row["msg"])
+        self.assertEqual((row["src"], row["lvl"]), ("journal:nodetalker", "info"))
+        self.col.emit("journal:x", "info", "y" * 5000)
+        self.assertEqual(len(self.rows(("log",))[-1]["msg"]), self.m.SL_LINE_MAX)
+
+    def test_repeated_lines_collapse_into_one_row_with_a_count(self):
+        self.col.start()
+        for i in range(6):
+            self.col.emit("journal:wifimon", "info", "[Nov  4 08:03:%02d] link flapping" % i, now=1000.0 + i)
+        self.col.emit("journal:wifimon", "info", "something else", now=1010.0)
+        logs = self.rows(("log",))
+        self.assertEqual([r["msg"] for r in logs], ["[Nov  4 08:03:00] link flapping", "[Nov  4 08:03:00] link flapping",
+                                                    "something else"])
+        rep = logs[1]
+        self.assertEqual((rep["n"], rep["rep"]), (6, True))
+
+    def test_a_run_is_summarised_after_the_repeat_window(self):
+        self.col.start()
+        for i in range(3):
+            self.col.emit("journal:a", "info", "same", now=2000.0 + i)
+        self.col.flush_runs(now=2000.0 + self.m.SL_REPEAT_SEC + 1)
+        self.assertEqual([r.get("n") for r in self.rows(("log",))], [None, 3])
+
+    def test_a_chatty_source_is_limited_but_warnings_and_other_sources_are_not(self):
+        self.col.start()
+        big = "x" * 900
+        sent = [self.col.emit("journal:chatty", "info", "%s %d" % (big, i), now=3000.0) for i in range(200)]
+        self.assertIn(False, sent)
+        self.assertTrue(self.col.emit("journal:chatty", "err", "boom", now=3000.0))
+        self.assertTrue(self.col.emit("journal:quiet", "info", "fine", now=3000.0))
+        self.assertTrue(self.col.emit("journal:chatty", "info", "next minute", now=3061.0))
+        drops = self.rows(("drop",))
+        self.assertEqual(len(drops), 1)
+        self.assertEqual(drops[0]["src"], "journal:chatty")
+        self.assertGreater(drops[0]["n"], 0)
+        self.assertEqual(self.col.status()["dropped"], drops[0]["n"])
+
+    def test_journal_lines_become_rows(self):
+        self.col.start()
+        j = lambda **kw: json.dumps(kw)
+        self.assertTrue(self.col.ingest_journal(j(MESSAGE="up", PRIORITY="6", _SYSTEMD_UNIT="nodetalker.service")))
+        self.assertTrue(self.col.ingest_journal(j(MESSAGE=list(b"bytes msg"), PRIORITY="3", SYSLOG_IDENTIFIER="asterisk")))
+        self.assertFalse(self.col.ingest_journal("not json"))
+        self.assertFalse(self.col.ingest_journal(j(MESSAGE=5)))
+        rows = self.rows(("log",))
+        self.assertEqual([(r["src"], r["lvl"], r["msg"]) for r in rows],
+                         [("journal:nodetalker", "info", "up"), ("journal:asterisk", "err", "bytes msg")])
+
+    def test_kernel_lines_are_kept_by_severity_or_keyword(self):
+        self.col.start()
+        k = lambda msg, pr: self.col.ingest_journal(json.dumps({"MESSAGE": msg, "PRIORITY": pr}), kernel=True)
+        self.assertTrue(k("brcmfmac: firmware crashed", "6"))
+        self.assertTrue(k("Under-voltage detected!", "6"))
+        self.assertTrue(k("something bad", "4"))
+        self.assertFalse(k("eth0: link is up", "6"))
+        self.assertFalse(k("debug chatter reset", "7"))
+        self.assertEqual({r["src"] for r in self.rows(("log",))}, {"kernel"})
+
+    def test_a_file_is_followed_from_its_last_lines_then_new_lines_and_rotation(self):
+        self.col.start()
+        log = os.path.join(self.d, "full")
+        with open(log, "w") as fh:
+            fh.write("".join("line %d\n" % i for i in range(80)))
+        self.col.tail_once([log])
+        got = [r["msg"] for r in self.rows(("log",))]
+        self.assertEqual(len(got), self.m.SL_TAIL_FIRST)
+        self.assertEqual(got[-1], "line 79")
+        with open(log, "a") as fh:
+            fh.write("new one\nERROR bad thing\n")
+        self.col.tail_once([log])
+        last = self.rows(("log",))[-2:]
+        self.assertEqual([(r["msg"], r["lvl"]) for r in last], [("new one", "info"), ("ERROR bad thing", "err")])
+        os.replace(log, log + ".1")
+        with open(log, "w") as fh:
+            fh.write("after rotation\n")
+        self.col.tail_once([log])
+        self.assertEqual(self.rows(("log",))[-1]["msg"], "after rotation")
+        with open(log, "w") as fh:
+            fh.write("shorter\n")
+        self.col.tail_once([log])
+        self.assertEqual(self.rows(("log",))[-1]["msg"], "shorter")
+        self.col.tail_once([os.path.join(self.d, "missing")])
+
+    def test_wifi_samples_keep_only_the_useful_fields(self):
+        self.col.start()
+        wf = os.path.join(self.d, "wifi_link.json")
+        with open(wf, "w") as fh:
+            json.dump({"v": 1, "linked": True, "band": "2.4 GHz", "channel": 1, "signal_dbm": -41, "ssid": "My Net",
+                       "bssid_id": "a1b2", "tx_packets": 100, "tx_retries": 9}, fh)
+        with mock.patch.object(self.m, "SL_WIFI_FILE", wf):
+            self.assertTrue(self.col.sample_wifi())
+        row = self.rows(("wifi",))[0]
+        self.assertEqual(row["data"], {"linked": True, "band": "2.4 GHz", "channel": 1, "signal_dbm": -41,
+                                       "tx_packets": 100, "tx_retries": 9})
+        with mock.patch.object(self.m, "SL_WIFI_FILE", os.path.join(self.d, "none")):
+            self.assertFalse(self.col.sample_wifi())
+
+    def test_clear_keeps_only_the_kerchunk_rows(self):
+        self.col.start()
+        self.col.emit("journal:a", "info", "bye")
+        for r in ({"kind": "kc_base", "data": {}}, {"kind": "kc", "data": {"id": "1"}},
+                  {"kind": "kc_label", "data": {"id": "1", "label": "real"}}):
+            self.m.suitelog_append(self.path, dict(r, src="nodetalker"), None, 100000)
+        st = self.col.clear()
+        self.assertEqual([r["kind"] for r in self.rows()], ["kc_base", "kc", "kc_label"])
+        self.assertEqual(st["written"], 0)
+
+    def test_the_total_is_held_to_two_segments(self):
+        col = self.m.SuiteCollector(self.path, self.flag, 4000)
+        col.start()
+        for i in range(400):
+            col.emit("journal:a", "info", "row %d %s" % (i, "z" * 50), now=5000.0 + i * 61)
+        self.assertLessEqual(col.size(), 2 * 4000 + 400)
+        self.assertEqual(col.status()["cap"], 8000)
+
+    def test_a_flag_left_by_a_restart_is_resumed_with_the_same_salt(self):
+        os.makedirs(os.path.dirname(self.flag))
+        with open(self.flag, "w") as fh:
+            fh.write("oldsalt99\n")
+        self.assertTrue(self.col.resume_if_flagged())
+        self.assertTrue(self.col.status()["running"])
+        self.col.emit("journal:a", "info", "from 10.9.8.7")
+        self.assertEqual(self.m.suitelog_flag(self.flag), "oldsalt99")
+        self.assertIn(self.m.suitelog_redact("from 10.9.8.7", "oldsalt99"), self.rows(("log",))[-1]["msg"])
+        self.col.stop()
+        self.assertFalse(self.col.resume_if_flagged())
+
+    def test_download_sends_both_segments_with_the_right_length(self):
+        import io
+        self.col.start()
+        for i in range(5):
+            self.col.emit("journal:a", "info", "row %d" % i, now=7000.0 + i * 61)
+        os.replace(self.path, self.path + ".1")
+        self.col.emit("journal:a", "info", "newest", now=8000.0)
+
+        class Fake:
+            def __init__(self):
+                self.out = io.BytesIO()
+                self.headers = {}
+                self.wfile = self.out
+
+            def send_response(self, code):
+                self.code = code
+
+            def send_header(self, k, v):
+                self.headers[k] = v
+
+            def end_headers(self):
+                pass
+
+        fake = Fake()
+        with mock.patch.object(self.m, "SUITELOG", self.col):
+            self.m.InstmonHandler._route_suitelog_download(fake)
+        body = fake.out.getvalue()
+        self.assertEqual(fake.code, 200)
+        self.assertEqual(int(fake.headers["Content-Length"]), len(body))
+        self.assertIn("attachment", fake.headers["Content-Disposition"])
+        lines = [json.loads(ln) for ln in body.decode().splitlines() if ln.strip()]
+        self.assertEqual(lines[-1]["msg"], "newest")
+        self.assertEqual(lines[0]["kind"], "mark")
+
+    def test_the_card_and_routes_are_in_the_page(self):
+        m = self.m
+        self.assertIn("/api/suitelog/status", m._GET_ROUTES)
+        self.assertIn("/api/suitelog/download", m._GET_ROUTES)
+        for name in ("start", "stop", "clear"):
+            self.assertIn("/api/suitelog/" + name, m._POST_ROUTES)
+        for ident in ("sl-start", "sl-stop", "sl-dl", "sl-clear"):
+            self.assertIn('id="%s"' % ident, m.HTML_TEMPLATE)
+        self.assertIn("slAct", m._JS)
+
+
 class RxHealthWifiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -2078,7 +2491,7 @@ class RxHealthWifiTests(unittest.TestCase):
 
     def setUp(self):
         self.rxh = self.nt.RxHealth()
-        p = mock.patch.object(self.nt, "RXH_PATH", os.devnull)
+        p = mock.patch.object(self.nt, "SUITELOG_PATH", os.devnull)
         p.start()
         self.addCleanup(p.stop)
 
