@@ -1,6 +1,49 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_7_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_12_20261105.py`. Newest entries first.
+
+## 0.5.12 (2026-11-05)
+
+- **Node Recorder plays no audio.** The live audio stream the page never used (`/api/listen`, a copy of Node Talker's listen feature) is removed, with the listener slots behind it and the `max_listeners` and `public_listen` settings. Node Recorder now only receives the node's audio and writes it to recordings; nothing is sent out to a listener. A node whose saved settings still hold the two removed keys keeps working: they are ignored.
+- **Status is for logged-in users only.** `public_listen` used to let anyone read `/api/status` without a login; with it gone, that route always needs a login. The status fields `listeners`, `listener_list` and `max_listeners` are gone too. Programs on the Pi still get the recording status from the local route as before.
+- The unused Listen and volume styling from the Node Talker copy is removed from the page.
+- Recording, Record now, schedules and the level meter are unchanged.
+- This is a release, not a cosmetic build.
+
+## 0.5.11 (2026-11-05)
+
+- **Record now is named after the current tune, whoever made it.** It looks at what the main node is linked to when you press Record now (an ASL node linked from anywhere, or a DMR, D-STAR, YSF or M17 tune through Node Controller or Node Recorder) and uses that as the recording's name, for example `ASL Node 1234` or `DMR TGIF 3100`. The name is on the Record card and in the file name. With nothing tuned it is "Record now". It is taken once, when recording starts, so a later link change does not rename or stop it. The Schedule form's name is no longer used by Record now.
+- This is a release, not a cosmetic build.
+
+## 0.5.10 (2026-11-05)
+
+- **Record now works again.** Since 0.5.8 it ignored the link but still checked the Schedule form's target, so with the form empty it stopped with "Type or pick a node, talkgroup, room or reflector first" and never started. Record now no longer looks at the form's target at all: it only uses the form's name (or "Record now") and format. It records the current link, with or without one.
+- This is a release, not a cosmetic build.
+
+## 0.5.9.1 (2026-11-05)
+
+- **Wording only.** The Connect tab is now called Schedule: its tab button and the two notes that pointed to it (the Schedule card note on the Setup tab and the Digital card note). The Tune card's Connect and Disconnect buttons are unchanged.
+- This is a cosmetic build, not a release. The file name is unchanged.
+
+## 0.5.9 (2026-11-05)
+
+- **Schedule list in order.** Entries are sorted by when they next run: a recording running now is first, then the rest by day and time (Mon 09:00 before Tue 08:00). Regular entries whose window has already run today are at the bottom until their next day. A disabled entry keeps its place by its next time, so it returns to the schedule at that time and stays off. Specials with no window left sit at the very bottom.
+- **Dividers.** A line separates each entry, and done entries are dimmed; disabled entries are shown in italics. The order is set on the server (`schedule_view`), so the Connect and Setup lists match.
+- The "Next" label now shows the next time for a disabled entry too.
+- This is a release, not a cosmetic build.
+
+## 0.5.8 (2026-11-05)
+
+- **Record now records the current link.** It no longer tunes to the target set in the Schedule form and does not drop the link when it stops: it records the audio that is up now, as it is. It keeps going through link changes; the 4 hour limit and the save on Stop are unchanged. It is not started while a scheduled recording is due or running.
+- **Stop recording stops everything**, scheduled or Record now. A scheduled window in progress is marked done when you press Stop, so it does not start again after the stop. What was recorded is saved as before.
+- Includes the layout moves from 0.5.7.1 (Tune card to the top of Record, Schedule list to the bottom of Connect, Storage to Setup).
+- This is a release, not a cosmetic build.
+
+## 0.5.7.1 (2026-11-05)
+
+- **Layout only.** The Tune card moves from the Connect tab to the top of the Record tab, with its styles scoped to that tab. The Schedule card (the list of recordings, with Dry run, Edit and Remove) moves from the Record tab to the bottom of the Connect tab, after Disconnect All. The Storage card moves from the Record tab to the Setup tab, below Links. Element ids are unchanged, so the code that fills each card is the same.
+- The Connect tab now loads the schedule list when it opens, since the list moved there; the Record tab still loads it for its Record now and Stop buttons.
+- This is a cosmetic build, not a release. Not on the stable or testing channels until it is released.
 
 ## 0.5.7 (2026-11-05)
 

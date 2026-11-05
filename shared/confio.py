@@ -476,14 +476,21 @@ def suitelog_append(path, row, salt=None, seg_max=10000000):
     os.makedirs(os.path.dirname(path) or ".", mode=0o755, exist_ok=True)
     lock = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+        locked = False
+        for _ in range(50):
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                locked = True
+                break
+            except BlockingIOError:
+                time.sleep(0.01)
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
         try:
             os.write(fd, data)
             size = os.fstat(fd).st_size
         finally:
             os.close(fd)
-        if size < seg_max:
+        if not locked or size < seg_max:
             return False
         try:
             if os.stat(path).st_size >= seg_max:

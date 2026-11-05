@@ -2151,6 +2151,20 @@ class SuiteLogTests(unittest.TestCase):
         self.assertEqual(len(list(nt.suitelog_rows(path, ("b",)))), 0)
         self.assertTrue(all("t" in r for r in rows))
 
+    def test_a_held_lock_does_not_stall_the_writer(self):
+        import fcntl
+        nt = self.nt
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "s.jsonl")
+        held = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        t0 = time.monotonic()
+        nt.suitelog_append(path, {"kind": "a", "n": 1}, None, 100000)
+        self.assertLess(time.monotonic() - t0, 2.0)
+        self.assertEqual([r["n"] for r in nt.suitelog_rows(path)], [1])
+
     def test_the_total_stays_inside_two_segments_and_no_line_is_torn(self):
         import threading
         nt = self.nt
@@ -2426,6 +2440,17 @@ class InstmonSuiteLogTests(unittest.TestCase):
         st = self.col.clear()
         self.assertEqual([r["kind"] for r in self.rows()], ["kc_base", "kc", "kc_label"])
         self.assertEqual(st["written"], 0)
+
+    def test_a_held_lock_does_not_stall_the_writer(self):
+        import fcntl
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        held = os.open(self.path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+        self.addCleanup(os.close, held)
+        fcntl.flock(held, fcntl.LOCK_EX)
+        t0 = time.monotonic()
+        self.m.suitelog_append(self.path, {"kind": "a", "src": "x", "data": {"n": 1}}, None, 100000)
+        self.assertLess(time.monotonic() - t0, 2.0)
+        self.assertEqual([r["data"]["n"] for r in self.rows(("a",))], [1])
 
     def test_the_total_is_held_to_two_segments(self):
         col = self.m.SuiteCollector(self.path, self.flag, 4000)

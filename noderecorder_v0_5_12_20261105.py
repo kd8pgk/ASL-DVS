@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.7"
+VERSION = "0.5.12"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -202,7 +202,6 @@ FRAME_BYTES = FRAME_SAMPLES * 2
 FRAME_SEC = 0.02
 IN_QUEUE_MAX = 25
 IN_QUEUE_TRIM = 10
-LISTENER_QUEUE_MAX = 150
 ACTIVE_DB = -50.0
 ACTIVE_HOLD_SEC = 0.6
 
@@ -229,8 +228,6 @@ def log_event(message, level="info"):
 
 DEFAULT_CONFIG = {
     "node": "",
-    "max_listeners": 3,
-    "public_listen": False,
     "https": True,
     "tune_enabled": False,
     "rx_gain_db": 0,
@@ -265,7 +262,6 @@ def _norm_int(lo, hi, error):
     return norm
 
 
-_norm_listeners = _norm_int(1, 10, "max_listeners must be 1-10")
 _norm_jitter = _norm_int(100, 1500, "jitter_ms must be 100-1500")
 
 
@@ -394,8 +390,6 @@ def _norm_gain(value):
 
 _NORMALIZERS = {
     "node": _norm_node,
-    "max_listeners": _norm_listeners,
-    "public_listen": _parse_bool,
     "https": _parse_bool,
     "tune_enabled": _parse_bool,
     "rx_gain_db": _norm_gain,
@@ -774,7 +768,6 @@ def _ulaw_byte(s):
 
 
 ULAW_TABLE = bytes(_ulaw_byte(i - 65536 if i >= 32768 else i) for i in range(65536))
-ULAW_SILENCE = bytes([ULAW_TABLE[0]]) * FRAME_SAMPLES
 PCM_SILENCE = b"\x00" * FRAME_BYTES
 
 
@@ -1125,17 +1118,6 @@ def udp_socket(port=None):
     return sock
 
 
-class _Listener:
-    __slots__ = ("q", "closed", "ip", "since", "pcm")
-
-    def __init__(self, ip, pcm=False):
-        self.q = deque(maxlen=LISTENER_QUEUE_MAX)
-        self.closed = False
-        self.ip = ip
-        self.since = time.time()
-        self.pcm = pcm
-
-
 AMI_CONF = os.environ.get("NODERECORDER_AMI_CONF", "/etc/asterisk/manager.conf")
 AMI_HOST = "127.0.0.1"
 AMI_PORT = 5038
@@ -1337,10 +1319,8 @@ KEYED = KeyedWatch()
 class Hub:
     def __init__(self):
         self.lock = threading.Lock()
-        self.cond = threading.Condition(self.lock)
         self.inbuf = bytearray()
         self.frames = deque()
-        self.listeners = set()
         self.packets = 0
         self.dropped = 0
         self.dropped_over = 0
@@ -1372,38 +1352,12 @@ class Hub:
     def note_usrp(self, keyed):
         self.usrp_keyed = keyed
 
-    def add_listener(self, ip, pcm=False):
-        with self.lock:
-            if len(self.listeners) >= _cfg_get("max_listeners"):
-                return None
-            lst = _Listener(ip, pcm)
-            self.listeners.add(lst)
-        log_event(f"Listener connected from {ip}" + (" (16-bit)" if pcm else ""))
-        return lst
-
-    def remove_listener(self, lst):
-        with self.cond:
-            lst.closed = True
-            self.listeners.discard(lst)
-            self.cond.notify_all()
-        log_event(f"Listener from {lst.ip} left after {int(time.time() - lst.since)}s")
-
     def audio_active(self):
         now = time.monotonic()
         heard = self.usrp_keyed or now - self.last_active < ACTIVE_HOLD_SEC
         if KEYED.ok:
             return heard or KEYED.keyed or now - KEYED.unkey_at < ACTIVE_HOLD_SEC
         return heard
-
-    def wait_chunk(self, lst, timeout=5.0):
-        with self.cond:
-            if not lst.q and not lst.closed:
-                self.cond.wait(timeout)
-            if not lst.q:
-                return b""
-            chunk = b"".join(lst.q)
-            lst.q.clear()
-            return chunk
 
     def tick(self):
         now = time.monotonic()
@@ -1413,7 +1367,6 @@ class Hub:
                 self.frames.popleft()
                 self.dropped += 1
                 self.dropped_trim += 1
-            have_listeners = bool(self.listeners)
         if frame is not None:
             db = frame_db(frame)
             self.level_db = db
@@ -1425,30 +1378,14 @@ class Hub:
             self.level_db = -120.0
             self.peak_db = max(-120.0, self.peak_db - 1.0)
         rec = self.recorder
-        if have_listeners or rec is not None:
+        if rec is not None:
             if frame is not None:
                 pcm = RXC.process(frame, tune_value("rx_gain_db"), db)
             else:
                 RXC.idle_tick()
                 pcm = PCM_SILENCE
-            if have_listeners:
-                self._deliver(pcm)
-            if rec is not None:
-                rec.feed(pcm)
+            rec.feed(pcm)
         self.pump_beat = now
-
-    def _deliver(self, pcm):
-        with self.cond:
-            enc = None
-            for lst in self.listeners:
-                if lst.pcm:
-                    lst.q.append(pcm)
-                else:
-                    if enc is None:
-                        enc = ULAW_SILENCE if pcm == PCM_SILENCE else ulaw_encode(pcm)
-                    lst.q.append(enc)
-            if self.listeners:
-                self.cond.notify_all()
 
     def pump_loop(self):
         rate = {"t": time.monotonic(), "packets": 0}
@@ -1469,9 +1406,6 @@ class Hub:
 
     def snapshot(self):
         now = time.monotonic()
-        with self.lock:
-            n = len(self.listeners)
-            listeners = [{"ip": x.ip, "secs": int(time.time() - x.since)} for x in self.listeners]
         return {
             "receiving": self.last_rx > 0 and now - self.last_rx < 3.0,
             "last_rx_age": round(now - self.last_rx, 1) if self.last_rx else None,
@@ -1483,9 +1417,6 @@ class Hub:
             "level_db": round(self.level_db, 1),
             "peak_db": round(self.peak_db, 1),
             "audio_active": self.audio_active(),
-            "listeners": n,
-            "listener_list": listeners,
-            "max_listeners": _cfg_get("max_listeners"),
             "udp_error": "; ".join(self.udp_errors.values()),
             "rx_load_pct": RXC.load_pct,
         }
@@ -1818,7 +1749,6 @@ def build_status(full):
         st["rec_node"] = rec_node_state(node)
         st["talker"] = {"installed": talker_installed(), "active": talker_active()}
     else:
-        st.pop("listener_list", None)
         st.pop("udp_error", None)
         st.pop("rx_load_pct", None)
     return st
@@ -5270,6 +5200,17 @@ class RealActions:
         return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
 
 
+class CurrentLinkActions(RealActions):
+    def connect(self, entry):
+        return True, "recording the link as it is", None
+
+    def link_alive(self, entry):
+        return True
+
+    def disconnect(self, entry):
+        return True, "the link was left as it is", None
+
+
 def run_sequence(entry, actions, end_at, abort, set_state, now_fn, sleep_fn, timeouts=None, window=None):
     timeouts = timeouts or STEP_TIMEOUT
     steps = []
@@ -5541,7 +5482,7 @@ class Scheduler:
                         "end": window[1].isoformat(timespec="minutes"), "started": self.clock(), "file": "", "dry_run": dry}
             self.state = "connecting"
             self._state_save()
-        actions = (self.dry if dry else self.real)()
+        actions = self.dry() if dry else (CurrentLinkActions() if manual else self.real())
         self.thread = threading.Thread(target=self._run, args=(entry, window, s_iso, end_at, actions, abort, manual),
                                        name="sched-run", daemon=True)
         self.thread.start()
@@ -5554,9 +5495,15 @@ class Scheduler:
                 return True, "Already stopping."
             self.user_stop = True
             name = self.cur["name"]
+            now = sched_now()
+            for e in [x for x in schedule_load()["entries"] if x["enabled"]]:
+                w = schedule_current(e, now)
+                if w:
+                    self.done[e["id"]] = w[0].isoformat(timespec="minutes")
+            self._state_save()
             self.run_abort.set()
         log_event(f"Recording stopped by hand: {name}", "warn")
-        return True, f"Stopping {name}. What was recorded is saved and the link is dropped."
+        return True, f"Stopping {name}. What was recorded is saved."
 
     def _run(self, entry, window, s_iso, end_at, actions, abort, manual):
         try:
@@ -5634,15 +5581,26 @@ def recorder_status():
 MANUAL_MAX_SEC = 4 * 3600
 
 
+def current_link_name():
+    try:
+        ok, links = rpt_links(main_node())
+        link = live_link(links, ok, nc_running(cached=True), fav_load())
+    except Exception:
+        return ""
+    if link.get("state") not in ("connected", "linking") or not link.get("label"):
+        return ""
+    return _CALL_TRIM.sub(" ", f"{link.get('mode', '')} {link['label']}").strip()[:SCHEDULE_NAME_MAX]
+
+
 def recording_start(body):
     raw = body.get("entry") if isinstance(body, dict) else None
     if not isinstance(raw, dict):
         return {"ok": False, "error": "bad request"}
-    try:
-        entry = schedule_norm_entry({"name": raw.get("name", ""), "target": raw.get("target"), "format": raw.get("format", "pcm"),
-                                     "start": "00:00", "end": "00:01", "days": list(range(7))})
-    except ValueError as exc:
-        return {"ok": False, "error": str(exc)}
+    fmt = str(raw.get("format", "pcm") or "pcm").strip().lower()
+    if fmt not in SCHEDULE_FORMATS:
+        return {"ok": False, "error": "format must be ulaw or pcm"}
+    name = current_link_name() or "Record now"
+    entry = {"id": "recnow", "name": name, "kind": "regular", "format": fmt, "target": {}}
     now = sched_now()
     ok, msg = SCHED.start_manual(entry, (now, now + timedelta(seconds=MANUAL_MAX_SEC)))
     if not ok:
@@ -5702,14 +5660,29 @@ def schedule_sources(_body=None):
 def schedule_view():
     data = schedule_load()
     now = sched_now()
-    rows = []
+    keyed = []
     for e in data["entries"]:
         row = dict(e)
-        nxt = schedule_next(e, now) if e["enabled"] else None
+        nxt = schedule_next(e, now)
         cur = schedule_current(e, now) if e["enabled"] else None
-        row["next"] = (cur or nxt)[0].strftime("%a %d %b %H:%M") if (cur or nxt) else ""
+        shown = cur or nxt
+        row["next"] = shown[0].strftime("%a %d %b %H:%M") if shown else ""
         row["now"] = bool(cur)
-        rows.append(row)
+        last = schedule_last_ended(e, now)
+        row["done"] = bool(e["enabled"] and e.get("kind") != "special" and not cur and last
+                           and SCHED.done.get(e["id"]) == last[0].isoformat(timespec="minutes"))
+        if cur:
+            group, key = 0, cur[0]
+        elif nxt and not row["done"]:
+            group, key = 1, nxt[0]
+        elif nxt:
+            group, key = 2, nxt[0]
+        else:
+            group, key = 3, now
+        row["next_at"] = shown[0].isoformat(timespec="minutes") if shown else ""
+        keyed.append((group, key, row))
+    keyed.sort(key=lambda t: (t[0], t[1]))
+    rows = [t[2] for t in keyed]
     return {"ok": True, "entries": rows, "error": data["error"], "max": SCHEDULE_MAX, "gap_min": SCHEDULE_GAP_MIN,
             "formats": list(SCHEDULE_FORMATS), "status": SCHED.status(), "engine_ready": ENGINE_READY,
             "dry_run": bool(_cfg_get("schedule_dry_run")) or not ENGINE_READY, "now": now.strftime("%a %d %b %H:%M"),
@@ -5792,10 +5765,6 @@ table.links{font-size:calc(clamp(10.5px,3.1vw,14px) + var(--sett-font) - 15px);f
 #cd-links .small{font-size:calc(13px + var(--sett-font) - 15px)}
 table.links td,table.links th{padding:6px 3px;white-space:nowrap;overflow-wrap:normal}
 table.links td:nth-child(2){width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis}
-.listen-row{flex-wrap:nowrap}
-.listen-row .btn.big{min-width:112px;flex:none}
-.listen-row input[type=range]{flex:1;min-width:0}
-.vol-i{flex:none;width:22px;height:22px;color:var(--muted)}
 th{color:var(--muted);font-weight:600;white-space:nowrap;overflow-wrap:normal}
 code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padding:1px 5px;font-size:12px;word-break:break-all}
 #log{max-height:260px;overflow:auto;font:12px/1.5 ui-monospace,Menlo,Consolas,monospace;background:var(--card2);border:1px solid var(--line);border-radius:8px;padding:8px}
@@ -5839,13 +5808,24 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 #cd-sys .row{justify-content:center}
 #tab-connect .tn-bar .btn-last{min-height:40px}
 #tab-connect #cd-tune .tn-msg{min-height:0}
+#tab-record #cd-tune{padding:8px 10px;margin-bottom:8px}
+#tab-record #cd-tune h2{font-size:14px;margin:0 0 4px}
+#tab-record #cd-tune .btn.big{min-height:40px;font-size:14px;min-width:0}
+#tab-record #cd-tune .tn-bar{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--tn-gap)}
+#tab-record #cd-tune .tn-bar>*{width:100%!important;flex:none!important;max-width:none!important;min-width:0}
+#tab-record #cd-tune #t-find,#tab-record #cd-tune #t-pick{grid-column:span 2}
+#tab-record #cd-tune .tn-pair{grid-column:1 / -1}
+#tab-record #cd-tune #t-go{min-height:44px;font-size:15px}
+#tab-record #cd-tune .tn-msg,#tab-record #cd-tune .msg,#tab-record #cd-tune .small{font-size:12px;margin-top:2px}
+#tab-record #cd-tune .tn-foot{margin-top:2px}
+#tab-record #cd-tune .tn-bar .btn-last{min-height:40px}
+#tab-record #cd-tune .tn-msg{min-height:0}
 #da-wrap{margin:0 0 8px}
 #da-btn{width:100%;min-height:clamp(44px,8vh,64px);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:4px 12px;border-width:2px}
 #da-btn .da-t{font-size:clamp(14px,calc(1.6vh + 1vw),18px);font-weight:700;letter-spacing:.04em;line-height:1.15}
 #da-btn .da-s{font-size:clamp(10px,calc(.9vh + .5vw),12px);font-weight:500;color:var(--muted);line-height:1.2;max-width:100%;overflow-wrap:anywhere}
 #da-btn:disabled{opacity:.55;cursor:default}
 #da-wrap .msg:empty{display:none}
-#tab-listen .lpanel{padding:8px 10px}
 @media (max-width:560px){#t-mode,#t-net,#t-mod{flex:1 1 40%;width:auto}#t-find{flex:1 1 100%;max-width:none}#t-pick{flex:1 1 100%}.tn-bar .btn.primary{flex:1 1 auto}}
 #login-screen{display:none;position:fixed;inset:0;z-index:9999;align-items:center;justify-content:center;
 padding:16px;background:rgba(5,8,14,.88);backdrop-filter:blur(3px)}
@@ -5869,16 +5849,14 @@ nav.tabs button{background:transparent;border:1px solid var(--line2);border-bott
 nav.tabs button[aria-current=page]{color:#22d4ff;border-color:#22d4ff;background:rgba(34,212,255,.12);box-shadow:0 0 10px rgba(34,212,255,.35)}
 nav.tabs svg{width:22px;height:22px}
 main.fit{padding-top:10px;padding-bottom:12px}
-#tab-listen{min-height:100%;display:flex;flex-direction:column;font-size:var(--lt-font)}
+#tab-setup{font-size:var(--sett-font)}
+.sched-entry td{border-top:2px solid var(--line2);padding-top:8px}
+table.links tr.sched-entry:first-child td{border-top:0}
+.sched-entry.sched-done td{color:var(--muted)}
+.sched-entry.sched-off td:first-child{font-style:italic}
 #tab-setup{font-size:var(--sett-font)}
 #tab-setup .btn{min-height:var(--sett-h)}
 #tab-setup .fav-row button{min-height:40px}
-.lpanel{flex:1 0 auto;display:flex;flex-direction:column;gap:8px;background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
-.lpanel>*{flex:none}
-.lpanel .row{margin:0}
-.lpanel .msg{margin-top:0;min-height:0}
-.lpanel #listen-msg:empty{display:none}
-#listen-msg{display:none}
 .lstat{display:flex;align-items:center;justify-content:center;gap:12px;font-size:13px;color:var(--soft);white-space:nowrap;overflow:hidden}
 .lstat>span{flex:none;display:inline-flex;align-items:center}
 .lstat #st-node{font-weight:700;color:var(--text)}
@@ -5954,8 +5932,6 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 @keyframes guardblink{to{visibility:hidden}}
 .sel-card{display:flex;flex-direction:column;gap:6px;background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:10px}
 .tag{display:inline-block;padding:2px 8px;border:1px solid var(--accent);border-radius:7px;color:#7fd8c6;font-size:12px;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace}
-#listen-btn{line-height:1.05}
-#listen-btn .lb{display:inline-block;font-size:.72em;line-height:1.05}
 .lk-badge{display:inline-block;padding:0 .4em;border:1px solid var(--accent);border-radius:.3em;color:#7fd8c6;font-size:1em;line-height:1.4;font-weight:700;font-family:ui-monospace,Menlo,Consolas,monospace;letter-spacing:.03em;vertical-align:baseline}
 .fav-row{display:grid;grid-template-columns:110px 124px minmax(0,1fr) 44px;gap:6px;margin:6px 0}
 .fav-row input,.fav-row select{min-width:0;width:100%}
@@ -5974,7 +5950,7 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 """
 
 _JS = r"""const $ = (id) => document.getElementById(id);
-let authed = false, publicListen = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
+let authed = false, dashPort = 8989, tab = 'listen', lastLogId = 0, lastStatus = null;
 let favNets = [], favModes = ['ASL', 'EchoLink', 'M17'];
 let nets = [], netMax = 10;
 async function api(url, opts) {
@@ -6495,8 +6471,8 @@ function showTab(name) {
     const b = $('nav-' + t);
     if (t === name) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
   });
-  if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); }
-  if (name === 'record') { loadSchedule(); loadStorage(); }
+  if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); loadSchedule(); }
+  if (name === 'record') { loadSchedule(); }
   if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadSchedule(); loadDigital(); loadConv(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
@@ -6692,6 +6668,7 @@ async function loadSchedule() {
     tb.innerHTML = '';
     d.entries.forEach((e) => {
       const tr = document.createElement('tr');
+      tr.className = 'sched-entry' + (e.done ? ' sched-done' : '') + (e.enabled ? '' : ' sched-off');
       const cell = (lines) => { const td = document.createElement('td'); lines.forEach((v, i) => { const x = document.createElement('div'); x.textContent = v || ''; if (i) x.className = 'muted small'; td.appendChild(x); }); tr.appendChild(td); };
       cell([e.name + (e.enabled ? '' : ' (off)'), schedTarget(e.target)]);
       cell([(e.kind === 'special' ? 'Special ' + e.date : schedDays(e.days)) + ' ' + e.start + '-' + e.end + ' ' + (e.format === 'pcm' ? 'PCM' : 'u-law'), 'Next: ' + (e.now ? 'now' : e.next)]);
@@ -7233,26 +7210,6 @@ html[data-theme="light"] *{text-shadow:none!important}
 <main>
 
 <section id="tab-connect" class="hidden">
-<div class="card" id="cd-tune">
-<h2>Tune</h2>
-<div class="tn-bar">
-<select id="t-mode" aria-label="Mode"></select>
-<select id="t-net" aria-label="DMR network"></select>
-<select id="t-mod" aria-label="Module"></select>
-<input id="t-find" type="search" maxlength="40" aria-label="Search or type" autocomplete="off" autocapitalize="off" spellcheck="false">
-<select id="t-pick" aria-label="Pick from the list"></select>
-<button id="t-lh" class="btn-last lh-off" type="button" aria-label="Open Last Heard">LH</button>
-<div class="btn-pair tn-pair"><button id="t-go" class="btn big primary" type="button">Connect</button><button id="t-disc" class="btn big danger" type="button">Disconnect</button></div>
-</div>
-<div id="t-list" class="tn-msg"></div>
-<div id="t-msg" class="msg"></div>
-<div id="t-ask" class="hidden">
-<div class="row"><button id="t-net-add" class="btn primary" type="button">Add it to Node Controller and tune</button>
-<button id="t-net-once" class="btn" type="button">Tune this once</button>
-<button id="t-net-no" class="btn" type="button">Cancel</button></div>
-</div>
-<div class="tn-foot"><span id="t-now" class="muted small"></span></div>
-</div>
 <div class="card" id="cd-sched-form">
 <h2 id="sc-title">Schedule a recording</h2>
 <div class="row"><label>Name <input type="text" id="sc-name" maxlength="40" placeholder="optional" style="width:150px"></label>
@@ -7275,31 +7232,6 @@ html[data-theme="light"] *{text-shadow:none!important}
 <button id="da-btn" class="btn danger" type="button"><span class="da-t">Disconnect All</span></button>
 <div id="da-msg" class="msg"></div>
 </div>
-</section>
-
-<section id="tab-record" class="hidden">
-<div class="card" id="cd-rec">
-<h2>Record</h2>
-<div class="lstat"><span class="mono" id="st-node" title="Node">-</span>
-<span id="st-feed-w"><span id="st-feed" class="dot"></span><span id="st-feed-t">feed</span></span>
-<span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span></div>
-<div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
-<div id="rec-state" class="muted" style="margin-top:8px">Idle.</div>
-<div class="row"><button id="rec-start" class="btn primary" type="button">Record now</button><button id="rec-stop" class="btn danger" type="button" disabled>Stop recording</button></div>
-<p class="muted small">Record now records the target set in the Connect tab's schedule form, until you press Stop. It stops by itself after 4 hours.</p>
-<div id="rec-msg" class="msg"></div>
-</div>
-<div class="card" id="cd-rstore">
-<h2>Storage</h2>
-<table>
-<tr><th>Saving to</th><td id="rs-path">-</td></tr>
-<tr><th>Chosen by</th><td id="rs-source">-</td></tr>
-<tr><th>Free</th><td id="rs-free">-</td></tr>
-<tr><th>Recordings</th><td id="rs-files">-</td></tr>
-</table>
-<div id="rs-block" class="msg err hidden"></div>
-<div id="rs-conflict" class="msg warn hidden"></div>
-</div>
 <div class="card" id="cd-rsched">
 <h2>Schedule</h2>
 <div id="sch-note" class="muted small"></div>
@@ -7309,6 +7241,40 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div id="sch-msg" class="msg"></div>
 <div id="sch-trace" class="mono small hidden"></div>
 <div id="sch-results" class="muted small"></div>
+</div>
+</section>
+
+<section id="tab-record" class="hidden">
+<div class="card" id="cd-tune">
+<h2>Tune</h2>
+<div class="tn-bar">
+<select id="t-mode" aria-label="Mode"></select>
+<select id="t-net" aria-label="DMR network"></select>
+<select id="t-mod" aria-label="Module"></select>
+<input id="t-find" type="search" maxlength="40" aria-label="Search or type" autocomplete="off" autocapitalize="off" spellcheck="false">
+<select id="t-pick" aria-label="Pick from the list"></select>
+<button id="t-lh" class="btn-last lh-off" type="button" aria-label="Open Last Heard">LH</button>
+<div class="btn-pair tn-pair"><button id="t-go" class="btn big primary" type="button">Connect</button><button id="t-disc" class="btn big danger" type="button">Disconnect</button></div>
+</div>
+<div id="t-list" class="tn-msg"></div>
+<div id="t-msg" class="msg"></div>
+<div id="t-ask" class="hidden">
+<div class="row"><button id="t-net-add" class="btn primary" type="button">Add it to Node Controller and tune</button>
+<button id="t-net-once" class="btn" type="button">Tune this once</button>
+<button id="t-net-no" class="btn" type="button">Cancel</button></div>
+</div>
+<div class="tn-foot"><span id="t-now" class="muted small"></span></div>
+</div>
+<div class="card" id="cd-rec">
+<h2>Record</h2>
+<div class="lstat"><span class="mono" id="st-node" title="Node">-</span>
+<span id="st-feed-w"><span id="st-feed" class="dot"></span><span id="st-feed-t">feed</span></span>
+<span title="Lit while the node is passing audio"><span id="st-active" class="dot"></span>RX</span></div>
+<div class="spec-meter" id="spec-meter"><div class="meter"><i id="meter-bar"></i></div><span id="st-level" class="muted small mono">-inf</span></div>
+<div id="rec-state" class="muted" style="margin-top:8px">Idle.</div>
+<div class="row"><button id="rec-start" class="btn primary" type="button">Record now</button><button id="rec-stop" class="btn danger" type="button" disabled>Stop recording</button></div>
+<p class="muted small">Record now records the link that is up now, as it is, and keeps going through link changes until you press Stop. It stops by itself after 4 hours. It is not available while a scheduled recording is running.</p>
+<div id="rec-msg" class="msg"></div>
 </div>
 </section>
 
@@ -7329,6 +7295,17 @@ html[data-theme="light"] *{text-shadow:none!important}
 <table class="links"><thead><tr><th>Node</th><th>Name</th><th>Dir</th><th>Time</th><th>State</th></tr></thead><tbody id="s-links"></tbody></table>
 <div id="s-nolinks" class="muted small" style="margin-top:8px">No links.</div>
 <div id="s-links-err" class="msg warn hidden">Could not ask Asterisk for the links (rpt lstats).</div>
+</div>
+<div class="card" id="cd-rstore">
+<h2>Storage</h2>
+<table>
+<tr><th>Saving to</th><td id="rs-path">-</td></tr>
+<tr><th>Chosen by</th><td id="rs-source">-</td></tr>
+<tr><th>Free</th><td id="rs-free">-</td></tr>
+<tr><th>Recordings</th><td id="rs-files">-</td></tr>
+</table>
+<div id="rs-block" class="msg err hidden"></div>
+<div id="rs-conflict" class="msg warn hidden"></div>
 </div>
 <div class="card fold" id="cd-setup">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-setup"><span class="fold-t">Setup</span><span class="fold-sum" id="sum-cfg"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
@@ -7355,7 +7332,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="card fold" id="cd-sched">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-sched"><span class="fold-t">Schedule</span><span class="fold-sum" id="sum-sched"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-sched">
-<p class="muted small">Add recordings on the Connect tab. Here you can turn an entry off or on, change it, remove it or try it with a dry run. Windows must be at least 2 minutes apart.</p>
+<p class="muted small">Add recordings on the Schedule tab. Here you can turn an entry off or on, change it, remove it or try it with a dry run. Windows must be at least 2 minutes apart.</p>
 <table class="links"><thead><tr><th>Recording</th><th>When</th><th></th></tr></thead><tbody id="sl-rows"></tbody></table>
 <div id="sl-none" class="muted small" style="margin-top:8px">No scheduled recordings.</div>
 <div id="sl-msg" class="msg"></div>
@@ -7366,7 +7343,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="fold-body hidden" id="cb-dig">
 <p class="muted small">Without Node Controller, Node Recorder tunes DVSwitch and M17 itself: it sets the mode, tunes and
 links the bridge node to the main node. While Node Controller runs, ASL, EchoLink, DVSwitch and M17 all go through it.
-A DMR network Node Controller doesn't have can be added to it, or used for one tune, from the Connect tab.</p>
+A DMR network Node Controller doesn't have can be added to it, or used for one tune, from the Schedule tab.</p>
 <table>
 <tr><th>Control</th><td id="dg-control">-</td></tr>
 <tr><th>Found</th><td id="dg-found">-</td></tr>
@@ -7454,7 +7431,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 </section>
 </main>
 <nav class="tabs hidden" id="nav" aria-label="Main">
-<button id="nav-connect" type="button">__ICON_CONNECT__Connect</button>
+<button id="nav-connect" type="button">__ICON_CONNECT__Schedule</button>
 <button id="nav-record" type="button">__ICON_RECORD__Record</button>
 <button id="nav-setup" type="button">__ICON_SETUP__Setup</button>
 </nav>
@@ -7511,7 +7488,6 @@ _POST_ACTIONS = {
     "/api/dmr-networks/import": (lambda b: nets_import(), ()),
 }
 _OPEN_GET_PATHS = ("/", "/index.html", "/api/health", "/api/whoami")
-_PUBLIC_LISTEN_PATHS = ("/api/status", "/api/listen")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -7626,9 +7602,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         authed = self._authed()
         if path not in _OPEN_GET_PATHS and not authed:
-            if not (path in _PUBLIC_LISTEN_PATHS and _cfg_get("public_listen")):
-                self._json(401, {"ok": False, "error": "Log in first."})
-                return
+            self._json(401, {"ok": False, "error": "Log in first."})
+            return
         try:
             if path in ("/", "/index.html"):
                 self._send(200, render_page(), "text/html; charset=utf-8")
@@ -7637,7 +7612,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/whoami":
                 dport = dashboard_conf()["port"]
                 dash = port_open_cached(dport, ttl=5.0)
-                self._json(200, {"ok": True, "authed": authed, "public_listen": _cfg_get("public_listen"),
+                self._json(200, {"ok": True, "authed": authed,
                                  "backend": _root_backend_available(), "dash_port": dport,
                                  "dash_running": dash,
                                  "instmon_port": INSTMON_PORT if not dash and port_open_cached(INSTMON_PORT, ttl=5.0) else None,
@@ -7645,8 +7620,6 @@ class Handler(BaseHTTPRequestHandler):
                                  "sysmon_port": SYSMON_PORT if authed and port_open_cached(SYSMON_PORT) else None})
             elif path == "/api/status":
                 self._json(200, dict(build_status(authed), ok=True))
-            elif path == "/api/listen":
-                self._stream((query.get("fmt") or [""])[0] == "s16")
             elif path == "/api/disconnect-all/status":
                 self._json(200, disconnect_all_status())
             elif path == "/api/storage":
@@ -7686,30 +7659,6 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(404, {"ok": False, "error": "Not found."})
         except (BrokenPipeError, ConnectionResetError):
             pass
-
-    def _stream(self, pcm=False):
-        lst = HUB.add_listener(self._ip(), pcm)
-        if lst is None:
-            self.close_connection = True
-            self._json(503, {"ok": False, "error": f"All {_cfg_get('max_listeners')} listener slots are in use."})
-            return
-        try:
-            self._head(200, "application/octet-stream", {
-                "X-Audio-Format": "s16le; rate=8000; channels=1" if pcm else "mulaw; rate=8000; channels=1",
-                "Connection": "close"})
-            self.close_connection = True
-            self.connection.settimeout(15)
-            while True:
-                chunk = HUB.wait_chunk(lst)
-                if chunk:
-                    self.wfile.write(chunk)
-                    self.wfile.flush()
-                elif time.monotonic() - HUB.pump_beat > 5.0:
-                    break
-        except (BrokenPipeError, ConnectionResetError, socket.timeout, OSError):
-            pass
-        finally:
-            HUB.remove_listener(lst)
 
     def do_POST(self):
         if self._wan_refused():
