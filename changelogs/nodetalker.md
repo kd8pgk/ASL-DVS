@@ -1,11 +1,17 @@
 # Node Talker changelog
 
+## 0.10.17 (2026-11-05)
+
+- **A busy suite-log lock no longer holds Node Talker up.** 0.10.16 waited on the suite-log file lock for as long as another process kept it, so every request or thread that logged waited too: the Listen events, the receive-health rows and the kerchunk log. In a test the Listen event request waited 5.5 s while another process held the lock; 0.10.15 never waited, and with 0.10.16 the Listen button could stay on without the feed connecting. The shared `suitelog_append` now tries the lock for up to half a second and, if it is still held, writes the row without it, as 0.10.15 did. Only the rotation of a full segment is skipped that time. No row is lost and nothing waits.
+- Test: a held lock does not stall the writer (`ci/test_ci.py`).
+- This is a release, not a cosmetic build.
+
 ## 0.10.16 (2026-11-05)
 
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_16_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_17_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
