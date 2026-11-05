@@ -185,6 +185,56 @@ class Setup(Fake):
         self.assertFalse(r["ok"])
 
 
+class Remove(Fake):
+    def setUp(self):
+        super().setUp()
+        nr.rec2_enable()
+        self.ilinks.clear()
+
+    def _text(self):
+        with open(nr.RPT_CONF) as fh:
+            return fh.read()
+
+    def test_remove_deletes_the_stanza_and_its_nodes_line_only(self):
+        r = nr.rec2_disable()
+        self.assertTrue(r["ok"], r)
+        text = self._text()
+        self.assertNotIn("[1922]", text)
+        self.assertNotIn("1922 = radio@", text)
+        self.assertIn("[1921](node-main)", text)
+        self.assertIn("1921 = radio@127.0.0.1/1921,NONE", text)
+        self.assertEqual(self.main_calls(), [])
+
+    def test_remove_releases_a_station_it_is_receiving(self):
+        nr.listen_connect(asl_target("55553"))
+        self.ilinks.clear()
+        r = nr.rec2_disable()
+        self.assertTrue(r["ok"], r)
+        self.assertIn(("1922", 1, "55553"), self.ilinks)
+        self.assertEqual(nr._listen["peer"], "")
+        self.assertEqual(self.main_calls(), [])
+
+    def test_remove_refused_during_a_listen_recording(self):
+        with mock.patch.object(nr.ENGINE, "hub", nr.HUB2):
+            r = nr.rec2_disable()
+        self.assertFalse(r["ok"])
+        self.assertIn("A listen recording is running", r["error"])
+        self.assertIn("[1922]", self._text())
+
+    def test_remove_leaves_a_foreign_1922_alone(self):
+        with open(nr.RPT_CONF, "w") as fh:
+            fh.write(RPT_TEXT + "\n[1922]\nrxchannel = USRP/127.0.0.1:1:2\n")
+        r = nr.rec2_disable()
+        self.assertFalse(r["ok"])
+        self.assertIn("[1922]", self._text())
+
+    def test_remove_then_install_again(self):
+        self.assertTrue(nr.rec2_disable()["ok"])
+        self.assertFalse(nr.rec2_state()["ready"])
+        self.assertTrue(nr.rec2_enable()["ok"])
+        self.assertTrue(nr.rec2_state()["ready"])
+
+
 class Listen(Fake):
     def setUp(self):
         super().setUp()

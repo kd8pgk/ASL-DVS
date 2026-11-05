@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.7"
+VERSION = "0.5.8"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -1885,6 +1885,7 @@ COCKPIT_PORT = 9090
 WEB_PAGES = (("allmon3", "/allmon3/"), ("dvswitch", "/dvswitch/"))
 LINK_TTL_SEC = 30.0
 POWER_CMDS = {"reboot": (["reboot"], "Rebooting…"), "shutdown": (["shutdown", "-h", "now"], "Shutting down…")}
+_REC2_NODES_LINE_RE = re.compile(r"^\s*" + REC2_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + REC2_NODE + r",NONE\s*$")
 _REC_NODES_LINE_RE = re.compile(r"^\s*" + REC_NODE + r"\s*=\s*radio@127\.0\.0\.1(?::\d+)?/" + REC_NODE + r",NONE\s*$")
 USRP_HEADER = struct.Struct(">4s7i")
 _HOSTNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]{0,62}$")
@@ -5292,6 +5293,43 @@ def rec2_state():
     return out
 
 
+def rec2_disable():
+    if ENGINE.hub is HUB2:
+        return {"ok": False, "error": "A listen recording is running. Stop it first."}
+    with _rpt_lock:
+        lines, stanzas = read_rpt()
+        s, end = _node_stanza(lines, stanzas, REC2_NODE)
+        if s is not None and _rec_note(lines, s) != REC2_NOTE:
+            return {"ok": False, "error": f"[{REC2_NODE}] in rpt.conf was not added by Node Recorder, so it was left alone."}
+        if s is None and not any(_REC2_NODES_LINE_RE.match(ln) for ln in lines):
+            return {"ok": True, "changed": False, "message": f"Node {REC2_NODE} is not in rpt.conf."}
+    with _listen_lock:
+        public = _public_peers(REC2_NODE)
+        if public is None:
+            return {"ok": False, "error": f"Asterisk did not list node {REC2_NODE}'s links; nothing was removed."}
+        for p in public:
+            ilink(REC2_NODE, 1, p)
+        _listen["peer"] = ""
+    with _rpt_lock:
+        lines, stanzas = read_rpt()
+        s, end = _node_stanza(lines, stanzas, REC2_NODE)
+        drop = set()
+        if s is not None and _rec_note(lines, s) == REC2_NOTE:
+            drop.update(range(s["header"] - 1, end))
+        for i, ln in enumerate(lines):
+            if _REC2_NODES_LINE_RE.match(ln):
+                drop.add(i)
+        new = [ln for i, ln in enumerate(lines) if i not in drop]
+        while len(new) > 1 and new[-1].strip() == "" and new[-2].strip() == "":
+            new.pop()
+        try:
+            backup = _write_rpt(new)
+        except OSError as exc:
+            return _write_failed(exc)
+    log_event(f"rpt.conf: removed node {REC2_NODE} (backup {backup})", "ok")
+    return _changed(backup, f"Removed node {REC2_NODE}. Restart Asterisk for it to take effect.")
+
+
 def rec2_enable():
     main = main_node()
     if not main:
@@ -6695,7 +6733,7 @@ function showTab(name) {
   });
   if (name === 'connect') { loadTuneInfo(); connectTabEnter(); loadSchedSources(); }
   if (name === 'record') { loadSchedule(); loadStorage(); }
-  if (name === 'setup') { loadStorage(); loadRecNode(); loadConfig(); loadSchedule(); loadDigital(); loadConv(); }
+  if (name === 'setup') { loadStorage(); loadRecNode(); loadRec2Node(); loadConfig(); loadSchedule(); loadDigital(); loadConv(); }
   document.querySelector('main').classList.toggle('fit', name === 'record' || name === 'connect');
 }
 function render() {
@@ -6740,6 +6778,7 @@ function foldSet(k, open) {
   if (k === 'sched') loadSchedule();
   if (k === 'dig') loadDigital();
   if (k === 'node') loadRecNode();
+  if (k === 'node2') loadRec2Node();
   if (k === 'log') pollLog();
 }
 function pollEvery(fn, ms) {
@@ -6855,6 +6894,29 @@ async function loadRecNode() {
     : !(d.nodes_line && d.rx_ok) ? 'Needs attention' : d.linked === null ? 'Restart Asterisk' : d.linked ? 'Set up and linked' : 'Set up, linking');
   $('rn-add').disabled = d.defined && (talker || d.nodes_line);
   $('rn-remove').disabled = !(d.defined && d.owner === 'recorder') && !d.nodes_line;
+}
+async function loadRec2Node() {
+  const d = await api('/api/recnode2');
+  if (!d.ok) { $('rn2-state').textContent = d.error || 'Could not read rpt.conf.'; sum('node2', 'Could not read rpt.conf'); return; }
+  $('rn2-rxch').textContent = d.rxchannel;
+  let s;
+  if (d.error) s = d.error;
+  else if (!d.defined) s = 'Not installed.';
+  else if (d.owner !== 'recorder') s = 'rpt.conf has a [' + d.node + '] node that Node Recorder did not add.';
+  else if (!d.rx_ok) s = 'Installed, but its rxchannel is not ' + d.rxchannel + '.';
+  else if (!d.nodes_line) s = 'Installed, but its [nodes] line is missing: press Install to fix it.';
+  else if (!d.loaded) s = 'Installed. Restart Asterisk to load it.';
+  else s = 'Installed and loaded. Listen recordings link it to their station; it is never linked to the main node.';
+  $('rn2-state').textContent = s;
+  sum('node2', d.error ? 'Could not read rpt.conf' : !d.defined ? 'Not installed' : d.owner !== 'recorder' ? 'Needs attention'
+    : !(d.nodes_line && d.rx_ok) ? 'Needs attention' : !d.loaded ? 'Restart Asterisk' : 'Installed');
+  $('rn2-add').disabled = !!(d.owner === 'recorder' && d.ready && d.loaded);
+  $('rn2-remove').disabled = !(d.defined && d.owner === 'recorder');
+}
+async function rec2Install() { setMsg('rn2-msg', await post('/api/recnode2/enable', {})); loadRec2Node(); }
+async function rec2Remove() {
+  if (!confirm('Remove node 1922 from rpt.conf? Listen recordings stop working until it is installed again.')) return;
+  setMsg('rn2-msg', await post('/api/recnode2/disable', {})); loadRec2Node();
 }
 const STATE_TXT = {idle: 'Idle.', connecting: 'Connecting...', recording: 'Recording', stopping: 'Stopping the recording...', disconnecting: 'Disconnecting...'};
 const RESULT_TXT = {ok: 'done', connect_failed: 'could not connect', start_failed: 'could not start', link_lost: 'link dropped',
@@ -7274,6 +7336,8 @@ function initPage() {
   $('sc-special').addEventListener('change', schedKindShow);
   $('rec-stop').addEventListener('click', recStop);
   $('rn-remove').addEventListener('click', recNodeDisable);
+  $('rn2-add').addEventListener('click', rec2Install);
+  $('rn2-remove').addEventListener('click', rec2Remove);
   $('nw-add').addEventListener('click', nwAdd);
   $('nw-import').addEventListener('click', nwImport);
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
@@ -7602,6 +7666,19 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div id="rn-msg" class="msg"></div>
 </div>
 </div>
+<div class="card fold" id="cd-node2">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-node2"><span class="fold-t">Listen node <span id="rn2-node">1922</span></span><span class="fold-sum" id="sum-node2"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-node2">
+<p class="muted small">Listen recordings use this private node. A recording links it to its ASL or EchoLink station in receive-only mode; it is never linked to the main node, so the main node's talk and links are not touched. Install adds it to rpt.conf; restart Asterisk afterwards. Remove takes it out again and releases any station it is receiving.</p>
+<table>
+<tr><th>State</th><td id="rn2-state">-</td></tr>
+<tr><th>Channel</th><td><code id="rn2-rxch">-</code></td></tr>
+</table>
+<div class="row"><button id="rn2-add" class="btn primary" type="button">Install node 1922</button>
+<button id="rn2-remove" class="btn" type="button">Remove node 1922</button></div>
+<div id="rn2-msg" class="msg"></div>
+</div>
+</div>
 <div class="card fold" id="cd-store">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-store"><span class="fold-t">Storage</span><span class="fold-sum" id="sum-store"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-store">
@@ -7690,6 +7767,7 @@ _POST_ACTIONS = {
     "/api/config": (config_update, ()),
     "/api/recnode/enable": (lambda b: rec_node_enable(), (OSError,)),
     "/api/recnode2/enable": (lambda b: rec2_enable(), (OSError,)),
+    "/api/recnode2/disable": (lambda b: rec2_disable(), (OSError,)),
     "/api/setup/apply": (lambda b: setup_apply(), (OSError,)),
     "/api/convert/install": (encoder_install, ()),
     "/api/schedule/set": (schedule_set, (ValueError,)),
@@ -7858,6 +7936,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, schedule_view())
             elif path == "/api/recnode":
                 self._json(200, dict(rec_node_state(), ok=True))
+            elif path == "/api/recnode2":
+                self._json(200, dict(rec2_state(), ok=True, loaded=rec2_loaded()))
             elif path == "/api/setup":
                 self._json(200, dict(setup_plan(), ok=True))
             elif path == "/api/tune-info":

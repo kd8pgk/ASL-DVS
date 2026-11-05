@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_7_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_8_20261105.py`. Newest entries first.
+
+## 0.5.8 (2026-11-05)
+
+- **Install and Remove for the listen node on the page.** A new "Listen node 1922" card under the 1921 card has Install node 1922 and Remove node 1922. Install adds node 1922 to rpt.conf (the same as the API route); restart Asterisk afterwards. Remove takes it out of rpt.conf and releases any station it is receiving. Remove asks first, and is refused while a listen recording is running.
+- **New routes.** `GET /api/recnode2` gives the state, including whether Asterisk has loaded node 1922. `POST /api/recnode2/disable` removes it.
+- A stanza that Node Recorder did not add, such as a 1922 from another tool, is left alone by Remove.
+- Tests: `ci/test_noderecorder_listen.py` (30 checks), adding Remove: deletes only its own stanza and nodes line, releases a station, refuses during a listen recording, leaves a foreign 1922 alone, and installs again after a remove.
+- This is a release, not a cosmetic build.
 
 ## 0.5.7 (2026-11-05)
 
