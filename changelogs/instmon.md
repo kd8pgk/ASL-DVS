@@ -1,6 +1,11 @@
 # instmon changelog
 
-Current file: `instmon_v2_90_0_20261104.py`. Newest entries first.
+## 2.91.0 (2026-11-05)
+
+- **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
+- Only the shared suite-log copy changes; nothing else in instmon moves. This is a release, not a cosmetic build.
+
+Current file: `instmon_v2_91_0_20261105.py`. Newest entries first.
 
 ## 2.90.0 (2026-11-04)
 

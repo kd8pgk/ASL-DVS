@@ -264,26 +264,26 @@ def suitelog_append(path, row, salt=None, seg_max=10000000):
         line = suitelog_redact(line, salt)
     data = (line + "\n").encode("utf-8")
     os.makedirs(os.path.dirname(path) or ".", mode=0o755, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
-    try:
-        os.write(fd, data)
-        size = os.fstat(fd).st_size
-    finally:
-        os.close(fd)
-    if size < seg_max:
-        return False
     lock = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
     try:
         fcntl.flock(lock, fcntl.LOCK_EX)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, data)
+            size = os.fstat(fd).st_size
+        finally:
+            os.close(fd)
+        if size < seg_max:
+            return False
         try:
             if os.stat(path).st_size >= seg_max:
                 os.replace(path, path + ".1")
                 return True
         except FileNotFoundError:
             pass
+        return False
     finally:
         os.close(lock)
-    return False
 
 
 def suitelog_rows(path, kinds=None):
