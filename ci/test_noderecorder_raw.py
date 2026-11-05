@@ -1,6 +1,5 @@
 import glob
 import importlib.util
-import json
 import os
 import random
 import re
@@ -61,56 +60,6 @@ class RawPath(unittest.TestCase):
     def test_silence_passes_through_as_silence(self):
         frame = b"\x00" * nr.FRAME_BYTES
         self.assertEqual(self.rx.process(frame, 0.0, -120.0), frame)
-
-
-class SuiteLog(unittest.TestCase):
-    def setUp(self):
-        self.path = os.path.join(WORK, "suitelog.jsonl")
-        self.flag = os.path.join(WORK, "suitelog.on")
-        self.patches = [
-            mock.patch.object(nr, "SUITELOG_PATH", self.path),
-            mock.patch.object(nr, "SUITELOG_FLAG", self.flag),
-            mock.patch.object(nr, "_sl_flag", {"at": -10.0, "salt": None}),
-        ]
-        for p in self.patches:
-            p.start()
-            self.addCleanup(p.stop)
-        for f in (self.path, self.flag):
-            if os.path.exists(f):
-                os.remove(f)
-
-    def rows(self):
-        if not os.path.exists(self.path):
-            return []
-        with open(self.path) as fh:
-            return [json.loads(ln) for ln in fh if ln.strip()]
-
-    def test_no_rows_when_the_flag_is_off(self):
-        nr.log_event("Recording started: /x", "ok")
-        nr.log_event("a warning", "warn")
-        self.assertEqual(self.rows(), [])
-
-    def test_warn_err_and_ok_rows_when_the_flag_is_on(self):
-        with open(self.flag, "w") as fh:
-            fh.write("salt-x")
-        nr.log_event("Recording started", "ok")
-        nr.log_event("Waiting for node audio", "info")
-        nr.log_event("UDP receive error", "err")
-        rows = self.rows()
-        self.assertEqual([r["data"]["level"] for r in rows], ["ok", "err"])
-        self.assertTrue(all(r["kind"] == "log" and r["src"] == "noderecorder" for r in rows))
-        self.assertEqual(rows[0]["v"], nr.VERSION)
-
-    def test_suite_log_functions_match_the_shared_copy(self):
-        with open(os.path.join(ROOT, "shared", "confio.py")) as fh:
-            conf = fh.read()
-        with open(NR_FILE) as fh:
-            src = fh.read()
-        for name in ("suitelog_redact", "suitelog_append", "suitelog_rows", "suitelog_flag"):
-            start = conf.index("\ndef %s(" % name) + 1
-            m = re.compile(r"\n(?=def |class |[A-Z_]+ = )").search(conf, start + 1)
-            body = conf[start:(m.start() + 1 if m else len(conf))]
-            self.assertIn(body, src, name)
 
 
 if __name__ == "__main__":

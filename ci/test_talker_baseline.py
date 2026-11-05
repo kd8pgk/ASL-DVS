@@ -154,6 +154,31 @@ def onset_latency(chunks, t_send, thr=0.1 * 32768):
     return None
 
 
+def onsets(x, thr=0.05 * 32768, quiet_sec=0.5):
+    out, last = [], None
+    gap = int(FS * quiet_sec)
+    for i, v in enumerate(x):
+        if abs(v) >= thr:
+            if last is None or i - last > gap:
+                out.append(i)
+            last = i
+    return out
+
+
+def tone_windows(x, start=0.2, stop=0.8):
+    wins = []
+    for o in onsets(x)[1:]:
+        a, b = o + int(FS * start), o + int(FS * stop)
+        if b <= len(x):
+            wins.append(x[a:b])
+    return wins
+
+
+def median(vals):
+    v = sorted(vals)
+    return v[len(v) // 2]
+
+
 class TalkerBaseline(unittest.TestCase):
     results = {}
 
@@ -172,7 +197,7 @@ class TalkerBaseline(unittest.TestCase):
 
     def input_stats(self, name):
         x = array.array("h", signal_cycle(name))
-        seg = x[FS * 1:]
+        seg = x if name == "hum_floor" else x[int(FS * 1.2):int(FS * 1.8)]
         return {"input_rms_dbfs": round(rms_dbfs(seg), 2), "input_60hz_dbfs": round(goertzel_dbfs(seg, 60.0), 2),
                 "input_1khz_dbfs": round(goertzel_dbfs(seg, 1000.0), 2)}
 
@@ -193,32 +218,37 @@ class TalkerBaseline(unittest.TestCase):
         chunks, t0 = self.measure("tone")
         x = samples_of(chunks)
         self.assertGreater(len(x), FS * CYCLE_SEC * CYCLES * 0.8)
-        seg = x[int(FS * 1.2):int(FS * 1.9)]
-        level = goertzel_dbfs(seg, 1000.0)
-        self.assertGreater(level, -30.0)
+        wins = tone_windows(x)
+        self.assertGreaterEqual(len(wins), CYCLES - 1, "tone onsets not found in the output")
+        level = median([goertzel_dbfs(w, 1000.0) for w in wins])
+        inp = self.input_stats("tone")["input_1khz_dbfs"]
+        self.assertGreater(level, inp - 12.0)
+        self.assertLess(level, inp + 1.0)
         lats = []
         for k in range(WARM_CYCLES, WARM_CYCLES + CYCLES):
-            t_send = t0 + k * CYCLE_SEC + FS * 1.0 / FS
-            lat = onset_latency(chunks, t_send)
+            lat = onset_latency(chunks, t0 + k * CYCLE_SEC + 1.0)
             if lat is not None:
                 lats.append(lat)
         self.assertTrue(lats, "no tone onset heard")
         TalkerBaseline.results["tone"] = {
             "tone_1khz_dbfs": round(level, 2),
-            "input_1khz_dbfs": self.input_stats("tone")["input_1khz_dbfs"],
-            "onset_latency_ms_median": round(sorted(lats)[len(lats) // 2] * 1000.0, 1),
+            "input_1khz_dbfs": inp,
+            "onset_latency_ms_median": round(median(lats) * 1000.0, 1),
         }
 
     def test_hum_is_reported_with_tone(self):
         chunks, t0 = self.measure("hum_tone")
         x = samples_of(chunks)
         self.assertGreater(len(x), FS * CYCLE_SEC * CYCLES * 0.8)
-        seg = x[int(FS * 1.2):int(FS * 1.9)]
-        hum = goertzel_dbfs(seg, 60.0)
-        tone = goertzel_dbfs(seg, 1000.0)
-        self.assertGreater(tone, -30.0)
+        wins = tone_windows(x)
+        self.assertGreaterEqual(len(wins), CYCLES - 1, "tone onsets not found in the output")
+        tone = median([goertzel_dbfs(w, 1000.0) for w in wins])
+        hum = median([goertzel_dbfs(w, 60.0) for w in wins])
+        inp = self.input_stats("hum_tone")
+        self.assertGreater(tone, inp["input_1khz_dbfs"] - 12.0)
+        self.assertLess(hum, inp["input_60hz_dbfs"] - 20.0)
         TalkerBaseline.results["hum_tone"] = {"tone_1khz_dbfs": round(tone, 2), "hum_60hz_dbfs": round(hum, 2),
-                                              "input": self.input_stats("hum_tone")}
+                                              "input": inp}
 
     def test_floor_on_hum_only_input(self):
         chunks, t0 = self.measure("hum_floor")

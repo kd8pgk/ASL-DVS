@@ -11,18 +11,18 @@
       "rms_dbfs": -270.31
     },
     "hum_tone": {
-      "hum_60hz_dbfs": -79.21,
+      "hum_60hz_dbfs": -79.08,
       "input": {
-        "input_1khz_dbfs": -18.27,
-        "input_60hz_dbfs": -24.29,
-        "input_rms_dbfs": -17.3
+        "input_1khz_dbfs": -12.25,
+        "input_60hz_dbfs": -18.27,
+        "input_rms_dbfs": -14.29
       },
-      "tone_1khz_dbfs": -22.53
+      "tone_1khz_dbfs": -16.99
     },
     "tone": {
-      "input_1khz_dbfs": -18.27,
-      "onset_latency_ms_median": 102.8,
-      "tone_1khz_dbfs": -22.07
+      "input_1khz_dbfs": -12.25,
+      "onset_latency_ms_median": 98.9,
+      "tone_1khz_dbfs": -16.99
     }
   },
   "version": "nodetalker_v0_10_16_20261105.py"

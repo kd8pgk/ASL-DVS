@@ -1,6 +1,13 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_6_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_7_20261105.py`. Newest entries first.
+
+## 0.5.7 (2026-11-05)
+
+- **The suite-log hook from 0.5.6 is removed.** instmon already collects Node Recorder's log lines from the journal (as `journal:noderecorder`), with its rate limit and repeat folding. The 0.5.6 hook wrote a second copy of each success, warning and error, and put the level and message inside `data`, where instmon's viewer and level filter do not look, so those rows showed blank. Node Recorder no longer carries the shared suite-log functions, and `shared/confio.py` no longer lists it for them.
+- **Correction to 0.5.6:** the raw check covers the clean-up stage only. With high-pass, automatic level, gate and notch off and gain 0, the clean-up passes each frame through unchanged. The audio hub can still drop frames under load and fills gaps with silence, so a recording is not a bit-exact copy of the node's audio.
+- Otherwise the code is the same as 0.5.5. Tests: `ci/test_noderecorder_raw.py` (3 checks, the raw clean-up path).
+- This is a release, not a cosmetic build.
 
 ## 0.5.6 (2026-11-05)
 
