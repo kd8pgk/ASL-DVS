@@ -1,6 +1,11 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_14_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_15_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.15 (2026-11-05)
+
+- **The Data download saves inside Node Talker Mobile.** In the app the page hands the file to the app, which opens Android's Save dialog (Node Talker Mobile 0.10.15 or later). Before, nothing was saved there: the app could not open the file the page builds in memory. With an older app the Data card now says to update the app or use a browser, instead of failing without a word. In a browser nothing changes.
+- Page JavaScript logic changed, so this is a release.
 
 ## 0.10.14 (2026-11-05)
 
@@ -27,7 +32,7 @@ Current file: `nodetalker_v0_10_14_20261105.py`. Before 0.6.0 the tool was Node 
 - **CTCSS notch for the receive audio.** A new setting, "CTCSS notch (Hz)" under RX cleanup, removes one sub-audible tone from what listeners hear. Enter the tone the radio sends (for example 100.0); 0 turns it off, and it is off by default. Only that tone is cut, about 40 dB at the tone, and voice is unchanged. The high-pass at 300 Hz stays as it was, so the notch is for stations that use a tone the high-pass does not fully remove. The setting is stored as `rx_notch_hz`, accepts 60 to 300 Hz, and takes effect at once; the status line under the RX cleanup section shows it when it is on.
 - **Phone apps need no change.** The notch is applied on the node, so Node Talker Mobile and the page play the cleaned audio as they do now.
 - Shared by the full build and the Pi Zero 2 W fork (Node Talker has no fork of its own). Off by default, so an existing install hears no change until the notch is set.
-- Tests: a check of the notch on a 67, 100, 150, 1000 and 2500 Hz tone, the bypass when it is off, and the value checks. The file is renamed to `nodetalker_v0_10_14_20261105.py`.
+- Tests: a check of the notch on a 67, 100, 150, 1000 and 2500 Hz tone, the bypass when it is off, and the value checks. The file is renamed to `nodetalker_v0_10_15_20261105.py`.
 - This is a release, not a cosmetic build.
 
 ## 0.10.11 (2026-11-04)
