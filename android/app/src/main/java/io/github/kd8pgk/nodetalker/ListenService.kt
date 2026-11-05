@@ -25,6 +25,7 @@ import android.os.IBinder
 import android.os.PowerManager
 import android.os.SystemClock
 import android.webkit.CookieManager
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.io.InputStream
@@ -51,6 +52,8 @@ object Listen {
     @Volatile var volume = 1f
     @Volatile var specOn = false
     @Volatile var specSink: ((String, Double) -> Unit)? = null
+    @Volatile var statsOn = false
+    @Volatile var statsSink: ((String) -> Unit)? = null
 
     val listeners = CopyOnWriteArrayList<() -> Unit>()
 
@@ -83,6 +86,7 @@ object Talk {
     @Volatile var talking = false
     @Volatile var error = ""
     @Volatile var svc: ListenService? = null
+    @Volatile var micRate = 0
 
     val listeners = CopyOnWriteArrayList<(String) -> Unit>()
 
@@ -345,7 +349,7 @@ class ListenService : Service() {
         Talk.emit(t)
     }
 
-    fun key(guardSec: Double, gainDb: Double): Boolean {
+    fun key(guardSec: Double, gainDb: Double, opts: MicOpts? = null): Boolean {
         val c = ws ?: return false
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
         synchronized(talkLock) {
@@ -364,14 +368,17 @@ class ListenService : Service() {
             stopTalk()
             return false
         }
-        val m = Mic(NodeStore.audio(this).voiceMic, gainDb, ::micFrame) { db ->
+        val a = NodeStore.audio(this)
+        val statsOut: ((String) -> Unit)? = if (opts != null) { json -> Talk.emit(json) } else null
+        val m = Mic(a.voiceMic && (opts == null || opts.voice), a.txClean, opts, gainDb, ::micFrame, { db ->
             Talk.emit(JSONObject().put("ev", "level").put("db", db).toString())
-        }
+        }, statsOut)
         if (!m.start()) {
             unkey()
             Talk.emit("{\"ev\":\"micfail\"}")
             return false
         }
+        Talk.micRate = m.rate
         mic = m
         Talk.talking = true
         node?.let { notifyState(it) }
@@ -627,12 +634,16 @@ class ListenService : Service() {
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()
         val min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val track = AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(fmt)
-            .setBufferSizeInBytes(max(min, RATE * 2 / 5)).setTransferMode(AudioTrack.MODE_STREAM).build()
+            .setBufferSizeInBytes(max(min, RATE * 2 * TRACK_MS / 1000)).setTransferMode(AudioTrack.MODE_STREAM).build()
         val enh = try {
             LoudnessEnhancer(track.audioSessionId).apply { enabled = true }
         } catch (e: RuntimeException) {
             null
         }
+        val chain = if (s.rxClean) VoiceChain(RATE) else null
+        val fstats = FrameStats()
+        val hum = Hum()
+        var statRows = JSONArray()
         var boostMb = -1
         val target = (s.bufferMs / FRAME_MS).coerceAtLeast(2)
         val silence = ShortArray(FRAME)
@@ -670,11 +681,27 @@ class ListenService : Service() {
                     trimmed = true
                 }
                 if (trimmed && counting()) stats.reset()
-                val f = queue.poll(FRAME_MS * 4L, TimeUnit.MILLISECONDS)
-                if (f == null) {
+                val raw = queue.poll(FRAME_MS * 4L, TimeUnit.MILLISECONDS)
+                if (raw == null) {
                     if (stallAt == 0L) stallAt = SystemClock.elapsedRealtime() - FRAME_MS * 4L
                     filling = true
                     continue
+                }
+                val f = chain?.process(raw) ?: raw
+                val statsSink = Listen.statsSink
+                if (statsSink != null && Listen.statsOn && !(Listen.muted || focusLost)) {
+                    val r = fstats.of(raw)
+                    hum.push(raw)
+                    statRows.put(JSONArray().put(r[0]).put(r[1]).put(r[2]).put(r[3]))
+                    if (statRows.length() >= STAT_BATCH) {
+                        val o = JSONObject().put("f", statRows)
+                        val h = hum.db()
+                        if (!h.isNaN()) o.put("hum", h)
+                        statsSink(o.toString())
+                        statRows = JSONArray()
+                    }
+                } else if (statRows.length() > 0) {
+                    statRows = JSONArray()
                 }
                 val vol = Listen.volume
                 track.setVolume(vol.coerceAtMost(1f))
@@ -844,6 +871,8 @@ class ListenService : Service() {
         private const val CHANNEL = "listen"
         private const val NOTIF_ID = 1
         private const val RATE = 8000
+        private const val STAT_BATCH = 5
+        private const val TRACK_MS = 80
         private const val FRAME = 160
         private const val FRAME_MS = 20
         private const val QUEUE_FRAMES = 150

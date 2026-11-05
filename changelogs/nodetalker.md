@@ -1,6 +1,34 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_11_20261104.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_14_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.14 (2026-11-05)
+
+- **One Tests card.** The Audio check card is now Tests and holds every test and the balancer: the Audio check, the receive and transmit results, Automatic balancing (RX and TX), the RX tone test, the TX tone test and the Node test. The RX and TX cards keep only settings. The Mic test stays with the Microphone settings.
+- **Tests can be turned on and off** under Tests on this node (Audio check, Automatic balancing, RX tone test, TX tone test, Mic test, Node test, Kerchunk test). The setting is kept on the Pi (`tests_off`) and applies to every phone: a test that is off is grayed out with the reason, and the Pi refuses the tone tests, balancing and the kerchunk test when they are off. All on by default.
+- **Data card.** One button downloads a single file with every number: the last two Audio checks and what to change, the receive health field data, the last tone test, the kerchunk log, the settings on the Pi and on this phone, the phone and app details, the Pi's load and the recent log. Nothing is shown on the page and nothing goes through the clipboard, so nothing is cut short. It never holds audio or passwords. "Compare with a saved report" now reads a Data file (and older saved check reports).
+- **Removed:** every "Copy all" button, "Copy report", "Download report", the kerchunk "Copy JSON" (and the JSON box it showed when the clipboard refused) and the RX card's field-data link. All of that is in the Data download.
+- **Grayed out by mode, and only when it really can't work.** With Node Talker Mobile 0.10.13 or later the Mic settings, the Audio check and balancing are no longer grayed out in app audio (they were, after 0.10.13 made them work). In app audio the Listen buffer is grayed out (the app has its own receive buffer), and so are the Mic test and Node test (they record and play back with page audio). Noise suppression, echo cancellation and automatic gain are grayed out only when the app's own echo and noise filter is off. An older app keeps the old grays.
+- **Receive buffer advice in app audio goes to the app.** The check and the balancer used to change the page's Listen buffer, which the app doesn't use. They now change the app's receive buffer, with Apply, Undo and the balancer's put-back. With an older app the advice is shown without an Apply button.
+- **Balancer: one path instead of three.** The automatic balancer and the balance run now pick, apply and put back a change with the same functions (they were copied three times), and the two tone-test starters share one request. Behaviour is the same, except that a change can now be an app setting.
+- "Run the RX tone test after the check" said after; it runs first. The label now says so.
+- Audit (2026-11-05): every filter was measured and works as designed (the page's TX decimator, its smooth-playback upsampler, the Pi's high-pass, notch, AGC and gates, and the app's filters). Details are in the app's 0.10.14 notes.
+
+## 0.10.13 (2026-11-05)
+
+- **Every Mic setting works in Node Talker Mobile.** With app audio the page now sends its Mic settings (voice filter, radio voice, noise gate, leveler, noise suppression, echo cancellation, automatic gain) with each key-up, so the balancer's advice on them works there too. Before, only the gain reached the app. Needs Node Talker Mobile 0.10.13; an older app keeps using the gain only.
+- **The live check and Automatic balancing run in app audio.** While a check runs, the app sends what it receives and what it sends (see the app's 0.10.13 notes), and the page feeds them into the same counters as its own audio: speech level, peak, full-scale samples, stations' spread, tones and hum below 300 Hz, squelch tails, transmit signal-to-noise, limiter and gate. "Switch the app to Page audio" is now only asked of an older app.
+- **The phone panel shows the app's own settings:** received-audio clean-up, fixed clean-up on sent audio, whether sent audio follows the Mic settings, and the real microphone rate. Mic rows are no longer marked "not used: app audio" when the app can use them.
+- Page JavaScript logic changed, so this is a release. No change on the node: the RX cleanup, the notch and the balancer's settings are as in 0.10.12.
+- Tested in headless Chromium with a stand-in app: the stats feed the check counters, hum is counted only above -40 dB, squelch tails are found, the transmit counters move only while talking, the old `level` event still works, and the key-up carries the Mic settings.
+
+## 0.10.12 (2026-11-04)
+
+- **CTCSS notch for the receive audio.** A new setting, "CTCSS notch (Hz)" under RX cleanup, removes one sub-audible tone from what listeners hear. Enter the tone the radio sends (for example 100.0); 0 turns it off, and it is off by default. Only that tone is cut, about 40 dB at the tone, and voice is unchanged. The high-pass at 300 Hz stays as it was, so the notch is for stations that use a tone the high-pass does not fully remove. The setting is stored as `rx_notch_hz`, accepts 60 to 300 Hz, and takes effect at once; the status line under the RX cleanup section shows it when it is on.
+- **Phone apps need no change.** The notch is applied on the node, so Node Talker Mobile and the page play the cleaned audio as they do now.
+- Shared by the full build and the Pi Zero 2 W fork (Node Talker has no fork of its own). Off by default, so an existing install hears no change until the notch is set.
+- Tests: a check of the notch on a 67, 100, 150, 1000 and 2500 Hz tone, the bypass when it is off, and the value checks. The file is renamed to `nodetalker_v0_10_14_20261105.py`.
+- This is a release, not a cosmetic build.
 
 ## 0.10.11 (2026-11-04)
 

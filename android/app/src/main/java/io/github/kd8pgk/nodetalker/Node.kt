@@ -66,7 +66,15 @@ data class Node(
     }
 }
 
-data class AudioSettings(val mode: String, val bufferMs: Int, val earpiece: Boolean, val voiceMic: Boolean = true, val boostDb: Int = 0) {
+data class AudioSettings(
+    val mode: String,
+    val bufferMs: Int,
+    val earpiece: Boolean,
+    val voiceMic: Boolean = true,
+    val boostDb: Int = 0,
+    val rxClean: Boolean = false,
+    val txClean: Boolean = false,
+) {
     val app: Boolean
         get() = mode == APP
 
@@ -91,6 +99,8 @@ object NodeStore {
     private const val KEY_EARPIECE = "earpiece"
     private const val KEY_VOICE_MIC = "voice_mic"
     private const val KEY_BOOST = "boost_db"
+    private const val KEY_RX_CLEAN = "rx_clean"
+    private const val KEY_TX_CLEAN = "tx_clean"
     private const val KEY_BT_START = "bt_auto_start"
     private const val KEY_BT_STOP = "bt_auto_stop"
     private const val KEY_BT_RESUME = "bt_resume"
@@ -134,12 +144,15 @@ object NodeStore {
             it.getBoolean(KEY_EARPIECE, false),
             it.getBoolean(KEY_VOICE_MIC, true),
             it.getInt(KEY_BOOST, 0).coerceIn(0, AudioSettings.MAX_BOOST_DB),
+            it.getBoolean(KEY_RX_CLEAN, false),
+            it.getBoolean(KEY_TX_CLEAN, false),
         )
     }
 
     fun setAudio(c: Context, a: AudioSettings) = prefs(c).edit()
         .putString(KEY_MODE, a.mode).putInt(KEY_BUFFER, a.bufferMs).putBoolean(KEY_EARPIECE, a.earpiece)
-        .putBoolean(KEY_VOICE_MIC, a.voiceMic).putInt(KEY_BOOST, a.boostDb).apply()
+        .putBoolean(KEY_VOICE_MIC, a.voiceMic).putInt(KEY_BOOST, a.boostDb)
+        .putBoolean(KEY_RX_CLEAN, a.rxClean).putBoolean(KEY_TX_CLEAN, a.txClean).apply()
 
     fun bluetooth(c: Context) = prefs(c).let {
         BluetoothSettings(it.getBoolean(KEY_BT_START, false), it.getBoolean(KEY_BT_STOP, false), it.getBoolean(KEY_BT_RESUME, false))

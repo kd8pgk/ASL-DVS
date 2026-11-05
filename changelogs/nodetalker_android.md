@@ -1,6 +1,32 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.11`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.14`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.14 (2026-11-05)
+
+- **About 120 ms less delay when the app plays.** Android's playback buffer is now 80 ms instead of 200 ms. The receive buffer in the app's Audio settings (300 ms by default) still absorbs the network, and the app keeps reporting underruns to the node, so the receive-health check shows it if a phone needs more.
+- **The check and the balancer can set the app's receive buffer** (new `setBufferMs`), so their advice on dropouts and delay works in app audio. The change takes effect at once without reconnecting.
+- Needs Node Talker 0.10.14 on the node to use it; an older page never calls it.
+- Audit (2026-11-05), all measured: the page and the app filter the microphone before going to 8 kHz (aliasing at least 83 dB down; the page's filter is -3.6 dB at 3.4 kHz, the app's -6 dB); the app's mic chain matches the page's to 5e-14; the Pi's 300 Hz high-pass and notch remove CTCSS tones; the page's smooth-playback upsampler keeps images 52 dB down. Receive delay before this build: page about 250 ms plus 80 ms of squelch-tail look-ahead on the Pi, app about 500 ms plus the same 80 ms.
+
+## 0.10.13 (2026-11-05)
+
+- **The page's Mic settings now work in app audio.** The page sends its voice filter, radio voice, noise gate, leveler and noise suppression with every key-up, and the app applies them with the same code as the page (checked sample by sample against the page's own filter: the difference is below 1e-13). Gain already worked. Noise suppression, echo cancellation and automatic gain are applied by Android's voice microphone, and only when "Phone's echo and noise filter" is on in the app's Audio settings. Before, only the gain reached the app.
+- **The live check and Automatic balancing work in app audio.** While a check runs, the app sends the page what it receives (level, peak and the two correlations per 20 ms, plus how much sound is below 300 Hz) and what it sends (level, peak, limiter and gate per 20 ms), about ten small messages a second, only while a check is running. The page measures them exactly as it measures its own audio, so speech level, peaks, squelch tails, tones and hum, noise above background and limiter use all show up. The check no longer asks you to switch to Page audio.
+- **"Sent audio" check box.** It now means: always use one fixed clean-up and ignore the Mic settings on the page. Leave it off to follow the page's Mic settings (the new behaviour). The "Received audio" check box is unchanged: an extra clean-up on the phone, after the node's RX cleanup.
+- **The phone's noise gate follows the speech level and ignores low tones.** Its thresholds are now set 20 dB under the speech it hears (limited to -58 to -40 dBFS), so a quiet station is no longer chopped, and it listens above 300 Hz only, so a CTCSS tone left over after the node's cleanup cannot hold it open.
+- **The page can see the app's settings.** The phone panel in Node Talker shows "Phone also cleans received audio", "Sent audio: fixed clean-up", whether sent audio follows the Mic settings, and the real microphone rate (8, 16 or 48 kHz).
+- 17 unit tests for the filters (was 8).
+- Needs Node Talker 0.10.13 on the node for the page side: an older page shows no new rows and the check still asks for Page audio. An older app with the new page keeps working: the page falls back to what it did before.
+
+## 0.10.12 (2026-11-04)
+
+- **Clean-up filters, for received and sent audio.** The Audio dialog has two new check boxes under "Clean-up filters", both off by default: "Received audio" (the audio the phone plays) and "Sent audio" (the phone's microphone before it goes to the node). When on, each path runs a high-pass at 150 Hz (cuts rumble), a low-pass at 3.4 kHz (cuts hiss above speech), a gentle lift around 2.5 kHz for clearer speech, and a squelch that mutes between words (opens at -40 dBFS, closes at -46 dBFS, holds for 80 ms, with short fades so words are not clipped).
+- **The microphone is filtered before it is reduced to 8 kHz.** Before, a 16 kHz or 48 kHz microphone was reduced by averaging neighbouring samples, which let higher sounds fold back into the voice band. Now a low-pass at 3.4 kHz runs first, every time, whatever the microphone rate. Nothing changes in what is sent: still 8 kHz, 16-bit, mono.
+- Playback and the spectrum use the filtered audio when the received-audio check box is on.
+- Changing the check boxes restarts the listen feed, as the other audio settings do.
+- Filtering is done on the phone; the node is unchanged. CTCSS (sub-audible tone) removal for a radio on the Pi is a separate change and is not in this version.
+- 8 more unit tests for the filters (39 in all), run in CI.
 
 ## 0.10.11 (2026-11-03)
 
