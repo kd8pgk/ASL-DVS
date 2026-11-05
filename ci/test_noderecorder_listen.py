@@ -51,6 +51,7 @@ class Fake(unittest.TestCase):
             fh.write(RPT_TEXT)
         self.links = {}
         self.ilinks = []
+        self.loaded = True
         self.patches = [
             mock.patch.object(nr, "RPT_CONF", os.environ["NODERECORDER_RPT_CONF"]),
             mock.patch.object(nr, "BACKUP_DIR", os.path.join(WORK, "backups")),
@@ -62,6 +63,7 @@ class Fake(unittest.TestCase):
             mock.patch.object(nr, "rpt_links", self._rpt_links),
             mock.patch.object(nr, "ilink", self._ilink),
             mock.patch.object(nr, "tune_value", lambda k: 0),
+            mock.patch.object(nr, "ast_cli", lambda cmd, timeout=8: (self.loaded, "")),
         ]
         for p in self.patches:
             p.start()
@@ -212,16 +214,66 @@ class Listen(Fake):
         self.assertEqual(self.ilinks, [])
         self.assertIn("not set up", msg)
 
-    def test_disconnect_only_what_the_schedule_made(self):
+    def test_disconnect_releases_the_public_link(self):
         nr.listen_connect(asl_target("55553"))
         self.ilinks.clear()
-        ok, msg = nr.listen_disconnect(asl_target("55555"))
-        self.assertTrue(ok)
-        self.assertEqual(self.ilinks, [])
-        ok, msg = nr.listen_disconnect(asl_target("55553"))
+        ok, _msg = nr.listen_disconnect(asl_target("55553"))
         self.assertTrue(ok)
         self.assertEqual(self.ilinks, [("1922", 1, "55553")])
         self.assertEqual(nr._listen["peer"], "")
+        self.assertEqual(self.main_calls(), [])
+
+    def test_disconnect_after_restart_still_releases_the_link(self):
+        self.links["1922"] = ["55553"]
+        nr._listen["peer"] = ""
+        ok, _msg = nr.listen_disconnect(asl_target("55553"))
+        self.assertTrue(ok)
+        self.assertEqual(self.ilinks, [("1922", 1, "55553")])
+        self.assertEqual(self.links["1922"], [])
+
+    def test_disconnect_never_touches_private_nodes(self):
+        self.links["1922"] = [nr.REC_NODE, "55553"]
+        nr.listen_disconnect(asl_target("55553"))
+        self.assertNotIn(("1922", 1, nr.REC_NODE), self.ilinks)
+        self.assertEqual(self.main_calls(), [])
+
+    def test_connect_refused_when_asterisk_has_not_loaded_1922(self):
+        self.loaded = False
+        ok, msg = nr.listen_connect(asl_target("55553"))
+        self.assertFalse(ok)
+        self.assertIn("restart Asterisk", msg)
+        self.assertEqual(self.ilinks, [])
+
+    def test_keeper_links_the_station_again_during_a_recording(self):
+        nr.listen_connect(asl_target("55553"))
+        self.links["1922"] = []
+        self.ilinks.clear()
+        with mock.patch.object(nr.ENGINE, "hub", nr.HUB2):
+            nr.listen_keep_tick()
+        self.assertEqual(self.ilinks, [("1922", 2, "55553")])
+        self.assertEqual(self.main_calls(), [])
+
+    def test_keeper_does_nothing_when_linked_or_not_recording(self):
+        nr.listen_connect(asl_target("55553"))
+        self.ilinks.clear()
+        with mock.patch.object(nr.ENGINE, "hub", nr.HUB2):
+            nr.listen_keep_tick()
+        self.assertEqual(self.ilinks, [])
+        self.links["1922"] = []
+        with mock.patch.object(nr.ENGINE, "hub", None):
+            nr.listen_keep_tick()
+        self.assertEqual(self.ilinks, [])
+        nr._listen["peer"] = ""
+        with mock.patch.object(nr.ENGINE, "hub", nr.HUB2):
+            nr.listen_keep_tick()
+        self.assertEqual(self.ilinks, [])
+
+    def test_listen_node_is_not_inheriting_the_main_template(self):
+        nr.rec2_enable()
+        with open(nr.RPT_CONF) as fh:
+            text = fh.read()
+        self.assertIn("\n[1922]\n", text)
+        self.assertNotIn("[1922](", text)
 
     def test_listen_linked_false_after_drop(self):
         nr.listen_connect(asl_target("55553"))
@@ -283,12 +335,10 @@ class Engine(Fake):
             self.assertIs(eng.hub, nr.HUB2)
             self.assertIs(nr.HUB2.recorder, eng)
             self.assertIsNone(nr.HUB.recorder)
-            self.assertTrue(nr.rec2_listening())
         finally:
             eng.stop()
         self.assertIsNone(nr.HUB2.recorder)
         self.assertIsNone(eng.hub)
-        self.assertFalse(nr.rec2_listening())
 
     def test_main_recording_attaches_to_main_hub(self):
         eng = nr.ENGINE
@@ -297,7 +347,6 @@ class Engine(Fake):
             self.assertTrue(ok, msg)
             self.assertIs(nr.HUB.recorder, eng)
             self.assertIsNone(nr.HUB2.recorder)
-            self.assertFalse(nr.rec2_listening())
         finally:
             eng.stop()
         self.assertIsNone(nr.HUB.recorder)

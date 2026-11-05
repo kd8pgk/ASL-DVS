@@ -1,6 +1,17 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_6_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_7_20261105.py`. Newest entries first.
+
+## 0.5.7 (2026-11-05)
+
+- **A restart no longer leaves the listen link up.** Disconnect now releases every public link on node 1922, not only the one the schedule started. Node 1922 carries only listen links, so this can't drop anything else. Before, a restart forgot the station, and the link stayed up until the next listen recording.
+- **A lost listen link is linked again during a recording.** While a listen recording runs, a check every 20 s links node 1922 to its station again if the link has dropped, and logs it.
+- **Asterisk must have loaded node 1922.** Connect checks `rpt lstats 1922` and says to restart Asterisk if it fails. The check relies on that command's exit status; how Asterisk answers for a node it hasn't loaded has not been checked on a live node.
+- **Node 1922 does not inherit the main node's template.** Its stanza lists its own settings only, so no option from the main node's template (such as one that allows inbound connections) reaches it.
+- **No delay at the start of a listen recording.** The 1922 audio port is always open, so the first seconds of a recording are no longer lost while the port opens.
+- **Cleanup:** the writer's error path no longer carries a duplicate check on the main node's recorder hook.
+- Tests: `ci/test_noderecorder_listen.py` (25 checks), adding restart release, the keeper, the not-loaded refusal and the template rule.
+- This is a release, not a cosmetic build.
 
 ## 0.5.6 (2026-11-05)
 

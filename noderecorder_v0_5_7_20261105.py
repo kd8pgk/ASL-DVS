@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -4892,8 +4892,6 @@ class RecordingEngine:
             os.fsync(fh.fileno())
         except (OSError, ValueError) as exc:
             a["error"] = f"writing {a['name']} failed: {exc}"
-            if HUB.recorder is self:
-                HUB.recorder = None
             log_event(a["error"], "err")
             self._detach()
         finally:
@@ -5253,6 +5251,8 @@ def _entry_linked(target):
 
 LISTEN_MODES = ("ASL", "EchoLink")
 _listen = {"peer": ""}
+_listen_lock = threading.Lock()
+LISTEN_KEEP_SEC = 20
 
 
 def rec2_nodes_line():
@@ -5267,6 +5267,11 @@ def _node_stanza(lines, stanzas, name):
             end = stanzas[i + 1]["header"] if i + 1 < len(stanzas) else len(lines)
             return s, end
     return None, None
+
+
+def rec2_loaded():
+    ok, _out = ast_cli(f"rpt lstats {REC2_NODE}", timeout=6)
+    return ok
 
 
 def rec2_state():
@@ -5304,13 +5309,9 @@ def rec2_enable():
                 return {"ok": False, "error": f"The [{REC2_NODE}] node in rpt.conf does not use {st['rxchannel']}. Remove it and set it up again."}
         new = list(lines)
         if s is None:
-            main_st = _find_stanza(stanzas, main)
-            if main_st is None:
-                return {"ok": False, "error": f"Node {main} is not in {RPT_CONF}."}
-            tpl = f"({','.join(main_st['templates'])})" if main_st["templates"] else ""
             while new and new[-1].strip() == "":
                 new.pop()
-            new += ["", REC2_NOTE, f"[{REC2_NODE}]{tpl}",
+            new += ["", REC2_NOTE, f"[{REC2_NODE}]",
                     f"rxchannel = USRP/127.0.0.1:{REC2_USRP_IN}:{REC2_USRP_OUT}",
                     "duplex = 0", "hangtime = 0", "althangtime = 0", "holdofftelem = 1", "telemdefault = 0",
                     "nounkeyct = 1", "idrecording = |t(0,0,10,0)", ""]
@@ -5335,24 +5336,34 @@ def _listen_peer(target):
     return fav_target(f)
 
 
+def _public_peers(node):
+    ok, links = rpt_links(node, max_age=0)
+    if not ok:
+        return None
+    return [l["node"] for l in links if not is_private(l["node"])]
+
+
 def listen_connect(target):
     st = rec2_state()
     if not st["ready"]:
         return False, f"Node {REC2_NODE} is not set up in rpt.conf (Set up the listen node first)."
+    if not rec2_loaded():
+        return False, f"Asterisk has not loaded node {REC2_NODE} yet; restart Asterisk, then try again."
     try:
         peer = _listen_peer(target)
     except ValueError as exc:
         return False, str(exc)
-    ok, links = rpt_links(REC2_NODE, max_age=0)
-    if not ok:
-        return False, f"Asterisk did not list node {REC2_NODE}'s links."
-    for l in links:
-        if l["node"] != peer and not is_private(l["node"]):
-            ilink(REC2_NODE, 1, l["node"])
-    ok, out = ilink(REC2_NODE, 2, peer)
-    if not ok:
-        return False, f"Could not link node {REC2_NODE} to {peer}: {str(out).strip()[:120]}"
-    _listen["peer"] = peer
+    with _listen_lock:
+        public = _public_peers(REC2_NODE)
+        if public is None:
+            return False, f"Asterisk did not list node {REC2_NODE}'s links."
+        for p in public:
+            if p != peer:
+                ilink(REC2_NODE, 1, p)
+        ok, out = ilink(REC2_NODE, 2, peer)
+        if not ok:
+            return False, f"Could not link node {REC2_NODE} to {peer}: {str(out).strip()[:120]}"
+        _listen["peer"] = peer
     log_event(f"Listen: node {REC2_NODE} is receiving {peer} (receive only); the main node is not touched", "ok")
     return True, f"Node {REC2_NODE} is listening to {peer}"
 
@@ -5370,19 +5381,41 @@ def listen_linked(target):
 
 def listen_disconnect(target):
     try:
-        peer = _listen_peer(target)
+        _listen_peer(target)
     except ValueError as exc:
         return False, str(exc)
-    if _listen["peer"] != peer:
-        return True, f"Node {REC2_NODE} was not linked to {peer} by this schedule; left alone"
-    ilink(REC2_NODE, 1, peer)
-    _listen["peer"] = ""
-    log_event(f"Listen: node {REC2_NODE} released {peer}", "ok")
-    return True, f"Node {REC2_NODE} released {peer}"
+    with _listen_lock:
+        public = _public_peers(REC2_NODE)
+        if public is None:
+            return False, f"Asterisk did not list node {REC2_NODE}'s links."
+        for p in public:
+            ilink(REC2_NODE, 1, p)
+        _listen["peer"] = ""
+    if public:
+        log_event(f"Listen: node {REC2_NODE} released {', '.join(public)}", "ok")
+    return True, f"Node {REC2_NODE} released {', '.join(public) if public else 'nothing'}"
 
 
-def rec2_listening():
-    return ENGINE.hub is HUB2
+def listen_keep_tick():
+    with _listen_lock:
+        peer = _listen["peer"]
+        if not peer or ENGINE.hub is not HUB2:
+            return
+        ok, links = rpt_links(REC2_NODE, max_age=0)
+        if not ok or any(l["node"] == peer for l in links):
+            return
+        ok, out = ilink(REC2_NODE, 2, peer)
+    log_event(f"Listen: node {REC2_NODE} lost {peer} during a recording; linking it again"
+              + ("" if ok else f" failed: {str(out).strip()[:120]}"), "warn")
+
+
+def listen_keep_loop():
+    while True:
+        time.sleep(LISTEN_KEEP_SEC)
+        try:
+            listen_keep_tick()
+        except Exception as exc:
+            log_event(f"Listen keeper error: {exc}", "err")
 
 
 class DryActions:
@@ -8010,8 +8043,9 @@ def run_server():
     threading.Thread(target=SCHED.loop, name="schedule", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(FWD_PORT, None), name="usrp-fwd", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(REC_USRP_IN, talker_idle), name="usrp-node", daemon=True).start()
-    threading.Thread(target=usrp_loop, args=(REC2_USRP_IN, rec2_listening, HUB2), name="usrp-listen", daemon=True).start()
+    threading.Thread(target=usrp_loop, args=(REC2_USRP_IN, None, HUB2), name="usrp-listen", daemon=True).start()
     threading.Thread(target=HUB2.pump_loop, name="pump-listen", daemon=True).start()
+    threading.Thread(target=listen_keep_loop, name="listen-keeper", daemon=True).start()
     threading.Thread(target=link_keeper_loop, name="link-keeper", daemon=True).start()
     threading.Thread(target=guard_loop, name="link-guard", daemon=True).start()
     threading.Thread(target=_sd_watchdog_loop, args=(port, httpd.ssl_ctx is not None), name="watchdog", daemon=True).start()
