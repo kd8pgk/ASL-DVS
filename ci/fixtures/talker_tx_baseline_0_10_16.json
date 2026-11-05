@@ -1,0 +1,18 @@
+{
+  "node": "nodetalker",
+  "tx": {
+    "pause": {
+      "fade_in_last_to_first_quarter": 5.9,
+      "fade_out_first_to_last_quarter": 6.3,
+      "gap_frames": 19,
+      "steady_peak_dbfs": -12.25
+    },
+    "tone": {
+      "input_peak_dbfs": -12.25,
+      "keyed_packets": 100,
+      "steady_peak_dbfs": -12.25,
+      "unkey_packets": 3
+    }
+  },
+  "version": "nodetalker_v0_10_16_20261105.py"
+}
