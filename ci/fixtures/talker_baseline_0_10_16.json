@@ -1,0 +1,29 @@
+{
+  "node": "nodetalker",
+  "signals": {
+    "hum_floor": {
+      "hum_60hz_dbfs": -270.31,
+      "input": {
+        "input_1khz_dbfs": -270.31,
+        "input_60hz_dbfs": -30.31,
+        "input_rms_dbfs": -33.32
+      },
+      "rms_dbfs": -270.31
+    },
+    "hum_tone": {
+      "hum_60hz_dbfs": -79.21,
+      "input": {
+        "input_1khz_dbfs": -18.27,
+        "input_60hz_dbfs": -24.29,
+        "input_rms_dbfs": -17.3
+      },
+      "tone_1khz_dbfs": -22.53
+    },
+    "tone": {
+      "input_1khz_dbfs": -18.27,
+      "onset_latency_ms_median": 102.8,
+      "tone_1khz_dbfs": -22.07
+    }
+  },
+  "version": "nodetalker_v0_10_16_20261105.py"
+}
