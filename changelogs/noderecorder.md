@@ -1,6 +1,13 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_5_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_6_20261105.py`. Newest entries first.
+
+## 0.5.6 (2026-11-05)
+
+- **Suite log.** Node Recorder writes its warnings, errors and successes to the shared suite log, as Node Talker does, when instmon's suite log is on (the flag file). Off by default; with the flag off nothing is written. Rows are `kind: "log"` with `src: "noderecorder"`. The suite-log functions are the shared copy in `shared/confio.py`, now listed for Node Recorder too.
+- **Raw baseline check.** With its clean-up settings off (high-pass, automatic level, gate, notch, gain 0), Node Recorder's PCM path passes audio through bit for bit. A test checks this, so the baseline Node Talker is compared against stays raw.
+- Tests: `ci/test_noderecorder_raw.py` (6 checks).
+- This is a release, not a cosmetic build.
 
 ## 0.5.5 (2026-11-05)
 
