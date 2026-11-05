@@ -29,13 +29,13 @@
    "version": "7.4.0"
   },
   "instmon": {
-   "blob": "46c82616a2ac3f74a6d32e39dcb13731580791b2",
-   "commit": "21ba9978a8915333c9f96c821d54df7a0af1de7c",
-   "file": "instmon_v2_85_0_20261030.py",
-   "landed": "2026-10-30T06:44:05Z",
-   "promoted": "2026-11-04T08:52:33Z",
+   "blob": "77ffd98f47fb87f0eae19a3070e6b9e5cbb1dcb1",
+   "commit": "3d0e8e1d3d73acd32b34c2ad7708c096bcf13c55",
+   "file": "instmon_v2_87_0_20261102.py",
+   "landed": "2026-11-02T12:15:46Z",
+   "promoted": "2026-11-05T12:33:28Z",
    "reason": "count",
-   "version": "2.85.0"
+   "version": "2.87.0"
   },
   "nodecontrol": {
    "blob": "963023693fce62b6eaa57658f49a552fa447717c",
@@ -55,14 +55,23 @@
    "reason": "count",
    "version": "9.3.102-pi02w"
   },
-  "nodetalker": {
-   "blob": "4eb2d7ef1ae4a976032b87a8871db96781985eab",
-   "commit": "553a3683fbe1e5ff7f65ea50a43555f9d3bcaff7",
-   "file": "nodetalker_v0_10_0_20261102.py",
-   "landed": "2026-11-02T00:53:04Z",
-   "promoted": "2026-11-05T00:53:04Z",
+  "noderecorder": {
+   "blob": "8e82e025c66c809a50924809f7316b8a137e58a3",
+   "commit": "d6c511559f849f01a1b780a060685208e35e3330",
+   "file": "noderecorder_v0_4_0_20261102.py",
+   "landed": "2026-11-02T11:51:48Z",
+   "promoted": "2026-11-05T11:51:48Z",
    "reason": "count",
-   "version": "0.10.0"
+   "version": "0.4.0"
+  },
+  "nodetalker": {
+   "blob": "0f7487c43b902c2283b86c7b9bd031947cc4d7d2",
+   "commit": "040289f031e1beef0c439924d4ae80facc4fdd3a",
+   "file": "nodetalker_v0_10_1_20261102.py",
+   "landed": "2026-11-02T09:48:29Z",
+   "promoted": "2026-11-05T09:48:29Z",
+   "reason": "count",
+   "version": "0.10.1"
   },
   "pibrary": {
    "blob": "3297c565ab64a0992f3640702d203199661d5169",
