@@ -1,6 +1,14 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_3_20261104.py`. Newest entries first.
+Current file: `noderecorder_v0_5_4_20261105.py`. Newest entries first.
+
+## 0.5.4 (2026-11-05)
+
+- **CTCSS notch on what is recorded.** A new setting, "CTCSS notch (Hz)" on the RX card, removes one sub-audible tone from the recording: enter the tone the radio sends (for example 100.0); 0 is off, and it is off by default. It cuts about 40 dB at the tone and leaves voice unchanged (checked at 150 Hz and 1 kHz). Stored as `rx_notch_hz`, 60 to 300 Hz. It is the same notch as in Node Talker 0.10.12.
+- **PCM is the default recording format.** New schedules and Record now record PCM unless u-law is picked. With Convert on (the default), the PCM recording becomes an MP3 when it ends and the WAV is deleted; if the conversion fails the WAV is kept. Schedules saved with u-law keep it.
+- **MP3 quality as close to PCM as it gets.** The default quality is now 96 kbps (was 32), and 96 and 128 kbps are new choices. Measured on 8 kHz voice against the PCM recording: 32 kbps 15 dB signal to error (audibly coded), 64 kbps 42 dB, 96 kbps 44 dB, 128 kbps and up no better than 96. 96 kbps is about 0.7 MB a minute (the PCM WAV is about 0.9 MB). A node that already saved a quality keeps it: pick 96 kbps in the Convert card to use the new setting.
+- shine keeps the 8 kHz rate, where 64 kbps is the top MP3 rate, so it uses 64 kbps when 96 or 128 is picked.
+- No audio tests are added to Node Recorder.
 
 ## 0.5.3 (2026-11-04)
 
