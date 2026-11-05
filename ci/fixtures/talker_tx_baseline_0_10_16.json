@@ -2,7 +2,9 @@
   "node": "nodetalker",
   "tx": {
     "pause": {
-      "dip_frames": 19,
+      "fade_in_last_to_first_quarter": 5.9,
+      "fade_out_first_to_last_quarter": 6.3,
+      "gap_frames": 19,
       "steady_peak_dbfs": -12.25
     },
     "tone": {

@@ -64,6 +64,13 @@ class Capture:
         self.sock.close()
 
 
+def quarter_rms(payload, q):
+    a = samples(payload)
+    n = len(a) // 4
+    part = a[q * n:(q + 1) * n]
+    return math.sqrt(sum(v * v for v in part) / max(len(part), 1))
+
+
 def samples(payload):
     a = array.array("h")
     a.frombytes(payload[: len(payload) - (len(payload) % 2)])
@@ -166,18 +173,26 @@ class TalkerTxBaseline(unittest.TestCase):
             "input_peak_dbfs": round(20 * math.log10(TONE_AMP / 32768.0), 2),
         }
 
-    def test_mid_stream_pause_gets_a_fade_out_and_fade_in(self):
+    def test_mid_stream_pause_fades_out_and_back_in(self):
         pk, _ = self.send_tone_and_release(pause_at=40)
-        keyed = [p for p in pk if p[1] == 1]
-        self.assertTrue(keyed)
-        frames = [p[2] for p in keyed]
-        levels = [max(abs(v) for v in samples(f)) if f else 0 for f in frames]
-        steady = max(levels[10:30]) if len(levels) > 30 else max(levels)
-        dips = [i for i, v in enumerate(levels) if v < 0.5 * steady]
-        self.assertTrue(dips, "no dip in level around the pause")
+        frames = [p[2] for p in pk if p[1] == 1]
+        self.assertTrue(frames)
+        peaks = [max((abs(v) for v in samples(f)), default=0) for f in frames]
+        gap = next((i for i in range(5, len(peaks)) if peaks[i] == 0 and peaks[i - 1] > 0), None)
+        self.assertIsNotNone(gap, "no silent gap where the pause was")
+        back = next((j for j in range(gap, len(peaks)) if peaks[j] > 0), None)
+        self.assertIsNotNone(back, "the tone did not come back after the pause")
+        before, after = frames[gap - 1], frames[back]
+        out_ratio = quarter_rms(before, 0) / max(quarter_rms(before, 3), 1e-9)
+        in_ratio = quarter_rms(after, 3) / max(quarter_rms(after, 0), 1e-9)
+        self.assertGreater(out_ratio, 3.0, "the frame before the gap is not faded out")
+        self.assertGreater(in_ratio, 3.0, "the frame after the gap is not faded in")
+        steady = max(peaks[10:30])
         TalkerTxBaseline.results["pause"] = {
             "steady_peak_dbfs": round(20 * math.log10(steady / 32768.0), 2),
-            "dip_frames": len(dips),
+            "gap_frames": back - gap,
+            "fade_out_first_to_last_quarter": round(out_ratio, 1),
+            "fade_in_last_to_first_quarter": round(in_ratio, 1),
         }
 
 
