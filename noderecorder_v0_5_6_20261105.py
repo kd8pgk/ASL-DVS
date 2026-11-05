@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -1096,6 +1096,7 @@ class RxClean:
 
 
 RXC = RxClean()
+RXC2 = RxClean()
 
 
 def paced_loop(step, what):
@@ -1335,7 +1336,9 @@ KEYED = KeyedWatch()
 
 
 class Hub:
-    def __init__(self):
+    def __init__(self, rx=None, keyed_wake=True):
+        self.rx = RXC if rx is None else rx
+        self.keyed_wake = keyed_wake
         self.lock = threading.Lock()
         self.cond = threading.Condition(self.lock)
         self.inbuf = bytearray()
@@ -1419,7 +1422,8 @@ class Hub:
             self.level_db = db
             self.peak_db = max(db, self.peak_db - 1.0)
             if db > ACTIVE_DB:
-                KEYED.wake(now)
+                if self.keyed_wake:
+                    KEYED.wake(now)
                 self.last_active = now
         else:
             self.level_db = -120.0
@@ -1427,9 +1431,9 @@ class Hub:
         rec = self.recorder
         if have_listeners or rec is not None:
             if frame is not None:
-                pcm = RXC.process(frame, tune_value("rx_gain_db"), db)
+                pcm = self.rx.process(frame, tune_value("rx_gain_db"), db)
             else:
-                RXC.idle_tick()
+                self.rx.idle_tick()
                 pcm = PCM_SILENCE
             if have_listeners:
                 self._deliver(pcm)
@@ -1492,6 +1496,7 @@ class Hub:
 
 
 HUB = Hub()
+HUB2 = Hub(rx=RXC2, keyed_wake=False)
 
 
 _STANZA_RE = re.compile(r"^\s*\[([^\]]+)\]\s*(?:\(([^)]*)\))?")
@@ -1862,9 +1867,13 @@ TLS_KEY = os.path.join(TLS_DIR, "key.pem")
 REC_NODE = "1921"
 REC_USRP_OUT = 32018
 REC_USRP_IN = 34018
+REC2_NODE = "1922"
+REC2_USRP_OUT = 32019
+REC2_USRP_IN = 34019
 TALKER_NOTE = "; nodetalker: transmit node for Node Talker (remove it from the TX card)"
 TALKER_NOTES = (TALKER_NOTE, "; nodelisten: transmit node for the Node Listen page (remove it from that page)")
 REC_NOTE = "; noderecorder: receive node for Node Recorder (remove it from the Node Recorder page)"
+REC2_NOTE = "; noderecorder: listen node for Node Recorder (receive only; it is never linked to the main node)"
 TALKER_SERVICE = "nodetalker.service"
 TALKER_UNIT = os.environ.get("NODERECORDER_TALKER_UNIT", "/etc/systemd/system/nodetalker.service")
 FWD_PORT = 9995
@@ -4002,7 +4011,8 @@ def talker_idle():
     return not talker_active()
 
 
-def usrp_loop(port, gate):
+def usrp_loop(port, gate, hub=None):
+    hub = HUB if hub is None else hub
     while True:
         if gate is not None and not gate():
             time.sleep(2.0)
@@ -4010,11 +4020,11 @@ def usrp_loop(port, gate):
         try:
             sock = udp_socket(port)
         except OSError as exc:
-            HUB.udp_errors[port] = f"cannot listen on 127.0.0.1:{port}: {exc}"
-            log_event(HUB.udp_errors[port] + "; retrying in 10s", "err")
+            hub.udp_errors[port] = f"cannot listen on 127.0.0.1:{port}: {exc}"
+            log_event(hub.udp_errors[port] + "; retrying in 10s", "err")
             time.sleep(10)
             continue
-        HUB.udp_errors.pop(port, None)
+        hub.udp_errors.pop(port, None)
         sock.settimeout(1.0)
         log_event(f"Waiting for node audio on 127.0.0.1:{port}/udp")
         try:
@@ -4025,9 +4035,9 @@ def usrp_loop(port, gate):
                     continue
                 pcm, keyed = usrp_payload(data)
                 if keyed is not None:
-                    HUB.note_usrp(keyed)
+                    hub.note_usrp(keyed)
                 if pcm:
-                    HUB.feed(pcm)
+                    hub.feed(pcm)
         except OSError as exc:
             log_event(f"UDP receive error: {exc}", "err")
         finally:
@@ -4766,6 +4776,13 @@ class RecordingEngine:
         self.lock = threading.Lock()
         self.a = None
         self.closing = None
+        self.hub = None
+
+    def _detach(self):
+        hub = self.hub
+        if hub is not None and hub.recorder is self:
+            hub.recorder = None
+        self.hub = None
 
     def feed(self, pcm):
         a = self.a
@@ -4834,7 +4851,8 @@ class RecordingEngine:
             a["thread"] = threading.Thread(target=self._writer, args=(a,), name="rec-writer", daemon=True)
             self.a = a
             a["thread"].start()
-            HUB.recorder = self
+            self.hub = HUB2 if entry.get("via") == "listen" else HUB
+            self.hub.recorder = self
         log_event(f"Recording started: {path} ({'u-law' if fmt == 'ulaw' else 'PCM'})", "ok")
         return True, f"recording to {path}", name
 
@@ -4877,6 +4895,7 @@ class RecordingEngine:
             if HUB.recorder is self:
                 HUB.recorder = None
             log_event(a["error"], "err")
+            self._detach()
         finally:
             try:
                 fh.close()
@@ -4889,8 +4908,7 @@ class RecordingEngine:
             if a is None:
                 return True, "no recording was open", None
             self.a = None
-            if HUB.recorder is self:
-                HUB.recorder = None
+            self._detach()
             a["stop"].set()
             a["thread"].join(RECORD_CLOSE_SEC)
             alive = a["thread"].is_alive()
@@ -4990,6 +5008,11 @@ def schedule_norm_entry(raw, check_target=True):
     fmt = str(raw.get("format", "pcm") or "pcm").strip().lower()
     if fmt not in SCHEDULE_FORMATS:
         raise ValueError("format must be ulaw or pcm")
+    via = str(raw.get("via") or "main").strip().lower()
+    if via not in ("main", "listen"):
+        raise ValueError("via must be main or listen")
+    if via == "listen" and target.get("mode") not in LISTEN_MODES:
+        raise ValueError("A listen recording takes an ASL or EchoLink favorite; DVSwitch and M17 record through the main node.")
     eid = str(raw.get("id") or "").strip().lower() or secrets.token_hex(4)
     if not _ENTRY_ID_RE.match(eid):
         raise ValueError("bad entry id")
@@ -5019,7 +5042,7 @@ def schedule_norm_entry(raw, check_target=True):
     return {"id": eid, "name": name, "enabled": _parse_bool(raw.get("enabled", True)),
             "days": days, "start": _hm_text(start), "end": _hm_text(end),
             "duration_min": (end - start) % 1440, "target": target, "format": fmt, "rev": rev,
-            "kind": kind, "date": date}
+            "kind": kind, "date": date, "via": via}
 
 
 def _special_window(e):
@@ -5228,6 +5251,140 @@ def _entry_linked(target):
     return bool(bridge) and bridge in peers
 
 
+LISTEN_MODES = ("ASL", "EchoLink")
+_listen = {"peer": ""}
+
+
+def rec2_nodes_line():
+    port = iax_bindport()
+    host = "127.0.0.1" if port == "4569" else f"127.0.0.1:{port}"
+    return f"{REC2_NODE} = radio@{host}/{REC2_NODE},NONE"
+
+
+def _node_stanza(lines, stanzas, name):
+    for i, s in enumerate(stanzas):
+        if s["name"] == name:
+            end = stanzas[i + 1]["header"] if i + 1 < len(stanzas) else len(lines)
+            return s, end
+    return None, None
+
+
+def rec2_state():
+    out = {"node": REC2_NODE, "defined": False, "owner": "", "nodes_line": False, "ready": False,
+           "rxchannel": f"USRP/127.0.0.1:{REC2_USRP_IN}:{REC2_USRP_OUT}"}
+    try:
+        lines, stanzas = read_rpt()
+    except OSError as exc:
+        out["error"] = f"Could not read {RPT_CONF}: {exc}"
+        return out
+    s, end = _node_stanza(lines, stanzas, REC2_NODE)
+    if s is not None:
+        out["defined"] = True
+        out["owner"] = "recorder" if _rec_note(lines, s) == REC2_NOTE else ""
+        out["rx_ok"] = f"rxchannel={out['rxchannel']}" in _squash("\n".join(lines[s["header"]:end]))
+    out["nodes_line"] = _has_line(lines, rec2_nodes_line())
+    out["ready"] = out["defined"] and out["owner"] == "recorder" and out.get("rx_ok", False) and out["nodes_line"]
+    return out
+
+
+def rec2_enable():
+    main = main_node()
+    if not main:
+        return {"ok": False, "error": "Set the node first (the Dashboard's node number)."}
+    with _rpt_lock:
+        lines, stanzas = read_rpt()
+        s, _ = _node_stanza(lines, stanzas, REC2_NODE)
+        if s is not None:
+            if _rec_note(lines, s) != REC2_NOTE:
+                return {"ok": False, "error": f"rpt.conf already has a [{REC2_NODE}] node that Node Recorder didn't add. Remove it or pick another node."}
+            st = rec2_state()
+            if st["ready"]:
+                return {"ok": True, "changed": False, "message": f"Node {REC2_NODE} is already set up."}
+            if not st.get("rx_ok"):
+                return {"ok": False, "error": f"The [{REC2_NODE}] node in rpt.conf does not use {st['rxchannel']}. Remove it and set it up again."}
+        new = list(lines)
+        if s is None:
+            main_st = _find_stanza(stanzas, main)
+            if main_st is None:
+                return {"ok": False, "error": f"Node {main} is not in {RPT_CONF}."}
+            tpl = f"({','.join(main_st['templates'])})" if main_st["templates"] else ""
+            while new and new[-1].strip() == "":
+                new.pop()
+            new += ["", REC2_NOTE, f"[{REC2_NODE}]{tpl}",
+                    f"rxchannel = USRP/127.0.0.1:{REC2_USRP_IN}:{REC2_USRP_OUT}",
+                    "duplex = 0", "hangtime = 0", "althangtime = 0", "holdofftelem = 1", "telemdefault = 0",
+                    "nounkeyct = 1", "idrecording = |t(0,0,10,0)", ""]
+        if not _has_line(new, rec2_nodes_line()):
+            nodes_st = next((x for x in parse_rpt("\n".join(new))[1] if x["name"].lower() == "nodes"), None)
+            if nodes_st is not None:
+                new.insert(nodes_st["header"] + 1, rec2_nodes_line())
+            else:
+                new += ["[nodes]", rec2_nodes_line(), ""]
+        try:
+            backup = _write_rpt(new)
+        except OSError as exc:
+            return _write_failed(exc)
+    log_event(f"rpt.conf: added node {REC2_NODE} as a listen node (backup {backup}); it is not linked to node {main}", "ok")
+    return _changed(backup, f"Added node {REC2_NODE}. Restart Asterisk. Listen recordings link it to the station they record; it is never linked to node {main}.")
+
+
+def _listen_peer(target):
+    f = _tune_fav(target)
+    if f["mode"] not in LISTEN_MODES:
+        raise ValueError("A listen recording takes an ASL or EchoLink favorite; DVSwitch and M17 record through the main node.")
+    return fav_target(f)
+
+
+def listen_connect(target):
+    st = rec2_state()
+    if not st["ready"]:
+        return False, f"Node {REC2_NODE} is not set up in rpt.conf (Set up the listen node first)."
+    try:
+        peer = _listen_peer(target)
+    except ValueError as exc:
+        return False, str(exc)
+    ok, links = rpt_links(REC2_NODE, max_age=0)
+    if not ok:
+        return False, f"Asterisk did not list node {REC2_NODE}'s links."
+    for l in links:
+        if l["node"] != peer and not is_private(l["node"]):
+            ilink(REC2_NODE, 1, l["node"])
+    ok, out = ilink(REC2_NODE, 2, peer)
+    if not ok:
+        return False, f"Could not link node {REC2_NODE} to {peer}: {str(out).strip()[:120]}"
+    _listen["peer"] = peer
+    log_event(f"Listen: node {REC2_NODE} is receiving {peer} (receive only); the main node is not touched", "ok")
+    return True, f"Node {REC2_NODE} is listening to {peer}"
+
+
+def listen_linked(target):
+    try:
+        peer = _listen_peer(target)
+    except ValueError:
+        return None
+    ok, links = rpt_links(REC2_NODE, max_age=0)
+    if not ok:
+        return None
+    return any(l["node"] == peer for l in links)
+
+
+def listen_disconnect(target):
+    try:
+        peer = _listen_peer(target)
+    except ValueError as exc:
+        return False, str(exc)
+    if _listen["peer"] != peer:
+        return True, f"Node {REC2_NODE} was not linked to {peer} by this schedule; left alone"
+    ilink(REC2_NODE, 1, peer)
+    _listen["peer"] = ""
+    log_event(f"Listen: node {REC2_NODE} released {peer}", "ok")
+    return True, f"Node {REC2_NODE} released {peer}"
+
+
+def rec2_listening():
+    return ENGINE.hub is HUB2
+
+
 class DryActions:
     def connect(self, entry):
         return True, f"dry run: would connect {entry['name']}", None
@@ -5250,10 +5407,15 @@ class DryActions:
 
 class RealActions:
     def connect(self, entry):
+        if entry.get("via") == "listen":
+            ok, msg = listen_connect(entry["target"])
+            return ok, msg, None
         r = tune_connect(entry["target"])
         return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
 
     def link_alive(self, entry):
+        if entry.get("via") == "listen":
+            return listen_linked(entry["target"])
         return _entry_linked(entry["target"])
 
     def healthy(self, entry):
@@ -5266,6 +5428,9 @@ class RealActions:
         return ENGINE.stop()
 
     def disconnect(self, entry):
+        if entry.get("via") == "listen":
+            ok, msg = listen_disconnect(entry["target"])
+            return ok, msg, None
         r = tune_disconnect(entry["target"])
         return bool(r.get("ok")), str(r.get("message") or r.get("error") or ""), None
 
@@ -7491,6 +7656,7 @@ def render_page():
 _POST_ACTIONS = {
     "/api/config": (config_update, ()),
     "/api/recnode/enable": (lambda b: rec_node_enable(), (OSError,)),
+    "/api/recnode2/enable": (lambda b: rec2_enable(), (OSError,)),
     "/api/setup/apply": (lambda b: setup_apply(), (OSError,)),
     "/api/convert/install": (encoder_install, ()),
     "/api/schedule/set": (schedule_set, (ValueError,)),
@@ -7844,6 +8010,8 @@ def run_server():
     threading.Thread(target=SCHED.loop, name="schedule", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(FWD_PORT, None), name="usrp-fwd", daemon=True).start()
     threading.Thread(target=usrp_loop, args=(REC_USRP_IN, talker_idle), name="usrp-node", daemon=True).start()
+    threading.Thread(target=usrp_loop, args=(REC2_USRP_IN, rec2_listening, HUB2), name="usrp-listen", daemon=True).start()
+    threading.Thread(target=HUB2.pump_loop, name="pump-listen", daemon=True).start()
     threading.Thread(target=link_keeper_loop, name="link-keeper", daemon=True).start()
     threading.Thread(target=guard_loop, name="link-guard", daemon=True).start()
     threading.Thread(target=_sd_watchdog_loop, args=(port, httpd.ssl_ctx is not None), name="watchdog", daemon=True).start()

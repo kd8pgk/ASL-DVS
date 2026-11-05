@@ -1,6 +1,15 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_5_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_6_20261105.py`. Newest entries first.
+
+## 0.5.6 (2026-11-05)
+
+- **A listen node for recordings that does not touch the main node.** Node 1922 is a second private node, with its own USRP port pair (34019 in, 32019 out), set up in rpt.conf with the new route `POST /api/recnode2/enable`. Set up, it is not linked to anything. A schedule entry with `"via": "listen"` links node 1922 to its ASL or EchoLink station in receive-only mode (ilink 2), so the station cannot hear the recorder and the main node's links, guard and talk path are not changed. Entries without `via`, or with `"via": "main"`, record as before.
+- **Listen recordings have their own audio chain.** They use a second audio hub and RX chain, so the main node's listeners and recordings are not affected by them. Keying detection is left to the main node.
+- **Only ASL and EchoLink stations.** A listen entry for DVSwitch or M17 is refused when saved; those still record through the main node.
+- **Not yet in the page.** The schedule form and Setup tab do not offer the listen option yet; it is set through the schedule API for now.
+- Tests: `ci/test_noderecorder_listen.py` (19 checks: rpt.conf set-up, connect and disconnect on 1922 only, the main node never touched, separate audio chain, recording attached to the right hub).
+- This is a release, not a cosmetic build.
 
 ## 0.5.5 (2026-11-05)
 
