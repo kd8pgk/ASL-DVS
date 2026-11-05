@@ -1,6 +1,11 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.14`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.15`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.15 (2026-11-05)
+
+- **Saves the Data file from Node Talker.** A new `saveFile` lets the page hand the app a file it built (the Data card's download); the app asks where to save it with Android's Save dialog and says when it is saved. Before, the app passed such a download to a browser, which could not open it, so nothing was saved.
+- Needs Node Talker 0.10.15 on the node; an older page never calls it.
 
 ## 0.10.14 (2026-11-05)
 

@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.14"
+VERSION = "0.10.15"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Talker"
 
@@ -9413,17 +9413,29 @@ async function dataDownload() {
   if (doc.check.summary) doc.check.suggestions = chkSuggest(doc.check.summary, cfg).map((x) => ({tier: x.tier, text: x.text, change: x.change}));
   try { doc.phone = await phoneRows(); } catch (e) { doc.phone = {error: String(e)}; }
   const text = JSON.stringify(doc, null, 1);
+  const d = new Date(), kb = Math.max(1, Math.round(text.length / 1024));
+  const name = 'nodetalker-data-' + d.getFullYear() + chkPad(d.getMonth() + 1) + chkPad(d.getDate()) + '-' + chkPad(d.getHours()) + chkPad(d.getMinutes()) + '.json';
+  btn.disabled = false;
+  if (window.NodeTalkerApp) {
+    let canSave = false;
+    try { canSave = typeof NodeTalkerApp.saveFile === 'function'; } catch (e) {}
+    if (!canSave) { note('data-msg', 'err', 'This app version can\'t save the file: update Node Talker Mobile, or download it from a browser.'); return; }
+    let ok = false;
+    try { ok = !!NodeTalkerApp.saveFile(name, 'application/json', text); } catch (e) { ok = false; }
+    note('data-msg', ok ? 'ok' : 'err', ok ? 'Pick where to save ' + name + ' (' + kb + ' kB).' : 'The app could not save the file.');
+    if (ok) sum('data', 'last ' + d.toLocaleTimeString());
+    return;
+  }
   const url = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
-  const d = new Date(), a = document.createElement('a');
+  const a = document.createElement('a');
   a.href = url;
-  a.download = 'nodetalker-data-' + d.getFullYear() + chkPad(d.getMonth() + 1) + chkPad(d.getDate()) + '-' + chkPad(d.getHours()) + chkPad(d.getMinutes()) + '.json';
+  a.download = name;
   document.body.appendChild(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
-  note('data-msg', 'ok', 'Downloaded ' + a.download + ' (' + Math.max(1, Math.round(text.length / 1024)) + ' kB).');
+  note('data-msg', 'ok', 'Downloaded ' + name + ' (' + kb + ' kB).');
   sum('data', 'last ' + d.toLocaleTimeString());
-  btn.disabled = false;
 }
 
 function chkInit() {

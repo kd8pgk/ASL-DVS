@@ -38,6 +38,7 @@ class TalkerActivity : Activity() {
     private var micRequest: PermissionRequest? = null
     private var fileCallback: ValueCallback<Array<Uri>>? = null
     private var pendingDownload: String? = null
+    private var pendingText: String? = null
     private var certDialog: AlertDialog? = null
     private val pushState: () -> Unit = { runOnUiThread { sendState() } }
     private val pushTalk: (String) -> Unit = { ev -> runOnUiThread { sendTalk(ev) } }
@@ -252,6 +253,25 @@ class TalkerActivity : Activity() {
             val a = NodeStore.audio(c)
             if (a.earpiece != on) NodeStore.setAudio(c, a.copy(earpiece = on))
             if (Listen.state != Listen.OFF) Listen.nodeId?.let { id -> NodeStore.get(c, id)?.let { Listen.start(c, it) } }
+            return true
+        }
+
+        @JavascriptInterface
+        fun saveFile(name: String, mime: String, text: String): Boolean {
+            val safe = name.replace(Regex("[^A-Za-z0-9._-]"), "_").take(80).ifBlank { "nodetalker.json" }
+            runOnUiThread {
+                pendingText = text
+                val pick = Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType(mime.ifBlank { "application/json" })
+                    .putExtra(Intent.EXTRA_TITLE, safe)
+                try {
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(pick, REQ_SAVE_TEXT)
+                } catch (e: ActivityNotFoundException) {
+                    pendingText = null
+                    Toast.makeText(this@TalkerActivity, getString(R.string.save_failed, e.message ?: "no file picker"), Toast.LENGTH_LONG).show()
+                }
+            }
             return true
         }
 
@@ -475,7 +495,28 @@ class TalkerActivity : Activity() {
                 val dest = data?.data
                 if (resultCode == RESULT_OK && url != null && dest != null) saveTo(url, dest)
             }
+            REQ_SAVE_TEXT -> {
+                val text = pendingText
+                pendingText = null
+                val dest = data?.data
+                if (resultCode == RESULT_OK && text != null && dest != null) saveText(text, dest)
+            }
         }
+    }
+
+    private fun saveText(text: String, dest: Uri) {
+        Thread {
+            val msg = try {
+                val out = contentResolver.openOutputStream(dest) ?: throw IOException("can't write there")
+                out.use { it.write(text.toByteArray(Charsets.UTF_8)) }
+                getString(R.string.saved_file, dest.lastPathSegment ?: "")
+            } catch (e: IOException) {
+                getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
+            } catch (e: RuntimeException) {
+                getString(R.string.save_failed, e.message ?: e.javaClass.simpleName)
+            }
+            runOnUiThread { Toast.makeText(this, msg, Toast.LENGTH_LONG).show() }
+        }.start()
     }
 
     private fun saveTo(url: String, dest: Uri) {
@@ -509,5 +550,6 @@ class TalkerActivity : Activity() {
         private const val REQ_SAVE = 3
         private const val REQ_NOTIFY = 4
         private const val REQ_TALK_MIC = 5
+        private const val REQ_SAVE_TEXT = 6
     }
 }
