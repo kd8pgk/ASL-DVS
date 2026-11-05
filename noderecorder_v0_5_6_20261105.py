@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.5"
+VERSION = "0.5.6"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -214,6 +214,130 @@ _log_seq = 0
 _LOG_CTRL_RE = re.compile(r"[\r\n\x00-\x08\x0b\x0c\x0e-\x1f]")
 
 
+def suitelog_redact(text, salt):
+    import hashlib
+    import ipaddress
+    import re
+
+    def tag(kind, value):
+        return "%s:%s" % (kind, hashlib.sha256((salt + value.lower()).encode("utf-8")).hexdigest()[:4])
+
+    def hide(m):
+        return m.group(1) + "[hidden]"
+
+    def ip4(m):
+        try:
+            a = ipaddress.IPv4Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    def ip6(m):
+        try:
+            a = ipaddress.IPv6Address(m.group(0))
+        except ValueError:
+            return m.group(0)
+        if a.is_loopback or a.is_unspecified:
+            return m.group(0)
+        return tag("ip", m.group(0))
+
+    text = re.sub(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+", "Bearer [hidden]", text)
+    text = re.sub(r"(?i)(\b(?:pass(?:word|wd|phrase)?|psk|secret|token|api[_-]?key|auth(?:orization)?|cookie|credential)s?[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;&\"']+)", hide, text)
+    text = re.sub(r"(?i)(\bssid\b\s*[:=]?\s*)(?:\"[^\"]*\"|'[^']*')", lambda m: m.group(1) + tag("ssid", m.group(0)), text)
+    text = re.sub(r"\b[0-9A-Fa-f]{2}(?::[0-9A-Fa-f]{2}){5}\b", lambda m: tag("mac", m.group(0)), text)
+    text = re.sub(r"(?<![\w:.])(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?![\w:.])", ip6, text)
+    text = re.sub(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])", ip4, text)
+    return text
+
+
+def suitelog_append(path, row, salt=None, seg_max=10000000):
+    import fcntl
+    import json
+    import os
+    import time
+    if "t" not in row:
+        row = dict(row, t=int(time.time() * 1000))
+    line = json.dumps(row, separators=(",", ":"))
+    if salt:
+        line = suitelog_redact(line, salt)
+    data = (line + "\n").encode("utf-8")
+    os.makedirs(os.path.dirname(path) or ".", mode=0o755, exist_ok=True)
+    lock = os.open(path + ".lock", os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644)
+        try:
+            os.write(fd, data)
+            size = os.fstat(fd).st_size
+        finally:
+            os.close(fd)
+        if size < seg_max:
+            return False
+        try:
+            if os.stat(path).st_size >= seg_max:
+                os.replace(path, path + ".1")
+                return True
+        except FileNotFoundError:
+            pass
+        return False
+    finally:
+        os.close(lock)
+
+
+def suitelog_rows(path, kinds=None):
+    import json
+    for name in (path + ".1", path):
+        try:
+            fh = open(name, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for ln in fh:
+                try:
+                    row = json.loads(ln)
+                except ValueError:
+                    continue
+                if isinstance(row, dict) and (kinds is None or row.get("kind") in kinds):
+                    yield row
+
+
+def suitelog_flag(path):
+    try:
+        with open(path, "r", encoding="ascii", errors="replace") as fh:
+            return fh.read(64).strip() or "x"
+    except OSError:
+        return None
+
+SUITELOG_PATH = os.environ.get("NODERECORDER_SUITELOG", "/run/asl_dvs/suitelog.jsonl")
+SUITELOG_FLAG = os.environ.get("NODERECORDER_SUITELOG_FLAG", "/run/asl_dvs/suitelog.on")
+SUITELOG_SEG = 10000000
+SUITELOG_LEVELS = ("ok", "warn", "err")
+_sl_flag = {"at": -10.0, "salt": None}
+
+
+def suitelog_salt():
+    now = time.monotonic()
+    if now - _sl_flag["at"] > 2.0:
+        _sl_flag["at"] = now
+        _sl_flag["salt"] = suitelog_flag(SUITELOG_FLAG)
+    return _sl_flag["salt"]
+
+
+def suitelog_put(kind, data, always=False):
+    salt = suitelog_salt()
+    if salt is None and not always:
+        return False
+    try:
+        suitelog_append(SUITELOG_PATH, {"kind": kind, "src": "noderecorder", "v": VERSION, "data": data},
+                        salt, SUITELOG_SEG)
+    except OSError:
+        return False
+    return True
+
+
+
 def log_event(message, level="info"):
     global _log_seq
     msg = _LOG_CTRL_RE.sub(" ", str(message))
@@ -225,6 +349,8 @@ def log_event(message, level="info"):
         print(f"[{level}] {msg}", flush=True)
     except Exception:
         pass
+    if level in SUITELOG_LEVELS:
+        suitelog_put("log", {"level": level, "msg": msg})
 
 
 DEFAULT_CONFIG = {
