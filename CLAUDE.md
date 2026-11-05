@@ -61,6 +61,12 @@
 - **Manuals** (the user manual, the dialplan guide and the install manuals in
   `docs/`) are updated only when the request says so. A code change alone does
   not update them.
+- **Manual font: Readex Pro.** The next time a manual or guide in `docs/src/` is
+  rewritten or updated, switch its body font (`--sans`) from Inter to Readex
+  Pro, embedded with `@font-face` from the same woff2 data the tools' pages
+  embed (weights 400 and 700), so the PDF does not depend on the fonts of the
+  machine that builds it. Keep the monospace font. Rebuild the PDF with its
+  `build.mjs` and check the pages by eye.
 
 ## Android app (`android/`)
 
