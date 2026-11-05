@@ -32,7 +32,7 @@
       <tr><td>44helper</td><td class="mono">44helper_v0_0_215_20261018.py</td><td>0.0.215</td></tr>
       <tr><td>instmon</td><td class="mono">instmon_v2_57_0_20261018.py</td><td>2.57.0</td></tr>
       <tr><td>wifimon</td><td class="mono">wifimon_v5_38_0_20261018.py</td><td>5.38.0</td></tr>
-      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_6_0_20261020.py</td><td>0.6.0</td></tr>
+      <tr><td>Node Talker</td><td class="mono">nodetalker_v0_10_14_20261105.py</td><td>0.10.14</td></tr>
       <tr><td>Installer</td><td class="mono">install_all_v7_1_20261012.sh</td><td>7.1</td></tr>
       <tr><td>SysMon <span class="badge full">FULL</span></td><td class="mono">sysmon_v6_13_86_20261014.py</td><td>6.13.86</td></tr>
       <tr><td>Dashboard <span class="badge full">FULL</span></td><td class="mono">nodecontrol_v9_3_84_20261018.py</td><td>9.3.84</td></tr>
@@ -2918,26 +2918,31 @@ sudo python3 /usr/local/bin/sysmon.py --selftest</pre>
     <tr><th>Tab</th><th>What it holds</th></tr>
     <tr><td>Listen</td><td>Listen/Stop and the volume; the status line (node, <b>feed</b>, <b>RX</b>, <b>TX</b>, listeners); the waterfall (tap for bars) with the level bar under it, which shows your own level while you talk; the oblong push-to-talk button, which reads <i>Busy: …</i> while someone else transmits. Audio starts by itself when the browser allows it. The tab fits the screen without scrolling.</td></tr>
     <tr><td>Connect</td><td>The node's links, the favorites to connect, and Disconnect. Links are always made from the main node.</td></tr>
-    <tr><td>Setup</td><td>Cards that open and close: Receive, Transmit, Settings, Favorites, Digital, Audio check, Audio levels, Microphone, Playback, Log.</td></tr>
+    <tr><td>Setup</td><td>Cards that open and close: Setup, Favorites, Digital, RX (receive settings), TX (transmit settings and the microphone), Tests (every test and the balancer, with their results), Data (one download with every number), Phone, Kerchunks, Log. There are no Copy buttons: the Data card downloads everything in one file.</td></tr>
   </table>
 
   <h2><span class="n">15.3</span>Audio in brief</h2>
   <p>Settings marked <b>node</b> live on the Pi and apply to every listener; <b>browser</b> settings belong to one phone.</p>
   <table>
     <tr><th>Where</th><th>Settings</th></tr>
-    <tr><td>Receive (node, Audio levels card)</td><td><b>Cut below 300 Hz</b> (removes CTCSS tones and hum), <b>Automatic level</b>, <b>Squelch-tail gate</b> (Off, Light, Strong), <b>RX gain</b> (±12 dB), <b>Listen buffer</b>.</td></tr>
+    <tr><td>Receive (node, RX card)</td><td><b>Cut below 300 Hz</b> (removes hum and the lower CTCSS tones), <b>CTCSS notch</b> (removes the one tone you enter, off by default), <b>Automatic level</b>, <b>Squelch-tail gate</b> (Off, Light, Strong), <b>RX gain</b> (±12 dB), <b>Listen buffer</b> (page audio; Node Talker Mobile has its own receive buffer).</td></tr>
     <tr><td>Transmit (node, Audio levels and Settings cards)</td><td><b>TX gain</b> (±12 dB, soft limit), <b>TX buffer</b>, time-out (120 s), busy lockout.</td></tr>
-    <tr><td>Microphone (browser)</td><td>Browser processing, <b>Mic gain</b>, Voice filter or Radio voice, Noise gate, Leveler. <b>Test mic</b> records 4 seconds and reports level, peak, background and limiter use with a bar meter; <b>Test through the node</b> sends it out and back.</td></tr>
+    <tr><td>Microphone (browser)</td><td>Browser processing, <b>Mic gain</b>, Voice filter or Radio voice, Noise gate, Leveler; in Node Talker Mobile 0.10.13 and later the app applies the same settings. <b>Test mic</b> reports level, peak, background and limiter use with a bar meter; <b>Test through the node</b> (Tests card) sends it out and back.</td></tr>
     <tr><td>Playback (browser)</td><td>16-bit audio, Smooth playback, auto-listen, the spectrum, keep the screen on.</td></tr>
   </table>
   <p>Set levels in this order: the node's own audio (SysMon, Tune tab) first, then Node Talker's receive settings,
     then the microphone, and TX gain last. Chapter 7 of the Node Talker Manual walks through it.</p>
 
-  <h2><span class="n">15.4</span>Audio check</h2>
-  <p>The <b>Audio check</b> card (0.4.17) runs while you use the node as usual for a few minutes: start it, go to the
-    Listen tab, listen and talk, then come back. The report gives averages for receive and transmit against their
-    targets in green, amber or red, with suggestions. <b>Apply</b> makes a change (<b>Undo</b> puts it back), and
-    <b>Compare with last check</b> shows the difference after the next run. It keeps only numbers, in this browser.</p>
+  <h2><span class="n">15.4</span>Tests and the Audio check</h2>
+  <p>The <b>Tests</b> card (0.10.14; it was the Audio check card) holds every test and the balancer. The <b>Audio
+    check</b> runs while you use the node as usual for a few minutes: start it, go to the Listen tab, listen and talk,
+    then come back. The report gives averages for receive and transmit against their targets in green, amber or red,
+    with suggestions. <b>Apply</b> makes a change (<b>Undo</b> puts it back), and <b>Compare with last check</b> shows the
+    difference after the next run. It keeps only numbers, in this browser, and works in Node Talker Mobile's app audio
+    too (0.10.13 and later). The same card has Automatic balancing, the RX and TX tone tests and the node test.
+    <b>Tests on this node</b> turns each test on or off for every phone; the Pi refuses the tone tests, balancing and the
+    kerchunk test while they are off. The <b>Data</b> card downloads every number in one file (it doesn't save inside
+    Node Talker Mobile yet: use a browser). The Node Talker Manual has the details.</p>
 
   <h2><span class="n">15.5</span>Favorites: ASL, EchoLink, DVSwitch and M17</h2>
   <p>The Connect tab offers only the favorites set on the Setup tab's <b>Favorites</b> card: up to 15. Open the card,
