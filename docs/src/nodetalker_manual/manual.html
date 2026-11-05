@@ -25,7 +25,7 @@ td .sc{margin-left:.3em}
       <div class="brand">NODE CONTROLLER</div>
       <div class="brand-sub">ALLSTARLINK · DVSWITCH · RASPBERRY PI</div>
     </div>
-    <div class="ed"><b>Node Talker 0.9.22</b><br>Edition 2026-10-25</div>
+    <div class="ed"><b>Node Talker 0.10.14</b><br>Node Talker Mobile 0.10.14<br>Edition 2026-11-05</div>
   </div>
   <div class="body">
     <h1>Node Talker Manual<br><span>Receive and transmit audio, setting by setting</span></h1>
@@ -167,8 +167,8 @@ td .sc{margin-left:.3em}
   <ol class="steps">
     <li>Setup tab, <b>TX: node 1921</b> card, Microphone: press <b>Test mic</b>, talk for 4 seconds, and read the report (section 9.2).
       Adjust <b>Mic gain</b> until it says <i>Good</i>.</li>
-    <li>Press <b>Test through the node</b>. It transmits for 4 seconds, over the air and to every link, and plays back what
-      the node sent out.</li>
+    <li>On the <b>Tests</b> card, press <b>Test through the node</b>. It transmits for 4 seconds, over the air and to every
+      link, and plays back what the node sent out.</li>
     <li>Listen tab: hold the push-to-talk button and make a short call.</li>
   </ol>
 </section>
@@ -182,7 +182,7 @@ td .sc{margin-left:.3em}
     <figure><img class="shot" src="img/listen.jpg" style="width:2.3in" alt="The Listen tab">
       <figcaption><b>Figure 3.1 · Screenshot (test signal).</b> The Listen tab, with the spectrum as bars and the link line under push-to-talk.</figcaption></figure>
     <figure><img class="shot" src="img/setup.jpg" style="width:2.3in" alt="The Setup tab">
-      <figcaption><b>Figure 3.2 · Screenshot (test node).</b> The Setup tab: System and Links at the top, then the cards, each closed with its summary and a Copy all button.</figcaption></figure>
+      <figcaption><b>Figure 3.2 · Screenshot (test node).</b> The Setup tab: System and Links at the top, then the cards, each closed with its summary button.</figcaption></figure>
   </div>
   <h2><span class="n">3.1</span>Title bar and login</h2>
   <table>
@@ -198,7 +198,7 @@ td .sc{margin-left:.3em}
     <tr><th>Part</th><th>What it does</th></tr>
     <tr><td>Connect feed / Disconnect feed and volume</td><td>Starts and stops the audio (the button reads <i>Connect feed</i> while stopped and <i>Disconnect feed</i> while it plays; this is the page's own audio feed, not a link on the node); the slider beside it is the volume, 0 to 200 %. Listening starts by itself when the page opens (section 7.7).</td></tr>
     <tr><td>Status line</td><td>Node number · <b>feed</b> light (green while audio arrives from Asterisk; "no feed 12 s" otherwise) · <b>RX</b> light (the node is passing audio) · <b>TX</b> light (someone transmits from Node Talker) · listeners now / limit · <span class="k">CHECK 2:13</span> while an Audio check runs. Hover over a light for details.</td></tr>
-    <tr><td>Spectrum</td><td>0 to 4 kHz as bars (chapter 9). Off in Playback (RX card). With app audio in Node Talker Mobile it stays empty: the app plays the sound, not the page.</td></tr>
+    <tr><td>Spectrum</td><td>0 to 4 kHz as bars (chapter 9). Off in Playback (RX card). With app audio in Node Talker Mobile the app works out the bars from the audio it plays and sends them to the page.</td></tr>
     <tr><td>Level bar</td><td>The node's level, or your mic level (red <b>TX</b>) while you hold push-to-talk.</td></tr>
     <tr><td>Message line</td><td><i>Listening.</i>, <i>Tap anywhere to start listening</i>, or why the stream stopped.</td></tr>
     <tr><td>Push-to-talk</td><td>Hold to talk, or tap to talk and tap to stop (chapter 6; Push-to-talk on this phone, TX card, picks which). Red <b>TALKING</b> with the time, or the guard countdown in tap mode; amber <b>Busy: who 0:12</b> when someone else transmits; a 3-2-1 count in the spectrum's corner while <b>Quick Key Guard</b> holds it.</td></tr>
@@ -206,15 +206,16 @@ td .sc{margin-left:.3em}
   </table>
   <h2><span class="n">3.3</span>Setup tab</h2>
   <p>At the top, always open: <b>System</b> (<b>Reboot</b> and <b>Shutdown</b> the Pi, each asked first) and <b>Links</b>
-    (the node's links, one per line; node 1921 is marked TX). Below them, eight cards that follow the audio from
-    one-time setup to everyday use: <b>Setup</b> (the node's settings, Save, Restart Asterisk), <b>Favorites</b>,
-    <b>Digital</b>, <b>RX</b> (Node receive, Playback, Audio levels and RX cleanup), <b>TX: node 1921</b> (Transmit node,
-    Audio levels, Push-to-talk on this phone, Microphone, Headset / audio output), <b>Audio check</b> (with the Tone
-    test), <b>Phone</b> and <b>Log</b>. Tap a title to open or close it; every card starts closed, showing a one-line
-    summary such as <i>Set up and linked</i> or <i>300 Hz cut · auto level · gate light</i>. Each card ends with a
-    <b>Copy all</b> button that copies the whole card as plain text, folded sections and field values included
-    (password fields are left out), which is the easiest way to show someone your settings. Chapter 7 goes through
-    them all.</p>
+    (the node's links, one per line; node 1921 is marked TX). Below them, cards that follow the audio from one-time
+    setup to everyday use: <b>Setup</b> (the node's settings, Save, Restart Asterisk), <b>Favorites</b>, <b>Digital</b>,
+    <b>RX</b> (Node receive, Playback, Listen, Headset / audio output, Audio levels, RX cleanup and Receive health),
+    <b>TX: node 1921</b> (Transmit node, Transmit limits, Phone patch, Audio levels, Push-to-talk on this phone, Headset
+    microphone and button, Microphone with Test mic), <b>Tests</b> (every test and the balancer, with their results),
+    <b>Data</b> (one download with every number), <b>Phone</b>, <b>Kerchunks</b> and <b>Log</b>. The RX and TX cards hold
+    settings only; whatever measures or tests is on the Tests card. Tap a title to open or close it; every card starts
+    closed, showing a one-line summary such as <i>Set up and linked</i> or <i>300 Hz cut · auto level · gate light</i>.
+    There are no Copy buttons: to show someone your settings and results, download the Data file (section 7.11).
+    Chapter 7 goes through them all.</p>
   <h2><span class="n">3.4</span>Connect tab</h2>
   <div class="grid2" style="grid-template-columns:2.3in 1fr;align-items:start">
     <figure><img class="shot" src="img/connect.jpg" style="width:2.3in" alt="The Connect tab">
@@ -438,12 +439,13 @@ T41234</pre>
     node's own level before any cleanup: a frame louder than −50 dBFS counts as audio, held for 0.6 s.</p>
 
   <h2><span class="n">5.2</span>RX cleanup on the Pi</h2>
-  <p>Three steps, done once for every listener, change only what Node Talker's listeners hear. They are on by
-    default; chapter 7 has each setting in detail. Nothing is done while nobody listens, and near-silent frames
+  <p>These steps, done once for every listener, change only what Node Talker's listeners hear. All but the CTCSS
+    notch are on by default; chapter 7 has each setting in detail. Nothing is done while nobody listens, and near-silent frames
     (under −65 dBFS) skip the work.</p>
   <table>
     <tr><th>Step</th><th>What it does to the sound</th></tr>
     <tr><td>Cut below 300 Hz</td><td>Removes hum and the lower CTCSS (PL) tones: 100 Hz drops by about 38 dB, 150 Hz by 24 dB, 250 Hz by 7 dB. Voice above 300 Hz is untouched.</td></tr>
+    <tr><td>CTCSS notch</td><td>Off by default (0.10.12). Removes the one tone you enter, 60 to 300 Hz, by about 40 dB, and leaves everything else as it was: a tone 50 Hz away is not touched. It is for the tones the cut leaves audible: 151.4 Hz drops only 24 dB with the cut alone, 203.5 Hz 14 dB and 250.3 Hz 7 dB, but about 74 dB with the notch. It works with the cut on or off.</td></tr>
     <tr><td>Automatic level</td><td>Aims speech at about −20 dBFS: brings quiet stations up by as much as 18 dB and loud ones down by as much as 6 dB. It turns down within a frame or two, comes up at 3 dB a second (faster for the first half second of a new transmission), and holds still between transmissions. RX gain (Audio levels) is added on top.</td></tr>
     <tr><td>Soft limiter</td><td>Up to about −1 dBFS nothing changes; above that, peaks are rounded off smoothly instead of clipped.</td></tr>
     <tr><td>Squelch-tail gate</td><td>Mutes the burst of hiss after a station unkeys, and long silences. It tells hiss from voice by how alike neighbouring samples are: voice scores high, hiss low. A frame counts as hiss only when its samples one and two apart are both unrelated (flat hiss), so steady tones and loud "s" sounds are not muted. To mute a tail from its first frame, it holds the audio back 80 ms; when the gate opens it keeps the 40 ms before the opening and fades in, so the start of a word is not clipped.</td></tr>
@@ -471,6 +473,9 @@ T41234</pre>
   </table>
   <p>The total is about half a second at home. This is why the node's own audio comes back late when you test
     through it, and why Node Talker ignores the busy lockout for 1 s after your own transmission.</p>
+  <p>In Node Talker Mobile with app audio the page's Listen buffer is not used: the app plays after its own receive
+    buffer (300 ms by default, section 11.4) plus 80 ms in Android's player (it was 200 ms before Node Talker Mobile
+    0.10.14). Every filter in the chain adds 2 ms or less.</p>
 </section>
 
 <section class="chapter" id="ch6">
@@ -522,6 +527,9 @@ T41234</pre>
       past −1 dBFS.</li>
     <li>Every 20 ms (160 samples) a frame goes to the Pi over the WebSocket <code>/api/talk</code>.</li>
   </ol>
+  <p>In Node Talker Mobile with app audio (0.10.13 and later) the same steps run in the app: the page sends its Mic
+    settings with each press, and the app applies them with the same code as the page, so they sound the same. The
+    browser processing is replaced by Android's voice microphone (section 11.5).</p>
   <h2><span class="n">6.2</span>On the Pi and on the air</h2>
   <ol class="steps">
     <li><b>TX buffer.</b> The Pi waits until it has this much of your audio (120 ms by default) before it starts
@@ -560,6 +568,8 @@ T41234</pre>
     <tr><td>Restart Asterisk · Refresh</td><td>Restart asks first; every link drops and reconnects. Refresh rereads <code>rpt.conf</code>.</td></tr>
     <tr><td>Line added · Feeder · UDP input</td><td>The exact line; whether Asterisk is running the feeder program now; whether Node Talker is listening on the UDP port.</td></tr>
   </table>
+  <p>The RX card also shows <b>Receive health</b>: a verdict on where any lost audio starts (outside the network, on
+    the Pi, or between the Pi and the listener). Its per-minute field data is in the Data download (section 7.11).</p>
 
   <h2><span class="n">7.2</span>Transmit node and push-to-talk <span class="k">TX card</span></h2>
   <table>
@@ -593,12 +603,25 @@ T41234</pre>
   </table>
   <p><b>Tune card on this phone</b>: sliders for the Tune card's gap, height and text size (kept in this browser), with <b>Default spacing</b>. <b>Save</b> keeps the node settings above; <b>Restart Asterisk</b> asks first and drops every link while Asterisk comes back.</p>
 
-  <h2><span class="n">7.4</span>Audio check card <span class="sc b">BROWSER</span></h2>
-  <p>Length (2, 5, 10 or 15 minutes; 5 by default), <b>Start check</b>, <b>Stop</b>, <b>Copy all</b> and <b>Prompt me to
-    talk during the check</b> (on by default). The report has the Receive and Transmit tables, a <b>Per minute</b> strip,
-    <b>What to change</b> with <b>Apply</b>/<b>Undo</b>, and the buttons <b>Compare with last check</b>, <b>Copy
-    report</b>, <b>Download report</b> and <b>Compare with a saved report</b>. The <b>Tone test</b> is further down the
-    same card. Section 8.4 explains the check and section 8.5 the tone test.</p>
+  <h2><span class="n">7.4</span>Tests card <span class="k">0.10.14</span></h2>
+  <p>Every test and the balancer, with their results. It was the Audio check card; the results, Automatic balancing
+    and the tone tests used to be on the RX and TX cards.</p>
+  <h3>Tests on this node <span class="sc n">NODE</span></h3>
+  <p>One switch per test: <b>Audio check</b>, <b>Automatic balancing</b>, <b>RX tone test</b>, <b>TX tone test</b>,
+    <b>Mic test</b>, <b>Node test</b> and <b>Kerchunk test</b>, all on by default. <b>Save</b> keeps them on the Pi
+    (<code>tests_off</code>) for every phone; <b>Turn all on</b> switches them all back on. A test that is off is grayed
+    out with the reason, and a running Automatic balancing stops. The Pi itself refuses the tests it runs (both tone
+    tests, balancing and the kerchunk test) while they are off, so an old page or another phone can't start them.</p>
+  <h3>What else is on the card</h3>
+  <table>
+    <tr><th>Part</th><th>What it does</th></tr>
+    <tr><td>Audio check <span class="sc b">BROWSER</span></td><td>Length (2, 5, 10 or 15 minutes; 5 by default), <b>Start</b>, <b>Stop</b>, <b>Prompt me to talk during the check</b> (on by default), <b>Run the RX tone test first</b> and <b>Balance automatically</b>. The report: a <b>Per minute</b> strip, <b>What to change</b> with <b>Apply</b>/<b>Undo</b>, <b>Compare with last check</b> and <b>Compare with a saved Data file</b>. Section 8.4.</td></tr>
+    <tr><td>Receive results · Transmit results</td><td>The two tables of the last check, against their targets.</td></tr>
+    <tr><td>Automatic balancing</td><td><b>Run automatically</b> for the RX settings (RX gain, cleanup and the receive buffer) and for the TX settings (TX gain and TX buffer). Section 8.4.</td></tr>
+    <tr><td>RX tone test · TX tone test</td><td>Section 8.5.</td></tr>
+    <tr><td>Node test</td><td><b>Test through the node</b> (section 9.3).</td></tr>
+  </table>
+  <p>The Mic test stays with the Microphone settings on the TX card, where you change what it measures.</p>
 
   <h2><span class="n">7.5</span>Audio levels <span class="sc n">NODE</span> <span class="k">RX and TX cards</span></h2>
   <p>The settings are split by direction: <b>Adjust audio levels here</b>, <b>Mic to node (TX)</b>, <b>TX buffer</b> and
@@ -611,7 +634,7 @@ T41234</pre>
     <tr><th>Setting</th><th>Default</th><th>Range</th><th>What it does, and when to change it</th></tr>
     <tr><td>Mic to node (TX)</td><td>0 dB</td><td>−12 to +12 dB</td><td>Gain on every transmission from Node Talker, on the Pi, for everyone. Use it when all phones come out too quiet or too loud on the air (the node test shows it). For one phone, use its Mic gain instead.</td></tr>
     <tr><td>Node to phone (RX)</td><td>0 dB</td><td>−12 to +12 dB</td><td>Gain on what every listener hears, after Automatic level. Use it when audio is quiet even with Automatic level on, or when you turn Automatic level off.</td></tr>
-    <tr><td>Listen buffer</td><td>0.25 s</td><td>0.15, 0.25, 0.5, 1 s</td><td>How far behind real time the page plays. Larger rides over a weak connection without dropouts; smaller is closer to live. 0.15 s on good Wi-Fi, 0.5–1 s on mobile data.</td></tr>
+    <tr><td>Listen buffer</td><td>0.25 s</td><td>0.15, 0.25, 0.5, 1 s</td><td>How far behind real time the page plays. Larger rides over a weak connection without dropouts; smaller is closer to live. 0.15 s on good Wi-Fi, 0.5–1 s on mobile data. Grayed out in app audio: the app has its own receive buffer (section 11.4), and the check and the balancer change that one instead.</td></tr>
     <tr><td>TX buffer</td><td>120 ms</td><td>60, 120, 200, 300 ms</td><td>How much of your audio the Pi collects before sending. Raise it if transmissions have gaps (TX gaps, the Audio check); lower it for a slightly quicker start.</td></tr>
   </table>
   <p>Below them: <b>TX peak</b> (the loudest point of the current or last transmission, after TX gain), <b>RX level</b>
@@ -619,7 +642,8 @@ T41234</pre>
   <h3>RX cleanup</h3>
   <table>
     <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
-    <tr><td>Cut below 300 Hz</td><td>on</td><td>Removes hum and CTCSS tones from what listeners hear (section 5.2). Off only to hear the tones themselves, for example to check which one a station sends. It costs the most of the three on the Pi.</td></tr>
+    <tr><td>Cut below 300 Hz</td><td>on</td><td>Removes hum and CTCSS tones from what listeners hear (section 5.2). Off only to hear the tones themselves, for example to check which one a station sends. It costs the most of these on the Pi.</td></tr>
+    <tr><td>CTCSS notch (Hz)</td><td>0 (off)</td><td>Enter the tone your stations send, for example 100.0 (60 to 300 Hz), to remove just that tone (section 5.2). Use it when a tone is still heard with the cut on (tones above about 150 Hz), or with the cut off to keep the low end of voices. It costs about as much as the cut.</td></tr>
     <tr><td>Automatic level</td><td>on</td><td>Evens out quiet and loud stations. Off to hear stations at their real levels, or for an exact node test.</td></tr>
     <tr><td>Squelch-tail gate</td><td>Light</td><td><b>Light</b> mutes the hiss after a station unkeys and long silences. <b>Strong</b> also mutes shorter and quieter hiss: use it on a node with noisy links, and turn it back if the start of speech is ever clipped. <b>Off</b> passes everything, with no 80 ms delay.</td></tr>
   </table>
@@ -640,7 +664,12 @@ T41234</pre>
     <tr><td>Noise gate</td><td>Off</td><td><b>Light</b> opens above −45 dBFS and turns the mic down 15 dB between words; <b>Strong</b> opens above −35 dBFS and turns it down 30 dB. Use Light in a noisy room. If the starts of words are clipped, go back a step (the Audio check measures it).</td></tr>
     <tr><td>Mic gain</td><td>0 dB</td><td>−12 to +24 dB. The main control for your level: set it with the mic test (section 8.2).</td></tr>
   </table>
-  <p><b>Test mic</b> and <b>Test through the node</b> are in this section of the TX card; chapter 9 shows their meters and reports.</p>
+  <p>In Node Talker Mobile with app audio (0.10.13 and later) these settings work as in a browser: the app applies
+    the Leveler, Voice filter, Radio voice, Noise gate and Mic gain with the page's own code. Noise suppression, Echo
+    cancellation and Automatic gain are done by Android's voice microphone, so they are grayed out while the app's
+    <b>Phone's echo and noise filter</b> is off. An older app uses Mic gain only and the rest is grayed out.</p>
+  <p><b>Test mic</b> is in this section of the TX card; <b>Test through the node</b> is on the Tests card. Both record and
+    play back with page audio, so they are grayed out in app audio. Chapter 9 shows their meters and reports.</p>
 
   <h2><span class="n">7.7</span>Playback <span class="sc b">BROWSER</span> <span class="k">RX card</span></h2>
   <table>
@@ -656,8 +685,8 @@ T41234</pre>
     every <code>rpt.conf</code> edit. Fetched only while the card is open.</p>
   <h2><span class="n">7.9</span>Phone card <span class="sc b">BROWSER</span></h2>
   <p>Read-only: nothing here changes a setting. It lists what this phone's browser can tell the page about audio, so you
-    can see why a setting has no effect. <b>Refresh</b> rereads it, and <b>Copy all</b> puts it in a message when you ask
-    someone for help.</p>
+    can see why a setting has no effect. <b>Refresh</b> rereads it; the Data download (section 7.11) includes it, for when
+    you ask someone for help.</p>
   <ul>
     <li>Whether the page is secure (<code>https://</code>; the microphone and device names are blocked if not), the network
       state, the sound system's rate and playback latency, and whether the browser can pick the output.</li>
@@ -669,21 +698,39 @@ T41234</pre>
       says so unless the app reports it.</li>
     <li>Inside Node Talker Mobile a second table, <i>Node Talker Mobile</i>, shows the app version and whether the audio is
       app audio or page audio, and rows the app doesn't use are marked <i>not used: app audio</i>. The app's own settings
-      (output, receive buffer, echo and noise filter, microphone rate, phone volume, battery saver, keep the screen on)
-      appear once the app reports them; Node Talker Mobile 0.3.1 does not yet, and the table says so.</li>
+      appear as the app reports them: output, receive buffer, echo and noise filter, phone also cleans received audio,
+      fixed clean-up on sent audio, whether sent audio follows the Mic settings on the page, and the real microphone
+      rate (8, 16 or 48 kHz). With Node Talker Mobile 0.10.13 or later the Mic rows are no longer marked
+      <i>not used</i>.</li>
   </ul>
 
   <h2><span class="n">7.10</span>Settings that are grayed out</h2>
   <p>A setting that can't do anything right now is grayed out, and a note under its section says why, so you don't spend
-    time on a control that has no effect. The page rechecks every 2 seconds.</p>
+    time on a control that has no effect. The page rechecks every 2 seconds. Since 0.10.14 it grays out only what
+    really can't work in the mode you are in.</p>
   <table>
     <tr><th>Grayed out</th><th>Because</th></tr>
-    <tr><td>The page's playback options, its microphone processing, Test mic, Test through the node, output and microphone picking, the headset button and Start check</td><td>The app is doing the audio (Node Talker Mobile with app audio).</td></tr>
+    <tr><td>The page's playback options, output and microphone picking, the headset button</td><td>App audio: the app plays and records.</td></tr>
+    <tr><td>Listen buffer</td><td>App audio: the app uses its own receive buffer.</td></tr>
+    <tr><td>Test mic, Test through the node</td><td>App audio: these record and play back with page audio.</td></tr>
+    <tr><td>Noise suppression, Echo cancellation, Automatic gain</td><td>App audio with the app's echo and noise filter off; or a browser that can't do them.</td></tr>
+    <tr><td>The Mic settings except Mic gain</td><td>Node Talker Mobile older than 0.10.13, which applies only the gain.</td></tr>
+    <tr><td>Start (Audio check), Balance automatically, Run automatically</td><td>Node Talker Mobile older than 0.10.13, which can't report its audio to the check.</td></tr>
+    <tr><td>A test</td><td>It is turned off under Tests on this node.</td></tr>
     <tr><td>The microphone options</td><td>The page isn't the <code>https://</code> one, so the browser blocks the microphone.</td></tr>
-    <tr><td>Echo cancellation, Noise suppression, Automatic gain</td><td>This browser can't do them.</td></tr>
     <tr><td>Voice filter</td><td>Radio voice is on, which includes it.</td></tr>
     <tr><td>The gain and buffer fields</td><td>Adjust audio levels here is off.</td></tr>
   </table>
+
+  <h2><span class="n">7.11</span>Data card <span class="k">0.10.14</span></h2>
+  <p><b>Download all data</b> saves one JSON file, <code>nodetalker-data-YYYYMMDD-HHMM.json</code>, with every number
+    Node Talker and this phone have: the last two Audio checks and what to change, the receive health field data (one
+    row per minute), the last tone test, the kerchunk log, the settings on the Pi and on this phone, the Phone card's
+    rows, the app details in Node Talker Mobile, the Pi's load and the recent log. Nothing is shown on the page and
+    nothing goes through the clipboard, so nothing is cut short. It never holds audio or passwords. The Tests card's
+    <b>Compare with a saved Data file</b> reads the check back out of it (older saved check reports work too).</p>
+  <div class="call note"><span class="t">NOTE</span>Inside Node Talker Mobile 0.10.14 the download does not save yet: the app
+    can't save a file the page makes in memory, in App audio or Page audio. Download it from a browser on the phone or a computer.</div>
 </section>
 
 <section class="chapter" id="ch8">
@@ -721,7 +768,9 @@ T41234</pre>
   <p>The quick tests show four seconds; the Audio check shows a few minutes of real use, with several stations and
     several of your own transmissions.</p>
   <ol class="steps">
-    <li>Setup tab, <b>Audio check</b> card: choose a length and press <b>Start check</b>. The screen is kept awake while a
+    <li>Setup tab, <b>Tests</b> card: choose a length and press <b>Start</b>. It works in a browser and, with Node
+      Talker Mobile 0.10.13 or later, in app audio too (the app sends the page what it receives and sends while the check
+      runs). The screen is kept awake while a
       check runs (a warning shows if the browser can't).</li>
     <li>Go to the Listen tab and use the node as usual: listen, talk, listen. The status line shows <span class="k">CHECK 2:13</span>; tap it to come back.
       With <b>Prompt me to talk during the check</b> on (the default), the page asks you to talk at 0:30 and every 2
@@ -741,8 +790,8 @@ T41234</pre>
     <tr><td>RX speech level</td><td>−24 to −14 dBFS</td><td>Automatic level; RX gain</td></tr>
     <tr><td>RX peak</td><td>below −1 dBFS</td><td>Lower RX gain, or Automatic level</td></tr>
     <tr><td>Stations, quietest to loudest</td><td>under 8 dB</td><td>Automatic level</td></tr>
-    <tr><td>Below 300 Hz</td><td>under −25 dB</td><td>Cut below 300 Hz</td></tr>
-    <tr><td>Dropouts</td><td>none</td><td>Larger Listen buffer; better connection</td></tr>
+    <tr><td>Below 300 Hz</td><td>under −25 dB</td><td>Cut below 300 Hz; the CTCSS notch</td></tr>
+    <tr><td>Dropouts</td><td>none</td><td>Larger Listen buffer (in app audio, the app's receive buffer); better connection</td></tr>
     <tr><td>Squelch tails heard</td><td>none</td><td>Gate Light, then Strong</td></tr>
     <tr><td>Pi load</td><td>under 25 %</td><td>Cut below 300 Hz off</td></tr>
     <tr><td>TX speech level · peak</td><td>−24 to −12 · −8 to −1 dBFS</td><td>Mic gain</td></tr>
@@ -760,15 +809,22 @@ T41234</pre>
     <li><b>Transmit timing</b>: the push-to-talk round trip from the page, and the time from key to first audio on the Pi.</li>
     <li><b>Node cross-check</b>: the node's own count of key-ups since it started (<code>rpt stats</code>) beside the
       transmissions your phone made. If the format of <code>rpt stats</code> isn't recognised, the raw lines are shown instead.</li>
-    <li><b>Download report</b> saves the report as a JSON file on the phone, and <b>Compare with a saved report</b> loads
-      one and compares it with the current check. Nothing is kept on the Pi. (In Node Talker Mobile 0.3.1 the download
-      doesn't work; use <b>Copy report</b>.)</li>
+    <li>The report is in the Data download (section 7.11); <b>Compare with a saved Data file</b> loads one and compares it
+      with the current check. Nothing is kept on the Pi.</li>
   </ul>
+  <h3>Balancing</h3>
+  <p>The balancer makes the changes for you, one at a time, and puts a change back if the next measurement is worse.
+    <b>Balance automatically</b> does it during one Audio check (three rounds); <b>Run automatically</b> under Automatic
+    balancing keeps doing it, one minute at a time, while the page is open, slowing down after five minutes and pausing
+    while the Pi's CPU is above 70 %. Before its first change it saves the settings it may touch, and <b>Restore original
+    settings</b> on the Tests card puts them back. In app audio its receive-buffer changes go to the app's receive buffer
+    (Node Talker Mobile 0.10.14; with an older app the advice is shown without Apply). Both ways of balancing use the
+    same rules and are refused while Automatic balancing is turned off under Tests.</p>
   <div class="call note"><span class="t">NOTE</span>The check keeps only numbers, never audio, and only in this browser.
     It carries on if you switch tabs or reload; time with the page closed or the phone asleep is shown as paused.</div>
   <h2><span class="n">8.5</span>The tone test</h2>
-  <p>The Audio check measures real speech; the tone test measures the path itself. On the Audio check card, <b>Run tone
-    test</b> sends your station ID, a series of tones and the ID again through node 1921, listens to what comes back
+  <p>The Audio check measures real speech; the tone test measures the path itself. On the Tests card, <b>Run RX tone
+    test</b> (or <b>Run the RX tone test first</b> with an Audio check) sends your station ID, a series of tones and the ID again through node 1921, listens to what comes back
     from the node, and shows the response tone by tone: raw from the node, and after the Pi's RX cleanup. Use it to find
     out which frequencies the radio path passes, what the cleanup does to them, and how long the round trip takes.</p>
   <table>
@@ -977,9 +1033,10 @@ T41234</pre>
     <tr><td>Certificate warning</td><td>Each browser warns about the Pi's own certificate</td><td>Asked once, by fingerprint; no warnings after that</td></tr>
     <tr><td>Phone calls</td><td>Depends on the browser</td><td>Receive pauses for the call, transmit unkeys</td></tr>
     <tr><td>Other apps' sound</td><td>Depends on the browser</td><td>Plays alongside music or video</td></tr>
-    <tr><td>Spectrum on the Listen tab</td><td>Yes</td><td>Empty (the app plays the sound, not the page)</td></tr>
-    <tr><td>Download report (Audio check)</td><td>Saves a JSON file on the phone</td><td>Not yet: use Copy report</td></tr>
-    <tr><td>Microphone processing</td><td>The page's leveler, filters and gate (section 6.1)</td><td>Android's echo and noise filter, plus the page's Mic gain</td></tr>
+    <tr><td>Spectrum on the Listen tab</td><td>Yes</td><td>Yes (the app sends the bars)</td></tr>
+    <tr><td>Data download</td><td>Saves a JSON file on the phone</td><td>Not yet: use a browser</td></tr>
+    <tr><td>Microphone processing</td><td>The page's leveler, filters and gate (section 6.1)</td><td>The same, done by the app (0.10.13 and later), with Android's echo and noise filter in place of the browser's</td></tr>
+    <tr><td>Audio check and balancing</td><td>Yes</td><td>Yes (0.10.13 and later)</td></tr>
   </table>
   <h2><span class="n">11.2</span>Install and update</h2>
   <ol class="steps">
@@ -1014,9 +1071,11 @@ T41234</pre>
   <table>
     <tr><th>Setting</th><th>Default</th><th>What it does, and when to change it</th></tr>
     <tr><td>Audio</td><td>App audio</td><td><b>App audio</b>: the app plays and records, in the background too. <b>Page audio</b>: the page does it, as in a browser, and stops when the screen goes off. Use page audio only if app audio sounds bad.</td></tr>
-    <tr><td>Receive buffer</td><td>300 ms</td><td>100 to 1000 ms: how far behind live the app plays. Raise it if audio breaks up (mobile data, weak Wi-Fi); lower it for less delay.</td></tr>
+    <tr><td>Receive buffer</td><td>300 ms</td><td>100 to 1000 ms: how far behind live the app plays. Raise it if audio breaks up (mobile data, weak Wi-Fi); lower it for less delay. The Audio check and the balancer can change it from the page (0.10.14).</td></tr>
     <tr><td>Output</td><td>Speaker</td><td><b>Speaker</b> uses the media volume; <b>Earpiece</b> the call volume, held to the ear like a phone call.</td></tr>
-    <tr><td>Phone's echo and noise filter</td><td>on</td><td>Android's own processing on the microphone. Turn off if your transmit audio sounds choppy or muffled.</td></tr>
+    <tr><td>Phone's echo and noise filter</td><td>on</td><td>Android's own processing on the microphone. Turn off if your transmit audio sounds choppy or muffled. With it off, the page's Noise suppression, Echo cancellation and Automatic gain do nothing in app audio.</td></tr>
+    <tr><td>Clean-up filters: Received audio</td><td>off</td><td>An extra clean-up on the phone, after the node's RX cleanup: cuts hiss above 3.4 kHz, lifts clarity around 2.5 kHz and mutes quiet pauses. Tones and squelch tails are removed on the node (RX cleanup), which does it better.</td></tr>
+    <tr><td>Clean-up filters: Sent audio</td><td>off</td><td>On: always use one fixed clean-up (voice filter, clarity lift, noise gate) and ignore the Mic settings on the page. Off: follow the page's Mic settings (0.10.13 and later).</td></tr>
   </table>
   <p>Also on the node list: <b>Battery</b> opens Android's setting that lets the app run in the background (choose
     <i>Unrestricted</i> or <i>Don't optimize</i>; the list warns until it is set), and <b>Keep the screen on while a node is
@@ -1025,14 +1084,19 @@ T41234</pre>
   <p>The chain of chapter 4 stays the same on the Pi; only the end on your phone moves from the page into the app:</p>
   <ul>
     <li><b>Receive.</b> When you press Connect feed, the app opens <code>/api/listen?fmt=s16</code> itself, in a background
-      service with a notification, and plays it through Android's audio with its own receive buffer. It keeps Wi-Fi
+      service with a notification, and plays it through Android's audio with its own receive buffer (and 80 ms in
+      Android's player since 0.10.14). It keeps Wi-Fi
       awake and reconnects by itself (after 1 s, then up to every 10 s) if the stream drops. The page's Connect feed button,
       volume slider, level bar and message line follow the app.</li>
     <li><b>Transmit.</b> The app opens the talk channel <code>/api/talk</code> itself (with the same login), so the
-      page's push-to-talk button keys through the app. It records the microphone at 8 kHz (or at 16 or 48 kHz and
-      reduces it), applies the page's Mic gain, and sends 20 ms frames, holding up to half a second until the node
-      answers <i>keyed</i>, as the page does. The page shows the node's answers (keyed, busy, time-out) and the TX
-      level, unchanged.</li>
+      page's push-to-talk button keys through the app. It records the microphone at 8 kHz (or at 16 or 48 kHz, filtered
+      at 3.4 kHz before it is reduced, so nothing folds back), applies the page's Mic settings (the Leveler, Voice filter,
+      Radio voice, Noise gate and Mic gain, with the page's own code; 0.10.13 and later), and sends 20 ms frames, holding
+      up to half a second until the node answers <i>keyed</i>, as the page does. The page shows the node's answers
+      (keyed, busy, time-out) and the TX level, unchanged.</li>
+    <li><b>Measuring.</b> While an Audio check or Automatic balancing runs, the app sends the page what it receives and
+      what it sends, as small numbers about ten times a second, so the check measures app audio the same way it
+      measures page audio (0.10.13 and later).</li>
     <li><b>The guard timer</b> is kept by the app too, because a page's timers stall with the screen off.</li>
   </ul>
   <h2><span class="n">11.6</span>In the background</h2>
@@ -1190,10 +1254,12 @@ idrecording = |t(0,0,10,0)
     <tr><td class="mono">busy_lockout</td><td>true</td><td>bool</td><td>Setup card</td></tr>
     <tr><td class="mono">tune_enabled</td><td>false</td><td>bool</td><td>TX card: Adjust audio levels here</td></tr>
     <tr><td class="mono">tx_gain_db / rx_gain_db</td><td>0</td><td>−12–12</td><td>Audio levels (RX and TX cards)</td></tr>
-    <tr><td class="mono">jitter_ms</td><td>250</td><td>100–1500</td><td>RX card: Listen buffer</td></tr>
+    <tr><td class="mono">jitter_ms</td><td>250</td><td>100–1500</td><td>RX card: Listen buffer (page audio only)</td></tr>
     <tr><td class="mono">tx_buffer_ms</td><td>120</td><td>40–400</td><td>TX card: TX buffer</td></tr>
     <tr><td class="mono">rx_hpf / rx_agc</td><td>true</td><td>bool</td><td>RX card: RX cleanup</td></tr>
     <tr><td class="mono">rx_gate</td><td>1</td><td>0 off, 1 light, 2 strong</td><td>RX card: Squelch-tail gate</td></tr>
+    <tr><td class="mono">rx_notch_hz</td><td>0 (off)</td><td>0, or 60–300 Hz</td><td>RX card: CTCSS notch</td></tr>
+    <tr><td class="mono">tests_off</td><td>(empty)</td><td>check, balance, tone_rx, tone_tx, mic, node, kerchunk</td><td>Tests card: Tests on this node (the tests that are off)</td></tr>
     <tr><td class="mono">ptt_mode</td><td>hold</td><td>hold, tap</td><td>TX card: the copy of Push-to-talk on this phone</td></tr>
     <tr><td class="mono">ptt_guard_sec</td><td>60</td><td>30, 60, 90, 120, 180</td><td>TX card: Guard timer (copy)</td></tr>
     <tr><td class="mono">ptt_rx_gap</td><td>false</td><td>bool</td><td>TX card: Quick Key Guard (copy)</td></tr>
@@ -1245,12 +1311,20 @@ idrecording = |t(0,0,10,0)
     <tr><td>0.9.20</td><td>RX cleanup: gate tells hiss from tones, keeps 40 ms before opening and fades in; TX fades at a gap; Phone mic filter</td></tr>
     <tr><td>0.9.21</td><td>Settings that can't be used are grayed out; the Phone card shows the app</td></tr>
     <tr><td>0.9.22</td><td>The first build in the repository: <code>ptt_rx_gap</code> off by default; Pi health only with a login; the tone test is local-only for Stop too and limited by the TX time-out; node 1921 gets a silent ID</td></tr>
+    <tr><td>0.9.23–0.10.11</td><td>Not summarized here; see the changelog (balancing, receive health, the TX tone test, kerchunks, the suite log and more)</td></tr>
+    <tr><td>0.10.12</td><td>CTCSS notch in RX cleanup</td></tr>
+    <tr><td>0.10.13</td><td>The Mic settings, the Audio check and balancing work in Node Talker Mobile's app audio; the Phone card shows the app's settings</td></tr>
+    <tr><td>0.10.14</td><td>Tests card with test switches; Data card (one download, no Copy buttons); grays follow the mode; receive-buffer advice goes to the app</td></tr>
   </table>
   <table>
     <tr><th>Node Talker Mobile</th><th>What arrived</th></tr>
     <tr><td>0.1.0</td><td>Node list, the page alone, certificate trusted by fingerprint</td></tr>
     <tr><td>0.2.0–0.2.1</td><td>Receive in the background; follows the switch to HTTPS</td></tr>
     <tr><td>0.3.0–0.3.1</td><td>Transmit in the app; background play everywhere; Battery button; one signing key; renamed Node Talker Mobile</td></tr>
+    <tr><td>0.3.2–0.10.11</td><td>Not summarized here; see the changelog (release builds, the version follows Node Talker's, the spectrum, receive health, unit tests and more)</td></tr>
+    <tr><td>0.10.12</td><td>Clean-up filters for received and sent audio; the microphone is filtered before it is reduced to 8 kHz</td></tr>
+    <tr><td>0.10.13</td><td>Applies the page's Mic settings; sends its audio numbers to the Audio check; the phone gate follows the speech level</td></tr>
+    <tr><td>0.10.14</td><td>80 ms Android player buffer (about 120 ms less delay); the page can set the receive buffer</td></tr>
   </table>
   <p>The full lists are in <code>changelogs/nodetalker.md</code> and <code>changelogs/nodetalker_android.md</code>.</p>
 </section>
