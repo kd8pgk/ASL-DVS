@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.13"
+VERSION = "0.10.14"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Talker"
 
@@ -256,6 +256,7 @@ DEFAULT_CONFIG = {
     "rx_agc": True,
     "rx_gate": 1,
     "rx_notch_hz": 0.0,
+    "tests_off": "",
     "ptt_mode": "hold",
     "ptt_guard_sec": 60,
     "ptt_rx_gap": False,
@@ -336,6 +337,27 @@ def _norm_gain(value):
     return v
 
 
+TEST_NAMES = {"check": "Audio check", "balance": "Automatic balancing", "tone_rx": "RX tone test",
+              "tone_tx": "TX tone test", "mic": "Mic test", "node": "Node test", "kerchunk": "Kerchunk test"}
+
+
+def _norm_tests_off(value):
+    items = value if isinstance(value, (list, tuple)) else str(value).split(",")
+    off = {str(x).strip() for x in items if str(x).strip()}
+    bad = sorted(off - set(TEST_NAMES))
+    if bad:
+        raise ValueError("tests_off has unknown tests: " + ", ".join(bad))
+    return ",".join(k for k in TEST_NAMES if k in off)
+
+
+def test_off(tid):
+    return tid in str(_cfg_get("tests_off") or "").split(",")
+
+
+def test_off_error(tid):
+    return {"ok": False, "error": f"{TEST_NAMES[tid]} is turned off under Tests on the Setup tab."}
+
+
 def _norm_notch(value):
     try:
         v = round(float(str(value).strip()), 1)
@@ -375,6 +397,7 @@ _NORMALIZERS = {
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
     "rx_notch_hz": _norm_notch,
+    "tests_off": _norm_tests_off,
 }
 
 _config = dict(DEFAULT_CONFIG)
@@ -1524,6 +1547,8 @@ def kerchunk_status(_body=None):
 
 
 def kerchunk_test_start(body):
+    if test_off("kerchunk"):
+        return test_off_error("kerchunk")
     try:
         minutes = int(body.get("minutes", KERCHUNK_TEST_MIN))
     except (TypeError, ValueError):
@@ -6537,6 +6562,8 @@ class ToneTest:
         mode = body.get("mode", "rx")
         if mode not in ("rx", "tx"):
             raise ValueError("mode must be rx or tx")
+        if test_off("tone_" + mode):
+            return test_off_error("tone_" + mode)
         call, _src = callsign_now()
         if not call:
             return {"ok": False, "error": "Set your callsign in Setup first: the test identifies itself on air."}
@@ -6663,6 +6690,8 @@ def balance_get(_body=None):
 
 
 def balance_snapshot(_body=None):
+    if test_off("balance"):
+        return test_off_error("balance")
     if os.path.exists(BALANCE_PATH):
         return {"ok": False, "error": "An earlier balance run is still open. Restore or keep its changes first."}
     with _config_lock:
@@ -6943,7 +6972,6 @@ main{flex:1;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;paddin
 .kc-min{width:64px}
 .kc-sub{border:1px solid var(--line);border-radius:8px;padding:8px 10px;margin-top:8px}
 .kc-sub-head{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
-.kc-json{width:100%;min-height:160px;font:11px ui-monospace,Menlo,Consolas,monospace;background:#0a1016;color:var(--text);border:1px solid var(--line);border-radius:6px;margin:8px 0}
 .fold-body{padding:6px 0 10px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:8px 0}
 button{font:inherit;color:var(--text)}
@@ -6993,6 +7021,7 @@ code{background:var(--card2);border:1px solid var(--line);border-radius:4px;padd
 .hidden{display:none !important}
 .na{opacity:.45}
 .na,.na *{cursor:not-allowed}
+.tests-sw{display:flex;flex-wrap:wrap;gap:6px 16px;margin:6px 0}
 .why{margin:4px 0 8px}
 :root{--tn-gap:2px;--tn-h:40px;--tn-font:14px;--lt-font:15px;--lt-h:64px;--sett-font:15px;--sett-h:44px}
 .tn-bar{display:flex;flex-wrap:wrap;gap:var(--tn-gap);align-items:center}
@@ -7443,21 +7472,6 @@ async function kcRefresh() {
   kcDraw(d.bursts, d.threshold, d.source !== 'keyed');
   kcList(d.bursts);
 }
-async function kcCopy() {
-  if (!kcLast) return;
-  const text = JSON.stringify(kcLast, null, 2);
-  try {
-    await navigator.clipboard.writeText(text);
-    $('kc-state').textContent = 'Copied the kerchunk report as JSON.';
-  } catch (e) {
-    const box = $('kc-json');
-    box.value = text;
-    box.classList.remove('hidden');
-    box.focus();
-    box.select();
-    $('kc-state').textContent = 'The clipboard refused. The JSON is selected below: press Ctrl+C to copy it.';
-  }
-}
 async function kcReset() {
   if (!confirm('Reset the kerchunk log?\n\nThe current log is kept as a backup file. The cut-off goes back to 0.4 s, and a running test stops.')) return;
   const d = await post('/api/kerchunks/reset', {});
@@ -7579,7 +7593,7 @@ function sendOp(op) {
   if (ws && ws.readyState === 1) ws.send(JSON.stringify({op: op}));
 }
 
-const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'chk', 'phone', 'kc', 'log'];
+const FOLDS = ['setup', 'fav', 'dig', 'rx', 'tx', 'chk', 'data', 'phone', 'kc', 'log'];
 
 function foldOpen(k) { return !$('cb-' + k).classList.contains('hidden'); }
 
@@ -8360,6 +8374,18 @@ const prevStep = (steps, v) => steps.slice().reverse().find((x) => x < Number(v)
 // judged on its own in the next check. Levels are judged only after CHK_MIN_SPEECH seconds of speech.
 const CHK_MIN_SPEECH = 5, CHK_MAX_CHANGES = 2;
 
+function appBuf() {
+  if (!appAudio()) return null;
+  const d = appInfo() || {};
+  let ok = false;
+  try { ok = typeof NodeTalkerApp.setBufferMs === 'function'; } catch (e) {}
+  return {ms: Number(d.bufferMs) || 300, ok: ok};
+}
+
+function appSet(v) {
+  try { return !!NodeTalkerApp.setBufferMs(Number(v.bufferMs)); } catch (e) { return false; }
+}
+
 function chkSuggest(r, cfg) {
   const R = r.rx, T = r.tx, c = cfg || {}, mg = Number(mic.gain) || 0;
   const rxGain = Number(c.rx_gain_db) || 0, txGain = Number(c.tx_gain_db) || 0;
@@ -8373,14 +8399,18 @@ function chkSuggest(r, cfg) {
   // Tier 0: audio that is lost, cut or distorted.
   if (clipping) node(0, 'Received audio hit full scale ' + R.clipPct.toFixed(1) + ' % of the time: lower RX gain by 3 dB'
     + (c.rx_agc ? '' : ' or turn on Automatic level') + '.', {tune_enabled: true, rx_gain_db: Math.max(-12, rxGain - 3)});
+  const ab = appBuf();
   if (R.dropsMin >= 0.5) {
-    const j = nextStep(JIT_STEPS, c.tune_enabled ? c.jitter_ms : 250);
-    if (j) node(0, R.drops + ' dropouts: raise the Listen buffer to ' + (j / 1000) + ' s.', {tune_enabled: true, jitter_ms: j});
-    else add(0, R.drops + ' dropouts even with the largest Listen buffer: the phone\'s connection is the problem (try Wi-Fi).');
+    const j = nextStep(JIT_STEPS, ab ? ab.ms : (c.tune_enabled ? c.jitter_ms : 250));
+    if (j && ab && ab.ok) add(0, R.drops + ' dropouts: raise the app\'s receive buffer to ' + (j / 1000) + ' s.', {app: {bufferMs: j}});
+    else if (j && ab) add(0, R.drops + ' dropouts: raise the receive buffer in the app\'s Audio settings to ' + (j / 1000) + ' s.');
+    else if (j) node(0, R.drops + ' dropouts: raise the Listen buffer to ' + (j / 1000) + ' s.', {tune_enabled: true, jitter_ms: j});
+    else add(0, R.drops + ' dropouts even with the largest receive buffer: the phone\'s connection is the problem (try Wi-Fi).');
   }
   if (R.drops === 0 && rxOk) {
-    const lo = prevStep(JIT_STEPS, c.tune_enabled ? c.jitter_ms : 250);
-    if (lo) node(2, 'No dropouts this check: lower the Listen buffer to ' + (lo / 1000) + ' s to cut the delay.', {tune_enabled: true, jitter_ms: lo});
+    const lo = prevStep(JIT_STEPS, ab ? ab.ms : (c.tune_enabled ? c.jitter_ms : 250));
+    if (lo && ab && ab.ok) add(2, 'No dropouts this check: lower the app\'s receive buffer to ' + (lo / 1000) + ' s to cut the delay.', {app: {bufferMs: lo}});
+    else if (lo && !ab) node(2, 'No dropouts this check: lower the Listen buffer to ' + (lo / 1000) + ' s to cut the delay.', {tune_enabled: true, jitter_ms: lo});
   }
   const N = r.node;
   if (N && !N.available) add(3, 'Node cross-check unavailable: ' + N.why
@@ -8443,7 +8473,10 @@ function chkSuggest(r, cfg) {
 
 async function chkApply(i, s2, btn, undo) {
   const ch = s2.change;
-  if (ch.mic) {
+  if (ch.app) {
+    if (!undo) chkUndo[i] = {app: {bufferMs: (appInfo() || {}).bufferMs}};
+    if (!appSet(undo ? chkUndo[i].app : ch.app)) { note('chk-msg', 'err', 'The app did not take the change.'); return; }
+  } else if (ch.mic) {
     if (!undo) chkUndo[i] = {mic: Object.assign({}, mic)};
     Object.assign(mic, undo ? chkUndo[i].mic : ch.mic);
     try { localStorage.setItem('nlMic', JSON.stringify(mic)); } catch (e) {}
@@ -8467,6 +8500,28 @@ async function chkApply(i, s2, btn, undo) {
 }
 
 let chkShown = null, chkCmp = false;
+const TEST_IDS = ['check', 'balance', 'tone_rx', 'tone_tx', 'mic', 'node', 'kerchunk'];
+let testsOff = [];
+
+function testOff(id) { return testsOff.includes(id); }
+
+function testsUi() {
+  TEST_IDS.forEach((k) => { $('test-on-' + k).checked = !testOff(k); });
+  const n = testsOff.length;
+  sum('chk', n ? n + ' test' + (n > 1 ? 's' : '') + ' off' : '');
+}
+
+async function testsSave(all) {
+  if (all === true) TEST_IDS.forEach((k) => { $('test-on-' + k).checked = true; });
+  const off = TEST_IDS.filter((k) => !$('test-on-' + k).checked);
+  const d = await post('/api/config', {tests_off: off.join(',')});
+  note('tests-msg', d.ok ? 'ok' : 'err', d.ok ? 'Saved for every phone.' : (d.error || 'Could not save.'));
+  if (!d.ok) return;
+  testsOff = off;
+  if (testOff('balance') && autoRun) autoStop(true);
+  testsUi();
+  availUi();
+}
 
 // ---- Tone test (Pi side, v0.9.3): start, poll, show the report ----
 let toneTimer = null, toneWasRunning = false, toneMode = 'rx';
@@ -8488,14 +8543,18 @@ function toneUi(running) {
   });
 }
 
+function toneRequest(mode) {
+  const p = mode === 'tx' ? 'tx-tone-' : 'tone-';
+  const raw = $(p + 'hz').value.trim();
+  return {tones: raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null, tone_sec: Number($(p + 'sec').value), mode: mode};
+}
+
 async function toneStart(mode) {
   toneMode = mode;
   const p = tonePre();
-  const raw = $(p + 'hz').value.trim();
-  const tones = raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null;
   $(p + 'start').disabled = true;
   note(p + 'msg', '', 'Starting...');
-  const d = await post('/api/tonetest/start', {tones: tones, tone_sec: Number($(p + 'sec').value), mode: mode});
+  const d = await post('/api/tonetest/start', toneRequest(mode));
   $(p + 'start').disabled = false;
   if (!d.ok) { note(p + 'msg', 'err', d.error || 'Could not start the tone test.'); return; }
   note(p + 'msg', '', '');
@@ -8805,19 +8864,14 @@ async function autoStep(side, r, cfg) {
   const score = side === 'rx' ? balRxScore(r) : balTxScore(r);
   if (autoUndo[side]) {
     if (score > autoPre[side] + AUTO_WORSE) {
-      await post('/api/config', autoUndo[side]);
-      loadConfig();
+      await balRevert(autoUndo[side]);
       autoRejected[side][autoSig[side]] = Date.now() + AUTO_REJECT_MS;
       note(msg, 'warn', 'The last change made it worse, so it was put back. It is not tried again for 30 min.');
     } else note(msg, 'ok', 'The last change is kept.');
     autoUndo[side] = null;
     return;
   }
-  const keys = autoKeys(side), now = Date.now();
-  const hit = chkSuggest(r, cfg).find((x) => x.change && !x.change.mic
-    && Object.keys(x.change).every((k) => k === 'node' || k === 'tune_enabled' || keys.includes(k))
-    && Object.keys(x.change).some((k) => keys.includes(k))
-    && !((autoRejected[side][autoSigOf(x.change)] || 0) > now));
+  const hit = balPick(r, cfg, autoKeys(side), autoRejected[side]);
   if (!hit) { note(msg, '', 'Nothing to change this minute.'); return; }
   if (!(await balQuiet())) return;
   const res = await balApply(hit.change);
@@ -8870,10 +8924,11 @@ function autoStop(untick) {
   try { if (run.lock) run.lock.release(); } catch (e) {}
   if (run.window && chk && chk.running) chkStop();
   if (run.wait) { const w = run.wait; run.wait = null; w(null); }
-  ['rx', 'tx'].forEach((s) => note(s + '-auto-msg', '', 'Stopped. Changes are kept; Restore original settings in the Audio check card undoes them.'));
+  ['rx', 'tx'].forEach((s) => note(s + '-auto-msg', '', 'Stopped. Changes are kept; Restore original settings in the Tests card undoes them.'));
 }
 
 function autoPrefChanged() {
+  if (testOff('balance')) { ['rx', 'tx'].forEach((s) => { $(s + '-auto').checked = false; }); }
   saveAutoPrefs();
   if (autoWanted()) { if (!autoRun) autoStart(); }
   else if (autoRun) autoStop(false);
@@ -8888,11 +8943,24 @@ function loadAutoPrefs() {
   try { p = JSON.parse(localStorage.getItem('nlAutoBal') || '{}') || {}; } catch (e) {}
   $('rx-auto').checked = !!p.rx;
   $('tx-auto').checked = !!p.tx;
-  if (autoWanted()) autoStart();
+  if (autoWanted() && !testOff('balance')) autoStart();
 }
 
-function balLiveChange(r, cfg) {
-  return chkSuggest(r, cfg || {}).find((x) => x.change && !x.change.mic) || null;
+function balPick(r, cfg, keys, rejected) {
+  const now = Date.now();
+  return chkSuggest(r, cfg || {}).find((x) => x.change && !x.change.mic
+    && (!keys || (Object.keys(x.change).every((k) => k === 'node' || k === 'tune_enabled' || keys.includes(k))
+      && Object.keys(x.change).some((k) => keys.includes(k))))
+    && !(rejected && (rejected[autoSigOf(x.change)] || 0) > now)) || null;
+}
+
+async function balRevert(undo) {
+  if (!undo) return;
+  if (undo.app) appSet(undo.app);
+  const cfg = Object.assign({}, undo);
+  delete cfg.app;
+  if (Object.keys(cfg).length) await post('/api/config', cfg);
+  loadConfig();
 }
 
 // Turning on Adjust audio levels makes every level setting take effect. The ones the change does not set
@@ -8907,6 +8975,11 @@ function balBody(change, cfg) {
 }
 
 async function balApply(change) {
+  if (change.app) {
+    const old = (appInfo() || {}).bufferMs;
+    if (!appSet(change.app)) return {ok: false, error: 'The app did not take the change.'};
+    return {ok: true, undo: {app: {bufferMs: old}}};
+  }
   const cur = await api('/api/config');
   if (!cur.config) return {ok: false, error: cur.error || 'Could not read the settings.'};
   const body = balBody(change, cur.config), undo = {};
@@ -8948,7 +9021,7 @@ function expUi(running) {
   if (!running) expStage('');
 }
 
-const BAL_RX_KEYS = ['rx_gain_db', 'rx_hpf', 'rx_agc', 'rx_gate', 'jitter_ms'], BAL_TX_KEYS = ['tx_gain_db', 'tx_buffer_ms'];
+const BAL_RX_KEYS = ['rx_gain_db', 'rx_hpf', 'rx_agc', 'rx_gate', 'jitter_ms', 'app'], BAL_TX_KEYS = ['tx_gain_db', 'tx_buffer_ms'];
 
 function balNote(change, kind, text) {
   const keys = Object.keys(change || {});
@@ -8965,9 +9038,7 @@ function expLive(mins) {
 
 async function expTone() {
   toneMode = 'rx';
-  const raw = $('tone-hz').value.trim();
-  const tones = raw ? raw.split(/[ ,]+/).filter(Boolean).map(Number) : null;
-  const d = await post('/api/tonetest/start', {tones: tones, tone_sec: Number($('tone-sec').value)});
+  const d = await post('/api/tonetest/start', toneRequest('rx'));
   if (!d.ok) return expFail(d.error || 'The tone test did not start.');
   toneUi(true);
   let misses = 0;
@@ -8997,8 +9068,7 @@ async function expToneRounds() {
     const score = balToneScore(r);
     if (score == null) { exp.balance = false; note('rx-bal-msg', 'warn', 'No tone came back from the node, so there is nothing to balance. Balancing stopped.'); return; }
     if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.lastTone) {
-      await post('/api/config', exp.lastTone);
-      loadConfig();
+      await balRevert(exp.lastTone);
       exp.balance = false;
       note('rx-bal-msg', 'warn', 'The last RX gain change made the tones worse, so it was put back. Balancing stopped.');
       return;
@@ -9029,8 +9099,7 @@ async function expLiveRounds() {
     if (!r || exp.stopped || !exp.balance) return;
     const score = balLiveScore(r);
     if (prev != null && score > prev + BAL_KEEP_MARGIN && exp.undo) {
-      await post('/api/config', exp.undo);
-      loadConfig();
+      await balRevert(exp.undo);
       exp.balance = false;
       note('exp-msg', 'warn', 'The last change made the audio worse, so it was put back. Balancing stopped.');
       return;
@@ -9038,7 +9107,7 @@ async function expLiveRounds() {
     prev = score;
     if (i === rounds - 1) break;
     const cur = await api('/api/config');
-    const hit = balLiveChange(r, cur.config || {});
+    const hit = balPick(r, cur.config, null, null);
     if (!hit) { note('exp-msg', 'ok', 'Nothing left to change in range.'); return; }
     expStage('Waiting for a quiet channel before changing a setting.');
     if (!(await balQuiet())) {
@@ -9111,8 +9180,10 @@ async function expRun(o) {
 
 function expStart() {
   if (exp) return;
-  if (autoRun) { note('exp-msg', 'err', 'Automatic balancing is on: untick it in the RX or TX card first.'); return; }
-  const tone = $('exp-tone').checked, balance = $('exp-bal').checked;
+  if (testOff('check')) { note('exp-msg', 'err', 'The Audio check is turned off under Tests on this node.'); return; }
+  if ($('exp-bal').checked && testOff('balance')) { note('exp-msg', 'err', 'Automatic balancing is turned off under Tests on this node.'); return; }
+  if (autoRun) { note('exp-msg', 'err', 'Automatic balancing is on: untick it under Automatic balancing first.'); return; }
+  const tone = $('exp-tone').checked && !testOff('tone_rx'), balance = $('exp-bal').checked;
   if (appAudio() && !appStatsOk()) { note('exp-msg', 'err', 'This app version cannot report its audio to the live check: update Node Talker Mobile, or switch the app to Page audio in its Audio settings.'); return; }
   if (chk && chk.running) { note('exp-msg', 'err', 'A check is already running.'); return; }
   note('exp-msg', '', '');
@@ -9157,29 +9228,16 @@ let chkCompareWith = null;
 
 function chkPad(n) { return String(n).padStart(2, '0'); }
 
-function chkExport() {
-  if (!chkShown) return;
-  const doc = {format: 'nodetalker-check', version: '__VERSION__', saved: new Date().toISOString(), summary: chkShown};
-  const blob = new Blob([JSON.stringify(doc, null, 1)], {type: 'application/json'});
-  const url = URL.createObjectURL(blob);
-  const d = new Date();
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'nodetalker-check-' + d.getFullYear() + chkPad(d.getMonth() + 1) + chkPad(d.getDate()) + '-' + chkPad(d.getHours()) + chkPad(d.getMinutes()) + '.json';
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-}
-
 async function chkCompareFile(file) {
   let obj = null;
   try { obj = JSON.parse(await file.text()); } catch (e) { obj = null; }
-  if (!obj || obj.format !== 'nodetalker-check' || !obj.summary || !obj.summary.rx || !obj.summary.tx) {
-    note('chk-msg', 'err', 'That file is not a saved check report.');
+  const sm = obj && obj.format === 'nodetalker-check' ? obj.summary
+    : obj && obj.format === 'nodetalker-data' && obj.check ? obj.check.summary : null;
+  if (!sm || !sm.rx || !sm.tx) {
+    note('chk-msg', 'err', 'That file is not a Node Talker Data file with a check in it.');
     return;
   }
-  chkCompareWith = obj.summary;
+  chkCompareWith = sm;
   chkCmp = true;
   $('chk-cmp').textContent = 'Hide last check';
   const when = obj.saved ? new Date(obj.saved).toLocaleString() : 'an unknown time';
@@ -9198,7 +9256,6 @@ function chkClearFile() {
 async function chkShow(r) {
   chkShown = r;
   if (!r) { $('chk-rep').classList.add('hidden'); $('chk-rx-box').classList.add('hidden'); $('chk-tx-box').classList.add('hidden'); return; }
-  $('chk-export').disabled = false;
   let prev = chkCompareWith;
   if (!prev) { try { prev = JSON.parse(localStorage.getItem('nlCheckPrev') || 'null'); } catch (e) {} }
   $('chk-cmp').disabled = !prev || !!chkCompareWith;
@@ -9217,14 +9274,14 @@ async function chkShow(r) {
   sugs.forEach((s2, i) => {
     const d = document.createElement('div'); d.className = 'sug';
     const t = document.createElement('div'); t.className = 't';
-    t.textContent = s2.text + (s2.change && s2.change.mic ? ' *' : ''); d.appendChild(t);
+    t.textContent = s2.text + (s2.change && (s2.change.mic || s2.change.app) ? ' *' : ''); d.appendChild(t);
     if (s2.change && (!s2.change.node || authed)) {
       const b = document.createElement('button'); b.type = 'button'; b.className = 'btn'; b.textContent = 'Apply';
       b.onclick = () => chkApply(i, s2, b, false); d.appendChild(b);
     }
     box.appendChild(d);
   });
-  if (sugs.some((x) => x.change && x.change.mic)) {
+  if (sugs.some((x) => x.change && (x.change.mic || x.change.app))) {
     const lg = document.createElement('div'); lg.className = 'muted small';
     lg.textContent = '* You can change this on the phone.'; box.appendChild(lg);
   }
@@ -9286,7 +9343,7 @@ function phoneTable(rows) {
   return t;
 }
 
-async function phoneRefresh() {
+async function phoneRows() {
   const rows = [];
   const app = appAudio(), appT = appTalk();
   const add = (k, v, star, notInApp, notInAppTalk) => rows.push([k, v + ((app && notInApp) || (appT && notInAppTalk) ? ' (not used: app audio)' : ''), !!star]);
@@ -9316,104 +9373,57 @@ async function phoneRefresh() {
   add('Mic gain (this page)', (mic.gain > 0 ? '+' : '') + mic.gain + ' dB', true);
   const ai = appInfo();
   if (!(ai && ai.volume != null)) add('Phone media volume', 'not readable from a web page', true);
+  const ar = [];
+  if (window.NodeTalkerApp) appRows((k, v, star) => ar.push([k, v, !!star]));
+  return {rows: rows, app: ar};
+}
+
+async function phoneRefresh() {
+  const p = await phoneRows();
   const body = $('phone-body');
   body.innerHTML = '';
-  body.appendChild(phoneTable(rows));
-  let n = rows.length;
+  body.appendChild(phoneTable(p.rows));
   if (window.NodeTalkerApp) {
-    const ar = [];
-    appRows((k, v, star) => ar.push([k, v, !!star]));
     const h = document.createElement('h3'); h.style.margin = '12px 0 4px'; h.textContent = 'Node Talker Mobile';
     body.appendChild(h);
-    body.appendChild(phoneTable(ar));
-    n += ar.length;
+    body.appendChild(phoneTable(p.app));
   }
-  sum('phone', n + ' items');
+  sum('phone', (p.rows.length + p.app.length) + ' items');
 }
 
-function chkText() {
-  const r = chkShown;
-  if (!r) return '';
-  const lines = ['Node Talker ' + document.querySelector('header .ver').textContent + ' audio check, ' + new Date(r.at).toLocaleString() + ', ' + r.mins + ' min'];
-  ['rx', 'tx'].forEach((sd) => {
-    lines.push(sd === 'rx' ? 'Receive:' : 'Transmit:');
-    chkRows(r, null, sd).forEach(([k, v, , t]) => lines.push('  ' + k + ': ' + v + (t ? ' (target ' + t + ')' : '')));
-  });
-  lines.push('What to change:');
-  document.querySelectorAll('#chk-sug .sug').forEach((e) => { const t = e.querySelector('.t') || e; lines.push('  - ' + t.textContent); });
-  return lines.join('\n');
-}
-
-async function chkCopy() {
-  const t = chkText();
-  try { await navigator.clipboard.writeText(t); note('chk-msg', 'ok', 'Report copied.'); }
-  catch (e) {
-    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); note('chk-msg', 'ok', 'Report copied.'); } catch (x) { note('chk-msg', 'err', 'Could not copy.'); }
-    ta.remove();
+// The Data card: one file with every number, built here and downloaded. Nothing is shown on the page and
+// nothing goes through the clipboard, so nothing is cut short.
+async function dataDownload() {
+  const btn = $('data-dl');
+  btn.disabled = true;
+  note('data-msg', '', 'Collecting...');
+  const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch (e) { return null; } };
+  let ver = '';
+  try { ver = window.NodeTalkerApp && typeof NodeTalkerApp.version === 'function' ? String(NodeTalkerApp.version() || '') : ''; } catch (e) {}
+  const doc = {format: 'nodetalker-data', version: '__VERSION__', saved: new Date().toISOString(), mode: appAudio() ? 'app' : 'page',
+    page: {mic: mic, play: play, ptt: ptt, headset: hs, tests_off: testsOff, auto_balance: read('nlAutoBal')},
+    check: {format: 'nodetalker-check', summary: chkShown || read('nlCheckLast'), previous: read('nlCheckPrev'), running: chk && chk.running ? chk : null},
+    app: window.NodeTalkerApp ? {version: ver, info: appInfo()} : null, pi: {}};
+  const paths = {config: '/api/config', status: '/api/status', rxhealth: '/api/rxhealth?all=1', tonetest: '/api/tonetest/status',
+    kerchunks: '/api/kerchunks', balance: '/api/balance', load: '/api/load', tx: '/api/tx', log: '/api/log'};
+  for (const k of Object.keys(paths)) {
+    try { doc.pi[k] = await api(paths[k]); } catch (e) { doc.pi[k] = {ok: false, error: String((e && e.message) || e)}; }
   }
-}
-
-// Plain text of a whole Settings card: folded sections opened for the read, field values shown as text,
-// buttons left out. Everything is restored before returning, so nothing is painted in between.
-function cardText(card) {
-  const undo = [];
-  const hide = (el) => { const s = el.style.display; el.style.display = 'none'; undo.push(() => { el.style.display = s; }); };
-  card.querySelectorAll('.fold-body.hidden').forEach((el) => {
-    el.classList.remove('hidden'); undo.push(() => el.classList.add('hidden'));
-  });
-  card.querySelectorAll('.copy-row, .copy-msg, button:not(.fold-btn)').forEach(hide);
-  card.querySelectorAll('input, select, textarea').forEach((el) => {
-    if (el.type === 'file' || el.closest('.copy-row')) return;
-    const s = document.createElement('span');
-    let val;
-    if (el.type === 'password') val = el.value ? ' [hidden]' : '';
-    else if (el.type === 'checkbox' || el.type === 'radio') val = el.checked ? ' [on]' : ' [off]';
-    else if (el.tagName === 'SELECT') val = ' ' + (el.options[el.selectedIndex] ? el.options[el.selectedIndex].text : '');
-    else val = ' ' + el.value;
-    s.textContent = val;
-    el.after(s); undo.push(() => s.remove());
-    if (el.type !== 'checkbox' && el.type !== 'radio') hide(el);
-  });
-  const t = (card.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
-  undo.reverse().forEach((f) => f());
-  return t;
-}
-
-async function copyCard(card, msg) {
-  const t = cardText(card);
-  let ok = false;
-  try { await navigator.clipboard.writeText(t); ok = true; }
-  catch (e) {
-    const ta = document.createElement('textarea'); ta.value = t; document.body.appendChild(ta); ta.select();
-    try { ok = document.execCommand('copy'); } catch (x) { ok = false; }
-    ta.remove();
-  }
-  msg.textContent = ok ? 'Copied.' : 'Could not copy.';
-  clearTimeout(msg._t); msg._t = setTimeout(() => { msg.textContent = ''; }, 2500);
-}
-
-// Adds a Copy all row to the foot of every Settings card that doesn't have one already.
-function addCopyAll() {
-  document.querySelectorAll('#tab-setup > .card:not(#cd-sys)').forEach((card) => {
-    const own = card.querySelector('#chk-copy-card');  // Audio check keeps its button in the Start row
-    if (own) {
-      const msg = document.createElement('span');
-      msg.className = 'muted small copy-msg';
-      own.after(msg);
-      own.addEventListener('click', () => copyCard(card, msg));
-      return;
-    }
-    const row = document.createElement('div');
-    row.className = 'row copy-row';
-    const btn = document.createElement('button');
-    btn.className = 'btn'; btn.type = 'button'; btn.textContent = 'Copy all';
-    const msg = document.createElement('span');
-    msg.className = 'muted small copy-msg';
-    row.append(btn, msg);
-    card.appendChild(row);
-    btn.addEventListener('click', () => copyCard(card, msg));
-  });
+  const cfg = doc.pi.config && doc.pi.config.config;
+  if (doc.check.summary) doc.check.suggestions = chkSuggest(doc.check.summary, cfg).map((x) => ({tier: x.tier, text: x.text, change: x.change}));
+  try { doc.phone = await phoneRows(); } catch (e) { doc.phone = {error: String(e)}; }
+  const text = JSON.stringify(doc, null, 1);
+  const url = URL.createObjectURL(new Blob([text], {type: 'application/json'}));
+  const d = new Date(), a = document.createElement('a');
+  a.href = url;
+  a.download = 'nodetalker-data-' + d.getFullYear() + chkPad(d.getMonth() + 1) + chkPad(d.getDate()) + '-' + chkPad(d.getHours()) + chkPad(d.getMinutes()) + '.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+  note('data-msg', 'ok', 'Downloaded ' + a.download + ' (' + Math.max(1, Math.round(text.length / 1024)) + ' kB).');
+  sum('data', 'last ' + d.toLocaleTimeString());
+  btn.disabled = false;
 }
 
 function chkInit() {
@@ -9432,6 +9442,9 @@ function chkInit() {
   chkUi();
   setInterval(chkTick, 1000);
   $('chk-start').addEventListener('click', expStart);
+  $('tests-save').addEventListener('click', () => testsSave(false));
+  $('tests-all').addEventListener('click', () => testsSave(true));
+  $('data-dl').addEventListener('click', dataDownload);
   $('chk-stop').addEventListener('click', auditStop);
   $('rx-auto').addEventListener('change', autoPrefChanged);
   $('tx-auto').addEventListener('change', autoPrefChanged);
@@ -9444,11 +9457,9 @@ function chkInit() {
   $('tx-link-connect').addEventListener('click', () => txLink('connect'));
   $('tx-link-disconnect').addEventListener('click', () => txLink('disconnect'));
   $('tx-tone-stop').addEventListener('click', toneStop);
-  $('chk-export').addEventListener('click', chkExport);
   $('chk-file').addEventListener('click', () => $('chk-file-in').click());
   $('chk-file-in').addEventListener('change', (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) chkCompareFile(f); });
   $('chk-clear-file').addEventListener('click', chkClearFile);
-  $('chk-copy').addEventListener('click', chkCopy);
   $('fav-save').addEventListener('click', () => feSave());
   $('dig-save').addEventListener('click', async () => { await nwSave(); await dgSave(); });
   $('chk-cmp').addEventListener('click', () => { chkCmp = !chkCmp; $('chk-cmp').textContent = chkCmp ? 'Hide last check' : 'Compare with last check'; chkShow(chkShown); });
@@ -10255,12 +10266,16 @@ function whyNote(id, list) {
 
 function availUi() {
   const app = appAudio(), appT = appTalk(), md = navigator.mediaDevices;
+  const caps = (app && appInfo()) || {}, appMic = appT && !!caps.micOpts, statsOk = appStatsOk();
   const sup = md && md.getSupportedConstraints ? md.getSupportedConstraints() : {};
   const noMic = !window.isSecureContext ? 'The microphone needs the https:// page.'
     : !(md && md.getUserMedia) ? 'This browser gives the page no microphone.' : '';
   const A_PLAY = 'App audio plays the node itself, so the page\'s playback options aren\'t used.';
-  const A_MIC = 'App audio sends the mic with only Mic gain applied (for echo and noise, use the app\'s own filter in its Audio settings).';
-  const A_TEST = 'The tests use page audio; switch the app to Page audio in its Audio settings to run them.';
+  const A_MIC = 'This app version sends the mic with only Mic gain applied: update Node Talker Mobile to use these settings.';
+  const A_OS = 'In app audio this is done by Android\'s voice microphone: turn on "Phone\'s echo and noise filter" in the app\'s Audio settings.';
+  const A_TEST = 'This test records and plays back with page audio; switch the app to Page audio in its Audio settings to run it.';
+  const A_STATS = 'This app version can\'t report its audio to the check: update Node Talker Mobile, or switch the app to Page audio.';
+  const OFF = (id) => (testOff(id) ? 'Turned off under Tests on this node.' : '');
   const playWhy = {
     'play-s16': app ? A_PLAY : '',
     'play-smooth': app ? A_PLAY : (ctx && ctx.sampleRate === 8000 ? 'This phone already plays at 8 kHz, so there is nothing to smooth.' : ''),
@@ -10269,22 +10284,30 @@ function availUi() {
   Object.keys(playWhy).forEach((id) => naSet(id, playWhy[id]));
   whyNote('why-play', Object.values(playWhy));
 
+  const jitWhy = app ? 'App audio uses the app\'s own receive buffer, set in the app\'s Audio settings (the check and the balancer change it there).' : '';
+  naSet('tune-jit', jitWhy, !$('tune-on').checked);
+  whyNote('why-lvl', [jitWhy]);
+
   const browserCan = (k, what) => (sup[k] ? '' : 'This browser can\'t do ' + what + '.');
+  const eqCut = $('mic-eq').checked ? 'Radio voice already includes the Voice filter\'s low cut.' : '';
+  const viaOs = appMic && caps.voiceMic === false ? A_OS : '';
   const micWhy = {
-    'mic-lev': appT ? A_MIC : noMic,
-    'mic-agc': appT ? A_MIC : noMic || browserCan('autoGainControl', 'automatic gain'),
-    'mic-ns': appT ? A_MIC : noMic || browserCan('noiseSuppression', 'noise suppression'),
-    'mic-ec': appT ? A_MIC : noMic || browserCan('echoCancellation', 'echo cancellation'),
-    'mic-hp': appT ? A_MIC : noMic || ($('mic-eq').checked ? 'Radio voice already includes the Voice filter\'s low cut.' : ''),
-    'mic-eq': appT ? A_MIC : noMic,
-    'mic-gate': appT ? A_MIC : noMic,
+    'mic-lev': appT ? (appMic ? '' : A_MIC) : noMic,
+    'mic-agc': appT ? (appMic ? viaOs : A_MIC) : noMic || browserCan('autoGainControl', 'automatic gain'),
+    'mic-ns': appT ? (appMic ? viaOs : A_MIC) : noMic || browserCan('noiseSuppression', 'noise suppression'),
+    'mic-ec': appT ? (appMic ? viaOs : A_MIC) : noMic || browserCan('echoCancellation', 'echo cancellation'),
+    'mic-hp': appT ? (appMic ? eqCut : A_MIC) : noMic || eqCut,
+    'mic-eq': appT ? (appMic ? '' : A_MIC) : noMic,
+    'mic-gate': appT ? (appMic ? '' : A_MIC) : noMic,
     'mic-gain': appT ? '' : noMic,
   };
   Object.keys(micWhy).forEach((id) => naSet(id, micWhy[id]));
-  const testWhy = app ? A_TEST : noMic;
-  naSet('mic-test', testWhy, testing);
-  naSet('node-test', testWhy, nodeTesting);
-  whyNote('why-mic', Object.values(micWhy).concat([testWhy]));
+  const micTestWhy = OFF('mic') || (app ? A_TEST : noMic);
+  naSet('mic-test', micTestWhy, testing);
+  whyNote('why-mic', Object.values(micWhy).concat([micTestWhy]));
+  const nodeWhy = OFF('node') || (app ? A_TEST : noMic);
+  naSet('node-test', nodeWhy, nodeTesting);
+  whyNote('why-node', [nodeWhy]);
 
   const hsWhy = {
     'hs-out': app ? 'In app audio the app picks the output: use Sound through above.' : '',
@@ -10295,9 +10318,26 @@ function availUi() {
   naSet('hs-names', hsWhy['hs-mic']);
   whyNote('why-hs', Object.values(hsWhy));
 
-  const chkWhy = app && !(chk && chk.running) ? 'The check measures page audio; switch the app to Page audio in its Audio settings to run it. The Tone test runs on the Pi and works either way.' : '';
+  const running = !!(chk && chk.running) || !!exp;
+  const noStats = app && !statsOk ? A_STATS : '';
+  const chkWhy = running ? '' : OFF('check') || noStats;
   naSet('chk-start', chkWhy);
-  whyNote('why-chk', [chkWhy]);
+  const balWhy = OFF('balance') || noStats;
+  naSet('exp-bal', balWhy, !!exp);
+  naSet('exp-tone', OFF('tone_rx'), !!exp);
+  whyNote('why-chk', [chkWhy, balWhy && balWhy !== chkWhy ? 'Balance automatically: ' + balWhy : '', OFF('tone_rx') ? 'RX tone test: ' + OFF('tone_rx') : '']);
+  if (OFF('balance') && autoRun) autoStop(true);
+  ['rx-auto', 'tx-auto'].forEach((id) => naSet(id, balWhy));
+  whyNote('why-bal', [balWhy]);
+  naSet('tone-start', OFF('tone_rx'));
+  whyNote('why-tone', [OFF('tone_rx')]);
+  naSet('tx-tone-start', OFF('tone_tx'));
+  naSet('tx-link-connect', OFF('tone_tx'), toneWasRunning);
+  whyNote('why-txtone', [OFF('tone_tx')]);
+  const kcOn = !!(kcLast && kcLast.test && kcLast.test.on), kcWhy = kcOn ? '' : OFF('kerchunk');
+  $('kc-test').disabled = !!kcWhy;
+  $('kc-test').classList.toggle('na', !!kcWhy);
+  $('kc-test').title = kcWhy;
 }
 
 function saveMic() {
@@ -11421,6 +11461,8 @@ async function loadConfig() {
   $('rx-agc').checked = !!d.config.rx_agc;
   $('rx-gate').value = String(d.config.rx_gate);
   $('rx-notch').value = String(d.config.rx_notch_hz || 0);
+  testsOff = String(d.config.tests_off || '').split(',').filter(Boolean);
+  testsUi();
   tuneUi();
   $('tune-sysmon').classList.toggle('hidden', !sysmonPort);
   if (sysmonPort) $('tune-sysmon-link').href = 'http://' + location.hostname + ':' + sysmonPort + '/';
@@ -11548,7 +11590,6 @@ document.addEventListener('DOMContentLoaded', () => {
   $('tune-save').addEventListener('click', () => saveTune('tune-msg'));
   loadMicUi();
   chkInit();
-  addCopyAll();
   $('mic-lev').addEventListener('input', () => { if ($('mic-lev').checked) $('mic-agc').checked = false; });
   $('mic-agc').addEventListener('input', () => { if ($('mic-agc').checked) $('mic-lev').checked = false; });
   MIC_CHECKS.concat(['gain']).forEach((k) => $('mic-' + k).addEventListener('input', saveMic));
@@ -11602,7 +11643,6 @@ document.addEventListener('DOMContentLoaded', () => {
   pollEvery(pollLog, 3000, 10000);
   setInterval(() => { if (authed && foldOpen('kc')) kcRefresh(); }, 10000);
   setInterval(() => { if (authed && foldOpen('kc') && kcLast && kcLast.test && kcLast.test.on) $('kc-test-state').textContent = kcTestLine(kcLast.test); }, 1000);
-  $('kc-copy').addEventListener('click', kcCopy);
   $('kc-reset').addEventListener('click', kcReset);
   $('kc-test').addEventListener('click', kcTestToggle);
   $('kc-mark').addEventListener('click', kcMark);
@@ -11950,6 +11990,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div id="hs-msg" class="msg"></div>
 </div>
 <h3 style="margin:14px 0 4px">Audio levels</h3>
+<p class="muted small why hidden" id="why-lvl"></p>
 <div class="row"><label><input type="checkbox" id="tune-on-rx"> Adjust audio levels here</label></div>
 <div id="tune-body-rx">
 <div class="row"><label for="tune-rx" style="min-width:130px">Node to phone (RX)</label>
@@ -11972,31 +12013,11 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <p class="muted small">Looks at the last few minutes of received audio and says where any loss starts: outside the LAN, on the Pi, or between the Pi and the listener. It only measures; it changes no setting.</p>
 <div id="rxh-verdict" class="msg">-</div>
 <table class="chk-t"><tbody id="rxh-rows"></tbody></table>
-<div class="row"><a id="rxh-dl" class="small" href="/api/rxhealth?all=1" target="_blank" rel="noopener">Field data (JSON, one row per minute)</a></div>
+<p class="muted small">The per-minute field data is in the Data card download.</p>
 <p id="tune-sysmon" class="small hidden">SysMon is installed: for the node's own levels (radio, DVSwitch and USRP gains)
 use <a id="tune-sysmon-link" href="#" target="_blank" rel="noopener">SysMon</a>.</p>
 <div class="row"><button id="rx-save" class="btn primary" type="button">Save</button></div>
 <div id="rx-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">Receive results</h3>
-<p class="muted small">From the last Audio check: what the node sent to this phone and what came back. Shown after a check.</p>
-<div id="chk-rx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table></div>
-<div id="rx-bal-msg" class="msg"></div>
-<div class="row"><label class="small"><input type="checkbox" id="rx-auto"> Run automatically: keep balancing the RX settings. Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
-<div id="rx-auto-msg" class="msg"></div>
-<h3 style="margin:14px 0 4px">RX tone test (known baseline)</h3>
-<p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. This is the known baseline for the receive path. Local network only. The report is kept in memory on the Pi until the next test.</p>
-<div class="row"><label for="tone-sec" style="min-width:90px">Tone length</label>
-<select id="tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
-<div class="row"><label for="tone-hz" style="min-width:90px">Tones (Hz)</label>
-<input id="tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
-<div class="row"><button id="tone-start" class="btn primary" type="button">Run RX tone test</button><button id="tone-stop" class="btn hidden" type="button">Stop</button></div>
-<div id="tone-prog" class="chk-run hidden"></div>
-<div id="tone-rep" class="hidden">
-<div id="tone-sum" class="muted small"></div>
-<div class="tone-scroll"><table class="chk-t tone-t"><thead><tr><th>Hz</th><th>Sent dB</th><th>Raw dB</th><th>Raw vs sent</th><th>After cleanup dB</th><th>Cleanup effect</th><th>Freq err Hz</th><th>Drops</th></tr></thead><tbody id="tone-rows"></tbody></table></div>
-<div id="tone-warn"></div>
-</div>
-<div id="tone-msg" class="msg"></div>
 </div>
 </div>
 
@@ -12105,23 +12126,76 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="rep-n" id="rep-mic-n"></div>
 <div class="rep-v" id="rep-mic-v"></div>
 </div>
-<div class="row"><button id="node-test" class="btn" type="button">Test through the node (transmits 4 s)</button></div>
-<p class="muted small">Keys node 1921, records what the node sends out and plays it back. It goes out over the air and to linked nodes.</p>
-<div id="node-test-msg" class="msg"></div>
-<div class="rep hidden" id="rep-node">
-<h3>Node test report</h3>
-<div class="rep-strip"><canvas id="rep-node-tx"></canvas><span class="rep-lbl">sent (TX)</span></div>
-<div class="rep-strip"><canvas id="rep-node-rx"></canvas><span class="rep-lbl">came back from the node (RX)</span><i class="rep-head"></i></div>
-<div class="rep-n" id="rep-node-n"></div>
-<div class="rep-v" id="rep-node-v"></div>
 </div>
+</div>
+</div>
+
+<div class="card fold" id="cd-chk">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Tests</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-chk">
+<p class="muted small">Every test and the balancer are in this card; the RX and TX cards hold the settings. All the numbers are in the Data card download.</p>
+<h3 style="margin:6px 0 4px">Tests on this node</h3>
+<p class="muted small">A test that is off is grayed out on every phone, and the Pi refuses the ones it runs (tone tests, balancing, kerchunk test).</p>
+<div class="tests-sw"><label class="small"><input type="checkbox" id="test-on-check"> Audio check</label><label class="small"><input type="checkbox" id="test-on-balance"> Automatic balancing</label><label class="small"><input type="checkbox" id="test-on-tone_rx"> RX tone test</label><label class="small"><input type="checkbox" id="test-on-tone_tx"> TX tone test</label><label class="small"><input type="checkbox" id="test-on-mic"> Mic test</label><label class="small"><input type="checkbox" id="test-on-node"> Node test</label><label class="small"><input type="checkbox" id="test-on-kerchunk"> Kerchunk test</label></div>
+<div class="row"><button id="tests-save" class="btn primary" type="button">Save</button><button id="tests-all" class="btn" type="button">Turn all on</button></div>
+<div id="tests-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Audio check</h3>
+<p class="muted small">Start, go to the Listen tab and use the node as usual: listen, talk, listen. Come back for a report with averages and what to change. The results are below. Only numbers are kept, never audio, and only in this browser.</p>
+<div class="row"><label for="chk-mins" style="min-width:90px">Length</label>
+<select id="chk-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select>
+<button id="chk-start" class="btn primary" type="button">Start</button><button id="chk-stop" class="btn hidden" type="button">Stop</button></div>
+<p class="muted small why hidden" id="why-chk"></p>
+<div class="row"><label class="small"><input type="checkbox" id="chk-guide" checked> Prompt me to talk during the check</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="exp-tone"> Run the RX tone test first (keys the node; tone length and tones are set under RX tone test below)</label></div>
+<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs, put back if a change makes things worse</label></div>
+<p class="muted small">Tones are never sent while the node is linked or something is tuned, and the check stops if the Pi runs out of memory or its CPU stays high.</p>
+<div id="chk-run" class="chk-run hidden"></div>
+<div id="exp-run" class="chk-run hidden"></div>
+<div id="chk-rep" class="hidden">
+<h3 style="margin:10px 0 4px">Per minute</h3>
+<div id="chk-min" class="chk-min"></div>
+<h3 style="margin:12px 0 2px">What to change</h3>
+<div id="chk-sug"></div>
+<div class="row"><button id="chk-cmp" class="btn" type="button">Compare with last check</button>
+<button id="chk-file" class="btn" type="button">Compare with a saved Data file</button>
+<button id="chk-clear-file" class="btn hidden" type="button">Stop comparing</button>
+<input id="chk-file-in" type="file" accept="application/json,.json" class="hidden"></div>
+<div id="chk-msg" class="msg"></div>
+</div>
+<div id="exp-open" class="hidden"><div class="msg warn" id="exp-open-msg"></div>
+<div class="row"><button id="exp-restore" class="btn" type="button">Restore original settings</button><button id="exp-keep" class="btn" type="button">Keep changes</button></div></div>
+<div id="exp-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Receive results</h3>
+<p class="muted small">From the last Audio check: what the node sent to this phone. Shown after a check.</p>
+<div id="chk-rx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h1" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-rx"></tbody></table></div>
+<div id="rx-bal-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">Transmit results</h3>
 <p class="muted small">From the last Audio check: what this phone sent to the node. Shown after a check.</p>
 <div id="chk-tx-box" class="hidden"><table class="chk-t"><thead><tr><th></th><th>Now</th><th id="chk-prev-h2" class="hidden">Last</th><th>Target</th></tr></thead><tbody id="chk-tx"></tbody></table></div>
 <div id="tx-bal-msg" class="msg"></div>
-<div class="row"><label class="small"><input type="checkbox" id="tx-auto"> Run automatically: keep balancing the TX settings. Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
+<h3 style="margin:14px 0 4px">Automatic balancing</h3>
+<p class="muted small why hidden" id="why-bal"></p>
+<div class="row"><label class="small"><input type="checkbox" id="rx-auto"> Run automatically: keep balancing the RX settings (RX gain, cleanup and the receive buffer). Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
+<div id="rx-auto-msg" class="msg"></div>
+<div class="row"><label class="small"><input type="checkbox" id="tx-auto"> Run automatically: keep balancing the TX settings (TX gain and TX buffer). Runs while this page is open and the screen is on, and keeps the screen on when it can (HTTPS, or the app's Keep screen on); checks slow down after five minutes; pauses while the Pi's CPU is above 70 %.</label></div>
 <div id="tx-auto-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">RX tone test (known baseline)</h3>
+<p class="muted small why hidden" id="why-tone"></p>
+<p class="muted small">Sends a station ID, a series of tones and the station ID again through the node, and shows how the audio comes back: raw from the node, and after the Pi's cleanup. This is the known baseline for the receive path. Local network only. The report is kept in memory on the Pi until the next test.</p>
+<div class="row"><label for="tone-sec" style="min-width:90px">Tone length</label>
+<select id="tone-sec"><option value="0.5">0.5 s</option><option value="1" selected>1 s</option><option value="2">2 s</option></select></div>
+<div class="row"><label for="tone-hz" style="min-width:90px">Tones (Hz)</label>
+<input id="tone-hz" type="text" inputmode="numeric" placeholder="Default: 150 to 3400"></div>
+<div class="row"><button id="tone-start" class="btn primary" type="button">Run RX tone test</button><button id="tone-stop" class="btn hidden" type="button">Stop</button></div>
+<div id="tone-prog" class="chk-run hidden"></div>
+<div id="tone-rep" class="hidden">
+<div id="tone-sum" class="muted small"></div>
+<div class="tone-scroll"><table class="chk-t tone-t"><thead><tr><th>Hz</th><th>Sent dB</th><th>Raw dB</th><th>Raw vs sent</th><th>After cleanup dB</th><th>Cleanup effect</th><th>Freq err Hz</th><th>Drops</th></tr></thead><tbody id="tone-rows"></tbody></table></div>
+<div id="tone-warn"></div>
+</div>
+<div id="tone-msg" class="msg"></div>
 <h3 style="margin:14px 0 4px">TX tone test (for third-party nodes)</h3>
+<p class="muted small why hidden" id="why-txtone"></p>
 <p class="muted small">Keys node 1921 and sends a station ID, a series of tones and the station ID again, so other stations can measure what they receive. Nothing is measured here. Like the RX test, it is refused while the node is linked or something is tuned.</p>
 <div class="row"><label for="tx-link-node" style="min-width:90px">Link to node</label>
 <input id="tx-link-node" type="text" inputmode="numeric" maxlength="7" placeholder="Third-party node" style="width:140px">
@@ -12135,41 +12209,27 @@ mic volume, so the gain here is applied in the page.</p>
 <div id="tx-tone-prog" class="chk-run hidden"></div>
 <div id="tx-tone-rep" class="hidden"><div id="tx-tone-sum" class="muted small"></div></div>
 <div id="tx-tone-msg" class="msg"></div>
+<h3 style="margin:14px 0 4px">Node test</h3>
+<p class="muted small why hidden" id="why-node"></p>
+<div class="row"><button id="node-test" class="btn" type="button">Test through the node (transmits 4 s)</button></div>
+<p class="muted small">Keys node 1921, records what the node sends out and plays it back. It goes out over the air and to linked nodes.</p>
+<div id="node-test-msg" class="msg"></div>
+<div class="rep hidden" id="rep-node">
+<h3>Node test report</h3>
+<div class="rep-strip"><canvas id="rep-node-tx"></canvas><span class="rep-lbl">sent (TX)</span></div>
+<div class="rep-strip"><canvas id="rep-node-rx"></canvas><span class="rep-lbl">came back from the node (RX)</span><i class="rep-head"></i></div>
+<div class="rep-n" id="rep-node-n"></div>
+<div class="rep-v" id="rep-node-v"></div>
 </div>
 </div>
 </div>
 
-<div class="card fold" id="cd-chk">
-<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-chk"><span class="fold-t">Audio check</span><span class="fold-sum" id="sum-chk"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
-<div class="fold-body hidden" id="cb-chk">
-<p class="muted small">Start, go to the Listen tab and use the node as usual: listen, talk, listen. Come back for a report with averages and what to change. The receive results are in the RX card and the transmit results are in the TX card. Only numbers are kept, never audio, and only in this browser.</p>
-<div class="row"><label for="chk-mins" style="min-width:90px">Length</label>
-<select id="chk-mins"><option value="2">2 min</option><option value="5" selected>5 min</option><option value="10">10 min</option><option value="15">15 min</option></select>
-<button id="chk-start" class="btn primary" type="button">Start</button><button id="chk-stop" class="btn hidden" type="button">Stop</button>
-<button id="chk-copy-card" class="btn" type="button">Copy all</button></div>
-<p class="muted small why hidden" id="why-chk"></p>
-<div class="row"><label class="small"><input type="checkbox" id="chk-guide" checked> Prompt me to talk during the check</label></div>
-<div class="row"><label class="small"><input type="checkbox" id="exp-tone"> Run the RX tone test after the check (keys the node; tone length and tones are set in the RX card)</label></div>
-<div class="row"><label class="small"><input type="checkbox" id="exp-bal"> Balance automatically: change settings live between runs, put back if a change makes things worse</label></div>
-<p class="muted small">Tones are never sent while the node is linked or something is tuned, and the check stops if the Pi runs out of memory or its CPU stays high.</p>
-<div id="chk-run" class="chk-run hidden"></div>
-<div id="exp-run" class="chk-run hidden"></div>
-<div id="chk-rep" class="hidden">
-<h3 style="margin:10px 0 4px">Per minute</h3>
-<div id="chk-min" class="chk-min"></div>
-<h3 style="margin:12px 0 2px">What to change</h3>
-<div id="chk-sug"></div>
-<div class="row"><button id="chk-cmp" class="btn" type="button">Compare with last check</button>
-<button id="chk-copy" class="btn" type="button">Copy report</button>
-<button id="chk-export" class="btn" type="button">Download report</button>
-<button id="chk-file" class="btn" type="button">Compare with a saved report</button>
-<button id="chk-clear-file" class="btn hidden" type="button">Stop comparing</button>
-<input id="chk-file-in" type="file" accept="application/json,.json" class="hidden"></div>
-<div id="chk-msg" class="msg"></div>
-</div>
-<div id="exp-open" class="hidden"><div class="msg warn" id="exp-open-msg"></div>
-<div class="row"><button id="exp-restore" class="btn" type="button">Restore original settings</button><button id="exp-keep" class="btn" type="button">Keep changes</button></div></div>
-<div id="exp-msg" class="msg"></div>
+<div class="card fold" id="cd-data">
+<h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-data"><span class="fold-t">Data</span><span class="fold-sum" id="sum-data"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
+<div class="fold-body hidden" id="cb-data">
+<p class="muted small">One file with every number Node Talker and this phone have: nothing is shown here and nothing goes through the clipboard, so nothing is cut short. It holds the last two Audio checks and what to change, the receive health field data (one row per minute), the last tone test, the kerchunk log, the settings on the Pi and on this phone, the phone details, the app details in Node Talker Mobile, the Pi's load and the recent log. It never holds audio or passwords.</p>
+<div class="row"><button id="data-dl" class="btn primary" type="button">Download all data</button></div>
+<div id="data-msg" class="msg"></div>
 </div>
 </div>
 
@@ -12188,14 +12248,12 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="fold-body hidden" id="cb-kc">
 <p class="muted small" id="kc-state">Open this card to read the burst log.</p>
 <div class="kc-actions">
-<button class="btn" type="button" id="kc-copy">Copy JSON</button>
 <button class="btn" type="button" id="kc-reset">Reset</button>
 <label class="small">Minutes <input type="number" id="kc-min" class="kc-min" min="1" max="60" value="15"></label>
 <button class="btn" type="button" id="kc-test">Start test</button>
 <button class="btn" type="button" id="kc-mark" disabled>Mark kerchunk</button>
 </div>
 <p class="muted small" id="kc-test-state"></p>
-<textarea id="kc-json" class="kc-json hidden" readonly aria-label="Kerchunk report as JSON"></textarea>
 <canvas id="kc-graph" class="kc-graph" role="img" aria-label="Recent bursts of audio from the node. Height is how long each lasted; the dashed line is the cut-off."></canvas>
 <p class="muted small">Each bar is one key-up (when Asterisk reports key-ups) or one burst of audio (when it doesn't), and its height is how long it lasted. Amber bars are kerchunks. With key-ups, a kerchunk is a key-up under 3 s with less audio than the cut-off. With audio only, bars below the dashed cut-off are kerchunks. Label a few (Kerchunk or Real). Once there are six of each kind, the cut-off is learned from them.</p>
 <div class="kc-sub">

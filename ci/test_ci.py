@@ -1147,13 +1147,15 @@ class NodeTalkerCardTests(unittest.TestCase):
     CARDS = {
         "cd-setup": ["cfg-port", "cfg-udp_port", "cfg-https", "cfg-public_listen", "setup-save"],
         "cd-rx": ["cfg-max_listeners", "cfg-kerchunk_delay_ms", "play-spec", "hs-out", "ap-out", "hs-names",
-                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-save", "rxh-verdict", "rxh-rows", "rxh-dl", "nd-select", "rx-auto", "rx-auto-msg",
-                  "chk-rx", "rx-bal-msg", "tone-start", "tone-hz", "tone-sec", "tone-rep", "tone-msg"],
+                  "tune-on-rx", "tune-rx", "tune-jit", "rx-hpf", "rx-agc", "rx-gate", "rx-notch", "rx-save", "rxh-verdict", "rxh-rows", "nd-select"],
         "cd-tx": ["tune-on", "tune-tx", "tune-txbuf", "cfg-tot_sec", "cfg-busy_lockout", "ptt-hold", "ptt-gap",
-                  "hs-mic", "hs-btn", "mic-gain", "mic-test", "node-test", "tx-add", "tune-save",
-                  "chk-tx", "tx-bal-msg", "tx-tone-start", "tx-tone-hz", "tx-tone-sec", "tx-tone-rep",
-                  "tx-link-node", "tx-link-connect", "tx-link-disconnect", "tx-auto", "tx-auto-msg"],
-        "cd-chk": ["chk-start", "chk-stop", "chk-mins", "exp-tone", "exp-bal"],
+                  "hs-mic", "hs-btn", "mic-gain", "mic-test", "tx-add", "tune-save"],
+        "cd-chk": ["test-on-check", "test-on-balance", "test-on-tone_rx", "test-on-tone_tx", "test-on-mic", "test-on-node",
+                   "test-on-kerchunk", "tests-save", "chk-start", "chk-stop", "chk-mins", "exp-tone", "exp-bal",
+                   "chk-rx", "rx-bal-msg", "chk-tx", "tx-bal-msg", "rx-auto", "rx-auto-msg", "tx-auto", "tx-auto-msg",
+                   "tone-start", "tone-hz", "tone-sec", "tone-rep", "tone-msg", "tx-tone-start", "tx-tone-hz", "tx-tone-sec",
+                   "tx-tone-rep", "tx-link-node", "tx-link-connect", "tx-link-disconnect", "node-test"],
+        "cd-data": ["data-dl", "data-msg"],
     }
 
     def setUp(self):
@@ -1190,6 +1192,12 @@ class NodeTalkerCardTests(unittest.TestCase):
         self.assertIn('"/api/setup/apply": (lambda b: setup_apply(), (OSError,)),', self.text)
         self.assertIn('<dialog id="setup-dlg"', self.text)
         self.assertIn('setupCheck();', self.text)
+
+    def test_no_clipboard_copies_of_data(self):
+        for gone in ('id="chk-copy"', 'id="chk-copy-card"', 'id="kc-copy"', 'id="kc-json"', 'id="rxh-dl"', 'id="chk-export"',
+                     "function addCopyAll", "function copyCard", "function kcCopy"):
+            self.assertNotIn(gone, self.text)
+        self.assertIn("async function dataDownload()", self.text)
 
     def test_mic_test_records_20_seconds(self):
         self.assertIn("Test mic (20 s, plays back)", self.text)

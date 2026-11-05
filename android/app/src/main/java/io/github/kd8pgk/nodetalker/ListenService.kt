@@ -634,7 +634,7 @@ class ListenService : Service() {
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build()
         val min = AudioTrack.getMinBufferSize(RATE, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val track = AudioTrack.Builder().setAudioAttributes(attrs).setAudioFormat(fmt)
-            .setBufferSizeInBytes(max(min, RATE * 2 / 5)).setTransferMode(AudioTrack.MODE_STREAM).build()
+            .setBufferSizeInBytes(max(min, RATE * 2 * TRACK_MS / 1000)).setTransferMode(AudioTrack.MODE_STREAM).build()
         val enh = try {
             LoudnessEnhancer(track.audioSessionId).apply { enabled = true }
         } catch (e: RuntimeException) {
@@ -872,6 +872,7 @@ class ListenService : Service() {
         private const val NOTIF_ID = 1
         private const val RATE = 8000
         private const val STAT_BATCH = 5
+        private const val TRACK_MS = 80
         private const val FRAME = 160
         private const val FRAME_MS = 20
         private const val QUEUE_FRAMES = 150

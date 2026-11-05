@@ -254,6 +254,17 @@ class TalkerActivity : Activity() {
             if (Listen.state != Listen.OFF) Listen.nodeId?.let { id -> NodeStore.get(c, id)?.let { Listen.start(c, it) } }
             return true
         }
+
+        @JavascriptInterface
+        fun setBufferMs(ms: Int): Boolean {
+            val c = this@TalkerActivity
+            val v = (ms / 50 * 50).coerceIn(AudioSettings.MIN_BUFFER, AudioSettings.MAX_BUFFER)
+            val a = NodeStore.audio(c)
+            if (a.bufferMs == v) return true
+            NodeStore.setAudio(c, a.copy(bufferMs = v))
+            if (Listen.state != Listen.OFF) Listen.nodeId?.let { id -> NodeStore.get(c, id)?.let { Listen.start(c, it, "system", "format_changed") } }
+            return true
+        }
     }
 
     private fun askNotifications() {

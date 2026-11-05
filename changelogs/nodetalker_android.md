@@ -1,6 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.13`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.14`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.14 (2026-11-05)
+
+- **About 120 ms less delay when the app plays.** Android's playback buffer is now 80 ms instead of 200 ms. The receive buffer in the app's Audio settings (300 ms by default) still absorbs the network, and the app keeps reporting underruns to the node, so the receive-health check shows it if a phone needs more.
+- **The check and the balancer can set the app's receive buffer** (new `setBufferMs`), so their advice on dropouts and delay works in app audio. The change takes effect at once without reconnecting.
+- Needs Node Talker 0.10.14 on the node to use it; an older page never calls it.
+- Audit (2026-11-05), all measured: the page and the app filter the microphone before going to 8 kHz (aliasing at least 83 dB down; the page's filter is -3.6 dB at 3.4 kHz, the app's -6 dB); the app's mic chain matches the page's to 5e-14; the Pi's 300 Hz high-pass and notch remove CTCSS tones; the page's smooth-playback upsampler keeps images 52 dB down. Receive delay before this build: page about 250 ms plus 80 ms of squelch-tail look-ahead on the Pi, app about 500 ms plus the same 80 ms.
 
 ## 0.10.13 (2026-11-05)
 
