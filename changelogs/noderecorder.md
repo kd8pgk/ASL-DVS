@@ -1,6 +1,12 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_8_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_9_20261105.py`. Newest entries first.
+
+## 0.5.9 (2026-11-05)
+
+- **The Listen node card opens.** The page's fold list left out the new card, so its heading did nothing when clicked. It is now in the list.
+- Tests: `ci/test_noderecorder_listen.py` (31 checks), adding one that every fold card on the page is in the fold list.
+- This is a release, not a cosmetic build.
 
 ## 0.5.8 (2026-11-05)
 

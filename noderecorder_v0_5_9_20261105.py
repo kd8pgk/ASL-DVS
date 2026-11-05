@@ -35,7 +35,7 @@ except ImportError:
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.8"
+VERSION = "0.5.9"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Recorder"
 PORT = 8995
@@ -6720,7 +6720,7 @@ async function pollLog() {
 }
 let sysmonPort = null;
 const TABS = ['connect', 'record', 'setup'];
-const FOLDS = ['setup', 'sched', 'dig', 'node', 'store', 'conv', 'rx', 'log'];
+const FOLDS = ['setup', 'sched', 'dig', 'node', 'node2', 'store', 'conv', 'rx', 'log'];
 const CFG_BOOL = ['https'];
 const SVC_TXT = {active: 'running', inactive: 'stopped', failed: 'failed', missing: 'not installed', unknown: '?'};
 function showTab(name) {

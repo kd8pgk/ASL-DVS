@@ -235,6 +235,16 @@ class Remove(Fake):
         self.assertTrue(nr.rec2_state()["ready"])
 
 
+class PageFolds(unittest.TestCase):
+    def test_every_fold_card_is_in_the_fold_list(self):
+        src = open(nr.__file__).read()
+        folds = re.search(r"const FOLDS = \[([^\]]*)\]", src).group(1)
+        keys = set(re.findall(r"'([a-z0-9]+)'", folds))
+        cards = set(re.findall(r'<div class="card fold" id="cd-([a-z0-9]+)"', src))
+        self.assertTrue(cards)
+        self.assertEqual(cards - keys, set())
+
+
 class Listen(Fake):
     def setUp(self):
         super().setUp()
