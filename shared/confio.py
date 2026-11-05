@@ -12,10 +12,10 @@ USED_BY = {
                             "nodetalker", "amp_nodetalker", "pibrary"),
     "system_profile": ("44helper", "wifimon"),
     "allmon3_sync": ("44helper", "nodecontrol", "nodecontrol_pi02w", "nodetalker"),
-    "suitelog_redact": ("nodetalker", "instmon", "noderecorder"),
-    "suitelog_append": ("nodetalker", "instmon", "noderecorder"),
-    "suitelog_rows": ("nodetalker", "instmon", "noderecorder"),
-    "suitelog_flag": ("nodetalker", "instmon", "noderecorder"),
+    "suitelog_redact": ("nodetalker", "instmon"),
+    "suitelog_append": ("nodetalker", "instmon"),
+    "suitelog_rows": ("nodetalker", "instmon"),
+    "suitelog_flag": ("nodetalker", "instmon"),
 }
 
 
