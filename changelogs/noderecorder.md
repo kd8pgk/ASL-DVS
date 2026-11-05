@@ -1,6 +1,12 @@
 # Node Recorder changelog
 
-Current file: `noderecorder_v0_5_4_20261105.py`. Newest entries first.
+Current file: `noderecorder_v0_5_5_20261105.py`. Newest entries first.
+
+## 0.5.5 (2026-11-05)
+
+- **Time zone for the schedule.** The Schedule a recording card has a Time zone list: the Pi's clock (the default, as before), UTC, or any zone such as America/New_York. Every schedule, special and Record now window follows it, and the schedule's "now" line says which it is. Stored as `schedule_tz`. Changing it moves when existing entries run, so the card says so when it is saved.
+- **24-hour time in 15-minute steps.** From and To are now an hour list (00 to 23) and a minute list (00, 15, 30, 45) instead of the phone's time picker, so the times are always 24-hour. An entry saved earlier with another minute keeps it when edited.
+- Recording file names and the log keep the Pi's own clock.
 
 ## 0.5.4 (2026-11-05)
 
