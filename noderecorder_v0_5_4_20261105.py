@@ -30,8 +30,8 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.5.3"
-DATE_STR = "2026-11-04"
+VERSION = "0.5.4"
+DATE_STR = "2026-11-05"
 APP_NAME = "Node Recorder"
 PORT = 8995
 
@@ -234,12 +234,13 @@ DEFAULT_CONFIG = {
     "rx_hpf": True,
     "rx_agc": True,
     "rx_gate": 1,
+    "rx_notch_hz": 0.0,
     "schedule_dry_run": False,
     "record_path": "",
     "record_max_mb": 4096,
     "record_convert": True,
     "record_encoder": "lame",
-    "record_kbps": 32,
+    "record_kbps": 96,
 }
 
 
@@ -281,7 +282,19 @@ def _norm_dirpath(value):
     return v
 
 
-MP3_KBPS = (24, 32, 48, 64)
+MP3_KBPS = (24, 32, 48, 64, 96, 128)
+
+
+def _norm_notch(value):
+    try:
+        v = round(float(str(value).strip()), 1)
+    except (OverflowError, ValueError):
+        raise ValueError("CTCSS notch must be 0 (off) or 60 to 300 Hz")
+    if v == 0:
+        return 0.0
+    if not 60.0 <= v <= 300.0:
+        raise ValueError("CTCSS notch must be 0 (off) or 60 to 300 Hz")
+    return v
 
 
 def _norm_kbps(value):
@@ -323,6 +336,7 @@ _NORMALIZERS = {
     "rx_hpf": _parse_bool,
     "rx_agc": _parse_bool,
     "rx_gate": _norm_int(0, 2, "rx_gate must be 0, 1 or 2"),
+    "rx_notch_hz": _norm_notch,
     "schedule_dry_run": _parse_bool,
     "record_path": _norm_dirpath,
     "record_max_mb": _norm_int(100, 2000000, "record_max_mb must be 100-2000000"),
@@ -783,6 +797,16 @@ def _hp_section(q, fc=300.0, fs=8000.0):
 
 
 HP_SECTIONS = (_hp_section(0.5412), _hp_section(1.3066))
+NOTCH_Q = 25.0
+NOTCH_FS = 8000.0
+_notch_cache = {}
+
+
+def _notch_section(hz, q=NOTCH_Q, fs=NOTCH_FS):
+    w = 2 * math.pi * hz / fs
+    c, al = math.cos(w), math.sin(w) / (2 * q)
+    a0 = 1 + al
+    return (1 / a0, -2 * c / a0, 1 / a0, -2 * c / a0, (1 - al) / a0)
 
 
 def _dot(a, b):
@@ -810,6 +834,7 @@ class RxClean:
 
     def reset(self):
         self.z = (0.0,) * 8
+        self.nz = (0.0,) * 4
         self.gain_db = 0.0
         self.level_s = None
         self.fast = 0
@@ -838,12 +863,31 @@ class RxClean:
                 p2, p1, y2, y1 = p1, w, y1, y
                 ys.append(y)
             self.z = (x1, x2, w1, w2, p1, p2, y1, y2)
+        hz = _cfg_get("rx_notch_hz")
+        if hz:
+            ys = self._notch(ys, hz)
         n = len(ys)
         ss = _dot(ys, ys)
         r1 = _dot(ys[1:], ys[:-1]) / ss if ss > 0 else 1.0
         self.r2 = _dot(ys[2:], ys[:-2]) / ss if ss > 0 else 1.0
         db = 10.0 * math.log10(max(ss / n / 1073741824.0, 1e-30)) if ss > 0 else -120.0
         return ys, db, r1
+
+    def _notch(self, ys, hz):
+        sec = _notch_cache.get(hz)
+        if sec is None:
+            if len(_notch_cache) > 8:
+                _notch_cache.clear()
+            sec = _notch_cache[hz] = _notch_section(hz)
+        b0, b1, b2, a1, a2 = sec
+        x1, x2, y1, y2 = self.nz
+        out = []
+        for v in ys:
+            y = b0 * v + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2
+            x2, x1, y2, y1 = x1, v, y1, y
+            out.append(y)
+        self.nz = (x1, x2, y1, y2)
+        return out
 
     def _agc(self, db, speechy):
         if not speechy:
@@ -908,14 +952,16 @@ class RxClean:
     def process(self, frame, user_db, raw_db=0.0):
         t0 = time.perf_counter()
         hpf, agc, gate = _cfg_get("rx_hpf"), _cfg_get("rx_agc"), _cfg_get("rx_gate")
-        if not (hpf or agc or gate):
-            if self.delay or any(self.z) or self.gain_db:
+        notch = _cfg_get("rx_notch_hz")
+        if not (hpf or agc or gate or notch):
+            if self.delay or any(self.z) or any(self.nz) or self.gain_db:
                 self.reset()
             out = apply_gain(frame, user_db)
             self._account(t0)
             return out
         if raw_db < RX_QUIET_DB:
             self.z = (0.0,) * 8
+            self.nz = (0.0,) * 4
             self.idle += 1
             if not gate:
                 self.delay.clear()
@@ -4349,7 +4395,7 @@ def _enc_sox(exe, kbps, out):
 
 
 def _enc_shine(exe, kbps, out):
-    return [exe, "-q", "-m", "-b", str(kbps), "-", out], "wav"
+    return [exe, "-q", "-m", "-b", str(min(int(kbps), 64)), "-", out], "wav"
 
 
 def _enc_opus(exe, kbps, out):
@@ -4364,7 +4410,7 @@ def _enc_flac(exe, kbps, out):
 
 ENCODERS = {
     "lame": {"label": "lame (MP3)", "bin": "lame", "pkgs": "lame", "ext": ".mp3", "kbps": True, "build": _enc_lame,
-             "note": "Recommended. Small (about 1 MB), well tested on the Pi, and the MP3 plays in every browser and phone. "
+             "note": "Recommended. At 96 kbps (the default) it is as close to the PCM recording as MP3 gets, about 0.7 MB a minute; well tested on the Pi, and the MP3 plays in every browser and phone. "
                      "Voice is resampled to 16 kHz mono."},
     "sox": {"label": "sox (MP3)", "bin": "sox", "pkgs": "sox libsox-fmt-mp3", "ext": ".mp3", "kbps": True, "build": _enc_sox,
             "note": "Also makes MP3, but needs the extra libsox-fmt-mp3 package. Choose it if sox is already on the node for other jobs."},
@@ -4872,7 +4918,7 @@ def schedule_norm_entry(raw, check_target=True):
         if not isinstance(t, dict) or not t.get("mode") or not t.get("num"):
             raise ValueError("bad target")
         target = _target_keys(t)
-    fmt = str(raw.get("format", "ulaw") or "ulaw").strip().lower()
+    fmt = str(raw.get("format", "pcm") or "pcm").strip().lower()
     if fmt not in SCHEDULE_FORMATS:
         raise ValueError("format must be ulaw or pcm")
     eid = str(raw.get("id") or "").strip().lower() or secrets.token_hex(4)
@@ -5524,7 +5570,7 @@ def recording_start(body):
     if not isinstance(raw, dict):
         return {"ok": False, "error": "bad request"}
     try:
-        entry = schedule_norm_entry({"name": raw.get("name", ""), "target": raw.get("target"), "format": raw.get("format", "ulaw"),
+        entry = schedule_norm_entry({"name": raw.get("name", ""), "target": raw.get("target"), "format": raw.get("format", "pcm"),
                                      "start": "00:00", "end": "00:01", "days": list(range(7))})
     except ValueError as exc:
         return {"ok": False, "error": str(exc)}
@@ -6744,6 +6790,7 @@ async function loadConfig() {
   $('rx-hpf').checked = !!d.config.rx_hpf;
   $('rx-agc').checked = !!d.config.rx_agc;
   $('rx-gate').value = String(d.config.rx_gate);
+  $('rx-notch').value = String(d.config.rx_notch_hz || 0);
   tuneUi();
 }
 function tuneUi() {
@@ -6752,13 +6799,14 @@ function tuneUi() {
   if ($('rx-hpf').checked) clean.push('300 Hz cut');
   if ($('rx-agc').checked) clean.push('auto level');
   if ($('rx-gate').value !== '0') clean.push('gate ' + ($('rx-gate').value === '2' ? 'strong' : 'light'));
+  if (Number($('rx-notch').value) > 0) clean.push('CTCSS notch ' + Number($('rx-notch').value).toFixed(1) + ' Hz');
   sum('rx', [on ? 'RX ' + fmtGain(Number($('tune-rx').value)) : ''].concat(clean).filter((x) => x).join(' · ') || 'Off (audio unchanged)');
   $('tune-rx').disabled = !on;
   $('tune-rx-v').textContent = fmtGain(Number($('tune-rx').value));
 }
 async function saveTune(msgId = 'rx-msg') {
   const body = {tune_enabled: $('tune-on').checked, rx_gain_db: $('tune-rx').value,
-    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value};
+    rx_hpf: $('rx-hpf').checked, rx_agc: $('rx-agc').checked, rx_gate: $('rx-gate').value, rx_notch_hz: $('rx-notch').value};
   setMsg(msgId, await post('/api/config', body));
 }
 async function saveConfig() {
@@ -6840,7 +6888,7 @@ function schedClear(keepMsg) {
   $('sc-mode').value = 'ASL';
   schedFieldsShow(); schedPickFill();
   $('sc-num').value = ''; $('sc-mod').value = ''; schedNetFill('');
-  $('sc-format').value = 'ulaw'; $('sc-enabled').checked = true;
+  $('sc-format').value = 'pcm'; $('sc-enabled').checked = true;
   if (!keepMsg) note('sc-msg', '', '');
 }
 function schedEntry(e, on) {
@@ -6941,7 +6989,7 @@ function initPage() {
   $('setup-ok').addEventListener('click', setupApply);
   $('setup-later').addEventListener('click', () => $('setup-dlg').close());
   $('rx-save').addEventListener('click', () => saveTune('rx-msg'));
-  ['tune-on', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate'].forEach((id) => $(id).addEventListener('input', tuneUi));
+  ['tune-on', 'tune-rx', 'rx-hpf', 'rx-agc', 'rx-gate', 'rx-notch'].forEach((id) => $(id).addEventListener('input', tuneUi));
   $('store-save').addEventListener('click', saveStore);
   $('dash-link').addEventListener('click', (ev) => { ev.preventDefault(); openNamedTab($('dash-link').href, $('dash-link').dataset.win || 'asl_dvs_dash'); });
   $('sys-reboot').addEventListener('click', doReboot);
@@ -7115,7 +7163,7 @@ html[data-theme="light"] *{text-shadow:none!important}
 <div class="row"><label><span id="sc-num-l">Node</span> <input type="text" id="sc-num" maxlength="40" style="width:150px"></label>
 <label id="sc-net-w" class="hidden">Network <select id="sc-net"></select></label>
 <label id="sc-mod-w" class="hidden">Module <input type="text" id="sc-mod" maxlength="2" style="width:48px;text-transform:uppercase"></label></div>
-<div class="row"><label>Format <select id="sc-format"><option value="ulaw">u-law (half the size)</option><option value="pcm">PCM</option></select></label>
+<div class="row"><label>Format <select id="sc-format"><option value="pcm">PCM (best; becomes an MP3 after recording when Convert is on)</option><option value="ulaw">u-law (half the size, noisier)</option></select></label>
 <label><input type="checkbox" id="sc-enabled" checked> On</label></div>
 <div class="row"><button id="sc-set" class="btn primary" type="button">Set</button><button id="sc-clear" class="btn" type="button">Clear</button></div>
 <div id="sc-msg" class="msg"></div>
@@ -7268,6 +7316,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-conv"><span class="fold-t">Convert</span><span class="fold-sum" id="sum-conv"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-conv">
 <p class="muted small">When a recording ends, Node Recorder compresses the WAV file with the encoder chosen below and then deletes the WAV. If the conversion fails the WAV is kept. It runs at the lowest priority, one file at a time, and only if the encoder is installed. ffmpeg is not used: it is a very large install for this job.</p>
+<p class="muted small">Quality: 96 kbps is as close to the PCM recording as MP3 gets (measured: 44 dB signal to error in the voice band; 128 kbps adds size, not quality). 32 kbps is about 15 dB and sounds coded.</p>
 <div class="row"><label><input type="checkbox" id="cfg-record_convert"> Convert recordings and delete the WAV</label>
 <label>Quality <select id="cfg-record_kbps"></select></label></div>
 <div id="conv-list"></div>
@@ -7285,6 +7334,7 @@ talkgroup, as Node Controller does. Leave a password empty to keep the saved one
 <div class="row"><label><input type="checkbox" id="rx-hpf"> 300 Hz cut</label>
 <label><input type="checkbox" id="rx-agc"> Auto level</label>
 <label>Gate <select id="rx-gate"><option value="0">Off</option><option value="1">Light</option><option value="2">Strong</option></select></label></div>
+<div class="row"><label>CTCSS notch (Hz) <input type="number" id="rx-notch" min="0" max="300" step="0.1" style="width:90px"></label> <span class="small muted">0 = off. Enter the tone the radio sends, for example 100.0. Only that tone is removed from the recording; voice is kept.</span></div>
 <div class="row"><button id="rx-save" class="btn primary" type="button">Save</button></div>
 <div id="rx-msg" class="msg"></div>
 <table><tr><th>Processing load</th><td id="rx-load">-</td></tr></table>
