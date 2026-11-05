@@ -33,8 +33,8 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.12"
-DATE_STR = "2026-11-04"
+VERSION = "0.10.13"
+DATE_STR = "2026-11-05"
 APP_NAME = "Node Talker"
 
 INSTALL_BIN_PATH = "/usr/local/bin/nodetalker.py"
@@ -8256,6 +8256,7 @@ function chkStart(mins) {
   api('/api/node/counters').then((d) => { if (chk) chk.nodeStart = d; });
   chkSave(); chkUi(); chkTick();
   note('chk-msg', '', '');
+  appStats(true);
   if (!playing) startListen('system', 'balancer');
 }
 
@@ -8280,6 +8281,7 @@ async function chkStop() {
   const now = Date.now();
   if (now - chk.last < 5000) chk.elapsed += now - chk.last;
   chk.running = false;
+  appStats(false);
   chk.nodeEnd = await api('/api/node/counters');
   const r = chkSummary(chk);
   chk = null; chkSave(); chkUi();
@@ -9111,7 +9113,7 @@ function expStart() {
   if (exp) return;
   if (autoRun) { note('exp-msg', 'err', 'Automatic balancing is on: untick it in the RX or TX card first.'); return; }
   const tone = $('exp-tone').checked, balance = $('exp-bal').checked;
-  if (appAudio()) { note('exp-msg', 'err', 'The live check measures page audio: switch the app to Page audio in its Audio settings first.'); return; }
+  if (appAudio() && !appStatsOk()) { note('exp-msg', 'err', 'This app version cannot report its audio to the live check: update Node Talker Mobile, or switch the app to Page audio in its Audio settings.'); return; }
   if (chk && chk.running) { note('exp-msg', 'err', 'A check is already running.'); return; }
   note('exp-msg', '', '');
   note('rx-bal-msg', '', '');
@@ -9258,6 +9260,9 @@ function appRows(add) {
     output: ['Output', (v) => (v === 'earpiece' ? 'Earpiece / call volume' : v === 'speaker' ? 'Speaker / media volume' : String(v)), true],
     bufferMs: ['Receive buffer', (v) => v + ' ms', true],
     voiceMic: ['Phone\'s echo and noise filter', onOff, true],
+    rxClean: ['Phone also cleans received audio', onOff, true],
+    txClean: ['Sent audio: fixed clean-up instead of the Mic settings', onOff, true],
+    micOpts: ['Sent audio follows the Mic settings on this page', (v) => (v ? 'yes' : 'no'), true],
     micRate: ['Microphone rate', (v) => v + ' Hz'],
     volume: ['Phone volume (stream in use)', (v) => (v && typeof v === 'object' ? v.now + ' of ' + v.max : String(v)), true],
     batteryFree: ['Battery saver', (v) => (v ? 'lets the app run in the background' : 'may stop the app when the screen is off'), true],
@@ -9301,12 +9306,13 @@ async function phoneRefresh() {
   add('Microphone in use', hsLabel('hs-mic') || 'Default (follows Android)', true, false, true);
   const sup = md && md.getSupportedConstraints ? md.getSupportedConstraints() : {};
   add('Browser can do echo cancel / noise suppress / auto gain', ['echoCancellation', 'noiseSuppression', 'autoGainControl'].map((k) => (sup[k] ? 'yes' : 'no')).join(' / '), false, false, true);
-  add('Leveler', mic.lev ? 'on' : 'off', true, false, true);
-  add('Automatic gain', mic.agc ? 'on' : 'off', true, false, true);
-  add('Noise suppression', mic.ns ? 'on' : 'off', true, false, true);
-  add('Echo cancellation', mic.ec ? 'on' : 'off', true, false, true);
-  add('Voice filter / Radio voice', (mic.hp ? 'filter on' : 'filter off') + ' / ' + (mic.eq ? 'radio voice on' : 'radio voice off'), true, false, true);
-  add('Noise gate', ['Off', 'Light', 'Strong'][Number(mic.gate) || 0], true, false, true);
+  const micApp = !!(appT && (appInfo() || {}).micOpts), viaOs = micApp ? ' (done by the phone\'s voice microphone, if its echo and noise filter is on)' : '';
+  add('Leveler', mic.lev ? 'on' : 'off', true, false, !micApp);
+  add('Automatic gain', (mic.agc ? 'on' : 'off') + (mic.agc ? viaOs : ''), true, false, !micApp);
+  add('Noise suppression', (mic.ns ? 'on' : 'off') + (mic.ns ? viaOs : ''), true, false, !micApp);
+  add('Echo cancellation', (mic.ec ? 'on' : 'off') + (mic.ec ? viaOs : ''), true, false, !micApp);
+  add('Voice filter / Radio voice', (mic.hp ? 'filter on' : 'filter off') + ' / ' + (mic.eq ? 'radio voice on' : 'radio voice off'), true, false, !micApp);
+  add('Noise gate', ['Off', 'Light', 'Strong'][Number(mic.gate) || 0], true, false, !micApp);
   add('Mic gain (this page)', (mic.gain > 0 ? '+' : '') + mic.gain + ' dB', true);
   const ai = appInfo();
   if (!(ai && ai.volume != null)) add('Phone media volume', 'not readable from a web page', true);
@@ -9418,6 +9424,7 @@ function chkInit() {
     const gap = Date.now() - chk.last;
     chk.paused += gap; chk.last = Date.now();
     if (chk.elapsed >= chk.mins * 60000) chkStop();
+    else appStats(true);
   }
   let last = null;
   try { last = JSON.parse(localStorage.getItem('nlCheckLast') || 'null'); } catch (e) {}
@@ -10073,6 +10080,10 @@ window.ntAppTalk = (m) => {
   if (m.ev === 'closed') { appTalkClosed(m.error); return; }
   if (m.ev === 'retry') { openTalk(true); return; }
   if (m.ev === 'level') { if (talking) txMeter({pk: m.db}); return; }
+  if (m.ev === 'mic') {
+    if (talking && m.f) m.f.forEach((a) => micFrame({db: a[0], pk: a[1], lim: a[2], gate: !!a[3]}));
+    return;
+  }
   if (m.ev === 'micfail') { keyed = false; endTalk(); pttUi(wsReady ? 'ready' : 'off', 'The app could not open the microphone.', 'err'); return; }
   if (m.ev === 'guard') {
     if (!talking) return;
@@ -10083,6 +10094,20 @@ window.ntAppTalk = (m) => {
   }
   talkMsg(m);
 };
+
+window.ntAppRx = (m) => {
+  if (!m || !m.f || !chk || !chk.running) return;
+  m.f.forEach((a) => chkRx({db: a[0], pk: a[1], r1: a[2], r2: a[3]}));
+  if (m.hum != null && rxLastDb > -40) { chk.hum += Math.max(-60, Math.min(20, m.hum)); chk.humN++; }
+};
+
+function appStatsOk() {
+  try { return appAudio() && typeof NodeTalkerApp.statsWanted === 'function'; } catch (e) { return false; }
+}
+
+function appStats(on) {
+  try { if (appStatsOk()) NodeTalkerApp.statsWanted(!!on); } catch (e) {}
+}
 
 function appTalkSync() {
   if (!appTalk()) return;
@@ -10461,7 +10486,8 @@ async function pttDown(ev) {
   pttUi('keying', '');
   if (appTalk()) {
     talkTimer = setInterval(talkTick, 250);
-    if (!appCall('talkKey', JSON.stringify({guard: guardOn() ? guardSec() : 0, gain: Number(mic.gain) || 0}))) {
+    if (!appCall('talkKey', JSON.stringify({guard: guardOn() ? guardSec() : 0, gain: Number(mic.gain) || 0,
+      mic: {hp: !!mic.hp, eq: !!mic.eq, gate: Number(mic.gate) || 0, lev: !!mic.lev, ns: !!mic.ns, ec: !!mic.ec, agc: !!mic.agc}}))) {
       keyed = false; endTalk();
       pttUi(wsReady ? 'ready' : 'off', 'The app could not key up (talk channel or microphone).', 'err');
     }

@@ -1,13 +1,21 @@
 # Node Talker changelog
 
-Current file: `nodetalker_v0_10_12_20261104.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_13_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+
+## 0.10.13 (2026-11-05)
+
+- **Every Mic setting works in Node Talker Mobile.** With app audio the page now sends its Mic settings (voice filter, radio voice, noise gate, leveler, noise suppression, echo cancellation, automatic gain) with each key-up, so the balancer's advice on them works there too. Before, only the gain reached the app. Needs Node Talker Mobile 0.10.13; an older app keeps using the gain only.
+- **The live check and Automatic balancing run in app audio.** While a check runs, the app sends what it receives and what it sends (see the app's 0.10.13 notes), and the page feeds them into the same counters as its own audio: speech level, peak, full-scale samples, stations' spread, tones and hum below 300 Hz, squelch tails, transmit signal-to-noise, limiter and gate. "Switch the app to Page audio" is now only asked of an older app.
+- **The phone panel shows the app's own settings:** received-audio clean-up, fixed clean-up on sent audio, whether sent audio follows the Mic settings, and the real microphone rate. Mic rows are no longer marked "not used: app audio" when the app can use them.
+- Page JavaScript logic changed, so this is a release. No change on the node: the RX cleanup, the notch and the balancer's settings are as in 0.10.12.
+- Tested in headless Chromium with a stand-in app: the stats feed the check counters, hum is counted only above -40 dB, squelch tails are found, the transmit counters move only while talking, the old `level` event still works, and the key-up carries the Mic settings.
 
 ## 0.10.12 (2026-11-04)
 
 - **CTCSS notch for the receive audio.** A new setting, "CTCSS notch (Hz)" under RX cleanup, removes one sub-audible tone from what listeners hear. Enter the tone the radio sends (for example 100.0); 0 turns it off, and it is off by default. Only that tone is cut, about 40 dB at the tone, and voice is unchanged. The high-pass at 300 Hz stays as it was, so the notch is for stations that use a tone the high-pass does not fully remove. The setting is stored as `rx_notch_hz`, accepts 60 to 300 Hz, and takes effect at once; the status line under the RX cleanup section shows it when it is on.
 - **Phone apps need no change.** The notch is applied on the node, so Node Talker Mobile and the page play the cleaned audio as they do now.
 - Shared by the full build and the Pi Zero 2 W fork (Node Talker has no fork of its own). Off by default, so an existing install hears no change until the notch is set.
-- Tests: a check of the notch on a 67, 100, 150, 1000 and 2500 Hz tone, the bypass when it is off, and the value checks. The file is renamed to `nodetalker_v0_10_12_20261104.py`.
+- Tests: a check of the notch on a 67, 100, 150, 1000 and 2500 Hz tone, the bypass when it is off, and the value checks. The file is renamed to `nodetalker_v0_10_13_20261105.py`.
 - This is a release, not a cosmetic build.
 
 ## 0.10.11 (2026-11-04)

@@ -41,6 +41,11 @@ class TalkerActivity : Activity() {
     private var certDialog: AlertDialog? = null
     private val pushState: () -> Unit = { runOnUiThread { sendState() } }
     private val pushTalk: (String) -> Unit = { ev -> runOnUiThread { sendTalk(ev) } }
+    private val pushStats: (String) -> Unit = { json ->
+        runOnUiThread {
+            if (::web.isInitialized) web.evaluateJavascript("window.ntAppRx && window.ntAppRx($json)", null)
+        }
+    }
     private val specBusy = java.util.concurrent.atomic.AtomicBoolean(false)
     private val pushSpec: (String, Double) -> Unit = { bars, peak ->
         if (::web.isInitialized && specBusy.compareAndSet(false, true)) {
@@ -88,6 +93,7 @@ class TalkerActivity : Activity() {
         Talk.listeners.add(pushTalk)
         specBusy.set(false)
         Listen.specSink = pushSpec
+        Listen.statsSink = pushStats
         sendState()
     }
 
@@ -95,6 +101,8 @@ class TalkerActivity : Activity() {
         Listen.listeners.remove(pushState)
         Talk.listeners.remove(pushTalk)
         Listen.specSink = null
+        Listen.statsSink = null
+        Listen.statsOn = false
         super.onPause()
     }
 
@@ -150,6 +158,11 @@ class TalkerActivity : Activity() {
         }
 
         @JavascriptInterface
+        fun statsWanted(on: Boolean) {
+            Listen.statsOn = on
+        }
+
+        @JavascriptInterface
         fun listenStop() = Listen.stop(this@TalkerActivity)
 
         @JavascriptInterface
@@ -187,7 +200,14 @@ class TalkerActivity : Activity() {
                 org.json.JSONObject()
             }
             val s = Talk.svc ?: return false
-            return s.key(o.optDouble("guard", 0.0), o.optDouble("gain", 0.0))
+            val m = o.optJSONObject("mic")
+            val opts = m?.let {
+                MicOpts(
+                    it.optBoolean("hp"), it.optBoolean("eq"), it.optInt("gate").coerceIn(0, 2), it.optBoolean("lev"),
+                    it.optBoolean("ns") || it.optBoolean("ec") || it.optBoolean("agc"),
+                )
+            }
+            return s.key(o.optDouble("guard", 0.0), o.optDouble("gain", 0.0), opts)
         }
 
         @JavascriptInterface
@@ -216,6 +236,10 @@ class TalkerActivity : Activity() {
                 .put("output", if (a.earpiece) "earpiece" else "speaker")
                 .put("bufferMs", a.bufferMs)
                 .put("voiceMic", a.voiceMic)
+                .put("rxClean", a.rxClean)
+                .put("txClean", a.txClean)
+                .put("micOpts", true)
+                .apply { if (Talk.micRate > 0) put("micRate", Talk.micRate) }
                 .toString()
         }
 

@@ -1,6 +1,16 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.12`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.13`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.13 (2026-11-05)
+
+- **The page's Mic settings now work in app audio.** The page sends its voice filter, radio voice, noise gate, leveler and noise suppression with every key-up, and the app applies them with the same code as the page (checked sample by sample against the page's own filter: the difference is below 1e-13). Gain already worked. Noise suppression, echo cancellation and automatic gain are applied by Android's voice microphone, and only when "Phone's echo and noise filter" is on in the app's Audio settings. Before, only the gain reached the app.
+- **The live check and Automatic balancing work in app audio.** While a check runs, the app sends the page what it receives (level, peak and the two correlations per 20 ms, plus how much sound is below 300 Hz) and what it sends (level, peak, limiter and gate per 20 ms), about ten small messages a second, only while a check is running. The page measures them exactly as it measures its own audio, so speech level, peaks, squelch tails, tones and hum, noise above background and limiter use all show up. The check no longer asks you to switch to Page audio.
+- **"Sent audio" check box.** It now means: always use one fixed clean-up and ignore the Mic settings on the page. Leave it off to follow the page's Mic settings (the new behaviour). The "Received audio" check box is unchanged: an extra clean-up on the phone, after the node's RX cleanup.
+- **The phone's noise gate follows the speech level and ignores low tones.** Its thresholds are now set 20 dB under the speech it hears (limited to -58 to -40 dBFS), so a quiet station is no longer chopped, and it listens above 300 Hz only, so a CTCSS tone left over after the node's cleanup cannot hold it open.
+- **The page can see the app's settings.** The phone panel in Node Talker shows "Phone also cleans received audio", "Sent audio: fixed clean-up", whether sent audio follows the Mic settings, and the real microphone rate (8, 16 or 48 kHz).
+- 17 unit tests for the filters (was 8).
+- Needs Node Talker 0.10.13 on the node for the page side: an older page shows no new rows and the check still asks for Page audio. An older app with the new page keeps working: the page falls back to what it did before.
 
 ## 0.10.12 (2026-11-04)
 
