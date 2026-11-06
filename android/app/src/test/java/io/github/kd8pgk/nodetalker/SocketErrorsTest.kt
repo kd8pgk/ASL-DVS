@@ -29,7 +29,7 @@ class SocketErrorsTest {
 
     @Test
     fun certificateProblemsAreTls() {
-        assertEquals("tls", SocketErrors.classify(SSLHandshakeException("bad", CertificateException("chain"))))
+        assertEquals("tls", SocketErrors.classify(SSLHandshakeException("bad").also { it.initCause(CertificateException("chain")) }))
         assertEquals("tls", SocketErrors.classify(IOException("the certificate does not match pi.local")))
         assertEquals("tls", SocketErrors.classify(IOException("certificate does not match the trusted one")))
         assertEquals("tls", SocketErrors.classify(SSLException("Hostname pi.local not verified")))
