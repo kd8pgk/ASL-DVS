@@ -62,7 +62,7 @@
     <tr><td><code>cmd_template</code> and <code>fields</code></td><td>For steps that need a value (a callsign, a port, a node number). The template contains <code>{{field}}</code> markers.</td></tr>
     <tr><td><code>timeout</code></td><td>Seconds allowed. Package, build and script installs have no timeout.</td></tr>
     <tr><td><code>note</code>, <code>warning</code></td><td>Text shown before the step is run.</td></tr>
-    <tr><td><code>manual</code> or <code>manual_block</code></td><td>The step is not run by the helper. It is for a terminal (Part 7).</td></tr>
+    <tr><td><code>manual</code> or <code>manual_block</code></td><td>The page offers no Run button for the step, and it is meant for a terminal (Part 7). The server does not check this flag.</td></tr>
     <tr><td><code>alts</code></td><td>Alternative steps that belong to the same heading (Update tab).</td></tr>
   </table>
 
@@ -244,7 +244,7 @@
 <section class="chapter">
   <div class="kicker">Part 7 &middot; Manual steps</div>
   <h1 class="ch">Steps done by hand</h1>
-  <p class="ch-lede">Four steps are marked <code>manual</code> and three are marked <code>manual_block</code>. The helper does not run them. The page shows them with their notes.</p>
+  <p class="ch-lede">Four steps are marked <code>manual</code> and three are marked <code>manual_block</code>. The page shows them with their notes and offers no Run button. The server does not check the flag, so a request that sends one of these commands would still start it. Each one is interactive or needs a person, so do them by hand.</p>
   <table>
     <tr><th>Step</th><th>Why it is manual</th></tr>
     <tr><td>Configure node settings (asl-menu), ASL3</td><td>An interactive full-screen menu. The helper has no way to send it keystrokes.</td></tr>
