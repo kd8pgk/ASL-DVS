@@ -149,8 +149,8 @@
     <li><strong>Plan.</strong> Works out which tool gets which file, and writes the plan.</li>
     <li><strong>Back up.</strong> Copies each installed file to <code>config_restore/reinstall_backup</code>.</li>
     <li><strong>instmon first.</strong> Before instmon is replaced, a rollback timer is set for 90 seconds. Then instmon is installed and given 6 seconds. If instmon does not answer on its port within 90 seconds, the timer puts the backup back and reinstalls the old file.</li>
-    <li><strong>The other tools.</strong> Each is installed with <code>--install</code>, then checked: its service must be active and its port must answer, within 60 seconds.</li>
-    <li><strong>Settle.</strong> Every tool that was reinstalled is checked again.</li>
+    <li><strong>The other tools.</strong> Each is installed with <code>--install</code> (a command is limited to 600 seconds), then checked: its service must be active and its port must answer, within 60 seconds. If the check fails, the saved old file is installed again, and the step ends as "rolled back", or as "attention" if the old one does not come back either.</li>
+    <li><strong>Settle.</strong> The job waits at least 20 seconds, then up to 180 seconds more, for Asterisk (when it is loaded) and every reinstalled tool to be active with its port answering. Tools that are still not answering are named in the result as a warning.</li>
     <li><strong>Reboot or not.</strong> If instmon or the Dashboard is not healthy, or Asterisk is loaded but not active, the job does not reboot and says why. Otherwise it reboots the node 5 seconds later, through a one-shot systemd timer.</li>
   </ol>
   <p>After a reboot the job's state changes to "rebooted" once the boot time is later than the scheduled reboot. A reboot that cannot be scheduled leaves the job at "done, no reboot", and the message asks for a reboot by hand.</p>
@@ -210,7 +210,7 @@
   <p>The same file is the server, the installer and the boot reporter. A reader who knows that the helper runs as root from systemd will find the installer and the reporter easy to follow.</p>
 
   <h2><span class="n">7.2</span>The reinstall job is safer than it looks</h2>
-  <p>It keeps a backup of every file it replaces, puts instmon's backup back if instmon does not answer, and refuses to reboot unless the critical tools are healthy. The book can describe it as a guarded update.</p>
+  <p>It keeps a backup of every file it replaces, puts the old file back when a tool fails its check (instmon also has the 90-second timer), and refuses to reboot unless the critical tools (instmon and the Dashboard) and Asterisk are healthy. The book can describe it as a guarded update.</p>
 
   <h2><span class="n">7.3</span>Scripts need the exact command</h2>
   <p>The API is not a free shell. A script must read each step from the script route and send that exact command. This makes scripted installs match the page, but it also means a script breaks when the step table changes between releases.</p>

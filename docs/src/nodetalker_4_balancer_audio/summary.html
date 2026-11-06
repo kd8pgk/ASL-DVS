@@ -47,14 +47,15 @@
     <tr><td><code>kerchunk_delay_ms</code></td><td>0 (off)</td><td>0, or 100 to 1000 ms</td><td>Holds back audio so short kerchunks are dropped</td></tr>
     <tr><td><code>busy_lockout</code></td><td>on</td><td>on or off</td><td>Refuses a key while the channel is busy</td></tr>
     <tr><td><code>tot_sec</code></td><td>120</td><td>30 to 600 s</td><td>The longest transmission before timeout</td></tr>
-    <tr><td><code>ptt_mode</code></td><td>hold</td><td>hold or tap</td><td>How the page's push-to-talk button works</td></tr>
-    <tr><td><code>ptt_guard_sec</code></td><td>60</td><td>30, 60, 90, 120 or 180 s</td><td>When the page warns that a transmission is long (never beyond the time limit)</td></tr>
-    <tr><td><code>ptt_rx_gap</code></td><td>off</td><td>on or off</td><td>The page waits for a gap in the received audio before it keys</td></tr>
+    <tr><td><code>ptt_mode</code></td><td>hold</td><td>hold or tap</td><td>Hold: the node is keyed while the button is held. Tap: one tap keys and the next tap unkeys</td></tr>
+    <tr><td><code>ptt_guard_sec</code></td><td>60</td><td>30, 60, 90, 120 or 180 s</td><td>In tap mode (and with a headset key), the page counts down and unkeys by itself at this time, never beyond the time limit. With 10 seconds left it flashes, beeps and vibrates</td></tr>
+    <tr><td><code>ptt_rx_gap</code></td><td>off</td><td>on or off</td><td>The page waits for 4 seconds without received audio before it will key, and shows a countdown</td></tr>
     <tr><td><code>phone_tones</code></td><td>on</td><td>on or off</td><td>Opens a phone session on each key-up (TX path, Part 7)</td></tr>
     <tr><td><code>phone_open</code> / <code>phone_close</code></td><td>*99 / #</td><td>1 to 8 of 0-9, * and #</td><td>The phone tone codes</td></tr>
     <tr><td><code>phone_lead_ms</code></td><td>500</td><td>0 to 3000 ms</td><td>How long the phone session stays open after the close code</td></tr>
     <tr><td><code>max_listeners</code></td><td>3</td><td>1 to 10</td><td>Listener slots (RX series, Part 4)</td></tr>
-    <tr><td><code>allow_wan</code></td><td>off</td><td>on or off</td><td>Opens the gated routes to the internet</td></tr>
+    <tr><td><code>allow_wan</code></td><td>off</td><td>on or off</td><td>Lets requests from outside the local network reach the tool at all</td></tr>
+    <tr><td><code>tests_off</code></td><td>none</td><td>a list of: check, balance, tone_rx, tone_tx, mic, node, kerchunk</td><td>Switches individual tests off (Audio check, Automatic balancing, RX tone test, TX tone test, Mic test, Node test, Kerchunk test)</td></tr>
   </table>
   <p>Values outside the allowed range are refused with a message that names the rule.</p>
 </section>
@@ -74,7 +75,7 @@
   </table>
   <p>The filter, AGC, gate, notch, kerchunk and busy settings are read directly from the saved values, so they take effect whether or not the level switch is on.</p>
   <p>When a balancer change turns the switch on, the other level settings are pinned to the values that were in effect while the switch was off. So the change is the only thing that is heard, not a jump to several saved values at once.</p>
-  <p>During a tone test, the server may apply a temporary gain. The temporary gain is cleared when the test ends, and the saved values are not changed.</p>
+  <p>One thing overrides the level switch: a favorite. A favorite (a saved connection in the favorites list) can carry its own RX gain and TX gain, from -12 to +12 dB. While that favorite is the active connection, its gains replace the saved RX and TX gain, whether the level switch is on or off. When the favorite is disconnected, the override is cleared and the saved values apply again. The saved settings are not changed.</p>
 </section>
 
 <section class="chapter">
@@ -92,7 +93,7 @@
   <p>A test that is turned off under Tests (<code>tests_off</code>) cannot start a balance run.</p>
 
   <h2><span class="n">3.2</span>The tone rounds (RX gain)</h2>
-  <p>The node is asked for a tone test, and the tones are measured at each frequency. The score is based on the 1000 Hz tone (or the loudest tone if 1000 Hz is missing), which should come back at -16 dBFS:</p>
+  <p>The page runs the RX tone test (Part 4) and reads the processed level of each returned tone. The score is based on the 1000 Hz tone (or the loudest tone if 1000 Hz is missing), which should come back at -16 dBFS after the cleanup stage:</p>
   <ul>
     <li>The difference from the target is measured. If it is within 1.5 dB, nothing changes for that tone.</li>
     <li>Otherwise the RX gain moves by the difference, limited to 6 dB a round, and kept between -12 and +12 dB.</li>
@@ -113,12 +114,67 @@
     <li><strong>Transmit:</strong> <code>tx_gain_db</code> and <code>tx_buffer_ms</code>.</li>
   </ul>
 
-  <h2><span class="n">3.4</span>Limits on the choice</h2>
-  <p>The automatic mode is limited to the keys above. The live run chooses from the page's suggestion list, which was not traced in full.</p>
+  <h2><span class="n">3.4</span>Where the live changes come from</h2>
+  <p>The live rounds use the same rules as the page's Audio check. The check measures a few minutes of real use (it judges levels only after 5 seconds of speech) and returns a list of suggestions sorted by tier: tier 0 is audio that is lost or distorted, tier 1 is level, tier 2 is noise and filters, and tier 3 is information. At most two suggestions carry an Apply button at once, and the rest are marked "Later". The balancer takes the highest-ranked suggestion that changes a Pi setting (or the app's buffer) and does not change the microphone. Main rules:</p>
+  <table>
+    <tr><th>Reading</th><th>Suggestion</th></tr>
+    <tr><td>Received audio at full scale more than 1 % of the time</td><td>Lower RX gain by 3 dB, or turn on automatic level</td></tr>
+    <tr><td>Dropouts of 0.5 a minute or more</td><td>Raise the listen buffer one step (150, 250, 500, 1000 ms); at the top step, blame the phone's connection</td></tr>
+    <tr><td>No dropouts and enough speech</td><td>Lower the listen buffer one step, to cut delay (tier 2)</td></tr>
+    <tr><td>Stations differ by 10 dB or more, with automatic level off</td><td>Turn on automatic level</td></tr>
+    <tr><td>Received speech averaging below -24 dB</td><td>Raise RX gain toward -19 dB, in steps of 1 to 12 dB</td></tr>
+    <tr><td>Strong sound below 300 Hz</td><td>Turn on the 300 Hz high-pass</td></tr>
+    <tr><td>Two or more squelch tails with the gate off, or three or more with it on Light</td><td>Set the gate to Light, or to Strong</td></tr>
+    <tr><td>RX cleanup using more than 40 % of a core</td><td>Turn off the high-pass to save the most</td></tr>
+    <tr><td>Audio reaching the Pi above -1 dB with TX gain above 0</td><td>Lower TX gain by 3 dB</td></tr>
+    <tr><td>A quarter or more of transmissions had gaps</td><td>Raise the transmit buffer one step (60, 120, 200, 300 ms)</td></tr>
+    <tr><td>The node counted a different number of key-ups from the phone</td><td>Information (tier 0) about the link and the TX node</td></tr>
+    <tr><td>The Pi reports under-voltage or throttling during the check</td><td>Information about the power supply and cooling</td></tr>
+  </table>
+  <p>Each applied change can be undone from the page. The balancer itself keeps a change only while its score does not get worse (Part 3.2 and 3.3), and its undo values are the settings it read before the change.</p>
+
+  <h2><span class="n">3.5</span>Automatic balancing (always on)</h2>
+  <p>Two tick boxes, one for the receive side and one for the transmit side, switch on a standing balancer that runs inside the page. The choice is kept in the browser (<code>nlAutoBal</code>) and restarts when the page opens. The page must be open and logged in, and it asks the browser to keep the screen on while it runs.</p>
+  <ol>
+    <li>On start, it takes the snapshot (Part 3.1) if none is open, so "Restore original settings" in the Tests card can undo everything.</li>
+    <li>It measures for one minute of real use, then makes at most one change per side, taken from the keys in Part 3.3 only. It first waits for a quiet channel.</li>
+    <li>The change is "on trial until the next check". At the next check, if the side's score is worse by more than 2 points, the change is put back and that same change is not tried again for 30 minutes. Otherwise it is kept.</li>
+    <li>A side with less than 5 seconds of speech in the minute is not judged.</li>
+    <li>When there is nothing left to change, it settles and checks again every 5 minutes (4 minutes of rest plus the 1-minute window).</li>
+  </ol>
+  <p>It does not run, and says why, while the operator is transmitting or testing the microphone, while a tone test or an expanded balance run is going, or while another check is running. It pauses when the Pi reports a load breach (the same limits as Part 5) or when CPU is above 70 % for 30 seconds, and resumes when the Pi settles. Stopping it keeps the changes already made.</p>
+  </section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; The tone test</div>
+  <h1 class="ch">What the balancer measures with</h1>
+
+  <p class="ch-lede">The tone test sends a known set of tones out through the transmit node and, in RX mode, records what comes back through the receive path. The balancer's gain steps come from those readings.</p>
+
+  <h2><span class="n">4.1</span>The signal</h2>
+  <ul>
+    <li><strong>Tones.</strong> By default 150, 300, 500, 1000, 1500, 2000, 2500, 3000 and 3400 Hz. A request may give 1 to 12 tones between 100 and 3800 Hz, each held for 0.5, 1 or 2 seconds, at -10 dBFS.</li>
+    <li><strong>Identification.</strong> The test starts and ends with the operator's callsign sent as Morse ("DE" and the callsign, 700 Hz, 20 words a minute). The test refuses to start without a callsign.</li>
+    <li><strong>Length.</strong> The whole test must fit within the transmit time limit less 5 seconds, and within 120 seconds.</li>
+  </ul>
+
+  <h2><span class="n">4.2</span>Before it starts</h2>
+  <ol>
+    <li>The node's links must be readable, and the main node must have no links other than node 1921. In TX mode, one extra link is allowed: the tone test link (the operator can connect the main node to a second node for this, and disconnect it afterwards). A tuned connection (for example a digital-mode tune) also blocks the test.</li>
+    <li>The channel must be quiet: if audio above the activity level was heard within the last 3 seconds, the test waits.</li>
+    <li>The node must not be transmitting, and the key-up checks (TX path, Part 3) must pass. A test does not use phone tones.</li>
+  </ol>
+
+  <h2><span class="n">4.3</span>RX mode and TX mode</h2>
+  <p><strong>RX mode</strong> records the receive audio twice, as it arrives and after the cleanup stage, while the tones play. It then finds where the return audio starts (three frames at least 12 dB above the noise floor), and for each tone measures its level, its frequency error and its second and third harmonics. The report gives the delay, the noise floor before and after cleanup, the number of dropouts, and the band between the frequencies that stay within 6 dB of the 1000 Hz tone. If nothing returns, the report says the node may not be sending transmitted audio back, so only the transmit levels mean anything.</p>
+  <p><strong>TX mode</strong> only sends the tones. It measures nothing on the Pi, and the operator or a second node listens for the result.</p>
+
+  <h2><span class="n">4.4</span>Stopping</h2>
+  <p>A test stops, with a message, if the operator asks, if the transmitter drops out, or if the load guard or the link check trips (Part 5).</p>
 </section>
 
 <section class="chapter">
-  <div class="kicker">Part 4 &middot; The load guard</div>
+  <div class="kicker">Part 5 &middot; The load guard</div>
   <h1 class="ch">Stopping a test when the Pi is strained</h1>
 
   <p>While a tone test runs, a watch checks the Pi each second. The test stops, with a message, when any of these holds:</p>
@@ -133,7 +189,20 @@
 </section>
 
 <section class="chapter">
-  <div class="kicker">Part 5 &middot; Points for the book</div>
+  <div class="kicker">Part 6 &middot; Settings kept on the phone</div>
+  <h1 class="ch">Microphone and playback settings</h1>
+
+  <p>Not every audio setting lives on the Pi. The page keeps the operator's microphone and playback choices in the browser of the phone or laptop (local storage, keys <code>nlMic</code> and <code>nlPlay</code>). They are per device, they are not in <code>nodetalker.conf</code>, and the balancer's snapshot does not include them.</p>
+  <table>
+    <tr><th>Group</th><th>Default</th><th>Items</th></tr>
+    <tr><td>Microphone</td><td>Noise suppression on, high-pass on, leveler on; the rest off</td><td>AGC, noise suppression, echo cancellation, gain (dB), high-pass, leveler, noise gate (0 off, 1 light, 2 strong), equalizer</td></tr>
+    <tr><td>Playback</td><td>All on</td><td>16-bit stream (otherwise u-law), smoothing, automatic start, spectrum display</td></tr>
+  </table>
+  <p>The Audio check can suggest a microphone change (gain between -12 and +24 dB, noise suppression, or the noise gate). The page applies it to the phone's own settings, and the balancer never makes that kind of change.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
   <h1 class="ch">What the balancer and settings show</h1>
 
   <h2><span class="n">5.1</span>Change one thing at a time</h2>
@@ -147,7 +216,7 @@
 
   <h2><span class="n">5.4</span>Not checked</h2>
   <ul>
-    <li>The page's suggestion engine (the function that picks the settings for the live rounds), read only in part.</li>
+    <li>The Audio check's measurements (how the page computes clipping, speech level and spread), which feed the rules in Part 3.4.</li>
     <li>The app's own buffer, which is changed by the app and not by the server.</li>
     <li>The exact tone measurement on a running node.</li>
   </ul>

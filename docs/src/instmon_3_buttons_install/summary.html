@@ -43,7 +43,7 @@
     <tr><td>Helpers</td><td>install_confgetter, cg_run, cg_uninstall, cg_delete; install_confputter, cp_uninstall, cp_preview, cp_apply, cp_undo, cp_delete_edited; rpiclone_install</td><td>Install and run Confgetter and Confputter, preview and apply a Confputter change and undo it, install rpi-clone</td></tr>
     <tr><td>System</td><td>quiet, restore, comms_restart, reboot, shutdown</td><td>Quiet System pause and restore; restart the radio services; reboot or power off the node</td></tr>
   </table>
-  <p>Some actions are refused until the request says <code>confirm: true</code>: the installs and uninstalls, running a script, and the other actions that change the node.</p>
+  <p>Some actions are refused until the request says <code>confirm: true</code>: install, run_script, rpiclone_install, the install and uninstall of Confgetter and Confputter, gh_update, full_update, fu_stop, and the switch to the Testing channel. Others do not ask for it in the server (for example uninstall of a tool, install_config, delete, start, stop, comms_restart, reboot and shutdown); the page asks the operator before it sends some of those.</p>
 </section>
 
 <section class="chapter">
@@ -51,8 +51,10 @@
   <h1 class="ch">What stops an action from running</h1>
 
   <ul>
-    <li><strong>Confirmation.</strong> The installs, uninstalls, script runs and config installs need <code>confirm: true</code>, or they are refused with 400.</li>
-    <li><strong>Disk-image job.</strong> An install or a script run is refused with 409 while a disk-image job is running (Part 4 of this series).</li>
+    <li><strong>Full Update.</strong> While a Full Update is running, every action except <code>fu_stop</code> and <code>fu_dismiss</code> is refused with 409.</li>
+    <li><strong>Recording.</strong> While Node Recorder is recording (instmon asks its status port, 127.0.0.1:8995, at most once every 2 seconds), 22 settings, install and service actions are refused with 409: install, uninstall, start, stop, install_config, run_script, rpiclone_install, save_alternate, comms_restart, reboot, shutdown, gh_update, quiet, restore, full_update, and the Confgetter and Confputter install, run, uninstall, apply and undo actions. The message says the lock lasts until the recording ends, so it is not interrupted.</li>
+    <li><strong>Confirmation.</strong> The actions listed in Part 1 need <code>confirm: true</code>, or they are refused with 400.</li>
+    <li><strong>Disk-image job.</strong> An install, an uninstall, a script run, a rpi-clone install, a reboot or a shutdown is refused with 409 while a disk-image job is running (Part 4 of this series).</li>
     <li><strong>One install at a time per tool.</strong> A second install for the same tool is refused while the first is running (409). The same applies to a config install onto the same file.</li>
     <li><strong>One run at a time per script.</strong> A script that is already running cannot be started again (409).</li>
     <li><strong>No self-stop.</strong> instmon refuses to stop itself from its own panel. It can restart itself only by the scheduled restart at the end of its own install (Part 3.1).</li>
@@ -79,7 +81,7 @@
   </ol>
 
   <h2><span class="n">3.2</span>What <code>--uninstall</code> does</h2>
-  <p>It is the counterpart of the install: it stops and removes the service and the link. Its steps were not traced in full for this summary.</p>
+  <p>It also needs root. It disables and stops <code>instmon.service</code>, removes the service file, reloads systemd, removes the link at <code>/usr/local/bin/instmon.py</code> and the installed copy it pointed to, removes its compiled cache and empty install folders, removes the launcher if no other service file names it, and closes the firewall port. The library, config and install folders under the library path are left in place. The panel cannot start this on itself: instmon refuses to uninstall itself (400).</p>
 </section>
 
 <section class="chapter">
@@ -92,7 +94,7 @@
   <ol>
     <li><strong>Confirmation</strong> (Part 2).</li>
     <li><strong>The file.</strong> The file must be in the library folder for the tool's category.</li>
-    <li><strong>Self-install check.</strong> The file must have a self-install routine: its text must define <code>install_service</code> and an <code>--install</code> option. A file without them is refused with "doesn't support self-install ... Nothing was run."</li>
+    <li><strong>Self-install check.</strong> The file must have a self-install routine. For a Python file, its text must have an <code>--install</code> argument and define <code>install_service</code>. For a shell file, it must contain an <code>--install)</code> case and a <code>do_install</code> function. A file without them is refused with "doesn't support self-install ... Nothing was run."</li>
     <li><strong>Syntax check.</strong> A Python file is compiled, and a shell file is checked with <code>bash -n</code>. A syntax error stops the install before anything changes.</li>
     <li><strong>One install per tool</strong> (Part 2).</li>
   </ol>
@@ -100,7 +102,7 @@
   <h2><span class="n">4.2</span>What the background run does</h2>
   <ol>
     <li><strong>Prepare the install.</strong> Any symlink on the install path is replaced by a real copy of its target, so the new install writes a real file and does not change the old one through the link. Other unit names that the new file does not use are retired: the unit is disabled and removed, along with its unit paths.</li>
-    <li><strong>Run the file's own <code>--install</code></strong> with the Python or shell interpreter that suits it, with a cleaned environment.</li>
+    <li><strong>Run the file's own <code>--install</code></strong> with the Python or shell interpreter that suits it (<code>python3</code> or <code>bash</code>), in instmon's own environment plus <code>PYTHONUNBUFFERED=1</code>. The button run is a child of the instmon process. (The Full Update runs its commands as a separate systemd unit.)</li>
     <li><strong>Stream the output</strong> to instmon's log line by line.</li>
     <li><strong>Wait up to 600 seconds</strong> (INSTMON_SCRIPT_TIMEOUT_SEC). A run that takes longer is killed, and the log says so.</li>
     <li><strong>On success</strong> the log records it, the quiet-mode entry for the tool is cleared, and, for every tool except instmon, a watch starts that checks the tool stays up for 60 seconds. If it does not, the log says to check it, and points to the previous version in the library.</li>
@@ -114,9 +116,9 @@
   <h1 class="ch">Uninstall, start, stop and delete</h1>
 
   <ul>
-    <li><strong>Uninstall</strong> runs the tool's own <code>--uninstall</code>. The file must have one, or the uninstall is refused.</li>
-    <li><strong>Start and stop</strong> act on the tool's service through systemctl. instmon cannot stop itself.</li>
-    <li><strong>Delete</strong> removes a file from the library. The delete handler's own checks were not traced in full.</li>
+    <li><strong>Uninstall</strong> runs the tool's own <code>--uninstall</code>. The installed file must exist and must have an uninstall routine, or the uninstall is refused (400). instmon cannot uninstall itself. Before it runs, instmon saves a copy of the installed file into the library (unless an identical copy is already there), and it refuses to go on if that copy cannot be made. It is refused while a disk-image job is running, and while another install or uninstall of the same tool is in progress (409).</li>
+    <li><strong>Start and stop</strong> act on the tool's service through systemctl. "Start" is a restart. instmon refuses both for itself. After the command, the handler waits half a second and reports the service state it finds.</li>
+    <li><strong>Delete</strong> removes a file from the library. The category must be known (400), the file must exist (404), and a locked file is refused (409). Delete asks for no confirmation in the server.</li>
     <li><strong>Lock</strong> marks a library file as locked, or clears the mark. A locked file is protected from upload, update and editor overwrite (Part 2 of this series).</li>
   </ul>
 </section>
@@ -126,9 +128,9 @@
   <h1 class="ch">Power, radio services and Quiet System</h1>
 
   <ul>
-    <li><strong>Reboot and shutdown</strong> are scheduled, not immediate. The page is told the node will reboot or power off in about 2 seconds (INSTMON_REBOOT_SHUTDOWN_DELAY_SEC), and that the node will be unreachable until it comes back up. A shutdown needs physical access to power it back on.</li>
-    <li><strong>Restart radio services</strong> (comms_restart) stops the radio services in turn, from the list of comms services in the code. The restart steps after the stop were not traced in full.</li>
-    <li><strong>Quiet System</strong> pauses the services that compete for the SD card, and <strong>Restore</strong> brings them back. When a tool's install succeeds, its quiet entry is cleared (Part 4.2).</li>
+    <li><strong>Reboot and shutdown</strong> are scheduled, not immediate: a one-shot systemd timer runs the command after about 2 seconds (INSTMON_REBOOT_SHUTDOWN_DELAY_SEC). The page is told the node will be unreachable until it comes back up. A shutdown needs physical access (or a smart PDU) to power it back on. Both are refused while a disk-image job runs.</li>
+    <li><strong>Restart radio services</strong> (comms_restart) stops Asterisk, Analog_Bridge, MMDVM_Bridge, STFU and Allmon3 in that order, pauses 3 seconds, and starts them in the same order. It reports each one as ok or FAILED (state after start), with 207 and an error level when any failed.</li>
+    <li><strong>Quiet System</strong> pauses the services that compete for the SD card (the page lists SysMon, the Dashboard, 44helper, Node Talker, Node Recorder, Pibrary and any watchdog timer, and says the radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up), and <strong>Restore</strong> brings them back. Quiet is refused while a disk-image job runs. It restores itself after 30 minutes (INSTMON_QUIET_AUTO_RESTORE_SEC). When a tool's install succeeds, its quiet entry is cleared (Part 4.2).</li>
   </ul>
 </section>
 
@@ -150,7 +152,6 @@
     <li>The individual install routine inside each tool (covered by each tool's own summary).</li>
     <li>The exact cleanup of the install folder for tools other than instmon.</li>
     <li>The Confgetter and Confputter helper actions in full (only their names and checks were read).</li>
-    <li>The restart order of the radio services in comms_restart.</li>
   </ul>
 </section>
 

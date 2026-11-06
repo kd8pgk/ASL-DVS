@@ -132,7 +132,7 @@ rxchannel = Local/pseudo</pre>
   <h2><span class="n">5.2</span>Automatic copies and save points</h2>
   <ul>
     <li>Every apply first saves an automatic copy. The copies are kept under the config folder's <code>auto</code> directory.</li>
-    <li>When the total number of saved points passes a fixed limit (<code>_CFGR_MAX_POINTS</code>), the oldest automatic copies are removed. Copies the operator saved by hand are kept.</li>
+    <li>The limit is 10 save points (<code>_CFGR_MAX_POINTS</code>). When the total passes it, the oldest automatic copies are removed. Copies the operator saved by hand are kept, and saving one by hand is refused when 10 already exist.</li>
     <li>A copy can be restored from the Config tab's restore section (the restore path was not traced in full).</li>
   </ul>
 

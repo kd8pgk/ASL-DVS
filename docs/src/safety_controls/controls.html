@@ -63,6 +63,7 @@
     <tr><td>nodecontrol (Dashboard), pi02w</td><td>30 s</td><td>nodecontrol_pi02w, unit file (line 176)</td></tr>
     <tr><td>sysmon, pi02w</td><td>30 s</td><td>sysmon_pi02w, unit file</td></tr>
     <tr><td>44helper</td><td>60 s</td><td>44helper, unit file (line 539)</td></tr>
+    <tr><td>wifimon</td><td>60 s</td><td>wifimon, unit file (line 336)</td></tr>
     <tr><td>nodetalker (Node Talker)</td><td>60 s</td><td>nodetalker, unit file (line 197)</td></tr>
     <tr><td>amp_nodetalker, noderecorder, instmon</td><td>60 s</td><td>each tool's unit file</td></tr>
   </table>
@@ -112,7 +113,7 @@
     <tr><td>Maximum attempts</td><td>6 per boot</td><td>After that the watchdog shows "Gave up for this boot".</td></tr>
     <tr><td>Boot delay</td><td>300 s</td><td>Time after boot before the watchdog starts acting.</td></tr>
   </table>
-  <p>On a handshake failure, the watchdog restarts the tunnel unit. When the handshake returns, it can restart netcheck and the bridges that depend on the tunnel (the restart_dv setting, on by default). In the code, the tunnel watchdog never reboots or powers the node off. The manual says the same (manual). Its state is in <code>/run/asl_dvs/tunnel_guard.json</code>, and every action is written to the Activity log.</p>
+  <p>On a handshake failure, the watchdog restarts the tunnel unit. When the handshake returns, it can restart netcheck and the bridges that depend on the tunnel (the restart_dv setting, on by default). While a half-tunnel or exceptions test is armed in 44helper (its state files under <code>/run/44helper-half</code> and <code>/run/44helper-fullx</code> show steps or an arm time), the watchdog stays out of the way. In the code, the tunnel watchdog never reboots or powers the node off. The manual says the same (manual). Its state is in <code>/run/asl_dvs/tunnel_guard.json</code>, and every action is written to the Activity log.</p>
 
   <h2><span class="n">2.6</span>Link watchdogs (Node Controller and Node Talker)</h2>
   <table>
@@ -161,7 +162,7 @@
   <h2><span class="n">3.5</span>Transmit guard and limits (Node Talker)</h2>
   <table>
     <tr><th>Setting</th><th>Range or value</th><th>Meaning</th></tr>
-    <tr><td>Push-to-talk guard</td><td>30, 60, 90, 120, 180 s (default 60)</td><td>Ends a transmission after this time. Two short beeps sound 10 s before the end.</td></tr>
+    <tr><td>Push-to-talk guard</td><td>30, 60, 90, 120, 180 s (default 60)</td><td>Used by the page in tap mode (and with a headset key): it unkeys by itself after this time, never beyond the transmit time-out. With 10 s left it flashes, beeps twice and vibrates.</td></tr>
     <tr><td>Tap debounce</td><td>500 ms</td><td>Taps closer together than this are ignored.</td></tr>
     <tr><td>Wait after receive</td><td>4 s (off by default)</td><td>When on, push-to-talk is locked for 4 s after the node receives audio.</td></tr>
     <tr><td>Transmit time-out</td><td>30 to 600 s (default 120)</td><td>The node's own limit on any one transmission.</td></tr>
@@ -190,9 +191,9 @@
     <tr><th>Tool</th><th>Failures allowed</th><th>Lockout</th><th>Session</th></tr>
     <tr><td>Dashboard (nodecontrol) and SysMon</td><td>5 in 5 min</td><td>15 min, fixed. Applies to both tools.</td><td>12 h session, one shared session file in <code>/run/asl_dvs</code></td></tr>
     <tr><td>44helper</td><td>5 in 5 min</td><td>15 min, fixed</td><td>2 h session. The login cookie is set to last up to 365 days.</td></tr>
-    <tr><td>Node Talker</td><td>5</td><td>Starts at 5 s, doubles with each failure, capped at 300 s. Failure history forgotten after 1 h.</td><td>12 h</td></tr>
-    <tr><td>instmon</td><td>5</td><td>Starts at 5 s, doubles, capped at 300 s</td><td>12 h</td></tr>
-    <tr><td>wifimon</td><td>5</td><td>Starts at 5 s, doubles, capped at 300 s</td><td>12 h. At most 16 connections, 8 from one address.</td></tr>
+    <tr><td>Node Talker (and Node Recorder, same code)</td><td>5</td><td>From the fifth failure, 5 s, doubling with each failure, capped at 300 s. Failure history forgotten after 1 h.</td><td>12 h</td></tr>
+    <tr><td>instmon, pibrary, Node Recorder</td><td>5</td><td>The first four failures carry no wait. From the fifth, 5 s, doubling, capped at 300 s</td><td>12 h</td></tr>
+    <tr><td>wifimon</td><td>5</td><td>From the fifth failure, 5 s, doubling, capped at 300 s</td><td>12 h. At most 16 connections, 8 from one address.</td></tr>
   </table>
   <p>Node Talker also counts failed logins from the internet separately: 20 failures in 10 minutes make internet logins wait until that window ends.</p>
   <p>Sessions and the shared file: <code>/run</code> is cleared at reboot, so a reboot logs everyone out. Stored sessions are written under a file lock.</p>
@@ -236,7 +237,7 @@
   <table>
     <tr><th>Control</th><th>Where</th><th>What it does</th></tr>
     <tr><td>Quiet mode</td><td>44helper, instmon</td><td>Pauses the services that compete for the SD card, in tiers, before a big install or upgrade. Each stop waits up to 150 s. Watchdogs and update timers are paused too. Turning it on is refused while an apt or dpkg lock is held (manual for the tier order).</td></tr>
-    <tr><td>Quiet System / Restore</td><td>Dashboard, SysMon, 44helper (manual)</td><td>Pauses SysMon, the Dashboard, 44helper, Node Talker, Pibrary and the watchdog timer for up to 30 minutes, or until Restore is pressed.</td></tr>
+    <tr><td>Quiet System / Restore</td><td>instmon (code); also on other pages (manual)</td><td>Pauses SysMon, the Dashboard, 44helper, Node Talker, Node Recorder, Pibrary and any watchdog timer, and restores itself after 30 minutes (INSTMON_QUIET_AUTO_RESTORE_SEC) or when Restore is pressed. The radio, Asterisk, the bridges, Allmon3, SSH and wifimon stay up. Refused while a disk-image job runs.</td></tr>
     <tr><td>Node reboot schedule</td><td>44helper (manual)</td><td>Reboots the node 3 s after the schedule fires, with <code>systemd-run</code>.</td></tr>
   </table>
 
@@ -295,7 +296,7 @@
   <p>The constants in the code say both watchdogs are on. But a fresh install writes them as off, and the first login asks whether to turn them on. The manual is correct. The constants are only the fallback when no saved state exists.</p>
 
   <h2><span class="n">6.3</span>"Similar" lockout limits are not the same</h2>
-  <p>The manual says the other tools have similar limits. The code has three rules: a fixed 15 minutes (Dashboard, SysMon, 44helper), a doubling delay capped at 5 minutes (Node Talker, instmon, wifimon), and 44helper's 2-hour session, which differs from the 12-hour session of the others.</p>
+  <p>The manual says the other tools have similar limits. The code has three rules: a fixed 15 minutes (Dashboard, SysMon, 44helper), a delay that starts at the fifth failure and doubles, capped at 5 minutes (Node Talker, Node Recorder, pibrary, instmon, wifimon), and 44helper's 2-hour session, which differs from the 12-hour session of the others.</p>
 
   <h2><span class="n">6.4</span>Tunnel watchdog and reboots</h2>
   <p>The tunnel section of wifimon has no reboot or power-off call. That matches the manual's "it never reboots". The only restarts it makes are of the tunnel service and the units that depend on it.</p>

@@ -40,8 +40,8 @@
     <tr><td>Drives</td><td>Lists the disks, their partitions, mounts and filesystems. The boot disk is marked SYSTEM DRIVE.</td><td><code>/api/diskimg/drives</code></td></tr>
     <tr><td>Backup</td><td>Copies the boot disk (the SD card) to an image file on a USB drive.</td><td><code>/api/diskimg/backup/start</code></td></tr>
     <tr><td>Existing Backups</td><td>Lists the images on the drives, and downloads or deletes one.</td><td><code>/api/diskimg/backup/list</code>, <code>/download</code>, <code>/delete</code></td></tr>
-    <tr><td>Restore</td><td>Writes a chosen image back to a drive.</td><td><code>/api/diskimg/restore/start</code></td></tr>
-    <tr><td>Clone</td><td>Copies one whole drive to another drive.</td><td><code>/api/diskimg/clone/start</code></td></tr>
+    <tr><td>Restore</td><td>Writes a chosen image from one drive onto another, spare drive.</td><td><code>/api/diskimg/restore/start</code></td></tr>
+    <tr><td>Clone</td><td>Copies this Pi's boot disk straight onto another USB drive.</td><td><code>/api/diskimg/clone/start</code></td></tr>
     <tr><td>Full Format</td><td>Wipes a drive, makes a new partition table, and formats it.</td><td><code>/api/diskimg/format/start</code></td></tr>
     <tr><td>Scheduled Backups</td><td>Runs a backup automatically at an interval, with retention.</td><td><code>/api/diskimg/schedule</code></td></tr>
     <tr><td>Job</td><td>Shows the running job, its console, its progress, and cancel or reset.</td><td><code>/api/diskimg/job</code>, <code>/job/cancel</code>, <code>/job/reset</code></td></tr>
@@ -55,9 +55,11 @@
   <h1 class="ch">What stops a disk job from starting</h1>
 
   <ul>
-    <li><strong>The boot disk is never offered as a target.</strong> The drive pickers leave it out. The server refuses it for format and eject, and the scheduled backup skips it. The restore and clone checks depend on the pickers; a server-side refusal for those two was not confirmed in the code. Backup reads from the boot disk and never writes to it.</li>
-    <li><strong>One job at a time.</strong> A second job is refused while one is running. An install, a Full Update or a recording also blocks a job, and the page is told which one.</li>
-    <li><strong>Tools present.</strong> The job needs dd, lsblk, findmnt, mount, umount and partprobe. The dependency card lists what is missing and how to install it. The optional tools (for example ddrescue and rpi-clone) are needed only for those backends.</li>
+    <li><strong>The boot disk is never a target.</strong> The server refuses it as the destination of a backup, restore, clone or format, and refuses to mount, unmount or eject it. The scheduled backup skips it. Backup and clone read from it and never write to it. If the boot disk cannot be worked out, backup, clone, restore and format refuse to start.</li>
+    <li><strong>Only attached USB or removable drives.</strong> Every destination must be a drive on the current list (a whole disk with a positive size, on a USB connection or flagged removable), and must not be write-protected. Format, clone and restore also need the drive to be unmounted first. Backup, restore, clone, format, mount, unmount and eject each need <code>confirm: true</code>, and enabling the schedule does too.</li>
+    <li><strong>One job at a time.</strong> A second job is refused (409) while one is running, or while node services are being restarted after a quiesced job. The server does not check for a running install at the start of a manual job (the scheduled backup does wait for installs).</li>
+    <li><strong>Full Update and recording.</strong> While a Full Update runs, every instmon POST request except an action is refused with 409. While Node Recorder is recording, the backup, format, clone, restore, mount, unmount, eject and schedule requests are refused with 409, and so are the editor save and the Confputter upload.</li>
+    <li><strong>Tools present.</strong> The job needs dd, lsblk, findmnt, mount, umount and partprobe. The dependency card lists what is missing and how to install it. The optional tools (for example ddrescue, rpi-clone, and the shrink tools) are needed only for those options.</li>
     <li><strong>A preview first.</strong> The page shows the exact command a job would run, before it starts. The preview route builds it without running anything.</li>
   </ul>
 </section>
@@ -68,7 +70,8 @@
 
   <h2><span class="n">3.1</span>What is written</h2>
   <ul>
-    <li>The image is written to a folder named <code>instmon-backups</code> on the chosen drive, as a file ending in <code>.img</code> (or <code>.img.enc</code> if encrypted).</li>
+    <li>The image is written to a folder named <code>instmon-backups</code> on the chosen drive. The name is <code>host name_date-time</code>, then <code>_label</code> if one is set, then <code>.img</code> (or <code>.img.enc</code> if encrypted). Before the copy, the drive must be at least as large as the copy and have that much free space, and stale <code>.part</code> files from earlier runs are cleared when no job is running.</li>
+    <li><strong>How much is copied.</strong> On a disk with a DOS (MBR) partition table, only the partitions are copied: up to the end of the last partition, rounded up to a whole MiB, and the destination needs to be at least that large. On a GPT disk, the whole disk is copied. The message says when only the partitions are copied.</li>
     <li>While copying, the file has a <code>.part</code> suffix. It is renamed to its final name only when the copy has finished, so an interrupted copy never looks like a finished backup.</li>
     <li>Next to each image is a sidecar file (<code>.json</code>). It records the format and version, the image name, its size, the hash algorithm and value, the source device and its size, the host name, the time, whether it is encrypted, whether it was shrunk, and the instmon version.</li>
     <li>A backup that is cancelled removes its partial file.</li>
@@ -77,18 +80,19 @@
   <h2><span class="n">3.2</span>Options</h2>
   <table>
     <tr><th>Option</th><th>What it does</th></tr>
-    <tr><td>Label</td><td>A name for the image, used in its file name.</td></tr>
-    <tr><td>Shrink</td><td>Makes the image smaller than the card. The filesystem is checked with e2fsck first; a filesystem that is not clean is not shrunk. Then resize2fs shrinks it to its minimum, parted shrinks the partition to match, and the image file is truncated.</td></tr>
-    <tr><td>Verify</td><td>Reads the image back after it is written and compares its hash with the one taken during the copy. The hash is SHA-256 or BLAKE2b.</td></tr>
-    <tr><td>Encrypt</td><td>Pipes the copy through openssl (AES-256-CBC, PBKDF2, salted). The passphrase is passed through an environment variable, not on the command line.</td></tr>
-    <tr><td>Quiesce</td><td>Freezes the root filesystem with fsfreeze for the length of the copy, so the image is consistent. It is thawed afterwards.</td></tr>
-    <tr><td>Best effort</td><td>Keeps going past read errors (conv=noerror,sync).</td></tr>
-    <tr><td>Direct I/O and throttle</td><td>Direct I/O bypasses the cache. A throttle rate, in megabytes per second, slows the copy.</td></tr>
-    <tr><td>Rescue backend</td><td>Uses ddrescue instead of dd. It keeps a map file, so an interrupted rescue can be resumed.</td></tr>
+    <tr><td>Label</td><td>A name for the image, used in its file name. Characters other than letters, digits, <code>_</code> and <code>-</code> become <code>_</code>, at most 40 characters.</td></tr>
+    <tr><td>Shrink</td><td>Makes the image smaller than the card. It works on the image file through a loop device, after the copy. The filesystem is checked with <code>e2fsck -f -y</code> first, and a filesystem that is still inconsistent is not shrunk. Then <code>resize2fs -M</code> shrinks it to its minimum, parted shrinks the partition to match, and the image file is truncated. It is skipped automatically when the disk layout does not allow it. It cannot be combined with encryption.</td></tr>
+    <tr><td>Verify</td><td>Takes a hash of the data as it is copied, then reads the image back from the drive and compares. The hash is SHA-256 (the default) or BLAKE2b. It cannot be combined with encryption.</td></tr>
+    <tr><td>Encrypt</td><td>Pipes the copy through openssl (<code>-aes-256-cbc -pbkdf2 -salt</code>). The passphrase is passed through an environment variable (<code>INSTMON_DISKIMG_PASS</code>), not on the command line. It cannot be combined with shrink, verify, the ddrescue backend or a throttle.</td></tr>
+    <tr><td>Pause node services (quiesce)</td><td>Stops the watchdog, the suite dashboards (SysMon keeps running), Asterisk and the bridges for the length of the copy, so fewer writes are in flight. The node is off the air until the job ends, and the services are then restarted. A check for package-manager locks runs first and stops the job if one is held. The image is crash-consistent, not a snapshot.</td></tr>
+    <tr><td>Freeze filesystem</td><td>A sub-option of the pause. It freezes the root filesystem (<code>fsfreeze -f /</code>) for the copy. It is available only with the pause. If the freeze fails, the job goes on without it.</td></tr>
+    <tr><td>Best effort</td><td>Keeps going past read errors (dd backend only). Unreadable sectors are padded with nulls.</td></tr>
+    <tr><td>Direct I/O and throttle</td><td>Direct I/O (clone with dd only) bypasses the cache. The throttle slows the copy; the backup card offers no throttle, 5, 10 or 20 MB a second. A throttle is not supported with encryption or with ddrescue.</td></tr>
+    <tr><td>Rescue backend</td><td>Uses ddrescue (<code>-d -b 4MiB</code>) instead of dd. It keeps a map file (<code>.ddrescue.map</code>). It cannot be combined with encryption or a throttle.</td></tr>
   </table>
 
   <h2><span class="n">3.3</span>FAT drives</h2>
-  <p>A FAT drive cannot hold a file larger than 4 GB. Before a copy to a FAT drive, the size is compared with that limit, and the job is refused with the reason if the image would not fit.</p>
+  <p>A FAT drive cannot hold a file larger than 4 GB. Before a copy to a FAT drive, the size is compared with 4 GB less one byte, and the job is refused with the reason if the image would not fit. The message says to format the drive as ext4 or exFAT on the Full Format card.</p>
 </section>
 
 <section class="chapter">
@@ -96,28 +100,28 @@
   <h1 class="ch">Writing an image back to a drive</h1>
 
   <ol>
-    <li><strong>Pick the image.</strong> The card reads its sidecar and shows the size, the hash and whether it is encrypted.</li>
-    <li><strong>Pick the drive.</strong> The boot disk is refused. The drive must be large enough for the image.</li>
-    <li><strong>Write.</strong> The image is copied to the drive. An encrypted image is decrypted on the way, with the passphrase the operator types.</li>
-    <li><strong>Check the hash</strong> when the sidecar has one. A written image whose hash does not match is reported as a failure.</li>
-    <li><strong>Expand to fill</strong> (optional). After the restore, the partition is grown with parted, and the filesystem with resize2fs, to use the whole drive.</li>
+    <li><strong>Pick the image.</strong> It must be on a drive that is attached now. The card reads its sidecar and shows the size, the hash and whether it is encrypted. If the sidecar's size does not equal the file's size, the restore is refused as a damaged or incomplete backup.</li>
+    <li><strong>Pick the drive.</strong> The boot disk is refused ("restore always targets a different, spare drive"). The drive that holds the image is refused too. The drive must be attached, not write-protected, unmounted, and at least as large as the image.</li>
+    <li><strong>Write.</strong> The image is copied to the drive. An encrypted image needs the passphrase, and is decrypted on the way. For an encrypted image, verify and a throttle are not supported.</li>
+    <li><strong>Check the hash</strong> when the sidecar has one. The image is checked against its saved checksum as it is read. A written image whose hash does not match is reported as a failure.</li>
+    <li><strong>Expand to fill</strong> (optional). After the restore, the last partition is grown with parted to 100 % of the drive, the filesystem is checked with <code>e2fsck -f -y</code>, and it is grown with resize2fs.</li>
     <li><strong>New disk IDs</strong> (optional). The disk's identifiers are changed, so two cards restored from the same image do not share them.</li>
   </ol>
-  <p>A restore is the reverse of a backup. It writes over the drive it is given, so anything on that drive is replaced.</p>
+  <p>A restore writes over the drive it is given, so anything on that drive is replaced.</p>
 </section>
 
 <section class="chapter">
   <div class="kicker">Part 5 &middot; Clone</div>
   <h1 class="ch">Copying one drive to another</h1>
 
-  <p>A clone copies a whole drive to another drive with no image file in between. Three backends are offered:</p>
+  <p>A clone copies this Pi's boot disk to another USB drive with no image file in between. The boot disk is always the source, and the destination must be attached, not write-protected, unmounted, and (for dd and ddrescue) at least as large as the copy (the partitions on a DOS disk, otherwise the whole disk). Three backends are offered:</p>
   <table>
     <tr><th>Backend</th><th>What it does</th><th>Verify and freeze</th></tr>
-    <tr><td>dd</td><td>A direct block copy. Supports the same options as a backup, and expand and new IDs.</td><td>Both available</td></tr>
-    <tr><td>ddrescue</td><td>A rescue copy with a map file, so it can resume after errors.</td><td>As for dd</td></tr>
-    <tr><td>rpi-clone</td><td>The rpi-clone tool, which copies the Raspberry Pi system with its own options.</td><td>Not used: the job turns verify and freeze off</td></tr>
+    <tr><td>dd</td><td>A direct block copy. It supports best effort, direct I/O, a throttle, verify, expand and new IDs.</td><td>Both available</td></tr>
+    <tr><td>ddrescue</td><td>A rescue copy with a map file. No throttle.</td><td>As for dd, apart from best effort and direct I/O, which do not apply</td></tr>
+    <tr><td>rpi-clone</td><td>The rpi-clone tool, which syncs the Raspberry Pi system with its own options. It must be installed first. A new host name for the copy may be given (letters, digits and dashes, up to 63). It prepares the boot files first and refuses with 409 if that fails. No percentage is shown, only the console.</td><td>Verify, best effort, direct I/O and the throttle are turned off. Freeze is refused with 400</td></tr>
   </table>
-  <p>Expand and new IDs apply only to the dd and ddrescue clones. The source's size is recorded, so the copy length is known and the progress can be shown.</p>
+  <p>Expand and new IDs apply only to the dd and ddrescue clones. The size of the copy is known, so the progress can be shown. The pause of node services and the freeze work as in a backup.</p>
 </section>
 
 <section class="chapter">
@@ -126,8 +130,9 @@
 
   <ul>
     <li><strong>Filesystems:</strong> ext4 (mkfs.ext4), FAT32 (mkfs.vfat), or exfat (mkfs.exfat).</li>
-    <li><strong>Quick or full:</strong> a quick format clears only the start of the drive. A full format overwrites the whole drive, so it takes much longer.</li>
-    <li><strong>Steps:</strong> the partition and formatting tools are run in turn, and their output is shown in the job console.</li>
+    <li><strong>Before it starts:</strong> the drive must be attached, not write-protected and unmounted, and the format needs <code>confirm: true</code>.</li>
+    <li><strong>Quick or full:</strong> a quick format writes zeros over the first 16 MB of the drive and runs <code>wipefs -a</code>. It is not a secure erase. A full format writes zeros over the whole drive in 4 MB blocks, so it takes much longer.</li>
+    <li><strong>Steps:</strong> after the wipe, parted writes a GPT label with one primary partition spanning the drive, then the filesystem tool formats it. The output is shown in the job console. If a needed tool is missing, the job stops with the tool's name.</li>
     <li><strong>The boot disk</strong> is refused (Part 2).</li>
   </ul>
   <p>A format destroys every file on the drive.</p>
@@ -169,9 +174,9 @@
   <ul>
     <li><strong>The console</strong> keeps the last 300 lines of the job's output. The progress line of dd or ddrescue is turned into bytes done, rate and percentage.</li>
     <li><strong>The job record</strong> is saved as the job runs, so when instmon restarts, it can tell the page what was running and how it ended (the last-job recovery).</li>
-    <li><strong>Cancel</strong> stops the copy and removes a partial backup.</li>
+    <li><strong>Cancel</strong> stops the copy by stopping its systemd unit. A cancelled backup deletes its partial file. A cancelled clone, restore or format leaves the destination partial. Cancel is refused while services are being stopped or restarted, while the filesystem is being thawed, and while the job is shrinking, formatting, expanding or changing disk IDs. Cancel during a verify leaves the copy as it is.</li>
     <li><strong>Reset</strong> clears a finished job's record from the page.</li>
-    <li><strong>Eject</strong> syncs the drive, unmounts everything on it, and powers the USB device off. It is refused for the boot disk and while a job is busy.</li>
+    <li><strong>Eject</strong> syncs the drive, unmounts everything on it, and powers the USB device off. It needs <code>confirm: true</code>, and is refused for the boot disk and while a job is busy. If the power-off fails after the unmount, the answer is a warning that it is safe to remove.</li>
   </ul>
   <p>Copies run as systemd transient units, so they keep going if the instmon process is restarted.</p>
 </section>

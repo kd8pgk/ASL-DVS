@@ -165,8 +165,7 @@
   <ul>
     <li><strong>Keep</strong> cancels the auto-undo timer. The test stays until the operator chooses Undo now or the node reboots.</li>
     <li><strong>Undo now</strong> reverses the steps.</li>
-    <li><strong>Make permanent</strong> needs checks less than 15 minutes old. It writes the half-tunnel settings to <code>/etc/44helper/halftunnel.json</code>, a sysctl file for the loosened filter (<code>/etc/sysctl.d/90-44helper-halftunnel.conf</code>), a login reminder script (<code>/etc/profile.d/44helper-halftunnel.sh</code>), and a removal script with a copy of the old config. The removal script can be run later to take the half tunnel out.</li>
-    <li><strong>Remove permanent</strong> runs the removal, with the same care as the undo.</li>
+    <li><strong>Make permanent</strong> needs checks less than 15 minutes old. It writes <code>/etc/44helper/halftunnel.json</code>, a sysctl file for the loosened filter, a login reminder script, and a removal script with a copy of the old config. The removal script can take the half tunnel out later (Remove permanent runs it, with the same care as the undo).</li>
   </ul>
 </section>
 

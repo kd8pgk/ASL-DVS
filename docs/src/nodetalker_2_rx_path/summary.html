@@ -37,7 +37,10 @@
   <p>Enabling the receive feed for a node writes two lines into that node's block in rpt.conf: a note saying the line sends the node's audio to Node Talker, and an <code>outstreamcmd</code> line. The command runs the tool's own feed mode with Python, and passes the UDP port. The code refuses to add the hook if the node already has an <code>outstreamcmd</code> that is not Node Talker's (for example a Broadcastify feed), since a node takes only one.</p>
 
   <h2><span class="n">1.2</span>The feed process</h2>
-  <p>The feed process reads standard input in blocks of up to 4096 bytes and sends each block as one UDP datagram to 127.0.0.1 on the chosen port. It does no processing. It stops when the input ends or the output fails. A restart of Asterisk is needed after the hook is added or changed.</p>
+  <p>The feed process reads standard input in blocks of up to 4096 bytes and sends each block as one UDP datagram to 127.0.0.1 on the chosen port. It does no processing. It stops when the input ends or cannot be read. A failed send is ignored, so the feed keeps reading even when Node Talker is not listening. A restart of Asterisk is needed after the hook is added or changed.</p>
+
+  <h2><span class="n">1.3</span>The listening side</h2>
+  <p>Node Talker binds a UDP socket to 127.0.0.1 on the chosen port (address reuse on), so only programs on the node can send to it, and reads datagrams of up to 8192 bytes. If the port cannot be bound, it records the error (shown on the page), logs it, and tries again every 10 seconds. After a receive error it waits one second and binds again.</p>
 </section>
 
 <section class="chapter">
@@ -55,12 +58,25 @@
   </table>
 
   <h2><span class="n">2.1</span>The pump</h2>
-  <p>A paced loop runs a tick every 20 ms. Each tick takes one frame off the queue, measures its level, and checks for transmit activity. It then runs the cleanup stage (Part 3) if any listener is connected or a tone test is recording. Without listeners, the tick only keeps the level and burst counts up to date, so an idle node costs little.</p>
+  <p>A paced loop runs a tick every 20 ms. If the loop falls more than half a second behind, it restarts its clock instead of rushing to catch up, and an error in one tick is logged and does not stop the loop. Each tick takes one frame off the queue, measures its level, and checks for transmit activity. It then runs the cleanup stage (Part 3) if any listener is connected or a tone test is recording. Without listeners, the tick only keeps the level and burst counts up to date, so an idle node costs little.</p>
 
   <h2><span class="n">2.2</span>Bursts and kerchunks</h2>
-  <p>A burst is a run of loud frames. A burst at least 0.1 s long is logged as a possible kerchunk when it is shorter than a learned threshold (a short key-up, often a keying tail). A burst that starts while Node Talker is keying, or within one second after it unkeys, is marked as the node's own transmission, and is not counted as a kerchunk.</p>
+  <p>A burst is a run of loud frames (above -50 dBFS, with gaps shorter than 0.6 s). A burst that starts while Node Talker is keying or a tone test is running, or within one second after it unkeys, is marked as the node's own transmission and is not counted. Otherwise the burst is closed when 0.6 s passes without a loud frame, and its length decides what happens:</p>
+  <ul>
+    <li><strong>Busy.</strong> The channel counts as busy only after a burst has lasted 0.4 s. A shorter burst does not make the node busy, so it does not block a key-up.</li>
+    <li><strong>Kerchunk log.</strong> A burst of at least 0.1 s is recorded as a row of the kerchunk log (the newest 2000 rows are kept), and is marked as a kerchunk when it is shorter than the threshold. The log is stored as <code>kc</code> rows in the Suite Log file (<code>/run/asl_dvs/suitelog.jsonl</code>, the same file instmon's log collection uses), and these rows are written even when no collection is running. That folder is cleared at each reboot, so the kerchunk log and its learned threshold do not survive a reboot. An older <code>nodetalker_bursts.csv</code>, if present, is imported once and renamed with <code>.imported</code>. The threshold starts at 0.4 s. It is learned from bursts that the operator has labelled "kerchunk" or "real" on the page: it needs at least 6 labelled bursts of both kinds, is the cut with the fewest mistakes, and is kept between 0.15 s and 0.8 s. If more than a third of the labelled bursts would be misjudged, or the cut is above 0.8 s, the learned value is not used.</li>
+    <li><strong>Kerchunk test.</strong> A timed test (15 minutes by default, 1 to 60) lets the operator key up the node as usual and press Mark each time. The burst that ended in the last 5 seconds, or else the next burst, is kept as a kerchunk. The test can be stopped early, and the log can be reset, which puts the threshold back to 0.4 s.</li>
+  </ul>
 
-  <h2><span class="n">2.3</span>Delay for kerchunks</h2>
+  <h2><span class="n">2.3</span>The node's key-up state</h2>
+  <p>When the node's key-up state is available from Asterisk, it replaces the audio level as the source of "busy" and of the kerchunk test. A watcher logs in to the Asterisk manager (127.0.0.1, port 5038) with the login found in <code>/etc/asterisk/manager.conf</code> and asks every 0.25 s for the main node's status (<code>RptStatus XStat</code>), reading <code>RPT_RXKEYED</code>. It runs only while it is wanted: while the node is keyed, and for 20 s after the last loud frame or key-up request.</p>
+  <ul>
+    <li>With the watcher working, the channel is busy while the node is keyed, and for 0.6 s after it unkeys, as well as while audio is heard. A kerchunk is a key-up shorter than 3 s whose audio is shorter than the threshold.</li>
+    <li>The first reading after a login is treated as partial: a key-up that was already in progress is not recorded.</li>
+    <li>If there is no login in the file, Asterisk refuses it, or the connection fails, the log says "kerchunks and busy use audio again", and the audio rules above apply. After a refused login the watcher does not retry the same login.</li>
+  </ul>
+
+  <h2><span class="n">2.4</span>Delay for kerchunks</h2>
   <p>The setting <code>kerchunk_delay_ms</code> holds back all audio by a fixed time. It is 0 (off) or 100 to 1000 ms. When it is on, bursts that were marked as short kerchunks are dropped before they reach listeners, so the listener does not hear them.</p>
 </section>
 
@@ -85,16 +101,14 @@
   <table>
     <tr><th>Setting</th><th>Meaning</th><th>Close below</th><th>Hold</th></tr>
     <tr><td>0</td><td>Off, every frame passes</td><td>n/a</td><td>n/a</td></tr>
-    <tr><td>1 (default)</td><td>Gentle: closes only on a quiet channel, or when noise is flat and steady</td><td>-55 dBFS</td><td>20 frames</td></tr>
-    <tr><td>2</td><td>Strict: closes sooner and treats noise more firmly</td><td>-48 dBFS</td><td>12 frames</td></tr>
+    <tr><td>1 (default)</td><td>Light: closes after the level stays below -55 dBFS for 20 frames (0.4 s), or when flat loud noise (above -24 dBFS, with little sample-to-sample correlation) lasts 4 frames</td><td>-55 dBFS</td><td>20 frames</td></tr>
+    <tr><td>2</td><td>Strong: closes after the level stays below -48 dBFS for 12 frames (0.24 s), or when flat noise above -30 dBFS lasts 3 frames</td><td>-48 dBFS</td><td>12 frames</td></tr>
   </table>
-  <p>The gate looks four frames ahead (80 ms), so it can open before the speech starts and keep the first syllables. When it closes, the audio is faded out, and when it opens, it is faded in. A frame of noise that is flat and steady counts toward closing the gate, even above the close level.</p>
+  <p>The gate looks four frames ahead (80 ms), so it can open before the speech starts and keep the first syllables. When it closes, the audio is faded out, and when it opens, it is faded in. The noise rule is what catches a squelch tail: loud but flat, with no speech-like correlation. The page calls setting 1 "Light" and setting 2 "Strong".</p>
 
-  <h2><span class="n">3.5</span>Quiet floor</h2>
-  <p>When a frame is quieter than -65 dBFS, the filters are reset to silence, and the gate is driven as though the channel were empty. After 150 idle frames (3 s), any held audio is cleared.</p>
+  <h2><span class="n">3.5</span>Quiet floor and limiting</h2>
+  <p>When a frame is quieter than -65 dBFS, the filters are reset to silence, and the gate is driven as though the channel were empty. After 150 idle frames (3 s), any held audio is cleared. A gain that would push a sample above 29000 is passed through a soft curve, so loud peaks round off rather than clip hard.</p>
 
-  <h2><span class="n">3.6</span>Limiting</h2>
-  <p>A gain that would push a sample above 29000 is passed through a soft curve, so loud peaks round off rather than clip hard.</p>
 </section>
 
 <section class="chapter">
@@ -102,27 +116,41 @@
   <h1 class="ch">Each listener gets its own queue</h1>
 
   <h2><span class="n">4.1</span>Delivery</h2>
-  <p>After the cleanup stage, each frame is sent to every listener's queue. A listener that asked for 16-bit PCM (<code>fmt=s16</code>) gets the frame as it is. Any other listener gets it as u-law, which halves the data. Silence is sent as a pre-built u-law silence frame.</p>
+  <p>After the cleanup stage, each frame is sent to every listener's queue. A listener that asked for 16-bit PCM (<code>fmt=s16</code>) gets the frame as it is. Any other listener gets it as u-law, which halves the data. Silence is sent as a pre-built u-law silence frame. The stream is the route <code>/api/listen</code> and answers with <code>application/octet-stream</code> and an <code>X-Audio-Format</code> header: <code>mulaw; rate=8000; channels=1</code> or <code>s16le; rate=8000; channels=1</code>. It needs a login unless <code>public_listen</code> is on.</p>
 
   <h2><span class="n">4.2</span>Joining</h2>
   <p>A listener connects over HTTP and is given a slot. Up to <code>max_listeners</code> (default 3) listeners may connect. A request beyond that is refused with 503 and a message that every slot is in use. A client name is recorded from the request's user agent, so the health reports can say what kind of device is listening.</p>
 
   <h2><span class="n">4.3</span>Slow listeners</h2>
   <p>Each listener's socket send buffer is 64 KB. A listener that falls behind has its queue filled, and frames are dropped for that listener only. The other listeners are not held back.</p>
+  <p>A write that takes more than 15 seconds ends the listener ("write_timeout"). A listener also ends when the client closes, and when the audio pump has not ticked for 5 seconds ("pump_stopped"). Each connect and disconnect is noted, with the reason and the time connected.</p>
 </section>
 
 <section class="chapter">
   <div class="kicker">Part 5 &middot; Health</div>
   <h1 class="ch">The health readings</h1>
 
-  <p>Node Talker keeps a health record of the receive path, for the Data card download and for the operator. It notes:</p>
+  <p>Node Talker keeps a health record of the receive path in one-minute buckets (the last 120 minutes are kept in memory). The page's verdict looks at the last 5 minutes. A bucket that saw packets, link loss or listener underruns is also passed to the suite log (instmon's log collection), when that is switched on. The bucket notes:</p>
   <ul>
-    <li><strong>Gaps and jitter</strong> between packets from the feed, and how late the pump runs.</li>
-    <li><strong>Write times</strong>, to see if a listener's socket is slow.</li>
-    <li><strong>Drops</strong>, split into over-limit, trim and listener overruns.</li>
-    <li><strong>Network and Wi-Fi</strong> readings for each listener's link, where they are available.</li>
+    <li><strong>Gaps and jitter</strong> between packets from the feed (a gap is more than 60 ms), and how late the pump runs (more than 60 ms late is counted).</li>
+    <li><strong>Drops</strong>, split into input-queue overflow, trim and listener overruns.</li>
+    <li><strong>Sends to listeners</strong>: slow writes (0.25 s or more), audio left unsent in a listener's socket (reported from 100 ms, a stall from 500 ms).</li>
+    <li><strong>IAX link statistics</strong> for the node's links outside the LAN (loss, dropped, out of order, jitter, round trip), and the Pi's own Wi-Fi link where it can be read (signal, retries, failures).</li>
+    <li><strong>Client reports</strong> from the phone or browser (underruns, queue resets, silence), tagged android, browser or other.</li>
   </ul>
-  <p>A verdict combines these into one reading for the operator. The thresholds are set in the code (for example 60 ms for a jitter flag), and the numbers appear in the page's Data card download.</p>
+
+  <h2><span class="n">5.1</span>The verdict</h2>
+  <p>The verdict has six rows, one for each place audio can be lost, and then one summary state:</p>
+  <table>
+    <tr><th>Row</th><th>Bad when</th></tr>
+    <tr><td>Outside the LAN (IAX links)</td><td>Any lost or dropped frames, or jitter of 60 ms or more</td></tr>
+    <tr><td>Audio arriving at the Pi</td><td>Any gap over 60 ms</td></tr>
+    <tr><td>This Pi</td><td>Input queue overflowed, pump ran late, under-voltage or throttling, or CPU at 90 % or more</td></tr>
+    <tr><td>This Pi's Wi-Fi</td><td>Signal worse than -80 dBm; retries of 75 % of packets, or 30 % and 20 points above the usual rate; failed sends of 5 % (or three times the usual rate); or any beacon loss, link blip, drop, chip stall, rejoin or roam. The row is information only when Wi-Fi is not connected (the Pi may be on Ethernet)</td></tr>
+    <tr><td>Pi to listener</td><td>Audio waited unsent, slow sends, or listener queue overruns</td></tr>
+    <tr><td>Phone / browser</td><td>Underruns or queue resets reported by the client</td></tr>
+  </table>
+  <p>The summary state is chosen in this order: <strong>idle</strong> (no audio in the window), <strong>pi</strong> (the Pi row is bad), <strong>wifi</strong> (the Pi's Wi-Fi is bad while audio was lost or late), <strong>network</strong> (the IAX or arrival rows are bad, so audio is late before it reaches the Pi), <strong>listener</strong> (only the listener rows are bad, split into the phone itself or the phone's connection), and <strong>clean</strong>.</p>
 </section>
 
 <section class="chapter">

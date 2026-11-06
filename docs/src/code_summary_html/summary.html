@@ -57,31 +57,31 @@
 <section class="chapter">
   <div class="kicker">Part 2 &middot; At a glance</div>
   <h1 class="ch">Size and controls per page</h1>
-  <p class="ch-lede">Figures are for the markup stored in each file. Lines are the source lines the markup occupies.</p>
+  <p class="ch-lede">Figures are for the markup stored in each file, counted with an HTML parser (script and style text is not counted as markup). Lines are the source lines the markup occupies, and bytes are UTF-8 bytes of those lines.</p>
 
   <table>
     <tr><th>Page</th><th>Lines</th><th>Bytes</th><th>IDs</th><th>Buttons</th><th>Inputs</th><th>Selects</th><th>Tables</th><th>Dialogs</th></tr>
-    <tr><td>Node Controller</td><td>5,860</td><td>321,591</td><td>230</td><td>99</td><td>39</td><td>19</td><td>0</td><td>3</td></tr>
-    <tr><td>SysMon</td><td>9,638</td><td>418,629</td><td>342</td><td>141</td><td>33</td><td>1</td><td>0</td><td>1</td></tr>
-    <tr><td>instmon (main)</td><td>545</td><td>37,626</td><td>140</td><td>56</td><td>36</td><td>17</td><td>0</td><td>0</td></tr>
+    <tr><td>Node Controller</td><td>5,860</td><td>324,380</td><td>230</td><td>99</td><td>39</td><td>19</td><td>0</td><td>3</td></tr>
+    <tr><td>SysMon</td><td>9,638</td><td>419,818</td><td>342</td><td>141</td><td>33</td><td>1</td><td>0</td><td>1</td></tr>
+    <tr><td>instmon (main)</td><td>545</td><td>37,627</td><td>140</td><td>56</td><td>36</td><td>17</td><td>0</td><td>0</td></tr>
     <tr><td>instmon (Suite Log)</td><td>247</td><td>17,362</td><td>28</td><td>9</td><td>3</td><td>5</td><td>2</td><td>0</td></tr>
-    <tr><td>wifimon</td><td>2,216</td><td>148,504</td><td>211</td><td>52</td><td>31</td><td>9</td><td>0</td><td>1</td></tr>
-    <tr><td>44helper</td><td>44</td><td>1,784</td><td>10</td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
-    <tr><td>Node Talker</td><td>642</td><td>51,952</td><td>373</td><td>86</td><td>63</td><td>20</td><td>12</td><td>2</td></tr>
-    <tr><td>Node Recorder</td><td>353</td><td>26,890</td><td>193</td><td>42</td><td>31</td><td>15</td><td>7</td><td>1</td></tr>
-    <tr><td>Pibrary</td><td>366</td><td>24,258</td><td>171</td><td>41</td><td>42</td><td>6</td><td>0</td><td>0</td></tr>
+    <tr><td>wifimon</td><td>2,216</td><td>150,106</td><td>211</td><td>52</td><td>31</td><td>9</td><td>0</td><td>1</td></tr>
+    <tr><td>44helper</td><td>44</td><td>1,789</td><td>10</td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>Node Talker</td><td>642</td><td>51,973</td><td>373</td><td>86</td><td>63</td><td>20</td><td>12</td><td>2</td></tr>
+    <tr><td>Node Recorder</td><td>353</td><td>26,906</td><td>193</td><td>42</td><td>31</td><td>15</td><td>7</td><td>1</td></tr>
+    <tr><td>Pibrary</td><td>366</td><td>24,259</td><td>171</td><td>41</td><td>42</td><td>6</td><td>0</td><td>0</td></tr>
   </table>
   <p class="note">44helper's 44 lines are the page template, which holds the shell, login screen and tab bar. Its tab panels are built from the tab list in code (Part 3.6). Its visible content is therefore much larger than the count shows.</p>
 
   <h2><span class="n">2.1</span>Forms and accessibility</h2>
   <table>
     <tr><th>Page</th><th>Forms</th><th>ARIA attributes</th><th>Dialog or modal markers</th></tr>
-    <tr><td>Node Controller</td><td>1</td><td>61</td><td>3</td></tr>
+    <tr><td>Node Controller</td><td>1</td><td>70</td><td>3</td></tr>
     <tr><td>SysMon</td><td>1</td><td>6</td><td>1</td></tr>
     <tr><td>instmon (main)</td><td>1</td><td>0</td><td>0</td></tr>
-    <tr><td>wifimon</td><td>8</td><td>20</td><td>1</td></tr>
-    <tr><td>Node Talker</td><td>1</td><td>47</td><td>2</td></tr>
-    <tr><td>Node Recorder</td><td>1</td><td>36</td><td>1</td></tr>
+    <tr><td>wifimon</td><td>8</td><td>22</td><td>1</td></tr>
+    <tr><td>Node Talker</td><td>1</td><td>58</td><td>2</td></tr>
+    <tr><td>Node Recorder</td><td>1</td><td>44</td><td>1</td></tr>
     <tr><td>Pibrary</td><td>1</td><td>1</td><td>0</td></tr>
   </table>
   <p>The ARIA counts are uneven. Node Controller, Node Talker and Node Recorder use them widely. Pibrary has one and SysMon has six for 141 buttons. This affects screen-reader use, and the book should not claim full accessibility for any page without a check.</p>

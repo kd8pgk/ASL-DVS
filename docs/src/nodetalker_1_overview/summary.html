@@ -89,27 +89,42 @@
 </section>
 
 <section class="chapter">
-  <div class="kicker">Part 4 &middot; Who may connect</div>
+  <div class="kicker">Part 4 &middot; Start-up and shutdown</div>
+  <h1 class="ch">What runs inside the service</h1>
+
+  <h2><span class="n">4.1</span>HTTPS</h2>
+  <p>With <code>https</code> on (the default), the service creates a self-signed certificate on first start with <code>openssl</code> (elliptic-curve key, valid 10 years, names for the host, <code>host.local</code> and the node's LAN addresses) and serves TLS 1.2 or later on the one port. A plain HTTP request to that port is answered with a 301 redirect to the same address over HTTPS. If the certificate cannot be made or loaded, the service falls back to plain HTTP and the page shows a warning that the password travels in plain text. Push-to-talk needs HTTPS in the browser, so the log says so.</p>
+
+  <h2><span class="n">4.2</span>The threads</h2>
+  <p>After the listener is up, the service starts these background threads: the Asterisk key-up watcher, the audio pump (20 ms), the UDP receiver, the transmit pacer (20 ms), the transmit drain, the link keeper, the link guard and link log, the IAX and Wi-Fi health samplers, the Pi health sampler, and the systemd watchdog. It then tells systemd it is ready (<code>Type=notify</code>).</p>
+
+  <h2><span class="n">4.3</span>Stopping</h2>
+  <p>On a stop signal, the service ends any transmission in progress and, if the transmit node is set up, unlinks node 1921 from the main node, so a stopped service does not leave the transmit node linked.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Who may connect</div>
   <h1 class="ch">Access, briefly</h1>
 
   <ul>
     <li><strong>Local network by default.</strong> A request from outside the local network is treated as coming from the internet and is refused on the gated routes, unless <code>allow_wan</code> is on. The default is off.</li>
-    <li><strong>Login.</strong> The page uses a login with session cookies and lockouts. The security series covers these.</li>
-    <li><strong>Proxied requests</strong> are treated as outside, even when their address looks local.</li>
+    <li><strong>Login.</strong> The page uses a login with session cookies and lockouts. The security series covers these. Only the page itself, <code>/api/health</code> and <code>/api/whoami</code> answer without a login.</li>
+    <li><strong>Public listening.</strong> With <code>public_listen</code> on (off by default), the status and audio stream routes (<code>/api/status</code>, <code>/api/listen</code>) also answer without a login, to anyone who passes the local-network test. Talking (<code>/api/talk</code>) always needs a login.</li>
+    <li><strong>Proxied requests</strong> from a loopback address that carry a proxy header are treated as outside.</li>
   </ul>
 </section>
 
 <section class="chapter">
-  <div class="kicker">Part 5 &middot; Points for the book</div>
+  <div class="kicker">Part 6 &middot; Points for the book</div>
   <h1 class="ch">What the overview shows</h1>
 
-  <h2><span class="n">5.1</span>Two streams, one node</h2>
+  <h2><span class="n">6.1</span>Two streams, one node</h2>
   <p>Receive and transmit use different ports and different pieces of Asterisk. A problem on one side does not necessarily affect the other, and the logs and health readings keep them apart.</p>
 
-  <h2><span class="n">5.2</span>Node 1921 is a separate node</h2>
+  <h2><span class="n">6.2</span>Node 1921 is a separate node</h2>
   <p>The transmit path is a second node in rpt.conf, linked to the main node. The receive path uses the main node's own output hook. Operators must restart Asterisk after the rpt.conf change that the setup makes.</p>
 
-  <h2><span class="n">5.3</span>Not checked</h2>
+  <h2><span class="n">6.3</span>Not checked</h2>
   <ul>
     <li>The full set of routes in the page (only the main structure was read).</li>
     <li>The Asterisk side of the USRP channel on a running node.</li>

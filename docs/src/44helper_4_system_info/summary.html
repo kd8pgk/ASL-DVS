@@ -179,7 +179,7 @@
   <p>The report is built as text, or as JSON with <code>--json</code> (Stage 1.5). Its findings are warnings about things it can see. The manual lists the kinds, such as a restarted unit, a service that never started, an unsynchronised clock, or under-voltage.</p>
 
   <h2><span class="n">7.2</span>Snapshots</h2>
-  <p>A background loop saves a snapshot of the boot record 6 minutes and 25 minutes after each boot. Each snapshot is kept to 64 KB, and the snapshots are listed under "Saved copies of earlier boots" on the Boot tab.</p>
+  <p>A background loop saves a snapshot of the boot record 6 minutes after each boot and updates it at 25 minutes, one file per boot. Each snapshot is kept to 64 KB, and the snapshots are listed under "Saved copies of earlier boots" on the Boot tab.</p>
 </section>
 
 <section class="chapter">

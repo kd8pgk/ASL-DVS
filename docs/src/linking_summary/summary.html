@@ -61,7 +61,7 @@
     <tr><th>Node</th><th>Carries</th><th>Audio path (rpt.conf <code>rxchannel</code>)</th></tr>
     <tr><td><strong>1999</strong>, digital bridge</td><td>DVSwitch (DMR, D-STAR, YSF, P25, NXDN, STFU and others)</td><td><code>USRP/127.0.0.1:34001:32001</code></td></tr>
     <tr><td><strong>1917</strong>, M17 bridge</td><td>USRP2M17</td><td><code>USRP/127.0.0.1:34008:32008</code></td></tr>
-    <tr><td><strong>1921</strong>, listen node</td><td>Node Talker and Node Recorder receive (not a bridge for a mode)</td><td><code>USRP/127.0.0.1:34018:32018</code></td></tr>
+    <tr><td><strong>1921</strong>, Node Talker's transmit node</td><td>The node Node Talker keys to send a person's voice. Node Recorder uses the same node (it is handed over in rpt.conf) and receives its audio through Node Talker's forwarding port. Not a bridge for a mode</td><td><code>USRP/127.0.0.1:34018:32018</code></td></tr>
   </table>
   <p>The ports for node 1917 match the USRP2M17 ini (Part 5), so the bridge and the M17 program agree on where audio goes. Node 1999's ports go to the DVSwitch side of the bridge; the DVSwitch configuration is outside the repository, so the match is not checked here.</p>
 
@@ -95,7 +95,7 @@
     <li><strong>One link at a time.</strong> Before a bridge or an ASL node is linked, every other link is dropped (up to 16 per pass). The Node Talker transmit node (1921) is kept.</li>
     <li><strong>Bridge slots are owned by the dashboard.</strong> An ASL or EchoLink connect refuses a bridge node. The local API refuses to disconnect one.</li>
     <li><strong>Bridge reaper and watchdog.</strong> In Node Controller, a bridge that is linked while another tab owns a different slot is dropped. A bridge the tab owns that falls out is linked again. Both wait out an 8-second cooldown.</li>
-    <li><strong>Node Talker's guard</strong> runs every 5 seconds. It drops a bridge link that is not in use, and drops extra favorites when more than one public link is up.</li>
+    <li><strong>Node Talker's guard</strong> runs every 5 seconds, and only while Node Talker owns the node (not when Node Controller is running and the node is the Dashboard's). A condition must hold for two polls in a row, with an 8-second cooldown per link. It drops a bridge link that is not the bridge of what Node Talker has tuned. It re-links the bridge that Node Talker owns if that bridge falls out. When more than one public link is up (not the transmit node, not a bridge, and not a private node), it keeps one (the last ASL link Node Talker made, or else the first) and drops the others only if they are favorites; if none of the extras is a favorite, it logs that it left them alone. A link listed under <code>nodes=</code> in rpt.conf is a permanent link, and the guard drops it with <code>ilink 11</code> instead of <code>ilink 1</code>.</li>
   </ul>
 </section>
 
@@ -255,7 +255,7 @@
   <p>The README says Node Controller must be 9.3.94 or later for Node Talker to tune DVSwitch through it, and 9.3.89 or later for ASL and M17. Node Talker checks for an old version when it asks Node Controller to do a job, and reports that the version is too old. The version numbers in the README were not checked against the code for this summary.</p>
 
   <h2><span class="n">7.7</span>Not checked</h2>
-  <p>These were not traced for this summary: what <code>dvswitch.sh</code> does internally, how the bridge reports its state back, the ircDDB remote-control details, and what the README means by "private nodes (1999 and below) are left alone" in the code that drops links.</p>
+  <p>These were not traced for this summary: what <code>dvswitch.sh</code> does internally, how the bridge reports its state back, the ircDDB remote-control details, and the individual private-node numbers a home network uses. In the code, a "private" node is any all-digit node number up to 1999, and both the guard and the clean-up that runs before a connect leave those links alone.</p>
 </section>
 
 </body>

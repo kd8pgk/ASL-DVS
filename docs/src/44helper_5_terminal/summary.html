@@ -127,7 +127,7 @@
   <h2><span class="n">6.1</span>The commands</h2>
   <table>
     <tr><th>Id</th><th>Runs</th><th>How it is built</th></tr>
-    <tr><td>shell</td><td>A root login shell: <code>cd /root || cd /; exec bash -l</code></td><td>Written in the helper</td></tr>
+    <tr><td>shell</td><td>A root login shell: <code>cd /root 2&gt;/dev/null || cd /; exec bash -l</code></td><td>Written in the helper</td></tr>
     <tr><td>asl_menu</td><td>asl-menu (ASL3 node settings)</td><td>The ASL3 install step's own command</td></tr>
     <tr><td>m17_install</td><td>The USRP2M17 installer (asks for the callsign)</td><td>The M17 install step's own command</td></tr>
     <tr><td>amp_firstrun</td><td>amp-server, in the foreground</td><td>The Ampersand step's own command</td></tr>

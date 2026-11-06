@@ -42,6 +42,9 @@
     <tr><td>Build on a Pi Zero 2 W</td><td>Fork (pi02w)</td><td>The build choice (Part 2.3)</td></tr>
     <tr><td>Check time limit</td><td>240 seconds</td><td>INSTMON_GH_CHECK_LIMIT_SEC</td></tr>
     <tr><td>Retries for a failed fetch</td><td>2</td><td>INSTMON_GITHUB_RETRIES</td></tr>
+    <tr><td>Wait for a new tool to start (Full Update)</td><td>60 seconds</td><td>INSTMON_FU_START_TIMEOUT_SEC</td></tr>
+    <tr><td>Stay-up watch (Full Update)</td><td>60 seconds</td><td>INSTMON_FU_STABLE_SEC</td></tr>
+    <tr><td>One install or uninstall run</td><td>600 seconds</td><td>INSTMON_SCRIPT_TIMEOUT_SEC</td></tr>
   </table>
   <p>Each tool file carries a version line (for example <code>VERSION = "9.3.107-pi02w"</code>). instmon reads that line from a copy to decide whether it is newer.</p>
 </section>
@@ -51,11 +54,11 @@
   <h1 class="ch">Where the list of files comes from</h1>
 
   <h2><span class="n">2.1</span>The Stable channel (the default)</h2>
-  <p>Stable reads one file from the repository, <code>channels/stable.json</code>. It lists each tool file with its name, its git blob id, and the commit it came from. The file is written by a release workflow, not by hand, so Stable holds only files that have been on the testing branch for a while. A file that is not in the list is not offered.</p>
+  <p>Stable reads one file from the repository, <code>channels/stable.json</code>. It lists each tool with its file name, version, git blob id, commit, the date it landed on main, the date it was promoted, and the reason for the promotion. The file is written by the repository's promote workflow, not by hand. The rules are in <code>channels/rules.json</code>: a release becomes stable once 4 newer releases of that tool are on main and it has been there 3 days, or once it has been the newest release for 14 days; cosmetic builds do not count; and a floor sets the lowest version a tool may be promoted at (instmon 2.50.0). <code>channels/overrides.json</code> can hold a version back or hotfix one to stable at once. A file that is not in the list is not offered.</p>
   <p>If the repository has no stable list yet, the check says so, and tells the operator to switch to Testing.</p>
 
   <h2><span class="n">2.2</span>The Testing channel</h2>
-  <p>Testing lists the files on <code>main</code> through the GitHub contents API. It offers the latest commit, before any release has proven it. Switching to Testing needs a confirmation, and the message says the files come straight from main.</p>
+  <p>Testing lists the files on <code>main</code> through the GitHub contents API. It offers the latest commit, before any release has proven it. Switching to Testing needs a confirmation (without it the answer is a warning that confirmation is needed), and the message says the files come straight from main. Switching back to Stable needs none.</p>
   <p>Changing the channel stops a check that is running, and clears the last check's results. The page must press Check GitHub again.</p>
 
   <h2><span class="n">2.3</span>The Pi Zero 2 W build</h2>
@@ -136,17 +139,18 @@
   <h2><span class="n">6.2</span>For each tool</h2>
   <ol>
     <li><strong>Save a copy</strong> of the installed file in the library, if one is not already there.</li>
-    <li><strong>Uninstall</strong> the old version with its <code>--uninstall</code>. If that exits with an error, the install goes ahead anyway, and the log says so.</li>
+    <li><strong>Uninstall</strong> the old version with its <code>--uninstall</code>. A tool whose installed file has no <code>--uninstall</code> is skipped and left alone. If the uninstall exits with an error, the install goes ahead anyway, and the log says so.</li>
     <li><strong>Install</strong> the new file with its <code>--install</code>.</li>
     <li><strong>Wait up to 60 seconds</strong> for the tool to start and answer on its port.</li>
     <li><strong>Watch it for 60 seconds</strong> to make sure it stays up. instmon itself is not watched this way (Part 6.4).</li>
   </ol>
+  <p>The uninstall and install commands do not run inside instmon's own process. Each runs as a transient systemd unit (<code>instmon-fu-job</code>, started with <code>systemd-run</code>), with a run-time limit of 600 seconds, so the work survives an instmon restart and can be stopped by stopping the unit. Its output is read back into instmon's log. Without <code>systemd-run</code>, instmon runs the command directly.</p>
 
   <h2><span class="n">6.3</span>Rollback</h2>
   <p>If a tool does not start and answer, or does not stay up, instmon puts back the saved copy with its <code>--install</code> and waits for it to answer. The outcome is one of three: the tool is rolled back (warning), the tool could not be rolled back either (it "needs attention", and is left not running), or the new version is kept.</p>
 
   <h2><span class="n">6.4</span>instmon updates itself last</h2>
-  <p>instmon is replaced last, because it is the program doing the work. Before its file is changed, a guard timer is armed for 90 seconds. If instmon does not answer on its port when the timer fires, the timer restores the old file from its saved copy and reinstalls it. A successful install stops the timer.</p>
+  <p>instmon is replaced last, because it is the program doing the work. Before its file is changed, a one-shot systemd timer (<code>instmon-update-guard</code>) is armed for 90 seconds. When it fires, it tries to open instmon's port. If that fails, it unlinks the new install and runs the saved old file's <code>--install</code>. A successful install stops the timer. If the timer cannot be set up, instmon is left alone and the Full Update says so. After the new instmon is installed, the run waits 45 seconds and reports that the new version takes effect when instmon restarts.</p>
 
   <h2><span class="n">6.5</span>Controls</h2>
   <ul>

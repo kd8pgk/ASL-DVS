@@ -56,9 +56,9 @@
     <tr><th>Page</th><th>Parts</th><th>Characters</th><th>Rules</th><th>Tokens</th><th>Media rules</th><th>Animations</th><th>!important</th></tr>
     <tr><td>Node Controller</td><td>2</td><td>85,901</td><td>468</td><td>56</td><td>11</td><td>3</td><td>2</td></tr>
     <tr><td>SysMon</td><td>2</td><td>93,080</td><td>581</td><td>42</td><td>13</td><td>2</td><td>4</td></tr>
-    <tr><td>instmon</td><td>13</td><td>60,465</td><td>244</td><td>51</td><td>4</td><td>1</td><td>4</td></tr>
+    <tr><td>instmon</td><td>13</td><td>60,465</td><td>244</td><td>51</td><td>4</td><td>1</td><td>3</td></tr>
     <tr><td>wifimon</td><td>2</td><td>46,394</td><td>159</td><td>40</td><td>2</td><td>0</td><td>4</td></tr>
-    <tr><td>44helper</td><td>12</td><td>59,889</td><td>256</td><td>43</td><td>2</td><td>0</td><td>3</td></tr>
+    <tr><td>44helper</td><td>12</td><td>59,889</td><td>256</td><td>43</td><td>2</td><td>0</td><td>2</td></tr>
     <tr><td>Node Talker</td><td>5</td><td>60,475</td><td>346</td><td>32</td><td>4</td><td>1</td><td>95</td></tr>
     <tr><td>Node Recorder</td><td>4</td><td>61,134</td><td>350</td><td>32</td><td>4</td><td>1</td><td>98</td></tr>
     <tr><td>Pibrary</td><td>2</td><td>52,782</td><td>241</td><td>32</td><td>5</td><td>0</td><td>2</td></tr>
@@ -148,7 +148,7 @@
   <h2><span class="n">6.1</span>wifimon</h2>
   <ul>
     <li>One main sheet of 45,066 characters and 159 rules: the smallest rule count of the large sheets, which suits a page of cards.</li>
-    <li>Layouts change at 964 and 1100 px (min-width), so the card grid widens on larger screens rather than narrowing on smaller ones.</li>
+    <li>The one layout rule is at 964 px (min-width), so the card grid widens on larger screens rather than narrowing on smaller ones.</li>
     <li>Respects reduced motion, with one rule.</li>
   </ul>
 
@@ -176,7 +176,7 @@
     <li>A large part of 53,259 characters, with four smaller parts in the page.</li>
     <li>It uses <code>!important</code> 95 times. Many of these force a layout at phone widths: for example, the connect bar is made full width and its buttons share a row.</li>
     <li>Media rules at 420, 480 and 560 px. Its small-screen focus fits a phone-first page.</li>
-    <li>No reduced-motion rule. Its localStorage use is the heaviest of the eight (30 references in the page code), which is a JavaScript matter for Stage 3.</li>
+    <li>No reduced-motion rule. Its localStorage use is the heaviest of the eight (29 references in the page code), which is a JavaScript matter for Stage 3.</li>
   </ul>
 
   <h2><span class="n">7.2</span>Node Recorder</h2>

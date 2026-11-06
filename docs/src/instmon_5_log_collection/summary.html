@@ -37,7 +37,7 @@
     <tr><th></th><th>Activity log</th><th>Suite Log</th></tr>
     <tr><td>What it holds</td><td>What instmon has just done: installs, checks, job results</td><td>Lines from the whole suite: journals, log files, kernel messages, Wi-Fi state, periodic health snapshots</td></tr>
     <tr><td>Where it lives</td><td>In memory, the last 500 lines</td><td>A file in <code>/run/asl_dvs</code>, rotated at 10 MB, with one older copy</td></tr>
-    <tr><td>Survives a restart?</td><td>No</td><td>No, but the collection resumes if it was running (Part 4)</td></tr>
+    <tr><td>Survives a restart?</td><td>No</td><td>The file survives an instmon restart, and the collection resumes if it was running (Part 4). It does not survive a reboot, because <code>/run</code> is cleared</td></tr>
     <tr><td>How it is read</td><td>The <code>/api/log</code> route returns the lines after an id</td><td>The Suite log viewer at <code>/suitelog</code>, and <code>/api/suitelog/*</code></td></tr>
     <tr><td>Started by</td><td>Always on</td><td>The Start button, for a set number of hours</td></tr>
   </table>
@@ -50,18 +50,18 @@
 
   <h2><span class="n">2.1</span>Journal units</h2>
   <p>The collector follows the systemd journal for a list of units: the Node Talker, Node Listen, Node Recorder, Pibrary, wifimon, instmon, the Dashboard, SysMon, 44helper and its netready unit, the Zello bridge, the radio services (the analog and MMDVM bridges, Asterisk, the SVXLink USRP service, the STFU service, the M17 service), Allmon3, the WireGuard unit, and the Amp services. Units named with a pattern (for example <code>asl_dvs_*</code> and <code>wg-quick@*</code>) are matched when they run.</p>
-  <p>The journal is read with <code>journalctl -f</code> from the moment of start, so only new lines are collected. When the unit list changes, the reader is restarted with the new list.</p>
+  <p>Besides the fixed list, any other service file in <code>/etc/systemd/system</code> whose first 4 KB mentions asl_dvs, ASL-DVS, DVSwitch, Node Talker, Node Recorder or Node Control is added. The journal is read with <code>journalctl -f -n 0 -o json</code> at low priority (nice 10) from the moment of start, so only new lines are collected. The unit list is rechecked every 5 minutes, and the reader is restarted when the list changes or the reader stops.</p>
 
   <h2><span class="n">2.2</span>Kernel messages</h2>
-  <p>A second journal reader follows the kernel log (<code>journalctl -k</code>). Only lines that match a fixed set of patterns are kept: Wi-Fi chip and interface messages, MMC, USB, under-voltage and throttling, thermal, out-of-memory, firmware, I/O errors, ext4 filesystem messages and resets. The kernel lines carry a level, so the urgent ones are never dropped by the rate limit (Part 5).</p>
+  <p>A second journal reader follows the kernel log (<code>journalctl -k</code>). Lines of warning level and above are kept whatever they say. Ordinary (info) lines are kept only when they match a fixed set of patterns: Wi-Fi chip and interface messages, MMC, USB, under-voltage and throttling, thermal, out-of-memory, voltage, firmware, I/O errors, ext4 filesystem messages and resets. Debug lines are dropped. The kernel lines carry a level, so the urgent ones are never dropped by the rate limit (Part 3.3).</p>
 
   <h2><span class="n">2.3</span>Log files</h2>
-  <p>Files are read by tail: a new file is read from its last 50 lines, then followed. The list covers Asterisk's full and messages logs, the MMDVM, USRP, DVSwitch and ircDDB gateway logs, the wifimon logs, the SVXLink log, the instmon full-update job log, and the Pibrary logs found on any mounted drive.</p>
+  <p>The file list is rechecked every 30 seconds, and files ending in <code>.gz</code>, <code>.1</code> or <code>.old</code> are left out. Files are read by tail: a new file is read from its last 50 lines (taken from its final 64 KB), then followed, up to 1 MB each second. A file that is replaced or shortened is read again from the start. A line is marked as an error if it contains "error", "critical" or "fatal", as a warning if it contains "warn", and as information otherwise. The list covers Asterisk's full and messages logs, the MMDVM, USRP, DVSwitch and ircDDB gateway logs, the wifimon logs, the SVXLink log, the instmon full-update job log, and the Pibrary logs found on any mounted drive.</p>
 
   <h2><span class="n">2.4</span>Wi-Fi state and snapshots</h2>
   <ul>
-    <li><strong>Wi-Fi.</strong> The link state file <code>/run/asl_dvs/wifi_link.json</code> is sampled and written as rows.</li>
-    <li><strong>Snapshots.</strong> Every 10 minutes the collector writes a snapshot row with the load averages and the memory and swap figures from <code>/proc</code>.</li>
+    <li><strong>Wi-Fi.</strong> Every 10 seconds the link state file <code>/run/asl_dvs/wifi_link.json</code> (written by wifimon) is read, and a row is written with the link flag, band, channel, signal and noise, bit rates, packet, retry and failure counts, beacon loss, connected seconds, blips, drops and chip stalls.</li>
+    <li><strong>Snapshots.</strong> Every 10 minutes the collector writes a snapshot row with the load averages, the memory and swap figures from <code>/proc</code>, the free and total space of <code>/run</code> and <code>/</code>, the CPU temperature, the Pi's throttle flags (from <code>vcgencmd get_throttled</code>, when present), and the active state of each unit in the list.</li>
   </ul>
 </section>
 
@@ -70,7 +70,7 @@
   <h1 class="ch">What each row looks like and what limits it</h1>
 
   <h2><span class="n">3.1</span>A row</h2>
-  <p>Each row is one line of JSON with a time in milliseconds (<code>t</code>), a source (<code>src</code>, for example <code>journal:nodecontrol</code> or <code>file:…</code>), a level (<code>lvl</code>: info, warn or err, from the journal priority for journal lines), a kind (<code>kind</code>: for example log, mark, drop, snap, or a kernel-critical kind), a message, and optional structured data. Lines are cut to 2,000 characters, and control characters are removed.</p>
+  <p>Each row is one line of JSON with a time in milliseconds (<code>t</code>), a source (<code>src</code>, for example <code>journal:nodecontrol</code> or <code>file:…</code>), a level (<code>lvl</code>: debug, info, warn or err; for journal lines it comes from the journal priority, with 3 and below as err, 4 as warn, 5 and 6 as info, 7 as debug), a kind (<code>kind</code>: for example log, mark, drop, snap, wifi, the receive-health rows <code>rxh</code> that Node Talker writes, or a kerchunk kind), a message, and optional structured data. Lines are cut to 2,000 characters, and control characters are removed.</p>
 
   <h2><span class="n">3.2</span>Repeats are collapsed</h2>
   <p>When the same message arrives again from the same source within 60 seconds, it is counted, not written again. When the run ends, the count is written as one row. The comparison ignores the timestamp at the start of a line, so the same message with a new time still counts as a repeat.</p>
@@ -93,11 +93,11 @@
   <h1 class="ch">The collection's life</h1>
 
   <ol>
-    <li><strong>Start.</strong> The Start button asks for a number of hours, from 0 to 168 (default 12). Zero means it runs until stopped. A random salt is made for this session and written to the flag file. The start is logged in the file as a mark row, with a header that records the settings.</li>
+    <li><strong>Start.</strong> The Start button asks for a number of hours, from 0 to 168 (default 12). Zero means it runs until stopped. A random salt is made for this session and written to the flag file, and the end time to a second file next to it (<code>.until</code>). The start is logged in the file as a mark row whose data records the instmon version, the kernel, whether the journal is on disk or in memory, the node's uptime, the file list, the unit list and the hours.</li>
     <li><strong>Collect.</strong> The readers run as threads: the unit journal reader, the kernel reader, the file reader, the Wi-Fi reader, the memory guard and the snapshot writer. </li>
     <li><strong>Stop.</strong> Stop kills the reader processes, writes any repeats still held, writes a stop mark with the reason and the counts, and removes the flag file. The salt is cleared.</li>
-    <li><strong>Automatic stops.</strong> The collection stops by itself when its time is up, or when free memory drops below 60 MB (61,440 KB). The reason is written in the stop mark.</li>
-    <li><strong>Resume.</strong> If instmon restarts while the flag file exists, the collection starts again, with its end time read from the saved "until" file.</li>
+    <li><strong>Automatic stops.</strong> The collection stops by itself when its time is up, or when free memory drops below 60 MB (61,440 KB). Both are checked every 30 seconds. The reason is written in the stop mark.</li>
+    <li><strong>Resume.</strong> If instmon restarts while the flag file exists, the collection starts again with the same salt, its end time read from the saved "until" file, and a mark row "collection resumed after an instmon restart".</li>
   </ol>
 
   <h2><span class="n">4.1</span>The flag file</h2>
@@ -108,12 +108,12 @@
   <div class="kicker">Part 5 &middot; Redaction</div>
   <h1 class="ch">Hiding secrets and tagging addresses</h1>
 
-  <p>Every row is redacted before it is written, when a salt is set. The same function is used by Node Talker, so both tools' rows are treated the same way.</p>
+  <p>Every row is redacted before it is written, when a salt is set (that is, while a collection runs). The redaction is applied to the whole row after it is turned into JSON, so it also covers the structured data. The same function is used by Node Talker, so both tools' rows are treated the same way.</p>
   <table>
     <tr><th>What</th><th>What is written instead</th></tr>
     <tr><td>Bearer tokens</td><td><code>Bearer [hidden]</code></td></tr>
     <tr><td>Passwords, passphrases, secrets, tokens, API keys, auth and cookie values (after a word and a separator)</td><td><code>[hidden]</code> in place of the value</td></tr>
-    <tr><td>SSIDs (after the word ssid)</td><td>A tag such as <code>ssid:</code> followed by four hex characters</td></tr>
+    <tr><td>A quoted network name after the word ssid</td><td>A tag such as <code>ssid:</code> followed by four hex characters. An SSID that is not quoted is not matched</td></tr>
     <tr><td>MAC addresses</td><td>A <code>mac:</code> tag with four hex characters</td></tr>
     <tr><td>IPv4 and IPv6 addresses, including LAN addresses (all except loopback and unspecified)</td><td>An <code>ip:</code> tag with four hex characters</td></tr>
     <tr><td>Loopback and unspecified addresses</td><td>Kept as they are</td></tr>
@@ -121,8 +121,8 @@
   <p>Each tag is the first four hex characters of a SHA-256 hash of the salt and the value, in lower case. The salt is random for each collection. So the same SSID or address always gets the same tag within one collection, which keeps the rows linkable, but a tag cannot be reversed to the value, and it is not the same across collections.</p>
   <p class="note">The rows written by a collection are redacted, but the file is only as safe as its readers. The book should say that the collection is meant for sharing with a helper, after a check of its contents.</p>
 
-  <h2><span class="n">5.1</span>Rows that are not redacted</h2>
-  <p>The kernel-critical rows (kinds beginning <code>kc</code>) are kept as they are when the log is cleared, so they survive a clear, and they are not redacted again. They are kept on purpose (Part 6).</p>
+  <h2><span class="n">5.1</span>Kerchunk rows</h2>
+  <p>Rows whose kind begins <code>kc</code> (<code>kc</code>, <code>kc_label</code>, <code>kc_reset</code>, <code>kc_base</code>) are not kernel messages. They are Node Talker's kerchunk log (RX path, Part 2.2), which Node Talker stores in this same file. Node Talker writes them whether or not a collection is running, and without redaction, because the salt is only set during a collection. Clear keeps them, so the log is not lost when the collection is cleared. The file is in <code>/run</code>, so a reboot ends them too.</p>
 </section>
 
 <section class="chapter">
@@ -134,7 +134,7 @@
     <li><strong>Sources.</strong> The list of sources that have rows, with their counts and last times, can be refreshed by the operator (<code>force</code>).</li>
     <li><strong>Coverage.</strong> A coverage report lists each expected unit and file, and whether it has produced rows. A unit that is not running is shown as such. A collection that has run for at least 10 minutes is judged on that basis.</li>
     <li><strong>Download.</strong> The whole file, the old rotated copy included, downloads as <code>suitelog-&lt;time&gt;.jsonl</code>. A view can also be downloaded as text or as JSON lines.</li>
-    <li><strong>Clear.</strong> Clear removes the file and its old copy, and keeps only the kernel-critical rows. The counters are reset.</li>
+    <li><strong>Clear.</strong> Clear removes the file and its old copy, and writes back only the kerchunk rows (Part 5.1). The counters are reset.</li>
   </ul>
 
   <h2><span class="n">6.1</span>Rotation</h2>
@@ -165,7 +165,7 @@
   <h2><span class="n">8.4</span>Not checked</h2>
   <ul>
     <li>The viewer page's behaviour in a browser (its query and coverage views were read for their routes).</li>
-    <li>The full coverage logic for each unit, and the exact snapshot fields.</li>
+    <li>The viewer's timeline strip (up to 360 one-minute bars), which was read only in outline.</li>
     <li>The redaction patterns in a live log with real secrets.</li>
     <li>The resume-after-restart path, which was read by name.</li>
   </ul>
