@@ -1,8 +1,13 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.20`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.21`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
 
-## 0.10.20 (2026-11-06)
+## 0.10.21 (2026-11-06)
+
+- **Network changes are logged with their time.** The app notes each change in the phone's network type (wifi, cell, eth, other or none) with the local clock time, keeps the last 8, and sends them with its next report as `net_log`. A failed send keeps them for the next try.
+- **The app times its last report to the node.** The time from starting a report to the node's answer is sent with the next report as `probe_ms`. It includes opening a new connection when one is needed, so it is a sample, not a continuous probe.
+- Needs Node Talker 0.10.21 on the node to show these; an older node ignores the new fields.
+- Tests: the change log (its format, the newest entries kept, the order when a failed send is put back) and the probe and log in the report (`NetLogTest`, `PlayStatsTest`).
 
 - **The talk channel now tries every address a node name gives.** A name such as `MagicBox.local` often resolves to several addresses (an IPv6 link-local one and the IPv4 one). The talk channel took only the first and gave up if the phone could not use it, with "failed to connect to MagicBox.local", while Listen worked from the same phone and host because Android's own HTTP code tries each address in turn. Now the talk channel does too: IPv4 first, then global IPv6, then link-local IPv6, with the same 8 seconds in all. If every address fails, the message names the host and the addresses it tried.
 - **Copy for the page's Log card.** A new `copyText` lets the page hand the app text to put on the phone's clipboard (up to 500,000 characters), used by the Copy log button in Node Talker 0.10.20. A web view's own clipboard is not reliable, so the app does it.

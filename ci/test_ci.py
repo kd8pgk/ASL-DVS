@@ -1462,6 +1462,26 @@ class RxHealthTests(unittest.TestCase):
         self.assertEqual(v["state"], "clean")
         self.assertEqual(v["rows"][0]["level"], "warn")
 
+    def test_phone_probe_and_network_log_are_kept_and_shown(self):
+        nt = self.nt
+        with mock.patch.object(nt, "RXH", self.rxh):
+            nt.rxh_client({"client": "android", "probe_ms": 1500,
+                           "net_log": "wifi>cell 12:03:11;bad entry;cell>wifi 12:04:00"})
+        c = self.rxh.cur["clients"]["android"]
+        self.assertEqual(c["probe_ms"], 1500)
+        self.assertEqual(c["net_log"], "wifi>cell 12:03:11;cell>wifi 12:04:00")
+        text = nt._rxh_phone_text(c)
+        self.assertIn("network: wifi to cell at 12:03:11, cell to wifi at 12:04:00", text)
+        self.assertIn("last report to the node took 1500 ms", text)
+
+    def test_net_log_keeps_only_the_newest_valid_entries(self):
+        nt = self.nt
+        raw = ";".join(f"wifi>cell 00:00:{i:02d}" for i in range(20)) + ";<script>"
+        kept = nt._net_log_clean(raw).split(";")
+        self.assertEqual(len(kept), nt.RXH_NET_LOG_MAX)
+        self.assertEqual(kept[-1], "wifi>cell 00:00:19")
+        self.assertEqual(nt._net_log_clean(None), "")
+
     def test_client_report_is_checked_and_clamped(self):
         nt = self.nt
         with mock.patch.object(nt, "RXH", self.rxh):
