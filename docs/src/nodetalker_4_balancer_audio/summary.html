@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Talker - The Balancer and Audio Settings</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; NODE TALKER</div>
+    </div>
+    <div class="ed"><b>Part 4 of 4</b><br>balancer and audio settings</div>
+  </div>
+  <div class="body">
+    <h1>The Balancer and <span>Audio Settings</span></h1>
+    <p class="lede">Every audio setting Node Talker keeps, its range and default, which settings only take effect when the level settings are turned on, how the automatic balancer changes them, and the limits that stop a test when the Pi is under strain.</p>
+    <div class="chips">
+      <span class="chip c1">SETTINGS</span>
+      <span class="chip c2">LEVEL SWITCH</span>
+      <span class="chip c3">BALANCER</span>
+      <span class="chip c4">LOAD GUARD</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 4 of 4. Source: nodetalker_v0_10_20_20261105.py (settings, load guard and balancer storage) and the balancer code in the page. Nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; The settings</div>
+  <h1 class="ch">Every audio setting</h1>
+
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Allowed</th><th>What it does</th></tr>
+    <tr><td><code>tune_enabled</code></td><td>off</td><td>on or off</td><td>The level switch (Part 2). Gain, listen buffer and transmit buffer take effect only when it is on</td></tr>
+    <tr><td><code>rx_gain_db</code></td><td>0</td><td>-12 to +12 dB</td><td>Fixed gain on the receive audio, added to the AGC gain</td></tr>
+    <tr><td><code>tx_gain_db</code></td><td>0</td><td>-12 to +12 dB</td><td>Gain on the transmit audio</td></tr>
+    <tr><td><code>jitter_ms</code></td><td>250</td><td>100 to 1500 ms</td><td>The listen buffer on the page</td></tr>
+    <tr><td><code>tx_buffer_ms</code></td><td>120</td><td>40 to 400 ms</td><td>How much audio is held before transmit starts</td></tr>
+    <tr><td><code>rx_hpf</code></td><td>on</td><td>on or off</td><td>The 300 Hz high-pass filter (RX series, Part 3)</td></tr>
+    <tr><td><code>rx_agc</code></td><td>on</td><td>on or off</td><td>Automatic gain on the receive audio</td></tr>
+    <tr><td><code>rx_gate</code></td><td>1</td><td>0, 1 or 2</td><td>The receive gate (off, gentle, strict)</td></tr>
+    <tr><td><code>rx_notch_hz</code></td><td>0 (off)</td><td>0, or 60 to 300 Hz</td><td>A notch filter for one tone</td></tr>
+    <tr><td><code>kerchunk_delay_ms</code></td><td>0 (off)</td><td>0, or 100 to 1000 ms</td><td>Holds back audio so short kerchunks are dropped</td></tr>
+    <tr><td><code>busy_lockout</code></td><td>on</td><td>on or off</td><td>Refuses a key while the channel is busy</td></tr>
+    <tr><td><code>tot_sec</code></td><td>120</td><td>30 to 600 s</td><td>The longest transmission before timeout</td></tr>
+    <tr><td><code>ptt_mode</code></td><td>hold</td><td>hold or tap</td><td>How the page's push-to-talk button works</td></tr>
+    <tr><td><code>ptt_guard_sec</code></td><td>60</td><td>30, 60, 90, 120 or 180 s</td><td>When the page warns that a transmission is long (never beyond the time limit)</td></tr>
+    <tr><td><code>ptt_rx_gap</code></td><td>off</td><td>on or off</td><td>The page waits for a gap in the received audio before it keys</td></tr>
+    <tr><td><code>phone_tones</code></td><td>on</td><td>on or off</td><td>Opens a phone session on each key-up (TX path, Part 7)</td></tr>
+    <tr><td><code>phone_open</code> / <code>phone_close</code></td><td>*99 / #</td><td>1 to 8 of 0-9, * and #</td><td>The phone tone codes</td></tr>
+    <tr><td><code>phone_lead_ms</code></td><td>500</td><td>0 to 3000 ms</td><td>How long the phone session stays open after the close code</td></tr>
+    <tr><td><code>max_listeners</code></td><td>3</td><td>1 to 10</td><td>Listener slots (RX series, Part 4)</td></tr>
+    <tr><td><code>allow_wan</code></td><td>off</td><td>on or off</td><td>Opens the gated routes to the internet</td></tr>
+  </table>
+  <p>Values outside the allowed range are refused with a message that names the rule.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The level switch</div>
+  <h1 class="ch">Why some settings have no effect</h1>
+
+  <p class="ch-lede">Gain, the listen buffer and the transmit buffer are read through a single rule. When <code>tune_enabled</code> is off, the server uses the defaults for those three settings, whatever is saved. The saved values take effect only when the level switch is on.</p>
+
+  <table>
+    <tr><th>Setting</th><th>Level switch off</th><th>Level switch on</th></tr>
+    <tr><td><code>rx_gain_db</code></td><td>0 dB</td><td>Saved value</td></tr>
+    <tr><td><code>tx_gain_db</code></td><td>0 dB</td><td>Saved value</td></tr>
+    <tr><td><code>tx_buffer_ms</code></td><td>120 ms</td><td>Saved value</td></tr>
+    <tr><td><code>jitter_ms</code></td><td>Page uses 250 ms</td><td>Saved value</td></tr>
+  </table>
+  <p>The filter, AGC, gate, notch, kerchunk and busy settings are read directly from the saved values, so they take effect whether or not the level switch is on.</p>
+  <p>When a balancer change turns the switch on, the other level settings are pinned to the values that were in effect while the switch was off. So the change is the only thing that is heard, not a jump to several saved values at once.</p>
+  <p>During a tone test, the server may apply a temporary gain. The temporary gain is cleared when the test ends, and the saved values are not changed.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The balancer</div>
+  <h1 class="ch">How a balance run changes settings</h1>
+
+  <p class="ch-lede">The balancer runs in the page. It makes one change at a time, measures again, and keeps the change only if the score does not get worse. The server does not compute the changes; it saves and restores the settings.</p>
+
+  <h2><span class="n">3.1</span>Starting and undoing</h2>
+  <ol>
+    <li><strong>Snapshot.</strong> The server saves the current balance settings (the level switch, RX and TX gain, RX filter and gate settings, the listen buffer and the transmit buffer) to a file, <code>nodetalker_balance.json</code>. If that file already exists, a new run is refused until the earlier one is restored or kept.</li>
+    <li><strong>Restore.</strong> Writes the saved settings back and removes the file.</li>
+    <li><strong>Keep.</strong> Removes the file and leaves the changed settings in place.</li>
+  </ol>
+  <p>A test that is turned off under Tests (<code>tests_off</code>) cannot start a balance run.</p>
+
+  <h2><span class="n">3.2</span>The tone rounds (RX gain)</h2>
+  <p>The node is asked for a tone test, and the tones are measured at each frequency. The score is based on the 1000 Hz tone (or the loudest tone if 1000 Hz is missing), which should come back at -16 dBFS:</p>
+  <ul>
+    <li>The difference from the target is measured. If it is within 1.5 dB, nothing changes for that tone.</li>
+    <li>Otherwise the RX gain moves by the difference, limited to 6 dB a round, and kept between -12 and +12 dB.</li>
+    <li>Dropouts count against the score at half weight. If tones drop out, the listen buffer moves up through 150, 250, 500 and 1000 ms, instead of the gain.</li>
+    <li>The run makes up to three rounds. If a round scores worse than the one before by more than 0.5, that change is undone and the run stops.</li>
+  </ul>
+
+  <h2><span class="n">3.3</span>The live rounds</h2>
+  <p>During a live check, the balancer measures the operator's audio on both sides:</p>
+  <ul>
+    <li><strong>Receive score:</strong> three times the clipping percentage, twice the drops, plus the resets and tails, plus how far the speech level is from -19 dBFS.</li>
+    <li><strong>Transmit score:</strong> half the distance of the speech level from -18 dBFS, plus three times the clipping percentage.</li>
+  </ul>
+  <p>Before each change, the balancer waits for a quiet channel: five seconds with no audio and no transmission, up to a limit of two minutes. If the channel stays busy, the run stops. The live rounds also change only one setting at a time, and undo a change that made the score worse by more than 0.5.</p>
+  <p>The automatic mode is limited to these settings:</p>
+  <ul>
+    <li><strong>Receive:</strong> <code>rx_gain_db</code>, <code>rx_hpf</code>, <code>rx_agc</code>, <code>rx_gate</code>, <code>jitter_ms</code>, and the app's own buffer where an app is used.</li>
+    <li><strong>Transmit:</strong> <code>tx_gain_db</code> and <code>tx_buffer_ms</code>.</li>
+  </ul>
+
+  <h2><span class="n">3.4</span>Limits on the choice</h2>
+  <p>The automatic mode is limited to the keys above. The live run chooses from the page's suggestion list, which was not traced in full.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; The load guard</div>
+  <h1 class="ch">Stopping a test when the Pi is strained</h1>
+
+  <p>While a tone test runs, a watch checks the Pi each second. The test stops, with a message, when any of these holds:</p>
+  <table>
+    <tr><th>Check</th><th>Limit</th></tr>
+    <tr><td>CPU use</td><td>Above 90 % for 10 seconds in a row</td></tr>
+    <tr><td>Free memory</td><td>Below the larger of 40 MB or 10 % of the total</td></tr>
+    <tr><td>Temperature</td><td>80 degrees C or more</td></tr>
+    <tr><td>Throttling</td><td>The Pi reports it is throttling</td></tr>
+  </table>
+  <p>The watch also checks the link to the node at intervals. A test stops with a message if the node is no longer linked or ready.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Points for the book</div>
+  <h1 class="ch">What the balancer and settings show</h1>
+
+  <h2><span class="n">5.1</span>Change one thing at a time</h2>
+  <p>The balancer's rule is the important one for operators: one setting, one measurement, keep or undo. A tester who changes several settings by hand gets no such check, and the book should say so.</p>
+
+  <h2><span class="n">5.2</span>Read the level switch first</h2>
+  <p>An operator who edits the gain and sees no change should check the level switch. The gain only takes effect when it is on.</p>
+
+  <h2><span class="n">5.3</span>A run can be left open</h2>
+  <p>A balance run that is not restored or kept leaves its file behind, and blocks the next run. The page offers a restore. The book should tell operators to restore or keep a run before they start another.</p>
+
+  <h2><span class="n">5.4</span>Not checked</h2>
+  <ul>
+    <li>The page's suggestion engine (the function that picks the settings for the live rounds), read only in part.</li>
+    <li>The app's own buffer, which is changed by the app and not by the server.</li>
+    <li>The exact tone measurement on a running node.</li>
+  </ul>
+</section>
+
+</body>
+</html>

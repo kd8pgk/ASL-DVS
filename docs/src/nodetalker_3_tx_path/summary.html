@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Talker - The TX Path</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; NODE TALKER</div>
+    </div>
+    <div class="ed"><b>Part 3 of 4</b><br>the TX path</div>
+  </div>
+  <div class="body">
+    <h1>The <span>TX Path</span></h1>
+    <p class="lede">How the operator's voice gets from the page into Node Talker, through the key-up checks, the transmit buffer and the pacer, and out to Asterisk as USRP packets on the transmit node.</p>
+    <div class="chips">
+      <span class="chip c1">KEY-UP</span>
+      <span class="chip c2">BUFFER</span>
+      <span class="chip c3">USRP</span>
+      <span class="chip c4">NODE 1921</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 3 of 4. Source: nodetalker_v0_10_20_20261105.py on branch ccr-9d4fe19f-ssud83. Nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Setting up the node</div>
+  <h1 class="ch">Node 1921 in rpt.conf</h1>
+
+  <p class="ch-lede">Transmit needs its own node in Asterisk. Node Talker writes it into rpt.conf, and then links it to the main node so its audio reaches the main node's transmitter.</p>
+
+  <h2><span class="n">1.1</span>The block it writes</h2>
+  <p>The setup adds a comment and a node block for node 1921. The block uses a USRP channel that listens on 127.0.0.1:34018 and sends to 127.0.0.1:32018. It is set to half duplex, with no hang time, no alternate hang time, no telemetry, and no unkey count, and it sets an identification recording on a timer. The block inherits the templates of the main node, so it shares that node's settings.</p>
+  <p>The setup also adds node 1921 to the main node's <code>[nodes]</code> line, so that Asterisk will link to it.</p>
+
+  <h2><span class="n">1.2</span>Taking over from Node Recorder</h2>
+  <p>If node 1921 already exists as a Node Recorder block, the setup takes it over, so that recording continues from this node. If a node 1921 exists that Node Talker did not write, the setup refuses and asks the operator to remove it or pick another.</p>
+
+  <h2><span class="n">1.3</span>Asterisk restart</h2>
+  <p>After the file is written, Asterisk must be restarted before the node takes effect. A backup of rpt.conf is kept with each change.</p>
+
+  <h2><span class="n">1.4</span>Readiness</h2>
+  <p>The transmit path is ready when the node 1921 block exists with the right channel, the main node is set, and the <code>[nodes]</code> line includes node 1921. The page shows the state from this check, and the link is reported as linked or not linked from the main node's current links.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Keeping it linked</div>
+  <h1 class="ch">The link keeper</h1>
+
+  <p>A background loop checks every 20 seconds. If the transmit path is ready and node 1921 is not linked to the main node, the loop links it and writes a log line. The loop logs the first failure, and logs again when the link comes back. When the link is up, the loop does nothing.</p>
+  <p>Unlinking happens only when the transmit path is turned off or Node Talker stops. Ending a transmission does not unlink the node.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Key-up</div>
+  <h1 class="ch">Checks before the node keys</h1>
+
+  <p>When the page asks to key, the server runs these checks in order:</p>
+  <ol>
+    <li><strong>Ready.</strong> The transmit path must be ready (Part 1.4). If not, the key is refused as "not-ready".</li>
+    <li><strong>Linked.</strong> Node 1921 must be linked to the main node. If not, the key is refused as "not-linked".</li>
+    <li><strong>Busy.</strong> With <code>busy_lockout</code> on, a key is refused as "busy" while the channel is active (Part 2 of the RX series), unless Node Talker itself unkeyed less than one second ago. This stops a key-up over someone else's transmission.</li>
+    <li><strong>In use.</strong> Only one operator can hold the key. A second operator is refused as "in-use".</li>
+  </ol>
+  <p>A refused key gives the operator a short message, for example "The node is busy (someone is talking)."</p>
+  <p>When the key succeeds, the buffers are cleared and a new session starts. If phone tones are on (Part 6), the phone is opened as well.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Audio in</div>
+  <h1 class="ch">From the page into the buffer</h1>
+
+  <ol>
+    <li>The page sends microphone audio as binary WebSocket messages. Each message is 16-bit PCM.</li>
+    <li>The server accepts audio only from the operator who holds the key. Audio from anyone else is ignored.</li>
+    <li>The server cuts the audio into 320-byte frames (20 ms). Each frame gets the transmit gain (<code>tx_gain_db</code>, when the level settings are active) and its peak level is noted.</li>
+    <li>Frames wait in a queue. The queue holds up to 50 frames (1 s) for a normal transmission, or 300 frames (6 s) for a phone session.</li>
+  </ol>
+  <p>If the queue passes its limit, the oldest frames are dropped.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; The pacer</div>
+  <h1 class="ch">Sending at a steady pace</h1>
+
+  <p>A paced loop runs every 20 ms and decides what to send for that tick. The key rules are:</p>
+  <table>
+    <tr><th>Stage</th><th>What happens</th></tr>
+    <tr><td>Start</td><td>Nothing is sent until the queue holds the transmit buffer (<code>tx_buffer_ms</code>, default 120 ms, or six frames). If the buffer never fills, sending starts once the fill time has passed.</td></tr>
+    <tr><td>Sending</td><td>One frame is sent for each tick. A fade-in is applied after a gap.</td></tr>
+    <tr><td>Gap</td><td>If the queue runs dry while sending, the pacer fades out the last frame and counts a gap. It then waits for the buffer to refill before it sends again.</td></tr>
+    <tr><td>Release</td><td>When the operator lets go, the pacer sends what is left, fades the last frame out, and then stops.</td></tr>
+    <tr><td>Time limit</td><td>After <code>tot_sec</code> (default 120 s, from 30 to 600), the transmission ends with the reason "timeout".</td></tr>
+    <tr><td>Deadman</td><td>If no audio arrives for one second, the transmission ends with the reason "deadman".</td></tr>
+  </table>
+  <p>The gap count is part of the transmission state and the log. A transmission with gaps is logged as a warning.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Out to Asterisk</div>
+  <h1 class="ch">USRP packets</h1>
+
+  <h2><span class="n">6.1</span>The packets</h2>
+  <p>Each frame goes to Asterisk as one UDP packet. The packet starts with a 32-byte USRP header, followed by the 320 bytes of audio. The header carries a sequence number that rises with each packet, and a key bit. The key bit is set on the packets that carry audio, and is cleared on the packets that end the transmission.</p>
+
+  <h2><span class="n">6.2</span>Ending a transmission</h2>
+  <p>When the transmission ends, three silent packets are sent with the key bit cleared. Asterisk then drops its transmitter.</p>
+
+  <h2><span class="n">6.3</span>The drain loop</h2>
+  <p>The transmit node also sends its own output to 127.0.0.1:34018, and a drain loop listens there. The loop forwards every datagram to the Node Recorder's forwarding port, which is how this channel's audio reaches Node Recorder. If the port cannot be opened, the loop logs a warning and tries again every 60 seconds.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Phone tones</div>
+  <h1 class="ch">The phone session</h1>
+
+  <p>When phone tones are on (<code>phone_tones</code>, on by default), a key-up also opens a phone session on the node. The page's codes are sent as tones: <code>*99</code> to open and <code>#</code> to close by default. The phone session holds the transmission for up to 5 seconds, and keeps it open for a lead time (<code>phone_lead_ms</code>, default 500 ms) after the close code. Phone sessions use a larger queue, so a phone can keep speaking on a slow link.</p>
+  <p>The phone path uses the phone's own call protocol (SIP, IAX2, or a similar type), and was not traced in full for this summary.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">What the TX path shows</h1>
+
+  <h2><span class="n">8.1</span>Two checks stop a bad key</h2>
+  <p>The link check and the busy check stop most bad transmissions before the node keys. The busy check is the one operators need to understand: a refused key on a busy channel is the system doing its job, not a fault.</p>
+
+  <h2><span class="n">8.2</span>Ending is always clean</h2>
+  <p>Every ending, whether release, timeout, deadman or a dropped connection, sends the same silent packets and writes a log line with its reason.</p>
+
+  <h2><span class="n">8.3</span>Not checked</h2>
+  <ul>
+    <li>The Asterisk side of the USRP channel on a running node.</li>
+    <li>The phone protocol path in full (Part 7).</li>
+    <li>How the link keeper behaves when Asterisk is restarting.</li>
+  </ul>
+</section>
+
+</body>
+</html>
