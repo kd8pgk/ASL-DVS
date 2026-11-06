@@ -188,6 +188,8 @@ class WsClientTest {
             }
             val e = assertThrows(IOException::class.java) { WsClient(h.node(), null).connect() }
             assertEquals("log in on the page first", e.message)
+            assertEquals("login", SocketErrors.classify(e))
+            assertEquals(401, SocketErrors.httpCode(e))
             h.finish()
         }
     }
@@ -201,6 +203,8 @@ class WsClientTest {
             }
             val e = assertThrows(IOException::class.java) { WsClient(h.node(), null).connect() }
             assertEquals("the node refused the talk channel (HTTP 503)", e.message)
+            assertEquals("http", SocketErrors.classify(e))
+            assertEquals(503, SocketErrors.httpCode(e))
             h.finish()
         }
     }
@@ -211,6 +215,7 @@ class WsClientTest {
             h.serve { p -> p.readHead() }
             val e = assertThrows(IOException::class.java) { WsClient(h.node(), null).connect() }
             assertEquals("the node closed the talk channel", e.message)
+            assertEquals("closed", SocketErrors.classify(e))
             h.finish()
         }
     }

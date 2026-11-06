@@ -65,7 +65,7 @@ class WsClient(private val node: Node, private val cookie: String?) {
         val code = status.split(' ').getOrNull(1)?.toIntOrNull() ?: 0
         if (code != 101) {
             close()
-            throw IOException(if (code == 401) "log in on the page first" else "the node refused the talk channel (HTTP $code)")
+            throw NodeHttpException(code, if (code == 401) "log in on the page first" else "the node refused the talk channel (HTTP $code)")
         }
         val accept = head.lineSequence()
             .firstOrNull { it.startsWith("Sec-WebSocket-Accept:", ignoreCase = true) }

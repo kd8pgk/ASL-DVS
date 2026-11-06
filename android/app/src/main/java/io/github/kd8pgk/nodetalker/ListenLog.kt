@@ -59,11 +59,13 @@ object ListenLog {
             out.put(ev)
             val ed = p.edit().putString(KEY_EVENTS, out.toString())
             if (action == "connect") ed.putBoolean(KEY_ON, true).putLong(KEY_ON_AT, System.currentTimeMillis())
-            else ed.putBoolean(KEY_ON, false)
+            else if (action == "disconnect") ed.putBoolean(KEY_ON, false)
             ed.apply()
         }
         flush(c)
     }
+
+    fun talk(c: Context, action: String, reason: String, detail: String) = add(c, action, "system", why(reason, "other"), detail)
 
     private fun phone(c: Context, d: JSONObject) {
         try {

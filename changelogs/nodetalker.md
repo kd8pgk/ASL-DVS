@@ -1,5 +1,13 @@
 # Node Talker changelog
 
+## 0.10.19 (2026-11-06)
+
+- **Talk-channel problems in Node Talker Mobile are now shown at once and logged on the node.** The app tells the page the moment a try at opening the talk channel fails, with the reason ("Talk channel: ... Retrying..."), and when a send fails while you are transmitting ("Lost the talk channel while transmitting: ... Reconnecting..."). The app also reports each failure run to the node as a `talk_fail` event (and the recovery as `talk_up`), so it shows in the Node Talker log and the suite log. Reports are rate limited to one failure a minute, so a flapping connection cannot flood the log.
+- **More exact reasons.** The node now knows `tls` (certificate), `reset`, `login` and `reconnected` besides the old ones, in the Listen events and in the app's receive-health report. A node older than this one files them as "other", so old and new mix safely.
+- Works with Node Talker Mobile 0.10.19. With an older app nothing new arrives and everything behaves as before; the 0.10.18 page check still covers an app that does not report.
+- Tests: the talk events are kept with their reason and detail, failures log as warnings and recoveries as OK, and the app's reasons, actions and detail keys are checked against what the node accepts (`ci/test_ci.py`).
+- Page JavaScript logic changed, so this is a release.
+
 ## 0.10.18 (2026-11-05)
 
 - **In Node Talker Mobile the page now shows why the talk channel will not open.** The page asked the app to open the talk channel and then waited for an "open" notice, showing "Opening the talk channel..." and nothing else. If the app could not connect it kept its reason to itself and retried quietly, and if the notice reached the page before the page was ready (for example as the app starts) the page waited for ever. Now, while waiting, the page asks the app every 1.5 s (for up to 60 s): it shows the app's reason ("Talk channel: ... Retrying..."), says so after 12 s if the app has given none, and takes the channel as open as soon as the app reports it open, even if the notice was missed. Nothing changes once the channel is open.
@@ -17,7 +25,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_18_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_19_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
