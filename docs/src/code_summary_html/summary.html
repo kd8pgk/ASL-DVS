@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Code Summary: HTML</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; WEB PAGES</div>
+    </div>
+    <div class="ed"><b>Stage 1 of 3</b><br>HTML</div>
+  </div>
+  <div class="body">
+    <h1>Code Summary: <span>HTML</span></h1>
+    <p class="lede">The page markup of the eight web tools in the Pi Zero 2 W build: what each page contains, how it is laid out, and how it is built into the tool.</p>
+    <div class="chips">
+      <span class="chip c1">8 PAGES</span>
+      <span class="chip c2">NO EXTERNAL FILES</span>
+      <span class="chip c3">STAGE 1</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 1 covers HTML. CSS and JavaScript follow as separate summaries. Source: the tool files on branch ccr-9d4fe19f-ssud83.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Scope and method</div>
+  <h1 class="ch">What was counted</h1>
+  <p class="ch-lede">Eight tools serve a web page in the Pi Zero 2 W build. Each keeps its page as markup inside its Python file. The full build and AMP Node Talker are not covered.</p>
+
+  <h2><span class="n">1.1</span>The tools</h2>
+  <table>
+    <tr><th>Tool</th><th>Port</th><th>Build</th></tr>
+    <tr><td>Node Controller (Dashboard)</td><td>8989</td><td>nodecontrol_pi02w</td></tr>
+    <tr><td>SysMon</td><td>9999</td><td>sysmon_pi02w</td></tr>
+    <tr><td>instmon</td><td>8990</td><td>Common tool</td></tr>
+    <tr><td>wifimon</td><td>8991</td><td>Common tool</td></tr>
+    <tr><td>44helper</td><td>9997</td><td>Common tool</td></tr>
+    <tr><td>Node Talker</td><td>8993</td><td>Common tool</td></tr>
+    <tr><td>Node Recorder</td><td>8995</td><td>Common tool</td></tr>
+    <tr><td>Pibrary</td><td>9000</td><td>Common tool</td></tr>
+  </table>
+
+  <h2><span class="n">1.2</span>How the counts were made</h2>
+  <ul>
+    <li>The markup was located by its <code>&lt;!doctype&gt;</code> or <code>&lt;html&gt;</code> line and its closing <code>&lt;/html&gt;</code>. Counts come from parsing that text.</li>
+    <li>Some pages are assembled at run time from templates and placeholders. For those, the summary describes the source, and the static counts understate the final page. This is noted where it applies.</li>
+    <li>Counts are of the markup in the file. Nothing was loaded in a browser for this stage.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; At a glance</div>
+  <h1 class="ch">Size and controls per page</h1>
+  <p class="ch-lede">Figures are for the markup stored in each file. Lines are the source lines the markup occupies.</p>
+
+  <table>
+    <tr><th>Page</th><th>Lines</th><th>Bytes</th><th>IDs</th><th>Buttons</th><th>Inputs</th><th>Selects</th><th>Tables</th><th>Dialogs</th></tr>
+    <tr><td>Node Controller</td><td>5,860</td><td>321,591</td><td>230</td><td>99</td><td>39</td><td>19</td><td>0</td><td>3</td></tr>
+    <tr><td>SysMon</td><td>9,638</td><td>418,629</td><td>342</td><td>141</td><td>33</td><td>1</td><td>0</td><td>1</td></tr>
+    <tr><td>instmon (main)</td><td>545</td><td>37,626</td><td>140</td><td>56</td><td>36</td><td>17</td><td>0</td><td>0</td></tr>
+    <tr><td>instmon (Suite Log)</td><td>247</td><td>17,362</td><td>28</td><td>9</td><td>3</td><td>5</td><td>2</td><td>0</td></tr>
+    <tr><td>wifimon</td><td>2,216</td><td>148,504</td><td>211</td><td>52</td><td>31</td><td>9</td><td>0</td><td>1</td></tr>
+    <tr><td>44helper</td><td>44</td><td>1,784</td><td>10</td><td>1</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
+    <tr><td>Node Talker</td><td>642</td><td>51,952</td><td>373</td><td>86</td><td>63</td><td>20</td><td>12</td><td>2</td></tr>
+    <tr><td>Node Recorder</td><td>353</td><td>26,890</td><td>193</td><td>42</td><td>31</td><td>15</td><td>7</td><td>1</td></tr>
+    <tr><td>Pibrary</td><td>366</td><td>24,258</td><td>171</td><td>41</td><td>42</td><td>6</td><td>0</td><td>0</td></tr>
+  </table>
+  <p class="note">44helper's 44 lines are the page template, which holds the shell, login screen and tab bar. Its tab panels are built from the tab list in code (Part 3.6). Its visible content is therefore much larger than the count shows.</p>
+
+  <h2><span class="n">2.1</span>Forms and accessibility</h2>
+  <table>
+    <tr><th>Page</th><th>Forms</th><th>ARIA attributes</th><th>Dialog or modal markers</th></tr>
+    <tr><td>Node Controller</td><td>1</td><td>61</td><td>3</td></tr>
+    <tr><td>SysMon</td><td>1</td><td>6</td><td>1</td></tr>
+    <tr><td>instmon (main)</td><td>1</td><td>0</td><td>0</td></tr>
+    <tr><td>wifimon</td><td>8</td><td>20</td><td>1</td></tr>
+    <tr><td>Node Talker</td><td>1</td><td>47</td><td>2</td></tr>
+    <tr><td>Node Recorder</td><td>1</td><td>36</td><td>1</td></tr>
+    <tr><td>Pibrary</td><td>1</td><td>1</td><td>0</td></tr>
+  </table>
+  <p>The ARIA counts are uneven. Node Controller, Node Talker and Node Recorder use them widely. Pibrary has one and SysMon has six for 141 buttons. This affects screen-reader use, and the book should not claim full accessibility for any page without a check.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Page by page</div>
+  <h1 class="ch">Node Controller and SysMon</h1>
+
+  <h2><span class="n">3.1</span>Node Controller (Dashboard, port 8989)</h2>
+  <p>The page sits in one Python string, from line 7980 to 13839. It has a login screen, a header, a status strip, a tab strip and one panel per mode.</p>
+  <ul>
+    <li><strong>Login screen:</strong> <code>login-screen</code>, <code>login-card</code>, a password field and a Log In button. Errors appear in <code>login-err</code>.</li>
+    <li><strong>Header:</strong> callsign, node number, uptime, a talkgroup indicator, and links to the listen page and SysMon. A <code>perm-link-bar</code> shows a permanent link that is up.</li>
+    <li><strong>Banners:</strong> a recording banner (<code>rec-banner</code>) and an offline bar (<code>offline-bar</code>).</li>
+    <li><strong>Tab strip:</strong> ASL, ECHO, DMR, STFU, YSF, FCS, P25, NXDN, D-STAR, XLX, M17, Phone and Edit.</li>
+    <li><strong>Panels:</strong> one <code>pg-*</code> panel per tab. Each holds a card (for example <code>asl-card</code>), a filter, a reference select, a connect button, a save button, a message line and a grid of entries.</li>
+    <li><strong>Dialogs:</strong> three dialog elements for confirmations.</li>
+  </ul>
+
+  <h2><span class="n">3.2</span>SysMon (port 9999)</h2>
+  <p>The page is one large string from line 1504 to 11141. It is a status monitor with a zone layout, not a set of tabs.</p>
+  <ul>
+    <li><strong>Login and offline:</strong> the same login pattern as the Dashboard, plus an <code>offline-bar</code> and a <code>restart-banner</code>.</li>
+    <li><strong>Quick links:</strong> a bar (<code>ql-bar</code>) linking to Allmon3, DVSwitch, Cockpit, M17, wifimon and the Dashboard.</li>
+    <li><strong>Status strip:</strong> host, load, memory, temperature, voltage and registration. Each has its own id (for example <code>s-volt</code>).</li>
+    <li><strong>Command bar:</strong> a row of buttons (<code>tbtn-*</code>) for each view: Overview, Services, Ports, Journal, ASL-DVS, Reg, Phone, Tune, Hardware, DVSM, STFU, M17, SD Card and Edit.</li>
+    <li><strong>Content area:</strong> <code>zone-content</code> holds one panel per view (for example <code>panel-overview</code>, <code>panel-services</code>, <code>panel-ports</code>).</li>
+    <li><strong>Dialog:</strong> one dialog for confirmations.</li>
+  </ul>
+  <p>The ASL-DVS tab keeps its name in the markup (see the naming rules in CLAUDE.md).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Pages</div>
+  <h1 class="ch">instmon and wifimon</h1>
+
+  <h2><span class="n">4.1</span>instmon (port 8990)</h2>
+  <p>instmon has two pages in its file.</p>
+  <ul>
+    <li><strong>Main page</strong> (lines 11602 to 12146), titled for the installer and manager. Its sections are: full update (<code>fu-banners</code>, <code>fu-btn</code>, <code>fu-stop-btn</code>, <code>fu-plan</code>), GitHub update summary and release notes, a channel choice and a build choice, Quiet System and Restore buttons, and a component list with one card per tool (for example <code>confputter-card</code>).</li>
+    <li>Further cards hold a USB import (<code>usbimp-*</code>), a documents list (<code>docs-*</code>), a backup button and a disk-image section (<code>diskimg-*</code>) with a drive table, format options, a console and a backup destination.</li>
+    <li><strong>Suite Log page</strong> (lines 6363 to 6609), titled "Suite Log (testing)". It holds a filter form (range, level, kind, search, row limit, order, live refresh), a count line, copy and download buttons for text and JSON, and a coverage table.</li>
+  </ul>
+
+  <h2><span class="n">4.2</span>wifimon (port 8991)</h2>
+  <p>The page runs from line 7332 to 9547. It is one long page of cards, in this order:</p>
+  <table>
+    <tr><th>Card</th><th>Holds</th></tr>
+    <tr><td>Status</td><td>SSID, signal meter, IP, network state, power-save and country-code controls</td></tr>
+    <tr><td>Saved networks</td><td>The list, an add-network form, and options</td></tr>
+    <tr><td>Nearby networks</td><td>Scan results</td></tr>
+    <tr><td>Radio and device</td><td>WiFi devices, keep-on or keep-off settings, and the emergency hotspot</td></tr>
+    <tr><td>Watchdog</td><td>Watchdog settings, with counters</td></tr>
+    <tr><td>Alerts</td><td>Alert channel settings</td></tr>
+    <tr><td>Tunnel watchdog</td><td>Tunnel watchdog settings and state</td></tr>
+    <tr><td>Service</td><td>Service status and controls</td></tr>
+    <tr><td>Wi-Fi management tools</td><td>Install output</td></tr>
+    <tr><td>Activity log</td><td>Shutdown reports</td></tr>
+  </table>
+  <p>Banners sit above the cards: a report banner, a job banner with steps, a pending-change banner with an Undo button, and a hotspot banner. A dialog asks "Turn the watchdogs on?" on first login.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Pages</div>
+  <h1 class="ch">44helper and Node Talker</h1>
+
+  <h2><span class="n">5.1</span>44helper (port 9997)</h2>
+  <p>The page is built by a function that returns the full document (around line 27036). It has five parts:</p>
+  <ul>
+    <li><strong>Login screen:</strong> a welcome line and a root-password form.</li>
+    <li><strong>Header:</strong> the app name, an uptime value, and buttons for Terminal, Log out all devices, and Log Out.</li>
+    <li><strong>Quiet-mode banner</strong> (<code>qm-banner</code>), empty unless quiet mode is on.</li>
+    <li><strong>Tab bar</strong> built by <code>_render_tab_bar</code> from the tab list (Part 3.6).</li>
+    <li><strong>Panels</strong>, one per tab, and a version line at the foot.</li>
+  </ul>
+  <p>The shell is short in the source, so a count of its markup says little about the page. The panels contain most of the controls (see Part 3.6).</p>
+
+  <h2><span class="n">5.2</span>Node Talker (port 8993)</h2>
+  <p>The page runs from line 11873 to 12514. Its navigation is three buttons: <strong>Connect</strong>, <strong>Listen</strong> and <strong>Setup</strong>. The icons are placeholders (<code>__ICON_CONNECT__</code> and so on) replaced when the page is served.</p>
+  <ul>
+    <li><strong>Login:</strong> a password field and a TLS note (<code>login-tls</code>), since the page can run over HTTPS.</li>
+    <li><strong>Connect tab:</strong> a favorites list, a mode and number entry, connect and disconnect buttons, a network choice dialog, and a tune area with its own find and pick controls. Twelve tables hold the lists.</li>
+    <li><strong>Listen tab:</strong> a listen button, a volume range control, a status feed, a transmit status, a listener count, a spectrum box, and a gap countdown.</li>
+    <li><strong>Setup tab:</strong> the audio, push-to-talk and limits settings, with range sliders and checkboxes.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Pages</div>
+  <h1 class="ch">Node Recorder and Pibrary</h1>
+
+  <h2><span class="n">6.1</span>Node Recorder (port 8995)</h2>
+  <p>The page runs from line 7097 to 7449. Its navigation is <strong>Schedule</strong>, <strong>Record</strong> and <strong>Setup</strong>.</p>
+  <ul>
+    <li><strong>Schedule tab:</strong> a schedule form (title, name, special day, date, weekdays, start and end time, time zone, mode, network and module choice, format, and an enabled flag), a set and clear pair, a rows list, and a results table with a trace.</li>
+    <li><strong>Record tab:</strong> a tune area as in Node Talker, and a recordings list. The page has seven tables in all.</li>
+    <li><strong>Login:</strong> the same pattern as Node Talker, with a TLS note.</li>
+  </ul>
+
+  <h2><span class="n">6.2</span>Pibrary (port 9000)</h2>
+  <p>The page runs from line 8544 to 8909. It is a media player, and it is the only page that follows the operating system's light or dark setting.</p>
+  <ul>
+    <li><strong>Header:</strong> logo, a view button, and a logout button.</li>
+    <li><strong>Tabs:</strong> Movies, Audio and PDF. Each tab reads one folder of the library.</li>
+    <li><strong>Mini player:</strong> previous, play, next, art, title, restart, shuffle, repeat, rate, sleep, queue, cast and close controls, with an audio element.</li>
+    <li><strong>Queue panel</strong> and a <strong>picker</strong> (filter and list), a <strong>popup</strong> overlay, and a <strong>keyhelp</strong> sheet.</li>
+    <li><strong>View panel:</strong> theme, size, density and layout options, plus a close button.</li>
+    <li><strong>Global search</strong> (<code>gs-input</code>, <code>gs-results</code>), a keep bar, an alert area, and toasts.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Shared structure</div>
+  <h1 class="ch">What the pages have in common</h1>
+
+  <h2><span class="n">7.1</span>Login pattern</h2>
+  <p>Every page starts with a login screen that uses the same ids (<code>login-screen</code>, <code>login-card</code>, <code>login-pw</code>, <code>login-btn</code>, <code>login-err</code>). Each one checks the root password through PAM. Sessions and lockouts are covered in the Watchdogs, Guardrails, Locks and Controls summary.</p>
+
+  <h2><span class="n">7.2</span>Self-contained pages</h2>
+  <ul>
+    <li>No page loads an external script or stylesheet. Pibrary links its own web app manifest and icons from its own server.</li>
+    <li>Each page embeds its fonts with two <code>@font-face</code> rules (Readex Pro, weights 400 and 700) as data URIs. The page works offline.</li>
+    <li>Each page sets a viewport meta tag and a language attribute.</li>
+  </ul>
+
+  <h2><span class="n">7.3</span>Theme</h2>
+  <p>Every page carries a <code>data-theme</code> attribute, and a theme block is inserted before the page's own styles (the <code>__THEME__</code> placeholder, or <code>_THEME_HEAD</code> in 44helper). Only Pibrary also reads the operating system's dark or light setting, through <code>prefers-color-scheme</code>.</p>
+
+  <h2><span class="n">7.4</span>Banners and status</h2>
+  <p>Most pages show a banner above the content when something needs attention: a report, a background job, a quiet-mode state, an offline link, or a pending change. Each banner has its own id.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">Things the markup shows</h1>
+
+  <h2><span class="n">8.1</span>Pages are large single strings</h2>
+  <p>The Node Controller page is about 5,900 lines and SysMon about 9,600, each inside one Python string. Editing them means working inside a string literal. The book should say so, because it shapes how changes are made.</p>
+
+  <h2><span class="n">8.2</span>Some pages are built at run time</h2>
+  <p>44helper's tabs, and parts of instmon and Node Talker, are assembled from lists and placeholders. Anyone reading the raw file will miss part of what the user sees. The book should describe these pages from their templates.</p>
+
+  <h2><span class="n">8.3</span>Uneven ARIA coverage</h2>
+  <p>The ARIA counts in Part 2.1 vary by a large factor. Before the book claims accessibility for any page, check it with a screen reader or an accessibility audit.</p>
+
+  <h2><span class="n">8.4</span>Two login rules in the markup</h2>
+  <p>All eight pages use the same login ids, but the lockout and session rules differ between tools. The rules are in the Watchdogs, Guardrails, Locks and Controls summary. Do not read the shared markup as a shared rule.</p>
+</section>
+
+</body>
+</html>
