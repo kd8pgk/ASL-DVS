@@ -1,6 +1,15 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.15`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.19`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.19 (2026-11-06)
+
+- **The app now reports talk-channel failures.** Before, a try at opening the talk channel that failed was kept inside the app and retried quietly, so the page showed "Opening the talk channel..." and nothing else, and the node never heard of it. Now every failed try is sent to the page at once with its reason, and to the node as a `talk_fail` event (and `talk_up` when it works again), at most one failure report a minute. The page shows the reason; the node logs it.
+- **Failed sends while transmitting are no longer swallowed.** If the key-up, a pre-key frame, a microphone frame or the unkey cannot be sent, the app tells the page ("Lost the talk channel while transmitting") and closes the dead socket so the talk channel reconnects at once, instead of dropping audio until the connection timed out.
+- **The same reasons on both sockets, and more exact ones.** Listen and Talk sort errors as `timeout`, `connect`, `tls` (certificate), `reset`, `closed`, `http`, `login` or `other`. Certificate and connection-reset errors used to be filed as "other". The receive-health report sends them to the node.
+- A start or stop of the talk channel no longer changes the Listen log's "was listening" mark, so a talk failure cannot make the app report a listen session as killed.
+- Needs Node Talker 0.10.19 on the node to show the reasons on the page and to log them; an older node ignores the new events.
+- Tests: the error sorting, the report rate limit and the typed HTTP errors (`SocketErrorsTest`, `WsClientTest`).
 
 ## 0.10.15 (2026-11-05)
 

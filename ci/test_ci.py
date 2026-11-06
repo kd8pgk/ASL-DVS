@@ -2069,6 +2069,45 @@ class ListenEventTests(unittest.TestCase):
         self.assertEqual([r["why"] for r in rows], ["page_hidden", "page_shown", "page_frozen", "page_resumed", "page_unload", "resumed_dead"])
         self.assertEqual(rows[1]["detail"], {"hid": 90, "gap": 20})
 
+    def test_talk_events_keep_the_reason_and_log_failures_as_warnings(self):
+        nt = self.nt
+        evs = [{"action": "talk_fail", "src": "system", "why": "tls",
+                "detail": {"err": "the certificate does not match pi", "n": 3, "code": 403, "net": "wifi"}},
+               {"action": "talk_up", "src": "system", "why": "reconnected", "detail": {"secs": 42, "n": 3}},
+               {"action": "talk_fail", "src": "system", "why": "new_reason_from_a_newer_app", "detail": {"n": 1}}]
+        self.assertEqual(nt.listen_event({"client": "android", "events": evs})["n"], 3)
+        rows = self.rows()
+        self.assertEqual([(r["action"], r["why"]) for r in rows],
+                         [("talk_fail", "tls"), ("talk_up", "reconnected"), ("talk_fail", "other")])
+        self.assertEqual(rows[0]["detail"], {"err": "the certificate does not match pi", "n": 3, "code": 403, "net": "wifi"})
+        self.assertEqual(rows[1]["detail"], {"secs": 42, "n": 3})
+        self.assertEqual([c[0][1] for c in self.log.call_args_list], ["warn", "ok", "warn"])
+        self.assertIn("talk_fail", self.log.call_args_list[0][0][0])
+        self.assertIn("tls", self.log.call_args_list[0][0][0])
+
+    def test_the_app_talk_reports_agree_with_the_node(self):
+        nt = self.nt
+        base = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker")
+        with open(os.path.join(base, "SocketErrors.kt"), encoding="utf-8") as fh:
+            errs = fh.read()
+        reasons = re.findall(r'const val [A-Z]+ = "(\w+)"', errs)
+        self.assertIn("tls", reasons)
+        for why in reasons:
+            self.assertIn(why, nt.LISTEN_WHY)
+        for why in set(reasons) - {"login"}:
+            self.assertIn(why, nt._RXH_CLIENT_WHY)
+        with open(os.path.join(base, "ListenService.kt"), encoding="utf-8") as fh:
+            svc = fh.read()
+        actions = re.findall(r'ListenLog\.talk\(this, "(\w+)"', svc)
+        self.assertEqual(sorted(set(actions)), ["talk_fail", "talk_up"])
+        for action in actions:
+            self.assertIn(action, nt.LISTEN_ACTIONS)
+        for why in re.findall(r'ListenLog\.talk\(this, "\w+", "(\w+)"', svc):
+            self.assertIn(why, nt.LISTEN_WHY)
+        keys = set(re.findall(r'\.put\("(err|n|code|secs)"', svc))
+        self.assertEqual(keys, {"err", "n", "code", "secs"})
+        self.assertEqual(keys - set(nt.LISTEN_DETAIL_NUM) - set(nt.LISTEN_DETAIL_STR), set())
+
     def test_the_app_spectrum_and_the_page_agree(self):
         import re
         nt = self.nt

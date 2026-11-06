@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.18"
+VERSION = "0.10.19"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Talker"
 
@@ -1839,8 +1839,10 @@ LISTEN_WHY = ("button", "notification", "media_button", "auto_open", "balancer",
               "headset_lost", "bluetooth_connect", "bluetooth_gone", "login_rejected", "stream_ended",
               "service_destroyed", "process_killed", "format_changed", "logout", "app_start", "app_stop",
               "client_closed", "write_timeout", "error", "pump_stopped", "page_frozen", "page_resumed", "page_hidden",
-              "page_shown", "page_unload", "resumed_dead", "other")
-LISTEN_DETAIL_NUM = ("vis", "screen", "fg", "doze", "psave", "ign", "bucket", "up", "trim", "code", "imp", "secs", "hid", "gap")
+              "page_shown", "page_unload", "resumed_dead", "timeout", "connect", "tls", "reset", "closed", "http", "login",
+              "reconnected", "other")
+LISTEN_ACTIONS = ("connect", "disconnect", "page", "talk_fail", "talk_up")
+LISTEN_DETAIL_NUM = ("vis", "screen", "fg", "doze", "psave", "ign", "bucket", "up", "trim", "code", "imp", "secs", "hid", "gap", "n")
 LISTEN_DETAIL_STR = ("net", "exit", "err")
 _LISTEN_STR_RE = re.compile(r"[^A-Za-z0-9_ .:/-]")
 RXH_GAP_SEC = 0.06
@@ -1912,7 +1914,7 @@ _RXH_LINK_MAX = ("jit", "rtt")
 _RXH_CLIENT_SUM = ("under", "reset", "silence_ms", "under_local", "out_stalls", "reconn", "net_chg")
 _RXH_CLIENT_MAX = ("stall_ms", "out_ms", "ttfb_ms", "gap_ms", "rssi_weak", "wifi", "cell", "psave", "idle", "metered", "vpn", "mhz")
 _RXH_CLIENT_MIN = ("link_mbps",)
-_RXH_CLIENT_WHY = ("timeout", "connect", "closed", "http", "other")
+_RXH_CLIENT_WHY = ("timeout", "connect", "tls", "reset", "closed", "http", "other")
 
 
 def _rxh_loopback(chan):
@@ -2577,7 +2579,7 @@ def listen_note(client, src, action, why, detail, phone_t=None):
     _listenlog_write(row)
     bits = ", ".join(f"{k} {v}" for k, v in detail.items())
     log_event(f"Listen {action}: {client}, {src}, {why.replace('_', ' ')}" + (f" ({bits})" if bits else ""),
-              "ok" if src != "system" or action == "page" else "warn")
+              "ok" if src != "system" or action in ("page", "talk_up") else "warn")
 
 
 def listen_event(body):
@@ -2590,7 +2592,7 @@ def listen_event(body):
         if not isinstance(ev, dict):
             continue
         action, src = ev.get("action"), ev.get("src")
-        if action not in ("connect", "disconnect", "page") or src not in ("user", "system"):
+        if action not in LISTEN_ACTIONS or src not in ("user", "system"):
             continue
         if action == "page" and src != "system":
             continue
@@ -10107,6 +10109,16 @@ function appTalkClosed(err) {
 window.ntAppTalk = (m) => {
   if (!m || !appTalk()) return;
   if (m.ev === 'open') { if (!wsReady) { wsReady = true; pttUi('ready', connBusy ? undefined : ''); } return; }
+  if (m.ev === 'failed') {
+    if (!wsReady) pttUi('off', 'Talk channel: ' + (m.error || m.why || 'could not open') + '. Retrying...', 'warn');
+    return;
+  }
+  if (m.ev === 'txfail') {
+    wsReady = false;
+    if (talking) { keyed = false; endTalk(); }
+    pttUi('off', 'Lost the talk channel while transmitting: ' + (m.error || m.why || 'send failed') + '. Reconnecting...', 'err');
+    return;
+  }
   if (m.ev === 'closed') { appTalkClosed(m.error); return; }
   if (m.ev === 'retry') { openTalk(true); return; }
   if (m.ev === 'level') { if (talking) txMeter({pk: m.db}); return; }

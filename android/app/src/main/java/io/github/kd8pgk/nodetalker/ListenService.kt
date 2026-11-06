@@ -85,6 +85,8 @@ object Talk {
     @Volatile var open = false
     @Volatile var talking = false
     @Volatile var error = ""
+    @Volatile var why = ""
+    @Volatile var fails = 0
     @Volatile var svc: ListenService? = null
     @Volatile var micRate = 0
 
@@ -92,7 +94,7 @@ object Talk {
 
     fun emit(json: String) = listeners.forEach { it(json) }
 
-    fun json(): String = JSONObject().put("open", open).put("talking", talking).put("error", error).toString()
+    fun json(): String = JSONObject().put("open", open).put("talking", talking).put("error", error).put("why", why).put("fails", fails).toString()
 
     fun open(c: Context, node: Node) {
         val i = Intent(c, ListenService::class.java).setAction(ListenService.ACTION_TALK).putExtra(ListenService.EXTRA_NODE, node.id)
@@ -252,6 +254,36 @@ class ListenService : Service() {
         if (!talkWanted) shutdown() else node?.let { notifyState(it) }
     }
 
+    private val talkFails = FailureReporter()
+    @Volatile private var txFailSent = false
+
+    private fun talkFailed(e: IOException) {
+        val why = SocketErrors.classify(e)
+        Talk.why = why
+        Talk.fails++
+        Talk.emit(JSONObject().put("ev", "failed").put("why", why).put("error", Talk.error).toString())
+        val down = talkFails.fail(SystemClock.elapsedRealtime()) ?: return
+        val detail = JSONObject().put("err", SocketErrors.brief(e)).put("n", down.failures)
+        val code = SocketErrors.httpCode(e)
+        if (code > 0) detail.put("code", code)
+        ListenLog.talk(this, "talk_fail", why, detail.toString())
+    }
+
+    private fun talkRecovered() {
+        val up = talkFails.up(SystemClock.elapsedRealtime()) ?: return
+        ListenLog.talk(this, "talk_up", "reconnected", JSONObject().put("secs", up.secs).put("n", up.failures).toString())
+    }
+
+    private fun talkWriteFailed(e: IOException) {
+        if (txFailSent) return
+        txFailSent = true
+        Talk.error = e.message ?: e.javaClass.simpleName
+        Talk.why = SocketErrors.classify(e)
+        Talk.emit(JSONObject().put("ev", "txfail").put("why", Talk.why).put("error", Talk.error).toString())
+        val c = ws ?: return
+        Thread({ c.close() }, "nt-talk-close").start()
+    }
+
     private fun talkOpen(n: Node) {
         Talk.nodeId = n.id
         if (talkWanted && talkThread?.isAlive == true) {
@@ -295,6 +327,9 @@ class ListenService : Service() {
                 }
                 Talk.open = true
                 Talk.error = ""
+                Talk.why = ""
+                Talk.fails = 0
+                talkRecovered()
                 Talk.emit("{\"ev\":\"open\"}")
                 node?.let { notifyState(it) }
                 val upAt = SystemClock.elapsedRealtime()
@@ -305,6 +340,7 @@ class ListenService : Service() {
                 }
             } catch (e: IOException) {
                 Talk.error = e.message ?: e.javaClass.simpleName
+                if (talkWanted && g == talkGen) talkFailed(e)
             }
             ws = null
             if (talking) stopTalk()
@@ -340,7 +376,7 @@ class ListenService : Service() {
                 try {
                     pk.forEach { c?.sendBinary(it) }
                 } catch (e: IOException) {
-                    Talk.error = e.message ?: ""
+                    talkWriteFailed(e)
                 }
                 if (guardMs > 0) handler.postDelayed(guardRun, guardMs)
             }
@@ -359,12 +395,14 @@ class ListenService : Service() {
             preKey.clear()
             guardMs = (guardSec * 1000).toLong()
         }
+        txFailSent = false
         handler.removeCallbacks(unmute)
         handler.removeCallbacks(guardRun)
         Listen.muted = true
         try {
             c.sendText("{\"op\":\"key\"}")
         } catch (e: IOException) {
+            talkWriteFailed(e)
             stopTalk()
             return false
         }
@@ -396,7 +434,7 @@ class ListenService : Service() {
         try {
             ws?.sendBinary(f)
         } catch (e: IOException) {
-            Talk.error = e.message ?: ""
+            talkWriteFailed(e)
         }
     }
 
@@ -409,7 +447,7 @@ class ListenService : Service() {
         try {
             ws?.sendText("{\"op\":\"unkey\"}")
         } catch (e: IOException) {
-            Talk.error = e.message ?: ""
+            talkWriteFailed(e)
         }
         stopTalk()
     }
@@ -524,7 +562,7 @@ class ListenService : Service() {
                         ""
                     }
                     c.disconnect()
-                    throw IOException(msg.ifEmpty { "HTTP $code" })
+                    throw NodeHttpException(code, msg.ifEmpty { "HTTP $code" })
                 }
                 val pcm = c.getHeaderField("X-Audio-Format").orEmpty().startsWith("s16le")
                 val input = c.inputStream
@@ -544,15 +582,7 @@ class ListenService : Service() {
                 if (live(g)) throw IOException(getString(R.string.listen_ended))
             } catch (e: IOException) {
                 if (!live(g)) return
-                stats.reconnect(
-                    when {
-                        e is java.net.SocketTimeoutException -> "timeout"
-                        e is java.net.ConnectException || e is java.net.UnknownHostException -> "connect"
-                        e.message == getString(R.string.listen_ended) -> "closed"
-                        e.message?.startsWith("HTTP") == true -> "http"
-                        else -> "other"
-                    }
-                )
+                stats.reconnect(if (e.message == getString(R.string.listen_ended)) SocketErrors.CLOSED else SocketErrors.classify(e))
                 val waitMs = backoff.next(upMs)
                 set(Listen.RECONNECTING, getString(R.string.listen_retry, e.message ?: e.javaClass.simpleName, waitMs / 1000))
                 try {
