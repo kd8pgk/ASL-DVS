@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>instmon - Backup and Clone Cards</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; INSTMON</div>
+    </div>
+    <div class="ed"><b>Part 4 of 5</b><br>backup and clone</div>
+  </div>
+  <div class="body">
+    <h1>The <span>Backup</span> and Clone Cards</h1>
+    <p class="lede">The disk-image cards copy the node's SD card to a USB drive, restore an image to a drive, clone one drive to another, format a drive, and run backups on a schedule. This summary covers each card, the checks that stand before a job, the options, the image format, and how a job is watched and stopped.</p>
+    <div class="chips">
+      <span class="chip c1">BACKUP</span>
+      <span class="chip c2">RESTORE</span>
+      <span class="chip c3">CLONE</span>
+      <span class="chip c4">FORMAT</span>
+      <span class="chip c5">SCHEDULE</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 4 of 5. Source: instmon_v2_91_1_20261105.py on branch ccr-9d4fe19f-ssud83. Nothing was run on a node; disk operations are described from the code and were not executed.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; The cards</div>
+  <h1 class="ch">What is on the page</h1>
+  <p class="ch-lede">The disk-image section is one panel with a drive table and six cards. Each card has its own options, a command preview, and a start button. A single job console shows what the running job is doing.</p>
+
+  <table>
+    <tr><th>Card or part</th><th>What it does</th><th>Main route</th></tr>
+    <tr><td>Drives</td><td>Lists the disks, their partitions, mounts and filesystems. The boot disk is marked SYSTEM DRIVE.</td><td><code>/api/diskimg/drives</code></td></tr>
+    <tr><td>Backup</td><td>Copies the boot disk (the SD card) to an image file on a USB drive.</td><td><code>/api/diskimg/backup/start</code></td></tr>
+    <tr><td>Existing Backups</td><td>Lists the images on the drives, and downloads or deletes one.</td><td><code>/api/diskimg/backup/list</code>, <code>/download</code>, <code>/delete</code></td></tr>
+    <tr><td>Restore</td><td>Writes a chosen image back to a drive.</td><td><code>/api/diskimg/restore/start</code></td></tr>
+    <tr><td>Clone</td><td>Copies one whole drive to another drive.</td><td><code>/api/diskimg/clone/start</code></td></tr>
+    <tr><td>Full Format</td><td>Wipes a drive, makes a new partition table, and formats it.</td><td><code>/api/diskimg/format/start</code></td></tr>
+    <tr><td>Scheduled Backups</td><td>Runs a backup automatically at an interval, with retention.</td><td><code>/api/diskimg/schedule</code></td></tr>
+    <tr><td>Job</td><td>Shows the running job, its console, its progress, and cancel or reset.</td><td><code>/api/diskimg/job</code>, <code>/job/cancel</code>, <code>/job/reset</code></td></tr>
+    <tr><td>Mount, unmount, eject, preview</td><td>Manage a drive's mounts, power it off, and show the command before a job starts.</td><td><code>/api/diskimg/mount</code>, <code>/unmount</code>, <code>/eject</code>, <code>/preview</code></td></tr>
+  </table>
+  <p>Import from USB Drive is a separate card, covered in Part 2 of this series. It also stages files, not disk images.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Before any job</div>
+  <h1 class="ch">What stops a disk job from starting</h1>
+
+  <ul>
+    <li><strong>The boot disk is never offered as a target.</strong> The drive pickers leave it out. The server refuses it for format and eject, and the scheduled backup skips it. The restore and clone checks depend on the pickers; a server-side refusal for those two was not confirmed in the code. Backup reads from the boot disk and never writes to it.</li>
+    <li><strong>One job at a time.</strong> A second job is refused while one is running. An install, a Full Update or a recording also blocks a job, and the page is told which one.</li>
+    <li><strong>Tools present.</strong> The job needs dd, lsblk, findmnt, mount, umount and partprobe. The dependency card lists what is missing and how to install it. The optional tools (for example ddrescue and rpi-clone) are needed only for those backends.</li>
+    <li><strong>A preview first.</strong> The page shows the exact command a job would run, before it starts. The preview route builds it without running anything.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Backup</div>
+  <h1 class="ch">Copying the SD card to a USB drive</h1>
+
+  <h2><span class="n">3.1</span>What is written</h2>
+  <ul>
+    <li>The image is written to a folder named <code>instmon-backups</code> on the chosen drive, as a file ending in <code>.img</code> (or <code>.img.enc</code> if encrypted).</li>
+    <li>While copying, the file has a <code>.part</code> suffix. It is renamed to its final name only when the copy has finished, so an interrupted copy never looks like a finished backup.</li>
+    <li>Next to each image is a sidecar file (<code>.json</code>). It records the format and version, the image name, its size, the hash algorithm and value, the source device and its size, the host name, the time, whether it is encrypted, whether it was shrunk, and the instmon version.</li>
+    <li>A backup that is cancelled removes its partial file.</li>
+  </ul>
+
+  <h2><span class="n">3.2</span>Options</h2>
+  <table>
+    <tr><th>Option</th><th>What it does</th></tr>
+    <tr><td>Label</td><td>A name for the image, used in its file name.</td></tr>
+    <tr><td>Shrink</td><td>Makes the image smaller than the card. The filesystem is checked with e2fsck first; a filesystem that is not clean is not shrunk. Then resize2fs shrinks it to its minimum, parted shrinks the partition to match, and the image file is truncated.</td></tr>
+    <tr><td>Verify</td><td>Reads the image back after it is written and compares its hash with the one taken during the copy. The hash is SHA-256 or BLAKE2b.</td></tr>
+    <tr><td>Encrypt</td><td>Pipes the copy through openssl (AES-256-CBC, PBKDF2, salted). The passphrase is passed through an environment variable, not on the command line.</td></tr>
+    <tr><td>Quiesce</td><td>Freezes the root filesystem with fsfreeze for the length of the copy, so the image is consistent. It is thawed afterwards.</td></tr>
+    <tr><td>Best effort</td><td>Keeps going past read errors (conv=noerror,sync).</td></tr>
+    <tr><td>Direct I/O and throttle</td><td>Direct I/O bypasses the cache. A throttle rate, in megabytes per second, slows the copy.</td></tr>
+    <tr><td>Rescue backend</td><td>Uses ddrescue instead of dd. It keeps a map file, so an interrupted rescue can be resumed.</td></tr>
+  </table>
+
+  <h2><span class="n">3.3</span>FAT drives</h2>
+  <p>A FAT drive cannot hold a file larger than 4 GB. Before a copy to a FAT drive, the size is compared with that limit, and the job is refused with the reason if the image would not fit.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Restore</div>
+  <h1 class="ch">Writing an image back to a drive</h1>
+
+  <ol>
+    <li><strong>Pick the image.</strong> The card reads its sidecar and shows the size, the hash and whether it is encrypted.</li>
+    <li><strong>Pick the drive.</strong> The boot disk is refused. The drive must be large enough for the image.</li>
+    <li><strong>Write.</strong> The image is copied to the drive. An encrypted image is decrypted on the way, with the passphrase the operator types.</li>
+    <li><strong>Check the hash</strong> when the sidecar has one. A written image whose hash does not match is reported as a failure.</li>
+    <li><strong>Expand to fill</strong> (optional). After the restore, the partition is grown with parted, and the filesystem with resize2fs, to use the whole drive.</li>
+    <li><strong>New disk IDs</strong> (optional). The disk's identifiers are changed, so two cards restored from the same image do not share them.</li>
+  </ol>
+  <p>A restore is the reverse of a backup. It writes over the drive it is given, so anything on that drive is replaced.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Clone</div>
+  <h1 class="ch">Copying one drive to another</h1>
+
+  <p>A clone copies a whole drive to another drive with no image file in between. Three backends are offered:</p>
+  <table>
+    <tr><th>Backend</th><th>What it does</th><th>Verify and freeze</th></tr>
+    <tr><td>dd</td><td>A direct block copy. Supports the same options as a backup, and expand and new IDs.</td><td>Both available</td></tr>
+    <tr><td>ddrescue</td><td>A rescue copy with a map file, so it can resume after errors.</td><td>As for dd</td></tr>
+    <tr><td>rpi-clone</td><td>The rpi-clone tool, which copies the Raspberry Pi system with its own options.</td><td>Not used: the job turns verify and freeze off</td></tr>
+  </table>
+  <p>Expand and new IDs apply only to the dd and ddrescue clones. The source's size is recorded, so the copy length is known and the progress can be shown.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Full Format</div>
+  <h1 class="ch">Wiping and formatting a drive</h1>
+
+  <ul>
+    <li><strong>Filesystems:</strong> ext4 (mkfs.ext4), FAT32 (mkfs.vfat), or exfat (mkfs.exfat).</li>
+    <li><strong>Quick or full:</strong> a quick format clears only the start of the drive. A full format overwrites the whole drive, so it takes much longer.</li>
+    <li><strong>Steps:</strong> the partition and formatting tools are run in turn, and their output is shown in the job console.</li>
+    <li><strong>The boot disk</strong> is refused (Part 2).</li>
+  </ul>
+  <p>A format destroys every file on the drive.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Scheduled backups</div>
+  <h1 class="ch">Backups that run on their own</h1>
+
+  <h2><span class="n">7.1</span>Settings</h2>
+  <table>
+    <tr><th>Setting</th><th>Default</th><th>Meaning</th></tr>
+    <tr><td>Enabled</td><td>Off</td><td>The schedule runs only when turned on.</td></tr>
+    <tr><td>Interval</td><td>24 hours</td><td>Time between backups. A backup is due when this much time has passed since the last run.</td></tr>
+    <tr><td>Destination</td><td>None</td><td>The drive. Its filesystem UUID is remembered, so a drive that changes its device name is still found.</td></tr>
+    <tr><td>Retention</td><td>5</td><td>How many scheduled images are kept. The oldest are deleted when the count is passed.</td></tr>
+    <tr><td>Shrink, verify, quiesce</td><td>Off</td><td>The same options as a manual backup.</td></tr>
+    <tr><td>Label</td><td>auto</td><td>The label in the file name.</td></tr>
+  </table>
+
+  <h2><span class="n">7.2</span>When it waits</h2>
+  <p>The scheduler checks every minute. A backup that is due does not start, and the reason is logged and kept, when:</p>
+  <ul>
+    <li>the node booted less than 15 minutes ago (so the network, tunnel and radio services can start first);</li>
+    <li>a disk job is already running;</li>
+    <li>a Full Update is running, a recording is in progress, or an install is running;</li>
+    <li>no boot disk can be determined, no destination is set, or the destination drive is not attached.</li>
+  </ul>
+  <p>The last skip and the last run (with its status and message) are kept in the schedule settings and shown on the card.</p>
+
+  <h2><span class="n">7.3</span>Retention</h2>
+  <p>Only the scheduled images are pruned. They are recognised by their name ending in <code>.sched.img</code>. Manual backups are never pruned. The oldest scheduled images, by modification time, are removed beyond the retention count, along with their sidecars.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; The job, its console and its stop</div>
+  <h1 class="ch">Watching a job</h1>
+
+  <ul>
+    <li><strong>The console</strong> keeps the last 300 lines of the job's output. The progress line of dd or ddrescue is turned into bytes done, rate and percentage.</li>
+    <li><strong>The job record</strong> is saved as the job runs, so when instmon restarts, it can tell the page what was running and how it ended (the last-job recovery).</li>
+    <li><strong>Cancel</strong> stops the copy and removes a partial backup.</li>
+    <li><strong>Reset</strong> clears a finished job's record from the page.</li>
+    <li><strong>Eject</strong> syncs the drive, unmounts everything on it, and powers the USB device off. It is refused for the boot disk and while a job is busy.</li>
+  </ul>
+  <p>Copies run as systemd transient units, so they keep going if the instmon process is restarted.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 9 &middot; Points for the book</div>
+  <h1 class="ch">What the disk cards show</h1>
+
+  <h2><span class="n">9.1</span>The boot disk is protected in code</h2>
+  <p>The checks refuse the boot disk as a target in restore, clone, format and eject. The book can say the card cannot overwrite the disk the node is running from.</p>
+
+  <h2><span class="n">9.2</span>An image is only trusted when its hash matches</h2>
+  <p>A backup is written with a <code>.part</code> name and renamed only when it finishes, and its hash is recorded in the sidecar. A restore that checks the hash can show that the image was not damaged on the drive.</p>
+
+  <h2><span class="n">9.3</span>Scheduled backups wait for the node to settle</h2>
+  <p>The 15-minute boot wait and the skip rules keep a scheduled copy from competing with a Full Update, a recording or an install. The book should say that a backup can be skipped, and where the reason is shown.</p>
+
+  <h2><span class="n">9.4</span>Not checked</h2>
+  <ul>
+    <li>The dd, ddrescue and rpi-clone command lines were read in part, and were not run.</li>
+    <li>The partition and identity changes on a real card, and the resize results.</li>
+    <li>The exact progress parsing for each backend.</li>
+    <li>The restore card's warnings and the size checks in the browser.</li>
+  </ul>
+</section>
+
+</body>
+</html>
