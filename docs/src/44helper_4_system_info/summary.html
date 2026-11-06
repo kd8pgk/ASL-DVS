@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>44helper - How System Information Is Determined and What Needs Installing</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; 44HELPER</div>
+    </div>
+    <div class="ed"><b>Stage 4</b><br>system information</div>
+  </div>
+  <div class="body">
+    <h1>How System Information <span>Is Found</span></h1>
+    <p class="lede">What 44helper reads about the Pi and its software, how each reading is made, which pieces of software the tabs look for, and what has to be installed before each part of the setup works.</p>
+    <div class="chips">
+      <span class="chip c1">PLATFORM</span>
+      <span class="chip c2">PRODUCTS</span>
+      <span class="chip c3">READINESS</span>
+      <span class="chip c4">BOOT REPORT</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 4 of 6. Source: 44helper_v0_1_17_20261103.py on branch ccr-9d4fe19f-ssud83. The shared platform reader is the same code as in confio.py.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Overview</div>
+  <h1 class="ch">Where the readings come from</h1>
+  <p class="ch-lede">The helper gathers its facts in four groups: the platform (the board, the OS and the network), the installed products, the tunnel and firewall state, and the readiness of each setup step. The Boot report reads a fifth group, the boot record.</p>
+
+  <table>
+    <tr><th>Group</th><th>Read by</th><th>Shown on</th></tr>
+    <tr><td>Platform</td><td><code>system_profile</code>, cached once per run</td><td>Header text, default distro, Ampersand check, Boot report</td></tr>
+    <tr><td>Installed products</td><td>dpkg, the unit files and the program files</td><td>Overview, Services, the Config tab's status</td></tr>
+    <tr><td>Tunnel and firewall</td><td>wg0, the wg0 config, the 44NetConnect zone</td><td>Overview, Full and Split tabs, the self-check</td></tr>
+    <tr><td>Step readiness</td><td>One status function per setup step</td><td>Overview and each tunnel tab</td></tr>
+    <tr><td>Boot record</td><td>journalctl, timedatectl, vcgencmd, the boot log</td><td>Boot tab and <code>--boot-report</code></td></tr>
+  </table>
+  <p>The Overview is served from one route, which reads all four groups together. Passing <code>force=1</code> refreshes the installed-product cache before it reads.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The platform</div>
+  <h1 class="ch">The board, the OS and the network</h1>
+
+  <h2><span class="n">2.1</span>How it is read</h2>
+  <p>The platform reader is the shared function <code>system_profile</code>, copied unchanged from <code>shared/confio.py</code> (see the Common Functions Sheet). It is called once, the first time the helper needs it, and the result is kept for the life of the process.</p>
+  <table>
+    <tr><th>Field</th><th>Where it comes from</th></tr>
+    <tr><td>board, model</td><td><code>/proc/device-tree/model</code>. A board is "pi" if the model names a Raspberry Pi, otherwise "other".</td></tr>
+    <tr><td>os_id, os_name, codename, version_id</td><td><code>/etc/os-release</code>: ID, PRETTY_NAME, VERSION_CODENAME and VERSION_ID.</td></tr>
+    <tr><td>arch</td><td><code>dpkg --print-architecture</code>, or the machine name from <code>uname</code> if dpkg is not there.</td></tr>
+    <tr><td>wifi_manager</td><td>NetworkManager if its service is active; else wpa_supplicant if its socket folder has files; else systemd-networkd if active; else "unknown".</td></tr>
+    <tr><td>wifi_iface, wifi_ifaces</td><td>The wireless interfaces under <code>/sys/class/net</code>. The one that is up is preferred; else wlan0; else the first one.</td></tr>
+  </table>
+  <p>If the reader fails, the helper uses a blank platform with the board set to "other". The helper still runs.</p>
+
+  <h2><span class="n">2.2</span>What the platform is used for</h2>
+  <ul>
+    <li><strong>The default distro</strong> for install steps is the OS codename if it is bookworm or trixie; otherwise trixie. The install tabs can still be set to the other release.</li>
+    <li><strong>The platform text</strong> in the header reads the OS name, the architecture and the board.</li>
+    <li><strong>Ampersand</strong> checks, on the node itself with a shell line, that VERSION_CODENAME is trixie before anything else is done (Stage 1, Part 5.5).</li>
+  </ul>
+  <p class="note">The cache is kept for the life of the process. After an OS upgrade the helper must be restarted before it reports the new codename.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Installed products</div>
+  <h1 class="ch">What is on the node</h1>
+
+  <h2><span class="n">3.1</span>The catalogue</h2>
+  <p>The helper keeps a list of the products it knows, and for each one, the packages, the program files, the systemd units and the leftover paths that show it is there:</p>
+  <table>
+    <tr><th>Product</th><th>Packages (matched by name)</th><th>Program files</th><th>Units</th></tr>
+    <tr><td>ASL3</td><td>asl3, asl3-asterisk, allmon3</td><td>none listed</td><td>asterisk, allmon3</td></tr>
+    <tr><td>DVSwitch</td><td>dvswitch-server, analog-bridge, mmdvm-bridge, md380-emu</td><td>/opt/MMDVM_Bridge/MMDVM_Bridge, /opt/Analog_Bridge/Analog_Bridge</td><td>analog_bridge, mmdvm_bridge, md380-emu</td></tr>
+    <tr><td>USRP2M17</td><td>none (matched by name pattern)</td><td>/opt/USRP2M17</td><td>usrp2m17</td></tr>
+    <tr><td>SVXLink</td><td>svxlink-server (and names starting svxlink, remotetrx or qtel)</td><td>/usr/bin/svxlink, /usr/local/bin/svxlink</td><td>svxlink, svxlink-usrp, remotetrx</td></tr>
+    <tr><td>Ampersand</td><td>names starting amp-</td><td>/usr/bin/amp-server, /usr/etc/amp-hub.env</td><td>amp-server, amp-hub</td></tr>
+  </table>
+
+  <h2><span class="n">3.2</span>How it is read</h2>
+  <ol>
+    <li>One <code>dpkg-query</code> call lists every package with its status.</li>
+    <li>For each product, its packages are taken from that list. A package counts when its status says it is installed.</li>
+    <li>Its program files are checked with a file-exists test.</li>
+    <li>Its units are read with one <code>systemctl show</code> call, giving the load state, the active state and the unit-file state. A unit that is masked is flagged.</li>
+    <li>Leftover paths and removed packages with kept settings are noted.</li>
+  </ol>
+  <p>The whole result is kept for 20 seconds. A refresh with <code>force=1</code> bypasses it.</p>
+
+  <h2><span class="n">3.3</span>The states</h2>
+  <table>
+    <tr><th>State</th><th>Meaning</th></tr>
+    <tr><td>installed</td><td>A core package, a core program file, or a core unit is present.</td></tr>
+    <tr><td>broken</td><td>A package is half-installed (its status is not a clean install), or the package is installed but its working parts are missing (for example the package is there but the expected file is not). The note sends the operator to the Update tab's package recovery steps.</td></tr>
+    <tr><td>leftovers</td><td>Nothing is installed, but a package has its settings kept, or a leftover path, a program file or a unit file remains.</td></tr>
+    <tr><td>absent</td><td>None of the above.</td></tr>
+  </table>
+  <p>A product found only by its program file is noted as "found by file", not as a package install. A masked unit is listed in the notes.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Tunnel and firewall</div>
+  <h1 class="ch">What the helper checks about the tunnel</h1>
+
+  <ul>
+    <li><strong>wg0 present:</strong> the interface's folder exists under <code>/sys/class/net</code>.</li>
+    <li><strong>wg0.conf permissions:</strong> the file must be mode 600. If not, the self-check warns that the private key's permissions have drifted.</li>
+    <li><strong>The 44NetConnect zone:</strong> its ports and services, read from firewalld (cached). If the zone does not exist yet, the self-check says that is expected before the tunnel's steps 2 to 6.</li>
+    <li><strong>Exposure:</strong> the self-check looks for the helper's own port, the other dashboard ports it watches, and the Asterisk AMI port in that zone. Any of them exposed is a danger finding. A clean zone gives an "ok" finding.</li>
+    <li><strong>Configured tunnels:</strong> the names of the tunnels in the config (for example the Pi's tunnel and any router tunnel).</li>
+  </ul>
+  <p>The self-check looks at exposure, not at what is installed. Installation is read in Part 3 and Part 5.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Readiness</div>
+  <h1 class="ch">Whether each setup step is done</h1>
+  <p class="ch-lede">Each step of the tunnel setup has one status function that answers "done" or "not done", with a few facts behind the answer. The Overview combines them. The step numbers match Stage 2.</p>
+
+  <table>
+    <tr><th>Step</th><th>Done when</th></tr>
+    <tr><td>1. Firewall prerequisite</td><td>firewall-cmd is installed and firewalld is active</td></tr>
+    <tr><td>1a. systemd-resolved</td><td>systemd-resolved is active and answers DNS queries (the answer is cached)</td></tr>
+    <tr><td>2. The 44NetConnect zone</td><td>The zone exists</td></tr>
+    <tr><td>3. Inbound services and ports</td><td>The IAX2 port is open in the zone. The IAX2 port comes from the config (4569/udp by default). The check also accepts the port being listed, not only the service name.</td></tr>
+    <tr><td>4. Config pasted</td><td>wg0.conf exists and passes the checks in Stage 2, Part 2</td></tr>
+    <tr><td>5. wg0 attached to the zone</td><td>The zone lists wg0</td></tr>
+    <tr><td>6. Tunnel enabled and started</td><td>wg reports a latest handshake for wg0. The check is the handshake itself, not only that the unit is running.</td></tr>
+    <tr><td>DNS, AllowedIPs, reflector egress, boot order</td><td>Each has its own status: the DNS settings, the AllowedIPs shape for the tab, the egress ports, and the boot units</td></tr>
+  </table>
+  <p>A step can be done in the record but broken on the node (for example a zone that exists but no longer lists wg0). The status answers from the live system where it can, not from the step's own record.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; What needs installing</div>
+  <h1 class="ch">The requirements, by setup</h1>
+
+  <table>
+    <tr><th>Needed for</th><th>Package or program</th><th>Checked by</th></tr>
+    <tr><td>Any install step</td><td>A healthy package system (dpkg reports no problems)</td><td>The package-health gate (Stage 1, Part 6)</td></tr>
+    <tr><td>The tunnel's firewall</td><td>firewalld</td><td>Step 1</td></tr>
+    <tr><td>The tunnel's DNS</td><td>systemd-resolved, wireguard-tools</td><td>Step 1a</td></tr>
+    <tr><td>A DNS = line in the config</td><td>resolvconf (from openresolv, or the systemd-resolved shim)</td><td>The DNS step refuses without it</td></tr>
+    <tr><td>A full tunnel</td><td>nftables, or iptables-restore, for wg-quick's routing rules</td><td>Step 6 refuses without one</td></tr>
+    <tr><td>Starting the tunnel</td><td>The wg-quick@ template. Without it, the helper's fallback unit runs wg-quick up directly.</td><td>Step 6 chooses the unit</td></tr>
+    <tr><td>DVSwitch</td><td>The DVSwitch packages (Stage 1, Part 5.2)</td><td>The DVSwitch product state</td></tr>
+    <tr><td>SVXLink</td><td>svxlink-server or the USRP build (Stage 1, Part 5.3)</td><td>The SVXLink product state</td></tr>
+    <tr><td>M17</td><td>git, PHP for Apache, and USRP2M17 from its installer</td><td>The USRP2M17 product state</td></tr>
+    <tr><td>Ampersand</td><td>Debian 13 (Trixie), and the amp packages</td><td>The shell check, and the Ampersand product state</td></tr>
+    <tr><td>Remote control</td><td>Node.js 22 and Claude Code</td><td>The Claude Remote steps</td></tr>
+    <tr><td>Cloudflare connector</td><td>cloudflared</td><td>The Cloudflare steps</td></tr>
+  </table>
+  <p class="note">The requirements for each tab's installs are in Stage 1. The list above is what the helper checks before it lets a step run, not a full install list.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; The Boot report</div>
+  <h1 class="ch">The boot record</h1>
+
+  <h2><span class="n">7.1</span>What it reads</h2>
+  <table>
+    <tr><th>Part</th><th>Source</th></tr>
+    <tr><td>Host, node, boot time and uptime</td><td>The boot ID, <code>/proc/uptime</code>, the host name</td></tr>
+    <tr><td>Clock</td><td><code>timedatectl</code>: whether NTP is on and synchronised, and the time zone</td></tr>
+    <tr><td>Power</td><td><code>vcgencmd get_throttled</code></td></tr>
+    <tr><td>Journal</td><td><code>journalctl --list-boots</code>, and this boot's warnings</td></tr>
+    <tr><td>Boot order and the boot log</td><td>The boot-order units and <code>/var/lib/44helper/boot.log</code></td></tr>
+    <tr><td>The last report, the tunnel and its guard</td><td>The saved reports, the tunnel config, and wifimon's tunnel guard state</td></tr>
+    <tr><td>Versions</td><td>Each tool's version</td></tr>
+  </table>
+  <p>The report is built as text, or as JSON with <code>--json</code> (Stage 1.5). Its findings are warnings about things it can see. The manual lists the kinds, such as a restarted unit, a service that never started, an unsynchronised clock, or under-voltage.</p>
+
+  <h2><span class="n">7.2</span>Snapshots</h2>
+  <p>A background loop saves a snapshot of the boot record 6 minutes and 25 minutes after each boot. Each snapshot is kept to 64 KB, and the snapshots are listed under "Saved copies of earlier boots" on the Boot tab.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">What the readings show</h1>
+
+  <h2><span class="n">8.1</span>The readings are read-only</h2>
+  <p>Every reader in this summary only reads. The book can say that looking at the state changes nothing on the node.</p>
+
+  <h2><span class="n">8.2</span>Some readings are cached</h2>
+  <p>The platform is cached for the life of the process, the products for 20 seconds, and the resolver answer for a while. A reading can be a little old, and a restart or a forced refresh brings it up to date.</p>
+
+  <h2><span class="n">8.3</span>Product detection is by name and by file</h2>
+  <p>A product is found by its package name pattern and its program files. A hand-built program with no package is found only if its file is in the list. The book should say which products are matched by package and which by file.</p>
+
+  <h2><span class="n">8.4</span>The self-check checks exposure</h2>
+  <p>It does not check that the tunnel works, nor that the packages are installed. Those are the readiness steps in Part 5.</p>
+
+  <h2><span class="n">8.5</span>Not checked</h2>
+  <ul>
+    <li>The Nodes tab, which reads the ASL node's own state through Asterisk.</li>
+    <li>The router probes, which connect over SSH to the router.</li>
+    <li>The exact dpkg and systemctl output on a live node. The parsing was read against the expected formats.</li>
+  </ul>
+</section>
+
+</body>
+</html>
