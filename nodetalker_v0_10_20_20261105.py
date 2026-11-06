@@ -7688,7 +7688,11 @@ async function kcLabel(id, label) {
 }
 const TABS = ['connect', 'listen', 'setup'];
 
-let pttLogLast = '', pttMsgTimer = null;
+let pttLogKey = '', pttMsgTimer = null;
+
+function msgKey(text) {
+  return String(text || '').replace(/[0-9]+/g, '#');
+}
 
 function pttLogSend(cls, text) {
   if (!authed) return;
@@ -7701,10 +7705,13 @@ function note(id, cls, text) {
   el.textContent = text;
   if (id !== 'ptt-msg') return;
   el.parentNode.classList.toggle('full', text.length > 60);
+  if (!text) { clearTimeout(pttMsgTimer); pttLogKey = ''; return; }
+  const key = msgKey(text);
+  if (key === pttLogKey) return;
+  pttLogKey = key;
+  pttLogSend(cls, text);
   clearTimeout(pttMsgTimer);
-  if (!text) { pttLogLast = ''; return; }
-  if (text !== pttLogLast) { pttLogLast = text; pttLogSend(cls, text); }
-  pttMsgTimer = setTimeout(() => { if (el.textContent === text) note('ptt-msg', '', ''); }, 30000);
+  pttMsgTimer = setTimeout(() => { if (msgKey(el.textContent) === key) note('ptt-msg', '', ''); }, 30000);
 }
 
 const msgTimers = {};
@@ -10290,8 +10297,9 @@ function appTalkSync() {
 let appTalkTimer = null, appTalkShown = '';
 
 function appTalkSay(text) {
-  if (text === appTalkShown) return;
-  appTalkShown = text;
+  const key = msgKey(text);
+  if (key === appTalkShown) return;
+  appTalkShown = key;
   pttUi('off', text, 'warn');
 }
 

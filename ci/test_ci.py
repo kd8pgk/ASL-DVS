@@ -2287,6 +2287,12 @@ class ListenEventTests(unittest.TestCase):
         self.assertEqual(keys, {"err", "n", "code", "secs"})
         self.assertEqual(keys - set(nt.LISTEN_DETAIL_NUM) - set(nt.LISTEN_DETAIL_STR), set())
 
+    def test_the_page_declares_each_function_once(self):
+        import collections
+        names = re.findall(r"^(?:async )?function (\w+)", self.nt._JS, re.M)
+        self.assertTrue(names)
+        self.assertEqual({k: v for k, v in collections.Counter(names).items() if v > 1}, {})
+
     def test_every_app_call_the_page_makes_exists_in_the_app(self):
         nt = self.nt
         base = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker")
