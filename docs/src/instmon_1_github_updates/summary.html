@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>instmon - Updating from the Repositories</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; INSTMON</div>
+    </div>
+    <div class="ed"><b>Part 1 of 5</b><br>GitHub updates</div>
+  </div>
+  <div class="body">
+    <h1>Updating from the <span>Repositories</span></h1>
+    <p class="lede">How instmon checks GitHub for new versions of the suite's tools, verifies each file, stages it in the library, and installs it. It covers the two update channels, the Pi Zero 2 W build choice, the single-file update, and the Full Update that runs the whole suite in order with rollback.</p>
+    <div class="chips">
+      <span class="chip c1">STABLE</span>
+      <span class="chip c2">TESTING</span>
+      <span class="chip c3">FULL UPDATE</span>
+      <span class="chip c4">ROLLBACK</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 1 of 5. Source: instmon_v2_91_1_20261105.py on branch ccr-9d4fe19f-ssud83. Nothing was run on a node; the GitHub calls are described from the code.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Where the updates come from</div>
+  <h1 class="ch">The repository and the library</h1>
+  <p class="ch-lede">instmon reads the suite's files from the ASL-DVS repository on GitHub. It keeps every copy it downloads in a library folder on the node, and it installs a file from there. The node never runs a file straight from GitHub.</p>
+
+  <table>
+    <tr><th>Setting</th><th>Value by default</th><th>Set by</th></tr>
+    <tr><td>Repository</td><td>kd8pgk/ASL-DVS</td><td>The INSTMON_GITHUB_REPO variable</td></tr>
+    <tr><td>Branch</td><td>main</td><td>The INSTMON_GITHUB_BRANCH variable</td></tr>
+    <tr><td>Channel</td><td>Stable</td><td>The Update channel control (saved in instmon's config)</td></tr>
+    <tr><td>Build on a Pi Zero 2 W</td><td>Fork (pi02w)</td><td>The build choice (Part 2.3)</td></tr>
+    <tr><td>Check time limit</td><td>240 seconds</td><td>INSTMON_GH_CHECK_LIMIT_SEC</td></tr>
+    <tr><td>Retries for a failed fetch</td><td>2</td><td>INSTMON_GITHUB_RETRIES</td></tr>
+  </table>
+  <p>Each tool file carries a version line (for example <code>VERSION = "9.3.107-pi02w"</code>). instmon reads that line from a copy to decide whether it is newer.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Channels and builds</div>
+  <h1 class="ch">Where the list of files comes from</h1>
+
+  <h2><span class="n">2.1</span>The Stable channel (the default)</h2>
+  <p>Stable reads one file from the repository, <code>channels/stable.json</code>. It lists each tool file with its name, its git blob id, and the commit it came from. The file is written by a release workflow, not by hand, so Stable holds only files that have been on the testing branch for a while. A file that is not in the list is not offered.</p>
+  <p>If the repository has no stable list yet, the check says so, and tells the operator to switch to Testing.</p>
+
+  <h2><span class="n">2.2</span>The Testing channel</h2>
+  <p>Testing lists the files on <code>main</code> through the GitHub contents API. It offers the latest commit, before any release has proven it. Switching to Testing needs a confirmation, and the message says the files come straight from main.</p>
+  <p>Changing the channel stops a check that is running, and clears the last check's results. The page must press Check GitHub again.</p>
+
+  <h2><span class="n">2.3</span>The Pi Zero 2 W build</h2>
+  <p>On a Pi Zero 2 W, instmon offers two builds: the fork (the default, with the <code>-pi02w</code> version suffix) and the full build. On any other Pi, the choice does not apply. The choice is saved, and a change refreshes the update plan, so the next Full Update installs the chosen build of SysMon and the Dashboard.</p>
+
+  <h2><span class="n">2.4</span>Files are grouped by kind</h2>
+  <p>Files are grouped into categories (for example the dashboard, SysMon, wifimon, 44helper, Node Talker, and the scripts). Within a category, the newest file is kept for each build variant. So a fork file and a full-build file are compared only with their own kind.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The check</div>
+  <h1 class="ch">Check GitHub</h1>
+
+  <h2><span class="n">3.1</span>What the button does</h2>
+  <ol>
+    <li>The button starts a check in the background. Only one check runs at a time, and a second press is refused while one is running.</li>
+    <li>The check reads the file list (the stable list, or the contents of main).</li>
+    <li>For each file, it reads the version. It downloads the file only if the library has no copy with the same blob id, and caches the version by blob id.</li>
+    <li>It compares each file with the library. The result is one status per file.</li>
+    <li>If the check runs past its time limit (240 seconds by default), the check is stopped.</li>
+  </ol>
+  <p>A generation counter stops an old check from writing its results after the channel has changed or a new check has started.</p>
+
+  <h2><span class="n">3.2</span>The statuses</h2>
+  <table>
+    <tr><th>Status</th><th>Meaning</th></tr>
+    <tr><td>up_to_date</td><td>The library already has a copy with this exact blob id.</td></tr>
+    <tr><td>update</td><td>The library's newest copy of this kind is older than the file on GitHub.</td></tr>
+    <tr><td>missing</td><td>The library has no copy of this kind yet.</td></tr>
+    <tr><td>newer_local</td><td>The library's newest copy is newer than the file on GitHub.</td></tr>
+    <tr><td>error, or skipped</td><td>The file could not be read or was refused (for example, it has no version line, or its name has characters instmon refuses).</td></tr>
+  </table>
+  <p>Only "update" and "missing" are offered for a single-file update. A file that is skipped is listed with its reason, and it is not installed.</p>
+
+  <h2><span class="n">3.3</span>Version comparison</h2>
+  <p>Versions are compared by number, not by text, so 9.3.100 is newer than 9.3.99. A fork file and a full-build file are never compared with each other (Part 2.4).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Fetching and verifying</div>
+  <h1 class="ch">What is downloaded, and how it is checked</h1>
+
+  <ul>
+    <li><strong>HTTPS only.</strong> A GitHub address that does not start with https:// is refused.</li>
+    <li><strong>Size limits.</strong> The file list has a 1 MB limit, and a file is held to the upload limit.</li>
+    <li><strong>Retries.</strong> A failed fetch is retried (two retries by default). Network errors are recognised, so a check that cannot reach GitHub is reported as a network problem, not as a bad file.</li>
+    <li><strong>GitHub's limits.</strong> A message that GitHub's hourly limit has been reached is recognised and reported. The check then stops and says to try later.</li>
+    <li><strong>Download time.</strong> A download is limited to 1,800 seconds (INSTMON_GITHUB_MAX_DOWNLOAD_SEC).</li>
+    <li><strong>Blob check.</strong> Every downloaded file is hashed in git's way (the blob id). The hash must match the id in the file list. A file that does not match is refused, and the message says the file changed during the check.</li>
+    <li><strong>UTF-8 text only.</strong> A file that is not UTF-8 text is refused when its version is read.</li>
+  </ul>
+
+  <h2><span class="n">4.1</span>Staging in the library</h2>
+  <p>A verified file is written to the library folder for its category, under its own name. If the library already has a different file with that name, the new file is refused and the old one is left alone. Writes use a compare-before-write, so an unchanged file is not rewritten.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; One file</div>
+  <h1 class="ch">The Update button on one file</h1>
+  <p class="ch-lede">A single-file update downloads the file into the library. It does not install it. The operator then presses Install on the library file, which runs the component's own <code>--install</code>.</p>
+
+  <ol>
+    <li>The page sends the file's name with <code>confirm: true</code> to the GitHub update action. Without the confirmation, the request is refused.</li>
+    <li>The file must be in the last check's results. If not, the page is told to press Check GitHub first.</li>
+    <li>Only an "update" or "missing" file is accepted. An older file (newer_local) is accepted only on the Stable channel, and only when the operator explicitly allows older versions. This is the way to roll a tool back to an earlier stable release.</li>
+    <li>The file is downloaded, verified against its blob id, and written into the library (Part 4). A library file that is locked by a running install is not overwritten, and a different file of the same name is refused.</li>
+    <li>The message says "press Install on it to use it" (or, for a script, to run it from the library). The install itself is covered in Part 3 of this series (the install button and <code>--install</code>).</li>
+  </ol>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Full Update</div>
+  <h1 class="ch">Updating the whole suite in order</h1>
+
+  <h2><span class="n">6.1</span>The plan</h2>
+  <p>The Full Update runs the check, then makes a plan for each tool in this order: 44helper, wifimon, Node Talker, Node Recorder, Pibrary, the Dashboard, SysMon, and instmon last. A tool that is not installed is left alone. A tool whose installed file has no version line is marked for a hand update. Only "update" and "switch" entries are acted on.</p>
+
+  <h2><span class="n">6.2</span>For each tool</h2>
+  <ol>
+    <li><strong>Save a copy</strong> of the installed file in the library, if one is not already there.</li>
+    <li><strong>Uninstall</strong> the old version with its <code>--uninstall</code>. If that exits with an error, the install goes ahead anyway, and the log says so.</li>
+    <li><strong>Install</strong> the new file with its <code>--install</code>.</li>
+    <li><strong>Wait up to 60 seconds</strong> for the tool to start and answer on its port.</li>
+    <li><strong>Watch it for 60 seconds</strong> to make sure it stays up. instmon itself is not watched this way (Part 6.4).</li>
+  </ol>
+
+  <h2><span class="n">6.3</span>Rollback</h2>
+  <p>If a tool does not start and answer, or does not stay up, instmon puts back the saved copy with its <code>--install</code> and waits for it to answer. The outcome is one of three: the tool is rolled back (warning), the tool could not be rolled back either (it "needs attention", and is left not running), or the new version is kept.</p>
+
+  <h2><span class="n">6.4</span>instmon updates itself last</h2>
+  <p>instmon is replaced last, because it is the program doing the work. Before its file is changed, a guard timer is armed for 90 seconds. If instmon does not answer on its port when the timer fires, the timer restores the old file from its saved copy and reinstalls it. A successful install stops the timer.</p>
+
+  <h2><span class="n">6.5</span>Controls</h2>
+  <ul>
+    <li><strong>Stop</strong> asks the run to stop after the current step. It needs a confirmation. A step that has begun is finished or rolled back.</li>
+    <li><strong>Dismiss</strong> clears the summary once the run is finished.</li>
+    <li><strong>Resume at startup.</strong> If instmon restarts during a Full Update, it resumes or recovers the job when it starts again.</li>
+  </ul>
+
+  <h2><span class="n">6.6</span>After the run</h2>
+  <p>When every tool is current, the run reports that. Otherwise it reports each tool's outcome. Two extra checks follow the run: the Wi-Fi menu script and the manuals. Their details were not traced in full for this part.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Other things fetched from GitHub</div>
+  <h1 class="ch">Apps and documents</h1>
+
+  <ul>
+    <li><strong>Apps.</strong> instmon fetches the Node Talker Mobile APK from the newest release whose tag matches <code>android-vX.Y.Z</code>. The file name must match <code>NodeTalker-X.Y.Z.apk</code> (a <code>-debug</code> build is also accepted by the pattern). The file is kept in the library's apps folder. The first fetch runs on a schedule, with waits of 20, 90, 180 and 360 seconds.</li>
+    <li><strong>Documents.</strong> The docs folder of the repository is listed through the contents API and fetched into the library.</li>
+  </ul>
+  <p>Both use the same HTTPS, size and verification rules as the tool files.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">What the update path shows</h1>
+
+  <h2><span class="n">8.1</span>Two layers of trust</h2>
+  <p>Stable offers only files that a workflow has promoted, and every download is checked against its git blob id. The book can describe the design as curated for most users, and checked for every user.</p>
+
+  <h2><span class="n">8.2</span>Rollback at every step</h2>
+  <p>Each tool keeps a copy of its old file until its new one is healthy, and instmon is guarded by its own timer. The book should explain that a failed update is put back in most cases, and that the rare exception is flagged as "needs attention".</p>
+
+  <h2><span class="n">8.3</span>The check relies on GitHub</h2>
+  <p>The check needs a working connection to GitHub, and the GitHub API has an hourly limit. A node with no connection gets a network message, not an update. The book should say the update path needs the internet.</p>
+
+  <h2><span class="n">8.4</span>Not checked</h2>
+  <ul>
+    <li>The release workflow that writes the stable list (it is in the repository's CI, not in this file).</li>
+    <li>The Wi-Fi menu and manuals steps after a Full Update.</li>
+    <li>What the install of each component does beyond its own <code>--install</code>, which is covered in Part 3.</li>
+  </ul>
+</section>
+
+</body>
+</html>
