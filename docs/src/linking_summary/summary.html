@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Linking and Unlinking: ASL3, DVSwitch and USRP2M17</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; LINK CONTROL</div>
+    </div>
+    <div class="ed"><b>Pi Zero 2 W fork</b><br>three bridges</div>
+  </div>
+  <div class="body">
+    <h1>Linking and <span>Unlinking</span></h1>
+    <p class="lede">How a node links to ASL3, DVSwitch and USRP2M17: the bridge nodes that carry each one, the commands each tool sends, the paths for a connect and a disconnect, and what is left behind when a link is dropped.</p>
+    <div class="chips">
+      <span class="chip c1">ASL3</span>
+      <span class="chip c2">DVSWITCH</span>
+      <span class="chip c3">USRP2M17</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Source: the tool files and configs on branch ccr-9d4fe19f-ssud83. dvswitch.sh is not in the repository; its commands are described from how the tools call it.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Scope</div>
+  <h1 class="ch">What is covered</h1>
+  <p class="ch-lede">Three kinds of link. ASL3 links nodes to each other through Asterisk. DVSwitch and USRP2M17 are reached through a bridge node that Asterisk links in, so a radio on the node can reach the bridge.</p>
+
+  <h2><span class="n">1.1</span>Which tools link</h2>
+  <table>
+    <tr><th>Tool</th><th>Role in linking</th></tr>
+    <tr><td>Node Controller</td><td>The main controller. Makes and drops all three kinds of link. Holds the Dashboard's own state.</td></tr>
+    <tr><td>Node Talker</td><td>Makes the same links. It hands them to Node Controller when Node Controller is running, and does them itself when it is not (the "solo" path).</td></tr>
+    <tr><td>Node Recorder</td><td>Carries a copy of Node Talker's DVSwitch and M17 functions (checked by name), with the same delegate and solo paths.</td></tr>
+    <tr><td>SysMon</td><td>Restarts the USRP2M17 service and refreshes its reflector list. It does not connect or disconnect.</td></tr>
+    <tr><td>44helper</td><td>Installs USRP2M17 and DVSwitch-related pieces. It does not connect or disconnect.</td></tr>
+  </table>
+
+  <h2><span class="n">1.2</span>Sources and limits</h2>
+  <ul>
+    <li>The Node Controller and Node Talker paths were read in full. Node Recorder's copy was checked for the same functions.</li>
+    <li><code>dvswitch.sh</code> lives outside the repository, at <code>/opt/MMDVM_Bridge/dvswitch.sh</code> or one of three other paths. What it does with each argument is taken from the calls the tools make, not from its source.</li>
+    <li>The Asterisk link codes (1, 3, 6, 11) are described in the Connect and Disconnect Review. Their meanings come from how the code uses them.</li>
+    <li>Nothing was run on a node. Behaviour is described from the code.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The model</div>
+  <h1 class="ch">Three bridge nodes</h1>
+  <p class="ch-lede">Each kind of link goes through one bridge node. The bridge node is an ordinary Asterisk node, linked to the main node with the same link command as any other node.</p>
+
+  <table>
+    <tr><th>Node</th><th>Carries</th><th>Audio path (rpt.conf <code>rxchannel</code>)</th></tr>
+    <tr><td><strong>1999</strong>, digital bridge</td><td>DVSwitch (DMR, D-STAR, YSF, P25, NXDN, STFU and others)</td><td><code>USRP/127.0.0.1:34001:32001</code></td></tr>
+    <tr><td><strong>1917</strong>, M17 bridge</td><td>USRP2M17</td><td><code>USRP/127.0.0.1:34008:32008</code></td></tr>
+    <tr><td><strong>1921</strong>, listen node</td><td>Node Talker and Node Recorder receive (not a bridge for a mode)</td><td><code>USRP/127.0.0.1:34018:32018</code></td></tr>
+  </table>
+  <p>The ports for node 1917 match the USRP2M17 ini (Part 5), so the bridge and the M17 program agree on where audio goes. Node 1999's ports go to the DVSwitch side of the bridge; the DVSwitch configuration is outside the repository, so the match is not checked here.</p>
+
+  <h2><span class="n">2.1</span>The three link types</h2>
+  <table>
+    <tr><th>Kind</th><th>Connects</th><th>Shows on the node as</th></tr>
+    <tr><td>ASL3</td><td>Another node, by its number (or an EchoLink node through the gateway)</td><td>A linked node in Asterisk. This is the normal AllStar link.</td></tr>
+    <tr><td>DVSwitch</td><td>The bridge node 1999 is linked to the main node, and the bridge is then tuned to a talkgroup, reflector or gateway</td><td>The bridge node linked, plus a tuned mode and target in the Dashboard</td></tr>
+    <tr><td>USRP2M17</td><td>The bridge node 1917 is linked, and the USRP2M17 program is pointed at a reflector</td><td>The bridge node linked, plus a reflector and module in the ini</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; ASL3</div>
+  <h1 class="ch">Linking nodes in Asterisk</h1>
+
+  <h2><span class="n">3.1</span>Commands</h2>
+  <p>Every ASL3 link is one of these commands, sent through the Asterisk manager interface (or the command line as a fallback):</p>
+  <table>
+    <tr><th>Command</th><th>Used for</th></tr>
+    <tr><td><code>rpt cmd &lt;main&gt; ilink 3 &lt;node&gt;</code></td><td>Connect two-way (the usual connect, and linking a bridge node)</td></tr>
+    <tr><td><code>rpt cmd &lt;main&gt; ilink 2 &lt;node&gt;</code></td><td>Connect receive-only, for a phone node set to listen only</td></tr>
+    <tr><td><code>rpt cmd &lt;main&gt; ilink 1 &lt;node&gt;</code></td><td>Drop one link</td></tr>
+    <tr><td><code>rpt cmd &lt;main&gt; ilink 11 &lt;node&gt;</code></td><td>Drop a permanent link (one listed under <code>nodes=</code> in rpt.conf)</td></tr>
+    <tr><td><code>rpt cmd &lt;main&gt; ilink 6</code></td><td>Drop all links (used only when the link list cannot be read)</td></tr>
+  </table>
+  <p>Link commands are sent to the main node, the one whose number is set in the Dashboard, and name the target as the second argument.</p>
+
+  <h2><span class="n">3.2</span>Rules that apply to every bridge</h2>
+  <ul>
+    <li><strong>One link at a time.</strong> Before a bridge or an ASL node is linked, every other link is dropped (up to 16 per pass). The Node Talker transmit node (1921) is kept.</li>
+    <li><strong>Bridge slots are owned by the dashboard.</strong> An ASL or EchoLink connect refuses a bridge node. The local API refuses to disconnect one.</li>
+    <li><strong>Bridge reaper and watchdog.</strong> In Node Controller, a bridge that is linked while another tab owns a different slot is dropped. A bridge the tab owns that falls out is linked again. Both wait out an 8-second cooldown.</li>
+    <li><strong>Node Talker's guard</strong> runs every 5 seconds. It drops a bridge link that is not in use, and drops extra favorites when more than one public link is up.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; DVSwitch</div>
+  <h1 class="ch">Linking to DVSwitch</h1>
+
+  <h2><span class="n">4.1</span>The <code>dvswitch.sh</code> calls</h2>
+  <table>
+    <tr><th>Call</th><th>Meaning as used by the tools</th><th>Timeout</th></tr>
+    <tr><td><code>dvswitch.sh mode &lt;MODE&gt;</code></td><td>Set the bridge's digital mode: DMR, DSTAR, YSF, P25, NXDN, STFU. FCS is sent as YSF.</td><td>40 s</td></tr>
+    <tr><td><code>dvswitch.sh tune &lt;value&gt;</code></td><td>Tune the current mode. For DMR this is a talkgroup number, or <code>password@address</code> to join a network. For D-STAR it is a reflector or gateway string.</td><td>40 s</td></tr>
+    <tr><td><code>dvswitch.sh tune disconnect</code></td><td>Leave the current talkgroup. Also sent as <code>*88</code> from the Dashboard's tune path.</td><td>10 s</td></tr>
+    <tr><td><code>dvswitch.sh tune "       U"</code></td><td>D-STAR unlink (seven spaces and a U)</td><td>10 s</td></tr>
+  </table>
+  <p>Any other subcommand has a 10-second timeout. A call that times out is reported as "it may still finish", because the bridge can complete the step after the tool gives up.</p>
+
+  <h2><span class="n">4.2</span>D-STAR strings</h2>
+  <p>A D-STAR tune string is the base callsign padded to six characters, then the module letter, then <code>L</code>. For example, <code>REF001 C</code> becomes <code>REF001 CL</code>. The Dashboard's XLX tune uses the same form. A gateway callsign has three to six characters. An entry with no module letter is refused.</p>
+
+  <h2><span class="n">4.3</span>DMR networks</h2>
+  <p>A DMR favorite names a network. The tool joins it with a tune string <code>password@address</code>, and remembers the last one joined, so it does not join the same network again. A mode change clears that memory. When Node Controller has no DMR network for a favorite, Node Talker asks to add it, or to tune it once without saving it.</p>
+
+  <h2><span class="n">4.4</span>Node Controller path</h2>
+  <ol>
+    <li>Drop any other link, and clear a foreign link that is not the dashboard's own.</li>
+    <li>For D-STAR: send the D-STAR unlink and the disconnect, then wait 400 ms.</li>
+    <li>On ASL, link the digital bridge (1999) if it is not already linked (<code>ilink 3</code>).</li>
+    <li>Set the mode with <code>dvswitch.sh mode</code>, then wait out the settle time.</li>
+    <li>For a D-STAR gateway with ircDDB remote control set up, link through remote control and tune <code>CQCQCQ</code>. If that fails, fall back to a plain tune.</li>
+    <li>Tune the target. A timeout returns a message and does not update the page state.</li>
+  </ol>
+  <p>The Dashboard keeps the state: the page, the favorite, the mode and the DMR server. Node Talker reads that state through <code>dvs-status</code>.</p>
+
+  <h2><span class="n">4.5</span>Node Talker and Node Recorder, delegate path</h2>
+  <p>When Node Controller is running on the same node, Node Talker sends the request to it through the local API, with the local key in the request header:</p>
+  <ul>
+    <li><code>dvs-tune</code>: mode, talkgroup, name, and for DMR the network. Node Controller refuses a D-STAR string with no module letter. For DMR it looks up the server by address or name. If the server is not known and the request is not "once", it refuses and asks for the network to be added.</li>
+    <li><code>dvs-disconnect</code>: disconnects the DVSwitch favorite Node Controller is tuned to.</li>
+    <li><code>dvs-status</code>: returns the page, the favorite, the server and its address, as JSON.</li>
+    <li><code>dmr-server-add</code>: adds a DMR network to Node Controller.</li>
+  </ul>
+  <p>Node Talker sends the request only if the node is the Dashboard's node. A request for another node is refused with a message that says where to send that node's audio.</p>
+
+  <h2><span class="n">4.6</span>Node Talker solo path</h2>
+  <p>With no Node Controller running, Node Talker does the same steps itself:</p>
+  <ol>
+    <li>Take the tune lock (it waits up to 1 s), then drop every other link, except the bridge.</li>
+    <li>Arm the guard and leave the previous mode (<code>_leave</code>).</li>
+    <li>Start the gateway service for the mode if it is not running, and wait for it to become active.</li>
+    <li>Link the digital bridge with <code>ilink 3</code> if it is not linked.</li>
+    <li>Send <code>dvswitch.sh tune disconnect</code>, wait 0.4 s, then set the mode if it has changed.</li>
+    <li>For DMR, join the network if the last join was a different one. Wait 1 s.</li>
+    <li>Tune the target number, and save the state to the tuned-state file (mode, target, name, bridge).</li>
+  </ol>
+
+  <h2><span class="n">4.7</span>Unlinking DVSwitch</h2>
+  <table>
+    <tr><th>Path</th><th>What it does</th></tr>
+    <tr><td>Node Controller disconnect (D-STAR)</td><td>If ircDDB remote control is set up, sends an unlink. Then the D-STAR unlink and the talkgroup disconnect.</td></tr>
+    <tr><td>Node Controller disconnect (other modes)</td><td>The talkgroup disconnect. The bridge stays linked to the node.</td></tr>
+    <tr><td>Node Talker solo disconnect</td><td><code>_leave</code>: for D-STAR, the D-STAR unlink; then the talkgroup disconnect; then <code>ilink 1</code> on the bridge. The state is cleared.</td></tr>
+    <tr><td>Node Talker, when Node Controller takes over</td><td>The state is cleared without a command, once Node Controller is seen running.</td></tr>
+  </table>
+  <p>Notice that the bridge is unlinked from the node in the solo path, but not in the Node Controller path for other modes. A link left up in that case is shown as the bridge node still linked (Part 6).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; USRP2M17</div>
+  <h1 class="ch">Linking to M17</h1>
+
+  <h2><span class="n">5.1</span>Files and service</h2>
+  <table>
+    <tr><th>Item</th><th>What it is</th></tr>
+    <tr><td><code>/opt/USRP2M17/USRP2M17.ini</code></td><td>The program's config. Holds the callsign, the reflector name and address, the module, and the ports.</td></tr>
+    <tr><td><code>usrp2m17.service</code></td><td>The systemd unit. It must be restarted to read a new ini.</td></tr>
+    <tr><td><code>/var/lib/mmdvm/M17Hosts.json</code></td><td>The reflector list the tools use to look up an address for a reflector name. SysMon refreshes it.</td></tr>
+    <tr><td>Bridge node 1917</td><td>The Asterisk node the program's audio goes through (Part 2).</td></tr>
+  </table>
+
+  <h2><span class="n">5.2</span>The ini that is written</h2>
+  <p>Every connect and disconnect writes the whole file from a template. The fields that change are the callsign, the reflector name with its module, and the address. Node Controller and Node Talker use the same template:</p>
+  <table>
+    <tr><th>Section</th><th>Field</th><th>Value</th></tr>
+    <tr><td>M17 Network</td><td>Callsign</td><td>The node's callsign</td></tr>
+    <tr><td>M17 Network</td><td>Address, Name</td><td>The reflector address, and "reflector module" (for example <code>M17-USA C</code>)</td></tr>
+    <tr><td>M17 Network</td><td>LocalPort, DstPort</td><td>17010 and 17000</td></tr>
+    <tr><td>M17 Network</td><td>GainAdjustdB, Daemon, Debug</td><td>3, 1, 0</td></tr>
+    <tr><td>USRP Network</td><td>Address, DstPort, LocalPort</td><td>127.0.0.1, 32008, 34008</td></tr>
+    <tr><td>Log</td><td>FilePath, FileRoot</td><td><code>/var/log/usrp</code>, <code>USRP2M17</code></td></tr>
+  </table>
+  <p>The disconnected state is the same template with the name <code>DISCONNECTED</code>, the address <code>0.0.0.0</code> and module <code>A</code>.</p>
+
+  <h2><span class="n">5.3</span>Connect</h2>
+  <p><strong>Node Controller</strong> (<code>action_m17_connect</code>): check the reflector address, the base name and the module (A to Z, or <code>@ALL</code>), and that the M17 bridge is present. Clear any foreign link. Send the talkgroup disconnect. Write the ini, restart the service, link node 1917 with <code>ilink 3</code> if ASL is up and it is not linked, and set the page to M17 with the favorite <code>base|module</code>.</p>
+  <p><strong>Node Talker, solo</strong> (<code>solo_m17</code>): check that USRP2M17 is present and that a callsign is set. Look up the address in M17Hosts.json, or use the favorite's own address. Take the lock, drop other links, leave the previous mode, and send the DVSwitch disconnect if DVSwitch is present. Write the ini, restart the service, and link node 1917. Save the state.</p>
+  <p><strong>Delegate</strong>: Node Talker sends <code>m17-connect</code>. Node Controller looks the reflector up in its own list or in the M17 favorites, checks that the module is one the reflector publishes, and then runs the same connect as the Dashboard.</p>
+
+  <h2><span class="n">5.4</span>Disconnect</h2>
+  <table>
+    <tr><th>Path</th><th>What it does</th></tr>
+    <tr><td>Node Controller, <code>m17-disconnect</code></td><td>Unlinks node 1917 with <code>ilink 1</code> if ASL is up. Writes the disconnected ini and restarts the service. If the ini write fails, the message says the link was dropped but the file was not written.</td></tr>
+    <tr><td>Node Talker, solo</td><td>Park the ini (disconnected template) and restart the service, then <code>ilink 1</code> on node 1917.</td></tr>
+    <tr><td>Node Talker, delegate</td><td>Sends <code>m17-disconnect</code> to Node Controller, and only if an M17 reflector is set there.</td></tr>
+  </table>
+
+  <h2><span class="n">5.5</span>SysMon and 44helper</h2>
+  <ul>
+    <li><strong>SysMon</strong> has an M17 tab with a Restart button (restarts <code>usrp2m17</code>, root only) and an Update reflector list button, which fetches M17Hosts.json. It also shows the ini and a sample stanza, and has an editor for the ini. The M17 tab does not tune or link.</li>
+    <li><strong>44helper</strong> has an M17 install tab. It clones and runs the USRP2M17-Selector installer, builds the program, and sets a sudoers rule that lets the web server restart the service. Its purge steps stop and remove the service. It does not link.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Unlinking</div>
+  <h1 class="ch">What is left behind</h1>
+  <p class="ch-lede">A disconnect has to drop the audio path, the bridge's mode or reflector, and the saved state. The table shows what each path does for each part.</p>
+
+  <table>
+    <tr><th>Path</th><th>Bridge node</th><th>Mode or reflector</th><th>Saved state</th></tr>
+    <tr><td>Node Controller, ASL disconnect</td><td>Not a bridge node, so no change</td><td>Not applicable</td><td>Cleared</td></tr>
+    <tr><td>Node Controller, DVSwitch disconnect</td><td>Stays linked (other modes)</td><td>Talkgroup disconnected</td><td>Page state cleared</td></tr>
+    <tr><td>Node Controller, D-STAR disconnect</td><td>Stays linked</td><td>D-STAR unlinked, then talkgroup disconnected</td><td>Page state set to Ready</td></tr>
+    <tr><td>Node Controller, M17 disconnect</td><td><code>ilink 1</code> on 1917 (if ASL)</td><td>ini parked, service restarted</td><td>Page state cleared</td></tr>
+    <tr><td>Node Talker solo, DVSwitch</td><td><code>ilink 1</code> on 1999</td><td>D-STAR unlink (if D-STAR), talkgroup disconnected</td><td>Tuned-state file cleared</td></tr>
+    <tr><td>Node Talker solo, M17</td><td><code>ilink 1</code> on 1917</td><td>ini parked, service restarted</td><td>Tuned-state file cleared</td></tr>
+    <tr><td>Emergency reset (Node Controller)</td><td>Dropped with every other link</td><td>D-STAR unlink and talkgroup disconnect, then services restarted</td><td>Cleared</td></tr>
+  </table>
+
+  <h2><span class="n">6.1</span>Two things a disconnect does not do</h2>
+  <ul>
+    <li>A DVSwitch disconnect on the Node Controller path does not drop the bridge node. The bridge stays linked and the talkgroup is left disconnected.</li>
+    <li>An M17 disconnect does not change the mode of the digital bridge, and a DVSwitch disconnect does not change the reflector in the M17 ini.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
+  <h1 class="ch">Things the code shows</h1>
+
+  <h2><span class="n">7.1</span>Two implementations of the same link</h2>
+  <p>Node Controller, Node Talker and Node Recorder each carry DVSwitch and M17 linking code. The M17 ini template is the same in all three, checked line by line for Node Talker and Node Recorder, and Node Controller's disconnect placeholder matches Node Talker's park. That match is by construction, not by a shared function, so a change to one has to be copied to the others. The book should say which tool a user should use for each job.</p>
+
+  <h2><span class="n">7.2</span>A failed tune can leave the bridge linked</h2>
+  <p>In the Node Talker solo DVSwitch path, the bridge is linked before the mode is set and the frequency is tuned. If the tune then fails, the function returns an error. It does not drop the bridge or update the tuned-state file. The node is left with the bridge linked and no record of a target. The Node Controller path has the same ordering, but its failure messages do not say the bridge is still up.</p>
+
+  <h2><span class="n">7.3</span>A failed M17 restart leaves a new ini</h2>
+  <p>In the Node Talker solo M17 path, the ini is written before the service is restarted. If the restart fails, the function returns an error with the new ini on disk, and the bridge is not linked. The next restart of the service will read the new reflector.</p>
+
+  <h2><span class="n">7.4</span>Every M17 change restarts the service</h2>
+  <p>Connecting, disconnecting and parking all restart <code>usrp2m17</code>. Each restart interrupts any M17 audio that is running, so a change of reflector or module is never seamless. The book should tell users this.</p>
+
+  <h2><span class="n">7.5</span>D-STAR unlink depends on exact spacing</h2>
+  <p>The D-STAR unlink is the string seven spaces and a <code>U</code>, sent exactly. The code sends it unchanged in every tool. A change in the spacing would break the unlink without any error from the code, so the string should not be reformatted.</p>
+
+  <h2><span class="n">7.6</span>Version gates</h2>
+  <p>The README says Node Controller must be 9.3.94 or later for Node Talker to tune DVSwitch through it, and 9.3.89 or later for ASL and M17. Node Talker checks for an old version when it asks Node Controller to do a job, and reports that the version is too old. The version numbers in the README were not checked against the code for this summary.</p>
+
+  <h2><span class="n">7.7</span>Not checked</h2>
+  <p>These were not traced for this summary: what <code>dvswitch.sh</code> does internally, how the bridge reports its state back, the ircDDB remote-control details, and what the README means by "private nodes (1999 and below) are left alone" in the code that drops links.</p>
+</section>
+
+</body>
+</html>
