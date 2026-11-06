@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>44helper - How the Install Tabs Install</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; 44HELPER</div>
+    </div>
+    <div class="ed"><b>Stage 1</b><br>install tabs</div>
+  </div>
+  <div class="body">
+    <h1>How the Install Tabs <span>Install</span></h1>
+    <p class="lede">The install tabs of 44helper put software on the node one step at a time. This summary covers how each step is defined, how the page sends it, how the helper checks and runs it, what a person does by hand, and which tab installs what.</p>
+    <div class="chips">
+      <span class="chip c1">ASL3</span>
+      <span class="chip c2">DVSWITCH</span>
+      <span class="chip c3">SVXLINK</span>
+      <span class="chip c4">M17</span>
+      <span class="chip c5">AMPERSAND</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 1 of 6. Source: 44helper_v0_1_17_20261103.py on branch ccr-9d4fe19f-ssud83. Stage 1.5 covers the command line and headless use.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; The tabs</div>
+  <h1 class="ch">What each install tab installs</h1>
+  <p class="ch-lede">The tab list is in code (the <code>TABS</code> list). Each tab with an install has its own step table and its own purge table. Some tabs (Overview, Services, Ports, Boot, Config) do not install software.</p>
+
+  <table>
+    <tr><th>Tab</th><th>Installs</th><th>Install steps</th><th>Purge steps</th><th>Distros</th></tr>
+    <tr><td>ASL3</td><td>ASL3 (Asterisk and app_rpt) and Allmon3</td><td>15</td><td>6</td><td>Bookworm and Trixie</td></tr>
+    <tr><td>DVSwitch</td><td>DVSwitch Server, Analog_Bridge, the digital-mode gateways</td><td>6 (Bookworm), 8 (Trixie)</td><td>5 and 1</td><td>Bookworm and Trixie</td></tr>
+    <tr><td>SVXLink</td><td>SvxLink, or a USRP build of it with its own service</td><td>5 (package), 13 (USRP)</td><td>4 and 2</td><td>Bookworm, Trixie, USRP</td></tr>
+    <tr><td>M17</td><td>USRP2M17 through USRP2M17-Selector, with its web page</td><td>9</td><td>7</td><td>Standard</td></tr>
+    <tr><td>Ampersand</td><td>amp-server (radio node) and amp-hub (conference hub)</td><td>12 and 12</td><td>5 and 6</td><td>Trixie only</td></tr>
+    <tr><td>Cloudflare</td><td>cloudflared, as a token connector or a quick test tunnel</td><td>1 (apt), 3 (token), 1 (quick)</td><td>4 and 2</td><td>Standard</td></tr>
+    <tr><td>Claude Remote</td><td>Node.js 22 and Claude Code, run as a service for remote control</td><td>8</td><td>3</td><td>Bookworm and Trixie</td></tr>
+    <tr><td>Update</td><td>Package maintenance and the optional Webmin, Ajenti and fail2ban</td><td>Maintenance and optional steps (Part 5.9)</td><td>Yes, for the optional tools</td><td>Standard</td></tr>
+  </table>
+  <p class="note">The Router Install, Full Tunnel and Split Tunnel tabs set up tunnels rather than installing packages. They are covered in Stage 2. System Optimization applies and reverts settings rather than running steps (Part 5).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The step</div>
+  <h1 class="ch">What a step is</h1>
+  <p class="ch-lede">Every step is a record in the helper's own table, with an id, a number, a title and a command. The page only shows the records and sends an id back. The command itself is never trusted from the page.</p>
+
+  <h2><span class="n">2.1</span>The fields of a step</h2>
+  <table>
+    <tr><th>Field</th><th>Meaning</th></tr>
+    <tr><td><code>id</code>, <code>num</code>, <code>title</code></td><td>The identifier, the step number, and the heading shown on the page.</td></tr>
+    <tr><td><code>cmd</code></td><td>The exact command for a fixed step.</td></tr>
+    <tr><td><code>cmd_template</code> and <code>fields</code></td><td>For steps that need a value (a callsign, a port, a node number). The template contains <code>{{field}}</code> markers.</td></tr>
+    <tr><td><code>timeout</code></td><td>Seconds allowed. Package, build and script installs have no timeout.</td></tr>
+    <tr><td><code>note</code>, <code>warning</code></td><td>Text shown before the step is run.</td></tr>
+    <tr><td><code>manual</code> or <code>manual_block</code></td><td>The step is not run by the helper. It is for a terminal (Part 7).</td></tr>
+    <tr><td><code>alts</code></td><td>Alternative steps that belong to the same heading (Update tab).</td></tr>
+  </table>
+
+  <h2><span class="n">2.2</span>Input rules for fields</h2>
+  <p>Each field must match a fixed pattern before the command is built. The rules are in <code>_STEP_FIELD_RULES</code>:</p>
+  <table>
+    <tr><th>Field</th><th>Accepted value</th></tr>
+    <tr><td>callsign</td><td>3 to 16 letters, digits or hyphen</td></tr>
+    <tr><td>dmrid</td><td>6 to 9 digits</td></tr>
+    <tr><td>port, rx_port</td><td>1 to 5 digits</td></tr>
+    <tr><td>branch</td><td>Letters, digits and . _ / - (up to 100)</td></tr>
+    <tr><td>username</td><td>1 to 32 letters, digits and . _ -</td></tr>
+    <tr><td>version</td><td>An 8-digit release date</td></tr>
+    <tr><td>node</td><td>4 to 7 digits</td></tr>
+    <tr><td>hubpassword</td><td>Up to 64 characters from a fixed set with no spaces, quotes, slashes or ampersands. Blank means a private node.</td></tr>
+    <tr><td>authmode</td><td>2 to 16 letters, for example OPEN</td></tr>
+    <tr><td>allowlist</td><td>Comma-separated node numbers, or blank</td></tr>
+  </table>
+  <p>A field with no rule is refused. A value that fails its rule is refused with the rule's wording.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; The path of one step</div>
+  <h1 class="ch">From the Run button to the result</h1>
+
+  <ol>
+    <li><strong>The page loads the tab's steps.</strong> The step tables are served as JSON from <code>/api/&lt;tab&gt;/script</code> (for example <code>/api/asl3/script</code>). The page shows the steps, their commands and their notes.</li>
+    <li><strong>The page sends the step.</strong> A POST goes to <code>/api/&lt;tab&gt;/action</code> with the mode (install, purge or custom), the distro, the step id, any field values, and the exact command text the page is showing.</li>
+    <li><strong>The helper rebuilds the command.</strong> It looks the step up by id, fills the template with the field values after checking them, and compares the result with the command text it was sent. If they differ, the step is refused with "This step's command was changed on the page, so it was not run."</li>
+    <li><strong>Root and state gates run.</strong> The request must come from a logged-in session. For installs and apt commands, two gates run next: the masked-service gate (Part 6) and the package-health gate (Part 6).</li>
+    <li><strong>The command starts as a job.</strong> Package changes start as a transient systemd unit. Other commands start as a background process in their own process group. Details are in Part 4.</li>
+    <li><strong>The page follows the job.</strong> It polls <code>/api/action_status?job_key=...</code>. The result carries the output so far, a status, and a success flag.</li>
+  </ol>
+
+  <h2><span class="n">3.1</span>Why the command text must match</h2>
+  <p>The page sends back the command it showed the person. The helper runs only the command it built from its own table, and refuses if the two differ. A changed command in the browser, or a stale page after an update, cannot run something the table does not hold. The Custom box is the one exception (Part 6.3).</p>
+
+  <h2><span class="n">3.2</span>Job keys</h2>
+  <p>Each job has a key, such as <code>asl3_install_bookworm_prereqs</code> (tab, mode, distro and step id). Running the same step again while it is still running returns the running job rather than starting a second one.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Running a job</div>
+  <h1 class="ch">Package changes and everything else</h1>
+
+  <h2><span class="n">4.1</span>Two ways to run</h2>
+  <table>
+    <tr><th>Kind of command</th><th>How it runs</th><th>Timeout</th></tr>
+    <tr><td>Package change (apt install, remove, upgrade, purge and similar)</td><td>A transient systemd unit named <code>44helper-job-&lt;key&gt;</code>, started with <code>systemd-run</code>. The job keeps running if the helper restarts. On return, the helper re-attaches to the unit and shows its output.</td><td>None</td></tr>
+    <tr><td>Other command</td><td>A background shell in its own process group. Output is read line by line. Killed in two steps if it times out: a terminate, then a kill after a short wait.</td><td>The step's timeout (900 seconds by default)</td></tr>
+  </table>
+  <p>Builds (compiling from source) and installer scripts have no timeout either, because they can take many minutes on a Pi Zero 2 W.</p>
+
+  <h2><span class="n">4.2</span>Quiet mode for some steps</h2>
+  <p>Steps marked <code>quiet_eligible</code> (for example the Update tab's fix-missing and reconfigure steps) can run with quiet mode on. Quiet mode pauses the node's services first, so the package job does not compete for the SD card. If quiet mode cannot start, the package job does not run.</p>
+
+  <h2><span class="n">4.3</span>Output and results</h2>
+  <ul>
+    <li>Job output is kept up to a cap of 64 KB.</li>
+    <li>Package progress lines from apt and dpkg are removed from the output before it is shown.</li>
+    <li>A job's status is one of running or done, with a success flag and a return code.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; The tab steps</div>
+  <h1 class="ch">What each tab's steps do</h1>
+
+  <h2><span class="n">5.1</span>ASL3</h2>
+  <ol>
+    <li>Install prerequisites</li>
+    <li>Download the ASL3 repository package, and install it</li>
+    <li>Refresh the package index</li>
+    <li>Install ASL3 core</li>
+    <li>Install Allmon3</li>
+    <li>Install the node database and text-to-speech utilities</li>
+    <li>(Optional) the full ASL3 appliance branding and firewall defaults</li>
+    <li>Remove the default Allmon3 account; set the Allmon3 admin password (username and password fields)</li>
+    <li>Enable Allmon3 and the node database timer</li>
+    <li><strong>Configure node settings (asl-menu)</strong>, manual (Part 7)</li>
+  </ol>
+  <p>Purge: stop the services, purge the ASL3 and Allmon3 packages, remove unused dependencies, remove the repository package, clear the downloaded package, and (optionally) remove leftover node config.</p>
+
+  <h2><span class="n">5.2</span>DVSwitch</h2>
+  <ul>
+    <li><strong>Bookworm:</strong> download the DVSwitch repository-install script, run it (it adds the apt source and key), refresh the index, install the DVSwitch server (base, Analog_Bridge and the gateways), enable the DVSwitch services at boot, and enable the digital-mode gateways.</li>
+    <li><strong>Trixie:</strong> the same steps with a read-only pre-flight check first, and a dry-run install that changes nothing before the real install.</li>
+    <li>A dashboard port step (<code>port</code>) lets the operator choose another port if the default clashes.</li>
+    <li>Purge: stop the services, purge the packages, remove unused dependencies, remove the apt repository, and optionally the leftover config. A final step removes 44helper's netcheck and boot-order settings.</li>
+  </ul>
+
+  <h2><span class="n">5.3</span>SVXLink</h2>
+  <ul>
+    <li><strong>Package:</strong> refresh the index, install SvxLink, install the ALSA utilities, add the svxlink user to the audio and serial groups, and enable and start SvxLink.</li>
+    <li><strong>USRP fork (built from source):</strong> a read-only conflict check, build dependencies, clone the USRP fork, a branch field, create the svxlink user, configure and build (compiling takes several minutes), a read-only check that the USRP part was built, a read-only locate of the installed files, then the USRP logic settings (callsign, the port Analog_Bridge listens on, and the port it sends to), and install and start the svxlink-usrp service.</li>
+    <li>Purge removes the service, the binaries and config (optional), the unit (optional) and the source tree (optional).</li>
+  </ul>
+
+  <h2><span class="n">5.4</span>M17</h2>
+  <ol>
+    <li>Install git, sudo and the build tools</li>
+    <li>Install PHP for Apache</li>
+    <li>Clone USRP2M17-Selector</li>
+    <li>Run its installer, which builds USRP2M17 (a few minutes on a Pi Zero 2 W)</li>
+    <li>Callsign field</li>
+    <li>Add the M17 node to rpt.conf, modules.conf and extensions.conf</li>
+    <li>M17 node number field</li>
+    <li>Restart Asterisk</li>
+    <li>Install a sudoers rule that lets the web page restart the service</li>
+  </ol>
+  <p>Purge undoes the Asterisk config edits, restarts Asterisk, stops USRP2M17, removes the web page, the sudoers rule and the unit, and optionally the clone directory.</p>
+
+  <h2><span class="n">5.5</span>Ampersand</h2>
+  <ul>
+    <li><strong>Server:</strong> a conflict check, packages, a udev rule for COS and PTT access, download and unpack the server, its version (the 8-digit release date), the run-as user (not root), the web port, an optional web password, and the service. The first run is a manual foreground test.</li>
+    <li><strong>Hub:</strong> a conflict check, packages, download and install, its version, then its settings: the hub node number, the node password (blank means a private node with no ASL registration), the IAX port (4569, or 4568 if ASL3 already uses 4569), the auth mode (OPEN means no checks), and an allowlist of node numbers. Optional settings go in <code>/usr/etc/amp-hub.env</code>, by hand. The hub is then enabled and started.</li>
+    <li>Both need Debian 13 (Trixie). The check runs before anything else and stops on any other release.</li>
+  </ul>
+
+  <h2><span class="n">5.6</span>Cloudflare</h2>
+  <ul>
+    <li><strong>Install cloudflared</strong> from the Cloudflare apt source.</li>
+    <li><strong>Token connector:</strong> install the connector service, with the token pasted by hand. Verify it (read-only). Then map a public hostname and an access policy in the Cloudflare dashboard, a manual step.</li>
+    <li><strong>Quick test:</strong> run a temporary tunnel in the foreground, by hand (Part 7).</li>
+    <li>Purge removes the service, the package, the apt source and the signing key, and optionally the stored credentials.</li>
+  </ul>
+
+  <h2><span class="n">5.7</span>Claude Remote</h2>
+  <ol>
+    <li>Check what is already here (read-only)</li>
+    <li>Install Node.js 22, pinned and checked against its SHA-256 hash</li>
+    <li>Install Claude Code</li>
+    <li>Sign in as the login user, a manual step in a terminal (Part 7)</li>
+    <li>Create the remote-control folder, for the login user</li>
+    <li>Start Claude Remote as a service</li>
+    <li>Check the service; or stop it</li>
+  </ol>
+  <p>The login user and the folder are fields. Purge stops and removes the service, removes Claude Code, and removes Node.js 22.</p>
+
+  <h2><span class="n">5.8</span>Cockpit</h2>
+  <p>A separate step installs Cockpit, the web admin UI, and one optional step stops and purges it. The tab that shows these steps was not traced for this summary.</p>
+
+  <h2><span class="n">5.9</span>Update</h2>
+  <p>The Update tab runs maintenance, not an installation. Its steps are kept in one table, and some have alternatives under them.</p>
+  <table>
+    <tr><th>Step</th><th>What it does</th></tr>
+    <tr><td>Refresh package index</td><td><code>apt update</code></td></tr>
+    <tr><td>Fix missing or broken packages</td><td>Finishes interrupted installs (<code>dpkg --configure -a</code>), then <code>apt install -f</code>. Quiet mode can be used. It changes nothing when nothing is broken.</td></tr>
+    <tr><td>Is apt still running? (read-only)</td><td>Lists any apt, dpkg or unattended-upgrade process. Run it first after an interrupted install.</td></tr>
+    <tr><td>Reconfigure half-installed packages</td><td>A narrower repair. Quiet mode can be used.</td></tr>
+    <tr><td>Upgrade; full upgrade</td><td>Upgrade packages; the full upgrade may install or remove packages.</td></tr>
+    <tr><td>Autoremove; autoremove and purge configs</td><td>Remove unused packages, the second also removes their config.</td></tr>
+    <tr><td>Clean; autoclean</td><td>Clear the package cache, or keep recent packages.</td></tr>
+    <tr><td>Webmin, Ajenti 2, fail2ban</td><td>Each has an install step and a remove step. fail2ban also has a read-only status step.</td></tr>
+    <tr><td>Package recovery 1, 2, 3 (steps 9 to 11)</td><td>Check for broken packages (read-only), finish half-installed packages, and re-install broken packages. Other tabs send the operator here when <code>dpkg --audit</code> reports problems.</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Gates and safety</div>
+  <h1 class="ch">What stops a step from running</h1>
+
+  <h2><span class="n">6.1</span>Masked services</h2>
+  <p>A masked service cannot start, and a package install that needs it fails. Before an install step, the helper tries to clear the masks on that tab's own services (<code>_guard_autofix</code>). If any stay masked, the step is refused and the message names them, with the command to unmask them by hand: <code>sudo systemctl unmask</code>.</p>
+
+  <h2><span class="n">6.2</span>Broken package system</h2>
+  <p>Before a package step, the helper runs <code>dpkg --audit</code>. If it reports problems, the step is refused, and the message sends the operator to the Update tab's package recovery steps (9, 10 and 11). If <code>dpkg --audit</code> does not answer, the step is allowed.</p>
+
+  <h2><span class="n">6.3</span>The Custom box</h2>
+  <p>The Custom box runs any command text, as root, after the same login check. Package commands in it still pass the masked-service gate. It is not restricted to the step table. The book should describe it as a root shell for commands, so it is used with care.</p>
+
+  <h2><span class="n">6.4</span>Root</h2>
+  <p>Every install action first checks that the helper is running as root. A helper not run as root refuses the step.</p>
+
+  <h2><span class="n">6.5</span>Login</h2>
+  <p>The install actions need a logged-in session. Five failed logins from one address within five minutes lock that address out for 15 minutes.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Manual steps</div>
+  <h1 class="ch">Steps done by hand</h1>
+  <p class="ch-lede">Four steps are marked <code>manual</code> and three are marked <code>manual_block</code>. The helper does not run them. The page shows them with their notes.</p>
+  <table>
+    <tr><th>Step</th><th>Why it is manual</th></tr>
+    <tr><td>Configure node settings (asl-menu), ASL3</td><td>An interactive full-screen menu. The helper has no way to send it keystrokes.</td></tr>
+    <tr><td>Ampersand first run, amp-server</td><td>Runs in the foreground until Ctrl-C.</td></tr>
+    <tr><td>Ampersand hub settings file</td><td>Optional settings in <code>/usr/etc/amp-hub.env</code>, edited by hand.</td></tr>
+    <tr><td>Cloudflare token service</td><td>The token is pasted by hand, so it does not pass through a command.</td></tr>
+    <tr><td>Cloudflare dashboard mapping</td><td>The hostname and access policy are set in the Cloudflare web dashboard.</td></tr>
+    <tr><td>Cloudflare quick test</td><td>Runs in the foreground.</td></tr>
+    <tr><td>Claude sign-in</td><td>Claude shows a sign-in link to open on another device. It runs in a terminal (Stage 5 covers the terminal).</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">What the install tabs show</h1>
+
+  <h2><span class="n">8.1</span>Commands are checked, not trusted</h2>
+  <p>Every step's command comes from the helper's table, and the page's copy is only compared with it. The book can describe the install tabs as safe against a changed page, while noting the Custom box as the exception.</p>
+
+  <h2><span class="n">8.2</span>Long jobs survive a restart</h2>
+  <p>A package install runs as a systemd unit, so a restart of the helper does not stop it. A shell command does not have that protection.</p>
+
+  <h2><span class="n">8.3</span>Distro checks are per tab</h2>
+  <p>Some tabs accept only one release. Ampersand needs Trixie, M17 has one standard path, and SVXLink has a USRP option. The book should list the release for each tab before the install steps.</p>
+
+  <h2><span class="n">8.4</span>Steps are a fixed list</h2>
+  <p>The steps are written into the file. A new step, or a changed command, needs a new version of 44helper. That keeps the install behaviour fixed for each release, and it means the book can describe each step.</p>
+
+  <h2><span class="n">8.5</span>Not checked</h2>
+  <p>The vendor scripts that some steps download (the DVSwitch repository script, the USRP2M17-Selector installer, the Ampersand packages and the Cloudflare packages) were not read. This summary describes the steps the helper runs, not what those scripts do inside.</p>
+</section>
+
+</body>
+</html>
