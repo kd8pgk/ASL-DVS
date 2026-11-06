@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>44helper - The System Terminal and How It Opens in a Browser</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; 44HELPER</div>
+    </div>
+    <div class="ed"><b>Stage 5</b><br>terminal</div>
+  </div>
+  <div class="body">
+    <h1>The System <span>Terminal</span></h1>
+    <p class="lede">44helper includes a root shell that runs in the browser. This summary covers how it is switched on, who may open it, how a session is opened and ended, what runs inside it, and the protections that apply.</p>
+    <div class="chips">
+      <span class="chip c1">OFF BY DEFAULT</span>
+      <span class="chip c2">LAN ONLY</span>
+      <span class="chip c3">PASSWORD EACH TIME</span>
+      <span class="chip c4">ONE AT A TIME</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 5 of 6. Source: 44helper_v0_1_17_20261103.py on branch ccr-9d4fe19f-ssud83. Nothing was run on a node; the browser behaviour is described from the page code.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Overview</div>
+  <h1 class="ch">What the terminal is</h1>
+  <p class="ch-lede">The Terminal button in the 44helper header opens a root shell on the node, in a panel of the same page. Its output is drawn by a terminal emulator that the helper serves itself. The shell is a real login bash run as root.</p>
+
+  <table>
+    <tr><th>Part</th><th>What it is</th></tr>
+    <tr><td>The switch</td><td>A file, <code>/etc/44helper/terminal.enable</code>. The terminal works only while this file exists.</td></tr>
+    <tr><td>The ticket</td><td>A one-time key, valid for 60 seconds, issued after the root password is checked.</td></tr>
+    <tr><td>The socket</td><td>A WebSocket to <code>/api/term/ws</code>, carrying the terminal's input and output.</td></tr>
+    <tr><td>The shell</td><td>A pseudo-terminal running <code>bash -l</code> in <code>/root</code> (or <code>/</code> if that is missing).</td></tr>
+    <tr><td>The emulator</td><td>xterm.js, with its fit addon and stylesheet, served from the helper at <code>/static/</code>.</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Switching it on</div>
+  <h1 class="ch">The switch</h1>
+
+  <h2><span class="n">2.1</span>The file</h2>
+  <p>The terminal is off until <code>/etc/44helper/terminal.enable</code> exists. The helper accepts the file only if it is a plain file, owned by root, and not writable by anyone but root. Any other file is refused, and the page says why.</p>
+
+  <h2><span class="n">2.2</span>Switching on from the page</h2>
+  <ol>
+    <li>The page asks the helper for the terminal's status. If the terminal is off and this browser may switch it on, it asks the operator to switch it on.</li>
+    <li>The operator enters the root password. The helper checks it, and counts a wrong password against the same lockout as the login (five failures in five minutes lock the address for 15 minutes).</li>
+    <li>The helper writes the file: a short note with the address that switched it on, and the time. The file is written to a temporary name first, then renamed into place.</li>
+    <li>The switch is logged, with the address.</li>
+  </ol>
+
+  <h2><span class="n">2.3</span>Switching on at the node</h2>
+  <p>The page can only switch the terminal on if the request is allowed (Part 3), and if the helper runs as root. If either fails, the page gives the command to run on the node itself: <code>sudo touch /etc/44helper/terminal.enable</code>.</p>
+
+  <h2><span class="n">2.4</span>Switching off</h2>
+  <p>Switching off deletes the file. An open session ends at its next check (Part 5).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Who may open it</div>
+  <h1 class="ch">The access rules</h1>
+
+  <h2><span class="n">3.1</span>Local network only</h2>
+  <p>The helper accepts a request for the terminal only from a loopback address, a link-local address, or a private address (the local network). Any other address is refused with "is not a local-network address". Addresses in 44Net are public, so a request from one is refused.</p>
+
+  <h2><span class="n">3.2</span>Refused through a proxy</h2>
+  <p>A request that carries a proxy or tunnel header is refused, whatever its address. The headers checked are those that Cloudflare, load balancers and other proxies add (for example <code>Cf-Connecting-Ip</code>, <code>X-Forwarded-For</code> and <code>Via</code>). The page says the terminal "only works from your local network" in that case.</p>
+
+  <h2><span class="n">3.3</span>The page must match</h2>
+  <p>The WebSocket handshake is refused unless its Origin matches the Host. A request from another site is therefore refused even from a local browser.</p>
+
+  <h2><span class="n">3.4</span>The root password, each time</h2>
+  <p>Opening the terminal needs the root password, sent with the open request. The password is checked on every open, and the field is cleared after each attempt. Wrong passwords count against the shared lockout. A root login session alone is not enough.</p>
+
+  <h2><span class="n">3.5</span>Logged in</h2>
+  <p>The open request also needs a logged-in session. A session that has ended ends the terminal too (Part 5).</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Opening a session</div>
+  <h1 class="ch">From the Terminal button to a shell</h1>
+
+  <ol>
+    <li><strong>The page checks the status.</strong> <code>/api/term/status</code> reports whether the terminal is on, whether this client is allowed, whether the terminal is busy, and which commands are on the allow-list.</li>
+    <li><strong>The operator chooses the shell, or a command.</strong> The page offers the root shell and the commands on the allow-list (Part 6).</li>
+    <li><strong>The page sends the open request.</strong> <code>POST /api/term/open</code> carries the command id and the root password. The helper checks the switch, the client address, the allow-list, the lockout, the password and that no other terminal is open.</li>
+    <li><strong>The helper issues a ticket.</strong> The ticket is random, valid for 60 seconds, and bound to the session that asked for it.</li>
+    <li><strong>The page loads the emulator</strong> from <code>/static/</code>: the stylesheet, the script and the fit addon. Each file is decompressed and checked against its SHA-256 before it is served. A file that fails its check is not served.</li>
+    <li><strong>The page opens the WebSocket</strong> with the ticket in its address. The helper takes the ticket (it can be used only once), checks that the session matches, and claims the single terminal slot.</li>
+    <li><strong>The helper starts the command</strong> in a new pseudo-terminal, sets its size to 80 by 24, and relays output both ways.</li>
+  </ol>
+  <p>The ticket is used once, so a copied address cannot open a second terminal later.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Running and ending</div>
+  <h1 class="ch">While a session is open</h1>
+
+  <table>
+    <tr><th>Event</th><th>What happens</th></tr>
+    <tr><td>Typing</td><td>Each key is sent as a message and written to the shell. The page sends typed text as JSON messages.</td></tr>
+    <tr><td>Resizing the window</td><td>The page sends the new size, and the helper resizes the pseudo-terminal (between 2 and 500 columns, 1 and 300 rows).</td></tr>
+    <tr><td>Closing from the page</td><td>The page asks for confirmation ("the command running in it will be stopped"), then closes the socket.</td></tr>
+    <tr><td>The command exits</td><td>The helper sends the exit code and closes the socket with "command finished".</td></tr>
+    <tr><td>Ten minutes with no typing</td><td>The helper sends an idle exit and closes the socket.</td></tr>
+    <tr><td>The terminal is switched off</td><td>The helper's check finds the switch file gone, and closes the socket.</td></tr>
+    <tr><td>The login ends</td><td>The helper's check finds the session gone, and closes the socket.</td></tr>
+  </table>
+  <p>When a session ends, the helper stops the command's process group: it sends a hang-up, waits 3 seconds, then sends a kill. The helper releases the single terminal slot in all cases.</p>
+  <p>The idle timer counts from the last key typed. Output from a running program does not reset it.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; What runs</div>
+  <h1 class="ch">The allow-list</h1>
+
+  <h2><span class="n">6.1</span>The commands</h2>
+  <table>
+    <tr><th>Id</th><th>Runs</th><th>How it is built</th></tr>
+    <tr><td>shell</td><td>A root login shell: <code>cd /root || cd /; exec bash -l</code></td><td>Written in the helper</td></tr>
+    <tr><td>asl_menu</td><td>asl-menu (ASL3 node settings)</td><td>The ASL3 install step's own command</td></tr>
+    <tr><td>m17_install</td><td>The USRP2M17 installer (asks for the callsign)</td><td>The M17 install step's own command</td></tr>
+    <tr><td>amp_firstrun</td><td>amp-server, in the foreground</td><td>The Ampersand step's own command</td></tr>
+    <tr><td>cr_signin</td><td>Claude Code sign-in, as the login user</td><td>The Claude Remote step's own command</td></tr>
+    <tr><td>cf_token</td><td>Cloudflare connector service. The token is typed hidden, and checked for the allowed characters before use.</td><td>Written in the helper</td></tr>
+    <tr><td>cf_quick</td><td>Cloudflare quick test tunnel, on a port the operator gives (default 8989)</td><td>Written in the helper</td></tr>
+    <tr><td>amp_hub_env</td><td>nano on <code>/usr/etc/amp-hub.env</code></td><td>Written in the helper</td></tr>
+  </table>
+  <p>An entry is offered only if its step is found in the install tables. A command is taken from its step's command, so the terminal runs the same command the install step would.</p>
+
+  <h2><span class="n">6.2</span>The shell is not limited</h2>
+  <p>The root shell has no allow-list inside it. Once it is open, the operator can run any command as root. The allow-list limits which programs the terminal can start, not what happens in the shell. This is the most powerful capability on the helper, and the book should describe it as such.</p>
+
+  <h2><span class="n">6.3</span>Steps that need a person</h2>
+  <p>The install steps marked manual in Stage 1 (Part 7) are the ones that run here: the ASL3 menu, the Ampersand first run and hub file, the Cloudflare token and quick test, and the Claude sign-in. The terminal is how those steps are done by hand.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
+  <h1 class="ch">What the terminal shows</h1>
+
+  <h2><span class="n">7.1</span>Layers, not one lock</h2>
+  <p>The terminal is protected by the switch, the address rules, the proxy rule, the origin rule, the password, the lockout, the single-use ticket and the single slot. A request must pass all of them. The book can describe the design as defence in depth, and list each layer.</p>
+
+  <h2><span class="n">7.2</span>The protections are for the network, not the node</h2>
+  <p>The rules keep the terminal off the internet and off other sites. They do not limit a person on the local network who knows the root password. The book should say that the root password is the one secret that matters.</p>
+
+  <h2><span class="n">7.3</span>Embedded and checked</h2>
+  <p>The emulator is inside the helper and checked by hash, so the page does not reach outside for it. This suits a node with no reliable internet.</p>
+
+  <h2><span class="n">7.4</span>Not checked</h2>
+  <ul>
+    <li>The browser-side layout and the emulator's behaviour on a phone, which the page code was read for but not run.</li>
+    <li>The exact list of addresses that Python's private-address test accepts, beyond loopback, link-local and private.</li>
+    <li>The effect of the 44Net address rule in a network that uses another range for its LAN.</li>
+  </ul>
+</section>
+
+</body>
+</html>
