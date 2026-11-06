@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Common Functions Sheet</title>
+<link rel="stylesheet" href="sheet.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; SHARED CODE</div>
+    </div>
+    <div class="ed"><b>Pi Zero 2 W fork</b><br>shared/confio.py</div>
+  </div>
+  <div class="body">
+    <h1>Common <span>Functions</span> Sheet</h1>
+    <p class="lede">The thirteen functions in <code>shared/confio.py</code>: what each one does, what it returns, and which tools carry a copy of it.</p>
+    <div class="chips">
+      <span class="chip c1">13 FUNCTIONS</span>
+      <span class="chip c2">11 TOOLS</span>
+      <span class="chip c3">52 COPIES CHECKED</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Source: shared/confio.py and the copies in each tool file on branch ccr-9d4fe19f-ssud83.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; How the sheet works</div>
+  <h1 class="ch">What is in shared/confio.py</h1>
+  <p class="ch-lede">Code that more than one tool needs is written once, in <code>shared/confio.py</code>, and then copied unchanged into each tool that uses it. The file's <code>USED_BY</code> table lists every function and the tools that carry a copy.</p>
+
+  <h2><span class="n">1.1</span>The copy rule</h2>
+  <ul>
+    <li>Change the reference in <code>shared/confio.py</code> first.</li>
+    <li>Copy the changed function into every tool listed for it in <code>USED_BY</code>. A tool's own wrapper may call the copy.</li>
+    <li><code>ci/check_repo.py</code> fails any tool whose copy differs from the reference.</li>
+    <li>Tool files carry no comments or docstrings (a repo rule), so each copy should match its reference exactly.</li>
+  </ul>
+
+  <h2><span class="n">1.2</span>Parity check for this sheet</h2>
+  <p>Each of the 13 functions was compared with every copy listed in <code>USED_BY</code>: 52 copies in 11 tool files. Each comparison matched the reference structurally (syntax tree, ignoring comments). No copy differed and no listed copy was missing.</p>
+  <p>The repository clone used for this sheet has no <code>origin/main</code> branch, so <code>ci/check_repo.py</code> itself was not run. Run it before any pull request that touches <code>shared/confio.py</code>.</p>
+
+  <h2><span class="n">1.3</span>Where the functions are used</h2>
+  <table>
+    <tr><th>Tool (file prefix)</th><th>Copies</th><th>Group</th></tr>
+    <tr><td>nodecontrol (full build)</td><td>2</td><td>Files, allmon3_sync</td></tr>
+    <tr><td>nodecontrol_pi02w</td><td>5</td><td>Files, firewall, allmon3_sync</td></tr>
+    <tr><td>sysmon (full build)</td><td>1</td><td>Files</td></tr>
+    <tr><td>sysmon_pi02w</td><td>4</td><td>Files, firewall</td></tr>
+    <tr><td>nodetalker</td><td>10</td><td>Files, Asterisk, firewall, allmon3_sync, suitelog</td></tr>
+    <tr><td>amp_nodetalker</td><td>4</td><td>Files, firewall</td></tr>
+    <tr><td>44helper</td><td>8</td><td>Files, config, network, firewall, system, allmon3_sync</td></tr>
+    <tr><td>wifimon</td><td>5</td><td>Files, firewall, system</td></tr>
+    <tr><td>instmon</td><td>7</td><td>Firewall, suitelog</td></tr>
+    <tr><td>confputter</td><td>2</td><td>Files, config</td></tr>
+    <tr><td>pibrary</td><td>4</td><td>Files, firewall</td></tr>
+  </table>
+  <p class="note">Counts come from the <code>USED_BY</code> table. A firewall function counts once for each of its three names. The copies add to 52.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; At a glance</div>
+  <h1 class="ch">The thirteen functions</h1>
+  <p class="ch-lede">Grouped by what they do. The last column gives the number of tools that carry a copy.</p>
+
+  <table>
+    <tr><th>Function</th><th>Group</th><th>What it does</th><th>Tools</th></tr>
+    <tr><td>atomic_write</td><td>Files</td><td>Writes a file safely: a temporary file, then an atomic replace.</td><td>10</td></tr>
+    <tr><td>fill_secrets</td><td>Config</td><td>Puts saved secrets back into a config file that holds placeholders.</td><td>2</td></tr>
+    <tr><td>http_get</td><td>Network</td><td>Fetches an https address with a size limit.</td><td>1</td></tr>
+    <tr><td>firewall_backend</td><td>Firewall</td><td>Reports which firewall is active: firewalld, ufw or none.</td><td>8</td></tr>
+    <tr><td>open_firewall_port</td><td>Firewall</td><td>Opens a port in the active firewall.</td><td>8</td></tr>
+    <tr><td>close_firewall_port</td><td>Firewall</td><td>Closes a port the tools opened.</td><td>8</td></tr>
+    <tr><td>ami_credentials</td><td>Asterisk</td><td>Finds the AMI login in manager.conf.</td><td>1</td></tr>
+    <tr><td>allmon3_sync</td><td>Asterisk</td><td>Adds or removes node sections in allmon3.ini.</td><td>4</td></tr>
+    <tr><td>system_profile</td><td>System</td><td>Describes the board, OS, architecture and Wi-Fi manager.</td><td>2</td></tr>
+    <tr><td>suitelog_redact</td><td>Suitelog</td><td>Hides secrets and tags addresses in a log line.</td><td>2</td></tr>
+    <tr><td>suitelog_append</td><td>Suitelog</td><td>Adds one row to a log file, with locking and rotation.</td><td>2</td></tr>
+    <tr><td>suitelog_rows</td><td>Suitelog</td><td>Reads log rows back, oldest first, optionally filtered by kind.</td><td>2</td></tr>
+    <tr><td>suitelog_flag</td><td>Suitelog</td><td>Reads a one-line flag file.</td><td>2</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Files and config</div>
+  <h1 class="ch">Writing and filling files</h1>
+
+  <h2><span class="n">3.1</span><code>atomic_write(path, data, mode=None, new_mode=0o600, skip_same=False)</code></h2>
+  <p><strong>Returns</strong> True when the file was written, False when it was skipped.</p>
+  <ul>
+    <li>Writes to a temporary file in the same folder, created with mode 0600, then syncs it to disk and replaces the target in one step. A reader sees the old file or the new one, never a part of each.</li>
+    <li>When run as root and the file already exists, keeps the file's owner and group.</li>
+    <li>Mode: the explicit <code>mode</code> if given, else the existing file's mode, else <code>new_mode</code> (0600 by default).</li>
+    <li><code>skip_same=True</code> returns False and writes nothing when the content is already identical.</li>
+    <li>On any error the temporary file is removed and the error is raised again.</li>
+  </ul>
+
+  <h2><span class="n">3.2</span><code>fill_secrets(text, current, supplied=None, is_json=False)</code></h2>
+  <p><strong>Returns</strong> a tuple: the filled text, the count of placeholders resolved, and a list of unresolved placeholders.</p>
+  <ul>
+    <li>Placeholders look like <code>&lt;redacted:xxxxxxxx&gt;</code>. Each one is filled from <code>supplied</code> when given, otherwise from the value at the same spot in <code>current</code> (the file already on disk), matched by section and line shape.</li>
+    <li>A placeholder with no value is returned in the unresolved list. Comment lines (starting with <code>;</code> or <code>#</code>) are not reported.</li>
+    <li><code>is_json=True</code> walks the parsed JSON instead of the lines and returns the JSON text, pretty-printed with sorted keys.</li>
+  </ul>
+
+  <h2><span class="n">3.3</span><code>http_get(url, max_bytes, timeout=20)</code></h2>
+  <p><strong>Returns</strong> the response bytes. Only <code>https://</code> addresses are allowed; anything else raises ValueError. The request sends the User-Agent <code>asl-dvs</code>. A response larger than <code>max_bytes</code> raises ValueError rather than being cut short.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Firewall</div>
+  <h1 class="ch">Opening and closing ports</h1>
+  <p class="ch-lede">The three firewall helpers share one pattern. They look at the firewall that is actually running, change it only when needed, and report what happened with a short code.</p>
+
+  <h2><span class="n">4.1</span><code>firewall_backend()</code></h2>
+  <p><strong>Returns</strong> <code>"firewalld"</code> when <code>firewall-cmd --state</code> says running, <code>"ufw"</code> when <code>ufw status verbose</code> says active, otherwise <code>"none"</code>. firewalld is checked first. Missing commands and timeouts count as "none".</p>
+
+  <h2><span class="n">4.2</span><code>open_firewall_port(port, proto="tcp")</code> and <code>close_firewall_port(port, proto="tcp")</code></h2>
+  <p><strong>Returns</strong> a tuple: a code and a message.</p>
+  <table>
+    <tr><th>Code</th><th>Meaning in open</th><th>Meaning in close</th></tr>
+    <tr><td>+</td><td>Port opened (firewalld: now and after a reboot)</td><td>(not used)</td></tr>
+    <tr><td>-</td><td>(not used)</td><td>Port closed</td></tr>
+    <tr><td>=</td><td>Already open, or no firewall running</td><td>Was not open, or no firewall running</td></tr>
+    <tr><td>!</td><td>Could not open the port</td><td>Could not close the port, or ufw's default still allows incoming traffic</td></tr>
+  </table>
+  <ul>
+    <li><strong>firewalld:</strong> open treats the port as open if the zone target is ACCEPT or the port is listed. It adds the port both now and permanently. Close removes it both ways and checks again.</li>
+    <li><strong>ufw:</strong> open looks for an ALLOW rule or the default-allow setting, then runs <code>ufw allow</code>. Close runs <code>ufw --force delete allow</code> and warns when the default still allows incoming traffic.</li>
+    <li>With no firewall running, both functions change nothing and return "=".</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Asterisk, system and logs</div>
+  <h1 class="ch">Asterisk, system profile and the suitelog</h1>
+
+  <h2><span class="n">5.1</span><code>ami_credentials(conf_path, user="", secret="")</code></h2>
+  <p><strong>Returns</strong> a (user, secret) pair. If both are given they are returned unchanged. Otherwise the function reads the Asterisk manager file and returns the first section, other than <code>[general]</code>, that has a secret. Returns ("", "") when nothing is found. Only Node Talker uses it.</p>
+
+  <h2><span class="n">5.2</span><code>allmon3_sync(text, add=(), remove=(), own="")</code></h2>
+  <p><strong>Returns</strong> the new allmon3.ini text and a list of notes.</p>
+  <ul>
+    <li>Removes the sections named in <code>remove</code>.</li>
+    <li>Adds the sections named in <code>add</code> (in numeric order). Each new section copies its host, port, user and pass lines from a public node section. Public sections are numbered outside 1000 to 1999, and the <code>own</code> node is preferred.</li>
+    <li>If there is no public section to copy from, nothing is added and a note asks for a manual change.</li>
+  </ul>
+
+  <h2><span class="n">5.3</span><code>system_profile(root="/")</code></h2>
+  <p><strong>Returns</strong> a dictionary: board (<code>pi</code> or <code>other</code>), model, os_id, os_name, codename, version_id, arch, wifi_manager (NetworkManager, wpa_supplicant, systemd-networkd or unknown), wifi_iface, and wifi_ifaces. The <code>root</code> argument lets a test point the function at a copy of the filesystem.</p>
+
+  <h2><span class="n">5.4</span>The suitelog functions</h2>
+  <table>
+    <tr><th>Function</th><th>Returns and behaviour</th></tr>
+    <tr><td><code>suitelog_redact(text, salt)</code></td><td>Returns the text with secrets hidden: Bearer tokens and password, psk, secret, token, key, auth and cookie values become <code>[hidden]</code>. SSIDs, MAC addresses and public IP addresses become a kind tag and a four-character salted hash. Loopback and unspecified addresses are kept.</td></tr>
+    <tr><td><code>suitelog_append(path, row, salt=None, seg_max=10000000)</code></td><td>Adds a millisecond time <code>t</code> when missing, writes one JSON line under a file lock, and redacts the line when a salt is given. When the file reaches <code>seg_max</code> bytes (10 MB by default) it moves to <code>path.1</code>, replacing any earlier one. Returns True when it rotated.</td></tr>
+    <tr><td><code>suitelog_rows(path, kinds=None)</code></td><td>A generator of rows from <code>path.1</code> then <code>path</code> (older first). Lines that are not valid JSON are skipped. <code>kinds</code> keeps only rows of those kinds.</td></tr>
+    <tr><td><code>suitelog_flag(path)</code></td><td>Returns the first 64 characters of the file, stripped, or "x" if the file is empty. Returns None when the file cannot be read.</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Reading the sheet</div>
+  <h1 class="ch">Points for the book</h1>
+
+  <h2><span class="n">6.1</span>Single-user functions</h2>
+  <p><code>ami_credentials</code> is used only by Node Talker, and <code>http_get</code> only by 44helper.</p>
+
+  <h2><span class="n">6.2</span>Full build and pi02w</h2>
+  <p>The firewall functions are listed for the pi02w tools and the shared tools only. The full-build Node Controller and SysMon do not carry them. Any change to a firewall function therefore has to be copied into the pi02w tools, and the full build is unaffected unless it is listed.</p>
+
+  <h2><span class="n">6.3</span>Return conventions</h2>
+  <ul>
+    <li>Firewall helpers return a code and a message. The codes are +, -, = and !.</li>
+    <li>Writers return True or False. <code>atomic_write</code> returns False only when <code>skip_same</code> found nothing to change.</li>
+    <li><code>fill_secrets</code> and <code>allmon3_sync</code> return the new text along with what they resolved or noted, so the caller decides what to show.</li>
+  </ul>
+
+  <h2><span class="n">6.4</span>How this sheet was made</h2>
+  <p>Read from the source files in the repository on branch ccr-9d4fe19f-ssud83. The sheet describes the code as it stands. It was not written from the tools' manuals.</p>
+</section>
+
+</body>
+</html>
