@@ -1,5 +1,15 @@
 # Node Talker changelog
 
+## 0.10.20 (2026-11-06)
+
+- **Copy log.** The Log card on the Setup tab has a Copy log button. It copies the lines shown (the last 400, one per line with their time) and says how many it copied. In Node Talker Mobile 0.10.20 or later the app puts them on the phone's clipboard itself, which a web view does not do reliably. In a browser it uses the browser's clipboard and, where that is blocked, the older copy method; if both are refused it says so. With an older app it says to update the app instead of failing without a word.
+- **A long talk-channel error shows in full and is kept in the log.** The line under the talk button was cut at two lines, so a long address such as "failed to connect to MagicBox.local (192.168.0.50, fe80::...)" could not be read or copied. A message longer than 60 characters now shows in full, left aligned and selectable. The node's Listen events keep up to 300 characters of the error (it was 40) and no longer strip brackets, commas, percent signs or round brackets, so the whole address reaches the Node Talker log, where Copy log can copy it. A node older than this still cuts it at 40.
+- **Link changes are logged.** The node now looks at its links every 5 seconds and writes to the Log when one connects, is connecting, disconnects or never connected, with the link's name: "Link connected: Allstar Hub (node 45192)", "Link disconnected: ...", "Link to ... did not connect". The name is the favorite's label, else the AllStar name, else "node N"; the transmit node and the digital and M17 bridges are named as such, with what is tuned when it is known. On start it lists the links already up ("Links now: ..."). A link has to be gone for two looks before it counts as disconnected, so a missed look does not log a false disconnect. It uses the same link list the page already reads.
+- **Everything under the talk button is logged.** Each message that appears under the talk button is also written to the Log as "Talk button: ..." (a repeat of the same message is logged once, and at most 30 a minute are accepted). The route is `/api/ptt/log`; it needs a login.
+- **Those messages clear after 30 seconds.** The talk-channel failure message used to stay until something replaced it, because it was set again on every retry. It is now shown once when the failure or its reason changes, and every message under the talk button clears itself 30 seconds after it last changed.
+- Tests: the link log (the first look, connect, connecting, disconnect, a one-look gap, a link that never connected, the names, a failed look and a changed main node), the talk-button log (levels, control characters, length, empty requests and the rate limit), every app call the page makes must exist in the app, and a long error keeps its whole address (`ci/test_ci.py`).
+- Page JavaScript logic changed, so this is a release.
+
 ## 0.10.19 (2026-11-06)
 
 - **Talk-channel problems in Node Talker Mobile are now shown at once and logged on the node.** The app tells the page the moment a try at opening the talk channel fails, with the reason ("Talk channel: ... Retrying..."), and when a send fails while you are transmitting ("Lost the talk channel while transmitting: ... Reconnecting..."). The app also reports each failure run to the node as a `talk_fail` event (and the recovery as `talk_up`), so it shows in the Node Talker log and the suite log. Reports are rate limited to one failure a minute, so a flapping connection cannot flood the log.
@@ -25,7 +35,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_19_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_20_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

@@ -5,6 +5,8 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ActivityNotFoundException
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -254,6 +256,18 @@ class TalkerActivity : Activity() {
             if (a.earpiece != on) NodeStore.setAudio(c, a.copy(earpiece = on))
             if (Listen.state != Listen.OFF) Listen.nodeId?.let { id -> NodeStore.get(c, id)?.let { Listen.start(c, it) } }
             return true
+        }
+
+        @JavascriptInterface
+        fun copyText(text: String): Boolean {
+            if (text.isEmpty() || text.length > MAX_COPY) return false
+            return try {
+                val cm = getSystemService(ClipboardManager::class.java) ?: return false
+                cm.setPrimaryClip(ClipData.newPlainText(getString(R.string.app_name), text))
+                true
+            } catch (e: RuntimeException) {
+                false
+            }
         }
 
         @JavascriptInterface
@@ -551,5 +565,6 @@ class TalkerActivity : Activity() {
         private const val REQ_NOTIFY = 4
         private const val REQ_TALK_MIC = 5
         private const val REQ_SAVE_TEXT = 6
+        private const val MAX_COPY = 500000
     }
 }

@@ -4,7 +4,6 @@ import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.IOException
 import java.io.OutputStream
-import java.net.InetSocketAddress
 import java.net.Socket
 import java.security.MessageDigest
 import java.security.SecureRandom
@@ -21,8 +20,7 @@ class WsClient(private val node: Node, private val cookie: String?) {
     private val rnd = SecureRandom()
 
     fun connect() {
-        val raw = Socket()
-        raw.connect(InetSocketAddress(node.host, node.port), 8000)
+        val raw = Dial.connect(node.host, node.port, 8000)
         raw.tcpNoDelay = true
         val s: Socket = if (node.https) {
             val f = if (node.pin.isNotEmpty()) NodeHttp.pinned(node.pin).socketFactory else SSLSocketFactory.getDefault() as SSLSocketFactory

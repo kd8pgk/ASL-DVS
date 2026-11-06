@@ -1989,6 +1989,173 @@ class WifimonLinkFileTests(unittest.TestCase):
         self.assertEqual(set(self.nt.WIFI_LINK_KEYS) - set(snap), set())
 
 
+class LinkLogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        nt = self.nt
+        nt._link_log.update(node=None, seen=None, gone={})
+        self.links = []
+        self.ok = True
+        self.log = []
+        favs = [{"mode": "ASL", "num": "45192", "label": "Allstar Hub"}]
+        for q in (mock.patch.object(nt, "main_node", return_value="1999"),
+                  mock.patch.object(nt, "rpt_links", side_effect=lambda node, max_age=2.0: (self.ok, list(self.links))),
+                  mock.patch.object(nt, "bridge_nodes", return_value={"digital": "1950", "m17": "1951"}),
+                  mock.patch.object(nt, "fav_load", return_value=favs),
+                  mock.patch.object(nt, "astdb_name", side_effect=lambda n: {"2000": "Some Repeater"}.get(n, "")),
+                  mock.patch.object(nt, "nc_running", return_value=False),
+                  mock.patch.object(nt, "log_event", side_effect=lambda m, level="info": self.log.append((level, m)))):
+            q.start()
+            self.addCleanup(q.stop)
+
+    def link(self, node, state="ESTABLISHED"):
+        return {"node": node, "dir": "OUT", "time": "00:00:01", "state": state}
+
+    def tick(self, n=1):
+        for _ in range(n):
+            self.nt.link_log_tick()
+
+    def test_the_first_look_names_the_links_already_up(self):
+        self.links = [self.link("45192"), self.link("2000")]
+        self.tick()
+        self.assertEqual(self.log, [("info", "Links now: Allstar Hub (node 45192), Some Repeater (node 2000)")])
+
+    def test_no_links_at_the_start_logs_nothing(self):
+        self.tick(2)
+        self.assertEqual(self.log, [])
+
+    def test_a_new_link_is_logged_with_its_name(self):
+        self.tick()
+        self.links = [self.link("45192")]
+        self.tick()
+        self.assertEqual(self.log, [("ok", "Link connected: Allstar Hub (node 45192)")])
+        self.tick(3)
+        self.assertEqual(len(self.log), 1)
+
+    def test_a_link_that_is_connecting_then_connected(self):
+        self.tick()
+        self.links = [self.link("2000", "CONNECTING")]
+        self.tick()
+        self.links = [self.link("2000", "ESTABLISHED")]
+        self.tick()
+        self.assertEqual(self.log, [("info", "Link connecting: Some Repeater (node 2000)"),
+                                    ("ok", "Link connected: Some Repeater (node 2000)")])
+
+    def test_a_disconnect_is_logged_once_after_two_looks(self):
+        self.links = [self.link("45192")]
+        self.tick()
+        self.log.clear()
+        self.links = []
+        self.tick()
+        self.assertEqual(self.log, [])
+        self.tick(3)
+        self.assertEqual(self.log, [("info", "Link disconnected: Allstar Hub (node 45192)")])
+
+    def test_a_one_look_gap_is_not_a_disconnect(self):
+        self.links = [self.link("45192")]
+        self.tick()
+        self.log.clear()
+        self.links = []
+        self.tick()
+        self.links = [self.link("45192")]
+        self.tick(3)
+        self.assertEqual(self.log, [])
+
+    def test_a_link_that_never_connected_says_so(self):
+        self.tick()
+        self.links = [self.link("2000", "CONNECTING")]
+        self.tick()
+        self.links = []
+        self.tick(2)
+        self.assertEqual(self.log[-1], ("warn", "Link to Some Repeater (node 2000) did not connect"))
+
+    def test_names_for_unknown_transmit_and_bridge_nodes(self):
+        self.tick()
+        self.links = [self.link("3000"), self.link("1921"), self.link("1950"), self.link("1951")]
+        self.tick()
+        self.assertEqual([m for _, m in self.log],
+                         ["Link connected: node 3000", "Link connected: transmit node 1921",
+                          "Link connected: digital bridge node 1950", "Link connected: M17 bridge node 1951"])
+
+    def test_a_failed_look_changes_nothing(self):
+        self.links = [self.link("45192")]
+        self.tick()
+        self.log.clear()
+        self.ok = False
+        self.links = []
+        self.tick(5)
+        self.assertEqual(self.log, [])
+        self.ok = True
+        self.links = [self.link("45192")]
+        self.tick()
+        self.assertEqual(self.log, [])
+
+    def test_a_different_main_node_starts_again_quietly(self):
+        nt = self.nt
+        self.links = [self.link("45192")]
+        self.tick()
+        self.log.clear()
+        with mock.patch.object(nt, "main_node", return_value="2999"):
+            self.links = [self.link("2000")]
+            self.tick()
+        self.assertEqual(self.log, [("info", "Links now: Some Repeater (node 2000)")])
+
+
+class PttLogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.nt = load_nodetalker()
+
+    def setUp(self):
+        self.nt._ptt_log_times.clear()
+        self.log = []
+        q = mock.patch.object(self.nt, "log_event", side_effect=lambda m, level="info": self.log.append((level, m)))
+        q.start()
+        self.addCleanup(q.stop)
+
+    def test_a_message_is_logged_with_its_level(self):
+        nt = self.nt
+        self.assertEqual(nt.ptt_log({"text": "Talk channel: refused. Retrying...", "level": "warn"}), {"ok": True, "n": 1})
+        nt.ptt_log({"text": "Could not key", "level": "err"})
+        nt.ptt_log({"text": "Opening the talk channel...", "level": "weird"})
+        self.assertEqual(self.log, [("warn", "Talk button: Talk channel: refused. Retrying..."),
+                                    ("err", "Talk button: Could not key"),
+                                    ("info", "Talk button: Opening the talk channel...")])
+
+    def test_control_characters_are_removed_and_the_length_is_capped(self):
+        nt = self.nt
+        nt.ptt_log({"text": "a\nb\x00c\x1b[31m" + "x" * 900})
+        msg = self.log[0][1]
+        self.assertNotIn("\n", msg)
+        self.assertNotIn("\x00", msg)
+        self.assertNotIn("\x1b", msg)
+        self.assertEqual(len(msg), len("Talk button: ") + nt.PTT_LOG_MAX)
+
+    def test_an_empty_or_bad_request_is_refused(self):
+        nt = self.nt
+        for bad in ({"text": ""}, {"text": "   "}, {}):
+            with self.assertRaises(ValueError):
+                nt.ptt_log(bad)
+        with self.assertRaises(ValueError):
+            nt.ptt_log("x")
+
+    def test_a_flood_is_held_to_the_limit_a_minute(self):
+        nt = self.nt
+        sent = [nt.ptt_log({"text": f"m{i}"})["n"] for i in range(nt.PTT_LOG_PER_MIN + 10)]
+        self.assertEqual(sum(sent), nt.PTT_LOG_PER_MIN)
+        self.assertEqual(len(self.log), nt.PTT_LOG_PER_MIN)
+
+    def test_the_route_is_registered_and_the_page_calls_it(self):
+        nt = self.nt
+        with open(nt.__file__, encoding="utf-8") as fh:
+            text = fh.read()
+        self.assertIn('"/api/ptt/log": (ptt_log', text)
+        self.assertIn("'/api/ptt/log'", text)
+
+
 class ListenEventTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -2019,12 +2186,12 @@ class ListenEventTests(unittest.TestCase):
     def test_bad_events_are_dropped_and_unknown_reasons_become_other(self):
         nt = self.nt
         evs = [{"action": "connect", "src": "node", "why": "button"}, {"action": "poke", "src": "user"}, "x",
-               {"action": "connect", "src": "user", "why": "<script>", "detail": {"err": "a<b>c;d" * 30, "up": "x", "vis": True,
+               {"action": "connect", "src": "user", "why": "<script>", "detail": {"err": "a<b>c;d" * 200, "up": "x", "vis": True,
                                                                               "screen": 10 ** 12, "zzz": 1}}]
         self.assertEqual(nt.listen_event({"client": "browser", "events": evs})["n"], 1)
         row = self.rows()[0]
         self.assertEqual(row["why"], "other")
-        self.assertLessEqual(len(row["detail"]["err"]), 40)
+        self.assertEqual(len(row["detail"]["err"]), nt.LISTEN_STR_MAX)
         self.assertNotIn("<", row["detail"]["err"])
         self.assertEqual(row["detail"]["screen"], nt.RXH_CLIENT_MAX)
         self.assertNotIn("zzz", row["detail"])
@@ -2085,6 +2252,18 @@ class ListenEventTests(unittest.TestCase):
         self.assertIn("talk_fail", self.log.call_args_list[0][0][0])
         self.assertIn("tls", self.log.call_args_list[0][0][0])
 
+    def test_a_long_error_keeps_the_whole_address(self):
+        nt = self.nt
+        err = ("failed to connect to MagicBox.local (192.168.0.50, fe80:0:0:0:a2b:cff:fe00:1%wlan0): "
+               "failed to connect to MagicBox.local/192.168.0.50 (port 8993) from /192.168.0.168 (port 40000) after 3000ms")
+        nt.listen_event({"client": "android", "events": [{"action": "talk_fail", "src": "system", "why": "connect", "detail": {"err": err, "n": 1}}]})
+        self.assertIn(err, self.log.call_args[0][0])
+        kept = self.rows()[0]["detail"]["err"]
+        self.assertIn("failed to connect to MagicBox.local", kept)
+        self.assertIn("(port 8993)", kept)
+        self.assertNotIn("192.168.0.50", kept)
+        self.assertIn("ip:", kept)
+
     def test_the_app_talk_reports_agree_with_the_node(self):
         nt = self.nt
         base = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker")
@@ -2107,6 +2286,18 @@ class ListenEventTests(unittest.TestCase):
         keys = set(re.findall(r'\.put\("(err|n|code|secs)"', svc))
         self.assertEqual(keys, {"err", "n", "code", "secs"})
         self.assertEqual(keys - set(nt.LISTEN_DETAIL_NUM) - set(nt.LISTEN_DETAIL_STR), set())
+
+    def test_every_app_call_the_page_makes_exists_in_the_app(self):
+        nt = self.nt
+        base = os.path.join(HERE, "..", "android", "app", "src", "main", "java", "io", "github", "kd8pgk", "nodetalker")
+        with open(nt.__file__, encoding="utf-8") as fh:
+            page = fh.read()
+        with open(os.path.join(base, "TalkerActivity.kt"), encoding="utf-8") as fh:
+            app = fh.read()
+        offered = set(re.findall(r"@JavascriptInterface\s+fun (\w+)\(", app))
+        used = set(re.findall(r"NodeTalkerApp\.(\w+)", page)) | set(re.findall(r"appCall\('(\w+)'", page))
+        self.assertIn("copyText", used)
+        self.assertEqual(used - offered, set())
 
     def test_the_app_spectrum_and_the_page_agree(self):
         import re
