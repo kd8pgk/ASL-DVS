@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.17"
+VERSION = "0.10.18"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Talker"
 
@@ -10149,12 +10149,29 @@ function appTalkSync() {
   if (talking && !st.talking) { keyed = false; endTalk(); pttUi(wsReady ? 'ready' : 'off', ''); }
 }
 
+let appTalkTimer = null;
+
+function appTalkWatch() {
+  if (appTalkTimer) return;
+  let n = 0;
+  appTalkTimer = setInterval(() => {
+    n++;
+    if (!appTalk() || !authed || wsReady || n > 40) { clearInterval(appTalkTimer); appTalkTimer = null; return; }
+    let st = null;
+    try { st = JSON.parse(NodeTalkerApp.talkState() || 'null'); } catch (e) {}
+    if (!st) return;
+    if (st.open) { window.ntAppTalk({ev: 'open'}); return; }
+    if (st.error) pttUi('off', 'Talk channel: ' + st.error + '. Retrying...', 'warn');
+    else if (n === 8) pttUi('off', 'Still opening the talk channel. The app has not said why; check that the phone can reach the node.', 'warn');
+  }, 1500);
+}
+
 function openTalk(force) {
   if (appTalk()) {
     if (!authed || (tab !== 'listen' && force !== true)) return;
     if (wsReady) { appTalkSync(); return; }
     if (!appCall('talkOpen')) pttUi('off', 'Allow the microphone for Node Talker (Android asks), then press again.', 'warn');
-    else pttUi('off', 'Opening the talk channel...');
+    else { pttUi('off', 'Opening the talk channel...'); appTalkWatch(); }
     return;
   }
   if (!authed || (tab !== 'listen' && force !== true) || document.visibilityState === 'hidden') return;
