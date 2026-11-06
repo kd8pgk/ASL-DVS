@@ -1,5 +1,14 @@
 # Node Talker changelog
 
+## 0.10.21 (2026-11-06)
+
+- **The phone's last report to the node is timed.** Each report the phone sends now carries how long its previous report took to reach the node (`probe_ms`), counted from the start of the send to the node's answer, so it includes opening a new connection when one is needed. The receive-health report's phone line shows "last report to the node took N ms" when that is 1 second or more. Reports go out about every 2.5 minutes when nothing is wrong, so this is a sample, not a continuous probe.
+- **The phone's network changes are logged with their time.** The phone records each change between wifi, cell (mobile data), eth, other and none, with the local clock time, and sends the last 8 with its report (`net_log`). The phone's line shows the last three: "network: wifi to cell at 12:03:11, cell to wifi at 12:04:00". A failed send keeps its entries for the next try.
+- Needs Node Talker Mobile 0.10.21 for the phone's new fields. An older app sends neither and the node shows nothing new; a newer app with an older node has its extra fields ignored.
+- Nothing changes on the Pi's wifimon, the verdicts or the page.
+- Tests: the probe and the network log kept, shown and bounded, and a bad entry dropped (`ci/test_ci.py`).
+- Python behaviour changed, so this is a release.
+
 ## 0.10.20 (2026-11-06)
 
 - **Copy log.** The Log card on the Setup tab has a Copy log button. It copies the lines shown (the last 400, one per line with their time) and says how many it copied. In Node Talker Mobile 0.10.20 or later the app puts them on the phone's clipboard itself, which a web view does not do reliably. In a browser it uses the browser's clipboard and, where that is blocked, the older copy method; if both are refused it says so. With an older app it says to update the app instead of failing without a word.
@@ -35,7 +44,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_20_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_21_20261106.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 

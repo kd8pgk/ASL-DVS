@@ -11,15 +11,18 @@ class PlayStats {
     private var ttfbMs = 0L
     private var gapMs = 0L
     private var netChg = 0
+    private var probeMs = 0L
+    private val netLog = NetLog()
 
     class Snapshot(
         val under: Int, val reset: Int, val silenceMs: Long, val underLocal: Int, val stallMs: Long,
         val reconn: Int = 0, val why: String = "", val ttfbMs: Long = 0, val gapMs: Long = 0, val netChg: Int = 0,
-        val extra: String = ""
+        val extra: String = "", val probeMs: Long = 0, val netLog: List<String> = emptyList()
     ) {
         fun json(): String = "{\"client\":\"android\",\"under\":$under,\"reset\":$reset,\"silence_ms\":$silenceMs," +
             "\"under_local\":$underLocal,\"stall_ms\":$stallMs,\"reconn\":$reconn,\"why\":\"$why\"," +
-            "\"ttfb_ms\":$ttfbMs,\"gap_ms\":$gapMs,\"net_chg\":$netChg$extra}"
+            "\"ttfb_ms\":$ttfbMs,\"gap_ms\":$gapMs,\"net_chg\":$netChg,\"probe_ms\":$probeMs," +
+            "\"net_log\":\"${netLog.joinToString(";")}\"$extra}"
     }
 
     @Synchronized
@@ -62,15 +65,26 @@ class PlayStats {
     }
 
     @Synchronized
+    fun netKind(from: String, to: String) {
+        netLog.add(from, to, System.currentTimeMillis())
+    }
+
+    @Synchronized
+    fun probe(ms: Long) {
+        probeMs = maxOf(probeMs, ms.coerceIn(0, LIMIT.toLong()))
+    }
+
+    @Synchronized
     fun take(force: Boolean = false, extra: String = ""): Snapshot? {
-        val notable = under > 0 || reset > 0 || reconn > 0 || netChg > 0 || gapMs >= GAP_NOTE_MS
+        val notable = under > 0 || reset > 0 || reconn > 0 || netChg > 0 || gapMs >= GAP_NOTE_MS || netLog.size() > 0
         if (!notable && !force) {
             stallMs = 0
             ttfbMs = 0
             gapMs = 0
             return null
         }
-        val s = Snapshot(under, reset, silenceMs, underLocal, stallMs, reconn, why, ttfbMs, gapMs, netChg, extra)
+        val s = Snapshot(under, reset, silenceMs, underLocal, stallMs, reconn, why, ttfbMs, gapMs, netChg, extra,
+            probeMs, netLog.take())
         clearLocked()
         return s
     }
@@ -87,6 +101,8 @@ class PlayStats {
         ttfbMs = maxOf(ttfbMs, s.ttfbMs)
         gapMs = maxOf(gapMs, s.gapMs)
         netChg = (netChg + s.netChg).coerceAtMost(LIMIT)
+        probeMs = maxOf(probeMs, s.probeMs)
+        netLog.restore(s.netLog)
     }
 
     @Synchronized
@@ -105,6 +121,8 @@ class PlayStats {
         ttfbMs = 0
         gapMs = 0
         netChg = 0
+        probeMs = 0
+        netLog.clear()
     }
 
     companion object {
