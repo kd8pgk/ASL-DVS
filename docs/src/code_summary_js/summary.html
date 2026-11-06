@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Code Summary: JavaScript</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; WEB PAGES</div>
+    </div>
+    <div class="ed"><b>Stage 3 of 3</b><br>JavaScript</div>
+  </div>
+  <div class="body">
+    <h1>Code Summary: <span>JavaScript</span></h1>
+    <p class="lede">The scripts of the eight web tools in the Pi Zero 2 W build: how much script each page carries, which parts of the tool it talks to, how it keeps itself up to date, where it stores settings in the browser, and how it writes markup safely.</p>
+    <div class="chips">
+      <span class="chip c1">8 PAGES</span>
+      <span class="chip c2">~1.5 MB OF SCRIPT</span>
+      <span class="chip c3">STAGE 3</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Stage 3 covers JavaScript. HTML was Stage 1 and CSS Stage 2. Source: the tool files on branch ccr-9d4fe19f-ssud83.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Scope and method</div>
+  <h1 class="ch">Where the scripts are</h1>
+  <p class="ch-lede">The same eight pages as Stages 1 and 2. Script is kept two ways: literal <code>&lt;script&gt;</code> blocks in the page, and Python string constants (names containing JS, SCRIPT or THEME) that are joined when the page is served.</p>
+
+  <h2><span class="n">1.1</span>How the counts were made</h2>
+  <ul>
+    <li>Both forms were collected for each tool. Script blocks that load an outside file were checked for; none was found.</li>
+    <li>Function counts are approximate. They count <code>function</code> declarations and arrow functions bound to a name.</li>
+    <li>Calls were counted in the text: <code>fetch(</code>, the page's own request helpers, <code>innerHTML</code> writes, timers and browser storage. Nothing was run in a browser.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; At a glance</div>
+  <h1 class="ch">Size and features per page</h1>
+
+  <table>
+    <tr><th>Page</th><th>Parts</th><th>Characters</th><th>Functions</th><th>fetch calls</th><th>innerHTML</th><th>Named escape helper</th></tr>
+    <tr><td>Node Controller</td><td>5</td><td>199,309</td><td>~275</td><td>35</td><td>47</td><td>yes (<code>esc</code>)</td></tr>
+    <tr><td>SysMon</td><td>3</td><td>260,808</td><td>~386</td><td>4 (plus helpers)</td><td>100</td><td>yes (<code>esc</code>)</td></tr>
+    <tr><td>instmon</td><td>15</td><td>151,712</td><td>~161</td><td>26</td><td>31</td><td>yes (<code>escHtml</code>)</td></tr>
+    <tr><td>wifimon</td><td>2</td><td>78,271</td><td>~119</td><td>2 (plus helpers)</td><td>0</td><td>not needed</td></tr>
+    <tr><td>44helper</td><td>36</td><td>406,136</td><td>~497</td><td>126</td><td>111</td><td>yes (per section)</td></tr>
+    <tr><td>Node Talker</td><td>3</td><td>208,899</td><td>~396</td><td>2 (plus helpers)</td><td>20</td><td>no</td></tr>
+    <tr><td>Node Recorder</td><td>3</td><td>54,975</td><td>~123</td><td>1 (plus helpers)</td><td>8</td><td>no</td></tr>
+    <tr><td>Pibrary</td><td>3</td><td>141,060</td><td>~221</td><td>19</td><td>2</td><td>no</td></tr>
+  </table>
+  <p class="note">"Plus helpers" means the page makes its requests through wrapper functions, so the direct <code>fetch</code> count is low. The endpoint list in Part 3 comes from the request paths named in the code.</p>
+
+  <h2><span class="n">2.1</span>Browser features</h2>
+  <table>
+    <tr><th>Page</th><th>Live connection</th><th>Audio and media</th><th>Browser storage</th><th>Timers</th></tr>
+    <tr><td>Node Controller</td><td>none</td><td>none</td><td>session storage (10 uses)</td><td>3 s, 10 s and 60 s</td></tr>
+    <tr><td>SysMon</td><td>none</td><td>none</td><td>session storage (7 uses)</td><td>1.5 s to 30 s</td></tr>
+    <tr><td>instmon</td><td>none</td><td>none</td><td>session storage (4 uses)</td><td>1 s to 15 s</td></tr>
+    <tr><td>wifimon</td><td>none</td><td>none</td><td>local storage, 4 keys</td><td>1 s and 5 s</td></tr>
+    <tr><td>44helper</td><td>WebSocket for the terminal</td><td>none</td><td>none</td><td>3 s and 5 s, plus elapsed-time timers</td></tr>
+    <tr><td>Node Talker</td><td>WebSocket for listen and talk</td><td>microphone, audio processing, media session</td><td>local storage, about 10 keys</td><td>250 ms to 30 s</td></tr>
+    <tr><td>Node Recorder</td><td>none</td><td>none</td><td>none</td><td>2 s and 30 s</td></tr>
+    <tr><td>Pibrary</td><td>none</td><td>media element</td><td>local storage (prefix <code>pibrary.</code>) and session storage</td><td>1 s to 300 s</td></tr>
+  </table>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Pages</div>
+  <h1 class="ch">Node Controller and SysMon</h1>
+
+  <h2><span class="n">3.1</span>Node Controller</h2>
+  <ul>
+    <li><strong>Size and shape:</strong> five script parts. The main script is about 198,000 characters and holds roughly 275 functions. Three of the five parts are small placeholder scripts.</li>
+    <li><strong>Requests:</strong> actions go to <code>/api/action</code>, settings to <code>/api/config</code>, login to <code>/api/login</code>. Reference lists come from <code>/api/talkgroups</code>, <code>/api/xlx-reflectors</code>, <code>/api/m17-reflectors</code>, <code>/api/phone</code>, <code>/api/recording</code> and <code>/api/fcs-hosts</code>.</li>
+    <li><strong>Keeping up to date:</strong> the recording status is checked every 3 seconds, the analog bridge status every 10 seconds, and the keyed state is polled. The push-to-talk audio poll also runs every 3 seconds.</li>
+    <li><strong>Inline handlers:</strong> 167 <code>on...</code> attributes in the markup, so the page depends on <code>'unsafe-inline'</code> (see Part 5).</li>
+  </ul>
+
+  <h2><span class="n">3.2</span>SysMon</h2>
+  <ul>
+    <li><strong>Size:</strong> the largest script of the eight, about 260,000 characters and about 386 functions.</li>
+    <li><strong>Requests:</strong> the page talks to about 50 paths. The most used are <code>/api/svc</code> (services), <code>/api/hardware</code>, <code>/api/config</code>, <code>/api/dvswitch/file</code>, <code>/api/nodelisten</code>, <code>/api/phone/routertest</code>, <code>/api/sdcard/test</code> and <code>/api/pinned</code>. The file editors use <code>/api/asterisk/file</code>, <code>/api/allmon3/file</code> and <code>/api/appconf/file</code>.</li>
+    <li><strong>Keeping up to date:</strong> refresh timers run from 1.5 seconds to 30 seconds.</li>
+    <li><strong>Markup:</strong> about 100 <code>innerHTML</code> writes, and 234 inline handlers. A shared <code>esc</code> function is used for values put into markup.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Pages</div>
+  <h1 class="ch">instmon, wifimon and 44helper</h1>
+
+  <h2><span class="n">4.1</span>instmon</h2>
+  <ul>
+    <li><strong>Size:</strong> fifteen script parts, one for each feature: the log poll, status toasts, the config installer, the editor, actions, login, start-up, USB import, documents, and the Suite Log. The largest part is about 65,000 characters.</li>
+    <li><strong>Requests:</strong> actions go to <code>/api/action</code>. The disk-image feature has the largest group of paths (drives, format, backup, clone, job status, eject and cancel). Logs go to <code>/api/log</code> and <code>/api/suitelog/status</code>.</li>
+    <li><strong>Jobs:</strong> installs and disk-image jobs are followed by polling, at intervals from 1 to 15 seconds.</li>
+  </ul>
+
+  <h2><span class="n">4.2</span>wifimon</h2>
+  <ul>
+    <li><strong>Size:</strong> two script parts, about 78,000 characters and about 119 functions. The page uses the most event listeners of the eight (70), and no <code>innerHTML</code> at all.</li>
+    <li><strong>Requests:</strong> status comes from <code>/api/status</code>. Settings go to <code>/api/watchdogs</code>, <code>/api/alerts</code> and <code>/api/country</code>. Network actions are under <code>/api/device/</code>, <code>/api/hotspot/</code>, <code>/api/change/</code> (keep and undo) and <code>/api/install/</code>.</li>
+    <li><strong>Timers:</strong> the pending-change and hotspot displays redraw every second. The install status is polled every 5 seconds.</li>
+    <li><strong>Browser storage:</strong> four keys with the <code>wifimon.</code> prefix. They are named for "seen" jobs, reports and results and for the details toggle. They appear to record what the browser has already shown, so a banner is not repeated. Confirm this in the code before the book states it.</li>
+  </ul>
+
+  <h2><span class="n">4.3</span>44helper</h2>
+  <ul>
+    <li><strong>Size:</strong> the largest page of all: 36 script parts, about 406,000 characters and about 497 functions. Most tabs have their own script part, and the parts are joined in order when the page is built.</li>
+    <li><strong>Requests:</strong> the page makes about 126 direct fetch calls, and its paths follow a pattern: <code>/api/action_status</code> (the status of a running action), <code>/api/pi_install/action</code>, <code>/api/firewall/action</code>, <code>/api/router_install/action</code>, <code>/api/asl3/action</code>, <code>/api/dvswitch/action</code>, and many others for each tab.</li>
+    <li><strong>Terminal:</strong> the one WebSocket connects to <code>/api/term/ws</code> with a one-time ticket. This is the shell the Terminal button opens. The manual says it is for the local network and needs the root password (manual; see the Watchdogs, Guardrails, Locks and Controls summary).</li>
+    <li><strong>Keeping up to date:</strong> status checks at 3 and 5 seconds, with elapsed-time timers on running jobs.</li>
+    <li><strong>Markup:</strong> about 111 <code>innerHTML</code> writes, and 242 inline handlers. Each section has its own escape helper (for example <code>cfgEsc</code>, <code>htEsc</code>, <code>ndEscapeHtml</code> and <code>dvEscapeAttr</code>).</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Pages</div>
+  <h1 class="ch">Node Talker, Node Recorder and Pibrary</h1>
+
+  <h2><span class="n">5.1</span>Node Talker</h2>
+  <ul>
+    <li><strong>Size:</strong> about 208,000 characters and about 396 functions, with 125 event listeners.</li>
+    <li><strong>Live link:</strong> a WebSocket to <code>/api/talk</code> (<code>wss://</code> when the page is on HTTPS) is the live link the page uses for talk and listen.</li>
+    <li><strong>Audio:</strong> the page uses the microphone (<code>getUserMedia</code>, five references), audio processing (<code>AudioContext</code> and <code>AudioWorklet</code>), and the operating system's media session. Its audio code is the part to test on each browser and phone.</li>
+    <li><strong>Requests:</strong> connect and disconnect go to <code>/api/connect</code> and <code>/api/disconnect</code>, and the balance and restore actions to <code>/api/balance/</code>. Settings go to <code>/api/config</code>, which is called 15 times.</li>
+    <li><strong>Browser storage:</strong> about ten keys with the <code>nl</code> prefix hold the page's settings (for example push-to-talk, microphone, playback, headset, keep-awake and the automatic balance). They are kept per browser.</li>
+    <li><strong>Markup:</strong> 20 <code>innerHTML</code> writes, but no escape helper with a named function. Each write should be checked for values that come from outside.</li>
+  </ul>
+
+  <h2><span class="n">5.2</span>Node Recorder</h2>
+  <ul>
+    <li><strong>Size:</strong> about 55,000 characters and about 123 functions, the smallest script of the eight.</li>
+    <li><strong>Requests:</strong> the schedule is saved to <code>/api/schedule/set</code>, and recordings are converted through <code>/api/convert</code> (with <code>/api/convert/install</code>). Reboot and shutdown are available from the page through <code>/api/system/reboot</code> and <code>/api/system/shutdown</code>, so the page can switch the node off.</li>
+    <li><strong>Keeping up to date:</strong> status is checked every 2 seconds, and a slower check runs every 30 seconds.</li>
+    <li><strong>Markup:</strong> 8 <code>innerHTML</code> writes, and no named escape helper.</li>
+    <li>Node Recorder's script is close to Node Talker's, and the two have been edited separately (see the CSS summary). A fix to shared behaviour should be checked in both.</li>
+  </ul>
+
+  <h2><span class="n">5.3</span>Pibrary</h2>
+  <ul>
+    <li><strong>Size:</strong> about 141,000 characters and about 221 functions, with 140 event listeners.</li>
+    <li><strong>Requests:</strong> the library is read through <code>/api/lib/list</code>, <code>/api/lib/file</code>, <code>/api/lib/art</code> and <code>/api/lib/recent</code>. Resume positions go to <code>/api/positions</code>. Imports use <code>/api/import/list</code> and <code>/api/import/copy</code>, and backups use <code>/api/config/backup</code> and <code>/api/config/restore</code>.</li>
+    <li><strong>Browser storage:</strong> local storage with the <code>pibrary.</code> prefix, plus session storage.</li>
+    <li><strong>Timers:</strong> from 1 second (the player) to 300 seconds (a slow check).</li>
+    <li><strong>Markup:</strong> two <code>innerHTML</code> writes, both built from strings. No named escape helper.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Shared patterns</div>
+  <h1 class="ch">What the scripts have in common</h1>
+
+  <h2><span class="n">6.1</span>Request paths</h2>
+  <p>Requests are JSON calls to <code>/api/</code> paths, usually of the form <code>/api/&lt;feature&gt;/&lt;action&gt;</code>. Each tool has its own set. Some tools use a generic <code>/api/action</code> path for many actions, and others name each action as its own path.</p>
+
+  <h2><span class="n">6.2</span>Polling and job progress</h2>
+  <p>Every page refreshes by timer rather than by push, except the two WebSockets. Long jobs (installs, disk-image work, the tunnel steps) are started with one request and then followed by a status request, polled at a set interval. The intervals in Part 2 show where the timers are, which is the place to look when tuning.</p>
+
+  <h2><span class="n">6.3</span>Login and session</h2>
+  <p>Pages log in through <code>/api/login</code> (Node Controller, Node Talker, Node Recorder and others) and end the session through <code>/api/logout</code>. The page keeps no password. The session is held in a cookie.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Security</div>
+  <h1 class="ch">Markup, inline script and the CSP</h1>
+
+  <h2><span class="n">7.1</span>The Content-Security-Policy allows inline script</h2>
+  <p>Five tools send a Content-Security-Policy: Node Controller, wifimon, instmon, 44helper and Pibrary. Each allows inline script, with <code>'unsafe-inline'</code> in <code>script-src</code>. The policy therefore does not block injected script, and escaping of values is the main defence against cross-site scripting. SysMon, Node Talker and Node Recorder send no policy in the code.</p>
+
+  <h2><span class="n">7.2</span>Inline handlers</h2>
+  <table>
+    <tr><th>Page</th><th>Inline <code>on...</code> attributes in markup</th></tr>
+    <tr><td>44helper</td><td>242</td></tr>
+    <tr><td>SysMon</td><td>234</td></tr>
+    <tr><td>Node Controller</td><td>167</td></tr>
+    <tr><td>instmon</td><td>16</td></tr>
+    <tr><td>Pibrary</td><td>2</td></tr>
+    <tr><td>wifimon, Node Talker, Node Recorder</td><td>0</td></tr>
+  </table>
+
+  <h2><span class="n">7.3</span>Writing markup from data</h2>
+  <p>The counts of <code>innerHTML</code> writes that build markup from strings are a rough guide, not a verdict. Writes built from values that come from the node, from a file, or from a network user need escaping. Node Controller, SysMon, instmon and 44helper escape with named helpers. Node Talker, Node Recorder and Pibrary have no named helper, and their writes should be checked one by one.</p>
+
+  <h2><span class="n">7.4</span>No code is eval'd</h2>
+  <p>No page uses <code>eval</code> or <code>new Function</code>. The scripts are plain code that the browser reads once.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">Things the scripts show</h1>
+
+  <h2><span class="n">8.1</span>The scripts are large</h2>
+  <p>Taken together, the eight pages carry about 1.5 million characters of script. Most of it is in a few pages: 44helper, SysMon and Node Talker. Changes to those pages are the costliest to review.</p>
+
+  <h2><span class="n">8.2</span>Escaping is not uniform</h2>
+  <p>Four pages have a named escape helper, three write markup without one, and wifimon writes none. The book should describe the rule (every value from outside is escaped) and say which pages are checked against it.</p>
+
+  <h2><span class="n">8.3</span>A policy that allows inline script</h2>
+  <p>The policy does not stop injected script, as described in Part 7. Describe it accurately in the book and do not present it as a protection against script injection.</p>
+
+  <h2><span class="n">8.4</span>Timers set the Pi's load</h2>
+  <p>Pages poll at intervals as short as 250 milliseconds (Node Talker) and 1 second (several pages). On a Pi Zero 2 W with the audio pages open, these timers and the audio code share the processor. The cost has not been measured here.</p>
+
+  <h2><span class="n">8.5</span>Stored settings are per browser</h2>
+  <p>Node Talker, Pibrary and wifimon keep some settings in the browser. A setting changed on one device does not appear on another. The book should say where a setting lives: on the node, or in the browser.</p>
+</section>
+
+</body>
+</html>
