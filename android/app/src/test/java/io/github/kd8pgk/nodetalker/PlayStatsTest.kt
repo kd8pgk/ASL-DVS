@@ -12,7 +12,7 @@ class PlayStatsTest {
         val s = PlayStats()
         s.probe(40)
         assertNull(s.take(false, ""))
-        assertEquals(40L, s.take(true, "").probeMs)
+        assertEquals(40L, s.take(true, "")!!.probeMs)
     }
 
     @Test
