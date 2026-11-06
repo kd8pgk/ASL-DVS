@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>instmon - The Buttons and How an Install Works</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; INSTMON</div>
+    </div>
+    <div class="ed"><b>Part 3 of 5</b><br>buttons and install</div>
+  </div>
+  <div class="body">
+    <h1>The Buttons and <span>How an Install Works</span></h1>
+    <p class="lede">What each instmon button sends, the checks that stand in front of each action, how instmon installs itself with <code>--install</code>, and how it installs any other tool from the library with that tool's own <code>--install</code>.</p>
+    <div class="chips">
+      <span class="chip c1">BUTTONS</span>
+      <span class="chip c2">--INSTALL</span>
+      <span class="chip c3">LIBRARY INSTALL</span>
+      <span class="chip c4">CONFIRMATIONS</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 3 of 5. Source: instmon_v2_91_1_20261105.py on branch ccr-9d4fe19f-ssud83. Nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; The buttons</div>
+  <h1 class="ch">Every action the page can send</h1>
+  <p class="ch-lede">Each button posts one action name to <code>/api/action</code>. The server looks the name up in one table and calls its handler. The table is the complete list of what the page can ask instmon to do.</p>
+
+  <table>
+    <tr><th>Group</th><th>Actions</th><th>What they do</th></tr>
+    <tr><td>Components</td><td>install, uninstall, start, stop, delete, lib_lock</td><td>Install or remove a tool from its library file; start or stop its service; delete a library file; lock or unlock a library file so it cannot be overwritten</td></tr>
+    <tr><td>Config</td><td>install_config, save_alternate</td><td>Copy a library config file into the node's config folder; save a live config as an alternate</td></tr>
+    <tr><td>Scripts</td><td>run_script</td><td>Run a script from the scripts library</td></tr>
+    <tr><td>Updates</td><td>gh_check, gh_update, gh_channel, build_pref, full_update, fu_stop, fu_dismiss, app_fetch, app_delete</td><td>Check GitHub, download one file, choose the channel and build, run or stop a Full Update, fetch or delete the app</td></tr>
+    <tr><td>Helpers</td><td>install_confgetter, cg_run, cg_uninstall, cg_delete; install_confputter, cp_uninstall, cp_preview, cp_apply, cp_undo, cp_delete_edited; rpiclone_install</td><td>Install and run Confgetter and Confputter, preview and apply a Confputter change and undo it, install rpi-clone</td></tr>
+    <tr><td>System</td><td>quiet, restore, comms_restart, reboot, shutdown</td><td>Quiet System pause and restore; restart the radio services; reboot or power off the node</td></tr>
+  </table>
+  <p>Some actions are refused until the request says <code>confirm: true</code>: the installs and uninstalls, running a script, and the other actions that change the node.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; The checks in front of an action</div>
+  <h1 class="ch">What stops an action from running</h1>
+
+  <ul>
+    <li><strong>Confirmation.</strong> The installs, uninstalls, script runs and config installs need <code>confirm: true</code>, or they are refused with 400.</li>
+    <li><strong>Disk-image job.</strong> An install or a script run is refused with 409 while a disk-image job is running (Part 4 of this series).</li>
+    <li><strong>One install at a time per tool.</strong> A second install for the same tool is refused while the first is running (409). The same applies to a config install onto the same file.</li>
+    <li><strong>One run at a time per script.</strong> A script that is already running cannot be started again (409).</li>
+    <li><strong>No self-stop.</strong> instmon refuses to stop itself from its own panel. It can restart itself only by the scheduled restart at the end of its own install (Part 3.1).</li>
+    <li><strong>Library lock.</strong> A locked library file cannot be overwritten by an upload, an update, or an editor save (Part 2 of this series).</li>
+    <li><strong>Config names.</strong> A library config is installed only if its name maps to a known node config. A Node Talker config (nodetalker or nodelisten) must contain its own section, or it is refused.</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; instmon's own install</div>
+  <h1 class="ch">The <code>--install</code> option for instmon</h1>
+
+  <h2><span class="n">3.1</span>What <code>--install</code> does</h2>
+  <p>The program's argument parser accepts <code>--install</code> and <code>--uninstall</code>. With <code>--install</code> it runs the install routine, which needs root (it exits with an error otherwise). The routine:</p>
+  <ol>
+    <li>Copies the running file into the install folder <code>/usr/local/lib/asl_dvs/instmon</code>, under its own name, with mode 755.</li>
+    <li>Replaces the link at <code>/usr/local/bin/instmon.py</code> with one that points at that copy. A plain file at that path is replaced, and its compiled cache files are removed.</li>
+    <li>Removes the other Python copies in the install folder, so only the new one is left.</li>
+    <li>Writes the launcher, and the service file <code>/etc/systemd/system/instmon.service</code>. The service is Type=notify, runs the shared launcher with the installed file, and restarts always after 3 seconds, with a watchdog every 60 seconds.</li>
+    <li>Opens instmon's port (8990) in the firewall, through the shared firewall helper.</li>
+    <li>Reloads systemd and enables <code>instmon.service</code>.</li>
+    <li>Fetches the manuals from the repository (the docs fetch, Part 1 of this series).</li>
+    <li>Schedules a restart of <code>instmon.service</code> two seconds later, through a one-shot systemd timer. The restart is scheduled and not run inline, so the install can finish before its own process is stopped.</li>
+  </ol>
+
+  <h2><span class="n">3.2</span>What <code>--uninstall</code> does</h2>
+  <p>It is the counterpart of the install: it stops and removes the service and the link. Its steps were not traced in full for this summary.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Installing a library file</div>
+  <h1 class="ch">The Install button on a tool</h1>
+
+  <p class="ch-lede">The Install button installs one tool from its library file. instmon does not know how each tool installs itself. It hands the work to the tool's own <code>--install</code>, and watches the log.</p>
+
+  <h2><span class="n">4.1</span>Before anything runs</h2>
+  <ol>
+    <li><strong>Confirmation</strong> (Part 2).</li>
+    <li><strong>The file.</strong> The file must be in the library folder for the tool's category.</li>
+    <li><strong>Self-install check.</strong> The file must have a self-install routine: its text must define <code>install_service</code> and an <code>--install</code> option. A file without them is refused with "doesn't support self-install ... Nothing was run."</li>
+    <li><strong>Syntax check.</strong> A Python file is compiled, and a shell file is checked with <code>bash -n</code>. A syntax error stops the install before anything changes.</li>
+    <li><strong>One install per tool</strong> (Part 2).</li>
+  </ol>
+
+  <h2><span class="n">4.2</span>What the background run does</h2>
+  <ol>
+    <li><strong>Prepare the install.</strong> Any symlink on the install path is replaced by a real copy of its target, so the new install writes a real file and does not change the old one through the link. Other unit names that the new file does not use are retired: the unit is disabled and removed, along with its unit paths.</li>
+    <li><strong>Run the file's own <code>--install</code></strong> with the Python or shell interpreter that suits it, with a cleaned environment.</li>
+    <li><strong>Stream the output</strong> to instmon's log line by line.</li>
+    <li><strong>Wait up to 600 seconds</strong> (INSTMON_SCRIPT_TIMEOUT_SEC). A run that takes longer is killed, and the log says so.</li>
+    <li><strong>On success</strong> the log records it, the quiet-mode entry for the tool is cleared, and, for every tool except instmon, a watch starts that checks the tool stays up for 60 seconds. If it does not, the log says to check it, and points to the previous version in the library.</li>
+    <li><strong>On failure</strong> the log records the exit code. Nothing is rolled back.</li>
+  </ol>
+  <p>The run does not roll back. A button install that fails leaves the tool as the failed install left it. The Full Update (Part 1 of this series) is the path that rolls back.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Uninstalling and removing</div>
+  <h1 class="ch">Uninstall, start, stop and delete</h1>
+
+  <ul>
+    <li><strong>Uninstall</strong> runs the tool's own <code>--uninstall</code>. The file must have one, or the uninstall is refused.</li>
+    <li><strong>Start and stop</strong> act on the tool's service through systemctl. instmon cannot stop itself.</li>
+    <li><strong>Delete</strong> removes a file from the library. The delete handler's own checks were not traced in full.</li>
+    <li><strong>Lock</strong> marks a library file as locked, or clears the mark. A locked file is protected from upload, update and editor overwrite (Part 2 of this series).</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; System buttons</div>
+  <h1 class="ch">Power, radio services and Quiet System</h1>
+
+  <ul>
+    <li><strong>Reboot and shutdown</strong> are scheduled, not immediate. The page is told the node will reboot or power off in about 2 seconds (INSTMON_REBOOT_SHUTDOWN_DELAY_SEC), and that the node will be unreachable until it comes back up. A shutdown needs physical access to power it back on.</li>
+    <li><strong>Restart radio services</strong> (comms_restart) stops the radio services in turn, from the list of comms services in the code. The restart steps after the stop were not traced in full.</li>
+    <li><strong>Quiet System</strong> pauses the services that compete for the SD card, and <strong>Restore</strong> brings them back. When a tool's install succeeds, its quiet entry is cleared (Part 4.2).</li>
+  </ul>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; Points for the book</div>
+  <h1 class="ch">What the install path shows</h1>
+
+  <h2><span class="n">7.1</span>Each tool installs itself</h2>
+  <p>instmon never copies a tool into place by itself. Each tool's own <code>--install</code> does the work, so the book should describe the install as the tool's, with instmon as the caller.</p>
+
+  <h2><span class="n">7.2</span>A button install does not roll back</h2>
+  <p>The Full Update rolls back when a tool does not come back. The Install button does not. Operators should be told to use the Full Update, or to keep the previous version in the library, if an install may fail.</p>
+
+  <h2><span class="n">7.3</span>Checks catch the obvious faults</h2>
+  <p>Confirmation, the self-install check, the syntax check and the busy checks stop bad requests before anything changes. They do not check that the new tool works. That is the health watch's job after the install, and it runs only for a minute.</p>
+
+  <h2><span class="n">7.4</span>Not checked</h2>
+  <ul>
+    <li>The individual install routine inside each tool (covered by each tool's own summary).</li>
+    <li>The exact cleanup of the install folder for tools other than instmon.</li>
+    <li>The Confgetter and Confputter helper actions in full (only their names and checks were read).</li>
+    <li>The restart order of the radio services in comms_restart.</li>
+  </ul>
+</section>
+
+</body>
+</html>
