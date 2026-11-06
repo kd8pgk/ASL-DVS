@@ -1,5 +1,11 @@
 # Node Talker changelog
 
+## 0.10.18 (2026-11-05)
+
+- **In Node Talker Mobile the page now shows why the talk channel will not open.** The page asked the app to open the talk channel and then waited for an "open" notice, showing "Opening the talk channel..." and nothing else. If the app could not connect it kept its reason to itself and retried quietly, and if the notice reached the page before the page was ready (for example as the app starts) the page waited for ever. Now, while waiting, the page asks the app every 1.5 s (for up to 60 s): it shows the app's reason ("Talk channel: ... Retrying..."), says so after 12 s if the app has given none, and takes the channel as open as soon as the app reports it open, even if the notice was missed. Nothing changes once the channel is open.
+- Page only: Node Talker Mobile is not changed and needs no update.
+- Page JavaScript logic changed, so this is a release.
+
 ## 0.10.17 (2026-11-05)
 
 - **A busy suite-log lock no longer holds Node Talker up.** 0.10.16 waited on the suite-log file lock for as long as another process kept it, so every request or thread that logged waited too: the Listen events, the receive-health rows and the kerchunk log. In a test the Listen event request waited 5.5 s while another process held the lock; 0.10.15 never waited, and with 0.10.16 the Listen button could stay on without the feed connecting. The shared `suitelog_append` now tries the lock for up to half a second and, if it is still held, writes the row without it, as 0.10.15 did. Only the rotation of a full segment is skipped that time. No row is lost and nothing waits.
@@ -11,7 +17,7 @@
 - **Suite log holds its lock for the whole write.** The shared `suitelog_append` (in `shared/confio.py`) wrote a row without the lock and checked the segment size after, so concurrent writers could push a segment past its limit before it was rotated. The lock is now held across the write and the rotation. This fixes an intermittent failure of the suite-log test in `ci/test_ci.py`.
 - This is a release, not a cosmetic build.
 
-Current file: `nodetalker_v0_10_17_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
+Current file: `nodetalker_v0_10_18_20261105.py`. Before 0.6.0 the tool was Node Listen, the file was `nodelisten_v….py` and this log was `nodelisten.md`. Newest entries first.
 
 ## 0.10.15 (2026-11-05)
 
