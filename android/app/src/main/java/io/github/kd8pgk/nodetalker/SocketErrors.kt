@@ -23,7 +23,7 @@ object SocketErrors {
     const val OTHER = "other"
 
     private const val MAX_DEPTH = 8
-    private const val BRIEF_MAX = 40
+    private const val DETAIL_MAX = 300
 
     private fun chain(e: Throwable): List<Throwable> {
         val out = ArrayList<Throwable>()
@@ -57,7 +57,7 @@ object SocketErrors {
 
     fun httpCode(e: Throwable): Int = chain(e).filterIsInstance<NodeHttpException>().firstOrNull()?.code ?: 0
 
-    fun brief(e: Throwable): String = (e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName).take(BRIEF_MAX)
+    fun detail(e: Throwable): String = (e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName).take(DETAIL_MAX)
 }
 
 class FailureReporter(private val gapMs: Long = 60000L) {

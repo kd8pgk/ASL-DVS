@@ -263,7 +263,7 @@ class ListenService : Service() {
         Talk.fails++
         Talk.emit(JSONObject().put("ev", "failed").put("why", why).put("error", Talk.error).toString())
         val down = talkFails.fail(SystemClock.elapsedRealtime()) ?: return
-        val detail = JSONObject().put("err", SocketErrors.brief(e)).put("n", down.failures)
+        val detail = JSONObject().put("err", SocketErrors.detail(e)).put("n", down.failures)
         val code = SocketErrors.httpCode(e)
         if (code > 0) detail.put("code", code)
         ListenLog.talk(this, "talk_fail", why, detail.toString())

@@ -1,6 +1,14 @@
 # Node Talker Mobile changelog
 
-Current version: `0.10.19`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+Current version: `0.10.20`. The app is in `android/`; its version is `appVersion` in `android/app/build.gradle.kts`. Newest entries first.
+
+## 0.10.20 (2026-11-06)
+
+- **The talk channel now tries every address a node name gives.** A name such as `MagicBox.local` often resolves to several addresses (an IPv6 link-local one and the IPv4 one). The talk channel took only the first and gave up if the phone could not use it, with "failed to connect to MagicBox.local", while Listen worked from the same phone and host because Android's own HTTP code tries each address in turn. Now the talk channel does too: IPv4 first, then global IPv6, then link-local IPv6, with the same 8 seconds in all. If every address fails, the message names the host and the addresses it tried.
+- **Copy for the page's Log card.** A new `copyText` lets the page hand the app text to put on the phone's clipboard (up to 500,000 characters), used by the Copy log button in Node Talker 0.10.20. A web view's own clipboard is not reliable, so the app does it.
+- **The whole error is reported to the node.** A talk-channel failure sent only the first 40 characters of its error to the node, so a long address was lost from the log. It now sends up to 300 characters (`SocketErrors.detail`). Node Talker 0.10.20 keeps them all; an older node still cuts at 40.
+- The address fix needs nothing on the node; Copy log and the full error need Node Talker 0.10.20, and an older page never calls it.
+- Tests: the order, the fall-back past a dead address, and the failure messages and reasons (`DialTest`).
 
 ## 0.10.19 (2026-11-06)
 

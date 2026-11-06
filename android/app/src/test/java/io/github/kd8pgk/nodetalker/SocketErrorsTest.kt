@@ -77,11 +77,13 @@ class SocketErrorsTest {
     }
 
     @Test
-    fun briefIsShortAndNeverEmpty() {
-        assertEquals("IOException", SocketErrors.brief(IOException()))
-        assertEquals("SocketTimeoutException", SocketErrors.brief(SocketTimeoutException("  ")))
-        assertEquals(40, SocketErrors.brief(IOException("x".repeat(200))).length)
-        assertEquals("Connection refused", SocketErrors.brief(ConnectException("Connection refused")))
+    fun detailKeepsTheWholeAddressAndIsNeverEmpty() {
+        assertEquals("IOException", SocketErrors.detail(IOException()))
+        assertEquals("SocketTimeoutException", SocketErrors.detail(SocketTimeoutException("  ")))
+        assertEquals(300, SocketErrors.detail(IOException("x".repeat(900))).length)
+        val long = "failed to connect to MagicBox.local (192.168.0.50, fe80:0:0:0:a2b:cff:fe00:1%wlan0): " +
+            "failed to connect to MagicBox.local/192.168.0.50 (port 8993) from /192.168.0.168 (port 40000) after 3000ms"
+        assertEquals(long, SocketErrors.detail(ConnectException(long)))
     }
 
     @Test

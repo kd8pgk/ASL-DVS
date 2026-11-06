@@ -33,7 +33,7 @@ from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-VERSION = "0.10.19"
+VERSION = "0.10.20"
 DATE_STR = "2026-11-05"
 APP_NAME = "Node Talker"
 
@@ -1844,7 +1844,8 @@ LISTEN_WHY = ("button", "notification", "media_button", "auto_open", "balancer",
 LISTEN_ACTIONS = ("connect", "disconnect", "page", "talk_fail", "talk_up")
 LISTEN_DETAIL_NUM = ("vis", "screen", "fg", "doze", "psave", "ign", "bucket", "up", "trim", "code", "imp", "secs", "hid", "gap", "n")
 LISTEN_DETAIL_STR = ("net", "exit", "err")
-_LISTEN_STR_RE = re.compile(r"[^A-Za-z0-9_ .:/-]")
+LISTEN_STR_MAX = 300
+_LISTEN_STR_RE = re.compile(r"[^A-Za-z0-9_ .:/()\[\],%-]")
 RXH_GAP_SEC = 0.06
 RXH_BURST_SEC = 0.5
 RXH_PUMP_LATE_SEC = 0.06
@@ -2566,7 +2567,7 @@ def listen_detail(raw):
     for k in LISTEN_DETAIL_STR:
         v = raw.get(k)
         if isinstance(v, str) and v:
-            out[k] = _LISTEN_STR_RE.sub("", v)[:40]
+            out[k] = _LISTEN_STR_RE.sub("", v)[:LISTEN_STR_MAX]
     return out
 
 
@@ -2600,6 +2601,28 @@ def listen_event(body):
         listen_note(client, src, action, why, listen_detail(ev.get("detail")), ev.get("t"))
         n += 1
     return {"ok": True, "n": n}
+
+
+PTT_LOG_MAX = 300
+PTT_LOG_PER_MIN = 30
+_ptt_log_times = deque(maxlen=PTT_LOG_PER_MIN)
+_ptt_log_lock = threading.Lock()
+
+
+def ptt_log(body):
+    if not isinstance(body, dict):
+        raise ValueError("bad request")
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(body.get("text") or "")).strip()[:PTT_LOG_MAX]
+    if not text:
+        raise ValueError("text is empty")
+    level = body.get("level") if body.get("level") in ("warn", "err") else "info"
+    now = time.monotonic()
+    with _ptt_log_lock:
+        if len(_ptt_log_times) == _ptt_log_times.maxlen and now - _ptt_log_times[0] < 60:
+            return {"ok": True, "n": 0}
+        _ptt_log_times.append(now)
+    log_event(f"Talk button: {text}", level)
+    return {"ok": True, "n": 1}
 
 
 def rxh_report(body=None):
@@ -4676,6 +4699,95 @@ def guard_loop():
             guard_tick()
         except Exception as exc:
             log_event(f"Guard error: {exc}", "err")
+
+
+LINK_LOG_SEC = 5.0
+LINK_LOG_GONE_POLLS = 2
+_link_log = {"node": None, "seen": None, "gone": {}}
+
+
+def _link_tune(num, nc, bridges):
+    try:
+        dig, m17 = bridges.get("digital", ""), bridges.get("m17", "")
+        dvs = (nc_dvs_current() or {}) if nc and num == dig else {}
+        m17_now = m17_current() if nc and num == m17 else ""
+        return _bridge_tune(num, nc, dvs, m17_now, dig, m17)[1]
+    except Exception:
+        return ""
+
+
+def link_name(num, favs, bridges, nc):
+    if num == TX_NODE:
+        return f"transmit node {num}"
+    if num in (bridges.get("digital", ""), bridges.get("m17", "")) and num:
+        kind = "M17 bridge" if num == bridges.get("m17", "") else "digital bridge"
+        tune = _link_tune(num, nc, bridges)
+        return f"{kind} node {num}" + (f" ({tune})" if tune else "")
+    fav = next((f for f in favs if fav_target(f) == num), None)
+    name = (fav or {}).get("label") or astdb_name(num)
+    return f"{name} (node {num})" if name else f"node {num}"
+
+
+def _link_connecting(link):
+    return str(link.get("state", "")).upper().startswith("CONN")
+
+
+def link_log_tick():
+    node = main_node()
+    ok, links = rpt_links(node, max_age=2.0)
+    if not ok:
+        return
+    st = _link_log
+    cur = {l["node"]: l for l in links}
+    favs = fav_load()
+    bridges = bridge_nodes()
+    nc = nc_running(cached=True)
+    if st["node"] != node or st["seen"] is None:
+        st.update(node=node, seen={}, gone={})
+        names = []
+        for n, l in cur.items():
+            name = link_name(n, favs, bridges, nc)
+            st["seen"][n] = {"connecting": _link_connecting(l), "name": name}
+            names.append(name)
+        if names:
+            log_event("Links now: " + ", ".join(names), "info")
+        return
+    seen = st["seen"]
+    for n, l in cur.items():
+        st["gone"].pop(n, None)
+        connecting = _link_connecting(l)
+        old = seen.get(n)
+        if old is None:
+            name = link_name(n, favs, bridges, nc)
+            seen[n] = {"connecting": connecting, "name": name}
+            log_event(f"Link {'connecting' if connecting else 'connected'}: {name}", "info" if connecting else "ok")
+        elif old["connecting"] and not connecting:
+            old["connecting"] = False
+            old["name"] = link_name(n, favs, bridges, nc)
+            log_event(f"Link connected: {old['name']}", "ok")
+    for n in [n for n in seen if n not in cur]:
+        st["gone"][n] = st["gone"].get(n, 0) + 1
+        if st["gone"][n] < LINK_LOG_GONE_POLLS:
+            continue
+        old = seen.pop(n)
+        del st["gone"][n]
+        if old["connecting"]:
+            log_event(f"Link to {old['name']} did not connect", "warn")
+        else:
+            log_event(f"Link disconnected: {old['name']}", "info")
+
+
+def link_log_loop():
+    last_err = ""
+    while True:
+        time.sleep(LINK_LOG_SEC)
+        try:
+            link_log_tick()
+            last_err = ""
+        except Exception as exc:
+            if str(exc) != last_err:
+                last_err = str(exc)
+                log_event(f"Link log error: {exc}", "err")
 
 
 def _hide(text, secret):
@@ -7173,6 +7285,7 @@ touch-action:none;user-select:none;-webkit-user-select:none;-webkit-touch-callou
 #ptt.talking{background:#4a1418;border-color:var(--red-line);box-shadow:0 0 0 6px rgba(242,84,91,.15)}
 .ptt-line{font-size:12px;text-align:center;min-height:16px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 #ptt-msg:not(:empty)+#ptt-info{display:none}
+.ptt-line.full{display:block;-webkit-line-clamp:unset;overflow:visible;text-align:left;user-select:text;-webkit-user-select:text}
 #ptt:disabled{opacity:.45;cursor:default}
 #ptt-time{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:15px;color:var(--soft)}
 #ptt.guard-warn{border-color:var(--amber);box-shadow:0 0 0 6px rgba(244,192,78,.18)}
@@ -7489,10 +7602,9 @@ async function kcReset() {
 }
 async function pttMark() {
   const d = await post('/api/kerchunks/test/mark', {});
-  const msg = $('ptt-msg'), text = d.ok ? d.message : (d.error || 'Could not mark the key-up.');
-  msg.className = 'msg ' + (d.ok ? 'ok' : 'err');
-  msg.textContent = text;
-  setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, 4000);
+  const text = d.ok ? d.message : (d.error || 'Could not mark the key-up.');
+  note('ptt-msg', d.ok ? 'ok' : 'err', text);
+  setTimeout(() => { if ($('ptt-msg').textContent === text) note('ptt-msg', '', ''); }, 4000);
   if (foldOpen('kc')) kcRefresh();
 }
 async function kcMark() {
@@ -7576,10 +7688,30 @@ async function kcLabel(id, label) {
 }
 const TABS = ['connect', 'listen', 'setup'];
 
+let pttLogKey = '', pttMsgTimer = null;
+
+function msgKey(text) {
+  return String(text || '').replace(/[0-9]+/g, '#');
+}
+
+function pttLogSend(cls, text) {
+  if (!authed) return;
+  api('/api/ptt/log', {method: 'POST', body: {text: text, level: cls === 'err' ? 'err' : cls === 'warn' ? 'warn' : 'info'}}).catch(() => {});
+}
+
 function note(id, cls, text) {
   const el = $(id);
   el.className = cls ? 'msg ' + cls : 'msg';
   el.textContent = text;
+  if (id !== 'ptt-msg') return;
+  el.parentNode.classList.toggle('full', text.length > 60);
+  if (!text) { clearTimeout(pttMsgTimer); pttLogKey = ''; return; }
+  const key = msgKey(text);
+  if (key === pttLogKey) return;
+  pttLogKey = key;
+  pttLogSend(cls, text);
+  clearTimeout(pttMsgTimer);
+  pttMsgTimer = setTimeout(() => { if (msgKey(el.textContent) === key) note('ptt-msg', '', ''); }, 30000);
 }
 
 const msgTimers = {};
@@ -9466,6 +9598,7 @@ function chkInit() {
   $('tests-save').addEventListener('click', () => testsSave(false));
   $('tests-all').addEventListener('click', () => testsSave(true));
   $('data-dl').addEventListener('click', dataDownload);
+  $('log-copy').addEventListener('click', logCopy);
   $('chk-stop').addEventListener('click', auditStop);
   $('rx-auto').addEventListener('change', autoPrefChanged);
   $('tx-auto').addEventListener('change', autoPrefChanged);
@@ -10108,9 +10241,9 @@ function appTalkClosed(err) {
 
 window.ntAppTalk = (m) => {
   if (!m || !appTalk()) return;
-  if (m.ev === 'open') { if (!wsReady) { wsReady = true; pttUi('ready', connBusy ? undefined : ''); } return; }
+  if (m.ev === 'open') { appTalkShown = ''; if (!wsReady) { wsReady = true; pttUi('ready', connBusy ? undefined : ''); } return; }
   if (m.ev === 'failed') {
-    if (!wsReady) pttUi('off', 'Talk channel: ' + (m.error || m.why || 'could not open') + '. Retrying...', 'warn');
+    if (!wsReady) appTalkSay('Talk channel: ' + (m.error || m.why || 'could not open') + '. Retrying...');
     return;
   }
   if (m.ev === 'txfail') {
@@ -10161,7 +10294,14 @@ function appTalkSync() {
   if (talking && !st.talking) { keyed = false; endTalk(); pttUi(wsReady ? 'ready' : 'off', ''); }
 }
 
-let appTalkTimer = null;
+let appTalkTimer = null, appTalkShown = '';
+
+function appTalkSay(text) {
+  const key = msgKey(text);
+  if (key === appTalkShown) return;
+  appTalkShown = key;
+  pttUi('off', text, 'warn');
+}
 
 function appTalkWatch() {
   if (appTalkTimer) return;
@@ -10173,8 +10313,8 @@ function appTalkWatch() {
     try { st = JSON.parse(NodeTalkerApp.talkState() || 'null'); } catch (e) {}
     if (!st) return;
     if (st.open) { window.ntAppTalk({ev: 'open'}); return; }
-    if (st.error) pttUi('off', 'Talk channel: ' + st.error + '. Retrying...', 'warn');
-    else if (n === 8) pttUi('off', 'Still opening the talk channel. The app has not said why; check that the phone can reach the node.', 'warn');
+    if (st.error) appTalkSay('Talk channel: ' + st.error + '. Retrying...');
+    else if (n === 8) appTalkSay('Still opening the talk channel. The app has not said why; check that the phone can reach the node.');
   }, 1500);
 }
 
@@ -10182,6 +10322,7 @@ function openTalk(force) {
   if (appTalk()) {
     if (!authed || (tab !== 'listen' && force !== true)) return;
     if (wsReady) { appTalkSync(); return; }
+    appTalkShown = '';
     if (!appCall('talkOpen')) pttUi('off', 'Allow the microphone for Node Talker (Android asks), then press again.', 'warn');
     else { pttUi('off', 'Opening the talk channel...'); appTalkWatch(); }
     return;
@@ -11556,6 +11697,32 @@ async function saveConfig() {
   if (d.ok) { publicListen = body.public_listen; loadNode(); }
 }
 
+async function logCopy() {
+  const lines = Array.from($('log').childNodes).map((n) => n.textContent);
+  if (!lines.length) { setMsg('log-copy-msg', {ok: true, warn: true, message: 'The log is empty.'}); return; }
+  const text = lines.join('\n') + '\n';
+  const count = lines.length + (lines.length === 1 ? ' line' : ' lines');
+  const viaApp = !!(window.NodeTalkerApp && typeof NodeTalkerApp.copyText === 'function');
+  let ok = false;
+  try {
+    if (viaApp) ok = !!NodeTalkerApp.copyText(text);
+    else if (navigator.clipboard && window.isSecureContext) { await navigator.clipboard.writeText(text); ok = true; }
+  } catch (e) { ok = false; }
+  if (!ok && !viaApp) {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+    ta.remove();
+  }
+  if (ok) { setMsg('log-copy-msg', {ok: true, message: 'Copied ' + count + '.'}); return; }
+  setMsg('log-copy-msg', {ok: false, error: viaApp ? 'The app could not copy the log.'
+    : window.NodeTalkerApp ? 'Could not copy. Update Node Talker Mobile.' : 'Could not copy: the browser blocked the clipboard.'});
+}
+
 async function pollLog() {
   if (!authed || tab !== 'setup' || !foldOpen('log')) return;
   const d = await api('/api/log?since=' + lastLogId);
@@ -12314,6 +12481,8 @@ mic volume, so the gain here is applied in the page.</p>
 <div class="card fold" id="cd-log">
 <h2><button class="fold-btn" type="button" aria-expanded="false" aria-controls="cb-log"><span class="fold-t">Log</span><span class="fold-sum" id="sum-log"></span><span class="fold-i" aria-hidden="true">▸</span></button></h2>
 <div class="fold-body hidden" id="cb-log">
+<div class="row"><button id="log-copy" class="btn" type="button">Copy log</button></div>
+<div id="log-copy-msg" class="msg"></div>
 <div id="log"></div>
 </div>
 </div>
@@ -12388,6 +12557,7 @@ _POST_ACTIONS = {
     "/api/tonetest/stop": (lambda b: TONE.stop(), ()),
     "/api/rxhealth/client": (rxh_client, (ValueError,)),
     "/api/listen/event": (listen_event, (ValueError,)),
+    "/api/ptt/log": (ptt_log, (ValueError,)),
     "/api/balance/snapshot": (balance_snapshot, ()),
     "/api/balance/restore": (balance_restore, ()),
     "/api/balance/keep": (balance_keep, ()),
@@ -12836,6 +13006,7 @@ def run_server():
     threading.Thread(target=usrp_drain_loop, name="tx-drain", daemon=True).start()
     threading.Thread(target=link_keeper_loop, name="link-keeper", daemon=True).start()
     threading.Thread(target=guard_loop, name="link-guard", daemon=True).start()
+    threading.Thread(target=link_log_loop, name="link-log", daemon=True).start()
     threading.Thread(target=_sd_watchdog_loop, args=(port, httpd.ssl_ctx is not None), name="watchdog", daemon=True).start()
     scheme = "https" if httpd.ssl_ctx is not None else "http"
     log_event(f"{APP_NAME} v{VERSION} on {scheme} port {port}, node audio on 127.0.0.1:{_cfg_get('udp_port')}/udp, "
