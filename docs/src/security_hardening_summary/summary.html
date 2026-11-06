@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Node Controller - Security Hardening</title>
+<link rel="stylesheet" href="summary.css">
+</head>
+<body>
+
+<section class="cover">
+  <div class="band">
+    <div>
+      <div class="brand">NODE CONTROLLER</div>
+      <div class="brand-sub">BOOK REFERENCE &middot; SECURITY</div>
+    </div>
+    <div class="ed"><b>Part 1 of 3</b><br>security hardening</div>
+  </div>
+  <div class="body">
+    <h1>Security <span>Hardening</span></h1>
+    <p class="lede">What the Pi Zero 2 W build and the common tools do to keep a node safe: how people log in, how a request is checked before it runs, which headers each page sends, which requests are refused, and where the protection stops.</p>
+    <div class="chips">
+      <span class="chip c1">LOGIN</span>
+      <span class="chip c2">REQUEST CHECKS</span>
+      <span class="chip c3">HEADERS</span>
+      <span class="chip c4">GAPS</span>
+    </div>
+    <div class="draft">SUMMARY &middot; READ-ONLY REVIEW</div>
+  </div>
+  <div class="foot">Part 1 of 3. Sources: the pi02w tools (nodecontrol, sysmon, wifimon, 44helper), the common tools (instmon, pibrary, Node Talker, Node Recorder) on branch ccr-9d4fe19f-ssud83. Nothing was run on a node.</div>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 1 &middot; Logging in</div>
+  <h1 class="ch">How a person gets past the login</h1>
+
+  <h2><span class="n">1.1</span>The root password</h2>
+  <p>The Dashboard (nodecontrol) checks the root password first through the system's PAM stack, using the <code>login</code> service. If PAM is not usable, it falls back to reading the root hash from <code>/etc/shadow</code> and checking it with <code>crypt(3)</code> from libcrypt. The logging of the password itself was not traced in this review.</p>
+
+  <h2><span class="n">1.2</span>Lockouts</h2>
+  <p>A failed login counts against the address it came from. Two rules are in use:</p>
+  <table>
+    <tr><th>Tools</th><th>Rule</th></tr>
+    <tr><td>Dashboard, SysMon, 44helper</td><td>Five failures within five minutes lock the address out for 15 minutes (<code>_LOGIN_LOCKOUT_SEC = 15 * 60</code>)</td></tr>
+    <tr><td>instmon, wifimon, Node Talker</td><td>Each failure lengthens the wait. The first wait is 5 seconds, doubling, and capped at 300 seconds. A locked request is answered with 429 and a <code>Retry-After</code> header</td></tr>
+  </table>
+  <p>The lockout is keyed on the client address the server sees (<code>client_address</code>). A proxy in front of the node would put every user behind one address, so the proxy rules in Part 5 matter here too.</p>
+
+  <h2><span class="n">1.3</span>Session cookies</h2>
+  <p>After a good login the server sets a session cookie. Each tool sets its own name (for example <code>helper44_session</code> in 44helper, <code>asl_dvs_session</code> elsewhere). The cookie is sent with <code>HttpOnly</code>, <code>SameSite=Strict</code>, <code>Path=/</code> and a <code>Max-Age</code>. A script on the page cannot read it, and a browser does not send it on a request that starts on another site.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 2 &middot; Checks before a request runs</div>
+  <h1 class="ch">Refusing requests that look forged</h1>
+
+  <p class="ch-lede">A web page that a person has open can be made to send a request on their behalf. The tools block that in two ways: they demand a header that a plain web form cannot send, or they demand a content type that a plain form cannot send.</p>
+
+  <table>
+    <tr><th>Check</th><th>Where</th><th>Refused with</th></tr>
+    <tr><td><code>Content-Type: application/json</code> required</td><td>Dashboard, SysMon</td><td>415</td></tr>
+    <tr><td><code>X-Requested-With: XMLHttpRequest</code> required</td><td>44helper, instmon, wifimon, pibrary, Node Talker, Node Recorder, amp Node Talker</td><td>Refused. The exact status code varies by tool and was not tabulated</td></tr>
+  </table>
+
+  <h2><span class="n">2.1</span>Why these work</h2>
+  <p>A browser form can send a plain POST with a few content types, and it cannot add a custom header to a request from another site without a permission check that fails. Requiring either one closes the common route.</p>
+  <p>The check is only as good as its coverage. The Dashboard and SysMon use the content-type check, and the other tools use the header check. A new endpoint added without the check has no protection, so each new route needs the same guard.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 3 &middot; Local-only interface</div>
+  <h1 class="ch">The local key and the loopback-only API</h1>
+
+  <h2><span class="n">3.1</span>Loopback peers only</h2>
+  <p>The Dashboard's local API accepts a request only from a loopback address (<code>127.0.0.1</code>, <code>::1</code>, or the IPv4-mapped form). Any other peer is refused, even if it has the key.</p>
+
+  <h2><span class="n">3.2</span>The key</h2>
+  <p>The local API also needs the header <code>X-ASL-DVS-Local-Key</code>. The key is kept in <code>/etc/asl_dvs/local_api.key</code>, mode 0600, and must be at least 32 hexadecimal characters. A key file that does not meet that rule is not used.</p>
+  <p>The name of the header and the path keep the <code>asl_dvs</code> system name, as the naming rules require.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 4 &middot; Response headers</div>
+  <h1 class="ch">What each page tells the browser</h1>
+
+  <table>
+    <tr><th>Header</th><th>Purpose</th><th>Set by (found in source)</th></tr>
+    <tr><td><code>X-Frame-Options: DENY</code></td><td>Stops the page being shown inside another site's frame (clickjacking)</td><td>44helper, wifimon</td></tr>
+    <tr><td><code>X-Content-Type-Options: nosniff</code></td><td>Stops the browser guessing a file's type</td><td>Dashboard, 44helper, instmon, wifimon</td></tr>
+    <tr><td><code>Referrer-Policy: no-referrer</code></td><td>The page does not send the address it came from</td><td>44helper, instmon, wifimon</td></tr>
+    <tr><td><code>Content-Security-Policy</code></td><td>Limits which scripts, styles and connections the page may use</td><td>Dashboard (per page), 44helper, wifimon</td></tr>
+  </table>
+  <p>A search of the SysMon pi02w file found none of these four headers. SysMon's pages therefore rely on its other checks (the content-type check in Part 2 and the login) and not on these headers. This is a gap to confirm on a running node before the book states it.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 5 &middot; Refusing proxied requests</div>
+  <h1 class="ch">Requests that came through a proxy or tunnel</h1>
+
+  <p>A request that passes through a reverse proxy or a tunnel such as Cloudflare carries a header that names the proxy. Several tools refuse those requests on purpose, so a remote visitor cannot reach a control through a tunnel that puts them on the local network.</p>
+  <table>
+    <tr><th>Tool</th><th>Headers checked</th><th>Effect</th></tr>
+    <tr><td>wifimon</td><td>X-Forwarded-For, X-Forwarded-Host, X-Forwarded-Proto, X-Real-Ip, Forwarded, Via, Cf-Connecting-Ip, Cf-Ray, Cf-Visitor, Cf-Ipcountry</td><td>Control actions refused with 403</td></tr>
+    <tr><td>Node Recorder</td><td>Forwarded, X-Forwarded-For, X-Real-IP, CF-Connecting-IP, Tailscale-Funnel-Request</td><td>Refused as proxied</td></tr>
+    <tr><td>44helper terminal</td><td>Cf-Connecting-Ip, Cf-Ray, Cf-Ipcountry, Cf-Visitor, X-Forwarded-For and others</td><td>Terminal refused with a message that it works only from the local network</td></tr>
+    <tr><td>Node Talker</td><td>Its own proxy list, checked with the LAN test</td><td>Proxied requests are treated as coming from the internet</td></tr>
+  </table>
+  <p>The lists are not the same in every tool. A header missing from one list is not checked there. The lists are best read as a tripwire, and the book should not present them as a complete defence against a tunnel.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 6 &middot; Transport and privilege</div>
+  <h1 class="ch">Plain HTTP, root services and the terminal</h1>
+
+  <h2><span class="n">6.1</span>Plain HTTP by default</h2>
+  <ul>
+    <li><strong>wifimon</strong> is set to plain HTTP (<code>USE_TLS = False</code>) and binds to <code>0.0.0.0</code>, so it listens on every interface.</li>
+    <li><strong>Node Talker</strong> and <strong>Node Recorder</strong> default to HTTPS (<code>https: True</code>).</li>
+    <li><strong>The Dashboard</strong> binds to <code>0.0.0.0</code>.</li>
+  </ul>
+  <p>Plain HTTP means a login password and a session cookie cross the local network unencrypted. On a home LAN that is a known risk, and the book should state it rather than imply the logins are encrypted.</p>
+
+  <h2><span class="n">6.2</span>Services run as root</h2>
+  <p>The 44helper unit file runs the service as <code>User=root</code>. The other unit files in the pi02w and common tools set no sandboxing directives (no <code>NoNewPrivileges</code>, <code>ProtectSystem</code> or <code>PrivateTmp</code>). A flaw in any of these web services therefore has root on the node.</p>
+
+  <h2><span class="n">6.3</span>The terminal is a root shell</h2>
+  <p>The 44helper terminal opens a shell in the browser. Before it opens, the server checks that the request is not proxied, that it comes from loopback, link-local or a private address, that the service runs as root, and that the terminal-enable switch is set. The terminal is the most sensitive control in the pi02w build, and the book should describe it as root access gated by the network and the switch.</p>
+  <p>The 44helper job worker runs commands through a shell (<code>shell=True</code>). The tab actions are limited to an exact command list (<code>_dispatch_tab_action</code>), and the book should note that the safety of that step rests on the list.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 7 &middot; The gap between builds</div>
+  <h1 class="ch">What the full build has that the pi02w build does not</h1>
+
+  <p>The full build of SysMon (<code>sysmon_v6_13_95_20261028.py</code>) includes a security audit with 11 checks, among them the Asterisk and AMI default credentials, the Dashboard web authentication, SSH hardening, Fail2ban jails, service user, unit file permissions and Asterisk file permissions. The pi02w build of SysMon (<code>sysmon_pi02w_v6_13_83_20261028.py</code>) has no audit table.</p>
+  <p>This summary changes no code. The gap is recorded here so the book does not describe the audit as a feature of both builds. Porting the audit to the pi02w build is a separate change, and under the repo rules it needs a request that names the pi02w build.</p>
+</section>
+
+<section class="chapter">
+  <div class="kicker">Part 8 &middot; Points for the book</div>
+  <h1 class="ch">What the hardening does and does not cover</h1>
+
+  <h2><span class="n">8.1</span>Layers, not one switch</h2>
+  <p>Login, lockout, the request checks, the local key, the header set and the proxy refusals each stop a different route. None of them is a complete defence alone, and each tool sets a different subset.</p>
+
+  <h2><span class="n">8.2</span>The LAN is the outer wall</h2>
+  <p>Most controls assume the node is on a trusted home or office LAN. Any device on that LAN can reach the plain HTTP ports. The LAN-only policy (the second summary in this series) describes that wall.</p>
+
+  <h2><span class="n">8.3</span>Not checked</h2>
+  <ul>
+    <li>The PAM configuration of the <code>login</code> service on a running node.</li>
+    <li>Every endpoint in every tool for the request checks in Part 2. Only the check functions were read.</li>
+    <li>The full Node Talker proxy list (only its name was read).</li>
+    <li>Whether a browser on a real node sends the headers listed in Part 4.</li>
+  </ul>
+</section>
+
+</body>
+</html>
